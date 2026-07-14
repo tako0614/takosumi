@@ -5,7 +5,6 @@
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
-  Connection,
   ConnectionOAuthStartResponse,
   ConnectionResponse,
   ConnectionScopeHints,
@@ -13,10 +12,7 @@ import type {
   CreateConnectionFile,
   CreateConnectionRequest,
   DeployControlErrorCode,
-  Deployment,
-  InternalDeployRequest,
   ListConnectionsResponse,
-  ListDeploymentsResponse,
   ListRunnerProfilesResponse,
   OpenTofuModuleSource,
   PlanRunResponse,
@@ -24,7 +20,6 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
-  ArtifactSnapshotRequest,
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
@@ -35,10 +30,6 @@ import type {
   SourceSnapshot,
 } from "takosumi-contract/sources";
 import type {
-  DeployResponse,
-  PublicDeployResponse,
-} from "takosumi-contract/deploy";
-import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
@@ -46,7 +37,6 @@ import type {
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  CapsuleProviderEnvBindingSet,
   InstallConfig,
   Capsule,
   OutputAllowlistEntry,
@@ -62,32 +52,24 @@ import type {
 } from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
-import type {
-  CapsuleProviderConnectionBinding,
-  CapsuleProviderConnectionBindings,
-  CapsuleProviderEnvBinding,
-  CapsuleProviderEnvBindings,
-  CapsuleProviderConnectionSet,
-  ProviderConnection,
+import {
+  isPublicManagedProviderConnection,
+  type ProviderBinding,
+  type ProviderBindings,
+  type ProviderBindingSet,
+  type ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
 import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
-import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
   CreateBackupResponse,
   CreateRestoreRequest,
   ListBackupsResponse,
 } from "takosumi-contract/backups";
-import type {
-  BillingSettings,
-  CreditBalance,
-  CreditReservation,
-  UsageEvent,
-} from "takosumi-contract/billing";
 import type {
   ListRunsResponse,
   Run,
@@ -97,14 +79,6 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import type {
-  AppCapsuleMode,
-  AppCapsuleStatus,
-  CapsuleRecord,
-  WorkspaceKind,
-} from "../ledger.ts";
-import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -133,22 +107,19 @@ import {
   parseControlPageParams,
   publicApplyActionResponse,
   publicCompatibilityReportResponse,
-  publicDeployResponse,
-  publicDeployment,
   publicCapsule,
+  publicProviderConnection,
   publicPlanActionResponse,
   publicRun,
   requireWorkspaceAccess,
-  resolveProviderConnectionBindings,
+  resolveProviderBindings,
 } from "./shared.ts";
 import {
   booleanValue,
   connectionCredentialFiles,
   connectionScopeHints,
-  connectionScopeHintsFromValues,
   dependencyModeValue,
   dependencyVisibilityValue,
-  isGoogleCloudProvider,
   isJsonValue,
   isOutputsMapping,
   isPlainJsonObject,
@@ -157,22 +128,20 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseCapsuleProviderConnectionBinding,
-  parseCapsuleProviderConnectionBindings,
+  parseProviderBinding,
+  parseProviderBindings,
   parseLimit,
-  spaceTypeValue,
+  workspaceTypeValue,
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/capsules/install_config_bootstrap.ts";
+} from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
-import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 export async function handleCredentialRecipes(
   ctx: ControlDispatchContext,
@@ -212,11 +181,9 @@ async function listProviderConnections(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const workspaceId =
-    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
-    stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
-    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
-    stringValue(url.searchParams.get("space_id") ?? undefined);
+  const workspaceId = stringValue(
+    url.searchParams.get("workspaceId") ?? undefined,
+  );
   if (!workspaceId) {
     return errorJson(
       "invalid_request",
@@ -236,25 +203,17 @@ async function listProviderConnections(
   ).filter((connection) =>
     providerConnectionVisibleToWorkspace(connection, workspaceId),
   );
-  return json({ providerConnections });
+  return json({
+    providerConnections: providerConnections.map(publicProviderConnection),
+  });
 }
 
 function providerConnectionVisibleToWorkspace(
   connection: ProviderConnection,
   workspaceId: string,
 ): boolean {
-  if (
-    connection.workspaceId === workspaceId ||
-    connection.spaceId === workspaceId
-  ) {
+  if (connection.workspaceId === workspaceId) {
     return true;
   }
-  return (
-    connection.scope === "operator" &&
-    connection.workspaceId === undefined &&
-    connection.spaceId === undefined &&
-    connection.scopeHints?.managedProvider === true &&
-    typeof connection.scopeHints.providerConfig?.base_url === "string" &&
-    connection.scopeHints.providerConfig.base_url.trim().length > 0
-  );
+  return isPublicManagedProviderConnection(connection);
 }

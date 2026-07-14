@@ -21,12 +21,14 @@ export interface AuditChainVerificationResult {
 export function redactAuditEvent(event: AuditEvent): AuditEvent {
   return {
     ...event,
-    actor: event.actor
+    ...(event.actor
       ? {
-        ...event.actor,
-        ...(event.actor.sessionId ? { sessionId: "[REDACTED]" } : {}),
-      }
-      : undefined,
+          actor: {
+            ...event.actor,
+            ...(event.actor.sessionId ? { sessionId: "[REDACTED]" } : {}),
+          },
+        }
+      : {}),
     payload: redactJsonObject(event.payload),
   };
 }
@@ -104,10 +106,9 @@ function canonicalJson(value: unknown): string {
   }
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   const entries = Object.entries(value)
+    .filter(([, child]) => child !== undefined)
     .sort(([left], [right]) => left.localeCompare(right));
-  return `{${
-    entries.map(([key, child]) =>
-      `${JSON.stringify(key)}:${canonicalJson(child)}`
-    ).join(",")
-  }}`;
+  return `{${entries
+    .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
+    .join(",")}}`;
 }

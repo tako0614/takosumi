@@ -36,9 +36,7 @@ class FakeAuditSqlClient implements SqlClient {
     }
   }
 
-  async transaction<T>(
-    fn: (tx: SqlTransaction) => T | Promise<T>,
-  ): Promise<T> {
+  async transaction<T>(fn: (tx: SqlTransaction) => T | Promise<T>): Promise<T> {
     const snapshot = this.rows.map((row) => ({ ...row }));
     const tx: SqlTransaction = {
       query: (sql, params) => this.query(sql, params),
@@ -52,10 +50,7 @@ class FakeAuditSqlClient implements SqlClient {
     }
   }
 
-  #execute(
-    sql: string,
-    parameters?: SqlParameters,
-  ): SqlQueryResult {
+  #execute(sql: string, parameters?: SqlParameters): SqlQueryResult {
     const normalized = sql.trim().toLowerCase();
     if (
       normalized.startsWith("insert into audit_events") ||
@@ -77,8 +72,8 @@ class FakeAuditSqlClient implements SqlClient {
         type: String(params.type),
         severity: String(params.severity),
         actor_json: params.actorJson as string | null,
-        space_id: (params.spaceId ?? null) as string | null,
-        group_id: (params.groupId ?? null) as string | null,
+        space_id: (params.workspaceId ?? null) as string | null,
+        group_id: (params.runGroupId ?? null) as string | null,
         target_type: String(params.targetType),
         target_id: (params.targetId ?? null) as string | null,
         payload_json: params.payloadJson as string | null,
@@ -94,10 +89,8 @@ class FakeAuditSqlClient implements SqlClient {
     }
     if (
       normalized.startsWith("select") &&
-      (
-        normalized.includes("audit_events") ||
-        normalized.includes('"audit_events"')
-      )
+      (normalized.includes("audit_events") ||
+        normalized.includes('"audit_events"'))
     ) {
       const params = (parameters ?? {}) as Record<string, unknown>;
       let rows = [...this.rows];
@@ -116,9 +109,10 @@ class FakeAuditSqlClient implements SqlClient {
           .sort((a, b) => b.sequence - a.sequence)
           .slice(0, 1);
       } else {
-        rows.sort((a, b) =>
-          (a.sequence ?? 0) - (b.sequence ?? 0) ||
-          a.occurred_at.localeCompare(b.occurred_at)
+        rows.sort(
+          (a, b) =>
+            (a.sequence ?? 0) - (b.sequence ?? 0) ||
+            a.occurred_at.localeCompare(b.occurred_at),
         );
       }
       return {
@@ -156,9 +150,11 @@ class FakeAuditSqlClient implements SqlClient {
       return { rows: [], rowCount: before - remaining.length };
     }
     if (
-      normalized === "begin" || normalized === "commit" ||
+      normalized === "begin" ||
+      normalized === "commit" ||
       normalized === "rollback"
-    ) return { rows: [], rowCount: 0 };
+    )
+      return { rows: [], rowCount: 0 };
     throw new Error(`unhandled SQL: ${normalized}`);
   }
 
@@ -186,8 +182,8 @@ function auditInsertParams(
     type: parameters[2],
     severity: parameters[3],
     actorJson: parameters[4],
-    spaceId: parameters[5],
-    groupId: parameters[6],
+    workspaceId: parameters[5],
+    runGroupId: parameters[6],
     targetType: parameters[7],
     targetId: parameters[8],
     payloadJson: parameters[9],
@@ -232,8 +228,8 @@ function event(id: string, occurredAt: string): AuditEvent {
       roles: ["owner"],
       requestId: `req_${id}`,
     },
-    spaceId: "space_a",
-    groupId: "group_a",
+    workspaceId: "space_a",
+    runGroupId: "group_a",
     targetType: "worker",
     targetId: "worker_a",
     payload: { action: "allow" },
@@ -337,9 +333,8 @@ test("SqlObservabilitySink applies retention policy by archiving old events", as
 });
 
 test("SqlObservabilitySink sends archive candidates to replication before marking archived", async () => {
-  const { InMemoryAuditReplicationSink, AuditReplicationDriver } = await import(
-    "../../../../core/domains/audit-replication/sink.ts"
-  );
+  const { InMemoryAuditReplicationSink, AuditReplicationDriver } =
+    await import("../../../../core/domains/audit-replication/sink.ts");
   const replicationSink = new InMemoryAuditReplicationSink({
     id: "object-store-archive",
   });
@@ -369,9 +364,8 @@ test("SqlObservabilitySink sends archive candidates to replication before markin
 });
 
 test("SqlObservabilitySink replicates new appends to attached replication driver", async () => {
-  const { InMemoryAuditReplicationSink, AuditReplicationDriver } = await import(
-    "../../../../core/domains/audit-replication/sink.ts"
-  );
+  const { InMemoryAuditReplicationSink, AuditReplicationDriver } =
+    await import("../../../../core/domains/audit-replication/sink.ts");
   const replicationSink = new InMemoryAuditReplicationSink({ id: "siem-1" });
   const driver = new AuditReplicationDriver({ sinks: [replicationSink] });
   const client = new FakeAuditSqlClient();
@@ -389,12 +383,10 @@ test("SqlObservabilitySink replicates new appends to attached replication driver
 });
 
 test("SqlObservabilitySink delete-after-archive only triggers when policy enables it", async () => {
-  const { resolveAuditRetention } = await import(
-    "../../../../core/domains/audit-replication/policy.ts"
-  );
-  const { InMemoryAuditReplicationSink, AuditReplicationDriver } = await import(
-    "../../../../core/domains/audit-replication/sink.ts"
-  );
+  const { resolveAuditRetention } =
+    await import("../../../../core/domains/audit-replication/policy.ts");
+  const { InMemoryAuditReplicationSink, AuditReplicationDriver } =
+    await import("../../../../core/domains/audit-replication/sink.ts");
   const replicationSink = new InMemoryAuditReplicationSink({
     id: "object-store-archive",
   });
@@ -432,15 +424,17 @@ test("SqlObservabilitySink delete-after-archive only triggers when policy enable
     replicationSink.records().map((record) => record.event.id),
     ["ancient", "aging"],
   );
-  assert.equal(client.rows.find((r) => r.id === "ancient"), undefined);
+  assert.equal(
+    client.rows.find((r) => r.id === "ancient"),
+    undefined,
+  );
   assert.equal(client.rows.find((r) => r.id === "aging")?.archived, true);
   assert.equal(client.rows.find((r) => r.id === "recent")?.archived, false);
 });
 
 test("SqlObservabilitySink refuses delete-after-archive without replication", async () => {
-  const { resolveAuditRetention } = await import(
-    "../../../../core/domains/audit-replication/policy.ts"
-  );
+  const { resolveAuditRetention } =
+    await import("../../../../core/domains/audit-replication/policy.ts");
   const client = new FakeAuditSqlClient();
   const fixedNow = new Date("2026-05-01T00:00:00.000Z");
   const policy = resolveAuditRetention({

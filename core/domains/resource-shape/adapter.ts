@@ -1,9 +1,9 @@
 // Resource Shape adapter port (`docs/internal/final-plan.md` §9 Adapter Contract).
 //
 // An adapter turns a resolved implementation plan into native resources on a
-// Target. The opentofu-adapter (broad-first, §9/§17) drives the existing Flow A
-// runner; a deterministic stub backs tests and self-host-without-runner. The
-// service depends only on this port, so the runner wiring stays isolated.
+// Target. The opentofu-adapter (broad-first, §9/§17) drives the shared OpenTofu
+// runner with a first-class Resource run subject; a deterministic stub backs
+// tests. The service depends only on this port, so runner wiring stays isolated.
 
 import type {
   ActorContext,
@@ -13,9 +13,14 @@ import type {
   ResourceDeletePolicy,
   ResourceProjectionKind,
   ResourceShapeKind,
+  TargetImplementationDescriptor,
   TargetPoolEntry,
 } from "takosumi-contract";
 import type { ResourceShapePlan } from "./planner.ts";
+import type {
+  ResourceShapeExecutionRecord,
+  ResourceShapeStateAdoptionDescriptor,
+} from "./records.ts";
 
 /**
  * A connection after the control plane has resolved and authorized its
@@ -37,9 +42,14 @@ export interface ResolvedResourceConnection {
 export interface AdapterApplyInput {
   /** Canonical resource id (`tkrn:{space}:{kind}:{name}`). */
   readonly resourceId: string;
+  readonly environment: string;
+  readonly stateGeneration: number;
+  readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
   readonly plan: ResourceShapePlan;
   /** The selected TargetPool entry the plan resolved to. */
   readonly target: TargetPoolEntry;
+  /** Complete selected descriptor, pinned by ResolutionLock. */
+  readonly implementation: TargetImplementationDescriptor;
   /** ProviderConnection id injected into the runner for the opentofu-adapter. */
   readonly credentialRef?: string;
   /**
@@ -56,14 +66,6 @@ export interface AdapterApplyInput {
   readonly resolvedConnections?: Readonly<
     Record<string, ResolvedResourceConnection>
   >;
-  /**
-   * Optional operator-selected implementation plugin. The built-in opentofu
-   * adapter may ignore it; plugin-aware adapters use this to dispatch the
-   * selected implementation without hard-coding vendor breadth into core.
-   */
-  readonly implementationPlugin?: string;
-  /** Plugin-local, non-secret configuration from TargetPoolImplementation. */
-  readonly implementationOptions?: JsonObject;
   readonly actor: ActorContext;
 }
 
@@ -79,39 +81,106 @@ export interface AdapterApplyResult {
   readonly nativeResources: readonly NativeResourceRef[];
   readonly outputs: JsonObject;
   readonly runId?: string;
+  readonly execution?: ResourceShapeExecutionRecord;
+}
+
+/**
+ * Explicit proof attached only when an adapter can guarantee that a failed
+ * apply performed no provider mutation. Untyped errors are outcome-unknown and
+ * must never trigger automatic billing release or a terminal Failed state.
+ */
+export class ResourceAdapterApplyError extends Error {
+  readonly mutationOutcome: "none" | "unknown";
+
+  constructor(
+    message: string,
+    options: {
+      readonly mutationOutcome: "none" | "unknown";
+      readonly cause?: unknown;
+    },
+  ) {
+    super(
+      message,
+      options.cause === undefined ? undefined : { cause: options.cause },
+    );
+    this.name = "ResourceAdapterApplyError";
+    this.mutationOutcome = options.mutationOutcome;
+  }
+}
+
+export function adapterApplyMutationOutcome(
+  error: unknown,
+): "none" | "unknown" {
+  return error instanceof ResourceAdapterApplyError
+    ? error.mutationOutcome
+    : "unknown";
+}
+
+/**
+ * State/output publication after a backend refresh. Unlike observe, refresh is
+ * allowed to advance Resource-owned state and public outputs, but must not
+ * mutate native provider resources.
+ */
+export interface AdapterRefreshResult extends AdapterApplyResult {
+  readonly summary: string;
+}
+
+/** Existing provider identity to adopt into Resource-owned state. */
+export interface AdapterImportInput extends AdapterApplyInput {
+  readonly nativeId: string;
+}
+
+/** State/output publication produced by a read-only backend adoption. */
+export interface AdapterImportResult extends AdapterApplyResult {
+  readonly summary: string;
+}
+
+export type AdapterObservationStatus = "current" | "drifted" | "missing";
+
+/** Read-only backend observation. It never updates provider state or outputs. */
+export interface AdapterObserveResult {
+  readonly status: AdapterObservationStatus;
+  readonly summary: string;
+  /** Underlying drift-check Run id when observation uses the shared runner. */
+  readonly runId?: string;
 }
 
 export interface AdapterDeleteInput {
   readonly resourceId: string;
+  readonly environment: string;
+  readonly stateGeneration: number;
+  readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
   /**
-   * The same implementation plan used to create the resource. OpenTofu-backed
-   * resources need it again for destroy because the backing Capsule is only a
-   * state/identity anchor; the generated root remains the executable module.
+   * The same implementation plan used to create the Resource. OpenTofu-backed
+   * Resources need it again for destroy so the runner can replay the pinned
+   * operator module against the Resource-owned state.
    */
   readonly plan?: ResourceShapePlan;
   readonly nativeResources: readonly NativeResourceRef[];
   readonly target: TargetPoolEntry;
+  readonly implementation: TargetImplementationDescriptor;
   readonly credentialRef?: string;
-  readonly implementationPlugin?: string;
-  readonly implementationOptions?: JsonObject;
   readonly deletePolicy?: ResourceDeletePolicy;
   readonly actor: ActorContext;
 }
 
-/** The adapter contract (Phase 2 subset: preview / apply / delete). */
+/** Stable adapter contract for plan, reconcile, observation, and teardown. */
 export interface ResourceAdapter {
   /** Stable adapter id, e.g. `opentofu` or `stub`. */
   readonly id: string;
   preview(input: AdapterApplyInput): Promise<AdapterPreviewResult>;
   apply(input: AdapterApplyInput): Promise<AdapterApplyResult>;
+  importResource(input: AdapterImportInput): Promise<AdapterImportResult>;
+  observe(input: AdapterApplyInput): Promise<AdapterObserveResult>;
+  refresh(input: AdapterApplyInput): Promise<AdapterRefreshResult>;
   delete(input: AdapterDeleteInput): Promise<void>;
 }
 
 /**
  * Deterministic adapter: it never touches a cloud. It echoes the resolved
  * native-resource plan and synthesizes outputs from the module's public output
- * names. Used by unit tests and as the self-host default before a runner is
- * configured.
+ * names. Available only through explicit test injection; production and
+ * self-host composition fail closed when no real adapter is installed.
  */
 export class StubResourceShapeAdapter implements ResourceAdapter {
   readonly id = "stub";
@@ -121,7 +190,7 @@ export class StubResourceShapeAdapter implements ResourceAdapter {
     return Promise.resolve({
       summary:
         `create ${native.length} resource(s) ` +
-        `via ${input.plan.templateId} on ${input.target.name}`,
+        `via ${input.plan.executionId} on ${input.target.name}`,
       nativeResources: native,
     });
   }
@@ -138,6 +207,43 @@ export class StubResourceShapeAdapter implements ResourceAdapter {
       nativeResources: input.nativeResources ?? [],
       outputs,
     });
+  }
+
+  async importResource(
+    input: AdapterImportInput,
+  ): Promise<AdapterImportResult> {
+    const result = await this.apply(input);
+    return {
+      ...result,
+      nativeResources:
+        result.nativeResources.length > 0
+          ? result.nativeResources.map((resource, index) =>
+              index === 0 ? { ...resource, id: input.nativeId } : resource,
+            )
+          : [{ type: input.plan.shape, id: input.nativeId }],
+      summary: `imported ${input.nativeId} as ${input.resourceId}`,
+      execution: {
+        runId: `stub-import:${input.resourceId}`,
+        stateGeneration: input.stateGeneration + 1,
+        stateRef: `stub://state/${input.resourceId}`,
+        updatedAt: new Date(0).toISOString(),
+      },
+    };
+  }
+
+  observe(input: AdapterApplyInput): Promise<AdapterObserveResult> {
+    return Promise.resolve({
+      status: "current",
+      summary: `observed ${input.resourceId} through ${input.plan.executionId}`,
+    });
+  }
+
+  async refresh(input: AdapterApplyInput): Promise<AdapterRefreshResult> {
+    const result = await this.apply(input);
+    return {
+      ...result,
+      summary: `refreshed ${input.resourceId} through ${input.plan.executionId}`,
+    };
   }
 
   delete(_input: AdapterDeleteInput): Promise<void> {

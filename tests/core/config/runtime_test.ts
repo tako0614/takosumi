@@ -11,27 +11,17 @@ test("runtime config loader defaults to local + takosumi-api when env empty", as
   assert.deepEqual(config.diagnostics, []);
 });
 
-test("runtime config loader reads explicit environment + process role", async () => {
+test("runtime config loader reads explicit environment + API process role", async () => {
   const config = await loadRuntimeConfigFromEnv({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
-      TAKOSUMI_PROCESS_ROLE: "takosumi-worker",
+      TAKOSUMI_PROCESS_ROLE: "takosumi-api",
     },
   });
 
   assert.equal(config.environment, "production");
-  assert.equal(config.processRole, "takosumi-worker");
+  assert.equal(config.processRole, "takosumi-api");
   assert.deepEqual(config.diagnostics, []);
-});
-
-test("runtime config loader prefers canonical process role key", async () => {
-  const config = await loadRuntimeConfigFromEnv({
-    env: {
-      TAKOSUMI_PROCESS_ROLE: "takosumi-runtime-agent",
-    },
-  });
-
-  assert.equal(config.processRole, "takosumi-runtime-agent");
 });
 
 test("runtime config loader rejects invalid process role", async () => {

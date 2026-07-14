@@ -18,12 +18,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
   [
     {
       method: "GET",
-      path: "/api/v1/billing/plans",
-      summary: "List public billing plans",
-      auth: "account-session",
-    },
-    {
-      method: "GET",
       path: "/api/v1/dashboard/bootstrap",
       summary: "Read the dashboard session bootstrap projection",
       auth: "account-session",
@@ -60,32 +54,26 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
-      path: "/api/v1/workspaces/{workspaceId}/output-sync",
-      summary: "Read Workspace Output Sync settings and revision",
-      auth: "account-session",
-    },
-    {
-      method: "PATCH",
-      path: "/api/v1/workspaces/{workspaceId}/output-sync",
-      summary: "Enable or disable Workspace Output Sync",
+      path: "/api/v1/workspaces/{workspaceId}/members",
+      summary: "List Workspace members",
       auth: "account-session",
     },
     {
       method: "GET",
-      path: "/api/v1/workspaces/{workspaceId}/output-sync/snapshot",
-      summary: "Read the current Workspace Output snapshot",
+      path: "/api/v1/workspaces/{workspaceId}/projects",
+      summary: "List Workspace Projects",
       auth: "account-session",
     },
     {
       method: "POST",
-      path: "/api/v1/workspaces/{workspaceId}/output-sync/reconcile",
-      summary: "Start or advance Workspace Output reconciliation",
+      path: "/api/v1/workspaces/{workspaceId}/projects",
+      summary: "Create a Project",
       auth: "account-session",
     },
     {
       method: "GET",
-      path: "/api/v1/workspaces/{workspaceId}/members",
-      summary: "List Workspace members",
+      path: "/api/v1/projects/{projectId}",
+      summary: "Read a Project",
       auth: "account-session",
     },
     {
@@ -173,12 +161,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
-      method: "GET",
-      path: "/api/v1/workspaces/{workspaceId}/credit-reservations",
-      summary: "List Workspace credit reservations",
-      auth: "account-session",
-    },
-    {
       method: "POST",
       path: "/api/v1/workspaces/{workspaceId}/plan-update",
       summary: "Create a Workspace plan update Run",
@@ -246,6 +228,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
+      path: "/api/v1/capsules/{capsuleId}/outputs",
+      summary: "Read the Capsule's current public Output projection",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
       path: "/api/v1/capsules/{capsuleId}/dependencies",
       summary: "List Capsule Dependencies",
       auth: "account-session",
@@ -258,13 +246,13 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
-      path: "/api/v1/capsules/{capsuleId}/provider-connections",
+      path: "/api/v1/capsules/{capsuleId}/provider-bindings",
       summary: "Read Capsule ProviderBinding selections",
       auth: "account-session",
     },
     {
       method: "PUT",
-      path: "/api/v1/capsules/{capsuleId}/provider-connections",
+      path: "/api/v1/capsules/{capsuleId}/provider-bindings",
       summary: "Replace Capsule ProviderBinding selections",
       auth: "account-session",
     },
@@ -439,14 +427,14 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "POST",
-      path: "/api/v1/connections/cloudflare/oauth/start",
-      summary: "Start Cloudflare credential OAuth",
+      path: "/api/v1/connections/oauth/{helperId}/start",
+      summary: "Start an installed credential OAuth helper",
       auth: "account-session",
     },
     {
       method: "GET",
-      path: "/api/v1/connections/cloudflare/oauth/callback",
-      summary: "Complete Cloudflare credential OAuth",
+      path: "/api/v1/connections/oauth/{helperId}/callback",
+      summary: "Complete an installed credential OAuth helper",
       auth: "account-session",
     },
     {

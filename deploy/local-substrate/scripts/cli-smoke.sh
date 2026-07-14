@@ -118,7 +118,7 @@ PROFILE_IDS="$(response_body "$PROFILES_RESPONSE" | json_field "','.join(p['id']
 	exit 1
 }
 
-SPACE_REQUEST=$(cat <<EOF
+WORKSPACE_REQUEST=$(cat <<EOF
 {
   "handle": "cli-smoke-$RUN_SUFFIX",
   "displayName": "CLI smoke $RUN_SUFFIX",
@@ -127,13 +127,13 @@ SPACE_REQUEST=$(cat <<EOF
 }
 EOF
 )
-SPACE_RESPONSE="$(post_json "/internal/v1/workspaces" "$SPACE_REQUEST")"
-require_code "space create" "$SPACE_RESPONSE" "201"
-SPACE_ID="$(response_body "$SPACE_RESPONSE" | json_field "data['space']['id']")"
+WORKSPACE_RESPONSE="$(post_json "/internal/v1/workspaces" "$WORKSPACE_REQUEST")"
+require_code "workspace create" "$WORKSPACE_RESPONSE" "201"
+WORKSPACE_ID="$(response_body "$WORKSPACE_RESPONSE" | json_field "data['workspace']['id']")"
 
 SOURCE_REQUEST=$(cat <<EOF
 {
-  "spaceId": "$SPACE_ID",
+  "workspaceId": "$WORKSPACE_ID",
   "name": "$APP_NAME",
   "url": "$SOURCE_GIT",
   "defaultRef": "$SOURCE_REF",
@@ -172,11 +172,11 @@ CAPSULE_REQUEST=$(cat <<EOF
 }
 EOF
 )
-CAPSULE_RESPONSE="$(post_json "/internal/v1/workspaces/$SPACE_ID/capsules" "$CAPSULE_REQUEST")"
+CAPSULE_RESPONSE="$(post_json "/internal/v1/workspaces/$WORKSPACE_ID/capsules" "$CAPSULE_REQUEST")"
 require_code "capsule create" "$CAPSULE_RESPONSE" "201"
-INSTALLATION_ID="$(response_body "$CAPSULE_RESPONSE" | json_field "data['capsule']['id']")"
+CAPSULE_ID="$(response_body "$CAPSULE_RESPONSE" | json_field "data['capsule']['id']")"
 
-PLAN_RESPONSE="$(post_json "/internal/v1/capsules/$INSTALLATION_ID/plan" '{}')"
+PLAN_RESPONSE="$(post_json "/internal/v1/capsules/$CAPSULE_ID/plan" '{}')"
 require_code "capsule plan create" "$PLAN_RESPONSE" "201"
 PLAN_BODY="$(response_body "$PLAN_RESPONSE")"
 PLAN_ID="$(printf '%s' "$PLAN_BODY" | json_field "data['run']['id']")"
@@ -218,15 +218,15 @@ if [[ "$APPLY_STATUS" != "succeeded" ]]; then
 	exit 1
 fi
 
-GET_INSTALLATION_RESPONSE="$(get_json "/internal/v1/capsules/$INSTALLATION_ID")"
-require_code "get installation" "$GET_INSTALLATION_RESPONSE" "200"
-LIST_DEPLOYMENTS_RESPONSE="$(get_json "/internal/v1/capsules/$INSTALLATION_ID/state-versions")"
-require_code "list deployments" "$LIST_DEPLOYMENTS_RESPONSE" "200"
-DEPLOYMENT_COUNT="$(response_body "$LIST_DEPLOYMENTS_RESPONSE" | json_field "len(data.get('deployments') or [])")"
-[[ "$DEPLOYMENT_COUNT" -gt 0 ]] || {
-	echo "FAIL: no deployment was recorded for $INSTALLATION_ID" >&2
-	echo "      response: $(response_body "$LIST_DEPLOYMENTS_RESPONSE")" >&2
+GET_CAPSULE_RESPONSE="$(get_json "/internal/v1/capsules/$CAPSULE_ID")"
+require_code "get capsule" "$GET_CAPSULE_RESPONSE" "200"
+LIST_STATE_VERSIONS_RESPONSE="$(get_json "/internal/v1/capsules/$CAPSULE_ID/state-versions")"
+require_code "list state versions" "$LIST_STATE_VERSIONS_RESPONSE" "200"
+STATE_VERSION_COUNT="$(response_body "$LIST_STATE_VERSIONS_RESPONSE" | json_field "len(data.get('stateVersions') or [])")"
+[[ "$STATE_VERSION_COUNT" -gt 0 ]] || {
+	echo "FAIL: no StateVersion was recorded for $CAPSULE_ID" >&2
+	echo "      response: $(response_body "$LIST_STATE_VERSIONS_RESPONSE")" >&2
 	exit 1
 }
 
-echo "OK git capsule deploy space=$SPACE_ID source=$SOURCE_ID sync=$SYNC_ID installation=$INSTALLATION_ID plan=$PLAN_ID apply=$APPLY_ID snapshots=$SNAPSHOT_COUNT profiles=$PROFILE_IDS"
+echo "OK git capsule run workspace=$WORKSPACE_ID source=$SOURCE_ID sync=$SYNC_ID capsule=$CAPSULE_ID plan=$PLAN_ID apply=$APPLY_ID stateVersions=$STATE_VERSION_COUNT snapshots=$SNAPSHOT_COUNT profiles=$PROFILE_IDS"

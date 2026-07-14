@@ -2,26 +2,22 @@
  * Capsules domain service (Core Specification §5 / §6 / §16).
  *
  * A Capsule is the OpenTofu execution unit directly under a Workspace / Project
- * (`@workspace/name`): one Capsule = one normalized generated root, one tfstate
+ * (`@workspace/name`): one Capsule = one OpenTofu root execution, one tfstate
  * lineage, outputs, and activity. It is configured by a service-side
- * InstallConfig and optionally pinned to one Source. The App / Environment /
+ * InstallConfig and pinned to one Git Source. The App / Environment /
  * InstallProfile lanes model is retired; `environment` is a column on the
- * Capsule (UNIQUE(project_id, name, environment)). Upload/artifact deploys omit
- * Source and still use the same Capsule ledger.
+ * Capsule (UNIQUE(project_id, name, environment)).
  *
  * This service owns Capsule creation + lookup and InstallConfig /
- * CapsuleProviderEnvBinding record passthroughs with validation. No secret
- * material flows through it; bindings reference Connection ids only.
- *
- * (Formerly `InstallationsService` / `Installation`. The transient
- * `Installation` contract alias and the spine store's `*Installation*` method
- * names stay until the rename converges.)
+ * ProviderBindingSet record passthroughs with validation. No secret material
+ * flows through it; bindings reference ProviderConnection ids only.
  */
 
 import type { Capsule, CapsuleStatus } from "takosumi-contract/capsules";
 import type {
-  CapsuleProviderEnvBindingSet,
+  ProviderBindingSet,
   InstallConfig,
+  InstallConfigLifecycleAction,
 } from "takosumi-contract/install-configs";
 import type { Page } from "takosumi-contract/pagination";
 import {
@@ -30,17 +26,20 @@ import {
 } from "../deploy-control/errors.ts";
 import type {
   CapsuleListPageParams,
-  OpenTofuDeploymentStore,
+  OpenTofuControlStore,
 } from "../deploy-control/store.ts";
 import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
 } from "../activity/mod.ts";
+import { validateCapsuleInterfaceBlueprints } from "../interfaces/service.ts";
+import { ProjectsService } from "../projects/mod.ts";
 import {
-  isNonselectableRepositoryStoreInstallConfigId,
-  isRetiredBuiltInInstallConfigId,
-  builtInInstallConfigs,
-} from "./install_config_bootstrap.ts";
+  containsSecretLikeString,
+  isSecretKey,
+} from "takosumi-contract/redaction";
+import { capsuleInterfaceBlueprintsNeedInstallingPrincipal } from "takosumi-contract/interfaces";
+import { materializeInstallContextVariables } from "../deploy-control/validation.ts";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -51,37 +50,40 @@ const CAPSULE_NAME_PATTERN = /^[a-z0-9-]+$/;
 
 export interface CreateCapsuleRequest {
   readonly workspaceId: string;
+  /** Defaults to the Workspace-qualified default Project. */
+  readonly projectId?: string;
   readonly name: string;
   readonly environment: string;
-  /**
-   * Registered git Source. Omit only for legacy source-less Capsules retained
-   * for internal/operator compatibility with retired upload/artifact snapshots.
-   */
-  readonly sourceId?: string;
+  /** Registered Git Source. */
+  readonly sourceId: string;
   readonly installConfigId: string;
   /** Auto-update opt-in (see {@link Capsule.autoUpdate}). Defaults to off. */
   readonly autoUpdate?: boolean;
 }
 
 export interface CapsulesServiceDependencies {
-  readonly store: OpenTofuDeploymentStore;
+  readonly store: OpenTofuControlStore;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
   /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder;
+  readonly projects?: ProjectsService;
 }
 
 export class CapsulesService {
-  readonly #store: OpenTofuDeploymentStore;
+  readonly #store: OpenTofuControlStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
   readonly #activity: ActivityRecorder;
+  readonly #projects: ProjectsService;
 
   constructor(deps: CapsulesServiceDependencies) {
     this.#store = deps.store;
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
     this.#activity = deps.activity ?? NOOP_ACTIVITY_RECORDER;
+    this.#projects =
+      deps.projects ?? new ProjectsService({ store: deps.store });
   }
 
   // --- Capsule (§5) ---------------------------------------------------------
@@ -97,31 +99,29 @@ export class CapsulesService {
         `name ${request.name} must match ${CAPSULE_NAME_PATTERN.source}`,
       );
     }
-    if (isRetiredBuiltInInstallConfigId(request.installConfigId)) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        `installConfigId ${request.installConfigId} is a retired built-in alias; use a Git URL Capsule config instead`,
-      );
-    }
-    const workspace = await this.#store.getSpace(request.workspaceId);
+    const workspace = await this.#store.getWorkspace(request.workspaceId);
     if (!workspace) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "workspace does not exist",
       );
     }
-    // A git Source is optional only for legacy upload/artifact-origin Capsules.
-    // When supplied it must resolve in the same Workspace.
-    if (request.sourceId !== undefined) {
-      requireNonEmptyString(request.sourceId, "sourceId");
-      const source = await this.#store.getSource(request.sourceId);
-      const sourceWorkspaceId = source?.workspaceId ?? source?.spaceId;
-      if (!source || sourceWorkspaceId !== request.workspaceId) {
-        throw new OpenTofuControllerError(
-          "invalid_argument",
-          "source is not available to this workspace",
-        );
-      }
+    const project = request.projectId
+      ? await this.#projects.getProject(request.projectId)
+      : await this.#projects.ensureDefaultProject(request.workspaceId);
+    if (project.workspaceId !== request.workspaceId) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "project is not available to this workspace",
+      );
+    }
+    requireNonEmptyString(request.sourceId, "sourceId");
+    const source = await this.#store.getSource(request.sourceId);
+    if (!source || source.workspaceId !== request.workspaceId) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "source is not available to this workspace",
+      );
     }
     let config: InstallConfig;
     try {
@@ -138,15 +138,20 @@ export class CapsulesService {
       }
       throw error;
     }
-    if (isRetiredBuiltInInstallConfigId(config.id)) {
+    validateCapsuleInterfaceBlueprints(config.interfaceBlueprints ?? []);
+    if (
+      capsuleInterfaceBlueprintsNeedInstallingPrincipal(
+        config.interfaceBlueprints,
+      )
+    ) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        "install config is retired; use a Git URL Capsule config instead",
+        "install config contains an unresolved installing Principal binding placeholder",
       );
     }
     // A workspace-scoped InstallConfig may only be used by its owning Workspace;
-    // a built-in shared config (no workspaceId) is usable by any Workspace.
-    const configWorkspaceId = config.workspaceId ?? config.spaceId;
+    // an operator catalog/default config without workspaceId is reusable.
+    const configWorkspaceId = config.workspaceId;
     if (
       configWorkspaceId !== undefined &&
       configWorkspaceId !== request.workspaceId
@@ -156,8 +161,8 @@ export class CapsulesService {
         "install config is not available to this workspace",
       );
     }
-    const existing = await this.#store.getInstallationByName(
-      request.workspaceId,
+    const existing = await this.#store.getCapsuleByName(
+      project.id,
       request.name,
       request.environment,
     );
@@ -174,16 +179,14 @@ export class CapsulesService {
     }
     const nowIso = this.#now().toISOString();
     const capsule: Capsule = {
-      id: this.#newId("inst"),
+      id: this.#newId("cap"),
       workspaceId: request.workspaceId,
-      // @deprecated mirror kept populated until the rename converges.
-      spaceId: request.workspaceId,
+      projectId: project.id,
       name: request.name,
       // The name is already a slug; the column is kept distinct so a future
       // display name can diverge from the URL segment.
       slug: request.name,
-      ...(request.sourceId ? { sourceId: request.sourceId } : {}),
-      installType: config.installType,
+      sourceId: request.sourceId,
       installConfigId: request.installConfigId,
       environment: request.environment,
       currentStateGeneration: 0,
@@ -192,21 +195,20 @@ export class CapsulesService {
       createdAt: nowIso,
       updatedAt: nowIso,
     };
-    const created = await this.#store.putInstallation(capsule);
+    const created = await this.#store.putCapsule(capsule);
     // Activity (§27 / §34): a Capsule was created in the Workspace. Names /
     // ids only — no secret material.
     await this.#activity.record({
       workspaceId: created.workspaceId,
-      spaceId: created.workspaceId,
       action: "capsule.created",
       targetType: "capsule",
       targetId: created.id,
       metadata: {
         name: created.name,
         environment: created.environment,
-        installType: created.installType,
-        ...(created.sourceId ? { sourceId: created.sourceId } : {}),
-        origin: created.sourceId ? "git" : "upload",
+        projectId: created.projectId,
+        sourceId: created.sourceId,
+        origin: "git",
       },
     });
     return created;
@@ -218,7 +220,7 @@ export class CapsulesService {
 
   async listCapsules(workspaceId: string): Promise<readonly Capsule[]> {
     requireNonEmptyString(workspaceId, "workspaceId");
-    return await this.#store.listInstallations(workspaceId);
+    return await this.#store.listCapsules(workspaceId);
   }
 
   async listCapsulesPage(
@@ -226,13 +228,13 @@ export class CapsulesService {
     params: CapsuleListPageParams,
   ): Promise<Page<Capsule>> {
     requireNonEmptyString(workspaceId, "workspaceId");
-    return await this.#store.listInstallationsPage(workspaceId, params);
+    return await this.#store.listCapsulesPage(workspaceId, params);
   }
 
   /**
    * Patches the lifecycle status of a Capsule. Other ledger cursors
    * (currentStateVersionId / currentStateGeneration / currentOutputId) are owned
-   * by the apply pipeline through the guarded `patchInstallation` store accessor
+   * by the apply pipeline through the guarded `patchCapsule` store accessor
    * and are not exposed here.
    */
   async patchCapsuleStatus(
@@ -240,7 +242,7 @@ export class CapsulesService {
     status: CapsuleStatus,
   ): Promise<Capsule> {
     await this.#requireCapsule(id);
-    const updated = await this.#store.patchInstallation(id, {
+    const updated = await this.#store.patchCapsule(id, {
       status,
       updatedAt: this.#now().toISOString(),
     });
@@ -253,7 +255,7 @@ export class CapsulesService {
   /** Toggles the auto-update opt-in (see {@link Capsule.autoUpdate}). */
   async setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule> {
     await this.#requireCapsule(id);
-    const updated = await this.#store.patchInstallation(id, {
+    const updated = await this.#store.patchCapsule(id, {
       autoUpdate: enabled,
       updatedAt: this.#now().toISOString(),
     });
@@ -262,7 +264,6 @@ export class CapsulesService {
     }
     await this.#activity.record({
       workspaceId: updated.workspaceId,
-      spaceId: updated.workspaceId,
       action: enabled
         ? "capsule.auto_update_enabled"
         : "capsule.auto_update_disabled",
@@ -281,32 +282,24 @@ export class CapsulesService {
    */
   async abandonUnappliedCapsule(id: string, reason: string): Promise<Capsule> {
     const existing = await this.#requireCapsule(id);
-    if (
-      existing.currentDeploymentId ||
-      existing.currentStateVersionId ||
-      existing.currentStateGeneration > 0
-    ) {
+    if (existing.currentStateVersionId || existing.currentStateGeneration > 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `capsule ${id} has applied state and must use the destroy flow`,
       );
     }
     const now = this.#now().toISOString();
-    const updated = await this.#store.patchInstallation(id, {
+    const updated = await this.#store.patchCapsule(id, {
       status: "destroyed",
       updatedAt: now,
     });
     if (!updated) {
       throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
     }
-    await this.#store.deleteInstallationProviderEnvBindingSet(
-      updated.id,
-      updated.environment,
-    );
-    await this.#store.releasePublicHostsForInstallation(id, now);
+    await this.#store.deleteProviderBindingSet(updated.id, updated.environment);
+    await this.#store.releasePublicHostsForCapsule(id, now);
     await this.#activity.record({
       workspaceId: updated.workspaceId,
-      spaceId: updated.workspaceId,
       action: "capsule.abandoned",
       targetType: "capsule",
       targetId: updated.id,
@@ -324,22 +317,15 @@ export class CapsulesService {
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
     requireNonEmptyString(config.id, "id");
     requireNonEmptyString(config.name, "name");
-    if (isRetiredBuiltInInstallConfigId(config.id)) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        `install config ${config.id} is a retired built-in alias`,
-      );
-    }
-    if (config.installType === "opentofu_root") {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "opentofu_root is a legacy direct-root compatibility type; new InstallConfigs must use an OpenTofu Capsule install type",
-      );
-    }
     if (config.sourceBuild) validateSourceBuild(config.sourceBuild);
-    const configWorkspaceId = config.workspaceId ?? config.spaceId;
+    validateLifecycleActions(config);
+    materializeInstallContextVariables(config.installContextVariableMapping, {
+      workspaceId: "workspace-validation",
+      capsuleId: "capsule-validation",
+    });
+    const configWorkspaceId = config.workspaceId;
     if (configWorkspaceId !== undefined) {
-      const workspace = await this.#store.getSpace(configWorkspaceId);
+      const workspace = await this.#store.getWorkspace(configWorkspaceId);
       if (!workspace) {
         throw new OpenTofuControllerError(
           "invalid_argument",
@@ -347,19 +333,14 @@ export class CapsulesService {
         );
       }
     }
+    validateCapsuleInterfaceBlueprints(config.interfaceBlueprints ?? []);
     return await this.#store.putInstallConfig(config);
   }
 
   async getInstallConfig(id: string): Promise<InstallConfig> {
     requireNonEmptyString(id, "id");
     const config = await this.#store.getInstallConfig(id);
-    if (!config || isRetiredBuiltInInstallConfigId(config.id)) {
-      const fallback = this.#sharedFallbackInstallConfigs().find(
-        (sharedConfig) => sharedConfig.id === id,
-      );
-      if (fallback && !isRetiredBuiltInInstallConfigId(fallback.id)) {
-        return fallback;
-      }
+    if (!config) {
       throw new OpenTofuControllerError(
         "not_found",
         `install config ${id} not found`,
@@ -371,39 +352,22 @@ export class CapsulesService {
   async listInstallConfigs(
     workspaceId?: string,
   ): Promise<readonly InstallConfig[]> {
-    const stored = (await this.#store.listInstallConfigs(workspaceId)).filter(
-      (config) =>
-        !isRetiredBuiltInInstallConfigId(config.id) &&
-        isSelectableInstallConfig(config),
-    );
-    if (workspaceId !== undefined) return stored;
-    const byId = new Map<string, InstallConfig>(
-      this.#sharedFallbackInstallConfigs().map((config) => [config.id, config]),
-    );
-    for (const config of stored) byId.set(config.id, config);
-    return [...byId.values()];
-  }
-
-  #sharedFallbackInstallConfigs(): readonly InstallConfig[] {
-    return builtInInstallConfigs({ now: this.#now }).filter(
-      (config) => !isRetiredBuiltInInstallConfigId(config.id),
+    return (await this.#store.listInstallConfigs(workspaceId)).filter(
+      isSelectableInstallConfig,
     );
   }
 
   // --- Capsule provider env binding record ----------------------------------
 
-  async putCapsuleProviderEnvBindingSet(
-    profile: CapsuleProviderEnvBindingSet,
-  ): Promise<CapsuleProviderEnvBindingSet> {
+  async putProviderBindingSet(
+    profile: ProviderBindingSet,
+  ): Promise<ProviderBindingSet> {
     requireNonEmptyString(profile.id, "id");
-    const profileCapsuleId = profile.capsuleId ?? profile.installationId;
+    const profileCapsuleId = profile.capsuleId;
     requireNonEmptyString(profileCapsuleId, "capsuleId");
     requireNonEmptyString(profile.environment, "environment");
     const capsule = await this.#requireCapsule(profileCapsuleId);
-    if (
-      (capsule.workspaceId ?? capsule.spaceId) !==
-      (profile.workspaceId ?? profile.spaceId)
-    ) {
+    if (capsule.workspaceId !== profile.workspaceId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "provider env binding set workspace does not match capsule workspace",
@@ -415,77 +379,18 @@ export class CapsulesService {
         `capsule ${profileCapsuleId} is deleted`,
       );
     }
-    return await this.#store.putInstallationProviderEnvBindingSet(profile);
+    return await this.#store.putProviderBindingSet(profile);
   }
 
-  async getCapsuleProviderEnvBindingSetByCapsule(
+  async getProviderBindingSetByCapsule(
     capsuleId: string,
     environment: string,
-  ): Promise<CapsuleProviderEnvBindingSet | undefined> {
+  ): Promise<ProviderBindingSet | undefined> {
     requireNonEmptyString(capsuleId, "capsuleId");
     requireNonEmptyString(environment, "environment");
     const capsule = await this.#requireCapsule(capsuleId);
     if (capsule.status === "destroyed") return undefined;
-    return await this.#store.getInstallationProviderEnvBindingSetByInstallation(
-      capsuleId,
-      environment,
-    );
-  }
-
-  // --- Transient deprecated aliases (removed at rename convergence) ----------
-
-  /** @deprecated transient alias for {@link createCapsule}. */
-  async createInstallation(
-    request: CreateInstallationRequest,
-  ): Promise<Capsule> {
-    return await this.createCapsule({
-      workspaceId: request.workspaceId ?? request.spaceId ?? "",
-      name: request.name,
-      environment: request.environment,
-      ...(request.sourceId ? { sourceId: request.sourceId } : {}),
-      installConfigId: request.installConfigId,
-    });
-  }
-
-  /** @deprecated transient alias for {@link getCapsule}. */
-  async getInstallation(id: string): Promise<Capsule> {
-    return await this.getCapsule(id);
-  }
-
-  /** @deprecated transient alias for {@link listCapsules}. */
-  async listInstallations(workspaceId: string): Promise<readonly Capsule[]> {
-    return await this.listCapsules(workspaceId);
-  }
-
-  /** @deprecated transient alias for {@link listCapsulesPage}. */
-  async listInstallationsPage(
-    workspaceId: string,
-    params: CapsuleListPageParams,
-  ): Promise<Page<Capsule>> {
-    return await this.listCapsulesPage(workspaceId, params);
-  }
-
-  /** @deprecated transient alias for {@link patchCapsuleStatus}. */
-  async patchInstallationStatus(
-    id: string,
-    status: CapsuleStatus,
-  ): Promise<Capsule> {
-    return await this.patchCapsuleStatus(id, status);
-  }
-
-  /** @deprecated transient alias for {@link putCapsuleProviderEnvBindingSet}. */
-  async putInstallationProviderEnvBindingSet(
-    profile: CapsuleProviderEnvBindingSet,
-  ): Promise<CapsuleProviderEnvBindingSet> {
-    return await this.putCapsuleProviderEnvBindingSet(profile);
-  }
-
-  /** @deprecated transient alias for {@link getCapsuleProviderEnvBindingSetByCapsule}. */
-  async getInstallationProviderEnvBindingSetByInstallation(
-    capsuleId: string,
-    environment: string,
-  ): Promise<CapsuleProviderEnvBindingSet | undefined> {
-    return await this.getCapsuleProviderEnvBindingSetByCapsule(
+    return await this.#store.getProviderBindingSetByCapsule(
       capsuleId,
       environment,
     );
@@ -493,26 +398,12 @@ export class CapsulesService {
 
   async #requireCapsule(id: string): Promise<Capsule> {
     requireNonEmptyString(id, "id");
-    const capsule = await this.#store.getInstallation(id);
+    const capsule = await this.#store.getCapsule(id);
     if (!capsule) {
       throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
     }
     return capsule;
   }
-}
-
-/**
- * @deprecated transient alias for {@link CreateCapsuleRequest}. Accepts the old
- * `spaceId` field name during the rename convergence.
- */
-export interface CreateInstallationRequest {
-  readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
-  readonly name: string;
-  readonly environment: string;
-  readonly sourceId?: string;
-  readonly installConfigId: string;
 }
 
 function assertSafeInstallConfigPath(value: string, field: string): void {
@@ -583,8 +474,170 @@ function validateSourceBuild(
   }
 }
 
+const LIFECYCLE_ACTION_ENV_NAME_RE = /^[A-Z_][A-Z0-9_]*$/u;
+const LIFECYCLE_ACTION_RESERVED_ENV_RE = /^(?:TAKOSUMI_|OPENTOFU_|TF_)/u;
+const LIFECYCLE_ACTION_RESERVED_ENV_NAMES = new Set(["PATH", "HOME", "PWD"]);
+
+function validateLifecycleActions(config: InstallConfig): void {
+  const actions = config.lifecycleActions ?? [];
+  if (actions.length === 0) return;
+  if (actions.length > 20) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "lifecycleActions must contain at most 20 actions",
+    );
+  }
+  const policy = config.policy.lifecycleActions;
+  if (!policy) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "lifecycleActions require policy.lifecycleActions",
+    );
+  }
+  const ids = new Set<string>();
+  for (const [index, action] of actions.entries()) {
+    validateLifecycleAction(action, index);
+    if (ids.has(action.id)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `lifecycleActions[${index}].id must be unique`,
+      );
+    }
+    ids.add(action.id);
+    if (!policy.allowedExecutors.includes(action.executor)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `lifecycleActions[${index}].executor is not allowed by policy.lifecycleActions`,
+      );
+    }
+    if (!policy.allowedRunnerCapabilities.includes(action.runnerCapability)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `lifecycleActions[${index}].runnerCapability is not allowed by policy.lifecycleActions`,
+      );
+    }
+    if (action.useProviderCredentials === true) {
+      if (action.executor !== "runner") {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          `lifecycleActions[${index}].useProviderCredentials is supported only by runner actions`,
+        );
+      }
+      if (policy.allowProviderCredentials !== true) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          `lifecycleActions[${index}].useProviderCredentials is not allowed by policy.lifecycleActions`,
+        );
+      }
+    }
+  }
+}
+
+function validateLifecycleAction(
+  action: InstallConfigLifecycleAction,
+  index: number,
+): void {
+  const field = `lifecycleActions[${index}]`;
+  if (action.apiVersion !== "takosumi.dev/v1alpha1") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field}.apiVersion is unsupported`,
+    );
+  }
+  if (action.kind !== "command") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field}.kind is unsupported`,
+    );
+  }
+  if (!action.id || action.id.length > 128 || /[\0\r\n]/u.test(action.id)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field}.id is invalid`,
+    );
+  }
+  if (action.phase !== "post_apply" && action.phase !== "pre_destroy") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field}.phase is unsupported`,
+    );
+  }
+  if (action.executor !== "runner" && action.executor !== "operator") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field}.executor is unsupported`,
+    );
+  }
+  if (action.command.length === 0 || action.command.length > 40) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field}.command must contain 1-40 arguments`,
+    );
+  }
+  for (const argument of action.command) {
+    if (
+      typeof argument !== "string" ||
+      argument.length === 0 ||
+      argument.length > 4096 ||
+      /[\0\r\n]/u.test(argument)
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `${field}.command contains an invalid argument`,
+      );
+    }
+  }
+  if (action.workingDirectory) {
+    assertSafeInstallConfigPath(
+      action.workingDirectory,
+      `${field}.workingDirectory`,
+    );
+  }
+  if (!/^[a-z0-9][a-z0-9._/-]{0,127}$/u.test(action.runnerCapability)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field}.runnerCapability is invalid`,
+    );
+  }
+  if (
+    action.timeoutSeconds !== undefined &&
+    (!Number.isInteger(action.timeoutSeconds) ||
+      action.timeoutSeconds < 1 ||
+      action.timeoutSeconds > 6 * 60 * 60)
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field}.timeoutSeconds must be an integer between 1 and 21600`,
+    );
+  }
+  const envEntries = Object.entries(action.env ?? {});
+  if (envEntries.length > 64) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field}.env must contain at most 64 entries`,
+    );
+  }
+  for (const [name, value] of envEntries) {
+    if (
+      !LIFECYCLE_ACTION_ENV_NAME_RE.test(name) ||
+      LIFECYCLE_ACTION_RESERVED_ENV_RE.test(name) ||
+      LIFECYCLE_ACTION_RESERVED_ENV_NAMES.has(name) ||
+      isSecretKey(name) ||
+      typeof value !== "string" ||
+      value.length === 0 ||
+      value.length > 4096 ||
+      /[\0\r\n]/u.test(value) ||
+      containsSecretLikeString(value)
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `${field}.env contains an invalid or secret-like entry`,
+      );
+    }
+  }
+}
+
 function isSelectableInstallConfig(config: InstallConfig): boolean {
-  if (isNonselectableRepositoryStoreInstallConfigId(config.id)) return false;
   if (config.internal?.reason === "per_install_overrides") return false;
   if (
     config.workspaceId !== undefined &&

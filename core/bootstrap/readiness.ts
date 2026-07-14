@@ -1,35 +1,13 @@
 import type { ReadinessRouteProbes } from "../api/readiness_routes.ts";
 import type { AppContext, AppRuntimeConfig } from "../app_context.ts";
 import type { TakosumiProcessRole } from "../process/mod.ts";
-import type {
-  WorkerDaemonHandle,
-  WorkerDaemonTickResult,
-} from "../workers/daemon.ts";
 import { errorMessage } from "../shared/errors.ts";
-
-/**
- * Structural shape of the worker daemon state the readiness probe needs.
- *
- * Defined locally (rather than imported from `./worker_daemon.ts`) so the
- * readiness module stays independent of the worker daemon module — see
- * the no-cross-import rule in the bootstrap split. The orchestrator
- * (`bootstrap.ts`) constructs the concrete state and threads it in here;
- * structural typing matches the two interfaces at the call site.
- */
-interface ReadinessWorkerDaemonState {
-  readonly startedAt: string;
-  readonly lastTickByTask: ReadonlyMap<string, WorkerDaemonTickResult>;
-}
 
 export interface RoleReadinessProbeOptions {
   readonly role: TakosumiProcessRole;
   readonly context: AppContext;
   readonly runtimeConfig: AppRuntimeConfig;
   readonly runtimeEnv: Record<string, string | undefined>;
-  readonly implementationBindingCount?: number;
-  readonly strictImplementationBindings?: boolean;
-  readonly workerDaemonState: ReadinessWorkerDaemonState;
-  readonly workerDaemon?: WorkerDaemonHandle;
 }
 
 export function createRoleReadinessProbes(
@@ -51,25 +29,9 @@ export function createRoleReadinessProbes(
         }
         return options.runtimeConfig.processRole ?? options.role;
       });
-      await recordCheck(checks, failures, "storage", async () => {
-        await options.context.adapters.storage.transaction(() => undefined);
-        return "ok";
-      });
-      await recordCheck(checks, failures, "implementationBindings", () => {
-        const selected = options.implementationBindingCount ?? 0;
-        const strict = options.strictImplementationBindings ?? false;
-        return {
-          selected,
-          strict,
-          ...(strict && selected === 0
-            ? {
-              ok: false,
-              error:
-                "strict implementation binding mode requires at least one operator implementation binding",
-            }
-            : {}),
-        };
-      });
+      await recordCheck(checks, failures, "observability", () =>
+        options.context.adapters.observability ? "configured" : "missing"
+      );
       if (requiresInternalApiSecret(options.role)) {
         await recordCheck(checks, failures, "internalApiSecret", () => {
           if (!options.runtimeEnv.TAKOSUMI_INTERNAL_API_SECRET) {
@@ -77,15 +39,6 @@ export function createRoleReadinessProbes(
           }
           return "configured";
         });
-      }
-      if (options.role === "takosumi-worker") {
-        await recordCheck(
-          checks,
-          failures,
-          "workerDaemon",
-          () => workerDaemonReadiness(options),
-          booting,
-        );
       }
       const state = failures.length === 0
         ? "ready"
@@ -134,48 +87,7 @@ async function recordCheck(
 }
 
 function requiresInternalApiSecret(role: TakosumiProcessRole): boolean {
-  return role === "takosumi-api" || role === "takosumi-runtime-agent";
-}
-
-function workerDaemonReadiness(
-  options: RoleReadinessProbeOptions,
-): Record<string, unknown> {
-  if (!options.workerDaemon) {
-    throw new Error("worker daemon is not running");
-  }
-  if (options.workerDaemon.signal.aborted) {
-    throw new Error("worker daemon is stopped");
-  }
-  const tasks = [...options.workerDaemonState.lastTickByTask.values()];
-  if (tasks.length === 0) {
-    return {
-      ok: false,
-      state: "booting",
-      startedAt: options.workerDaemonState.startedAt,
-      error: "worker daemon has not completed an initial tick",
-    };
-  }
-  const failed = tasks.filter((task) => !task.ok);
-  if (failed.length > 0) {
-    throw new Error(
-      failed.map((task) =>
-        `${task.taskName} failed ${task.consecutiveFailures} time(s)`
-      ).join("; "),
-    );
-  }
-  return {
-    startedAt: options.workerDaemonState.startedAt,
-    tasks: Object.fromEntries(
-      tasks.map((task) => [
-        task.taskName,
-        {
-          ok: task.ok,
-          iteration: task.iteration,
-          finishedAt: task.finishedAt.toISOString(),
-        },
-      ]),
-    ),
-  };
+  return role === "takosumi-api";
 }
 
 function checkFailureMessage(

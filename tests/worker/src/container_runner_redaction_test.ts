@@ -159,8 +159,8 @@ test("container runner returns sanitized source sync phase timings", async () =>
       ref: "main",
       path: ".",
     },
-    archiveObjectKey:
-      "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+    archiveRef:
+      "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
   });
 
   expect(result.phaseTimings).toEqual([
@@ -195,7 +195,7 @@ test("container runner records active run and startup metrics", async () => {
         { "x-takosumi-runner-startup-seconds": "1.25" },
       ),
       TAKOSUMI_ENVIRONMENT: "test",
-      TAKOSUMI_RUNTIME_CELL_ID: "cell_test",
+      TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID: "runner_test",
     } as CloudflareWorkerEnv,
     { observability },
   );
@@ -210,8 +210,8 @@ test("container runner records active run and startup metrics", async () => {
   expect(active.map((metric) => metric.value)).toEqual([1, 0]);
   expect(active[0]?.tags).toMatchObject({
     environment: "test",
-    operationKind: "plan",
-    runtime_cell_id: "cell_test",
+    operation_kind: "plan",
+    runner_profile_id: "runner_test",
     status: "running",
   });
   const startup = await observability.listMetrics({
@@ -447,8 +447,8 @@ test("container runner reads Capsule compatibility source files", async () => {
       ref: "main",
       resolvedCommit: "abc123",
       path: ".",
-      archiveObjectKey:
-        "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      archiveRef:
+        "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
       archiveDigest: `sha256:${"a".repeat(64)}`,
       archiveSizeBytes: 128,
       fetchedByRunId: "ssr_1",
@@ -462,7 +462,7 @@ test("container runner reads Capsule compatibility source files", async () => {
   ]);
   expect(captured?.request).toMatchObject({
     sourceArchive: {
-      objectKey: "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      ref: "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
       digest: `sha256:${"a".repeat(64)}`,
     },
     source: { modulePath: "takos/deploy/opentofu" },
@@ -484,8 +484,8 @@ test("container runner times out stuck Capsule compatibility reads", async () =>
         ref: "main",
         resolvedCommit: "abc123",
         path: ".",
-        archiveObjectKey:
-          "spaces/space_1/sources/src_timeout/snapshots/snap_timeout/source.tar.zst",
+        archiveRef:
+          "workspaces/space_1/sources/src_timeout/snapshots/snap_timeout/source.tar.zst",
         archiveDigest: `sha256:${"a".repeat(64)}`,
         archiveSizeBytes: 128,
         fetchedByRunId: "ssr_timeout",
@@ -539,8 +539,8 @@ test("container runner dispatches custom_command service-data backups to the bac
       ref: "main",
       resolvedCommit: "abc123",
       path: ".",
-      archiveObjectKey:
-        "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      archiveRef:
+        "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
       archiveDigest: `sha256:${"a".repeat(64)}`,
       archiveSizeBytes: 128,
       fetchedByRunId: "ssr_1",
@@ -562,7 +562,7 @@ test("container runner dispatches custom_command service-data backups to the bac
     command: ["bun run backup"],
   });
   expect((captured?.request as Record<string, unknown>).sourceArchive).toEqual({
-    objectKey: "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+    ref: "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
     digest: `sha256:${"a".repeat(64)}`,
   });
 });
@@ -586,7 +586,7 @@ test("container runner dispatches post-apply release commands to the release act
     runId: "release_run_apply_1",
     applyRunId: "run_apply_1",
     installationId: "inst_1",
-    deploymentId: "dep_1",
+    stateVersionId: "state_1",
     sourceSnapshot: {
       id: "snap_1",
       sourceId: "src_1",
@@ -594,8 +594,8 @@ test("container runner dispatches post-apply release commands to the release act
       ref: "main",
       resolvedCommit: "abc123",
       path: ".",
-      archiveObjectKey:
-        "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      archiveRef:
+        "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
       archiveDigest: `sha256:${"a".repeat(64)}`,
       archiveSizeBytes: 128,
       fetchedByRunId: "ssr_1",
@@ -637,7 +637,7 @@ test("container runner dispatches post-apply release commands to the release act
     ],
   });
   expect((captured?.request as Record<string, unknown>).sourceArchive).toEqual({
-    objectKey: "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+    ref: "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
     digest: `sha256:${"a".repeat(64)}`,
   });
   expect((captured?.request as Record<string, unknown>).outputs).toEqual({
@@ -646,8 +646,7 @@ test("container runner dispatches post-apply release commands to the release act
   });
   expect((captured?.request as Record<string, unknown>).activation).toEqual({
     applyRunId: "run_apply_1",
-    installationId: "inst_1",
-    deploymentId: "dep_1",
+    stateVersionId: "state_1",
   });
 });
 
@@ -687,8 +686,8 @@ test("container runner dispatches provider_snapshot service-data backups without
       CloudflareContainerOpenTofuRunner["run"]
     >[0]["installConfig"],
     mode: "provider_snapshot",
+    adapterId: "snapshot-export",
     outputPath: "provider.snapshot",
-    provider: "registry.opentofu.org/cloudflare/cloudflare",
   });
 
   expect(result.status).toEqual("exported");
@@ -698,8 +697,8 @@ test("container runner dispatches provider_snapshot service-data backups without
   expect(captured?.action).toEqual("backup");
   expect((captured?.request as Record<string, unknown>).backup).toEqual({
     mode: "provider_snapshot",
+    adapterId: "snapshot-export",
     outputPath: "provider.snapshot",
-    provider: "registry.opentofu.org/cloudflare/cloudflare",
   });
   expect(
     (captured?.request as Record<string, unknown>).sourceArchive,

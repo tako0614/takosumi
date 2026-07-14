@@ -18,7 +18,7 @@ const ARCHIVE_BYTES = new Uint8Array([
   0x28, 0xb5, 0x2f, 0xfd, 0x01, 0x02, 0x03,
 ]);
 const ARCHIVE_KEY =
-  "spaces/spc_1/sources/src_1/snapshots/snap_1/source.tar.zst";
+  "workspaces/spc_1/sources/src_1/snapshots/snap_1/source.tar.zst";
 const RESOLVED_COMMIT = "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d";
 
 async function digestOf(bytes: Uint8Array): Promise<string> {
@@ -51,8 +51,7 @@ test("source_sync run promotes the runner-local source archive to R2_SOURCE", as
           archiveSizeBytes: ARCHIVE_BYTES.byteLength,
           sourceArchive: {
             kind: "runner-local",
-            ref: "runner-local://sync_1/source-archive",
-            archiveObjectKey: ARCHIVE_KEY,
+            ref: ARCHIVE_KEY,
             digest: archiveDigest,
             contentType: "application/zstd",
             sizeBytes: ARCHIVE_BYTES.byteLength,
@@ -85,7 +84,7 @@ test("source_sync run promotes the runner-local source archive to R2_SOURCE", as
             url: "https://github.com/octocat/Hello-World.git",
             ref: "main",
           },
-          archiveObjectKey: ARCHIVE_KEY,
+          archiveRef: ARCHIVE_KEY,
         },
       }),
     }),
@@ -103,7 +102,7 @@ test("source_sync run promotes the runner-local source archive to R2_SOURCE", as
   assert.equal(payload.resolvedCommit, RESOLVED_COMMIT);
   const archive = payload.sourceArchive as Record<string, unknown>;
   assert.equal(archive.kind, "object-storage");
-  assert.equal(archive.archiveObjectKey, ARCHIVE_KEY);
+  assert.equal(archive.ref, ARCHIVE_KEY);
   assert.equal(archive.digest, archiveDigest);
   assert.deepEqual(source.body(ARCHIVE_KEY), ARCHIVE_BYTES);
   // The plan/state bucket must be untouched by a source_sync run.
@@ -136,7 +135,7 @@ test("source_sync run reuses an object-storage source archive without re-persist
           archiveSizeBytes: ARCHIVE_BYTES.byteLength,
           sourceArchive: {
             kind: "object-storage",
-            archiveObjectKey: ARCHIVE_KEY,
+            ref: ARCHIVE_KEY,
             digest: archiveDigest,
             contentType: "application/zstd",
             sizeBytes: ARCHIVE_BYTES.byteLength,
@@ -162,11 +161,11 @@ test("source_sync run reuses an object-storage source archive without re-persist
             url: "https://github.com/octocat/Hello-World.git",
             ref: "main",
           },
-          archiveObjectKey: ARCHIVE_KEY,
+          archiveRef: ARCHIVE_KEY,
           reuseSnapshot: {
             id: "snap_prev",
             resolvedCommit: RESOLVED_COMMIT,
-            archiveObjectKey: ARCHIVE_KEY,
+            archiveRef: ARCHIVE_KEY,
             archiveDigest,
             archiveSizeBytes: ARCHIVE_BYTES.byteLength,
           },
@@ -180,7 +179,7 @@ test("source_sync run reuses an object-storage source archive without re-persist
   const payload = (await response.json()) as Record<string, unknown>;
   const archive = payload.sourceArchive as Record<string, unknown>;
   assert.equal(archive.kind, "object-storage");
-  assert.equal(archive.archiveObjectKey, ARCHIVE_KEY);
+  assert.equal(archive.ref, ARCHIVE_KEY);
   assert.equal(archive.reusedFromSnapshotId, "snap_prev");
   assert.deepEqual(source.body(ARCHIVE_KEY), ARCHIVE_BYTES);
   assert.equal(artifacts.body(ARCHIVE_KEY), undefined);
@@ -210,7 +209,7 @@ test("source_sync run rejects object-storage reuse without a matching reusable s
           archiveSizeBytes: ARCHIVE_BYTES.byteLength,
           sourceArchive: {
             kind: "object-storage",
-            archiveObjectKey: ARCHIVE_KEY,
+            ref: ARCHIVE_KEY,
             digest: archiveDigest,
             contentType: "application/zstd",
             sizeBytes: ARCHIVE_BYTES.byteLength,
@@ -236,7 +235,7 @@ test("source_sync run rejects object-storage reuse without a matching reusable s
             url: "https://github.com/octocat/Hello-World.git",
             ref: "main",
           },
-          archiveObjectKey: ARCHIVE_KEY,
+          archiveRef: ARCHIVE_KEY,
         },
       }),
     }),
@@ -261,7 +260,7 @@ test("source_sync run fails when the archive digest does not match", async () =>
           resolvedCommit: RESOLVED_COMMIT,
           sourceArchive: {
             kind: "runner-local",
-            archiveObjectKey: ARCHIVE_KEY,
+            ref: ARCHIVE_KEY,
             digest: "sha256:" + "0".repeat(64),
             contentType: "application/zstd",
           },
@@ -291,7 +290,7 @@ test("source_sync run fails when the archive digest does not match", async () =>
             url: "https://github.com/octocat/Hello-World.git",
             ref: "main",
           },
-          archiveObjectKey: ARCHIVE_KEY,
+          archiveRef: ARCHIVE_KEY,
         },
       }),
     }),

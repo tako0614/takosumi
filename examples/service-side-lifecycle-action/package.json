@@ -1,0 +1,6 @@
+{
+  "name": "service-side-lifecycle-action-sample",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Plain OpenTofu Capsule with a Takosumi service-side lifecycle action"
+}

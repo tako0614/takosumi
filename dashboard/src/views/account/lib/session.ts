@@ -28,11 +28,6 @@ import {
 
 export interface SessionRecord {
   readonly subject: string;
-  // sessionId kept for compatibility with older readers but is empty
-  // string from the cookie-only path (the HttpOnly cookie cannot be
-  // read from JS — the server proves the session via the
-  // /session/me endpoint).
-  readonly sessionId: string;
   readonly expiresAt: number; // epoch ms; 0 means "server didn't tell us"
   readonly provider?: string;
   readonly displayName?: string;
@@ -62,25 +57,20 @@ interface SessionMeResponse {
   readonly email?: string;
   readonly session?: {
     readonly subject: string;
-    readonly expires_at?: number;
     readonly expiresAt?: number;
-    readonly primary_account_id?: string;
     readonly primaryAccountId?: string;
     readonly provider?: string;
-    readonly display_name?: string;
     readonly displayName?: string;
     readonly email?: string;
   } | null;
 }
 
 function pickResponseRecord(data: SessionMeResponse): SessionRecord | null {
-  // The contract is the top-level shape `{ subject, expiresAt, primaryAccountId }`.
-  // We also accept the existing `{ session: { subject, ... } }` envelope so the
-  // SPA keeps working during a rolling deploy.
+  // `/v1/account/session/me` uses the top-level shape, while the dashboard
+  // bootstrap intentionally nests the same canonical fields under `session`.
   if (typeof data?.subject === "string" && data.subject.length > 0) {
     return {
       subject: data.subject,
-      sessionId: "",
       expiresAt: data.expiresAt ?? 0,
       provider: data.provider,
       displayName: data.displayName,
@@ -92,12 +82,11 @@ function pickResponseRecord(data: SessionMeResponse): SessionRecord | null {
   if (nested && typeof nested.subject === "string" && nested.subject) {
     return {
       subject: nested.subject,
-      sessionId: "",
-      expiresAt: nested.expiresAt ?? nested.expires_at ?? 0,
+      expiresAt: nested.expiresAt ?? 0,
       provider: nested.provider,
-      displayName: nested.displayName ?? nested.display_name,
+      displayName: nested.displayName,
       email: nested.email,
-      primaryAccountId: nested.primaryAccountId ?? nested.primary_account_id,
+      primaryAccountId: nested.primaryAccountId,
     };
   }
   return null;

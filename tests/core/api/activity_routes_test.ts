@@ -1,11 +1,11 @@
 /**
  * Activity HTTP route tests (Core Specification §27 audit_events / §34 Activity).
  *
- *   GET /internal/v1/workspaces/:spaceId/activity   -> the Space's audit trail, newest first
+ *   GET /internal/v1/workspaces/:workspaceId/activity   -> the Workspace's audit trail, newest first
  *
  * Drives the full internal route surface over an in-memory store. Real flows emit
- * Activity events (Installation created, plan created), and the listing shows
- * them space-scoped, newest-first, ?limit-bounded. A second Space sees nothing.
+ * Activity events (Capsule created, plan created), and the listing shows
+ * them workspace-scoped, newest-first, ?limit-bounded. A second Workspace sees nothing.
  */
 
 import { expect, test } from "bun:test";
@@ -14,8 +14,8 @@ import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
-import type { OpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import type { OpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
@@ -58,25 +58,24 @@ interface Harness {
   readonly app: {
     request: (path: string, init?: RequestInit) => Promise<Response>;
   };
-  readonly store: OpenTofuDeploymentStore;
+  readonly store: OpenTofuControlStore;
 }
 
 async function harness(): Promise<Harness> {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const { app } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
     },
-    opentofuDeploymentStore: store,
+    opentofuControlStore: store,
     opentofuRunner: runner(),
-    startWorkerDaemon: false,
   });
   return { app, store };
 }
 
-async function createSpace(
+async function createWorkspace(
   app: Harness["app"],
   handle: string,
 ): Promise<string> {
@@ -91,35 +90,34 @@ async function createSpace(
     }),
   });
   expect(res.status).toBe(201);
-  return (await res.json()).space.id as string;
+  return (await res.json()).workspace.id as string;
 }
 
-/** Creates a source + Installation in a Space and returns the Installation id. */
-async function createInstallation(
-  store: OpenTofuDeploymentStore,
+/** Creates a source + Capsule in a Workspace and returns the Capsule id. */
+async function createCapsule(
+  store: OpenTofuControlStore,
   app: Harness["app"],
-  spaceId: string,
+  workspaceId: string,
   name: string,
 ): Promise<string> {
   const sourceRes = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
-      spaceId,
+      workspaceId,
       name: `${name}-repo`,
       url: `https://github.com/acme/${name}.git`,
     }),
   });
   expect(sourceRes.status).toBe(201);
-  const sourceId = (await sourceRes.json()).source.id as string;
+  const source = (await sourceRes.json()).source;
+  const sourceId = source.id as string;
 
   const nowIso = new Date(0).toISOString();
   const config: InstallConfig = {
     id: `cfg_${name}00000001`,
-    spaceId,
+    workspaceId,
     name: `${name}-module`,
-    installType: "opentofu_module",
-    trustLevel: "space",
     variableMapping: {},
     outputAllowlist: {},
     policy: {},
@@ -129,7 +127,7 @@ async function createInstallation(
   await store.putInstallConfig(config);
 
   const installRes = await app.request(
-    `/internal/v1/workspaces/${spaceId}/capsules`,
+    `/internal/v1/workspaces/${workspaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -142,19 +140,20 @@ async function createInstallation(
     },
   );
   expect(installRes.status).toBe(201);
-  const installationId = (await installRes.json()).capsule.id as string;
-  const installation = await store.getInstallation(installationId);
-  expect(installation).toBeDefined();
-  await seedProviderConnections(store, installation!);
+  const capsuleId = (await installRes.json()).capsule.id as string;
+  const capsule = await store.getCapsule(capsuleId);
+  expect(capsule).toBeDefined();
+  await seedProviderConnections(store, capsule!);
 
   const snapshot: SourceSnapshot = {
     id: `snap_${name}00001`,
+    origin: "git",
     sourceId,
-    url: `https://github.com/acme/${name}.git`,
-    ref: "main",
+    url: source.url,
+    ref: source.defaultRef,
     resolvedCommit: "a".repeat(40),
-    path: ".",
-    archiveObjectKey: `spaces/${spaceId}/sources/${sourceId}/snapshots/snap_${name}/source.tar.zst`,
+    path: source.defaultPath,
+    archiveRef: `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_${name}/source.tar.zst`,
     archiveDigest: ARCHIVE_DIGEST,
     archiveSizeBytes: 1024,
     fetchedByRunId: `ssr_${name}00001`,
@@ -163,6 +162,7 @@ async function createInstallation(
   await store.putSourceSnapshot(snapshot);
   const compatibilityReport: CapsuleCompatibilityReport = {
     id: `caprep_${name}00001`,
+    sourceId,
     sourceSnapshotId: snapshot.id,
     level: "ready",
     findings: [],
@@ -173,93 +173,93 @@ async function createInstallation(
     createdAt: nowIso,
   };
   await store.putCapsuleCompatibilityReport(compatibilityReport);
-  await store.patchInstallation(installationId, {
+  await store.patchCapsule(capsuleId, {
     compatibilityReportId: compatibilityReport.id,
     compatibilityStatus: compatibilityReport.level,
     updatedAt: nowIso,
   });
-  return installationId;
+  return capsuleId;
 }
 
 async function listActivity(
   app: Harness["app"],
-  spaceId: string,
+  workspaceId: string,
   query = "",
 ): Promise<Response> {
   return await app.request(
-    `/internal/v1/workspaces/${spaceId}/activity${query}`,
+    `/internal/v1/workspaces/${workspaceId}/activity${query}`,
     {
       headers: headers(),
     },
   );
 }
 
-test("real flows emit Activity events; listing is space-scoped and newest-first", async () => {
+test("real flows emit Activity events; listing is workspace-scoped and newest-first", async () => {
   const { app, store } = await harness();
-  const spaceId = await createSpace(app, "acme");
-  const otherSpaceId = await createSpace(app, "other");
+  const workspaceId = await createWorkspace(app, "acme");
+  const otherWorkspaceId = await createWorkspace(app, "other");
 
-  // Creating an Installation emits capsule.created.
-  const installationId = await createInstallation(store, app, spaceId, "shop");
+  // Creating a Capsule emits capsule.created.
+  const capsuleId = await createCapsule(store, app, workspaceId, "shop");
 
   // Planning emits run.plan_created.
   const planRes = await app.request(
-    `/internal/v1/capsules/${installationId}/plan`,
+    `/internal/v1/capsules/${capsuleId}/plan`,
     { method: "POST", headers: headers() },
   );
   expect(planRes.status).toBe(201);
 
-  const res = await listActivity(app, spaceId);
+  const res = await listActivity(app, workspaceId);
   expect(res.status).toBe(200);
   const body = (await res.json()) as { events: ActivityEvent[] };
   const actions = body.events.map((e) => e.action);
 
-  // Both flows are recorded for the Space.
+  // Both flows are recorded for the Workspace.
   expect(actions).toContain("capsule.created");
   expect(actions).toContain("run.plan_created");
 
-  // Newest-first: the plan (created after the installation) sorts ahead of it.
+  // Newest-first: the plan (created after the capsule) sorts ahead of it.
   const planIndex = actions.indexOf("run.plan_created");
   const installIndex = actions.indexOf("capsule.created");
   expect(planIndex).toBeLessThan(installIndex);
 
-  // Every event is scoped to this Space; none leak run output values.
+  // Every event is scoped to this Workspace; none leak run output values.
   for (const event of body.events) {
-    expect(event.spaceId).toBe(spaceId);
+    expect(event.workspaceId).toBe(workspaceId);
   }
   // The capsule.created event carries non-secret context only.
   const created = body.events.find((e) => e.action === "capsule.created")!;
   expect(created.targetType).toBe("capsule");
-  expect(created.targetId).toBe(installationId);
+  expect(created.targetId).toBe(capsuleId);
   expect(created.metadata.name).toBe("shop");
 
-  // A different Space sees NONE of acme's activity.
-  const otherRes = await listActivity(app, otherSpaceId);
+  // A different Workspace sees NONE of acme's activity.
+  const otherRes = await listActivity(app, otherWorkspaceId);
   expect(otherRes.status).toBe(200);
   expect((await otherRes.json()).events).toEqual([]);
 });
 
 test("?limit bounds the page; invalid limits are rejected 400", async () => {
   const { app, store } = await harness();
-  const spaceId = await createSpace(app, "acme");
+  const workspaceId = await createWorkspace(app, "acme");
 
-  // Three installations => at least three capsule.created events.
-  await createInstallation(store, app, spaceId, "one");
-  await createInstallation(store, app, spaceId, "two");
-  await createInstallation(store, app, spaceId, "three");
+  // Three Capsules => at least three capsule.created events.
+  await createCapsule(store, app, workspaceId, "one");
+  await createCapsule(store, app, workspaceId, "two");
+  await createCapsule(store, app, workspaceId, "three");
 
-  const limited = await listActivity(app, spaceId, "?limit=2");
+  const limited = await listActivity(app, workspaceId, "?limit=2");
   expect(limited.status).toBe(200);
   expect((await limited.json()).events).toHaveLength(2);
 
   // limit=0, over-max, and non-numeric are all 400.
-  expect((await listActivity(app, spaceId, "?limit=0")).status).toBe(400);
-  expect((await listActivity(app, spaceId, "?limit=501")).status).toBe(400);
-  expect((await listActivity(app, spaceId, "?limit=abc")).status).toBe(400);
+  expect((await listActivity(app, workspaceId, "?limit=0")).status).toBe(400);
+  expect((await listActivity(app, workspaceId, "?limit=501")).status).toBe(400);
+  expect((await listActivity(app, workspaceId, "?limit=abc")).status).toBe(400);
 });
 
-test("a malformed spaceId is rejected 400", async () => {
+test("a malformed workspaceId is rejected 400", async () => {
   const { app } = await harness();
-  const res = await listActivity(app, "not-a-space");
+  const res = await listActivity(app, "not-a-workspace");
   expect(res.status).toBe(400);
 });

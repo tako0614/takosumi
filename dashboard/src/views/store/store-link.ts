@@ -5,8 +5,8 @@ import type { TcsListing } from "../../lib/tcs-client.ts";
  * field what `parseInstallPrefill` reads. Reuses the dashboard's own install-link
  * var guards so the produced query is guaranteed compatible. Store listings
  * only announce repository existence; Git ref/tag/commit selection remains on
- * the Source flow, so refs and resolved commits are intentionally not pinned
- * here even when a store node exposes them as display hints.
+ * the Source flow, so an optional Store ref hint is intentionally not pinned
+ * here.
  */
 export function buildNewQuery(listing: TcsListing): string {
   const params = new URLSearchParams();
@@ -14,7 +14,7 @@ export function buildNewQuery(listing: TcsListing): string {
     params.set("tcsBase", listing.primaryServer);
     params.set("tcsListing", listing.id);
   }
-  params.set("git", listing.source.git);
+  params.set("git", listing.source.url);
   if (listing.source.path) params.set("path", listing.source.path);
   params.set("name", listing.suggestedName.slice(0, 96));
   return params.toString();

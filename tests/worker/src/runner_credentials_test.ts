@@ -4,17 +4,10 @@ import {
   redactRunnerOutput,
 } from "../../../runner/entrypoint.ts";
 
-// Runner profile that requires a cloudflare credential ref by env://.
+// Runner profile policy is independent of the CredentialRecipe payload.
 const CLOUDFLARE_PROFILE = {
   id: "opentofu-default",
   allowedProviders: ["cloudflare/cloudflare"],
-  credentialRefs: [
-    {
-      provider: "cloudflare/cloudflare",
-      ref: "env://CLOUDFLARE_API_TOKEN",
-      required: true,
-    },
-  ],
 };
 
 const REQUEST = {
@@ -23,12 +16,40 @@ const REQUEST = {
   },
 };
 
+function requestWithCredentials(
+  env: Readonly<Record<string, string>>,
+  envNames: readonly string[] = Object.keys(env).filter(
+    (name) => /^[A-Z][A-Z0-9_]*$/u.test(name) && !name.startsWith("TF_VAR_"),
+  ),
+) {
+  return {
+    ...REQUEST,
+    credentials: {
+      env,
+      manifest: {
+        bindings: [
+          {
+            providerSource:
+              "registry.opentofu.org/cloudflare/cloudflare",
+            connectionId: "conn_fixture",
+            recipeId: "generic-env",
+            authMode: "env",
+            envNames,
+            fileEnvNames: [],
+            requiredEnvGroups: [],
+          },
+        ],
+      },
+    },
+  };
+}
+
 test("generic-env provider payload credentials are admitted", () => {
   const prev = Bun.env.CLOUDFLARE_API_TOKEN;
   Bun.env.CLOUDFLARE_API_TOKEN = "ambient-env-token";
   try {
     const context = commandContextFromRequest(
-      { ...REQUEST, credentials: { CLOUDFLARE_API_TOKEN: "payload-token" } },
+      requestWithCredentials({ CLOUDFLARE_API_TOKEN: "payload-token" }),
       CLOUDFLARE_PROFILE,
     );
     expect(context.env.CLOUDFLARE_API_TOKEN).toBe("payload-token");
@@ -67,16 +88,13 @@ test("generic-env provider payload admits upper-snake env and rejects invalid na
   delete Bun.env.CLOUDFLARE_API_TOKEN;
   try {
     const context = commandContextFromRequest(
-      {
-        ...REQUEST,
-        credentials: {
+      requestWithCredentials({
           CLOUDFLARE_API_TOKEN: "payload-token",
           // Another declared provider env supplied by the control plane payload.
           AWS_SECRET_ACCESS_KEY: "payload-aws-secret",
           // Invalid env-name shape; must be ignored.
           "lower-case": "nope",
-        },
-      },
+      }),
       CLOUDFLARE_PROFILE,
     );
     expect(context.env.CLOUDFLARE_API_TOKEN).toBe("payload-token");
@@ -87,40 +105,28 @@ test("generic-env provider payload admits upper-snake env and rejects invalid na
   }
 });
 
-// --- §13 per-alias credential split (TF_VAR_<provider>_<alias>_<arg>) ---
-
-test("TF_VAR_ per-alias credentials from the payload are admitted into the tofu env", () => {
+test("TF_VAR credentials are rejected even when supplied by the payload", () => {
   const context = commandContextFromRequest(
-    {
-      ...REQUEST,
-      credentials: {
+    requestWithCredentials({
         CLOUDFLARE_API_TOKEN: "shared-token",
         TF_VAR_cloudflare_main_api_token: "per-alias-compute-token",
         TF_VAR_cloudflare_dns_api_token: "per-alias-dns-token",
-      },
-    },
+    }),
     CLOUDFLARE_PROFILE,
   );
   expect(context.env.CLOUDFLARE_API_TOKEN).toEqual("shared-token");
-  expect(context.env.TF_VAR_cloudflare_main_api_token).toEqual(
-    "per-alias-compute-token",
-  );
-  expect(context.env.TF_VAR_cloudflare_dns_api_token).toEqual(
-    "per-alias-dns-token",
-  );
+  expect(context.env.TF_VAR_cloudflare_main_api_token).toBeUndefined();
+  expect(context.env.TF_VAR_cloudflare_dns_api_token).toBeUndefined();
 });
 
 test("payload credential values are exact-redaction values even when printed bare", () => {
   const runScopedToken = "opaque-run-scoped-token-1234567890";
   const gatewayRunKey = "run-key.2000000000.deadbeefcafebabefeedface";
   const context = commandContextFromRequest(
-    {
-      ...REQUEST,
-      credentials: {
-        TF_VAR_cloudflare_main_api_token: runScopedToken,
-        TF_VAR_cloudflare_gateway_api_token: gatewayRunKey,
-      },
-    },
+    requestWithCredentials({
+        CLOUDFLARE_API_TOKEN: runScopedToken,
+        CLOUDFLARE_API_KEY: gatewayRunKey,
+    }),
     CLOUDFLARE_PROFILE,
   );
 
@@ -135,7 +141,7 @@ test("payload credential values are exact-redaction values even when printed bar
   expect(redacted).toContain("[redacted]");
 });
 
-test("TF_VAR_ per-alias credentials are sourced ONLY from the payload, never Bun.env", () => {
+test("TF_VAR credentials are never sourced from ambient env", () => {
   const name = "TF_VAR_cloudflare_main_api_token";
   const prev = Bun.env[name];
   Bun.env[name] = "ambient-tf-var";
@@ -150,14 +156,11 @@ test("TF_VAR_ per-alias credentials are sourced ONLY from the payload, never Bun
 
 test("a non-TF_VAR lowercase payload name is still rejected", () => {
   const context = commandContextFromRequest(
-    {
-      ...REQUEST,
-      credentials: {
+    requestWithCredentials({
         // Not TF_VAR-prefixed and not upper-snake -> ignored.
         tf_var_sneaky: "nope",
         TF_VARsneaky: "nope-too",
-      },
-    },
+    }),
     CLOUDFLARE_PROFILE,
   );
   expect(context.env.tf_var_sneaky).toBeUndefined();

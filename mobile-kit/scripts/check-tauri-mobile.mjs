@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { inspectMobileReleaseVersions } from "./mobile-release-versions.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const appDir = path.resolve(args.appDir ?? process.cwd());
@@ -32,6 +33,33 @@ const libRs = readText("src-tauri/src/lib.rs");
 const iosPlist = readText("src-tauri/Info.ios.plist");
 const viteConfig = readText("vite.config.ts");
 const nativeTs = readText("src/native.ts");
+const keystorePluginCargoToml = readText(
+  "src-tauri/plugins/keystore/Cargo.toml",
+);
+const keystorePluginAndroid = readText(
+  "src-tauri/plugins/keystore/android/src/main/java/KeystorePlugin.kt",
+);
+const keystorePluginIos = readText(
+  "src-tauri/plugins/keystore/ios/Sources/KeystorePlugin.swift",
+);
+const mobilePushPluginCargoToml = readText(
+  "src-tauri/plugins/mobile-push/Cargo.toml",
+);
+const mobilePushPluginAndroid = readText(
+  "src-tauri/plugins/mobile-push/android/src/main/java/MobilePushPlugin.kt",
+);
+const mobilePushPluginAndroidService = readText(
+  "src-tauri/plugins/mobile-push/android/src/main/java/TakosFirebaseMessagingService.kt",
+);
+const mobilePushPluginAndroidRuntime = readText(
+  "src-tauri/plugins/mobile-push/android/src/main/java/MobilePushRuntime.kt",
+);
+const mobilePushPluginAndroidManifest = readText(
+  "src-tauri/plugins/mobile-push/android/src/main/AndroidManifest.xml",
+);
+const mobilePushPluginIos = readText(
+  "src-tauri/plugins/mobile-push/ios/Sources/MobilePushPlugin.swift",
+);
 const mobileKitTauriBridgeTs = readFileSync(
   new URL("../src/tauri-bridge.ts", import.meta.url),
   "utf8",
@@ -39,9 +67,17 @@ const mobileKitTauriBridgeTs = readFileSync(
 
 checkPackage(packageJson);
 checkTauriConfig(tauriConfig);
+checkReleaseVersionSources(tauriConfig);
 checkCapabilities(defaultCapability, mobileCapability);
 checkCargoToml(cargoToml);
 checkRustEntry(libRs);
+checkKeystoreSecurity({
+  cargoToml,
+  keystorePluginCargoToml,
+  keystorePluginAndroid,
+  keystorePluginIos,
+  mobileKitTauriBridgeTs,
+});
 checkIosPlist(iosPlist);
 checkViteConfig(viteConfig);
 checkNativeBridge(nativeTs, mobileKitTauriBridgeTs);
@@ -52,6 +88,12 @@ checkRemotePushPlugin(remotePushPlugin, {
   cargoToml,
   libRs,
   nativeTs,
+  mobilePushPluginCargoToml,
+  mobilePushPluginAndroid,
+  mobilePushPluginAndroidRuntime,
+  mobilePushPluginAndroidService,
+  mobilePushPluginAndroidManifest,
+  mobilePushPluginIos,
 });
 checkCliSurface();
 checkNativeEnvironment();
@@ -100,18 +142,55 @@ function checkPackage(pkg) {
   );
   expectScript(pkg, "release:check");
   expect(
-    pkg.scripts?.["release:check"]?.includes(
-      "check-mobile-full-release.mjs",
-    ),
+    pkg.scripts?.["release:check"]?.includes("check-mobile-full-release.mjs"),
     "script release:check runs native and evidence release checks",
   );
-  expectScript(pkg, "tauri:native-push:apply");
-  expectScript(pkg, "tauri:native-push:verify");
+  expectScript(pkg, "release:status");
+  expectScript(pkg, "release:repo-check");
   expect(
-    pkg.scripts?.["tauri:native-push:verify"]?.includes("--dry-run") &&
-      pkg.scripts?.["tauri:native-push:verify"]?.includes("--strict"),
-    "script tauri:native-push:verify checks generated native push wiring without mutation",
+    pkg.scripts?.["release:repo-check"]?.includes("--skip-toolchain-probe") &&
+      pkg.scripts?.["release:repo-check"]?.includes("--fail-on-repo-blockers"),
+    "script release:repo-check fails only repository-actionable release blockers",
   );
+  if (remotePushPlugin) {
+    expect(
+      pkg.scripts?.["tauri:android:init"]?.includes(
+        "init-tauri-mobile-native.mjs --platform android",
+      ) &&
+        pkg.scripts?.["tauri:ios:init"]?.includes(
+          "init-tauri-mobile-native.mjs --platform ios",
+        ),
+      "native init scripts automatically apply product-owned push wiring",
+    );
+    expectScript(pkg, "tauri:native-push:apply");
+    expectScript(pkg, "tauri:native-push:verify");
+    expectScript(pkg, "tauri:native-push:apply:release");
+    expectScript(pkg, "tauri:native-push:verify:release");
+    expect(
+      pkg.scripts?.["tauri:native-push:apply"]?.includes(
+        "--apple-environment development",
+      ) &&
+        pkg.scripts?.["tauri:native-push:verify"]?.includes(
+          "--apple-environment development",
+        ) &&
+        pkg.scripts?.["tauri:native-push:verify"]?.includes("--dry-run") &&
+        pkg.scripts?.["tauri:native-push:verify"]?.includes("--strict"),
+      "development native-push scripts explicitly use the APNs development entitlement",
+    );
+    expect(
+      pkg.scripts?.["tauri:native-push:apply:release"]?.includes(
+        "--apple-environment production",
+      ) &&
+        pkg.scripts?.["tauri:native-push:verify:release"]?.includes(
+          "--apple-environment production",
+        ) &&
+        pkg.scripts?.["tauri:native-push:verify:release"]?.includes(
+          "--dry-run",
+        ) &&
+        pkg.scripts?.["tauri:native-push:verify:release"]?.includes("--strict"),
+      "release native-push scripts explicitly require the APNs production entitlement",
+    );
+  }
   expect(
     pkg.scripts?.["tauri:android:dev"]?.includes("--host"),
     "script tauri:android:dev exposes the dev server host to devices",
@@ -160,6 +239,20 @@ function checkTauriConfig(config) {
     desktopSchemes.includes(scheme),
     "desktop deep-link scheme is configured",
   );
+}
+
+function checkReleaseVersionSources(config) {
+  const tauriVersion =
+    typeof config.version === "string" && config.version.trim()
+      ? config.version.trim()
+      : undefined;
+  const inspection = inspectMobileReleaseVersions(appDir, tauriVersion);
+  for (const issue of inspection.issues) {
+    error(`${issue.id}: ${issue.detail}`);
+  }
+  if (inspection.issues.length === 0 && tauriVersion) {
+    ok(`release version sources match: ${tauriVersion}`);
+  }
 }
 
 function checkIconFiles() {
@@ -275,12 +368,69 @@ function checkCargoToml(cargoToml) {
     "Cargo.toml registers mobile biometric dependency",
   );
   expect(
-    cargoToml.includes("tauri-plugin-keystore"),
-    "Cargo.toml registers mobile keystore dependency",
+    /tauri-plugin-keystore\s*=\s*\{\s*path\s*=\s*["']plugins\/keystore["']\s*\}/.test(
+      cargoToml,
+    ),
+    "Cargo.toml registers the product-owned mobile keystore",
+  );
+  expect(
+    !cargoToml.includes('tauri-plugin-keystore = "2.1.0-alpha') &&
+      !cargoToml.includes("tauri-plugin-keystore = '2.1.0-alpha"),
+    "Cargo.toml does not use the unsafe alpha keystore package",
   );
   expect(
     cargoToml.includes('cfg(any(target_os = "android", target_os = "ios"))'),
     "mobile native dependencies are mobile-target scoped",
+  );
+}
+
+function checkKeystoreSecurity({
+  cargoToml,
+  keystorePluginCargoToml,
+  keystorePluginAndroid,
+  keystorePluginIos,
+  mobileKitTauriBridgeTs,
+}) {
+  expect(
+    cargoToml.includes('path = "plugins/keystore"'),
+    "mobile keystore source is owned by the product",
+  );
+  expect(
+    keystorePluginCargoToml.includes("publish = false") &&
+      keystorePluginCargoToml.includes('license = "AGPL-3.0-only"'),
+    "product-owned keystore is private and uses the product license",
+  );
+  expect(
+    keystorePluginAndroid.includes("request.service") &&
+      keystorePluginAndroid.includes("request.user") &&
+      keystorePluginAndroid.includes("AndroidKeyStore") &&
+      keystorePluginAndroid.includes("AES/GCM/NoPadding") &&
+      keystorePluginAndroid.includes(".commit()"),
+    "Android keystore scopes each item and confirms encrypted persistence",
+  );
+  expect(
+    !/unime|identity-wallet/i.test(keystorePluginAndroid),
+    "Android keystore has no unrelated product identifiers",
+  );
+  expect(
+    keystorePluginIos.includes("kSecAttrService") &&
+      keystorePluginIos.includes("kSecAttrAccount") &&
+      keystorePluginIos.includes(
+        "kSecAttrAccessibleWhenUnlockedThisDeviceOnly",
+      ),
+    "iOS keystore uses device-local service/account Keychain items",
+  );
+  expect(
+    !/unime|identity-wallet/i.test(keystorePluginIos),
+    "iOS keystore has no unrelated product identifiers",
+  );
+  expect(
+    mobileKitTauriBridgeTs.includes("payload: { service, user, value }") &&
+      mobileKitTauriBridgeTs.includes(
+        "removeVerifiedStrongholdPasswordMigrationFallback",
+      ) &&
+      mobileKitTauriBridgeTs.includes("await handle.delete(key)"),
+    "Stronghold seed migration deletes plaintext only after native read-back",
   );
 }
 
@@ -365,7 +515,7 @@ function checkNativeBridge(nativeTs, mobileKitTauriBridgeTs) {
   expect(
     mobileKitTauriBridgeTs.includes("createTauriMobileProductStorageNames") &&
       mobileKitTauriBridgeTs.includes("storageNames.strongholdPasswordKey"),
-    "native bridge keeps a product-scoped Store fallback for Stronghold password migration",
+    "native bridge recognizes the product-scoped legacy Store migration source",
   );
   expect(
     !nativeTs.includes(`${product}-mobile-stronghold-v1`) &&
@@ -382,7 +532,19 @@ function checkNativeBridge(nativeTs, mobileKitTauriBridgeTs) {
 
 function checkRemotePushPlugin(
   plugin,
-  { packageJson, mobileCapability, cargoToml, libRs, nativeTs },
+  {
+    packageJson,
+    mobileCapability,
+    cargoToml,
+    libRs,
+    nativeTs,
+    mobilePushPluginCargoToml,
+    mobilePushPluginAndroid,
+    mobilePushPluginAndroidRuntime,
+    mobilePushPluginAndroidService,
+    mobilePushPluginAndroidManifest,
+    mobilePushPluginIos,
+  },
 ) {
   if (!plugin) return;
   if (plugin !== "mobile-push") {
@@ -391,24 +553,106 @@ function checkRemotePushPlugin(
   }
 
   ok("remote push plugin profile: mobile-push");
-  expectDependency(packageJson, "tauri-plugin-mobile-push-api");
+  expect(
+    !packageJson.dependencies?.["tauri-plugin-mobile-push-api"],
+    "mobile shell does not use the community mobile-push JavaScript package",
+  );
   expect(
     new Set(mobileCapability.permissions ?? []).has("mobile-push:default"),
     "mobile capability includes mobile-push:default",
   );
   expect(
-    cargoToml.includes("tauri-plugin-mobile-push"),
-    "Cargo.toml registers mobile-push plugin dependency",
+    /tauri-plugin-mobile-push\s*=\s*\{\s*path\s*=\s*["']plugins\/mobile-push["']\s*\}/.test(
+      cargoToml,
+    ),
+    "Cargo.toml registers the product-owned mobile-push plugin",
   );
   expect(
     libRs.includes("tauri_plugin_mobile_push::init"),
     "Rust entry registers mobile-push plugin",
   );
   expect(
-    nativeTs.includes("onNotificationReceived") &&
-      nativeTs.includes("onNotificationTapped") &&
-      nativeTs.includes("onTokenRefresh"),
-    "native bridge wires mobile-push event listeners",
+    nativeTs.includes("takosMobilePushPlugin") &&
+      nativeTs.includes("mobilePush:"),
+    "native bridge wires the product-owned mobile-push module",
+  );
+  expect(
+    mobilePushPluginCargoToml.includes("publish = false") &&
+      mobilePushPluginCargoToml.includes('license = "AGPL-3.0-only"') &&
+      !mobilePushPluginCargoToml.includes('tauri-plugin-mobile-push = "0.1.4"'),
+    "mobile-push plugin is private, product-licensed, and not the community alpha package",
+  );
+  expect(
+    mobilePushPluginAndroidService.includes("FirebaseMessagingService") &&
+      mobilePushPluginAndroidService.includes("onRegistered") &&
+      !mobilePushPluginAndroidService.includes("onNewToken") &&
+      mobilePushPluginAndroidService.includes("onMessageReceived") &&
+      mobilePushPluginAndroid.includes(
+        "FirebaseMessaging.getInstance().register()",
+      ) &&
+      mobilePushPluginAndroid.includes(
+        "FirebaseMessaging.getInstance().unregister()",
+      ) &&
+      mobilePushPluginAndroid.includes(
+        "FirebaseInstallations.getInstance().id",
+      ) &&
+      mobilePushPluginAndroid.includes("REGISTRATION_REQUEST_TIMEOUT_MILLIS") &&
+      mobilePushPluginAndroid.includes("AtomicBoolean(false)") &&
+      !mobilePushPluginAndroid.includes(".deleteToken()") &&
+      !mobilePushPluginAndroid.includes(".getToken()"),
+    "Android plugin uses bounded FCM FID registration/unregistration and current lifecycle callbacks",
+  );
+  expect(
+    mobilePushPluginAndroidManifest.includes(
+      "jp.takos.mobile.push.TakosFirebaseMessagingService",
+    ) &&
+      mobilePushPluginAndroidManifest.includes(
+        "com.google.firebase.MESSAGING_EVENT",
+      ) &&
+      mobilePushPluginAndroidManifest.includes("POST_NOTIFICATIONS") &&
+      mobilePushPluginAndroidManifest.includes(
+        "firebase_messaging_installation_id_enabled",
+      ) &&
+      mobilePushPluginAndroidManifest.includes(
+        "firebase_messaging_auto_init_enabled",
+      ) &&
+      mobilePushPluginAndroidManifest.includes('android:value="false"'),
+    "Android plugin owns its FCM service, FID opt-in, session-bound auto-init policy, and notification permission manifest",
+  );
+  expect(
+    mobilePushPluginAndroidRuntime.includes("event in activatedEvents") &&
+      !mobilePushPluginAndroidRuntime.includes("activeListeners") &&
+      mobilePushPluginIos.includes("activatedEvents.contains(event)") &&
+      !mobilePushPluginIos.includes("activeListeners"),
+    "native push uses an idempotent event barrier without a parallel listener count",
+  );
+  expect(
+    mobilePushPluginIos.includes("registerForRemoteNotifications()") &&
+      mobilePushPluginIos.includes(
+        "didRegisterForRemoteNotificationsWithDeviceToken",
+      ) &&
+      mobilePushPluginIos.includes(
+        "didFailToRegisterForRemoteNotificationsWithError",
+      ) &&
+      mobilePushPluginIos.includes("requestAuthorization") &&
+      mobilePushPluginIos.includes('return "sandbox"') &&
+      mobilePushPluginIos.includes('return "production"') &&
+      mobilePushPluginIos.includes("SecTaskCopyValueForEntitlement") &&
+      mobilePushPluginIos.includes("aps-environment") &&
+      !mobilePushPluginIos.includes("#if DEBUG") &&
+      mobilePushPluginIos.includes("tokenRequestTimeoutSeconds") &&
+      mobilePushPluginIos.includes("timeoutPendingTokenInvoke") &&
+      mobilePushPluginIos.includes("unregisterForRemoteNotifications()") &&
+      mobilePushPluginIos.includes("registrationRequested") &&
+      mobilePushPluginIos.includes("UNPushNotificationTrigger.self") &&
+      !mobilePushPluginIos.includes("UserDefaults"),
+    "iOS plugin separates permission from bounded session registration, unregisters on logout, and derives APNs environment from the signed entitlement",
+  );
+  expect(
+    mobilePushPluginIos.includes("notification-received") &&
+      mobilePushPluginIos.includes("notification-tapped") &&
+      mobilePushPluginIos.includes("token-refresh"),
+    "iOS plugin exposes notification and token-refresh lifecycle events",
   );
   checkRemotePushNativeProjectFiles();
 }
@@ -439,11 +683,29 @@ function checkIosPushEntitlement() {
     return;
   }
 
-  const hasPushEntitlement = entitlementFiles.some((filePath) =>
-    readFileSync(filePath, "utf8").includes("aps-environment"),
-  );
-  if (hasPushEntitlement) ok("iOS aps-environment entitlement is present");
-  else warn("iOS aps-environment entitlement is missing", true);
+  const environments = entitlementFiles
+    .map((filePath) => readApsEnvironment(readFileSync(filePath, "utf8")))
+    .filter((value) => value !== undefined);
+  if (environments.length === 0) {
+    warn("iOS aps-environment entitlement is missing", true);
+  } else if (
+    environments.every(
+      (environment) =>
+        environment === "development" || environment === "production",
+    )
+  ) {
+    ok(
+      `iOS aps-environment entitlement is valid: ${[...new Set(environments)].join(", ")}`,
+    );
+  } else {
+    warn("iOS aps-environment entitlement has an invalid value", true);
+  }
+}
+
+function readApsEnvironment(xml) {
+  return xml.match(
+    /<key>\s*aps-environment\s*<\/key>\s*<string>\s*([^<]+?)\s*<\/string>/,
+  )?.[1];
 }
 
 function checkAndroidFirebaseProjectFiles() {
@@ -463,7 +725,7 @@ function checkAndroidFirebaseProjectFiles() {
   const androidDir = path.join(appDir, "src-tauri/gen/android");
   if (!existsSync(androidDir)) {
     warn(
-      "Android Firebase Gradle and FCM service wiring must be added after tauri android init; run tauri:native-push:apply after init",
+      "Android Firebase Gradle wiring must be added after tauri android init; run tauri:native-push:apply after init",
       true,
     );
     return;
@@ -480,24 +742,18 @@ function checkAndroidFirebaseProjectFiles() {
     .join("\n");
   if (
     gradleText.includes("com.google.gms.google-services") &&
-    gradleText.includes("firebase-messaging")
+    gradleText.includes("firebase-messaging") &&
+    gradleText.includes("firebase-installations")
   ) {
-    ok("Android Firebase Messaging Gradle wiring is present");
+    ok("Android Firebase Messaging and Installations Gradle wiring is present");
   } else {
-    warn("Android Firebase Messaging Gradle wiring is missing", true);
+    warn(
+      "Android Firebase Messaging or Installations Gradle wiring is missing",
+      true,
+    );
   }
 
-  const manifest = androidFiles.find((filePath) =>
-    filePath.endsWith("AndroidManifest.xml"),
-  );
-  if (
-    manifest &&
-    readFileSync(manifest, "utf8").includes("app.tauri.mobilepush.FCMService")
-  ) {
-    ok("Android FCM service manifest entry is present");
-  } else {
-    warn("Android FCM service manifest entry is missing", true);
-  }
+  ok("Android FCM service is supplied by the product-owned plugin manifest");
 }
 
 function collectFiles(directory) {

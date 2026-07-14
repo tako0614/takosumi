@@ -11,13 +11,13 @@ import {
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
-  ensureSpacePermission,
+  ensureWorkspacePermission,
   ensureValidParam,
   errorEnvelope,
   notImplemented,
   parsePageParams,
   runHandler,
-  SPACE_ID_PATTERN,
+  WORKSPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import {
   TAKOSUMI_CAPSULE_BACKUPS_ROUTE,
@@ -28,7 +28,7 @@ import {
 
 const WORKSPACE_ID_PARAM = {
   param: "workspaceId",
-  pattern: SPACE_ID_PATTERN,
+  pattern: WORKSPACE_ID_PATTERN,
 } as const;
 const CAPSULE_ID_PARAM = { id: "capsuleId" } as const;
 
@@ -48,7 +48,7 @@ export const DEPLOY_CONTROL_ACTIVITY_ENDPOINTS: readonly DeployControlEndpoint[]
       method: "POST",
       path: TAKOSUMI_WORKSPACE_BACKUPS_ROUTE,
       summary:
-        "Creates a sealed zstd control backup of a Workspace ledger in R2_BACKUPS (no secret material).",
+    "Creates a sealed zstd control backup of a Workspace ledger in host artifact storage (no secret material).",
       auth: "deploy-control-token",
       operationId: "createWorkspaceBackup",
       openapi: {
@@ -129,7 +129,7 @@ export function mountDeployControlActivityRoutes(
     if (!activityService) {
       return c.json(notImplemented(c, "activity not wired"), 501);
     }
-    const idCheck = ensureValidParam(c, "workspaceId", SPACE_ID_PATTERN);
+    const idCheck = ensureValidParam(c, "workspaceId", WORKSPACE_ID_PATTERN);
     if (idCheck.kind === "invalid") return idCheck.response;
     const limit = parseActivityLimit(c.req.query("limit"));
     if (limit.kind === "invalid") {
@@ -143,7 +143,7 @@ export function mountDeployControlActivityRoutes(
       );
     }
     return await runHandler(c, async () => {
-      ensureSpacePermission(auth.principal, idCheck.value);
+      ensureWorkspacePermission(auth.principal, idCheck.value);
       const events = await activityService.list(idCheck.value, limit.value);
       return c.json({ events }, 200);
     });
@@ -157,7 +157,7 @@ export function mountDeployControlActivityRoutes(
         deps.backupsService ? undefined : "backups not wired",
       param: WORKSPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
-        ensureSpacePermission(principal, id);
+        ensureWorkspacePermission(principal, id);
         const backup = await dependencies.backupsService!.createBackup({
           workspaceId: id,
         });
@@ -176,8 +176,8 @@ export function mountDeployControlActivityRoutes(
           : "backups not wired",
       param: CAPSULE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
-        const response = await dependencies.controller!.getInstallation(id);
-        ensureSpacePermission(principal, response.capsule.workspaceId);
+        const response = await dependencies.controller!.getCapsule(id);
+        ensureWorkspacePermission(principal, response.capsule.workspaceId);
         const backup = await dependencies.backupsService!.createBackup({
           workspaceId: response.capsule.workspaceId,
           capsuleId: response.capsule.id,
@@ -196,7 +196,7 @@ export function mountDeployControlActivityRoutes(
         deps.backupsService ? undefined : "backups not wired",
       param: WORKSPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
-        ensureSpacePermission(principal, id);
+        ensureWorkspacePermission(principal, id);
         const page = parsePageParams(c);
         if (page.kind === "invalid") return page.response;
         return c.json(
@@ -215,7 +215,7 @@ export function mountDeployControlActivityRoutes(
         deps.controller ? undefined : "deploy control not wired",
       param: WORKSPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
-        ensureSpacePermission(principal, id);
+        ensureWorkspacePermission(principal, id);
         const backupId = c.req.param("backupId");
         if (!backupId || backupId.trim().length === 0) {
           return c.json(
@@ -244,8 +244,8 @@ export function mountDeployControlActivityRoutes(
           backupId,
           {
             stateGeneration: Number(stateGeneration),
-            ...(typeof body.installationId === "string"
-              ? { installationId: body.installationId }
+            ...(typeof body.capsuleId === "string"
+              ? { capsuleId: body.capsuleId }
               : {}),
             ...(typeof body.environment === "string"
               ? { environment: body.environment }

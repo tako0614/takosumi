@@ -15,8 +15,15 @@ commercial operation. Takosumi Cloud is the official hosted operation run by us.
 - manage CredentialRecipe seeds, provider allowlists, and ProviderConnection policy
 - manage sealed backing material and secret delivery for ProviderConnections
 - manage Resource Shape, TargetPool, Adapter, and compatibility profile availability
+- tune scheduled Resource observation cadence, batch, and concurrency to runner capacity
 - manage state and lock backends
+- in production/staging, do not infer encryption at rest from the database URL
+  format; set storage-adapter evidence, or a confirmed
+  `TAKOSUMI_DATABASE_ENCRYPTION_AT_REST=verified` plus non-secret
+  `TAKOSUMI_DATABASE_ENCRYPTION_EVIDENCE`
 - manage local/docker/remote/operator runner pools
+- when using Workers for Platforms, treat it as the tenant/user Worker ingress
+  boundary, separate from the OpenTofu runner execution boundary
 - operate customer, billing, metering, quota, and support workflows
 - operate a release activator materializer when enabled, and record app
   publication separately from the apply ledger
@@ -84,24 +91,45 @@ official billing / quota / usage / support / SLA
 Official managed capacity implementations, tests, secrets, and deployment
 config belong in the closed Cloud repo.
 
+## Scheduled Resource Shape observation
+
+The platform worker runs read-only scheduled observation by default when the
+host enables at least one Resource Shape kind. Only `Ready` Resources at their
+current generation are eligible. Observation runs against the pinned Target and
+implementation as a non-applyable `drift_check`; it never applies or refreshes.
+A durable lease deduplicates candidates across all Spaces and isolates one
+Resource failure from the rest of the tick.
+
+| Variable                                         | Default | Accepted range | Meaning                                            |
+| ------------------------------------------------ | ------- | -------------- | -------------------------------------------------- |
+| `TAKOSUMI_RESOURCE_OBSERVATION_ENABLED`          | auto    | `0` / `1`      | Unset follows whether any shape kind is enabled    |
+| `TAKOSUMI_RESOURCE_OBSERVATION_BATCH`            | `8`     | `1`–`32`       | Maximum Resources claimed in one tick              |
+| `TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY`      | `4`     | `1`–`8`        | Maximum simultaneous backend observations          |
+| `TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS` | `3600`  | `300`–`604800` | Minimum interval between attempts for one Resource |
+| `TAKOSUMI_RESOURCE_OBSERVATION_LEASE_SECONDS`    | `900`   | `600`–`7200`   | Abandoned-claim reclamation delay                  |
+
+Invalid or out-of-range values fall back to safe defaults. Keep the batch small
+enough for the runner pool. Verify each observation outcome through the
+`outcome` label on `takosumi_resource_observation_count`.
+
 ## Production Readiness
 
 OSS Operator GA readiness:
 
-| Area               | Required evidence                                                                                                            |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| Website/docs       | docs build, custom domain/TLS if hosted publicly                                                                             |
-| Runner             | non-production OpenTofu plan/apply/destroy proof                                                                             |
-| Release activation | webhook/materializer proof, activation failure surfacing, rollback-independent ledger evidence if app publication is enabled |
-| Accounts/auth      | dashboard, session/OIDC as configured, audit trail                                                                           |
-| State              | state backend, lock evidence, backup/restore drill                                                                           |
-| Secrets            | encrypted storage, rotation process, redaction proof                                                                         |
-| Provider recipes   | CredentialRecipe seed, provider allowlist, ProviderConnection policy, and helper coverage                                    |
-| Resource shapes    | TargetPool policy, adapter capability evidence, ResolutionLock behavior                                                      |
-| Compatibility      | scoped/versioned capability list and negative proof for unsupported full-provider APIs                                       |
-| Network            | provider allowlist and egress enforcement                                                                                    |
-| Tenant isolation   | workspace/team separation and runner isolation                                                                               |
-| Audit              | run, secret, state, and admin action evidence                                                                                |
+| Area               | Required evidence                                                                                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Website/docs       | docs build, custom domain/TLS if hosted publicly                                                                                 |
+| Runner             | non-production OpenTofu plan/apply/destroy proof                                                                                 |
+| Release activation | webhook/materializer proof, terminal-success gate, retained state/output and non-ready Run/Capsule/Interface evidence on failure |
+| Accounts/auth      | dashboard, session/OIDC as configured, audit trail                                                                               |
+| State              | state backend, lock evidence, backup/restore drill                                                                               |
+| Secrets            | encrypted storage, rotation process, redaction proof                                                                             |
+| Provider recipes   | CredentialRecipe seed, provider allowlist, ProviderConnection policy, and helper coverage                                        |
+| Resource shapes    | TargetPool policy, adapter capability evidence, ResolutionLock behavior                                                          |
+| Compatibility      | scoped/versioned capability list and negative proof for unsupported full-provider APIs                                           |
+| Network            | provider allowlist and egress enforcement                                                                                        |
+| Tenant isolation   | workspace/team separation and runner isolation                                                                                   |
+| Audit              | run, secret, state, and admin action evidence                                                                                    |
 
 Cloud GA adds official managed targets, hosted compatibility profiles, official
 billing, abuse, support, usage metering, and deprovision proof requirements.

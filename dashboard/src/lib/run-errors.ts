@@ -1,15 +1,15 @@
 /**
  * Run failure display — friendly one-sentence explanations for run error
- * codes. The public Run carries a short snake_case `errorCode` (derived
- * server-side in core/domains/deploy-control/projection_run.ts); a general
+ * codes. The public Run carries a stable `errorCode` copied from structured
+ * diagnostic/error reasons (never recovered from prose); a general
  * user must never see the raw token. Known codes map to a plain sentence with
  * the next action; unknown codes fall back to the generic hint, and the raw
  * token stays available only in the folded expert details.
  *
- * Credits (`credits_required`) and provider-access issues
- * (`provider_connection_*`, `credential_service_unavailable`) are classified
- * earlier by RunView's dedicated access-issue layer — they never reach this
- * fallback map.
+ * Provider-access issues (`provider_connection_*`,
+ * `credential_service_unavailable`) are classified earlier by RunView's
+ * dedicated access-issue layer. Host extensions must contribute their own UI;
+ * this shared client never infers behavior from an extension error-code prefix.
  */
 import { t } from "../i18n/index.ts";
 import type { MessageKey } from "../i18n/index.ts";

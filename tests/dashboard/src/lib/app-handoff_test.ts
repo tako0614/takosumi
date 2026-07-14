@@ -91,6 +91,7 @@ describe("Takosumi App Handoff", () => {
 
   test("round-trips a Host Center URL into a mobile connect payload", () => {
     const hostCenterUrl = createTakosumiHostCenterUrl({
+      hostCenterUrl: "https://operator.example/install",
       product: "notes-app",
       source: {
         git: "https://github.com/acme/notes.git",

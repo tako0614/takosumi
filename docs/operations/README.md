@@ -5,9 +5,10 @@ response, cost monitoring, secret rotation, readiness collection, and production
 verification.
 
 These documents are not published product docs and are not customer-facing
-contracts. They may mention operator-local paths, deployment commands, private
-evidence records, payment-provider synchronization, support procedures, and
-closed implementation details that must not be copied into public docs.
+contracts. They cover the OSS/Operator deployment boundary and may mention
+operator-local paths and evidence classes. Official Cloud payment, managed
+capacity, price-book, and closed handler procedures live in
+`takosumi-cloud/docs/operations`, not this OSS repository.
 
 Use public docs for stable external contracts:
 
@@ -23,15 +24,40 @@ Use public docs for stable external contracts:
 Use this directory for operator procedures:
 
 ```text
-platform-worker-deploy.md
-real-cloud-staging.md
-cloud-customer-operations.md
-cloud-pricing.md
-secret-rotation.md
-incident-response.md
-rollback-sop.md
+Deploy / topology:
+  platform-worker-deploy.md
+  deploy-topology-notes.md
+  release-artifacts.md
+  lan-dev-setup.md
+
+Pricing / cost:
+  cloud-pricing.md
+  cost-monitoring.md
+
+Secrets / patching:
+  secret-rotation.md
+  secret-rotation-policy.md
+  patch-management.md
+
+State / migrations:
+  resource-state-adoption.md
+  online-db-migrations.md
+
+Incident / recovery / on-call:
+  incident-response.md
+  rollback-sop.md
+  disaster-recovery.md
+  backup-restore-drills.md
+  oncall.md
+  troubleshooting.md
 ```
 
-When a runbook detail becomes a public contract, rewrite the stable contract
-into the public docs without private paths, secret names, raw evidence refs,
-payment-provider IDs, or implementation wiring.
+`cloud-pricing.md` is intentionally only the OSS disabled/showback versus
+commercial-extension boundary. When a runbook detail becomes a public
+contract, rewrite the stable contract into the public docs without private
+paths, secret names, raw evidence refs, payment-provider IDs, or implementation
+wiring.
+
+Official hosted launch, staging, customer operations, and real-Cloudflare smoke
+procedures live in `takosumi-cloud/docs/operations`. They are not part of the
+OSS/Operator software contract.

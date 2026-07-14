@@ -5,7 +5,8 @@
 Takosumi is one OSS OpenTofu-native control plane. It provides deploy-control, accounts, dashboard, runner boundary, and
 audit ledger code that can be composed in two contexts:
 
-- the operator-run Takosumi platform worker at `app.takosumi.com`;
+- an operator-run Takosumi platform worker at the operator's own origin (the
+  official Takosumi Cloud deployment uses `app.takosumi.com`);
 - the self-hosted Takos distribution worker, where the Takos product surface composes Takosumi accounts, deploy-control,
   dashboard, and runner boundaries in-process at the self-hoster's own origin.
 
@@ -15,8 +16,9 @@ projects OpenTofu outputs as Outputs.
 
 Takosumi handlers are consumed **in-process** through `tsconfig` aliases by the host worker. That is a composition
 mechanism, not two different products. There is no retired split account/deploy-control host topology, and no
-npm-published service package. One hosted operator runs one Cloudflare worker serving the platform under
-`app.takosumi.com`; `takosumi.com` is the landing/software-docs site only.
+npm-published service package. An operator serves the composed platform at an
+explicit origin; our official hosted deployment uses `app.takosumi.com`.
+`takosumi.com` is the landing/software-docs site only.
 
 Software docs: <https://takosumi.com/docs/>
 Hosted Cloud docs: <https://app.takosumi.com/docs/>
@@ -32,8 +34,9 @@ Hosted Cloud docs: <https://app.takosumi.com/docs/>
 query, forwards to `/new`, and only pre-fills the Git form; compatibility check and explicit confirmation still happen
 inside `/new`.
 
-`deploy/accounts-cloudflare/` stores account-plane state in D1. Capsule backup/export artifacts belong to the
-deploy-control backup/export flow and its R2 buckets, not to the account-plane ownership boundary. Cloudflare Container
+`deploy/accounts-cloudflare/` stores account-plane state in D1. Capsule backup artifacts belong to the control-plane
+Backup ledger and artifact store, not to the account-plane ownership boundary. Accounts privacy export requests record
+only operator workflow state and references; they do not hold Capsule export bundles or signed downloads. Cloudflare Container
 is not used by the account-plane path; it is used by the deploy-control runner for OpenTofu `plan` / `apply`.
 
 `deploy/node-postgres/` is the Bun + Postgres substrate that backs the same `createAccountsHandler` for the
@@ -44,8 +47,9 @@ behind the one handler, not an alternate distribution.
 
 The product flow is deliberately small: choose a **Workspace** and **Project**, register a Git **Source**, create a
 **Capsule**, bind provider aliases through **ProviderConnections**, **CredentialRecipes**, and **ProviderBindings**,
-review a **Run**, then inspect **StateVersions**, **Outputs**, and **AuditEvents**. See [AGENTS.md](AGENTS.md) "Public
-Surface" and [docs/internal/final-plan.md](docs/internal/final-plan.md) for the current model.
+review a **Run**, then inspect **StateVersions**, **Outputs**, and **AuditEvents**. See the public
+[Model reference](docs/en/reference/model.md) and [glossary](docs/en/reference/glossary.md). Implementer-facing final
+direction lives in [docs/internal/final-plan.md](docs/internal/final-plan.md) (not a published product contract).
 
 | Concept              | Meaning                                                                                                                         |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -87,7 +91,7 @@ points. OSS ships and runs with nothing from the hosted Cloud operation present.
 ## Local control-plane quickstart
 
 Run the local control-plane service directly when you want to exercise the `/api/v1` contract from curl or tests.
-The CLI is documented separately in [docs/reference/cli.md](docs/reference/cli.md): the standard product flow is
+The CLI is documented separately in [docs/en/reference/cli.md](docs/en/reference/cli.md): the standard product flow is
 dashboard Git URL install and Capsule creation from a Git Source. The retired
 `takosumi deploy` / `takosumi plan` local-upload helpers fail closed and do not
 create public Capsules.
@@ -100,12 +104,12 @@ export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
 PORT=8788 bun core/index.ts
 ```
 
-Dashboard install / plan / apply go through the [`/api`](docs/reference/deploy-control-api.md) control plane against a
+Dashboard install / plan / apply go through the [`/api`](docs/en/reference/deploy-control-api.md) control plane against a
 registered Git Source. App source, build outputs, container images, and release
 artifacts are modeled by the Git-hosted OpenTofu module and its ordinary
 variables, not by a Takosumi-owned upload/build path.
 
-## Workspace
+## Repository Layout
 
 The current layout is `contract/`, `core/`, `lib/`, `accounts/`, `providers/`, `worker/`, `runner/`,
 `opentofu-modules/`, `dashboard/`, `website/`, and `deploy/`. See the [AGENTS.md](AGENTS.md) "Workspace" section for the

@@ -1,5 +1,5 @@
 /*
- * views.css — the few cross-view rules that survived the Installation-centric rebuild.
+ * views.css — the few cross-view rules that survived the Capsule-centric rebuild.
  * Everything else moved to the per-cluster wave-* files or styles/app-views.css;
  * colours stay on the canonical --tg-* tokens.
  */
@@ -28,4 +28,314 @@
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
   font-weight: 600;
+}
+
+/* ===== Resource Shape management ===== */
+.rs-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-6);
+  padding-bottom: var(--tg-s-8);
+}
+
+.rs-header-actions,
+.rs-editor-actions,
+.rs-row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  flex-wrap: wrap;
+}
+
+.rs-scope-card,
+.rs-editor,
+.rs-config-editor {
+  overflow: hidden;
+}
+
+.rs-scope-row {
+  display: flex;
+  align-items: end;
+  gap: var(--tg-s-3);
+}
+
+.rs-scope-row .tg-field {
+  flex: 1;
+}
+
+.rs-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+}
+
+.rs-section-title-row {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--tg-s-4);
+  flex-wrap: wrap;
+}
+
+.rs-section-title-row h2,
+.rs-section-heading h3 {
+  margin: 0;
+  font-family: var(--tg-font-display);
+  font-size: var(--tg-fs-lg);
+}
+
+.rs-section-title-row p,
+.rs-section-heading p {
+  margin: var(--tg-s-1) 0 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+
+.rs-resource-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rs-resource-name code,
+.rs-output-keys code {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+
+.rs-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--tg-s-4);
+}
+
+.rs-json-field {
+  margin-top: var(--tg-s-4);
+}
+
+.rs-code-editor,
+.rs-code-block,
+.rs-preview code,
+.rs-event-list code,
+.rs-resource-name code,
+.rs-output-keys code {
+  font-family: var(--tg-font-mono);
+}
+
+.rs-code-editor {
+  tab-size: 2;
+  line-height: 1.55;
+}
+
+.rs-editor-actions {
+  margin-top: var(--tg-s-4);
+}
+
+.rs-advanced,
+.rs-json-disclosure,
+.rs-policy-disclosure {
+  margin-top: var(--tg-s-4);
+}
+
+.rs-advanced > summary,
+.rs-json-disclosure > summary,
+.rs-policy-disclosure > summary {
+  cursor: pointer;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+}
+
+.rs-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-4);
+  background: var(--tg-bg-subtle);
+}
+
+.rs-section-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--tg-s-3);
+  align-items: start;
+}
+
+.rs-section-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--tg-r-md);
+  color: var(--tg-success);
+  background: color-mix(in srgb, var(--tg-success) 12%, transparent);
+}
+
+.rs-preview-kv dd code + code {
+  margin-left: var(--tg-s-2);
+}
+
+.rs-compact-list {
+  margin: 0;
+  padding-left: var(--tg-s-5);
+}
+
+.rs-import-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--tg-s-3);
+  align-items: end;
+  margin-top: var(--tg-s-3);
+}
+
+.rs-config-editor {
+  margin-top: var(--tg-s-2);
+}
+
+.rs-policy-disclosure {
+  margin-top: 0;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-elev);
+}
+
+.rs-policy-disclosure > summary {
+  padding: var(--tg-s-4) var(--tg-s-5);
+  list-style-position: outside;
+}
+
+.rs-policy-disclosure > summary span {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: var(--tg-s-2);
+}
+
+.rs-policy-disclosure > summary strong {
+  color: var(--tg-fg);
+}
+
+.rs-policy-disclosure > summary small {
+  color: var(--tg-fg-muted);
+  font-weight: 400;
+}
+
+.rs-policy-disclosure .rs-config-editor {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--tg-line);
+  border-radius: 0;
+}
+
+.rs-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--tg-s-4);
+}
+
+.rs-muted {
+  margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+
+.rs-json-disclosure {
+  margin-top: 0;
+}
+
+.rs-code-block {
+  max-height: 32rem;
+  overflow: auto;
+  margin: var(--tg-s-3) 0 0;
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+  font-size: var(--tg-fs-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rs-condition-list,
+.rs-event-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rs-condition-list li,
+.rs-event-list li {
+  padding-bottom: var(--tg-s-3);
+  border-bottom: 1px solid var(--tg-line);
+}
+
+.rs-condition-list li:last-child,
+.rs-event-list li:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.rs-condition-list li > div,
+.rs-event-list li > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--tg-s-3);
+}
+
+.rs-condition-list p {
+  margin: var(--tg-s-1) 0 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+
+.rs-event-list time {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+
+.rs-event-list code {
+  display: inline-block;
+  margin-top: var(--tg-s-1);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+
+.rs-output-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+}
+
+.rs-output-keys code {
+  padding: var(--tg-s-1) var(--tg-s-2);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-sm);
+  background: var(--tg-bg-subtle);
+}
+
+@media (max-width: 720px) {
+  .rs-form-grid,
+  .rs-detail-grid,
+  .rs-import-row {
+    grid-template-columns: 1fr;
+  }
+
+  .rs-scope-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .rs-section-heading {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .rs-section-heading > .tg-badge {
+    grid-column: 2;
+    justify-self: start;
+  }
 }

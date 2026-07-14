@@ -1,5 +1,5 @@
 /**
- * takosumi-graph: Installation dependency DAG utilities (core-spec.md §14).
+ * takosumi-graph: Capsule dependency DAG utilities (core-spec.md §14).
  *
  * Pure graph helpers over readonly producer -> consumer edges. The package is
  * deliberately free of service imports: it operates on plain node/edge data so
@@ -7,9 +7,9 @@
  * creation), topological ordering (RunGroup layering), and downstream-stale
  * closure (§24) without pulling in any service dependency.
  *
- * Edge orientation: `from` is the producer Installation, `to` is the consumer
- * Installation. An edge `{ from: a, to: b }` means "b depends on a", i.e. a
- * must be applied before b. A cycle is therefore a set of Installations that
+ * Edge orientation: `from` is the producer Capsule, `to` is the consumer
+ * Capsule. An edge `{ from: a, to: b }` means "b depends on a", i.e. a
+ * must be applied before b. A cycle is therefore a set of Capsules that
  * mutually (transitively) depend on each other.
  */
 
@@ -211,7 +211,7 @@ export function topologicalLayers(
  * Transitive downstream closure: every consumer reachable from `start` by
  * following producer -> consumer edges, NOT including `start` itself.
  *
- * Used for the §24 stale cascade: when an Installation's outputs change, all of
+ * Used for the §24 stale cascade: when a Capsule's outputs change, all of
  * its transitive downstream consumers become candidates for `stale`.
  */
 export function downstreamClosure(

@@ -1,18 +1,16 @@
 import { expect, test } from "bun:test";
 
-import { OpenTofuDeploymentController } from "../../../../core/domains/deploy-control/mod.ts";
+import { OpenTofuController } from "../../../../core/domains/deploy-control/mod.ts";
 import {
-  InstallationLeaseBusyError,
-  type InstallationCoordination,
-  InMemoryInstallationCoordination,
-  installationLeaseScope,
-} from "../../../../core/domains/deploy-control/installation_lease.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import { seedInstallationModel } from "../../../helpers/deploy-control/model_fixture.ts";
-import type {
-  ApplyRun,
-  PlanRun,
-} from "@takosumi/internal/deploy-control-api";
+  CapsuleLeaseBusyError,
+  type CapsuleCoordination,
+  InMemoryCapsuleCoordination,
+  capsuleLeaseScope,
+} from "../../../../core/domains/deploy-control/capsule_lease.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -26,35 +24,35 @@ function planArtifact() {
 }
 
 /**
- * Seeds the Space-direct Installation model (spec §5) plus a succeeded PlanRun
- * and a queued ApplyRun, all bound to the same Installation (= one
- * `installation:{installationId}:{environment}` lease lane), so the apply
- * consumer takes that lease. The Installation is seeded WITH a current
- * deployment so the update plan's current-deployment guard is well-formed and
+ * Seeds the Workspace-direct Capsule model (spec §5) plus a succeeded PlanRun
+ * and a queued ApplyRun, all bound to the same Capsule (= one
+ * `capsule:{capsuleId}:{environment}` lease lane), so the apply
+ * consumer takes that lease. The Capsule is seeded WITH a current
+ * StateVersion so the update plan's current-StateVersion guard is well-formed and
  * the state generation (0) matches the plan's base generation.
  */
 async function seedApply(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   ids: {
-    installationId: string;
+    capsuleId: string;
     planRunId: string;
     applyRunId: string;
     environment?: string;
   },
 ): Promise<{ environment: string }> {
   const environment = ids.environment ?? "production";
-  const seedDeploymentId = `dep_seed_${ids.installationId}`;
-  const { installation, source, snapshot } = await seedInstallationModel(store, {
-    installationId: ids.installationId,
-    spaceId: `space_${ids.installationId}`,
-    sourceId: `src_${ids.installationId}`,
-    snapshotId: `snap_${ids.installationId}`,
-    installConfigId: `cfg_${ids.installationId}`,
+  const seedStateVersionId = `state_seed_${ids.capsuleId}`;
+  const { capsule, source, snapshot } = await seedCapsuleModel(store, {
+    capsuleId: ids.capsuleId,
+    workspaceId: `ws_${ids.capsuleId}`,
+    sourceId: `src_${ids.capsuleId}`,
+    snapshotId: `snap_${ids.capsuleId}`,
+    installConfigId: `cfg_${ids.capsuleId}`,
     environment,
   });
-  await store.putInstallation({
-    ...installation,
-    currentDeploymentId: seedDeploymentId,
+  await store.putCapsule({
+    ...capsule,
+    currentStateVersionId: seedStateVersionId,
     currentStateGeneration: 0,
     status: "active",
   });
@@ -65,9 +63,14 @@ async function seedApply(
   };
   const planRun: PlanRun = {
     id: ids.planRunId,
-    spaceId: installation.spaceId,
-    installationId: ids.installationId,
-    installationCurrentDeploymentId: seedDeploymentId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: ids.capsuleId,
+    capsuleContext: {
+      workspaceId: capsule.workspaceId,
+      capsuleId: ids.capsuleId,
+      environment,
+    },
+    capsuleCurrentStateVersionId: seedStateVersionId,
     source: moduleSource,
     sourceSnapshotId: snapshot.id,
     sourceDigest: "sha256:src",
@@ -91,7 +94,7 @@ async function seedApply(
     variables: {},
     generatedRoot: {
       files: {
-        "main.tf": 'module "app" { source = "./template-module" }',
+        "main.tf": 'module "child" { source = "./module" }',
       },
       moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
     },
@@ -99,15 +102,15 @@ async function seedApply(
   const applyRun: ApplyRun = {
     id: ids.applyRunId,
     planRunId: ids.planRunId,
-    spaceId: installation.spaceId,
-    installationId: ids.installationId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: ids.capsuleId,
     operation: "update",
     runnerProfileId: "opentofu-default",
     status: "queued",
     expected: {
       planRunId: ids.planRunId,
-      installationId: ids.installationId,
-      currentDeploymentId: seedDeploymentId,
+      capsuleId: ids.capsuleId,
+      currentStateVersionId: seedStateVersionId,
       runnerProfileId: "opentofu-default",
       sourceDigest: "sha256:src",
       variablesDigest: "sha256:vars",
@@ -126,13 +129,14 @@ async function seedApply(
 }
 
 function controllerWith(
-  store: InMemoryOpenTofuDeploymentStore,
-  coordination: InstallationCoordination,
+  store: InMemoryOpenTofuControlStore,
+  coordination: CapsuleCoordination,
   runner: { apply: () => Promise<unknown> },
 ) {
-  return new OpenTofuDeploymentController({
+  return new OpenTofuController({
     store,
-    installationCoordination: coordination,
+    capsuleCoordination: coordination,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: () => 1,
     newId: ((): ((p: string) => string) => {
       let n = 0;
@@ -146,23 +150,23 @@ function controllerWith(
 }
 
 test("a second write run for the same environment is blocked while the lease is held", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const { environment } = await seedApply(store, {
-    installationId: "ins_shared",
+    capsuleId: "cap_shared01",
     planRunId: "plan_a",
     applyRunId: "apply_a",
   });
-  // A second apply targeting the SAME installation/environment.
+  // A second apply targeting the SAME capsule/environment.
   await seedApply(store, {
-    installationId: "ins_shared",
+    capsuleId: "cap_shared01",
     planRunId: "plan_b",
     applyRunId: "apply_b",
   });
 
-  const coordination = new InMemoryInstallationCoordination();
-  // Pre-hold the installation lease as if a sibling consumer were running.
+  const coordination = new InMemoryCapsuleCoordination();
+  // Pre-hold the capsule lease as if a sibling consumer were running.
   const held = await coordination.acquireLease({
-    scope: installationLeaseScope("ins_shared", environment),
+    scope: capsuleLeaseScope("cap_shared01", environment),
     holderId: "other-run",
     ttlMs: 60_000,
   });
@@ -174,23 +178,23 @@ test("a second write run for the same environment is blocked while the lease is 
 
   // The consumer cannot acquire the busy lease -> rethrows for redelivery.
   await expect(controller.runQueuedApply("apply_b")).rejects.toBeInstanceOf(
-    InstallationLeaseBusyError,
+    CapsuleLeaseBusyError,
   );
   // The apply did not run; the run stays queued for the redelivery.
   expect((await store.getApplyRun("apply_b"))?.status).toBe("queued");
 });
 
 test("write runs for DIFFERENT environments are not blocked by each other's lease", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const { environment: envOne } = await seedApply(store, {
-    installationId: "ins_one",
+    capsuleId: "cap_one00001",
     planRunId: "plan_one",
     applyRunId: "apply_one",
   });
-  const coordination = new InMemoryInstallationCoordination();
-  // Hold a DIFFERENT installation/environment's lease.
+  const coordination = new InMemoryCapsuleCoordination();
+  // Hold a DIFFERENT capsule/environment's lease.
   await coordination.acquireLease({
-    scope: installationLeaseScope("ins_two", envOne),
+    scope: capsuleLeaseScope("cap_two00001", envOne),
     holderId: "other-run",
     ttlMs: 60_000,
   });
@@ -209,13 +213,13 @@ test("write runs for DIFFERENT environments are not blocked by each other's leas
 });
 
 test("the lease is released after a successful apply so the next run can acquire it", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const { environment } = await seedApply(store, {
-    installationId: "ins_seq",
+    capsuleId: "cap_seq00001",
     planRunId: "plan_seq",
     applyRunId: "apply_seq",
   });
-  const coordination = new InMemoryInstallationCoordination();
+  const coordination = new InMemoryCapsuleCoordination();
   const controller = controllerWith(store, coordination, {
     apply: () => Promise.resolve({}),
   });
@@ -225,7 +229,7 @@ test("the lease is released after a successful apply so the next run can acquire
 
   // The lease was released in finally; a fresh holder can take it.
   const after = await coordination.acquireLease({
-    scope: installationLeaseScope("ins_seq", environment),
+    scope: capsuleLeaseScope("cap_seq00001", environment),
     holderId: "next-run",
     ttlMs: 60_000,
   });

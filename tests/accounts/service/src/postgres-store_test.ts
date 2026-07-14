@@ -1,16 +1,9 @@
 import { expect, test } from "bun:test";
 import {
-  assertEquals,
-  assertNotEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "../../../helpers/assert.ts";
-import {
   PostgresAccountsStore,
   type PostgresQueryClient,
   type PostgresQueryResult,
 } from "../../../../accounts/service/src/postgres-store.ts";
-import { LedgerAccountOwnershipConflictError } from "../../../../accounts/service/src/store.ts";
 
 class RecordingPostgresClient implements PostgresQueryClient {
   calls: Array<{ sql: string; args: readonly unknown[] }> = [];
@@ -45,6 +38,66 @@ test("PostgresAccountsStore hashes OAuth credentials before writing", async () =
   expect(client.calls[0].args[0]).not.toEqual("plain-code");
 });
 
+test("PostgresAccountsStore persists Interface OAuth evidence without the raw token", async () => {
+  const client = new RecordingPostgresClient();
+  const store = new PostgresAccountsStore(client);
+  const expiresAt = Date.now() + 60_000;
+
+  await store.saveAccessToken("taksrv_plain_secret", {
+    clientId: "https://office.example.test/mcp",
+    audience: "https://office.example.test/mcp",
+    scope: "mcp.invoke",
+    subject: "pairwise_pg_subject",
+    takosumiSubject: "tsub_owner",
+    capsuleId: "inst_office",
+    workspaceId: "ws_owner",
+    role: "interface-runtime",
+    interfaceId: "if_office",
+    interfaceBindingId: "ifb_office",
+    interfaceResolvedRevision: 4,
+    expiresAt,
+  });
+
+  expect(client.calls[0].sql).toContain('"accounts_v1"."oauth_access_tokens"');
+  expect(client.calls[0].sql).toContain('"audience"');
+  expect(client.calls[0].sql).toContain('"interface_id"');
+  expect(client.calls[0].sql).toContain('"interface_binding_id"');
+  expect(client.calls[0].sql).toContain('"interface_resolved_revision"');
+  expect(client.calls[0].args).not.toContain("taksrv_plain_secret");
+  expect(String(client.calls[0].args[0])).toStartWith("sha256:");
+
+  client.queuedRows.push([
+    {
+      client_id: "https://office.example.test/mcp",
+      audience: "https://office.example.test/mcp",
+      scope: "mcp.invoke",
+      subject: "pairwise_pg_subject",
+      takosumi_subject: "tsub_owner",
+      capsule_id: "inst_office",
+      workspace_id: "ws_owner",
+      role: "interface-runtime",
+      interface_id: "if_office",
+      interface_binding_id: "ifb_office",
+      interface_resolved_revision: "4",
+      expires_at: new Date(expiresAt),
+    },
+  ]);
+  expect(await store.findAccessToken("taksrv_plain_secret")).toMatchObject({
+    clientId: "https://office.example.test/mcp",
+    audience: "https://office.example.test/mcp",
+    scope: "mcp.invoke",
+    subject: "pairwise_pg_subject",
+    takosumiSubject: "tsub_owner",
+    capsuleId: "inst_office",
+    workspaceId: "ws_owner",
+    role: "interface-runtime",
+    interfaceId: "if_office",
+    interfaceBindingId: "ifb_office",
+    interfaceResolvedRevision: 4,
+    expiresAt,
+  });
+});
+
 test("PostgresAccountsStore hashes personal access tokens before writing", async () => {
   const client = new RecordingPostgresClient();
   const store = new PostgresAccountsStore(client);
@@ -73,6 +126,7 @@ test("PostgresAccountsStore maps account terms acceptance", async () => {
     subject: "tsub_owner",
     email: "owner@example.test",
     displayName: "Owner",
+    picture: "https://accounts.example.test/owner.png",
     termsVersion: "terms-2026-05-13",
     termsAcceptedAt: 1_500,
     termsAcceptedSource: "account-terms",
@@ -81,14 +135,18 @@ test("PostgresAccountsStore maps account terms acceptance", async () => {
   });
 
   expect(client.calls[0].sql).toContain("email_verified");
+  expect(client.calls[0].sql).toContain("picture");
   expect(client.calls[0].sql).toContain("terms_version");
   expect(client.calls[0].sql).toContain("terms_accepted_at");
-  // `email_verified` is bound as $3 (no upstream assertion here -> null),
-  // shifting the terms args down by one.
+  // `email_verified` is bound as $3 (no upstream assertion here -> null), and
+  // the optional picture occupies the next profile slot before terms.
   expect(client.calls[0].args[2]).toEqual(null);
-  expect(client.calls[0].args[4]).toEqual("terms-2026-05-13");
-  expect(client.calls[0].args[5]).toEqual("1970-01-01T00:00:01.500Z");
-  expect(client.calls[0].args[6]).toEqual("account-terms");
+  expect(client.calls[0].args[4]).toEqual(
+    "https://accounts.example.test/owner.png",
+  );
+  expect(client.calls[0].args[5]).toEqual("terms-2026-05-13");
+  expect(client.calls[0].args[6]).toEqual("1970-01-01T00:00:01.500Z");
+  expect(client.calls[0].args[7]).toEqual("account-terms");
 
   client.queuedRows.push([
     {
@@ -96,6 +154,7 @@ test("PostgresAccountsStore maps account terms acceptance", async () => {
       email: "owner@example.test",
       email_verified: true,
       display_name: "Owner",
+      picture: "https://accounts.example.test/owner.png",
       terms_version: "terms-2026-05-13",
       terms_accepted_at: new Date(1_500),
       terms_accepted_source: "account-terms",
@@ -114,6 +173,7 @@ test("PostgresAccountsStore maps account terms acceptance", async () => {
     email: "owner@example.test",
     emailVerified: true,
     displayName: "Owner",
+    picture: "https://accounts.example.test/owner.png",
     termsVersion: "terms-2026-05-13",
     termsAcceptedAt: 1_500,
     termsAcceptedSource: "account-terms",
@@ -127,6 +187,7 @@ test("PostgresAccountsStore maps account terms acceptance", async () => {
       email: "member@example.test",
       email_verified: true,
       display_name: "Member",
+      picture: null,
       terms_version: null,
       terms_accepted_at: null,
       terms_accepted_source: null,
@@ -334,114 +395,6 @@ test("PostgresAccountsStore maps personal access token records", async () => {
   });
 });
 
-test("PostgresAccountsStore maps billing dunning and credit state", async () => {
-  const client = new RecordingPostgresClient();
-  const store = new PostgresAccountsStore(client);
-
-  await store.saveBillingAccount({
-    billingAccountId: "bill_1",
-    subject: "tsub_owner",
-    provider: "stripe",
-    stripeCustomerId: "cus_1",
-    stripeSubscriptionId: "sub_1",
-    stripePriceId: "price_pro",
-    stripeDefaultPaymentMethodId: "pm_default",
-    planCode: "pro",
-    currentPeriodEndUnix: 1_700_200_000,
-    lastInvoiceId: "in_failed",
-    dunningStartedAt: 2_000,
-    nextPaymentAttemptUnix: 1_700_300_000,
-    dunningAttemptCount: 2,
-    dunningAction: "marked_uncollectible",
-    dunningExhaustedAt: 2_500,
-    lastCreditEventId: "evt_credit",
-    lastCreditKind: "credit_note",
-    lastCreditId: "cn_1",
-    lastCreditAmount: 500,
-    lastCreditCurrency: "usd",
-    lastPlanTransitionEventId: "evt_plan",
-    lastPlanFromCode: "plus",
-    lastPlanToCode: "pro",
-    lastPlanTransitionedAt: 1_800,
-    lastTaxEventId: "evt_tax",
-    taxPolicyRef: "tax-policy://us-sales-tax",
-    taxJurisdiction: "US",
-    taxAutomaticStatus: "complete",
-    status: "past_due",
-    createdAt: 1_000,
-    updatedAt: 2_000,
-  });
-
-  expect(client.calls[0].sql).toContain("dunning_started_at");
-  expect(client.calls[0].sql).toContain("last_credit_kind");
-  expect(client.calls[0].sql).toContain("last_plan_transition_event_id");
-  expect(client.calls[0].sql).toContain("tax_policy_ref");
-  expect(client.calls[0].args[6]).toEqual("pm_default");
-  expect(client.calls[0].args[9]).toEqual("in_failed");
-  expect(client.calls[0].args[10]).toEqual("1970-01-01T00:00:02.000Z");
-  expect(client.calls[0].args[11]).toEqual(1_700_300_000);
-  expect(client.calls[0].args[12]).toEqual(2);
-  expect(client.calls[0].args[13]).toEqual("marked_uncollectible");
-  expect(client.calls[0].args[14]).toEqual("1970-01-01T00:00:02.500Z");
-  expect(client.calls[0].args[16]).toEqual("credit_note");
-  expect(client.calls[0].args[18]).toEqual(500);
-  expect(client.calls[0].args[20]).toEqual("evt_plan");
-  expect(client.calls[0].args[23]).toEqual("1970-01-01T00:00:01.800Z");
-  expect(client.calls[0].args[25]).toEqual("tax-policy://us-sales-tax");
-
-  client.queuedRows.push([
-    {
-      billing_account_id: "bill_1",
-      subject: "tsub_owner",
-      provider: "stripe",
-      stripe_customer_id: "cus_1",
-      stripe_subscription_id: "sub_1",
-      stripe_price_id: "price_pro",
-      stripe_default_payment_method_id: "pm_default",
-      plan_code: "pro",
-      current_period_end_unix: "1700200000",
-      last_invoice_id: "in_failed",
-      dunning_started_at: new Date(2_000),
-      next_payment_attempt_unix: "1700300000",
-      dunning_attempt_count: "2",
-      dunning_action: "marked_uncollectible",
-      dunning_exhausted_at: new Date(2_500),
-      last_credit_event_id: "evt_credit",
-      last_credit_kind: "credit_note",
-      last_credit_id: "cn_1",
-      last_credit_amount: "500",
-      last_credit_currency: "usd",
-      last_plan_transition_event_id: "evt_plan",
-      last_plan_from_code: "plus",
-      last_plan_to_code: "pro",
-      last_plan_transitioned_at: new Date(1_800),
-      last_tax_event_id: "evt_tax",
-      tax_policy_ref: "tax-policy://us-sales-tax",
-      tax_jurisdiction: "US",
-      tax_automatic_status: "complete",
-      status: "past_due",
-      created_at: new Date(1_000),
-      updated_at: new Date(2_000),
-    },
-  ]);
-
-  const record = await store.findBillingAccount("bill_1");
-
-  expect(record?.stripeDefaultPaymentMethodId).toEqual("pm_default");
-  expect(record?.dunningStartedAt).toEqual(2_000);
-  expect(record?.nextPaymentAttemptUnix).toEqual(1_700_300_000);
-  expect(record?.dunningAttemptCount).toEqual(2);
-  expect(record?.dunningAction).toEqual("marked_uncollectible");
-  expect(record?.dunningExhaustedAt).toEqual(2_500);
-  expect(record?.lastCreditKind).toEqual("credit_note");
-  expect(record?.lastCreditAmount).toEqual(500);
-  expect(record?.lastPlanFromCode).toEqual("plus");
-  expect(record?.lastPlanToCode).toEqual("pro");
-  expect(record?.lastPlanTransitionedAt).toEqual(1_800);
-  expect(record?.taxPolicyRef).toEqual("tax-policy://us-sales-tax");
-  expect(record?.taxJurisdiction).toEqual("US");
-});
-
 test("PostgresAccountsStore consumes authorization codes with DELETE RETURNING mapping", async () => {
   const client = new RecordingPostgresClient();
   client.queuedRows.push([
@@ -451,9 +404,8 @@ test("PostgresAccountsStore consumes authorization codes with DELETE RETURNING m
       scope: "openid",
       subject: "sub_pairwise",
       takosumi_subject: "tsub_owner",
-      installation_id: "inst_1",
-      app_id: "app.demo",
-      space_id: "space_1",
+      capsule_id: "inst_1",
+      workspace_id: "space_1",
       role: "owner",
       nonce: "nonce-1",
       code_challenge: "challenge",
@@ -476,7 +428,6 @@ test("PostgresAccountsStore consumes authorization codes with DELETE RETURNING m
     subject: "sub_pairwise",
     takosumiSubject: "tsub_owner",
     capsuleId: "inst_1",
-    appId: "app.demo",
     workspaceId: "space_1",
     role: "owner",
     nonce: "nonce-1",
@@ -484,435 +435,4 @@ test("PostgresAccountsStore consumes authorization codes with DELETE RETURNING m
     codeChallengeMethod: "S256",
     expiresAt: 2_000,
   });
-});
-
-test("PostgresAccountsStore writes billing usage metadata as jsonb", async () => {
-  const client = new RecordingPostgresClient();
-  const store = new PostgresAccountsStore(client);
-  // The atomic conditional upsert RETURNs the usage_report_id when the write
-  // (insert or owner-matching update) succeeds; queue it so the store does
-  // not treat a non-empty result as an ownership conflict.
-  client.queuedRows.push([{ usage_report_id: "usage_report_1" }]);
-
-  await store.saveBillingUsageRecord({
-    usageReportId: "usage_report_1",
-    capsuleId: "inst_1",
-    billingAccountId: "bill_1",
-    meter: "agent.compute.seconds",
-    quantity: 12.5,
-    unit: "seconds",
-    periodStart: 1_000,
-    periodEnd: 2_000,
-    idempotencyKey: "usage-window-1",
-    requestDigest: "sha256:usage-1",
-    metadata: { run_id: "run_1" },
-    reportedBySubject: "tsub_owner",
-    reportedAt: 3_000,
-  });
-
-  // The pre-read find() is gone (it raced); the conditional upsert is now the
-  // only statement.
-  expect(client.calls[0].sql).toContain(
-    '"accounts_v1"."billing_usage_records"',
-  );
-  expect(client.calls[0].sql).toContain('"billing_usage_records"');
-  expect(client.calls[0].sql).toContain('"installation_id"');
-  expect(client.calls[0].sql).toContain('"billing_account_id"');
-  expect(client.calls[0].sql).toContain('returning "usage_report_id"');
-  expect(client.calls[0].args[9]).toEqual("sha256:usage-1");
-  expect(client.calls[0].args[10]).toEqual('{"run_id":"run_1"}');
-});
-
-test("PostgresAccountsStore rejects a cross-owner billing usage conflict", async () => {
-  const client = new RecordingPostgresClient();
-  const store = new PostgresAccountsStore(client);
-  // 0 rows returned: the conditional ON CONFLICT ... WHERE owner-matches did
-  // not fire because the existing row is owned by another installation.
-  client.queuedRows.push([]);
-
-  await assertRejects(
-    () =>
-      store.saveBillingUsageRecord({
-        usageReportId: "usage_report_1",
-        capsuleId: "inst_other",
-        billingAccountId: "bill_other",
-        meter: "agent.compute.seconds",
-        quantity: 99,
-        unit: "seconds",
-        requestDigest: "sha256:usage-2",
-        metadata: {},
-        reportedAt: 3_000,
-      }),
-    TypeError,
-    "already owned by another installation",
-  );
-});
-
-test("PostgresAccountsStore maps billing usage records", async () => {
-  const client = new RecordingPostgresClient();
-  client.queuedRows.push([
-    {
-      usage_report_id: "usage_report_1",
-      installation_id: "inst_1",
-      billing_account_id: "bill_1",
-      meter: "agent.compute.seconds",
-      quantity: 12.5,
-      unit: "seconds",
-      period_start: new Date(1_000),
-      period_end: null,
-      idempotency_key: "usage-window-1",
-      request_digest: "sha256:usage-1",
-      metadata: '{"run_id":"run_1"}',
-      reported_by_subject: "tsub_owner",
-      reported_at: new Date(3_000),
-      billing_export_provider: null,
-      billing_export_id: null,
-      billing_export_reference: null,
-      billing_exported_at: null,
-    },
-  ]);
-  const store = new PostgresAccountsStore(client);
-
-  const records = await store.listBillingUsageRecordsForCapsule("inst_1");
-
-  expect(client.calls[0].sql).toContain('"installation_id" = $1');
-  expect(records).toEqual([
-    {
-      usageReportId: "usage_report_1",
-      capsuleId: "inst_1",
-      billingAccountId: "bill_1",
-      meter: "agent.compute.seconds",
-      quantity: 12.5,
-      unit: "seconds",
-      periodStart: 1_000,
-      periodEnd: undefined,
-      idempotencyKey: "usage-window-1",
-      requestDigest: "sha256:usage-1",
-      metadata: { run_id: "run_1" },
-      reportedBySubject: "tsub_owner",
-      reportedAt: 3_000,
-      billingExportProvider: undefined,
-      billingExportId: undefined,
-      billingExportReference: undefined,
-      billingExportedAt: undefined,
-    },
-  ]);
-
-  client.queuedRows.push([
-    {
-      usage_report_id: "usage_report_1",
-      installation_id: "inst_1",
-      billing_account_id: "bill_1",
-      meter: "agent.compute.seconds",
-      quantity: 12.5,
-      unit: "seconds",
-      period_start: new Date(1_000),
-      period_end: null,
-      idempotency_key: "usage-window-1",
-      request_digest: "sha256:usage-1",
-      metadata: '{"run_id":"run_1"}',
-      reported_by_subject: "tsub_owner",
-      reported_at: new Date(3_000),
-      billing_export_provider: null,
-      billing_export_id: null,
-      billing_export_reference: null,
-      billing_exported_at: null,
-    },
-  ]);
-  const billingRecords =
-    await store.listBillingUsageRecordsForBillingAccount("bill_1");
-  expect(client.calls[1].sql).toContain('"billing_account_id" = $1');
-  expect(billingRecords.map((record) => record.usageReportId)).toEqual([
-    "usage_report_1",
-  ]);
-
-  client.queuedRows.push([
-    {
-      usage_report_id: "usage_report_1",
-      installation_id: "inst_1",
-      billing_account_id: "bill_1",
-      meter: "agent.compute.seconds",
-      quantity: 12.5,
-      unit: "seconds",
-      period_start: new Date(1_000),
-      period_end: null,
-      idempotency_key: "usage-window-1",
-      request_digest: "sha256:usage-1",
-      metadata: '{"run_id":"run_1"}',
-      reported_by_subject: "tsub_owner",
-      reported_at: new Date(3_000),
-      billing_export_provider: null,
-      billing_export_id: null,
-      billing_export_reference: null,
-      billing_exported_at: null,
-    },
-  ]);
-  await store.markBillingUsageRecordsExported({
-    billingAccountId: "bill_1",
-    usageReportIds: ["usage_report_1"],
-    provider: "stripe",
-    exportId: "export_1",
-    exportReference: "ii_1",
-    exportedAt: 4_000,
-  });
-  expect(client.calls[3].sql).toContain('"billing_export_id"');
-  expect(client.calls[3].args).toContain("export_1");
-});
-
-test("PostgresAccountsStore reports launch token jti insert conflicts", async () => {
-  const client = new RecordingPostgresClient();
-  client.queuedRows.push([{ jti: "lt_1" }], []);
-  const store = new PostgresAccountsStore(client);
-  const record = {
-    jti: "lt_1",
-    capsuleId: "inst_1",
-    subject: "tsub_owner" as const,
-    audience: "app.demo",
-    expiresAt: 2_000,
-    consumedAt: 1_000,
-  };
-
-  expect(await store.consumeLaunchTokenJti(record)).toEqual(true);
-  expect(await store.consumeLaunchTokenJti(record)).toEqual(false);
-});
-
-test("PostgresAccountsStore prunes expired and used launch tokens", async () => {
-  const client = new RecordingPostgresClient();
-  client.queuedRows.push([
-    { reason: "expired" },
-    { reason: "expired" },
-    { reason: "used" },
-  ]);
-  const store = new PostgresAccountsStore(client);
-
-  const result = await store.pruneLaunchTokens({
-    expiredBefore: 2_000,
-    usedBefore: 3_000,
-  });
-
-  expect(result).toEqual({ deleted: 3, expired: 2, used: 1 });
-  expect(client.calls[0].sql).toContain(
-    'delete from "installation_v1"."launch_tokens"',
-  );
-  expect(client.calls[0].sql).toContain('"expires_at" <= $1');
-  expect(client.calls[0].sql).toContain('"used_at" is not null');
-  expect(client.calls[0].args).toEqual([
-    "1970-01-01T00:00:02.000Z",
-    "1970-01-01T00:00:03.000Z",
-    new Date(3_000),
-  ]);
-});
-
-test("PostgresAccountsStore does not write retired service import storage", async () => {
-  const client = new RecordingPostgresClient();
-  const store = new PostgresAccountsStore(client);
-
-  await store.saveAppCapsule({
-    capsuleId: "inst_1",
-    accountId: "acct_1",
-    workspaceId: "space_1",
-    appId: "app.demo",
-    sourceGitUrl: "https://git.example.test/app.git",
-    sourceRef: "main",
-    sourceCommit: "abc123",
-    planDigest: "sha256:manifest",
-    artifactDigest: undefined,
-    mode: "shared-cell",
-    runtimeBindingId: undefined,
-    billingAccountId: "billing_inst_1",
-    status: "installing",
-    createdBySubject: "tsub_owner",
-    createdAt: 1_000,
-    updatedAt: 1_000,
-  });
-
-  expect(client.calls[0].sql.includes("service_imports_json")).toEqual(false);
-  expect(client.calls[0].sql).toContain("billing_account_id");
-  expect(client.calls[0].args.includes("billing_inst_1")).toEqual(true);
-});
-
-test("PostgresAccountsStore validates ServiceBindingMaterial records before writing", async () => {
-  const client = new RecordingPostgresClient();
-  const store = new PostgresAccountsStore(client);
-
-  await assertRejects(
-    () =>
-      store.saveServiceBindingMaterial({
-        bindingId: "bind_launch",
-        capsuleId: "inst_1",
-        name: "launch",
-        kind: "auth.bootstrap_token",
-        configRef: "takosumi-accounts://inst_1/launch-token/kid",
-        secretRefs: ["secret://inst_1/launch-token/private-key"],
-        createdAt: 1_000,
-        updatedAt: 1_000,
-      }),
-    TypeError,
-    "auth.bootstrap_token must not store secret references",
-  );
-  expect(client.calls.length).toEqual(0);
-});
-
-test("PostgresAccountsStore persists service binding material records", async () => {
-  const client = new RecordingPostgresClient();
-  const store = new PostgresAccountsStore(client);
-
-  await store.saveServiceBindingMaterial({
-    bindingId: "bind_auth",
-    capsuleId: "inst_1",
-    name: "auth",
-    kind: "identity.oidc",
-    configRef:
-      "takosumi-accounts://installations/inst_1/service-bindings/auth/oidc-client/client",
-    secretRefs: [
-      "takosumi-accounts://installations/inst_1/service-bindings/auth/secrets/client-secret",
-    ],
-    createdAt: 1_000,
-    updatedAt: 2_000,
-  });
-
-  expect(client.calls[0].sql).toContain(
-    '"installation_v1"."service_binding_materials"',
-  );
-  expect(client.calls[0].sql).toContain("on conflict");
-  expect(client.calls[0].sql).not.toContain('"installation_v1"."app_bindings"');
-
-  client.queuedRows.push([
-    {
-      binding_id: "bind_auth",
-      installation_id: "inst_1",
-      name: "auth",
-      kind: "identity.oidc",
-      config_ref:
-        "takosumi-accounts://installations/inst_1/service-bindings/auth/oidc-client/client",
-      secret_refs: [
-        "takosumi-accounts://installations/inst_1/service-bindings/auth/secrets/client-secret",
-      ],
-      created_at: new Date(1_000),
-      updated_at: new Date(2_000),
-    },
-  ]);
-
-  expect(
-    await store.listServiceBindingMaterialsForCapsule("inst_1"),
-  ).toEqual([
-    {
-      bindingId: "bind_auth",
-      capsuleId: "inst_1",
-      name: "auth",
-      kind: "identity.oidc",
-      configRef:
-        "takosumi-accounts://installations/inst_1/service-bindings/auth/oidc-client/client",
-      secretRefs: [
-        "takosumi-accounts://installations/inst_1/service-bindings/auth/secrets/client-secret",
-      ],
-      createdAt: 1_000,
-      updatedAt: 2_000,
-    },
-  ]);
-  expect(client.calls[1].sql).toContain(
-    '"installation_v1"."service_binding_materials"',
-  );
-  expect(client.calls[1].sql).toContain("order by");
-});
-
-test("PostgresAccountsStore orders CapsuleEvents by append sequence", async () => {
-  const client = new RecordingPostgresClient();
-  const store = new PostgresAccountsStore(client);
-
-  await store.listCapsuleEvents("inst_1");
-
-  expect(client.calls[0].sql).toContain('order by "installation_v1"');
-  expect(client.calls[0].sql).toContain('"event_sequence" asc');
-  expect(client.calls[0].sql).toContain('"event_id" asc');
-});
-
-test("PostgresAccountsStore guards ledger account ownership at the store boundary (F7)", async () => {
-  const client = new RecordingPostgresClient();
-  const store = new PostgresAccountsStore(client);
-  // The conditional upsert RETURNs account_id on a successful insert /
-  // owner-matching update; queue it so the store does not treat the write as
-  // an ownership conflict.
-  client.queuedRows.push([{ account_id: "acct_1" }]);
-
-  await store.saveLedgerAccount({
-    accountId: "acct_1",
-    legalOwnerSubject: "tsub_alice",
-    billingAccountId: undefined,
-    createdAt: 1_000,
-    updatedAt: 1_000,
-  });
-
-  // The UPSERT keeps the original `legal_owner_subject` in the SET
-  // clause (because it equals EXCLUDED.legal_owner_subject) but the
-  // `WHERE` clause refuses to overwrite the row when the existing
-  // owner differs from the incoming one.
-  expect(client.calls[0].sql).toContain('on conflict ("account_id")');
-  expect(client.calls[0].sql).toContain(
-    '"installation_v1"."ledger_accounts"."legal_owner_subject"',
-  );
-  expect(client.calls[0].sql).toContain("= excluded.legal_owner_subject");
-  // The UPDATE clause no longer touches legal_owner_subject directly,
-  // since we never want to silently rebind a ledger account to a
-  // different owner.
-  expect(
-    client.calls[0].sql.includes(
-      "legal_owner_subject = EXCLUDED.legal_owner_subject",
-    ),
-  ).toEqual(false);
-});
-
-test("PostgresAccountsStore throws on a ledger ownership change (F7, consistent with D1/in-memory)", async () => {
-  const client = new RecordingPostgresClient();
-  const store = new PostgresAccountsStore(client);
-  // 0 rows from the conditional upsert: the existing row is owned by a
-  // different subject, so the WHERE owner-match did not fire.
-  client.queuedRows.push([]);
-  // The conflict branch re-reads the existing row to populate the error.
-  client.queuedRows.push([
-    {
-      account_id: "acct_1",
-      legal_owner_subject: "tsub_alice",
-      billing_account_id: null,
-      created_at: new Date(1_000),
-      updated_at: new Date(1_000),
-    },
-  ]);
-
-  await assertRejects(
-    () =>
-      store.saveLedgerAccount({
-        accountId: "acct_1",
-        legalOwnerSubject: "tsub_mallory",
-        billingAccountId: undefined,
-        createdAt: 2_000,
-        updatedAt: 2_000,
-      }),
-    LedgerAccountOwnershipConflictError,
-    "already owned by a different Takosumi subject",
-  );
-});
-
-test("PostgresAccountsStore serializes installation event appends with a row lock (F7)", async () => {
-  const client = new RecordingPostgresClient();
-  const store = new PostgresAccountsStore(client);
-
-  await store.appendCapsuleEvent({
-    eventId: "evt_1",
-    capsuleId: "inst_1",
-    eventType: "installation.created",
-    payload: {},
-    eventHash: "sha256:first",
-    createdAt: 1_000,
-  });
-
-  // BEGIN / lock insert / SELECT ... FOR UPDATE NOWAIT / INSERT event /
-  // COMMIT, in that order.
-  expect(client.calls[0].sql.trim()).toEqual("BEGIN");
-  expect(client.calls[1].sql).toContain("installation_event_chain_locks");
-  expect(client.calls[2].sql).toContain("FOR UPDATE NOWAIT");
-  expect(client.calls[3].sql).toContain(
-    'insert into "installation_v1"."installation_events"',
-  );
-  expect(client.calls[4].sql.trim()).toEqual("COMMIT");
 });

@@ -109,7 +109,6 @@ describe("Run review ProviderConnection evidence", () => {
 
   test("does not render an empty diagnostics card on normal run reviews", () => {
     expect(runViewSource).toContain("const diagnosticRows = createMemo");
-    expect(runViewSource).toContain("const creditsRequired = createMemo");
     expect(runViewSource).toContain("const showDiagnosticsPanel = createMemo");
     expect(runViewSource).toContain("<Show when={showDiagnosticsPanel()}>");
     expect(runViewSource).toContain('t("run.diagnostics.failed")');
@@ -123,33 +122,33 @@ describe("Run review ProviderConnection evidence", () => {
     expect(ja["run.diagnostics.failed"]).toContain("詳細");
   });
 
-  test("classifies credit gate failures as a billing action instead of raw OpenTofu failure", () => {
-    expect(runViewSource).toContain("function isCreditsRequiredRun");
-    expect(runViewSource).toContain("credits_required");
-    expect(runViewSource).toContain("cloud_extension_insufficient_credits");
-    expect(runViewSource).toContain('run.errorCode === "credits_required"');
-    expect(runViewSource).toContain('t("run.summary.creditsRequired")');
-    expect(runViewSource).toContain('t("run.summary.creditsRequiredHint")');
-    expect(runViewSource).toContain('t("run.diagnostics.creditsRequired")');
-    expect(runViewSource).toContain(
-      't("run.diagnostics.creditsRequiredShort")',
+  test("does not infer host extension behavior from error-code prefixes", () => {
+    expect(runViewSource).not.toContain("isBillingActionRequiredRun");
+    expect(runViewSource).not.toContain('startsWith("billing_")');
+    expect(runViewSource).not.toContain("billingActionRequired");
+    expect(runViewSource).toContain("cost().blocked");
+    expect(runViewSource).toContain('"billing.commercial.v1"');
+  });
+
+  test("shows unrated showback without presenting it as a free zero estimate", () => {
+    expect(controlApiSource).toContain(
+      'readonly ratingStatus: "not_applicable" | "rated" | "unrated"',
     );
-    expect(runViewSource).toContain(
-      't("run.diagnostics.creditsRequiredDetail")',
-    );
-    expect(en["run.summary.creditsRequired"]).toContain("Credits");
-    expect(ja["run.summary.creditsRequired"]).toContain("クレジット");
-    expect(en["run.diagnostics.creditsRequired"]).toContain("credits");
-    expect(ja["run.diagnostics.creditsRequired"]).toContain("クレジット");
+    expect(runViewSource).toContain('cost.ratingStatus === "unrated"');
+    expect(runViewSource).toContain('t("run.cost.unrated")');
+    expect(en["run.cost.unrated"]).toContain("no price policy");
+    expect(ja["run.cost.unrated"]).toContain("価格ポリシー");
   });
 
   test("classifies short managed-hostname quota failures as a URL action", () => {
-    expect(runViewSource).toContain(
-      "function isManagedHostnameSlotLimitRun",
-    );
+    expect(runViewSource).toContain("function isManagedHostnameSlotLimitRun");
     expect(runViewSource).toContain(
       'run.errorCode === "managed_public_hostname_slot_limit_reached"',
     );
+    expect(runViewSource).toContain(
+      'diagnostic.code === "managed_public_hostname_slot_limit_reached"',
+    );
+    expect(runViewSource).not.toContain("isManagedHostnameSlotLimitText");
     expect(runViewSource).toContain('t("run.summary.hostnameSlotLimit")');
     expect(runViewSource).toContain(
       't("run.diagnostics.hostnameSlotLimitShort")',
@@ -160,13 +159,11 @@ describe("Run review ProviderConnection evidence", () => {
 
   test("classifies stale connected-account verification failures as a re-review action", () => {
     expect(runViewSource).toContain("function accessIssueForRun");
-    expect(runViewSource).toContain("credential_mint_failed");
-    expect(runViewSource).toContain("pending (not verified)");
-    expect(runViewSource).toContain("provider_connection_not_ready");
-    expect(runViewSource).not.toContain(
-      'run.errorCode === "credential_mint_failed"',
-    );
+    expect(runViewSource).toContain("diagnostic.code");
     expect(runViewSource).toContain('"provider_connection_not_ready"');
+    expect(runViewSource).not.toContain("accessIssueFromText");
+    expect(runViewSource).not.toContain("credential_mint_failed");
+    expect(runViewSource).not.toContain("pending (not verified)");
     expect(runViewSource).toContain(
       't("run.summary.connectionVerificationRequired")',
     );
@@ -201,6 +198,8 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain('"provider_connection_setup_required"');
     expect(runViewSource).toContain('"provider_connection_changed"');
     expect(runViewSource).toContain('"credential_service_unavailable"');
+    expect(runViewSource).not.toContain("resolved_bindings_changed");
+    expect(runViewSource).not.toContain("connection vault is not configured");
     expect(runViewSource).toContain('t("run.summary.connectionSetupRequired")');
     expect(runViewSource).toContain('t("run.summary.connectionChanged")');
     expect(runViewSource).toContain('t("run.summary.credentialServiceIssue")');
@@ -225,8 +224,10 @@ describe("Run review ProviderConnection evidence", () => {
 
   test("redacts secret-shaped values before rendering run diagnostics", () => {
     expect(runViewSource).toContain("function diagnosticDisplayText");
-    expect(runViewSource).toContain("Bearer [REDACTED]");
-    expect(runViewSource).toContain("[REDACTED]");
+    expect(runViewSource).toContain(
+      'import { redactString } from "takosumi-contract/redaction"',
+    );
+    expect(runViewSource).toContain("const redacted = redactString(value)");
     expect(runViewSource).toContain(
       "diagnosticDisplayText(props.diagnostic.message)",
     );
@@ -253,8 +254,9 @@ describe("Run review ProviderConnection evidence", () => {
     );
   });
 
-  test("keeps paid billing recovery Cloud-only on blocked run reviews", () => {
-    expect(runViewSource).toContain("isTakosumiCloudRuntime");
+  test("gates commercial recovery behind the generic capability surface", () => {
+    expect(runViewSource).toContain("hasPlatformExtensionCapability");
+    expect(runViewSource).toContain('"billing.commercial.v1"');
     expect(runViewSource).toContain('href="/billing"');
     expect(runViewSource).toContain('"run.cost.billingCta"');
     expect(runViewSource).toContain('"run.cost.operatorHelp"');
@@ -264,11 +266,19 @@ describe("Run review ProviderConnection evidence", () => {
     expect(ja["run.cost.operatorHelp"]).toContain("ワークスペース");
   });
 
-  test("surfaces the deployed public app URL as the primary completion action", () => {
-    expect(runViewSource).toContain("listDeployments");
+  test("keeps launch URLs Interface-owned instead of inferring them from run state or outputs", () => {
+    expect(runViewSource).not.toContain("listDeployments");
     expect(runViewSource).toContain("listActivity");
-    expect(runViewSource).toContain("launchUrlFromDeployment");
+    expect(runViewSource).not.toContain("launchUrlFromDeployment");
+    expect(runViewSource).toContain("listAuthorizedUiSurfaces");
+    expect(runViewSource).toContain("refreshSession");
+    expect(runViewSource).toContain("capsuleId: id");
     expect(runViewSource).toContain("completedRunLaunchUrl");
+    expect(runViewSource).toContain(
+      "Runtime launch surfaces are Interface-owned",
+    );
+    expect(runViewSource).not.toContain("publicUrlFromOutputs");
+    expect(runViewSource).toContain("completedRunUiSurfaces.error");
     expect(runViewSource).toContain('t("apps.openApp")');
     expect(runViewSource).toContain('target="_blank"');
     expect(runViewSource).toContain('rel="noreferrer noopener"');
@@ -281,7 +291,8 @@ describe("Run review ProviderConnection evidence", () => {
   });
 
   test("waits for release activation before presenting a successful apply as ready", () => {
-    expect(runViewSource).toContain("deploymentReadinessAfterApply");
+    expect(runViewSource).toContain("stateVersionReadinessAfterApply");
+    expect(runViewSource).toContain("completedRunStateVersion");
     expect(runViewSource).toContain("completedRunReadiness");
     expect(runViewSource).toContain('readiness === "activation_pending"');
     expect(runViewSource).toContain(
@@ -293,7 +304,7 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain(
       'if (readiness === "ready" || readiness === "activation_failed") return;',
     );
-    expect(runViewSource).toContain("refetchDeployments()");
+    expect(runViewSource).toContain("refetchStateVersions()");
     expect(runViewSource).toContain("refetchActivity()");
     expect(runViewSource).toContain('t("run.summary.activationPending")');
     expect(runViewSource).toContain('t("run.summary.activationFailed")');

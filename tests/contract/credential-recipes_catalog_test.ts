@@ -4,12 +4,8 @@ import { expect, test } from "bun:test";
 import { parse } from "yaml";
 
 import {
-  allowedEnvNamesForProvider,
   isProviderEnvName,
   isReservedProviderEnvName,
-  PROVIDER_CREDENTIAL_ENV_RULES,
-  providerEnvRule,
-  requiredEnvGroupsForProvider,
 } from "../../contract/provider-env-rules.ts";
 import { GUIDED_PROVIDER_SETUPS } from "../../providers/registry.ts";
 
@@ -18,7 +14,6 @@ const RECIPE_DIR = join(import.meta.dir, "../../recipes/providers");
 interface ParsedRecipe {
   readonly id: string;
   readonly display_name?: string;
-  readonly provider_rule?: string;
   readonly terraform_source?: readonly string[] | string;
   readonly env_names?: readonly string[];
   readonly required_env_groups?: readonly (readonly string[])[];
@@ -60,26 +55,10 @@ test("recipe catalog covers the Final Plan built-ins plus arbitrary generic env"
   );
 });
 
-test("every built-in provider env rule has a matching recipe with exact env and required-group projection", () => {
-  for (const rule of PROVIDER_CREDENTIAL_ENV_RULES) {
-    const recipe = RECIPES_BY_ID.get(rule.shortName);
-    expect(recipe, `missing recipe for ${rule.shortName}`).toBeDefined();
-    expect(recipe!.provider_rule).toBe(rule.shortName);
-    expect(sorted(recipe!.env_names ?? [])).toEqual(sorted(rule.envNames));
-    expect(groupSet(recipe!.required_env_groups ?? [])).toEqual(
-      groupSet(rule.requiredGroups),
-    );
-  }
-});
-
 test("recipe auth modes only reference declared provider env names", () => {
   for (const recipe of RECIPES) {
     if (recipe.declared_env) continue;
-    const rule = providerEnvRule(recipe.provider_rule ?? recipe.id);
-    expect(
-      rule,
-      `recipe ${recipe.id} must resolve a provider rule`,
-    ).toBeDefined();
+    expect(recipe.terraform_source).toBeDefined();
     const declared = new Set(recipe.env_names ?? []);
     expect(
       declared.size,
@@ -98,20 +77,20 @@ test("recipe auth modes only reference declared provider env names", () => {
   }
 });
 
-test("s3-compatible is an AWS provider recipe, not a separate provider boundary", () => {
+test("s3-compatible selects the AWS provider by exact Terraform source", () => {
   const recipe = RECIPES_BY_ID.get("s3-compatible");
-  expect(recipe?.provider_rule).toBe("aws");
-  const allowed = new Set(allowedEnvNamesForProvider("aws"));
+  const aws = RECIPES_BY_ID.get("aws");
+  expect(recipe?.terraform_source).toEqual(aws?.terraform_source);
+  const allowed = new Set(aws?.env_names ?? []);
   expect(recipe?.env_names).toContain("AWS_ENDPOINT_URL_S3");
   for (const envName of recipe?.env_names ?? []) {
     expect(allowed.has(envName), envName).toBe(true);
   }
 });
 
-test("generic-env recipe declares the arbitrary provider path without widening built-in rules", () => {
+test("generic-env recipe declares the arbitrary provider path", () => {
   const recipe = RECIPES_BY_ID.get("generic-env");
   expect(recipe?.declared_env).toBe(true);
-  expect(recipe?.provider_rule).toBeUndefined();
   expect(recipe?.terraform_source).toBe("*");
   expect(authModeEnvNames(recipe!)).toEqual(["*"]);
   expect(
@@ -135,14 +114,19 @@ test("guided provider setup credential env names are backed by recipes", () => {
   }
 });
 
-test("recipe required groups match the runtime provider-env rule helper", () => {
+test("recipe required groups reference only their own declared env names", () => {
   for (const recipe of RECIPES) {
     if (recipe.declared_env) continue;
-    if (recipe.provider_rule && recipe.provider_rule !== recipe.id) continue;
-    const provider = recipe.provider_rule ?? recipe.id;
-    expect(groupSet(recipe.required_env_groups ?? [])).toEqual(
-      groupSet(requiredEnvGroupsForProvider(provider)),
-    );
+    const declared = new Set(recipe.env_names ?? []);
+    for (const group of recipe.required_env_groups ?? []) {
+      expect(
+        group.length,
+        `${recipe.id} has an empty required group`,
+      ).toBeGreaterThan(0);
+      for (const envName of group) {
+        expect(declared.has(envName), `${recipe.id}:${envName}`).toBe(true);
+      }
+    }
   }
 });
 
@@ -172,10 +156,6 @@ function collectFileEnvNames(value: unknown, names: Set<string>): void {
 
 function sorted(values: readonly string[]): readonly string[] {
   return [...values].sort();
-}
-
-function groupSet(groups: readonly (readonly string[])[]): readonly string[] {
-  return groups.map((group) => sorted(group).join("\0")).sort();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

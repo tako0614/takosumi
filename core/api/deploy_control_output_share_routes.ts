@@ -1,9 +1,9 @@
 /**
- * §18 cross-Space OutputShare routes: create / list / approve / revoke. A producer
- * Installation's Space authorizes a consumer Space to consume named projected
- * outputs; create + revoke are gated by space-permission on the GRANTING (from)
- * Space, approve is gated on the RECEIVING (to) Space, and the list returns the
- * grants a Space granted OR received. Owns its handlers and its slice of the
+ * §18 cross-Workspace OutputShare routes: create / list / approve / revoke. A
+ * producer Capsule's Workspace authorizes a consumer Workspace to consume named
+ * outputs; create + revoke are gated on the granting Workspace, approve on the
+ * receiving Workspace, and list returns grants in either direction. Owns its
+ * handlers and its slice of the
  * {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS}
  * descriptor inventory.
  */
@@ -19,14 +19,14 @@ import {
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
-  ensureSpacePermission,
+  ensureWorkspacePermission,
   errorEnvelope,
   notImplemented,
   parsePageParams,
   readJsonBody,
   runHandler,
   OUTPUT_SHARE_ID_PATTERN,
-  SPACE_ID_PATTERN,
+  WORKSPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import {
   TAKOSUMI_OUTPUT_SHARE_APPROVE_ROUTE,
@@ -40,7 +40,7 @@ export const DEPLOY_CONTROL_OUTPUT_SHARE_ENDPOINTS:
       method: "POST",
       path: TAKOSUMI_OUTPUT_SHARES_ROUTE,
       summary:
-        "Creates a pending cross-Space OutputShare (space-permission gated on the granting fromSpace).",
+        "Creates a pending cross-Workspace OutputShare (permission-gated on the granting Workspace).",
       auth: "deploy-control-token",
       operationId: "createOutputShare",
       openapi: {
@@ -54,7 +54,7 @@ export const DEPLOY_CONTROL_OUTPUT_SHARE_ENDPOINTS:
       method: "GET",
       path: TAKOSUMI_OUTPUT_SHARES_ROUTE,
       summary:
-        "Lists the OutputShares a Space granted or received (?spaceId=, space-permission gated).",
+        "Lists the OutputShares a Workspace granted or received (?workspaceId=).",
       auth: "deploy-control-token",
       operationId: "listOutputShares",
       openapi: { okSchema: "ListOutputSharesResponse" },
@@ -64,7 +64,7 @@ export const DEPLOY_CONTROL_OUTPUT_SHARE_ENDPOINTS:
       method: "POST",
       path: TAKOSUMI_OUTPUT_SHARE_APPROVE_ROUTE,
       summary:
-        "Approves a pending cross-Space OutputShare (space-permission gated via its receiving toSpace).",
+        "Approves a pending cross-Workspace OutputShare (permission-gated via its receiving Workspace).",
       auth: "deploy-control-token",
       operationId: "approveOutputShare",
       openapi: { pathParams: ["shareId"], okSchema: "OutputShareResponse" },
@@ -74,7 +74,7 @@ export const DEPLOY_CONTROL_OUTPUT_SHARE_ENDPOINTS:
       method: "POST",
       path: TAKOSUMI_OUTPUT_SHARE_REVOKE_ROUTE,
       summary:
-        "Revokes a cross-Space OutputShare (space-permission gated via its granting fromSpace).",
+        "Revokes a cross-Workspace OutputShare (permission-gated via its granting Workspace).",
       auth: "deploy-control-token",
       operationId: "revokeOutputShare",
       openapi: { pathParams: ["shareId"], okSchema: "OutputShareResponse" },
@@ -104,12 +104,7 @@ export function mountDeployControlOutputShareRoutes(
           c,
           "outputShareCreate",
         );
-        // The grant is authorized by the GRANTING (from) Space: only a principal
-        // with permission on fromSpaceId may share that Space's outputs.
-        ensureSpacePermission(
-          principal,
-          body.fromWorkspaceId ?? body.fromSpaceId ?? "",
-        );
+        ensureWorkspacePermission(principal, body.fromWorkspaceId);
         const share = await outputSharesService!.createShare(body);
         return c.json({ share }, 201);
       },
@@ -122,13 +117,13 @@ export function mountDeployControlOutputShareRoutes(
     if (!outputSharesService) {
       return c.json(notImplemented(c, "output shares not wired"), 501);
     }
-    const spaceId = c.req.query("spaceId");
-    if (!spaceId || !SPACE_ID_PATTERN.test(spaceId)) {
+    const workspaceId = c.req.query("workspaceId");
+    if (!workspaceId || !WORKSPACE_ID_PATTERN.test(workspaceId)) {
       return c.json(
         errorEnvelope(
           c,
           "invalid_argument",
-          "spaceId query parameter is required and must be a valid space id",
+          "workspaceId query parameter is required and must be a valid Workspace id",
         ),
         400,
       );
@@ -136,11 +131,9 @@ export function mountDeployControlOutputShareRoutes(
     const page = parsePageParams(c);
     if (page.kind === "invalid") return page.response;
     return await runHandler(c, async () => {
-      // Listing is gated on the queried Space: the principal must be able to
-      // access the Space whose grants (granted OR received) it is reading.
-      ensureSpacePermission(auth.principal, spaceId);
+      ensureWorkspacePermission(auth.principal, workspaceId);
       const { items, nextCursor } =
-        await outputSharesService.listForWorkspacePage(spaceId, page.value);
+        await outputSharesService.listForWorkspacePage(workspaceId, page.value);
       return c.json(
         {
           shares: items,
@@ -165,7 +158,7 @@ export function mountDeployControlOutputShareRoutes(
             `output share ${id} not found`,
           );
         }
-        ensureSpacePermission(principal, existing.toSpaceId);
+        ensureWorkspacePermission(principal, existing.toWorkspaceId);
         const share = await outputSharesService!.approveShare(id);
         return c.json({ share }, 200);
       },
@@ -179,8 +172,7 @@ export function mountDeployControlOutputShareRoutes(
       requireService: requireOutputShares,
       param: { param: "shareId", pattern: OUTPUT_SHARE_ID_PATTERN },
       handler: async ({ c, principal, id }) => {
-        // Resolve the share first so revoke is space-permission gated via the
-        // GRANTING (from) Space, the side that owns the grant.
+        // Resolve the share first so revoke is gated via the granting Workspace.
         const existing = await outputSharesService!.getShare(id);
         if (!existing) {
           throw new OpenTofuControllerError(
@@ -188,7 +180,7 @@ export function mountDeployControlOutputShareRoutes(
             `output share ${id} not found`,
           );
         }
-        ensureSpacePermission(principal, existing.fromSpaceId);
+        ensureWorkspacePermission(principal, existing.fromWorkspaceId);
         const share = await outputSharesService!.revokeShare(id);
         return c.json({ share }, 200);
       },

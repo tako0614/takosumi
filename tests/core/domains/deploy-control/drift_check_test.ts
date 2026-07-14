@@ -1,5 +1,5 @@
 /**
- * Installation drift-check tests (Core Specification §19 `drift_check`; Phase 8
+ * Capsule drift-check tests (Core Specification §19 `drift_check`; Phase 8
  * advanced).
  *
  * A drift check is a plan-kind internal run flagged `driftCheck` that:
@@ -8,9 +8,9 @@
  *     delete-replace changes that would normally require approval);
  *   - can NEVER be applied (`createApplyRun` rejects it);
  *   - on completion with a non-empty change summary emits
- *     `installation.drift_detected` with counts plus provider/resource
+ *     `capsule.drift_detected` with counts plus provider/resource
  *     type/action aggregates and public-safe remediation hints only; on an
- *     empty summary emits nothing and never changes the Installation status.
+ *     empty summary emits nothing and never changes the Capsule status.
  */
 
 import { expect, test } from "bun:test";
@@ -22,19 +22,27 @@ import type {
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   applyExpectedGuardFromPlanRun,
-  OpenTofuDeploymentController,
+  OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import type { PlanRunSummary } from "@takosumi/internal/deploy-control-api";
-import type { ActivityRecorder, RecordActivityInput } from "../../../../core/domains/activity/mod.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import type {
+  PlanRun,
+  PlanRunSummary,
+} from "@takosumi/internal/deploy-control-api";
+import type {
+  ActivityRecorder,
+  RecordActivityInput,
+} from "../../../../core/domains/activity/mod.ts";
+import { DriftService } from "../../../../core/domains/deploy-control/drift_service.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
-  seedInstallationModel,
+  seedCapsuleModel,
   seedProviderConnections,
-  type SeedModelOptions,
+  type SeedCapsuleModelOptions,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 
 const PLAN_DIGEST =
@@ -94,24 +102,27 @@ function recordingActivity(): {
 
 async function seededDriftController(
   runner: OpenTofuRunner,
-  options: SeedModelOptions = {},
+  options: SeedCapsuleModelOptions = {},
 ): Promise<{
-  store: OpenTofuDeploymentStore;
-  controller: OpenTofuDeploymentController;
+  store: OpenTofuControlStore;
+  controller: OpenTofuController;
   events: RecordActivityInput[];
 }> {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const seeded = await seedInstallationModel(store, {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "ws_test001",
+    capsuleId: "cap_fixture1",
     environment: "preview",
     ...options,
   });
-  await seedProviderConnections(store, seeded.installation);
+  await seedProviderConnections(store, seeded.capsule);
   const { recorder, events } = recordingActivity();
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
     store,
     runner,
     vault: fakeProviderVault() as never,
     activity: recorder,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -126,8 +137,7 @@ test("drift check succeeds, never parks waiting_approval, and projects type drif
     { environment: "production" },
   );
 
-  const { planRun } =
-    await controller.createInstallationDriftCheck("inst_fixture");
+  const { planRun } = await controller.createCapsuleDriftCheck("cap_fixture1");
   expect(planRun.driftCheck).toBe(true);
   expect(planRun.status).toEqual("succeeded");
 
@@ -141,8 +151,7 @@ test("a drift-check plan can never be applied", async () => {
     summaryRunner({ change: 1 }),
   );
 
-  const { planRun } =
-    await controller.createInstallationDriftCheck("inst_fixture");
+  const { planRun } = await controller.createCapsuleDriftCheck("cap_fixture1");
   expect(planRun.status).toEqual("succeeded");
 
   await expect(
@@ -159,7 +168,7 @@ test("a drift-check plan can never be applied", async () => {
   ).rejects.toThrow(/drift_check/);
 });
 
-test("drift check emits installation.drift_detected with provider/type/action aggregates and hints", async () => {
+test("drift check emits capsule.drift_detected with generic type/action aggregates and hints", async () => {
   const { controller, events } = await seededDriftController(
     summaryRunner(
       { add: 1, change: 2, destroy: 3 },
@@ -169,13 +178,13 @@ test("drift check emits installation.drift_detected with provider/type/action ag
             address: "cloudflare_workers_script.talk",
             type: "cloudflare_workers_script",
             actions: ["update"],
-            scope: { cloudflareAccountId: "acct_must_not_leak" },
+            scope: { facts: { account_id: "acct_must_not_leak" } },
           },
           {
             address: "cloudflare_dns_record.talk",
             type: "cloudflare_dns_record",
             actions: ["delete", "create"],
-            scope: { cloudflareZoneId: "zone_must_not_leak" },
+            scope: { facts: { zone_id: "zone_must_not_leak" } },
           },
           {
             address: "random_pet.noop",
@@ -187,8 +196,10 @@ test("drift check emits installation.drift_detected with provider/type/action ag
             type: "aws_s3_bucket",
             actions: ["create"],
             scope: {
-              awsAccountId: "aws_account_must_not_leak",
-              awsRegion: "us-east-1",
+              facts: {
+                account_id: "aws_account_must_not_leak",
+                region: "us-east-1",
+              },
             },
           },
         ],
@@ -196,22 +207,19 @@ test("drift check emits installation.drift_detected with provider/type/action ag
     ),
   );
 
-  const { planRun } =
-    await controller.createInstallationDriftCheck("inst_fixture");
+  const { planRun } = await controller.createCapsuleDriftCheck("cap_fixture1");
 
-  const drift = events.filter(
-    (e) => e.action === "installation.drift_detected",
-  );
+  const drift = events.filter((e) => e.action === "capsule.drift_detected");
   expect(drift).toHaveLength(1);
   const event = drift[0]!;
-  expect(event.spaceId).toEqual("space_test");
-  expect(event.targetType).toEqual("installation");
-  expect(event.targetId).toEqual("inst_fixture");
+  expect(event.workspaceId).toEqual("ws_test001");
+  expect(event.targetType).toEqual("capsule");
+  expect(event.targetId).toEqual("cap_fixture1");
   expect(event.runId).toEqual(planRun.id);
   // Counts + provider/resource class only; never resource addresses, scope ids,
   // or values.
   expect(event.metadata).toEqual({
-    installationId: "inst_fixture",
+    capsuleId: "cap_fixture1",
     add: 1,
     change: 2,
     destroy: 3,
@@ -219,10 +227,6 @@ test("drift check emits installation.drift_detected with provider/type/action ag
       aws_s3_bucket: 1,
       cloudflare_dns_record: 1,
       cloudflare_workers_script: 1,
-    },
-    providers: {
-      aws: 1,
-      cloudflare: 2,
     },
     actions: {
       create: 1,
@@ -236,29 +240,6 @@ test("drift check emits installation.drift_detected with provider/type/action ag
         category: "replacement",
         action: "create a reviewed update plan before applying remediation",
       },
-      {
-        code: "cloudflare_dns_drift",
-        severity: "info",
-        provider: "cloudflare",
-        category: "dns",
-        action: "compare zone records against the last reviewed plan",
-      },
-      {
-        code: "cloudflare_workers_drift",
-        severity: "info",
-        provider: "cloudflare",
-        category: "compute",
-        action:
-          "compare Worker script and route settings against the last reviewed plan",
-      },
-      {
-        code: "aws_storage_drift",
-        severity: "info",
-        provider: "aws",
-        category: "storage",
-        action:
-          "compare bucket configuration against the last reviewed plan",
-      },
     ],
   });
   const metadataJson = JSON.stringify(event.metadata);
@@ -270,22 +251,67 @@ test("drift check emits installation.drift_detected with provider/type/action ag
   expect(metadataJson).not.toContain("us-east-1");
 });
 
-test("drift check emits NOTHING on an empty plan and does not change the Installation status", async () => {
+test("first-class Resource drift emits resource.drift_detected against the Resource subject", async () => {
+  const events: RecordActivityInput[] = [];
+  const drift = new DriftService({
+    createPlanRun: () => {
+      throw new Error("not used");
+    },
+    recordActivity: (event) => {
+      events.push(event);
+      return Promise.resolve();
+    },
+  });
+  const planRun = {
+    id: "plan_resource_drift_1",
+    workspaceId: "ws_test001",
+    summary: { add: 0, change: 1, destroy: 0 },
+    resourceContext: {
+      workspaceId: "ws_test001",
+      resourceId: "tkrn:ws_test001:ObjectBucket:assets",
+      environment: "production",
+      providerBinding: {
+        provider: "cloudflare",
+        providerSource: FIXTURE_CLOUDFLARE_PROVIDER,
+      },
+    },
+  } as PlanRun;
+
+  await drift.recordDriftDetected(planRun, [
+    {
+      address: "cloudflare_r2_bucket.assets",
+      type: "cloudflare_r2_bucket",
+      actions: ["update"],
+    },
+  ]);
+
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({
+    action: "resource.drift_detected",
+    targetType: "resource",
+    targetId: "tkrn:ws_test001:ObjectBucket:assets",
+    metadata: {
+      resourceId: "tkrn:ws_test001:ObjectBucket:assets",
+      change: 1,
+    },
+  });
+});
+
+test("drift check emits NOTHING on an empty plan and does not change the Capsule status", async () => {
   // No summary at all (no changes observed).
   const { store, controller, events } = await seededDriftController(
     summaryRunner(undefined),
   );
 
-  const before = (await store.getInstallation("inst_fixture"))!.status;
-  const { planRun } =
-    await controller.createInstallationDriftCheck("inst_fixture");
+  const before = (await store.getCapsule("cap_fixture1"))!.status;
+  const { planRun } = await controller.createCapsuleDriftCheck("cap_fixture1");
   expect(planRun.status).toEqual("succeeded");
 
   expect(
-    events.filter((e) => e.action === "installation.drift_detected"),
+    events.filter((e) => e.action === "capsule.drift_detected"),
   ).toHaveLength(0);
   // No status change (the spec has no `drifted` status).
-  const after = (await store.getInstallation("inst_fixture"))!.status;
+  const after = (await store.getCapsule("cap_fixture1"))!.status;
   expect(after).toEqual(before);
 });
 
@@ -294,43 +320,46 @@ test("drift check with an all-zero summary emits nothing (no drift)", async () =
     summaryRunner({ add: 0, change: 0, destroy: 0 }),
   );
 
-  await controller.createInstallationDriftCheck("inst_fixture");
+  await controller.createCapsuleDriftCheck("cap_fixture1");
   expect(
-    events.filter((e) => e.action === "installation.drift_detected"),
+    events.filter((e) => e.action === "capsule.drift_detected"),
   ).toHaveLength(0);
 });
 
-test("listActiveInstallations returns only active installations, bounded", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  // Seed three installations: two active, one pending.
-  await seedInstallationModel(store, {
-    installationId: "inst_a",
+test("listActiveCapsules returns only active Capsules, bounded", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  // Seed three Capsules: two active, one pending.
+  await seedCapsuleModel(store, {
+    capsuleId: "cap_active01",
     sourceId: "src_a",
     installConfigId: "cfg_a",
     name: "a",
   });
-  await seedInstallationModel(store, {
-    installationId: "inst_b",
+  await seedCapsuleModel(store, {
+    capsuleId: "cap_active02",
     sourceId: "src_b",
     installConfigId: "cfg_b",
     name: "b",
   });
-  await seedInstallationModel(store, {
-    installationId: "inst_c",
+  await seedCapsuleModel(store, {
+    capsuleId: "cap_pending1",
     sourceId: "src_c",
     installConfigId: "cfg_c",
     name: "c",
   });
   // Promote a + b to active; c stays pending.
-  await store.patchInstallation("inst_a", { status: "active" });
-  await store.patchInstallation("inst_b", { status: "active" });
+  await store.patchCapsule("cap_active01", { status: "active" });
+  await store.patchCapsule("cap_active02", { status: "active" });
 
-  const controller = new OpenTofuDeploymentController({ store });
-  const active = await controller.listActiveInstallations(20);
-  expect(active.map((i) => i.id).sort()).toEqual(["inst_a", "inst_b"]);
+  const controller = new OpenTofuController({ store });
+  const active = await controller.listActiveCapsules(20);
+  expect(active.map((i) => i.id).sort()).toEqual([
+    "cap_active01",
+    "cap_active02",
+  ]);
 
   // Bounded: a limit of 1 returns at most one.
-  expect((await controller.listActiveInstallations(1)).length).toEqual(1);
+  expect((await controller.listActiveCapsules(1)).length).toEqual(1);
   // Non-positive limit returns empty.
-  expect((await controller.listActiveInstallations(0)).length).toEqual(0);
+  expect((await controller.listActiveCapsules(0)).length).toEqual(0);
 });

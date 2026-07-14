@@ -70,7 +70,6 @@ const SOURCE_DOCS_WITH_PUBLIC_SURFACE_WORDING = [
   "CONVENTIONS.md",
   "contract/README.md",
   "core/README.md",
-  "core/runtime-agent/README.md",
   "website/src/components/EndCTA.tsx",
   "website/src/components/Showcase.tsx",
   "website/src/components/Footer.tsx",
@@ -193,7 +192,7 @@ test("Takosumi internal authority docs stay outside the public docs surface", as
   );
   assert.match(
     finalPlan,
-    /specific compatibility profile is enabled is reported through capabilities/,
+    /specific compatibility\s+profile is enabled is reported through capabilities/,
   );
 });
 
@@ -260,7 +259,6 @@ test("workspace packages stay private source modules", async () => {
     "package.json",
     "accounts/contract/package.json",
     "accounts/service/package.json",
-    "accounts/platform-services/package.json",
     "cli/package.json",
     "deploy/node-postgres/package.json",
   ]) {

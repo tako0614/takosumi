@@ -10,6 +10,13 @@ import { runCommand } from "./exec.ts";
 import { assertSafeRelativePath } from "./policy.ts";
 import { assertDirectory, assertRealPathInsideSourceRoot } from "./util.ts";
 
+const SOURCE_BUILD_ENV_NAMES = [
+  "CI",
+  "BUN_INSTALL_CACHE_DIR",
+  "npm_config_cache",
+  "XDG_CACHE_HOME",
+] as const;
+
 export async function runSourceBuild(
   sourceBuild: SourceBuildConfig | undefined,
   sourceRoot: string,
@@ -19,7 +26,7 @@ export async function runSourceBuild(
   await assertDirectory(sourceRoot, "source build root");
 
   const env = await sourceBuildEnv();
-  assertCommandEnvHasNoProviderCredentials(env);
+  assertCommandEnvHasNoProviderCredentials(env, SOURCE_BUILD_ENV_NAMES);
   const context: CommandContext = {
     env,
     ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),

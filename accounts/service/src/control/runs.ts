@@ -6,7 +6,6 @@
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
-  Connection,
   ConnectionOAuthStartResponse,
   ConnectionResponse,
   ConnectionScopeHints,
@@ -14,10 +13,7 @@ import type {
   CreateConnectionFile,
   CreateConnectionRequest,
   DeployControlErrorCode,
-  Deployment,
-  InternalDeployRequest,
   ListConnectionsResponse,
-  ListDeploymentsResponse,
   ListRunnerProfilesResponse,
   OpenTofuModuleSource,
   PlanRunResponse,
@@ -25,7 +21,6 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
-  ArtifactSnapshotRequest,
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
@@ -36,10 +31,6 @@ import type {
   SourceSnapshot,
 } from "takosumi-contract/sources";
 import type {
-  DeployResponse,
-  PublicDeployResponse,
-} from "takosumi-contract/deploy";
-import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
@@ -47,7 +38,6 @@ import type {
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  CapsuleProviderEnvBindingSet,
   InstallConfig,
   Capsule,
   OutputAllowlistEntry,
@@ -64,11 +54,9 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  CapsuleProviderConnectionBinding,
-  CapsuleProviderConnectionBindings,
-  CapsuleProviderEnvBinding,
-  CapsuleProviderEnvBindings,
-  CapsuleProviderConnectionSet,
+  ProviderBinding,
+  ProviderBindings,
+  ProviderBindingSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -76,19 +64,12 @@ import type {
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
 import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
-import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
   CreateBackupResponse,
   CreateRestoreRequest,
   ListBackupsResponse,
 } from "takosumi-contract/backups";
-import type {
-  BillingSettings,
-  CreditBalance,
-  CreditReservation,
-  UsageEvent,
-} from "takosumi-contract/billing";
 import type {
   ListRunsResponse,
   Run,
@@ -98,14 +79,6 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import type {
-  AppCapsuleMode,
-  AppCapsuleStatus,
-  CapsuleRecord,
-  WorkspaceKind,
-} from "../ledger.ts";
-import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -134,22 +107,18 @@ import {
   parseControlPageParams,
   publicApplyActionResponse,
   publicCompatibilityReportResponse,
-  publicDeployResponse,
-  publicDeployment,
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
   requireWorkspaceAccess,
-  resolveProviderConnectionBindings,
+  resolveProviderBindings,
 } from "./shared.ts";
 import {
   booleanValue,
   connectionCredentialFiles,
   connectionScopeHints,
-  connectionScopeHintsFromValues,
   dependencyModeValue,
   dependencyVisibilityValue,
-  isGoogleCloudProvider,
   isJsonValue,
   isOutputsMapping,
   isPlainJsonObject,
@@ -158,29 +127,20 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseCapsuleProviderConnectionBinding,
-  parseCapsuleProviderConnectionBindings,
+  parseProviderBinding,
+  parseProviderBindings,
   parseLimit,
-  spaceTypeValue,
+  workspaceTypeValue,
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
 import {
-  deployProjectionModeValue,
-  saveProjectionStatusChange,
-  syncDeployControlProjectionFromApply,
-  syncDeployControlProjectionFromDeploy,
-  syncDeployControlProjectionStatusFromRun,
-} from "./projection.ts";
-import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/capsules/install_config_bootstrap.ts";
+} from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
-import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 export async function handleRuns(
   ctx: ControlDispatchContext,
@@ -188,25 +148,6 @@ export async function handleRuns(
   method: string,
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
-  const staleSourceSyncRunRead =
-    segments[0] === "source-sync-runs" && segments.length === 2;
-  // Stale dashboard assets from before the Run route consolidation polled
-  // /api/v1/source-sync-runs/:id. Keep this read-only alias so already-open
-  // production tabs do not spin on 404s during source sync waits. New clients
-  // use /api/v1/runs/:id; this route intentionally has no leaf actions.
-  if (staleSourceSyncRunRead) {
-    if (method !== "GET") return methodNotAllowed("GET");
-    const runId = decodeURIComponent(segments[1] ?? "");
-    const run = await operations.getRun(runId);
-    const auth = await requireWorkspaceAccess({
-      operations,
-      store,
-      workspaceId: run.workspaceId,
-      subject: ctx.session.subject,
-    });
-    if (!auth.ok) return auth.response;
-    return json({ run: await publicRun(operations, run) });
-  }
   // /api/v1/runs/:id ; .../apply ; .../approve ; .../logs ; .../cost
   if (segments[0] === "runs" && segments.length >= 2) {
     const runId = decodeURIComponent(segments[1] ?? "");
@@ -220,7 +161,6 @@ export async function handleRuns(
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method !== "GET") return methodNotAllowed("GET");
-      await syncDeployControlProjectionStatusFromRun({ store, run });
       return json({ run: await publicRun(operations, run) });
     }
     const leaf = segments[2];
@@ -230,13 +170,7 @@ export async function handleRuns(
     }
     if (leaf === "apply" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await applyPlanRun(
-        request,
-        operations,
-        store,
-        ctx.session.subject,
-        runId,
-      );
+      return await applyPlanRun(operations, store, ctx.session.subject, runId);
     }
     if (leaf === "logs" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -254,9 +188,9 @@ export async function handleRuns(
     }
     if (leaf === "cost" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      // Public, non-secret cost projection: the billing reservation values the
-      // controller already computed at plan time (estimated / available credits,
-      // reservation status, credit-shortfall reasons). Workspace-gated above.
+      // Public, non-secret cost projection: values the controller already
+      // computed at plan time (estimated USD, showback or host-extension
+      // decision, and policy reasons). Workspace-gated above.
       return json({ cost: await operations.getRunCost(runId) });
     }
     if (leaf === "stream" && segments.length === 3) {
@@ -435,22 +369,19 @@ async function approveRun(
 
 /**
  * Applies a reviewed PlanRun on behalf of the dashboard session (§31 GUI
- * deploy). The plan run is resolved first so the apply is space-permission gated
+ * deploy). The plan run is resolved first so the apply is Workspace-permission gated
  * via the plan's OWNING Workspace (a session may not apply another Workspace's plan);
  * only then is the reviewed apply guard rebuilt server-side from that same plan
  * and handed to the controller, which independently re-checks every apply
  * precondition (succeeded plan / passed policy / immutable plan artifact / not a
- * drift_check / apply-once / destructive confirmation).
+ * drift_check / apply-once / recorded approval when required).
  */
 async function applyPlanRun(
-  request: Request,
   operations: ControlPlaneOperations,
   store: AccountsStore,
   sessionSubject: string,
   planRunId: string,
 ): Promise<Response> {
-  const body = await readJsonObject(request.clone()).catch(() => null);
-  const confirmDestructive = body?.confirmDestructive === true;
   const { planRun } = await operations.getPlanRun(planRunId);
   const auth = await requireWorkspaceAccess({
     operations,
@@ -462,17 +393,8 @@ async function applyPlanRun(
   const applyRequest: CreateApplyRunRequest = {
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
-    ...(confirmDestructive ? { confirmDestructive: true } : {}),
   };
   const response = await operations.createApplyRun(applyRequest);
-  const projectionError = await syncDeployControlProjectionFromApply({
-    operations,
-    store,
-    sessionSubject: sessionSubject as TakosumiSubject,
-    planRun,
-    response,
-  });
-  if (projectionError) return projectionError;
   return jsonStatus(await publicApplyActionResponse(operations, response), 201);
 }
 
@@ -488,10 +410,10 @@ function applyExpectedGuardFromPlanRun(
   planRun: PublicPlanRun,
 ): ApplyExpectedGuard {
   // Mirror the deploy-control emit + TOCTOU digest keys EXACTLY: the guard pins
-  // the Capsule's current StateVersion (Deployment ledger retired), keyed by
+  // the Capsule's current StateVersion, keyed by
   // `capsuleId` / `currentStateVersionId`. Any divergence here from
   // APPLY_EXPECTED_GUARD_KEYS would fail every apply with a guard mismatch.
-  const capsuleId = planRun.capsuleId ?? planRun.installationId;
+  const capsuleId = planRun.capsuleId;
   return {
     planRunId: planRun.id,
     ...(capsuleId ? { capsuleId } : {}),
@@ -508,10 +430,10 @@ function applyExpectedGuardFromPlanRun(
     ...(planRun.providerLockDigest
       ? { providerLockDigest: planRun.providerLockDigest }
       : {}),
-    ...(planRun.resolvedProviderEnvBindingsDigest
+    ...(planRun.resolvedProviderBindingsDigest
       ? {
-          resolvedProviderEnvBindingsDigest:
-            planRun.resolvedProviderEnvBindingsDigest,
+          resolvedProviderBindingsDigest:
+            planRun.resolvedProviderBindingsDigest,
         }
       : {}),
   };

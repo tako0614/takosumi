@@ -12,41 +12,67 @@ describe("Takosumi App Handoff contract", () => {
   test("builds OpenTofu-native handoff URLs from plain source coordinates", () => {
     expect(
       createTakosumiAppHandoffUrl({
+        baseUrl: "https://operator.example/install",
         product: "notes-app",
         returnUri: "notesapp://connect",
         git: "https://github.com/acme/notes.git",
         ref: "v1.2.3",
         path: "deploy/opentofu",
         name: "Notes",
-        vars: { project_name: "notes-prod" },
       }),
     ).toBe(
-      "https://app.takosumi.com/install?product=notes-app&return_uri=notesapp%3A%2F%2Fconnect&git=https%3A%2F%2Fgithub.com%2Facme%2Fnotes.git&ref=v1.2.3&path=deploy%2Fopentofu&name=Notes&var.project_name=notes-prod",
+      "https://operator.example/install?product=notes-app&return_uri=notesapp%3A%2F%2Fconnect&git=https%3A%2F%2Fgithub.com%2Facme%2Fnotes.git&ref=v1.2.3&path=deploy%2Fopentofu&name=Notes",
     );
   });
 
   test("builds ordinary install URLs without client handoff params", () => {
     expect(
       createTakosumiAppHandoffUrl({
+        baseUrl: "https://operator.example/install",
         git: "https://github.com/acme/notes.git",
         ref: "main",
         path: "deploy/opentofu",
       }),
     ).toBe(
-      "https://app.takosumi.com/install?git=https%3A%2F%2Fgithub.com%2Facme%2Fnotes.git&ref=main&path=deploy%2Fopentofu",
+      "https://operator.example/install?git=https%3A%2F%2Fgithub.com%2Facme%2Fnotes.git&ref=main&path=deploy%2Fopentofu",
     );
   });
 
+  test("never carries a caller-selected service-side InstallConfig", () => {
+    const url = createTakosumiAppHandoffUrl({
+      baseUrl:
+        "https://operator.example/install?installConfigId=cfg_base&var.secret=hidden&varjson.runtime=%7B%7D",
+      git: "https://github.com/acme/notes.git",
+      installConfigId: "cfg_attacker_selected",
+    } as Parameters<typeof createTakosumiAppHandoffUrl>[0] & {
+      installConfigId: string;
+    });
+    expect(new URL(url).searchParams.has("installConfigId")).toBe(false);
+    expect(new URL(url).searchParams.has("var.secret")).toBe(false);
+    expect(new URL(url).searchParams.has("varjson.runtime")).toBe(false);
+  });
+
   test("rejects product-only URLs because product is not an install target", () => {
-    expect(() => createTakosumiAppHandoffUrl({ product: "notes-app" })).toThrow(
-      "App handoff URL requires git, source, or installConfigId.",
-    );
     expect(() =>
       createTakosumiAppHandoffUrl({
+        baseUrl: "https://operator.example/install",
+        product: "notes-app",
+      }),
+    ).toThrow("App handoff URL requires git or source.");
+    expect(() =>
+      createTakosumiAppHandoffUrl({
+        baseUrl: "https://operator.example/install",
         git: "https://github.com/acme/notes.git",
         product: "notes-app",
       }),
     ).toThrow("App handoff return_uri is invalid.");
+    expect(() =>
+      createTakosumiAppHandoffUrl({
+        baseUrl: "https://operator.example/install",
+        git: "https://github.com/acme/notes.git",
+        source: "git::https://github.com/acme/other.git//.",
+      }),
+    ).toThrow("exactly one of git or source");
   });
 
   test("parses product keys and return URIs with conservative URL rules", () => {

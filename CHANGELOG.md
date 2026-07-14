@@ -23,8 +23,10 @@ plane, account plane, dashboard, CLI, runner env, and HTTP routes.
   successful apply Run plus its `StateVersion` and `Output` is the record.
 - HTTP routes move `/spaces` → `/workspaces` and `/installations` →
   `/capsules`; runner env injects `TAKOSUMI_CAPSULE_ID` and
-  `TAKOSUMI_STATE_VERSION_ID`. Production-hardening evidence env is
-  `TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF` / `_DIGEST`.
+  `TAKOSUMI_STATE_VERSION_ID`. Production hardening uses versioned
+  `PlatformHardeningContribution` definitions and one validator-emitted
+  `TAKOSUMI_PLATFORM_HARDENING_EVIDENCE` gate bundle; provider/substrate checks
+  are not fixed OSS env slots.
 - The provider-credential cluster collapses to three concepts —
   `ProviderConnection`, `CredentialRecipe`, `ProviderBinding`. The Provider
   Catalog ownership axis and the `own_key` / `takos_provided` sentinels are

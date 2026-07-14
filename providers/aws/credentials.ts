@@ -1,16 +1,15 @@
 /**
  * AWS AssumeRole credential driver (registry-facing).
  *
- * This is the extracted, self-contained form of the vault's AWS AssumeRole mint
- * path (the `Action:"AssumeRole"` branch of `#mintProviderValues`) plus its
- * `#verifyAwsAssumeRole`. The crypto / secret-opening stays in core: the vault
+ * This provider-owned driver implements AWS AssumeRole mint and verification.
+ * The crypto / secret-opening stays in core: the Vault
  * opens the sealed source credentials and hands the already-decrypted
  * `{ name: value }` map in; this driver maps those source credentials + the
  * connection's AWS scope hints to the runner-facing `AWS_*` env map and the
  * provider-credential mint evidence (mint), or to a structural verify result
  * (verify). The network-facing STS exchange lives in `./connection.ts`.
  *
- * Behavior is byte-identical to the in-vault path:
+ * Its explicit recipe behavior is:
  *   - The web-identity token-file contract (`AWS_WEB_IDENTITY_TOKEN_FILE` +
  *     `AWS_ROLE_ARN` present) passes through, only defaulting `AWS_ROLE_ARN` to
  *     the connection's `awsRoleArn`, with static evidence.
@@ -20,11 +19,10 @@
  *     credentials, and the result env carries the assumed credentials plus the
  *     region with `aws_sts_assume_role` evidence.
  *
- * The `staticEvidence` factory the vault builds inline is passed in by the
- * caller so the temporary-vs-static evidence shape stays a single source.
+ * The Vault supplies `staticEvidence`, keeping temporary-vs-static evidence at
+ * the generic credential boundary.
  */
-import type { Connection } from "takosumi-contract/connections";
-import { providerEnvRule } from "takosumi-contract/provider-env-rules";
+import type { ProviderConnection } from "takosumi-contract/connections";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import {
   assumeAwsRole,
@@ -32,11 +30,12 @@ import {
   AwsConnectionError,
   type AwsFetch,
 } from "./connection.ts";
+import { awsProviderSettings } from "./settings.ts";
 
 /**
  * Error raised when the AWS mint preconditions fail. The `code` mirrors the
- * deploy-control error codes the vault raises so the caller can translate it
- * identically to the in-vault `ConnectionVaultError`. Re-exported here so a
+ * deploy-control error codes so the Vault can expose one stable error surface.
+ * Re-exported here so a
  * caller only needs to import from this driver module. The network-facing
  * exchange in `./connection.ts` raises the same class.
  */
@@ -58,14 +57,11 @@ export interface AwsDriverDeps {
  * Mint AWS provider credentials for an AssumeRole connection.
  *
  * Mirrors the vault's `#mintProviderValues` AWS branch exactly. The caller
- * (vault) has already opened the sealed blob, checked expiry, and decided the
- * `delivery` mode; it must pass:
+ * (vault) has already opened the sealed blob and checked expiry; it must pass:
  *
- * @param connection the resolved AWS Connection (its `scopeHints.awsRoleArn`
+ * @param connection the resolved AWS ProviderConnection (its `scopeHints.awsRoleArn`
  *   gates whether AssumeRole applies).
  * @param values the connection's already-decrypted `{ name: value }` map.
- * @param delivery the mint delivery mode (drives `rootOnly` in evidence),
- *   sourced from `ProviderCredentialMintEvidence["delivery"]`.
  * @param staticEvidence the caller's static-evidence factory (the same closure
  *   the vault builds inline), used for the pass-through web-identity case.
  * @param deps injected `fetch` / `now` seams (default to global `fetch` /
@@ -75,13 +71,13 @@ export interface AwsDriverDeps {
  *   falls through to its static-secret path unchanged.
  */
 export async function mintAwsAssumeRoleCredentials(
-  connection: Connection,
+  connection: ProviderConnection,
   values: Readonly<Record<string, string>>,
-  delivery: ProviderCredentialMintEvidence["delivery"],
   staticEvidence: () => ProviderCredentialMintEvidence,
   deps: AwsDriverDeps = {},
 ): Promise<AwsAssumeRoleMintResult | undefined> {
-  if (!isAwsProvider(connection.provider) || !connection.scopeHints?.awsRoleArn) {
+  const settings = awsProviderSettings(connection.scopeHints);
+  if (!settings.roleArn) {
     return undefined;
   }
   if (values.AWS_WEB_IDENTITY_TOKEN_FILE && values.AWS_ROLE_ARN) {
@@ -92,7 +88,7 @@ export async function mintAwsAssumeRoleCredentials(
     return {
       values: {
         ...values,
-        AWS_ROLE_ARN: values.AWS_ROLE_ARN || connection.scopeHints.awsRoleArn,
+        AWS_ROLE_ARN: values.AWS_ROLE_ARN || settings.roleArn,
       },
       evidence: staticEvidence(),
     };
@@ -105,7 +101,7 @@ export async function mintAwsAssumeRoleCredentials(
     );
   }
   const region =
-    connection.scopeHints.awsRegion ??
+    settings.region ??
     values.AWS_REGION ??
     values.AWS_DEFAULT_REGION ??
     "us-east-1";
@@ -114,8 +110,8 @@ export async function mintAwsAssumeRoleCredentials(
       accessKeyId,
       secretAccessKey,
       sessionToken: values.AWS_SESSION_TOKEN,
-      roleArn: connection.scopeHints.awsRoleArn,
-      externalId: connection.scopeHints.awsExternalId,
+      roleArn: settings.roleArn,
+      externalId: settings.externalId,
       region,
       sessionName: awsRoleSessionName(connection.id),
     },
@@ -130,11 +126,8 @@ export async function mintAwsAssumeRoleCredentials(
       AWS_DEFAULT_REGION: values.AWS_DEFAULT_REGION ?? region,
     },
     evidence: {
-      providerEnvId: connection.id,
       connectionId: connection.id,
       provider: connection.provider,
-      delivery,
-      rootOnly: delivery === "generated_root_variable",
       temporary: true,
       ttlEnforced: true,
       expiresAt: assumed.expiresAt,
@@ -150,19 +143,21 @@ export async function mintAwsAssumeRoleCredentials(
  * precondition checks (role ARN scope hint + source access/secret keys), the
  * same region fallback, and the same success/detail mapping.
  *
- * @param connection the AWS Connection under test.
+ * @param connection the AWS ProviderConnection under test.
  * @param values the already-decrypted source credential map.
  * @param deps injected `fetch` / `now` seams.
  */
 export async function verifyAwsAssumeRole(
-  connection: Connection,
+  connection: ProviderConnection,
   values: Readonly<Record<string, string>>,
   deps: AwsDriverDeps = {},
 ): Promise<{ readonly ok: boolean; readonly detail?: string }> {
-  if (!connection.scopeHints?.awsRoleArn) {
+  const settings = awsProviderSettings(connection.scopeHints);
+  if (!settings.roleArn) {
     return {
       ok: false,
-      detail: "aws verification requires scopeHints.awsRoleArn for AssumeRole",
+      detail:
+        "aws verification requires scopeHints.providerSettings.roleArn for AssumeRole",
     };
   }
   const accessKeyId = values.AWS_ACCESS_KEY_ID;
@@ -175,7 +170,7 @@ export async function verifyAwsAssumeRole(
     };
   }
   const region =
-    connection.scopeHints.awsRegion ??
+    settings.region ??
     values.AWS_REGION ??
     values.AWS_DEFAULT_REGION ??
     "us-east-1";
@@ -185,8 +180,8 @@ export async function verifyAwsAssumeRole(
         accessKeyId,
         secretAccessKey,
         sessionToken: values.AWS_SESSION_TOKEN,
-        roleArn: connection.scopeHints.awsRoleArn,
-        externalId: connection.scopeHints.awsExternalId,
+        roleArn: settings.roleArn,
+        externalId: settings.externalId,
         region,
         sessionName: awsRoleSessionName(connection.id),
       },
@@ -199,12 +194,4 @@ export async function verifyAwsAssumeRole(
       detail: error instanceof Error ? error.message : String(error),
     };
   }
-}
-
-/**
- * True when `provider` resolves to the AWS provider family. Mirrors the vault's
- * `isAwsProvider`, which keys off the `provider-env-rules` short-name match.
- */
-function isAwsProvider(provider: string): boolean {
-  return providerEnvRule(provider)?.shortName === "aws";
 }

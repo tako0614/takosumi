@@ -61,7 +61,7 @@ describe("installReturnContext", () => {
       null,
       "",
       "/",
-      "/installations",
+      "/services",
       "/new",
       "https://evil.example/new?git=https://github.com/acme/app.git",
       "//evil.example/new?git=https://github.com/acme/app.git",
@@ -78,24 +78,14 @@ describe("installReturnContext", () => {
       git: "https://github.com/acme/worker.git",
       ref: "main",
       path: "deploy/opentofu",
-      vars: {
-        domain: "app.example.com",
-        project_name: "takos-space",
-        region: "ap-northeast-1",
-      },
     });
     expect(returnPath).toEqual(
-      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu&var.domain=app.example.com&var.project_name=takos-space&var.region=ap-northeast-1",
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu",
     );
     expect(installReturnContext(returnPath)).toMatchObject({
       git: "https://github.com/acme/worker.git",
       ref: "main",
       path: "deploy/opentofu",
-      vars: {
-        domain: "app.example.com",
-        project_name: "takos-space",
-        region: "ap-northeast-1",
-      },
       label: "worker",
     });
   });
@@ -105,45 +95,26 @@ describe("installReturnContext", () => {
       git: "https://github.com/acme/worker.git",
       ref: "",
       path: "deploy/opentofu",
-      vars: {
-        project_name: "takos-space",
-      },
     });
     expect(returnPath).toEqual(
-      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&path=deploy%2Fopentofu&var.project_name=takos-space",
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&path=deploy%2Fopentofu",
     );
     expect(installReturnContext(returnPath)).toMatchObject({
       git: "https://github.com/acme/worker.git",
       ref: "",
       path: "deploy/opentofu",
-      vars: {
-        project_name: "takos-space",
-      },
       label: "worker",
     });
   });
 
-  test("preserves typed OpenTofu variables in canonical return paths", () => {
-    const returnPath = installReturnPathFromPrefill({
-      git: "https://github.com/acme/worker.git",
-      ref: "main",
-      path: "deploy/opentofu",
-      vars: {
-        cloudflare: {},
-        enable_cloudflare_resources: true,
-        project_name: "takos-space",
-      },
-    });
-    expect(returnPath).toEqual(
+  test("drops OpenTofu variable side channels from canonical return paths", () => {
+    const returnPath = installReturnPathFromReturnParam(
       "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu&varjson.cloudflare=%7B%7D&varjson.enable_cloudflare_resources=true&var.project_name=takos-space",
     );
-    expect(installReturnContext(returnPath)).toMatchObject({
-      vars: {
-        cloudflare: {},
-        enable_cloudflare_resources: true,
-        project_name: "takos-space",
-      },
-    });
+    expect(returnPath).toEqual(
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu",
+    );
+    expect(installReturnContext(returnPath)).not.toHaveProperty("vars");
   });
 
   test("preserves the typed Capsule name through install return links", () => {
@@ -152,10 +123,9 @@ describe("installReturnContext", () => {
       ref: "main",
       path: "deploy/opentofu",
       name: "Customer API",
-      vars: { project_name: "customer-api" },
     });
     expect(returnPath).toEqual(
-      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu&name=Customer+API&var.project_name=customer-api",
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu&name=Customer+API",
     );
     expect(installReturnContext(returnPath)).toMatchObject({
       git: "https://github.com/acme/worker.git",
@@ -163,7 +133,6 @@ describe("installReturnContext", () => {
       path: "deploy/opentofu",
       name: "Customer API",
       label: "Customer API",
-      vars: { project_name: "customer-api" },
     });
   });
 
@@ -172,7 +141,6 @@ describe("installReturnContext", () => {
       git: "https://github.com/acme/worker.git",
       ref: "main",
       path: "deploy/opentofu",
-      vars: { project_name: "takos-space" },
     });
     expect(returnPath).toBeDefined();
     const href = providerConnectionsHrefForInstallReturn(returnPath);
@@ -183,9 +151,9 @@ describe("installReturnContext", () => {
     expect(
       installReturnPathFromReturnParam(url.searchParams.get("return")),
     ).toEqual(returnPath);
-    expect(installReturnContext(url.searchParams.get("return"))).toMatchObject({
-      vars: { project_name: "takos-space" },
-    });
+    expect(
+      installReturnContext(url.searchParams.get("return")),
+    ).not.toHaveProperty("vars");
   });
 
   test("keeps pinned full commit refs in Provider Connections return hrefs", () => {

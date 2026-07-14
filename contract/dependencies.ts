@@ -1,10 +1,10 @@
 /**
- * Dependency DAG contract (`installation_dependencies` /
- * `dependency_snapshots`).
+ * Dependency DAG contract (Dependency / DependencySnapshot ledger).
  *
  * Capsules within a Workspace form a DAG: a Dependency edge connects a
  * producer Capsule's outputs to a consumer Capsule's inputs.
- * The canonical store is the D1 ledger, not the filesystem.
+ * The canonical store is the injected durable control ledger, not the
+ * filesystem or a particular database adapter.
  *
  * Modes:
  *   - `variable_injection` (standard): Takosumi reads the producer
@@ -19,21 +19,17 @@
 import type { OutputValueType } from "./install-configs.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
-export const CAPSULE_DEPENDENCIES_PATH = (
-  capsuleId: string,
-): string =>
-  `${INTERNAL_V1_PREFIX}/capsules/${
-    encodeURIComponent(capsuleId)
-  }/dependencies`;
+export const CAPSULE_DEPENDENCIES_PATH = (capsuleId: string): string =>
+  `${INTERNAL_V1_PREFIX}/capsules/${encodeURIComponent(
+    capsuleId,
+  )}/dependencies`;
 export const DEPENDENCY_PATH = (dependencyId: string): string =>
   `${INTERNAL_V1_PREFIX}/dependencies/${encodeURIComponent(dependencyId)}`;
 
 export type DependencyMode =
-  | "remote_state"
-  | "variable_injection"
-  | "published_output";
+  "remote_state" | "variable_injection" | "published_output";
 
-export type DependencyVisibility = "space" | "cross_space";
+export type DependencyVisibility = "workspace" | "cross_workspace";
 
 /** One producer-output -> consumer-input mapping on a Dependency edge. */
 export interface DependencyOutputMapping {
@@ -46,14 +42,8 @@ export interface DependencyOutputMapping {
 export interface Dependency {
   readonly id: string;
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId: string;
   readonly producerCapsuleId: string;
   readonly consumerCapsuleId: string;
-  /** @deprecated Use producerCapsuleId. */
-  readonly producerInstallationId: string;
-  /** @deprecated Use consumerCapsuleId. */
-  readonly consumerInstallationId: string;
   readonly mode: DependencyMode;
   readonly outputs: Readonly<Record<string, DependencyOutputMapping>>;
   readonly visibility: DependencyVisibility;
@@ -92,9 +82,7 @@ export interface SealedDependencyValues {
  */
 export interface DependencySnapshotEntry {
   readonly dependencyId: string;
-  readonly producerCapsuleId?: string;
-  /** @deprecated Use producerCapsuleId. */
-  readonly producerInstallationId: string;
+  readonly producerCapsuleId: string;
   readonly producerStateGeneration: number;
   /**
    * Pinned StateVersion for `remote_state` edges. Variable-injection and
@@ -102,9 +90,7 @@ export interface DependencySnapshotEntry {
    * of state bytes.
    */
   readonly producerStateVersionId?: string;
-  /** @deprecated Use producerStateVersionId. */
-  readonly producerStateSnapshotId?: string;
-  readonly producerStateObjectKey?: string;
+  readonly producerStateRef?: string;
   readonly producerStateDigest?: string;
   readonly producerOutputId: string;
   readonly producerOutputDigest: string;

@@ -22,7 +22,9 @@ interface TestInput {
   readonly required?: boolean;
   readonly advanced?: boolean;
   readonly secret?: boolean;
-  readonly defaultValue?: string;
+  readonly defaultValue?: NonNullable<
+    InstallConfig["variablePresentation"]
+  >[number]["defaultValue"];
 }
 
 function makeConfig(options: {
@@ -33,8 +35,11 @@ function makeConfig(options: {
     id: "cfg_1",
     name: "app",
     sourceKind: "first_party_capsule",
-    trustLevel: "official",
     variableMapping: options.variableMapping ?? {},
+    variablePresentation: (options.inputs ?? []).map((input) => ({
+      label: { ja: input.name, en: input.name },
+      ...input,
+    })),
     outputAllowlist: {},
     store: {
       order: 1,
@@ -45,10 +50,6 @@ function makeConfig(options: {
       badge: { ja: "追加候補", en: "Installable" },
       name: { ja: "App", en: "App" },
       description: { ja: "アプリ", en: "App" },
-      inputs: (options.inputs ?? []).map((input) => ({
-        label: { ja: input.name, en: input.name },
-        ...input,
-      })),
     },
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-01T00:00:00.000Z",
@@ -83,7 +84,10 @@ describe("configRowsFromInstallConfig", () => {
       makeConfig({
         variableMapping: { public_subdomain: "mine" },
         inputs: [
-          { name: "public_subdomain", defaultValue: "blog" },
+          {
+            name: "public_subdomain",
+            defaultValue: { source: "literal", value: "blog" },
+          },
           { name: "optional_note" },
         ],
       }),
@@ -113,17 +117,76 @@ describe("configRowsFromInstallConfig", () => {
     expect(secret.secret).toBe(true);
     expect(secret.hasExistingValue).toBe(true);
   });
+
+  test("treats unpresented variable names as ordinary visible inputs", () => {
+    const rows = configRowsFromInstallConfig(
+      makeConfig({
+        variableMapping: {
+          admin_password: "hunter2",
+          takosumi_accounts_issuer_url: "https://accounts.example.test",
+        },
+      }),
+      "ja",
+    );
+
+    expect(rows.map((row) => row.name)).toEqual([
+      "admin_password",
+      "takosumi_accounts_issuer_url",
+    ]);
+    expect(rows[0]).toMatchObject({
+      value: "hunter2",
+      savedValue: "hunter2",
+      secret: false,
+      advanced: false,
+    });
+    expect(rows[1]).toMatchObject({
+      value: "https://accounts.example.test",
+      secret: false,
+      advanced: false,
+    });
+  });
+
+  test("uses only explicit presentation flags for secret and advanced rows", () => {
+    const rows = configRowsFromInstallConfig(
+      makeConfig({
+        variableMapping: { api_key: "visible", internal_token: "also-visible" },
+        inputs: [
+          { name: "api_key" },
+          { name: "internal_token", advanced: true },
+        ],
+      }),
+      "ja",
+    );
+
+    expect(rows.find((row) => row.name === "api_key")).toMatchObject({
+      value: "visible",
+      secret: false,
+      advanced: false,
+    });
+    expect(rows.find((row) => row.name === "internal_token")).toMatchObject({
+      value: "also-visible",
+      secret: false,
+      advanced: true,
+    });
+  });
 });
 
 describe("buildConfigVariablePatch — dirty-only writes", () => {
   const config = makeConfig({
     variableMapping: { public_url: "https://x.test", public_subdomain: "mine" },
     inputs: [
-      { name: "public_subdomain", defaultValue: "blog" },
+      {
+        name: "public_subdomain",
+        defaultValue: { source: "literal", value: "blog" },
+      },
       { name: "optional_note" },
       { name: "enable_thing", type: "boolean" },
       { name: "extra_json", type: "json" },
-      { name: "replica_count", type: "number", defaultValue: "2" },
+      {
+        name: "replica_count",
+        type: "number",
+        defaultValue: { source: "literal", value: 2 },
+      },
     ],
   });
   const seed = () => [...configRowsFromInstallConfig(config, "ja")];

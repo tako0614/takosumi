@@ -1,7 +1,7 @@
 /**
  * Source-sync consumer + finalization facade (Core Specification §6).
  *
- * A cohesive collaborator pulled out of `OpenTofuDeploymentController`: it owns
+ * A cohesive collaborator pulled out of `OpenTofuController`: it owns
  * the `source_sync` run consumer path — the idempotency guard, the transition to
  * `running`, the source-phase credential mint (git-only; never provider), the
  * runner dispatch, and the terminal finalization that records the immutable
@@ -13,7 +13,10 @@
  * shares with the controller (the public {@link SourcesService}, the
  * {@link OpenTofuRunner}, the {@link ConnectionVault}, the run-heartbeat
  * idempotency predicate, the id/clock) are injected as ports so the SAME
- * instances are used here as on the controller. The controller keeps
+ * instances are used here as on the controller. A missing Source service or
+ * `sourceSync` runner capability terminally fails the claimed Run; the ledger
+ * never uses an indefinitely queued row as an implicit capability fallback.
+ * The controller keeps
  * `runQueuedSourceSync` as a thin delegating wrapper, so the queue consumer and
  * the inline dispatcher keep calling the controller surface unchanged.
  *
@@ -23,7 +26,8 @@
  */
 
 import type { RunStatus } from "@takosumi/internal/deploy-control-api";
-import type { Capsule as Installation } from "takosumi-contract/capsules";
+import type { Capsule } from "takosumi-contract/capsules";
+import type { StateVersion } from "takosumi-contract/state-versions";
 import type {
   MintResponse,
   SourceSnapshot,
@@ -31,7 +35,7 @@ import type {
 } from "takosumi-contract/sources";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type { SourcesService } from "../sources/mod.ts";
-import type { OpenTofuDeploymentStore, StoredSource } from "./store.ts";
+import type { OpenTofuControlStore, StoredSource } from "./store.ts";
 import type { OpenTofuRunner, OpenTofuSourceSyncResult } from "./mod.ts";
 import { mapVaultError, OpenTofuControllerError } from "./errors.ts";
 import { errorMessage } from "./projection.ts";
@@ -39,14 +43,15 @@ import { errorMessage } from "./projection.ts";
 /**
  * Ports the controller injects into {@link SourceLifecycleService}. `store` /
  * `now` / `newId` mirror the controller's own handles; `sourcesService` and
- * `runner` are the optional source-sync collaborators (absent leaves runs
- * queued); `requireVault` resolves the wired {@link ConnectionVault} (the SAME
+ * `runner` are optional composition ports, but an absent port is an explicit
+ * terminal capability error once a source-sync Run is dispatched;
+ * `requireVault` resolves the wired {@link ConnectionVault} (the SAME
  * `not_implemented` fail-closed as the controller); `shouldProcessRun` is the
  * shared run-heartbeat idempotency predicate (also used by the plan/apply
  * consumers, so it stays owned by the controller and is passed in).
  */
 export interface SourceLifecycleServiceDependencies {
-  readonly store: OpenTofuDeploymentStore;
+  readonly store: OpenTofuControlStore;
   readonly now: () => number;
   readonly newId: (prefix: string) => string;
   readonly runRenewalIntervalMs: number;
@@ -66,7 +71,7 @@ export interface SourceLifecycleServiceDependencies {
    * callee's to swallow — a broken hook must never fail the source sync.
    */
   readonly onCapsuleStaleForNewSnapshot?: (input: {
-    readonly capsule: Installation;
+    readonly capsule: Capsule;
     readonly snapshot: SourceSnapshot;
   }) => Promise<void>;
 }
@@ -76,7 +81,7 @@ export interface SourceLifecycleServiceDependencies {
  * identical to the prior inline controller methods.
  */
 export class SourceLifecycleService {
-  readonly #store: OpenTofuDeploymentStore;
+  readonly #store: OpenTofuControlStore;
   readonly #now: () => number;
   readonly #newId: (prefix: string) => string;
   readonly #runRenewalIntervalMs: number;
@@ -88,7 +93,7 @@ export class SourceLifecycleService {
     heartbeatAt: number | undefined,
   ) => boolean;
   readonly #onCapsuleStaleForNewSnapshot?: (input: {
-    readonly capsule: Installation;
+    readonly capsule: Capsule;
     readonly snapshot: SourceSnapshot;
   }) => Promise<void>;
 
@@ -112,10 +117,6 @@ export class SourceLifecycleService {
    * Source's `lastSeenCommit`. Never logs credential material.
    */
   async runQueuedSourceSync(runId: string): Promise<SourceSyncRun | undefined> {
-    const sources = this.#sourcesService;
-    if (!sources || !this.#runner?.sourceSync) {
-      return await this.#store.getSourceSyncRun(runId);
-    }
     const run = await this.#store.getSourceSyncRun(runId);
     if (!run) {
       throw new OpenTofuControllerError(
@@ -132,6 +133,21 @@ export class SourceLifecycleService {
     }
     const { running, leaseToken } = claim;
 
+    const sources = this.#sourcesService;
+    const sourceSync = this.#runner?.sourceSync;
+    if (!sources || !sourceSync) {
+      await this.#failSourceSyncRun(
+        running,
+        leaseToken,
+        new OpenTofuControllerError(
+          "not_implemented",
+          "the selected runner does not provide the source-sync capability",
+          { reason: "runner_capability_missing" },
+        ),
+      );
+      return await this.#store.getSourceSyncRun(runId);
+    }
+
     let stored;
     try {
       stored = await sources.getStoredSource(run.sourceId);
@@ -144,13 +160,13 @@ export class SourceLifecycleService {
     try {
       if (stored.authConnectionId) {
         const bundle = await this.#requireVault().mintForPhase({
-          spaceId: run.spaceId,
+          workspaceId: run.workspaceId,
           phase: "source",
           sourceConnectionId: stored.authConnectionId,
         });
         await this.#recordSourceCredentialMintEvent({
           runId: run.id,
-          spaceId: run.spaceId,
+          workspaceId: run.workspaceId,
           sourceId: run.sourceId,
           connectionId: stored.authConnectionId,
         });
@@ -181,18 +197,18 @@ export class SourceLifecycleService {
         running,
         leaseToken,
         () =>
-          this.#runner!.sourceSync!({
+          sourceSync.call(this.#runner, {
             runId: run.id,
-            spaceId: run.spaceId,
+            workspaceId: run.workspaceId,
             sourceId: run.sourceId,
             source: { url: run.url, ref: run.ref, path: run.path },
-            archiveObjectKey: run.archiveObjectKey,
+            archiveRef: run.archiveRef,
             ...(reuseSnapshot
               ? {
                   reuseSnapshot: {
                     id: reuseSnapshot.id,
                     resolvedCommit: reuseSnapshot.resolvedCommit,
-                    archiveObjectKey: reuseSnapshot.archiveObjectKey,
+                    archiveRef: reuseSnapshot.archiveRef,
                     archiveDigest: reuseSnapshot.archiveDigest,
                     archiveSizeBytes: reuseSnapshot.archiveSizeBytes,
                   },
@@ -260,14 +276,14 @@ export class SourceLifecycleService {
     const finishedAtMs = this.#now();
     const finishedAtIso = new Date(finishedAtMs).toISOString();
     const snapshotId = running.snapshotId ?? this.#newId("snap");
-    const archiveObjectKey = this.#verifiedSourceArchiveObjectKey(
+    const archiveRef = this.#verifiedSourceArchiveRef(
       running,
       result,
       reuseSnapshot,
     );
     const repositoryInstallMetadata =
       result.repositoryInstallMetadata ??
-      (reuseSnapshot && archiveObjectKey === reuseSnapshot.archiveObjectKey
+      (reuseSnapshot && archiveRef === reuseSnapshot.archiveRef
         ? reuseSnapshot.repositoryInstallMetadata
         : undefined);
     if (!repositoryInstallMetadata) {
@@ -280,13 +296,12 @@ export class SourceLifecycleService {
       id: snapshotId,
       origin: "git",
       workspaceId: running.workspaceId,
-      spaceId: running.spaceId,
       sourceId: running.sourceId,
       url: running.url,
       ref: running.ref,
       resolvedCommit: result.resolvedCommit,
       path: running.path,
-      archiveObjectKey,
+      archiveRef,
       archiveDigest: result.archiveDigest,
       archiveSizeBytes: result.archiveSizeBytes,
       repositoryInstallMetadata,
@@ -338,9 +353,7 @@ export class SourceLifecycleService {
     readonly snapshot: SourceSnapshot;
     readonly finishedAtIso: string;
   }): Promise<void> {
-    const capsules = await this.#store.listInstallations(
-      input.running.workspaceId,
-    );
+    const capsules = await this.#store.listCapsules(input.running.workspaceId);
     for (const capsule of capsules) {
       if (
         capsule.sourceId !== input.running.sourceId ||
@@ -348,13 +361,18 @@ export class SourceLifecycleService {
       ) {
         continue;
       }
-      const currentDeploymentId = capsule.currentDeploymentId;
-      if (!currentDeploymentId) continue;
-      const deployment = await this.#store.getDeployment(currentDeploymentId);
-      if (!deployment) continue;
-      if (deployment.sourceSnapshotId === input.snapshot.id) continue;
+      const currentStateVersionId = capsule.currentStateVersionId;
+      if (!currentStateVersionId) continue;
+      const stateVersion = await this.#store.getStateVersion(
+        currentStateVersionId,
+      );
+      if (!stateVersion) continue;
+      const deployedSourceSnapshotId =
+        await this.#sourceSnapshotIdForStateVersion(stateVersion, new Set());
+      if (!deployedSourceSnapshotId) continue;
+      if (deployedSourceSnapshotId === input.snapshot.id) continue;
       const deployedSnapshot = await this.#store.getSourceSnapshot(
-        deployment.sourceSnapshotId,
+        deployedSourceSnapshotId,
       );
       if (
         deployedSnapshot &&
@@ -362,22 +380,21 @@ export class SourceLifecycleService {
       ) {
         continue;
       }
-      await this.#store.patchInstallation(capsule.id, {
+      await this.#store.patchCapsule(capsule.id, {
         status: "stale",
         updatedAt: input.finishedAtIso,
       });
       await this.#store.putActivityEvent({
         id: this.#newId("act"),
-        workspaceId: capsule.workspaceId ?? capsule.spaceId,
-        spaceId: capsule.workspaceId ?? capsule.spaceId,
-        action: "installation.stale",
-        targetType: "installation",
+        workspaceId: capsule.workspaceId,
+        action: "capsule.stale",
+        targetType: "capsule",
         targetId: capsule.id,
         metadata: {
           reason: "source_ref_changed",
           sourceId: input.running.sourceId,
           sourceSnapshotId: input.snapshot.id,
-          previousSourceSnapshotId: deployment.sourceSnapshotId,
+          previousSourceSnapshotId: deployedSourceSnapshotId,
           resolvedCommit: input.snapshot.resolvedCommit,
           previousResolvedCommit: deployedSnapshot?.resolvedCommit ?? null,
           ref: input.running.ref,
@@ -396,22 +413,49 @@ export class SourceLifecycleService {
     }
   }
 
-  #verifiedSourceArchiveObjectKey(
+  async #sourceSnapshotIdForStateVersion(
+    stateVersion: StateVersion,
+    seen: Set<string>,
+  ): Promise<string | undefined> {
+    if (seen.has(stateVersion.id)) return undefined;
+    seen.add(stateVersion.id);
+    const applyRun = await this.#store.getApplyRun(stateVersion.createdByRunId);
+    if (applyRun) {
+      return (await this.#store.getPlanRun(applyRun.planRunId))
+        ?.sourceSnapshotId;
+    }
+    const restoreRun = await this.#store.getBackupRun(
+      stateVersion.createdByRunId,
+    );
+    if (
+      restoreRun?.type !== "restore" ||
+      !restoreRun.restoredFromStateVersionId
+    ) {
+      return undefined;
+    }
+    const restored = await this.#store.getStateVersion(
+      restoreRun.restoredFromStateVersionId,
+    );
+    return restored
+      ? await this.#sourceSnapshotIdForStateVersion(restored, seen)
+      : undefined;
+  }
+
+  #verifiedSourceArchiveRef(
     running: SourceSyncRun,
     result: OpenTofuSourceSyncResult,
     reuseSnapshot: SourceSnapshot | undefined,
   ): string {
-    const archiveObjectKey =
-      result.archiveObjectKey ?? running.archiveObjectKey;
-    if (archiveObjectKey === running.archiveObjectKey) return archiveObjectKey;
+    const archiveRef = result.archiveRef ?? running.archiveRef;
+    if (archiveRef === running.archiveRef) return archiveRef;
     if (
       reuseSnapshot &&
-      archiveObjectKey === reuseSnapshot.archiveObjectKey &&
+      archiveRef === reuseSnapshot.archiveRef &&
       result.resolvedCommit === reuseSnapshot.resolvedCommit &&
       result.archiveDigest === reuseSnapshot.archiveDigest &&
       result.archiveSizeBytes === reuseSnapshot.archiveSizeBytes
     ) {
-      return archiveObjectKey;
+      return archiveRef;
     }
     throw new OpenTofuControllerError(
       "failed_precondition",
@@ -434,7 +478,7 @@ export class SourceLifecycleService {
       }
     }
     if (stored.authConnectionId) return undefined;
-    const siblingSources = (await this.#store.listSources(running.spaceId))
+    const siblingSources = (await this.#store.listSources(running.workspaceId))
       .filter((source) => source.id !== running.sourceId)
       .filter((source) => !source.authConnectionId)
       .filter(
@@ -472,6 +516,7 @@ export class SourceLifecycleService {
       finishedAt: finishedAtIso,
       updatedAt: finishedAtIso,
       error: errorMessage(error),
+      errorCode: sourceSyncErrorCode(error),
     };
     await this.#persistTerminalSourceSyncRun(failed, leaseToken);
   }
@@ -538,14 +583,14 @@ export class SourceLifecycleService {
 
   async #recordSourceCredentialMintEvent(input: {
     readonly runId: string;
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly sourceId: string;
     readonly connectionId: string;
   }): Promise<void> {
     await this.#store.putCredentialMintEvent({
       id: this.#newId("credmint"),
       runId: input.runId,
-      workspaceId: input.spaceId,
+      workspaceId: input.workspaceId,
       sourceId: input.sourceId,
       connectionId: input.connectionId,
       phase: "source",
@@ -555,13 +600,29 @@ export class SourceLifecycleService {
   }
 }
 
+function sourceSyncErrorCode(error: unknown): string {
+  if (error instanceof OpenTofuControllerError) {
+    const details = error.details;
+    if (details && typeof details === "object" && !Array.isArray(details)) {
+      const reason = (details as { readonly reason?: unknown }).reason;
+      if (
+        typeof reason === "string" &&
+        /^[a-z][a-z0-9_]{2,63}$/u.test(reason)
+      ) {
+        return reason;
+      }
+    }
+  }
+  return "source_sync_failed";
+}
+
 function sourceSnapshotMatchesRun(
   snapshot: SourceSnapshot,
   running: SourceSyncRun,
 ): boolean {
   return (
     snapshot.origin === "git" &&
-    snapshot.spaceId === running.spaceId &&
+    snapshot.workspaceId === running.workspaceId &&
     snapshot.url === running.url &&
     snapshot.ref === running.ref &&
     snapshot.path === running.path
@@ -602,7 +663,7 @@ function sourceSyncResultFromSnapshot(
     resolvedCommit: snapshot.resolvedCommit,
     archiveDigest: snapshot.archiveDigest,
     archiveSizeBytes: snapshot.archiveSizeBytes,
-    archiveObjectKey: snapshot.archiveObjectKey,
+    archiveRef: snapshot.archiveRef,
   };
 }
 

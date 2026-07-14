@@ -11,7 +11,7 @@ export interface UpstreamOAuthProvider {
   subjectClaim: string;
 }
 
-export interface CustomOidcOAuthProviderInput {
+export interface OidcOAuthProviderInput {
   id: string;
   issuer: string;
   authorizationEndpoint: string;
@@ -50,38 +50,8 @@ export interface UpstreamAuthorizationCodeExchangeResult {
   userInfo: Record<string, unknown>;
 }
 
-/** Optional endpoint overrides. Used by local-substrate tests to point the
- *  builtin provider definitions at a mock OAuth server (avoiding outbound
- *  traffic to real Google). Production leaves all overrides unset
- *  and gets the real endpoints. */
-export type BuiltinUpstreamProviderOverrides = Partial<
-  Pick<
-    UpstreamOAuthProvider,
-    "issuer" | "authorizationEndpoint" | "tokenEndpoint" | "userInfoEndpoint"
-  >
->;
-
-export function googleOAuthProvider(
-  overrides: BuiltinUpstreamProviderOverrides = {},
-): UpstreamOAuthProvider {
-  return {
-    id: "google",
-    issuer: overrides.issuer ?? "https://accounts.google.com",
-    authorizationEndpoint:
-      overrides.authorizationEndpoint ??
-      "https://accounts.google.com/o/oauth2/v2/auth",
-    tokenEndpoint:
-      overrides.tokenEndpoint ?? "https://oauth2.googleapis.com/token",
-    userInfoEndpoint:
-      overrides.userInfoEndpoint ??
-      "https://openidconnect.googleapis.com/v1/userinfo",
-    defaultScopes: ["openid", "profile", "email"],
-    subjectClaim: "sub",
-  };
-}
-
-export function customOidcOAuthProvider(
-  input: CustomOidcOAuthProviderInput,
+export function oidcOAuthProvider(
+  input: OidcOAuthProviderInput,
 ): UpstreamOAuthProvider {
   return {
     id: input.id,

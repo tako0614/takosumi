@@ -14,12 +14,12 @@ variable "base_url" {
   default     = "https://keyless.fixture.takosumi.test"
 }
 
-output "worker_name" {
-  description = "Stable string output used by the generic Capsule smoke."
+output "example_label" {
+  description = "An ordinary string output projected by the example smoke configuration."
   value       = var.name
 }
 
-output "url" {
-  description = "Stable URL output used by the generic Capsule smoke."
+output "example_endpoint" {
+  description = "An ordinary URL output projected by the example smoke configuration."
   value       = var.base_url
 }

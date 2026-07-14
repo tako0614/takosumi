@@ -268,7 +268,6 @@ export function classifyOpenTofuFailure(
     return "provider_package_unavailable";
   }
   if (
-    normalized.includes("does not allow local source paths") ||
     normalized.includes("runner capability") ||
     normalized.includes("no runner is configured") ||
     normalized.includes("runner profile") &&

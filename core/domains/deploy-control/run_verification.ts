@@ -3,20 +3,20 @@
  * §6 / §15 / §17 / §18 / §20 / §26).
  *
  * A cohesive, READ-ONLY collaborator pulled out of
- * `OpenTofuDeploymentController`: every method here is a function of the stored
- * ledger (PlanRun + SourceSnapshot + DependencySnapshot + StateSnapshot +
- * CompatibilityReport + Installation/OutputShare rows) and never mutates run
+ * `OpenTofuController`: every method here is a function of the stored
+ * ledger (PlanRun + SourceSnapshot + DependencySnapshot + StateVersion +
+ * CompatibilityReport + Capsule/OutputShare rows) and never mutates run
  * state nor calls back into the plan/apply run-engine mutation core. It owns two
  * cohesive concerns the queue consumers + apply preconditions lean on:
  *
- *   - the {@link RunInstallationDispatch} payload build (`installationDispatch`
+ *   - the {@link RunExecutionDispatch} payload build (`executionDispatch`
  *     + the source-archive / remote-state descriptor resolution it threads), and
  *   - the apply/plan-time re-verification of the pins the plan was reviewed
  *     against: state generation, source snapshot, Capsule compatibility, and the
- *     DependencySnapshot (per-entry tamper digest, remote_state objectKey/digest,
+ *     DependencySnapshot (per-entry tamper digest, remote state ref/digest,
  *     published_output OutputShare coverage).
  *
- * The controller holds one instance and delegates from `#installationDispatch`,
+ * The controller holds one instance and delegates from `#executionDispatch`,
  * the apply preconditions, `runQueuedPlan`, and `createApplyRun` so the exact
  * signatures, error codes, and verification ordering are preserved.
  *
@@ -36,20 +36,22 @@
 import type {
   DispatchDepState,
   DispatchSourceArchive,
+  DispatchStateAdoption,
   DispatchStateScope,
-  Installation,
+  Capsule,
   PlanRun,
   PolicyConfig,
-  StateSnapshot,
+  StateVersion,
 } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { DependencySnapshotEntry } from "takosumi-contract/dependencies";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
-import type { OpenTofuDeploymentStore } from "./store.ts";
+import type { OpenTofuControlStore } from "./store.ts";
 import { OpenTofuControllerError } from "./errors.ts";
 import type { DependencyResolutionService } from "./dependency_resolution.ts";
-import type { DependencyValueSealer, RunInstallationDispatch } from "./mod.ts";
+import type { DependencyValueSealer, RunExecutionDispatch } from "./mod.ts";
+import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 
 /**
  * Ports the controller injects into {@link RunVerificationService}. `store` is
@@ -63,9 +65,10 @@ import type { DependencyValueSealer, RunInstallationDispatch } from "./mod.ts";
  * used by the run-creation path).
  */
 export interface RunVerificationServiceDependencies {
-  readonly store: OpenTofuDeploymentStore;
+  readonly store: OpenTofuControlStore;
   readonly dependencies: DependencyResolutionService;
   readonly dependencyValueSealer?: DependencyValueSealer;
+  readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   readonly policyForPlanRun: (
     planRun: PlanRun,
   ) => Promise<PolicyConfig | undefined>;
@@ -80,9 +83,10 @@ export interface RunVerificationServiceDependencies {
  * identical to the prior inline controller methods.
  */
 export class RunVerificationService {
-  readonly #store: OpenTofuDeploymentStore;
+  readonly #store: OpenTofuControlStore;
   readonly #dependencies: DependencyResolutionService;
   readonly #dependencyValueSealer?: DependencyValueSealer;
+  readonly #artifactReferenceAllocator?: ArtifactReferenceAllocator;
   readonly #policyForPlanRun: (
     planRun: PlanRun,
   ) => Promise<PolicyConfig | undefined>;
@@ -95,6 +99,7 @@ export class RunVerificationService {
     this.#store = dependencies.store;
     this.#dependencies = dependencies.dependencies;
     this.#dependencyValueSealer = dependencies.dependencyValueSealer;
+    this.#artifactReferenceAllocator = dependencies.artifactReferenceAllocator;
     this.#policyForPlanRun = dependencies.policyForPlanRun;
     this.#assertCompatibilityReportRunnable =
       dependencies.assertCompatibilityReportRunnable;
@@ -110,11 +115,33 @@ export class RunVerificationService {
    * unchanged. Throws when the recorded SourceSnapshot is missing (a run cannot
    * dispatch against a snapshot the ledger no longer holds).
    */
-  async installationDispatch(
+  async executionDispatch(
     planRun: PlanRun,
     generation: number,
-  ): Promise<RunInstallationDispatch> {
-    const ctx = planRun.installationContext;
+    stateAdoption?: DispatchStateAdoption,
+  ): Promise<RunExecutionDispatch> {
+    if (planRun.resourceContext) {
+      const subject = {
+        kind: "resource" as const,
+        id: planRun.resourceContext.resourceId,
+      };
+      return {
+        stateScope: await this.#stateScope({
+          workspaceId: planRun.resourceContext.workspaceId,
+          subject,
+          environment: planRun.resourceContext.environment,
+          generation,
+        }),
+        ...(stateAdoption ? { stateAdoption } : {}),
+      };
+    }
+    if (stateAdoption) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "state adoption is valid only for a first-class Resource run",
+      );
+    }
+    const ctx = planRun.capsuleContext;
     if (!ctx || !planRun.sourceSnapshotId) return {};
     const snapshot = await this.#store.getSourceSnapshot(
       planRun.sourceSnapshotId,
@@ -124,24 +151,22 @@ export class RunVerificationService {
         "failed_precondition",
         `source_snapshot_missing: plan run ${planRun.id} references ` +
           `SourceSnapshot ${planRun.sourceSnapshotId} which is no longer present`,
+        { reason: "source_snapshot_missing" },
       );
     }
-    const stateScope: DispatchStateScope = {
-      workspaceId: ctx.workspaceId ?? ctx.spaceId,
-      capsuleId: ctx.capsuleId ?? ctx.installationId,
+    const stateScope = await this.#stateScope({
+      workspaceId: ctx.workspaceId,
+      subject: {
+        kind: "capsule",
+        id: ctx.capsuleId,
+      },
       environment: ctx.environment,
       generation,
-    };
+    });
     // remote_state dependencies (spec §15): for each remote_state edge, dispatch
-    // the producer StateSnapshot pinned by the plan's DependencySnapshot so
+    // the producer StateVersion pinned by the plan's DependencySnapshot so
     // apply/destroy use the same state bytes the plan reviewed.
     const depStates = await this.#resolveRemoteStateDispatch(planRun);
-    if (isGeneratedRootOnlySnapshot(snapshot)) {
-      return {
-        stateScope,
-        ...(depStates.length > 0 ? { depStates } : {}),
-      };
-    }
     const sourceArchive = await this.#dispatchSourceArchive(planRun, snapshot);
     return {
       stateScope,
@@ -156,7 +181,7 @@ export class RunVerificationService {
   ): Promise<DispatchSourceArchive> {
     if (!planRun.compatibilityReportId) {
       return {
-        objectKey: snapshot.archiveObjectKey,
+        ref: snapshot.archiveRef,
         digest: snapshot.archiveDigest,
       };
     }
@@ -168,27 +193,14 @@ export class RunVerificationService {
         "failed_precondition",
         `compatibility_report_missing: plan run ${planRun.id} references ` +
           `CompatibilityReport ${planRun.compatibilityReportId} which no longer exists`,
+        { reason: "compatibility_report_missing" },
       );
     }
     this.#assertCompatibilityReportScopedToRun(report, planRun, snapshot);
     const policy = await this.#policyForPlanRun(planRun);
     this.#assertCompatibilityReportRunnable(report, policy);
-    if (
-      report.level === "auto_capsulized" &&
-      (!report.normalizedObjectKey || !report.normalizedDigest)
-    ) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `normalized_capsule_artifact_missing: CompatibilityReport ${report.id} ` +
-          "is auto_capsulized but has no normalizedObjectKey/normalizedDigest",
-      );
-    }
-    // auto_capsulized normalized modules are threaded through generatedRoot
-    // moduleFiles; sourceArchive remains the immutable original SourceSnapshot
-    // so the runner can still restore source/build context and verify commit
-    // lineage without pretending the JSON artifact is an R2_SOURCE archive.
     return {
-      objectKey: snapshot.archiveObjectKey,
+      ref: snapshot.archiveRef,
       digest: snapshot.archiveDigest,
     };
   }
@@ -196,9 +208,9 @@ export class RunVerificationService {
   /**
    * Builds the {@link DispatchDepState} list for a PlanRun's `remote_state`
    * DependencySnapshot entries (spec §15/§17). New PlanRuns pin the exact
-   * StateSnapshot objectKey/digest at plan time. Older snapshots without those
-   * optional fields fall back to the StateSnapshot with the pinned generation.
-   * `name` is the producer Installation name — the `/work/deps/<name>.tfstate`
+   * StateVersion ref/digest at plan time. Older snapshots without those
+   * optional fields fall back to the StateVersion with the pinned generation.
+   * `name` is the producer Capsule name — the `/work/deps/<name>.tfstate`
    * filename the consumer references via `terraform_remote_state`. Returns an
    * empty list when the plan pinned no remote_state edges.
    */
@@ -215,6 +227,7 @@ export class RunVerificationService {
         `dependency_snapshot_missing: plan run ${planRun.id} references ` +
           `DependencySnapshot ${planRun.dependencySnapshotId} which is no ` +
           `longer present`,
+        { reason: "dependency_snapshot_missing" },
       );
     }
     const depStates: DispatchDepState[] = [];
@@ -222,39 +235,38 @@ export class RunVerificationService {
       const dependency = await this.#store.getDependency(entry.dependencyId);
       if (!dependency) continue;
       if (dependency.mode !== "remote_state") continue;
-      const producer = await this.#store.getInstallation(
-        entry.producerInstallationId,
-      );
+      const producer = await this.#store.getCapsule(entry.producerCapsuleId);
       if (!producer) {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `dependency_state_unavailable: dependency ${dependency.id} producer ` +
-            `installation ${entry.producerInstallationId} not found`,
+            `Capsule ${entry.producerCapsuleId} not found`,
+          { reason: "dependency_state_unavailable" },
         );
       }
-      const pinned = await this.#pinnedRemoteStateSnapshotForEntry(
+      const pinned = await this.#pinnedRemoteStateVersionForEntry(
         planRun,
         entry,
         producer,
       );
       depStates.push({
         name: producer.name,
-        installationId: producer.id,
+        capsuleId: producer.id,
         environment: producer.environment,
         generation: pinned.generation,
-        objectKey: pinned.objectKey,
+        stateRef: pinned.stateRef,
         digest: pinned.digest,
       });
     }
     return depStates;
   }
 
-  async #pinnedRemoteStateSnapshotForEntry(
+  async #pinnedRemoteStateVersionForEntry(
     planRun: PlanRun,
     entry: DependencySnapshotEntry,
-    producer: Installation,
-  ): Promise<StateSnapshot> {
-    const snapshots = await this.#store.listStateSnapshots(
+    producer: Capsule,
+  ): Promise<StateVersion> {
+    const snapshots = await this.#store.listStateVersions(
       producer.id,
       producer.environment,
     );
@@ -265,60 +277,87 @@ export class RunVerificationService {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `dependency_state_unavailable: plan run ${planRun.id} dependency ` +
-          `${entry.dependencyId} pinned producer StateSnapshot generation ` +
+          `${entry.dependencyId} pinned producer StateVersion generation ` +
           `${entry.producerStateGeneration} is no longer present`,
+        { reason: "dependency_state_unavailable" },
       );
     }
-    if (entry.producerStateObjectKey || entry.producerStateDigest) {
+    if (entry.producerStateRef || entry.producerStateDigest) {
       if (
-        (entry.producerStateSnapshotId &&
-          pinned.id !== entry.producerStateSnapshotId) ||
-        pinned.objectKey !== entry.producerStateObjectKey ||
+        (entry.producerStateVersionId &&
+          pinned.id !== entry.producerStateVersionId) ||
+        pinned.stateRef !== entry.producerStateRef ||
         pinned.digest !== entry.producerStateDigest
       ) {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `dependency_snapshot_tampered: plan run ${planRun.id} dependency ` +
-            `${entry.dependencyId} pinned producer StateSnapshot no longer ` +
+            `${entry.dependencyId} pinned producer StateVersion no longer ` +
             `matches the ledger row`,
+          { reason: "dependency_snapshot_tampered" },
         );
       }
     }
     return pinned;
   }
 
-  async #reverifyRemoteStateSnapshotPin(
+  async #stateScope(
+    input: Omit<DispatchStateScope, "stateRef">,
+  ): Promise<DispatchStateScope> {
+    const allocator = this.#artifactReferenceAllocator;
+    if (!allocator || !input.subject) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "run dispatch requires an artifact-reference allocator",
+      );
+    }
+    const stateRef = await allocator.allocate({
+      kind: "state",
+      workspaceId: input.workspaceId,
+      subject: input.subject,
+      environment: input.environment,
+      generation: input.generation,
+    });
+    if (!stateRef.trim()) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "artifact-reference allocator returned an empty stateRef",
+      );
+    }
+    return { ...input, stateRef };
+  }
+
+  async #reverifyRemoteStateVersionPin(
     planRun: PlanRun,
     entry: DependencySnapshotEntry,
   ): Promise<void> {
     const dependency = await this.#store.getDependency(entry.dependencyId);
     if (dependency?.mode !== "remote_state") return;
-    const producer = await this.#store.getInstallation(
-      entry.producerInstallationId,
-    );
+    const producer = await this.#store.getCapsule(entry.producerCapsuleId);
     if (!producer) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `dependency_state_unavailable: dependency ${entry.dependencyId} ` +
-          `producer installation ${entry.producerInstallationId} not found`,
+          `producer Capsule ${entry.producerCapsuleId} not found`,
+        { reason: "dependency_state_unavailable" },
       );
     }
-    await this.#pinnedRemoteStateSnapshotForEntry(planRun, entry, producer);
+    await this.#pinnedRemoteStateVersionForEntry(planRun, entry, producer);
   }
 
   /**
    * Env-driven state generation guard (M2). For a run carrying environment
-   * context, rejects when the Environment's latest StateSnapshot generation no
+   * context, rejects when the Environment's latest StateVersion generation no
    * longer equals the generation this plan was created against (a sibling apply
    * advanced the env state in between). Runs without env context are unaffected
-   * (the Installation-backed guard handles them).
+   * (the Capsule-backed guard handles them).
    */
-  async assertInstallationStateGeneration(planRun: PlanRun): Promise<void> {
-    const ctx = planRun.installationContext;
+  async assertCapsuleStateGeneration(planRun: PlanRun): Promise<void> {
+    const ctx = planRun.capsuleContext;
     if (!ctx) return;
     const base = planRun.baseStateGeneration ?? 0;
-    const latest = await this.#store.getLatestStateSnapshot(
-      (ctx.capsuleId ?? ctx.installationId),
+    const latest = await this.#store.getLatestStateVersion(
+      ctx.capsuleId,
       ctx.environment,
     );
     const current = latest?.generation ?? 0;
@@ -326,8 +365,9 @@ export class RunVerificationService {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `state_generation_mismatch: plan run ${planRun.id} was created against ` +
-          `installation ${ctx.installationId} (${ctx.environment}) state ` +
+          `Capsule ${ctx.capsuleId} (${ctx.environment}) state ` +
           `generation ${base} but it is now at generation ${current}`,
+        { reason: "state_generation_mismatch" },
       );
     }
   }
@@ -349,6 +389,7 @@ export class RunVerificationService {
         `source_snapshot_mismatch: plan run ${planRun.id} source snapshot ` +
           `changed since review (${planRun.sourceSnapshotId} -> ` +
           `${persistedSnapshotId ?? "<none>"})`,
+        { reason: "source_snapshot_mismatch" },
       );
     }
     const snapshot = await this.#store.getSourceSnapshot(
@@ -359,16 +400,17 @@ export class RunVerificationService {
         "failed_precondition",
         `source_snapshot_missing: plan run ${planRun.id} references ` +
           `SourceSnapshot ${planRun.sourceSnapshotId} which is no longer present`,
+        { reason: "source_snapshot_missing" },
       );
     }
   }
 
   /**
    * Capsule Gate precondition (core-spec §6 / §26): when a PlanRun was created
-   * from an Installation that has a reviewed CompatibilityReport, the queued
+   * from a Capsule that has a reviewed CompatibilityReport, the queued
    * plan/apply consumer must re-read it before provider credential mint. Only
-   * `ready` and `auto_capsulized` reports are runnable; `needs_patch` and
-   * `unsupported` stop before credentials are issued.
+   * Only `ready` reports are runnable; `needs_patch` and `unsupported` stop
+   * before credentials are issued.
    */
   async assertCapsuleCompatibilityAllowsRun(planRun: PlanRun): Promise<void> {
     if (!planRun.compatibilityReportId) return;
@@ -380,6 +422,7 @@ export class RunVerificationService {
         "failed_precondition",
         `compatibility_report_missing: plan run ${planRun.id} references ` +
           `CompatibilityReport ${planRun.compatibilityReportId} which no longer exists`,
+        { reason: "compatibility_report_missing" },
       );
     }
     if (planRun.sourceSnapshotId) {
@@ -391,18 +434,20 @@ export class RunVerificationService {
           "failed_precondition",
           `source_snapshot_missing: plan run ${planRun.id} references ` +
             `SourceSnapshot ${planRun.sourceSnapshotId} which is no longer present`,
+          { reason: "source_snapshot_missing" },
         );
       }
       this.#assertCompatibilityReportScopedToRun(report, planRun, snapshot);
     } else if (
-      report.installationId &&
-      report.installationId !== planRun.installationContext?.installationId
+      report.capsuleId &&
+      report.capsuleId !== planRun.capsuleContext?.capsuleId
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `compatibility_report_installation_mismatch: plan run ${planRun.id} ` +
-          `uses Capsule ${planRun.installationContext?.installationId ?? "<none>"} ` +
-          `but report ${report.id} was created for ${report.installationId}`,
+        `compatibility_report_capsule_mismatch: plan run ${planRun.id} ` +
+          `uses Capsule ${planRun.capsuleContext?.capsuleId ?? "<none>"} ` +
+          `but report ${report.id} was created for ${report.capsuleId}`,
+        { reason: "compatibility_report_capsule_mismatch" },
       );
     }
     const policy = await this.#policyForPlanRun(planRun);
@@ -419,6 +464,7 @@ export class RunVerificationService {
         "failed_precondition",
         `compatibility_report_snapshot_mismatch: plan run ${planRun.id} ` +
           `uses SourceSnapshot ${snapshot.id} but report ${report.id} was created for ${report.sourceSnapshotId}`,
+        { reason: "compatibility_report_snapshot_mismatch" },
       );
     }
     if (report.sourceId && report.sourceId !== snapshot.sourceId) {
@@ -427,17 +473,19 @@ export class RunVerificationService {
         `compatibility_report_source_mismatch: plan run ${planRun.id} ` +
           `uses Source ${snapshot.sourceId ?? "<none>"} but report ${report.id} ` +
           `was created for ${report.sourceId}`,
+        { reason: "compatibility_report_source_mismatch" },
       );
     }
     if (
-      report.installationId &&
-      report.installationId !== planRun.installationContext?.installationId
+      report.capsuleId &&
+      report.capsuleId !== planRun.capsuleContext?.capsuleId
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `compatibility_report_installation_mismatch: plan run ${planRun.id} ` +
-          `uses Capsule ${planRun.installationContext?.installationId ?? "<none>"} ` +
-          `but report ${report.id} was created for ${report.installationId}`,
+        `compatibility_report_capsule_mismatch: plan run ${planRun.id} ` +
+          `uses Capsule ${planRun.capsuleContext?.capsuleId ?? "<none>"} ` +
+          `but report ${report.id} was created for ${report.capsuleId}`,
+        { reason: "compatibility_report_capsule_mismatch" },
       );
     }
   }
@@ -446,7 +494,7 @@ export class RunVerificationService {
    * Verifies the plan's pinned DependencySnapshot at apply time (spec §17 /
    * invariant 9). No-ops when the plan pinned no snapshot.
    *
-   *   - `strict` mode (production consumer): every entry's producer Installation
+   *   - `strict` mode (production consumer): every entry's producer Capsule
    *     must STILL be at the `producerStateGeneration` pinned at plan time; a
    *     moved producer is a typed `failed_precondition`
    *     (`dependency_snapshot_stale`).
@@ -473,6 +521,7 @@ export class RunVerificationService {
         `dependency_snapshot_missing: plan run ${planRun.id} references ` +
           `DependencySnapshot ${planRun.dependencySnapshotId} which is no ` +
           `longer present`,
+        { reason: "dependency_snapshot_missing" },
       );
     }
     for (const entry of snapshot.dependencies) {
@@ -488,27 +537,27 @@ export class RunVerificationService {
           "failed_precondition",
           `dependency_snapshot_tampered: plan run ${planRun.id} dependency ` +
             `${entry.dependencyId} pinned values no longer match the pinned digest`,
+          { reason: "dependency_snapshot_tampered" },
         );
       }
       // published_output: re-verify the backing OutputShare at apply (spec §18).
       // A revoke after plan must fail the apply regardless of snapshot mode.
       await this.#reverifyPublishedOutputShare(planRun, entry.dependencyId);
-      // remote_state: the pinned state objectKey/digest must still match the
-      // immutable StateSnapshot ledger row, regardless of strict/pinned mode.
-      await this.#reverifyRemoteStateSnapshotPin(planRun, entry);
+      // remote_state: the pinned state ref/digest must still match the
+      // immutable StateVersion ledger row, regardless of strict/pinned mode.
+      await this.#reverifyRemoteStateVersionPin(planRun, entry);
       if (snapshot.mode !== "strict") continue;
       // Strict freshness: the producer must not have moved since plan.
-      const producer = await this.#store.getInstallation(
-        entry.producerInstallationId,
-      );
+      const producer = await this.#store.getCapsule(entry.producerCapsuleId);
       const current = producer?.currentStateGeneration ?? 0;
       if (current !== entry.producerStateGeneration) {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `dependency_snapshot_stale: plan run ${planRun.id} dependency ` +
-            `${entry.dependencyId} producer installation ` +
-            `${entry.producerInstallationId} advanced from state generation ` +
+            `${entry.dependencyId} producer Capsule ` +
+            `${entry.producerCapsuleId} advanced from state generation ` +
             `${entry.producerStateGeneration} to ${current} since plan`,
+          { reason: "dependency_snapshot_stale" },
         );
       }
     }
@@ -535,6 +584,7 @@ export class RunVerificationService {
         `dependency_value_sealer_unavailable: plan run ${planRun.id} dependency ` +
           `${entry.dependencyId} pinned sealed values but no at-rest value ` +
           `sealer is configured to open them`,
+        { reason: "dependency_value_sealer_unavailable" },
       );
     }
     const unsealed = await this.#dependencyValueSealer.open(entry.sealedValues);
@@ -555,12 +605,8 @@ export class RunVerificationService {
   ): Promise<void> {
     const dependency = await this.#store.getDependency(dependencyId);
     if (!dependency || dependency.mode !== "published_output") return;
-    const producer = await this.#store.getInstallation(
-      dependency.producerInstallationId,
-    );
-    const consumer = await this.#store.getInstallation(
-      dependency.consumerInstallationId,
-    );
+    const producer = await this.#store.getCapsule(dependency.producerCapsuleId);
+    const consumer = await this.#store.getCapsule(dependency.consumerCapsuleId);
     if (!producer || !consumer) return;
     const coverage = await this.#dependencies.resolveShareCoverage(
       producer,
@@ -572,14 +618,11 @@ export class RunVerificationService {
           "failed_precondition",
           `output_share_revoked: plan run ${planRun.id} dependency ` +
             `${dependencyId} consumes shared output ${mapping.from} from ` +
-            `producer installation ${producer.id} but no active OutputShare ` +
+            `producer Capsule ${producer.id} but no active OutputShare ` +
             `covers it`,
+          { reason: "output_share_revoked" },
         );
       }
     }
   }
-}
-
-function isGeneratedRootOnlySnapshot(snapshot: SourceSnapshot): boolean {
-  return snapshot.url.startsWith("takosumi://generated-root/");
 }

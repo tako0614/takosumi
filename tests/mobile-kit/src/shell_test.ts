@@ -6,12 +6,14 @@ import {
   type MobileProductAdapter,
 } from "../../../mobile-kit/src/index.ts";
 import { defineMobileHostActions } from "../../../mobile-kit/src/host-actions.ts";
+import { resolvePushNotificationPath } from "../../../mobile-kit/src/push-navigation.ts";
 
 const adapter: MobileProductAdapter = {
   product: "takos",
   appName: "Takos",
   hostNoun: "Takos host",
   hostCenterLabel: "Host Takos",
+  hostCenterUrl: "https://operator.example/install",
   hostCenterSource: {
     git: "https://github.com/acme/takos.git",
     path: "deploy/opentofu",
@@ -98,4 +100,32 @@ test("copyMobileText reports unavailable clipboard support", async () => {
       unavailableMessage: "Copy is unavailable.",
     }),
   ).rejects.toThrow("Copy is unavailable.");
+});
+
+test("provider event ids open the notification inbox when no route is present", () => {
+  const session = {
+    hostUrl: "https://host.example",
+    product: "takos" as const,
+    oidcIssuer: "https://host.example",
+    accessToken: "access-token",
+    tokenType: "Bearer",
+    createdAt: "2026-07-14T00:00:00.000Z",
+  };
+
+  expect(
+    resolvePushNotificationPath({
+      session,
+      kind: "tapped",
+      notification: { data: { event_id: "notification-1" } },
+    }),
+  ).toBe("/notifications");
+  expect(
+    resolvePushNotificationPath({
+      session,
+      kind: "tapped",
+      notification: {
+        data: { event_id: "notification-1", path: "/runs/run-1" },
+      },
+    }),
+  ).toBe("/runs/run-1");
 });

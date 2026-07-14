@@ -22,7 +22,7 @@ export const AUDIENCES: readonly Audience[] = [
     exampleStack: "Web + API + DB をひとつの構成で",
     cta: {
       label: "クイックスタート",
-      href: "/docs/reference/deploy-control-api",
+      href: "/docs/getting-started/quickstart",
     },
   },
   {

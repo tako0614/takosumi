@@ -1,4 +1,5 @@
 import type { TcsLocale } from "../../lib/tcs-aggregate.ts";
+import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
 
 const CATEGORY_LABELS: Record<string, { ja: string; en: string }> = {
   // The store is a サービス surface (see i18n/ja.ts vocabulary contract) —
@@ -13,20 +14,6 @@ const CATEGORY_LABELS: Record<string, { ja: string; en: string }> = {
   storage: { ja: "ストレージ", en: "Storage" },
   tools: { ja: "ツール", en: "Tools" },
   workspace: { ja: "ワークスペース", en: "Workspace" },
-};
-
-const PROVIDER_LABELS: Record<string, string> = {
-  aws: "AWS",
-  cloudflare: "Cloudflare",
-  digitalocean: "DigitalOcean",
-  gcp: "Google Cloud",
-  google: "Google Cloud",
-  hcloud: "Hetzner",
-  hetzner: "Hetzner",
-  openstack: "OpenStack",
-  scaleway: "Scaleway",
-  takosumi: "Takosumi",
-  vultr: "Vultr",
 };
 
 const BADGE_LABELS: Record<string, { ja: string; en: string }> = {
@@ -57,7 +44,7 @@ export function tcsCategoryLabel(value: string, locale: TcsLocale): string {
 }
 
 export function tcsProviderLabel(value: string): string {
-  return PROVIDER_LABELS[value.toLowerCase()] ?? readableToken(value);
+  return readableProviderSourceLabel(value);
 }
 
 export function tcsBadgeLabel(value: string, locale: TcsLocale): string {

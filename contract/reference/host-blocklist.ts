@@ -1,9 +1,8 @@
 /**
  * Canonical SSRF host blocklist shared across source fetchers.
  *
- * Both the deploy-control input validation and the runtime-agent
- * prepared-source reader accept a caller-supplied URL and reach out over the
- * network on the operator's behalf. To avoid the service being used as a
+ * Source validation accepts a caller-supplied URL that the OpenTofu Runner may
+ * fetch on the operator's behalf. To avoid the service being used as a
  * confused deputy against loopback / RFC1918 / link-local / cloud-metadata
  * addresses, every IP literal in a source URL is classified here and rejected
  * before any subprocess (`git clone`) or `fetch()` runs.

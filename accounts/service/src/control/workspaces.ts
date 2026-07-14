@@ -1,14 +1,12 @@
 /**
  * Session-authed Workspace (`/api/v1/workspaces`)
  * control routes: workspace CRUD, members, capsule create/list, graph,
- * runs/activity, backups, billing reads, plan-update / drift-check. Public
- * upload/prepared-source ingest is retired; upload compatibility remains
- * internal/operator-only. Extracted from `control-routes.ts` (P3 god-file split).
+ * runs/activity, backups, billing reads, plan-update / drift-check. Extracted
+ * from `control-routes.ts` (P3 god-file split).
  */
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
-  Connection,
   ConnectionOAuthStartResponse,
   ConnectionResponse,
   ConnectionScopeHints,
@@ -16,10 +14,7 @@ import type {
   CreateConnectionFile,
   CreateConnectionRequest,
   DeployControlErrorCode,
-  Deployment,
-  InternalDeployRequest,
   ListConnectionsResponse,
-  ListDeploymentsResponse,
   ListRunnerProfilesResponse,
   OpenTofuModuleSource,
   PlanRunResponse,
@@ -27,7 +22,6 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
-  ArtifactSnapshotRequest,
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
@@ -37,10 +31,6 @@ import type {
   SourceResponse,
 } from "takosumi-contract/sources";
 import type {
-  DeployResponse,
-  PublicDeployResponse,
-} from "takosumi-contract/deploy";
-import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
@@ -48,9 +38,9 @@ import type {
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  InstallConfigStoreInput,
+  InstallConfigVariableDefault,
+  InstallConfigVariablePresentation,
   ManagedPublicHostnameAllocation,
   Capsule,
   OutputAllowlistEntry,
@@ -58,6 +48,11 @@ import type {
   PublicInstallConfig,
   PublicCapsule,
 } from "takosumi-contract/install-configs";
+import {
+  capsuleInterfaceBlueprintsNeedInstallingPrincipal,
+  resolveCapsuleInterfaceBlueprintInstallingPrincipal,
+} from "takosumi-contract/interfaces";
+import { parseScopeBoundaryPolicy } from "takosumi-contract";
 import type {
   Dependency,
   DependencyMode,
@@ -67,11 +62,9 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  CapsuleProviderConnectionBinding,
-  CapsuleProviderConnectionBindings,
-  CapsuleProviderEnvBinding,
-  CapsuleProviderEnvBindings,
-  CapsuleProviderConnectionSet,
+  ProviderBinding,
+  ProviderBindings,
+  ProviderBindingSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -79,19 +72,16 @@ import type {
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
 import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
-import type { PublicDeployment } from "takosumi-contract/deployments";
+import type {
+  PublicStateVersion,
+  StateVersion,
+} from "takosumi-contract/state-versions";
 import type {
   BackupRecord,
   CreateBackupResponse,
   CreateRestoreRequest,
   ListBackupsResponse,
 } from "takosumi-contract/backups";
-import type {
-  BillingSettings,
-  CreditBalance,
-  CreditReservation,
-  UsageEvent,
-} from "takosumi-contract/billing";
 import type {
   ListRunsResponse,
   Run,
@@ -101,15 +91,6 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import { TAKOSUMI_OUTPUT_SYNC_CAPABILITY } from "takosumi-contract/output-sync";
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import type {
-  AppCapsuleMode,
-  AppCapsuleStatus,
-  CapsuleRecord,
-  WorkspaceKind,
-} from "../ledger.ts";
-import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -138,23 +119,20 @@ import {
   parseControlPageParams,
   publicApplyActionResponse,
   publicCompatibilityReportResponse,
-  publicDeployResponse,
-  publicDeployment,
+  publicStateVersion,
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
   requireWorkspaceAccess,
-  resolveProviderConnectionBindings,
+  resolveProviderBindings,
 } from "./shared.ts";
 import {
   booleanValue,
   connectionCredentialFiles,
   connectionScopeHints,
-  connectionScopeHintsFromValues,
   dependencyModeValue,
   dependencyVisibilityValue,
   installConfigStoreValue,
-  isGoogleCloudProvider,
   isJsonValue,
   isOutputsMapping,
   isPlainJsonObject,
@@ -162,35 +140,35 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseCapsuleProviderConnectionBinding,
-  parseCapsuleProviderConnectionBindings,
+  parseProviderBinding,
+  parseProviderBindings,
   parseLimit,
-  spaceTypeValue,
+  workspaceTypeValue,
   sourceBuildValue,
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
+import { parseInterfaceBlueprintsValue } from "./interface-blueprints.ts";
 import { normalizeVariablePathRecord } from "../../../../core/domains/deploy-control/validation.ts";
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/capsules/install_config_bootstrap.ts";
+} from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
-import { maybeEnsurePersonalWorkspaceForSession } from "../control-personal-space.ts";
-import { appendLedgerEvent } from "../installation-ledger-events.ts";
+import { maybeEnsurePersonalWorkspaceForSession } from "../control-personal-workspace.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 import { ensureTakosumiAccountsOidcForCapsule } from "./capsule-oidc.ts";
 import {
   hydrateRepoOwnedStoreConfig,
   latestSourceSnapshotForSource,
 } from "./repo-owned-install-config.ts";
+import { handleWorkspaceProjects } from "./projects.ts";
 
 function sourceWorkspaceId(
-  source: Readonly<{ workspaceId?: string; spaceId?: string }>,
+  source: Readonly<{ workspaceId?: string }>,
 ): string | undefined {
-  return stringValue(source.workspaceId) ?? stringValue(source.spaceId);
+  return stringValue(source.workspaceId);
 }
 
 export async function handleWorkspaces(
@@ -199,8 +177,8 @@ export async function handleWorkspaces(
   method: string,
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
-  // GET/POST /api/v1/workspaces, normalized to the historical handler key.
-  if (segments.length === 1 && segments[0] === "spaces") {
+  // GET/POST /api/v1/workspaces.
+  if (segments.length === 1 && segments[0] === "workspaces") {
     if (method === "GET") {
       await maybeEnsurePersonalWorkspaceForSession({
         request: request.clone(),
@@ -215,32 +193,20 @@ export async function handleWorkspaces(
     return methodNotAllowed("GET, POST");
   }
   // /api/v1/workspaces/:workspaceId ; /api/v1/workspaces/:workspaceId/...
-  if (segments[0] === "spaces" && segments.length >= 2) {
+  if (segments[0] === "workspaces" && segments.length >= 2) {
     const workspaceId = decodeURIComponent(segments[1] ?? "");
     const leaf = segments[2];
-    let canManageOutputSync = false;
-    if (leaf === "output-sync") {
-      const auth = await requireOutputSyncWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        subject: ctx.session.subject,
-      });
-      if (!auth.ok) return auth.response;
-      canManageOutputSync = auth.canManage;
-    } else {
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        subject: ctx.session.subject,
-      });
-      if (!auth.ok) return auth.response;
-    }
+    const auth = await requireWorkspaceAccess({
+      operations,
+      store,
+      workspaceId,
+      subject: ctx.session.subject,
+    });
+    if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method === "GET")
         return json({
-          space: await operations.spaces.getWorkspace(workspaceId),
+          workspace: await operations.workspaces.getWorkspace(workspaceId),
         });
       if (method === "PATCH")
         return await updateWorkspace(
@@ -251,62 +217,6 @@ export async function handleWorkspaces(
           workspaceId,
         );
       return methodNotAllowed("GET, PATCH");
-    }
-    if (leaf === "output-sync") {
-      if (segments.length === 3) {
-        if (method === "GET") {
-          return json(await operations.outputSync.getStatus(workspaceId));
-        }
-        if (method === "PATCH") {
-          if (!canManageOutputSync) {
-            return memberForbidden(
-              "Only a Workspace owner or admin can change Output Sync settings.",
-            );
-          }
-          const body = await readJsonObject(request);
-          if (!body || typeof body.enabled !== "boolean") {
-            return errorJson(
-              "invalid_argument",
-              "enabled must be boolean",
-              400,
-              request,
-            );
-          }
-          return json(
-            await operations.outputSync.setEnabled(workspaceId, body.enabled),
-          );
-        }
-        return methodNotAllowed("GET, PATCH");
-      }
-      if (segments.length === 4 && segments[3] === "snapshot") {
-        if (method !== "GET") return methodNotAllowed("GET");
-        const snapshot = await operations.outputSync.getSnapshot(workspaceId);
-        const etag = `\"takosumi-output-sync-${snapshot.revision}\"`;
-        if (request.headers.get("if-none-match") === etag) {
-          return new Response(null, { status: 304, headers: { etag } });
-        }
-        return json({ snapshot }, 200, {
-          etag,
-          "cache-control": "private, no-cache",
-        });
-      }
-      if (segments.length === 4 && segments[3] === "reconcile") {
-        if (method !== "POST") return methodNotAllowed("POST");
-        if (!canManageOutputSync) {
-          return memberForbidden(
-            "Only a Workspace owner or admin can reconcile Outputs.",
-          );
-        }
-        const result = await operations.outputSync.reconcile(workspaceId);
-        return json(
-          {
-            capability: TAKOSUMI_OUTPUT_SYNC_CAPABILITY,
-            ...result,
-          },
-          result.reconciliation ? 202 : 200,
-        );
-      }
-      return undefined;
     }
     if (leaf === "members") {
       // /api/v1/workspaces/:workspaceId/members[/:subject]. The Workspace is already
@@ -354,25 +264,10 @@ export async function handleWorkspaces(
         return methodNotAllowed("PATCH, DELETE");
       }
     }
-    if (leaf === "uploads" && segments.length === 3) {
-      if (method !== "POST") return methodNotAllowed("POST");
-      return errorJson(
-        "gone",
-        "Public upload ingest is retired. Register a Git URL Source and create a Capsule instead.",
-        410,
-        request,
-      );
+    if (leaf === "projects" && segments.length === 3) {
+      return await handleWorkspaceProjects(ctx, workspaceId, method);
     }
-    if (leaf === "artifact-snapshots" && segments.length === 3) {
-      if (method !== "POST") return methodNotAllowed("POST");
-      return errorJson(
-        "gone",
-        "Public prepared-source archive ingest is retired. Register a Git URL Source and create a Capsule instead.",
-        410,
-        request,
-      );
-    }
-    if (leaf === "installations" && segments.length === 3) {
+    if (leaf === "capsules" && segments.length === 3) {
       if (method === "GET")
         return await listWorkspaceCapsules(operations, workspaceId, url);
       if (method === "POST") {
@@ -398,15 +293,15 @@ export async function handleWorkspaces(
     }
     if (leaf === "graph" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await spaceGraph(operations, workspaceId);
+      return await workspaceGraph(operations, workspaceId);
     }
     if (leaf === "runs" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await spaceRuns(operations, workspaceId, url);
+      return await workspaceRuns(operations, workspaceId, url);
     }
     if (leaf === "activity" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await spaceActivity(operations, workspaceId, url);
+      return await workspaceActivity(operations, workspaceId, url);
     }
     if (leaf === "backups" && segments.length === 3) {
       if (method === "GET") {
@@ -452,20 +347,9 @@ export async function handleWorkspaces(
         await operations.listWorkspaceUsage(workspaceId, page.params),
       );
     }
-    if (leaf === "credit-reservations" && segments.length === 3) {
-      if (method !== "GET") return methodNotAllowed("GET");
-      return json(
-        await operations.listWorkspaceCreditReservations(workspaceId),
-      );
-    }
-    // NOTE: `credits/top-up` and `subscription/change` are intentionally NOT
-    // on this session surface. Billing mode is operator-selected and credits
-    // enter through paid Stripe checkout (spec §32); the operator mutations
-    // live on the bearer-gated `/internal/v1` surface
-    // (core/api/deploy_control_billing_routes.ts).
     if (leaf === "plan-update" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await spacePlanUpdate(operations, workspaceId);
+      return await workspacePlanUpdate(operations, workspaceId);
     }
     if (leaf === "drift-check" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -492,9 +376,6 @@ export async function handleWorkspaces(
   return undefined;
 }
 
-/** 64 MiB cap on a single local Capsule upload archive. */
-const DEFAULT_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
-
 // --- Workspaces ----------------------------------------------------------------
 
 async function listWorkspaces(
@@ -503,7 +384,7 @@ async function listWorkspaces(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  // Scope the read to the caller's own spaces instead of loading every tenant's
+  // Scope the read to the caller's own Workspaces instead of loading every tenant's
   // Workspace and filtering per row. This reproduces `canAccessWorkspace`'s accept set
   // as a UNION of two scoped queries:
   //   (A) deploy-control Workspaces the subject directly owns (ownerUserId), and
@@ -514,70 +395,31 @@ async function listWorkspaces(
   const visible = (
     await listWorkspacesForSession(operations, store, sessionSubject)
   )
-    .filter((space) => includeArchived || !isArchivedWorkspace(space))
+    .filter((workspace) => includeArchived || !isArchivedWorkspace(workspace))
     .sort(
       (a, b) =>
         a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
     );
-  return json({ spaces: visible });
+  return json({ workspaces: visible });
 }
 
 async function listWorkspacesForSession(
   operations: ControlPlaneOperations,
-  store: AccountsStore,
+  _store: AccountsStore,
   sessionSubject: string,
 ): Promise<readonly Workspace[]> {
-  const byId = new Map<string, Workspace>();
-  for (const space of await operations.spaces.listWorkspacesByOwner(
-    sessionSubject,
-  )) {
-    byId.set(space.id, space);
-  }
-  const ledgerWorkspaces = await store.listWorkspacesForOwner(
-    sessionSubject as TakosumiSubject,
-  );
-  const missingIds = uniqueMissingWorkspaceIds(
-    ledgerWorkspaces.map((workspace) => workspace.workspaceId),
-    byId,
-  );
-  if (missingIds.length > 0 && operations.spaces.listWorkspacesByIds) {
-    for (const space of await operations.spaces.listWorkspacesByIds(
-      missingIds,
-    )) {
-      byId.set(space.id, space);
-    }
-  }
-  for (const workspaceId of missingIds) {
-    if (byId.has(workspaceId)) continue;
-    try {
-      byId.set(workspaceId, await operations.spaces.getWorkspace(workspaceId));
-    } catch {
-      // The deploy-control Workspace may not exist (or is mid-creation); skip it.
-    }
-  }
-  return [...byId.values()].sort(
+  return [
+    ...(await operations.workspaces.listWorkspacesForAccount(sessionSubject)),
+  ].sort(
     (a, b) =>
       a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
   );
 }
 
-function uniqueMissingWorkspaceIds(
-  ids: readonly string[],
-  existing: ReadonlyMap<string, Workspace>,
-): readonly string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const id of ids) {
-    if (typeof id !== "string" || id.trim().length === 0) continue;
-    if (seen.has(id) || existing.has(id)) continue;
-    seen.add(id);
-    result.push(id);
-  }
-  return result;
-}
-
-function isArchivedWorkspace(space: Workspace): boolean {
-  return typeof space.archivedAt === "string" && space.archivedAt.length > 0;
+function isArchivedWorkspace(workspace: Workspace): boolean {
+  return (
+    typeof workspace.archivedAt === "string" && workspace.archivedAt.length > 0
+  );
 }
 
 function parseBooleanQuery(url: URL, name: string): boolean | undefined {
@@ -597,21 +439,19 @@ async function createWorkspace(
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const handle = stringValue(body.handle);
   const displayName = stringValue(body.displayName) ?? handle;
-  const type = spaceTypeValue(body.type) ?? "personal";
+  const type = workspaceTypeValue(body.type) ?? "personal";
   if (!handle) {
     return errorJson("invalid_request", "handle is required", 400);
   }
-  // ownerUserId is the session account id (the authenticated subject); the
-  // dashboard never supplies it. The membership ledger seeds no row here; the
-  // member handlers grant the namespace owner an implicit active-owner row (see
-  // `effectiveMembers`) so they can bootstrap the first membership.
-  const space = await operations.spaces.createWorkspace({
+  // ownerUserId is the authenticated account id; canonical Workspace creation
+  // persists the corresponding owner membership in the same authority.
+  const workspace = await operations.workspaces.createWorkspace({
     handle,
     displayName: displayName ?? handle,
     type,
     ownerUserId: sessionSubject,
   });
-  return jsonStatus({ space }, 201);
+  return jsonStatus({ workspace }, 201);
 }
 
 async function updateWorkspace(
@@ -639,6 +479,17 @@ async function updateWorkspace(
     if (!isPlainJsonObject(body.policy)) {
       return errorJson("invalid_argument", "policy must be an object", 400);
     }
+    if (body.policy.scopeBoundary !== undefined) {
+      try {
+        parseScopeBoundaryPolicy(body.policy.scopeBoundary);
+      } catch (error) {
+        return errorJson(
+          "invalid_argument",
+          error instanceof Error ? error.message : "scopeBoundary is invalid",
+          400,
+        );
+      }
+    }
     patch.policy = body.policy as PolicyConfig;
   }
   if (body.archived !== undefined) {
@@ -659,12 +510,12 @@ async function updateWorkspace(
     );
   }
   if (patch.archived === true) {
-    const [target, spaces] = await Promise.all([
-      operations.spaces.getWorkspace(workspaceId),
+    const [target, workspaces] = await Promise.all([
+      operations.workspaces.getWorkspace(workspaceId),
       listWorkspacesForSession(operations, store, sessionSubject),
     ]);
-    const activeWorkspaces = spaces.filter(
-      (space) => !isArchivedWorkspace(space),
+    const activeWorkspaces = workspaces.filter(
+      (workspace) => !isArchivedWorkspace(workspace),
     );
     if (!isArchivedWorkspace(target) && activeWorkspaces.length <= 1) {
       return errorJson(
@@ -674,13 +525,15 @@ async function updateWorkspace(
       );
     }
   }
-  const space = await operations.spaces.updateWorkspace(workspaceId, patch);
+  const workspace = await operations.workspaces.updateWorkspace(
+    workspaceId,
+    patch,
+  );
   await operations.activity.record?.({
     workspaceId,
-    spaceId: workspaceId,
     actorId: sessionSubject,
-    action: "space.updated",
-    targetType: "space",
+    action: "workspace.updated",
+    targetType: "workspace",
     targetId: workspaceId,
     metadata: {
       fields: Object.keys(patch).sort(),
@@ -690,7 +543,7 @@ async function updateWorkspace(
       ...(patch.archived !== undefined ? { archived: patch.archived } : {}),
     },
   });
-  return json({ space });
+  return json({ workspace });
 }
 
 // --- Members (Workspace membership / roles) ------------------------------------
@@ -708,7 +561,7 @@ async function updateWorkspace(
 //                  or demoted (last-owner guard) so a Workspace is never left
 //                  unmanaged.
 //
-// The spaces domain seeds NO membership row when a Workspace is created, so the
+// The Workspaces domain seeds no membership row when a Workspace is created, so the
 // roster starts empty. To keep the mutation gate aligned with the namespace
 // gate (which already trusts `Workspace.ownerUserId`) and to let the namespace owner
 // bootstrap the first membership, every handler reads the roster via
@@ -726,43 +579,11 @@ const MEMBER_ROLES: readonly ControlWorkspaceRole[] = [
   "viewer",
 ];
 
-type OutputSyncWorkspaceAccessResult =
-  | { readonly ok: true; readonly canManage: boolean }
-  | { readonly ok: false; readonly response: Response };
-
-async function requireOutputSyncWorkspaceAccess(input: {
-  readonly operations: ControlPlaneOperations;
-  readonly store: AccountsStore;
-  readonly workspaceId: string;
-  readonly subject: string;
-}): Promise<OutputSyncWorkspaceAccessResult> {
-  const namespaceAccess = await requireWorkspaceAccess(input);
-  if (namespaceAccess.ok) return { ok: true, canManage: true };
-  if (!input.operations.members) return namespaceAccess;
-
-  const member = (await input.operations.members.listMembers(input.workspaceId))
-    .find((candidate) => candidate.accountId === input.subject);
-  if (!member || member.status !== "active") return namespaceAccess;
-  return {
-    ok: true,
-    canManage:
-      member.roles.includes("owner") || member.roles.includes("admin"),
-  };
-}
-
 function controlRoleValue(value: unknown): ControlWorkspaceRole | undefined {
   return typeof value === "string" &&
     (MEMBER_ROLES as readonly string[]).includes(value)
     ? (value as ControlWorkspaceRole)
     : undefined;
-}
-
-function membersUnavailable(): Response {
-  return errorJson(
-    "feature_unavailable",
-    "Workspace membership management is not available.",
-    503,
-  );
 }
 
 function memberForbidden(description: string): Response {
@@ -782,71 +603,12 @@ function findCaller(
   return members.find((member) => member.accountId === subject);
 }
 
-/**
- * The membership ledger does not seed a row when a Workspace is created (the spaces
- * domain records only `Workspace.ownerUserId`), so a brand-new Workspace starts with an
- * EMPTY roster. To let the namespace owner bootstrap the first membership and to
- * keep the mutation gate aligned with the namespace gate (`canAccessWorkspace`,
- * which already trusts `Workspace.ownerUserId`), synthesize an implicit ACTIVE owner
- * row for the namespace owner whenever the ledger has no active row for them.
- *
- * This is read-only: it does not write to the ledger. The first real
- * `upsertMember` the owner performs persists a concrete row; once any active
- * owner row exists for the namespace owner, the synthetic row is not added.
- */
-function withImplicitNamespaceOwner(
-  members: readonly PublicWorkspaceMember[],
-  workspaceId: string,
-  ownerUserId: string,
-): readonly PublicWorkspaceMember[] {
-  const existing = members.find((member) => member.accountId === ownerUserId);
-  // Only synthesize when the namespace owner has NO active row. A suspended /
-  // invited row for the owner is left as-is (the owner explicitly changed it),
-  // and an existing active row already grants them management.
-  if (existing && existing.status === "active") return members;
-  if (existing) {
-    // Replace a non-active owner row with the implicit active-owner view so the
-    // namespace owner is never locked out of their own Workspace.
-    return members.map((member) =>
-      member.accountId === ownerUserId
-        ? implicitOwner(workspaceId, ownerUserId)
-        : member,
-    );
-  }
-  return [implicitOwner(workspaceId, ownerUserId), ...members];
-}
-
-/** The synthetic active-owner projection for a namespace owner with no row. */
-function implicitOwner(
-  workspaceId: string,
-  ownerUserId: string,
-): PublicWorkspaceMember {
-  const now = new Date(0).toISOString();
-  return {
-    id: `implicit-owner:${ownerUserId}`,
-    workspaceId,
-    accountId: ownerUserId,
-    roles: ["owner"],
-    status: "active",
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-/**
- * Resolves the Workspace's namespace owner (`Workspace.ownerUserId`) server-side and
- * returns the effective member roster (ledger rows + the implicit namespace
- * owner). The Workspace is already namespace-gated by `requireWorkspaceAccess` in
- * dispatch; we re-read it here only to learn the owner subject, never from the
- * client body.
- */
+/** Returns the canonical membership roster for this Workspace. */
 async function effectiveMembers(
   operations: ControlPlaneOperations,
   workspaceId: string,
 ): Promise<readonly PublicWorkspaceMember[]> {
-  const members = await operations.members!.listMembers(workspaceId);
-  const space = await operations.spaces.getWorkspace(workspaceId);
-  return withImplicitNamespaceOwner(members, workspaceId, space.ownerUserId);
+  return await operations.members.listMembers(workspaceId);
 }
 
 async function listWorkspaceMembers(
@@ -854,7 +616,6 @@ async function listWorkspaceMembers(
   workspaceId: string,
   subject: string,
 ): Promise<Response> {
-  if (!operations.members) return membersUnavailable();
   const members = await effectiveMembers(operations, workspaceId);
   // List is member-visible: the caller must be an active member of THIS Workspace.
   // The namespace gate (requireWorkspaceAccess) already passed, but membership is a
@@ -875,7 +636,6 @@ async function addWorkspaceMember(
   workspaceId: string,
   subject: string,
 ): Promise<Response> {
-  if (!operations.members) return membersUnavailable();
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const email = stringValue(body.email);
@@ -963,7 +723,6 @@ async function changeWorkspaceMemberRole(
   subject: string,
   targetSubject: string,
 ): Promise<Response> {
-  if (!operations.members) return membersUnavailable();
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const roles = parseRolesField(body.roles ?? body.role);
@@ -1012,7 +771,6 @@ async function removeWorkspaceMember(
   subject: string,
   targetSubject: string,
 ): Promise<Response> {
-  if (!operations.members) return membersUnavailable();
   const members = await effectiveMembers(operations, workspaceId);
   const caller = findCaller(members, subject);
   // Remove is owner-only.
@@ -1108,7 +866,7 @@ async function listWorkspaceCapsules(
   if (!page.ok) return page.response;
   const includeDestroyed = parseIncludeDestroyed(url);
   if (!includeDestroyed.ok) return includeDestroyed.response;
-  const { items, nextCursor } = await operations.installations.listCapsulesPage(
+  const { items, nextCursor } = await operations.capsules.listCapsulesPage(
     workspaceId,
     {
       ...page.params,
@@ -1130,16 +888,16 @@ async function listWorkspaceCurrentStateVersions(
   if (!page.ok) return page.response;
   const includeDestroyed = parseIncludeDestroyed(url);
   if (!includeDestroyed.ok) return includeDestroyed.response;
-  const { items, nextCursor } = await operations.installations.listCapsulesPage(
+  const { items, nextCursor } = await operations.capsules.listCapsulesPage(
     workspaceId,
     {
       ...page.params,
       includeDestroyed: includeDestroyed.includeDestroyed,
     },
   );
-  const deployments = operations.listDeploymentsByIds
+  const stateVersions = operations.listStateVersionsByIds
     ? await listCurrentStateVersionsFromIdsRead(operations, workspaceId, items)
-    : operations.listDeploymentsBySpace
+    : operations.listStateVersionsByWorkspace
       ? await listCurrentStateVersionsFromWorkspaceRead(
           operations,
           workspaceId,
@@ -1151,7 +909,7 @@ async function listWorkspaceCurrentStateVersions(
           items,
         );
   return json({
-    deployments,
+    stateVersions,
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   });
 }
@@ -1160,30 +918,30 @@ async function listCurrentStateVersionsFromWorkspaceRead(
   operations: ControlPlaneOperations,
   workspaceId: string,
   capsules: readonly Capsule[],
-): Promise<readonly PublicDeployment[]> {
+): Promise<readonly PublicStateVersion[]> {
   const currentIds = new Set(currentStateVersionIds(capsules));
   if (currentIds.size === 0) return [];
-  const byId = publicDeploymentMap(
-    (await operations.listDeploymentsBySpace!(workspaceId)).filter(
-      (deployment) => currentIds.has(deployment.id),
+  const byId = publicStateVersionMap(
+    (await operations.listStateVersionsByWorkspace!(workspaceId)).filter(
+      (stateVersion) => currentIds.has(stateVersion.id),
     ),
     workspaceId,
   );
-  return currentDeploymentsInCapsuleOrder(capsules, byId);
+  return currentStateVersionsInCapsuleOrder(capsules, byId);
 }
 
 async function listCurrentStateVersionsFromIdsRead(
   operations: ControlPlaneOperations,
   workspaceId: string,
   capsules: readonly Capsule[],
-): Promise<readonly PublicDeployment[]> {
+): Promise<readonly PublicStateVersion[]> {
   const currentIds = currentStateVersionIds(capsules);
   if (currentIds.length === 0) return [];
-  const byId = publicDeploymentMap(
-    await operations.listDeploymentsByIds!(currentIds),
+  const byId = publicStateVersionMap(
+    await operations.listStateVersionsByIds!(currentIds),
     workspaceId,
   );
-  return currentDeploymentsInCapsuleOrder(capsules, byId);
+  return currentStateVersionsInCapsuleOrder(capsules, byId);
 }
 
 function currentStateVersionIds(
@@ -1195,59 +953,55 @@ function currentStateVersionIds(
 }
 
 function capsuleCurrentStateVersionId(capsule: Capsule): string | undefined {
-  return capsule.currentStateVersionId ?? capsule.currentDeploymentId;
+  return capsule.currentStateVersionId ?? capsule.currentStateVersionId;
 }
 
-function publicDeploymentMap(
-  deployments: readonly Deployment[],
+function publicStateVersionMap(
+  stateVersions: readonly StateVersion[],
   workspaceId: string,
-): ReadonlyMap<string, PublicDeployment> {
+): ReadonlyMap<string, PublicStateVersion> {
   return new Map(
-    deployments
-      .filter((deployment) => deploymentWorkspaceId(deployment) === workspaceId)
-      .map((deployment) => [deployment.id, publicDeployment(deployment)]),
+    stateVersions
+      .filter((stateVersion) => stateVersion.workspaceId === workspaceId)
+      .map((stateVersion) => [
+        stateVersion.id,
+        publicStateVersion(stateVersion),
+      ]),
   );
 }
 
-function currentDeploymentsInCapsuleOrder(
+function currentStateVersionsInCapsuleOrder(
   capsules: readonly Capsule[],
-  deploymentsById: ReadonlyMap<string, PublicDeployment>,
-): readonly PublicDeployment[] {
+  stateVersionsById: ReadonlyMap<string, PublicStateVersion>,
+): readonly PublicStateVersion[] {
   return capsules
     .map((capsule) => {
       const id = capsuleCurrentStateVersionId(capsule);
-      return id ? deploymentsById.get(id) : undefined;
+      return id ? stateVersionsById.get(id) : undefined;
     })
-    .filter((row): row is PublicDeployment => row !== undefined);
+    .filter((row): row is PublicStateVersion => row !== undefined);
 }
 
 async function listCurrentStateVersionsFromSingleReads(
   operations: ControlPlaneOperations,
   workspaceId: string,
   capsules: readonly Capsule[],
-): Promise<readonly PublicDeployment[]> {
-  const deployments = await Promise.all(
+): Promise<readonly PublicStateVersion[]> {
+  const stateVersions = await Promise.all(
     capsules.map(async (capsule) => {
       const currentId = capsuleCurrentStateVersionId(capsule);
       if (!currentId) return undefined;
       try {
-        const deployment = await operations.getDeployment(currentId);
-        if (deploymentWorkspaceId(deployment) !== workspaceId) return undefined;
-        return publicDeployment(deployment);
+        const { stateVersion } = await operations.getStateVersion(currentId);
+        if (stateVersion.workspaceId !== workspaceId) return undefined;
+        return publicStateVersion(stateVersion);
       } catch {
         return undefined;
       }
     }),
   );
-  return deployments.filter(
-    (row): row is PublicDeployment => row !== undefined,
-  );
-}
-
-function deploymentWorkspaceId(deployment: Deployment): string | undefined {
-  return (
-    deployment.spaceId ??
-    (deployment as { readonly workspaceId?: string }).workspaceId
+  return stateVersions.filter(
+    (row): row is PublicStateVersion => row !== undefined,
   );
 }
 
@@ -1263,12 +1017,21 @@ async function createCapsule(
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const name = stringValue(body.name);
+  const projectId = stringValue(body.projectId);
   const environment = stringValue(body.environment);
   const sourceId = stringValue(body.sourceId);
   const installConfigId = stringValue(body.installConfigId);
   const runnerProfileId =
     stringValue(body.runnerId) ?? stringValue(body.runnerProfileId);
   const outputAllowlist = outputAllowlistValue(body.outputAllowlist);
+  const interfaceBlueprintsResult =
+    body.interfaceBlueprints === undefined
+      ? undefined
+      : parseInterfaceBlueprintsValue(body.interfaceBlueprints);
+  const interfaceBlueprints =
+    interfaceBlueprintsResult?.ok === true
+      ? interfaceBlueprintsResult.value
+      : undefined;
   const storeMetadata = installConfigStoreValue(body.store);
   const modulePath = modulePathValue(body.modulePath);
   const sourceBuild = sourceBuildValue(body.sourceBuild);
@@ -1295,6 +1058,12 @@ async function createCapsule(
       "outputAllowlist must be an object of { from, type, required? } entries",
       400,
     );
+  }
+  if (
+    interfaceBlueprintsResult !== undefined &&
+    !interfaceBlueprintsResult.ok
+  ) {
+    return errorJson("invalid_request", interfaceBlueprintsResult.message, 400);
   }
   if (
     body.managedPublicHostname !== undefined &&
@@ -1355,7 +1124,7 @@ async function createCapsule(
   let resolvedInstallConfigId = installConfigId;
   let resolvedInstallConfig: InstallConfig | undefined;
   const baseConfig =
-    await operations.installations.getInstallConfig(installConfigId);
+    await operations.capsules.getInstallConfig(installConfigId);
   if (
     baseConfig.workspaceId !== undefined &&
     baseConfig.workspaceId !== workspaceId
@@ -1375,44 +1144,46 @@ async function createCapsule(
     source,
     sourceSnapshot: repoMetadataSnapshot,
     storeMetadata,
-    outputAllowlist,
     modulePath,
   });
-  if (hydratedRepoConfig.metadataUnavailable) {
-    return errorJson(
-      "repo_metadata_unavailable",
-      "Repository install metadata could not be loaded. Retry after the Git Source has synced.",
-      409,
-    );
-  }
   const resolvedStoreMetadata = hydratedRepoConfig.storeMetadata;
-  const resolvedOutputAllowlist = hydratedRepoConfig.outputAllowlist;
   const resolvedModulePath = hydratedRepoConfig.modulePath;
-  const storeDefaultVars = storeDefaultVariableMapping(
-    resolvedStoreMetadata ?? baseConfig.store,
-    {
-      capsuleName: name,
-      workspaceId,
-    },
+  const presentationDefaultVars = variablePresentationDefaultMapping(
+    baseConfig.variablePresentation,
+    { capsuleName: name, workspaceId },
   );
-  const hasStoreDefaultVars = Object.keys(storeDefaultVars).length > 0;
+  const hasPresentationDefaultVars =
+    Object.keys(presentationDefaultVars).length > 0;
   const hasVars = vars !== undefined && Object.keys(vars).length > 0;
+  const selectedInterfaceBlueprints =
+    interfaceBlueprints ?? baseConfig.interfaceBlueprints;
+  const needsInstallingPrincipalScope =
+    capsuleInterfaceBlueprintsNeedInstallingPrincipal(
+      selectedInterfaceBlueprints,
+    );
+  const resolvedInterfaceBlueprints =
+    resolveCapsuleInterfaceBlueprintInstallingPrincipal(
+      selectedInterfaceBlueprints,
+      sessionSubject,
+    );
   if (
     hasVars ||
-    hasStoreDefaultVars ||
+    hasPresentationDefaultVars ||
     runnerProfileId ||
-    resolvedOutputAllowlist !== undefined ||
+    outputAllowlist !== undefined ||
     resolvedStoreMetadata !== undefined ||
     resolvedModulePath !== undefined ||
     sourceBuild !== undefined ||
-    managedPublicHostname !== undefined
+    managedPublicHostname !== undefined ||
+    interfaceBlueprints !== undefined ||
+    needsInstallingPrincipalScope
   ) {
     const now = new Date().toISOString();
     const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
       baseConfig;
     const configBase =
       resolvedModulePath === "" ? baseConfigWithoutModulePath : baseConfig;
-    const config = await operations.installations.putInstallConfig({
+    const config = await operations.capsules.putInstallConfig({
       ...configBase,
       id: `icfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
       workspaceId,
@@ -1420,7 +1191,7 @@ async function createCapsule(
       internal: { reason: "per_install_overrides" },
       variableMapping: mergeVariableMappings(
         baseConfig.variableMapping,
-        storeDefaultVars,
+        presentationDefaultVars,
         vars ?? {},
       ),
       ...(resolvedStoreMetadata ? { store: resolvedStoreMetadata } : {}),
@@ -1428,16 +1199,20 @@ async function createCapsule(
       ...(resolvedModulePath ? { modulePath: resolvedModulePath } : {}),
       ...(sourceBuild ? { sourceBuild } : {}),
       ...(managedPublicHostname ? { managedPublicHostname } : {}),
+      ...(resolvedInterfaceBlueprints
+        ? { interfaceBlueprints: resolvedInterfaceBlueprints }
+        : {}),
       outputAllowlist:
-        resolvedOutputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
+        outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
       createdAt: now,
       updatedAt: now,
     });
     resolvedInstallConfigId = config.id;
     resolvedInstallConfig = config;
   }
-  const installation = await operations.installations.createCapsule({
+  const capsule = await operations.capsules.createCapsule({
     workspaceId,
+    ...(projectId ? { projectId } : {}),
     name,
     environment,
     sourceId,
@@ -1450,7 +1225,7 @@ async function createCapsule(
         operations,
         store,
         issuer,
-        capsule: installation,
+        capsule,
         installConfig: resolvedInstallConfig,
         ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
       });
@@ -1459,8 +1234,8 @@ async function createCapsule(
       // client provisioning fails — the caller sees the error, and without
       // this the workspace keeps a ghost capsule that was never installable.
       try {
-        await operations.installations.abandonUnappliedCapsule?.(
-          installation.id,
+        await operations.capsules.abandonUnappliedCapsule?.(
+          capsule.id,
           "takosumi accounts oidc provisioning failed during create",
         );
       } catch {
@@ -1469,7 +1244,7 @@ async function createCapsule(
       throw error;
     }
   }
-  return jsonStatus({ capsule: publicCapsule(installation) }, 201);
+  return jsonStatus({ capsule: publicCapsule(capsule) }, 201);
 }
 
 function managedPublicHostnameValue(
@@ -1482,25 +1257,31 @@ function managedPublicHostnameValue(
     : undefined;
 }
 
-function storeDefaultVariableMapping(
-  store: InstallConfig["store"] | undefined,
+function variablePresentationDefaultMapping(
+  presentation: InstallConfig["variablePresentation"] | undefined,
   options: {
     readonly capsuleName: string;
     readonly workspaceId: string;
   },
 ): Readonly<Record<string, JsonValue>> {
-  if (!store) return {};
+  if (!presentation) return {};
   let out: Record<string, JsonValue> = {};
-  for (const input of store.inputs) {
+  for (const input of presentation) {
     if (input.secret === true) continue;
-    const raw = input.defaultValue?.trim();
-    if (!raw) continue;
-    const value = storeDefaultInputValue(input, raw, store, options);
+    if (!input.defaultValue) continue;
+    const value = variablePresentationDefaultValue(
+      input,
+      input.defaultValue,
+      options,
+    );
     if (value === undefined) continue;
     try {
       out = mergeVariableMappings(
         out,
-        normalizeVariablePathRecord({ [input.name]: value }, "store.inputs"),
+        normalizeVariablePathRecord(
+          { [input.name]: value },
+          "variablePresentation",
+        ),
       ) as Record<string, JsonValue>;
     } catch {
       continue;
@@ -1509,54 +1290,41 @@ function storeDefaultVariableMapping(
   return out;
 }
 
-function storeDefaultInputValue(
-  input: InstallConfigStoreInput,
-  raw: string,
-  store: NonNullable<InstallConfig["store"]>,
+function variablePresentationDefaultValue(
+  input: InstallConfigVariablePresentation,
+  defaultValue: InstallConfigVariableDefault,
   options: {
     readonly capsuleName: string;
     readonly workspaceId: string;
   },
 ): JsonValue | undefined {
-  const value = symbolicStoreDefaultValue(raw, store, options);
-  if (input.type === "boolean") {
-    const normalized = value.toLowerCase();
-    if (["true", "1", "yes", "on"].includes(normalized)) return true;
-    if (["false", "0", "no", "off"].includes(normalized)) return false;
-    return undefined;
-  }
-  if (input.type === "number") {
-    const numberValue = Number(value);
-    return Number.isFinite(numberValue) ? numberValue : undefined;
-  }
-  if (input.type === "json") {
-    try {
-      const parsed = JSON.parse(value) as unknown;
-      return isJsonValue(parsed) ? parsed : undefined;
-    } catch {
-      return undefined;
+  let value: JsonValue;
+  switch (defaultValue.source) {
+    case "literal":
+      value = defaultValue.value;
+      break;
+    case "capsule_name":
+      value = storeSlug(options.capsuleName);
+      break;
+    case "workspace_scoped_capsule_name": {
+      const base = storeSlug(options.capsuleName);
+      const suffix = workspaceSlugSuffix(options.workspaceId);
+      value = suffix ? `${base}-${suffix}` : base;
+      break;
     }
   }
-  return value;
-}
-
-function symbolicStoreDefaultValue(
-  value: string,
-  store: NonNullable<InstallConfig["store"]>,
-  options: {
-    readonly capsuleName: string;
-    readonly workspaceId: string;
-  },
-): string {
-  if (value === "service-name") {
-    return storeSlug(options.capsuleName || store.suggestedName);
+  switch (input.type ?? "string") {
+    case "string":
+      return typeof value === "string" ? value : undefined;
+    case "number":
+      return typeof value === "number" && Number.isFinite(value)
+        ? value
+        : undefined;
+    case "boolean":
+      return typeof value === "boolean" ? value : undefined;
+    case "json":
+      return value;
   }
-  if (value === "service-name-with-space") {
-    const base = storeSlug(options.capsuleName || store.suggestedName);
-    const suffix = workspaceSlugSuffix(options.workspaceId);
-    return suffix ? `${base}-${suffix}` : base;
-  }
-  return value;
 }
 
 function storeSlug(value: string): string {
@@ -1572,7 +1340,7 @@ function storeSlug(value: string): string {
 
 function workspaceSlugSuffix(value: string): string {
   return value
-    .replace(/^(workspace|space)_/u, "")
+    .replace(/^workspace_/u, "")
     .replace(/[^a-z0-9-]+/giu, "-")
     .replace(/^-+|-+$/gu, "")
     .slice(0, 6)
@@ -1607,9 +1375,7 @@ function scopedCloneOutputAllowlist(
   if (Object.keys(baseConfig.outputAllowlist).length > 0) {
     return baseConfig.outputAllowlist;
   }
-  return baseConfig.sourceKind === "generic_capsule"
-    ? defaultCapsuleOutputAllowlist()
-    : baseConfig.outputAllowlist;
+  return defaultCapsuleOutputAllowlist();
 }
 
 function normalizedVarsValue(
@@ -1664,19 +1430,19 @@ async function createRestoreRun(
 
 // --- Graph -----------------------------------------------------------------
 
-async function spaceGraph(
+async function workspaceGraph(
   operations: ControlPlaneOperations,
   workspaceId: string,
 ): Promise<Response> {
-  const [installations, edges] = await Promise.all([
-    operations.installations.listCapsules(workspaceId),
+  const [capsules, edges] = await Promise.all([
+    operations.capsules.listCapsules(workspaceId),
     operations.listDependenciesByWorkspace(workspaceId),
   ]);
-  const nodes = installations.map((installation) => ({
-    capsuleId: installation.id,
-    name: installation.name,
-    environment: installation.environment,
-    status: installation.status,
+  const nodes = capsules.map((capsule) => ({
+    capsuleId: capsule.id,
+    name: capsule.name,
+    environment: capsule.environment,
+    status: capsule.status,
   }));
   const graphEdges = edges.map((edge) => ({
     id: edge.id,
@@ -1689,7 +1455,7 @@ async function spaceGraph(
 
 // --- Activity --------------------------------------------------------------
 
-async function spaceRuns(
+async function workspaceRuns(
   operations: ControlPlaneOperations,
   workspaceId: string,
   url: URL,
@@ -1708,7 +1474,7 @@ async function spaceRuns(
   } satisfies ListRunsResponse);
 }
 
-async function spaceActivity(
+async function workspaceActivity(
   operations: ControlPlaneOperations,
   workspaceId: string,
   url: URL,
@@ -1725,78 +1491,7 @@ async function spaceActivity(
   return json({ events });
 }
 
-async function uploadWorkspaceArchive(
-  request: Request,
-  url: URL,
-  operations: ControlPlaneOperations,
-  workspaceId: string,
-): Promise<Response> {
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength === 0) {
-    return errorJson("invalid_argument", "upload body is empty", 400, request);
-  }
-  if (bytes.byteLength > DEFAULT_UPLOAD_MAX_BYTES) {
-    return errorJson(
-      "resource_exhausted",
-      "upload archive too large",
-      413,
-      request,
-    );
-  }
-  const path = stringValue(url.searchParams.get("path") ?? undefined);
-  const snapshot = await operations.recordUploadArchive({
-    workspaceId,
-    bytes,
-    ...(path ? { path } : {}),
-  });
-  return jsonStatus({ snapshot }, 201);
-}
-
-async function createWorkspacePreparedSourceSnapshot(
-  request: Request,
-  operations: ControlPlaneOperations,
-  workspaceId: string,
-): Promise<Response> {
-  const body = await readJsonObject(request);
-  if (!body) {
-    return errorJson("invalid_argument", "invalid request", 400, request);
-  }
-  const sourceArchiveUrl = stringValue(body.url);
-  const digest = stringValue(body.digest);
-  const format = stringValue(body.format);
-  if (!sourceArchiveUrl || !digest) {
-    return errorJson(
-      "invalid_argument",
-      "url and digest are required",
-      400,
-      request,
-    );
-  }
-  if (format !== undefined && format !== "tar.zst") {
-    return errorJson(
-      "invalid_argument",
-      "format must be tar.zst",
-      400,
-      request,
-    );
-  }
-  const path = stringValue(body.path);
-  const sourceArchiveRequest: ArtifactSnapshotRequest = {
-    url: sourceArchiveUrl,
-    digest,
-    ...(format ? { format } : {}),
-    ...(path ? { path } : {}),
-  };
-  const snapshot = await operations.recordArtifactSnapshot({
-    workspaceId,
-    url: sourceArchiveRequest.url,
-    digest: sourceArchiveRequest.digest,
-    ...(sourceArchiveRequest.path ? { path: sourceArchiveRequest.path } : {}),
-  });
-  return jsonStatus({ snapshot }, 201);
-}
-
-async function spacePlanUpdate(
+async function workspacePlanUpdate(
   operations: ControlPlaneOperations,
   workspaceId: string,
 ): Promise<Response> {

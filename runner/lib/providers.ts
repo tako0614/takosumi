@@ -13,6 +13,7 @@ import type {
   RunnerPolicyBeforeInitOptions,
   StrictProviderMirrorAttestation,
   ProviderMirrorInit,
+  PlanScopeSelector,
 } from "./types.ts";
 import {
   CAPSULE_COMPATIBILITY_MAX_FILES,
@@ -36,13 +37,7 @@ import {
   assertCredentialEnvAvailable,
 } from "./credentials.ts";
 import { parseSource, parseRequiredProviders } from "./parsing.ts";
-
-const DEFAULT_MIRRORED_PROVIDERS = [
-  "registry.opentofu.org/cloudflare/cloudflare",
-  "registry.opentofu.org/hashicorp/random",
-  "registry.opentofu.org/hashicorp/tls",
-  "registry.opentofu.org/hashicorp/http",
-] as const;
+import { canonicalProviderSource } from "../../contract/provider-env-rules.ts";
 
 const providerCacheInitLocks = new Map<string, Promise<void>>();
 
@@ -152,19 +147,7 @@ export function assertRunnerPolicyBeforeInit(
   options: RunnerPolicyBeforeInitOptions = {},
 ): void {
   if (!runnerProfile) return;
-  const source = parseSource(request);
-  if (
-    source.kind === "local" &&
-    !hasGeneratedRoot(request) &&
-    recordField(
-      recordField(runnerProfile, "sourcePolicy"),
-      "allowLocalSource",
-    ) !== true
-  ) {
-    throw new Error(
-      `runner profile ${stringField(runnerProfile, "id") ?? "<unknown>"} does not allow local source paths`,
-    );
-  }
+  parseSource(request);
   const requiredProviders =
     options.requiredProviders ?? parseRequiredProviders(request);
   const allowedProviders = stringArray(
@@ -197,13 +180,11 @@ export function assertRunnerPolicyBeforeInit(
       );
     }
   }
-  assertCredentialEnvAvailable(requiredProviders, runnerProfile, context.env);
-}
-
-function hasGeneratedRoot(request: unknown): boolean {
-  const generatedRoot = recordField(request, "generatedRoot");
-  return (
-    isRecord(generatedRoot) && isRecord(recordField(generatedRoot, "files"))
+  assertCredentialEnvAvailable(
+    requiredProviders,
+    runnerProfile,
+    context.env,
+    context.credentialManifest,
   );
 }
 
@@ -436,32 +417,20 @@ export function defaultProviderMirrorCliConfig(
   mirrorRoot: string,
   providerCache: string,
 ): string {
-  const providerLines = DEFAULT_MIRRORED_PROVIDERS.map(
-    (provider) => `      ${JSON.stringify(provider)}`,
-  ).join(",\n");
   return `plugin_cache_dir = ${JSON.stringify(providerCache)}
 
 provider_installation {
   filesystem_mirror {
     path = ${JSON.stringify(mirrorRoot)}
-    include = [
-${providerLines}
-    ]
   }
 
-  direct {
-    exclude = [
-${providerLines}
-    ]
-  }
+  direct {}
 }
 `;
 }
 
 export function canonicalProviderAddress(provider: string): string {
-  const segments = provider.split("/").filter((part) => part.length > 0);
-  if (segments.length === 2) return `registry.opentofu.org/${provider}`;
-  return provider;
+  return canonicalProviderSource(provider);
 }
 
 export function collectProviderFullNames(
@@ -568,16 +537,16 @@ function isJsonValue(value: unknown): boolean {
 
 // Trimmed per-resource change list (address/type/actions only) extracted from
 // `tofu show -json tfplan`. Used by the plan-JSON policy on the service side.
-export function resourceChangesFromPlanJson(planJson: string): Array<{
+export function resourceChangesFromPlanJson(
+  planJson: string,
+  scopeSelectors?: readonly PlanScopeSelector[],
+): Array<{
   address: string;
   type: string;
+  providerSource?: string;
   actions: string[];
-  scope?: {
-    cloudflareAccountId?: string;
-    cloudflareZoneId?: string;
-    awsAccountId?: string;
-    awsRegion?: string;
-  };
+  importing?: true;
+  scope?: { facts: Record<string, string | number | boolean> };
 }> {
   const parsed = JSON.parse(planJson) as {
     readonly resource_changes?: unknown;
@@ -585,28 +554,29 @@ export function resourceChangesFromPlanJson(planJson: string): Array<{
   const out: Array<{
     address: string;
     type: string;
+    providerSource?: string;
     actions: string[];
-    scope?: {
-      cloudflareAccountId?: string;
-      cloudflareZoneId?: string;
-      awsAccountId?: string;
-      awsRegion?: string;
-    };
+    importing?: true;
+    scope?: { facts: Record<string, string | number | boolean> };
   }> = [];
   if (!Array.isArray(parsed.resource_changes)) return out;
   for (const changeRecord of parsed.resource_changes) {
     const address = stringField(changeRecord, "address");
     const type = stringField(changeRecord, "type");
+    const providerSource = stringField(changeRecord, "provider_name");
     const change = recordField(changeRecord, "change");
     const actions = recordField(change, "actions");
+    const importing = recordField(change, "importing");
     if (!address || !type || !Array.isArray(actions)) continue;
     const resourceChange = {
       address,
       type,
+      ...(providerSource ? { providerSource } : {}),
       actions: actions.filter(
         (action): action is string => typeof action === "string",
       ),
-      ...scopeProjectionForPlanResource(type, change),
+      ...(isRecord(importing) ? { importing: true as const } : {}),
+      ...scopeProjectionForPlanResource(type, change, scopeSelectors),
     };
     out.push(resourceChange);
   }
@@ -616,40 +586,105 @@ export function resourceChangesFromPlanJson(planJson: string): Array<{
 export function scopeProjectionForPlanResource(
   type: string,
   change: unknown,
-): {
-  scope?: {
-    cloudflareAccountId?: string;
-    cloudflareZoneId?: string;
-    awsAccountId?: string;
-    awsRegion?: string;
-  };
-} {
+  selectors: readonly PlanScopeSelector[] = [],
+): { scope?: { facts: Record<string, string | number | boolean> } } {
+  const matching = selectors.filter((selector) =>
+    resourceTypeMatchesPattern(type, selector.resourceTypePattern),
+  );
+  if (matching.length === 0) return {};
+  const facts: Record<string, string | number | boolean> = {};
+  const ambiguous = new Set<string>();
+  for (const selector of matching) {
+    for (const [dimension, pointer] of Object.entries(selector.dimensions)) {
+      if (ambiguous.has(dimension)) continue;
+      const value = selectedNonSecretScalar(change, pointer);
+      if (value === undefined) continue;
+      const existing = facts[dimension];
+      if (existing !== undefined && existing !== value) {
+        delete facts[dimension];
+        ambiguous.add(dimension);
+        continue;
+      }
+      facts[dimension] = value;
+    }
+  }
+  return Object.keys(facts).length > 0 ? { scope: { facts } } : {};
+}
+
+function selectedNonSecretScalar(
+  change: unknown,
+  pointer: string,
+): string | number | boolean | undefined {
   const after = recordField(change, "after");
-  const before = recordField(change, "before");
-  const source = after ?? before;
-  if (!source) return {};
-  const scope: {
-    cloudflareAccountId?: string;
-    cloudflareZoneId?: string;
-    awsAccountId?: string;
-    awsRegion?: string;
-  } = {};
-  if (type.startsWith("cloudflare_")) {
-    const accountId =
-      stringField(source, "account_id") ?? stringField(source, "accountId");
-    const zoneId =
-      stringField(source, "zone_id") ?? stringField(source, "zoneId");
-    if (accountId) scope.cloudflareAccountId = accountId;
-    if (zoneId) scope.cloudflareZoneId = zoneId;
+  const phase = after === undefined || after === null ? "before" : "after";
+  const source = phase === "after" ? after : recordField(change, "before");
+  if (source === undefined || source === null) return undefined;
+  const selected = jsonPointerLookup(source, pointer);
+  if (!selected.found || !isScopeScalar(selected.value)) return undefined;
+  const sensitive = recordField(change, `${phase}_sensitive`);
+  const unknown = recordField(change, `${phase}_unknown`);
+  if (jsonPointerBlocked(sensitive, pointer)) return undefined;
+  if (jsonPointerBlocked(unknown, pointer)) return undefined;
+  return selected.value;
+}
+
+function jsonPointerLookup(
+  value: unknown,
+  pointer: string,
+): { readonly found: boolean; readonly value?: unknown } {
+  let current = value;
+  for (const segment of jsonPointerSegments(pointer)) {
+    if (Array.isArray(current)) {
+      if (!/^(?:0|[1-9][0-9]*)$/u.test(segment)) return { found: false };
+      const index = Number(segment);
+      if (index >= current.length) return { found: false };
+      current = current[index];
+      continue;
+    }
+    if (!isRecord(current) || !(segment in current)) return { found: false };
+    current = current[segment];
   }
-  if (type.startsWith("aws_")) {
-    const accountId =
-      stringField(source, "account_id") ??
-      stringField(source, "accountId") ??
-      stringField(source, "owner_id");
-    const region = stringField(source, "region");
-    if (accountId) scope.awsAccountId = accountId;
-    if (region) scope.awsRegion = region;
+  return { found: true, value: current };
+}
+
+function jsonPointerBlocked(mask: unknown, pointer: string): boolean {
+  let current = mask;
+  if (current === true) return true;
+  for (const segment of jsonPointerSegments(pointer)) {
+    if (Array.isArray(current)) {
+      const index = /^(?:0|[1-9][0-9]*)$/u.test(segment) ? Number(segment) : -1;
+      current = index >= 0 ? current[index] : undefined;
+    } else if (isRecord(current)) {
+      current = current[segment];
+    } else {
+      return false;
+    }
+    if (current === true) return true;
   }
-  return Object.keys(scope).length > 0 ? { scope } : {};
+  return false;
+}
+
+function jsonPointerSegments(pointer: string): readonly string[] {
+  return pointer
+    .slice(1)
+    .split("/")
+    .map((segment) => segment.replace(/~1/g, "/").replace(/~0/g, "~"));
+}
+
+function isScopeScalar(value: unknown): value is string | number | boolean {
+  return (
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+function resourceTypeMatchesPattern(type: string, pattern: string): boolean {
+  let expression = "^";
+  for (const character of pattern) {
+    if (character === "*") expression += ".*";
+    else if (character === "?") expression += ".";
+    else expression += character.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`${expression}$`, "u").test(type);
 }

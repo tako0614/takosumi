@@ -22,8 +22,8 @@ FAIL=0
 assert_internal_seam_not_edge_reachable() {
 	echo "==> [service] Verifying the /internal/v1 deploy-control seam is not edge-reachable"
 	local leaked=0
-	# The /internal/v1 seam (deploy-control ledger + runtime-agent gateway +
-	# container callbacks) is dialed in-process only; it must never answer at the
+	# The /internal/v1 seam (deploy-control ledger + Runner callbacks) is dialed
+	# in-process only; it must never answer at the
 	# public edge. The single edge-public deploy-control surface is /api/v1.
 	# An operator-bearer probe to a seam path must 404 (route not mounted at the
 	# edge), NOT 401/200 (which would mean the seam leaked to the edge).
@@ -36,7 +36,6 @@ assert_internal_seam_not_edge_reachable() {
 		"/internal/v1/runner-profiles"
 		"/internal/v1/sources"
 		"/internal/v1/connections"
-		"/internal/v1/runtime/agents/enroll"
 		"/api/spaces"
 		"/api/connections"
 	)
@@ -83,8 +82,8 @@ recommend_egress_filter() {
 ==> [recommendation] Network egress filter (host nftables)
 
 The Docker network blocks DNS queries that try to leak to public Let's Encrypt,
-but a fully isolated runbook should also nft-block egress from service/runtime-agent
-container subnet to public ACME directories. Example:
+but a fully isolated runbook should also nft-block egress from the service and
+Runner container subnets to public ACME directories. Example:
 
    sudo nft add table inet takos-deny
    sudo nft add chain inet takos-deny out '{ type filter hook output priority -10 ; }'

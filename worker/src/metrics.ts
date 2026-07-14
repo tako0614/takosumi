@@ -47,10 +47,8 @@ export function workerMetricTags(
 ): Record<string, string> {
   return {
     environment: stringEnv(env.TAKOSUMI_ENVIRONMENT) ?? "development",
-    runtime_cell_id:
-      stringEnv(env.TAKOSUMI_RUNTIME_CELL_ID) ??
-      stringEnv(env.TAKOSUMI_RUNTIME_CELL) ??
-      "platform-default",
+    runner_profile_id:
+      stringEnv(env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID) ?? "opentofu-default",
   };
 }
 

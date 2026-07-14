@@ -14,8 +14,8 @@ export interface MetricEvent {
   readonly value: number;
   readonly unit?: string;
   readonly tags?: Record<string, string>;
-  readonly spaceId?: string;
-  readonly groupId?: string;
+  readonly workspaceId?: string;
+  readonly runGroupId?: string;
   readonly actor?: ActorContext;
   readonly payload?: JsonObject;
   readonly observedAt: IsoTimestamp;
@@ -26,8 +26,8 @@ export interface MetricEvent {
 export interface MetricEventQuery {
   readonly name?: string;
   readonly kind?: MetricKind;
-  readonly spaceId?: string;
-  readonly groupId?: string;
+  readonly workspaceId?: string;
+  readonly runGroupId?: string;
   readonly since?: IsoTimestamp;
   readonly until?: IsoTimestamp;
 }
@@ -35,11 +35,7 @@ export interface MetricEventQuery {
 export type TraceSpanId = string;
 export type TraceId = string;
 export type TraceSpanKind =
-  | "internal"
-  | "server"
-  | "client"
-  | "producer"
-  | "consumer";
+  "internal" | "server" | "client" | "producer" | "consumer";
 export type TraceSpanStatus = "unset" | "ok" | "error";
 
 export interface TraceSpanEvent {
@@ -54,8 +50,8 @@ export interface TraceSpanEvent {
   readonly startTime: IsoTimestamp;
   readonly endTime: IsoTimestamp;
   readonly attributes?: Record<string, string | number | boolean>;
-  readonly spaceId?: string;
-  readonly groupId?: string;
+  readonly workspaceId?: string;
+  readonly runGroupId?: string;
   readonly requestId?: string;
   readonly correlationId?: string;
 }
@@ -66,8 +62,8 @@ export interface TraceSpanQuery {
   readonly name?: string;
   readonly kind?: TraceSpanKind;
   readonly status?: TraceSpanStatus;
-  readonly spaceId?: string;
-  readonly groupId?: string;
+  readonly workspaceId?: string;
+  readonly runGroupId?: string;
   readonly since?: IsoTimestamp;
   readonly until?: IsoTimestamp;
 }

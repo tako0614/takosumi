@@ -71,9 +71,7 @@ test("Deploy Control API v1 request and response DTO top-level shapes are frozen
     "variables",
     "requiredProviders",
   ]);
-  expect(Object.keys(fixtures.planRunResponse)).toEqual([
-    "planRun",
-  ]);
+  expect(Object.keys(fixtures.planRunResponse)).toEqual(["planRun"]);
   expect(Object.keys(fixtures.createApplyRunRequest)).toEqual([
     "planRunId",
     "expected",
@@ -81,17 +79,13 @@ test("Deploy Control API v1 request and response DTO top-level shapes are frozen
   expect(Object.keys(fixtures.applyRunResponse)).toEqual([
     "applyRun",
     "capsule",
-    "deployment",
   ]);
-  expect(Object.keys(fixtures.getCapsuleResponse)).toEqual([
-    "capsule",
+  expect(Object.keys(fixtures.getCapsuleResponse)).toEqual(["capsule"]);
+  expect(Object.keys(fixtures.listStateVersionsResponse)).toEqual([
+    "stateVersions",
   ]);
-  expect(Object.keys(fixtures.listDeploymentsResponse)).toEqual([
-    "deployments",
-  ]);
-  expect(Object.keys(fixtures.listDeploymentOutputsResponse)).toEqual([
-    "outputs",
-  ]);
+  expect(Object.keys(fixtures.outputResponse)).toEqual(["output"]);
+  expect("rawArtifactRef" in fixtures.outputResponse.output).toBe(false);
   expect(Object.keys(fixtures.errorEnvelope)).toEqual(["error"]);
   expect(Object.keys(fixtures.errorEnvelope.error)).toEqual([
     "code",
@@ -101,26 +95,32 @@ test("Deploy Control API v1 request and response DTO top-level shapes are frozen
   ]);
 });
 
-test("RunnerProfile fixture exposes Cloudflare tenant runtime and secret exposure boundaries", () => {
-  const profile = DEPLOY_CONTROL_API_CONTRACT_FIXTURES
-    .listRunnerProfilesResponse.runnerProfiles[0];
+test("RunnerProfile fixture is operator-composed and provider-neutral", () => {
+  const profile =
+    DEPLOY_CONTROL_API_CONTRACT_FIXTURES.listRunnerProfilesResponse
+      .runnerProfiles[0];
 
   expect(Object.keys(profile)).toEqual([
     "id",
     "name",
     "substrate",
+    "executorId",
+    "lifecycle",
+    "availability",
     "tofuVersion",
     "stateBackend",
     "allowedProviders",
-    "credentialRefs",
     "resourceLimits",
     "networkPolicy",
-    "cloudflareContainer",
     "secretExposurePolicy",
     "createdAt",
   ]);
-  expect(profile.substrate).toEqual("cloudflare-containers");
-  expect(profile.cloudflareWorkersForPlatforms).toBeUndefined();
+  expect(profile.substrate).toEqual("operator-managed");
+  expect(profile.executorId).toEqual("opentofu.default");
+  expect(profile.lifecycle).toEqual({ state: "active" });
+  expect(profile.availability).toEqual({ state: "available" });
+  expect(profile.allowedProviders).toEqual(["*"]);
+  expect(profile.networkPolicy).toEqual({ mode: "operator-managed" });
   expect(profile.secretExposurePolicy).toEqual({
     providerCredentials: "runner-only",
     tenantWorkerOperatorSecrets: "forbidden",

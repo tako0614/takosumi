@@ -18,13 +18,10 @@ export * from "./activity.ts";
 export * from "./backups.ts";
 export * from "./billing.ts";
 export type {
-  CapsuleProviderConnectionBinding,
-  CapsuleProviderConnectionBindings,
-  CapsuleProviderConnectionSet,
-  ListProviderConnectionsResponse,
   ProviderBinding,
   ProviderBindings,
   ProviderBindingSet,
+  ListProviderConnectionsResponse,
   ProviderConnection,
   ProviderConnectionStatus,
 } from "./connections.ts";
@@ -40,11 +37,12 @@ export type {
 } from "./provider-resolution.ts";
 export { PUBLIC_PROVIDER_RESOLUTION_STATUSES as PROVIDER_RESOLUTION_STATUSES } from "./provider-resolution.ts";
 export type {
-  Capsule,
+  PublicCapsule as Capsule,
   CapsuleStatus,
   CapsuleCompatibility,
   CapsuleCompatibilityLevel,
   CapsuleDataSourceSummary,
+  CapsuleFindingCompatibilityImpact,
   CapsuleFindingSeverity,
   CapsuleGateFinding,
   CapsuleGateResult,
@@ -57,10 +55,11 @@ export type {
   CreateSourceCompatibilityCheckRequest,
 } from "./capsules.ts";
 export type { Project, PublicProject } from "./projects.ts";
-export type { StateVersion } from "./state-versions.ts";
+export type { PublicStateVersion as StateVersion } from "./state-versions.ts";
 export type {
-  Output,
+  PublicOutput as Output,
   PublicOutput,
+  OutputResponse,
   OutputShare,
   OutputShareEntry,
   OutputShareStatus,
@@ -74,23 +73,30 @@ export type {
 } from "./deploy-control-errors.ts";
 export type {
   BackupConfig,
-  InstallConfigStoreDefault,
-  InstallConfigStoreInputFormat,
-  InstallConfigStoreInput,
+  InstallConfigLifecycleAction,
+  InstallConfigLifecycleCommandAction,
+  InstallConfigLifecycleExecutor,
+  InstallConfigLifecyclePhase,
+  InstallContextVariableMapping,
+  InstallContextVariableValue,
+  InstallConfigVariableDefault,
+  InstallConfigVariableInputFormat,
+  InstallConfigVariablePresentation,
   InstallConfigStoreKind,
   InstallConfigStoreMetadata,
   InstallConfigStoreSource,
   InstallConfigStoreSurface,
   InstallConfigStoreText,
-  InstallConfigSourceKind,
-  NormalizationConfig,
   OutputAllowlistEntry,
   OutputValueType,
   PolicyConfig,
   SourceBuildCommand,
   SourceBuildConfig,
   PublicInstallConfig as InstallConfig,
-  TrustLevel,
+} from "./install-configs.ts";
+export {
+  CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
+  CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
 } from "./install-configs.ts";
 export * from "./credential-recipes.ts";
 export type {

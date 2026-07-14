@@ -40,8 +40,16 @@ const connectionsHelperSource = readFileSync(
   ),
   "utf8",
 );
+const credentialRecipesSource = readFileSync(
+  resolve(here, "../../../../../providers/credential-recipes.generated.ts"),
+  "utf8",
+);
 const controlApiSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/lib/control-api.ts"),
+  "utf8",
+);
+const connectionContractSource = readFileSync(
+  resolve(here, "../../../../../contract/connections.ts"),
   "utf8",
 );
 const appDetailViewSource = readFileSync(
@@ -131,10 +139,10 @@ describe("/new Provider Connections return context", () => {
       connectionsTabSource.match(
         /await afterConnectionCreated\(connection\)/g,
       ) ?? [],
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     expect(
       connectionsTabSource.match(/await runTest\(connection\.id\)/g) ?? [],
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     expect(connectionsTabSource).toContain('"conn.saved.message"');
     expect(connectionsTabSource).toContain('"conn.saved.needsTest"');
     expect(connectionsTabSource).toContain('"conn.saved.testCta"');
@@ -199,6 +207,7 @@ describe("/new Provider Connections return context", () => {
     expect(runViewSource).toContain("appHandoffFromSearch");
     expect(runViewSource).toContain("appendAppHandoff");
     expect(runViewSource).toContain("createAppHandoffConnectHref");
+    expect(runViewSource).toContain("listAuthorizedUiSurfaces");
     expect(runViewSource).toContain("completedRunLaunchUrl()");
     expect(runViewSource).toContain('"run.appHandoff.open"');
     expect(en["run.appHandoff.open"]).toContain("{app}");
@@ -222,42 +231,24 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("setProviderRows(defaultedRows)");
   });
 
-  test("/new prefers Cloudflare connections that can derive workers.dev launch URLs", () => {
-    expect(newAppViewSource).toContain("const providerConnectionScore =");
-    expect(newAppViewSource).toContain("const wantsWorkersSubdomain =");
-    expect(newAppViewSource).toContain(
-      'row.resourceTypes.includes("cloudflare_workers_script_subdomain")',
-    );
-    expect(newAppViewSource).toContain(
-      'row.rootModuleVariables.includes("cloudflare")',
-    );
-    expect(newAppViewSource).toContain(
-      'row.rootModuleVariables.includes("cloudflare_workers_subdomain")',
-    );
-    expect(newAppViewSource).toContain(
-      'row.rootModuleVariables.includes("workersSubdomain")',
-    );
-    expect(newAppViewSource).toContain(
-      "connection.scopeHints?.workersSubdomain",
-    );
+  test("/new keeps ProviderConnection ordering independent of resource and variable names", () => {
     expect(newAppViewSource).toContain("const providerConnectionsForRow =");
     expect(newAppViewSource).toContain(
-      "providerConnectionScore(row, connection)",
+      "providerConnectionsForProvider(row.provider)",
     );
+    expect(newAppViewSource).not.toContain("providerConnectionScore");
+    expect(newAppViewSource).not.toContain("wantsWorkersSubdomain");
+    expect(newAppViewSource).not.toContain(
+      "cloudflare_workers_script_subdomain",
+    );
+    expect(newAppViewSource).not.toContain("cloudflare_workers_subdomain");
+    expect(newAppViewSource).not.toContain("row.resourceTypes");
+    expect(newAppViewSource).not.toContain("row.rootModuleVariables");
     expect(newAppViewSource).toContain(
       "const connectionId = defaultConnectionForRow(row)",
     );
     expect(newAppViewSource).toContain("const options = () =>");
     expect(newAppViewSource).toContain("providerConnectionsForRow(row)");
-    expect(newAppViewSource).toContain(
-      "rootModuleVariables: result.rootModuleVariables",
-    );
-    expect(controlApiSource).toContain(
-      "readonly rootModuleVariables: readonly string[]",
-    );
-    expect(controlApiSource).toContain(
-      "rootModuleVariables: body.report.rootModuleVariables ?? []",
-    );
   });
 
   test("/new uses a managed provider connection and its public namespace without hard-coded app behavior", () => {
@@ -299,7 +290,24 @@ describe("/new Provider Connections return context", () => {
       "const isUsableManagedProviderConnection = (connection: ProviderConnection)",
     );
     expect(newAppViewSource).toContain('connection.status === "pending" &&');
-    expect(newAppViewSource).toContain('connection.scope === "operator" &&');
+    expect(newAppViewSource).toContain(
+      "isPublicManagedProviderConnection(connection)",
+    );
+    expect(connectionContractSource).toContain(
+      'connection.scope === "operator" &&',
+    );
+    expect(connectionContractSource).toContain(
+      "connection.workspaceId === undefined &&",
+    );
+    expect(connectionContractSource).toContain(
+      "connection.scopeHints?.managedProvider === true &&",
+    );
+    expect(connectionContractSource).toContain(
+      "managedProviderProfile(connection.scopeHints) !== undefined",
+    );
+    expect(newAppViewSource).not.toContain(
+      "connection.scopeHints.providerConfig?.base_url",
+    );
     expect(newAppViewSource).toContain(
       "visibleProviderConnections().filter(isReadyProviderConnection)",
     );
@@ -326,42 +334,38 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("routePatternFromAppUrl");
     expect(newAppViewSource).toContain("const currentSubdomain =");
     expect(newAppViewSource).toContain("const currentAppUrl =");
-    expect(newAppViewSource).toContain('"cloudflare_route_zone_id"');
-    expect(newAppViewSource).toContain("connection.scopeHints?.zoneId");
+    expect(newAppViewSource).toContain(
+      "connection.scopeHints?.moduleInputDefaults ?? {}",
+    );
+    expect(newAppViewSource).not.toContain('"cloudflare_route_zone_id"');
+    expect(newAppViewSource).not.toContain("connection.scopeHints?.zoneId");
   });
 
-  test("/new only asks for Provider Connections when the provider has credential env rules", () => {
-    expect(newAppViewSource).toContain(
+  test("/new only asks for Provider Connections from explicit compatibility data", () => {
+    expect(newAppViewSource).not.toContain(
       'from "takosumi-contract/provider-env-rules"',
     );
     expect(newAppViewSource).toContain("const providerRequiresConnection =");
+    expect(newAppViewSource).toContain("provider.credentialRequired === true");
+    expect(newAppViewSource).toContain("sameProviderSource");
+    expect(newAppViewSource).not.toContain("sameProviderFamily");
+    expect(newAppViewSource).not.toContain("CREDENTIAL_FREE_PROVIDER_TAILS");
     expect(newAppViewSource).toContain(
-      "!isCredentialFreeUtilityProvider(provider)",
-    );
-    expect(newAppViewSource).toContain(
-      "provider.allowed && providerRequiresConnection(provider.source)",
-    );
-    expect(newAppViewSource).toContain(
-      ".filter((row) => providerRequiresConnection(row.provider))",
+      ".filter((row) => providerRequiresConnection(row))",
     );
   });
 
-  test("Cloudflare connection form requires and forwards account id as a scope hint", () => {
-    expect(connectionsTabSource).toContain("scopeHintsFromConnectionValues");
-    expect(connectionsTabSource).toContain("helperCloudflareAccountId");
-    expect(connectionsTabSource).toContain("helperCloudflareWorkersSubdomain");
-    expect(connectionsTabSource).toContain("CLOUDFLARE_ACCOUNT_ID");
-    expect(connectionsTabSource).toContain(
-      "submitValues.CLOUDFLARE_ACCOUNT_ID = cloudflareAccountId",
+  test("guided fields do not create a dashboard-owned provider settings authority", () => {
+    expect(connectionsTabSource).not.toContain(
+      "providerSettingsFromConnectionValues",
     );
-    expect(connectionsTabSource).toContain(
-      "scopeHints: scopeHintsFromConnectionValues(",
-    );
-    expect(connectionsTabSource).toContain("d.providerSource ?? d.provider");
-    expect(connectionsHelperSource).toContain(
-      'envName: "CLOUDFLARE_ACCOUNT_ID"',
-    );
-    expect(connectionsHelperSource).toContain("required: true");
+    expect(connectionsTabSource).not.toContain("helperValues");
+    expect(connectionsTabSource).not.toContain("providerId ===");
+    expect(connectionsTabSource).toContain("provider: option.providerSource");
+    expect(connectionsTabSource).toContain("option.credentialRecipe");
+    expect(connectionsHelperSource).toContain("definition.env");
+    expect(connectionsHelperSource).toContain("definition.inputHints");
+    expect(connectionsHelperSource).not.toContain("providerSettings");
   });
 
   test("compatibility adapter preserves backend resource summaries", () => {
@@ -372,7 +376,7 @@ describe("/new Provider Connections return context", () => {
   test("/new only proceeds when the compatibility report is runnable", () => {
     expect(newAppViewSource).toContain("const compatibilityRunnable = () =>");
     expect(newAppViewSource).toContain('level === "ready"');
-    expect(newAppViewSource).toContain('level === "auto_capsulized"');
+    expect(newAppViewSource).not.toContain("auto_capsulized");
     expect(newAppViewSource).toContain('"new.error.notRunnable"');
   });
 
@@ -451,10 +455,10 @@ describe("/new Provider Connections return context", () => {
       "setCreatedCapsuleId(capsuleId);",
     );
     const payloadIndex = newAppViewSource.indexOf(
-      "const providerConnectionsForRun = providerConnectionsPayload();",
+      "const providerBindingsForRun = providerBindingsPayload();",
     );
     const saveIndex = newAppViewSource.indexOf(
-      "await putCapsuleProviderConnectionSet(",
+      "await putCapsuleProviderBindingSet(",
     );
     const doneIndex = newAppViewSource.indexOf('setStepInstall("done");');
 
@@ -465,7 +469,7 @@ describe("/new Provider Connections return context", () => {
     expect(saveIndex).toBeGreaterThan(setCreatedIndex);
     expect(doneIndex).toBeGreaterThan(saveIndex);
     expect(
-      newAppViewSource.match(/await putCapsuleProviderConnectionSet\(/g) ?? [],
+      newAppViewSource.match(/await putCapsuleProviderBindingSet\(/g) ?? [],
     ).toHaveLength(1);
   });
 
@@ -504,27 +508,30 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("abortActiveFlow()");
     expect(newAppViewSource).toContain("const flowInput = {");
     expect(newAppViewSource).toContain(
-      "const providerConnectionsForRun = providerConnectionsPayload();",
+      "const providerBindingsForRun = providerBindingsPayload();",
     );
     expect(newAppViewSource).not.toContain(
-      "providerConnections: providerConnectionsPayload()",
+      "providerConnections: providerBindingsPayload()",
     );
     expect(newAppViewSource).toContain("await settleProviderConnectionRows();");
     expect(
       newAppViewSource.match(/await settleProviderConnectionRows\(\);/g) ?? [],
     ).toHaveLength(3);
     expect(newAppViewSource).toContain("throwIfStaleFlow(flow)");
-    expect(newAppViewSource).toContain("INSTALLATION_NAME_PATTERN");
+    expect(newAppViewSource).toContain("CAPSULE_NAME_PATTERN");
     expect(newAppViewSource).toContain('"new.error.nameInvalid"');
     expect(en["new.error.nameInvalid"]).toContain("lowercase");
     expect(ja["new.error.nameInvalid"]).toContain("半角英小文字");
   });
 
-  test("duplicate installation errors use typed details before message fallback", () => {
+  test("duplicate Capsule errors use typed details without message inference", () => {
     expect(controlApiSource).toContain("get isDuplicateService()");
     expect(controlApiSource).toContain("function controlErrorDetails");
     expect(controlApiSource).toContain('"duplicate_capsule"');
-    expect(controlApiSource).toContain('"duplicate_installation"');
+    expect(controlApiSource).not.toContain('"duplicate_installation"');
+    expect(controlApiSource).not.toContain(".test(this.message)");
+    expect(controlApiSource).not.toContain("this.message.includes(");
+    expect(controlApiSource).not.toContain("this.message.startsWith(");
     expect(newAppViewSource).toContain("error?.isDuplicateService");
     expect(installationsServiceSource).toContain('reason: "duplicate_capsule"');
     expect(installationsServiceSource).toContain('"capsule already exists"');
@@ -543,7 +550,10 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("compatibilityDiagnosticDisplay");
     expect(newAppViewSource).toContain("compatibilitySummaryDisplay");
     expect(newAppViewSource).toContain("provider_credentials_in_source");
-    expect(newAppViewSource).toContain("provider_block_lift_candidate");
+    expect(newAppViewSource).toContain("provider_configuration_preserved");
+    expect(newAppViewSource).toContain("backend_state_isolated");
+    expect(newAppViewSource).not.toContain("provider_block_lift_candidate");
+    expect(newAppViewSource).not.toContain("backend_override_candidate");
     expect(newAppViewSource).toContain("dependency_lock_detected");
     expect(newAppViewSource).toContain(
       '"new.compat.summary.providerCredentials"',
@@ -557,8 +567,10 @@ describe("/new Provider Connections return context", () => {
   test("/new retries transient compatibility checks after source sync races", () => {
     expect(newAppViewSource).toContain("compatibilityCheckLooksTransient");
     expect(newAppViewSource).toContain("abortableDelay(1_500");
-    expect(newAppViewSource).toContain("operation was aborted");
-    expect(newAppViewSource).toContain("compatibility_check runner");
+    expect(newAppViewSource).toContain(
+      'diagnostic.code === "capsule_compatibility_check_failed"',
+    );
+    expect(newAppViewSource).not.toContain('text.includes("source sync")');
     expect(newAppViewSource).toContain(
       "sourceId: result.sourceId ?? createdSourceId() ?? undefined",
     );
@@ -567,45 +579,33 @@ describe("/new Provider Connections return context", () => {
   test("connections tab gives form controls stable names", () => {
     expect(connectionsTabSource).toContain('name="provider"');
     expect(connectionsTabSource).toContain('name="displayName"');
-    expect(connectionsTabSource).toContain('name="helperToken"');
-    expect(connectionsTabSource).toContain('name="helperCloudflareAccountId"');
     expect(connectionsTabSource).toContain('name="genericProvider"');
     expect(connectionsTabSource).toContain("name={`field:${field().envName}`}");
     expect(connectionsTabSource).toContain("name={`genericEnvName:${index}`}");
     expect(connectionsTabSource).toContain("name={`genericEnvValue:${index}`}");
   });
 
-  test("guided provider connection submit includes the typed display name", () => {
+  test("recipe-described connection submit includes the typed display name", () => {
     expect(connectionsTabSource).toContain(
-      "const createFromHelper = createAction",
+      "const createFromRecipe = createAction",
     );
     expect(connectionsTabSource).toContain(
-      "displayName:\n        displayName().trim() || (d.providerSource ? d.label : undefined)",
+      "displayName: displayName().trim() || option.label",
     );
   });
 
-  test("provider setup helper copy goes through dashboard i18n", () => {
-    expect(connectionsHelperSource).toContain("providerCopy");
+  test("provider setup copy and URLs come from service CredentialRecipes", () => {
     expect(connectionsHelperSource).toContain(
-      '"conn.provider.cloudflare.helper.stepOpen"',
+      "providerSetupOptionsFromCredentialRecipes",
     );
-    expect(connectionsHelperSource).not.toContain(
-      "下のボタンで Cloudflare のトークン作成画面を開きます。",
-    );
-    expect(connectionsHelperSource).not.toContain("API トークン");
-    expect(connectionsHelperSource).not.toContain("アカウント ID");
+    expect(connectionsHelperSource).toContain("definition.presentation");
+    expect(connectionsHelperSource).not.toContain("cloudflare");
+    expect(connectionsHelperSource).not.toContain("hashicorp/aws");
+    expect(connectionsHelperSource).not.toContain("https://");
+    expect(connectionsTabSource).toContain("listCredentialRecipes");
   });
 
-  test("connections tab exposes common OpenTofu provider env recipes before custom env", () => {
-    for (const provider of [
-      "cloudflare",
-      "aws",
-      "gcp",
-      "hcloud",
-      "s3-compatible",
-    ]) {
-      expect(connectionsHelperSource).toContain(`provider: "${provider}"`);
-    }
+  test("reference guided fields are generated from provider recipe files", () => {
     for (const envName of [
       "CLOUDFLARE_API_TOKEN",
       "AWS_ACCESS_KEY_ID",
@@ -615,19 +615,12 @@ describe("/new Provider Connections return context", () => {
       "HCLOUD_TOKEN",
       "AWS_ENDPOINT_URL_S3",
     ]) {
-      expect(connectionsHelperSource).toContain(`envName: "${envName}"`);
+      expect(credentialRecipesSource).toContain(envName);
     }
-    expect(en["conn.provider.aws.label"]).toBe("AWS");
-    expect(ja["conn.provider.gcp.label"]).toBe("Google Cloud");
-    expect(connectionsHelperSource).toContain(
-      'providerSource: "hetznercloud/hcloud"',
-    );
-    expect(connectionsHelperSource).toContain(
-      'providerSource: "hashicorp/aws"',
-    );
-    expect(connectionsTabSource).toContain(
-      "provider: d.providerSource ?? d.provider",
-    );
+    expect(credentialRecipesSource).toContain("showInConnectionSetup");
+    expect(credentialRecipesSource).toContain("setupGuide");
+    expect(connectionsHelperSource).toContain("credentialRecipe:");
+    expect(connectionsTabSource).toContain("provider: option.providerSource");
   });
 
   test("custom ProviderConnection path asks for provider source and env variables", () => {
@@ -636,12 +629,13 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).toContain('"conn.byok.body"');
     expect(connectionsTabSource).toContain('"conn.byok.noBillingNote"');
     expect(connectionsTabSource).toContain('"conn.byok.usePreset"');
-    // Guided presets are the default surface; the raw BYOK editor sits behind
+    // Installed recipes are the default surface; the raw BYOK editor sits behind
     // the quiet advanced control.
     expect(connectionsTabSource).toContain('"conn.add.genericEnvOption"');
     expect(connectionsTabSource).toContain(
-      "PROVIDERS[0]?.provider ?? GENERIC_ENV_PROVIDER_OPTION",
+      "providerSetupOptionsFromCredentialRecipes",
     );
+    expect(connectionsTabSource).toContain("setProvider(options[0].id)");
     expect(connectionsTabSource).toContain(
       'placeholder={t("conn.genericEnv.providerPlaceholder")}',
     );
@@ -661,10 +655,10 @@ describe("/new Provider Connections return context", () => {
     );
     expect(en["conn.genericEnv.providerName"]).toBe("Provider source");
     expect(en["conn.genericEnv.providerPlaceholder"]).toBe(
-      "snowflake-labs/snowflake",
+      "examplecorp/example",
     );
     expect(en["conn.genericEnv.envName"]).toBe("Env name");
-    expect(en["conn.genericEnv.envNamePlaceholder"]).toBe("SNOWFLAKE_PASSWORD");
+    expect(en["conn.genericEnv.envNamePlaceholder"]).toBe("EXAMPLE_API_TOKEN");
     expect(en["conn.genericEnv.invalidName"]).toContain("uppercase env name");
     expect(en["conn.genericEnv.reservedName"]).toContain(
       "reserved for the runner",

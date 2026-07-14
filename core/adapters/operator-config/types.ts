@@ -1,4 +1,5 @@
-export type OperatorConfigSource = "env" | "local";
+/** Opaque adapter id that supplied an operator configuration value. */
+export type OperatorConfigSource = string;
 
 export interface OperatorConfigSecretRef {
   readonly name: string;

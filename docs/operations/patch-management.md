@@ -5,23 +5,25 @@
 > management 方針。
 
 この runbook は **Takosumi operated environment** の patch management 正本です。
-operator が production / staging で deploy するのは単一 Cloudflare Worker
-(Takosumi platform worker) です。Takos product worker や installable apps の
-patch gate はそれぞれの product docs が所有します。
+operator は単一の Takosumi origin を運用し、storage / queue / lease / runner
+の substrate adapter は明示 composition で選びます。Cloudflare Worker /
+Container は公開 reference composition であって、すべての Operator の必須
+substrate ではありません。Takos product worker や installable apps の patch
+gate はそれぞれの product docs が所有します。
 
 ## Scope
 
 | Area                                     | Owner                                                               | Patch path                                                                  |
 | ---------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Platform worker source                   | `takosumi/worker` / `takosumi/core`                                 | Takosumi service checks + platform deploy                                   |
+| Platform service source                  | `takosumi/worker` / `takosumi/core`                                 | Takosumi service checks + selected composition deploy                       |
 | Dashboard SPA                            | `takosumi/dashboard`                                                | dashboard typecheck / build                                                 |
-| Runner image                             | `takosumi/runner/Dockerfile`                                        | image rebuild + Cloudflare Container smoke                                  |
+| Reference runner image                   | `takosumi/runner/Dockerfile`                                        | image rebuild + selected executor-adapter smoke                             |
 | CredentialRecipe / provider policy packs | `takosumi/docs/internal/core-spec.md`, schema/store/policy packages | CredentialRecipe/provider allowlist tests + custom provider policy evidence |
 | Custom runner policy                     | `takosumi/runner`, operator boundary policy                         | custom runner smoke + egress policy evidence                                |
 | Provider mirror/cache policy             | runner tofu CLI config / provider mirror                            | provider install attestation tests                                          |
 | OpenTofu modules                         | `takosumi/opentofu-modules`                                         | module tests / fixture plan where available                                 |
 | Bun/npm dependencies                     | each Takosumi package root                                          | `bun outdated`, `bun update`, checks                                        |
-| Operator realized config                 | `takosumi-private/platform/wrangler.toml`                           | private repo review; no secrets committed                                   |
+| Operator realized config                 | operator-owned state outside source repositories                    | private config review; no secrets committed                                 |
 
 private deploy credentials and rotation evidence live outside public repos in
 the operator vault / approved run log. Public docs may mention secret classes
@@ -62,9 +64,9 @@ bun test
 bun run check:dashboard
 ```
 
-`bun run check` is the package-level gate: it includes the root typecheck,
-worker typecheck, and Cloudflare worker build checks. Do not replace it with a
-raw `tsc --noEmit`-only check for release or patch promotion.
+`bun run check` is the package-level gate: it includes the root typecheck and
+supported distribution builds. Do not replace it with a raw
+`tsc --noEmit`-only check for release or patch promotion.
 
 When docs or public contract changed:
 
@@ -78,8 +80,13 @@ bun run check:design-docs
 bun run check:legacy-names
 ```
 
-When runner image changed, add a Cloudflare Container smoke in staging using
-the deployed `OpenTofuRunnerObject`, not only local Docker.
+When a runner artifact changed, add a staging smoke through the selected
+`RunnerProfile.executorId` and real executor adapter, not only a local image
+start. For the Cloudflare reference adapter this means the deployed Container
+runner path; other adapters provide their own equivalent versioned hardening
+contribution. Official hosted Cloud checks are composed by
+`takosumi-cloud/modules/hardening/cloudflare-platform-hardening.json`, not by a
+fixed OSS checklist.
 
 ## Severity SLA
 
@@ -117,4 +124,4 @@ private evidence:
 - provider account id
 - secret rotation log
 - production deploy operator log
-- Cloudflare worker version id and runner image digest
+- substrate deployment version and runner image digest

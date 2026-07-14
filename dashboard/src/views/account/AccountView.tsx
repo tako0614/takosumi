@@ -139,12 +139,6 @@ function Inner(props: { readonly session: SessionRecord }) {
                       ),
                     },
                     {
-                      label: t("account.session.id"),
-                      value: (
-                        <code class="wc-code">{props.session.sessionId}</code>
-                      ),
-                    },
-                    {
                       label: t("account.profile.expires"),
                       value: formatDateTime(
                         new Date(props.session.expiresAt).toISOString(),

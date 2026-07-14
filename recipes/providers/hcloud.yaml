@@ -1,6 +1,6 @@
 id: hcloud
 display_name: Hetzner Cloud
-provider_rule: hcloud
+secret_partition: provider-credentials
 terraform_source:
   - hetznercloud/hcloud
   - registry.opentofu.org/hetznercloud/hcloud
@@ -10,6 +10,22 @@ required_env_groups:
   - [HCLOUD_TOKEN]
 auth_modes:
   token:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: API token, ja: API トークン }
+      setup_guide:
+        url: https://console.hetzner.cloud/
+        steps:
+          - en: Open the Hetzner Cloud project used by this stack.
+            ja: この Stack で使う Hetzner Cloud プロジェクトを開きます。
+          - en: Create a project API token with the required permissions.
+            ja: 必要な権限を持つプロジェクト API トークンを作成します。
+          - en: Copy the token below.
+            ja: トークンを下へ入力します。
+    input_hints:
+      HCLOUD_TOKEN:
+        label: { en: API token, ja: API トークン }
+        required: true
     env:
       HCLOUD_TOKEN:
         from: secret

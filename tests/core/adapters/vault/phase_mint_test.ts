@@ -4,31 +4,39 @@ import {
   ConnectionVaultError,
   PhaseMintBundle,
   StaticSecretConnectionVault,
+  type RegisterConnectionInput,
 } from "../../../../core/adapters/vault/mod.ts";
-import type { Connection } from "@takosumi/internal/deploy-control-api";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import { MultiCloudSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
+import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../../providers/registry.ts";
+import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 
 function makeVault(
   overrides: {
     fetch?: typeof fetch;
-    store?: InMemoryOpenTofuDeploymentStore;
+    store?: InMemoryOpenTofuControlStore;
     now?: () => Date;
     managedProviderCredentialIssuer?: ConstructorParameters<
       typeof StaticSecretConnectionVault
     >[0]["managedProviderCredentialIssuer"];
   } = {},
 ) {
-  const store = overrides.store ?? new InMemoryOpenTofuDeploymentStore();
+  const store = overrides.store ?? new InMemoryOpenTofuControlStore();
   let counter = 0;
-  const vault = new StaticSecretConnectionVault({
+  const subject = new StaticSecretConnectionVault({
     store,
-    crypto: new MultiCloudSecretBoundaryCrypto({
+    crypto: new PartitionedSecretBoundaryCrypto({
       globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
     }),
     now: overrides.now ?? (() => new Date("2026-06-04T00:00:00.000Z")),
     newId: () => `conn_test${(counter += 1).toString().padStart(12, "0")}`,
     fetch: overrides.fetch as never,
+    credentialRecipeResolver: (id) =>
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(
+        (recipe) => recipe.id === id,
+      ),
+    credentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
     ...(overrides.managedProviderCredentialIssuer
       ? {
           managedProviderCredentialIssuer:
@@ -36,15 +44,76 @@ function makeVault(
         }
       : {}),
   });
+  const vault = explicitRecipeFixtureVault(subject);
   return { store, vault };
 }
 
+function explicitRecipeFixtureVault(
+  subject: StaticSecretConnectionVault,
+): StaticSecretConnectionVault {
+  return new Proxy(subject, {
+    get(target, property) {
+      if (property === "register") {
+        return (input: RegisterConnectionInput) =>
+          target.register(withExplicitRecipe(input));
+      }
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+function withExplicitRecipe(
+  input: RegisterConnectionInput,
+): RegisterConnectionInput {
+  if (input.credentialRecipe || input.kind?.startsWith("source_git_")) {
+    return input;
+  }
+  const provider = input.provider;
+  const recipe = provider.endsWith("/cloudflare/cloudflare")
+    ? {
+        id: "cloudflare",
+        authMode: input.kind === "cloudflare_oauth" ? "oauth" : "api_token",
+      }
+    : provider.endsWith("/hashicorp/aws")
+      ? { id: "aws", authMode: "assume_role" }
+      : provider.endsWith("/hashicorp/google")
+        ? {
+            id: "google",
+            authMode:
+              input.kind === "gcp_service_account_json"
+                ? "service_account_json"
+                : "oauth",
+          }
+        : undefined;
+  return recipe
+    ? {
+        ...input,
+        credentialRecipe: {
+          ...recipe,
+          secretPartition: "provider-credentials",
+        },
+      }
+    : input;
+}
+
+function declaredEnvRecipe(): NonNullable<
+  RegisterConnectionInput["credentialRecipe"]
+> {
+  return {
+    id: "generic-env",
+    authMode: "env",
+    secretPartition: "provider-credentials",
+    declaredEnv: true,
+  };
+}
+
 async function markVerified(
-  store: InMemoryOpenTofuDeploymentStore,
-  connection: Connection,
-): Promise<Connection> {
+  store: InMemoryOpenTofuControlStore,
+  connection: ProviderConnection,
+): Promise<ProviderConnection> {
   const now = "2026-06-04T00:00:00.000Z";
-  const verified: Connection = {
+  const verified: ProviderConnection = {
     ...connection,
     status: "verified",
     verifiedAt: now,
@@ -55,14 +124,14 @@ async function markVerified(
 }
 
 async function registerProvider(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   vault: StaticSecretConnectionVault,
 ) {
   return await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
-      provider: "cloudflare",
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
     }),
@@ -70,28 +139,30 @@ async function registerProvider(
 }
 
 async function registerCloudflareTokenVending(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   vault: StaticSecretConnectionVault,
 ) {
   return await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
-      provider: "cloudflare",
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       scopeHints: {
-        cloudflareTokenVending: {
-          ttlSeconds: 900,
-          namePrefix: "takosumi-test",
-          policies: [
-            {
-              effect: "allow",
-              permission_groups: [{ id: "perm_workers_write" }],
-              resources: {
-                "com.cloudflare.api.account.acct_123": "*",
+        providerSettings: {
+          tokenVending: {
+            ttlSeconds: 900,
+            namePrefix: "takosumi-test",
+            policies: [
+              {
+                effect: "allow",
+                permission_groups: [{ id: "perm_workers_write" }],
+                resources: {
+                  "com.cloudflare.api.account.acct_123": "*",
+                },
               },
-            },
-          ],
+            ],
+          },
         },
       },
       values: { CLOUDFLARE_API_TOKEN: "cf-bootstrap-token" },
@@ -100,34 +171,38 @@ async function registerCloudflareTokenVending(
 }
 
 async function registerHttps(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   vault: StaticSecretConnectionVault,
 ) {
   return await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "source_git_https_token",
       kind: "source_git_https_token",
       authMethod: "static_secret",
-      scopeHints: { username: "git-bot" },
+      scopeHints: { providerSettings: { username: "git-bot" } },
       values: { GIT_HTTPS_TOKEN: "ghp_secret_token" },
     }),
   );
 }
 
 async function registerSsh(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   vault: StaticSecretConnectionVault,
 ) {
   return await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "source_git_ssh_key",
       kind: "source_git_ssh_key",
       authMethod: "static_secret",
-      scopeHints: { knownHostsEntry: "github.com ssh-ed25519 AAAAC3Nz..." },
+      scopeHints: {
+        providerSettings: {
+          knownHostsEntry: "github.com ssh-ed25519 AAAAC3Nz...",
+        },
+      },
       values: {
         GIT_SSH_PRIVATE_KEY: "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n",
       },
@@ -143,8 +218,10 @@ test("registers source_git_https_token with kind and single env", async () => {
   expect(conn.kind).toBe("source_git_https_token");
   expect(conn.provider).toBe("source_git_https_token");
   expect(conn.envNames).toEqual(["GIT_HTTPS_TOKEN"]);
-  expect(conn.scope).toBe("space");
-  expect(conn.scopeHints).toEqual({ username: "git-bot" });
+  expect(conn.scope).toBe("workspace");
+  expect(conn.scopeHints).toEqual({
+    providerSettings: { username: "git-bot" },
+  });
   expect(JSON.stringify(conn)).not.toContain("ghp_secret_token");
 });
 
@@ -152,7 +229,7 @@ test("source_git_ssh_key REQUIRES scopeHints.knownHostsEntry", async () => {
   const { store, vault } = makeVault();
   const err = await vault
     .register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "source_git_ssh_key",
       kind: "source_git_ssh_key",
       authMethod: "static_secret",
@@ -168,7 +245,7 @@ test("source_git_https_token rejects wrong env name", async () => {
   const { store, vault } = makeVault();
   await expect(
     vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "source_git_https_token",
       kind: "source_git_https_token",
       authMethod: "static_secret",
@@ -185,9 +262,9 @@ test("rule 1: source phase rejects provider request", async () => {
   await registerProvider(store, vault);
   await expect(
     vault.mintForPhase({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       phase: "source",
-      providers: ["cloudflare"],
+      providers: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
   ).rejects.toThrow(/source phase must not request provider/);
 });
@@ -197,7 +274,7 @@ test("rule 2a: source phase mints https git creds as env + askpass file", async 
   const { store, vault } = makeVault();
   const conn = await registerHttps(store, vault);
   const bundle = await vault.mintForPhase({
-    spaceId: "space_1",
+    workspaceId: "space_1",
     phase: "source",
     sourceConnectionId: conn.id,
   });
@@ -219,7 +296,7 @@ test("rule 2b: source phase mints ssh git credential files without command env",
   const conn = await registerSsh(store, vault);
   const response = (
     await vault.mintForPhase({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       phase: "source",
       sourceConnectionId: conn.id,
     })
@@ -237,7 +314,7 @@ test("rule 3: source phase with no connection is empty", async () => {
   const { store, vault } = makeVault();
   const response = (
     await vault.mintForPhase({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       phase: "source",
     })
   ).toMintResponse();
@@ -250,15 +327,15 @@ test("rule 4: build phase rejects any credential request", async () => {
   const { store, vault } = makeVault();
   await expect(
     vault.mintForPhase({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       phase: "build",
-      providers: ["cloudflare"],
+      providers: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
   ).rejects.toThrow(/build phase must not request/);
   const conn = await registerHttps(store, vault);
   await expect(
     vault.mintForPhase({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       phase: "build",
       sourceConnectionId: conn.id,
     }),
@@ -270,7 +347,7 @@ test("rule 5: build phase with nothing requested is empty", async () => {
   const { store, vault } = makeVault();
   const response = (
     await vault.mintForPhase({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       phase: "build",
     })
   ).toMintResponse();
@@ -284,9 +361,9 @@ for (const phase of ["plan", "apply", "destroy"] as const) {
     await registerProvider(store, vault);
     const response = (
       await vault.mintForPhase({
-        spaceId: "space_1",
+        workspaceId: "space_1",
         phase,
-        providers: ["cloudflare"],
+        providers: ["registry.opentofu.org/cloudflare/cloudflare"],
       })
     ).toMintResponse();
     expect(response.env.CLOUDFLARE_API_TOKEN).toBe("cf-secret-token");
@@ -298,7 +375,7 @@ for (const phase of ["plan", "apply", "destroy"] as const) {
     const conn = await registerHttps(store, vault);
     await expect(
       vault.mintForPhase({
-        spaceId: "space_1",
+        workspaceId: "space_1",
         phase,
         sourceConnectionId: conn.id,
       }),
@@ -311,11 +388,13 @@ for (const phase of ["plan", "apply", "destroy"] as const) {
     await registerHttps(store, vault);
     await expect(
       vault.mintForPhase({
-        spaceId: "space_1",
+        workspaceId: "space_1",
         phase,
-        providers: ["cloudflare"],
+        providers: ["registry.opentofu.org/cloudflare/cloudflare"],
       }),
-    ).rejects.toThrow(/no connection registered for provider cloudflare/);
+    ).rejects.toThrow(
+      /no connection registered for provider registry\.opentofu\.org\/cloudflare\/cloudflare/,
+    );
   });
 }
 
@@ -324,19 +403,19 @@ test("source phase rejects a provider env binding passed as sourceConnectionId",
   const provider = await registerProvider(store, vault);
   await expect(
     vault.mintForPhase({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       phase: "source",
       sourceConnectionId: provider.id,
     }),
   ).rejects.toThrow(/not a git source connection/);
 });
 
-test("source phase rejects a connection from another space", async () => {
+test("source phase rejects a connection from another Workspace", async () => {
   const { store, vault } = makeVault();
   const conn = await registerHttps(store, vault);
   await expect(
     vault.mintForPhase({
-      spaceId: "space_2",
+      workspaceId: "space_2",
       phase: "source",
       sourceConnectionId: conn.id,
     }),
@@ -346,42 +425,44 @@ test("source phase rejects a connection from another space", async () => {
 test("mint (legacy provider path) never selects a git connection", async () => {
   const { store, vault } = makeVault();
   await registerHttps(store, vault);
-  await expect(vault.mint("space_1", ["cloudflare"])).rejects.toThrow(
-    /no connection registered for provider cloudflare/,
+  await expect(
+    vault.mint("space_1", ["registry.opentofu.org/cloudflare/cloudflare"]),
+  ).rejects.toThrow(
+    /no connection registered for provider registry\.opentofu\.org\/cloudflare\/cloudflare/,
   );
 });
 
 // --- Operator-scoped connections + provider-connection connection pool (§8 / §9) -
 
-test("registers an operator-scoped connection without a space", async () => {
+test("registers an operator-scoped connection without a Workspace", async () => {
   const { store, vault } = makeVault();
   const conn = await vault.register({
-    provider: "cloudflare",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
   });
   expect(conn.scope).toBe("operator");
-  expect(conn.spaceId).toBeUndefined();
+  expect(conn.workspaceId).toBeUndefined();
   expect(JSON.stringify(conn)).not.toContain("operator-cf-token");
 });
 
-test("provider-connection connection pool mints an operator connection from any space", async () => {
+test("provider-connection connection pool mints an operator connection from any Workspace", async () => {
   const { store, vault } = makeVault();
   const operatorConn = await markVerified(
     store,
     await vault.register({
-      provider: "cloudflare",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
     }),
   );
-  // The space itself has NO cloudflare connection: only the resolved
+  // The Workspace itself has NO cloudflare connection: only the resolved
   // provider-connection pool supplies one through operator-level provider
   // compatibility coverage.
   const bundle = await vault.mintForPhase({
-    spaceId: "space_other",
+    workspaceId: "space_other",
     phase: "plan",
-    providers: ["cloudflare"],
+    providers: ["registry.opentofu.org/cloudflare/cloudflare"],
     connectionIds: [operatorConn.id],
   });
   expect(bundle.env.CLOUDFLARE_API_TOKEN).toBe("operator-cf-token");
@@ -404,12 +485,15 @@ test("provider-connection connection pool mints a pending managed-provider conne
     }),
   });
   const operatorConn = await vault.register({
-    provider: "cloudflare",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
     scopeHints: {
       managedProvider: true,
-      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
+      managedProviderProfile: "compat.cloudflare.workers.v1",
+      providerConfig: {
+        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
       managedPublicBaseDomain: "app-staging.takos.jp",
     },
   });
@@ -419,9 +503,9 @@ test("provider-connection connection pool mints a pending managed-provider conne
   );
 
   const bundle = await vault.mintForPhase({
-    spaceId: "space_other",
+    workspaceId: "space_other",
     phase: "plan",
-    providers: ["cloudflare"],
+    providers: ["registry.opentofu.org/cloudflare/cloudflare"],
     connectionIds: [operatorConn.id],
   });
 
@@ -441,7 +525,7 @@ test("provider-connection connection pool mints a pending managed-provider conne
 test("provider-connection connection pool still rejects a pending non-managed connection", async () => {
   const { vault } = makeVault();
   const operatorConn = await vault.register({
-    provider: "cloudflare",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
   });
@@ -449,40 +533,40 @@ test("provider-connection connection pool still rejects a pending non-managed co
 
   await expect(
     vault.mintForPhase({
-      spaceId: "space_other",
+      workspaceId: "space_other",
       phase: "plan",
-      providers: ["cloudflare"],
+      providers: ["registry.opentofu.org/cloudflare/cloudflare"],
       connectionIds: [operatorConn.id],
     }),
   ).rejects.toThrow(`connection ${operatorConn.id} is pending (not verified)`);
 });
 
-test("provider-connection connection pool rejects a connection from another space", async () => {
+test("provider-connection connection pool rejects a connection from another Workspace", async () => {
   const { store, vault } = makeVault();
   const spaceConn = await registerProvider(store, vault); // space_1
   const err = await vault
     .mintForPhase({
-      spaceId: "space_other",
+      workspaceId: "space_other",
       phase: "plan",
-      providers: ["cloudflare"],
+      providers: ["registry.opentofu.org/cloudflare/cloudflare"],
       connectionIds: [spaceConn.id],
     })
     .catch((e) => e);
   expect(err).toBeInstanceOf(ConnectionVaultError);
-  expect(String(err)).toContain("belongs to another space");
+  expect(String(err)).toContain("belongs to another Workspace");
 });
 
 test("provider-connection connection pool restricts selection: provider outside the pool fails", async () => {
   const { store, vault } = makeVault();
   // space_1 HAS a cloudflare connection, but the resolved pool is empty-handed
-  // for aws — the mint must not silently fall back to the space-wide pool.
+  // for aws — the mint must not silently fall back to the Workspace-wide pool.
   await registerProvider(store, vault);
   const gitConn = await registerHttps(store, vault);
   const err = await vault
     .mintForPhase({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       phase: "plan",
-      providers: ["cloudflare"],
+      providers: ["registry.opentofu.org/cloudflare/cloudflare"],
       connectionIds: [gitConn.id],
     })
     .catch((e) => e);
@@ -490,17 +574,17 @@ test("provider-connection connection pool restricts selection: provider outside 
   expect(String(err)).toContain("no connection registered");
 });
 
-// --- §13 per-binding credential mint (mintForInstallationProviderEnvBindings) --------------------
+// --- §13 per-binding credential mint (mintForCapsuleProviderBindings) --------------------
 
 async function registerAws(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   vault: StaticSecretConnectionVault,
 ) {
   return await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
-      provider: "aws",
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/hashicorp/aws",
       authMethod: "static_secret",
       values: {
         AWS_ACCESS_KEY_ID: "AKIA_secret_id",
@@ -512,19 +596,21 @@ async function registerAws(
 }
 
 async function registerAwsAssumeRole(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   vault: StaticSecretConnectionVault,
 ) {
   return await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
-      provider: "aws",
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/hashicorp/aws",
       authMethod: "static_secret",
       scopeHints: {
-        awsRoleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
-        awsExternalId: "space_1",
-        awsRegion: "us-west-2",
+        providerSettings: {
+          roleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
+          externalId: "space_1",
+          region: "us-west-2",
+        },
       },
       values: {
         AWS_ACCESS_KEY_ID: "AKIA_source",
@@ -548,22 +634,23 @@ function stsSuccessXml(): string {
 </AssumeRoleResponse>`;
 }
 
-test("mintForInstallationProviderEnvBindings maps cloudflare env to TF_VAR_<provider>_<alias>_api_token", async () => {
+test("mintForCapsuleProviderBindings preserves declared Cloudflare env", async () => {
   const { store, vault } = makeVault();
   const conn = await registerProvider(store, vault);
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
-    { provider: "cloudflare", alias: "main", connectionId: conn.id },
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      alias: "main",
+      connectionId: conn.id,
+    },
   ]);
   expect(bundle.env).toEqual({
-    TF_VAR_cloudflare_main_api_token: "cf-secret-token",
+    CLOUDFLARE_API_TOKEN: "cf-secret-token",
   });
   expect(bundle.providerCredentialEvidence).toEqual([
     {
       connectionId: conn.id,
-      providerEnvId: conn.id,
-      provider: "cloudflare",
-      delivery: "generated_root_variable",
-      rootOnly: true,
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       temporary: false,
       ttlEnforced: false,
       issuer: "static_secret",
@@ -571,30 +658,31 @@ test("mintForInstallationProviderEnvBindings maps cloudflare env to TF_VAR_<prov
   ]);
 });
 
-test("mintForInstallationProviderEnvBindings records TTL evidence for expiring static provider credentials", async () => {
+test("mintForCapsuleProviderBindings records TTL evidence for expiring static provider credentials", async () => {
   const { store, vault } = makeVault();
   const conn = await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
-      provider: "cloudflare",
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       expiresAt: "2026-06-04T00:30:00.000Z",
       values: { CLOUDFLARE_API_TOKEN: "cf-expiring-token" },
     }),
   );
 
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
-    { provider: "cloudflare", alias: "main", connectionId: conn.id },
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      alias: "main",
+      connectionId: conn.id,
+    },
   ]);
 
   expect(bundle.providerCredentialEvidence).toEqual([
     {
       connectionId: conn.id,
-      providerEnvId: conn.id,
-      provider: "cloudflare",
-      delivery: "generated_root_variable",
-      rootOnly: true,
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       temporary: false,
       ttlEnforced: true,
       expiresAt: "2026-06-04T00:30:00.000Z",
@@ -604,7 +692,7 @@ test("mintForInstallationProviderEnvBindings records TTL evidence for expiring s
   ]);
 });
 
-test("mintForInstallationProviderEnvBindings vends a TTL-bound Cloudflare token for root-only provider args", async () => {
+test("mintForCapsuleProviderBindings vends a TTL-bound Cloudflare env token", async () => {
   let called:
     | {
         readonly url: string;
@@ -640,8 +728,12 @@ test("mintForInstallationProviderEnvBindings vends a TTL-bound Cloudflare token 
   const { store, vault } = makeVault({ fetch: fakeFetch as never });
   const conn = await registerCloudflareTokenVending(store, vault);
 
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
-    { provider: "cloudflare", alias: "main", connectionId: conn.id },
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      alias: "main",
+      connectionId: conn.id,
+    },
   ]);
 
   expect(called?.url).toBe("https://api.cloudflare.com/client/v4/user/tokens");
@@ -660,15 +752,12 @@ test("mintForInstallationProviderEnvBindings vends a TTL-bound Cloudflare token 
     },
   ]);
   expect(bundle.env).toEqual({
-    TF_VAR_cloudflare_main_api_token: "cf-run-scoped-token",
+    CLOUDFLARE_API_TOKEN: "cf-run-scoped-token",
   });
   expect(bundle.providerCredentialEvidence).toEqual([
     {
       connectionId: conn.id,
-      providerEnvId: conn.id,
-      provider: "cloudflare",
-      delivery: "generated_root_variable",
-      rootOnly: true,
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       temporary: true,
       ttlEnforced: true,
       expiresAt: "2026-06-04T00:15:00.000Z",
@@ -693,8 +782,12 @@ test("cloudflare token vending fails closed when Cloudflare omits expires_on", a
   const conn = await registerCloudflareTokenVending(store, vault);
 
   const err = await vault
-    .mintForInstallationProviderEnvBindings("space_1", [
-      { provider: "cloudflare", alias: "main", connectionId: conn.id },
+    .mintForCapsuleProviderBindings("space_1", [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "main",
+        connectionId: conn.id,
+      },
     ])
     .catch((e) => e);
 
@@ -707,8 +800,8 @@ test("expired connections fail closed before any provider credential mint", asyn
   const conn = await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
-      provider: "cloudflare",
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       expiresAt: "2026-06-04T00:30:00.000Z",
       values: { CLOUDFLARE_API_TOKEN: "cf-expiring-token" },
@@ -720,15 +813,19 @@ test("expired connections fail closed before any provider credential mint", asyn
   }).vault;
 
   await expect(
-    lateVault.mintForInstallationProviderEnvBindings("space_1", [
-      { provider: "cloudflare", alias: "main", connectionId: conn.id },
+    lateVault.mintForCapsuleProviderBindings("space_1", [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "main",
+        connectionId: conn.id,
+      },
     ]),
   ).rejects.toThrow("expired at 2026-06-04T00:30:00.000Z");
   expect((await store.getConnection(conn.id))?.status).toBe("expired");
   await expect(
     vault.register({
-      spaceId: "space_1",
-      provider: "cloudflare",
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       expiresAt: "2026-06-03T23:59:59.000Z",
       values: { CLOUDFLARE_API_TOKEN: "already-expired" },
@@ -736,19 +833,23 @@ test("expired connections fail closed before any provider credential mint", asyn
   ).rejects.toThrow("expiresAt must be in the future");
 });
 
-test("mintForInstallationProviderEnvBindings maps the three aws args and supports multiple provider aliases", async () => {
+test("mintForCapsuleProviderBindings preserves recipe env across providers", async () => {
   const { store, vault } = makeVault();
   const cf = await registerProvider(store, vault);
   const aws = await registerAws(store, vault);
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
-    { provider: "cloudflare", alias: "main", connectionId: cf.id },
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      alias: "main",
+      connectionId: cf.id,
+    },
     { provider: "hashicorp/aws", alias: "archive", connectionId: aws.id },
   ]);
   expect(bundle.env).toEqual({
-    TF_VAR_cloudflare_main_api_token: "cf-secret-token",
-    TF_VAR_aws_archive_access_key: "AKIA_secret_id",
-    TF_VAR_aws_archive_secret_key: "aws_secret_key_value",
-    TF_VAR_aws_archive_token: "aws_session_token_value",
+    CLOUDFLARE_API_TOKEN: "cf-secret-token",
+    AWS_ACCESS_KEY_ID: "AKIA_secret_id",
+    AWS_SECRET_ACCESS_KEY: "aws_secret_key_value",
+    AWS_SESSION_TOKEN: "aws_session_token_value",
   });
 });
 
@@ -777,9 +878,9 @@ test("aws assume-role connection mints short-lived STS credentials for tofu phas
   await registerAwsAssumeRole(store, vault);
 
   const bundle = await vault.mintForPhase({
-    spaceId: "space_1",
+    workspaceId: "space_1",
     phase: "plan",
-    providers: ["aws"],
+    providers: ["registry.opentofu.org/hashicorp/aws"],
   });
   const response = bundle.toMintResponse();
 
@@ -803,10 +904,7 @@ test("aws assume-role connection mints short-lived STS credentials for tofu phas
   expect(bundle.providerCredentialEvidence).toEqual([
     {
       connectionId: "conn_test000000000001",
-      providerEnvId: "conn_test000000000001",
-      provider: "aws",
-      delivery: "provider_env",
-      rootOnly: false,
+      provider: "registry.opentofu.org/hashicorp/aws",
       temporary: true,
       ttlEnforced: true,
       expiresAt: "2026-06-04T01:00:00.000Z",
@@ -817,7 +915,7 @@ test("aws assume-role connection mints short-lived STS credentials for tofu phas
   expect(JSON.stringify(response)).not.toContain("source_secret");
 });
 
-test("mintForInstallationProviderEnvBindings uses assumed AWS credentials for per-binding TF_VAR mapping", async () => {
+test("mintForCapsuleProviderBindings returns assumed AWS recipe env", async () => {
   const { store, vault } = makeVault({
     fetch: (() =>
       Promise.resolve(
@@ -829,22 +927,21 @@ test("mintForInstallationProviderEnvBindings uses assumed AWS credentials for pe
   });
   const aws = await registerAwsAssumeRole(store, vault);
 
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
     { provider: "hashicorp/aws", alias: "archive", connectionId: aws.id },
   ]);
 
   expect(bundle.env).toEqual({
-    TF_VAR_aws_archive_access_key: "ASIA_assumed",
-    TF_VAR_aws_archive_secret_key: "assumed_secret",
-    TF_VAR_aws_archive_token: "assumed_session",
+    AWS_ACCESS_KEY_ID: "ASIA_assumed",
+    AWS_SECRET_ACCESS_KEY: "assumed_secret",
+    AWS_SESSION_TOKEN: "assumed_session",
+    AWS_REGION: "us-west-2",
+    AWS_DEFAULT_REGION: "us-west-2",
   });
   expect(bundle.providerCredentialEvidence).toEqual([
     {
       connectionId: aws.id,
-      providerEnvId: aws.id,
-      provider: "aws",
-      delivery: "generated_root_variable",
-      rootOnly: true,
+      provider: "registry.opentofu.org/hashicorp/aws",
       temporary: true,
       ttlEnforced: true,
       expiresAt: "2026-06-04T01:00:00.000Z",
@@ -868,9 +965,9 @@ test("aws assume-role mint fails closed when STS rejects the role", async () => 
 
   const err = await vault
     .mintForPhase({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       phase: "plan",
-      providers: ["aws"],
+      providers: ["registry.opentofu.org/hashicorp/aws"],
     })
     .catch((e) => e);
 
@@ -879,64 +976,73 @@ test("aws assume-role mint fails closed when STS rejects the role", async () => 
   expect(String(err)).toContain("AccessDenied");
 });
 
-test("mintForInstallationProviderEnvBindings re-validates ids: a connection from another space is rejected", async () => {
+test("mintForCapsuleProviderBindings re-validates ids: a connection from another Workspace is rejected", async () => {
   const { store, vault } = makeVault();
   const conn = await registerProvider(store, vault); // space_1
   const err = await vault
-    .mintForInstallationProviderEnvBindings("space_other", [
-      { provider: "cloudflare", alias: "main", connectionId: conn.id },
+    .mintForCapsuleProviderBindings("space_other", [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "main",
+        connectionId: conn.id,
+      },
     ])
     .catch((e) => e);
   expect(err).toBeInstanceOf(ConnectionVaultError);
-  expect(String(err)).toContain("belongs to another space");
+  expect(String(err)).toContain("belongs to another Workspace");
 });
 
-test("mintForInstallationProviderEnvBindings re-validates ids: an unknown connection fails closed", async () => {
+test("mintForCapsuleProviderBindings re-validates ids: an unknown connection fails closed", async () => {
   const { store, vault } = makeVault();
   const err = await vault
-    .mintForInstallationProviderEnvBindings("space_1", [
-      { provider: "cloudflare", alias: "main", connectionId: "conn_missing" },
+    .mintForCapsuleProviderBindings("space_1", [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "main",
+        connectionId: "conn_missing",
+      },
     ])
     .catch((e) => e);
   expect(err).toBeInstanceOf(ConnectionVaultError);
   expect((err as ConnectionVaultError).code).toBe("not_found");
 });
 
-test("mintForInstallationProviderEnvBindings mints an operator connection from any space", async () => {
+test("mintForCapsuleProviderBindings mints an operator connection from any Workspace", async () => {
   const { store, vault } = makeVault();
   const operatorConn = await markVerified(
     store,
     await vault.register({
-      provider: "cloudflare",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
     }),
   );
-  const bundle = await vault.mintForInstallationProviderEnvBindings(
-    "space_other",
-    [{ provider: "cloudflare", alias: "zone", connectionId: operatorConn.id }],
-  );
+  const bundle = await vault.mintForCapsuleProviderBindings("space_other", [
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      alias: "zone",
+      connectionId: operatorConn.id,
+    },
+  ]);
   expect(bundle.env).toEqual({
-    TF_VAR_cloudflare_zone_api_token: "operator-cf-token",
+    CLOUDFLARE_API_TOKEN: "operator-cf-token",
   });
 });
 
-test("mintForInstallationProviderEnvBindings uses managed-provider issuer before stored operator material", async () => {
+test("mintForCapsuleProviderBindings uses managed-provider issuer before stored operator material", async () => {
   const calls: {
     readonly workspaceId: string;
-    readonly installationId?: string;
+    readonly capsuleId?: string;
     readonly connectionId: string;
-    readonly delivery: string;
+    readonly managedProviderProfile: string;
   }[] = [];
   const { store, vault } = makeVault({
     managedProviderCredentialIssuer: async (request) => {
       calls.push({
         workspaceId: request.workspaceId,
-        ...(request.installationId
-          ? { installationId: request.installationId }
-          : {}),
+        ...(request.capsuleId ? { capsuleId: request.capsuleId } : {}),
         connectionId: request.connection.id,
-        delivery: request.delivery,
+        managedProviderProfile: request.managedProviderProfile,
       });
       return {
         values: { CLOUDFLARE_API_TOKEN: "takmpt_run_scoped" },
@@ -951,40 +1057,46 @@ test("mintForInstallationProviderEnvBindings uses managed-provider issuer before
   const operatorConn = await markVerified(
     store,
     await vault.register({
-      provider: "cloudflare",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
       scopeHints: {
         managedProvider: true,
-        providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
+        managedProviderProfile: "compat.cloudflare.workers.v1",
+        providerConfig: {
+          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        },
       },
     }),
   );
 
-  const bundle = await vault.mintForInstallationProviderEnvBindings(
+  const bundle = await vault.mintForCapsuleProviderBindings(
     "space_other",
-    [{ provider: "cloudflare", alias: "zone", connectionId: operatorConn.id }],
-    { installationId: "inst_1234567890abcdef" },
+    [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "zone",
+        connectionId: operatorConn.id,
+      },
+    ],
+    { capsuleId: "cap_1234567890abcdef" },
   );
 
   expect(bundle.env).toEqual({
-    TF_VAR_cloudflare_zone_api_token: "takmpt_run_scoped",
+    CLOUDFLARE_API_TOKEN: "takmpt_run_scoped",
   });
   expect(calls).toEqual([
     {
       workspaceId: "space_other",
-      installationId: "inst_1234567890abcdef",
+      capsuleId: "cap_1234567890abcdef",
       connectionId: operatorConn.id,
-      delivery: "generated_root_variable",
+      managedProviderProfile: "compat.cloudflare.workers.v1",
     },
   ]);
   expect(bundle.providerCredentialEvidence).toEqual([
     {
-      providerEnvId: operatorConn.id,
       connectionId: operatorConn.id,
-      provider: "cloudflare",
-      delivery: "generated_root_variable",
-      rootOnly: true,
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       temporary: true,
       ttlEnforced: true,
       expiresAt: "2026-06-04T00:15:00.000Z",
@@ -995,22 +1107,20 @@ test("mintForInstallationProviderEnvBindings uses managed-provider issuer before
   ]);
 });
 
-test("mintForInstallationProviderEnvBindings mints a pending managed-provider connection through the issuer", async () => {
+test("mintForCapsuleProviderBindings mints a pending managed-provider connection through the issuer", async () => {
   const calls: {
     readonly workspaceId: string;
-    readonly installationId?: string;
+    readonly capsuleId?: string;
     readonly connectionId: string;
-    readonly delivery: string;
+    readonly managedProviderProfile: string;
   }[] = [];
   const { vault } = makeVault({
     managedProviderCredentialIssuer: async (request) => {
       calls.push({
         workspaceId: request.workspaceId,
-        ...(request.installationId
-          ? { installationId: request.installationId }
-          : {}),
+        ...(request.capsuleId ? { capsuleId: request.capsuleId } : {}),
         connectionId: request.connection.id,
-        delivery: request.delivery,
+        managedProviderProfile: request.managedProviderProfile,
       });
       return {
         values: { CLOUDFLARE_API_TOKEN: "takmpt_run_scoped" },
@@ -1023,79 +1133,151 @@ test("mintForInstallationProviderEnvBindings mints a pending managed-provider co
     },
   });
   const operatorConn = await vault.register({
-    provider: "cloudflare",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
     scopeHints: {
       managedProvider: true,
-      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
+      managedProviderProfile: "compat.cloudflare.workers.v1",
+      providerConfig: {
+        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
     },
   });
   expect(operatorConn.status).toBe("pending");
 
-  const bundle = await vault.mintForInstallationProviderEnvBindings(
+  const bundle = await vault.mintForCapsuleProviderBindings(
     "space_other",
-    [{ provider: "cloudflare", alias: "zone", connectionId: operatorConn.id }],
-    { installationId: "inst_1234567890abcdef" },
+    [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "zone",
+        connectionId: operatorConn.id,
+      },
+    ],
+    { capsuleId: "cap_1234567890abcdef" },
   );
 
   expect(bundle.env).toEqual({
-    TF_VAR_cloudflare_zone_api_token: "takmpt_run_scoped",
+    CLOUDFLARE_API_TOKEN: "takmpt_run_scoped",
   });
   expect(calls).toEqual([
     {
       workspaceId: "space_other",
-      installationId: "inst_1234567890abcdef",
+      capsuleId: "cap_1234567890abcdef",
       connectionId: operatorConn.id,
-      delivery: "generated_root_variable",
+      managedProviderProfile: "compat.cloudflare.workers.v1",
     },
   ]);
   expect(JSON.stringify(bundle)).not.toContain("operator-static-token");
 });
 
-test("mintForInstallationProviderEnvBindings still rejects a pending non-managed connection", async () => {
+test("mintForCapsuleProviderBindings still rejects a pending non-managed connection", async () => {
   const { vault } = makeVault();
   const operatorConn = await vault.register({
-    provider: "cloudflare",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
   });
   expect(operatorConn.status).toBe("pending");
 
   await expect(
-    vault.mintForInstallationProviderEnvBindings("space_other", [
-      { provider: "cloudflare", alias: "zone", connectionId: operatorConn.id },
+    vault.mintForCapsuleProviderBindings("space_other", [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "zone",
+        connectionId: operatorConn.id,
+      },
     ]),
   ).rejects.toThrow(`connection ${operatorConn.id} is pending (not verified)`);
 });
 
-test("mintForInstallationProviderEnvBindings rejects managed-provider connections without an issuer", async () => {
+test("managed provider registration rejects an unprofiled row even when providerConfig has a base_url", async () => {
   const { store, vault } = makeVault();
-  const operatorConn = await markVerified(
-    store,
-    await vault.register({
-      provider: "cloudflare",
+  await expect(
+    vault.register({
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
       scopeHints: {
         managedProvider: true,
-        providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
+        providerConfig: {
+          base_url: "https://provider.example.test/api",
+        },
+      },
+    }),
+  ).rejects.toThrow(
+    "scopeHints.managedProviderProfile is required when managedProvider is true",
+  );
+  expect(await store.listOperatorConnections()).toEqual([]);
+});
+
+test("managed provider registration rejects Workspace-owned rows", async () => {
+  const { store, vault } = makeVault();
+  await expect(
+    vault.register({
+      workspaceId: "workspace_1",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "workspace-static-token" },
+      scopeHints: {
+        managedProvider: true,
+        managedProviderProfile: "compat.cloudflare.workers.v1",
+      },
+    }),
+  ).rejects.toThrow(
+    "managed provider connections must be operator-scoped and must not have an owning Workspace",
+  );
+  expect(await store.listConnections("workspace_1")).toEqual([]);
+});
+
+test("managed provider profile is inert unless the service-side marker is explicit", async () => {
+  const { store, vault } = makeVault();
+  await expect(
+    vault.register({
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
+      scopeHints: {
+        managedProviderProfile: "operator.example.provider.v1",
+      },
+    }),
+  ).rejects.toThrow(
+    "scopeHints.managedProviderProfile requires managedProvider: true",
+  );
+  expect(await store.listOperatorConnections()).toEqual([]);
+});
+
+test("mintForCapsuleProviderBindings rejects managed-provider connections without an issuer", async () => {
+  const { store, vault } = makeVault();
+  const operatorConn = await markVerified(
+    store,
+    await vault.register({
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
+      scopeHints: {
+        managedProvider: true,
+        managedProviderProfile: "compat.cloudflare.workers.v1",
+        providerConfig: {
+          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        },
       },
     }),
   );
 
   let err: unknown;
   try {
-    await vault.mintForInstallationProviderEnvBindings(
+    await vault.mintForCapsuleProviderBindings(
       "space_other",
       [
         {
-          provider: "cloudflare",
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
           alias: "zone",
           connectionId: operatorConn.id,
         },
       ],
-      { installationId: "inst_1234567890abcdef" },
+      { capsuleId: "cap_1234567890abcdef" },
     );
   } catch (caught) {
     err = caught;
@@ -1108,35 +1290,38 @@ test("mintForInstallationProviderEnvBindings rejects managed-provider connection
   );
 });
 
-test("mintForInstallationProviderEnvBindings rejects managed-provider connections when issuer returns no token", async () => {
+test("mintForCapsuleProviderBindings rejects managed-provider connections when issuer returns no token", async () => {
   const { store, vault } = makeVault({
     managedProviderCredentialIssuer: async () => undefined,
   });
   const operatorConn = await markVerified(
     store,
     await vault.register({
-      provider: "cloudflare",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
       values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
       scopeHints: {
         managedProvider: true,
-        providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
+        managedProviderProfile: "compat.cloudflare.workers.v1",
+        providerConfig: {
+          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        },
       },
     }),
   );
 
   let err: unknown;
   try {
-    await vault.mintForInstallationProviderEnvBindings(
+    await vault.mintForCapsuleProviderBindings(
       "space_other",
       [
         {
-          provider: "cloudflare",
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
           alias: "zone",
           connectionId: operatorConn.id,
         },
       ],
-      { installationId: "inst_1234567890abcdef" },
+      { capsuleId: "cap_1234567890abcdef" },
     );
   } catch (caught) {
     err = caught;
@@ -1149,39 +1334,63 @@ test("mintForInstallationProviderEnvBindings rejects managed-provider connection
   );
 });
 
-test("mintForInstallationProviderEnvBindings contributes no TF_VAR for a provider without an arg mapping", async () => {
+test("mintForCapsuleProviderBindings preserves env for every provider", async () => {
   const { store, vault } = makeVault();
   const conn = await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
-      provider: "kubernetes",
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/hashicorp/kubernetes",
       authMethod: "static_secret",
+      credentialRecipe: {
+        id: "generic-env",
+        authMode: "env",
+        secretPartition: "provider-credentials",
+      },
       values: { KUBE_CONFIG_PATH: "/work/.kube/config" },
     }),
   );
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
-    { provider: "kubernetes", alias: "main", connectionId: conn.id },
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
+    {
+      provider: "registry.opentofu.org/hashicorp/kubernetes",
+      alias: "main",
+      connectionId: conn.id,
+    },
   ]);
-  expect(bundle.env).toEqual({});
+  expect(bundle.env).toEqual({ KUBE_CONFIG_PATH: "/work/.kube/config" });
 });
 
-test("mintForInstallationProviderEnvBindings maps approved generic-env variables to process env", async () => {
+test("mintForCapsuleProviderBindings executes the generic-env recipe without a connection kind", async () => {
   const { store, vault } = makeVault();
   const conn = await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "registry.opentofu.org/integrations/github",
       authMethod: "static_secret",
-      kind: "generic_env_provider",
+      credentialRecipe: {
+        id: "generic-env",
+        authMode: "env",
+        secretPartition: "provider-credentials",
+      },
       values: {
         GITHUB_TOKEN: "github-secret",
       },
     }),
   );
 
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
+  expect(conn.kind).toBeUndefined();
+  expect(conn.credentialRecipe).toEqual({
+    id: "generic-env",
+    authMode: "env",
+    secretPartition: "provider-credentials",
+    declaredEnv: true,
+    envNames: ["GITHUB_TOKEN"],
+    fileEnvNames: [],
+    requiredEnvGroups: [],
+  });
+
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
     {
       provider: "registry.opentofu.org/integrations/github",
       alias: "main",
@@ -1192,19 +1401,17 @@ test("mintForInstallationProviderEnvBindings maps approved generic-env variables
   expect(bundle.env).toEqual({
     GITHUB_TOKEN: "github-secret",
   });
-  expect(bundle.providerCredentialEvidence[0]?.delivery).toBe("provider_env");
-  expect(bundle.providerCredentialEvidence[0]?.rootOnly).toBe(false);
 });
 
-test("mintForInstallationProviderEnvBindings maps generic provider files to tofu credential files", async () => {
+test("mintForCapsuleProviderBindings maps generic provider files to tofu credential files", async () => {
   const { store, vault } = makeVault();
   const conn = await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "registry.opentofu.org/example/envfile",
       authMethod: "static_secret",
-      kind: "generic_env_provider",
+      credentialRecipe: declaredEnvRecipe(),
       values: {
         GENERIC_API_TOKEN: "generic-secret",
       },
@@ -1224,7 +1431,7 @@ test("mintForInstallationProviderEnvBindings maps generic provider files to tofu
   ]);
   expect(conn.fileEnvNames).toEqual(["GENERIC_CREDENTIALS_FILE"]);
 
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
     {
       provider: "registry.opentofu.org/example/envfile",
       connectionId: conn.id,
@@ -1249,10 +1456,10 @@ test("generic-env provider registration rejects unsafe credential file declarati
   const { vault } = makeVault();
   await expect(
     vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "registry.opentofu.org/example/envfile",
       authMethod: "static_secret",
-      kind: "generic_env_provider",
+      credentialRecipe: declaredEnvRecipe(),
       values: {},
       files: [
         {
@@ -1266,10 +1473,10 @@ test("generic-env provider registration rejects unsafe credential file declarati
 
   await expect(
     vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "registry.opentofu.org/example/envfile",
       authMethod: "static_secret",
-      kind: "generic_env_provider",
+      credentialRecipe: declaredEnvRecipe(),
       values: { GENERIC_CREDENTIALS_FILE: "also-a-value" },
       files: [
         {
@@ -1291,15 +1498,15 @@ test("generic-env provider registration accepts arbitrary providers with explici
   const conn = await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider,
       authMethod: "static_secret",
-      kind: "generic_env_provider",
+      credentialRecipe: declaredEnvRecipe(),
       values: { NOT_A_REAL_PROVIDER_TOKEN: "secret" },
     }),
   );
 
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
     {
       provider: "not-a-real-provider/not-a-real-provider",
       connectionId: conn.id,
@@ -1316,10 +1523,10 @@ test("generic-env provider registration accepts explicit env names for guided pr
   const conn = await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "registry.opentofu.org/integrations/github",
       authMethod: "static_secret",
-      kind: "generic_env_provider",
+      credentialRecipe: declaredEnvRecipe(),
       values: {
         GITHUB_TOKEN: "github-secret",
         GITHUB_CUSTOM_ENDPOINT: "https://github.example.test",
@@ -1327,7 +1534,7 @@ test("generic-env provider registration accepts explicit env names for guided pr
     }),
   );
 
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
     {
       provider: "registry.opentofu.org/integrations/github",
       connectionId: conn.id,
@@ -1345,10 +1552,10 @@ test("generic-env provider registration passes raw env for root-mapped guided pr
   const conn = await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
-      provider: "cloudflare",
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
       authMethod: "static_secret",
-      kind: "generic_env_provider",
+      credentialRecipe: declaredEnvRecipe(),
       values: {
         CLOUDFLARE_API_TOKEN: "cf-secret-token",
         CLOUDFLARE_CUSTOM_ENDPOINT: "https://api.example.test/client/v4",
@@ -1356,7 +1563,7 @@ test("generic-env provider registration passes raw env for root-mapped guided pr
     }),
   );
 
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
     {
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       alias: "main",
@@ -1369,59 +1576,61 @@ test("generic-env provider registration passes raw env for root-mapped guided pr
     CLOUDFLARE_CUSTOM_ENDPOINT: "https://api.example.test/client/v4",
   });
   expect(bundle.env.TF_VAR_cloudflare_main_api_token).toBeUndefined();
-  expect(bundle.providerCredentialEvidence[0]?.delivery).toBe("provider_env");
-  expect(bundle.providerCredentialEvidence[0]?.rootOnly).toBe(false);
 });
 
 test("generic-env provider registration rejects runner-reserved env names", async () => {
   const { vault } = makeVault();
   await expect(
     vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "registry.opentofu.org/example/example",
       authMethod: "static_secret",
-      kind: "generic_env_provider",
+      credentialRecipe: declaredEnvRecipe(),
       values: { PATH: "/tmp/evil" },
     }),
   ).rejects.toThrow("reserved for the runner runtime");
   await expect(
     vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "registry.opentofu.org/example/example",
       authMethod: "static_secret",
-      kind: "generic_env_provider",
+      credentialRecipe: declaredEnvRecipe(),
       values: { TAKOSUMI_RUN_ID: "override" },
     }),
   ).rejects.toThrow("reserved for the runner runtime");
 });
 
-test("mintForInstallationProviderEnvBindings re-validates InstallationProviderEnvBinding provider before opening values", async () => {
+test("mintForCapsuleProviderBindings re-validates CapsuleProviderEnvBinding provider before opening values", async () => {
   const { store, vault } = makeVault();
   const conn = await markVerified(
     store,
     await vault.register({
-      spaceId: "space_1",
+      workspaceId: "space_1",
       provider: "registry.opentofu.org/integrations/github",
       authMethod: "static_secret",
-      kind: "generic_env_provider",
+      credentialRecipe: declaredEnvRecipe(),
       values: { GITHUB_TOKEN: "github-secret" },
     }),
   );
 
   await expect(
-    vault.mintForInstallationProviderEnvBindings("space_1", [
-      { provider: "cloudflare", alias: "main", connectionId: conn.id },
+    vault.mintForCapsuleProviderBindings("space_1", [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "main",
+        connectionId: conn.id,
+      },
     ]),
   ).rejects.toThrow(
-    /provider registry\.opentofu\.org\/integrations\/github does not match InstallationProviderEnvBinding provider cloudflare/,
+    /provider registry\.opentofu\.org\/integrations\/github does not match CapsuleProviderEnvBinding provider registry\.opentofu\.org\/cloudflare\/cloudflare/,
   );
 });
 
-test("mintForInstallationProviderEnvBindings rejects a git source connection", async () => {
+test("mintForCapsuleProviderBindings rejects a git source connection", async () => {
   const { store, vault } = makeVault();
   const git = await registerHttps(store, vault);
   const err = await vault
-    .mintForInstallationProviderEnvBindings("space_1", [
+    .mintForCapsuleProviderBindings("space_1", [
       { provider: "source", alias: "git", connectionId: git.id },
     ])
     .catch((e) => e);
@@ -1429,23 +1638,33 @@ test("mintForInstallationProviderEnvBindings rejects a git source connection", a
   expect(String(err)).toContain("git source connection");
 });
 
-test("mintForInstallationProviderEnvBindings is tofu-phase only", async () => {
+test("mintForCapsuleProviderBindings is tofu-phase only", async () => {
   const { store, vault } = makeVault();
   const conn = await registerProvider(store, vault);
   await expect(
-    vault.mintForInstallationProviderEnvBindings(
+    vault.mintForCapsuleProviderBindings(
       "space_1",
-      [{ provider: "cloudflare", alias: "main", connectionId: conn.id }],
+      [
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          alias: "main",
+          connectionId: conn.id,
+        },
+      ],
       { phase: "build" },
     ),
   ).rejects.toThrow(/tofu-phase only/);
 });
 
-test("mintForInstallationProviderEnvBindings bundle never serializes its values", async () => {
+test("mintForCapsuleProviderBindings bundle never serializes its values", async () => {
   const { store, vault } = makeVault();
   const conn = await registerProvider(store, vault);
-  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
-    { provider: "cloudflare", alias: "main", connectionId: conn.id },
+  const bundle = await vault.mintForCapsuleProviderBindings("space_1", [
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      alias: "main",
+      connectionId: conn.id,
+    },
   ]);
   expect(JSON.stringify(bundle)).not.toContain("cf-secret-token");
   expect(`${bundle}`).not.toContain("cf-secret-token");

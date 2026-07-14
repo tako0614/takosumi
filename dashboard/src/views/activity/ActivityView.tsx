@@ -70,7 +70,6 @@ function metaString(
 function activityTitle(event: ActivityEvent): string {
   const metadata = event.metadata ?? {};
   switch (event.action) {
-    case "installation.created":
     case "capsule.created":
       return t("notif.event.installCreated", {
         name: metaString(metadata, "name") ?? "—",

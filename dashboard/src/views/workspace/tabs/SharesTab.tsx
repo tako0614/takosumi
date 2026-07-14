@@ -179,7 +179,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
   // one-click danger action, naming the share's target (same pattern as the
   // Connections tab delete confirm).
   const confirmRevoke = async (share: OutputShare) => {
-    const to = share.toWorkspaceId ?? share.toSpaceId;
+    const to = share.toWorkspaceId;
     const ok = await confirm({
       title: t("shares.revokeConfirmTitle"),
       message: t("shares.revokeConfirmMessage", {
@@ -217,8 +217,8 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
     {
       header: t("shares.col.direction"),
       cell: (share) => {
-        const from = share.fromWorkspaceId ?? share.fromSpaceId;
-        const to = share.toWorkspaceId ?? share.toSpaceId;
+        const from = share.fromWorkspaceId;
+        const to = share.toWorkspaceId;
         return (
           <span class="wb-mono">
             <code>{workspaceName().get(from) ?? from}</code>
@@ -231,8 +231,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
     {
       header: t("shares.col.capsule"),
       cell: (share) => {
-        const producer =
-          share.producerCapsuleId ?? share.producerInstallationId;
+        const producer = share.producerCapsuleId;
         return capsuleName().get(producer) ?? producer;
       },
     },
@@ -279,7 +278,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
           <Show
             when={
               share.status === "pending" &&
-              (share.toWorkspaceId ?? share.toSpaceId) === workspaceId()
+              share.toWorkspaceId === workspaceId()
             }
           >
             <Button

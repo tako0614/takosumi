@@ -1,21 +1,19 @@
 /**
  * SECURITY S5 — create-plan apply-once is atomic across isolates.
  *
- * A `create` apply has no prior Deployment to guard against, so the
+ * A `create` apply has no prior StateVersion to guard against, so the
  * apply-once invariant (a succeeded plan applies AT MOST once) is the only
  * thing standing between two concurrent create-applies and a real duplicate
- * Installation + Deployment (duplicate cloud resources). The up-front
+ * Capsule + StateVersion (duplicate cloud resources). The up-front
  * `appliedApplyRunId` check in `createApplyRun` is non-atomic: two cross-isolate
  * applies of the same plan both observe it undefined before either marks the
  * plan applied. The cross-isolate guard is the coordination lease:
- *   - a plan that DOES carry an installationId is covered by the
- *     `installation:{id}:{env}` lease (one write run per env at a time);
- *   - a `create` plan that carries NO installationId yet is covered by the
- *     `plan:{planRunId}` lease added for S5.
+ * A Capsule-first `create` plan is covered by the `capsule:{id}:{env}` lease
+ * (one write run per environment at a time).
  *
  * In both cases the inner `#executeApply` re-reads the persisted PlanRun under
  * the lease and folds a sibling that already marked it applied into an
- * idempotent replay, so only ONE Deployment is ever recorded and the duplicate
+ * idempotent replay, so only ONE StateVersion is ever recorded and the duplicate
  * apply does not poison the Capsule status.
  */
 
@@ -23,28 +21,19 @@ import { expect, test } from "bun:test";
 
 import {
   applyExpectedGuardFromPlanRun,
-  OpenTofuDeploymentController,
+  OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import {
-  InstallationLeaseBusyError,
-  InMemoryInstallationCoordination,
-  planLeaseScope,
-} from "../../../../core/domains/deploy-control/installation_lease.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryCapsuleCoordination } from "../../../../core/domains/deploy-control/capsule_lease.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
-  seedInstallationModel,
+  seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
-
-const SOURCE = {
-  kind: "git",
-  url: "https://github.com/example/app.git",
-  ref: "main",
-} as const;
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -80,41 +69,37 @@ function succeedingRunner() {
 }
 
 /**
- * Builds a controller over a freshly-seeded Installation (generation 0, NO
- * current deployment) plus a succeeded `create` PlanRun ready to apply. The
+ * Builds a controller over a freshly-seeded Capsule (generation 0, NO
+ * current StateVersion) plus a succeeded `create` PlanRun ready to apply. The
  * coordination seam is wired so the apply consumer takes the lease.
  */
 async function seedCreatePlan(): Promise<{
-  store: InMemoryOpenTofuDeploymentStore;
-  coordination: InMemoryInstallationCoordination;
-  controller: OpenTofuDeploymentController;
+  store: InMemoryOpenTofuControlStore;
+  coordination: InMemoryCapsuleCoordination;
+  controller: OpenTofuController;
   planRun: PlanRun;
-  installationId: string;
+  capsuleId: string;
 }> {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const { installation } = await seedInstallationModel(store, {
-    installationId: "inst_create",
+  const store = new InMemoryOpenTofuControlStore();
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: "ws_test001",
+    capsuleId: "cap_create01",
   });
-  // A fresh Installation: pending, no current deployment, generation 0 — the
-  // shape a `create` apply lands its FIRST deployment on.
-  await store.putInstallation({ ...installation, status: "pending" });
-  await seedProviderConnections(store, installation);
-  const coordination = new InMemoryInstallationCoordination();
-  const controller = new OpenTofuDeploymentController({
+  // A fresh Capsule: pending, no current StateVersion, generation 0 — the
+  // shape a `create` apply lands its FIRST StateVersion on.
+  await store.putCapsule({ ...capsule, status: "pending" });
+  await seedProviderConnections(store, capsule);
+  const coordination = new InMemoryCapsuleCoordination();
+  const controller = new OpenTofuController({
     store,
-    installationCoordination: coordination,
+    capsuleCoordination: coordination,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner: succeedingRunner(),
     vault: fakeProviderVault() as never,
   });
-  const { planRun } = await controller.createPlanRun({
-    spaceId: installation.spaceId,
-    installationId: installation.id,
-    operation: "create",
-    source: SOURCE,
-    requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
-  });
+  const { planRun } = await controller.createCapsulePlan(capsule.id);
   expect(planRun.status).toBe("succeeded");
   expect(planRun.operation).toBe("create");
   return {
@@ -122,7 +107,7 @@ async function seedCreatePlan(): Promise<{
     coordination,
     controller,
     planRun,
-    installationId: installation.id,
+    capsuleId: capsule.id,
   };
 }
 
@@ -131,17 +116,15 @@ async function seedCreatePlan(): Promise<{
  *  already passed the non-atomic check before the first marked the plan
  *  applied). */
 async function seedQueuedApply(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   planRun: PlanRun,
   applyRunId: string,
 ): Promise<void> {
   const apply: ApplyRun = {
     id: applyRunId,
     planRunId: planRun.id,
-    spaceId: planRun.spaceId,
-    ...(planRun.installationId
-      ? { installationId: planRun.installationId }
-      : {}),
+    workspaceId: planRun.workspaceId,
+    ...(planRun.capsuleId ? { capsuleId: planRun.capsuleId } : {}),
     operation: planRun.operation,
     runnerProfileId: planRun.runnerProfileId,
     status: "queued",
@@ -155,8 +138,8 @@ async function seedQueuedApply(
   await store.putApplyRun(apply);
 }
 
-test("two applies of the same create plan: exactly one materializes, the other replays, only ONE deployment", async () => {
-  const { store, controller, planRun, installationId } = await seedCreatePlan();
+test("two applies of the same create plan: exactly one materializes, the other replays, only ONE StateVersion", async () => {
+  const { store, controller, planRun, capsuleId } = await seedCreatePlan();
 
   // Two ApplyRuns both pass the non-atomic up-front check (modeled by seeding
   // them directly), as two cross-isolate consumers would.
@@ -164,7 +147,7 @@ test("two applies of the same create plan: exactly one materializes, the other r
   await seedQueuedApply(store, planRun, "apply_second");
 
   // First consumer acquires the lease, completes, marks the plan applied, and
-  // records exactly one Deployment.
+  // records exactly one StateVersion.
   const first = await controller.runQueuedApply("apply_first");
   expect(first.applyRun.status).toBe("succeeded");
   expect((await store.getPlanRun(planRun.id))?.appliedApplyRunId).toBe(
@@ -173,20 +156,20 @@ test("two applies of the same create plan: exactly one materializes, the other r
 
   // Second consumer (redelivered after the first released the lease) re-reads
   // the now-applied plan under the lease and is folded into an idempotent
-  // replay — it never allocates a second Deployment and it is not a failed run.
+  // replay — it never allocates a second StateVersion and it is not a failed run.
   const second = await controller.runQueuedApply("apply_second");
   expect(second.applyRun.status).toBe("succeeded");
-  expect(second.applyRun.deploymentId).toBe(first.applyRun.deploymentId);
+  expect(second.applyRun.stateVersionId).toBe(first.applyRun.stateVersionId);
   expect(second.applyRun.auditEvents.map((event) => event.type)).toContain(
     "apply.idempotent_replay",
   );
 
-  const deployments = await store.listDeployments(installationId);
-  expect(deployments.length).toBe(1);
+  const stateVersions = await store.listStateVersions(capsuleId, "production");
+  expect(stateVersions.length).toBe(1);
 });
 
 test("createApplyRun returns the existing apply response after a plan has already applied", async () => {
-  const { store, controller, planRun, installationId } = await seedCreatePlan();
+  const { store, controller, planRun, capsuleId } = await seedCreatePlan();
 
   const first = await controller.createApplyRun({
     planRunId: planRun.id,
@@ -200,74 +183,8 @@ test("createApplyRun returns the existing apply response after a plan has alread
   });
   expect(replay.applyRun.id).toBe(first.applyRun.id);
   expect(replay.applyRun.status).toBe("succeeded");
-  expect(replay.deployment?.id).toBe(first.deployment?.id);
+  expect(replay.applyRun.stateVersionId).toBe(first.applyRun.stateVersionId);
 
-  const deployments = await store.listDeployments(installationId);
-  expect(deployments.length).toBe(1);
-});
-
-test("a create plan with NO installationId is covered by the plan:{planRunId} lease", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  // A `create` PlanRun carrying NO installationId (the S5 case): seed the run
-  // ledger rows directly and a SourceSnapshot the apply would dispatch against.
-  await seedInstallationModel(store, { installationId: "inst_unused" });
-  const planRun: PlanRun = {
-    id: "plan_create_noinst",
-    spaceId: "space_test",
-    source: { kind: "git", url: SOURCE.url, ref: SOURCE.ref },
-    sourceDigest: "sha256:src",
-    operation: "create",
-    runnerProfileId: "opentofu-default",
-    variablesDigest: "sha256:vars",
-    requiredProviders: [],
-    status: "succeeded",
-    policy: { status: "passed", reasons: [], checkedAt: 1 },
-    policyDecisionDigest: "sha256:policy",
-    planDigest: PLAN_DIGEST,
-    planArtifact: {
-      kind: "runner-local",
-      ref: "runner-local://plan/tfplan",
-      digest: PLAN_DIGEST,
-    },
-    baseStateGeneration: 0,
-    auditEvents: [],
-    createdAt: 1,
-    updatedAt: 1,
-  };
-  await store.putPlanRun(planRun);
-  await store.putPlanRunInputs({
-    planRunId: planRun.id,
-    variables: {},
-    generatedRoot: {
-      files: { "main.tf": 'module "app" { source = "./template-module" }' },
-      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
-    },
-  });
-  await seedQueuedApply(store, planRun, "apply_noinst");
-
-  const coordination = new InMemoryInstallationCoordination();
-  // Pre-hold the create plan's lease as if a sibling isolate were already
-  // applying it.
-  const held = await coordination.acquireLease({
-    scope: planLeaseScope(planRun.id),
-    holderId: "sibling-run",
-    ttlMs: 60_000,
-  });
-  expect(held.acquired).toBe(true);
-
-  const controller = new OpenTofuDeploymentController({
-    store,
-    installationCoordination: coordination,
-    now: sequenceNow(1),
-    newId: deterministicIds(),
-    runner: succeedingRunner(),
-    vault: fakeProviderVault() as never,
-  });
-
-  // The consumer cannot acquire the busy `plan:{planRunId}` lease, so it
-  // rethrows for queue redelivery instead of racing into a second Deployment.
-  await expect(
-    controller.runQueuedApply("apply_noinst"),
-  ).rejects.toBeInstanceOf(InstallationLeaseBusyError);
-  expect((await store.getApplyRun("apply_noinst"))?.status).toBe("queued");
+  const stateVersions = await store.listStateVersions(capsuleId, "production");
+  expect(stateVersions.length).toBe(1);
 });

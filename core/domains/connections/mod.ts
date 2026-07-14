@@ -8,30 +8,36 @@
  * provider compatibility profile handlers and managed-resource backends are
  * Operator/Cloud extensions, not OSS resolver materializations.
  */
-import type {
-  Connection,
-  Installation,
-} from "@takosumi/internal/deploy-control-api";
+import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
+import type { Capsule } from "takosumi-contract/capsules";
 import { randomUUID } from "node:crypto";
 import type {
   ProviderBinding,
   ProviderBindings,
   ProviderConnectionMaterialization,
 } from "takosumi-contract/connections";
-import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
+import {
+  isPublicManagedProviderConnection,
+  managedProviderProfile,
+} from "takosumi-contract/connections";
+import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
-import { OpenTofuControllerError } from "../deploy-control/errors.ts";
-import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
+import {
+  OpenTofuControllerError,
+  PROVIDER_CONNECTION_NOT_READY_REASON,
+  PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
+} from "../deploy-control/errors.ts";
+import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 
 /** One Provider Connection binding's resolution outcome. */
-export interface ResolvedInstallationProviderEnvBinding {
+export interface ResolvedCapsuleProviderBinding {
   readonly provider: string;
   readonly alias?: string;
-  readonly connection: Connection;
+  readonly connection: ProviderConnection;
   readonly materialization: ProviderConnectionMaterialization;
 }
 
-export function validateInstallationProviderEnvBindings(
+export function validateCapsuleProviderBindings(
   value: unknown,
   field = "providerBindings",
 ): ProviderBindings {
@@ -42,11 +48,11 @@ export function validateInstallationProviderEnvBindings(
     );
   }
   return value.map((entry, index) =>
-    validateInstallationProviderEnvBinding(entry, `${field}[${index}]`),
+    validateCapsuleProviderBinding(entry, `${field}[${index}]`),
   );
 }
 
-function validateInstallationProviderEnvBinding(
+function validateCapsuleProviderBinding(
   value: unknown,
   field: string,
 ): ProviderBinding {
@@ -57,10 +63,8 @@ function validateInstallationProviderEnvBinding(
     );
   }
   const provider = nonEmptyField(value.provider, `${field}.provider`);
-  // Accept the legacy `envId` field name (provider env id == connection id) so
-  // binding sets serialized before the credential-model collapse keep resolving.
   const connectionId = nonEmptyField(
-    value.connectionId ?? value.envId,
+    value.connectionId,
     `${field}.connectionId`,
   );
   const alias =
@@ -94,24 +98,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Stable digest over a run's resolved Provider Connection bindings. The field
- * projection is kept byte-identical to the pre-collapse `ProviderEnv` projection
- * (`envId`/`connectionId` are the connection id). Mutable verification status
- * is deliberately excluded: a pending-to-verified transition does not change
- * which credential binding the plan reviewed, while revocation still fails in
- * binding resolution before credential minting.
+ * Stable digest over a run's resolved Provider Connection bindings. The chosen
+ * CredentialRecipe and managed-provider profile are pinned with the connection
+ * id so changing a pre-run driver or token authority cannot slip between
+ * reviewed plan and apply. Mutable verification status is deliberately
+ * excluded; revocation still fails before minting.
  */
-export async function resolvedProviderEnvBindingsDigest(
-  resolved: readonly ResolvedInstallationProviderEnvBinding[] | undefined,
+export async function resolvedProviderBindingsDigest(
+  resolved: readonly ResolvedCapsuleProviderBinding[] | undefined,
 ): Promise<string> {
   const entries = (resolved ?? [])
     .map((entry) => ({
       provider: entry.provider,
       alias: entry.alias ?? null,
-      envId: entry.connection.id,
       materialization: entry.connection.materialization,
+      credentialRecipe: entry.connection.credentialRecipe ?? null,
       connectionId: entry.connection.id,
       envNames: [...entry.connection.envNames].sort(),
+      managedProviderProfile:
+        managedProviderProfile(entry.connection.scopeHints) ?? null,
     }))
     .sort(
       (a, b) =>
@@ -122,22 +127,22 @@ export async function resolvedProviderEnvBindingsDigest(
 }
 
 export interface ConnectionsServiceDependencies {
-  readonly store: OpenTofuDeploymentStore;
+  readonly store: OpenTofuControlStore;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => string;
   /**
-   * Takosumi Cloud may expose a Space-scoped Provider Connection that is backed
-   * by an operator-scoped credential. OSS leaves this disabled so self-hosted
+   * An operator extension may expose a Workspace-scoped Provider Connection
+   * backed by an operator-scoped credential. OSS leaves this disabled so
    * operator credentials never become bindable by accident.
    */
-  readonly allowOperatorBackedProviderEnvs?: boolean;
+  readonly allowOperatorScopedProviderConnections?: boolean;
 }
 
 export class ConnectionsService {
-  readonly #store: OpenTofuDeploymentStore;
+  readonly #store: OpenTofuControlStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
-  readonly #allowOperatorBackedProviderEnvs: boolean;
+  readonly #allowOperatorScopedProviderConnections: boolean;
 
   constructor(dependencies: ConnectionsServiceDependencies) {
     this.#store = dependencies.store;
@@ -146,22 +151,22 @@ export class ConnectionsService {
       ((prefix) =>
         `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 24)}`);
     this.#now = dependencies.now ?? (() => new Date().toISOString());
-    this.#allowOperatorBackedProviderEnvs =
-      dependencies.allowOperatorBackedProviderEnvs === true;
+    this.#allowOperatorScopedProviderConnections =
+      dependencies.allowOperatorScopedProviderConnections === true;
   }
 
   /**
-   * Lists the provider-bindable Provider Connections visible to a Space. Source
+   * Lists the provider-bindable Provider Connections visible to a Workspace. Source
    * git connections are never provider connections and are excluded.
    */
   async listProviderConnections(
-    spaceId?: string,
-  ): Promise<readonly Connection[]> {
-    const connections = spaceId
-      ? await this.#store.listConnections(spaceId)
+    workspaceId?: string,
+  ): Promise<readonly ProviderConnection[]> {
+    const connections = workspaceId
+      ? await this.#store.listConnections(workspaceId)
       : [];
     const operatorManagedConnections =
-      spaceId && this.#allowOperatorBackedProviderEnvs
+      workspaceId && this.#allowOperatorScopedProviderConnections
         ? (await this.#store.listOperatorConnections()).filter(
             isPublicManagedProviderConnection,
           )
@@ -171,115 +176,150 @@ export class ConnectionsService {
     );
   }
 
-  async getProviderConnection(id: string): Promise<Connection> {
+  async getProviderConnection(id: string): Promise<ProviderConnection> {
     const connection = await this.#store.getConnection(nonEmptyField(id, "id"));
     if (!connection || isSourceGitKind(connection)) {
       throw new OpenTofuControllerError(
         "not_found",
         `Provider Connection ${id} not found`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
     }
     return connection;
   }
 
-  async resolveProviderEnvBindings(
-    installation: Installation,
-  ): Promise<readonly ResolvedInstallationProviderEnvBinding[]> {
-    const set =
-      await this.#store.getInstallationProviderEnvBindingSetByInstallation(
-        installation.id,
-        installation.environment,
-      );
-    const bindings = validateInstallationProviderEnvBindings(
+  async resolveProviderBindings(
+    capsule: Capsule,
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    const set = await this.#store.getProviderBindingSetByCapsule(
+      capsule.id,
+      capsule.environment,
+    );
+    const bindings = validateCapsuleProviderBindings(
       set?.bindings ?? [],
-      "installation provider binding set bindings",
+      "capsule provider binding set bindings",
     );
     return await Promise.all(
-      bindings.map((binding) => this.#resolveBinding(installation, binding)),
+      bindings.map((binding) => this.#resolveBinding(capsule, binding)),
     );
   }
 
-  async resolveProviderEnvBindingsForRun(
-    installation: Installation,
+  async resolveProviderBindingsForRun(
+    capsule: Capsule,
     requiredProviders: readonly string[],
-  ): Promise<readonly ResolvedInstallationProviderEnvBinding[]> {
-    const explicit = await this.resolveProviderEnvBindings(installation);
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    const explicit = await this.resolveProviderBindings(capsule);
     if (requiredProviders.length === 0) return explicit;
 
-    let missing = requiredProviders
+    const missing = requiredProviders
       .filter(
         (required) =>
           !explicit.some((entry) =>
-            sameProviderFamily(required, entry.provider),
+            sameProviderSource(required, entry.provider),
           ),
       )
       .sort();
-    const managedFallbacks =
-      missing.length > 0
-        ? await this.#managedProviderFallbacks(installation, missing)
-        : [];
-    if (managedFallbacks.length > 0) {
-      missing = missing.filter(
-        (required) =>
-          !managedFallbacks.some((entry) =>
-            sameProviderFamily(required, entry.provider),
-          ),
-      );
-    }
     if (missing.length > 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `provider connection is required for providers: ${missing.join(", ")}`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
     }
-    return [...explicit, ...managedFallbacks];
+    return explicit;
+  }
+
+  /** Resolve one Target-selected Provider Connection for a Resource Run. */
+  async resolveResourceProviderBinding(input: {
+    readonly workspaceId: string;
+    readonly provider: string;
+    readonly alias?: string;
+    readonly connectionId?: string;
+    readonly required: boolean;
+  }): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    if (!input.connectionId) {
+      if (input.required) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `provider connection is required for provider ${input.provider}`,
+          { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+        );
+      }
+      return [];
+    }
+    return [
+      await this.#resolveBinding(
+        { workspaceId: input.workspaceId },
+        {
+          provider: input.provider,
+          connectionId: input.connectionId,
+          ...(input.alias ? { alias: input.alias } : {}),
+        },
+      ),
+    ];
   }
 
   async #resolveBinding(
-    installation: Installation,
+    capsule: Pick<Capsule, "workspaceId">,
     binding: ProviderBinding,
-  ): Promise<ResolvedInstallationProviderEnvBinding> {
+  ): Promise<ResolvedCapsuleProviderBinding> {
     const connection = await this.#store.getConnection(binding.connectionId);
     if (!connection) {
       throw new OpenTofuControllerError(
         "not_found",
         `Provider Connection ${binding.connectionId} (provider ${binding.provider}) not found`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
     }
     if (isSourceGitKind(connection)) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `Provider Connection ${connection.id} is a git source connection and cannot back a provider binding`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
     }
     if (
-      connection.scope === "space" &&
-      connection.spaceId !== installation.spaceId
+      connection.scope === "workspace" &&
+      connection.workspaceId !== capsule.workspaceId
     ) {
       throw new OpenTofuControllerError(
         "permission_denied",
-        `Provider Connection ${binding.connectionId} belongs to another Space`,
+        `Provider Connection ${binding.connectionId} belongs to another Workspace`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
     }
     if (
       connection.scope === "operator" &&
-      !this.#allowOperatorBackedProviderEnvs
+      !this.#allowOperatorScopedProviderConnections
     ) {
       throw new OpenTofuControllerError(
         "permission_denied",
         `Provider Connection ${connection.id} is operator-scoped and cannot back OSS Provider Connections`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
     }
-    if (!sameProviderFamily(binding.provider, connection.provider)) {
+    if (!sameProviderSource(binding.provider, connection.providerSource)) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `Provider Connection ${binding.connectionId} provider ${connection.provider} does not match binding provider ${binding.provider}`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
+    if (
+      connection.scopeHints?.managedProvider === true &&
+      !isPublicManagedProviderConnection(connection)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Provider Connection ${binding.connectionId} requires an explicit managedProviderProfile and operator scope`,
+        { reason: PROVIDER_CONNECTION_NOT_READY_REASON },
       );
     }
     if (!connectionUsableForProviderBinding(connection)) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `Provider Connection ${binding.connectionId} status ${connection.status} is not verified`,
+        { reason: PROVIDER_CONNECTION_NOT_READY_REASON },
       );
     }
     return {
@@ -289,70 +329,31 @@ export class ConnectionsService {
       materialization: connection.materialization,
     };
   }
-
-  async #managedProviderFallbacks(
-    installation: Installation,
-    requiredProviders: readonly string[],
-  ): Promise<readonly ResolvedInstallationProviderEnvBinding[]> {
-    if (!this.#allowOperatorBackedProviderEnvs) return [];
-    const installConfig = await this.#store.getInstallConfig(
-      installation.installConfigId,
-    );
-    const storeProvider = installConfig?.store?.provider;
-    if (typeof storeProvider !== "string" || !storeProvider.trim()) {
-      return [];
-    }
-    const candidates = (await this.#store.listOperatorConnections()).filter(
-      (connection) =>
-        isPublicManagedProviderConnection(connection) &&
-        connectionUsableForProviderBinding(connection) &&
-        !isSourceGitKind(connection),
-    );
-    const resolved: ResolvedInstallationProviderEnvBinding[] = [];
-    for (const provider of requiredProviders) {
-      if (!sameProviderFamily(provider, storeProvider)) continue;
-      const matches = candidates.filter((connection) =>
-        sameProviderFamily(provider, connection.provider),
-      );
-      if (matches.length !== 1) continue;
-      resolved.push({
-        provider,
-        connection: matches[0]!,
-        materialization: matches[0]!.materialization,
-      });
-    }
-    return resolved;
-  }
 }
 
-function isSourceGitKind(connection: Connection): boolean {
+function isSourceGitKind(connection: ProviderConnection): boolean {
   return (
     connection.kind === "source_git_https_token" ||
     connection.kind === "source_git_ssh_key"
   );
 }
 
-function isPublicManagedProviderConnection(connection: Connection): boolean {
-  return (
-    connection.scope === "operator" &&
-    connection.spaceId === undefined &&
-    connection.scopeHints?.managedProvider === true &&
-    typeof connection.scopeHints.providerConfig?.base_url === "string" &&
-    connection.scopeHints.providerConfig.base_url.trim().length > 0
-  );
-}
-
-function connectionUsableForProviderBinding(connection: Connection): boolean {
+function connectionUsableForProviderBinding(
+  connection: ProviderConnection,
+): boolean {
+  if (connection.scopeHints?.managedProvider === true) {
+    return (
+      (connection.status === "pending" || connection.status === "verified") &&
+      isPublicManagedProviderConnection(connection)
+    );
+  }
   if (connection.status === "verified") return true;
-  return (
-    connection.status === "pending" &&
-    isPublicManagedProviderConnection(connection)
-  );
+  return false;
 }
 
 /** Collects the connection ids a run's vault-backed credential mint may draw from. */
 export function mintableConnectionIds(
-  resolved: readonly ResolvedInstallationProviderEnvBinding[],
+  resolved: readonly ResolvedCapsuleProviderBinding[],
 ): readonly string[] {
   const ids = new Set<string>();
   for (const entry of resolved) {
@@ -366,5 +367,3 @@ export function createConnectionsService(
 ): ConnectionsService {
   return new ConnectionsService(dependencies);
 }
-
-export type { ProviderBinding as InstallationProviderEnvBinding };

@@ -1,87 +1,37 @@
 import { expect, test } from "bun:test";
 
 import { createApiApp } from "../../../core/api/app.ts";
-import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
+import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+
+const WORKSPACE_ID = "ws_12345678";
 
 async function makeApp() {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  await store.putSpace({
-    id: "space_12345678",
+  const store = new InMemoryOpenTofuControlStore();
+  await store.putWorkspace({
+    id: WORKSPACE_ID,
     handle: "billing",
     displayName: "Billing",
     type: "personal",
     ownerUserId: "user_1",
-    billingSettings: { mode: "showback", provider: "none" },
+    billingSettings: { mode: "showback" },
     createdAt: "2026-06-07T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-  await store.putCreditBalance({
-    spaceId: "user_1",
-    availableCredits: 12,
-    reservedCredits: 2,
-    monthlyIncludedCredits: 10,
-    purchasedCredits: 4,
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-  await store.putBillingPlan({
-    id: "pro",
-    name: "Pro",
-    monthlyBasePrice: 2000,
-    includedCredits: 700,
-    limits: {
-      maxEstimatedCreditsPerRun: 100,
-      quota: { gateway_compute: 5 },
-    },
-    createdAt: "2026-06-01T00:00:00.000Z",
-    updatedAt: "2026-06-01T00:00:00.000Z",
-  });
-  await store.putBillingAccount({
-    id: "bill_user_1",
-    ownerType: "user",
-    ownerId: "user_1",
-    provider: "stripe",
-    stripeCustomerId: "cus_123",
-    status: "active",
-    createdAt: "2026-06-01T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-  await store.putSpaceSubscription({
-    id: "sub_123",
-    spaceId: "user_1",
-    billingAccountId: "bill_user_1",
-    planId: "pro",
-    status: "active",
-    currentPeriodStart: "2026-06-01T00:00:00.000Z",
-    currentPeriodEnd: "2026-07-01T00:00:00.000Z",
-    createdAt: "2026-06-01T00:00:00.000Z",
     updatedAt: "2026-06-07T00:00:00.000Z",
   });
   await store.putUsageEvent({
     id: "usage_1",
-    spaceId: "user_1",
-    resourceMetadata: {
-      source_workspace_id: "space_12345678",
-    },
+    workspaceId: WORKSPACE_ID,
+    capsuleId: "capsule_1",
     runId: "apply_1",
-    kind: "operation",
+    kind: "opentofu.apply",
     quantity: 1,
-    credits: 1,
+    usdMicros: 1_000_000,
+    ratingStatus: "rated",
     source: "runner",
-    idempotencyKey: "apply_1:operation",
+    idempotencyKey: "apply_1:opentofu.apply",
     createdAt: "2026-06-07T00:00:01.000Z",
   });
-  await store.putCreditReservation({
-    id: "cres_1",
-    spaceId: "user_1",
-    runId: "plan_1",
-    estimatedCredits: 28,
-    status: "reserved",
-    mode: "enforce",
-    createdAt: "2026-06-07T00:00:02.000Z",
-    expiresAt: "2026-06-07T01:00:02.000Z",
-  });
-  const controller = new OpenTofuDeploymentController({ store });
+  const controller = new OpenTofuController({ store });
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
@@ -90,7 +40,7 @@ async function makeApp() {
         token === "scoped-token"
           ? {
               actor: "acct_1",
-              spaceIds: ["space_12345678"],
+              workspaceIds: [WORKSPACE_ID],
               operations: "*",
               runnerProfileIds: "*",
             }
@@ -106,272 +56,105 @@ const HEADERS = {
   "content-type": "application/json",
 } as const;
 
-test("GET /internal/v1/workspaces/:spaceId/billing returns settings and balance", async () => {
+test("GET /internal/v1/workspaces/:workspaceId/billing returns OSS showback settings only", async () => {
   const { app } = await makeApp();
-
   const response = await app.request(
-    "/internal/v1/workspaces/space_12345678/billing",
-    {
-      headers: { authorization: "Bearer scoped-token" },
-    },
+    `/internal/v1/workspaces/${WORKSPACE_ID}/billing`,
+    { headers: { authorization: "Bearer scoped-token" } },
   );
 
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({
-    billing: {
-      settings: { mode: "showback", provider: "none" },
-      balance: {
-        workspaceId: "user_1",
-        spaceId: "user_1",
-        availableUsdMicros: 702_000_000,
-        reservedUsdMicros: 2_000_000,
-        monthlyIncludedUsdMicros: 700_000_000,
-        purchasedUsdMicros: 4_000_000,
-        availableCredits: 702,
-        reservedCredits: 2,
-        monthlyIncludedCredits: 700,
-        purchasedCredits: 4,
-        updatedAt: expect.any(String),
-      },
-      account: {
-        id: "bill_user_1",
-        ownerType: "user",
-        ownerId: "user_1",
-        provider: "stripe",
-        stripeCustomerId: "cus_123",
-        status: "active",
-        createdAt: "2026-06-01T00:00:00.000Z",
-        updatedAt: "2026-06-07T00:00:00.000Z",
-      },
-      subscription: {
-        id: "sub_123",
-        spaceId: "user_1",
-        billingAccountId: "bill_user_1",
-        planId: "pro",
-        status: "active",
-        currentPeriodStart: "2026-06-01T00:00:00.000Z",
-        currentPeriodEnd: "2026-07-01T00:00:00.000Z",
-        createdAt: "2026-06-01T00:00:00.000Z",
-        updatedAt: "2026-06-07T00:00:00.000Z",
-      },
-      plan: {
-        id: "pro",
-        name: "Pro",
-        monthlyBasePrice: 2000,
-        includedUsdMicros: 700_000_000,
-        includedCredits: 700,
-        limits: {
-          maxEstimatedCreditsPerRun: 100,
-          quota: { gateway_compute: 5 },
-        },
-        createdAt: "2026-06-01T00:00:00.000Z",
-        updatedAt: "2026-06-01T00:00:00.000Z",
-      },
-    },
+    billing: { settings: { mode: "showback" } },
   });
 });
 
-test("GET /internal/v1/workspaces/:spaceId/usage lists usage events", async () => {
+test("GET /internal/v1/workspaces/:workspaceId/usage lists USD showback events", async () => {
   const { app } = await makeApp();
-
   const response = await app.request(
-    "/internal/v1/workspaces/space_12345678/usage",
-    {
-      headers: { authorization: "Bearer scoped-token" },
-    },
+    `/internal/v1/workspaces/${WORKSPACE_ID}/usage`,
+    { headers: { authorization: "Bearer scoped-token" } },
   );
 
   expect(response.status).toBe(200);
   expect((await response.json()).usageEvents).toEqual([
     expect.objectContaining({
       id: "usage_1",
-      kind: "operation",
-      credits: 1,
+      workspaceId: WORKSPACE_ID,
+      capsuleId: "capsule_1",
+      kind: "opentofu.apply",
+      usdMicros: 1_000_000,
+      ratingStatus: "rated",
     }),
   ]);
 });
 
-test("GET /internal/v1/workspaces/:spaceId/credit-reservations lists reservation history", async () => {
-  const { app } = await makeApp();
-
+test("PATCH /internal/v1/workspaces/:workspaceId/billing updates disabled/showback mode", async () => {
+  const { app, store } = await makeApp();
   const response = await app.request(
-    "/internal/v1/workspaces/space_12345678/credit-reservations",
+    `/internal/v1/workspaces/${WORKSPACE_ID}/billing`,
     {
-      headers: { authorization: "Bearer scoped-token" },
-    },
-  );
-
-  expect(response.status).toBe(200);
-  expect((await response.json()).creditReservations).toEqual([
-    expect.objectContaining({
-      id: "cres_1",
-      runId: "plan_1",
-      estimatedCredits: 28,
-      status: "reserved",
-      mode: "enforce",
-    }),
-  ]);
-});
-
-test("POST /internal/v1/workspaces/:spaceId/credits/top-up adds purchased credits", async () => {
-  const { app } = await makeApp();
-
-  const response = await app.request(
-    "/internal/v1/workspaces/space_12345678/credits/top-up",
-    {
-      method: "POST",
+      method: "PATCH",
       headers: HEADERS,
-      body: JSON.stringify({ credits: 8 }),
+      body: JSON.stringify({ billingSettings: { mode: "disabled" } }),
     },
   );
 
   expect(response.status).toBe(200);
-  expect((await response.json()).balance).toMatchObject({
-    availableCredits: 710,
-    reservedCredits: 2,
-    monthlyIncludedCredits: 700,
-    purchasedCredits: 12,
+  expect(await response.json()).toEqual({
+    billing: { settings: { mode: "disabled" } },
+  });
+  expect((await store.getWorkspace(WORKSPACE_ID))?.billingSettings).toEqual({
+    mode: "disabled",
   });
 });
 
-test("POST /internal/v1/workspaces/:spaceId/credits/top-up rejects invalid credits", async () => {
+test("PATCH /internal/v1/workspaces/:workspaceId/billing rejects commercial fields and modes", async () => {
   const { app } = await makeApp();
-
-  for (const credits of [0, "8"]) {
+  for (const billingSettings of [
+    { mode: "enforce" },
+    { mode: "showback", provider: "manual" },
+    { mode: "disabled", reservationRequired: true },
+    { mode: "bogus" },
+  ]) {
     const response = await app.request(
-      "/internal/v1/workspaces/space_12345678/credits/top-up",
+      `/internal/v1/workspaces/${WORKSPACE_ID}/billing`,
       {
-        method: "POST",
+        method: "PATCH",
         headers: HEADERS,
-        body: JSON.stringify({ credits }),
+        body: JSON.stringify({ billingSettings }),
       },
     );
-
     expect(response.status).toBe(400);
     expect((await response.json()).error.code).toBe("invalid_argument");
   }
-  const invalidMicros = await app.request(
-    "/internal/v1/workspaces/space_12345678/credits/top-up",
-    {
-      method: "POST",
-      headers: HEADERS,
-      body: JSON.stringify({ usdMicros: 1.5 }),
-    },
-  );
-  expect(invalidMicros.status).toBe(400);
-  expect((await invalidMicros.json()).error.code).toBe("invalid_argument");
 });
 
-test("billing routes reject an unknown Space", async () => {
+test("billing routes enforce Workspace scope", async () => {
   const { app } = await makeApp();
-
   for (const path of [
-    "/internal/v1/workspaces/space_99999999/billing",
-    "/internal/v1/workspaces/space_99999999/usage",
-    "/internal/v1/workspaces/space_99999999/credit-reservations",
+    "/internal/v1/workspaces/ws_87654321/billing",
+    "/internal/v1/workspaces/ws_87654321/usage",
   ]) {
     const response = await app.request(path, {
       headers: { authorization: "Bearer scoped-token" },
     });
     expect(response.status).toBe(403);
   }
-
-  const appWithWideScope = await createApiApp({
-    registerDeployControlInternalRoutes: true,
-    deployControlInternalRouteOptions: {
-      controller: new OpenTofuDeploymentController({
-        store: new InMemoryOpenTofuDeploymentStore(),
-      }),
-      authorizeDeployControlBearer: ({ token }) =>
-        token === "wide-token"
-          ? {
-              actor: "acct_1",
-              spaceIds: "*",
-              operations: "*",
-              runnerProfileIds: "*",
-            }
-          : undefined,
-    },
-    requestCorrelation: false,
-  });
-
-  const response = await appWithWideScope.request(
-    "/internal/v1/workspaces/space_99999999/credits/top-up",
-    {
-      method: "POST",
-      headers: {
-        authorization: "Bearer wide-token",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ credits: 1 }),
-    },
-  );
-  expect(response.status).toBe(404);
 });
 
-test("POST /internal/v1/workspaces/:spaceId/subscription/change updates billing settings", async () => {
-  const { app, store } = await makeApp();
-
-  const response = await app.request(
-    "/internal/v1/workspaces/space_12345678/subscription/change",
-    {
-      method: "POST",
-      headers: HEADERS,
-      body: JSON.stringify({
-        billingSettings: {
-          mode: "showback",
-          provider: "manual",
-        },
-      }),
-    },
-  );
-
-  expect(response.status).toBe(200);
-  expect((await response.json()).billing.settings).toEqual({
-    mode: "showback",
-    provider: "manual",
-  });
-  expect((await store.getSpace("space_12345678"))?.billingSettings).toEqual({
-    mode: "showback",
-    provider: "manual",
-  });
-});
-
-test("POST /internal/v1/workspaces/:spaceId/subscription/change rejects invalid billing settings", async () => {
+test("removed OSS commercial billing routes are not mounted", async () => {
   const { app } = await makeApp();
-
-  for (const billingSettings of [
-    // enforce is a Takosumi Cloud-only mode; OSS rejects it outright.
-    { mode: "enforce", provider: "none", reservationRequired: true },
-    { mode: "enforce", provider: "manual", reservationRequired: true },
-    { mode: "disabled", provider: "manual" },
-    { mode: "showback", provider: "manual", reservationRequired: true },
-    { mode: "showback", provider: "bogus" },
-    { mode: "bogus", provider: "none" },
+  for (const path of [
+    `/internal/v1/workspaces/${WORKSPACE_ID}/credit-reservations`,
+    `/internal/v1/workspaces/${WORKSPACE_ID}/credits/top-up`,
+    `/internal/v1/workspaces/${WORKSPACE_ID}/subscription/change`,
   ]) {
-    const response = await app.request(
-      "/internal/v1/workspaces/space_12345678/subscription/change",
-      {
-        method: "POST",
-        headers: HEADERS,
-        body: JSON.stringify({ billingSettings }),
-      },
-    );
-
-    expect(response.status).toBe(400);
-    expect((await response.json()).error.code).toBe("invalid_argument");
+    const response = await app.request(path, {
+      method: path.endsWith("credit-reservations") ? "GET" : "POST",
+      headers: HEADERS,
+      body: path.endsWith("credit-reservations") ? undefined : "{}",
+    });
+    expect(response.status).toBe(404);
   }
-});
-
-test("billing routes enforce space scope", async () => {
-  const { app } = await makeApp();
-
-  const response = await app.request(
-    "/internal/v1/workspaces/space_87654321/billing",
-    {
-      headers: { authorization: "Bearer scoped-token" },
-    },
-  );
-
-  expect(response.status).toBe(403);
 });

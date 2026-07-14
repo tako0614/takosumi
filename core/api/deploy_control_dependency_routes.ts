@@ -10,7 +10,7 @@ import {
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
-  ensureSpacePermission,
+  ensureWorkspacePermission,
   readJsonBody,
   DEPENDENCY_ID_PATTERN,
 } from "./deploy_control_shared.ts";
@@ -45,7 +45,7 @@ export const DEPLOY_CONTROL_DEPENDENCY_ENDPOINTS: readonly DeployControlEndpoint
       operationId: "listCapsuleDependencies",
       openapi: {
         pathParams: ["capsuleId"],
-        okSchema: "InstallationDependenciesResponse",
+        okSchema: "CapsuleDependenciesResponse",
       },
       notImplementedMessage: "dependencies not wired",
     },
@@ -53,7 +53,7 @@ export const DEPLOY_CONTROL_DEPENDENCY_ENDPOINTS: readonly DeployControlEndpoint
       method: "DELETE",
       path: TAKOSUMI_DEPENDENCY_ROUTE,
       summary:
-        "Deletes a Dependency edge (space-permission gated via its consumer).",
+        "Deletes a Dependency edge (Workspace-permission gated via its consumer).",
       auth: "deploy-control-token",
       operationId: "deleteDependency",
       openapi: {
@@ -85,12 +85,12 @@ export function mountDeployControlDependencyRoutes(
       enforceBody: true,
       handler: async ({ c, principal, id }) => {
         // The consumer is the path Capsule; its Workspace gates the write.
-        const consumer = await controller.getInstallation(id);
-        ensureSpacePermission(principal, consumer.capsule.workspaceId);
+        const consumer = await controller.getCapsule(id);
+        ensureWorkspacePermission(principal, consumer.capsule.workspaceId);
         const body = await readJsonBody<
           Omit<
             CreateDependencyRequest,
-            "workspaceId" | "spaceId" | "consumerCapsuleId" | "consumerInstallationId"
+            "workspaceId" | "consumerCapsuleId"
           >
         >(c, "dependencyCreate");
         const dependency = await dependenciesService!.createDependency({
@@ -110,8 +110,8 @@ export function mountDeployControlDependencyRoutes(
       requireService: requireDependencies,
       param: { id: "capsuleId" },
       handler: async ({ c, principal, id }) => {
-        const capsule = await controller.getInstallation(id);
-        ensureSpacePermission(principal, capsule.capsule.workspaceId);
+        const capsule = await controller.getCapsule(id);
+        ensureWorkspacePermission(principal, capsule.capsule.workspaceId);
         return c.json(await dependenciesService!.listForCapsule(id), 200);
       },
     }),
@@ -133,7 +133,7 @@ export function mountDeployControlDependencyRoutes(
             `dependency ${id} not found`,
           );
         }
-        ensureSpacePermission(principal, dependency.spaceId);
+        ensureWorkspacePermission(principal, dependency.workspaceId);
         await dependenciesService!.deleteDependency(id);
         return c.body(null, 204);
       },

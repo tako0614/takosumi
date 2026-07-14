@@ -13,7 +13,7 @@ import type { RunStatus } from "takosumi-contract/runs";
 function planRun(over: Partial<PlanRun> = {}): PlanRun {
   return {
     id: "plan_1",
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     source: { kind: "git", url: "https://x/r.git", ref: "main", path: "." },
     sourceDigest: "sha256:src",
     operation: "create",
@@ -34,7 +34,7 @@ function applyRun(over: Partial<ApplyRun> = {}): ApplyRun {
   return {
     id: "apply_1",
     planRunId: "plan_1",
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     operation: "create",
     runnerProfileId: "opentofu-default",
     status: "succeeded",
@@ -130,7 +130,7 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
           address: "cloudflare_workers_script.api",
           type: "cloudflare_workers_script",
           actions: ["update"],
-          scope: { cloudflareAccountId: "acct_public" },
+          scope: { facts: { account_id: "acct_public" } },
         },
       ],
       baseStateGeneration: 3,
@@ -138,14 +138,14 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
     }),
     {
       sourceSnapshotId: "snap_1",
-      installationId: "inst_1",
+      capsuleId: "inst_1",
       environment: "production",
     },
   );
   expect(run.sourceSnapshotId).toBe("snap_1");
   expect(run.baseStateGeneration).toBe(3);
   expect(run.planDigest).toBe("sha256:plan");
-  expect(run.planArtifactKey).toBe("key/plan.bin");
+  expect(run.planArtifactRef).toBe("key/plan.bin");
   expect(run.applyExpected).toEqual({
     planId: "plan_1",
     runnerId: "opentofu-default",
@@ -161,14 +161,43 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
       address: "cloudflare_workers_script.api",
       type: "cloudflare_workers_script",
       actions: ["update"],
-      scope: { cloudflareAccountId: "acct_public" },
+      scope: { facts: { account_id: "acct_public" } },
     },
   ]);
   expect(run.compatibilityReportId).toBe("caprep_1");
   expect(run.policyStatus).toBe("pass");
-  expect(run.installationId).toBe("inst_1");
+  expect(run.capsuleId).toBe("inst_1");
   expect(run.environment).toBe("production");
   expect(run.createdBy).toBe("system");
+});
+
+test("Resource plan/apply project a Resource subject without Capsule identity", () => {
+  const resourceContext = {
+    workspaceId: "workspace_1",
+    resourceId: "tkrn:space_1:EdgeWorker:api",
+    environment: "production",
+    providerBinding: {
+      provider: "cloudflare",
+      providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+    },
+  };
+  const plan = projectPlanRun(
+    planRun({ workspaceId: "workspace_1", resourceContext }),
+    { environment: resourceContext.environment },
+  );
+  const apply = projectApplyRun(applyRun({ workspaceId: "workspace_1" }), {
+    resourceId: resourceContext.resourceId,
+    environment: resourceContext.environment,
+  });
+
+  for (const run of [plan, apply]) {
+    expect(run.subject).toEqual({
+      kind: "resource",
+      id: resourceContext.resourceId,
+    });
+    expect(run.environment).toBe("production");
+    expect(run.capsuleId).toBeUndefined();
+  }
 });
 
 test("projectPlanRun projects non-secret run environment evidence", () => {
@@ -183,13 +212,13 @@ test("projectPlanRun projects non-secret run environment evidence", () => {
             discoveredFrom: "required_providers",
             requiredForPhases: ["plan", "apply"],
           },
-          status: "resolved_provider_env",
-          envId: "penv_1",
+          status: "resolved_provider_connection",
+          connectionId: "penv_1",
           materialization: "secret",
           evidence: {
             kind: "provider_env",
             provider: "cloudflare",
-            envId: "penv_1",
+            connectionId: "penv_1",
             materialization: "secret",
             requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
           },
@@ -199,19 +228,22 @@ test("projectPlanRun projects non-secret run environment evidence", () => {
       redactionProfileId: "redact_provider_material",
     }),
   );
-  expect(run.providerResolutions?.[0]?.status).toBe("resolved_provider_env");
+  expect(run.providerResolutions?.[0]?.status).toBe(
+    "resolved_provider_connection",
+  );
   expect(run.runEnvironmentEvidenceDigest).toBe("sha256:runenv");
   expect(run.redactionProfileId).toBe("redact_provider_material");
 });
 
-test("projectPlanRun surfaces a compact error code from a failed plan", () => {
+test("projectPlanRun surfaces a structured error code from a failed plan", () => {
   const run = projectPlanRun(
     planRun({
       status: "failed",
       diagnostics: [
         {
           severity: "error",
-          message: "state_generation_mismatch: plan ... is now at generation 2",
+          code: "state_generation_mismatch",
+          message: "the state generation changed after planning",
         },
       ],
     }),
@@ -241,13 +273,13 @@ test("projectApplyRun projects non-secret run environment evidence", () => {
             discoveredFrom: "required_providers",
             requiredForPhases: ["plan", "apply"],
           },
-          status: "resolved_provider_env",
-          envId: "penv_secret",
+          status: "resolved_provider_connection",
+          connectionId: "penv_secret",
           materialization: "secret",
           evidence: {
             kind: "provider_env",
             provider: "cloudflare",
-            envId: "penv_secret",
+            connectionId: "penv_secret",
             materialization: "secret",
             requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
           },
@@ -257,7 +289,9 @@ test("projectApplyRun projects non-secret run environment evidence", () => {
       redactionProfileId: "redact_provider_material",
     }),
   );
-  expect(run.providerResolutions?.[0]?.status).toBe("resolved_provider_env");
+  expect(run.providerResolutions?.[0]?.status).toBe(
+    "resolved_provider_connection",
+  );
   expect(run.runEnvironmentEvidenceDigest).toBe("sha256:apply-runenv");
   expect(run.redactionProfileId).toBe("redact_provider_material");
 });
@@ -266,12 +300,12 @@ test("projectSourceSyncRun maps the sync lifecycle and snapshot id", () => {
   const base: SourceSyncRun = {
     id: "ssr_1",
     kind: "source_sync",
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     sourceId: "src_1",
     url: "https://x/r.git",
     ref: "main",
     path: ".",
-    archiveObjectKey: "key",
+    archiveRef: "key",
     status: "succeeded",
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:01:00.000Z",
@@ -288,7 +322,7 @@ test("projectSourceSyncRun maps the sync lifecycle and snapshot id", () => {
   expect(queued.sourceSnapshotId).toBeUndefined();
 });
 
-// --- projectPlanRunCost (public credit-shortfall surface) ------------------
+// --- projectPlanRunCost (portable OSS estimate surface) --------------------
 
 /** A `plan.policy_evaluated` audit event carrying the recorded billing audit. */
 function billingAuditEvent(
@@ -302,170 +336,134 @@ function billingAuditEvent(
   };
 }
 
-test("projectPlanRunCost surfaces an enforce-mode credit shortfall as blocked", () => {
-  const cost = projectPlanRunCost(
-    planRun({
-      status: "failed",
-      policy: {
-        status: "blocked",
-        reasons: [
-          "credit reservation failed: 12 credits estimated but only 5 available",
-        ],
-        checkedAt: 1500,
-      },
-      auditEvents: [
-        billingAuditEvent({
-          mode: "enforce",
-          estimatedCredits: 12,
-          availableCredits: 5,
-          reservationStatus: "insufficient_credits",
-        }),
-      ],
-    }),
-  );
-  expect(cost.runId).toBe("plan_1");
-  // Public billingMode is always `showback` in OSS; the enforce decision lives
-  // in the injected Cloud port's recorded audit and surfaces via `blocked`.
-  expect(cost.billingMode).toBe("showback");
-  expect(cost.estimatedUsdMicros).toBe(12_000_000);
-  expect(cost.availableUsdMicros).toBe(5_000_000);
-  expect(cost.shortfallUsdMicros).toBe(7_000_000);
-  expect(cost.estimatedCredits).toBe(12);
-  expect(cost.availableCredits).toBe(5);
-  expect(cost.reservationStatus).toBe("insufficient_credits");
-  expect(cost.creditShortfall).toBe(7);
-  expect(cost.blocked).toBe(true);
-  expect(cost.reasons).toEqual([
-    "credit reservation failed: 12 credits estimated but only 5 available",
-  ]);
-});
-
-test("projectPlanRunCost prefers USD micros audit values for fractional balances", () => {
-  const cost = projectPlanRunCost(
-    planRun({
-      status: "failed",
-      policy: {
-        status: "blocked",
-        reasons: [
-          "USD balance reservation failed: $0.25 estimated but only $0.10 available",
-        ],
-        checkedAt: 1500,
-      },
-      auditEvents: [
-        billingAuditEvent({
-          mode: "enforce",
-          estimatedUsdMicros: 250_000,
-          availableUsdMicros: 100_000,
-          reservationStatus: "insufficient_credits",
-        }),
-      ],
-    }),
-  );
-  expect(cost.estimatedUsdMicros).toBe(250_000);
-  expect(cost.availableUsdMicros).toBe(100_000);
-  expect(cost.shortfallUsdMicros).toBe(150_000);
-  expect(cost.estimatedCredits).toBe(0.25);
-  expect(cost.availableCredits).toBe(0.1);
-  expect(cost.creditShortfall).toBe(0.15);
-  expect(cost.blocked).toBe(true);
-  expect(cost.reasons).toEqual([
-    "USD balance reservation failed: $0.25 estimated but only $0.10 available",
-  ]);
-});
-
-test("projectPlanRunCost surfaces a reserved plan as non-blocked with no shortfall", () => {
+test("projectPlanRunCost projects the OSS showback USD estimate", () => {
   const cost = projectPlanRunCost(
     planRun({
       status: "succeeded",
       policy: { status: "passed", reasons: [], checkedAt: 1500 },
       auditEvents: [
         billingAuditEvent({
-          mode: "enforce",
-          estimatedCredits: 4,
-          availableCredits: 40,
-          reservationStatus: "reserved",
-          reservationId: "creditres_1",
+          mode: "showback",
+          estimatedUsdMicros: 12_000_000,
+          ratingStatus: "rated",
+          blocked: false,
+          reasons: [],
         }),
       ],
     }),
   );
+  expect(cost.runId).toBe("plan_1");
   expect(cost.billingMode).toBe("showback");
-  expect(cost.estimatedUsdMicros).toBe(4_000_000);
-  expect(cost.availableUsdMicros).toBe(40_000_000);
-  expect(cost.shortfallUsdMicros).toBeUndefined();
-  expect(cost.estimatedCredits).toBe(4);
-  expect(cost.availableCredits).toBe(40);
-  expect(cost.reservationStatus).toBe("reserved");
-  expect(cost.creditShortfall).toBeUndefined();
+  expect(cost.estimatedUsdMicros).toBe(12_000_000);
+  expect(cost.ratingStatus).toBe("rated");
   expect(cost.blocked).toBe(false);
   expect(cost.reasons).toEqual([]);
 });
 
-test("projectPlanRunCost reports a billing-plan limit reason as blocked under enforce", () => {
+test("projectPlanRunCost selects the last policy event that carries billing", () => {
   const cost = projectPlanRunCost(
     planRun({
-      status: "failed",
-      policy: {
-        status: "blocked",
-        reasons: [
-          "billing plan free limits estimated credits per run to 5; plan estimated 9",
-        ],
-        checkedAt: 1500,
-      },
+      auditEvents: [
+        {
+          id: "evt_preflight",
+          type: "plan.policy_evaluated",
+          at: 1200,
+          data: { status: "passed" },
+        },
+        {
+          ...billingAuditEvent({
+            mode: "showback",
+            estimatedUsdMicros: 3_000_000,
+            ratingStatus: "rated",
+            blocked: false,
+            reasons: [],
+          }),
+          id: "evt_billing",
+          at: 1500,
+        },
+        {
+          id: "evt_postflight",
+          type: "plan.policy_evaluated",
+          at: 1800,
+          data: { status: "passed" },
+        },
+      ],
+    }),
+  );
+  expect(cost.billingMode).toBe("showback");
+  expect(cost.estimatedUsdMicros).toBe(3_000_000);
+});
+
+test("projectPlanRunCost preserves a host extension without interpreting it", () => {
+  const cost = projectPlanRunCost(
+    planRun({
+      status: "succeeded",
+      policy: { status: "passed", reasons: [], checkedAt: 1500 },
       auditEvents: [
         billingAuditEvent({
-          mode: "enforce",
-          estimatedCredits: 9,
-          planLimits: { maxEstimatedCreditsPerRun: 5 },
+          mode: "showback",
+          estimatedUsdMicros: 250_000,
+          ratingStatus: "rated",
+          blocked: false,
+          reasons: [],
+          extension: { hostEstimateClass: "operator.v2" },
         }),
       ],
     }),
   );
-  expect(cost.blocked).toBe(true);
-  expect(cost.reasons).toEqual([
-    "billing plan free limits estimated credits per run to 5; plan estimated 9",
-  ]);
-  // No reservation was attempted, so available credits / shortfall are absent.
-  expect(cost.availableUsdMicros).toBeUndefined();
-  expect(cost.shortfallUsdMicros).toBeUndefined();
-  expect(cost.availableCredits).toBeUndefined();
-  expect(cost.creditShortfall).toBeUndefined();
+  expect(cost.estimatedUsdMicros).toBe(250_000);
+  expect(cost.extension).toEqual({ hostEstimateClass: "operator.v2" });
 });
 
 test("projectPlanRunCost defaults to disabled/zero when no billing audit exists", () => {
   const cost = projectPlanRunCost(planRun({ status: "queued" }));
   expect(cost.billingMode).toBe("disabled");
   expect(cost.estimatedUsdMicros).toBe(0);
-  expect(cost.estimatedCredits).toBe(0);
+  expect(cost.ratingStatus).toBe("not_applicable");
   expect(cost.blocked).toBe(false);
   expect(cost.reasons).toEqual([]);
-  expect(cost.reservationStatus).toBeUndefined();
 });
 
-test("projectPlanRunCost does not block a showback-mode plan even when policy blocked", () => {
-  // showback never blocks apply; a blocked plan in showback (e.g. a non-billing
-  // policy block) still reports blocked=false for the billing surface.
+test("projectPlanRunCost does not turn a non-billing policy denial into a billing block", () => {
   const cost = projectPlanRunCost(
     planRun({
       status: "failed",
       policy: {
         status: "blocked",
-        reasons: [
-          "credit reservation failed: 8 credits estimated but only 2 available",
-        ],
+        reasons: ["resource action denied by Workspace policy"],
         checkedAt: 1500,
       },
       auditEvents: [
         billingAuditEvent({
           mode: "showback",
-          estimatedCredits: 8,
-          availableCredits: 2,
+          estimatedUsdMicros: 8_000_000,
+          ratingStatus: "rated",
+          blocked: false,
+          reasons: [],
         }),
       ],
     }),
   );
   expect(cost.billingMode).toBe("showback");
-  expect(cost.shortfallUsdMicros).toBe(6_000_000);
-  expect(cost.creditShortfall).toBe(6);
+  expect(cost.estimatedUsdMicros).toBe(8_000_000);
   expect(cost.blocked).toBe(false);
+  expect(cost.reasons).toEqual([]);
+});
+
+test("projectPlanRunCost does not treat a pre-rating amount as rated", () => {
+  const cost = projectPlanRunCost(
+    planRun({
+      auditEvents: [
+        billingAuditEvent({
+          mode: "showback",
+          estimatedUsdMicros: 9_000_000,
+          blocked: false,
+          reasons: [],
+        }),
+      ],
+    }),
+  );
+
+  expect(cost.ratingStatus).toBe("unrated");
+  expect(cost.estimatedUsdMicros).toBe(0);
 });

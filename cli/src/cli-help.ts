@@ -1,6 +1,6 @@
 import process from "node:process";
 
-const platformReadinessKind = "takosumi.platform-readiness@v1";
+const platformReadinessKind = "takosumi.platform-readiness@v2";
 const platformReadinessProductionTopologyKind =
   "takosumi.production-topology@v1";
 
@@ -22,14 +22,18 @@ export function helpText(): string {
       "  status <run-id>         Run の状態を表示",
       "  logs   <run-id>         Run のログを表示",
       "",
+      "Resource Shape:",
+      "  resources               Resource の preview / apply / import / drift 操作",
+      "",
       "Operator:",
       "  connections             operator connection と internal resolver を管理",
-      "  secrets                 Worker secret の確認と適用",
+      "  target-pools            TargetPool 宣言を管理",
+      "  space-policies          SpacePolicy 宣言を管理",
       "",
       "Install link の例:",
-      "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com",
+      "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com",
       "  export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>",
-      "  open 'https://app.takosumi.com/install?git=https://github.com/example/app.git&path=deploy/opentofu'",
+      "  open 'https://takosumi.example.com/install?git=https://git.example.com/example/app.git&path=deploy/opentofu'",
       "",
       "内部/開発用コマンドは help には表示しません。",
       "日本語表示は TAKOSUMI_LANG=ja または LANG=ja_* で有効になります。",
@@ -43,123 +47,129 @@ export function helpText(): string {
     "  status <run-id>         show a Run's status",
     "  logs   <run-id>         show a Run's logs",
     "",
+    "Resource Shape:",
+    "  resources               Preview and reconcile typed Resources",
+    "",
     "Operator:",
     "  connections             Manage operator connections and internal resolvers",
-    "  secrets                 Check and apply Worker secrets",
+    "  target-pools            Manage TargetPool declarations",
+    "  space-policies          Manage SpacePolicy declarations",
     "",
     "Install link example:",
-    "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com",
+    "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com",
     "  export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>",
-    "  open 'https://app.takosumi.com/install?git=https://github.com/example/app.git&path=deploy/opentofu'",
+    "  open 'https://takosumi.example.com/install?git=https://git.example.com/example/app.git&path=deploy/opentofu'",
     "",
     "Internal/development commands are intentionally hidden from this help.",
   ].join("\n");
 }
 
-export function platformSecretsHelpText(): string {
+export function resourcesHelpText(): string {
   if (isJapaneseCli()) {
     return [
-      "takosumi secrets <command>",
+      "takosumi resources <command>",
       "",
       "コマンド:",
-      "  status",
-      "  apply",
+      "  list --space <id> [--limit <n> --cursor <opaque>]",
+      "  get <kind> <name> --space <id>",
+      "  events <kind> <name> --space <id> [--limit <n> --cursor <opaque>]",
+      "  preview --file <resource.json>",
+      "  apply <kind> <name> --file <resource.json> [--yes]",
+      "  import <kind> <name> --file <resource-with-native-id.json>",
+      "  observe <kind> <name> --space <id>",
+      "  refresh <kind> <name> --space <id>",
+      "  delete <kind> <name> --space <id> [--force]",
       "",
-      "operator vault の状態を確認し、生成可能 secret を作成して Worker に push します。",
-      "表示するのは secret 名と件数だけで、値は表示しません。",
-      "Provider Connection は dashboard/API flow で扱います。",
-      "内部 resolver record は通常 CLI surface では操作しません。",
+      "共通オプション:",
+      "  --url <deploy-control-url>",
+      "  --token <deploy-control-bearer>",
+      "  --json",
+      "  --yes  preview した plan と価格を承認して apply",
+      "",
+      "write request は non-secret JSON object として file から読みます。",
+      "--force は operator の break-glass 認可がある endpoint だけで成功します。",
     ].join("\n");
   }
   return [
-    "takosumi secrets <command>",
+    "takosumi resources <command>",
     "",
     "Commands:",
-    "  status",
-    "  apply",
+    "  list --space <id> [--limit <n> --cursor <opaque>]",
+    "  get <kind> <name> --space <id>",
+    "  events <kind> <name> --space <id> [--limit <n> --cursor <opaque>]",
+    "  preview --file <resource.json>",
+    "  apply <kind> <name> --file <resource.json> [--yes]",
+    "  import <kind> <name> --file <resource-with-native-id.json>",
+    "  observe <kind> <name> --space <id>",
+    "  refresh <kind> <name> --space <id>",
+    "  delete <kind> <name> --space <id> [--force]",
     "",
-    "Checks the operator vault, creates generatable secrets, and pushes Worker",
-    "secrets. It only prints secret names and counts, never values. Provider",
-    "Connection setup is a dashboard/API flow. Internal",
-    "resolver records are not part of the normal CLI surface.",
+    "Common options:",
+    "  --url <deploy-control-url>",
+    "  --token <deploy-control-bearer>",
+    "  --json",
+    "  --yes  approve the previewed plan and price, then apply",
+    "",
+    "Write requests are read from non-secret JSON object files.",
+    "--force succeeds only when the endpoint grants operator break-glass access.",
   ].join("\n");
 }
 
-export function platformSecretsStatusHelpText(): string {
+export function targetPoolsHelpText(): string {
   if (isJapaneseCli()) {
     return [
-      "takosumi secrets status",
+      "takosumi target-pools <command>",
       "",
-      "オプション:",
-      "  --config <wrangler.toml>",
-      "  --secrets-dir <path>",
-      "  --json",
+      "コマンド:",
+      "  list --space <id> [--limit <n> --cursor <opaque>]",
+      "  get <name> --space <id>",
+      "  put <name> --file <target-pool.json>",
+      "  delete <name> --space <id>",
       "",
-      "AI Gateway の `TAKOSUMI_AI_GATEWAY_PROFILES` は env または wrangler config の",
-      "`[vars]` から読みます。`openai_compatible` profile は `apiKeyEnv` が指す",
-      "Worker secret 名の不足も検出します。Cloudflare Unified Billing profile では",
-      "Cloudflare API token secret、direct/BYOK provider では upstream key secret を",
-      "指定します。`workers_ai_binding` profile は Worker `AI` binding を使うため",
-      "upstream secret を要求しません。",
-      "",
-      "環境変数:",
-      "  TAKOSUMI_WRANGLER_CONFIG",
-      "  TAKOSUMI_SECRETS",
+      "put file は top-level の space と spec.targets を持つ non-secret JSON object です。",
+      "共通オプション: --url、--token、--json",
     ].join("\n");
   }
   return [
-    "takosumi secrets status",
+    "takosumi target-pools <command>",
     "",
-    "Options:",
-    "  --config <wrangler.toml>",
-    "  --secrets-dir <path>",
-    "  --json",
+    "Commands:",
+    "  list --space <id> [--limit <n> --cursor <opaque>]",
+    "  get <name> --space <id>",
+    "  put <name> --file <target-pool.json>",
+    "  delete <name> --space <id>",
     "",
-    "Reads `TAKOSUMI_AI_GATEWAY_PROFILES` from the environment or the",
-    "wrangler config `[vars]` block. `openai_compatible` profiles report",
-    "missing Worker secrets named by `apiKeyEnv`. Cloudflare Unified Billing",
-    "profiles use a Cloudflare API token secret; direct/BYOK providers use an",
-    "upstream key secret. `workers_ai_binding` profiles use the Worker `AI`",
-    "binding and do not require upstream secrets.",
-    "",
-    "Environment:",
-    "  TAKOSUMI_WRANGLER_CONFIG",
-    "  TAKOSUMI_SECRETS",
+    "The put file is a non-secret JSON object with top-level space and spec.targets.",
+    "Common options: --url, --token, --json",
   ].join("\n");
 }
 
-export function platformSecretsApplyHelpText(): string {
+export function spacePoliciesHelpText(): string {
   if (isJapaneseCli()) {
     return [
-      "takosumi secrets apply",
+      "takosumi space-policies <command>",
       "",
-      "local vault を正本として Worker secret に push します。",
-      "生成可能 secret は不足時に作成します。既存 protected key は上書きしません。",
+      "コマンド:",
+      "  list --space <id> [--limit <n> --cursor <opaque>]",
+      "  get <name> --space <id>",
+      "  put <name> --file <space-policy.json>",
+      "  delete <name> --space <id>",
       "",
-      "オプション:",
-      "  --config <wrangler.toml>",
-      "  --secrets-dir <path>",
-      "  --regenerate <secret-name|rotate-safe>",
-      "  --init-protected",
-      "  --local-only",
-      "  --dry-run",
-      "  --json",
+      "put file は top-level の space と spec を持つ non-secret JSON object です。",
+      "共通オプション: --url、--token、--json",
     ].join("\n");
   }
   return [
-    "takosumi secrets apply",
+    "takosumi space-policies <command>",
     "",
-    "Pushes Worker secrets from the local operator vault. Missing generatable",
-    "secrets are created. Existing protected keys are never overwritten.",
+    "Commands:",
+    "  list --space <id> [--limit <n> --cursor <opaque>]",
+    "  get <name> --space <id>",
+    "  put <name> --file <space-policy.json>",
+    "  delete <name> --space <id>",
     "",
-    "Options:",
-    "  --config <wrangler.toml>",
-    "  --secrets-dir <path>",
-    "  --regenerate <secret-name|rotate-safe>",
-    "  --init-protected",
-    "  --local-only",
-    "  --dry-run",
-    "  --json",
+    "The put file is a non-secret JSON object with top-level space and spec.",
+    "Common options: --url, --token, --json",
   ].join("\n");
 }
 
@@ -170,14 +180,13 @@ export function connectionsHelpText(): string {
       "",
       "コマンド:",
       "  list",
-      "  set-cloudflare-token",
-      "  create-generic-env",
+      "  create",
       "  test <connection-id>",
       "  revoke <connection-id>",
       "",
       "`--url` に Takosumi platform origin、`--token` に deploy-control bearer を渡します。",
       "credential 値は file からだけ読み、CLI には表示しません。",
-      "set-cloudflare-token は operator-scope、create-generic-env は明示的な Workspace-scoped Provider Connection を作成します。",
+      "create は provider source と Credential Recipe を明示して Provider Connection を作成します。",
     ].join("\n");
   }
   return [
@@ -185,15 +194,14 @@ export function connectionsHelpText(): string {
     "",
     "Commands:",
     "  list",
-    "  set-cloudflare-token",
-    "  create-generic-env",
+    "  create",
     "  test <connection-id>",
     "  revoke <connection-id>",
     "",
     "Use --url with the Takosumi platform origin and --token with the",
     "deploy-control bearer. Credential values are accepted only through files",
-    "and are never printed by the CLI. set-cloudflare-token creates operator-scope",
-    "material; create-generic-env creates explicit Workspace-scoped Provider Connections.",
+    "and are never printed by the CLI. create requires an explicit provider source,",
+    "Credential Recipe id/auth mode, and secret partition.",
   ].join("\n");
 }
 
@@ -226,52 +234,23 @@ export function connectionsListHelpText(): string {
   ].join("\n");
 }
 
-export function connectionsCreateCloudflareHelpText(): string {
+export function connectionsCreateHelpText(): string {
   if (isJapaneseCli()) {
     return [
-      "takosumi connections set-cloudflare-token",
+      "takosumi connections create",
       "",
-      "オプション:",
-      "  --api-token-file <path>  Cloudflare API token を含む file",
-      '  --values-file <path>     JSON object。例: {"CLOUDFLARE_API_TOKEN":"..."}',
-      "  --display-name <name>",
-      "  --account-id <id>",
-      "  --zone-id <id>",
-      "  --expires-at <iso8601>",
-      "  --url <deploy-control-url>",
-      "  --token <deploy-control-bearer>",
-      "  --json",
-    ].join("\n");
-  }
-  return [
-    "takosumi connections set-cloudflare-token",
-    "",
-    "Options:",
-    "  --api-token-file <path>  file containing the Cloudflare API token",
-    '  --values-file <path>     JSON object, e.g. {"CLOUDFLARE_API_TOKEN":"..."}',
-    "  --display-name <name>",
-    "  --account-id <id>",
-    "  --zone-id <id>",
-    "  --expires-at <iso8601>",
-    "  --url <deploy-control-url>",
-    "  --token <deploy-control-bearer>",
-    "  --json",
-  ].join("\n");
-}
-
-export function connectionsCreateGenericEnvHelpText(): string {
-  if (isJapaneseCli()) {
-    return [
-      "takosumi connections create-generic-env",
-      "",
-      "任意 OpenTofu/Terraform provider 用の Workspace-scoped Provider Connection を作成します。",
+      "provider source と Credential Recipe を明示して Provider Connection を作成します。",
       "credential値はfileからだけ読み、CLIには表示しません。",
       "",
       "オプション:",
-      "  --space <space-id>      必須。Connection を所有する Workspace",
-      "  --provider <source>     必須。例: registry.opentofu.org/hashicorp/aws",
-      '  --values-file <path>    JSON object。例: {"AWS_REGION":"ap-northeast-1"}',
-      '  --files-file <path>     JSON array。例: [{"path":"google.json","content":"...","envName":"GOOGLE_APPLICATION_CREDENTIALS"}]',
+      "  --provider <source>     必須。完全修飾 provider source",
+      "  --recipe <id>           必須。Credential Recipe id",
+      "  --auth-mode <mode>      必須。recipe auth mode",
+      "  --secret-partition <id> 必須。暗号境界の任意 token",
+      "  --scope <workspace|operator> 省略時は --workspace の有無から決定",
+      "  --workspace <workspace-id> Workspace scope の所有 Workspace",
+      "  --values-file <path>    credential env の JSON object",
+      "  --files-file <path>     credential file の JSON array",
       "  --scope-hints-file <path>  任意の非secret JSON object",
       "  --display-name <name>",
       "  --expires-at <iso8601>",
@@ -281,16 +260,20 @@ export function connectionsCreateGenericEnvHelpText(): string {
     ].join("\n");
   }
   return [
-    "takosumi connections create-generic-env",
+    "takosumi connections create",
     "",
-    "Creates a Workspace-scoped Provider Connection for any OpenTofu/Terraform provider.",
+    "Creates a Provider Connection from explicit provider and Credential Recipe data.",
     "Credential values are read only from files and are never printed by the CLI.",
     "",
     "Options:",
-    "  --space <space-id>      required Workspace owner",
-    "  --provider <source>     required, e.g. registry.opentofu.org/hashicorp/aws",
-    '  --values-file <path>    JSON object, e.g. {"AWS_REGION":"ap-northeast-1"}',
-    '  --files-file <path>     JSON array, e.g. [{"path":"google.json","content":"...","envName":"GOOGLE_APPLICATION_CREDENTIALS"}]',
+    "  --provider <source>     required fully-qualified provider source",
+    "  --recipe <id>           required Credential Recipe id",
+    "  --auth-mode <mode>      required recipe auth mode",
+    "  --secret-partition <id> required opaque encryption partition token",
+    "  --scope <workspace|operator> inferred from --workspace when omitted",
+    "  --workspace <workspace-id> owning Workspace for workspace scope",
+    "  --values-file <path>    JSON object containing credential env",
+    "  --files-file <path>     JSON array containing credential files",
     "  --scope-hints-file <path>  optional non-secret JSON object",
     "  --display-name <name>",
     "  --expires-at <iso8601>",
@@ -402,23 +385,6 @@ export function accountsMigrateD1HelpText(): string {
   ].join("\n");
 }
 
-export function accountsLaunchTokensCleanupHelpText(): string {
-  return [
-    "takosumi accounts launch-tokens cleanup",
-    "",
-    "Options:",
-    "  --database-url <postgres-url>",
-    "  --expired-retention-hours <hours>  default 24",
-    "  --used-retention-hours <hours>     default 24",
-    "  --now <iso-timestamp>              test/audit override",
-    "  --dry-run",
-    "  --json",
-    "",
-    "Environment:",
-    "  TAKOSUMI_ACCOUNTS_DATABASE_URL",
-  ].join("\n");
-}
-
 export function launchReadinessValidateHelpText(): string {
   return [
     "takosumi launch-readiness validate",
@@ -496,7 +462,12 @@ export function launchReadinessTemplateHelpText(): string {
   return [
     "takosumi launch-readiness template",
     "",
+    "Options:",
+    "  --contribution-file <path>  Optional versioned contribution JSON object or array",
+    "",
     "Print a fail-closed JSON skeleton for platform readiness evidence.",
+    "The full selected contribution definition is embedded in the @v2 document,",
+    "so later validation needs no provider-specific validator or registry lookup.",
     "Each required evidence type is expanded with its structured field shape,",
     "private=true, and a required publicSummary placeholder.",
     "Fill every row, change status to passed only after live evidence exists,",
@@ -513,13 +484,17 @@ export function launchReadinessMigrateFinalModelHelpText(): string {
     "Options:",
     "  --file <path>  Existing private readiness JSON",
     "  --out <path>   Write migrated JSON here",
+    "  --contribution-file <path>  Fix the v2 profile to versioned contribution JSON",
     "  --dry-run      Report changes without writing output",
     "  --check        Exit 1 when legacy names are still present",
     "  --json         Print migration report JSON",
     "",
-    "Migrates pre-final-plan readiness evidence names such as",
-    "installation-created, capsuleId, and workspaceId to the final",
-    "Workspace/Capsule/Run/StateVersion evidence schema. Raw evidence is",
+    "Migrates pre-final-plan readiness event and owner keys to the final",
+    "Workspace/Capsule/Run/StateVersion evidence schema, upgrades a readiness",
+    "document to @v2, maps retired baseline readiness IDs explicitly, and fixes",
+    "the selected contribution definition. For an operation-drill evidence",
+    "envelope, its kind and metadata stay unchanged while readinessPatch is",
+    "migrated. Raw evidence is",
     "not printed; pass --out to write the migrated document.",
   ].join("\n");
 }
@@ -576,61 +551,19 @@ export function accountsServeHelpText(): string {
     "  --hostname <host>",
     "  --port <port>",
     "  --subject-secret <secret>",
-    "  --google-client-id <id>",
-    "  --google-client-secret <secret>",
-    "  --google-redirect-uri <uri>",
-    "  --oidc-provider-id <id>",
-    "  --oidc-issuer <url>",
-    "  --oidc-authorization-endpoint <url>",
-    "  --oidc-token-endpoint <url>",
-    "  --oidc-userinfo-endpoint <url>",
-    "  --oidc-client-id <id>",
-    "  --oidc-client-secret <secret>",
-    "  --oidc-redirect-uri <uri>",
-    "  --oidc-scopes <scope[,scope...]>",
-    "  --oidc-subject-claim <claim>",
+    "  --upstream-providers <json-array>",
     "  --upstream-session-ttl-ms <milliseconds>",
     "  --passkey-rp-id <domain>",
     "  --passkey-rp-name <name>",
     "  --passkey-origin <origin>",
     "  --passkey-session-ttl-ms <milliseconds>",
-    "  --deploy-control-url <url>",
-    "  --deploy-control-token <token>",
-    "  --service-binding-materials-file <path>",
-    "  --shared-cell-slots <cell-id:capacity[,cell-id:capacity...]>",
-    "  --shared-cell-scale-out-policy <json>",
-    "  --materialize-worker-url <url>",
-    "  --materialize-worker-token <token>",
-    "  --runtime-projection-material-resolver-token <token>",
-    "  --billing-portal-url <url>",
-    "  --export-output-dir <path>",
-    "  --export-download-base-url <url>",
-    "  --export-data-dir <path>",
-    "  --export-download-ttl-ms <milliseconds>",
-    "  --platform-access <closed|open>",
-    "  --platform-readiness-file <path>",
-    "  --platform-readiness-digest <sha256:digest>",
-    "  --platform-evidence-ref <ref>",
-    "  --platform-approval-ref <ref>",
-    "  --platform-public-summary <text>",
     "  --database-url <postgres-url>",
     "  --dev-session-id <sess_...>  seed one in-memory dev Accounts session",
     "  --dry-run",
     "",
     "Environment:",
     "  TAKOSUMI_ACCOUNTS_DATABASE_URL",
-    "  TAKOSUMI_DEPLOY_CONTROL_URL",
-    "  TAKOSUMI_DEPLOY_CONTROL_TOKEN",
-    "  TAKOSUMI_ACCOUNTS_SERVICE_BINDING_MATERIALS",
-    "  TAKOSUMI_ACCOUNTS_SHARED_CELL_SLOTS",
-    "  TAKOSUMI_ACCOUNTS_SHARED_CELL_SCALE_OUT_POLICY",
-    "  TAKOSUMI_ACCOUNTS_MATERIALIZE_WORKER_URL",
-    "  TAKOSUMI_ACCOUNTS_MATERIALIZE_WORKER_TOKEN",
-    "  TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN",
-    "  TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL",
-    "  TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR",
-    "  TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL",
-    "  TAKOSUMI_ACCOUNTS_EXPORT_DATA_DIR",
+    "  <clientSecretEnv named by each upstream provider descriptor>",
   ].join("\n");
 }
 
@@ -679,177 +612,6 @@ export function accountsTokensRevokeHelpText(): string {
     "Options:",
     "  --accounts-url <url>",
     "  --token <accounts-session-bearer>",
-    "  --json",
-  ].join("\n");
-}
-
-export function installationsListHelpText(): string {
-  return [
-    "takosumi internal installations list",
-    "",
-    "Options:",
-    "  --space <id>",
-    "  --accounts-url <url>",
-    "  --token <accounts-session-bearer>",
-    "  --json",
-  ].join("\n");
-}
-
-export function installationsInspectHelpText(): string {
-  return [
-    "takosumi internal installations inspect <installation-id>",
-    "",
-    "Options:",
-    "  --accounts-url <url>",
-    "  --token <accounts-session-bearer>",
-    "  --json",
-  ].join("\n");
-}
-
-export function installationsUninstallHelpText(): string {
-  return [
-    "takosumi internal installations uninstall <installation-id>",
-    "",
-    "Options:",
-    "  --reason <text>",
-    "  --accounts-url <url>",
-    "  --token <accounts-write-bearer>",
-    "  --json",
-  ].join("\n");
-}
-
-export function installationsStatusHelpText(): string {
-  return [
-    "takosumi internal installations status <installation-id>",
-    "",
-    "Options:",
-    "  --status <installing|ready|suspended|exported|failed>",
-    "  --reason <text>",
-    "  --mode <shared-cell|dedicated|self-hosted>",
-    "  --operation <materialize|export>",
-    "  --operation-id <op_...>",
-    "  --preserve-digest <sha256:...>",
-    "  --runtime-target-record-id <id>",
-    "  --runtime-target-type <shared-cell|dedicated|self-hosted>",
-    "  --runtime-target-id <id>",
-    "  --download-url <url>",
-    "  --download-expires-at <iso8601>",
-    "  --archive-digest <sha256:...>",
-    "  --error <message>",
-    "  --accounts-url <url>",
-    "  --token <accounts-write-bearer>",
-    "  --json",
-  ].join("\n");
-}
-
-export function installationsMaterializeHelpText(): string {
-  return [
-    "takosumi internal installations materialize <installation-id>",
-    "",
-    "Options:",
-    "  --mode dedicated",
-    "  --region <name>",
-    "  --compute <plan>",
-    "  --database <plan>",
-    "  --object-store <plan>",
-    "  --cutover-strategy <blue-green|cutover-now>",
-    "  --drain-seconds <seconds>",
-    "  --cost-ack",
-    "  --permission-digest <sha256:...>",
-    "  --idempotency-key <key>",
-    "  --accounts-url <url>",
-    "  --token <accounts-write-bearer>",
-    "  --drill-token <operator-token>",
-    "  --drill-token-file <path>",
-    "  --json",
-  ].join("\n");
-}
-
-export function installationsExportHelpText(): string {
-  return [
-    "takosumi internal installations export <installation-id>",
-    "",
-    "Options:",
-    "  --include-data",
-    "  --format <bundle>",
-    "  --encryption-method <none|age>",
-    "  --recipient <age1...[,age1...]>",
-    "  --data <postgres,blobs,memory,profiles>",
-    "  --secrets <templates-only|with-references>",
-    "  --idempotency-key <key>",
-    "  --accounts-url <url>",
-    "  --token <accounts-write-bearer>",
-    "  --json",
-  ].join("\n");
-}
-
-export function installationsExportOperationHelpText(): string {
-  return [
-    "takosumi internal installations export-operation <installation-id> <operation-id>",
-    "",
-    "Reads an installation export operation without downloading the archive.",
-    "",
-    "Options:",
-    "  --accounts-url <url>",
-    "  --token <accounts-read-bearer>",
-    "  --json",
-  ].join("\n");
-}
-
-export function installationsImportPlanHelpText(): string {
-  return [
-    "takosumi internal installations import-plan",
-    "",
-    "Reads a takos-export/bundle.json payload or a Cloudflare/R2 export JSON",
-    "document and prints the target deploy-control PlanRun request plus the",
-    "Accounts projection create template that import-apply can execute.",
-    "This does not call the retired public import route.",
-    "",
-    "Options:",
-    "  --bundle-file <takos-export/bundle.json>",
-    "  --target-issuer <https://self-host.example>",
-    "  --target-account <account-id>",
-    "  --target-workspace <workspace-id>",
-    "  --created-by-subject <tsub_...>",
-    "  --target-capsule-id <capsule-id>",
-    "  --mode <shared-cell|dedicated|self-hosted>",
-    "  --variables-json <json-object>",
-    "  --variables-file <path>",
-    "  --out-file <path>",
-    "  --json",
-  ].join("\n");
-}
-
-export function installationsImportApplyHelpText(): string {
-  return [
-    "takosumi internal installations import-apply",
-    "",
-    "Applies an installation import through the target Accounts/deploy-control",
-    "flow: create/sync the target Git Source, create the target Capsule,",
-    "create target PlanRun, require it to be succeeded, then create the Accounts",
-    "projection using the reviewed expected guard.",
-    "This does not call the retired public import route.",
-    "",
-    "Options:",
-    "  --plan-file <import-plan.json>",
-    "  --bundle-file <takos-export/bundle.json>",
-    "  --target-issuer <https://self-host.example>",
-    "  --target-account <account-id>",
-    "  --target-workspace <workspace-id>",
-    "  --created-by-subject <tsub_...>",
-    "  --target-capsule-id <review-only-capsule-id>",
-    "  --mode <shared-cell|dedicated|self-hosted>",
-    "  --install-config-id <id>   default: cfg-default-opentofu-capsule",
-    "  --environment <name>       default: production",
-    "  --provider <provider=connection-id[,provider=connection-id]>",
-    "  --variables-json <json-object>",
-    "  --variables-file <path>",
-    "  --wait-timeout-seconds <n> default: 120",
-    "  --wait-interval-ms <n>     default: 1000",
-    "  --idempotency-key <key>",
-    "  --accounts-url <url>",
-    "  --token <accounts-write-bearer>",
-    "  --out-file <path>",
     "  --json",
   ].join("\n");
 }

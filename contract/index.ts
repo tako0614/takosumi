@@ -10,20 +10,27 @@ export * from "./mobile.ts";
 export * from "./notification-pushers.ts";
 export * from "./install-experience.ts";
 export * from "./resource-shape.ts";
+export * from "./resource-deployment.ts";
+export * from "./plan-scope.ts";
+export * from "./interfaces.ts";
 export * from "./target.ts";
 export * from "./resolution.ts";
 export * from "./sources.ts";
 export * from "./redaction.ts";
 export * from "./workspaces.ts";
-export * from "./output-sync.ts";
-export * from "./output-projection.ts";
 export type { CapsuleFullName } from "./workspaces.ts";
 export type { Project, PublicProject } from "./projects.ts";
 export type {
   BackupConfig,
-  InstallConfigStoreDefault,
-  InstallConfigStoreInputFormat,
-  InstallConfigStoreInput,
+  InstallConfigLifecycleAction,
+  InstallConfigLifecycleCommandAction,
+  InstallConfigLifecycleExecutor,
+  InstallConfigLifecyclePhase,
+  InstallContextVariableMapping,
+  InstallContextVariableValue,
+  InstallConfigVariableDefault,
+  InstallConfigVariableInputFormat,
+  InstallConfigVariablePresentation,
   InstallConfigStoreKind,
   InstallConfigStoreMetadata,
   InstallConfigStoreSource,
@@ -36,23 +43,25 @@ export type {
   ManagedPublicHostnameClaimRequest,
   ManagedPublicHostnameClaimResult,
   ManagedPublicHostnameMode,
-  NormalizationConfig,
   OutputAllowlistEntry,
   OutputValueType,
   PolicyConfig,
   SourceBuildCommand,
   SourceBuildConfig,
   PublicInstallConfig as InstallConfig,
-  TrustLevel,
+} from "./install-configs.ts";
+export {
+  CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
+  CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
 } from "./install-configs.ts";
 export type {
-  Capsule,
+  PublicCapsule as Capsule,
   CapsuleStatus,
-  InstallType,
   PublicCapsule,
   CapsuleCompatibility,
   CapsuleCompatibilityLevel,
   CapsuleDataSourceSummary,
+  CapsuleFindingCompatibilityImpact,
   CapsuleFindingSeverity,
   CapsuleGateFinding,
   CapsuleGateResult,
@@ -80,7 +89,6 @@ export {
   isReservedProviderEnvName,
 } from "./provider-env-rules.ts";
 export * from "./credential-recipes.ts";
-export * from "./credential-recipes.generated.ts";
 export * from "./dependencies.ts";
 export type {
   TakosumiApiErrorCode,
@@ -90,15 +98,21 @@ export type {
 export * from "./activity.ts";
 export * from "./pagination.ts";
 export type {
-  Output,
+  PublicOutput as Output,
   PublicOutput,
+  OutputResponse,
   OutputShare,
   OutputShareEntry,
   OutputShareStatus,
 } from "./outputs.ts";
-export type { StateVersion } from "./state-versions.ts";
+export type {
+  PublicStateVersion as StateVersion,
+  PublicStateVersion,
+} from "./state-versions.ts";
 export * from "./backups.ts";
 export * from "./billing.ts";
+export * from "./platform-readiness.ts";
+export * from "./platform-hardening.ts";
 export * from "./security.ts";
 // `RunStatus` from ./runs.ts is exported selectively: the internal `/v1`
 // compatibility seam owns a separate status union for its private execution

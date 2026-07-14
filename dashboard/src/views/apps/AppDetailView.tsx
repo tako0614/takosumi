@@ -6,8 +6,8 @@
  *
  * The friendly layer leads: open the service, check its status, then opt into
  * updates/settings when needed. All mutations still route through the same
- * control-plane actions (plan / destroy plan / rollback plan / backup / put
- * profile).
+ * control-plane actions (plan / destroy plan / rollback plan / backup /
+ * ProviderBinding replacement).
  */
 import "../../styles/wave-a.css";
 import "../../styles/wave-b.css";
@@ -29,50 +29,50 @@ import { A, useBeforeLeave, useNavigate, useParams } from "@solidjs/router";
 import {
   Archive,
   ArrowLeft,
-  ExternalLink,
   RefreshCw,
   RotateCcw,
   Settings2,
   Trash2,
 } from "lucide-solid";
 import {
+  installExperienceArtifact,
   installExperienceInitialSecret,
+  installExperienceOidcClient,
   installExperiencePublicEndpoint,
   installExperienceServiceNameVariable,
 } from "takosumi-contract";
+import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import Page from "../account/components/auth/Page.tsx";
 import {
   type BackupRecord,
   type ActivityEvent,
   ControlApiError,
   type InstallConfig,
-  type CapsuleProviderConnectionBinding,
-  type CapsuleProviderConnectionBindings,
+  type ProviderBinding,
+  type ProviderBindings,
   type ProviderConnection,
-  createDeploymentRollbackPlan,
+  createStateVersionRollbackPlan,
   createCapsuleBackup,
   deleteCapsule,
   extractRunId,
-  getDeployment,
+  getStateVersion,
   getInstallConfig,
-  getCapsuleProviderConnectionSet,
+  getCapsuleProviderBindingSet,
   getCapsule,
   getWorkspaceGraph,
   listActivity,
-  listDeployments,
+  listStateVersions,
   listProviderConnections,
   listSources,
   getCapsuleUsageSummary,
   planCapsuleUpdate,
   patchInstallConfig,
-  putCapsuleProviderConnectionSet,
+  putCapsuleProviderBindingSet,
   setCapsuleAutoUpdate,
 } from "../../lib/control-api.ts";
 import { formatUsdMicros } from "../../lib/billing-format.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
-  deploymentStatusLabel,
-  deploymentTone,
   capsuleStatusLabel,
   capsuleTone,
   operationLabel,
@@ -85,13 +85,13 @@ import {
   type ConfigVariableRow,
   configRowsFromInstallConfig,
   effectiveCapsuleStatus,
-  isDeploymentOpenable,
-  isUrlString,
-  launchUrlFromDeployment,
-  publicLinkRowLabels,
-  releaseActivationStatusForDeployment,
-  outputLabel,
+  isStateVersionRuntimeReady,
+  releaseActivationStatusForStateVersion,
 } from "../../lib/capsules-ui.ts";
+import {
+  formatInterfaceBlueprintsJson,
+  parseInterfaceBlueprintsJson,
+} from "../../lib/interface-blueprints.ts";
 import {
   formatDateTime,
   locale,
@@ -121,6 +121,11 @@ import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
+import {
+  listAuthorizedUiSurfaces,
+  type AuthorizedUiSurface,
+} from "../../lib/ui-surface-interfaces.ts";
+import { refreshSession } from "../account/lib/session.ts";
 
 type TabId = "overview" | "deploys" | "settings" | "danger";
 
@@ -178,11 +183,9 @@ function Inner() {
   const graphWorkspaceId = () =>
     tab() === "overview" ? (workspaceId() ?? null) : null;
   const currentStateVersionId = () =>
-    capsuleData()?.currentStateVersionId ?? capsuleData()?.currentDeploymentId ?? null;
-  const [profile, { refetch: refetchProfile }] = createResource(
-    settingsCapsuleId,
-    getCapsuleProviderConnectionSet,
-  );
+    capsuleData()?.currentStateVersionId ?? null;
+  const [providerBindingSet, { refetch: refetchProviderBindingSet }] =
+    createResource(settingsCapsuleId, getCapsuleProviderBindingSet);
   // Fetched on every tab (not just settings): the header shows the store
   // display name, which lives on the install config's store metadata.
   const installConfigId = () => capsuleData()?.installConfigId ?? null;
@@ -190,18 +193,36 @@ function Inner() {
     installConfigId,
     getInstallConfig,
   );
-  // Same source as the launcher tile name (store metadata) so the home screen
-  // and the detail header agree on what the app is called. A failed install
-  // config read must not break the header — fall back to the instance name.
+  // Store presentation is useful on the control-plane detail only. Launcher
+  // presentation is Interface-owned and may intentionally differ. A failed
+  // install-config read must not break the header — fall back to the Capsule
+  // instance name.
   const displayName = createMemo(() => {
     if (installConfig.error) return undefined;
     return capsuleDisplayName(installConfig(), locale());
   });
   const [sources] = createResource(settingsWorkspaceId, listSources);
-  const [deployments] = createResource(deploysCapsuleId, listDeployments);
-  const [currentStateVersion] = createResource(
+  const [stateVersions] = createResource(deploysCapsuleId, listStateVersions);
+  const [currentStateVersionResource] = createResource(
     currentStateVersionId,
-    getDeployment,
+    getStateVersion,
+  );
+  const uiSurfaceKey = createMemo(() => {
+    const inst = capsuleData();
+    if (tab() !== "overview" || !inst || inst.status === "destroyed") {
+      return undefined;
+    }
+    return { workspaceId: inst.workspaceId, capsuleId: inst.id };
+  });
+  const [uiSurfaces] = createResource(
+    uiSurfaceKey,
+    async ({ workspaceId: id, capsuleId: ownerId }) => {
+      const session = await refreshSession();
+      if (!session) throw new Error("dashboard session is unavailable");
+      return await listAuthorizedUiSurfaces(id, session.subject, {
+        capsuleId: ownerId,
+      });
+    },
   );
   const [graph] = createResource(graphWorkspaceId, getWorkspaceGraph);
   const [providerConnections] = createResource(
@@ -211,14 +232,14 @@ function Inner() {
   const activityWorkspaceId = () => {
     const id = workspaceId();
     if (!id) return null;
-    return tab() === "deploys" || currentDeployment() ? id : null;
+    return tab() === "deploys" || currentStateVersionId() ? id : null;
   };
   const [activity] = createResource(activityWorkspaceId, (id) =>
     listActivity(id, 100),
   );
   // Secondary-resource reads are guarded with `.error` first: reading an
   // errored resource THROWS, and a transient failure of any of these
-  // supplemental fetches (activity / sources / graph / deployments / current
+  // supplemental fetches (activity / sources / graph / stateVersions / current
   // state version) must degrade to its own inline/empty state — never
   // white-screen the whole detail view. The primary `capsule` resource keeps
   // the load/notFound handling in the outer Switch.
@@ -227,16 +248,19 @@ function Inner() {
   );
   const sourceList = () => (sources.error ? [] : (sources() ?? []));
   const graphData = () => (graph.error ? undefined : graph());
-  const deploymentList = () =>
-    deployments.error ? [] : (deployments() ?? []);
+  const stateVersionList = () =>
+    stateVersions.error ? [] : (stateVersions() ?? []);
   const currentStateVersionValue = () =>
-    currentStateVersion.error ? undefined : currentStateVersion();
+    currentStateVersionResource.error
+      ? undefined
+      : currentStateVersionResource();
+  const uiSurfaceList = () => (uiSurfaces.error ? [] : (uiSurfaces() ?? []));
   // Guarded settings-tab inputs: a failed secondary fetch degrades the
   // field (config not-ready / no bindings) instead of crashing the tab.
   const settingsInstallConfig = () =>
     installConfig.error ? undefined : installConfig();
-  const settingsProfileBindings = () =>
-    profile.error ? undefined : profile()?.bindings;
+  const settingsProviderBindings = () =>
+    providerBindingSet.error ? undefined : providerBindingSet()?.bindings;
   const settingsProviderConnections = () =>
     providerConnections.error ? [] : (providerConnections() ?? []);
 
@@ -261,35 +285,27 @@ function Inner() {
     }
   });
 
-  const deploymentHistory = createMemo(() =>
-    [...deploymentList()].sort((a, b) =>
+  const stateVersionHistory = createMemo(() =>
+    [...stateVersionList()].sort((a, b) =>
       b.createdAt.localeCompare(a.createdAt),
     ),
   );
-  const currentDeployment = createMemo(() => {
+  const currentStateVersion = createMemo(() => {
     const current = currentStateVersionValue();
     if (current) return current;
-    const list = deploymentHistory();
-    const currentId =
-      capsuleData()?.currentStateVersionId ?? capsuleData()?.currentDeploymentId;
+    const list = stateVersionHistory();
+    const currentId = capsuleData()?.currentStateVersionId;
     return (
       (currentId && list.find((d) => d.id === currentId)) ||
       list[0] ||
       undefined
     );
   });
-  const publicOutputs = createMemo(() =>
-    Object.entries(currentDeployment()?.outputsPublic ?? {}),
-  );
-  const publicLinkOutputs = createMemo(() =>
-    publicOutputs().filter(([, value]) => isUrlString(value)),
-  );
-  const otherPublicOutputs = createMemo(() =>
-    publicOutputs().filter(([, value]) => !isUrlString(value)),
-  );
+  // StateVersion is readiness/provenance only. URL and presentation authority
+  // comes exclusively from the authorized Capsule-owned UI Interfaces above.
   const releaseActivationStatus = createMemo(() =>
-    releaseActivationStatusForDeployment(
-      currentDeployment(),
+    releaseActivationStatusForStateVersion(
+      currentStateVersion(),
       activityEvents(),
       capsuleId(),
     ),
@@ -297,12 +313,12 @@ function Inner() {
   const serviceOpenable = createMemo(
     () =>
       capsuleData()?.status !== "destroyed" &&
-      isDeploymentOpenable(currentDeployment(), activityEvents(), capsuleId()),
+      isStateVersionRuntimeReady(
+        currentStateVersion(),
+        activityEvents(),
+        capsuleId(),
+      ),
   );
-  const launchUrl = createMemo(() =>
-    launchUrlFromDeployment(currentDeployment(), activityEvents(), capsuleId()),
-  );
-
   /** Recent run/release events for THIS app (activity carries metadata.capsuleId). */
   const recentActivity = createMemo(() =>
     activityEvents()
@@ -355,8 +371,8 @@ function Inner() {
   const backup = createAction(async (): Promise<BackupRecord> => {
     return await createCapsuleBackup(capsuleId());
   });
-  const rollback = createAction(async (deploymentId: string) => {
-    const envelope = await createDeploymentRollbackPlan(deploymentId);
+  const rollback = createAction(async (stateVersionId: string) => {
+    const envelope = await createStateVersionRollbackPlan(stateVersionId);
     const runId = extractRunId(envelope);
     if (runId) navigate(`/runs/${runId}`);
   });
@@ -379,7 +395,7 @@ function Inner() {
   return (
     <>
       <Switch>
-        {/* First load ONLY — every auto-update toggle and every config/profile
+        {/* First load ONLY — every auto-update toggle and every config/binding
             save refetches the capsule, and `resource.loading` is true during
             those refetches too. Remounting the whole view for a skeleton on
             each would evict focus and re-seed the settings editors, silently
@@ -442,9 +458,9 @@ function Inner() {
                 title={
                   <span class="wa-title-row">
                     {displayName() ?? inst().name}
-                    {/* Store display name leads (matching the launcher tile);
-                        the instance name stays visible as a muted secondary
-                        only when the two differ. */}
+                    {/* Store display name leads on this management view; the
+                        Capsule instance name stays visible as a muted
+                        secondary only when the two differ. */}
                     <Show when={displayName() && displayName() !== inst().name}>
                       <span class="av-title-instance">{inst().name}</span>
                     </Show>
@@ -471,19 +487,6 @@ function Inner() {
                       >
                         {t("app.updateNow")}
                       </Button>
-                    </Show>
-                    <Show when={launchUrl()}>
-                      {(url) => (
-                        <Button
-                          variant="primary"
-                          href={url()}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                          icon={<ExternalLink size={16} />}
-                        >
-                          {t("apps.openApp")}
-                        </Button>
-                      )}
                     </Show>
                     {/* One delete flow: the header button routes to the 削除
                         tab (plan-first) instead of opening a duplicate modal. */}
@@ -545,14 +548,13 @@ function Inner() {
                 <Switch>
                   <Match when={tab() === "overview"}>
                     <OverviewTab
-                      publicLinkOutputs={publicLinkOutputs()}
-                      otherPublicOutputs={otherPublicOutputs()}
-                      hasDeployment={currentDeployment() !== undefined}
+                      uiSurfaces={uiSurfaceList()}
+                      hasStateVersion={currentStateVersion() !== undefined}
                       destroyed={inst().status === "destroyed"}
                       serviceOpenable={serviceOpenable()}
                       releaseActivationStatus={releaseActivationStatus()}
-                      outputsLoading={currentStateVersion.loading}
-                      outputsError={Boolean(currentStateVersion.error)}
+                      surfacesLoading={uiSurfaces.loading}
+                      surfacesError={Boolean(uiSurfaces.error)}
                       producers={producers()}
                       consumers={consumers()}
                     />
@@ -562,7 +564,13 @@ function Inner() {
                           title={t("app.usage.title")}
                           subtitle={t("app.usage.body")}
                           actions={
-                            <UsageAmount micros={usageSummary()!.usdMicros} />
+                            <UsageAmount
+                              micros={usageSummary()!.usdMicros}
+                              ratedEventCount={usageSummary()!.ratedEventCount}
+                              unratedEventCount={
+                                usageSummary()!.unratedEventCount
+                              }
+                            />
                           }
                         />
                       </Card>
@@ -570,14 +578,14 @@ function Inner() {
                   </Match>
                   <Match when={tab() === "deploys"}>
                     <DeploysTab
-                      loading={deployments.loading}
+                      loading={stateVersions.loading}
                       error={
-                        deployments.error
-                          ? (deployments.error as ControlApiError).message
+                        stateVersions.error
+                          ? (stateVersions.error as ControlApiError).message
                           : undefined
                       }
-                      history={deploymentHistory()}
-                      currentId={currentDeployment()?.id}
+                      history={stateVersionHistory()}
+                      currentId={currentStateVersion()?.id}
                       rollbackBusy={rollback.busy()}
                       onRollback={(id) => void rollback.run(id)}
                       rollbackError={rollback.error()}
@@ -624,7 +632,7 @@ function Inner() {
                       installConfig={settingsInstallConfig()}
                       installConfigLoading={installConfig.loading}
                       sourceLoading={sources.loading}
-                      providerConnections={settingsProfileBindings()}
+                      providerBindings={settingsProviderBindings()}
                       availableProviderConnections={settingsProviderConnections()}
                       capsuleId={capsuleId()}
                       deploysHref={`/services/${encodeURIComponent(capsuleId())}/deploys`}
@@ -634,8 +642,8 @@ function Inner() {
                         // its reference and re-seed its editor, discarding the
                         // user's unsaved edits there.
                         void Promise.all([
-                          scope === "profile"
-                            ? refetchProfile()
+                          scope === "bindings"
+                            ? refetchProviderBindingSet()
                             : Promise.resolve(),
                           scope === "config"
                             ? refetchInstallConfig()
@@ -690,19 +698,36 @@ function Inner() {
  * read like display bugs — collapse them to a "< $0.01" note and keep the
  * exact value reachable via the title attribute.
  */
-function UsageAmount(props: { readonly micros: number }): JSX.Element {
+function UsageAmount(props: {
+  readonly micros: number;
+  readonly ratedEventCount: number;
+  readonly unratedEventCount: number;
+}): JSX.Element {
   const ONE_CENT_MICROS = 10_000;
   const subCent = () => props.micros > 0 && props.micros < ONE_CENT_MICROS;
+  const allUnrated = () =>
+    props.unratedEventCount > 0 && props.ratedEventCount === 0;
   return (
-    <span
-      class="wa-usage-amount"
-      title={subCent() ? formatUsdMicros(props.micros) : undefined}
-    >
-      {subCent() ? t("app.usage.subCent") : formatUsdMicros(props.micros)}
-      {/* The exact sub-cent amount is otherwise title-only (unreachable to
-          screen readers) — expose it as off-screen text. */}
-      <Show when={subCent()}>
-        <span class="sr-only"> ({formatUsdMicros(props.micros)})</span>
+    <span class="wa-stack-xs">
+      <span
+        class="wa-usage-amount"
+        title={subCent() ? formatUsdMicros(props.micros) : undefined}
+      >
+        {allUnrated()
+          ? t("app.usage.unrated")
+          : subCent()
+            ? t("app.usage.subCent")
+            : formatUsdMicros(props.micros)}
+        {/* The exact sub-cent amount is otherwise title-only (unreachable to
+            screen readers) — expose it as off-screen text. */}
+        <Show when={!allUnrated() && subCent()}>
+          <span class="sr-only"> ({formatUsdMicros(props.micros)})</span>
+        </Show>
+      </span>
+      <Show when={props.unratedEventCount > 0 && !allUnrated()}>
+        <span class="muted">
+          {t("app.usage.unratedCount", { n: props.unratedEventCount })}
+        </span>
       </Show>
     </span>
   );
@@ -747,68 +772,62 @@ function dependencyRows(
 }
 
 function OverviewTab(props: {
-  readonly publicLinkOutputs: readonly [string, unknown][];
-  readonly otherPublicOutputs: readonly [string, unknown][];
-  readonly hasDeployment: boolean;
+  readonly uiSurfaces: readonly AuthorizedUiSurface[];
+  readonly hasStateVersion: boolean;
   readonly destroyed: boolean;
   readonly serviceOpenable: boolean;
   readonly releaseActivationStatus:
     "not_required" | "pending" | "succeeded" | "failed";
-  readonly outputsLoading: boolean;
-  readonly outputsError: boolean;
+  readonly surfacesLoading: boolean;
+  readonly surfacesError: boolean;
   readonly producers: readonly DependencyRow[];
   readonly consumers: readonly DependencyRow[];
 }) {
-  // Distinguishing labels: several well-known link keys share one friendly
-  // label, which rendered near-identical 公開アドレス rows on live services.
-  const linkLabels = createMemo(() =>
-    publicLinkRowLabels(props.publicLinkOutputs),
-  );
   return (
     <>
       <Card>
         {/* Mutually exclusive copy, driven by the actual service state:
-            destroyed → records-only; never deployed → the generic subtitle
-            (the body says links appear after a deploy); otherwise the normal
-            activation-aware subtitle. A preparing service must never read as
-            deleted. */}
+            destroyed → links unavailable; otherwise activation-aware copy.
+            A preparing service must never read as deleted. */}
         <CardHeader
-          title={t("app.outputs.title")}
+          title={t("app.surfaces.title")}
           subtitle={
             props.destroyed
-              ? t("app.outputs.deletedSubtitle")
+              ? t("app.surfaces.deletedSubtitle")
               : props.releaseActivationStatus === "pending"
-                ? t("app.outputs.activationPending")
+                ? t("app.surfaces.activationPending")
                 : props.releaseActivationStatus === "failed"
-                  ? t("app.outputs.activationFailed")
-                  : t("app.outputs.subtitle")
+                  ? t("app.surfaces.activationFailed")
+                  : t("app.surfaces.subtitle")
           }
         />
         <Switch>
-          <Match when={props.outputsLoading}>
+          <Match when={props.surfacesLoading}>
             {/* Shape-matched placeholder (the links render as a KVList) rather
                 than a bare "読み込み中…" line that reflows on load. */}
             <Skeleton variant="row" count={2} />
           </Match>
-          <Match when={props.outputsError}>
+          <Match when={props.surfacesError}>
             <p class="wa-error" role="alert">
-              {t("app.outputs.loadError")}
+              {t("app.surfaces.loadError")}
             </p>
           </Match>
-          <Match when={props.publicLinkOutputs.length === 0}>
+          <Match when={props.uiSurfaces.length === 0}>
             <p class="muted">
-              {props.hasDeployment || props.destroyed
-                ? t("app.outputs.none")
-                : t("app.outputs.empty")}
+              {props.hasStateVersion || props.destroyed
+                ? t("app.surfaces.none")
+                : t("app.surfaces.empty")}
             </p>
           </Match>
-          <Match when={props.publicLinkOutputs.length > 0}>
+          <Match when={props.uiSurfaces.length > 0}>
             <KVList
-              items={props.publicLinkOutputs.map(([name, value], index) => ({
-                label: linkLabels()[index] ?? outputLabel(name),
+              items={props.uiSurfaces.map((surface, index) => ({
+                label:
+                  surface.name ??
+                  t("app.surfaces.defaultName", { n: index + 1 }),
                 value: (
-                  <OutputValue
-                    value={value}
+                  <RuntimeSurfaceLink
+                    surface={surface}
                     openable={props.serviceOpenable}
                     // Only the first/primary link keeps the filled style; a
                     // column of identical filled buttons reads as noise.
@@ -819,17 +838,6 @@ function OverviewTab(props: {
             />
           </Match>
         </Switch>
-        <Show when={props.otherPublicOutputs.length > 0}>
-          <details class="wb-disclosure">
-            <summary>{t("app.outputs.valuesTitle")}</summary>
-            <KVList
-              items={props.otherPublicOutputs.map(([name, value]) => ({
-                label: outputLabel(name),
-                value: <OutputValue value={value} openable={false} />,
-              }))}
-            />
-          </details>
-        </Show>
       </Card>
 
       <Show when={props.producers.length > 0 || props.consumers.length > 0}>
@@ -879,51 +887,38 @@ function DependencyList(props: {
   );
 }
 
-/** Public output value: http(s) → prominent link; otherwise monospace text. */
-function OutputValue(props: {
-  readonly value: unknown;
+/** Authorized Interface URL with readiness controlling only whether it opens. */
+function RuntimeSurfaceLink(props: {
+  readonly surface: AuthorizedUiSurface;
   readonly openable?: boolean;
   /** Only the first/primary link row keeps the filled button style. */
   readonly primary?: boolean;
 }): JSX.Element {
   return (
-    <Switch fallback={<code>{stringifyOutput(props.value)}</code>}>
-      <Match when={isUrlString(props.value) && props.openable !== false}>
+    <Switch>
+      <Match when={props.openable !== false}>
         <span class="wa-output-url">
           <Button
             variant={props.primary ? "primary" : "secondary"}
             size="sm"
-            href={props.value as string}
+            href={props.surface.url}
             target="_blank"
             rel="noreferrer noopener"
           >
-            {t("app.output.openPublicLink")}
+            {t("app.surfaces.open")}
           </Button>
           {/* Inline muted URL: the old ▶アドレス disclosure repeated the row
               label and hid the one value the card exists to show. */}
-          <code class="av-output-url-text">{props.value as string}</code>
+          <code class="av-output-url-text">{props.surface.url}</code>
         </span>
       </Match>
-      <Match when={isUrlString(props.value)}>
+      <Match when={props.openable === false}>
         <span class="wa-output-url">
-          <code>{props.value as string}</code>
+          <code>{props.surface.url}</code>
         </span>
-      </Match>
-      <Match when={typeof props.value === "string"}>
-        <code>{props.value as string}</code>
       </Match>
     </Switch>
   );
-}
-
-function stringifyOutput(value: unknown): string {
-  if (value === null || value === undefined) return "—";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
 }
 
 // === deploys =================================================================
@@ -933,13 +928,13 @@ function DeploysTab(props: {
   readonly error?: string;
   readonly history: readonly {
     readonly id: string;
-    readonly status: string;
-    readonly stateGeneration: number;
+    readonly generation: number;
+    readonly createdByRunId: string;
     readonly createdAt: string;
   }[];
   readonly currentId?: string;
   readonly rollbackBusy: boolean;
-  readonly onRollback: (deploymentId: string) => void;
+  readonly onRollback: (stateVersionId: string) => void;
   readonly rollbackError: string | null;
   readonly backupBusy: boolean;
   readonly onBackup: () => void;
@@ -1022,24 +1017,22 @@ function DeploysTab(props: {
             <Match when={props.history.length > 0}>
               <ul class="wa-deploy-history">
                 <For each={props.history}>
-                  {(deployment) => {
-                    const isCurrent = () => deployment.id === props.currentId;
+                  {(stateVersion) => {
+                    const isCurrent = () => stateVersion.id === props.currentId;
                     return (
                       <li class="wa-deploy-row">
                         <span class="wa-deploy-when">
-                          {formatDateTime(deployment.createdAt)}
+                          {formatDateTime(stateVersion.createdAt)}
                         </span>
                         <Show when={isCurrent()}>
                           <Badge tone="ok">
-                            {t("status.deployment.active")}
+                            {t("status.stateVersion.current")}
                           </Badge>
                         </Show>
                         <Show when={!isCurrent()}>
-                          <StatusBadge
-                            status={deployment.status}
-                            label={deploymentStatusLabel}
-                            tone={deploymentTone}
-                          />
+                          <Badge tone="neutral">
+                            {`Generation ${stateVersion.generation}`}
+                          </Badge>
                         </Show>
                         <Show when={!isCurrent()}>
                           <details class="wb-inline-details">
@@ -1054,7 +1047,7 @@ function DeploysTab(props: {
                               type="button"
                               icon={<RotateCcw size={14} />}
                               disabled={props.rollbackBusy}
-                              onClick={() => props.onRollback(deployment.id)}
+                              onClick={() => props.onRollback(stateVersion.id)}
                             >
                               {t("app.deploys.restore")}
                             </Button>
@@ -1141,11 +1134,7 @@ function activityBelongsToCapsule(
   event: ActivityEvent,
   capsuleId: string,
 ): boolean {
-  return (
-    event.metadata.capsuleId === capsuleId ||
-    event.metadata.installationId === capsuleId ||
-    event.targetId === capsuleId
-  );
+  return event.metadata.capsuleId === capsuleId || event.targetId === capsuleId;
 }
 
 function activityRunId(event: ActivityEvent): string | undefined {
@@ -1185,15 +1174,13 @@ function ActivityEventBadge(props: { readonly action: string }) {
 
 // === settings ================================================================
 
-interface CapsuleProviderConnectionRow {
+interface ProviderBindingRow {
   readonly provider: string;
   readonly alias: string;
   readonly connectionId: string;
 }
 
-function providerConnectionToRow(
-  binding: CapsuleProviderConnectionBinding,
-): CapsuleProviderConnectionRow {
+function providerBindingToRow(binding: ProviderBinding): ProviderBindingRow {
   return {
     provider: binding.provider,
     alias: binding.alias ?? "",
@@ -1210,16 +1197,6 @@ function providerTail(provider: string): string {
   return normalized.split("/").at(-1) ?? normalized;
 }
 
-function sameProviderFamily(
-  requiredProvider: string,
-  candidateProvider: string,
-) {
-  const required = canonicalProvider(requiredProvider);
-  const candidate = canonicalProvider(candidateProvider);
-  if (required === candidate) return true;
-  return providerTail(required) === providerTail(candidate);
-}
-
 function readyProviderConnectionsForProvider(
   provider: string,
   providerConnections: readonly ProviderConnection[],
@@ -1227,7 +1204,7 @@ function readyProviderConnectionsForProvider(
   return providerConnections.filter(
     (connection) =>
       connection.status === "verified" &&
-      sameProviderFamily(provider, connection.providerSource),
+      sameProviderSource(provider, connection.providerSource),
   );
 }
 
@@ -1246,7 +1223,7 @@ function providerDisplayName(provider: string): string {
 }
 
 function boundConnectionLabel(
-  row: CapsuleProviderConnectionRow,
+  row: ProviderBindingRow,
   providerConnections: readonly ProviderConnection[],
 ): string {
   const match = providerConnections.find(
@@ -1255,22 +1232,20 @@ function boundConnectionLabel(
   return match ? providerConnectionLabel(match) : t("common.none");
 }
 
-function boundProviderLabel(row: CapsuleProviderConnectionRow): string {
+function boundProviderLabel(row: ProviderBindingRow): string {
   if (!row.provider.trim()) return t("app.bindings.providerPlaceholder");
   return row.alias
     ? `${providerDisplayName(row.provider)} (${row.alias})`
     : providerDisplayName(row.provider);
 }
 
-function buildProviderConnections(
-  rows: readonly CapsuleProviderConnectionRow[],
+function buildProviderBindings(
+  rows: readonly ProviderBindingRow[],
   options: {
     readonly providerConnections: readonly ProviderConnection[];
   },
-):
-  | { readonly connections: CapsuleProviderConnectionBindings }
-  | { readonly error: string } {
-  const connections: CapsuleProviderConnectionBinding[] = [];
+): { readonly bindings: ProviderBindings } | { readonly error: string } {
+  const bindings: ProviderBinding[] = [];
   for (const [index, row] of rows.entries()) {
     const provider = row.provider.trim();
     if (!provider) {
@@ -1295,29 +1270,37 @@ function buildProviderConnections(
     ) {
       return { error: t("app.bindings.errorConnection", { provider }) };
     }
-    connections.push(binding);
+    bindings.push(binding);
   }
-  return { connections };
+  return { bindings };
 }
 
 // Config-row seeding + the dirty-only save patch live in
 // lib/capsules-ui.ts (configRowsFromInstallConfig / buildConfigVariablePatch)
-// so the write semantics are unit-testable. SYSTEM_CONFIG_VARIABLES
-// (takosumi_accounts_issuer_url and friends) are filtered there too.
+// so the write semantics are unit-testable. InstallConfig.variablePresentation
+// is the only authority for secret and advanced presentation semantics.
 
 function primaryConfigVariableNames(
   config: InstallConfig | undefined,
 ): ReadonlySet<string> {
-  const installExperience = config?.store?.installExperience;
+  const installExperience = config?.installExperience;
   const publicEndpoint = installExperiencePublicEndpoint(installExperience);
   const initialSecret = installExperienceInitialSecret(installExperience);
+  const oidcClient = installExperienceOidcClient(installExperience);
+  const artifact = installExperienceArtifact(installExperience);
   return new Set(
     [
       installExperienceServiceNameVariable(installExperience),
       publicEndpoint?.subdomainVariable,
       publicEndpoint?.urlVariable,
+      publicEndpoint?.routePatternVariable,
       initialSecret?.variable,
-      "project_name",
+      oidcClient?.issuerUrlVariable,
+      oidcClient?.accountsUrlVariable,
+      oidcClient?.clientIdVariable,
+      oidcClient?.redirectUriVariable,
+      artifact?.urlVariable,
+      artifact?.sha256Variable,
     ].filter((name): name is string => Boolean(name)),
   );
 }
@@ -1325,9 +1308,7 @@ function primaryConfigVariableNames(
 function configSummaryItems(config: InstallConfig | undefined) {
   if (!config) return [];
   const variables = config.variableMapping ?? {};
-  const endpoint = installExperiencePublicEndpoint(
-    config.store?.installExperience,
-  );
+  const endpoint = installExperiencePublicEndpoint(config.installExperience);
   const subdomainVariable = endpoint?.subdomainVariable;
   const urlVariable = endpoint?.urlVariable;
   const subdomain = subdomainVariable
@@ -1336,9 +1317,16 @@ function configSummaryItems(config: InstallConfig | undefined) {
   const publicUrl = urlVariable
     ? stringConfigValue(variables[urlVariable])
     : undefined;
+  const oidcClient = installExperienceOidcClient(config.installExperience);
+  const oidcVariableNames = [
+    oidcClient?.issuerUrlVariable,
+    oidcClient?.accountsUrlVariable,
+    oidcClient?.clientIdVariable,
+    oidcClient?.redirectUriVariable,
+  ].filter((name): name is string => Boolean(name));
   const oidcReady =
-    stringConfigValue(variables.takosumi_accounts_issuer_url) &&
-    stringConfigValue(variables.takosumi_accounts_client_id);
+    oidcVariableNames.length > 0 &&
+    oidcVariableNames.every((name) => stringConfigValue(variables[name]));
   return [
     ...(publicUrl
       ? [{ label: t("app.config.publicUrl"), value: <code>{publicUrl}</code> }]
@@ -1399,13 +1387,13 @@ function SettingsTab(props: {
   readonly installConfig: InstallConfig | undefined;
   readonly installConfigLoading: boolean;
   readonly sourceLoading: boolean;
-  readonly providerConnections: CapsuleProviderConnectionBindings | undefined;
+  readonly providerBindings: ProviderBindings | undefined;
   readonly availableProviderConnections: readonly ProviderConnection[];
   readonly capsuleId: string;
   readonly deploysHref: string;
-  readonly onSaved: (scope: "profile" | "config") => void | Promise<void>;
+  readonly onSaved: (scope: "bindings" | "config") => void | Promise<void>;
 }) {
-  const [rows, setRows] = createSignal<CapsuleProviderConnectionRow[]>([]);
+  const [rows, setRows] = createSignal<ProviderBindingRow[]>([]);
   const [variableRows, setVariableRows] = createSignal<ConfigVariableRow[]>([]);
   const [formError, setFormError] = createSignal<string | null>(null);
   const [configError, setConfigError] = createSignal<string | null>(null);
@@ -1413,19 +1401,31 @@ function SettingsTab(props: {
   // the other's still-true pending-deploy note, and a later FAILED save left
   // the stale success note above the new error.
   const [configSavedNote, setConfigSavedNote] = createSignal(false);
-  const [profileSavedNote, setProfileSavedNote] = createSignal(false);
+  const [bindingsSavedNote, setBindingsSavedNote] = createSignal(false);
+  const [interfaceBlueprintsText, setInterfaceBlueprintsText] =
+    createSignal("[]");
+  const [savedInterfaceBlueprintsText, setSavedInterfaceBlueprintsText] =
+    createSignal("[]");
+  const [interfaceBlueprintsError, setInterfaceBlueprintsError] = createSignal<
+    string | null
+  >(null);
+  const [interfaceBlueprintsSavedNote, setInterfaceBlueprintsSavedNote] =
+    createSignal(false);
   // Provider-binding rows have no per-row dirty flag (unlike config rows), so
   // track binding edits explicitly for the navigation-away guard below.
-  const [profileDirty, setProfileDirty] = createSignal(false);
+  const [bindingsDirty, setBindingsDirty] = createSignal(false);
   const { confirm } = useConfirmDialog();
 
+  const interfaceBlueprintsDirty = () =>
+    interfaceBlueprintsText() !== savedInterfaceBlueprintsText();
+
   createEffect(() => {
-    const providerConnections = props.providerConnections;
-    if (!providerConnections) return;
-    setRows(providerConnections.map(providerConnectionToRow));
+    const providerBindings = props.providerBindings;
+    if (!providerBindings) return;
+    setRows(providerBindings.map(providerBindingToRow));
     // Reseeding from a fresh fetch (initial load or post-save refetch) is the
     // clean baseline — clear the dirty flag.
-    setProfileDirty(false);
+    setBindingsDirty(false);
   });
 
   // The settings tab holds unsaved edits in plain signals; navigating away
@@ -1433,7 +1433,8 @@ function SettingsTab(props: {
   // and only proceed if the user confirms (mirrors the destructive-confirm
   // grammar used elsewhere).
   const isDirty = () =>
-    profileDirty() ||
+    bindingsDirty() ||
+    interfaceBlueprintsDirty() ||
     variableRows().some(
       (row) => row.dirty || row.deleted === true || row.resetToDefault,
     );
@@ -1466,11 +1467,35 @@ function SettingsTab(props: {
     ),
   );
 
-  const update = (
-    index: number,
-    patch: Partial<CapsuleProviderConnectionRow>,
-  ) => {
-    setProfileDirty(true);
+  let seededInterfaceBlueprintsConfigId: string | undefined;
+  createEffect(
+    on(
+      () => props.installConfig,
+      (installConfig) => {
+        if (!installConfig) return;
+        // A variable save also refetches this InstallConfig. Preserve an
+        // unsaved Interface edit across that unrelated refresh; a different
+        // config id is always a new editing baseline.
+        if (
+          seededInterfaceBlueprintsConfigId === installConfig.id &&
+          interfaceBlueprintsDirty()
+        ) {
+          return;
+        }
+        const next = formatInterfaceBlueprintsJson(
+          installConfig.interfaceBlueprints,
+        );
+        seededInterfaceBlueprintsConfigId = installConfig.id;
+        setInterfaceBlueprintsText(next);
+        setSavedInterfaceBlueprintsText(next);
+        setInterfaceBlueprintsError(null);
+        setInterfaceBlueprintsSavedNote(false);
+      },
+    ),
+  );
+
+  const update = (index: number, patch: Partial<ProviderBindingRow>) => {
+    setBindingsDirty(true);
     setRows((prev) =>
       prev.map((row, i) => (i === index ? { ...row, ...patch } : row)),
     );
@@ -1531,24 +1556,24 @@ function SettingsTab(props: {
     configSummaryItems(props.installConfig),
   );
 
-  const saveProfile = createAction(async () => {
+  const saveBindings = createAction(async () => {
     setFormError(null);
     // Clear at the start so a save that FAILS never leaves the previous
     // attempt's success note above the fresh error.
-    setProfileSavedNote(false);
-    const providerConnections = buildProviderConnections(rows(), {
+    setBindingsSavedNote(false);
+    const providerBindings = buildProviderBindings(rows(), {
       providerConnections: props.availableProviderConnections,
     });
-    if ("error" in providerConnections) {
-      setFormError(providerConnections.error);
+    if ("error" in providerBindings) {
+      setFormError(providerBindings.error);
       return;
     }
-    await putCapsuleProviderConnectionSet(
+    await putCapsuleProviderBindingSet(
       props.capsuleId,
-      providerConnections.connections,
+      providerBindings.bindings,
     );
-    await props.onSaved("profile");
-    setProfileSavedNote(true);
+    await props.onSaved("bindings");
+    setBindingsSavedNote(true);
   });
   const saveVariables = createAction(async () => {
     setConfigError(null);
@@ -1565,6 +1590,33 @@ function SettingsTab(props: {
     await patchInstallConfig(props.installConfig.id, patch);
     await props.onSaved("config");
     setConfigSavedNote(true);
+  });
+  const saveInterfaceBlueprints = createAction(async () => {
+    setInterfaceBlueprintsError(null);
+    setInterfaceBlueprintsSavedNote(false);
+    if (!props.installConfig) {
+      setInterfaceBlueprintsError(t("app.interfaces.notReady"));
+      return;
+    }
+    const parsed = parseInterfaceBlueprintsJson(interfaceBlueprintsText());
+    if (!parsed.ok) {
+      setInterfaceBlueprintsError(
+        parsed.error === "not_array"
+          ? t("app.interfaces.errorArray")
+          : t("app.interfaces.errorJson"),
+      );
+      return;
+    }
+    const updated = await patchInstallConfig(props.installConfig.id, {
+      interfaceBlueprints: parsed.value,
+    });
+    const canonicalText = formatInterfaceBlueprintsJson(
+      updated.interfaceBlueprints,
+    );
+    setInterfaceBlueprintsText(canonicalText);
+    setSavedInterfaceBlueprintsText(canonicalText);
+    await props.onSaved("config");
+    setInterfaceBlueprintsSavedNote(true);
   });
 
   return (
@@ -1672,6 +1724,87 @@ function SettingsTab(props: {
       </details>
 
       <details class="wb-disclosure">
+        <summary>{t("app.interfaces.title")}</summary>
+        <Card>
+          <CardHeader
+            title={t("app.interfaces.title")}
+            subtitle={t("app.interfaces.subtitle")}
+          />
+          <Switch>
+            <Match when={props.installConfigLoading}>
+              <p class="muted">{t("common.loading")}</p>
+            </Match>
+            <Match when={!props.installConfig}>
+              <p class="muted">{t("app.interfaces.notReady")}</p>
+            </Match>
+            <Match when={props.installConfig}>
+              <form
+                class="wb-input-vars"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void saveInterfaceBlueprints.run();
+                }}
+              >
+                <FormField
+                  label={t("app.interfaces.editorLabel")}
+                  hint={t("app.interfaces.editorHint")}
+                  error={interfaceBlueprintsError() ?? undefined}
+                >
+                  <Textarea
+                    class="wb-mono"
+                    rows={14}
+                    value={interfaceBlueprintsText()}
+                    invalid={interfaceBlueprintsError() !== null}
+                    spellcheck={false}
+                    onInput={(event) => {
+                      setInterfaceBlueprintsText(event.currentTarget.value);
+                      setInterfaceBlueprintsError(null);
+                      setInterfaceBlueprintsSavedNote(false);
+                      saveInterfaceBlueprints.clearError();
+                    }}
+                  />
+                </FormField>
+                <div class="wa-form-actions">
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    disabled={
+                      saveInterfaceBlueprints.busy() ||
+                      !interfaceBlueprintsDirty()
+                    }
+                    busy={saveInterfaceBlueprints.busy()}
+                  >
+                    {saveInterfaceBlueprints.busy()
+                      ? t("common.saving")
+                      : t("common.save")}
+                  </Button>
+                </div>
+                <Show when={saveInterfaceBlueprints.error()}>
+                  {(message) => (
+                    <p class="wa-error" role="alert">
+                      {message()}
+                    </p>
+                  )}
+                </Show>
+                <Show when={interfaceBlueprintsSavedNote()}>
+                  <div class="wa-saved-note" role="status">
+                    <span>{t("app.config.savedNeedsDeploy")}</span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      href={props.deploysHref}
+                    >
+                      {t("app.config.deployChanges")}
+                    </Button>
+                  </div>
+                </Show>
+              </form>
+            </Match>
+          </Switch>
+        </Card>
+      </details>
+
+      <details class="wb-disclosure">
         <summary>{t("app.bindings.title")}</summary>
         <Card>
           <CardHeader
@@ -1697,7 +1830,7 @@ function SettingsTab(props: {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                void saveProfile.run();
+                void saveBindings.run();
               }}
             >
               <div class="wa-binding-grid">
@@ -1752,7 +1885,7 @@ function SettingsTab(props: {
                             size="sm"
                             type="button"
                             onClick={() => {
-                              setProfileDirty(true);
+                              setBindingsDirty(true);
                               setRows((prev) =>
                                 prev.filter((_, i) => i !== index),
                               );
@@ -1799,7 +1932,7 @@ function SettingsTab(props: {
                   variant="secondary"
                   type="button"
                   onClick={() => {
-                    setProfileDirty(true);
+                    setBindingsDirty(true);
                     setRows((prev) => [
                       ...prev,
                       {
@@ -1815,10 +1948,10 @@ function SettingsTab(props: {
                 <Button
                   variant="primary"
                   type="submit"
-                  disabled={saveProfile.busy()}
-                  busy={saveProfile.busy()}
+                  disabled={saveBindings.busy()}
+                  busy={saveBindings.busy()}
                 >
-                  {saveProfile.busy() ? t("common.saving") : t("common.save")}
+                  {saveBindings.busy() ? t("common.saving") : t("common.save")}
                 </Button>
               </div>
               <Show when={formError()}>
@@ -1828,7 +1961,7 @@ function SettingsTab(props: {
                   </p>
                 )}
               </Show>
-              <Show when={saveProfile.error()}>
+              <Show when={saveBindings.error()}>
                 {(m) => (
                   <p class="wa-error" role="alert">
                     {m()}
@@ -1839,7 +1972,7 @@ function SettingsTab(props: {
                   on the next deploy — confirm the save and offer the deploy
                   link. Separate per-form signal: saving the config form must
                   not hide this note (and vice versa). */}
-              <Show when={profileSavedNote()}>
+              <Show when={bindingsSavedNote()}>
                 <div class="wa-saved-note" role="status">
                   <span>{t("app.config.savedNeedsDeploy")}</span>
                   <Button
@@ -1971,8 +2104,7 @@ function VariableRows(props: {
             </Show>
             <FormField
               // A store input carries a localized human label — use it as the
-              // value field's label so the editor reads プロジェクト名, not
-              // the raw project_name key.
+              // value field's label instead of exposing the raw variable key.
               label={row().storeField ? row().label : t("app.config.value")}
               hint={variableRowHint(row())}
               required={row().required}

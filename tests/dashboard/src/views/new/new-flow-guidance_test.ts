@@ -90,6 +90,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("showSortControl={false}");
     expect(newAppViewSource).not.toContain("showKindFilters");
     expect(newAppViewSource).toContain("function StoreIcon");
+    expect(newAppViewSource).toContain("return <Package size={20} />");
     expect(newAppViewSource).not.toContain("function storeKindLabel");
     expect(newAppViewSource).not.toContain("function StoreCard");
     expect(newAppViewSource).not.toContain("function ManualImportCard");
@@ -104,7 +105,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain(
       'config.id.startsWith("cfg-built-in-")',
     );
-    expect(newAppViewSource).not.toContain("config.store?.source");
+    expect(newAppViewSource).toContain("config.store?.source");
+    expect(newAppViewSource).toContain("installConfigForStoreListing");
     expect(newAppViewSource).not.toContain("const primaryStore = createMemo");
     expect(newAppViewSource).not.toContain(
       "const buildingBlockStore = createMemo",
@@ -235,12 +237,16 @@ describe("/new flow guidance", () => {
   test("treats pasted install links as active prefill state, not raw git input", () => {
     expect(newAppViewSource).toContain("activeInstallPrefill");
     expect(newAppViewSource).toContain("setActiveInstallPrefill(next)");
-    expect(newAppViewSource).toContain(
-      "setInputVariables(inputVariableRowsFromPrefill(next.vars))",
-    );
+    // Install links identify a plain Git/OpenTofu source. They never carry
+    // module inputs or environment material as a configuration side channel.
+    expect(newAppViewSource).not.toContain("next.vars");
+    expect(newAppViewSource).not.toContain("inputVariableRowsFromPrefill");
+    expect(newAppViewSource).not.toContain("envVariableRowsFromPrefill");
+    expect(newAppViewSource).toContain("setInputVariables([])");
+    expect(newAppViewSource).toContain("setEnvVariables([])");
     expect(newAppViewSource).not.toContain("SYSTEM_INSTALL_VARIABLE_NAMES");
     expect(newAppViewSource).not.toContain("ADVANCED_INSTALL_VARIABLE_NAMES");
-    expect(newAppViewSource).toContain("currentInstallPrefill()?.vars ?? {}");
+    expect(newAppViewSource).not.toContain("currentInstallPrefill()?.vars");
     expect(newAppViewSource).toContain("activeInstallPrefill()");
     expect(newAppViewSource).toContain("? prefilledLinkReview()");
     expect(newAppViewSource).toContain(": gitFields()");
@@ -250,16 +256,16 @@ describe("/new flow guidance", () => {
     );
   });
 
-  test("known Git sources keep app store metadata even when ref differs", () => {
+  test("Store matching ignores the optional ref hint and never adopts it", () => {
     expect(newAppViewSource).toContain("storeListingForCurrentSource");
     expect(newAppViewSource).toContain("storeListingMatchesCurrentSource");
-    // Presentation metadata comes from repo-owned metadata hydrated onto the
-    // picked store listing, not a hardcoded local store.
+    // The picked Store row is a discovery pointer. Its optional ref cannot
+    // select an InstallConfig or the effective Source ref.
     expect(newAppViewSource).toContain("selectedStoreListing()");
-    expect(newAppViewSource).toContain(
+    expect(newAppViewSource).not.toContain(
       "hydrateRequiredTcsListingWithRepoMetadata",
     );
-    expect(newAppViewSource).toContain("hydrateStoreListing");
+    expect(newAppViewSource).toContain("prepareStoreListing");
     expect(newAppViewSource).not.toContain("localStoreListings");
     expect(newAppViewSource).toContain("sameGitUrl");
     expect(newAppViewSource).toContain("normalizeSourcePath");
@@ -269,27 +275,39 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain(
       "...(listing.source.ref ? { ref: listing.source.ref } : {})",
     );
+    expect(newAppViewSource).toContain("url: listing.source.url");
     expect(newAppViewSource).toContain(
-      "const listing = storeListingForCurrentSource()",
+      "storeInstallConfigsForSource(\n      installConfigList(),\n      listing.source.url,\n      listing.source.path",
     );
+    expect(newAppViewSource).not.toContain(
+      "listing.source.ref.trim() !== sourceRef().trim()",
+    );
+    expect(newAppViewSource).not.toContain("setRef(listing.source.ref)");
     expect(newAppViewSource).toContain("storeMetadataFromStoreListing");
     expect(newAppViewSource).not.toContain(
       "const listing = activeStoreListing();\n    return listing ? storeMetadataFromStoreListing",
     );
   });
 
-  test("direct Git hand-offs render repository-owned setup before apply", () => {
-    expect(newAppViewSource).toContain("fetchTcsRepoMetadata");
-    expect(newAppViewSource).toContain("listingFromSnapshot");
-    expect(newAppViewSource).toContain("repositoryInstallMetadata");
-    expect(newAppViewSource).toContain("adoptRepoOwnedListing");
-    expect(newAppViewSource).toContain(
-      "if (!setupWasVisible && selectedServiceEntry()) return",
-    );
+  test("direct Git links select only a unique service-side URL/path InstallConfig", () => {
+    expect(newAppViewSource).toContain("sourceCoordinateForInstallConfig");
+    expect(newAppViewSource).toContain("storeInstallConfigsForSource(");
+    expect(newAppViewSource).toContain("sourceMatches.length === 1");
+    expect(newAppViewSource).toContain("sourceMatches.length === 0");
+    expect(newAppViewSource).toContain(': "";');
+    expect(newAppViewSource).toContain("if (matches.length > 1) return null");
+    expect(newAppViewSource).not.toContain("listing.source.ref.trim()");
+  });
+
+  test("direct Git hand-offs do not adopt repository-owned execution setup", () => {
+    expect(newAppViewSource).not.toContain("fetchTcsRepoMetadata");
+    expect(newAppViewSource).not.toContain("listingFromSnapshot");
+    expect(newAppViewSource).not.toContain("repositoryInstallMetadata");
+    expect(newAppViewSource).not.toContain("adoptRepoOwnedListing");
     expect(controlApiSource).toContain("onSourceSnapshot?.(snapshot)");
   });
 
-  test("store metadata is normalized before being sent to the control API", () => {
+  test("store metadata stays presentation-only and is not sent on Capsule creation", () => {
     expect(newAppViewSource).toContain("DEFAULT_STORE_BADGE");
     expect(newAppViewSource).toContain("nonEmptyStoreText(listing.badge)");
     expect(newAppViewSource).toContain(
@@ -298,45 +316,84 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain(
       "name: nonEmptyStoreText(listing.name) ?? fallbackName",
     );
-    expect(newAppViewSource).toContain("inputs: listing.inputs ?? []");
+    expect(newAppViewSource).not.toContain("inputs: listing.inputs ?? []");
     expect(newAppViewSource).toContain(
-      "{ installExperience: listing.installExperience }",
+      "inputs: installConfig.variablePresentation ?? []",
+    );
+    expect(newAppViewSource).toContain(
+      "{ installExperience: installConfig.installExperience }",
     );
     expect(newAppViewSource).toContain(
       "description: nonEmptyStoreText(listing.description) ?? fallbackName",
     );
+    expect(newAppViewSource).not.toContain("storeMetadataForRun");
+    expect(newAppViewSource).not.toContain("flowInput.store");
+    expect(controlApiSource).not.toContain("readonly store?: NonNullable");
+    expect(controlApiSource).not.toContain("...(input.store ? { store:");
   });
 
-  test("known Git sources derive setup defaults from root module variables", () => {
-    expect(newAppViewSource).toContain("standardCapsuleVariableDefaults");
-    expect(newAppViewSource).toContain("rootModuleVariables");
-    expect(newAppViewSource).toContain("standardServiceNameVariable");
-    expect(newAppViewSource).toContain("standardPublicSubdomainVariable");
-    expect(newAppViewSource).toContain("standardPublicUrlVariable");
+  test("Store discovery does not opt a Capsule into auto-update", () => {
+    expect(newAppViewSource).not.toContain(
+      "Store installs opt into auto-update",
+    );
+    expect(newAppViewSource).not.toContain(
+      "...(flowInput.store ? { autoUpdate: true } : {})",
+    );
+  });
+
+  test("root module variable names do not declare app or endpoint metadata", () => {
+    expect(newAppViewSource).not.toContain("standardCapsuleVariableDefaults");
+    expect(newAppViewSource).not.toContain("standardServiceNameVariable");
+    expect(newAppViewSource).not.toContain("standardPublicSubdomainVariable");
+    expect(newAppViewSource).not.toContain("standardPublicUrlVariable");
+    expect(newAppViewSource).not.toContain('"project_name"');
+    expect(newAppViewSource).not.toContain('"public_subdomain"');
+    expect(newAppViewSource).not.toContain('"worker_name"');
+    expect(newAppViewSource).not.toContain('"app_name"');
+    expect(newAppViewSource).not.toContain('"public_url"');
+    expect(newAppViewSource).not.toContain('"app_url"');
+    expect(newAppViewSource).not.toContain(
+      "Object.assign(variables, standardCapsuleVariableDefaults(variables))",
+    );
+  });
+
+  test("explicit installExperience mappings remain authoritative", () => {
+    expect(newAppViewSource).toContain("installExperienceForCurrentSource");
+    expect(newAppViewSource).toContain("storeServiceNameVariable");
+    expect(newAppViewSource).toContain(
+      "installExperiencePublicEndpoint(installExperience)",
+    );
+    expect(newAppViewSource).toContain("if (publicEndpoint)");
+    expect(newAppViewSource).toContain(
+      "const subdomainVariable = publicEndpoint.subdomainVariable?.trim()",
+    );
+    expect(newAppViewSource).toContain(
+      "const urlVariable = publicEndpoint.urlVariable?.trim()",
+    );
     expect(newAppViewSource).toContain(
       "serviceNameHintIsGenerated(storeServiceNameDefault())",
     );
-    expect(newAppViewSource).toContain(
-      "Object.assign(variables, standardCapsuleVariableDefaults(variables))",
-    );
-    expect(newAppViewSource).toContain(
-      "...storeListingDefaultVariables(),\n      ...(currentInstallPrefill()?.vars ?? {})",
-    );
+    expect(newAppViewSource).toContain("...storeListingDefaultVariables()");
+    expect(newAppViewSource).toContain("...selectedStoreVariables()");
+    expect(newAppViewSource).not.toContain("currentInstallPrefill()?.vars");
     expect(newAppViewSource).toContain("storeListingVariableNames");
     expect(newAppViewSource).toContain("...storeListingVariableNames()");
   });
 
-  test("prefers managed provider connections for known store sources", () => {
+  test("uses explicit managed-provider metadata for store fallback", () => {
     expect(newAppViewSource).toContain(
-      "const listing = storeListingForCurrentSource()",
+      "const managedProviderConnectionForRow =",
     );
-    expect(newAppViewSource).toContain(
-      "providerTail(listing.provider) === provider",
+    expect(newAppViewSource).toContain("providerConnectionsForRow(row).find(");
+    expect(newAppViewSource).toContain("isPublicManagedProviderConnection");
+    expect(newAppViewSource).not.toContain(
+      "scopeHints?.managedProvider === true",
     );
-    expect(newAppViewSource).toContain(
-      "connection.scopeHints?.managedProvider === true",
+    expect(newAppViewSource).not.toContain(
+      "connection.scopeHints.providerConfig?.base_url",
     );
-    expect(newAppViewSource).toContain("score += 1_000");
+    expect(newAppViewSource).not.toContain("providerConnectionScore");
+    expect(newAppViewSource).not.toContain("score += 1_000");
   });
 
   test("normalizes pasted install links before checking or creating the source", () => {
@@ -361,16 +418,17 @@ describe("/new flow guidance", () => {
 
   test("generated service-name hints follow the visible service name mapping", () => {
     expect(newAppViewSource).toContain("function serviceNameHintIsGenerated");
+    expect(newAppViewSource).toContain('value?.source === "capsule_name"');
     expect(newAppViewSource).toContain(
-      'value === "service-name" || value === "service-name-with-space"',
+      'value?.source === "workspace_scoped_capsule_name"',
     );
     expect(newAppViewSource).toContain("serviceNameVariableForCurrentSource");
     expect(newAppViewSource).toContain(
       "slugInputValue(resourcePrefix() || defaultProjectName())",
     );
     expect(newAppViewSource).toContain("const isGeneratedProjectName =");
-    expect(newAppViewSource).toContain(
-      "serviceNameHintIsGenerated(nextProjectName)",
+    expect(newAppViewSource).toMatch(
+      /serviceNameHintIsGenerated\(\s*nextProjectNameDefault[,\s]*\)/u,
     );
     expect(newAppViewSource).not.toContain('name="project_name"');
   });
@@ -389,8 +447,8 @@ describe("/new flow guidance", () => {
 
   test("/new sources installable apps from the store, not a hardcoded store", () => {
     // The dashboard-local installable-app-listings.ts is retired; discovery is
-    // served by the takosumi-store node(s); the picked listing is hydrated from
-    // repo-owned presentation metadata.
+    // served by configured TCS node(s); the picked listing remains a discovery
+    // pointer until Source sync observes optional repository presentation.
     expect(newAppViewSource).not.toContain("installable-app-listings");
     expect(newAppViewSource).not.toContain("installableAppStoreListings");
     expect(newAppViewSource).not.toContain("localStoreListings");
@@ -398,7 +456,7 @@ describe("/new flow guidance", () => {
     // loadRemoteOnMount={false} that would leave it dependent on a local list).
     expect(newAppViewSource).not.toContain("loadRemoteOnMount={false}");
     expect(newAppViewSource).toContain("selectedStoreListing");
-    expect(newAppViewSource).toContain(
+    expect(newAppViewSource).not.toContain(
       "hydrateRequiredTcsListingWithRepoMetadata",
     );
   });
@@ -436,24 +494,27 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("listInstallConfigsCached");
   });
 
-  test("keeps internal template configs separate from /new app discovery", () => {
-    const bootstrapSource = readFileSync(
+  test("uses one plain OpenTofu default instead of built-in app templates", () => {
+    const defaultConfigSource = readFileSync(
       resolve(
         here,
-        "../../../../../core/domains/capsules/install_config_bootstrap.ts",
+        "../../../../../core/domains/capsules/default_install_config.ts",
       ),
       "utf8",
     );
-    expect(bootstrapSource).toContain('"cloudflare-hello-worker"');
-    expect(bootstrapSource).toContain("storeMetadataForTemplate");
-    expect(bootstrapSource).toContain("builtInStoreSource");
-    expect(bootstrapSource).toContain('name: "accountId"');
-    expect(bootstrapSource).toContain('name: "workersSubdomain"');
-    expect(bootstrapSource).not.toContain('name: "bucketName"');
-    expect(bootstrapSource).toContain(
-      'defaultValue: "service-name-with-space"',
+    expect(defaultConfigSource).toContain('name: "opentofu-capsule"');
+    expect(defaultConfigSource).toContain("variableMapping: {}");
+    expect(defaultConfigSource).not.toContain("\n    store:");
+    expect(defaultConfigSource).not.toContain("\n    variablePresentation:");
+    expect(newAppViewSource).toContain(
+      "config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID",
     );
-    expect(controlApiSource).toContain("listTemplateStoreInstallConfigs");
+    expect(newAppViewSource).toContain(
+      'config.name === "opentofu-capsule" && !config.store',
+    );
+    expect(newAppViewSource).not.toContain("config.workspaceId === undefined");
+    expect(newAppViewSource).not.toContain("installConfigList()[0]");
+    expect(controlApiSource).not.toContain("listTemplateStoreInstallConfigs");
     expect(newAppViewSource).not.toContain("STORE_VIEW");
     expect(newAppViewSource).not.toContain(
       "const allStoreEntries = createMemo",
@@ -465,7 +526,7 @@ describe("/new flow guidance", () => {
     );
   });
 
-  test("store handoffs use listing metadata and generic Capsule config only", () => {
+  test("store handoffs use listing metadata and a service-side InstallConfig", () => {
     expect(newAppViewSource).not.toContain("STORE_VIEW");
     expect(newAppViewSource).not.toContain("const [templateConfigs]");
     expect(newAppViewSource).toContain(
@@ -474,7 +535,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("listInstallConfigsCached(id)");
     expect(newAppViewSource).toContain("const installConfigList");
     expect(newAppViewSource).toContain("installConfigList().find");
-    expect(newAppViewSource).toContain('sourceKind === "generic_capsule"');
+    expect(newAppViewSource).toContain("defaultGitInstallConfig() ?? {");
+    expect(newAppViewSource).not.toContain("listing.installConfigId");
     expect(newAppViewSource).not.toContain("templateConfigList().length === 0");
     expect(newAppViewSource).not.toContain("parseInitialInstallConfigId");
   });
@@ -488,14 +550,13 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).toContain("storeEntryFromStoreListing");
     expect(newAppViewSource).toContain("selectedStoreVariables");
-    expect(newAppViewSource).toContain("selectedStoreReturnVariables");
+    expect(newAppViewSource).not.toContain("selectedStoreReturnVariables");
     expect(newAppViewSource).toContain("storeInputJsonValue");
     expect(newAppViewSource).toContain("setStoreJsonVariable");
     expect(newAppViewSource).toContain("storeVariablePath");
     expect(newAppViewSource).toContain("storeInputError");
-    expect(newAppViewSource).toContain(
-      "defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID",
-    );
+    expect(newAppViewSource).toContain("installConfigForStoreListing(listing)");
+    expect(newAppViewSource).toContain("defaultGitInstallConfig() ?? {");
     expect(newAppViewSource).not.toContain("listing.installConfigId");
     expect(newAppViewSource).not.toContain("storeListing.installConfigId");
     expect(newAppViewSource).toContain('class="av-service-setup"');
@@ -523,24 +584,25 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain('repo.endsWith("/takos")');
   });
 
-  test("service setup defaults managed domains without app-specific branches", () => {
+  test("service setup supports explicitly mapped managed domains without app-specific branches", () => {
     expect(newAppViewSource).toContain("serviceNameInputValue");
     expect(newAppViewSource).toContain("managedServiceLabel");
     expect(newAppViewSource).toContain("managedPublicHostnameMode");
     expect(newAppViewSource).toContain(
       "selectedManagedProviderConnection() ||",
     );
-    expect(newAppViewSource).toContain(
-      't("new.hostname.mode.vanity")',
-    );
+    expect(newAppViewSource).toContain('t("new.hostname.mode.vanity")');
     expect(newAppViewSource).toContain("managedPublicHostname:");
     // Managed-host derivation lives server-side (9f2912c9); the old client
     // helpers hardcoding app.takos.jp are gone for good.
     expect(newAppViewSource).not.toContain("standardManagedHost");
     expect(newAppViewSource).not.toContain("standardManagedUrl");
-    expect(newAppViewSource).toContain("standardPublicSubdomainVariable");
-    expect(newAppViewSource).toContain("standardPublicUrlVariable");
-    expect(newAppViewSource).toContain("standardRoutePatternVariable");
+    expect(newAppViewSource).not.toContain("standardPublicSubdomainVariable");
+    expect(newAppViewSource).not.toContain("standardPublicUrlVariable");
+    expect(newAppViewSource).not.toContain("standardRoutePatternVariable");
+    expect(newAppViewSource).toContain(
+      "installExperiencePublicEndpoint(installExperience)",
+    );
     expect(newAppViewSource).toContain("canSuggestPublicHostname");
     expect(newAppViewSource).toContain("storePublicEndpointSubdomainField");
     expect(newAppViewSource).toContain("hostIsManagedBaseDomainSubdomain");
@@ -550,48 +612,34 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain('entry.id === "yurucommu"');
   });
 
-  test("selected store services can use safe cloud-account hints instead of duplicate setup input", () => {
-    const hintSourceStart = newAppViewSource.indexOf(
-      "const storeScopeHintValue",
+  test("selected store services use only explicit install presentation metadata", () => {
+    expect(newAppViewSource).toContain("field.advanced === true");
+    expect(newAppViewSource).toContain(
+      "installExperienceInitialSecret(entry.installExperience)?.variable",
     );
-    const hintSourceEnd = newAppViewSource.indexOf(
-      "const sourceGitConnections",
-      hintSourceStart,
+    expect(newAppViewSource).toContain(
+      'type={field.secret ? "password" : "text"}',
     );
-    expect(hintSourceStart).toBeGreaterThan(-1);
-    expect(hintSourceEnd).toBeGreaterThan(hintSourceStart);
-    const hintSource = newAppViewSource.slice(hintSourceStart, hintSourceEnd);
-
-    expect(newAppViewSource).toContain("storeScopeHintValue");
-    expect(newAppViewSource).toContain("scopeHintValueForStoreInput");
-    expect(hintSource).toContain("connection.scopeHints?.accountId");
-    expect(hintSource).toContain("connection.scopeHints?.awsRegion");
-    expect(hintSource).toContain("connection.scopeHints?.zoneId");
-    expect(hintSource).toContain("connection.scopeHints?.workersSubdomain");
-    expect(hintSource).not.toContain('entry.provider === "cloudflare"');
-    expect(hintSource).not.toContain('entry.provider === "aws"');
-    expect(newAppViewSource).toContain("storeInputTouched");
-    expect(newAppViewSource).toContain("isConnectionScopedStoreInput");
     expect(newAppViewSource).toContain("hasMissingAdvancedStoreInputs");
     expect(newAppViewSource).toContain(
-      "const scopeHint = storeScopeHintValue(entry, field)",
+      "connection.scopeHints?.moduleInputDefaults ?? {}",
     );
-    expect(newAppViewSource).toContain("if (scopeHint === undefined) continue");
-    expect(newAppViewSource).toContain("next[key] = scopeHint");
-    expect(newAppViewSource).toContain(
-      "if (storeInputTouched()[key]) continue",
+    expect(newAppViewSource).not.toContain("storeScopeHintValue");
+    expect(newAppViewSource).not.toContain("scopeHintValueForStoreInput");
+    expect(newAppViewSource).not.toContain("isConnectionScopedStoreInput");
+    expect(newAppViewSource).not.toContain("storeInputHasImplicitValue");
+    expect(newAppViewSource).not.toContain("connection.scopeHints?.accountId");
+    expect(newAppViewSource).not.toContain("connection.scopeHints?.awsRegion");
+    expect(newAppViewSource).not.toContain("connection.scopeHints?.zoneId");
+    expect(newAppViewSource).not.toContain(
+      "connection.scopeHints?.workersSubdomain",
     );
-    expect(newAppViewSource).toContain(
-      'if ((next[key] ?? "").trim()) continue',
-    );
-    expect(hintSource).not.toContain("repoUrl");
-    expect(hintSource).not.toContain("knownHostsEntry");
   });
 
   test("keeps arbitrary visible service inputs in the add flow", () => {
     expect(newAppViewSource).toContain("const shouldOpenServiceAdvanced = ()");
     expect(newAppViewSource).toContain("normalizedInputVariables");
-    expect(newAppViewSource).toContain("installReturnVariables");
+    expect(newAppViewSource).not.toContain("installReturnVariables");
     expect(newAppViewSource).toContain("selectedStoreVariableNames");
     expect(newAppViewSource).toContain("shouldOpenServiceAdvanced() ||");
     expect(newAppViewSource).toContain("hasMissingAdvancedStoreInputs()");
@@ -609,7 +657,7 @@ describe("/new flow guidance", () => {
 
   test("keeps plain environment variables dynamic and separate from fixed setup inputs", () => {
     expect(newAppViewSource).toContain("interface EnvVariableRow");
-    expect(newAppViewSource).toContain("envVariableRowsFromPrefill");
+    expect(newAppViewSource).not.toContain("envVariableRowsFromPrefill");
     expect(newAppViewSource).toContain("isSafePlainEnvName");
     expect(newAppViewSource).toContain("normalizedEnvVariables");
     expect(newAppViewSource).toContain("mergeEnvVariables");
@@ -617,9 +665,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('t("new.env.title")');
     expect(newAppViewSource).toContain("name={`envName:${index}`}");
     expect(newAppViewSource).toContain("name={`envValue:${index}`}");
-    expect(newAppViewSource).toContain(
-      "setEnvVariables(envVariableRowsFromPrefill(next.vars))",
-    );
+    expect(newAppViewSource).not.toContain("next.vars");
+    expect(newAppViewSource).toContain("setEnvVariables([])");
     expect(newAppViewSource).toContain(
       "mergeEnvVariables(variables, normalizedEnvVariables())",
     );
@@ -631,7 +678,8 @@ describe("/new flow guidance", () => {
     // values through connected accounts.
     expect(en["new.env.errorUnsafeName"]).not.toContain("Secrets");
     expect(ja["new.env.errorUnsafeName"]).not.toContain("Secret");
-    expect(ja["new.env.errorUnsafeName"]).toContain("接続済みアカウント");
+    expect(en["new.env.errorUnsafeName"]).toContain("uppercase letters");
+    expect(ja["new.env.errorUnsafeName"]).toContain("大文字の英字");
   });
 
   test("keeps external connection UI hidden unless there is something to choose", () => {

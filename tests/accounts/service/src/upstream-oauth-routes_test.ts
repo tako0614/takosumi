@@ -2,6 +2,17 @@ import { expect, test } from "bun:test";
 import type { TakosumiAccountsAuthProvidersResponse } from "@takosjp/takosumi-accounts-contract";
 import { handleAuthProvidersRequest } from "../../../../accounts/service/src/upstream-oauth-routes.ts";
 import type { UpstreamOAuthOptions } from "../../../../accounts/service/src/mod.ts";
+import { oidcOAuthProvider } from "../../../../accounts/service/src/upstream.ts";
+
+function testProvider(id: string) {
+  return oidcOAuthProvider({
+    id,
+    issuer: `https://${id}.example.test`,
+    authorizationEndpoint: `https://${id}.example.test/authorize`,
+    tokenEndpoint: `https://${id}.example.test/token`,
+    userInfoEndpoint: `https://${id}.example.test/userinfo`,
+  });
+}
 
 async function readProviders(
   response: Response,
@@ -11,12 +22,9 @@ async function readProviders(
   return (await response.json()) as TakosumiAccountsAuthProvidersResponse;
 }
 
-test("handleAuthProvidersRequest reports built-ins disabled when nothing configured", async () => {
+test("handleAuthProvidersRequest reports no methods when nothing is configured", async () => {
   const body = await readProviders(handleAuthProvidersRequest({}));
-  expect(body.providers).toEqual([
-    { id: "google", enabled: false },
-    { id: "passkey", enabled: false },
-  ]);
+  expect(body.providers).toEqual([]);
 });
 
 test("handleAuthProvidersRequest marks configured upstream providers enabled", async () => {
@@ -24,17 +32,26 @@ test("handleAuthProvidersRequest marks configured upstream providers enabled", a
     subjectSecret: "secret",
     providers: [
       {
-        providerId: "google",
-        clientId: "google-client",
+        providerId: "primary-oidc",
+        label: "Primary OIDC",
+        protocol: "oidc",
+        clientId: "primary-client",
         redirectUri: "https://accounts.example.test/callback",
+        provider: testProvider("primary-oidc"),
       },
     ],
   };
   const body = await readProviders(
     handleAuthProvidersRequest({ upstreamOAuth }),
   );
-  expect(body.providers).toContainEqual({ id: "google", enabled: true });
-  expect(body.providers).toContainEqual({ id: "passkey", enabled: false });
+  expect(body.providers).toEqual([
+    {
+      id: "primary-oidc",
+      enabled: true,
+      label: "Primary OIDC",
+      protocol: "oidc",
+    },
+  ]);
 });
 
 test("handleAuthProvidersRequest enables passkey when passkeys configured", async () => {
@@ -47,17 +64,27 @@ test("handleAuthProvidersRequest enables passkey when passkeys configured", asyn
       },
     }),
   );
-  expect(body.providers).toContainEqual({ id: "passkey", enabled: true });
+  expect(body.providers).toEqual([
+    {
+      id: "passkey",
+      enabled: true,
+      label: "Passkey",
+      protocol: "webauthn",
+    },
+  ]);
 });
 
-test("handleAuthProvidersRequest hides custom upstream provider ids from hosted dashboard discovery", async () => {
+test("handleAuthProvidersRequest publishes generic OIDC descriptors", async () => {
   const upstreamOAuth: UpstreamOAuthOptions = {
     subjectSecret: "secret",
     providers: [
       {
         providerId: "keycloak",
+        label: "Company SSO",
+        protocol: "oidc",
         clientId: "kc-client",
         redirectUri: "https://accounts.example.test/callback",
+        provider: testProvider("keycloak"),
       },
     ],
   };
@@ -65,12 +92,16 @@ test("handleAuthProvidersRequest hides custom upstream provider ids from hosted 
     handleAuthProvidersRequest({ upstreamOAuth }),
   );
   expect(body.providers).toEqual([
-    { id: "google", enabled: false },
-    { id: "passkey", enabled: false },
+    {
+      id: "keycloak",
+      enabled: true,
+      label: "Company SSO",
+      protocol: "oidc",
+    },
   ]);
 });
 
-test("handleAuthProvidersRequest hides retired GitHub sign-in config", async () => {
+test("handleAuthProvidersRequest treats an explicitly configured provider id generically", async () => {
   const upstreamOAuth: UpstreamOAuthOptions = {
     subjectSecret: "secret",
     providers: [
@@ -78,6 +109,7 @@ test("handleAuthProvidersRequest hides retired GitHub sign-in config", async () 
         providerId: "github",
         clientId: "gh-client",
         redirectUri: "https://accounts.example.test/callback",
+        provider: testProvider("github"),
       },
     ],
   };
@@ -85,8 +117,12 @@ test("handleAuthProvidersRequest hides retired GitHub sign-in config", async () 
     handleAuthProvidersRequest({ upstreamOAuth }),
   );
   expect(body.providers).toEqual([
-    { id: "google", enabled: false },
-    { id: "passkey", enabled: false },
+    {
+      id: "github",
+      enabled: true,
+      label: "Single sign-on",
+      protocol: "oidc",
+    },
   ]);
 });
 
@@ -99,6 +135,7 @@ test("handleAuthProvidersRequest never leaks credentials in the body", async () 
         clientId: "gh-client-id",
         clientSecret: "gh-client-secret",
         redirectUri: "https://accounts.example.test/callback",
+        provider: testProvider("github"),
       },
     ],
   };

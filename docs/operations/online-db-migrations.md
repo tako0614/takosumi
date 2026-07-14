@@ -1,27 +1,28 @@
 # Operations: Online DB Migrations
 
-> このページでわかること: Takosumi platform worker の hosted D1 control
-> ledger を zero-downtime に migration するための expand / backfill /
-> contract 手順、rollback 方針、release gate。
+> このページでわかること: Takosumi の durable accounts / control ledger を
+> zero-downtime に migration するための expand / backfill / contract 手順、
+> rollback 方針、release gate。D1 と Postgres は同じ論理 model の adapter です。
 
 この runbook は **Takosumi operated environment** の DB migration 正本です。
 対象は platform worker が所有する accounts plane と control-plane ledger
 (Workspace / Project / Capsule / Source / ProviderConnection / CredentialRecipe / ProviderBinding / Secret / Run /
-StateVersion / Output / Runner / AuditEvent / Operator settings / UsageEvent / CreditReservation / Billing) です。
+StateVersion / Output / Runner / AuditEvent / Operator settings / RunCost / UsageEvent) です。
 既存 ledgers に Space / Installation / StateSnapshot / OutputSnapshot / Deployment などの旧行が残る場合は、Final Plan
 model への migration 対象として扱います。host/distribution product の app-local DB migration は各 product docs の領域であり、
 この runbook では扱いません。
 
 ## Scope
 
-| Store               | Contains                                                                                                                                                                                                                                                 | Migration owner                                   |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Accounts D1         | users, sessions, account / billing / OIDC issuer records                                                                                                                                                                                                 | Takosumi accounts plane                           |
-| Control-plane D1    | Workspace, Project, Capsule, Source, ProviderConnection, CredentialRecipe, ProviderBinding, Secret metadata, Run, StateVersion, Output, Runner, Artifact, UsageEvent, CreditReservation, Billing, Audit, plus legacy rows while migrations are in flight | Takosumi control plane                            |
-| R2 object manifests | source archives, artifacts, state snapshots, backups                                                                                                                                                                                                     | schema change only when D1 metadata shape changes |
+| Store | Contains | Migration owner |
+| --- | --- | --- |
+| Accounts ledger | users, sessions, Workspace membership, and OIDC issuer records | Takosumi accounts plane |
+| Control-plane ledger | Workspace, Project, Capsule, Source, ProviderConnection, CredentialRecipe, ProviderBinding, Secret metadata, Run, StateVersion, Output, Runner, Artifact, RunCost, UsageEvent, Audit, plus legacy rows while migrations are in flight | Takosumi control plane |
+| Artifact-store metadata | opaque refs for source archives, artifacts, state, backups | owning storage adapter; change only with matching ledger migration |
 
-realized config では accounts と control-plane を別 D1 binding にしてもよいが、
-正本 model は single Takosumi platform worker が所有する ledger です。
+realized config では accounts と control-plane を別 database / schema にしても
+よいですが、正本 model は単一 Takosumi origin が所有する同じ論理 ledger
+です。D1 の binding 名や Postgres の schema 名は adapter-private です。
 
 Migration は customer-facing command surface ではありません。operator は
 platform worker deploy と同じ change window で migration を扱い、production /
@@ -37,13 +38,12 @@ runbook の `--database-id` には UUID ではなく realized config の databas
 ```bash
 cd takosumi
 bun run check
-bun test core/adapters/storage/migrations_test.ts
-bun test core/adapters/storage/drizzle/schema/schema_mirror_test.ts
+bun test tests/core/adapters/storage/migration-runner/mod_test.ts tests/core/adapters/storage/migration-runner/rollback_test.ts
+bun test tests/core/adapters/storage/drizzle/schema/schema_mirror_test.ts
 ```
 
-`bun run check` is required here because it includes the root typecheck, worker
-typecheck, and Cloudflare worker build checks that raw `tsc --noEmit` does not
-cover.
+`bun run check` is required here because it includes the root typecheck and
+supported distribution builds that raw `tsc --noEmit` does not cover.
 
 変更が API contract / dashboard に影響する場合は追加で:
 
@@ -127,7 +127,14 @@ production 前:
 - platform worker rollback version / commit が判明している
 - queue consumer / scheduled handler を freeze する必要があるか判断済み
 
-実行例:
+Postgres composition の実行例:
+
+```bash
+cd takosumi
+bun run cli -- accounts migrate --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+```
+
+Cloudflare D1 reference composition の実行例:
 
 ```bash
 cd takosumi
@@ -135,9 +142,9 @@ bun run cli -- accounts migrate-d1 --database-id takosumi-accounts-staging --rem
 bun run cli -- accounts migrate-d1 --database-id takosumi-accounts --remote
 ```
 
-production 後:
+production 後（`$TAKOSUMI_ORIGIN` は operator が公開した origin）:
 
-- `https://app.takosumi.com/healthz` が green
+- `$TAKOSUMI_ORIGIN/healthz` が green
 - OIDC discovery / JWKS が serve される
 - `GET /api/v1/workspaces` が認証なしで 401 を返す
 - known staging / production Workspace の Capsule list が読める

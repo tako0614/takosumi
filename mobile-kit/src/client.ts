@@ -20,6 +20,7 @@ import {
   ensureFreshMobileSession,
   isOidcCallbackPayload,
   loadMobileSession,
+  persistMobileSession,
 } from "./auth.ts";
 import { discoverHost } from "./discovery.ts";
 import { parseMobileConnectInput, parseMobileRouteInput } from "./handoff.ts";
@@ -111,6 +112,8 @@ export interface CreateMobileClientControllerOptions<Home = unknown> {
   readonly adapter: MobileProductAdapter;
   readonly nativeBridge: NativeBridge;
   readonly fetch?: FetchLike;
+  /** Overrides adapter.oidcScopes for this controller instance. */
+  readonly oidcScopes?: readonly string[];
   readonly loadHome?: (session: MobileSession) => Promise<Home>;
   readonly registerPush?: (
     input: MobilePushRegistrationCallbackInput,
@@ -162,6 +165,7 @@ export interface MobileClientController<Home = unknown> {
 export function createMobileClientController<Home = unknown>(
   options: CreateMobileClientControllerOptions<Home>,
 ): MobileClientController<Home> {
+  const signOutCleanupTimeoutMs = 5_000;
   const actions = createFirstRunActions(options.adapter);
   const copy = createClientCopy(options);
   const listeners = new Set<(state: MobileClientState<Home>) => void>();
@@ -177,6 +181,9 @@ export function createMobileClientController<Home = unknown>(
   };
   let launchPayloadUnlisten: (() => void) | undefined;
   let pushEventUnlisteners: Array<() => void | Promise<void>> = [];
+  let sessionLifecycleEpoch = 0;
+  let sessionStorageQueue: Promise<void> = Promise.resolve();
+  let pushOperationQueue: Promise<void> = Promise.resolve();
   let started = false;
 
   function publish(next: Partial<MobileClientState<Home>>) {
@@ -185,11 +192,18 @@ export function createMobileClientController<Home = unknown>(
     for (const listener of listeners) listener(snapshot);
   }
 
-  async function clearSessionAfterRefreshFailure(error: unknown) {
+  async function clearSessionAfterRefreshFailure(
+    error: unknown,
+    expectedEpoch: number,
+  ) {
+    if (expectedEpoch !== sessionLifecycleEpoch) return;
+    invalidateSessionLifecycle();
     await stopPushEventListeners();
-    await clearMobileSession({
-      adapter: options.adapter,
-      nativeBridge: options.nativeBridge,
+    await enqueueSessionStorageOperation(async () => {
+      await clearMobileSession({
+        adapter: options.adapter,
+        nativeBridge: options.nativeBridge,
+      });
     });
     publish({
       session: undefined,
@@ -197,6 +211,7 @@ export function createMobileClientController<Home = unknown>(
       unlockLoading: false,
       home: undefined,
       homeStatus: "",
+      homeLoading: false,
       pushRegistration: undefined,
       lastPushNotification: undefined,
       pushStatus: "",
@@ -205,26 +220,54 @@ export function createMobileClientController<Home = unknown>(
     });
   }
 
-  async function freshenSession(next: MobileSession): Promise<MobileSession> {
+  async function freshenSession(
+    next: MobileSession,
+    expectedEpoch: number,
+  ): Promise<MobileSession> {
     try {
-      return await ensureFreshMobileSession({
+      const session = await ensureFreshMobileSession({
         adapter: options.adapter,
         nativeBridge: options.nativeBridge,
         session: next,
+        persistSession: false,
         fetch: options.fetch,
       });
+      if (
+        session !== next &&
+        !(await persistSessionForEpoch(session, expectedEpoch))
+      ) {
+        return session;
+      }
+      return session;
     } catch (error) {
-      await clearSessionAfterRefreshFailure(error);
+      await clearSessionAfterRefreshFailure(error, expectedEpoch);
       throw error;
     }
   }
 
-  async function activateSession(next: MobileSession, message: string) {
+  async function activateSession(
+    next: MobileSession,
+    message: string,
+    expectedEpoch = sessionLifecycleEpoch,
+  ) {
+    if (expectedEpoch !== sessionLifecycleEpoch) return;
+    const previousSession = state.session;
+    const previousPushRegistration = state.pushRegistration;
+    const replacedSession = Boolean(previousSession);
+    const epoch = invalidateSessionLifecycle();
+    await stopPushEventListeners();
+    if (epoch !== sessionLifecycleEpoch) return;
+
     let session: MobileSession;
     try {
-      session = await freshenSession(next);
+      session = await freshenSession(next, epoch);
     } catch {
       return;
+    }
+    if (epoch !== sessionLifecycleEpoch) return;
+    if (previousSession && previousPushRegistration) {
+      await unregisterPushBestEffort(previousSession, previousPushRegistration);
+      if (epoch !== sessionLifecycleEpoch) return;
     }
     publish({
       session,
@@ -232,12 +275,82 @@ export function createMobileClientController<Home = unknown>(
       lockedSession: undefined,
       unlockLoading: false,
       lastPushNotification: undefined,
+      ...(replacedSession
+        ? { pushRegistration: undefined, pushStatus: "" }
+        : {}),
       status: message,
     });
-    await controller.refreshHome(session);
+    await refreshHomeForSession(session, epoch);
+    if (!currentMatchingSession(session, epoch)) return;
     await controller.registerPushNotifications(session);
-    await startPushEventListeners(session);
+    if (!currentMatchingSession(session, epoch)) return;
+    await startPushEventListeners(session, epoch);
+    if (!currentMatchingSession(session, epoch)) return;
     await openPendingRoute(session);
+  }
+
+  function invalidateSessionLifecycle(): number {
+    sessionLifecycleEpoch += 1;
+    return sessionLifecycleEpoch;
+  }
+
+  function enqueuePushOperation(operation: () => Promise<void>): Promise<void> {
+    const queued = pushOperationQueue.then(operation, operation);
+    pushOperationQueue = queued.catch(() => undefined);
+    return queued;
+  }
+
+  function enqueueSessionStorageOperation<Result>(
+    operation: () => Promise<Result>,
+  ): Promise<Result> {
+    const queued = sessionStorageQueue.then(operation, operation);
+    sessionStorageQueue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }
+
+  async function persistSessionForEpoch(
+    session: MobileSession,
+    expectedEpoch: number,
+  ): Promise<boolean> {
+    return await enqueueSessionStorageOperation(async () => {
+      if (expectedEpoch !== sessionLifecycleEpoch) return false;
+      await persistMobileSession({
+        adapter: options.adapter,
+        nativeBridge: options.nativeBridge,
+        session,
+      });
+      if (expectedEpoch === sessionLifecycleEpoch) return true;
+      await clearMobileSession({
+        adapter: options.adapter,
+        nativeBridge: options.nativeBridge,
+      });
+      return false;
+    });
+  }
+
+  async function unregisterPushBestEffort(
+    session: MobileSession,
+    registration: MobilePushRegistration,
+  ) {
+    if (!options.unregisterPush) return;
+    try {
+      await options.unregisterPush({ session, registration });
+    } catch {
+      // A failed cleanup must not restore or roll back a newer lifecycle.
+      // Provider rejection and host retention remain the final backstop.
+    }
+  }
+
+  async function unregisterNativePushBestEffort() {
+    try {
+      await options.nativeBridge.unregisterPushNotifications?.();
+    } catch {
+      // Provider cleanup is best effort. A later registration obtains the
+      // current provider identity and host retention bounds stale rows.
+    }
   }
 
   async function stopPushEventListeners() {
@@ -256,24 +369,46 @@ export function createMobileClientController<Home = unknown>(
     );
   }
 
-  async function startPushEventListeners(session: MobileSession) {
+  async function startPushEventListeners(
+    session: MobileSession,
+    epoch = sessionLifecycleEpoch,
+  ) {
     await stopPushEventListeners();
+    if (!currentMatchingSession(session, epoch)) return;
     const nextUnlisteners: Array<() => void | Promise<void>> = [];
     const bridge = options.nativeBridge;
     try {
       if (bridge.onPushNotificationReceived) {
         nextUnlisteners.push(
           await bridge.onPushNotificationReceived((notification) => {
-            void handlePushNotificationEvent(session, "received", notification);
+            void handlePushNotificationEvent(
+              session,
+              epoch,
+              "received",
+              notification,
+            );
           }),
         );
+        if (!currentMatchingSession(session, epoch)) {
+          await stopRegisteredPushEventListeners(nextUnlisteners);
+          return;
+        }
       }
       if (bridge.onPushNotificationTapped) {
         nextUnlisteners.push(
           await bridge.onPushNotificationTapped((notification) => {
-            void handlePushNotificationEvent(session, "tapped", notification);
+            void handlePushNotificationEvent(
+              session,
+              epoch,
+              "tapped",
+              notification,
+            );
           }),
         );
+        if (!currentMatchingSession(session, epoch)) {
+          await stopRegisteredPushEventListeners(nextUnlisteners);
+          return;
+        }
       }
       if (bridge.onPushTokenRefresh && options.registerPush) {
         nextUnlisteners.push(
@@ -283,21 +418,31 @@ export function createMobileClientController<Home = unknown>(
               product: session.product,
             },
             (registration) => {
-              void handlePushTokenRefresh(session, registration);
+              void handlePushTokenRefresh(session, epoch, registration);
             },
           ),
         );
+        if (!currentMatchingSession(session, epoch)) {
+          await stopRegisteredPushEventListeners(nextUnlisteners);
+          return;
+        }
       }
       pushEventUnlisteners = nextUnlisteners;
     } catch (error) {
       await stopRegisteredPushEventListeners(nextUnlisteners);
-      publish({
-        pushStatus: mobileErrorMessage(error, copy.pushEventsFailedStatus),
-      });
+      if (currentMatchingSession(session, epoch)) {
+        publish({
+          pushStatus: mobileErrorMessage(error, copy.pushEventsFailedStatus),
+        });
+      }
     }
   }
 
-  function currentMatchingSession(session: MobileSession) {
+  function currentMatchingSession(
+    session: MobileSession,
+    epoch = sessionLifecycleEpoch,
+  ) {
+    if (epoch !== sessionLifecycleEpoch) return undefined;
     const current = state.session;
     if (
       !current ||
@@ -311,10 +456,11 @@ export function createMobileClientController<Home = unknown>(
 
   async function handlePushNotificationEvent(
     session: MobileSession,
+    epoch: number,
     kind: MobilePushNotificationEventKind,
     notification: MobilePushNotification,
   ) {
-    const current = currentMatchingSession(session);
+    const current = currentMatchingSession(session, epoch);
     if (!current) return;
     publish({
       lastPushNotification: notification,
@@ -330,41 +476,99 @@ export function createMobileClientController<Home = unknown>(
         notification,
       });
     } catch (error) {
-      publish({
-        pushStatus: mobileErrorMessage(error, copy.pushEventsFailedStatus),
-      });
+      if (currentMatchingSession(session, epoch)) {
+        publish({
+          pushStatus: mobileErrorMessage(error, copy.pushEventsFailedStatus),
+        });
+      }
     }
   }
 
   async function handlePushTokenRefresh(
     session: MobileSession,
+    epoch: number,
     registration: MobilePushRegistration,
   ) {
-    const current = currentMatchingSession(session);
-    if (!current || !options.registerPush) return;
-    publish({
-      pushLoading: true,
-      pushStatus: copy.pushRegisteringStatus,
+    await enqueuePushOperation(async () => {
+      const current = currentMatchingSession(session, epoch);
+      if (!current || !options.registerPush) return;
+      const previousRegistration = state.pushRegistration;
+      if (
+        previousRegistration &&
+        samePushRegistration(previousRegistration, registration)
+      ) {
+        publish({ pushStatus: copy.pushTokenRefreshedStatus });
+        return;
+      }
+      publish({
+        pushLoading: true,
+        pushStatus: copy.pushRegisteringStatus,
+      });
+      try {
+        await options.registerPush({ session: current, registration });
+        if (!currentMatchingSession(session, epoch)) {
+          await unregisterPushBestEffort(current, registration);
+          return;
+        }
+        if (
+          previousRegistration &&
+          !samePushRegistration(previousRegistration, registration)
+        ) {
+          await unregisterPushBestEffort(current, previousRegistration);
+          if (!currentMatchingSession(session, epoch)) {
+            await unregisterPushBestEffort(current, registration);
+            return;
+          }
+        }
+        publish({
+          pushRegistration: registration,
+          pushStatus: copy.pushTokenRefreshedStatus,
+        });
+      } catch (error) {
+        if (currentMatchingSession(session, epoch)) {
+          publish({
+            pushStatus: mobileErrorMessage(error, copy.pushFailedStatus),
+          });
+        }
+      } finally {
+        if (currentMatchingSession(session, epoch)) {
+          publish({ pushLoading: false });
+        }
+      }
     });
-    try {
-      await options.registerPush({ session: current, registration });
-      publish({
-        pushRegistration: registration,
-        pushStatus: copy.pushTokenRefreshedStatus,
-      });
-    } catch (error) {
-      publish({
-        pushStatus: mobileErrorMessage(error, copy.pushFailedStatus),
-      });
-    } finally {
-      publish({ pushLoading: false });
-    }
   }
 
   async function openPendingRoute(session: MobileSession) {
     const pendingRoute = state.pendingRoute;
     if (!pendingRoute || !routeMatchesSession(pendingRoute, session)) return;
     await openRoutePayload(pendingRoute);
+  }
+
+  async function refreshHomeForSession(current: MobileSession, epoch: number) {
+    if (!options.loadHome || !currentMatchingSession(current, epoch)) return;
+    publish({ homeLoading: true, homeStatus: copy.homeLoadingStatus });
+    try {
+      const session = await freshenSession(current, epoch);
+      if (!currentMatchingSession(current, epoch)) return;
+      if (session !== current) publish({ session });
+      const home = await options.loadHome(session);
+      if (!currentMatchingSession(session, epoch)) return;
+      publish({
+        home,
+        homeStatus: copy.homeReadyStatus,
+      });
+    } catch (error) {
+      if (currentMatchingSession(current, epoch)) {
+        publish({
+          home: undefined,
+          homeStatus: mobileErrorMessage(error, copy.homeFailedStatus),
+        });
+      }
+    } finally {
+      if (currentMatchingSession(current, epoch)) {
+        publish({ homeLoading: false });
+      }
+    }
   }
 
   async function openRoutePayload(route: MobileRoutePayload) {
@@ -525,6 +729,7 @@ export function createMobileClientController<Home = unknown>(
     async start() {
       if (started) return;
       started = true;
+      const startEpoch = sessionLifecycleEpoch;
       if (options.nativeBridge.onLaunchPayload) {
         launchPayloadUnlisten = await options.nativeBridge.onLaunchPayload(
           (payload) => {
@@ -539,6 +744,7 @@ export function createMobileClientController<Home = unknown>(
         adapter: options.adapter,
         nativeBridge: options.nativeBridge,
       });
+      if (startEpoch !== sessionLifecycleEpoch) return;
       if (existingSession) {
         if (shouldLockRestoredSession(options, existingSession)) {
           publish({
@@ -546,14 +752,20 @@ export function createMobileClientController<Home = unknown>(
             status: copy.sessionLockedStatus,
           });
         } else {
-          await activateSession(existingSession, copy.sessionRestoredStatus);
+          await activateSession(
+            existingSession,
+            copy.sessionRestoredStatus,
+            startEpoch,
+          );
         }
       }
 
+      if (startEpoch !== sessionLifecycleEpoch && !state.session) return;
       const payload = await options.nativeBridge.getLaunchPayload();
       if (payload) await controller.handleLaunchPayload(payload);
     },
     stop() {
+      invalidateSessionLifecycle();
       launchPayloadUnlisten?.();
       launchPayloadUnlisten = undefined;
       void stopPushEventListeners();
@@ -621,6 +833,9 @@ export function createMobileClientController<Home = unknown>(
           adapter: options.adapter,
           discovery: current,
           nativeBridge: options.nativeBridge,
+          scope: normalizeOidcScopes(
+            options.oidcScopes ?? options.adapter.oidcScopes,
+          ),
           fetch: options.fetch,
         });
         publish({ status: copy.openingSignInStatus });
@@ -633,24 +848,30 @@ export function createMobileClientController<Home = unknown>(
       return {};
     },
     async completeSignIn(callbackUrl) {
+      const completionEpoch = sessionLifecycleEpoch;
       publish({ status: "Completing sign-in..." });
       try {
         const session = await completeMobileOidcSignIn({
           adapter: options.adapter,
           nativeBridge: options.nativeBridge,
           callbackUrl,
+          persistSession: false,
           fetch: options.fetch,
         });
-        await activateSession(session, copy.signedInStatus);
+        if (!(await persistSessionForEpoch(session, completionEpoch))) return;
+        await activateSession(session, copy.signedInStatus, completionEpoch);
       } catch (error) {
-        publish({
-          status: mobileErrorMessage(error, copy.signInFailedStatus),
-        });
+        if (completionEpoch === sessionLifecycleEpoch) {
+          publish({
+            status: mobileErrorMessage(error, copy.signInFailedStatus),
+          });
+        }
       }
     },
     async unlockSession() {
       const current = state.lockedSession;
       if (!current) return;
+      const unlockEpoch = sessionLifecycleEpoch;
       const unlocker = options.nativeBridge.authenticateBiometric;
       if (!options.nativeBridge.capabilities.biometricAuth || !unlocker) {
         if (sessionUnlockMode(options) === "required") {
@@ -658,7 +879,7 @@ export function createMobileClientController<Home = unknown>(
           return;
         }
         publish({ lockedSession: undefined });
-        await activateSession(current, copy.sessionRestoredStatus);
+        await activateSession(current, copy.sessionRestoredStatus, unlockEpoch);
         return;
       }
       publish({
@@ -670,88 +891,79 @@ export function createMobileClientController<Home = unknown>(
           resolveSessionUnlockPrompt(options.sessionUnlock, current),
         );
         if (!authenticated) {
-          publish({ status: copy.sessionUnlockFailedStatus });
+          if (unlockEpoch === sessionLifecycleEpoch) {
+            publish({ status: copy.sessionUnlockFailedStatus });
+          }
           return;
         }
+        if (unlockEpoch !== sessionLifecycleEpoch) return;
         publish({ lockedSession: undefined });
-        await activateSession(current, copy.sessionUnlockedStatus);
+        await activateSession(current, copy.sessionUnlockedStatus, unlockEpoch);
       } catch (error) {
-        publish({
-          status: mobileErrorMessage(error, copy.sessionUnlockFailedStatus),
-        });
+        if (unlockEpoch === sessionLifecycleEpoch) {
+          publish({
+            status: mobileErrorMessage(error, copy.sessionUnlockFailedStatus),
+          });
+        }
       } finally {
-        publish({ unlockLoading: false });
+        if (unlockEpoch === sessionLifecycleEpoch) {
+          publish({ unlockLoading: false });
+        }
       }
     },
     async refreshHome(current = state.session) {
       if (!current || !options.loadHome) return;
-      publish({ homeLoading: true, homeStatus: copy.homeLoadingStatus });
-      try {
-        const session = await freshenSession(current);
-        if (session !== current) publish({ session });
-        publish({
-          home: await options.loadHome(session),
-          homeStatus: copy.homeReadyStatus,
-        });
-      } catch (error) {
-        publish({
-          home: undefined,
-          homeStatus: mobileErrorMessage(error, copy.homeFailedStatus),
-        });
-      } finally {
-        publish({ homeLoading: false });
-      }
+      await refreshHomeForSession(current, sessionLifecycleEpoch);
     },
     async registerPushNotifications(current = state.session) {
-      if (!current || !options.registerPush) return;
-      if (!options.nativeBridge.registerPushNotifications) {
-        publish({ pushStatus: copy.pushUnavailableStatus });
-        return;
-      }
-      publish({ pushLoading: true, pushStatus: copy.pushRegisteringStatus });
-      try {
-        const registration =
-          await options.nativeBridge.registerPushNotifications({
-            hostUrl: current.hostUrl,
-            product: current.product,
-          });
-        if (!registration) {
+      const registerPush = options.registerPush;
+      if (!current || !registerPush) return;
+      const epoch = sessionLifecycleEpoch;
+      await enqueuePushOperation(async () => {
+        const active = currentMatchingSession(current, epoch);
+        if (!active) return;
+        if (!options.nativeBridge.registerPushNotifications) {
           publish({ pushStatus: copy.pushUnavailableStatus });
           return;
         }
-        await options.registerPush({ session: current, registration });
-        publish({
-          pushRegistration: registration,
-          pushStatus: copy.pushReadyStatus,
-        });
-      } catch (error) {
-        publish({
-          pushRegistration: undefined,
-          pushStatus: mobileErrorMessage(error, copy.pushFailedStatus),
-        });
-      } finally {
-        publish({ pushLoading: false });
-      }
+        publish({ pushLoading: true, pushStatus: copy.pushRegisteringStatus });
+        try {
+          const registration =
+            await options.nativeBridge.registerPushNotifications({
+              hostUrl: active.hostUrl,
+              product: active.product,
+            });
+          if (!currentMatchingSession(current, epoch)) return;
+          if (!registration) {
+            publish({ pushStatus: copy.pushUnavailableStatus });
+            return;
+          }
+          await registerPush({ session: active, registration });
+          if (!currentMatchingSession(current, epoch)) {
+            await unregisterPushBestEffort(active, registration);
+            return;
+          }
+          publish({
+            pushRegistration: registration,
+            pushStatus: copy.pushReadyStatus,
+          });
+        } catch (error) {
+          if (currentMatchingSession(current, epoch)) {
+            publish({
+              pushStatus: mobileErrorMessage(error, copy.pushFailedStatus),
+            });
+          }
+        } finally {
+          if (currentMatchingSession(current, epoch)) {
+            publish({ pushLoading: false });
+          }
+        }
+      });
     },
     async signOut() {
-      await stopPushEventListeners();
       const currentSession = state.session;
       const currentPushRegistration = state.pushRegistration;
-      if (currentSession && currentPushRegistration && options.unregisterPush) {
-        try {
-          await options.unregisterPush({
-            session: currentSession,
-            registration: currentPushRegistration,
-          });
-        } catch {
-          // Sign-out must remain local-first; stale push registrations can be
-          // overwritten by the next sign-in or cleaned by host retention.
-        }
-      }
-      await clearMobileSession({
-        adapter: options.adapter,
-        nativeBridge: options.nativeBridge,
-      });
+      invalidateSessionLifecycle();
       publish({
         connectPayload: undefined,
         discovery: undefined,
@@ -761,12 +973,33 @@ export function createMobileClientController<Home = unknown>(
         unlockLoading: false,
         home: undefined,
         homeStatus: "",
+        homeLoading: false,
         pushRegistration: undefined,
         lastPushNotification: undefined,
         pushStatus: "",
         pushLoading: false,
         status: copy.signedOutStatus,
       });
+
+      const listenerCleanup = stopPushEventListeners();
+      const pushCleanup = enqueuePushOperation(async () => {
+        await Promise.allSettled([
+          currentSession && currentPushRegistration
+            ? unregisterPushBestEffort(currentSession, currentPushRegistration)
+            : Promise.resolve(),
+          unregisterNativePushBestEffort(),
+        ]);
+      });
+      await enqueueSessionStorageOperation(async () => {
+        await clearMobileSession({
+          adapter: options.adapter,
+          nativeBridge: options.nativeBridge,
+        });
+      });
+      await settleWithin(
+        Promise.allSettled([listenerCleanup, pushCleanup]),
+        signOutCleanupTimeoutMs,
+      );
     },
     async selectAction(actionId) {
       if (actionId === "host") {
@@ -790,6 +1023,28 @@ export function createMobileClientController<Home = unknown>(
   };
 
   return controller;
+}
+
+async function settleWithin(
+  operation: Promise<unknown>,
+  timeoutMs: number,
+): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    operation,
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, timeoutMs);
+    }),
+  ]);
+  if (timeout !== undefined) clearTimeout(timeout);
+}
+
+function normalizeOidcScopes(scopes: readonly string[] | undefined) {
+  if (!scopes) return undefined;
+  const normalized = scopes
+    .flatMap((scope) => scope.trim().split(/\s+/u))
+    .filter(Boolean);
+  return normalized.length > 0 ? [...new Set(normalized)].join(" ") : undefined;
 }
 
 function createClientCopy(
@@ -898,6 +1153,17 @@ function sessionUnlockMode(
   options: CreateMobileClientControllerOptions,
 ): "off" | "if-available" | "required" {
   return options.sessionUnlock?.restoreMode ?? "off";
+}
+
+function samePushRegistration(
+  left: MobilePushRegistration,
+  right: MobilePushRegistration,
+): boolean {
+  return (
+    left.token === right.token &&
+    left.provider === right.provider &&
+    left.environment === right.environment
+  );
 }
 
 function resolveSessionUnlockPrompt(

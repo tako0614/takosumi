@@ -3,22 +3,27 @@ import type { OpenTofuRunner } from "../../../../core/domains/deploy-control/mod
 import {
   applyExpectedGuardFromPlanRun,
   createDefaultRunnerProfiles,
+  DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
   OpenTofuControllerError,
-  OpenTofuDeploymentController,
+  OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import type {
-  Connection,
+  ProviderConnection,
   CreatePlanRunRequest,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import { projectServicesFromOutputs } from "takosumi-contract/output-projection";
-import { SourcesService } from "../../../../core/domains/sources/mod.ts";
-import type { JsonValue } from "../../../../contract/types.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   fakeProviderVault,
-  seedInstallationModel,
+  seedCapsuleModel,
 } from "../../../helpers/deploy-control/model_fixture.ts";
+
+const ACTIVE_TEST_RUNNER_PROFILE = {
+  executorId: DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
+  lifecycle: { state: "active" },
+  availability: { state: "available" },
+} as const;
 
 const SOURCE = {
   kind: "git",
@@ -27,51 +32,51 @@ const SOURCE = {
 } as const;
 
 /**
- * Installation-first model setup (spec §5). Seeds Space + Source + Snapshot +
- * InstallConfig + Installation into a freshly constructed store and returns it
- * alongside an `update` plan-run request bound to the seeded Installation. The
- * Installation is seeded WITH a current deployment so the apply-expected guard is
- * well-formed (an `update` PlanRun carries `installationCurrentDeploymentId`; a
- * fresh installation has no prior deployment to guard against). The store is
+ * Capsule-first model setup (spec §5). Seeds Workspace + Source + Snapshot +
+ * InstallConfig + Capsule into a freshly constructed store and returns it
+ * alongside an `update` plan-run request bound to the seeded Capsule. The
+ * Capsule is seeded WITH a current StateVersion so the apply-expected guard is
+ * well-formed (an `update` PlanRun carries `capsuleCurrentStateVersionId`; a
+ * fresh Capsule has no prior StateVersion to guard against). The store is
  * passed back so the caller can wire it into the controller it constructs.
  */
-async function seedUpdatableInstallation(
+async function seedUpdatableCapsule(
   options: {
-    readonly store?: InMemoryOpenTofuDeploymentStore;
-    readonly spaceId?: string;
-    readonly installationId?: string;
+    readonly store?: InMemoryOpenTofuControlStore;
+    readonly workspaceId?: string;
+    readonly capsuleId?: string;
     readonly source?: CreatePlanRunRequest["source"];
     readonly runnerProfileId?: string;
     readonly requiredProviders?: readonly string[];
     readonly seedProviderConnections?: boolean;
   } = {},
 ): Promise<{
-  readonly store: InMemoryOpenTofuDeploymentStore;
-  readonly installationId: string;
-  readonly currentDeploymentId: string;
+  readonly store: InMemoryOpenTofuControlStore;
+  readonly capsuleId: string;
+  readonly currentStateVersionId: string;
   readonly request: CreatePlanRunRequest;
 }> {
-  const store = options.store ?? new InMemoryOpenTofuDeploymentStore();
-  const installationId = options.installationId ?? "inst_fixture";
-  const { installation } = await seedInstallationModel(store, {
-    spaceId: options.spaceId,
-    installationId,
+  const store = options.store ?? new InMemoryOpenTofuControlStore();
+  const capsuleId = options.capsuleId ?? "cap_fixture";
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: options.workspaceId,
+    capsuleId,
   });
   const requiredProviders = options.requiredProviders ?? [
     "registry.opentofu.org/cloudflare/cloudflare",
   ];
   if (options.seedProviderConnections !== false) {
-    await seedProviderConnections(store, installation, requiredProviders);
+    await seedProviderConnections(store, capsule, requiredProviders);
   }
-  const currentDeploymentId = `dep_seed_${installationId}`;
-  await store.putInstallation({
-    ...installation,
-    currentDeploymentId,
+  const currentStateVersionId = `dep_seed_${capsuleId}`;
+  await store.putCapsule({
+    ...capsule,
+    currentStateVersionId,
     status: "active",
   });
   const request: CreatePlanRunRequest = {
-    spaceId: installation.spaceId,
-    installationId: installation.id,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
     operation: "update",
     source: options.source ?? SOURCE,
     requiredProviders,
@@ -79,14 +84,14 @@ async function seedUpdatableInstallation(
       ? { runnerProfileId: options.runnerProfileId }
       : {}),
   };
-  return { store, installationId, currentDeploymentId, request };
+  return { store, capsuleId, currentStateVersionId, request };
 }
 
 async function seedProviderConnections(
-  store: InMemoryOpenTofuDeploymentStore,
-  installation: {
+  store: InMemoryOpenTofuControlStore,
+  capsule: {
     readonly id: string;
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly environment: string;
   },
   requiredProviders: readonly string[],
@@ -96,12 +101,18 @@ async function seedProviderConnections(
   const bindings = requiredProviders.map((provider) => {
     const shortName = providerShortName(provider);
     const connectionId = `conn_seed_${shortName}`;
-    const connection: Connection = {
+    const connection: ProviderConnection = {
       id: connectionId,
-      spaceId: installation.spaceId,
-      provider: shortName,
+      workspaceId: capsule.workspaceId,
+      provider,
       providerSource: provider,
-      scope: "space",
+      credentialRecipe: {
+        id: "generic-env",
+        authMode: "env",
+        secretPartition: "provider-credentials",
+      },
+      secretPartition: "provider-credentials",
+      scope: "workspace",
       status: "verified",
       materialization: "secret",
       envNames: providerEnvNames(shortName),
@@ -113,7 +124,7 @@ async function seedProviderConnections(
       providerSource: provider,
       connection,
       binding: {
-        provider: shortName,
+        provider,
         alias: "main",
         connectionId,
       },
@@ -122,11 +133,11 @@ async function seedProviderConnections(
   for (const { connection } of bindings) {
     await store.putConnection(connection);
   }
-  await store.putInstallationProviderEnvBindingSet({
-    id: `ipcset_seed_${installation.id}`,
-    spaceId: installation.spaceId,
-    installationId: installation.id,
-    environment: installation.environment,
+  await store.putProviderBindingSet({
+    id: `ipcset_seed_${capsule.id}`,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
     bindings: bindings.map((entry) => entry.binding),
     createdAt: now,
     updatedAt: now,
@@ -182,9 +193,50 @@ const AWS_MIRROR_EVIDENCE = {
     "/opt/opentofu/provider-mirror/registry.opentofu.org/hashicorp/aws",
 } as const;
 
+async function seedRestoreFixture(
+  store: InMemoryOpenTofuControlStore,
+  suffix: string,
+) {
+  const capsuleId = `inst_restore_${suffix}`;
+  const { capsule } = await seedCapsuleModel(store, {
+    capsuleId,
+  });
+  const stateId = `state_restore_${suffix}`;
+  const backupId = `bkp_restore_${suffix}`;
+  await store.putStateVersion({
+    id: stateId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
+    generation: 1,
+    stateRef: `states/${suffix}/1.tfstate.enc`,
+    digest: LOCK_DIGEST,
+    createdByRunId: `apply_restore_${suffix}`,
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putBackupRecord({
+    id: backupId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
+    ref: `workspaces/${capsule.workspaceId}/backups/${backupId}/control.json.zst.enc`,
+    digest: PLAN_DIGEST,
+    sizeBytes: 1,
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putCapsule({
+    ...capsule,
+    status: "destroyed",
+    currentStateGeneration: 2,
+    updatedAt: "2026-06-06T00:00:01.000Z",
+  });
+  return { capsule, backupId };
+}
+
 test("plan run stays queued when no OpenTofu runner is injected", async () => {
-  const { store, request } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  const { store, request } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: () => 1,
@@ -200,8 +252,9 @@ test("plan run stays queued when no OpenTofu runner is injected", async () => {
 
 test("PlanRun stores variable digest without retaining variable values", async () => {
   let runnerVariables: Readonly<Record<string, unknown>> | undefined;
-  const { store, request } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  const { store, request } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(2),
@@ -244,15 +297,16 @@ test("PlanRun stores variable digest without retaining variable values", async (
   expect(payload).not.toContain("super-secret-plan-token");
   expect(payload).not.toContain("acct_123");
   const sidecar = await store.getPlanRunInputs(planRun.id);
-  expect(sidecar?.generatedRoot?.files["main.tf"]).toContain('module "app"');
+  expect(sidecar?.generatedRoot?.files["main.tf"]).toContain('module "child"');
   expect(sidecar?.generatedRoot?.files["main.tf"]).toContain(
-    'source = "./template-module"',
+    'source = "./module"',
   );
 });
 
-test("plan/apply records Installation, Deployment, and non-sensitive well-known outputs", async () => {
-  const { store, request, installationId } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+test("plan/apply records Capsule, StateVersion, and explicitly allowlisted Output", async () => {
+  const { store, request, capsuleId } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(10),
@@ -269,22 +323,23 @@ test("plan/apply records Installation, Deployment, and non-sensitive well-known 
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
-
-  // A successful apply patches the pre-existing Installation to `active` with the
-  // new current deployment + bumped state generation (§21), and records a
-  // Deployment whose public outputs project only the non-sensitive well-known
-  // value (`launch_url`); the sensitive output never lands on the run.
-  expect(applied.applyRun.status).toEqual("succeeded");
-  expect(applied.installation?.id).toEqual(installationId);
-  expect(applied.installation?.status).toEqual("active");
-  expect(applied.installation?.currentDeploymentId).toEqual(
-    applied.deployment!.id,
+  const stateVersion = await store.getStateVersion(
+    applied.applyRun.stateVersionId!,
   );
-  expect(applied.installation?.currentStateGeneration).toEqual(1);
-  expect(applied.deployment?.status).toEqual("active");
-  expect(applied.deployment?.installationId).toEqual(installationId);
-  expect(applied.deployment?.stateGeneration).toEqual(1);
-  expect(applied.deployment?.outputsPublic).toEqual({
+  const output = await store.getOutput(applied.applyRun.outputId!);
+
+  // A successful apply advances the Capsule cursor and records canonical
+  // StateVersion + Output rows. Sensitive values never enter publicOutputs.
+  expect(applied.applyRun.status).toEqual("succeeded");
+  expect(applied.capsule?.id).toEqual(capsuleId);
+  expect(applied.capsule?.status).toEqual("active");
+  expect(applied.capsule?.currentStateVersionId).toEqual(stateVersion!.id);
+  expect(applied.capsule?.currentStateGeneration).toEqual(1);
+  expect(stateVersion?.capsuleId).toEqual(capsuleId);
+  expect(stateVersion?.generation).toEqual(1);
+  expect(output?.capsuleId).toEqual(capsuleId);
+  expect(output?.stateGeneration).toEqual(1);
+  expect(output?.publicOutputs).toEqual({
     launch_url: "https://app.example.test",
   });
   expect(applied.applyRun.stateBackend.kind).toEqual("operator-managed");
@@ -292,31 +347,19 @@ test("plan/apply records Installation, Deployment, and non-sensitive well-known 
   expect(applied.applyRun.stateLock.backendRef).toEqual(
     "state://takosumi/opentofu-default",
   );
-  expect(applied.applyRun.outputs).toEqual([
-    {
-      name: "launch_url",
-      kind: "url",
-      value: "https://app.example.test",
-      sensitive: false,
-    },
-  ]);
-  expect(
-    applied.applyRun.outputs?.some((output) => output.name === "secret_value"),
-  ).toEqual(false);
+  expect(output?.workspaceOutputs.secret_value).toBeUndefined();
   expect(applied.applyRun.auditEvents.map((event) => event.type)).toContain(
     "apply.completed",
   );
 
-  const deployments = await controller.listDeployments(
-    applied.installation!.id,
+  const stateVersions = await controller.listStateVersions(applied.capsule!.id);
+  expect(stateVersions.stateVersions.map((version) => version.id)).toContain(
+    stateVersion!.id,
   );
-  expect(deployments.deployments.map((deployment) => deployment.id)).toEqual([
-    applied.deployment!.id,
-  ]);
 });
 
-test("apply allowlists service_exports and service_bindings outputs that project to transient services", async () => {
-  const { store, request } = await seedUpdatableInstallation();
+test("apply treats former runtime declaration names as ordinary allowlisted Outputs", async () => {
+  const { store, request } = await seedUpdatableCapsule();
   const installConfig = await store.getInstallConfig("cfg_fixture");
   await store.putInstallConfig({
     ...installConfig!,
@@ -326,7 +369,8 @@ test("apply allowlists service_exports and service_bindings outputs that project
       service_bindings: { from: "service_bindings", type: "json" },
     },
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(40),
@@ -338,32 +382,11 @@ test("apply allowlists service_exports and service_bindings outputs that project
       },
       service_exports: {
         sensitive: false,
-        value: [
-          {
-            name: "tools",
-            capabilities: ["protocol.mcp.server"],
-            endpoints: [{ name: "mcp", url: "https://tools.example.test/mcp" }],
-            visibility: "space",
-          },
-        ],
+        value: { opaque: "exports" },
       },
       service_bindings: {
         sensitive: false,
-        value: [
-          {
-            name: "agent_tools",
-            target: { kind: "workload", name: "agent-runtime" },
-            selector: {
-              name: "tools",
-              capabilities: ["protocol.mcp.server"],
-            },
-            grant_request: {
-              scopes: ["mcp.invoke"],
-              audience: ["agent-runtime"],
-              env: ["MCP_BASE_URL", "MCP_TOKEN"],
-            },
-          },
-        ],
+        value: { opaque: "bindings" },
       },
     }),
   });
@@ -373,31 +396,16 @@ test("apply allowlists service_exports and service_bindings outputs that project
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
-  // Deploy decision D3: there is no persisted service ledger. The allowlisted
-  // outputs are projected to TRANSIENT services from the Deployment's public
-  // outputs.
-  const { serviceExports, serviceBindings } = projectServicesFromOutputs(
-    applied.deployment!.outputsPublic as Readonly<Record<string, JsonValue>>,
-    { producerCapsuleId: applied.installation!.id },
-  );
-
-  expect(serviceExports).toHaveLength(1);
-  expect(serviceExports[0]?.name).toBe("tools");
-  expect(serviceExports[0]?.capabilities).toEqual(["protocol.mcp.server"]);
-
-  expect(serviceBindings).toHaveLength(1);
-  expect(serviceBindings[0]?.selector).toEqual({
-    capabilities: ["protocol.mcp.server"],
-    name: "tools",
+  const output = await store.getOutput(applied.applyRun.outputId!);
+  expect(output?.publicOutputs).toEqual({
+    launch_url: "https://app.example.test",
+    service_bindings: { opaque: "bindings" },
+    service_exports: { opaque: "exports" },
   });
-  expect(serviceBindings[0]?.grantRequest.env).toEqual([
-    "MCP_BASE_URL",
-    "MCP_TOKEN",
-  ]);
 });
 
-test("apply allowlists app_deployment output that projects to transient exports and bindings", async () => {
-  const { store, request } = await seedUpdatableInstallation();
+test("apply treats app_deployment as an ordinary allowlisted Output", async () => {
+  const { store, request } = await seedUpdatableCapsule();
   const installConfig = await store.getInstallConfig("cfg_fixture");
   await store.putInstallConfig({
     ...installConfig!,
@@ -406,7 +414,8 @@ test("apply allowlists app_deployment output that projects to transient exports 
       app_deployment: { from: "app_deployment", type: "json" },
     },
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(50),
@@ -457,32 +466,48 @@ test("apply allowlists app_deployment output that projects to transient exports 
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
-  const { serviceExports, serviceBindings } = projectServicesFromOutputs(
-    applied.deployment!.outputsPublic as Readonly<Record<string, JsonValue>>,
-    { producerCapsuleId: applied.installation!.id },
-  );
-
-  expect(serviceExports.map((serviceExport) => serviceExport.name)).toEqual([
-    "launcher",
-  ]);
-  expect(serviceExports[0]?.capabilities).toEqual(["interface.ui.surface"]);
-  expect(serviceBindings).toHaveLength(1);
-  expect(serviceBindings[0]?.selector).toEqual({
-    capabilities: ["identity.oidc"],
-    name: "identity.oidc",
+  const output = await store.getOutput(applied.applyRun.outputId!);
+  expect(output?.publicOutputs).toEqual({
+    app_deployment: {
+      name: "yurucommu",
+      version: "2.0.0",
+      compute: {
+        web: {
+          kind: "worker",
+          consume: [
+            {
+              publication: "identity.oidc",
+              inject: {
+                env: {
+                  issuerUrl: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+                  clientId: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+                },
+              },
+            },
+          ],
+        },
+      },
+      publish: [
+        {
+          name: "launcher",
+          publisher: "web",
+          type: "UiSurface",
+          outputs: { url: { kind: "url", routeRef: "root" } },
+          display: { title: "Yurucommu" },
+          spec: { launcher: true },
+        },
+      ],
+    },
+    launch_url: "https://app.example.test",
   });
-  expect(serviceBindings[0]?.target.name).toBe("web");
-  expect(serviceBindings[0]?.grantRequest.env).toEqual([
-    "TAKOSUMI_ACCOUNTS_ISSUER_URL",
-    "TAKOSUMI_ACCOUNTS_CLIENT_ID",
-  ]);
 });
 
-test("PlanRun rejects installation operations outside the requested space", async () => {
-  const { store, installationId } = await seedUpdatableInstallation({
-    spaceId: "space_a",
+test("PlanRun rejects capsule operations outside the requested space", async () => {
+  const { store, capsuleId } = await seedUpdatableCapsule({
+    workspaceId: "workspace_a",
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(20),
@@ -492,8 +517,8 @@ test("PlanRun rejects installation operations outside the requested space", asyn
 
   await expect(
     controller.createPlanRun({
-      spaceId: "space_b",
-      installationId,
+      workspaceId: "workspace_b",
+      capsuleId,
       operation: "update",
       source: SOURCE,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
@@ -501,12 +526,13 @@ test("PlanRun rejects installation operations outside the requested space", asyn
   ).rejects.toThrow(/capsule is not available to this workspace/);
 });
 
-test("PlanRun requires an existing Installation regardless of operation", async () => {
-  // Installation-first model (spec §5): every plan / destroy plan targets an
-  // existing Installation row. A raw createPlanRun with no installationId is a
+test("PlanRun requires an existing Capsule regardless of operation", async () => {
+  // Capsule-first model (spec §5): every plan / destroy plan targets an
+  // existing Capsule row. A raw createPlanRun with no capsuleId is a
   // failed_precondition for any operation; the create-on-apply legacy path is
   // removed.
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     now: sequenceNow(30),
     newId: deterministicIds(),
@@ -515,7 +541,7 @@ test("PlanRun requires an existing Installation regardless of operation", async 
 
   await expect(
     controller.createPlanRun({
-      spaceId: "space_test",
+      workspaceId: "workspace_test",
       operation: "update",
       source: SOURCE,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
@@ -524,19 +550,19 @@ test("PlanRun requires an existing Installation regardless of operation", async 
 
   await expect(
     controller.createPlanRun({
-      spaceId: "space_test",
+      workspaceId: "workspace_test",
       operation: "destroy",
       source: SOURCE,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
   ).rejects.toThrow(/plan requires an existing capsuleId/);
 
-  // A missing installationId target is a typed not_found (the id is consulted
+  // A missing capsuleId target is a typed not_found (the id is consulted
   // before any operation-specific handling).
   await expect(
     controller.createPlanRun({
-      spaceId: "space_test",
-      installationId: "inst_missing",
+      workspaceId: "workspace_test",
+      capsuleId: "inst_missing",
       operation: "update",
       source: SOURCE,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
@@ -547,15 +573,16 @@ test("PlanRun requires an existing Installation regardless of operation", async 
   });
 });
 
-test("update and destroy PlanRuns stay bound to the targeted Installation", async () => {
-  // The Space-direct Installation no longer carries a `source` identity or a
+test("update and destroy PlanRuns stay bound to the targeted Capsule", async () => {
+  // The Workspace-direct Capsule no longer carries a `source` identity or a
   // `runnerProfileId` (those are resolved through the InstallConfig / Source), so
-  // the binding the run preserves is the Installation + its current Deployment
-  // cursor: an update / destroy plan records the installationId, the operation,
-  // and the Installation's current Deployment as the apply guard.
-  const { store, installationId, currentDeploymentId } =
-    await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  // the binding the run preserves is the Capsule + its current StateVersion
+  // cursor: an update / destroy plan records the capsuleId, the operation,
+  // and the Capsule's current StateVersion as the apply guard.
+  const { store, capsuleId, currentStateVersionId } =
+    await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(60),
@@ -564,96 +591,78 @@ test("update and destroy PlanRuns stay bound to the targeted Installation", asyn
   });
 
   const { planRun: updatePlan } = await controller.createPlanRun({
-    spaceId: "space_test",
-    installationId,
+    workspaceId: "workspace_test",
+    capsuleId,
     operation: "update",
     source: { ...SOURCE, ref: "release-2" },
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   expect(updatePlan.status).toEqual("succeeded");
-  expect(updatePlan.installationId).toEqual(installationId);
+  expect(updatePlan.capsuleId).toEqual(capsuleId);
   expect(updatePlan.operation).toEqual("update");
-  expect(updatePlan.installationCurrentDeploymentId).toEqual(
-    currentDeploymentId,
+  expect(updatePlan.capsuleCurrentStateVersionId).toEqual(
+    currentStateVersionId,
   );
 
   const { planRun: destroyPlan } = await controller.createPlanRun({
-    spaceId: "space_test",
-    installationId,
+    workspaceId: "workspace_test",
+    capsuleId,
     operation: "destroy",
     source: SOURCE,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   expect(destroyPlan.status).toEqual("waiting_approval");
-  expect(destroyPlan.installationId).toEqual(installationId);
+  expect(destroyPlan.capsuleId).toEqual(capsuleId);
   expect(destroyPlan.operation).toEqual("destroy");
-  expect(destroyPlan.installationCurrentDeploymentId).toEqual(
-    currentDeploymentId,
+  expect(destroyPlan.capsuleCurrentStateVersionId).toEqual(
+    currentStateVersionId,
   );
 });
 
-test("apply rejects a stale update PlanRun after the current Deployment changes", async () => {
-  const { store, installationId } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+test("apply rejects a stale update PlanRun after the current StateVersion changes", async () => {
+  const { store, capsuleId } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(80),
     newId: deterministicIds(),
     runner: fakeRunner(),
   });
-  // Two update plans are created against the SAME current Deployment.
+  // Two update plans are created against the same current StateVersion.
   const { planRun: staleUpdate } = await controller.createPlanRun({
-    spaceId: "space_test",
-    installationId,
+    workspaceId: "workspace_test",
+    capsuleId,
     operation: "update",
     source: { ...SOURCE, ref: "release-2" },
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   const { planRun: freshUpdate } = await controller.createPlanRun({
-    spaceId: "space_test",
-    installationId,
+    workspaceId: "workspace_test",
+    capsuleId,
     operation: "update",
     source: { ...SOURCE, ref: "release-3" },
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
-  // Applying the fresh plan moves the Installation's current Deployment forward.
+  // Applying the fresh plan moves the Capsule's StateVersion cursor forward.
   await controller.createApplyRun({
     planRunId: freshUpdate.id,
     expected: applyExpectedGuardFromPlanRun(freshUpdate),
   });
 
-  // The stale plan was created against the prior current Deployment; its apply
+  // The stale plan was created against the prior current StateVersion; its apply
   // must be rejected.
   await expect(
     controller.createApplyRun({
       planRunId: staleUpdate.id,
       expected: applyExpectedGuardFromPlanRun(staleUpdate),
     }),
-  ).rejects.toThrow(/current Deployment changed/);
-});
-
-test("prepared source digest must be a canonical sha256 digest", async () => {
-  const controller = new OpenTofuDeploymentController({
-    vault: fakeProviderVault() as never,
-    now: sequenceNow(90),
-    newId: deterministicIds(),
-  });
-
-  await expect(
-    controller.createPlanRun({
-      spaceId: "space_test",
-      source: {
-        kind: "prepared",
-        url: "https://example.test/module.tar.gz",
-        digest: "sha256:not-a-real-digest",
-      },
-      requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-    }),
-  ).rejects.toThrow(/prepared source digest/);
+  ).rejects.toThrow(/current StateVersion changed/);
 });
 
 test("git source is restricted to safe HTTPS source URLs", async () => {
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     now: sequenceNow(91),
     newId: deterministicIds(),
@@ -662,7 +671,7 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
 
   await expect(
     controller.createPlanRun({
-      spaceId: "space_test",
+      workspaceId: "workspace_test",
       source: {
         kind: "git",
         url: "file:///etc/passwd",
@@ -674,7 +683,7 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
 
   await expect(
     controller.createPlanRun({
-      spaceId: "space_test",
+      workspaceId: "workspace_test",
       source: {
         kind: "git",
         url: "https://token@example.com/private.git",
@@ -686,7 +695,7 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
 
   await expect(
     controller.createPlanRun({
-      spaceId: "space_test",
+      workspaceId: "workspace_test",
       source: {
         kind: "git",
         url: "https://127.0.0.1/private.git",
@@ -698,7 +707,7 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
 
   await expect(
     controller.createPlanRun({
-      spaceId: "space_test",
+      workspaceId: "workspace_test",
       source: {
         kind: "git",
         url: "https://github.com/example/app.git",
@@ -710,7 +719,7 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
 
   await expect(
     controller.createPlanRun({
-      spaceId: "space_test",
+      workspaceId: "workspace_test",
       source: {
         kind: "git",
         url: "https://github.com/example/app.git",
@@ -722,7 +731,7 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
 
   await expect(
     controller.createPlanRun({
-      spaceId: "space_test",
+      workspaceId: "workspace_test",
       source: {
         kind: "git",
         url: "https://github.com/example/app.git",
@@ -733,134 +742,10 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
   ).rejects.toThrow(/source\.modulePath must stay inside/);
 });
 
-test("local source requires runner profile opt-in", async () => {
-  const denying = await seedUpdatableInstallation({
-    source: { kind: "local", path: "/workspace/module" },
-  });
-  const controller = new OpenTofuDeploymentController({
-    vault: fakeProviderVault() as never,
-    store: denying.store,
-    now: sequenceNow(40),
-    newId: deterministicIds(),
-  });
-
-  await expect(controller.createPlanRun(denying.request)).rejects.toThrow(
-    /does not allow local source paths/,
-  );
-
-  const localProfile: RunnerProfile = {
-    ...createDefaultRunnerProfiles(40)[0],
-    id: "local-dev",
-    name: "Local dev",
-    sourcePolicy: { allowLocalSource: true },
-  };
-  const allowing = await seedUpdatableInstallation({
-    installationId: "inst_local",
-    source: { kind: "local", path: "/workspace/module" },
-    runnerProfileId: "local-dev",
-  });
-  const localController = new OpenTofuDeploymentController({
-    vault: fakeProviderVault() as never,
-    store: allowing.store,
-    now: sequenceNow(50),
-    newId: deterministicIds(),
-    runnerProfiles: [localProfile],
-    defaultRunnerProfileId: "local-dev",
-  });
-  const { planRun } = await localController.createPlanRun(allowing.request);
-  expect(planRun.status).toEqual("queued");
-});
-
-test("internal generated-root dispatch may use a nominal local source", async () => {
-  const seeded = await seedUpdatableInstallation({
-    source: { kind: "local", path: "/resource-shape/generated-root-anchor" },
-  });
-  const controller = new OpenTofuDeploymentController({
-    vault: fakeProviderVault() as never,
-    store: seeded.store,
-    now: sequenceNow(60),
-    newId: deterministicIds(),
-  });
-
-  const { planRun } = await controller.createPlanRun(
-    seeded.request,
-    {},
-    {
-      genericRootDispatch: {
-        generatedRoot: {
-          files: {
-            "main.tf": [
-              "terraform {",
-              '  required_version = ">= 1.6.0"',
-              "}",
-            ].join("\n"),
-          },
-        },
-        outputAllowlist: [],
-      },
-    },
-  );
-
-  expect(planRun.status).toEqual("queued");
-  expect(planRun.source).toEqual({
-    kind: "local",
-    path: "/resource-shape/generated-root-anchor",
-  });
-  expect(planRun.sourceSnapshotId).toMatch(/^snap_/);
-  const snapshot = await seeded.store.getSourceSnapshot(
-    planRun.sourceSnapshotId!,
-  );
-  expect(snapshot?.url).toEqual(`takosumi://generated-root/${planRun.id}`);
-  expect(snapshot?.archiveObjectKey).toContain("/generated-roots/");
-});
-
-test("internal generated-root dispatch skips source compatibility preflight", async () => {
-  const seeded = await seedUpdatableInstallation({
-    source: { kind: "local", path: "/resource-shape/generated-root-anchor" },
-  });
-  let readSourceFiles = 0;
-  const controller = new OpenTofuDeploymentController({
-    vault: fakeProviderVault() as never,
-    store: seeded.store,
-    now: sequenceNow(70),
-    newId: deterministicIds(),
-    runner: fakeRunner(),
-    sourcesService: new SourcesService({
-      store: seeded.store,
-      readCapsuleSourceFiles: () => {
-        readSourceFiles += 1;
-        throw new Error("generated-root snapshots must not be source-checked");
-      },
-    }),
-  });
-
-  const { planRun } = await controller.createPlanRun(
-    seeded.request,
-    {},
-    {
-      genericRootDispatch: {
-        generatedRoot: {
-          files: {
-            "main.tf": [
-              "terraform {",
-              '  required_version = ">= 1.6.0"',
-              "}",
-            ].join("\n"),
-          },
-        },
-        outputAllowlist: [],
-      },
-    },
-  );
-
-  expect(planRun.status).toEqual("succeeded");
-  expect(planRun.compatibilityReportId).toBeUndefined();
-  expect(readSourceFiles).toBe(0);
-});
-
 test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", async () => {
-  const { store, request } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  const { store, request } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(15),
@@ -914,8 +799,9 @@ test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", 
 });
 
 test("apply expected guard compares against the succeeded PlanRun", async () => {
-  const { store, request } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  const { store, request } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(20),
@@ -939,8 +825,9 @@ test("apply expected guard compares against the succeeded PlanRun", async () => 
 });
 
 test("apply requires the full reviewed PlanRun guard", async () => {
-  const { store, request } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  const { store, request } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(25),
@@ -967,10 +854,11 @@ test("apply requires the full reviewed PlanRun guard", async () => {
 test("default runner admits arbitrary valid provider sources", async () => {
   let runnerCalled = false;
   const awsProvider = "registry.opentofu.org/hashicorp/aws";
-  const { store, request } = await seedUpdatableInstallation({
+  const { store, request } = await seedUpdatableCapsule({
     requiredProviders: [awsProvider],
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: () => 30,
@@ -1006,10 +894,11 @@ test("default runner admits arbitrary valid provider sources", async () => {
 
 test("default runner records providers discovered during OpenTofu init", async () => {
   let runnerCalled = false;
-  const { store, request } = await seedUpdatableInstallation({
+  const { store, request } = await seedUpdatableCapsule({
     requiredProviders: [],
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(31),
@@ -1037,8 +926,9 @@ test("default runner records providers discovered during OpenTofu init", async (
   ]);
 });
 
-test("runner profile policy blocks denied providers and missing credential refs", async () => {
+test("runner profile policy blocks denied providers", async () => {
   const profile: RunnerProfile = {
+    ...ACTIVE_TEST_RUNNER_PROFILE,
     id: "strict-cloudflare",
     name: "Strict Cloudflare",
     substrate: "cloudflare-containers",
@@ -1049,12 +939,12 @@ test("runner profile policy blocks denied providers and missing credential refs"
     },
     allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     deniedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-    requireCredentialRefs: true,
-    credentialRefs: [],
+    requireProviderBindings: true,
     createdAt: 1,
   };
-  const { store, request } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  const { store, request } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: () => 35,
@@ -1073,8 +963,9 @@ test("runner profile policy blocks denied providers and missing credential refs"
   expect(planRun.policy.reasons.join("\n")).toContain("denied");
 });
 
-test("runner profile policy blocks required providers without credential refs", async () => {
+test("runner profile requires explicit Provider Bindings", async () => {
   const profile: RunnerProfile = {
+    ...ACTIVE_TEST_RUNNER_PROFILE,
     id: "credential-required",
     name: "Credential required",
     substrate: "cloudflare-containers",
@@ -1083,12 +974,14 @@ test("runner profile policy blocks required providers without credential refs", 
       ref: "state://credential-required",
     },
     allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-    requireCredentialRefs: true,
-    credentialRefs: [],
+    requireProviderBindings: true,
     createdAt: 1,
   };
-  const { store, request } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  const { store, request } = await seedUpdatableCapsule({
+    seedProviderConnections: false,
+  });
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: () => 36,
@@ -1098,36 +991,26 @@ test("runner profile policy blocks required providers without credential refs", 
     defaultRunnerProfileId: profile.id,
   });
 
-  const { planRun } = await controller.createPlanRun({
-    ...request,
-    runnerProfileId: profile.id,
-  });
-
-  expect(planRun.status).toEqual("failed");
-  expect(planRun.policy.reasons.join("\n")).toContain("credential reference");
+  await expect(
+    controller.createPlanRun({
+      ...request,
+      runnerProfileId: profile.id,
+    }),
+  ).rejects.toThrow(/provider connection is required/);
 });
 
 test("generic runner allows optional provider declarations without Provider Connections", async () => {
   let runnerCalled = false;
-  const genericProfile = createDefaultRunnerProfiles()
-    .map((profile) =>
-      profile.id === "opentofu-default"
-        ? {
-            ...profile,
-            labels: {
-              ...(profile.labels ?? {}),
-              "takosumi.com/profile-enabled": "true",
-            },
-          }
-        : profile,
-    )
-    .find((profile) => profile.id === "opentofu-default");
+  const genericProfile = createDefaultRunnerProfiles().find(
+    (profile) => profile.id === "opentofu-default",
+  );
   if (!genericProfile) throw new Error("generic profile fixture missing");
-  const { store, request } = await seedUpdatableInstallation({
+  const { store, request } = await seedUpdatableCapsule({
     runnerProfileId: genericProfile.id,
     seedProviderConnections: false,
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(37),
@@ -1175,6 +1058,7 @@ test("generic runner allows optional provider declarations without Provider Conn
 
 test("InstallConfig provider allowlist blocks after RunnerProfile admits provider", async () => {
   const profile: RunnerProfile = {
+    ...ACTIVE_TEST_RUNNER_PROFILE,
     id: "aws-admitting",
     name: "AWS admitting",
     substrate: "cloudflare-containers",
@@ -1185,11 +1069,11 @@ test("InstallConfig provider allowlist blocks after RunnerProfile admits provide
     allowedProviders: ["registry.opentofu.org/hashicorp/aws"],
     createdAt: 1,
   };
-  const { store, request } = await seedUpdatableInstallation({
+  const { store, request } = await seedUpdatableCapsule({
     requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
     runnerProfileId: profile.id,
   });
-  const seeded = await store.getInstallation(request.installationId!);
+  const seeded = await store.getCapsule(request.capsuleId!);
   const installConfig = await store.getInstallConfig(seeded!.installConfigId);
   await store.putInstallConfig({
     ...installConfig!,
@@ -1198,7 +1082,8 @@ test("InstallConfig provider allowlist blocks after RunnerProfile admits provide
       allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     },
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault({
       provider: "registry.opentofu.org/hashicorp/aws",
       connectionId: "conn_seed_aws",
@@ -1229,10 +1114,10 @@ test("InstallConfig provider allowlist blocks after RunnerProfile admits provide
 });
 
 test("plan policy blocks strict Cloudflare scope when plan metadata is missing", async () => {
-  const { store, request } = await seedUpdatableInstallation({
-    store: new InMemoryOpenTofuDeploymentStore(),
+  const { store, request } = await seedUpdatableCapsule({
+    store: new InMemoryOpenTofuControlStore(),
   });
-  const seeded = await store.getInstallation(request.installationId!);
+  const seeded = await store.getCapsule(request.capsuleId!);
   const installConfig = await store.getInstallConfig(seeded!.installConfigId);
   await store.putInstallConfig({
     ...installConfig!,
@@ -1241,11 +1126,22 @@ test("plan policy blocks strict Cloudflare scope when plan metadata is missing",
       allowedResourceTypes: ["cloudflare_r2_bucket"],
       scopeBoundary: {
         mode: "strict",
-        cloudflare: { accountIds: ["acct_allowed"] },
+        rules: [
+          {
+            resourceTypePattern: "cloudflare_*",
+            dimensions: {
+              account_id: {
+                selector: "/account_id",
+                allowedValues: ["acct_allowed"],
+              },
+            },
+          },
+        ],
       },
     },
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(41),
@@ -1275,13 +1171,13 @@ test("plan policy blocks strict Cloudflare scope when plan metadata is missing",
   expect(planRun.status).toEqual("failed");
   expect(planRun.policy.status).toEqual("blocked");
   expect(planRun.policy.reasons.join("\n")).toContain(
-    "missing Cloudflare account metadata",
+    "missing scope dimension account_id",
   );
 });
 
 test("plan policy admits matching scope metadata and blocks quota overflow", async () => {
-  const { store, request } = await seedUpdatableInstallation();
-  const seeded = await store.getInstallation(request.installationId!);
+  const { store, request } = await seedUpdatableCapsule();
+  const seeded = await store.getCapsule(request.capsuleId!);
   const installConfig = await store.getInstallConfig(seeded!.installConfigId);
   await store.putInstallConfig({
     ...installConfig!,
@@ -1290,12 +1186,23 @@ test("plan policy admits matching scope metadata and blocks quota overflow", asy
       allowedResourceTypes: ["cloudflare_r2_bucket"],
       scopeBoundary: {
         mode: "strict",
-        cloudflare: { accountIds: ["acct_allowed"] },
+        rules: [
+          {
+            resourceTypePattern: "cloudflare_*",
+            dimensions: {
+              account_id: {
+                selector: "/account_id",
+                allowedValues: ["acct_allowed"],
+              },
+            },
+          },
+        ],
       },
       quota: { "resources.total": 1 },
     },
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(42),
@@ -1313,13 +1220,13 @@ test("plan policy admits matching scope metadata and blocks quota overflow", asy
               address: "cloudflare_r2_bucket.files_a",
               type: "cloudflare_r2_bucket",
               actions: ["create"],
-              scope: { cloudflareAccountId: "acct_allowed" },
+              scope: { facts: { account_id: "acct_allowed" } },
             },
             {
               address: "cloudflare_r2_bucket.files_b",
               type: "cloudflare_r2_bucket",
               actions: ["create"],
-              scope: { cloudflareAccountId: "acct_allowed" },
+              scope: { facts: { account_id: "acct_allowed" } },
             },
           ],
         }),
@@ -1336,17 +1243,17 @@ test("plan policy admits matching scope metadata and blocks quota overflow", asy
   );
 });
 
-test("plan policy composes Space policy ceiling with InstallConfig policy", async () => {
-  const { store, request } = await seedUpdatableInstallation();
-  const space = await store.getSpace(request.spaceId);
-  await store.putSpace({
+test("plan policy composes Workspace policy ceiling with InstallConfig policy", async () => {
+  const { store, request } = await seedUpdatableCapsule();
+  const space = await store.getWorkspace(request.workspaceId);
+  await store.putWorkspace({
     ...space!,
     policy: {
       allowedResourceTypes: ["cloudflare_r2_bucket"],
       quota: { "resources.total": 1 },
     },
   });
-  const seeded = await store.getInstallation(request.installationId!);
+  const seeded = await store.getCapsule(request.capsuleId!);
   const installConfig = await store.getInstallConfig(seeded!.installConfigId);
   await store.putInstallConfig({
     ...installConfig!,
@@ -1359,7 +1266,8 @@ test("plan policy composes Space policy ceiling with InstallConfig policy", asyn
       quota: { "resources.total": 5 },
     },
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(43),
@@ -1405,8 +1313,7 @@ test("default OpenTofu runner is provider-neutral and has no Cloud hosting metad
     (profile) => profile.id === "opentofu-default",
   );
 
-  expect(profile?.substrate).toEqual("cloudflare-containers");
-  expect(profile?.cloudflareContainer?.queueName).toEqual("takosumi-runs");
+  expect(profile?.substrate).toEqual("operator-managed");
   expect(profile?.resourceLimits).toEqual({
     maxRunSeconds: 900,
     maxSourceArchiveBytes: 104857600,
@@ -1415,13 +1322,12 @@ test("default OpenTofu runner is provider-neutral and has no Cloud hosting metad
     memoryMb: 1024,
   });
   expect(profile?.cloudflareWorkersForPlatforms).toBeUndefined();
-  expect(profile?.labels?.["takosumi.com/opentofu-runner"]).toEqual("true");
-  expect(profile?.labels?.["takosumi.com/provider-installation"]).toEqual(
-    "direct-allowed",
-  );
+  expect(profile?.executorId).toEqual(DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID);
+  expect(profile?.lifecycle).toEqual({ state: "active" });
+  expect(profile?.availability).toEqual({ state: "available" });
+  expect(profile?.labels).toBeUndefined();
   expect(profile?.allowedProviders).toEqual(["*"]);
-  expect(profile?.credentialRefs).toBeUndefined();
-  expect(profile?.requireCredentialRefs).toEqual(false);
+  expect(profile?.requireProviderBindings).toEqual(false);
   expect(profile?.secretExposurePolicy).toEqual({
     providerCredentials: "runner-only",
     tenantWorkerOperatorSecrets: "forbidden",
@@ -1435,17 +1341,21 @@ test("default runner seed is one generic OpenTofu execution profile", () => {
   expect(profiles.map((profile) => profile.id)).toEqual(["opentofu-default"]);
   expect(profiles[0]?.allowedProviders).toEqual(["*"]);
   expect(profiles[0]?.networkPolicy).toEqual({ mode: "operator-managed" });
-  expect(profiles[0]?.labels?.["takosumi.com/profile-state"]).toBeUndefined();
+  expect(profiles[0]?.executorId).toBe(DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID);
 });
 
 test("runner profile discovery exposes configured profiles, not retired persisted rows", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await store.putRunnerProfile({
     ...createDefaultRunnerProfiles(123)[0]!,
     id: "cloudflare-default",
     name: "Retired profile",
   });
-  const controller = new OpenTofuDeploymentController({ store, now: () => 124 });
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    store,
+    now: () => 124,
+  });
 
   const listed = await controller.listRunnerProfiles();
 
@@ -1459,13 +1369,14 @@ test("operator-defined capability runner profiles remain explicitly selectable",
     ...createDefaultRunnerProfiles(123)[0]!,
     id: "private-network",
     name: "Private network",
-    labels: { "takosumi.com/execution-capability": "private-network" },
+    labels: { purpose: "private-network" },
   };
-  const { store, request } = await seedUpdatableInstallation({
+  const { store, request } = await seedUpdatableCapsule({
     requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
     runnerProfileId: profile.id,
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault({
       provider: "registry.opentofu.org/hashicorp/aws",
       connectionId: "conn_seed_aws",
@@ -1497,13 +1408,13 @@ test("operator-defined capability runner profiles remain explicitly selectable",
 
 test("generic-env providers run on an ordinary runner profile when the provider is allowed", async () => {
   const provider = "registry.opentofu.org/vercel/vercel";
-  const { store, request, installationId } = await seedUpdatableInstallation({
+  const { store, request, capsuleId } = await seedUpdatableCapsule({
     requiredProviders: [provider],
     runnerProfileId: "vercel-template",
   });
   await store.putConnection({
     id: "conn_vercel",
-    spaceId: "space_test",
+    workspaceId: "workspace_test",
     provider,
     providerSource: provider,
     kind: "generic_env_provider",
@@ -1516,10 +1427,10 @@ test("generic-env providers run on an ordinary runner profile when the provider 
     updatedAt: "2026-06-06T00:00:00.000Z",
     verifiedAt: "2026-06-06T00:00:00.000Z",
   });
-  await store.putInstallationProviderEnvBindingSet({
+  await store.putProviderBindingSet({
     id: "profile_vercel",
-    spaceId: "space_test",
-    installationId,
+    workspaceId: "workspace_test",
+    capsuleId,
     environment: "production",
     bindings: [
       {
@@ -1532,6 +1443,7 @@ test("generic-env providers run on an ordinary runner profile when the provider 
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
   const profile: RunnerProfile = {
+    ...ACTIVE_TEST_RUNNER_PROFILE,
     id: "vercel-template",
     name: "Vercel template",
     substrate: "cloudflare-containers",
@@ -1549,7 +1461,8 @@ test("generic-env providers run on an ordinary runner profile when the provider 
       blockSensitiveOutputs: true,
     },
   };
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(41),
@@ -1585,15 +1498,15 @@ test("generic-env providers run on an ordinary runner profile when the provider 
   expect(planRun.policy.status).toEqual("passed");
 });
 
-test("generic-env provider policy also passes with a Space generic-env connection and custom runner class", async () => {
+test("generic-env provider policy uses the profile's explicitly registered executor", async () => {
   const provider = "registry.opentofu.org/vercel/vercel";
-  const { store, request, installationId } = await seedUpdatableInstallation({
+  const { store, request, capsuleId } = await seedUpdatableCapsule({
     requiredProviders: [provider],
     runnerProfileId: "vercel-custom",
   });
   await store.putConnection({
     id: "conn_vercel",
-    spaceId: "space_test",
+    workspaceId: "workspace_test",
     provider,
     providerSource: provider,
     kind: "generic_env_provider",
@@ -1606,10 +1519,10 @@ test("generic-env provider policy also passes with a Space generic-env connectio
     updatedAt: "2026-06-06T00:00:00.000Z",
     verifiedAt: "2026-06-06T00:00:00.000Z",
   });
-  await store.putInstallationProviderEnvBindingSet({
+  await store.putProviderBindingSet({
     id: "profile_vercel",
-    spaceId: "space_test",
-    installationId,
+    workspaceId: "workspace_test",
+    capsuleId,
     environment: "production",
     bindings: [
       {
@@ -1622,13 +1535,13 @@ test("generic-env provider policy also passes with a Space generic-env connectio
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
   const profile: RunnerProfile = {
+    ...ACTIVE_TEST_RUNNER_PROFILE,
     id: "vercel-custom",
     name: "Vercel custom",
     substrate: "cloudflare-containers",
     allowedProviders: [provider],
-    labels: {
-      "takosumi.com/runner-class": "custom",
-    },
+    executorId: "test.vercel",
+    labels: { purpose: "custom-network" },
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
     stateLock: { kind: "native" },
     networkPolicy: {
@@ -1663,7 +1576,8 @@ test("generic-env provider policy also passes with a Space generic-env connectio
       }),
     apply: () => Promise.resolve({}),
   };
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault({
       provider,
       connectionId: "conn_vercel",
@@ -1672,7 +1586,7 @@ test("generic-env provider policy also passes with a Space generic-env connectio
     now: sequenceNow(42),
     newId: deterministicIds(),
     runner: fakeRunner(),
-    providerEnvRunner: customRunner,
+    runnerExecutors: new Map([["test.vercel", customRunner]]),
     runnerProfiles: [profile],
     defaultRunnerProfileId: profile.id,
   });
@@ -1683,9 +1597,44 @@ test("generic-env provider policy also passes with a Space generic-env connectio
   expect(planRun.policy.status).toEqual("passed");
 });
 
+test("a RunnerProfile with an unregistered executor fails closed at dispatch", async () => {
+  const provider = "registry.opentofu.org/hashicorp/aws";
+  const profile: RunnerProfile = {
+    ...createDefaultRunnerProfiles(1)[0]!,
+    id: "unregistered-executor",
+    executorId: "operator.missing",
+    allowedProviders: [provider],
+  };
+  const { store, request } = await seedUpdatableCapsule({
+    requiredProviders: [provider],
+    runnerProfileId: profile.id,
+  });
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault({
+      provider,
+      connectionId: "conn_seed_aws",
+    }) as never,
+    store,
+    now: sequenceNow(43),
+    newId: deterministicIds(),
+    runner: fakeRunner(),
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createPlanRun(request);
+
+  expect(planRun.status).toBe("queued");
+  await expect(controller.runQueuedPlan(planRun.id)).rejects.toThrow(
+    "references unregistered executor operator.missing",
+  );
+});
+
 test("destroy is recorded as an ApplyRun when the runner succeeds", async () => {
-  const { store, installationId } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  const { store, capsuleId } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(40),
@@ -1694,8 +1643,8 @@ test("destroy is recorded as an ApplyRun when the runner succeeds", async () => 
   });
 
   const { planRun: destroyPlan } = await controller.createPlanRun({
-    spaceId: "space_test",
-    installationId,
+    workspaceId: "workspace_test",
+    capsuleId,
     source: SOURCE,
     operation: "destroy",
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
@@ -1709,16 +1658,19 @@ test("destroy is recorded as an ApplyRun when the runner succeeds", async () => 
 
   expect(destroyed.applyRun.operation).toEqual("destroy");
   expect(destroyed.applyRun.status).toEqual("succeeded");
-  expect(destroyed.installation?.status).toEqual("destroyed");
-  expect(destroyed.installation?.currentDeploymentId ?? null).toEqual(null);
+  expect(destroyed.capsule?.status).toEqual("destroyed");
+  expect(destroyed.capsule?.currentStateVersionId).toEqual(
+    destroyed.applyRun.stateVersionId,
+  );
   expect(destroyed.applyRun.auditEvents.map((event) => event.type)).toContain(
     "destroy.completed",
   );
 });
 
 test("destroy apply is rejected until the plan is approved (always two-stage, spec §10.6)", async () => {
-  const { store, installationId } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  const { store, capsuleId } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(40),
@@ -1727,8 +1679,8 @@ test("destroy apply is rejected until the plan is approved (always two-stage, sp
   });
 
   const { planRun: destroyPlan } = await controller.createPlanRun({
-    spaceId: "space_test",
-    installationId,
+    workspaceId: "workspace_test",
+    capsuleId,
     source: SOURCE,
     operation: "destroy",
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
@@ -1755,9 +1707,10 @@ test("destroy apply is rejected until the plan is approved (always two-stage, sp
   expect(destroyed.applyRun.status).toEqual("succeeded");
 });
 
-test("restore marks the Installation stale because it restores state, not live resources", async () => {
-  const { store, installationId } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+test("restore marks the Capsule stale because it restores state, not live resources", async () => {
+  const { store, capsuleId } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(70),
@@ -1766,48 +1719,54 @@ test("restore marks the Installation stale because it restores state, not live r
       restore: ({ stateScope }) =>
         Promise.resolve({
           state: {
-            objectKey: `states/${stateScope.generation}.tfstate.enc`,
+            stateRef: stateScope.stateRef,
             digest: PLAN_DIGEST,
           },
         }),
     },
   });
-  const installation = await store.getInstallation(installationId);
-  expect(installation).toBeDefined();
-  await store.putStateSnapshot({
+  const lifecycle: string[] = [];
+  controller.setRestoreRunObserver(async ({ phase, run }) => {
+    lifecycle.push(
+      `${phase}:${run.status}:${(await store.getBackupRun(run.id))?.status}`,
+    );
+  });
+  const capsule = await store.getCapsule(capsuleId);
+  expect(capsule).toBeDefined();
+  await store.putStateVersion({
     id: "state_restore_source",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
     generation: 1,
-    objectKey: "states/1.tfstate.enc",
+    stateRef: "states/1.tfstate.enc",
     digest: LOCK_DIGEST,
     createdByRunId: "apply_seed",
     createdAt: "2026-06-06T00:00:00.000Z",
   });
   await store.putBackupRecord({
     id: "bkp_restore",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
-    objectKey: "spaces/space_test/backups/bkp_restore/control.json.zst.enc",
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
+    ref: "workspaces/space_test/backups/bkp_restore/control.json.zst.enc",
     digest: PLAN_DIGEST,
     sizeBytes: 1,
     createdAt: "2026-06-06T00:00:00.000Z",
   });
-  await store.putInstallation({
-    ...installation!,
+  await store.putCapsule({
+    ...capsule!,
     status: "destroyed",
     currentStateGeneration: 2,
     updatedAt: "2026-06-06T00:00:01.000Z",
   });
 
   const restore = await controller.createRestoreRun(
-    installation!.spaceId,
+    capsule!.workspaceId,
     "bkp_restore",
     {
-      installationId,
-      environment: installation!.environment,
+      capsuleId,
+      environment: capsule!.environment,
       stateGeneration: 1,
       expectedBackupDigest: PLAN_DIGEST,
     },
@@ -1815,47 +1774,139 @@ test("restore marks the Installation stale because it restores state, not live r
   await controller.approveRun(restore.id, { approvedBy: "ops" });
   await controller.runQueuedRestore(restore.id);
 
-  const restored = await store.getInstallation(installationId);
+  const restored = await store.getCapsule(capsuleId);
   const restoreRun = await store.getBackupRun(restore.id);
   expect(restoreRun?.status).toBe("succeeded");
   expect(restored?.currentStateGeneration).toBe(3);
   expect(restored?.status).toBe("stale");
+  expect(lifecycle).toEqual([
+    "started:running:running",
+    "succeeded:succeeded:succeeded",
+  ]);
+});
+
+test("restore failure is observed after the failed terminal row is durable", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { capsule, backupId } = await seedRestoreFixture(store, "failed");
+  const lifecycle: string[] = [];
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(75),
+    newId: deterministicIds(),
+    runner: {
+      restore: () => Promise.reject(new Error("restore backend failed")),
+    },
+    enqueueRun: () => Promise.resolve(),
+  });
+  controller.setRestoreRunObserver(async ({ phase, run }) => {
+    lifecycle.push(
+      `${phase}:${run.status}:${(await store.getBackupRun(run.id))?.status}`,
+    );
+  });
+  const restore = await controller.createRestoreRun(
+    capsule.workspaceId,
+    backupId,
+    {
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+    },
+  );
+  await controller.approveRun(restore.id, { approvedBy: "ops" });
+
+  await expect(controller.runQueuedRestore(restore.id)).rejects.toThrow(
+    "restore backend failed",
+  );
+
+  expect((await store.getBackupRun(restore.id))?.status).toBe("failed");
+  expect(lifecycle).toEqual([
+    "started:running:running",
+    "failed:failed:failed",
+  ]);
+});
+
+test("restore DLQ failure is observed after its terminal transition", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { capsule, backupId } = await seedRestoreFixture(store, "dlq");
+  const lifecycle: string[] = [];
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(80),
+    newId: deterministicIds(),
+    runner: {
+      restore: ({ stateScope }) =>
+        Promise.resolve({
+          state: {
+            stateRef: stateScope.stateRef,
+            digest: PLAN_DIGEST,
+          },
+        }),
+    },
+    enqueueRun: () => Promise.resolve(),
+  });
+  controller.setRestoreRunObserver(async ({ phase, run }) => {
+    lifecycle.push(
+      `${phase}:${run.status}:${(await store.getBackupRun(run.id))?.status}`,
+    );
+  });
+  const restore = await controller.createRestoreRun(
+    capsule.workspaceId,
+    backupId,
+    {
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+    },
+  );
+  await controller.approveRun(restore.id, { approvedBy: "ops" });
+
+  expect(
+    await controller.markRunFailed("restore", restore.id, "retries-exhausted"),
+  ).toBe(true);
+  expect((await store.getBackupRun(restore.id))?.status).toBe("failed");
+  expect(lifecycle).toEqual(["failed:failed:failed"]);
 });
 
 test("restore does not publish state after losing its run lease", async () => {
-  const { store, installationId } = await seedUpdatableInstallation();
-  const installation = await store.getInstallation(installationId);
-  expect(installation).toBeDefined();
-  await store.putStateSnapshot({
+  const { store, capsuleId } = await seedUpdatableCapsule();
+  const capsule = await store.getCapsule(capsuleId);
+  expect(capsule).toBeDefined();
+  await store.putStateVersion({
     id: "state_restore_lost_source",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
     generation: 1,
-    objectKey: "states/1.tfstate.enc",
+    stateRef: "states/1.tfstate.enc",
     digest: LOCK_DIGEST,
     createdByRunId: "apply_seed",
     createdAt: "2026-06-06T00:00:00.000Z",
   });
   await store.putBackupRecord({
     id: "bkp_restore_lost",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
-    objectKey:
-      "spaces/space_test/backups/bkp_restore_lost/control.json.zst.enc",
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
+    ref: "workspaces/space_test/backups/bkp_restore_lost/control.json.zst.enc",
     digest: PLAN_DIGEST,
     sizeBytes: 1,
     createdAt: "2026-06-06T00:00:00.000Z",
   });
-  await store.putInstallation({
-    ...installation!,
+  await store.putCapsule({
+    ...capsule!,
     status: "destroyed",
     currentStateGeneration: 2,
     updatedAt: "2026-06-06T00:00:01.000Z",
   });
   let restoreRunId = "";
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(700),
@@ -1880,7 +1931,7 @@ test("restore does not publish state after losing its run lease", async () => {
         expect(takeover.won).toBe(true);
         return {
           state: {
-            objectKey: `states/${stateScope.generation}.tfstate.enc`,
+            stateRef: stateScope.stateRef,
             digest: PLAN_DIGEST,
           },
         };
@@ -1888,11 +1939,11 @@ test("restore does not publish state after losing its run lease", async () => {
     },
   });
   const restore = await controller.createRestoreRun(
-    installation!.spaceId,
+    capsule!.workspaceId,
     "bkp_restore_lost",
     {
-      installationId,
-      environment: installation!.environment,
+      capsuleId,
+      environment: capsule!.environment,
       stateGeneration: 1,
       expectedBackupDigest: PLAN_DIGEST,
     },
@@ -1901,40 +1952,39 @@ test("restore does not publish state after losing its run lease", async () => {
   await controller.approveRun(restore.id, { approvedBy: "ops" });
   await controller.runQueuedRestore(restore.id);
 
-  const restored = await store.getInstallation(installationId);
+  const restored = await store.getCapsule(capsuleId);
   const restoreRun = await store.getBackupRun(restore.id);
   expect(restoreRun?.status).toBe("running");
   expect(restoreRun?.heartbeatAt).toBe(999_000);
   expect(restored?.currentStateGeneration).toBe(2);
   expect(
-    (
-      await store.listStateSnapshots(installationId, installation!.environment)
-    ).find((snapshot) => snapshot.generation === 3),
+    (await store.listStateVersions(capsuleId, capsule!.environment)).find(
+      (snapshot) => snapshot.generation === 3,
+    ),
   ).toBeUndefined();
 });
 
 test("restore renews the run heartbeat while the runner blocks", async () => {
-  const { store, installationId } = await seedUpdatableInstallation();
-  const installation = await store.getInstallation(installationId);
-  expect(installation).toBeDefined();
-  await store.putStateSnapshot({
+  const { store, capsuleId } = await seedUpdatableCapsule();
+  const capsule = await store.getCapsule(capsuleId);
+  expect(capsule).toBeDefined();
+  await store.putStateVersion({
     id: "state_restore_heartbeat_source",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
     generation: 1,
-    objectKey: "states/1.tfstate.enc",
+    stateRef: "states/1.tfstate.enc",
     digest: LOCK_DIGEST,
     createdByRunId: "apply_seed",
     createdAt: "2026-06-06T00:00:00.000Z",
   });
   await store.putBackupRecord({
     id: "bkp_restore_heartbeat",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
-    objectKey:
-      "spaces/space_test/backups/bkp_restore_heartbeat/control.json.zst.enc",
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
+    ref: "workspaces/space_test/backups/bkp_restore_heartbeat/control.json.zst.enc",
     digest: PLAN_DIGEST,
     sizeBytes: 1,
     createdAt: "2026-06-06T00:00:00.000Z",
@@ -1943,7 +1993,8 @@ test("restore renews the run heartbeat while the runner blocks", async () => {
   let restoreRunId = "";
   let claimHeartbeat = 0;
   let midFlightHeartbeat = 0;
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: () => (clock += 1),
@@ -1965,7 +2016,7 @@ test("restore renews the run heartbeat while the runner blocks", async () => {
         }
         return {
           state: {
-            objectKey: `states/${stateScope.generation}.tfstate.enc`,
+            stateRef: stateScope.stateRef,
             digest: PLAN_DIGEST,
           },
         };
@@ -1973,11 +2024,11 @@ test("restore renews the run heartbeat while the runner blocks", async () => {
     },
   });
   const restore = await controller.createRestoreRun(
-    installation!.spaceId,
+    capsule!.workspaceId,
     "bkp_restore_heartbeat",
     {
-      installationId,
-      environment: installation!.environment,
+      capsuleId,
+      environment: capsule!.environment,
       stateGeneration: 1,
       expectedBackupDigest: PLAN_DIGEST,
     },
@@ -1991,9 +2042,9 @@ test("restore renews the run heartbeat while the runner blocks", async () => {
 });
 
 test("restore dispatches service-data artifacts only when requested and acknowledged", async () => {
-  const { store, installationId } = await seedUpdatableInstallation();
+  const { store, capsuleId } = await seedUpdatableCapsule();
   const serviceData = {
-    objectKey: "spaces/space_test/backups/bkp_restore/service-data.tar.zst.enc",
+    ref: "workspaces/space_test/backups/bkp_restore/service-data.tar.zst.enc",
     digest: "sha256:service-data",
     sizeBytes: 42,
     exportedCount: 3,
@@ -2003,7 +2054,8 @@ test("restore dispatches service-data artifacts only when requested and acknowle
   const restoreJobs: Array<{
     readonly serviceData?: typeof serviceData;
   }> = [];
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(75),
@@ -2013,7 +2065,7 @@ test("restore dispatches service-data artifacts only when requested and acknowle
         return Promise.resolve({
           state: {
             generation: job.stateScope.generation,
-            objectKey: `states/${job.stateScope.generation}.tfstate.enc`,
+            stateRef: job.stateScope.stateRef,
             digest: PLAN_DIGEST,
           },
         });
@@ -2022,7 +2074,7 @@ test("restore dispatches service-data artifacts only when requested and acknowle
         restoreJobs.push({ serviceData: job.serviceData });
         return Promise.resolve({
           status: "restored",
-          objectKey: job.serviceData.objectKey,
+          ref: job.serviceData.ref,
           digest: job.serviceData.digest,
           sizeBytes: job.serviceData.sizeBytes,
           restoredCount: job.serviceData.exportedCount,
@@ -2030,26 +2082,25 @@ test("restore dispatches service-data artifacts only when requested and acknowle
       },
     },
   });
-  const installation = await store.getInstallation(installationId);
-  expect(installation).toBeDefined();
-  await store.putStateSnapshot({
+  const capsule = await store.getCapsule(capsuleId);
+  expect(capsule).toBeDefined();
+  await store.putStateVersion({
     id: "state_restore_service_data_source",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
     generation: 1,
-    objectKey: "states/1.tfstate.enc",
+    stateRef: "states/1.tfstate.enc",
     digest: LOCK_DIGEST,
     createdByRunId: "apply_seed",
     createdAt: "2026-06-06T00:00:00.000Z",
   });
   await store.putBackupRecord({
     id: "bkp_restore_service_data",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
-    objectKey:
-      "spaces/space_test/backups/bkp_restore_service_data/control.json.zst.enc",
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
+    ref: "workspaces/space_test/backups/bkp_restore_service_data/control.json.zst.enc",
     digest: PLAN_DIGEST,
     sizeBytes: 1,
     serviceData,
@@ -2057,11 +2108,11 @@ test("restore dispatches service-data artifacts only when requested and acknowle
   });
 
   const restore = await controller.createRestoreRun(
-    installation!.spaceId,
+    capsule!.workspaceId,
     "bkp_restore_service_data",
     {
-      installationId,
-      environment: installation!.environment,
+      capsuleId,
+      environment: capsule!.environment,
       stateGeneration: 1,
       expectedBackupDigest: PLAN_DIGEST,
       restoreServiceData: true,
@@ -2078,7 +2129,7 @@ test("restore dispatches service-data artifacts only when requested and acknowle
   expect(restoreRun?.status).toBe("succeeded");
   expect(restoreRun?.restoredServiceData).toEqual({
     status: "restored",
-    objectKey: serviceData.objectKey,
+    ref: serviceData.ref,
     digest: serviceData.digest,
     sizeBytes: serviceData.sizeBytes,
     restoredCount: serviceData.exportedCount,
@@ -2086,34 +2137,34 @@ test("restore dispatches service-data artifacts only when requested and acknowle
 });
 
 test("restoreServiceData fails closed when the backup has no service-data artifact", async () => {
-  const { store, installationId } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  const { store, capsuleId } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(80),
     newId: deterministicIds(),
     runner: fakeRunner(),
   });
-  const installation = await store.getInstallation(installationId);
-  expect(installation).toBeDefined();
-  await store.putStateSnapshot({
+  const capsule = await store.getCapsule(capsuleId);
+  expect(capsule).toBeDefined();
+  await store.putStateVersion({
     id: "state_restore_without_service_data_source",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
     generation: 1,
-    objectKey: "states/1.tfstate.enc",
+    stateRef: "states/1.tfstate.enc",
     digest: LOCK_DIGEST,
     createdByRunId: "apply_seed",
     createdAt: "2026-06-06T00:00:00.000Z",
   });
   await store.putBackupRecord({
     id: "bkp_restore_without_service_data",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
-    objectKey:
-      "spaces/space_test/backups/bkp_restore_without_service_data/control.json.zst.enc",
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
+    ref: "workspaces/space_test/backups/bkp_restore_without_service_data/control.json.zst.enc",
     digest: PLAN_DIGEST,
     sizeBytes: 1,
     createdAt: "2026-06-06T00:00:00.000Z",
@@ -2121,11 +2172,11 @@ test("restoreServiceData fails closed when the backup has no service-data artifa
 
   await expect(
     controller.createRestoreRun(
-      installation!.spaceId,
+      capsule!.workspaceId,
       "bkp_restore_without_service_data",
       {
-        installationId,
-        environment: installation!.environment,
+        capsuleId,
+        environment: capsule!.environment,
         stateGeneration: 1,
         expectedBackupDigest: PLAN_DIGEST,
         restoreServiceData: true,
@@ -2135,39 +2186,38 @@ test("restoreServiceData fails closed when the backup has no service-data artifa
 });
 
 test("restoreServiceData fails closed when the runner lacks service-data restore capability", async () => {
-  const { store, installationId } = await seedUpdatableInstallation();
-  const controller = new OpenTofuDeploymentController({
+  const { store, capsuleId } = await seedUpdatableCapsule();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     store,
     now: sequenceNow(85),
     newId: deterministicIds(),
     runner: fakeRunner(),
   });
-  const installation = await store.getInstallation(installationId);
-  expect(installation).toBeDefined();
-  await store.putStateSnapshot({
+  const capsule = await store.getCapsule(capsuleId);
+  expect(capsule).toBeDefined();
+  await store.putStateVersion({
     id: "state_restore_service_data_unwired_source",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
     generation: 1,
-    objectKey: "states/1.tfstate.enc",
+    stateRef: "states/1.tfstate.enc",
     digest: LOCK_DIGEST,
     createdByRunId: "apply_seed",
     createdAt: "2026-06-06T00:00:00.000Z",
   });
   await store.putBackupRecord({
     id: "bkp_restore_service_data_unwired",
-    spaceId: installation!.spaceId,
-    installationId,
-    environment: installation!.environment,
-    objectKey:
-      "spaces/space_test/backups/bkp_restore_service_data_unwired/control.json.zst.enc",
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
+    ref: "workspaces/space_test/backups/bkp_restore_service_data_unwired/control.json.zst.enc",
     digest: PLAN_DIGEST,
     sizeBytes: 1,
     serviceData: {
-      objectKey:
-        "spaces/space_test/backups/bkp_restore_service_data_unwired/service-data.tar.zst.enc",
+      ref: "workspaces/space_test/backups/bkp_restore_service_data_unwired/service-data.tar.zst.enc",
       digest: "sha256:service-data",
       sizeBytes: 42,
       exportedCount: 3,
@@ -2179,11 +2229,11 @@ test("restoreServiceData fails closed when the runner lacks service-data restore
 
   await expect(
     controller.createRestoreRun(
-      installation!.spaceId,
+      capsule!.workspaceId,
       "bkp_restore_service_data_unwired",
       {
-        installationId,
-        environment: installation!.environment,
+        capsuleId,
+        environment: capsule!.environment,
         stateGeneration: 1,
         expectedBackupDigest: PLAN_DIGEST,
         restoreServiceData: true,
@@ -2193,7 +2243,8 @@ test("restoreServiceData fails closed when the runner lacks service-data restore
 });
 
 test("not found surfaces the closed controller error code", async () => {
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
     now: () => 50,
     newId: deterministicIds(),

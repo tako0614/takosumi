@@ -19,7 +19,7 @@ const ARCHIVE_BYTES = new Uint8Array([
   0x28, 0xb5, 0x2f, 0xfd, 0x09, 0x08, 0x07,
 ]);
 const ARCHIVE_KEY =
-  "spaces/spc_1/sources/src_1/snapshots/snap_1/source.tar.zst";
+  "workspaces/spc_1/sources/src_1/snapshots/snap_1/source.tar.zst";
 
 async function digestOf(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -75,7 +75,7 @@ test("plan dispatch with sourceArchive restores the snapshot archive to the cont
         action: "plan",
         runId: "plan_1",
         request: {
-          sourceArchive: { objectKey: ARCHIVE_KEY, digest },
+          sourceArchive: { ref: ARCHIVE_KEY, digest },
         },
       }),
     }),
@@ -110,7 +110,7 @@ test("sourceArchive restore fails closed when the R2 object digest does not matc
         runId: "plan_1",
         request: {
           sourceArchive: {
-            objectKey: ARCHIVE_KEY,
+            ref: ARCHIVE_KEY,
             digest: `sha256:${"0".repeat(64)}`,
           },
         },
@@ -121,7 +121,7 @@ test("sourceArchive restore fails closed when the R2 object digest does not matc
   assert.equal(response.status, 500);
 });
 
-test("sourceArchive restore rejects an unsafe object key (traversal) and never reads R2", async () => {
+test("sourceArchive restore rejects an unsafe ref (traversal) and never reads R2", async () => {
   const source = new FakeR2Bucket();
   const artifacts = new FakeR2Bucket();
 
@@ -141,7 +141,7 @@ test("sourceArchive restore rejects an unsafe object key (traversal) and never r
         runId: "plan_1",
         request: {
           sourceArchive: {
-            objectKey: "spaces/../../etc/passwd",
+            ref: "workspaces/../../etc/passwd",
             digest: `sha256:${"0".repeat(64)}`,
           },
         },

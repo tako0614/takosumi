@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 
 import type {
-  Connection,
+  ProviderConnection,
   PlanRun,
 } from "@takosumi/internal/deploy-control-api";
-import type { ResolvedInstallationProviderEnvBinding } from "../../../../core/domains/connections/mod.ts";
+import type { ResolvedCapsuleProviderBinding } from "../../../../core/domains/connections/mod.ts";
 import type { RunCredentials } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   RUN_ENV_REDACTION_PROFILE_ID,
@@ -18,7 +18,8 @@ const NULL_PROVIDER = "registry.opentofu.org/hashicorp/null";
 function planRun(over: Partial<PlanRun> = {}): PlanRun {
   return {
     id: "plan_1",
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_1",
     source: {
       kind: "git",
       url: "https://example.com/app.git",
@@ -28,9 +29,9 @@ function planRun(over: Partial<PlanRun> = {}): PlanRun {
     sourceDigest: "sha256:src",
     operation: "create",
     runnerProfileId: "opentofu-default",
-    installationContext: {
-      spaceId: "space_1",
-      installationId: "inst_1",
+    capsuleContext: {
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
       environment: "production",
     },
     variablesDigest: "sha256:vars",
@@ -45,26 +46,55 @@ function planRun(over: Partial<PlanRun> = {}): PlanRun {
   };
 }
 
-function connection(over: Partial<Connection> = {}): Connection {
+function connection(over: Partial<ProviderConnection> = {}): ProviderConnection {
   return {
     id: "conn_1",
-    spaceId: "space_1",
-    provider: "cloudflare",
+    workspaceId: "workspace_1",
+    provider: CLOUDFLARE_PROVIDER,
     providerSource: CLOUDFLARE_PROVIDER,
     kind: "cloudflare_api_token",
     materialization: "secret",
-    scope: "space",
+    scope: "workspace",
     status: "verified",
     envNames: ["CLOUDFLARE_API_TOKEN"],
+    credentialRecipe: {
+      id: "cloudflare",
+      authMode: "api_token",
+      terraformSource: CLOUDFLARE_PROVIDER,
+      secretPartition: "provider-credentials",
+      envNames: ["CLOUDFLARE_API_TOKEN"],
+      fileEnvNames: [],
+      requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
+    },
+    secretPartition: "provider-credentials",
     createdAt: "2026-06-15T00:00:00.000Z",
     updatedAt: "2026-06-15T00:00:00.000Z",
     ...over,
   };
 }
 
+function runCredentials(env: Readonly<Record<string, string>>): RunCredentials {
+  return {
+    env,
+    manifest: {
+      bindings: [
+        {
+          providerSource: CLOUDFLARE_PROVIDER,
+          connectionId: "conn_1",
+          recipeId: "cloudflare",
+          authMode: "api_token",
+          envNames: Object.keys(env),
+          fileEnvNames: [],
+          requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
+        },
+      ],
+    },
+  };
+}
+
 function resolver(input: {
   readonly resolved:
-    readonly ResolvedInstallationProviderEnvBinding[] | undefined;
+    readonly ResolvedCapsuleProviderBinding[] | undefined;
   readonly credentials: () => RunCredentials | undefined;
   readonly releaseCredentials?: () => RunCredentials | undefined;
   readonly calls?: Array<{
@@ -72,16 +102,6 @@ function resolver(input: {
     auditRunId: string;
     context: "opentofu" | "release_command";
   }>;
-  readonly serviceGrant?: {
-    mintServiceGrantEnv(
-      planRun: PlanRun,
-      phase: "plan" | "apply" | "destroy",
-      auditRunId: string,
-      consumerOutputs?: Readonly<
-        Record<string, import("takosumi-contract").JsonValue>
-      >,
-    ): Promise<Record<string, string> | undefined>;
-  };
 }): RunEnvResolver {
   return new RunEnvResolver({
     credentials: {
@@ -94,8 +114,7 @@ function resolver(input: {
         return input.releaseCredentials?.() ?? input.credentials();
       },
     },
-    resolveRunInstallationProviderEnvBindings: async () => input.resolved,
-    ...(input.serviceGrant ? { serviceGrant: input.serviceGrant } : {}),
+    resolveRunProviderBindings: async () => input.resolved,
   });
 }
 
@@ -111,12 +130,12 @@ test("RunEnvResolver resolves secret Provider Connections without hashing secret
     calls,
     resolved: [
       {
-        provider: "cloudflare",
+        provider: CLOUDFLARE_PROVIDER,
         materialization: "secret",
         connection: conn,
       },
     ],
-    credentials: () => ({ CLOUDFLARE_API_TOKEN: secret }),
+    credentials: () => runCredentials({ CLOUDFLARE_API_TOKEN: secret }),
   });
 
   const first = await subject.resolveRunEnvironment({
@@ -135,18 +154,18 @@ test("RunEnvResolver resolves secret Provider Connections without hashing secret
     { phase: "plan", auditRunId: "plan_1", context: "opentofu" },
     { phase: "plan", auditRunId: "plan_1", context: "opentofu" },
   ]);
-  expect(first.credentials?.CLOUDFLARE_API_TOKEN).toBe("first-secret");
-  expect(second.credentials?.CLOUDFLARE_API_TOKEN).toBe("second-secret");
+  expect(first.credentials?.env.CLOUDFLARE_API_TOKEN).toBe("first-secret");
+  expect(second.credentials?.env.CLOUDFLARE_API_TOKEN).toBe("second-secret");
   expect(first.runEnvironmentEvidenceDigest).toBe(
     second.runEnvironmentEvidenceDigest,
   );
   expect(first.providerResolutions[0]).toMatchObject({
-    status: "resolved_provider_env",
-    envId: conn.id,
+    status: "resolved_provider_connection",
+    connectionId: conn.id,
     materialization: "secret",
     evidence: {
-      kind: "provider_env",
-      envId: conn.id,
+      kind: "provider_connection",
+      connectionId: conn.id,
       materialization: "secret",
       requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
     },
@@ -161,60 +180,6 @@ test("RunEnvResolver resolves secret Provider Connections without hashing secret
   expect(first.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 
-test("RunEnvResolver enriches a discovery plan without re-minting provider credentials", async () => {
-  let providerMintCount = 0;
-  const subject = resolver({
-    resolved: [
-      {
-        provider: "cloudflare",
-        materialization: "secret",
-        connection: connection(),
-      },
-    ],
-    credentials: () => {
-      providerMintCount += 1;
-      return { CLOUDFLARE_API_TOKEN: "provider-value" };
-    },
-    serviceGrant: {
-      mintServiceGrantEnv: async (_run, phase, _audit, outputs) =>
-        phase === "plan" && outputs?.app_deployment
-          ? {
-              TF_VAR_object_storage_access_token: "service-value",
-              TF_VAR_object_storage_api_url: "https://storage.example/o",
-            }
-          : undefined,
-    },
-  });
-
-  const base = await subject.resolveRunEnvironment({
-    planRun: planRun(),
-    phase: "plan",
-    auditRunId: "plan_1",
-  });
-  const enriched = await subject.enrichRunEnvironmentWithPlannedServiceGrants({
-    planRun: planRun(),
-    auditRunId: "plan_1",
-    plannedWorkspaceOutputs: {
-      app_deployment: { name: "office" },
-    },
-    base,
-  });
-
-  expect(providerMintCount).toBe(1);
-  expect(enriched.credentials).toEqual({
-    CLOUDFLARE_API_TOKEN: "provider-value",
-    TF_VAR_object_storage_access_token: "service-value",
-    TF_VAR_object_storage_api_url: "https://storage.example/o",
-  });
-  expect(enriched.serviceGrantEnvNames).toEqual([
-    "TF_VAR_object_storage_access_token",
-    "TF_VAR_object_storage_api_url",
-  ]);
-  expect(enriched.runEnvironmentEvidenceDigest).not.toBe(
-    base.runEnvironmentEvidenceDigest,
-  );
-});
-
 test("RunEnvResolver mints provider env for release command context", async () => {
   const calls: Array<{
     phase: string;
@@ -225,17 +190,19 @@ test("RunEnvResolver mints provider env for release command context", async () =
     calls,
     resolved: [
       {
-        provider: "cloudflare",
+        provider: CLOUDFLARE_PROVIDER,
         materialization: "secret",
         connection: connection(),
       },
     ],
-    credentials: () => ({
-      TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
-    }),
-    releaseCredentials: () => ({
-      CLOUDFLARE_API_TOKEN: "fixture-provider-token",
-    }),
+    credentials: () =>
+      runCredentials({
+        CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+      }),
+    releaseCredentials: () =>
+      runCredentials({
+        CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+      }),
   });
 
   const result = await subject.resolveRunEnvironment({
@@ -252,34 +219,13 @@ test("RunEnvResolver mints provider env for release command context", async () =
       context: "release_command",
     },
   ]);
-  expect(result.credentials).toEqual({
+  expect(result.credentials?.env).toEqual({
     CLOUDFLARE_API_TOKEN: "fixture-provider-token",
   });
   expect(result.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 
-test("RunEnvResolver blocks Cloud-only gateway materialization in OSS", async () => {
-  const subject = resolver({
-    resolved: [
-      {
-        provider: "cloudflare",
-        connection: connection({ id: "conn_gateway" }),
-        materialization: "gateway" as never,
-      },
-    ],
-    credentials: () => ({ CLOUDFLARE_API_TOKEN: "run-token" }),
-  });
-
-  await expect(
-    subject.resolveRunEnvironment({
-      planRun: planRun({ operation: "destroy" }),
-      phase: "destroy",
-      auditRunId: "apply_1",
-    }),
-  ).rejects.toThrow(RunEnvironmentResolutionError);
-});
-
-test("RunEnvResolver treats unresolved installation providers as no-credential providers after policy resolution", async () => {
+test("RunEnvResolver treats unresolved Capsule providers as no-credential providers after policy resolution", async () => {
   const calls: Array<{
     phase: string;
     auditRunId: string;
@@ -334,7 +280,7 @@ test("RunEnvResolver does not require Provider Connections for credential-free p
   expect(result.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 
-test("RunEnvResolver fails closed for raw no-installation runs with providers", async () => {
+test("RunEnvResolver fails closed for raw runs without a Capsule or Resource subject", async () => {
   const subject = resolver({
     resolved: undefined,
     credentials: () => undefined,
@@ -343,7 +289,7 @@ test("RunEnvResolver fails closed for raw no-installation runs with providers", 
   let thrown: unknown;
   try {
     await subject.resolveRunEnvironment({
-      planRun: planRun({ installationContext: undefined }),
+      planRun: planRun({ capsuleId: undefined, capsuleContext: undefined }),
       phase: "plan",
       auditRunId: "plan_1",
     });
@@ -355,8 +301,8 @@ test("RunEnvResolver fails closed for raw no-installation runs with providers", 
   const error = thrown as RunEnvironmentResolutionError;
   expect(error.runEnvironment.credentials).toBeUndefined();
   expect(error.runEnvironment.providerResolutions[0]).toMatchObject({
-    status: "blocked_missing_env",
-    blockedReason: `installation provider connection evidence is required for provider ${CLOUDFLARE_PROVIDER}`,
+    status: "blocked_missing_connection",
+    blockedReason: `capsule provider connection evidence is required for provider ${CLOUDFLARE_PROVIDER}`,
   });
   expect(error.runEnvironment.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });

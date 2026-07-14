@@ -1,4 +1,4 @@
-# Takosumi platform worker (app.takosumi.com) — REFERENCE TEMPLATE.
+# Takosumi platform worker — operator-neutral REFERENCE TEMPLATE.
 #
 # The REALIZED config actually deployed by the operator (real resource IDs)
 # lives in the operator-private takosumi-private repo (platform/wrangler.toml),
@@ -14,13 +14,13 @@
 # All relative paths below resolve from THIS config's directory
 # (takosumi/deploy/platform/).
 
-name = "takosumi"
+name = "takosumi-platform"
 main = "worker.ts"
 compatibility_date = "2026-04-01"
 compatibility_flags = ["nodejs_compat"]
 
 [[routes]]
-pattern = "app.takosumi.com"
+pattern = "takosumi.example.com"
 custom_domain = true
 
 # Dashboard SPA and static OpenTofu provider mirror assets. The accounts handler
@@ -37,7 +37,7 @@ run_worker_first = true
 [observability]
 enabled = true
 
-# Accounts plane store (OIDC / billing / Capsule projection ledger).
+# Accounts plane store (session / OIDC / PAT / billing support data).
 [[d1_databases]]
 binding = "TAKOSUMI_ACCOUNTS_DB"
 database_name = "takosumi-accounts"
@@ -49,11 +49,6 @@ binding = "TAKOSUMI_CONTROL_DB"
 database_name = "takosumi-deploy"
 database_id = "replace-with-deploy-d1-database-id"
 
-# Accounts data-export artifacts (signed download).
-[[r2_buckets]]
-binding = "TAKOSUMI_ACCOUNTS_EXPORTS"
-bucket_name = "takosumi-accounts-exports"
-
 # Deploy-control plan/state artifacts.
 [[r2_buckets]]
 binding = "R2_ARTIFACTS"
@@ -61,7 +56,7 @@ bucket_name = "takos-artifacts"
 
 # Source archive snapshots (immutable per-snapshot tar.zst). Written by the
 # runner DO during a source_sync run, keyed
-# spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst.
+# workspaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst.
 [[r2_buckets]]
 binding = "R2_SOURCE"
 bucket_name = "takosumi-source"
@@ -73,7 +68,7 @@ bucket_name = "takosumi-state"
 
 # Backup/export artifacts (core-spec.md §26 R2_BACKUPS / §33 control backup).
 # Holds sealed zstd control/state/service-data backup bundles written by the
-# backups service under spaces/{spaceId}/backups/{backupId}/.
+# backups service under workspaces/{workspaceId}/backups/{backupId}/.
 [[r2_buckets]]
 binding = "R2_BACKUPS"
 bucket_name = "takosumi-backups"
@@ -142,11 +137,13 @@ queue = "takosumi-runs-dlq"
 max_batch_size = 10
 max_batch_timeout = 5
 
-# Cloud extension seams are NOT declared in the OSS template. The generic Seam A
-# (deploy/platform/worker.ts + cloud_extensions.ts) is config-driven: the closed
-# Takosumi Cloud delta supplies `TAKOSUMI_CLOUD_EXTENSIONS` (the matched base
-# paths + handler keys) and resolves those keys in its platform wrapper. The
-# OSS worker names no Cloud feature and declares no Cloud-only gateway binding.
+# Optional platform extensions are not declared in the OSS template. The
+# provider-neutral seam (`worker.ts` + `platform_extensions.ts`) reads
+# `TAKOSUMI_PLATFORM_EXTENSIONS`; an operator supplies descriptors and matching
+# fetch handlers at composition time. The OSS worker owns only authentication,
+# scope authorization, catalog discovery, and delegation. A route accepting
+# managed-provider run tokens must also declare the exact opaque
+# `managedProviderProfile` used by its service-side Provider Connections.
 
 # Scheduled source polling (Core Specification §6). Every 5 minutes the worker's
 # scheduled() handler scans active autoSync sources and enqueues a deduped
@@ -155,13 +152,12 @@ max_batch_timeout = 5
 crons = ["*/5 * * * *"]
 
 [vars]
-TAKOSUMI_ACCOUNTS_ISSUER = "https://app.takosumi.com"
-TAKOSUMI_ACCOUNTS_SUBJECT = "tsub_takosumi_prod"
-TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS = "closed"
-TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
-# Operator-curated provider surface. Cloudflare is the guided GA recipe; the
-# generic profile lets other OpenTofu providers run through explicit env/file
-# Provider Connections instead of adding provider-compatible Gateway APIs.
+TAKOSUMI_ACCOUNTS_ISSUER = "https://takosumi.example.com"
+TAKOSUMI_ACCOUNTS_SUBJECT = "operator-platform"
+# The stock Worker contributes one provider-neutral runner. A composing Worker
+# may inject additional profiles and executor adapters through the runtime
+# TAKOSUMI_RUNNER_HOST_COMPOSITION object; this text value only enables exact
+# contributed profile ids and does not define a provider or runner catalog.
 TAKOSUMI_ENABLED_RUNNER_PROFILES = "opentofu-default"
 # Optional post-apply release activation bridge. This generic webhook hands
 # already-filtered, non-sensitive apply evidence to an operator/Cloud
@@ -191,18 +187,21 @@ TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL = "1"
 # Keep scheduled source_sync from competing with user-facing plan/apply/destroy
 # runs for runner container capacity.
 TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH = "5"
+# Read-only Resource Shape observation follows TAKOSUMI_RESOURCE_SHAPES by
+# default. Set TAKOSUMI_RESOURCE_OBSERVATION_ENABLED="0" to pause it, or "1"
+# to keep observing existing Resources while public shape creation is disabled.
+TAKOSUMI_RESOURCE_OBSERVATION_BATCH = "8"
+TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY = "4"
+TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS = "3600"
+TAKOSUMI_RESOURCE_OBSERVATION_LEASE_SECONDS = "900"
 # Production hardening evidence gate. In observe mode the internal gate reports
-# missing/drifted evidence but does not return 503. Platform readiness access must
-# stay closed in observe mode: TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS="open"
-# is accepted only when this gate is "enforce" and all seven evidence refs point
-# at immutable, reviewed operator-private proof files:
-#   TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF / _DIGEST
-#   TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF / _DIGEST
-#   TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF / _DIGEST
-#   TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF / _DIGEST
-#   TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF / _DIGEST
-#   TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF / _DIGEST
-#   TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF / _DIGEST
+# missing/drifted evidence but does not return 503. Platform readiness access
+# is accepted only when this gate is "enforce" and the versioned
+# TAKOSUMI_PLATFORM_HARDENING_EVIDENCE JSON bundle covers every check in the
+# OSS baseline plus any host-code TAKOSUMI_PLATFORM_HARDENING_CONTRIBUTIONS.
+# The evidence validator emits the non-secret bundle from immutable, reviewed
+# operator evidence. Substrate/provider-specific definitions belong to the
+# composing host contribution, not this reference template.
 # The internal `/internal/platform/hardening-gates` route is operator-bearer
 # gated and returns 503 only in enforce mode while any required proof is missing.
 TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
@@ -215,16 +214,13 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 #   TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET pairwise OIDC subject secret
 #   TAKOSUMI_ACCOUNT_SESSION_HASH_SALT             account session hash-at-rest salt
 #   TAKOSUMI_ACCOUNTS_SUBJECT_SECRET               upstream OAuth subject mapping secret
-#   TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET launch-token pairwise secret
-#   TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET       R2 export download HMAC secret
 #   TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN     operator token for privacy request completion
 #   TAKOSUMI_DEPLOY_CONTROL_TOKEN                  accounts/control-plane bearer
 #   TAKOSUMI_METRICS_SCRAPE_TOKEN                  Prometheus `/metrics` scrape bearer
 # Optional release activation webhook:
 #   TAKOSUMI_RELEASE_ACTIVATOR_TOKEN               required only when TAKOSUMI_RELEASE_ACTIVATOR_URL is set
-# Optional (billing; set both when hosted billing is enabled):
-#   TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY / _WEBHOOK_SECRET
-# Optional (upstream OAuth provider):
-#   [vars] TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID / _REDIRECT_URI
-#   [secret] TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET
-#   TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_*             custom OIDC upstream provider
+# Commercial payment-provider credentials belong to the host extension and are
+# intentionally absent from this OSS deployment template.
+# Optional upstream OAuth providers:
+#   [vars] TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS   explicit descriptor JSON
+#   [secret] each descriptor's clientSecretEnv    runtime secret binding

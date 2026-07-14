@@ -12,17 +12,19 @@ import { R2SensitiveOutputResolver } from "../../../worker/src/sensitive_output_
 
 const PASSPHRASE = "takosumi-sensitive-output-resolver-test-passphrase";
 const RAW_KEY =
-  "spaces/space_from/installations/inst_producer/runs/apply_1/outputs.raw.json.enc";
+  "workspaces/space_from/capsules/inst_producer/runs/apply_1/outputs.raw.json.enc";
 
 test("R2SensitiveOutputResolver returns only sensitive raw output values", async () => {
   const bucket = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: PASSPHRASE,
   });
-  const plaintext = new TextEncoder().encode(JSON.stringify({
-    admin_token: { sensitive: true, value: "super-secret-token" },
-    public_url: { sensitive: false, value: "https://example.test" },
-  }));
+  const plaintext = new TextEncoder().encode(
+    JSON.stringify({
+      admin_token: { sensitive: true, value: "super-secret-token" },
+      public_url: { sensitive: false, value: "https://example.test" },
+    }),
+  );
   const sealed = await crypto.seal(plaintext);
   await bucket.put(RAW_KEY, sealed.ciphertext, {
     customMetadata: {
@@ -35,30 +37,34 @@ test("R2SensitiveOutputResolver returns only sensitive raw output values", async
     spaceId: "space_from",
     installationId: "inst_producer",
     stateGeneration: 1,
-    rawOutputArtifactKey: RAW_KEY,
+    rawArtifactRef: RAW_KEY,
     publicOutputs: {},
     spaceOutputs: { public_url: "https://example.test" },
     outputDigest: "sha256:test",
     createdAt: "2026-06-06T00:00:00.000Z",
   };
 
-  await expect(resolver.resolve({
-    outputSnapshot: snapshot,
-    outputName: "admin_token",
-    fromSpaceId: "space_from",
-    toSpaceId: "space_to",
-    producerInstallationId: "inst_producer",
-  })).resolves.toEqual({
+  await expect(
+    resolver.resolve({
+      output: snapshot,
+      outputName: "admin_token",
+      fromSpaceId: "space_from",
+      toSpaceId: "space_to",
+      producerInstallationId: "inst_producer",
+    }),
+  ).resolves.toEqual({
     value: "super-secret-token",
     sensitive: true,
   });
-  await expect(resolver.resolve({
-    outputSnapshot: snapshot,
-    outputName: "public_url",
-    fromSpaceId: "space_from",
-    toSpaceId: "space_to",
-    producerInstallationId: "inst_producer",
-  })).resolves.toBeUndefined();
+  await expect(
+    resolver.resolve({
+      output: snapshot,
+      outputName: "public_url",
+      fromSpaceId: "space_from",
+      toSpaceId: "space_to",
+      producerInstallationId: "inst_producer",
+    }),
+  ).resolves.toBeUndefined();
 });
 
 class FakeR2Bucket implements R2Bucket {

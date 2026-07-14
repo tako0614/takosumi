@@ -1,6 +1,6 @@
 id: cloudflare
 display_name: Cloudflare
-provider_rule: cloudflare
+secret_partition: provider-credentials
 terraform_source:
   - cloudflare/cloudflare
   - registry.opentofu.org/cloudflare/cloudflare
@@ -16,7 +16,35 @@ required_env_groups:
   - [CF_API_TOKEN]
   - [CLOUDFLARE_API_KEY, CLOUDFLARE_EMAIL]
 auth_modes:
+  oauth:
+    env:
+      CLOUDFLARE_API_TOKEN:
+        from: secret
+        name: access_token
   api_token:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: API token, ja: API トークン }
+      setup_guide:
+        url: https://dash.cloudflare.com/profile/api-tokens
+        steps:
+          - en: Open the API Tokens page in Cloudflare.
+            ja: Cloudflare の API Tokens 画面を開きます。
+          - en: Create a token with only the permissions required by this stack.
+            ja: この Stack に必要な権限だけを持つトークンを作成します。
+          - en: Copy the token and any optional account or zone scope below.
+            ja: トークンと、必要ならアカウントまたはゾーンの範囲を入力します。
+    input_hints:
+      CLOUDFLARE_API_TOKEN:
+        label: { en: API token, ja: API トークン }
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        label: { en: Account ID, ja: アカウント ID }
+        placeholder: 0123abcd...
+        required: false
+      CLOUDFLARE_ZONE_ID:
+        label: { en: Zone ID, ja: ゾーン ID }
+        required: false
     env:
       CLOUDFLARE_API_TOKEN:
         from: secret
@@ -28,11 +56,28 @@ auth_modes:
         from: value
         name: zone_id
   cf_api_token:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: CF API token, ja: CF API トークン }
+    input_hints:
+      CF_API_TOKEN:
+        label: { en: API token, ja: API トークン }
+        required: true
     env:
       CF_API_TOKEN:
         from: secret
         name: api_token
   global_key:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: Global API key, ja: Global API キー }
+    input_hints:
+      CLOUDFLARE_API_KEY:
+        label: { en: Global API key, ja: Global API キー }
+        required: true
+      CLOUDFLARE_EMAIL:
+        label: { en: Account email, ja: アカウントメールアドレス }
+        required: true
     env:
       CLOUDFLARE_API_KEY:
         from: secret

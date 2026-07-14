@@ -3,7 +3,7 @@
 //
 // This module does NOT implement a new crypto primitive. It reuses the existing
 // secret-store AES-GCM boundary crypto (selectSecretBoundaryCrypto /
-// MultiCloudSecretBoundaryCrypto in
+// PartitionedSecretBoundaryCrypto in
 // core/adapters/secret-store/memory.ts), which derives an AES-GCM key
 // from TAKOSUMI_SECRET_STORE_PASSPHRASE (an already-pushed production secret).
 //

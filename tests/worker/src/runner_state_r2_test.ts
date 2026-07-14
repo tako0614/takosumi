@@ -21,15 +21,50 @@ const PLAN_DIGEST =
   "sha256:0fd9817656d95201f5c8073b9b4b4c2d5bfe8468b69e7bf771e5311b122a90e7";
 const NEW_STATE_BYTES = new TextEncoder().encode('{"version":4,"serial":2}');
 
-const SCOPE = {
-  spaceId: "spc_1",
-  installationId: "inst_1",
-  environment: "production",
-  generation: 2,
-};
-const STATE_PREFIX = "spaces/spc_1/installations/inst_1/envs/production/states";
+const STATE_PREFIX =
+  "workspaces/spc_1/capsules/inst_1/environments/production/state-versions";
 const NEXT_STATE_KEY = `${STATE_PREFIX}/00000002.tfstate.enc`;
 const CURRENT_KEY = `${STATE_PREFIX}/current.json`;
+const RAW_OUTPUT_REF =
+  "workspaces/spc_1/capsules/inst_1/runs/plan_1/outputs.raw.json.enc";
+const SCOPE = {
+  workspaceId: "spc_1",
+  subject: { kind: "capsule", id: "inst_1" },
+  environment: "production",
+  generation: 2,
+  stateRef: NEXT_STATE_KEY,
+} as const;
+const RESOURCE_STATE_PREFIX =
+  "workspaces/spc_1/resources/tkrn_spc_1_EdgeWorker_api/environments/production/state-versions";
+const RESOURCE_NEXT_STATE_KEY = `${RESOURCE_STATE_PREFIX}/00000002.tfstate.enc`;
+const RESOURCE_CURRENT_KEY = `${RESOURCE_STATE_PREFIX}/current.json`;
+const RESOURCE_RAW_OUTPUT_REF =
+  "workspaces/spc_1/resources/tkrn_spc_1_EdgeWorker_api/runs/plan_1/outputs.raw.json.enc";
+const RESOURCE_SCOPE = {
+  workspaceId: "spc_1",
+  subject: { kind: "resource", id: "tkrn:spc_1:EdgeWorker:api" },
+  environment: "production",
+  generation: 2,
+  stateRef: RESOURCE_NEXT_STATE_KEY,
+} as const;
+const LEGACY_ADOPTION_PREFIX =
+  "spaces/spc_1/installations/cap_legacy_edge_api/envs/resource-shape/states";
+const LEGACY_ADOPTION_KEY = `${LEGACY_ADOPTION_PREFIX}/00000007.tfstate.enc`;
+
+function legacyStateAdoption(digest: string) {
+  return {
+    kind: "legacy_backing_capsule_state",
+    sourceWorkspaceId: "spc_1",
+    sourceCapsuleId: "cap_legacy_edge_api",
+    sourceEnvironment: "resource-shape",
+    sourceStateVersionId: "state_legacy_7",
+    stateGeneration: 7,
+    stateRef: LEGACY_ADOPTION_KEY,
+    stateDigest: digest,
+    confirmedBy: "operator_1",
+    confirmedAt: "2026-07-13T00:00:00.000Z",
+  };
+}
 
 async function digestOf(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -38,7 +73,7 @@ async function digestOf(bytes: Uint8Array): Promise<string> {
     .join("")}`;
 }
 
-test("apply with stateScope persists encrypted state to R2_STATE and writes current.json after the object", async () => {
+test("apply with a Resource stateScope persists under the Resource R2_STATE prefix", async () => {
   const calls: string[] = [];
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
@@ -100,7 +135,8 @@ test("apply with stateScope persists encrypted state to R2_STATE and writes curr
         action: "apply",
         runId: "plan_1",
         request: {
-          stateScope: SCOPE,
+          stateScope: RESOURCE_SCOPE,
+          rawOutputRef: RESOURCE_RAW_OUTPUT_REF,
           planArtifact: {
             kind: "object-storage",
             ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
@@ -121,12 +157,12 @@ test("apply with stateScope persists encrypted state to R2_STATE and writes curr
   ]);
 
   // State object is encrypted at rest (not the plaintext).
-  const stored = state.body(NEXT_STATE_KEY);
+  const stored = state.body(RESOURCE_NEXT_STATE_KEY);
   assert.ok(stored && stored.byteLength > 0);
   assert.notDeepEqual(stored, NEW_STATE_BYTES);
 
   // current.json points at the generation object with the PLAINTEXT digest.
-  const currentBytes = state.body(CURRENT_KEY);
+  const currentBytes = state.body(RESOURCE_CURRENT_KEY);
   assert.ok(currentBytes);
   const current = JSON.parse(new TextDecoder().decode(currentBytes)) as {
     generation: number;
@@ -134,7 +170,7 @@ test("apply with stateScope persists encrypted state to R2_STATE and writes curr
     digest: string;
   };
   assert.equal(current.generation, 2);
-  assert.equal(current.objectKey, NEXT_STATE_KEY);
+  assert.equal(current.objectKey, RESOURCE_NEXT_STATE_KEY);
   assert.equal(current.digest, await digestOf(NEW_STATE_BYTES));
 
   // The stored ciphertext decrypts back to the plaintext (digest verified).
@@ -145,11 +181,175 @@ test("apply with stateScope persists encrypted state to R2_STATE and writes curr
   const payload = (await response.json()) as Record<string, unknown>;
   const stateField = payload.state as Record<string, unknown>;
   assert.equal(stateField.generation, 2);
-  assert.equal(stateField.objectKey, NEXT_STATE_KEY);
+  assert.equal(stateField.stateRef, RESOURCE_NEXT_STATE_KEY);
   assert.equal(stateField.digest, current.digest);
 });
 
-test("apply with stateScope encrypts the raw outputs envelope to R2_ARTIFACTS and echoes rawOutputsKey", async () => {
+test("confirmed adoption restores only the exact legacy state and writes the next state under the Resource prefix", async () => {
+  const calls: string[] = [];
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const legacyState = new TextEncoder().encode('{"version":4,"serial":7}');
+  const sealedLegacy = await crypto.seal(legacyState);
+  await state.put(LEGACY_ADOPTION_KEY, sealedLegacy.ciphertext, {
+    customMetadata: {
+      "takosumi-content-digest": sealedLegacy.contentDigest,
+      "takosumi-run-id": "run_legacy_apply",
+    },
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await artifacts.put(
+    "opentofu-plan-runs/plan_adopt/tfplan.enc",
+    sealedPlan.ciphertext,
+  );
+  const canonicalKey = `${RESOURCE_STATE_PREFIX}/00000008.tfstate.enc`;
+  const resourceScope = {
+    ...RESOURCE_SCOPE,
+    generation: 8,
+    stateRef: canonicalKey,
+  };
+
+  const runner = runnerWithContainer(artifacts, state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      calls.push(`${request.method} ${path}`);
+      if (
+        request.method === "PUT" &&
+        path === "/runs/plan_adopt/artifacts/tfplan"
+      ) {
+        return Response.json({ ok: true });
+      }
+      if (
+        request.method === "PUT" &&
+        path === "/runs/plan_adopt/artifacts/tfstate"
+      ) {
+        assert.deepEqual(
+          new Uint8Array(await request.arrayBuffer()),
+          legacyState,
+        );
+        return Response.json({ ok: true });
+      }
+      if (request.method === "POST" && path === "/runs/plan_adopt") {
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_adopt/artifacts/tfstate"
+      ) {
+        return new Response(NEW_STATE_BYTES);
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_adopt", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId: "plan_adopt",
+        request: {
+          stateScope: resourceScope,
+          rawOutputRef:
+            "workspaces/spc_1/resources/tkrn_spc_1_EdgeWorker_api/runs/plan_adopt/outputs.raw.json.enc",
+          stateAdoption: legacyStateAdoption(sealedLegacy.contentDigest),
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_adopt/tfplan",
+            digest: PLAN_DIGEST,
+          },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [
+    "PUT /runs/plan_adopt/artifacts/tfplan",
+    "PUT /runs/plan_adopt/artifacts/tfstate",
+    "POST /runs/plan_adopt",
+    "GET /runs/plan_adopt/artifacts/tfstate",
+  ]);
+  assert.ok(state.body(LEGACY_ADOPTION_KEY));
+  assert.ok(state.body(canonicalKey));
+  const currentBytes = state.body(RESOURCE_CURRENT_KEY);
+  assert.ok(currentBytes);
+  const current = JSON.parse(new TextDecoder().decode(currentBytes)) as {
+    generation: number;
+    objectKey: string;
+  };
+  assert.equal(current.generation, 8);
+  assert.equal(current.objectKey, canonicalKey);
+});
+
+test("confirmed adoption is refused when canonical Resource state already exists", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const legacyState = new TextEncoder().encode('{"version":4,"serial":7}');
+  const sealedLegacy = await crypto.seal(legacyState);
+  await state.put(LEGACY_ADOPTION_KEY, sealedLegacy.ciphertext, {
+    customMetadata: {
+      "takosumi-content-digest": sealedLegacy.contentDigest,
+    },
+  });
+  const canonicalKey = `${RESOURCE_STATE_PREFIX}/00000007.tfstate.enc`;
+  const canonicalState = new TextEncoder().encode('{"version":4,"serial":700}');
+  const sealedCanonical = await crypto.seal(canonicalState);
+  await state.put(canonicalKey, sealedCanonical.ciphertext, {
+    customMetadata: {
+      "takosumi-content-digest": sealedCanonical.contentDigest,
+    },
+  });
+  await state.put(
+    RESOURCE_CURRENT_KEY,
+    JSON.stringify({
+      generation: 7,
+      objectKey: canonicalKey,
+      digest: sealedCanonical.contentDigest,
+    }),
+  );
+  let containerCalled = false;
+  const runner = runnerWithContainer(artifacts, state, {
+    containerFetch() {
+      containerCalled = true;
+      return Promise.resolve(Response.json({ ok: true }));
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_adopt", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_adopt",
+        request: {
+          stateScope: {
+            ...RESOURCE_SCOPE,
+            generation: 7,
+            stateRef: canonicalKey,
+          },
+          stateAdoption: legacyStateAdoption(sealedLegacy.contentDigest),
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 500);
+  assert.equal(containerCalled, false);
+  assert.deepEqual(state.body(canonicalKey), sealedCanonical.ciphertext);
+});
+
+test("apply with stateScope encrypts the raw outputs envelope to R2_ARTIFACTS and echoes rawOutputRef", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -204,7 +404,8 @@ test("apply with stateScope encrypts the raw outputs envelope to R2_ARTIFACTS an
         action: "apply",
         runId: "plan_1",
         request: {
-          stateScope: SCOPE,
+          stateScope: RESOURCE_SCOPE,
+          rawOutputRef: RESOURCE_RAW_OUTPUT_REF,
           planArtifact: {
             kind: "object-storage",
             ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
@@ -217,14 +418,11 @@ test("apply with stateScope encrypts the raw outputs envelope to R2_ARTIFACTS an
 
   assert.equal(response.status, 200);
   const payload = (await response.json()) as Record<string, unknown>;
-  const rawOutputsKey = payload.rawOutputsKey as string;
-  assert.equal(
-    rawOutputsKey,
-    "spaces/spc_1/installations/inst_1/runs/plan_1/outputs.raw.json.enc",
-  );
+  const rawOutputRef = payload.rawOutputRef as string;
+  assert.equal(rawOutputRef, RESOURCE_RAW_OUTPUT_REF);
 
   // The object is encrypted at rest (not the plaintext JSON).
-  const stored = artifacts.body(rawOutputsKey);
+  const stored = artifacts.body(rawOutputRef);
   assert.ok(stored && stored.byteLength > 0);
   const plaintextJson = new TextEncoder().encode(
     JSON.stringify(outputsEnvelope),
@@ -239,14 +437,48 @@ test("apply with stateScope encrypts the raw outputs envelope to R2_ARTIFACTS an
   );
 });
 
+test("apply rejects a rawOutputRef outside the canonical subject and Run path", async () => {
+  let containerCalled = false;
+  const runner = runnerWithContainer(new FakeR2Bucket(), new FakeR2Bucket(), {
+    containerFetch() {
+      containerCalled = true;
+      return Promise.resolve(Response.json({ ok: true }));
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId: "plan_1",
+        request: {
+          stateScope: RESOURCE_SCOPE,
+          rawOutputRef:
+            "workspaces/spc_1/capsules/other/runs/plan_1/outputs.raw.json.enc",
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 500);
+  assert.equal(containerCalled, false);
+});
+
 test("apply with stateScope adopts same-run completed state without reapplying", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
-  const targetScope = { ...SCOPE, generation: 1 };
   const targetStateKey = `${STATE_PREFIX}/00000001.tfstate.enc`;
+  const targetScope = {
+    ...SCOPE,
+    generation: 1,
+    stateRef: targetStateKey,
+  };
   const completedState = new TextEncoder().encode('{"version":4,"serial":1}');
   const sealedState = await crypto.seal(completedState);
   await state.put(targetStateKey, sealedState.ciphertext, {
@@ -272,12 +504,10 @@ test("apply with stateScope adopts same-run completed state without reapplying",
   const outputsEnvelope = {
     launch_url: { sensitive: false, value: "https://x.example" },
   };
-  const rawOutputsKey =
-    "spaces/spc_1/installations/inst_1/runs/plan_1/outputs.raw.json.enc";
   const sealedOutputs = await crypto.seal(
     new TextEncoder().encode(JSON.stringify(outputsEnvelope)),
   );
-  await artifacts.put(rawOutputsKey, sealedOutputs.ciphertext, {
+  await artifacts.put(RAW_OUTPUT_REF, sealedOutputs.ciphertext, {
     customMetadata: {
       "takosumi-run-id": "plan_1",
       "takosumi-content-digest": sealedOutputs.contentDigest,
@@ -305,6 +535,7 @@ test("apply with stateScope adopts same-run completed state without reapplying",
         runId: "plan_1",
         request: {
           stateScope: targetScope,
+          rawOutputRef: RAW_OUTPUT_REF,
           planArtifact: {
             kind: "object-storage",
             ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
@@ -319,10 +550,10 @@ test("apply with stateScope adopts same-run completed state without reapplying",
   assert.equal(containerCalled, false);
   const payload = (await response.json()) as Record<string, unknown>;
   assert.deepEqual(payload.outputs, outputsEnvelope);
-  assert.equal(payload.rawOutputsKey, rawOutputsKey);
+  assert.equal(payload.rawOutputRef, RAW_OUTPUT_REF);
   const stateField = payload.state as Record<string, unknown>;
   assert.equal(stateField.generation, 1);
-  assert.equal(stateField.objectKey, targetStateKey);
+  assert.equal(stateField.stateRef, targetStateKey);
   assert.equal(stateField.digest, sealedState.contentDigest);
 });
 
@@ -380,7 +611,12 @@ test("apply with stateScope does not adopt another run's target generation", asy
         action: "apply",
         runId: "plan_1",
         request: {
-          stateScope: { ...SCOPE, generation: 1 },
+          stateScope: {
+            ...SCOPE,
+            generation: 1,
+            stateRef: targetStateKey,
+          },
+          rawOutputRef: RAW_OUTPUT_REF,
           planArtifact: {
             kind: "object-storage",
             ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
@@ -475,6 +711,7 @@ test("apply with stateScope restores the encrypted current state before apply", 
         runId: "plan_1",
         request: {
           stateScope: SCOPE,
+          rawOutputRef: RAW_OUTPUT_REF,
           planArtifact: {
             kind: "object-storage",
             ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
@@ -585,12 +822,10 @@ test("plan with stateScope reconciles missing current.json from the latest seale
   const artifact = payload.planArtifact as Record<string, unknown>;
   assert.equal(
     artifact.ref,
-    "r2://takos-artifacts/spaces/spc_1/installations/inst_1/runs/plan_1/plan.bin",
+    "r2://takos-artifacts/workspaces/spc_1/capsules/inst_1/runs/plan_1/plan.bin",
   );
   assert.ok(
-    artifacts.body(
-      "spaces/spc_1/installations/inst_1/runs/plan_1/plan.bin.enc",
-    ),
+    artifacts.body("workspaces/spc_1/capsules/inst_1/runs/plan_1/plan.bin.enc"),
   );
   const currentBytes = state.body(CURRENT_KEY);
   assert.ok(currentBytes);
@@ -673,6 +908,7 @@ test("apply with stateScope reconciles only the previous generation before writi
         runId: "plan_1",
         request: {
           stateScope: { ...SCOPE, generation: 2 },
+          rawOutputRef: RAW_OUTPUT_REF,
           planArtifact: {
             kind: "object-storage",
             ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
@@ -738,6 +974,7 @@ test("state restore fails closed when the stored ciphertext is tampered", async 
         runId: "plan_1",
         request: {
           stateScope: SCOPE,
+          rawOutputRef: RAW_OUTPUT_REF,
           planArtifact: {
             kind: "object-storage",
             ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
@@ -765,7 +1002,7 @@ test("plan with depStates fetches + decrypts the producer state into /work/deps"
     '{"version":4,"serial":3,"outputs":{"base_domain":{"value":"x"}}}',
   );
   const producerPrefix =
-    "spaces/spc_1/installations/inst_producer/envs/production/states";
+    "workspaces/spc_1/capsules/inst_producer/environments/production/state-versions";
   const producerKey = `${producerPrefix}/00000003.tfstate.enc`;
   const sealedProducer = await crypto.seal(producerState);
   await state.put(producerKey, sealedProducer.ciphertext);
@@ -800,15 +1037,19 @@ test("plan with depStates fetches + decrypts the producer state into /work/deps"
         runId: "plan_1",
         request: {
           // The consumer's own env state scope (gen 1).
-          stateScope: { ...SCOPE, generation: 1 },
+          stateScope: {
+            ...SCOPE,
+            generation: 1,
+            stateRef: `${STATE_PREFIX}/00000001.tfstate.enc`,
+          },
           // One remote_state dependency on the producer Installation.
           depStates: [
             {
               name: "producer",
-              installationId: "inst_producer",
+              capsuleId: "inst_producer",
               environment: "production",
               generation: 3,
-              objectKey: producerKey,
+              stateRef: producerKey,
               digest: sealedProducer.contentDigest,
             },
           ],
@@ -836,7 +1077,7 @@ test("depStates restore fails closed when the producer ciphertext is tampered", 
   });
   const producerState = new TextEncoder().encode('{"version":4,"serial":3}');
   const producerKey =
-    "spaces/spc_1/installations/inst_producer/envs/production/states/00000003.tfstate.enc";
+    "workspaces/spc_1/capsules/inst_producer/environments/production/state-versions/00000003.tfstate.enc";
   const sealedProducer = await crypto.seal(producerState);
   const tampered = new Uint8Array(sealedProducer.ciphertext);
   tampered[tampered.length - 1] ^= 0x01;
@@ -862,14 +1103,18 @@ test("depStates restore fails closed when the producer ciphertext is tampered", 
         action: "plan",
         runId: "plan_1",
         request: {
-          stateScope: { ...SCOPE, generation: 1 },
+          stateScope: {
+            ...SCOPE,
+            generation: 1,
+            stateRef: `${STATE_PREFIX}/00000001.tfstate.enc`,
+          },
           depStates: [
             {
               name: "producer",
-              installationId: "inst_producer",
+              capsuleId: "inst_producer",
               environment: "production",
               generation: 3,
-              objectKey: producerKey,
+              stateRef: producerKey,
               digest: sealedProducer.contentDigest,
             },
           ],
@@ -882,7 +1127,7 @@ test("depStates restore fails closed when the producer ciphertext is tampered", 
   assert.equal(response.status, 500);
 });
 
-test("depStates restore rejects an objectKey that escapes the producer prefix", async () => {
+test("depStates restore rejects a stateRef that escapes the producer prefix", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -891,7 +1136,7 @@ test("depStates restore rejects an objectKey that escapes the producer prefix", 
   const producerState = new TextEncoder().encode('{"version":4,"serial":3}');
   // A key that does NOT match the descriptor's installationId/environment prefix.
   const crossTenantKey =
-    "spaces/spc_1/installations/inst_other/envs/production/states/00000003.tfstate.enc";
+    "workspaces/spc_1/capsules/inst_other/environments/production/state-versions/00000003.tfstate.enc";
   const sealedProducer = await crypto.seal(producerState);
   await state.put(crossTenantKey, sealedProducer.ciphertext);
 
@@ -912,14 +1157,18 @@ test("depStates restore rejects an objectKey that escapes the producer prefix", 
         action: "plan",
         runId: "plan_1",
         request: {
-          stateScope: { ...SCOPE, generation: 1 },
+          stateScope: {
+            ...SCOPE,
+            generation: 1,
+            stateRef: `${STATE_PREFIX}/00000001.tfstate.enc`,
+          },
           depStates: [
             {
               name: "producer",
-              installationId: "inst_producer",
+              capsuleId: "inst_producer",
               environment: "production",
               generation: 3,
-              objectKey: crossTenantKey,
+              stateRef: crossTenantKey,
               digest: sealedProducer.contentDigest,
             },
           ],
@@ -928,7 +1177,7 @@ test("depStates restore rejects an objectKey that escapes the producer prefix", 
     }),
   );
 
-  // The path-jail rejects the mismatched objectKey -> 500, no container call.
+  // The path-jail rejects the mismatched stateRef -> 500, no container call.
   assert.equal(response.status, 500);
 });
 
@@ -937,7 +1186,7 @@ test("legacy apply without stateScope keeps using the R2_ARTIFACTS state path", 
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const stateBackendRef = "state://takosumi/opentofu-default";
-  const legacyStateKey = `${await legacyBackendPrefix(stateBackendRef)}/installations/inst_1/terraform.tfstate`;
+  const legacyStateKey = `${await legacyBackendPrefix(stateBackendRef)}/capsules/inst_1/terraform.tfstate`;
   const priorState = new TextEncoder().encode('{"serial":1}');
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
@@ -1001,8 +1250,8 @@ test("legacy apply without stateScope keeps using the R2_ARTIFACTS state path", 
         request: {
           planRun: {
             id: "plan_1",
-            installationId: "inst_1",
-            spaceId: "space_1",
+            capsuleId: "inst_1",
+            workspaceId: "spc_1",
             runnerProfileId: "opentofu-default",
             source: {
               kind: "git",

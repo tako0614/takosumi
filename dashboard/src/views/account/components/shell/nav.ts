@@ -11,6 +11,7 @@
  */
 import {
   Archive,
+  Boxes,
   Clock3,
   History,
   LayoutGrid,
@@ -41,12 +42,6 @@ export const PRIMARY_NAV: readonly ShellNavItem[] = [
 
 export type ManageDestination = ShellNavItem & {
   readonly descriptionKey: MessageKey;
-  /**
-   * Cloud-only surfaces (e.g. managed Cloud resources) render an "unavailable"
-   * dead-end on self-host / Takos-embedded runtimes. Gate them out of the
-   * catalog there, mirroring the runtime-gated Cloud tabs in workspace settings.
-   */
-  readonly cloudOnly?: boolean;
 };
 
 /**
@@ -67,13 +62,6 @@ export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
     icon: Link2,
   },
   {
-    href: "/cloud",
-    labelKey: "nav.cloudResources",
-    descriptionKey: "settings.manage.cloud",
-    icon: Network,
-    cloudOnly: true,
-  },
-  {
     href: "/runs",
     labelKey: "nav.runs",
     descriptionKey: "settings.manage.runs",
@@ -84,6 +72,12 @@ export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
     labelKey: "nav.graph",
     descriptionKey: "settings.manage.graph",
     icon: Network,
+  },
+  {
+    href: "/resources",
+    labelKey: "nav.resources",
+    descriptionKey: "settings.manage.resources",
+    icon: Boxes,
   },
   {
     href: "/activity",
@@ -120,13 +114,13 @@ export const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/^\/settings(\/|$)/, "nav.settings"],
   [/^\/services(\/|$)/, "nav.services"],
   [/^\/new(\/|$)/, "nav.add"],
-  [/^\/cloud(\/|$)/, "nav.cloudResources"],
   [/^\/connections(\/|$)/, "nav.connections"],
   [/^\/advanced\/workspace(\/|$)/, "nav.workspaceSettings"],
   [/^\/billing(\/|$)/, "nav.billing"],
   [/^\/runs(\/|$)/, "nav.runs"],
   [/^\/run-groups(\/|$)/, "nav.runs"],
   [/^\/graph(\/|$)/, "nav.graph"],
+  [/^\/resources(\/|$)/, "nav.resources"],
   [/^\/notifications(\/|$)/, "nav.notifications"],
   [/^\/activity(\/|$)/, "nav.activity"],
   [/^\/account(\/|$)/, "nav.account"],

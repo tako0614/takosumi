@@ -3,8 +3,6 @@ import { expect, test } from "bun:test";
 import {
   analyzeOpenTofuCapsuleFiles,
   collectRootModuleOutputDeclarations,
-  normalizedCapsuleArtifactBody,
-  normalizedModuleObjectKey,
 } from "../../../../core/domains/sources/capsule_compatibility.ts";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 
@@ -15,15 +13,15 @@ const snapshot: SourceSnapshot = {
   ref: "main",
   resolvedCommit: "abc123",
   path: ".",
-  archiveObjectKey:
-    "spaces/space_1/sources/src_test/snapshots/snap_test/source.tar.zst",
+  archiveRef:
+    "workspaces/space_1/sources/src_test/snapshots/snap_test/source.tar.zst",
   archiveDigest: "sha256:archive",
   archiveSizeBytes: 123,
   fetchedByRunId: "ssr_test",
   fetchedAt: "2026-06-07T00:00:00.000Z",
 };
 
-test("collectRootModuleOutputDeclarations preserves sensitive output flags", () => {
+test("collectRootModuleOutputDeclarations preserves OpenTofu Output metadata", () => {
   expect(
     collectRootModuleOutputDeclarations([
       {
@@ -33,9 +31,14 @@ output "launch_url" {
   value = local.launch_url
 }
 
-output "service_grant_signing_key" {
+output "private_signing_material" {
   value     = local.signing_key
   sensitive = true
+}
+
+output "transient_session" {
+  value     = local.session
+  ephemeral = true
 }
 `,
       },
@@ -50,8 +53,67 @@ output "ignored_child_output" {
       },
     ]),
   ).toEqual([
-    { name: "launch_url", sensitive: false },
-    { name: "service_grant_signing_key", sensitive: true },
+    { name: "launch_url", sensitive: false, ephemeral: false },
+    { name: "private_signing_material", sensitive: true, ephemeral: false },
+    { name: "transient_session", sensitive: false, ephemeral: true },
+  ]);
+});
+
+test("rejects an ephemeral root Output that cannot enter the persisted Capsule ledger", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "outputs.tf",
+        text: `
+output "transient_session" {
+  value     = "transient"
+  ephemeral = true
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.findings).toContainEqual(
+    expect.objectContaining({
+      code: "ephemeral_root_output_unsupported",
+      compatibilityImpact: "unsupported",
+    }),
+  );
+  expect(result.rootModuleOutputs).toEqual([
+    { name: "transient_session", sensitive: false, ephemeral: true },
+  ]);
+});
+
+test("fails closed when Output metadata is a constant expression the static gate cannot preserve", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "outputs.tf",
+        text: `
+output "computed_metadata" {
+  value     = "value"
+  sensitive = 1 == 1
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.findings).toContainEqual(
+    expect.objectContaining({
+      code: "output_metadata_expression_unsupported",
+      compatibilityImpact: "unsupported",
+    }),
+  );
+  expect(result.rootModuleOutputs).toEqual([
+    { name: "computed_metadata", sensitive: null, ephemeral: false },
   ]);
 });
 
@@ -98,15 +160,7 @@ output "attachments_bucket" {
   expect(result.resources).toEqual([
     { type: "aws_s3_bucket", count: 1, allowed: true },
   ]);
-  expect(result.findings).toEqual([
-    {
-      severity: "info",
-      code: "provider_connection_may_be_required",
-      message: "Provider hashicorp/aws may require a Provider Connection.",
-      suggestion:
-        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
-    },
-  ]);
+  expect(result.findings).toEqual([]);
 });
 
 test("treats provider-free output modules as runnable", () => {
@@ -141,7 +195,7 @@ output "public_origin" {
   expect(result.findings).toEqual([]);
 });
 
-test("flags auto-capsulize candidates for provider and backend lifting", () => {
+test("preserves provider and backend blocks instead of auto-rewriting HCL", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",
     sourceSnapshot: snapshot,
@@ -174,7 +228,7 @@ output "public_url" {
     ],
   });
 
-  expect(result.level).toBe("auto_capsulized");
+  expect(result.level).toBe("ready");
   expect(result.providers).toEqual([
     {
       source: "cloudflare/cloudflare",
@@ -183,36 +237,17 @@ output "public_url" {
     },
   ]);
   expect(result.findings.map((finding) => finding.code)).toContain(
-    "backend_override_candidate",
+    "backend_state_isolated",
   );
   expect(result.findings.map((finding) => finding.code)).toContain(
-    "provider_block_lift_candidate",
+    "provider_configuration_preserved",
   );
-  expect(result.normalizedObjectKey).toBe(normalizedModuleObjectKey(snapshot));
-  expect(result.normalizedDigest).toBeUndefined();
-  expect(result.normalizedFiles).toHaveLength(1);
-  expect(result.normalizedFiles?.[0]?.path).toBe("main.tf");
-  expect(result.normalizedFiles?.[0]?.text).not.toContain('backend "s3"');
-  expect(result.normalizedFiles?.[0]?.text).not.toContain(
-    'provider "cloudflare"',
-  );
-  expect(result.normalizedFiles?.[0]?.text).toContain("required_providers");
-  expect(result.normalizedFiles?.[0]?.text).toContain('output "public_url"');
-  expect(
-    JSON.parse(
-      normalizedCapsuleArtifactBody({
-        sourceSnapshot: snapshot,
-        files: result.normalizedFiles!,
-      }),
-    ),
-  ).toMatchObject({
-    kind: "takosumi.normalized-capsule@v1",
-    sourceSnapshotId: "snap_test",
-    files: [{ path: "main.tf" }],
-  });
+  expect(result).not.toHaveProperty("normalizedObjectKey");
+  expect(result).not.toHaveProperty("normalizedDigest");
+  expect(result).not.toHaveProperty("normalizedFiles");
 });
 
-test("carries non-.tf files through auto-capsulized normalization unchanged", () => {
+test("keeps the immutable source archive when backend isolation is needed", () => {
   const migrationSql = "CREATE TABLE accounts (id TEXT PRIMARY KEY);\n";
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",
@@ -242,20 +277,10 @@ output "public_url" {
     ],
   });
 
-  expect(result.level).toBe("auto_capsulized");
-  expect(result.normalizedFiles?.map((file) => file.path)).toEqual([
-    "main.tf",
-    "migrations/001_init.sql",
-  ]);
-  const migration = result.normalizedFiles?.find(
-    (file) => file.path === "migrations/001_init.sql",
-  );
-  expect(migration?.text).toBe(migrationSql);
-  const normalizedTf = result.normalizedFiles?.find(
-    (file) => file.path === "main.tf",
-  );
-  expect(normalizedTf?.text).not.toContain('backend "s3"');
-  expect(normalizedTf?.text).toContain("required_providers");
+  expect(result.level).toBe("ready");
+  expect(result).not.toHaveProperty("normalizedFiles");
+  expect(result).not.toHaveProperty("normalizedObjectKey");
+  expect(result).not.toHaveProperty("normalizedDigest");
 });
 
 test("keeps the original archive for ready capsules with non-.tf files", () => {
@@ -291,9 +316,9 @@ output "attachments_bucket" {
   });
 
   expect(result.level).toBe("ready");
-  expect(result.normalizedFiles).toBeUndefined();
-  expect(result.normalizedObjectKey).toBe(snapshot.archiveObjectKey);
-  expect(result.normalizedDigest).toBe(snapshot.archiveDigest);
+  expect(result).not.toHaveProperty("normalizedFiles");
+  expect(result).not.toHaveProperty("normalizedObjectKey");
+  expect(result).not.toHaveProperty("normalizedDigest");
 });
 
 test("requires patch when provider credentials are in source", () => {
@@ -328,6 +353,11 @@ output "public_url" {
   expect(result.findings.map((finding) => finding.code)).toContain(
     "provider_credentials_in_source",
   );
+  expect(
+    result.findings.find(
+      (finding) => finding.code === "provider_credentials_in_source",
+    )?.context,
+  ).toEqual({ provider: "aws" });
 });
 
 test("uses explicit policy allowlists when classifying gate findings", () => {
@@ -382,15 +412,7 @@ output "public_url" {
   ]);
   expect(result.dataSources).toEqual([{ type: "external", allowed: true }]);
   expect(result.provisioners).toEqual([{ type: "local-exec", allowed: true }]);
-  expect(result.findings).toEqual([
-    {
-      severity: "info",
-      code: "provider_connection_may_be_required",
-      message: "Provider custom/provider may require a Provider Connection.",
-      suggestion:
-        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
-    },
-  ]);
+  expect(result.findings).toEqual([]);
 });
 
 test("detects dependency lockfiles without downgrading reusable modules", () => {
@@ -432,6 +454,7 @@ output "attachments_bucket" {
   expect(result.level).toBe("ready");
   expect(result.findings).toContainEqual({
     severity: "info",
+    compatibilityImpact: "none",
     code: "dependency_lock_detected",
     message:
       "A provider dependency lockfile is present and will be reviewed by the provider lockfile policy after credential-free init.",
@@ -739,12 +762,10 @@ output "url" {
   ).toBe(false);
 });
 
-test("still rejects domain-takeover Cloudflare resource types by default", () => {
-  // The default allowlist deliberately excludes cross-domain / cross-tenant
-  // reaching types like DNS records. Worker routes are part of the standard
-  // Worker-compatible app surface and remain controlled by provider
-  // credentials, scope policy, and route ownership checks outside this static
-  // resource-type gate.
+test("does not smuggle a vendor denylist into an unset resource policy", () => {
+  // Resource safety is enforced by explicit operator policy, provider scope,
+  // plan review, and ownership checks. Generic Core must not pretend that a
+  // short Cloudflare denylist is a complete resource security boundary.
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",
     sourceSnapshot: snapshot,
@@ -775,24 +796,22 @@ output "url" {
     ],
   });
 
-  expect(result.level).toBe("unsupported");
-  const denied = result.resources.filter((resource) => !resource.allowed);
-  expect(denied.map((resource) => resource.type).sort()).toEqual([
-    "cloudflare_dns_record",
-  ]);
+  expect(result.level).toBe("ready");
+  expect(result.resources.every((resource) => resource.allowed)).toBe(true);
   expect(
     result.findings.some(
       (finding) => finding.code === "resource_type_not_allowed",
     ),
-  ).toBe(true);
+  ).toBe(false);
 });
 
-test("still rejects account/zone-level Cloudflare resource types by default", () => {
-  // Account/zone configuration types affect the whole account or other tenants
-  // and are never in the Gateway coverage.
+test("applies an explicitly configured resource allowlist strictly", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",
     sourceSnapshot: snapshot,
+    policy: {
+      allowedResourceTypes: ["cloudflare_workers_script"],
+    },
     files: [
       {
         path: "main.tf",
@@ -871,16 +890,7 @@ output "database_name" {
   expect(result.resources).toEqual([
     { type: "snowflake_database", count: 1, allowed: true },
   ]);
-  expect(result.findings).toEqual([
-    {
-      severity: "info",
-      code: "provider_connection_may_be_required",
-      message:
-        "Provider snowflake-labs/snowflake may require a Provider Connection.",
-      suggestion:
-        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
-    },
-  ]);
+  expect(result.findings).toEqual([]);
 });
 
 test("admits http data sources for explicit release artifact retrieval", () => {

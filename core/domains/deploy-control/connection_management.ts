@@ -1,10 +1,10 @@
 /**
  * Connection-management facade (provider credential registration; Phase 1A).
  *
- * A thin collaborator pulled out of `OpenTofuDeploymentController`: the write +
+ * A thin collaborator pulled out of `OpenTofuController`: the write +
  * test + mint methods delegate to the injected {@link ConnectionVault} (guarded
  * by a single `not_implemented` check when no Vault is wired), and the read
- * methods project the {@link OpenTofuDeploymentStore} Connection rows (never
+ * methods project the {@link OpenTofuControlStore} Connection rows (never
  * secret values). The controller holds one instance and re-exposes these on its
  * public API unchanged, so the `/api` connection route layer keeps calling the
  * controller surface. The run-execution path keeps its own direct Vault handle
@@ -12,7 +12,7 @@
  */
 
 import type {
-  Connection,
+  ProviderConnection,
   ConnectionResponse,
   CreateConnectionRequest,
   ListConnectionsResponse,
@@ -20,7 +20,7 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
-import type { OpenTofuDeploymentStore } from "./store.ts";
+import type { OpenTofuControlStore } from "./store.ts";
 import {
   mapVaultError,
   OpenTofuControllerError,
@@ -34,10 +34,10 @@ import {
  * the store).
  */
 export class ConnectionManagement {
-  readonly #store: OpenTofuDeploymentStore;
+  readonly #store: OpenTofuControlStore;
   readonly #vault?: ConnectionVault;
 
-  constructor(store: OpenTofuDeploymentStore, vault?: ConnectionVault) {
+  constructor(store: OpenTofuControlStore, vault?: ConnectionVault) {
     this.#store = store;
     this.#vault = vault;
   }
@@ -55,12 +55,12 @@ export class ConnectionManagement {
   }
 
   async listConnections(
-    spaceId: string,
+    workspaceId: string,
     params?: PageParams,
   ): Promise<ListConnectionsResponse> {
-    requireNonEmptyString(spaceId, "spaceId");
+    requireNonEmptyString(workspaceId, "workspaceId");
     const { items, nextCursor } = await this.#store.listConnectionsPage(
-      spaceId,
+      workspaceId,
       params ?? {},
     );
     return {
@@ -71,13 +71,13 @@ export class ConnectionManagement {
 
   /**
    * Lists instance-wide `operator`-scoped Connections (spec §30 `GET
-   * /api/connections` with `?spaceId` omitted). Never includes secret values.
+   * /api/connections` with `?workspaceId` omitted). Never includes secret values.
    */
   async listOperatorConnections(): Promise<ListConnectionsResponse> {
     return { connections: await this.#store.listOperatorConnections() };
   }
 
-  async getConnection(connectionId: string): Promise<Connection> {
+  async getConnection(connectionId: string): Promise<ProviderConnection> {
     requireNonEmptyString(connectionId, "connectionId");
     const connection = await this.#store.getConnection(connectionId);
     if (!connection) {

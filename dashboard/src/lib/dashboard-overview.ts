@@ -78,9 +78,10 @@ function primeDerivedCaches(overview: DashboardOverview): void {
   const workspaceId = overview.workspace?.id;
   if (!workspaceId) return;
   if (overview.nextCapsuleCursor !== undefined) {
-    // Dashboard overview is a launcher projection, not a complete list read. Do
-    // not poison the full-list caches with the first page when the server tells
-    // us more Capsules exist.
+    // Dashboard overview is a bounded installed-Capsule projection, not a
+    // complete list read. Runtime launcher surfaces come from Interface reads.
+    // Do not poison the full-list caches with the first page when the server
+    // tells us more Capsules exist.
     return;
   }
   primeCapsuleListCache(workspaceId, overview.capsules, {

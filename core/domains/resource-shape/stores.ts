@@ -3,13 +3,19 @@
 // The interfaces are the contract the service layer depends on. Durable
 // implementations (Cloudflare D1 + Postgres) mirror these and are wired on the
 // deploy-control persistence plane; the in-memory stores here keep the service
-// runnable in tests and self-host defaults without a database.
+// runnable in tests through explicit injection without a database.
 
 import type { ResourceShapeKind } from "takosumi-contract";
+import {
+  pageSorted,
+  type Page,
+  type PageParams,
+} from "takosumi-contract/pagination";
 import type { SpaceId } from "../../shared/ids.ts";
 import type {
   ResolutionLockRecord,
   ResourceShapeRecord,
+  ResourceShapeStateAdoptionDescriptor,
   ResourceShapeRecordId,
   SpacePolicyRecord,
   SpacePolicyRecordId,
@@ -29,7 +35,96 @@ export type ResourceDeleteClaimResult =
       readonly record: ResourceShapeRecord;
     };
 
+export type ResourceCompareAndSetResult =
+  | { readonly status: "updated"; readonly record: ResourceShapeRecord }
+  | { readonly status: "not_found" }
+  | { readonly status: "conflict"; readonly record: ResourceShapeRecord };
+
+export type ResourceCreateResult =
+  | { readonly status: "created"; readonly record: ResourceShapeRecord }
+  | { readonly status: "conflict"; readonly record: ResourceShapeRecord };
+
+export interface ResourceRecordVersion {
+  readonly generation: number;
+  readonly phase: ResourceShapeRecord["phase"];
+  readonly updatedAt: string;
+}
+
+export interface ResourceApplyingVersion {
+  readonly generation: number;
+  readonly phase: "Applying";
+  readonly updatedAt: string;
+}
+
+export interface ResourceApplyBeginInput {
+  readonly applyingRecord: ResourceShapeRecord;
+  readonly plannedLock: ResolutionLockRecord;
+  /** Omit only for a create-only claim. Present means CAS-only. */
+  readonly expected?: ResourceRecordVersion;
+}
+
+export type ResourceApplyBeginResult =
+  | {
+      readonly status: "begun";
+      readonly record: ResourceShapeRecord;
+      readonly lock: ResolutionLockRecord;
+    }
+  | { readonly status: "not_found" }
+  | { readonly status: "conflict"; readonly record: ResourceShapeRecord };
+
+export interface ResourceApplyCommitInput {
+  readonly readyRecord: ResourceShapeRecord;
+  readonly finalLock: ResolutionLockRecord;
+  readonly expectedApplying: ResourceApplyingVersion;
+}
+
+export type ResourceApplyCommitResult =
+  | {
+      readonly status: "committed";
+      readonly record: ResourceShapeRecord;
+      readonly lock: ResolutionLockRecord;
+    }
+  | { readonly status: "not_found" }
+  | { readonly status: "conflict"; readonly record: ResourceShapeRecord };
+
+export interface ResourceApplyAbortInput {
+  readonly resourceId: ResourceShapeRecordId;
+  readonly expectedApplying: ResourceApplyingVersion;
+  /** Exact planned lock version installed by beginApply. */
+  readonly expectedPlannedLock: ResolutionLockRecord;
+  /**
+   * `null` removes a create-only claim. A replacement restores the prior
+   * Resource (or publishes a known-failure Resource); `lock: null` explicitly
+   * restores the prior absence of a ResolutionLock.
+   */
+  readonly replacement: {
+    readonly record: ResourceShapeRecord;
+    readonly lock: ResolutionLockRecord | null;
+  } | null;
+}
+
+export type ResourceApplyAbortResult =
+  | { readonly status: "rolled_back" }
+  | { readonly status: "not_found" }
+  | {
+      readonly status: "conflict";
+      readonly record?: ResourceShapeRecord;
+      readonly lock?: ResolutionLockRecord;
+    };
+
+/** Durable lease request used by the bounded scheduled Resource observer. */
+export interface ResourceObservationClaimInput {
+  readonly leaseId: string;
+  readonly claimedAt: string;
+  /** Only Resources not attempted after this instant are due. */
+  readonly dueBefore: string;
+  /** An abandoned lease at or before this instant may be reclaimed. */
+  readonly staleClaimBefore: string;
+}
+
 export interface ResourceShapeStore {
+  /** Atomically inserts a new Resource without replacing an existing owner. */
+  create(record: ResourceShapeRecord): Promise<ResourceCreateResult>;
   upsert(record: ResourceShapeRecord): Promise<ResourceShapeRecord>;
   get(id: ResourceShapeRecordId): Promise<ResourceShapeRecord | undefined>;
   getByName(
@@ -38,6 +133,54 @@ export interface ResourceShapeStore {
     name: string,
   ): Promise<ResourceShapeRecord | undefined>;
   listBySpace(spaceId: SpaceId): Promise<readonly ResourceShapeRecord[]>;
+  /** Bounded keyset page for public Resource list reads. */
+  listBySpacePage(
+    spaceId: SpaceId,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>>;
+  /**
+   * Claims the globally oldest due, fully-applied Ready Resource. The lease is
+   * internal scheduler state, not Resource status or another lifecycle ledger.
+   */
+  claimObservationCandidate(
+    input: ResourceObservationClaimInput,
+  ): Promise<ResourceShapeRecord | undefined>;
+  /** Releases exactly one matching lease and records its attempt time. */
+  finishObservationClaim(
+    id: ResourceShapeRecordId,
+    leaseId: string,
+    attemptedAt: string,
+  ): Promise<boolean>;
+  /**
+   * Atomically records a confirmed one-shot state adoption only while the
+   * Resource still has neither Resource-owned execution state nor another
+   * pending adoption. The timestamp fence prevents a stale report from
+   * overwriting a Resource changed after candidate inspection.
+   */
+  confirmStateAdoption(
+    id: ResourceShapeRecordId,
+    descriptor: ResourceShapeStateAdoptionDescriptor,
+    expectedUpdatedAt: string,
+  ): Promise<
+    | { readonly status: "confirmed"; readonly record: ResourceShapeRecord }
+    | { readonly status: "not_found" }
+    | { readonly status: "conflict"; readonly record: ResourceShapeRecord }
+  >;
+  /**
+   * Atomically replaces an observed Resource projection only when the desired
+   * generation and lifecycle phase still match the snapshot that was sent to
+   * the backend observer. This prevents a slow observation from overwriting a
+   * concurrent apply or delete.
+   */
+  compareAndSet(
+    record: ResourceShapeRecord,
+    expected: ResourceRecordVersion,
+  ): Promise<ResourceCompareAndSetResult>;
+  /** Deletes only the exact lifecycle version currently owned by a caller. */
+  deleteIfVersion(
+    id: ResourceShapeRecordId,
+    expected: ResourceRecordVersion,
+  ): Promise<boolean>;
   claimDelete(
     record: ResourceShapeRecord,
     expectedGeneration: number,
@@ -61,6 +204,11 @@ export interface TargetPoolStore {
     name: string,
   ): Promise<TargetPoolRecord | undefined>;
   listBySpace(spaceId: SpaceId): Promise<readonly TargetPoolRecord[]>;
+  /** Bounded keyset page for public TargetPool list reads. */
+  listBySpacePage(
+    spaceId: SpaceId,
+    params: PageParams,
+  ): Promise<Page<TargetPoolRecord>>;
   delete(id: TargetPoolRecordId): Promise<void>;
 }
 
@@ -72,21 +220,67 @@ export interface SpacePolicyStore {
     name: string,
   ): Promise<SpacePolicyRecord | undefined>;
   listBySpace(spaceId: SpaceId): Promise<readonly SpacePolicyRecord[]>;
+  /** Bounded keyset page for public SpacePolicy list reads. */
+  listBySpacePage(
+    spaceId: SpaceId,
+    params: PageParams,
+  ): Promise<Page<SpacePolicyRecord>>;
   delete(id: SpacePolicyRecordId): Promise<void>;
 }
 
 /** The four Resource Shape stores, grouped for transaction wiring. */
 export interface ResourceShapeStores {
+  /** Composition-time persistence assertion used by strict runtime gates. */
+  readonly persistence: "durable" | "ephemeral";
   readonly resources: ResourceShapeStore;
   readonly locks: ResolutionLockStore;
   readonly targetPools: TargetPoolStore;
   readonly spacePolicies: SpacePolicyStore;
+  /**
+   * Atomically claims an apply by publishing the Applying Resource together
+   * with the planned ResolutionLock. `expected` selects CAS-only behavior;
+   * omitting it selects create-only behavior.
+   */
+  beginApply(input: ResourceApplyBeginInput): Promise<ResourceApplyBeginResult>;
+  /**
+   * Atomically publishes the final ResolutionLock and Ready Resource while
+   * fencing the exact Applying lifecycle version that reached the backend.
+   */
+  commitApply(
+    input: ResourceApplyCommitInput,
+  ): Promise<ResourceApplyCommitResult>;
+  /**
+   * Atomically removes or replaces an unstarted/known-no-mutation Applying
+   * claim and restores its prior lock state. Both the Applying Resource and
+   * the planned lock are fenced so a stale rollback cannot erase another
+   * apply's resolution.
+   */
+  abortApply(input: ResourceApplyAbortInput): Promise<ResourceApplyAbortResult>;
 }
 
 // --- In-memory implementations -----------------------------------------------
 
 export class InMemoryResourceShapeStore implements ResourceShapeStore {
   readonly #byId = new Map<ResourceShapeRecordId, ResourceShapeRecord>();
+  readonly #observationSchedule = new Map<
+    ResourceShapeRecordId,
+    {
+      leaseId?: string;
+      claimedAt?: string;
+      lastAttemptAt?: string;
+    }
+  >();
+
+  create(record: ResourceShapeRecord): Promise<ResourceCreateResult> {
+    return Promise.resolve(this.createSync(record));
+  }
+
+  createSync(record: ResourceShapeRecord): ResourceCreateResult {
+    const current = this.#byId.get(record.id);
+    if (current) return { status: "conflict", record: current };
+    this.#byId.set(record.id, record);
+    return { status: "created", record };
+  }
 
   upsert(record: ResourceShapeRecord): Promise<ResourceShapeRecord> {
     this.#byId.set(record.id, record);
@@ -97,6 +291,14 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
     return Promise.resolve(this.#byId.get(id));
   }
 
+  getSync(id: ResourceShapeRecordId): ResourceShapeRecord | undefined {
+    return this.#byId.get(id);
+  }
+
+  replaceSync(record: ResourceShapeRecord): void {
+    this.#byId.set(record.id, record);
+  }
+
   getByName(
     spaceId: SpaceId,
     kind: ResourceShapeKind,
@@ -104,7 +306,8 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
   ): Promise<ResourceShapeRecord | undefined> {
     for (const record of this.#byId.values()) {
       if (
-        record.spaceId === spaceId && record.kind === kind &&
+        record.spaceId === spaceId &&
+        record.kind === kind &&
         record.name === name
       ) {
         return Promise.resolve(record);
@@ -117,6 +320,140 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
     return Promise.resolve(
       [...this.#byId.values()].filter((record) => record.spaceId === spaceId),
     );
+  }
+
+  listBySpacePage(
+    spaceId: SpaceId,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    const records = [...this.#byId.values()]
+      .filter((record) => record.spaceId === spaceId)
+      .sort(compareCreatedAtAndId);
+    return Promise.resolve(pageSorted(records, params));
+  }
+
+  claimObservationCandidate(
+    input: ResourceObservationClaimInput,
+  ): Promise<ResourceShapeRecord | undefined> {
+    const candidates = [...this.#byId.values()]
+      .filter((record) => {
+        if (
+          record.phase !== "Ready" ||
+          record.observedGeneration !== record.generation
+        ) {
+          return false;
+        }
+        const schedule = this.#observationSchedule.get(record.id);
+        if (
+          schedule?.lastAttemptAt &&
+          schedule.lastAttemptAt > input.dueBefore
+        ) {
+          return false;
+        }
+        return !(
+          schedule?.leaseId &&
+          schedule.claimedAt &&
+          schedule.claimedAt > input.staleClaimBefore
+        );
+      })
+      .sort((left, right) => {
+        const leftAttempt =
+          this.#observationSchedule.get(left.id)?.lastAttemptAt ??
+          left.createdAt;
+        const rightAttempt =
+          this.#observationSchedule.get(right.id)?.lastAttemptAt ??
+          right.createdAt;
+        return (
+          leftAttempt.localeCompare(rightAttempt) ||
+          left.id.localeCompare(right.id)
+        );
+      });
+    const candidate = candidates[0];
+    if (!candidate) return Promise.resolve(undefined);
+    const current = this.#observationSchedule.get(candidate.id);
+    this.#observationSchedule.set(candidate.id, {
+      ...(current?.lastAttemptAt
+        ? { lastAttemptAt: current.lastAttemptAt }
+        : {}),
+      leaseId: input.leaseId,
+      claimedAt: input.claimedAt,
+    });
+    return Promise.resolve(candidate);
+  }
+
+  finishObservationClaim(
+    id: ResourceShapeRecordId,
+    leaseId: string,
+    attemptedAt: string,
+  ): Promise<boolean> {
+    const current = this.#observationSchedule.get(id);
+    if (!current || current.leaseId !== leaseId) {
+      return Promise.resolve(false);
+    }
+    this.#observationSchedule.set(id, { lastAttemptAt: attemptedAt });
+    return Promise.resolve(true);
+  }
+
+  confirmStateAdoption(
+    id: ResourceShapeRecordId,
+    descriptor: ResourceShapeStateAdoptionDescriptor,
+    expectedUpdatedAt: string,
+  ): Promise<
+    | { readonly status: "confirmed"; readonly record: ResourceShapeRecord }
+    | { readonly status: "not_found" }
+    | { readonly status: "conflict"; readonly record: ResourceShapeRecord }
+  > {
+    const current = this.#byId.get(id);
+    if (!current) return Promise.resolve({ status: "not_found" });
+    if (
+      current.updatedAt !== expectedUpdatedAt ||
+      current.execution !== undefined ||
+      current.stateAdoption !== undefined
+    ) {
+      return Promise.resolve({ status: "conflict", record: current });
+    }
+    const record = {
+      ...current,
+      stateAdoption: descriptor,
+      updatedAt: descriptor.confirmedAt,
+    };
+    this.#byId.set(id, record);
+    return Promise.resolve({ status: "confirmed", record });
+  }
+
+  compareAndSet(
+    record: ResourceShapeRecord,
+    expected: ResourceRecordVersion,
+  ): Promise<ResourceCompareAndSetResult> {
+    const current = this.#byId.get(record.id);
+    if (!current) return Promise.resolve({ status: "not_found" });
+    if (
+      current.generation !== expected.generation ||
+      current.phase !== expected.phase ||
+      current.updatedAt !== expected.updatedAt
+    ) {
+      return Promise.resolve({ status: "conflict", record: current });
+    }
+    this.#byId.set(record.id, record);
+    return Promise.resolve({ status: "updated", record });
+  }
+
+  deleteIfVersion(
+    id: ResourceShapeRecordId,
+    expected: ResourceRecordVersion,
+  ): Promise<boolean> {
+    const current = this.#byId.get(id);
+    if (
+      !current ||
+      current.generation !== expected.generation ||
+      current.phase !== expected.phase ||
+      current.updatedAt !== expected.updatedAt
+    ) {
+      return Promise.resolve(false);
+    }
+    this.#byId.delete(id);
+    this.#observationSchedule.delete(id);
+    return Promise.resolve(true);
   }
 
   claimDelete(
@@ -136,8 +473,13 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
   }
 
   delete(id: ResourceShapeRecordId): Promise<void> {
-    this.#byId.delete(id);
+    this.deleteSync(id);
     return Promise.resolve();
+  }
+
+  deleteSync(id: ResourceShapeRecordId): void {
+    this.#byId.delete(id);
+    this.#observationSchedule.delete(id);
   }
 }
 
@@ -145,8 +487,12 @@ export class InMemoryResolutionLockStore implements ResolutionLockStore {
   readonly #byResource = new Map<ResourceShapeRecordId, ResolutionLockRecord>();
 
   put(lock: ResolutionLockRecord): Promise<ResolutionLockRecord> {
-    this.#byResource.set(lock.resourceId, lock);
+    this.putSync(lock);
     return Promise.resolve(lock);
+  }
+
+  putSync(lock: ResolutionLockRecord): void {
+    this.#byResource.set(lock.resourceId, lock);
   }
 
   get(
@@ -155,9 +501,17 @@ export class InMemoryResolutionLockStore implements ResolutionLockStore {
     return Promise.resolve(this.#byResource.get(resourceId));
   }
 
+  getSync(resourceId: ResourceShapeRecordId): ResolutionLockRecord | undefined {
+    return this.#byResource.get(resourceId);
+  }
+
   delete(resourceId: ResourceShapeRecordId): Promise<void> {
-    this.#byResource.delete(resourceId);
+    this.deleteSync(resourceId);
     return Promise.resolve();
+  }
+
+  deleteSync(resourceId: ResourceShapeRecordId): void {
+    this.#byResource.delete(resourceId);
   }
 }
 
@@ -189,6 +543,16 @@ export class InMemoryTargetPoolStore implements TargetPoolStore {
     return Promise.resolve(
       [...this.#byId.values()].filter((record) => record.spaceId === spaceId),
     );
+  }
+
+  listBySpacePage(
+    spaceId: SpaceId,
+    params: PageParams,
+  ): Promise<Page<TargetPoolRecord>> {
+    const records = [...this.#byId.values()]
+      .filter((record) => record.spaceId === spaceId)
+      .sort(compareCreatedAtAndId);
+    return Promise.resolve(pageSorted(records, params));
   }
 
   delete(id: TargetPoolRecordId): Promise<void> {
@@ -227,18 +591,201 @@ export class InMemorySpacePolicyStore implements SpacePolicyStore {
     );
   }
 
+  listBySpacePage(
+    spaceId: SpaceId,
+    params: PageParams,
+  ): Promise<Page<SpacePolicyRecord>> {
+    const records = [...this.#byId.values()]
+      .filter((record) => record.spaceId === spaceId)
+      .sort(compareCreatedAtAndId);
+    return Promise.resolve(pageSorted(records, params));
+  }
+
   delete(id: SpacePolicyRecordId): Promise<void> {
     this.#byId.delete(id);
     return Promise.resolve();
   }
 }
 
-/** Construct the in-memory store group (used by tests + self-host default). */
+/** Construct the in-memory store group for explicit test/dev injection. */
 export function createInMemoryResourceShapeStores(): ResourceShapeStores {
+  const resources = new InMemoryResourceShapeStore();
+  const locks = new InMemoryResolutionLockStore();
   return {
-    resources: new InMemoryResourceShapeStore(),
-    locks: new InMemoryResolutionLockStore(),
+    persistence: "ephemeral",
+    resources,
+    locks,
     targetPools: new InMemoryTargetPoolStore(),
     spacePolicies: new InMemorySpacePolicyStore(),
+    beginApply(input) {
+      assertApplyPair(input.applyingRecord, input.plannedLock, "Applying");
+      const current = resources.getSync(input.applyingRecord.id);
+      if (input.expected === undefined) {
+        if (current) {
+          return Promise.resolve({ status: "conflict", record: current });
+        }
+      } else {
+        if (!current) return Promise.resolve({ status: "not_found" });
+        if (!matchesVersion(current, input.expected)) {
+          return Promise.resolve({ status: "conflict", record: current });
+        }
+      }
+      // Both mutations happen synchronously after every possible failure and
+      // conflict has been checked, so no Promise turn can observe torn state.
+      resources.replaceSync(input.applyingRecord);
+      locks.putSync(input.plannedLock);
+      return Promise.resolve({
+        status: "begun",
+        record: input.applyingRecord,
+        lock: input.plannedLock,
+      });
+    },
+    commitApply(input) {
+      assertApplyPair(input.readyRecord, input.finalLock, "Ready");
+      const current = resources.getSync(input.readyRecord.id);
+      if (!current) return Promise.resolve({ status: "not_found" });
+      if (!matchesVersion(current, input.expectedApplying)) {
+        return Promise.resolve({ status: "conflict", record: current });
+      }
+      resources.replaceSync(input.readyRecord);
+      locks.putSync(input.finalLock);
+      return Promise.resolve({
+        status: "committed",
+        record: input.readyRecord,
+        lock: input.finalLock,
+      });
+    },
+    abortApply(input) {
+      assertAbortInput(input);
+      const current = resources.getSync(input.resourceId);
+      const currentLock = locks.getSync(input.resourceId);
+      if (!current && !currentLock) {
+        return Promise.resolve({ status: "not_found" });
+      }
+      if (
+        !current ||
+        !currentLock ||
+        !matchesVersion(current, input.expectedApplying) ||
+        !matchesApplyLock(currentLock, input.expectedPlannedLock)
+      ) {
+        return Promise.resolve({
+          status: "conflict",
+          ...(current ? { record: current } : {}),
+          ...(currentLock ? { lock: currentLock } : {}),
+        });
+      }
+      // Like begin/commit, every possible failure is checked before these
+      // synchronous mutations; there is no interleaving Promise turn.
+      if (input.replacement) {
+        resources.replaceSync(input.replacement.record);
+        if (input.replacement.lock) {
+          locks.putSync(input.replacement.lock);
+        } else {
+          locks.deleteSync(input.resourceId);
+        }
+      } else {
+        resources.deleteSync(input.resourceId);
+        locks.deleteSync(input.resourceId);
+      }
+      return Promise.resolve({ status: "rolled_back" });
+    },
   };
+}
+
+export function assertApplyPair(
+  record: ResourceShapeRecord,
+  lock: ResolutionLockRecord,
+  phase: "Applying" | "Ready",
+): void {
+  if (record.phase !== phase) {
+    throw new Error(`atomic Resource apply requires ${phase} record`);
+  }
+  if (lock.resourceId !== record.id) {
+    throw new Error(
+      `ResolutionLock ${lock.resourceId} does not belong to Resource ${record.id}`,
+    );
+  }
+}
+
+export function matchesVersion(
+  record: ResourceShapeRecord,
+  expected: ResourceRecordVersion,
+): boolean {
+  return (
+    record.generation === expected.generation &&
+    record.phase === expected.phase &&
+    record.updatedAt === expected.updatedAt
+  );
+}
+
+export function matchesApplyLock(
+  lock: ResolutionLockRecord,
+  expected: ResolutionLockRecord,
+): boolean {
+  return (
+    lock.resourceId === expected.resourceId &&
+    lock.selectedImplementation === expected.selectedImplementation &&
+    lock.targetPool === expected.targetPool &&
+    lock.target === expected.target &&
+    canonicalJson(lock.targetSnapshot) ===
+      canonicalJson(expected.targetSnapshot) &&
+    canonicalJson(lock.implementationSnapshot) ===
+      canonicalJson(expected.implementationSnapshot) &&
+    lock.selectedImplementationPlugin ===
+      expected.selectedImplementationPlugin &&
+    canonicalJson(lock.selectedImplementationOptions) ===
+      canonicalJson(expected.selectedImplementationOptions) &&
+    lock.implementationFingerprint === expected.implementationFingerprint &&
+    lock.locked === expected.locked &&
+    canonicalJson(lock.reason) === canonicalJson(expected.reason) &&
+    lock.portability === expected.portability &&
+    canonicalJson(lock.nativeResources) ===
+      canonicalJson(expected.nativeResources) &&
+    lock.lockedAt === expected.lockedAt &&
+    lock.updatedAt === expected.updatedAt
+  );
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "undefined";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  const object = value as Readonly<Record<string, unknown>>;
+  return `{${Object.keys(object)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
+    .join(",")}}`;
+}
+
+export function assertAbortInput(input: ResourceApplyAbortInput): void {
+  if (input.expectedPlannedLock.resourceId !== input.resourceId) {
+    throw new Error("planned ResolutionLock does not match rollback Resource");
+  }
+  if (input.replacement?.record.id !== undefined) {
+    if (input.replacement.record.id !== input.resourceId) {
+      throw new Error("replacement Resource does not match rollback Resource");
+    }
+    if (
+      input.replacement.lock &&
+      input.replacement.lock.resourceId !== input.resourceId
+    ) {
+      throw new Error(
+        "replacement ResolutionLock does not match rollback Resource",
+      );
+    }
+  }
+}
+
+function compareCreatedAtAndId(
+  left: Readonly<{ createdAt: string; id: string }>,
+  right: Readonly<{ createdAt: string; id: string }>,
+): number {
+  return (
+    left.createdAt.localeCompare(right.createdAt) ||
+    left.id.localeCompare(right.id)
+  );
 }

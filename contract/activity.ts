@@ -3,7 +3,7 @@
  *
  * Activity is the Workspace-scoped audit trail surfaced in the dashboard's Activity
  * view. One {@link ActivityEvent} records a single state-changing action
- * inside a Workspace — an Capsule created, a plan / apply / destroy run reaching
+ * inside a Workspace — a Capsule created, a plan / apply / destroy run reaching
  * a milestone, a Dependency added, stale propagation, a RunGroup created — keyed
  * by the Workspace so the dashboard can list a Workspace's recent activity.
  *
@@ -35,14 +35,14 @@ export const ACTIVITY_MAX_LIMIT = 500;
  *   - `id`         — service-assigned event id.
  *   - `workspaceId`    — the owning Workspace (the listing key).
  *   - `actorId`    — the principal that triggered the action, when known.
- *   - `action`     — a dotted action verb (`installation.created`,
+ *   - `action`     — a dotted action verb (`capsule.created`,
  *                    `run.plan_created`, `run.approved`, `run.applied`,
- *                    `run.destroyed`, `installation.stale`,
+ *                    `run.destroyed`, `capsule.stale`,
  *                    `dependency.created`, `dependency.deleted`,
  *                    `connection.default_set`, `run_group.created`, …).
  *   - `targetType` — the kind of entity the action targeted
- *                    (`installation` / `run` / `dependency` / `connection` /
- *                    `run_group` / `space`).
+ *                    (`capsule` / `run` / `dependency` / `connection` /
+ *                    `run_group` / `workspace` / `resource`).
  *   - `targetId`   — the targeted entity id.
  *   - `runId`      — the Run this event belongs to, for run lifecycle events.
  *   - `metadata`   — non-secret structured context (names / ids / digests /
@@ -52,8 +52,6 @@ export const ACTIVITY_MAX_LIMIT = 500;
 export interface ActivityEvent {
   readonly id: string;
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId: string;
   readonly actorId?: string;
   readonly action: string;
   readonly targetType: string;

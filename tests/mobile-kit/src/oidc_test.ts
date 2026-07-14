@@ -3,6 +3,7 @@ import {
   createOidcAuthorizationUrl,
   createPkcePair,
   exchangeOidcCode,
+  fetchOidcMetadata,
   parseOidcCallback,
 } from "../../../mobile-kit/src/index.ts";
 
@@ -70,4 +71,49 @@ test("exchangeOidcCode posts public PKCE token exchange", async () => {
   expect(token.token_type).toBe("Bearer");
   expect(requests[0].method).toBe("POST");
   expect(await requests[0].text()).toContain("code_verifier=verifier-1");
+});
+
+test("fetchOidcMetadata validates issuer and secure endpoints", async () => {
+  const metadata = await fetchOidcMetadata({
+    issuer: "https://accounts.example",
+    fetch: async () =>
+      new Response(
+        JSON.stringify({
+          issuer: "https://accounts.example",
+          authorization_endpoint: "https://login.example/oauth/authorize",
+          token_endpoint: "https://login.example/oauth/token",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+  });
+  expect(metadata.issuer).toBe("https://accounts.example");
+  expect(metadata.token_endpoint).toBe("https://login.example/oauth/token");
+
+  await expect(
+    fetchOidcMetadata({
+      issuer: "https://accounts.example",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            issuer: "https://other.example",
+            authorization_endpoint: "https://other.example/oauth/authorize",
+            token_endpoint: "https://other.example/oauth/token",
+          }),
+        ),
+    }),
+  ).rejects.toThrow("issuer does not match requested issuer");
+
+  await expect(
+    fetchOidcMetadata({
+      issuer: "https://accounts.example",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            issuer: "https://accounts.example",
+            authorization_endpoint: "http://accounts.example/oauth/authorize",
+            token_endpoint: "https://accounts.example/oauth/token",
+          }),
+        ),
+    }),
+  ).rejects.toThrow("must use https except for loopback development hosts");
 });

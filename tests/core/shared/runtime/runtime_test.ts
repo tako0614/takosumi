@@ -1,7 +1,5 @@
 import { expect, test } from "bun:test";
 import {
-  createSubprocessGitRunner,
-  createSubprocessTarRunner,
   currentRuntime,
   resetRuntimeForTesting,
   setRuntimeForTesting,
@@ -12,7 +10,6 @@ import {
   unavailableFsAdapter,
   unavailableSubprocessAdapter,
 } from "../../../../core/shared/runtime/runtime.ts";
-import type { SubprocessAdapter, SubprocessOutput } from "../../../../core/shared/runtime/runtime.ts";
 
 test("unavailableFsAdapter fails closed on every IO method", () => {
   const fs = unavailableFsAdapter("workers");
@@ -103,102 +100,4 @@ test("setRuntimeForTesting overrides detection", () => {
   } finally {
     resetRuntimeForTesting();
   }
-});
-
-/**
- * Build a fake SubprocessAdapter so the default git / tar runners can be tested
- * without invoking real `git` / `tar` binaries. Records the last invocation so
- * tests can assert the command / args / env / stdin the runner produced.
- */
-function fakeSubprocess(
-  output: SubprocessOutput,
-): {
-  adapter: SubprocessAdapter;
-  calls: Array<{
-    command: string;
-    args?: readonly string[];
-    cwd?: string;
-    env?: Record<string, string>;
-    stdin?: Uint8Array;
-  }>;
-} {
-  const calls: Array<{
-    command: string;
-    args?: readonly string[];
-    cwd?: string;
-    env?: Record<string, string>;
-    stdin?: Uint8Array;
-  }> = [];
-  const adapter: SubprocessAdapter = {
-    available: true,
-    run(command, options) {
-      calls.push({
-        command,
-        ...(options?.args ? { args: options.args } : {}),
-        ...(options?.cwd ? { cwd: options.cwd } : {}),
-        ...(options?.env ? { env: options.env } : {}),
-        ...(options?.stdin ? { stdin: options.stdin } : {}),
-      });
-      return Promise.resolve(output);
-    },
-  };
-  return { adapter, calls };
-}
-
-test("createSubprocessGitRunner routes git through SubprocessAdapter", async () => {
-  const enc = new TextEncoder();
-  const { adapter, calls } = fakeSubprocess({
-    code: 0,
-    stdout: enc.encode("HEAD\n"),
-    stderr: new Uint8Array(),
-  });
-  const runner = createSubprocessGitRunner(adapter);
-  const result = await runner.run(["rev-parse", "HEAD"], "/tmp/checkout");
-  expect(result).toEqual({ ok: true, stdout: "HEAD\n", stderr: "" });
-  expect(calls[0].command).toEqual("git");
-  expect(calls[0].args).toEqual(["rev-parse", "HEAD"]);
-  expect(calls[0].cwd).toEqual("/tmp/checkout");
-});
-
-test("createSubprocessGitRunner reports non-zero exit as ok=false", async () => {
-  const enc = new TextEncoder();
-  const { adapter } = fakeSubprocess({
-    code: 128,
-    stdout: new Uint8Array(),
-    stderr: enc.encode("fatal: not a git repo\n"),
-  });
-  const runner = createSubprocessGitRunner(adapter);
-  const result = await runner.run(["status"]);
-  expect(result.ok).toEqual(false);
-  expect(result.stderr).toEqual("fatal: not a git repo\n");
-});
-
-test("createSubprocessTarRunner pipes stdin and forces C locale", async () => {
-  const enc = new TextEncoder();
-  const { adapter, calls } = fakeSubprocess({
-    code: 0,
-    stdout: enc.encode("listing\n"),
-    stderr: new Uint8Array(),
-  });
-  const runner = createSubprocessTarRunner(adapter);
-  const stdin = enc.encode("archive-bytes");
-  const out = await runner.run(["-tv"], stdin);
-  expect(out).toEqual("listing\n");
-  expect(calls[0].command).toEqual("tar");
-  expect(calls[0].args).toEqual(["-tv"]);
-  expect(calls[0].env).toEqual({ LC_ALL: "C", LANG: "C" });
-  expect(calls[0].stdin).toEqual(stdin);
-});
-
-test("createSubprocessTarRunner throws on non-zero exit", async () => {
-  const enc = new TextEncoder();
-  const { adapter } = fakeSubprocess({
-    code: 2,
-    stdout: new Uint8Array(),
-    stderr: enc.encode("tar: broken archive"),
-  });
-  const runner = createSubprocessTarRunner(adapter);
-  await expect(runner.run(["-tv"], enc.encode("x"))).rejects.toThrow(
-    "tar -tv failed: tar: broken archive",
-  );
 });

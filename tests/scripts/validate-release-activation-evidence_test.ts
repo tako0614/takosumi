@@ -21,7 +21,7 @@ test("release activation evidence template carries every required check", () => 
     "successfulActivation",
   ]);
   expect(template.checks.successfulActivation.webhookPayloadKind).toBe(
-    "takosumi.operator.release-activation@v1",
+    "takosumi.operator.release-activation@v2",
   );
   expect(template.checks.successfulActivation.finalModel).toMatchObject({
     workspaceId: "<workspace-id>",
@@ -34,6 +34,12 @@ test("release activation evidence template carries every required check", () => 
   expect(template.checks.successfulActivation.activationRecordId).toBe(
     "<activation-record-id>",
   );
+  expect(template.checks.successfulActivation).toMatchObject({
+    launchUrlSource: "resolved_interface",
+    launchInterfaceId: "<interface-id>",
+    launchInterfaceBindingId: "<interface-binding-id>",
+    launchInterfaceResolvedRevision: 1,
+  });
   expect(template.checks.payloadBoundary.forbiddenSecretClasses).toEqual([
     "providerCredentials",
     "runnerEnv",
@@ -88,6 +94,15 @@ test("release activation evidence requires a successful activation", () => {
   );
 });
 
+test("release activation launch observation must cite a resolved Interface", () => {
+  const manifest = validManifest();
+  manifest.checks.successfulActivation.launchUrlSource = "release_activator";
+
+  expect(() => validateReleaseActivationEvidence(manifest)).toThrow(
+    "successfulActivation.launchUrlSource must be resolved_interface",
+  );
+});
+
 test("release activation evidence requires failure surfacing in both surfaces", () => {
   const manifest = validManifest();
   manifest.checks.failureSurfacing.surfacedIn = ["activity"];
@@ -99,8 +114,7 @@ test("release activation evidence requires failure surfacing in both surfaces", 
 
 test("release activation evidence requires ledger independence", () => {
   const manifest = validManifest();
-  manifest.checks.ledgerIndependence.activationDoesNotRollbackApplyLedger =
-    false;
+  manifest.checks.ledgerIndependence.activationDoesNotRollbackApplyLedger = false;
 
   expect(() => validateReleaseActivationEvidence(manifest)).toThrow(
     "ledgerIndependence.activationDoesNotRollbackApplyLedger must be true",
@@ -232,7 +246,7 @@ function validManifest(): any {
         summary:
           "Post-apply materializer published the app and the public health check passed.",
         platformUrl: "https://app.takosumi.com",
-        webhookPayloadKind: "takosumi.operator.release-activation@v1",
+        webhookPayloadKind: "takosumi.operator.release-activation@v2",
         planRunId: "run_plan_1",
         applyRunId: "run_apply_1",
         finalModel: {
@@ -249,6 +263,10 @@ function validManifest(): any {
         materializedResourceKind: "cloudflare-worker-script",
         activationStatus: "succeeded",
         launchUrl: "https://site.example.test",
+        launchUrlSource: "resolved_interface",
+        launchInterfaceId: "if_ui_1",
+        launchInterfaceBindingId: "ifb_ui_1",
+        launchInterfaceResolvedRevision: 4,
         healthUrl: "https://site.example.test/healthz",
         healthStatus: 200,
         nonSensitiveOutputKeys: ["public_url", "worker_script_name"],
@@ -296,7 +314,7 @@ function validManifest(): any {
         live: true,
         summary:
           "Captured webhook payload contained only non-sensitive refs and outputs.",
-        payloadKind: "takosumi.operator.release-activation@v1",
+        payloadKind: "takosumi.operator.release-activation@v2",
         forbiddenSecretClasses: [
           "providerCredentials",
           "runnerEnv",
