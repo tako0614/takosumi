@@ -2,12 +2,15 @@ import { test, expect } from "bun:test";
 import type {
   ActorContext,
   ResourceDeploymentAdmission,
+  ResourceDeploymentAdmissionDecision,
   ResourceDeploymentCaptureContext,
+  ResourceDeploymentImportContext,
   ResourceDeploymentQuote,
   ResourceDeploymentQuoteContext,
   ResourceDeploymentReleaseContext,
   ResourceDeploymentReserveContext,
   ResourceDeploymentReservationDecision,
+  ResourceDeploymentRetireContext,
   ResourceDeploymentReview,
   ResourceDeploymentSettlementPendingContext,
 } from "takosumi-contract";
@@ -658,10 +661,14 @@ class RecordingDeploymentAdmission implements ResourceDeploymentAdmission {
   readonly settlementPendingContexts: ResourceDeploymentSettlementPendingContext[] =
     [];
   readonly releaseContexts: ResourceDeploymentReleaseContext[] = [];
+  readonly importContexts: ResourceDeploymentImportContext[] = [];
+  readonly retireContexts: ResourceDeploymentRetireContext[] = [];
   lastQuote: ResourceDeploymentQuote | undefined;
   failCapture = false;
   failSettlementPending = false;
+  failRetire = false;
   reserveReasons: readonly string[] = [];
+  importReasons: readonly string[] = [];
   quoteFactory:
     | ((context: ResourceDeploymentQuoteContext) => ResourceDeploymentQuote)
     | undefined;
@@ -708,6 +715,18 @@ class RecordingDeploymentAdmission implements ResourceDeploymentAdmission {
 
   async release(context: ResourceDeploymentReleaseContext): Promise<void> {
     this.releaseContexts.push(context);
+  }
+
+  async admitImport(
+    context: ResourceDeploymentImportContext,
+  ): Promise<ResourceDeploymentAdmissionDecision> {
+    this.importContexts.push(context);
+    return { reasons: this.importReasons };
+  }
+
+  async retire(context: ResourceDeploymentRetireContext): Promise<void> {
+    this.retireContexts.push(context);
+    if (this.failRetire) throw new Error("simulated retirement outage");
   }
 }
 
@@ -873,6 +892,34 @@ test("rated preview binds offering and catalog versions and captures only after 
   expect(admission.releaseContexts).toHaveLength(0);
   expect(admission.settlementPendingContexts).toHaveLength(0);
   expect((await stores.resources.get(APPLY_ID))?.phase).toBe("Ready");
+});
+
+test("deployment admission keeps create/update intent stable across preview and apply", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const admission = new RecordingDeploymentAdmission();
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new StubResourceShapeAdapter(),
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+  const updatedRequest = { ...APPLY, labels: { release: "2" } };
+  expect((await reviewedApply(service, updatedRequest)).ok).toBe(true);
+
+  expect(admission.quoteContexts.map((context) => context.operation)).toEqual([
+    "create",
+    "update",
+  ]);
+  expect(admission.reserveContexts.map((context) => context.operation)).toEqual(
+    ["create", "update"],
+  );
+  expect(admission.captureContexts.map((context) => context.operation)).toEqual(
+    ["create", "update"],
+  );
 });
 
 test("service apply cannot bypass preview review evidence", async () => {
@@ -1086,6 +1133,13 @@ test("an unknown adapter outcome keeps reservation and retries the same generati
   expect(admission.releaseContexts).toHaveLength(0);
   expect(recoveryAdapter.applyInputs).toHaveLength(0);
   expect(recoveryAdapter.refreshInputs).toHaveLength(1);
+  expect(admission.quoteContexts.map((context) => context.operation)).toEqual([
+    "create",
+    "create",
+  ]);
+  expect(admission.reserveContexts.map((context) => context.operation)).toEqual(
+    ["create", "create"],
+  );
 });
 
 test("reserved state remains the recovery authority when pending annotation fails", async () => {
@@ -1218,6 +1272,48 @@ test("rated quote without an offering version fails closed", async () => {
   }
 });
 
+test("import admission can fail closed before adapter or lifecycle writes", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new ImportingAdapter();
+  const admission = new RecordingDeploymentAdmission();
+  admission.importReasons = ["Resource import is not enabled by this host"];
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const denied = await service.importResource({
+    ...APPLY,
+    nativeId: "bucket-backend-123",
+  });
+  expect(denied).toEqual({
+    ok: false,
+    error: {
+      code: "deployment_admission_denied",
+      message: "Resource import is not enabled by this host",
+    },
+  });
+  expect(admission.importContexts).toEqual([
+    {
+      space: "space_1",
+      resourceId: APPLY_ID,
+      kind: "ObjectBucket",
+      name: "assets",
+      spec: APPLY.spec,
+      nativeId: "bucket-backend-123",
+      actor: ACTOR,
+      now: NOW,
+    },
+  ]);
+  expect(adapter.importInputs).toHaveLength(0);
+  expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
+  expect(await stores.locks.get(APPLY_ID)).toBeUndefined();
+});
+
 test("import adopts existing backend identity into Resource-owned state and outputs", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new ImportingAdapter();
@@ -1330,9 +1426,11 @@ test("import finalization retries only the exact request without exposing native
 test("failed import remains a ledger-only removable record", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new FailingImportAdapter();
+  const admission = new RecordingDeploymentAdmission();
   const service = new ResourceShapeService({
     stores,
     adapter,
+    deploymentAdmission: admission,
     now: () => NOW,
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
   });
@@ -1360,6 +1458,15 @@ test("failed import remains a ledger-only removable record", async () => {
   ).toBe(true);
   expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
   expect(adapter.deleteInputs).toHaveLength(0);
+  expect(admission.retireContexts).toEqual([
+    {
+      space: "space_1",
+      resourceId: APPLY_ID,
+      kind: "ObjectBucket",
+      name: "assets",
+      now: NOW,
+    },
+  ]);
 });
 
 test("failed import conditions redact the provider-native identity", async () => {
@@ -3476,12 +3583,70 @@ test("delete timeout marks the resource failed instead of leaving it deleting fo
   adapter.finishDelete();
 });
 
-test("force delete tombstones a failed resource without re-entering the adapter", async () => {
+test("normal delete retries idempotent host retirement after the Resource is absent", async () => {
   const stores = createInMemoryResourceShapeStores();
-  const adapter = new FailingDeleteAdapter();
+  const adapter = new PluginSpyAdapter();
+  const admission = new RecordingDeploymentAdmission();
   const service = new ResourceShapeService({
     stores,
     adapter,
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+
+  admission.failRetire = true;
+  const pending = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("deployment_finalize_pending");
+    expect(pending.error.message).toContain("host lifecycle retirement");
+  }
+  expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
+  expect(adapter.deleteInputs).toHaveLength(1);
+
+  admission.failRetire = false;
+  const recovered = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(recovered.ok).toBe(true);
+  expect(adapter.deleteInputs).toHaveLength(1);
+  expect(admission.retireContexts).toEqual([
+    {
+      space: "space_1",
+      resourceId: APPLY_ID,
+      kind: "ObjectBucket",
+      name: "assets",
+      now: NOW,
+    },
+    {
+      space: "space_1",
+      resourceId: APPLY_ID,
+      kind: "ObjectBucket",
+      name: "assets",
+      now: NOW,
+    },
+  ]);
+});
+
+test("force delete tombstones a failed resource without re-entering the adapter", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new FailingDeleteAdapter();
+  const admission = new RecordingDeploymentAdmission();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    deploymentAdmission: admission,
     now: () => NOW,
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
   });
@@ -3516,6 +3681,7 @@ test("force delete tombstones a failed resource without re-entering the adapter"
   );
   expect(forced.ok).toBe(true);
   expect(adapter.deleteInputs).toHaveLength(1);
+  expect(admission.retireContexts).toHaveLength(0);
   expect(await stores.locks.get("tkrn:space_1:ObjectBucket:assets")).toBe(
     undefined,
   );

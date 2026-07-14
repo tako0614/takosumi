@@ -307,10 +307,12 @@ export function resourceDeploymentAdmissionFromEnv(
     typeof admission.reserve !== "function" ||
     typeof admission.capture !== "function" ||
     typeof admission.markSettlementPending !== "function" ||
-    typeof admission.release !== "function"
+    typeof admission.release !== "function" ||
+    typeof admission.admitImport !== "function" ||
+    typeof admission.retire !== "function"
   ) {
     throw new TypeError(
-      "TAKOSUMI_RESOURCE_DEPLOYMENT_ADMISSION must implement quote(), reserve(), capture(), markSettlementPending(), and release()",
+      "TAKOSUMI_RESOURCE_DEPLOYMENT_ADMISSION must implement quote(), reserve(), capture(), markSettlementPending(), release(), admitImport(), and retire()",
     );
   }
   return admission;
