@@ -10,7 +10,7 @@ name: Deploy takosumi.com website to Cloudflare Pages
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths:
       - "website/**"
       - "docs/**"
@@ -20,7 +20,7 @@ on:
       - "tsconfig.json"
       - "CHANGELOG.md"
   pull_request:
-    branches: [master]
+    branches: [main]
     paths:
       - "website/**"
       - "docs/**"
@@ -53,11 +53,11 @@ jobs:
 
       - name: Install website dependencies (Solid Start)
         working-directory: website
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Install docs dependencies (VitePress)
         working-directory: docs
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Build merged Pages artifact (landing + /docs/)
         run: bash website/build.sh
