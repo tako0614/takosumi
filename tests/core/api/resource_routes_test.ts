@@ -144,6 +144,7 @@ async function buildApp(
     stores,
     adapter: new StubResourceShapeAdapter(),
     activity,
+    operationRuns: activityStore,
     moduleRegistry: ROUTE_MODULE_REGISTRY,
     now: () => "2026-01-01T00:00:00.000Z",
   });
@@ -227,6 +228,20 @@ test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", as
   );
   expect(body.status.resolution.target).toBe("cloudflare-main");
   expect(body.status.phase).toBe("Ready");
+});
+
+test("PUT /v1/resources preserves the caller-declared Resource manager", async () => {
+  const { app } = await buildApp();
+  const res = await reviewedResourceApply(app, "/v1/resources/KVStore/cache", {
+    metadata: {
+      space: "space_1",
+      managedBy: "compatibility:cloudflare-workers",
+    },
+    spec: { name: "cache", consistency: "eventual" },
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.metadata.managedBy).toBe("compatibility:cloudflare-workers");
 });
 
 test("PUT /v1/resources/:kind/:name requires exact preview evidence", async () => {
@@ -834,9 +849,15 @@ test("registered operator shape tokens traverse the API, resolver, and plugin pl
     },
   });
   const stores = createInMemoryResourceShapeStores();
+  const operationRuns = new InMemoryOpenTofuControlStore();
   const service = new ResourceShapeService({
     stores,
     adapter: new StubResourceShapeAdapter(),
+    operationRuns,
+    activity: new ActivityService({
+      store: operationRuns,
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+    }),
     schemaRegistry: schemas,
     now: () => "2026-01-01T00:00:00.000Z",
   });

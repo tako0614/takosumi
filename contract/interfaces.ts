@@ -152,7 +152,10 @@ export interface InterfaceSubjectRef {
 }
 
 export interface InterfaceBindingDelivery {
-  /** Open capability token, for example `none`, `oauth2`, or `workload_token`. */
+  /**
+   * Open capability token. Core implements `none` and `oauth2`;
+   * `workload_token` is reserved and remains NotReady in v1alpha1.
+   */
   readonly type: string;
   /** `secret/...` or `credential/...` reference; never the credential value. */
   readonly credentialRef?: string;

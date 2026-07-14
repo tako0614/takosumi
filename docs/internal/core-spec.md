@@ -99,6 +99,14 @@ resource registry.
 
 Plan / Apply / Destroy are guarded Run operations, not separate ledgers.
 
+`Secret` here is the encrypted Stack-flow boundary, not a bundled Resource
+Shape. In the current v1alpha1 composition, ProviderConnection registration
+accepts write-only secret material, seals it at rest, and materializes it only
+inside an authorized Run. A standalone Secret API/resource contract is not yet
+defined. The candidate `Secret` Resource Shape in the Final Plan remains a
+future shape and must not be added without its own typed schema, planner,
+adapter, import/drift semantics, and tests.
+
 #### OpenTofu Output Boundary
 
 The baseline Stack flow captures `tofu output -json` as `Output` together with
@@ -121,6 +129,18 @@ Output changes do not schedule Workspace-wide reconciliation. Only an explicit
 output-to-input Dependency marks a downstream Capsule stale. Runtime consumers
 observe Interface `resolvedRevision` changes without applying their own
 OpenTofu Capsule.
+
+Migration from the retired runtime Output convention is an operator-reviewed,
+one-time report/confirm operation. The report exposes Output names and digests,
+never values. Known first-party Capsules materialize their service-side
+InstallConfig Interface blueprints; unknown third-party Capsules require an
+explicit owner selection of Output name and Interface type/version and are
+never inferred from `service_exports`, `service_bindings`, or
+`app_deployment`. Confirmation is fenced to the reviewed Capsule,
+InstallConfig, current Output, names, and blueprint digest. It completes only
+after the Interface resolves and durable names/digests-only Activity evidence
+is written. A retry adopts the exact existing Interface and rewrites the same
+deterministic evidence id; legacy discovery is never fallback authority.
 
 #### Artifact Reference Boundary
 
@@ -731,6 +751,15 @@ capability discovery
 cursor pagination
 ```
 
+For a direct adapter plugin, Core supplies the same internal `operationKey`
+when an uncertain apply/delete is retried. `apply` must create or update the
+provider object by the stable canonical Resource identity, and `delete` must
+remove that same object idempotently; replaying one key must never allocate a
+second native object. Recovery first performs read-only `observe`: apply uses
+read-only refresh for `current`/`drifted` and replays apply only for `missing`,
+while delete finalizes read-only for `missing` and replays delete only for
+`current`/`drifted`.
+
 Compatibility APIs are clients around the Resource API. Control-plane profiles
 translate supported industry-standard requests into typed preview/apply/delete
 calls; data-plane profiles resolve an existing Ready Resource and its authorized
@@ -975,6 +1004,31 @@ projection, policy, or metering surface is actually needed.
 
 Do not claim complete AWS API or Cloudflare API compatibility. Specific surfaces are
 enabled or disabled by `/v1/capabilities`.
+
+An installed profile declares its authority planes explicitly:
+
+```json
+{
+  "compatibilityProfiles": [
+    {
+      "profile": "compat.example.v1",
+      "planes": ["control", "data"]
+    }
+  ]
+}
+```
+
+The platform advertises the same plane metadata through
+`/v1/capabilities.compatibilityProfiles`. `control` dispatch receives only a
+Resource Deploy API port constrained to `/v1/resources`; `data` dispatch
+receives only a read resolver that rejects Resources that are not fully
+observed `Ready` and can return authorized resolved Interface/NativeResource
+evidence. The handler contract contains no environment, store, adapter,
+backend-manager, or compatibility lifecycle-state port. A `compat.*` capability
+without this declaration, a `/compat` raw extension route, or a handler that
+does not implement the restricted compatibility entrypoint fails closed and is
+not advertised. Core and Accounts route prefixes cannot be delegated to an
+extension and always retain dispatch precedence.
 
 Operator/Cloud implementations that expose managed capacity route every
 control-plane client through `/v1/resources`. The Deploy API resolves the

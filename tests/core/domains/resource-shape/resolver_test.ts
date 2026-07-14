@@ -85,7 +85,7 @@ test("Resolver selects only an explicit implementation descriptor", () => {
     CONTAINER_DESCRIPTOR,
   );
   expect(output.nativeResourcePlan).toEqual([
-    { type: "operator.container", id: "agent" },
+    { type: "operator.container", id: "agent", ownership: "planned" },
   ]);
   expect(output.resolutionLock.implementationSnapshot).toEqual(
     CONTAINER_DESCRIPTOR,

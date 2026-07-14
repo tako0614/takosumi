@@ -6,6 +6,18 @@
 // pricing, metering, commercial policy, and provider-specific behavior belong to
 // the extension implementation.
 
+import {
+  isTakosumiCompatibilityProfileToken,
+  type TakosumiCompatibilityPlane,
+} from "takosumi-contract/capabilities";
+
+export interface PlatformCompatibilityProfile {
+  /** Exact scoped, versioned capability token, for example `compat.s3.v1`. */
+  readonly profile: `compat.${string}`;
+  /** Explicit authority planes. Profiles that expose both list both values. */
+  readonly planes: readonly TakosumiCompatibilityPlane[];
+}
+
 export interface PlatformExtensionRoute {
   /** Stable public catalog id. */
   readonly id?: string;
@@ -24,6 +36,12 @@ export interface PlatformExtensionRoute {
   readonly managedProviderProfile?: string;
   /** Public capability tokens advertised by discovery. */
   readonly capabilities?: readonly string[];
+  /**
+   * Compatibility profiles mounted on this route. Presence switches dispatch
+   * to the restricted compatibility handler contract; raw extension fetch is
+   * never used for these profiles.
+   */
+  readonly compatibilityProfiles?: readonly PlatformCompatibilityProfile[];
   /** Safe dashboard links contributed by the extension. */
   readonly contributions?: readonly PlatformExtensionContribution[];
 }
@@ -46,6 +64,35 @@ export const PLATFORM_EXTENSION_CATALOG_PATH =
   "/__takosumi/platform/extensions" as const;
 export const PLATFORM_EXTENSION_CONTRIBUTIONS_PATH =
   "/__takosumi/platform/contributions" as const;
+
+/**
+ * Core route prefixes are never delegable to an extension. Keep this list
+ * narrower than all of `/v1`: operator extensions such as `/v1/billing` and
+ * `/v1/cloud` are valid, while concrete Takosumi/Accounts authorities are not.
+ */
+export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
+  "/api",
+  "/internal",
+  "/__takosumi",
+  "/.well-known",
+  "/oauth",
+  "/hooks",
+  "/install",
+  "/healthz",
+  "/readyz",
+  "/livez",
+  "/metrics",
+  "/capabilities",
+  "/openapi.json",
+  "/v1/account",
+  "/v1/auth",
+  "/v1/privacy",
+  "/v1/capabilities",
+  "/v1/interfaces",
+  "/v1/resources",
+  "/v1/target-pools",
+  "/v1/space-policies",
+] as const;
 
 export function platformExtensionRoutes(env: {
   readonly [PLATFORM_EXTENSIONS_ENV]?: unknown;
@@ -97,9 +144,18 @@ function platformExtensionRouteFromJson(
   if (
     typeof basePath !== "string" ||
     !basePath.startsWith("/") ||
-    basePath.includes("//")
+    basePath === "/" ||
+    basePath.includes("//") ||
+    basePath.includes("?") ||
+    basePath.includes("#") ||
+    basePath.includes("%")
   ) {
     throw new TypeError(`${label}.basePath must be an absolute path prefix`);
+  }
+  if (platformExtensionBasePathIsReserved(basePath)) {
+    throw new TypeError(
+      `${label}.basePath ${basePath} overlaps a Takosumi core route prefix`,
+    );
   }
   const handlerKey = nonEmptyString(record.handlerKey);
   if (!handlerKey) {
@@ -117,11 +173,41 @@ function platformExtensionRouteFromJson(
       `${label}.managedProviderProfile must be a non-empty string`,
     );
   }
-  const capabilities = optionalStringArray(
+  const declaredCapabilities = optionalStringArray(
     record.capabilities,
     label,
     "capabilities",
   );
+  const compatibilityProfiles = optionalCompatibilityProfiles(
+    record.compatibilityProfiles,
+    label,
+  );
+  const declaredCompatibilityTokens = (declaredCapabilities ?? []).filter(
+    isCompatibilityProfileToken,
+  );
+  const typedCompatibilityTokens = new Set(
+    (compatibilityProfiles ?? []).map(({ profile }) => profile),
+  );
+  const untypedCompatibilityToken = declaredCompatibilityTokens.find(
+    (token) => !typedCompatibilityTokens.has(token),
+  );
+  if (untypedCompatibilityToken) {
+    throw new TypeError(
+      `${label}.capabilities profile ${untypedCompatibilityToken} requires an explicit compatibilityProfiles control/data declaration`,
+    );
+  }
+  if (
+    pathIsUnderBase(basePath, "/compat") &&
+    (compatibilityProfiles?.length ?? 0) === 0
+  ) {
+    throw new TypeError(
+      `${label}.basePath under /compat requires compatibilityProfiles`,
+    );
+  }
+  const capabilities = uniqueStrings([
+    ...(declaredCapabilities ?? []),
+    ...(compatibilityProfiles ?? []).map(({ profile }) => profile),
+  ]);
   const contributions = optionalContributions(
     record.contributions,
     label,
@@ -134,7 +220,8 @@ function platformExtensionRouteFromJson(
     ...(authMode ? { authMode } : {}),
     ...(requiredScopes ? { requiredScopes } : {}),
     ...(managedProviderProfile ? { managedProviderProfile } : {}),
-    ...(capabilities ? { capabilities } : {}),
+    ...(capabilities.length > 0 ? { capabilities } : {}),
+    ...(compatibilityProfiles ? { compatibilityProfiles } : {}),
     ...(contributions ? { contributions } : {}),
   };
 }
@@ -153,6 +240,7 @@ function mergePlatformExtensionRoutes(
 ): readonly PlatformExtensionRoute[] {
   const merged = new Map<string, PlatformExtensionRoute>();
   const managedProfileOwners = new Map<string, string>();
+  const compatibilityProfileOwners = new Map<string, string>();
   for (const route of routes) {
     if (route.managedProviderProfile) {
       const owner = managedProfileOwners.get(route.managedProviderProfile);
@@ -162,6 +250,15 @@ function mergePlatformExtensionRoutes(
         );
       }
       managedProfileOwners.set(route.managedProviderProfile, route.basePath);
+    }
+    for (const { profile } of route.compatibilityProfiles ?? []) {
+      const owner = compatibilityProfileOwners.get(profile);
+      if (owner && owner !== route.basePath) {
+        throw new TypeError(
+          `compatibility profile ${profile} has multiple route owners`,
+        );
+      }
+      compatibilityProfileOwners.set(profile, route.basePath);
     }
     const existing = merged.get(route.basePath);
     if (
@@ -187,16 +284,84 @@ function mergePlatformExtensionRoutes(
               ...(existing.contributions ?? []),
               ...(route.contributions ?? []),
             ]);
+            const compatibilityProfiles = mergeCompatibilityProfiles([
+              ...(existing.compatibilityProfiles ?? []),
+              ...(route.compatibilityProfiles ?? []),
+            ]);
             return {
               ...existing,
               ...(capabilities.length > 0 ? { capabilities } : {}),
               ...(contributions.length > 0 ? { contributions } : {}),
+              ...(compatibilityProfiles.length > 0
+                ? { compatibilityProfiles }
+                : {}),
             };
           })()
         : route,
     );
   }
   return [...merged.values()];
+}
+
+function optionalCompatibilityProfiles(
+  value: unknown,
+  label: string,
+): readonly PlatformCompatibilityProfile[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label}.compatibilityProfiles must be an array`);
+  }
+  const profiles = value.map((entry, index) => {
+    const itemLabel = `${label}.compatibilityProfiles[${index}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new TypeError(`${itemLabel} must be an object`);
+    }
+    const record = entry as Record<string, unknown>;
+    const profile = nonEmptyString(record.profile);
+    if (!profile || !isCompatibilityProfileToken(profile)) {
+      throw new TypeError(
+        `${itemLabel}.profile must be a scoped compat.* version token`,
+      );
+    }
+    if (!Array.isArray(record.planes) || record.planes.length === 0) {
+      throw new TypeError(`${itemLabel}.planes must contain control or data`);
+    }
+    const planes = uniqueStrings(
+      record.planes.map((plane) => {
+        if (plane !== "control" && plane !== "data") {
+          throw new TypeError(
+            `${itemLabel}.planes entries must be control or data`,
+          );
+        }
+        return plane;
+      }),
+    ) as readonly TakosumiCompatibilityPlane[];
+    return { profile, planes } as PlatformCompatibilityProfile;
+  });
+  const merged = mergeCompatibilityProfiles(profiles);
+  return merged.length > 0 ? merged : undefined;
+}
+
+function mergeCompatibilityProfiles(
+  profiles: readonly PlatformCompatibilityProfile[],
+): readonly PlatformCompatibilityProfile[] {
+  const merged = new Map<string, Set<TakosumiCompatibilityPlane>>();
+  for (const { profile, planes } of profiles) {
+    const existing =
+      merged.get(profile) ?? new Set<TakosumiCompatibilityPlane>();
+    for (const plane of planes) existing.add(plane);
+    merged.set(profile, existing);
+  }
+  return [...merged].map(([profile, planes]) => ({
+    profile: profile as `compat.${string}`,
+    planes: [...planes].sort(),
+  }));
+}
+
+function isCompatibilityProfileToken(
+  value: string,
+): value is `compat.${string}` {
+  return isTakosumiCompatibilityProfileToken(value);
 }
 
 function optionalContributions(
@@ -332,6 +497,13 @@ export function matchPlatformExtensionRoute(
   return routes
     .filter((route) => pathIsUnderBase(pathname, route.basePath))
     .sort((left, right) => right.basePath.length - left.basePath.length)[0];
+}
+
+export function platformExtensionBasePathIsReserved(basePath: string): boolean {
+  return PLATFORM_EXTENSION_RESERVED_PREFIXES.some(
+    (prefix) =>
+      pathIsUnderBase(basePath, prefix) || pathIsUnderBase(prefix, basePath),
+  );
 }
 
 export function isPlatformExtensionCatalogPath(pathname: string): boolean {

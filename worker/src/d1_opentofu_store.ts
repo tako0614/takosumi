@@ -89,6 +89,7 @@ import type {
   CommitResourceRunResult,
   CommitRestoredStateInput,
   CommitRestoredStateResult,
+  BeginResourceOperationRunResult,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -96,6 +97,8 @@ import type {
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
+  RecoverableResourceOperationRunListOptions,
+  ResourceOperationRun,
   ReservePublicHostInput,
   ReservePublicHostResult,
   StoredRunRecord,
@@ -104,16 +107,26 @@ import type {
   CapsuleListPageParams,
   TransitionRunInput,
   TransitionRunResult,
+  TransitionResourceOperationRunInput,
+  TransitionResourceOperationRunResult,
 } from "../../core/domains/deploy-control/store.ts";
 import {
+  assertResourceOperationRun,
+  assertResourceOperationRunStart,
   clampActivityLimit,
   clampRecoverableOpenTofuRunListLimit,
+  clampRecoverableResourceOperationRunListLimit,
   clampRunListLimit,
   capsuleRuntimeSafetyFromRun,
   compareStoredRunRecordsAsc,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
+  isApplyRunRecord,
+  isPlanRunRecord,
   isRecoverableOpenTofuRunRecord,
+  resourceOperationRunTransitionAllowed,
+  resourceOperationRunNeedsRecovery,
+  sameResourceOperationIdentity,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
 } from "../../core/domains/deploy-control/store.ts";
@@ -139,6 +152,7 @@ const RUN_KIND_PLAN = "plan" as const;
 const RUN_KIND_APPLY = "apply" as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync" as const;
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
+const RUN_KIND_RESOURCE_OPERATION = "resource_operation" as const;
 const RUN_KIND_BACKUP = "backup" as const;
 const RUN_KIND_RESTORE = "restore" as const;
 
@@ -364,13 +378,12 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getPlanRun(id: string): Promise<PlanRun | undefined> {
-    return coerceRunRowStatus(
-      await this.#getRun<PlanRun>(id, [
-        RUN_KIND_PLAN,
-        "destroy_plan",
-        "drift_check",
-      ]),
-    );
+    const run = await this.#getRun<StoredRunRecord>(id, [
+      RUN_KIND_PLAN,
+      "destroy_plan",
+      "drift_check",
+    ]);
+    return coerceRunRowStatus(run && isPlanRunRecord(run) ? run : undefined);
   }
 
   async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
@@ -388,9 +401,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getApplyRun(id: string): Promise<ApplyRun | undefined> {
-    return coerceRunRowStatus(
-      await this.#getRun<ApplyRun>(id, [RUN_KIND_APPLY, "destroy_apply"]),
-    );
+    const run = await this.#getRun<StoredRunRecord>(id, [
+      RUN_KIND_APPLY,
+      "destroy_apply",
+    ]);
+    return coerceRunRowStatus(run && isApplyRunRecord(run) ? run : undefined);
   }
 
   /**
@@ -517,6 +532,114 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   async getCompatibilityCheckRun(id: string): Promise<Run | undefined> {
     return await this.#getRun<Run>(id, [RUN_KIND_COMPATIBILITY_CHECK]);
+  }
+
+  async beginResourceOperationRun(
+    run: ResourceOperationRun,
+  ): Promise<BeginResourceOperationRunResult> {
+    assertResourceOperationRunStart(run);
+    await this.#ensureSchema();
+    const inserted = await this.#orm
+      .insert(schema.runs)
+      .values({
+        id: run.id,
+        runGroupId: null,
+        workspaceId: run.workspaceId,
+        sourceId: null,
+        capsuleId: null,
+        environment: run.environment ?? null,
+        type: RUN_KIND_RESOURCE_OPERATION,
+        status: run.status,
+        leaseToken: null,
+        heartbeatAt: null,
+        runJson: run as unknown,
+        createdAt: String(run.createdAt),
+      })
+      .onConflictDoNothing({ target: schema.runs.id })
+      .run();
+    if (changes(inserted as D1Result) > 0) {
+      return { status: "created", run };
+    }
+    const current = await this.getResourceOperationRun(run.id);
+    if (!current) return { status: "conflict" };
+    return sameResourceOperationIdentity(current, run)
+      ? { status: "existing", run: current }
+      : { status: "conflict", run: current };
+  }
+
+  async getResourceOperationRun(
+    id: string,
+  ): Promise<ResourceOperationRun | undefined> {
+    return await this.#getRun<ResourceOperationRun>(id, [
+      RUN_KIND_RESOURCE_OPERATION,
+    ]);
+  }
+
+  async transitionResourceOperationRun(
+    input: TransitionResourceOperationRunInput,
+  ): Promise<TransitionResourceOperationRunResult> {
+    assertResourceOperationRun(input.run);
+    if (
+      input.run.resourceOperationKey !== input.operationKey ||
+      input.run.resourceOperationVersion !== input.expectedVersion + 1
+    ) {
+      throw new TypeError("invalid Resource operation Run transition identity");
+    }
+    const expected = await this.getResourceOperationRun(input.id);
+    if (
+      !expected ||
+      expected.resourceOperationVersion !== input.expectedVersion ||
+      !input.expectFrom.includes(expected.status) ||
+      !resourceOperationRunTransitionAllowed(expected, input.run)
+    ) {
+      return { won: false, ...(expected ? { run: expected } : {}) };
+    }
+    await this.#ensureSchema();
+    const result = await this.#orm
+      .update(schema.runs)
+      .set({
+        status: input.run.status,
+        runJson: input.run as unknown,
+      })
+      .where(
+        and(
+          eq(schema.runs.id, input.id),
+          eq(schema.runs.type, RUN_KIND_RESOURCE_OPERATION),
+          inArray(schema.runs.status, [...input.expectFrom]),
+          sql`json_extract(${schema.runs.runJson}, '$.resourceOperationKey') = ${input.operationKey}`,
+          sql`json_extract(${schema.runs.runJson}, '$.resourceOperationVersion') = ${input.expectedVersion}`,
+        ),
+      )
+      .run();
+    if (changes(result as D1Result) > 0) {
+      return { won: true, run: input.run };
+    }
+    const current = await this.getResourceOperationRun(input.id);
+    return { won: false, ...(current ? { run: current } : {}) };
+  }
+
+  async listRecoverableResourceOperationRuns(
+    options: RecoverableResourceOperationRunListOptions = {},
+  ): Promise<readonly ResourceOperationRun[]> {
+    const rows = await this.#drizzleManyJson<ResourceOperationRun>(
+      schema.runs,
+      schema.runs.runJson,
+      {
+        where: and(
+          eq(schema.runs.type, RUN_KIND_RESOURCE_OPERATION),
+          options.workspaceId === undefined
+            ? undefined
+            : eq(schema.runs.workspaceId, options.workspaceId),
+          or(
+            eq(schema.runs.status, "running"),
+            sql`json_extract(${schema.runs.runJson}, '$.resourceOperationAudit.status') = 'pending'`,
+          ),
+        ),
+        orderBy: [asc(d1RunCreatedAtMillisOrder()), asc(schema.runs.id)],
+        limit: clampRecoverableResourceOperationRunListLimit(options.limit),
+      },
+    );
+    return rows.filter(resourceOperationRunNeedsRecovery);
   }
 
   async putBackupRun(run: Run): Promise<Run> {

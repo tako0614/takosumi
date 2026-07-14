@@ -12,6 +12,8 @@ import {
   ResourceShapeService,
   StubResourceShapeAdapter,
 } from "../../../../core/domains/resource-shape/mod.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import {
   parseResourceSpec,
   planResourceShape,
@@ -195,9 +197,15 @@ test("Planner projects module inputs only from explicit descriptor mappings", ()
 
 test("ResourceShapeService applies a typed shape through an operator plugin descriptor", async () => {
   const stores = createInMemoryResourceShapeStores();
+  const operationRuns = new InMemoryOpenTofuControlStore();
   const service = new ResourceShapeService({
     stores,
     adapter: new StubResourceShapeAdapter(),
+    operationRuns,
+    activity: new ActivityService({
+      store: operationRuns,
+      now: () => new Date("2026-07-13T00:00:00.000Z"),
+    }),
     now: () => "2026-07-13T00:00:00.000Z",
   });
   const configured = await service.putTargetPool("ws_test", "default", {

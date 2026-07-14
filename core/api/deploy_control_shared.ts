@@ -37,6 +37,7 @@ import type { RunGroupsService } from "../domains/run-groups/mod.ts";
 import type { ActivityService } from "../domains/activity/mod.ts";
 import type { BackupsService } from "../domains/backups/mod.ts";
 import type { LegacyResourceStateAdoptionService } from "../domains/resource-shape/legacy_state_adoption.ts";
+import type { LegacyOutputInterfaceMigrationService } from "../domains/interfaces/legacy_output_migration.ts";
 import {
   OpenTofuControllerError,
   type OpenTofuControllerErrorCode,
@@ -127,7 +128,7 @@ export const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
 export const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
 export const WORKSPACE_ID_PATTERN = /^ws_[0-9a-zA-Z]{3,64}$/;
 export const RUN_ID_PATTERN =
-  /^(?:(?:plan|apply|ssr|ccr)_[0-9a-zA-Z]{8,64}|(?:backup|restore)_[0-9a-zA-Z]{4,64})$/;
+  /^(?:(?:plan|apply|ssr|ccr)_[0-9a-zA-Z]{8,64}|run_resource_[0-9a-zA-Z]{8,64}|(?:backup|restore)_[0-9a-zA-Z]{4,64})$/;
 export const DEPENDENCY_ID_PATTERN = /^dep_[0-9a-zA-Z]{8,64}$/;
 export const OUTPUT_SHARE_ID_PATTERN = /^oshare_[0-9a-zA-Z]{8,64}$/;
 export const RUN_GROUP_ID_PATTERN = /^rg_[0-9a-zA-Z]{8,64}$/;
@@ -248,6 +249,7 @@ export const ALLOWED_KEYS: Record<
     "stateRef",
     "stateDigest",
   ]),
+  outputInterfaceMigrationConfirm: new Set(["candidate", "selection"]),
 };
 
 export type DeployControlRouteName =
@@ -270,7 +272,8 @@ export type DeployControlRouteName =
   | "dependencyCreate"
   | "outputShareCreate"
   | "billingSettingsUpdate"
-  | "resourceStateAdoptionConfirm";
+  | "resourceStateAdoptionConfirm"
+  | "outputInterfaceMigrationConfirm";
 
 export interface DeployControlInternalRouteDependencies {
   /**
@@ -368,6 +371,7 @@ export interface DeployControlInternalRouteDependencies {
    * confirmation requires an exact reviewed candidate.
    */
   readonly legacyResourceStateAdoptionService?: LegacyResourceStateAdoptionService;
+  readonly legacyOutputInterfaceMigrationService?: LegacyOutputInterfaceMigrationService;
 }
 
 export type ConnectionOAuthHelpers = Readonly<

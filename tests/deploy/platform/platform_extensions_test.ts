@@ -125,3 +125,83 @@ test("nested extension routes select the most specific owner", () => {
       ?.handlerKey,
   ).toBe("EXAMPLE_ADMIN");
 });
+
+test("core route prefixes cannot be delegated to extensions", () => {
+  for (const basePath of [
+    "/v1/resources",
+    "/v1/resources/preview",
+    "/v1/capabilities",
+    "/.well-known/takosumi",
+    "/api/v1/workspaces",
+    "/v1/account/session",
+    "/internal/v1/runs",
+  ]) {
+    expect(() =>
+      platformExtensionRoutes({
+        TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+          { basePath, handlerKey: "UNSAFE_EXTENSION" },
+        ]),
+      }),
+    ).toThrow("overlaps a Takosumi core route prefix");
+  }
+
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        { basePath: "/v1", handlerKey: "TOO_BROAD" },
+      ]),
+    }),
+  ).toThrow("overlaps a Takosumi core route prefix");
+});
+
+test("compatibility routes require explicit control and data planes", () => {
+  const [route] = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/compat/example/v1",
+        handlerKey: "EXAMPLE_COMPAT",
+        compatibilityProfiles: [
+          {
+            profile: "compat.example.v1",
+            planes: ["control", "data", "control"],
+          },
+        ],
+      },
+    ]),
+  });
+  expect(route?.compatibilityProfiles).toEqual([
+    {
+      profile: "compat.example.v1",
+      planes: ["control", "data"],
+    },
+  ]);
+  expect(route?.capabilities).toEqual(["compat.example.v1"]);
+
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/compat/example/v1",
+          handlerKey: "EXAMPLE_COMPAT",
+          capabilities: ["compat.example.v1"],
+        },
+      ]),
+    }),
+  ).toThrow(
+    "requires an explicit compatibilityProfiles control/data declaration",
+  );
+
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/compat/example/unversioned",
+          handlerKey: "EXAMPLE_COMPAT",
+          compatibilityProfiles: [
+            { profile: "compat.example", planes: ["data"] },
+          ],
+        },
+      ]),
+    }),
+  ).toThrow("must be a scoped compat.* version token");
+});

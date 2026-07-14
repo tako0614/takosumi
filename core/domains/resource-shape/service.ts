@@ -10,6 +10,7 @@ import type {
   ActorContext,
   Condition,
   JsonObject,
+  JsonValue,
   NativeResourceRef,
   ResourceConnectionSpec,
   ResourceDeploymentAdmission,
@@ -19,6 +20,7 @@ import type {
   ResolverOutput,
   ResourceManagedBy,
   ResourceEvent,
+  ResourceOperation,
   ResourceObject,
   ResourceShapeKind,
   ResourceStatus,
@@ -51,6 +53,7 @@ import type {
   AdapterObservationStatus,
   AdapterImportResult,
   AdapterObserveResult,
+  AdapterPreviewResult,
   AdapterRefreshResult,
   ResolvedResourceConnection,
   ResourceAdapter,
@@ -70,6 +73,13 @@ import {
 import { secretLikeJsonPath } from "./secret_guard.ts";
 import type { ActivityLedger } from "../activity/mod.ts";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
+import type {
+  BeginResourceOperationRunResult,
+  OpenTofuControlStore,
+  ResourceOperationResultEvidence,
+  ResourceOperationRun,
+  TransitionResourceOperationRunResult,
+} from "../deploy-control/store.ts";
 
 export type ResourceServiceErrorCode =
   | "invalid_spec"
@@ -203,6 +213,17 @@ export interface ResourceShapeServiceDeps {
   readonly deploymentAdmission?: ResourceDeploymentAdmission;
   /** Shared non-secret Activity ledger used for Resource event projection. */
   readonly activity?: ActivityLedger;
+  /**
+   * Single canonical Run ledger for direct adapter plugins. Module-backed
+   * OpenTofu adapters keep using their existing plan/apply Resource Runs.
+   */
+  readonly operationRuns?: Pick<
+    OpenTofuControlStore,
+    | "beginResourceOperationRun"
+    | "getResourceOperationRun"
+    | "transitionResourceOperationRun"
+    | "listRecoverableResourceOperationRuns"
+  >;
   /** Explicit operator module catalog for `moduleTemplate` descriptors. */
   readonly moduleRegistry?: ResourceShapeModuleRegistry;
   /** Explicit schemas for operator-defined Resource Shape tokens. */
@@ -249,6 +270,13 @@ export interface DeleteResourceOptions {
   readonly force?: boolean;
 }
 
+export interface ResourceOperationRunRepairResult {
+  readonly scanned: number;
+  readonly completed: number;
+  readonly auditsRepaired: number;
+  readonly pending: number;
+}
+
 export class ResourceShapeService {
   readonly #stores: ResourceShapeStores;
   readonly #adapter: ResourceAdapter;
@@ -258,6 +286,7 @@ export class ResourceShapeService {
   readonly #moduleRegistry: ResourceShapeModuleRegistry;
   readonly #schemaRegistry: ResourceShapeSchemaRegistry;
   readonly #activity: ActivityLedger | undefined;
+  readonly #operationRuns: ResourceShapeServiceDeps["operationRuns"];
   readonly #deploymentAdmission: ResourceDeploymentAdmission;
   #lifecycleObserver: ResourceShapeLifecycleObserver | undefined;
 
@@ -268,6 +297,7 @@ export class ResourceShapeService {
     this.#deleteTimeoutMs = deps.deleteTimeoutMs ?? DEFAULT_DELETE_TIMEOUT_MS;
     this.#lifecycleObserver = deps.lifecycleObserver;
     this.#activity = deps.activity;
+    this.#operationRuns = deps.operationRuns;
     this.#deploymentAdmission =
       deps.deploymentAdmission ?? NOOP_RESOURCE_DEPLOYMENT_ADMISSION;
     this.#moduleRegistry =
@@ -287,6 +317,91 @@ export class ResourceShapeService {
     observer: ResourceShapeLifecycleObserver | undefined,
   ): void {
     this.#lifecycleObserver = observer;
+  }
+
+  /**
+   * Repairs direct-plugin Run terminalization and its Activity outbox after a
+   * process restart. Backend mutation recovery remains operation-specific;
+   * this bounded sweep only completes a Run after the canonical Resource row
+   * proves that the persisted backend result was finalized (or, for delete,
+   * after the Resource and lock were atomically removed).
+   */
+  async repairResourceOperationRuns(
+    options: {
+      readonly workspaceId?: string;
+      readonly limit?: number;
+    } = {},
+  ): Promise<ResourceOperationRunRepairResult> {
+    if (!this.#operationRuns) {
+      return { scanned: 0, completed: 0, auditsRepaired: 0, pending: 0 };
+    }
+    const runs =
+      await this.#operationRuns.listRecoverableResourceOperationRuns(options);
+    let completed = 0;
+    let auditsRepaired = 0;
+    let pending = 0;
+    for (const candidate of runs) {
+      try {
+        if (candidate.status === "succeeded") {
+          if (await this.#repairPluginOperationAudit(candidate)) {
+            auditsRepaired += 1;
+          } else {
+            pending += 1;
+          }
+          continue;
+        }
+        if (
+          candidate.status !== "running" ||
+          !candidate.resourceOperationResult
+        ) {
+          pending += 1;
+          continue;
+        }
+        if (candidate.resourceOperation === "preview") {
+          await this.#completePluginReadOperationRun(candidate);
+          completed += 1;
+          continue;
+        }
+        const resource = await this.#stores.resources.get(candidate.subject.id);
+        const finalized =
+          candidate.resourceOperation === "delete"
+            ? resource === undefined
+            : resource?.lastOperationRunId === candidate.id;
+        if (!finalized) {
+          pending += 1;
+          continue;
+        }
+        const repaired = await this.#completePluginOperationRun({
+          run: candidate,
+          ...(candidate.resourceOperationAudit
+            ? {
+                action: candidate.resourceOperationAudit.action,
+                metadata: candidate.resourceOperationAudit.metadata,
+              }
+            : recoveredPluginOperationAudit(candidate, resource)),
+        });
+        completed += 1;
+        if (repaired.audit) {
+          auditsRepaired += 1;
+        } else {
+          pending += 1;
+        }
+      } catch (error) {
+        pending += 1;
+        log.warn("service.resource_shape.operation_run_repair_failed", {
+          runId: candidate.id,
+          resourceId: candidate.subject.id,
+          operation: candidate.resourceOperation,
+          error,
+        });
+      }
+    }
+    return {
+      scanned: runs.length,
+      completed,
+      auditsRepaired,
+      pending,
+    };
   }
 
   // --- Configuration: TargetPool / SpacePolicy --------------------------------
@@ -426,7 +541,8 @@ export class ResourceShapeService {
       parsed,
     );
     if (!resolvedConnections.ok) return resolvedConnections;
-    const adapterPreview = await this.#adapter.preview({
+    const evidence = await resourceDeploymentEvidence(req, output, plan);
+    const adapterInput = {
       resourceId: output.resolutionLock.resourceId,
       environment: req.environment ?? existing?.environment ?? "default",
       stateGeneration:
@@ -445,8 +561,57 @@ export class ResourceShapeService {
         ? { resolvedConnections: resolvedConnections.value }
         : {}),
       actor: req.actor,
-    });
-    const evidence = await resourceDeploymentEvidence(req, output, plan);
+    };
+    let adapterPreview: AdapterPreviewResult;
+    if (output.selectedImplementationDescriptor.plugin) {
+      let run: ResourceOperationRun | undefined;
+      try {
+        run = await this.#beginPluginOperationRun({
+          operation: "preview",
+          resourceId,
+          actor: req.actor,
+          identity: {
+            planDigest: evidence.planDigest,
+            resolutionFingerprint: evidence.resolutionFingerprint,
+          },
+        });
+        if (run.status === "failed") {
+          throw new Error(`canonical Resource preview Run ${run.id} failed`);
+        }
+        if (run.resourceOperationResult) {
+          adapterPreview = {
+            summary: run.resourceOperationResult.summary,
+            nativeResources: run.resourceOperationResult.nativeResources ?? [],
+            ...(run.resourceOperationResult.backendOperationId
+              ? {
+                  backendOperationId:
+                    run.resourceOperationResult.backendOperationId,
+                }
+              : {}),
+          };
+        } else {
+          adapterPreview = await this.#adapter.preview(adapterInput);
+          run = await this.#persistPluginOperationResult(run, {
+            summary: adapterPreview.summary,
+            nativeResources: adapterPreview.nativeResources,
+            ...(adapterPreview.backendOperationId
+              ? { backendOperationId: adapterPreview.backendOperationId }
+              : {}),
+          });
+        }
+        await this.#completePluginReadOperationRun(run);
+      } catch (error) {
+        if (run) {
+          await this.#failPluginOperationRun(run, error);
+        }
+        return {
+          ok: false,
+          error: { code: "apply_failed", message: errorMessage(error) },
+        };
+      }
+    } else {
+      adapterPreview = await this.#adapter.preview(adapterInput);
+    }
     const quoteContext = resourceDeploymentQuoteContext(
       req,
       output,
@@ -595,6 +760,37 @@ export class ResourceShapeService {
     const generation = recoveringApplying
       ? existing.generation
       : (existing?.generation ?? 0) + 1;
+    let operationRun: ResourceOperationRun | undefined;
+    if (output.selectedImplementationDescriptor.plugin) {
+      try {
+        operationRun = await this.#beginPluginOperationRun({
+          operation: "apply",
+          resourceId: id,
+          actor: req.actor,
+          identity: {
+            generation,
+            planDigest: evidence.planDigest,
+            resolutionFingerprint: evidence.resolutionFingerprint,
+          },
+        });
+        if (
+          existing?.pendingOperation &&
+          (existing.pendingOperation.runId !== operationRun.id ||
+            existing.pendingOperation.operationKey !==
+              operationRun.resourceOperationKey ||
+            existing.pendingOperation.operation !== "apply")
+        ) {
+          throw new Error(
+            `resource ${id} is fenced by a different pending operation`,
+          );
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          error: { code: "apply_failed", message: errorMessage(error) },
+        };
+      }
+    }
 
     // Persist desired state in the Applying phase before touching the adapter.
     const applyingRecord: ResourceShapeRecord = {
@@ -611,6 +807,18 @@ export class ResourceShapeService {
       observedGeneration: existing?.observedGeneration ?? 0,
       outputs: existing?.outputs,
       execution: existing?.execution,
+      ...(operationRun
+        ? {
+            pendingOperation: {
+              runId: operationRun.id,
+              operation: "apply" as const,
+              operationKey: operationRun.resourceOperationKey,
+            },
+          }
+        : {}),
+      ...(existing?.lastOperationRunId
+        ? { lastOperationRunId: existing.lastOperationRunId }
+        : {}),
       ...(existing?.stateAdoption
         ? { stateAdoption: existing.stateAdoption }
         : {}),
@@ -678,6 +886,12 @@ export class ResourceShapeService {
           existing,
           existingLock,
         );
+        if (operationRun && rolledBack) {
+          operationRun = await this.#failPluginOperationRun(
+            operationRun,
+            new Error(decision.reasons.join("; ")),
+          );
+        }
         return rolledBack
           ? {
               ok: false,
@@ -697,6 +911,9 @@ export class ResourceShapeService {
         existing,
         existingLock,
       );
+      if (operationRun && rolledBack) {
+        operationRun = await this.#failPluginOperationRun(operationRun, error);
+      }
       return rolledBack
         ? {
             ok: false,
@@ -721,11 +938,15 @@ export class ResourceShapeService {
         space: req.space,
         resourceId: id,
         actor: req.actor,
+        ...(operationRun ? { runId: operationRun.id } : {}),
         metadata: { generation, phase: "Applying" },
       });
 
       const adapterInput = {
         resourceId: id,
+        ...(operationRun
+          ? { operationKey: operationRun.resourceOperationKey }
+          : {}),
         environment: req.environment ?? existing?.environment ?? "default",
         stateGeneration:
           existing?.execution?.stateGeneration ??
@@ -744,29 +965,88 @@ export class ResourceShapeService {
           : {}),
         actor: req.actor,
       };
-      adapterStarted = true;
-      // Never redispatch provider mutation for an Applying record: the prior
-      // call may have succeeded before its response or Ready persistence was
-      // lost. Recovery is read-only refresh over the pinned backend identity.
-      const result = recoveringApplying
-        ? await this.#adapter.refresh(adapterInput)
-        : await this.#adapter.apply(adapterInput);
+      let result: AdapterApplyResult;
+      if (operationRun?.resourceOperationResult) {
+        const persisted = operationRun.resourceOperationResult;
+        if (!persisted.outputs || !persisted.nativeResources) {
+          throw new Error(
+            `canonical Resource Run ${operationRun.id} has incomplete apply result evidence`,
+          );
+        }
+        result = {
+          outputs: persisted.outputs,
+          nativeResources: persisted.nativeResources,
+          ...(persisted.backendOperationId
+            ? { backendOperationId: persisted.backendOperationId }
+            : {}),
+        };
+      } else {
+        adapterStarted = true;
+        if (recoveringApplying && operationRun) {
+          // A lost response does not prove whether create/update reached the
+          // provider. Observe by stable Resource identity first. Existing
+          // native state is finalized through read-only refresh; only a proven
+          // missing backend is replayed with the exact same idempotency key.
+          const observation = await this.#adapter.observe(adapterInput);
+          result =
+            observation.status === "missing"
+              ? await this.#adapter.apply(adapterInput)
+              : await this.#adapter.refresh(adapterInput);
+        } else {
+          result = recoveringApplying
+            ? await this.#adapter.refresh(adapterInput)
+            : await this.#adapter.apply(adapterInput);
+        }
+      }
       adapterSucceeded = true;
       adapterResult = result;
+      if (operationRun && result.execution) {
+        throw new Error(
+          `direct Resource adapter ${output.selectedImplementation} returned an OpenTofu execution pointer`,
+        );
+      }
       if (existing?.stateAdoption && !result.execution) {
         throw new Error(
           `resource ${id} apply succeeded without Resource-owned execution state; refusing to consume confirmed state adoption`,
         );
       }
+      if (operationRun && !operationRun.resourceOperationResult) {
+        operationRun = await this.#persistPluginOperationResult(operationRun, {
+          summary: `applied ${result.nativeResources.length} native resource(s)`,
+          nativeResources: result.nativeResources,
+          outputs: result.outputs,
+          ...(result.backendOperationId
+            ? { backendOperationId: result.backendOperationId }
+            : {}),
+        });
+      }
+      const successMetadata = {
+        generation,
+        observedGeneration: generation,
+        phase: "Ready" as const,
+        nativeResourceCount: result.nativeResources.length,
+      };
+      if (operationRun) {
+        operationRun = await this.#stagePluginOperationAudit(
+          operationRun,
+          "resource.apply.succeeded",
+          successMetadata,
+        );
+      }
       const { stateAdoption: _consumedStateAdoption, ...readyRecordBase } =
         applyingRecord;
+      const {
+        pendingOperation: _completedPendingOperation,
+        ...readyRecordWithoutPending
+      } = readyRecordBase;
       const readyRecord: ResourceShapeRecord = {
-        ...readyRecordBase,
+        ...readyRecordWithoutPending,
         phase: "Ready",
         observedGeneration: generation,
         outputs: result.outputs,
         execution: result.execution ?? existing?.execution,
         conditions: [readyCondition(generation, this.#now())],
+        ...(operationRun ? { lastOperationRunId: operationRun.id } : {}),
         updatedAt: this.#now(),
       };
       const readyLock = {
@@ -796,19 +1076,25 @@ export class ResourceShapeService {
         spaceId: req.space,
         resourceId: id,
       });
-      await this.#recordResourceEvent({
-        action: "resource.apply.succeeded",
-        space: req.space,
-        resourceId: id,
-        actor: req.actor,
-        ...(result.runId ? { runId: result.runId } : {}),
-        metadata: {
-          generation,
-          observedGeneration: generation,
-          phase: "Ready",
-          nativeResourceCount: result.nativeResources.length,
-        },
-      });
+      let operationAuditComplete = true;
+      if (operationRun) {
+        const completed = await this.#completePluginOperationRun({
+          run: operationRun,
+          action: "resource.apply.succeeded",
+          metadata: successMetadata,
+        });
+        operationRun = completed.run;
+        operationAuditComplete = completed.audit;
+      } else {
+        await this.#recordResourceEvent({
+          action: "resource.apply.succeeded",
+          space: req.space,
+          resourceId: id,
+          actor: req.actor,
+          ...(result.runId ? { runId: result.runId } : {}),
+          metadata: successMetadata,
+        });
+      }
       if (review.quoteId) {
         try {
           await this.#deploymentAdmission.capture({
@@ -822,6 +1108,7 @@ export class ResourceShapeService {
             space: req.space,
             resourceId: id,
             actor: req.actor,
+            ...(operationRun ? { runId: operationRun.id } : {}),
             metadata: {
               generation,
               ...(reservationId ? { reservationId } : {}),
@@ -854,6 +1141,7 @@ export class ResourceShapeService {
             space: req.space,
             resourceId: id,
             actor: req.actor,
+            ...(operationRun ? { runId: operationRun.id } : {}),
             metadata: {
               generation,
               ...(reservationId ? { reservationId } : {}),
@@ -869,6 +1157,15 @@ export class ResourceShapeService {
             },
           };
         }
+      }
+      if (!operationAuditComplete) {
+        return {
+          ok: false,
+          error: {
+            code: "deployment_finalize_pending",
+            message: `resource ${id} is Ready but canonical Run audit finalization is pending`,
+          },
+        };
       }
       return {
         ok: true,
@@ -910,6 +1207,7 @@ export class ResourceShapeService {
           space: req.space,
           resourceId: id,
           actor: req.actor,
+          ...(operationRun ? { runId: operationRun.id } : {}),
           metadata: {
             generation,
             phase: "Applying",
@@ -966,6 +1264,7 @@ export class ResourceShapeService {
           space: req.space,
           resourceId: id,
           actor: req.actor,
+          ...(operationRun ? { runId: operationRun.id } : {}),
           metadata: {
             generation,
             phase: "Applying",
@@ -1039,8 +1338,12 @@ export class ResourceShapeService {
         space: req.space,
         resourceId: id,
         actor: req.actor,
+        ...(operationRun ? { runId: operationRun.id } : {}),
         metadata: { generation, phase: "Failed" },
       });
+      if (operationRun) {
+        await this.#failPluginOperationRun(operationRun, error);
+      }
       return {
         ok: false,
         error: { code: "apply_failed", message: errorMessage(error) },
@@ -1125,6 +1428,39 @@ export class ResourceShapeService {
     );
     if (!resolvedConnections.ok) return resolvedConnections;
 
+    let operationRun: ResourceOperationRun | undefined;
+    if (output.selectedImplementationDescriptor.plugin) {
+      try {
+        operationRun = await this.#beginPluginOperationRun({
+          operation: "import",
+          resourceId: id,
+          actor: req.actor,
+          identity: {
+            importRequestDigest,
+            resolutionFingerprint:
+              output.resolutionLock.implementationFingerprint ??
+              output.selectedImplementation,
+          },
+        });
+        if (
+          existing?.pendingOperation &&
+          (existing.pendingOperation.runId !== operationRun.id ||
+            existing.pendingOperation.operationKey !==
+              operationRun.resourceOperationKey ||
+            existing.pendingOperation.operation !== "import")
+        ) {
+          throw new Error(
+            `resource ${id} is fenced by a different pending operation`,
+          );
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          error: { code: "import_failed", message: errorMessage(error) },
+        };
+      }
+    }
+
     const now = nextApplyClaimTimestamp(this.#now(), existing?.updatedAt);
     const applyingRecord: ResourceShapeRecord = {
       id,
@@ -1139,6 +1475,15 @@ export class ResourceShapeService {
       generation: 1,
       observedGeneration: 0,
       conditions: [importingCondition(1, now, importRequestDigest)],
+      ...(operationRun
+        ? {
+            pendingOperation: {
+              runId: operationRun.id,
+              operation: "import" as const,
+              operationKey: operationRun.resourceOperationKey,
+            },
+          }
+        : {}),
       labels: req.labels,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -1192,23 +1537,49 @@ export class ResourceShapeService {
         space: req.space,
         resourceId: id,
         actor: req.actor,
+        ...(operationRun ? { runId: operationRun.id } : {}),
         metadata: { generation: 1, phase: "Applying" },
       });
-      result = await this.#adapter.importResource({
-        resourceId: id,
-        environment: req.environment ?? "default",
-        stateGeneration: 0,
-        plan,
-        target: entry,
-        implementation: output.selectedImplementationDescriptor,
-        credentialRef: entry.credentialRef,
-        nativeResources: output.nativeResourcePlan,
-        ...(Object.keys(resolvedConnections.value).length > 0
-          ? { resolvedConnections: resolvedConnections.value }
-          : {}),
-        actor: req.actor,
-        nativeId: req.nativeId,
-      });
+      if (operationRun?.resourceOperationResult) {
+        const persisted = operationRun.resourceOperationResult;
+        if (!persisted.outputs || !persisted.nativeResources) {
+          throw new Error(
+            `canonical Resource Run ${operationRun.id} has incomplete import result evidence`,
+          );
+        }
+        result = {
+          summary: persisted.summary,
+          outputs: persisted.outputs,
+          nativeResources: persisted.nativeResources,
+          ...(persisted.backendOperationId
+            ? { backendOperationId: persisted.backendOperationId }
+            : {}),
+        };
+      } else {
+        result = await this.#adapter.importResource({
+          resourceId: id,
+          ...(operationRun
+            ? { operationKey: operationRun.resourceOperationKey }
+            : {}),
+          environment: req.environment ?? "default",
+          stateGeneration: 0,
+          plan,
+          target: entry,
+          implementation: output.selectedImplementationDescriptor,
+          credentialRef: entry.credentialRef,
+          nativeResources: output.nativeResourcePlan,
+          ...(Object.keys(resolvedConnections.value).length > 0
+            ? { resolvedConnections: resolvedConnections.value }
+            : {}),
+          actor: req.actor,
+          nativeId: req.nativeId,
+        });
+      }
+      if (operationRun && result.execution) {
+        throw new Error(
+          `direct Resource adapter ${output.selectedImplementation} returned an OpenTofu execution pointer`,
+        );
+      }
       if (
         !output.selectedImplementationDescriptor.plugin &&
         !result.execution
@@ -1217,7 +1588,56 @@ export class ResourceShapeService {
           `resource ${id} import succeeded without Resource-owned execution state`,
         );
       }
+      if (operationRun && !operationRun.resourceOperationResult) {
+        operationRun = await this.#persistPluginOperationResult(operationRun, {
+          summary: result.summary,
+          nativeResources: result.nativeResources,
+          outputs: result.outputs,
+          ...(result.backendOperationId
+            ? { backendOperationId: result.backendOperationId }
+            : {}),
+        });
+      }
+      if (operationRun) {
+        operationRun = await this.#stagePluginOperationAudit(
+          operationRun,
+          "resource.import.succeeded",
+          {
+            generation: 1,
+            observedGeneration: 1,
+            phase: "Ready",
+            nativeResourceCount: result.nativeResources.length,
+          },
+        );
+      }
     } catch (error) {
+      if (operationRun) {
+        await this.#notifyLifecycle({
+          type: "unknown",
+          spaceId: req.space,
+          resourceId: id,
+          operation: "import",
+        });
+        await this.#recordResourceEvent({
+          action: "resource.import.finalize_pending",
+          space: req.space,
+          resourceId: id,
+          actor: req.actor,
+          runId: operationRun.id,
+          metadata: {
+            generation: 1,
+            phase: "Applying",
+            reason: "backend_outcome_unknown",
+          },
+        });
+        return {
+          ok: false,
+          error: {
+            code: "import_failed",
+            message: `resource ${id} direct import outcome is pending; retry the same read-only import request: ${errorMessage(error)}`,
+          },
+        };
+      }
       const failedAt = this.#now();
       const failedRecord: ResourceShapeRecord = {
         ...applyingRecord,
@@ -1273,14 +1693,17 @@ export class ResourceShapeService {
     }
 
     const importedAt = this.#now();
+    const { pendingOperation: _completedImport, ...importReadyBase } =
+      applyingRecord;
     const readyRecord: ResourceShapeRecord = {
-      ...applyingRecord,
+      ...importReadyBase,
       managedBy: req.managedBy ?? "import",
       phase: "Ready",
       observedGeneration: 1,
       outputs: result.outputs,
       execution: result.execution,
       conditions: [importedCondition(1, importedAt)],
+      ...(operationRun ? { lastOperationRunId: operationRun.id } : {}),
       updatedAt: importedAt,
     };
     const importedLock: ResolutionLockRecord = {
@@ -1311,7 +1734,11 @@ export class ResourceShapeService {
         space: req.space,
         resourceId: id,
         actor: req.actor,
-        ...(result.runId ? { runId: result.runId } : {}),
+        ...(operationRun
+          ? { runId: operationRun.id }
+          : result.runId
+            ? { runId: result.runId }
+            : {}),
         metadata: { generation: 1, phase: "Applying" },
       });
       return {
@@ -1336,26 +1763,49 @@ export class ResourceShapeService {
       spaceId: req.space,
       resourceId: id,
     });
-    await this.#recordResourceEvent({
-      action: "resource.import.succeeded",
-      space: req.space,
-      resourceId: id,
-      actor: req.actor,
-      ...(result.runId ? { runId: result.runId } : {}),
-      metadata: {
-        generation: 1,
-        observedGeneration: 1,
-        phase: "Ready",
-        nativeResourceCount: result.nativeResources.length,
-      },
-    });
+    const successMetadata = {
+      generation: 1,
+      observedGeneration: 1,
+      phase: "Ready" as const,
+      nativeResourceCount: result.nativeResources.length,
+    };
+    if (operationRun) {
+      const completed = await this.#completePluginOperationRun({
+        run: operationRun,
+        action: "resource.import.succeeded",
+        metadata: successMetadata,
+      });
+      operationRun = completed.run;
+      if (!completed.audit) {
+        return {
+          ok: false,
+          error: {
+            code: "deployment_finalize_pending",
+            message: `resource ${id} is Ready but canonical import Run audit finalization is pending`,
+          },
+        };
+      }
+    } else {
+      await this.#recordResourceEvent({
+        action: "resource.import.succeeded",
+        space: req.space,
+        resourceId: id,
+        actor: req.actor,
+        ...(result.runId ? { runId: result.runId } : {}),
+        metadata: successMetadata,
+      });
+    }
     return {
       ok: true,
       value: {
         resource: this.#assemble(persisted.record, persisted.lock),
         import: {
           summary: result.summary,
-          ...(result.runId ? { runId: result.runId } : {}),
+          ...(operationRun
+            ? { runId: operationRun.id }
+            : result.runId
+              ? { runId: result.runId }
+              : {}),
         },
       },
     };
@@ -1549,6 +1999,27 @@ export class ResourceShapeService {
     );
     if (!resolvedConnections.ok) return resolvedConnections;
 
+    let operationRun: ResourceOperationRun | undefined;
+    if (implementation.plugin) {
+      try {
+        operationRun = await this.#beginPluginOperationRun({
+          operation: "observe",
+          resourceId: id,
+          actor,
+          identity: {
+            generation: record.generation,
+            resourceVersion: record.updatedAt,
+            lockVersion: lock.updatedAt,
+          },
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          error: { code: "observe_failed", message: errorMessage(error) },
+        };
+      }
+    }
+
     const expected = {
       generation: record.generation,
       phase: record.phase,
@@ -1559,6 +2030,7 @@ export class ResourceShapeService {
       space,
       resourceId: id,
       actor,
+      ...(operationRun ? { runId: operationRun.id } : {}),
       metadata: {
         generation: record.generation,
         observedGeneration: record.observedGeneration,
@@ -1566,26 +2038,67 @@ export class ResourceShapeService {
     });
     let observation: AdapterObserveResult;
     try {
-      observation = await this.#adapter.observe({
-        resourceId: id,
-        environment: record.environment ?? "default",
-        stateGeneration:
-          record.execution?.stateGeneration ??
-          record.stateAdoption?.stateGeneration ??
-          0,
-        ...(record.stateAdoption
-          ? { stateAdoption: record.stateAdoption }
-          : {}),
-        plan,
-        target: entry,
-        implementation,
-        credentialRef: entry.credentialRef,
-        nativeResources: lock.nativeResources ?? [],
-        ...(Object.keys(resolvedConnections.value).length > 0
-          ? { resolvedConnections: resolvedConnections.value }
-          : {}),
-        actor,
-      });
+      if (operationRun?.resourceOperationResult) {
+        const persisted = operationRun.resourceOperationResult;
+        if (!persisted.observationStatus) {
+          throw new Error(
+            `canonical Resource Run ${operationRun.id} has incomplete observation evidence`,
+          );
+        }
+        observation = {
+          status: persisted.observationStatus,
+          summary: persisted.summary,
+          runId: operationRun.id,
+          ...(persisted.backendOperationId
+            ? { backendOperationId: persisted.backendOperationId }
+            : {}),
+        };
+      } else {
+        observation = await this.#adapter.observe({
+          resourceId: id,
+          ...(operationRun
+            ? { operationKey: operationRun.resourceOperationKey }
+            : {}),
+          environment: record.environment ?? "default",
+          stateGeneration:
+            record.execution?.stateGeneration ??
+            record.stateAdoption?.stateGeneration ??
+            0,
+          ...(record.stateAdoption
+            ? { stateAdoption: record.stateAdoption }
+            : {}),
+          plan,
+          target: entry,
+          implementation,
+          credentialRef: entry.credentialRef,
+          nativeResources: lock.nativeResources ?? [],
+          ...(Object.keys(resolvedConnections.value).length > 0
+            ? { resolvedConnections: resolvedConnections.value }
+            : {}),
+          actor,
+        });
+      }
+      if (operationRun && !operationRun.resourceOperationResult) {
+        operationRun = await this.#persistPluginOperationResult(operationRun, {
+          summary: observation.summary,
+          observationStatus: observation.status,
+          ...(observation.backendOperationId
+            ? { backendOperationId: observation.backendOperationId }
+            : {}),
+        });
+        observation = { ...observation, runId: operationRun.id };
+      }
+      if (operationRun) {
+        operationRun = await this.#stagePluginOperationAudit(
+          operationRun,
+          "resource.observe.succeeded",
+          {
+            generation: record.generation,
+            phase: record.phase,
+            observationStatus: observation.status,
+          },
+        );
+      }
     } catch (error) {
       const failedAt = this.#now();
       const failedRecord: ResourceShapeRecord = {
@@ -1608,11 +2121,15 @@ export class ResourceShapeService {
           space,
           resourceId: id,
           actor,
+          ...(operationRun ? { runId: operationRun.id } : {}),
           metadata: {
             generation: record.generation,
             reason: "reconcile_conflict",
           },
         });
+        if (operationRun) {
+          await this.#failPluginOperationRun(operationRun, error);
+        }
         return {
           ok: false,
           error: {
@@ -1639,8 +2156,12 @@ export class ResourceShapeService {
         space,
         resourceId: id,
         actor,
+        ...(operationRun ? { runId: operationRun.id } : {}),
         metadata: { generation: record.generation, phase: record.phase },
       });
+      if (operationRun) {
+        await this.#failPluginOperationRun(operationRun, error);
+      }
       return {
         ok: false,
         error: { code: "observe_failed", message: errorMessage(error) },
@@ -1657,6 +2178,7 @@ export class ResourceShapeService {
         observation.status,
         observation.summary,
       ),
+      ...(operationRun ? { lastOperationRunId: operationRun.id } : {}),
       updatedAt: observedAt,
     };
     const persisted = await this.#stores.resources.compareAndSet(
@@ -1669,9 +2191,19 @@ export class ResourceShapeService {
         space,
         resourceId: id,
         actor,
-        ...(observation.runId ? { runId: observation.runId } : {}),
+        ...(operationRun
+          ? { runId: operationRun.id }
+          : observation.runId
+            ? { runId: observation.runId }
+            : {}),
         metadata: { generation: record.generation, reason: "not_found" },
       });
+      if (operationRun) {
+        await this.#failPluginOperationRun(
+          operationRun,
+          new Error(`resource ${id} disappeared during observation`),
+        );
+      }
       return {
         ok: false,
         error: { code: "not_found", message: `resource ${id} not found` },
@@ -1683,12 +2215,22 @@ export class ResourceShapeService {
         space,
         resourceId: id,
         actor,
-        ...(observation.runId ? { runId: observation.runId } : {}),
+        ...(operationRun
+          ? { runId: operationRun.id }
+          : observation.runId
+            ? { runId: observation.runId }
+            : {}),
         metadata: {
           generation: record.generation,
           reason: "reconcile_conflict",
         },
       });
+      if (operationRun) {
+        await this.#failPluginOperationRun(
+          operationRun,
+          new Error(`resource ${id} changed during observation`),
+        );
+      }
       return {
         ok: false,
         error: {
@@ -1697,18 +2239,38 @@ export class ResourceShapeService {
         },
       };
     }
-    await this.#recordResourceEvent({
-      action: "resource.observe.succeeded",
-      space,
-      resourceId: id,
-      actor,
-      ...(observation.runId ? { runId: observation.runId } : {}),
-      metadata: {
-        generation: record.generation,
-        phase: persisted.record.phase,
-        observationStatus: observation.status,
-      },
-    });
+    const successMetadata = {
+      generation: record.generation,
+      phase: persisted.record.phase,
+      observationStatus: observation.status,
+    };
+    if (operationRun) {
+      const completed = await this.#completePluginOperationRun({
+        run: operationRun,
+        action: "resource.observe.succeeded",
+        metadata: successMetadata,
+      });
+      operationRun = completed.run;
+      if (!completed.audit) {
+        return {
+          ok: false,
+          error: {
+            code: "deployment_finalize_pending",
+            message: `resource ${id} observation is durable but canonical Run audit finalization is pending`,
+          },
+        };
+      }
+      observation = { ...observation, runId: operationRun.id };
+    } else {
+      await this.#recordResourceEvent({
+        action: "resource.observe.succeeded",
+        space,
+        resourceId: id,
+        actor,
+        ...(observation.runId ? { runId: observation.runId } : {}),
+        metadata: successMetadata,
+      });
+    }
     return {
       ok: true,
       value: {
@@ -1750,8 +2312,13 @@ export class ResourceShapeService {
         error: { code: "not_found", message: `resource ${id} not found` },
       };
     }
+    const recoveringPluginRefresh =
+      record.phase === "Applying" &&
+      record.pendingOperation?.operation === "refresh";
     if (
-      (record.phase !== "Ready" && record.phase !== "Failed") ||
+      (!recoveringPluginRefresh &&
+        record.phase !== "Ready" &&
+        record.phase !== "Failed") ||
       record.observedGeneration !== record.generation
     ) {
       return {
@@ -1840,41 +2407,100 @@ export class ResourceShapeService {
     );
     if (!resolvedConnections.ok) return resolvedConnections;
 
-    const claimAt = this.#now();
-    const claimedRecord: ResourceShapeRecord = {
-      ...record,
-      phase: "Applying",
-      conditions: refreshingConditions(
-        record.conditions,
-        record.generation,
-        claimAt,
-      ),
-      updatedAt: claimAt,
-    };
-    const claim = await this.#stores.resources.compareAndSet(claimedRecord, {
-      generation: record.generation,
-      phase: record.phase,
-      updatedAt: record.updatedAt,
-    });
-    if (claim.status === "not_found") {
-      return {
-        ok: false,
-        error: { code: "not_found", message: `resource ${id} not found` },
-      };
+    let operationRun: ResourceOperationRun | undefined;
+    if (implementation.plugin) {
+      try {
+        if (recoveringPluginRefresh) {
+          if (!this.#operationRuns || !record.pendingOperation) {
+            throw new Error(
+              `resource ${id} has no canonical Run ledger for refresh recovery`,
+            );
+          }
+          operationRun = await this.#operationRuns.getResourceOperationRun(
+            record.pendingOperation.runId,
+          );
+          if (
+            !operationRun ||
+            operationRun.resourceOperation !== "refresh" ||
+            operationRun.resourceOperationKey !==
+              record.pendingOperation.operationKey
+          ) {
+            throw new Error(
+              `resource ${id} refresh Run evidence is missing or mismatched`,
+            );
+          }
+        } else {
+          operationRun = await this.#beginPluginOperationRun({
+            operation: "refresh",
+            resourceId: id,
+            actor,
+            identity: {
+              generation: record.generation,
+              resourceVersion: record.updatedAt,
+              lockVersion: lock.updatedAt,
+            },
+          });
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          error: { code: "refresh_failed", message: errorMessage(error) },
+        };
+      }
     }
-    if (claim.status === "conflict") {
-      return {
-        ok: false,
-        error: {
-          code: "reconcile_conflict",
-          message: `resource ${id} changed while refresh was being claimed`,
-        },
+
+    const claimAt = nextApplyClaimTimestamp(this.#now(), record.updatedAt);
+    const plannedLock: ResolutionLockRecord = recoveringPluginRefresh
+      ? lock
+      : { ...lock, updatedAt: claimAt };
+    let claimed: ResourceShapeRecord;
+    if (recoveringPluginRefresh) {
+      claimed = record;
+    } else {
+      const claimedRecord: ResourceShapeRecord = {
+        ...record,
+        phase: "Applying",
+        conditions: refreshingConditions(
+          record.conditions,
+          record.generation,
+          claimAt,
+        ),
+        ...(operationRun
+          ? {
+              pendingOperation: {
+                runId: operationRun.id,
+                operation: "refresh" as const,
+                operationKey: operationRun.resourceOperationKey,
+              },
+            }
+          : {}),
+        updatedAt: claimAt,
       };
+      const claim = await this.#stores.beginApply({
+        applyingRecord: claimedRecord,
+        plannedLock,
+        expected: versionOf(record),
+      });
+      if (claim.status === "not_found") {
+        return {
+          ok: false,
+          error: { code: "not_found", message: `resource ${id} not found` },
+        };
+      }
+      if (claim.status === "conflict") {
+        return {
+          ok: false,
+          error: {
+            code: "reconcile_conflict",
+            message: `resource ${id} changed while refresh was being claimed`,
+          },
+        };
+      }
+      claimed = claim.record;
     }
-    const claimed = claim.record;
     const claimVersion = {
       generation: claimed.generation,
-      phase: claimed.phase,
+      phase: "Applying" as const,
       updatedAt: claimed.updatedAt,
     } as const;
     await this.#recordResourceEvent({
@@ -1882,6 +2508,7 @@ export class ResourceShapeService {
       space,
       resourceId: id,
       actor,
+      ...(operationRun ? { runId: operationRun.id } : {}),
       metadata: {
         generation: record.generation,
         observedGeneration: record.observedGeneration,
@@ -1893,22 +2520,29 @@ export class ResourceShapeService {
       error: unknown,
     ): Promise<ServiceResult<RefreshResourceResult>> => {
       const failedAt = this.#now();
-      const failed = await this.#stores.resources.compareAndSet(
-        {
-          ...claimed,
-          phase: "Failed",
-          outputs: record.outputs,
-          execution: record.execution,
-          conditions: refreshFailedConditions(
-            record.conditions,
-            record.generation,
-            failedAt,
-            error,
-          ),
-          updatedAt: failedAt,
+      const { pendingOperation: _failedPending, ...failedBase } = claimed;
+      const failed = await this.#stores.abortApply({
+        resourceId: id,
+        expectedApplying: claimVersion,
+        expectedPlannedLock: plannedLock,
+        replacement: {
+          record: {
+            ...failedBase,
+            phase: "Failed",
+            outputs: record.outputs,
+            execution: record.execution,
+            ...(operationRun ? { lastOperationRunId: operationRun.id } : {}),
+            conditions: refreshFailedConditions(
+              record.conditions,
+              record.generation,
+              failedAt,
+              error,
+            ),
+            updatedAt: failedAt,
+          },
+          lock,
         },
-        claimVersion,
-      );
+      });
       await this.#recordResourceEvent({
         action: "resource.refresh.failed",
         space,
@@ -1917,8 +2551,8 @@ export class ResourceShapeService {
         metadata: {
           generation: record.generation,
           reason:
-            failed.status === "updated" ? "adapter_failed" : failed.status,
-          ...(failed.status === "updated" ? { phase: "Failed" } : {}),
+            failed.status === "rolled_back" ? "adapter_failed" : failed.status,
+          ...(failed.status === "rolled_back" ? { phase: "Failed" } : {}),
         },
       });
       if (failed.status === "not_found") {
@@ -1936,6 +2570,9 @@ export class ResourceShapeService {
           },
         };
       }
+      if (operationRun) {
+        operationRun = await this.#failPluginOperationRun(operationRun, error);
+      }
       await this.#notifyLifecycle({
         type: "unknown",
         spaceId: space,
@@ -1950,29 +2587,76 @@ export class ResourceShapeService {
 
     let result: AdapterRefreshResult;
     try {
-      result = await this.#adapter.refresh({
-        resourceId: id,
-        environment: record.environment ?? "default",
-        stateGeneration:
-          record.execution?.stateGeneration ??
-          record.stateAdoption?.stateGeneration ??
-          0,
-        ...(record.stateAdoption
-          ? { stateAdoption: record.stateAdoption }
-          : {}),
-        plan,
-        target: entry,
-        implementation,
-        credentialRef: entry.credentialRef,
-        nativeResources: lock.nativeResources ?? [],
-        ...(Object.keys(resolvedConnections.value).length > 0
-          ? { resolvedConnections: resolvedConnections.value }
-          : {}),
-        actor,
-      });
+      if (operationRun?.resourceOperationResult) {
+        const persisted = operationRun.resourceOperationResult;
+        if (!persisted.outputs || !persisted.nativeResources) {
+          throw new Error(
+            `canonical Resource Run ${operationRun.id} has incomplete refresh result evidence`,
+          );
+        }
+        result = {
+          summary: persisted.summary,
+          outputs: persisted.outputs,
+          nativeResources: persisted.nativeResources,
+          ...(persisted.backendOperationId
+            ? { backendOperationId: persisted.backendOperationId }
+            : {}),
+        };
+      } else {
+        result = await this.#adapter.refresh({
+          resourceId: id,
+          ...(operationRun
+            ? { operationKey: operationRun.resourceOperationKey }
+            : {}),
+          environment: record.environment ?? "default",
+          stateGeneration:
+            record.execution?.stateGeneration ??
+            record.stateAdoption?.stateGeneration ??
+            0,
+          ...(record.stateAdoption
+            ? { stateAdoption: record.stateAdoption }
+            : {}),
+          plan,
+          target: entry,
+          implementation,
+          credentialRef: entry.credentialRef,
+          nativeResources: lock.nativeResources ?? [],
+          ...(Object.keys(resolvedConnections.value).length > 0
+            ? { resolvedConnections: resolvedConnections.value }
+            : {}),
+          actor,
+        });
+      }
+      if (operationRun && result.execution) {
+        throw new Error(
+          `direct Resource adapter ${implementation.implementation} returned an OpenTofu execution pointer`,
+        );
+      }
       if (record.stateAdoption && !result.execution) {
         throw new Error(
           `resource ${id} refresh succeeded without Resource-owned execution state; refusing to consume confirmed state adoption`,
+        );
+      }
+      if (operationRun && !operationRun.resourceOperationResult) {
+        operationRun = await this.#persistPluginOperationResult(operationRun, {
+          summary: result.summary,
+          nativeResources: result.nativeResources,
+          outputs: result.outputs,
+          ...(result.backendOperationId
+            ? { backendOperationId: result.backendOperationId }
+            : {}),
+        });
+      }
+      if (operationRun) {
+        operationRun = await this.#stagePluginOperationAudit(
+          operationRun,
+          "resource.refresh.succeeded",
+          {
+            generation: record.generation,
+            observedGeneration: record.observedGeneration,
+            phase: "Ready",
+            nativeResourceCount: result.nativeResources.length,
+          },
         );
       }
     } catch (error) {
@@ -1980,7 +2664,11 @@ export class ResourceShapeService {
     }
 
     const refreshedAt = this.#now();
-    const { stateAdoption: _consumedStateAdoption, ...refreshedBase } = claimed;
+    const {
+      stateAdoption: _consumedStateAdoption,
+      pendingOperation: _completedRefresh,
+      ...refreshedBase
+    } = claimed;
     const refreshedRecord: ResourceShapeRecord = {
       ...refreshedBase,
       phase: "Ready",
@@ -1991,19 +2679,63 @@ export class ResourceShapeService {
         record.generation,
         refreshedAt,
       ),
+      ...(operationRun ? { lastOperationRunId: operationRun.id } : {}),
       updatedAt: refreshedAt,
     };
-    const persisted = await this.#stores.resources.compareAndSet(
-      refreshedRecord,
-      claimVersion,
-    );
+    const refreshedLock: ResolutionLockRecord = {
+      ...lock,
+      nativeResources: result.nativeResources,
+      updatedAt: refreshedAt,
+    };
+    let persisted;
+    try {
+      persisted = await this.#stores.commitApply({
+        readyRecord: refreshedRecord,
+        finalLock: refreshedLock,
+        expectedApplying: claimVersion,
+      });
+    } catch (error) {
+      await this.#notifyLifecycle({
+        type: "unknown",
+        spaceId: space,
+        resourceId: id,
+        operation: "refresh",
+      });
+      await this.#recordResourceEvent({
+        action: "resource.refresh.finalize_pending",
+        space,
+        resourceId: id,
+        actor,
+        ...(operationRun
+          ? { runId: operationRun.id }
+          : result.runId
+            ? { runId: result.runId }
+            : {}),
+        metadata: {
+          generation: record.generation,
+          phase: "Applying",
+          reason: "atomic_finalize_failed",
+        },
+      });
+      return {
+        ok: false,
+        error: {
+          code: "deployment_finalize_pending",
+          message: `resource ${id} refresh result is durable but atomic Resource/ResolutionLock finalization is pending: ${errorMessage(error)}`,
+        },
+      };
+    }
     if (persisted.status === "not_found") {
       await this.#recordResourceEvent({
         action: "resource.refresh.failed",
         space,
         resourceId: id,
         actor,
-        ...(result.runId ? { runId: result.runId } : {}),
+        ...(operationRun
+          ? { runId: operationRun.id }
+          : result.runId
+            ? { runId: result.runId }
+            : {}),
         metadata: { generation: record.generation, reason: "not_found" },
       });
       return {
@@ -2017,7 +2749,11 @@ export class ResourceShapeService {
         space,
         resourceId: id,
         actor,
-        ...(result.runId ? { runId: result.runId } : {}),
+        ...(operationRun
+          ? { runId: operationRun.id }
+          : result.runId
+            ? { runId: result.runId }
+            : {}),
         metadata: {
           generation: record.generation,
           reason: "reconcile_conflict",
@@ -2031,81 +2767,54 @@ export class ResourceShapeService {
         },
       };
     }
-    const refreshedLock: ResolutionLockRecord = {
-      ...lock,
-      nativeResources: result.nativeResources,
-      updatedAt: refreshedAt,
-    };
-    try {
-      await this.#stores.locks.put(refreshedLock);
-    } catch (error) {
-      const failedAt = this.#now();
-      await this.#stores.resources.compareAndSet(
-        {
-          ...persisted.record,
-          phase: "Failed",
-          conditions: refreshFailedConditions(
-            persisted.record.conditions,
-            persisted.record.generation,
-            failedAt,
-            error,
-          ),
-          updatedAt: failedAt,
-        },
-        {
-          generation: persisted.record.generation,
-          phase: persisted.record.phase,
-          updatedAt: persisted.record.updatedAt,
-        },
-      );
-      await this.#notifyLifecycle({
-        type: "unknown",
-        spaceId: space,
-        resourceId: id,
-        operation: "refresh",
-      });
-      await this.#recordResourceEvent({
-        action: "resource.refresh.failed",
-        space,
-        resourceId: id,
-        actor,
-        ...(result.runId ? { runId: result.runId } : {}),
-        metadata: {
-          generation: record.generation,
-          phase: "Failed",
-          reason: "resolution_lock_persist_failed",
-        },
-      });
-      return {
-        ok: false,
-        error: { code: "refresh_failed", message: errorMessage(error) },
-      };
-    }
     await this.#notifyLifecycle({
       type: "ready",
       spaceId: space,
       resourceId: id,
     });
-    await this.#recordResourceEvent({
-      action: "resource.refresh.succeeded",
-      space,
-      resourceId: id,
-      actor,
-      ...(result.runId ? { runId: result.runId } : {}),
-      metadata: {
-        generation: persisted.record.generation,
-        observedGeneration: persisted.record.observedGeneration,
-        phase: persisted.record.phase,
-        nativeResourceCount: result.nativeResources.length,
-      },
-    });
+    const successMetadata = {
+      generation: persisted.record.generation,
+      observedGeneration: persisted.record.observedGeneration,
+      phase: persisted.record.phase,
+      nativeResourceCount: result.nativeResources.length,
+    };
+    if (operationRun) {
+      const completed = await this.#completePluginOperationRun({
+        run: operationRun,
+        action: "resource.refresh.succeeded",
+        metadata: successMetadata,
+      });
+      operationRun = completed.run;
+      if (!completed.audit) {
+        return {
+          ok: false,
+          error: {
+            code: "deployment_finalize_pending",
+            message: `resource ${id} is Ready but canonical refresh Run audit finalization is pending`,
+          },
+        };
+      }
+    } else {
+      await this.#recordResourceEvent({
+        action: "resource.refresh.succeeded",
+        space,
+        resourceId: id,
+        actor,
+        ...(result.runId ? { runId: result.runId } : {}),
+        metadata: successMetadata,
+      });
+    }
     return {
       ok: true,
       value: {
         resource: this.#assemble(persisted.record, refreshedLock),
         refresh: {
           summary: result.summary,
-          ...(result.runId ? { runId: result.runId } : {}),
+          ...(operationRun
+            ? { runId: operationRun.id }
+            : result.runId
+              ? { runId: result.runId }
+              : {}),
         },
       },
     };
@@ -2356,6 +3065,57 @@ export class ResourceShapeService {
       };
     }
 
+    const resolvedConnections = await this.#resolveConnections(
+      space,
+      id,
+      specResult.parsed,
+    );
+    if (!resolvedConnections.ok) return resolvedConnections;
+
+    let operationRun: ResourceOperationRun | undefined;
+    if (implementation.plugin) {
+      try {
+        if (record.phase === "Deleting") {
+          if (
+            !this.#operationRuns ||
+            record.pendingOperation?.operation !== "delete"
+          ) {
+            throw new Error(
+              `resource ${id} has no canonical delete Run for recovery`,
+            );
+          }
+          operationRun = await this.#operationRuns.getResourceOperationRun(
+            record.pendingOperation.runId,
+          );
+          if (
+            !operationRun ||
+            operationRun.resourceOperationKey !==
+              record.pendingOperation.operationKey
+          ) {
+            throw new Error(
+              `resource ${id} canonical delete Run is missing or mismatched`,
+            );
+          }
+        } else {
+          operationRun = await this.#beginPluginOperationRun({
+            operation: "delete",
+            resourceId: id,
+            actor,
+            identity: {
+              generation: record.generation,
+              resourceVersion: record.updatedAt,
+              lockVersion: lock.updatedAt,
+            },
+          });
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          error: { code: "delete_failed", message: errorMessage(error) },
+        };
+      }
+    }
+
     let claimedRecord = record;
     if (record.phase !== "Deleting") {
       const deleteClaim = await this.#stores.resources.claimDelete(
@@ -2363,6 +3123,15 @@ export class ResourceShapeService {
           ...record,
           phase: "Deleting",
           conditions: [deletingCondition(record.generation, this.#now())],
+          ...(operationRun
+            ? {
+                pendingOperation: {
+                  runId: operationRun.id,
+                  operation: "delete" as const,
+                  operationKey: operationRun.resourceOperationKey,
+                },
+              }
+            : {}),
           updatedAt: this.#now(),
         },
         record.generation,
@@ -2395,6 +3164,7 @@ export class ResourceShapeService {
       space,
       resourceId: id,
       actor,
+      ...(operationRun ? { runId: operationRun.id } : {}),
       metadata: {
         generation: claimedRecord.generation,
         phase: "Deleting",
@@ -2407,29 +3177,158 @@ export class ResourceShapeService {
       resourceId: id,
     });
     try {
-      await withTimeout(
-        this.#adapter.delete({
-          resourceId: id,
-          environment: claimedRecord.environment ?? "default",
-          stateGeneration:
-            claimedRecord.execution?.stateGeneration ??
-            claimedRecord.stateAdoption?.stateGeneration ??
-            0,
-          ...(claimedRecord.stateAdoption
-            ? { stateAdoption: claimedRecord.stateAdoption }
-            : {}),
-          plan: deletePlan,
-          nativeResources: lock.nativeResources ?? [],
-          target: entry,
-          implementation,
-          credentialRef: entry.credentialRef,
-          deletePolicy,
-          actor,
-        }),
-        this.#deleteTimeoutMs,
-        `delete ${id}`,
-      );
+      if (!operationRun?.resourceOperationResult) {
+        if (operationRun && record.phase === "Deleting") {
+          // The prior mutation response was lost. Never redispatch delete;
+          // resolve absence through the plugin's read-only observation path.
+          const observation = await this.#adapter.observe({
+            resourceId: id,
+            operationKey: operationRun.resourceOperationKey,
+            environment: claimedRecord.environment ?? "default",
+            stateGeneration:
+              claimedRecord.execution?.stateGeneration ??
+              claimedRecord.stateAdoption?.stateGeneration ??
+              0,
+            ...(claimedRecord.stateAdoption
+              ? { stateAdoption: claimedRecord.stateAdoption }
+              : {}),
+            plan: deletePlan,
+            target: entry,
+            implementation,
+            credentialRef: entry.credentialRef,
+            nativeResources: lock.nativeResources ?? [],
+            ...(Object.keys(resolvedConnections.value).length > 0
+              ? { resolvedConnections: resolvedConnections.value }
+              : {}),
+            actor,
+          });
+          if (observation.status === "missing") {
+            operationRun = await this.#persistPluginOperationResult(
+              operationRun,
+              {
+                summary: `confirmed deletion of ${id}`,
+                nativeResources: [],
+                observationStatus: "missing",
+                ...(observation.backendOperationId
+                  ? { backendOperationId: observation.backendOperationId }
+                  : {}),
+              },
+            );
+          } else {
+            // The first delete did not remove the stable provider object.
+            // Replay the exact same idempotent operation key; adapters must
+            // target the same native name and never fan out new work.
+            await withTimeout(
+              this.#adapter.delete({
+                resourceId: id,
+                operationKey: operationRun.resourceOperationKey,
+                environment: claimedRecord.environment ?? "default",
+                stateGeneration:
+                  claimedRecord.execution?.stateGeneration ??
+                  claimedRecord.stateAdoption?.stateGeneration ??
+                  0,
+                ...(claimedRecord.stateAdoption
+                  ? { stateAdoption: claimedRecord.stateAdoption }
+                  : {}),
+                plan: deletePlan,
+                nativeResources: lock.nativeResources ?? [],
+                target: entry,
+                implementation,
+                credentialRef: entry.credentialRef,
+                deletePolicy,
+                actor,
+              }),
+              this.#deleteTimeoutMs,
+              `delete ${id}`,
+            );
+            operationRun = await this.#persistPluginOperationResult(
+              operationRun,
+              {
+                summary: `deleted ${id} after ${observation.status} recovery observation`,
+                nativeResources: [],
+                ...(observation.backendOperationId
+                  ? { backendOperationId: observation.backendOperationId }
+                  : {}),
+              },
+            );
+          }
+        } else {
+          await withTimeout(
+            this.#adapter.delete({
+              resourceId: id,
+              ...(operationRun
+                ? { operationKey: operationRun.resourceOperationKey }
+                : {}),
+              environment: claimedRecord.environment ?? "default",
+              stateGeneration:
+                claimedRecord.execution?.stateGeneration ??
+                claimedRecord.stateAdoption?.stateGeneration ??
+                0,
+              ...(claimedRecord.stateAdoption
+                ? { stateAdoption: claimedRecord.stateAdoption }
+                : {}),
+              plan: deletePlan,
+              nativeResources: lock.nativeResources ?? [],
+              target: entry,
+              implementation,
+              credentialRef: entry.credentialRef,
+              deletePolicy,
+              actor,
+            }),
+            this.#deleteTimeoutMs,
+            `delete ${id}`,
+          );
+          if (operationRun) {
+            operationRun = await this.#persistPluginOperationResult(
+              operationRun,
+              {
+                summary: `deleted ${id}`,
+                nativeResources: [],
+              },
+            );
+          }
+        }
+      }
+      if (operationRun) {
+        operationRun = await this.#stagePluginOperationAudit(
+          operationRun,
+          "resource.delete.succeeded",
+          {
+            generation: claimedRecord.generation,
+            backendCleanup: true,
+            forced: false,
+          },
+        );
+      }
     } catch (error) {
+      if (operationRun) {
+        await this.#notifyLifecycle({
+          type: "unknown",
+          spaceId: space,
+          resourceId: id,
+          operation: "delete",
+        });
+        await this.#recordResourceEvent({
+          action: "resource.delete.finalize_pending",
+          space,
+          resourceId: id,
+          actor,
+          runId: operationRun.id,
+          metadata: {
+            generation: claimedRecord.generation,
+            phase: "Deleting",
+            reason: "backend_outcome_unknown",
+            forced: false,
+          },
+        });
+        return {
+          ok: false,
+          error: {
+            code: "deployment_finalize_pending",
+            message: `resource ${id} delete outcome is unknown; recovery will use read-only observation: ${errorMessage(error)}`,
+          },
+        };
+      }
       const failedAt = this.#now();
       const failed = await this.#stores.resources.compareAndSet(
         {
@@ -2543,21 +3442,343 @@ export class ResourceShapeService {
       spaceId: space,
       resourceId: id,
     });
-    await this.#recordResourceEvent({
-      action: "resource.delete.succeeded",
-      space,
-      resourceId: id,
-      actor,
-      metadata: {
-        generation: claimedRecord.generation,
-        backendCleanup: true,
-        forced: false,
-      },
-    });
+    const successMetadata = {
+      generation: claimedRecord.generation,
+      backendCleanup: true,
+      forced: false,
+    };
+    if (operationRun) {
+      const completed = await this.#completePluginOperationRun({
+        run: operationRun,
+        action: "resource.delete.succeeded",
+        metadata: successMetadata,
+      });
+      operationRun = completed.run;
+      if (!completed.audit) {
+        return {
+          ok: false,
+          error: {
+            code: "deployment_finalize_pending",
+            message: `resource ${id} is deleted but canonical Run audit finalization is pending`,
+          },
+        };
+      }
+    } else {
+      await this.#recordResourceEvent({
+        action: "resource.delete.succeeded",
+        space,
+        resourceId: id,
+        actor,
+        metadata: successMetadata,
+      });
+    }
     return { ok: true, value: undefined };
   }
 
   // --- internals --------------------------------------------------------------
+
+  async #beginPluginOperationRun(input: {
+    readonly operation: ResourceOperation;
+    readonly resourceId: string;
+    readonly actor: ActorContext;
+    readonly identity: unknown;
+  }): Promise<ResourceOperationRun> {
+    if (!this.#operationRuns) {
+      throw new Error(
+        `canonical Run ledger is not configured for direct Resource ${input.operation}`,
+      );
+    }
+    const operationKey = await canonicalSha256({
+      apiVersion: "takosumi.resource-operation/v1",
+      operation: input.operation,
+      resourceId: input.resourceId,
+      identity: input.identity,
+    });
+    const id = `run_resource_${operationKey.replace(/^sha256:/, "").slice(0, 32)}`;
+    const now = this.#now();
+    const run: ResourceOperationRun = {
+      id,
+      workspaceId: resourceWorkspaceId(input.resourceId),
+      subject: { kind: "resource", id: input.resourceId },
+      resourceOperation: input.operation,
+      resourceOperationKey: operationKey,
+      resourceOperationVersion: 1,
+      type: runTypeForResourceOperation(input.operation),
+      status: "running",
+      createdBy: input.actor.actorAccountId,
+      createdAt: now,
+      startedAt: now,
+    };
+    const begun: BeginResourceOperationRunResult =
+      await this.#operationRuns.beginResourceOperationRun(run);
+    if (begun.status === "conflict") {
+      throw new Error(
+        `canonical Resource Run id ${id} is already owned by a different operation`,
+      );
+    }
+    return begun.run;
+  }
+
+  async #persistPluginOperationResult(
+    run: ResourceOperationRun,
+    result: ResourceOperationResultEvidence,
+  ): Promise<ResourceOperationRun> {
+    if (!this.#operationRuns) {
+      throw new Error("canonical Resource Run ledger is not configured");
+    }
+    if (run.resourceOperationResult) {
+      if (
+        canonicalJson(run.resourceOperationResult) !== canonicalJson(result)
+      ) {
+        throw new Error(
+          `canonical Resource Run ${run.id} already carries a different backend result`,
+        );
+      }
+      return run;
+    }
+    if (run.status !== "running") {
+      throw new Error(
+        `canonical Resource Run ${run.id} is ${run.status}; backend result cannot be replaced`,
+      );
+    }
+    const next: ResourceOperationRun = {
+      ...run,
+      resourceOperationResult: result,
+      resourceOperationVersion: run.resourceOperationVersion + 1,
+    };
+    const transitioned: TransitionResourceOperationRunResult =
+      await this.#operationRuns.transitionResourceOperationRun({
+        id: run.id,
+        operationKey: run.resourceOperationKey,
+        expectedVersion: run.resourceOperationVersion,
+        expectFrom: ["running"],
+        run: next,
+      });
+    if (transitioned.won && transitioned.run) return transitioned.run;
+    const current = transitioned.run;
+    if (
+      current?.resourceOperationResult &&
+      canonicalJson(current.resourceOperationResult) === canonicalJson(result)
+    ) {
+      return current;
+    }
+    throw new Error(
+      `canonical Resource Run ${run.id} changed before backend result could be persisted`,
+    );
+  }
+
+  async #failPluginOperationRun(
+    run: ResourceOperationRun,
+    error: unknown,
+  ): Promise<ResourceOperationRun> {
+    if (!this.#operationRuns || run.status !== "running") return run;
+    const { resourceOperationAudit: _discardedSuccessAudit, ...failedBase } =
+      run;
+    const failed: ResourceOperationRun = {
+      ...failedBase,
+      status: "failed",
+      errorCode: `${run.resourceOperation}_failed`,
+      finishedAt: this.#now(),
+      resourceOperationVersion: run.resourceOperationVersion + 1,
+    };
+    const transitioned =
+      await this.#operationRuns.transitionResourceOperationRun({
+        id: run.id,
+        operationKey: run.resourceOperationKey,
+        expectedVersion: run.resourceOperationVersion,
+        expectFrom: ["running"],
+        run: failed,
+      });
+    if (transitioned.won && transitioned.run) return transitioned.run;
+    if (transitioned.run?.status === "failed") return transitioned.run;
+    log.warn("service.resource_shape.operation_run_failure_pending", {
+      runId: run.id,
+      resourceId: run.subject.id,
+      operation: run.resourceOperation,
+      error,
+    });
+    return run;
+  }
+
+  async #stagePluginOperationAudit(
+    run: ResourceOperationRun,
+    action: string,
+    metadata: Readonly<Record<string, JsonValue>>,
+  ): Promise<ResourceOperationRun> {
+    if (!this.#operationRuns) {
+      throw new Error("canonical Resource Run ledger is not configured");
+    }
+    if (run.resourceOperationAudit) {
+      if (
+        run.resourceOperationAudit.action !== action ||
+        canonicalJson(run.resourceOperationAudit.metadata) !==
+          canonicalJson(metadata)
+      ) {
+        throw new Error(
+          `canonical Resource Run ${run.id} already carries a different Activity outbox intent`,
+        );
+      }
+      return run;
+    }
+    if (run.status !== "running") {
+      throw new Error(
+        `canonical Resource Run ${run.id} is terminal ${run.status}; Activity outbox intent cannot be staged`,
+      );
+    }
+    const staged: ResourceOperationRun = {
+      ...run,
+      resourceOperationAudit: {
+        status: "pending",
+        eventId: `act_${run.id}`,
+        action,
+        metadata,
+        createdAt: this.#now(),
+      },
+      resourceOperationVersion: run.resourceOperationVersion + 1,
+    };
+    const transition = await this.#operationRuns.transitionResourceOperationRun(
+      {
+        id: run.id,
+        operationKey: run.resourceOperationKey,
+        expectedVersion: run.resourceOperationVersion,
+        expectFrom: ["running"],
+        run: staged,
+      },
+    );
+    if (transition.won && transition.run) return transition.run;
+    if (
+      transition.run?.resourceOperationAudit?.action === action &&
+      canonicalJson(transition.run.resourceOperationAudit.metadata) ===
+        canonicalJson(metadata)
+    ) {
+      return transition.run;
+    }
+    throw new Error(
+      `canonical Resource Run ${run.id} changed before its Activity outbox intent could be staged`,
+    );
+  }
+
+  async #completePluginReadOperationRun(
+    run: ResourceOperationRun,
+  ): Promise<ResourceOperationRun> {
+    if (!this.#operationRuns) {
+      throw new Error("canonical Resource Run ledger is not configured");
+    }
+    if (run.status === "succeeded") return run;
+    if (run.status !== "running") {
+      throw new Error(
+        `canonical Resource Run ${run.id} is terminal ${run.status}`,
+      );
+    }
+    const completed: ResourceOperationRun = {
+      ...run,
+      status: "succeeded",
+      finishedAt: this.#now(),
+      resourceOperationVersion: run.resourceOperationVersion + 1,
+    };
+    const transition = await this.#operationRuns.transitionResourceOperationRun(
+      {
+        id: run.id,
+        operationKey: run.resourceOperationKey,
+        expectedVersion: run.resourceOperationVersion,
+        expectFrom: ["running"],
+        run: completed,
+      },
+    );
+    if (transition.won && transition.run) return transition.run;
+    if (transition.run?.status === "succeeded") return transition.run;
+    throw new Error(
+      `canonical Resource Run ${run.id} terminal transition lost its fence`,
+    );
+  }
+
+  async #completePluginOperationRun(input: {
+    readonly run: ResourceOperationRun;
+    readonly action: string;
+    readonly metadata: Readonly<Record<string, JsonValue>>;
+  }): Promise<{ readonly run: ResourceOperationRun; readonly audit: boolean }> {
+    if (!this.#operationRuns) {
+      throw new Error("canonical Resource Run ledger is not configured");
+    }
+    let run = await this.#stagePluginOperationAudit(
+      input.run,
+      input.action,
+      input.metadata,
+    );
+    if (run.status === "running") {
+      const completedAt = this.#now();
+      const completed: ResourceOperationRun = {
+        ...run,
+        status: "succeeded",
+        finishedAt: completedAt,
+        resourceOperationVersion: run.resourceOperationVersion + 1,
+      };
+      const transitioned =
+        await this.#operationRuns.transitionResourceOperationRun({
+          id: run.id,
+          operationKey: run.resourceOperationKey,
+          expectedVersion: run.resourceOperationVersion,
+          expectFrom: ["running"],
+          run: completed,
+        });
+      if (transitioned.won && transitioned.run) {
+        run = transitioned.run;
+      } else if (transitioned.run?.status === "succeeded") {
+        run = transitioned.run;
+      } else {
+        throw new Error(
+          `canonical Resource Run ${run.id} terminal transition lost its fence`,
+        );
+      }
+    }
+    if (run.status !== "succeeded") {
+      throw new Error(
+        `canonical Resource Run ${run.id} is terminal ${run.status}, not succeeded`,
+      );
+    }
+    return { run, audit: await this.#repairPluginOperationAudit(run) };
+  }
+
+  async #repairPluginOperationAudit(
+    run: ResourceOperationRun,
+  ): Promise<boolean> {
+    const audit = run.resourceOperationAudit;
+    if (!audit || audit.status === "completed") return true;
+    if (run.status !== "succeeded") return false;
+    if (!this.#activity || !this.#operationRuns) return false;
+    const persisted = await this.#activity.recordIdempotent(
+      audit.eventId,
+      audit.createdAt,
+      {
+        workspaceId: run.workspaceId,
+        actorId: run.createdBy,
+        action: audit.action,
+        targetType: "resource",
+        targetId: run.subject.id,
+        runId: run.id,
+        metadata: { ...audit.metadata },
+      },
+    );
+    if (!persisted) return false;
+    const acknowledged: ResourceOperationRun = {
+      ...run,
+      resourceOperationAudit: { ...audit, status: "completed" },
+      resourceOperationVersion: run.resourceOperationVersion + 1,
+    };
+    const transition = await this.#operationRuns.transitionResourceOperationRun(
+      {
+        id: run.id,
+        operationKey: run.resourceOperationKey,
+        expectedVersion: run.resourceOperationVersion,
+        expectFrom: ["succeeded"],
+        run: acknowledged,
+      },
+    );
+    return (
+      transition.won ||
+      transition.run?.resourceOperationAudit?.status === "completed"
+    );
+  }
 
   async #recordResourceEvent(input: {
     readonly action: string;
@@ -3241,6 +4462,9 @@ function resourceDeploymentQuoteContext(
     spec: request.spec,
     selectedImplementation: output.selectedImplementation,
     selectedTarget: output.selectedTarget,
+    ...(output.resolutionLock.targetSnapshot?.region
+      ? { selectedTargetRegion: output.resolutionLock.targetSnapshot.region }
+      : {}),
     resolutionFingerprint: evidence.resolutionFingerprint,
     nativeResourcePlan: output.nativeResourcePlan,
     planDigest: evidence.planDigest,
@@ -3357,6 +4581,73 @@ function canonicalJson(value: unknown): string {
     .filter((key) => object[key] !== undefined)
     .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
     .join(",")}}`;
+}
+
+function recoveredPluginOperationAudit(
+  run: ResourceOperationRun,
+  resource: ResourceShapeRecord | undefined,
+): {
+  readonly action: string;
+  readonly metadata: Readonly<Record<string, JsonValue>>;
+} {
+  if (run.resourceOperation === "delete") {
+    return {
+      action: "resource.delete.succeeded",
+      metadata: {
+        backendCleanup: true,
+        forced: false,
+        recovered: true,
+      },
+    };
+  }
+  if (!resource) {
+    throw new Error(
+      `resource ${run.subject.id} vanished before ${run.resourceOperation} Run recovery`,
+    );
+  }
+  if (run.resourceOperation === "observe") {
+    return {
+      action: "resource.observe.succeeded",
+      metadata: {
+        generation: resource.generation,
+        phase: resource.phase,
+        observationStatus:
+          run.resourceOperationResult?.observationStatus ?? "current",
+        recovered: true,
+      },
+    };
+  }
+  const metadata: Record<string, JsonValue> = {
+    generation: resource.generation,
+    observedGeneration: resource.observedGeneration,
+    phase: resource.phase,
+    nativeResourceCount:
+      run.resourceOperationResult?.nativeResources?.length ?? 0,
+    recovered: true,
+  };
+  return {
+    action: `resource.${run.resourceOperation}.succeeded`,
+    metadata,
+  };
+}
+
+function runTypeForResourceOperation(
+  operation: ResourceOperation,
+): ResourceOperationRun["type"] {
+  if (operation === "preview") return "plan";
+  if (operation === "observe") return "drift_check";
+  if (operation === "delete") return "destroy_apply";
+  return "apply";
+}
+
+function resourceWorkspaceId(resourceId: string): string {
+  const match = /^tkrn:([^:]+):[^:]+:[^:]+$/.exec(resourceId);
+  if (!match?.[1]) {
+    throw new TypeError(
+      `resource id ${resourceId} must be formatted tkrn:{space}:{kind}:{name}`,
+    );
+  }
+  return match[1];
 }
 
 const CAPABILITY_LEVELS = new Set([

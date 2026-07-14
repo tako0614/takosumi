@@ -132,10 +132,51 @@ test("reference interfaces match each app's audited runtime contract", () => {
   ).toEqual(["source.git.hosting.read"]);
 });
 
+test("stateful R2 services use reviewed runner pre-destroy cleanup", () => {
+  const expectedAction = (script: string) => [
+    {
+      apiVersion: "takosumi.dev/v1alpha1",
+      kind: "command",
+      id: "empty-r2-before-destroy-v1",
+      phase: "pre_destroy",
+      executor: "runner",
+      command: ["bun", "run", script],
+      workingDirectory: ".",
+      timeoutSeconds: 3600,
+      runnerCapability: "capsule.lifecycle.command.v1",
+      useProviderCredentials: true,
+    },
+  ];
+  const expectedPolicy = {
+    allowedExecutors: ["runner"],
+    allowedRunnerCapabilities: ["capsule.lifecycle.command.v1"],
+    allowProviderCredentials: true,
+  };
+  for (const [name, script] of [
+    ["takos-storage-main", "storage:pre-destroy"],
+    ["takos-git-main", "git:pre-destroy"],
+  ] as const) {
+    const config = REFERENCE_APP_INSTALL_CONFIGS.find(
+      (candidate) => candidate.name === name,
+    )!;
+    expect(config.lifecycleActions).toEqual(expectedAction(script));
+    expect(config.policy.lifecycleActions).toEqual(expectedPolicy);
+    expect(config.outputAllowlist.object_bucket_name).toEqual({
+      from: "object_bucket_name",
+      type: "string",
+      required: true,
+    });
+  }
+});
+
 test("Office publishes the three surfaces and exact file handlers", () => {
   const office = REFERENCE_APP_INSTALL_CONFIGS.find(
     (config) => config.name === "takos-office-main",
   )!;
+  expect(office.installContextVariableMapping).toEqual({
+    object_storage_workspace_id: "workspace_id",
+    app_capsule_id: "capsule_id",
+  });
   const handlers = (office.interfaceBlueprints ?? []).filter(
     (item) => item.spec.type === "interface.file.handler",
   );

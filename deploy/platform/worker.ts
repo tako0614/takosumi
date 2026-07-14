@@ -55,7 +55,14 @@ import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "takosumi-contract/api-surface";
-import type { ActorContext } from "takosumi-contract";
+import type {
+  ActorContext,
+  Interface,
+  NativeResourceRef,
+  ResourceObject,
+  ResourceShapeKind,
+} from "takosumi-contract";
+import { isResourceShapeKind } from "takosumi-contract";
 import type {
   ManagedPublicHostnameClaimRequest,
   ManagedPublicHostnameClaimResult,
@@ -80,7 +87,9 @@ import {
   isPlatformExtensionContributionsPath,
   matchPlatformExtensionRoute,
   pathIsUnderBase,
+  platformExtensionBasePathIsReserved,
   platformExtensionRoutes,
+  type PlatformCompatibilityProfile,
   type PlatformExtensionRoute,
   type PlatformExtensionContribution,
 } from "./platform_extensions.ts";
@@ -88,6 +97,7 @@ import {
   TAKOSUMI_OPERATOR_CAPABILITY_KEYS,
   type CreateTakosumiDiscoveryOptions,
   type TakosumiAdapterCapabilities,
+  type TakosumiCompatibilityProfileCapabilities,
   type TakosumiOperatorCapabilities,
   type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
@@ -103,6 +113,7 @@ export {
   isPlatformExtensionContributionsPath,
   matchPlatformExtensionRoute,
   pathIsUnderBase,
+  platformExtensionBasePathIsReserved,
   platformExtensionRoutes,
 } from "./platform_extensions.ts";
 export {
@@ -249,20 +260,9 @@ export default {
     if (isPlatformExtensionContributionsPath(url.pathname)) {
       return handlePlatformExtensionContributionsRequest(request, url, env);
     }
-    const platformExtensionRoute = matchPlatformExtensionRoute(
-      url.pathname,
-      platformExtensionRoutes(
-        env as unknown as { readonly [key: string]: unknown },
-      ),
-    );
-    if (platformExtensionRoute) {
-      return await handlePlatformExtensionRouteRequest(
-        request,
-        env,
-        platformExtensionRoute,
-        verifyPlatformExtensionSession,
-      );
-    }
+    // Core lifecycle and identity prefixes always win over extension routing.
+    // Descriptor validation rejects overlaps too; keeping the dispatch order
+    // explicit prevents a future parser regression from shadowing authority.
     if (isPlatformResourceShapeApiPath(url.pathname)) {
       return await handlePlatformResourceShapeApiRequest(request, env);
     }
@@ -271,6 +271,22 @@ export default {
     // deploy-control service seam BEFORE delegating to the accounts handler.
     if (url.pathname.startsWith("/hooks/sources/")) {
       return await handleSourceWebhook(request, url, env);
+    }
+    if (!platformExtensionBasePathIsReserved(url.pathname)) {
+      const platformExtensionRoute = matchPlatformExtensionRoute(
+        url.pathname,
+        platformExtensionRoutes(
+          env as unknown as { readonly [key: string]: unknown },
+        ),
+      );
+      if (platformExtensionRoute) {
+        return await handlePlatformExtensionRouteRequest(
+          request,
+          env,
+          platformExtensionRoute,
+          verifyPlatformExtensionSession,
+        );
+      }
     }
     const accountsResponse = withPlatformAssetCacheHeaders(
       request,
@@ -302,6 +318,7 @@ export default {
   ): Promise<void> {
     await runScheduledSourcePoll(env);
     await runScheduledOpenTofuRunRepair(env);
+    await runScheduledResourceOperationRepair(env);
     if (autoPlanStaleCapsulesEnabled(env)) {
       await runScheduledStaleCapsuleAutoPlan(env);
     }
@@ -348,6 +365,7 @@ function platformDiscoveryOptions(
     },
     operator,
     compat: extensionDiscovery.compat,
+    compatibilityProfiles: extensionDiscovery.compatibilityProfiles,
     extensions: extensionDiscovery.extensions,
     endpoints: Object.fromEntries(
       Object.entries(extensionDiscovery.endpoints).map(([token, path]) => [
@@ -533,6 +551,23 @@ async function platformResourceShapeExternalRequest(
       response: Response.json({ error: "unauthenticated" }, { status: 401 }),
     };
   }
+  return await platformResourceShapeAuthorizedRequest(
+    request,
+    request,
+    env,
+    session,
+  );
+}
+
+async function platformResourceShapeAuthorizedRequest(
+  request: Request,
+  workspaceVerificationRequest: Request,
+  env: CloudflareWorkerEnv,
+  session: PlatformExtensionSessionContext,
+): Promise<
+  | { readonly ok: true; readonly request: Request }
+  | { readonly ok: false; readonly response: Response }
+> {
   const url = new URL(request.url);
   const interfaceAccessFailure = isPlatformInterfaceApiPath(url.pathname)
     ? platformInterfaceAccessFailure(request, session)
@@ -583,7 +618,7 @@ async function platformResourceShapeExternalRequest(
   }
 
   const verified = await platformExtensionVerifiedWorkspaceSession(
-    request,
+    workspaceVerificationRequest,
     env,
     session,
     workspaceId,
@@ -953,24 +988,34 @@ function hasDurableObjectBinding(value: unknown): boolean {
 
 function platformExtensionDiscovery(env: CloudflareWorkerEnv): {
   readonly compat: Readonly<Record<string, boolean>>;
+  readonly compatibilityProfiles: TakosumiCompatibilityProfileCapabilities;
   readonly extensions: readonly string[];
   readonly endpoints: Readonly<Record<string, string>>;
 } {
   const configuredRoutes = platformExtensionRoutes(
     env as unknown as { readonly [key: string]: unknown },
-  ).filter((route) => platformExtensionHandler(env, route.handlerKey));
+  ).filter((route) => platformExtensionRouteConfigured(env, route));
   const compat: Record<string, boolean> = {};
+  const compatibilityProfiles: Record<
+    string,
+    { readonly planes: readonly ("control" | "data")[] }
+  > = {};
   const extensions = new Set<string>();
   const endpoints: Record<string, string> = {};
   for (const route of configuredRoutes) {
     for (const capability of route.capabilities ?? []) {
       extensions.add(capability);
       endpoints[capability] = route.basePath;
-      if (capability.startsWith("compat.")) compat[capability] = true;
+    }
+    for (const profile of route.compatibilityProfiles ?? []) {
+      compat[profile.profile] = true;
+      compatibilityProfiles[profile.profile] = { planes: profile.planes };
+      endpoints[profile.profile] = route.basePath;
     }
   }
   return {
     compat,
+    compatibilityProfiles,
     extensions: [...extensions].sort(),
     endpoints,
   };
@@ -1398,6 +1443,7 @@ export interface PlatformExtensionCatalogItem {
   readonly basePath: `/${string}`;
   readonly configured: boolean;
   readonly capabilities?: readonly string[];
+  readonly compatibilityProfiles?: readonly PlatformCompatibilityProfile[];
   readonly authMode?: "platform" | "handler";
   readonly requiredScopes?: readonly string[];
   readonly contributions?: readonly PlatformExtensionContribution[];
@@ -1424,8 +1470,11 @@ export function platformExtensionCatalog(
   ).map((route) => ({
     ...(route.id ? { id: route.id } : {}),
     basePath: route.basePath,
-    configured: platformExtensionHandler(env, route.handlerKey) !== undefined,
+    configured: platformExtensionRouteConfigured(env, route),
     ...(route.capabilities ? { capabilities: route.capabilities } : {}),
+    ...(route.compatibilityProfiles
+      ? { compatibilityProfiles: route.compatibilityProfiles }
+      : {}),
     ...(route.authMode ? { authMode: route.authMode } : {}),
     ...(route.requiredScopes ? { requiredScopes: route.requiredScopes } : {}),
     ...(route.contributions ? { contributions: route.contributions } : {}),
@@ -1458,9 +1507,7 @@ export function platformExtensionContributionCatalog(
   const contributions = platformExtensionRoutes(
     env as unknown as { readonly [key: string]: unknown },
   )
-    .filter(
-      (route) => platformExtensionHandler(env, route.handlerKey) !== undefined,
-    )
+    .filter((route) => platformExtensionRouteConfigured(env, route))
     .flatMap((route) => route.contributions ?? [])
     .sort(
       (left, right) =>
@@ -1549,19 +1596,122 @@ export async function handlePlatformExtensionRequest(
   );
 }
 
+/** Handler-owned protocol authentication assertion for handler-auth profiles. */
+export interface PlatformCompatibilityAuthorization {
+  readonly workspaceId: string;
+  readonly subject: string;
+  readonly scopes?: readonly string[];
+}
+
+/**
+ * The only mutation authority given to a control-plane compatibility profile.
+ * Every accepted request is constrained to `/v1/resources` and dispatched to
+ * the same Resource Deploy API used by the provider, CLI, and dashboard.
+ */
+export interface PlatformCompatibilityResourceDeployApiPort {
+  fetch(
+    request: Request,
+    authorization?: PlatformCompatibilityAuthorization,
+  ): Promise<Response>;
+}
+
+export interface PlatformCompatibilityReadyResourceInput {
+  readonly space: string;
+  readonly kind: ResourceShapeKind;
+  readonly name: string;
+  /** Optional Interface grant to resolve alongside the Resource evidence. */
+  readonly interface?: {
+    readonly id: string;
+    readonly permission: string;
+  };
+}
+
+/** Immutable, read-only evidence returned to a data-plane profile. */
+export interface PlatformCompatibilityReadyResourceEvidence {
+  readonly resource: ResourceObject;
+  readonly nativeResources: readonly NativeResourceRef[];
+  readonly interface?: Interface;
+}
+
+/** The only authority given to a data-plane compatibility profile. */
+export interface PlatformCompatibilityDataReadResolver {
+  resolveReadyResource(
+    input: PlatformCompatibilityReadyResourceInput,
+    authorization?: PlatformCompatibilityAuthorization,
+  ): Promise<PlatformCompatibilityReadyResourceEvidence | undefined>;
+}
+
+/**
+ * Capability-limited authority passed to compatibility handlers. It contains
+ * no env, store, adapter, backend manager, lifecycle registry, or write API.
+ */
+export interface PlatformCompatibilityAuthority {
+  readonly profiles: readonly PlatformCompatibilityProfile[];
+  readonly control?: {
+    readonly resourceApi: PlatformCompatibilityResourceDeployApiPort;
+  };
+  readonly data?: PlatformCompatibilityDataReadResolver;
+}
+
+export interface PlatformCompatibilityHandler {
+  fetchCompatibility(
+    request: Request,
+    authority: PlatformCompatibilityAuthority,
+  ): Response | Promise<Response>;
+}
+
+export type PlatformCompatibilityAuthorityFactory = (input: {
+  readonly request: Request;
+  readonly env: CloudflareWorkerEnv;
+  readonly route: PlatformExtensionRoute;
+  readonly session?: PlatformExtensionSessionContext;
+}) => PlatformCompatibilityAuthority | Promise<PlatformCompatibilityAuthority>;
+
 export async function handlePlatformExtensionRouteRequest(
   request: Request,
   env: CloudflareWorkerEnv,
   route: PlatformExtensionRoute,
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
+  authorityFactory: PlatformCompatibilityAuthorityFactory = createPlatformCompatibilityAuthority,
 ): Promise<Response> {
   const handler = platformExtensionHandler(env, route.handlerKey);
   if (!handler) return Response.json({ error: "not found" }, { status: 404 });
-  if (route.authMode === "handler") {
-    return await handlePlatformExtensionHandlerAuthRouteRequest(
+  if ((route.compatibilityProfiles?.length ?? 0) > 0) {
+    if (typeof handler.fetchCompatibility !== "function") {
+      return Response.json(
+        {
+          error: "compatibility authority unavailable",
+          error_description:
+            "profile handler must implement fetchCompatibility(request, authority)",
+        },
+        { status: 503 },
+      );
+    }
+    if (route.authMode === "handler") {
+      const sanitized = platformExtensionHandlerAuthRequest(request);
+      const authority = await authorityFactory({ request, env, route });
+      return await handler.fetchCompatibility(sanitized, authority);
+    }
+    const authContext = await platformExtensionAuthContext(
       request,
-      handler,
+      env,
+      route,
+      sessionVerifier,
     );
+    if (!authContext.ok) return authContext.response;
+    const authority = await authorityFactory({
+      request,
+      env,
+      route,
+      session: authContext.session,
+    });
+    return await handler.fetchCompatibility(authContext.request, authority);
+  }
+  if (typeof handler.fetch !== "function") {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  if (route.authMode === "handler") {
+    return await handler.fetch(platformExtensionHandlerAuthRequest(request));
   }
   const authContext = await platformExtensionAuthContext(
     request,
@@ -1573,10 +1723,7 @@ export async function handlePlatformExtensionRouteRequest(
   return await handler.fetch(authContext.request);
 }
 
-async function handlePlatformExtensionHandlerAuthRouteRequest(
-  request: Request,
-  handler: PlatformExtensionHandler,
-): Promise<Response> {
+function platformExtensionHandlerAuthRequest(request: Request): Request {
   const headers = new Headers(request.headers);
   for (const header of [
     ...PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS.filter(
@@ -1586,13 +1733,14 @@ async function handlePlatformExtensionHandlerAuthRouteRequest(
   ]) {
     headers.delete(header);
   }
-  return await handler.fetch(clonePlatformExtensionRequest(request, headers));
+  return clonePlatformExtensionRequest(request, headers);
 }
 
 export interface PlatformExtensionSessionContext {
   readonly authenticated: boolean;
   readonly authKind?:
     | "service-token"
+    | "protocol-credential"
     | "interface-oauth-token"
     | "oauth-access-token"
     | "personal-access-token"
@@ -1612,6 +1760,271 @@ export type PlatformExtensionSessionVerifier = (
   env: CloudflareWorkerEnv,
   route?: PlatformExtensionRoute,
 ) => Promise<PlatformExtensionSessionContext>;
+
+export interface PlatformCompatibilityAuthorityDependencies {
+  readonly dispatchResourceRequest?: typeof dispatchPlatformCompatibilityResourceRequest;
+  readonly resolveReadyResource?: typeof resolvePlatformCompatibilityReadyResource;
+}
+
+export async function createPlatformCompatibilityAuthority(
+  input: {
+    readonly request: Request;
+    readonly env: CloudflareWorkerEnv;
+    readonly route: PlatformExtensionRoute;
+    readonly session?: PlatformExtensionSessionContext;
+  },
+  dependencies: PlatformCompatibilityAuthorityDependencies = {},
+): Promise<PlatformCompatibilityAuthority> {
+  const profiles = input.route.compatibilityProfiles ?? [];
+  const exposesControl = profiles.some(({ planes }) =>
+    planes.includes("control"),
+  );
+  const exposesData = profiles.some(({ planes }) => planes.includes("data"));
+  return Object.freeze({
+    profiles: Object.freeze(
+      profiles.map((profile) =>
+        Object.freeze({
+          profile: profile.profile,
+          planes: Object.freeze([...profile.planes]),
+        }),
+      ),
+    ),
+    ...(exposesControl
+      ? {
+          control: Object.freeze({
+            resourceApi: Object.freeze({
+              fetch: (
+                request: Request,
+                authorization?: PlatformCompatibilityAuthorization,
+              ) =>
+                (
+                  dependencies.dispatchResourceRequest ??
+                  dispatchPlatformCompatibilityResourceRequest
+                )(request, authorization, input),
+            }),
+          }),
+        }
+      : {}),
+    ...(exposesData
+      ? {
+          data: Object.freeze({
+            resolveReadyResource: (
+              resource: PlatformCompatibilityReadyResourceInput,
+              authorization?: PlatformCompatibilityAuthorization,
+            ) =>
+              resolveReadyCompatibilityEvidence(
+                dependencies.resolveReadyResource ??
+                  resolvePlatformCompatibilityReadyResource,
+                resource,
+                authorization,
+                input,
+              ),
+          }),
+        }
+      : {}),
+  });
+}
+
+async function resolveReadyCompatibilityEvidence(
+  resolver: typeof resolvePlatformCompatibilityReadyResource,
+  input: PlatformCompatibilityReadyResourceInput,
+  authorization: PlatformCompatibilityAuthorization | undefined,
+  context: {
+    readonly request: Request;
+    readonly env: CloudflareWorkerEnv;
+    readonly route: PlatformExtensionRoute;
+    readonly session?: PlatformExtensionSessionContext;
+  },
+): Promise<PlatformCompatibilityReadyResourceEvidence | undefined> {
+  const evidence = await resolver(input, authorization, context);
+  return evidence?.resource.status?.phase === "Ready" ? evidence : undefined;
+}
+
+async function dispatchPlatformCompatibilityResourceRequest(
+  request: Request,
+  authorization: PlatformCompatibilityAuthorization | undefined,
+  context: {
+    readonly request: Request;
+    readonly env: CloudflareWorkerEnv;
+    readonly route: PlatformExtensionRoute;
+    readonly session?: PlatformExtensionSessionContext;
+  },
+): Promise<Response> {
+  const url = new URL(request.url);
+  if (!pathIsUnderBase(url.pathname, "/v1/resources")) {
+    return Response.json(
+      {
+        error: "invalid_compatibility_translation",
+        error_description:
+          "control-plane compatibility profiles may call only /v1/resources",
+      },
+      { status: 400 },
+    );
+  }
+  if (url.searchParams.has("force")) {
+    return Response.json(
+      {
+        error: "forbidden",
+        error_description:
+          "compatibility profiles cannot request break-glass Resource deletion",
+      },
+      { status: 403 },
+    );
+  }
+  const session = compatibilityAuthoritySession(context.session, authorization);
+  if (!session) {
+    return Response.json(
+      {
+        error: "unauthenticated",
+        error_description:
+          "handler-auth compatibility calls require an authenticated Workspace assertion",
+      },
+      { status: 401 },
+    );
+  }
+
+  const normalized = compatibilityResourceApiRequest(request, context.request);
+  const authorized = await platformResourceShapeAuthorizedRequest(
+    normalized,
+    context.request,
+    context.env,
+    session,
+  );
+  if (!authorized.ok) return authorized.response;
+  const service = await cachedDeployControlService(context.env);
+  return await service.app.fetch(authorized.request);
+}
+
+async function resolvePlatformCompatibilityReadyResource(
+  input: PlatformCompatibilityReadyResourceInput,
+  authorization: PlatformCompatibilityAuthorization | undefined,
+  context: {
+    readonly request: Request;
+    readonly env: CloudflareWorkerEnv;
+    readonly route: PlatformExtensionRoute;
+    readonly session?: PlatformExtensionSessionContext;
+  },
+): Promise<PlatformCompatibilityReadyResourceEvidence | undefined> {
+  const space = safePlatformExtensionContextId(input.space);
+  const name = safePlatformCompatibilityResourceName(input.name);
+  if (!space || !name || !isResourceShapeKind(input.kind)) return undefined;
+  const session = compatibilityAuthoritySession(context.session, authorization);
+  if (!session) return undefined;
+  const verified = await platformExtensionVerifiedWorkspaceSession(
+    context.request,
+    context.env,
+    session,
+    space,
+  );
+  if (!verified.ok) return undefined;
+
+  const operations = await takosumiOperationsFor(context.env);
+  const evidence = await operations.resourceCompatibility?.resolveReadyResource(
+    {
+      space,
+      kind: input.kind,
+      name,
+    },
+  );
+  if (!evidence || evidence.resource.status?.phase !== "Ready") {
+    return undefined;
+  }
+
+  let resolvedInterface: Interface | undefined;
+  if (input.interface) {
+    const subject = safePlatformExtensionSubject(verified.session.subject);
+    const interfaceId = safePlatformExtensionContextId(input.interface.id);
+    const permission = input.interface.permission.trim();
+    if (!subject || !interfaceId || !permission) return undefined;
+    try {
+      const candidate = await operations.interfaces.getAuthorizedForPrincipal(
+        interfaceId,
+        subject,
+        permission,
+      );
+      const resourceId = `tkrn:${space}:${input.kind}:${name}`;
+      if (
+        candidate.metadata.workspaceId !== space ||
+        candidate.metadata.ownerRef.kind !== "Resource" ||
+        candidate.metadata.ownerRef.id !== resourceId ||
+        candidate.status.phase !== "Resolved"
+      ) {
+        return undefined;
+      }
+      resolvedInterface = candidate;
+    } catch {
+      return undefined;
+    }
+  }
+
+  return structuredClone({
+    ...evidence,
+    ...(resolvedInterface ? { interface: resolvedInterface } : {}),
+  });
+}
+
+function compatibilityAuthoritySession(
+  session: PlatformExtensionSessionContext | undefined,
+  authorization: PlatformCompatibilityAuthorization | undefined,
+): PlatformExtensionSessionContext | undefined {
+  if (session?.authenticated) {
+    // Platform-auth profiles cannot replace their verified identity with a
+    // handler assertion. Workspace membership is checked per port call.
+    return authorization === undefined ? session : undefined;
+  }
+  const workspaceId = safePlatformExtensionContextId(
+    authorization?.workspaceId,
+  );
+  const subject = safePlatformExtensionSubject(authorization?.subject);
+  if (!workspaceId || !subject) return undefined;
+  const scopes = (authorization?.scopes ?? []).filter(
+    (scope) => typeof scope === "string" && scope.trim().length > 0,
+  );
+  return {
+    authenticated: true,
+    authKind: "protocol-credential",
+    workspaceId,
+    subject,
+    ...(scopes.length > 0 ? { scopes } : {}),
+  };
+}
+
+function compatibilityResourceApiRequest(
+  request: Request,
+  extensionRequest: Request,
+): Request {
+  const requestedUrl = new URL(request.url);
+  const normalizedUrl = new URL(extensionRequest.url);
+  normalizedUrl.pathname = requestedUrl.pathname;
+  normalizedUrl.search = requestedUrl.search;
+  normalizedUrl.hash = "";
+  const headers = new Headers(request.headers);
+  for (const name of [
+    ...PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS,
+    ...PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS,
+    TAKOSUMI_INTERNAL_ACTOR_HEADER,
+  ]) {
+    headers.delete(name);
+  }
+  return new Request(normalizedUrl, {
+    method: request.method,
+    headers,
+    body:
+      request.method === "GET" || request.method === "HEAD"
+        ? undefined
+        : request.body,
+    redirect: request.redirect,
+  });
+}
+
+function safePlatformCompatibilityResourceName(
+  value: string,
+): string | undefined {
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(trimmed)
+    ? trimmed
+    : undefined;
+}
 
 const PLATFORM_EXTENSION_AUTHENTICATED_HEADER =
   "x-takosumi-platform-authenticated";
@@ -2255,7 +2668,11 @@ function safePlatformExtensionHeaderValue(value: string): string {
 }
 
 interface PlatformExtensionHandler {
-  fetch(request: Request): Response | Promise<Response>;
+  fetch?(request: Request): Response | Promise<Response>;
+  fetchCompatibility?(
+    request: Request,
+    authority: PlatformCompatibilityAuthority,
+  ): Response | Promise<Response>;
 }
 
 function platformExtensionHandler(
@@ -2266,11 +2683,23 @@ function platformExtensionHandler(
   if (
     !handler ||
     typeof handler !== "object" ||
-    typeof (handler as { fetch?: unknown }).fetch !== "function"
+    (typeof (handler as { fetch?: unknown }).fetch !== "function" &&
+      typeof (handler as { fetchCompatibility?: unknown })
+        .fetchCompatibility !== "function")
   ) {
     return undefined;
   }
   return handler as PlatformExtensionHandler;
+}
+
+function platformExtensionRouteConfigured(
+  env: CloudflareWorkerEnv,
+  route: PlatformExtensionRoute,
+): boolean {
+  const handler = platformExtensionHandler(env, route.handlerKey);
+  return (route.compatibilityProfiles?.length ?? 0) > 0
+    ? typeof handler?.fetchCompatibility === "function"
+    : typeof handler?.fetch === "function";
 }
 
 function handleHardeningGatesRequest(
@@ -3013,6 +3442,66 @@ async function runScheduledResourceObservation(
       }),
     ),
   );
+}
+
+async function runScheduledResourceOperationRepair(
+  env: CloudflareWorkerEnv,
+): Promise<void> {
+  const service = await cachedDeployControlService(env);
+  const repair = service.operations.resourceOperationRepair;
+  if (!repair) return;
+  const result = await repairDirectResourceRuns(repair, { limit: 100 });
+  await Promise.all(
+    Object.entries(result).map(([outcome, value]) =>
+      recordWorkerMetric({
+        observability: service.context.adapters.observability,
+        env,
+        name: "takosumi_resource_operation_repair_count",
+        kind: "counter",
+        value,
+        tags: { outcome },
+      }),
+    ),
+  );
+}
+
+export interface ScheduledResourceOperationRepairResult {
+  readonly scanned: number;
+  readonly completed: number;
+  readonly auditsRepaired: number;
+  readonly pending: number;
+  readonly failures: number;
+}
+
+/** Bounded, failure-isolated adapter used by the platform cron wiring. */
+export async function repairDirectResourceRuns(
+  repair: {
+    repair(options?: {
+      readonly workspaceId?: string;
+      readonly limit?: number;
+    }): Promise<{
+      readonly scanned: number;
+      readonly completed: number;
+      readonly auditsRepaired: number;
+      readonly pending: number;
+    }>;
+  },
+  options: { readonly limit?: number } = {},
+): Promise<ScheduledResourceOperationRepairResult> {
+  const limit = positiveInteger(options.limit, 100);
+  try {
+    return { ...(await repair.repair({ limit })), failures: 0 };
+  } catch {
+    // A transient Run-ledger outage must not suppress source polling, drift,
+    // stale-plan handling, or Resource observation in the same cron tick.
+    return {
+      scanned: 0,
+      completed: 0,
+      auditsRepaired: 0,
+      pending: 0,
+      failures: 1,
+    };
+  }
 }
 
 function boundedEnvInteger(
