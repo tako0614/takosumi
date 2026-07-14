@@ -1,7 +1,7 @@
 /**
- * Run-credential mint broker (§9 per-phase credential mint; §13 per-alias split).
+ * Run-credential mint broker (§9 per-phase Credential Recipe materialization).
  *
- * A thin collaborator pulled out of `OpenTofuDeploymentController`: it owns the
+ * A thin collaborator pulled out of `OpenTofuController`: it owns the
  * just-before-dispatch provider-credential mint for a plan / apply / destroy run,
  * the post-mint provider-credential mint-policy assertion, and the non-secret
  * mint-event audit recording. Concentrating this here keeps the never-store /
@@ -17,10 +17,9 @@
  *   - `vault` — the {@link ConnectionVault}, whose run-execution handle is shared
  *     (the Connection-lifecycle facade keeps its own);
  *   - `store` — for the mint-event ledger writes;
- *   - `resolveRunInstallationProviderEnvBindings` — the run-scoped Provider Env binding resolution
- *     that feeds rootgen, so the minted TF_VAR vars line up byte-for-byte;
- *   - `policyForPlanRun` — the layered policy lookup (root-only requirement +
- *     credential mint policy);
+ *   - `resolveRunProviderBindings` — the run-scoped Provider
+ *     Binding resolution shared by root generation and credential mint;
+ *   - `policyForPlanRun` — the layered credential mint policy lookup;
  *   - `newId` / `now` — mirror the controller's handles so ids / timestamps line
  *     up across both surfaces.
  */
@@ -30,43 +29,47 @@ import type {
   PolicyConfig,
 } from "@takosumi/internal/deploy-control-api";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
-import {
-  providerCredentialArgs,
-  providerEnvRule,
-} from "takosumi-contract/provider-env-rules";
 import { CredentialBundle } from "../../adapters/vault/mod.ts";
 import type {
-  InstallationProviderEnvBindingMintEntry,
-  InstallationProviderEnvBindingDelivery,
+  CapsuleProviderBindingMintEntry,
   ConnectionVault,
 } from "../../adapters/vault/mod.ts";
-import type { OpenTofuDeploymentStore } from "./store.ts";
-import { mapVaultError, OpenTofuControllerError } from "./errors.ts";
-import { providerMatches } from "./policy.ts";
+import type { OpenTofuControlStore } from "./store.ts";
+import {
+  CREDENTIAL_MINT_FAILED_REASON,
+  CREDENTIAL_POLICY_FAILED_REASON,
+  CREDENTIAL_SERVICE_UNAVAILABLE_REASON,
+  mapVaultError,
+  OpenTofuControllerError,
+  PROVIDER_CONNECTION_CHANGED_REASON,
+  PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
+  structuredErrorReason,
+} from "./errors.ts";
 import { evaluateProviderCredentialMintPolicy } from "./provider_policy.ts";
 import {
-  resolvedProviderEnvBindingsDigest,
-  type ResolvedInstallationProviderEnvBinding,
+  resolvedProviderBindingsDigest,
+  type ResolvedCapsuleProviderBinding,
 } from "../connections/mod.ts";
 import type { RunCredentials } from "./mod.ts";
+import type { RunCredentialRecipeManifest } from "takosumi-contract/credential-recipes";
 
 /**
  * Ports the controller injects into {@link RunCredentialBroker}. The vault and
- * `resolveRunInstallationProviderEnvBindings` stay owned by the controller and are passed as
+ * `resolveRunProviderBindings` stays owned by the controller and is passed as a
  * handles / callbacks rather than moved; `store` / `newId` / `now` mirror the
  * controller's own handles so ids and timestamps line up across both surfaces.
  */
 export interface RunCredentialBrokerDependencies {
-  readonly store: OpenTofuDeploymentStore;
+  readonly store: OpenTofuControlStore;
   readonly newId: (prefix: string) => string;
   readonly now: () => number;
   /** Run-execution Vault handle (absent on builds without provider credentials). */
   readonly vault?: ConnectionVault;
-  /** Run-scoped Provider Env binding resolution (feeds rootgen and the per-alias split). */
-  readonly resolveRunInstallationProviderEnvBindings: (
+  /** Run-scoped Provider Binding resolution shared with root generation. */
+  readonly resolveRunProviderBindings: (
     planRun: PlanRun,
-  ) => Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined>;
-  /** Layered policy lookup for the run's installation (root-only + mint policy). */
+  ) => Promise<readonly ResolvedCapsuleProviderBinding[] | undefined>;
+  /** Layered credential mint policy lookup for the Run subject. */
   readonly policyForPlanRun: (
     planRun: PlanRun,
   ) => Promise<PolicyConfig | undefined>;
@@ -79,13 +82,13 @@ export interface RunCredentialBrokerDependencies {
  * controller methods.
  */
 export class RunCredentialBroker {
-  readonly #store: OpenTofuDeploymentStore;
+  readonly #store: OpenTofuControlStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #vault?: ConnectionVault;
-  readonly #resolveRunInstallationProviderEnvBindings: (
+  readonly #resolveRunProviderBindings: (
     planRun: PlanRun,
-  ) => Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined>;
+  ) => Promise<readonly ResolvedCapsuleProviderBinding[] | undefined>;
   readonly #policyForPlanRun: (
     planRun: PlanRun,
   ) => Promise<PolicyConfig | undefined>;
@@ -95,8 +98,7 @@ export class RunCredentialBroker {
     this.#newId = dependencies.newId;
     this.#now = dependencies.now;
     this.#vault = dependencies.vault;
-    this.#resolveRunInstallationProviderEnvBindings =
-      dependencies.resolveRunInstallationProviderEnvBindings;
+    this.#resolveRunProviderBindings = dependencies.resolveRunProviderBindings;
     this.#policyForPlanRun = dependencies.policyForPlanRun;
   }
 
@@ -105,12 +107,7 @@ export class RunCredentialBroker {
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
   ): Promise<RunCredentials | undefined> {
-    return await this.#mintCredentials(
-      planRun,
-      phase,
-      auditRunId,
-      planRun.providerCredentialDelivery ?? "generated_root_variable",
-    );
+    return await this.#mintCredentials(planRun, phase, auditRunId);
   }
 
   async mintReleaseCommandCredentials(
@@ -118,39 +115,33 @@ export class RunCredentialBroker {
     phase: "apply" | "destroy",
     auditRunId: string,
   ): Promise<RunCredentials | undefined> {
-    return await this.#mintCredentials(
-      planRun,
-      phase,
-      auditRunId,
-      "provider_env",
-    );
+    return await this.#mintCredentials(planRun, phase, auditRunId);
   }
 
   async #mintCredentials(
     planRun: PlanRun,
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
-    delivery: InstallationProviderEnvBindingDelivery,
   ): Promise<RunCredentials | undefined> {
     if (planRun.requiredProviders.length === 0) {
       return undefined;
     }
     try {
-      if (!planRun.installationContext) {
+      if (!planRun.capsuleContext && !planRun.resourceContext) {
         throw new OpenTofuControllerError(
           "failed_precondition",
-          "credential_mint_failed: installation provider connection evidence is required",
+          "credential_mint_failed: provider connection evidence is required",
+          { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
         );
       }
-      // Resolve the installation's provider env bindings ONCE: the same resolution
-      // feeds the per-connection credential split (TF_VAR entries) so minted vars
-      // line up byte-for-byte with rootgen.
-      const resolved =
-        await this.#resolveRunInstallationProviderEnvBindings(planRun);
+      // Resolve the Capsule's Provider Bindings once. The same resolution feeds
+      // rootgen's non-secret provider configuration and run-scoped recipe mint.
+      const resolved = await this.#resolveRunProviderBindings(planRun);
       if (!resolved) {
         throw new OpenTofuControllerError(
           "failed_precondition",
-          "credential_mint_failed: installation provider connection resolution is required",
+          "credential_mint_failed: capsule provider connection resolution is required",
+          { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
         );
       }
       // plan→apply TOCTOU assert (S2): the plan pinned a digest of the bindings
@@ -161,48 +152,34 @@ export class RunCredentialBroker {
       // mint is the pinning side, so it is never asserted here.
       if (
         (phase === "apply" || phase === "destroy") &&
-        planRun.resolvedProviderEnvBindingsDigest !== undefined
+        planRun.resolvedProviderBindingsDigest !== undefined
       ) {
-        const liveDigest = await resolvedProviderEnvBindingsDigest(resolved);
-        if (liveDigest !== planRun.resolvedProviderEnvBindingsDigest) {
+        const liveDigest = await resolvedProviderBindingsDigest(resolved);
+        if (liveDigest !== planRun.resolvedProviderBindingsDigest) {
           throw new OpenTofuControllerError(
             "failed_precondition",
             `resolved_bindings_changed: plan run ${planRun.id} was reviewed ` +
               `against different provider connections than are now resolved; ` +
               `re-plan before apply`,
+            { reason: PROVIDER_CONNECTION_CHANGED_REASON },
           );
         }
       }
-      assertNoCloudOnlyGatewayMaterialization(planRun, resolved);
-      // Per-connection split: the same resolved entries that produced the
-      // rootgen provider blocks produce the runner dispatch credentials.
-      // Built-in recipes become TF_VAR_<provider>_<alias>_<arg> vars; generic
-      // provider connections pass explicit env/file material through unchanged.
-      // This is the only provider credential delivery path for Installation
-      // runs.
+      // The same resolved entries that produced rootgen provider blocks select
+      // the Credential Recipes materialized for the runner dispatch.
+      // Every recipe uses the same provider-neutral env/file path. Rootgen may
+      // render explicit non-secret providerConfig, but never credential args.
       const providerEntries = providerMintEntriesFromResolved(resolved);
       const credentialEvidenceProviders = providerEntries.map(
         (entry) => entry.provider,
       );
-      const missingRootOnly = missingRootOnlyCredentialProviders(
-        planRun.requiredProviders,
-        resolved,
-      );
-      const credentialPolicy = (await this.#policyForPlanRun(planRun))
-        ?.providerCredentials;
-      const rootOnlyRequired = credentialPolicy?.requireRootOnly === true;
-      if (missingRootOnly.length > 0 && rootOnlyRequired) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `credential_mint_failed: root-only provider connection is required for providers: ${missingRootOnly.join(", ")}`,
-        );
-      }
       const vaultRequired = providerEntries.length > 0;
       const vault = this.#vault;
       if (vaultRequired && !vault) {
         throw new OpenTofuControllerError(
           "failed_precondition",
           "credential_mint_failed: connection vault is not configured for provider credentials",
+          { reason: CREDENTIAL_SERVICE_UNAVAILABLE_REASON },
         );
       }
       const bundle = new CredentialBundle({});
@@ -220,18 +197,20 @@ export class RunCredentialBroker {
           providerEntries.length,
           credentialEvidenceProviders,
         );
-        return { ...bundle.env };
+        return {
+          env: { ...bundle.env },
+          manifest: credentialManifest(resolved),
+        };
       }
-      const installationId =
-        planRun.installationContext?.installationId ?? planRun.installationId;
-      const perAlias = await vault!.mintForInstallationProviderEnvBindings(
-        planRun.workspaceId ?? planRun.spaceId,
+      const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
+      const recipeBundle = await vault!.mintForCapsuleProviderBindings(
+        planRun.workspaceId,
         providerEntries,
-        { phase, delivery, ...(installationId ? { installationId } : {}) },
+        { phase, ...(capsuleId ? { capsuleId } : {}) },
       );
       const evidence = [
         ...bundle.providerCredentialEvidence,
-        ...perAlias.providerCredentialEvidence,
+        ...recipeBundle.providerCredentialEvidence,
       ];
       await this.#recordProviderCredentialMintEvents(
         planRun,
@@ -246,23 +225,19 @@ export class RunCredentialBroker {
         providerEntries.length,
         credentialEvidenceProviders,
       );
-      const perAliasResponse = perAlias.toMintResponse();
-      const env = { ...bundle.env, ...perAliasResponse.env };
-      return perAliasResponse.files && perAliasResponse.files.length > 0
-        ? { env, files: perAliasResponse.files }
-        : env;
+      const recipeResponse = recipeBundle.toMintResponse();
+      const env = { ...bundle.env, ...recipeResponse.env };
+      const manifest = credentialManifest(resolved, recipeResponse.files);
+      return recipeResponse.files && recipeResponse.files.length > 0
+        ? { env, files: recipeResponse.files, manifest }
+        : { env, manifest };
     } catch (error) {
       const mapped = mapVaultError(error);
       if (mapped instanceof OpenTofuControllerError) {
-        if (mapped.message.startsWith("credential_policy_failed:")) {
-          throw mapped;
-        }
-        throw new OpenTofuControllerError(
-          mapped.code,
-          mapped.message.startsWith("credential_mint_failed:")
-            ? mapped.message
-            : `credential_mint_failed: ${mapped.message}`,
-        );
+        if (structuredErrorReason(mapped)) throw mapped;
+        throw new OpenTofuControllerError(mapped.code, mapped.message, {
+          reason: CREDENTIAL_MINT_FAILED_REASON,
+        });
       }
       throw mapped;
     }
@@ -285,12 +260,13 @@ export class RunCredentialBroker {
     throw new OpenTofuControllerError(
       "failed_precondition",
       `credential_policy_failed: ${result.reasons[0]}`,
+      { reason: CREDENTIAL_POLICY_FAILED_REASON },
     );
   }
 
   async #recordProviderCredentialMintEvents(
     planRun: PlanRun,
-    resolved: readonly ResolvedInstallationProviderEnvBinding[],
+    resolved: readonly ResolvedCapsuleProviderBinding[],
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
     evidence: readonly ProviderCredentialMintEvidence[] = [],
@@ -298,19 +274,17 @@ export class RunCredentialBroker {
     const byConnection = credentialMintAuditEntries(resolved);
     if (byConnection.length === 0) return;
     const createdAt = new Date(this.#now()).toISOString();
-    const installationId =
-      planRun.installationContext?.installationId ?? planRun.installationId;
+    const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
     const evidenceByConnection = groupProviderCredentialEvidence(evidence);
     for (const entry of byConnection) {
       const providerCredentialEvidence =
-        evidenceByConnection.get(entry.providerEnvId) ?? [];
+        evidenceByConnection.get(entry.connectionId) ?? [];
       await this.#store.putCredentialMintEvent({
         id: this.#newId("credmint"),
         runId: auditRunId,
         workspaceId: planRun.workspaceId,
-        ...(installationId ? { capsuleId: installationId } : {}),
-        providerEnvId: entry.providerEnvId,
-        ...(entry.connectionId ? { connectionId: entry.connectionId } : {}),
+        ...(capsuleId ? { capsuleId } : {}),
+        connectionId: entry.connectionId,
         phase,
         capabilities: entry.capabilities,
         ...(providerCredentialEvidence.length > 0
@@ -322,30 +296,54 @@ export class RunCredentialBroker {
   }
 }
 
-function assertNoCloudOnlyGatewayMaterialization(
-  planRun: PlanRun,
-  resolved: readonly ResolvedInstallationProviderEnvBinding[],
-): void {
-  if (
-    !resolved.some((entry) => (entry.materialization as string) === "gateway")
-  ) {
-    return;
-  }
-  throw new OpenTofuControllerError(
-    "failed_precondition",
-    `credential_mint_failed: gateway materialization is Takosumi Cloud-only and is not available in OSS runner profile ${planRun.runnerProfileId}`,
-  );
+function credentialManifest(
+  resolved: readonly ResolvedCapsuleProviderBinding[],
+  files: readonly {
+    readonly path: string;
+    readonly mode: number;
+    readonly envName?: string;
+  }[] = [],
+): RunCredentialRecipeManifest {
+  return {
+    bindings: resolved
+      .map((entry) => ({
+        providerSource: entry.provider,
+        ...(entry.alias ? { alias: entry.alias } : {}),
+        connectionId: entry.connection.id,
+        recipeId: entry.connection.credentialRecipe?.id ?? "legacy",
+        authMode: entry.connection.credentialRecipe?.authMode ?? "legacy",
+        envNames: [...entry.connection.envNames].sort(),
+        fileEnvNames: [...(entry.connection.fileEnvNames ?? [])].sort(),
+        requiredEnvGroups: (
+          entry.connection.credentialRecipe?.requiredEnvGroups ?? []
+        ).map((group) => [...group].sort()),
+      }))
+      .sort(
+        (left, right) =>
+          left.providerSource.localeCompare(right.providerSource) ||
+          String(left.alias).localeCompare(String(right.alias)),
+      ),
+    ...(files.length > 0
+      ? {
+          files: files.map((file) => ({
+            path: file.path,
+            mode: file.mode,
+            ...(file.envName ? { envName: file.envName } : {}),
+          })),
+        }
+      : {}),
+  };
 }
 
 /**
- * Derives per-connection credential mint entries from resolved provider env bindings.
- * Mirrors `providerEnvBindingsFromResolved` so minted TF_VAR names line up
+ * Derives per-connection credential mint entries from resolved Provider Bindings.
+ * Mirrors `providerBindingsFromResolved` so minted TF_VAR names line up
  * byte-for-byte with rootgen. The vault still re-validates each connection id.
  */
 function providerMintEntriesFromResolved(
-  resolved: readonly ResolvedInstallationProviderEnvBinding[],
-): readonly InstallationProviderEnvBindingMintEntry[] {
-  const entries: InstallationProviderEnvBindingMintEntry[] = [];
+  resolved: readonly ResolvedCapsuleProviderBinding[],
+): readonly CapsuleProviderBindingMintEntry[] {
+  const entries: CapsuleProviderBindingMintEntry[] = [];
   for (const entry of resolved) {
     const connection = entry.connection;
     if (!connection) continue;
@@ -358,78 +356,44 @@ function providerMintEntriesFromResolved(
   return entries;
 }
 
-function missingRootOnlyCredentialProviders(
-  requiredProviders: readonly string[],
-  resolved: readonly ResolvedInstallationProviderEnvBinding[],
-): readonly string[] {
-  return requiredProviders
-    .filter((provider) => providerEnvRule(provider))
-    .filter((provider) => !rootOnlyProviderCovered(provider, resolved))
-    .sort();
-}
-
-function rootOnlyProviderCovered(
-  requiredProvider: string,
-  resolved: readonly ResolvedInstallationProviderEnvBinding[],
-): boolean {
-  return resolved.some((entry) => {
-    const provider = entry.connection?.provider ?? entry.provider;
-    if (providerCredentialArgs(provider).length === 0) {
-      return false;
-    }
-    return providerMatches(requiredProvider, provider);
-  });
-}
-
 /**
  * Produces the non-secret audit rows for provider credential mints. The legacy
  * `capabilities` field carries provider keys until the physical column is
  * migrated.
  */
 function credentialMintAuditEntries(
-  resolved: readonly ResolvedInstallationProviderEnvBinding[],
+  resolved: readonly ResolvedCapsuleProviderBinding[],
 ): readonly {
-  readonly providerEnvId: string;
-  readonly connectionId?: string;
+  readonly connectionId: string;
   readonly capabilities: readonly string[];
 }[] {
-  const byProviderEnv = new Map<
-    string,
-    { readonly connectionId?: string; readonly providers: Set<string> }
-  >();
+  const byConnection = new Map<string, Set<string>>();
   for (const entry of resolved) {
-    const providerEnvId = entry.connection.id;
-    let bucket = byProviderEnv.get(providerEnvId);
+    const connectionId = entry.connection.id;
+    let bucket = byConnection.get(connectionId);
     if (!bucket) {
-      bucket = {
-        connectionId: entry.connection.id,
-        providers: new Set<string>(),
-      };
-      byProviderEnv.set(providerEnvId, bucket);
+      bucket = new Set<string>();
+      byConnection.set(connectionId, bucket);
     }
-    bucket.providers.add(entry.connection.provider);
+    bucket.add(entry.connection.provider);
   }
-  return Array.from(byProviderEnv.entries())
+  return Array.from(byConnection.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([providerEnvId, bucket]) => ({
-      providerEnvId,
-      ...(bucket.connectionId ? { connectionId: bucket.connectionId } : {}),
-      capabilities: Array.from(bucket.providers).sort(),
+    .map(([connectionId, providers]) => ({
+      connectionId,
+      capabilities: Array.from(providers).sort(),
     }));
 }
 
 function groupProviderCredentialEvidence(
   evidence: readonly ProviderCredentialMintEvidence[],
 ): ReadonlyMap<string, readonly ProviderCredentialMintEvidence[]> {
-  const byProviderEnv = new Map<string, ProviderCredentialMintEvidence[]>();
+  const byConnection = new Map<string, ProviderCredentialMintEvidence[]>();
   const seen = new Set<string>();
   for (const item of evidence) {
     const key = [
-      item.providerEnvId,
-      item.connectionId ?? "",
+      item.connectionId,
       item.provider,
-      item.delivery,
-      item.rootOnly ? "root" : "shared",
       item.temporary ? "temporary" : "static",
       item.ttlEnforced ? "ttl" : "no-ttl",
       item.expiresAt ?? "",
@@ -438,19 +402,19 @@ function groupProviderCredentialEvidence(
     ].join("\0");
     if (seen.has(key)) continue;
     seen.add(key);
-    const existing = byProviderEnv.get(item.providerEnvId) ?? [];
+    const existing = byConnection.get(item.connectionId) ?? [];
     existing.push(item);
-    byProviderEnv.set(item.providerEnvId, existing);
+    byConnection.set(item.connectionId, existing);
   }
-  for (const [providerEnvId, entries] of byProviderEnv) {
-    byProviderEnv.set(
-      providerEnvId,
+  for (const [connectionId, entries] of byConnection) {
+    byConnection.set(
+      connectionId,
       entries.sort((a, b) =>
-        `${a.delivery}:${a.provider}:${a.expiresAt ?? ""}`.localeCompare(
-          `${b.delivery}:${b.provider}:${b.expiresAt ?? ""}`,
+        `${a.provider}:${a.expiresAt ?? ""}`.localeCompare(
+          `${b.provider}:${b.expiresAt ?? ""}`,
         ),
       ),
     );
   }
-  return byProviderEnv;
+  return byConnection;
 }

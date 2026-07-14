@@ -56,3 +56,24 @@ test("env operator config parses secret ref keys without exposing raw value", as
     redacted: true,
   });
 });
+
+test("operator config accepts an explicitly injected adapter source", async () => {
+  const config = new LocalOperatorConfig({
+    source: "database.operator.v1",
+    values: { REGION: "eu-west" },
+  });
+
+  assert.deepEqual(await config.require("REGION"), {
+    kind: "plain",
+    key: "REGION",
+    source: "database.operator.v1",
+    value: "eu-west",
+  });
+});
+
+test("operator config rejects an invalid adapter source token", () => {
+  assert.throws(
+    () => new LocalOperatorConfig({ source: "database adapter" }),
+    /valid adapter token/,
+  );
+});

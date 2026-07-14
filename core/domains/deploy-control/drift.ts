@@ -28,7 +28,7 @@ export function classifyDriftResourceChanges(
     if (type.length > 0) {
       resourceTypes[type] = (resourceTypes[type] ?? 0) + 1;
     }
-    const provider = driftProviderForChange(change);
+    const provider = change.providerSource?.trim();
     if (provider) {
       providers[provider] = (providers[provider] ?? 0) + 1;
     }
@@ -39,7 +39,7 @@ export function classifyDriftResourceChanges(
     if (actionKey.length > 0) {
       actions[actionKey] = (actions[actionKey] ?? 0) + 1;
     }
-    for (const tag of driftSemanticTags(provider, type, actionKey)) {
+    for (const tag of driftSemanticTags(actionKey)) {
       semanticTags.add(tag);
     }
   }
@@ -58,27 +58,12 @@ export function classifyDriftResourceChanges(
 }
 
 function driftSemanticTags(
-  provider: string | undefined,
-  type: string,
   actionKey: string,
 ): string[] {
   const tags: string[] = [];
   if (actionKey.includes("delete")) tags.push("destructive");
   if (actionKey === "delete+create" || actionKey === "create+delete") {
     tags.push("replacement");
-  }
-  if (provider === "cloudflare") {
-    tags.push("cloudflare");
-    if (type === "cloudflare_dns_record") tags.push("cloudflare_dns");
-    if (type.startsWith("cloudflare_workers_")) tags.push("cloudflare_workers");
-    if (type === "cloudflare_r2_bucket") tags.push("cloudflare_storage");
-  }
-  if (provider === "aws") {
-    tags.push("aws");
-    if (type.startsWith("aws_s3_bucket")) tags.push("aws_storage");
-  }
-  if (provider === "random" || provider === "tls") {
-    tags.push("local_material");
   }
   return tags;
 }
@@ -105,51 +90,6 @@ function driftRemediationHints(input: {
       action: "confirm deleted remote objects before planning remediation",
     });
   }
-  if (tags.has("cloudflare_dns")) {
-    hints.push({
-      code: "cloudflare_dns_drift",
-      severity: "info",
-      provider: "cloudflare",
-      category: "dns",
-      action: "compare zone records against the last reviewed plan",
-    });
-  }
-  if (tags.has("cloudflare_workers")) {
-    hints.push({
-      code: "cloudflare_workers_drift",
-      severity: "info",
-      provider: "cloudflare",
-      category: "compute",
-      action:
-        "compare Worker script and route settings against the last reviewed plan",
-    });
-  }
-  if (tags.has("cloudflare_storage")) {
-    hints.push({
-      code: "cloudflare_storage_drift",
-      severity: "info",
-      provider: "cloudflare",
-      category: "storage",
-      action: "compare R2 storage settings against the last reviewed plan",
-    });
-  }
-  if (tags.has("aws_storage")) {
-    hints.push({
-      code: "aws_storage_drift",
-      severity: "info",
-      provider: "aws",
-      category: "storage",
-      action: "compare bucket configuration against the last reviewed plan",
-    });
-  }
-  if (tags.has("local_material")) {
-    hints.push({
-      code: "local_material_drift",
-      severity: "info",
-      category: "local_material",
-      action: "verify generated local material is expected before replacing it",
-    });
-  }
   if (hints.length === 0 && Object.keys(input.providers).length > 0) {
     hints.push({
       code: "provider_drift_detected",
@@ -167,27 +107,4 @@ function driftRemediationHints(input: {
     });
   }
   return hints;
-}
-
-function driftProviderForChange(
-  change: PlanResourceChange,
-): string | undefined {
-  const type = change.type.trim();
-  if (type.startsWith("cloudflare_")) return "cloudflare";
-  if (type.startsWith("aws_")) return "aws";
-  if (type.startsWith("random_")) return "random";
-  if (type.startsWith("tls_")) return "tls";
-  if (
-    change.scope?.cloudflareAccountId !== undefined ||
-    change.scope?.cloudflareZoneId !== undefined
-  ) {
-    return "cloudflare";
-  }
-  if (
-    change.scope?.awsAccountId !== undefined ||
-    change.scope?.awsRegion !== undefined
-  ) {
-    return "aws";
-  }
-  return undefined;
 }

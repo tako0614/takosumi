@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Hosted Takosumi Layer-2 smoke.
+ * Takosumi control-plane Layer-2 smoke.
  *
  * This proves the product control-plane loop, not only the raw provider/module:
  * signed-in Account session -> Workspace ProviderConnection -> Git Source/Capsule ->
@@ -21,7 +21,7 @@ import { dirname, resolve } from "node:path";
 import { canonicalProviderSource } from "../contract/provider-env-rules.ts";
 
 export const PLATFORM_CONTROL_PLANE_SMOKE_KIND =
-  "takosumi.platform-control-plane-smoke@v1" as const;
+  "takosumi.platform-control-plane-smoke@v2" as const;
 
 const TAKOSUMI_ROOT = resolve(import.meta.dir, "..");
 const DEFAULT_CAPSULE_DIR = resolve(
@@ -75,13 +75,15 @@ process.stdin.on("end", async () => {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const name = error instanceof Error ? error.name : "Error";
       finish({
         ok: false,
-        name: error instanceof Error ? error.name : "Error",
+        name,
         message,
         timeout:
           controller?.signal.aborted === true ||
-          /(?:timed?\s*out|timeout|aborted)/iu.test(message),
+          name === "AbortError" ||
+          name === "TimeoutError",
       });
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -198,7 +200,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
   readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
   readonly runnerProfileId?: string;
-  readonly space: string;
+  readonly workspace: string;
   readonly appName: string;
   readonly environment: string;
   readonly sourceMode: "git";
@@ -207,6 +209,8 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly vars: Readonly<Record<string, JsonSmokeValue>>;
   readonly outputAllowlist: SmokeOutputAllowlist;
   readonly publicUrlChecks: readonly PublicUrlCheck[];
+  readonly cloudflareWorkerNameOutput?: string;
+  readonly runtimePublicUrlOutput?: string;
   readonly functionalProbeScript?: string;
   readonly functionalProbeScriptDigest?: string;
   readonly functionalProbeEnvNames: readonly string[];
@@ -226,9 +230,9 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly outFile?: string;
   readonly requireReleaseActivation?: ReleaseActivationRequirement;
   readonly keepConnection: boolean;
-  readonly ensureSpace: boolean;
+  readonly ensureWorkspace: boolean;
   readonly backupRestoreRehearsal: boolean;
-  readonly spaceDisplayName?: string;
+  readonly workspaceDisplayName?: string;
 }
 
 export interface PlatformControlPlaneSmokeResult {
@@ -239,10 +243,10 @@ export interface PlatformControlPlaneSmokeResult {
   readonly finishedAt: string;
   readonly durationMs: number;
   readonly serviceUrl: string;
-  readonly scratchSpaceId: string;
+  readonly scratchWorkspaceId: string;
   readonly capsuleModule: string;
   readonly verificationMode: SmokeVerificationMode;
-  readonly credentialPath: "space_scoped_provider_connection" | "none";
+  readonly credentialPath: "workspace_scoped_provider_connection" | "none";
   readonly providerConnectionMode: SmokeProviderConnectionMode;
   /** Required end-to-end checkpoints for this smoke shape. */
   readonly steps: readonly string[];
@@ -259,14 +263,15 @@ export interface PlatformControlPlaneSmokeResult {
   readonly sourceId?: string;
   readonly sourceSyncRunId?: string;
   readonly sourceSnapshotId?: string;
+  readonly installConfigId?: string;
   readonly compatibilityReportId?: string;
-  readonly installationId?: string;
+  readonly capsuleId?: string;
   readonly planRunId?: string;
   readonly applyRunId?: string;
   readonly destroyPlanRunId?: string;
   readonly destroyApplyRunId?: string;
   readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
-  readonly deploymentLedger?: DeploymentLedgerVerificationResult;
+  readonly stateVersionLedger?: StateVersionLedgerVerificationResult;
   readonly releaseActivation?: ReleaseActivationVerificationResult;
   readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
   readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
@@ -275,9 +280,9 @@ export interface PlatformControlPlaneSmokeResult {
   readonly policyStatus: SmokeCheckStatus;
   readonly workerUrl: string;
   readonly opentofuApplyVerified: boolean;
-  readonly deploymentVerified: boolean;
+  readonly runtimeVerified: boolean;
   readonly publicUrlVerified: boolean;
-  readonly deploymentLedgerVerified: boolean;
+  readonly stateVersionLedgerVerified: boolean;
   readonly destroyVerified: boolean;
   readonly connectionRevoked?: boolean;
   readonly timedOutRunId?: string;
@@ -302,6 +307,8 @@ export interface PlatformControlPlaneSmokeResult {
     readonly varsDigest: string;
     readonly outputAllowlistNames: readonly string[];
     readonly publicUrlCheckNames: readonly string[];
+    readonly cloudflareWorkerNameOutput?: string;
+    readonly runtimePublicUrlOutput?: string;
     readonly functionalProbeScriptDigest?: string;
     readonly functionalProbeEnvNames: readonly string[];
     readonly capsuleDir?: string;
@@ -323,7 +330,6 @@ interface CliArgs {
   readonly outFile?: string;
   readonly keepConnection?: boolean;
   readonly ensureWorkspace?: boolean;
-  readonly ensureSpace?: boolean;
   readonly backupRestoreRehearsal?: boolean;
   readonly url?: string;
   readonly sessionTokenFile?: string;
@@ -337,9 +343,7 @@ interface CliArgs {
   readonly cloudflareConnectionMode?: string;
   readonly cloudflareResourcePreflight?: string;
   readonly runnerProfileId?: string;
-  readonly space?: string;
   readonly workspace?: string;
-  readonly spaceDisplayName?: string;
   readonly workspaceDisplayName?: string;
   readonly appName?: string;
   readonly environment?: string;
@@ -359,6 +363,8 @@ interface CliArgs {
   readonly outputAllowlistJsonFile?: string;
   readonly publicUrlChecksJson?: string;
   readonly publicUrlChecksJsonFile?: string;
+  readonly cloudflareWorkerNameOutput?: string;
+  readonly runtimePublicUrlOutput?: string;
   readonly functionalProbeScript?: string;
   readonly functionalProbeEnv?: string;
   readonly timeoutSeconds?: string;
@@ -415,6 +421,16 @@ class RunPollTimeoutError extends Error {
   }
 }
 
+class CloudflareResourcePreflightError extends Error {
+  constructor(
+    readonly reason: "request_failed" | "capability_denied",
+    message: string,
+  ) {
+    super(message);
+    this.name = "CloudflareResourcePreflightError";
+  }
+}
+
 interface RunRecord {
   readonly id: string;
   readonly status: string;
@@ -423,27 +439,25 @@ interface RunRecord {
   readonly policyStatus?: string;
   readonly backupId?: string;
   readonly restoreStateGeneration?: number;
-  readonly restoredStateSnapshotId?: string;
-  readonly restoredFromStateSnapshotId?: string;
+  readonly restoredStateVersionId?: string;
+  readonly restoredFromStateVersionId?: string;
   readonly createdAt?: string;
   readonly startedAt?: string;
   readonly finishedAt?: string;
 }
 
 interface DeployResponse {
-  readonly installation: { readonly id: string; readonly name?: string };
+  readonly capsule: { readonly id: string; readonly name?: string };
   readonly run: RunRecord;
   readonly planRun?: RunRecord;
   readonly applyRun?: RunRecord;
   readonly created?: boolean;
 }
 
-interface InstallConfigRecord {
+export interface InstallConfigRecord {
   readonly id?: string;
-  readonly sourceKind?: string;
   readonly name?: string;
   readonly workspaceId?: string;
-  readonly spaceId?: string;
   readonly internal?: { readonly reason?: string };
 }
 
@@ -457,16 +471,13 @@ interface CapsuleLedgerRecord {
   readonly id?: string;
   readonly name?: string;
   readonly workspaceId?: string;
-  readonly spaceId?: string;
   readonly status?: string;
   readonly currentStateVersionId?: string;
-  readonly currentDeploymentId?: string;
   readonly currentStateGeneration?: number;
 }
 
 interface CapsuleLedgerResponse {
   readonly capsule?: CapsuleLedgerRecord;
-  readonly installation?: CapsuleLedgerRecord;
 }
 
 interface BackupRecord {
@@ -476,28 +487,34 @@ interface BackupRecord {
   readonly createdAt: string;
 }
 
-interface DeploymentRecord {
+interface StateVersionRecord {
   readonly id: string;
-  readonly workspaceId?: string;
-  readonly spaceId?: string;
-  readonly capsuleId?: string;
-  readonly installationId?: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
   readonly environment: string;
-  readonly applyRunId?: string;
-  readonly stateGeneration: number;
-  readonly outputsPublic?: Record<string, unknown>;
-  readonly status: string;
+  readonly createdByRunId: string;
+  readonly generation: number;
   readonly createdAt: string;
 }
 
-interface DeploymentLedgerVerificationResult {
-  readonly installationStatus: string;
-  readonly deploymentId: string;
+interface OutputRecord {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
   readonly stateGeneration: number;
+  readonly publicOutputs: Readonly<Record<string, unknown>>;
+  readonly outputDigest: string;
+  readonly createdAt: string;
+}
+
+interface StateVersionLedgerVerificationResult {
+  readonly capsuleStatus: string;
+  readonly stateVersionId: string;
+  readonly generation: number;
   readonly applyRunId: string;
   readonly publicOutputNames: readonly string[];
   readonly publicOutputDigest: string;
-  readonly outputsPublic?: Readonly<Record<string, unknown>>;
+  readonly publicOutputs?: Readonly<Record<string, unknown>>;
 }
 
 interface ReleaseActivationVerificationResult {
@@ -563,10 +580,10 @@ interface BackupRestoreRehearsalResult {
   readonly backupDigest: string;
   readonly backupCreatedAt: string;
   readonly stateGeneration: number;
-  readonly deploymentId: string;
+  readonly stateVersionId: string;
   readonly restoreRunId: string;
-  readonly restoredFromStateSnapshotId?: string;
-  readonly restoredStateSnapshotId?: string;
+  readonly restoredFromStateVersionId?: string;
+  readonly restoredStateVersionId?: string;
   readonly restoreCreatedAt?: string;
   readonly restoreStartedAt?: string;
   readonly restoreFinishedAt?: string;
@@ -576,7 +593,7 @@ interface BackupRestoreRehearsalResult {
 interface FailureCleanupResult {
   readonly attempted: true;
   readonly cloudflareWorkerGone: boolean;
-  readonly installationMarkedError: boolean;
+  readonly capsuleMarkedError: boolean;
   readonly destroyAttempted?: boolean;
   readonly destroyPlanRunId?: string;
   readonly destroyApplyRunId?: string;
@@ -633,12 +650,8 @@ export async function resolveOptions(
   if (!url) {
     throw new Error("--url or TAKOSUMI_PLATFORM_URL is required");
   }
-  const space =
-    args.workspace ??
-    args.space ??
-    env.TAKOSUMI_SMOKE_WORKSPACE ??
-    env.TAKOSUMI_SMOKE_SPACE;
-  if (!space) {
+  const workspace = args.workspace ?? env.TAKOSUMI_SMOKE_WORKSPACE;
+  if (!workspace) {
     throw new Error("--workspace or TAKOSUMI_SMOKE_WORKSPACE is required");
   }
   const cloudflareConnectionMode = parseCloudflareConnectionMode(
@@ -710,9 +723,6 @@ export async function resolveOptions(
         : "account session token",
     dryRun: args.dryRun === true,
   });
-  if (!args.dryRun) {
-    assertAccountAuthTokenKind(accountAuthTokenKind, accountSessionToken.value);
-  }
   const cloudflareApiToken = cloudflareInputsRequired
     ? await readSecret({
         file: args.cloudflareApiTokenFile ?? env.CLOUDFLARE_API_TOKEN_FILE,
@@ -726,7 +736,7 @@ export async function resolveOptions(
     args.sourceGitUrl ??
     env.TAKOSUMI_SMOKE_SOURCE_GIT_URL ??
     (args.dryRun === true
-      ? "https://github.example/takosumi/smoke-fixture.git"
+      ? "https://git.example.test/example/smoke-fixture.git"
       : undefined);
   if (!rawSourceGitUrl) {
     throw new Error(
@@ -737,7 +747,7 @@ export async function resolveOptions(
     rawSourceGitUrl !== undefined
       ? normalizeSmokeSourceGitUrl(rawSourceGitUrl)
       : undefined;
-  const sourceRef = args.sourceRef ?? env.TAKOSUMI_SMOKE_SOURCE_REF ?? "main";
+  const sourceRef = args.sourceRef ?? env.TAKOSUMI_SMOKE_SOURCE_REF;
   const sourcePath = args.sourcePath ?? env.TAKOSUMI_SMOKE_SOURCE_PATH ?? ".";
   const modulePath = args.modulePath ?? env.TAKOSUMI_SMOKE_MODULE_PATH;
   const installConfigId =
@@ -774,12 +784,6 @@ export async function resolveOptions(
           appName: resolvedAppName,
           workersSubdomain: cloudflareWorkersSubdomain.value,
           providerless: providerlessOpenTofuSmoke,
-          variableStyle: defaultSmokeVariableStyle({
-            sourceGitUrl,
-            sourcePath,
-            modulePath,
-            installConfigId,
-          }),
         });
   const vars = mergeJsonRecords(defaultVars, explicitVars);
   const outputAllowlist = parseOutputAllowlist(
@@ -790,7 +794,7 @@ export async function resolveOptions(
         args.outputAllowlistJsonFile ??
         env.TAKOSUMI_SMOKE_OUTPUT_ALLOWLIST_JSON_FILE,
       label: "output allowlist",
-      fallback: defaultSmokeOutputAllowlist(),
+      fallback: defaultSmokeOutputAllowlist(providerlessOpenTofuSmoke),
     }),
   );
   const publicUrlChecks = parsePublicUrlChecks(
@@ -805,6 +809,22 @@ export async function resolveOptions(
     }),
     outputAllowlist,
   );
+  const cloudflareWorkerNameOutput = parseExplicitProjectedOutputName({
+    raw:
+      args.cloudflareWorkerNameOutput ??
+      env.TAKOSUMI_SMOKE_CLOUDFLARE_WORKER_NAME_OUTPUT,
+    label: "--cloudflare-worker-name-output",
+    outputAllowlist,
+    acceptedTypes: ["string"],
+  });
+  const runtimePublicUrlOutput = parseExplicitProjectedOutputName({
+    raw:
+      args.runtimePublicUrlOutput ??
+      env.TAKOSUMI_SMOKE_RUNTIME_PUBLIC_URL_OUTPUT,
+    label: "--runtime-public-url-output",
+    outputAllowlist,
+    acceptedTypes: ["url"],
+  });
   const functionalProbeScriptInput =
     args.functionalProbeScript ?? env.TAKOSUMI_SMOKE_FUNCTIONAL_PROBE_SCRIPT;
   const functionalProbeScript = functionalProbeScriptInput
@@ -830,17 +850,7 @@ export async function resolveOptions(
       }
     }
   }
-  const appName =
-    args.appName ??
-    stringRecordValue(explicitVars, "appName") ??
-    stringRecordValue(explicitVars, "name") ??
-    stringRecordValue(explicitVars, "project_name") ??
-    stringRecordValue(explicitVars, "worker_name") ??
-    stringRecordValue(vars, "appName") ??
-    stringRecordValue(vars, "name") ??
-    stringRecordValue(vars, "project_name") ??
-    stringRecordValue(vars, "worker_name") ??
-    resolvedAppName;
+  const appName = resolvedAppName;
   const explicitRunnerProfileId =
     args.runnerProfileId ?? env.TAKOSUMI_SMOKE_RUNNER_PROFILE_ID;
   const runnerProfileId =
@@ -866,20 +876,22 @@ export async function resolveOptions(
     cloudflareConnectionMode,
     cloudflareResourcePreflight,
     ...(runnerProfileId ? { runnerProfileId } : {}),
-    space,
+    workspace,
     appName,
-    environment: args.environment ?? defaultSmokeEnvironment(url),
+    environment: args.environment?.trim() || "smoke",
     sourceMode,
     capsuleDir,
     verificationMode,
     vars,
     outputAllowlist,
     publicUrlChecks,
+    ...(cloudflareWorkerNameOutput ? { cloudflareWorkerNameOutput } : {}),
+    ...(runtimePublicUrlOutput ? { runtimePublicUrlOutput } : {}),
     ...(functionalProbeScript ? { functionalProbeScript } : {}),
     ...(functionalProbeScriptDigest ? { functionalProbeScriptDigest } : {}),
     functionalProbeEnvNames,
     ...(sourceGitUrl ? { sourceGitUrl } : {}),
-    ...(sourceGitUrl ? { sourceRef } : {}),
+    ...(sourceRef ? { sourceRef } : {}),
     ...(sourceGitUrl ? { sourcePath } : {}),
     ...(modulePath ? { modulePath } : {}),
     ...(installConfigId ? { installConfigId } : {}),
@@ -906,10 +918,10 @@ export async function resolveOptions(
     ...(args.outFile ? { outFile: resolve(args.outFile) } : {}),
     ...(requireReleaseActivation ? { requireReleaseActivation } : {}),
     keepConnection: args.keepConnection === true,
-    ensureSpace: args.ensureWorkspace === true || args.ensureSpace === true,
+    ensureWorkspace: args.ensureWorkspace === true,
     backupRestoreRehearsal: args.backupRestoreRehearsal === true,
-    ...((args.workspaceDisplayName ?? args.spaceDisplayName)
-      ? { spaceDisplayName: args.workspaceDisplayName ?? args.spaceDisplayName }
+    ...(args.workspaceDisplayName
+      ? { workspaceDisplayName: args.workspaceDisplayName }
       : {}),
   };
 }
@@ -927,13 +939,13 @@ export function dryRunResult(
     finishedAt: generatedAt,
     durationMs: 0,
     serviceUrl: options.url,
-    scratchSpaceId: options.space,
+    scratchWorkspaceId: options.workspace,
     capsuleModule: capsuleLabel(options),
     verificationMode: options.verificationMode,
     credentialPath:
       options.cloudflareConnectionMode === "none"
         ? "none"
-        : "space_scoped_provider_connection",
+        : "workspace_scoped_provider_connection",
     providerConnectionMode: options.cloudflareConnectionMode,
     sourceMode: options.sourceMode,
     steps,
@@ -955,7 +967,7 @@ export function dryRunResult(
             backupDigest: `sha256:${"0".repeat(64)}`,
             backupCreatedAt: new Date(0).toISOString(),
             stateGeneration: 1,
-            deploymentId: "dep_dry_run",
+            stateVersionId: "state_dry_run",
             restoreRunId: "restore_dry_run",
             restoreTargetSmoke: "passed",
           },
@@ -963,15 +975,15 @@ export function dryRunResult(
       : {}),
     capsuleGateStatus: "passed",
     policyStatus: "passed",
-    workerUrl: shouldVerifyCloudflareDeployment(options)
+    workerUrl: shouldVerifyCloudflareWorker(options)
       ? publicWorkerUrl(options)
       : "",
     opentofuApplyVerified: options.verificationMode === "opentofu",
-    deploymentVerified: shouldVerifyCloudflareDeployment(options),
+    runtimeVerified: shouldVerifyCloudflareWorker(options),
     publicUrlVerified:
       options.verificationMode === "cloudflare-worker" ||
       options.publicUrlChecks.length > 0,
-    deploymentLedgerVerified: true,
+    stateVersionLedgerVerified: true,
     destroyVerified: true,
     ...(options.cloudflareResourcePreflight !== "none"
       ? {
@@ -988,10 +1000,10 @@ export function dryRunResult(
       options.keepConnection || options.cloudflareConnectionMode === "none"
         ? undefined
         : true,
-    deploymentLedger: {
-      installationStatus: "active",
-      deploymentId: "dep_dry_run",
-      stateGeneration: 1,
+    stateVersionLedger: {
+      capsuleStatus: "active",
+      stateVersionId: "state_dry_run",
+      generation: 1,
       applyRunId: "apply_dry_run",
       publicOutputNames: Object.keys(options.outputAllowlist).sort(),
       publicOutputDigest: `sha256:${"0".repeat(64)}`,
@@ -1100,7 +1112,7 @@ export async function runPlatformControlPlaneSmoke(
 ): Promise<PlatformControlPlaneSmokeResult> {
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
-  const spaceId = await resolveSpaceId(options);
+  const workspaceId = await resolveWorkspaceId(options);
   const completedSteps: string[] = [];
   const stepTimings: SmokeStepTiming[] = [];
   const runTimings: SmokeRunTiming[] = [];
@@ -1131,14 +1143,15 @@ export async function runPlatformControlPlaneSmoke(
   let sourceId: string | undefined;
   let sourceSyncRunId: string | undefined;
   let sourceSnapshotId: string | undefined;
+  let installConfigId: string | undefined;
   let compatibilityReportId: string | undefined;
-  let installationId: string | undefined;
+  let capsuleId: string | undefined;
   let planRunId: string | undefined;
   let applyRunId: string | undefined;
   let destroyPlanRunId: string | undefined;
   let destroyApplyRunId: string | undefined;
   let backupRestoreRehearsal: BackupRestoreRehearsalResult | undefined;
-  let deploymentLedger: DeploymentLedgerVerificationResult | undefined;
+  let stateVersionLedger: StateVersionLedgerVerificationResult | undefined;
   let releaseActivation: ReleaseActivationVerificationResult | undefined;
   let publicUrlChecks: readonly PublicUrlCheckResult[] | undefined;
   let functionalProbe: CapsuleFunctionalProbeEvidence | undefined;
@@ -1156,15 +1169,15 @@ export async function runPlatformControlPlaneSmoke(
 
   try {
     if (options.cloudflareConnectionMode !== "none") {
-      beginStep("spaceScopedProviderConnection");
+      beginStep("workspaceScopedProviderConnection");
       beginStep("connectionVerified");
-      const connection = await createSpaceCloudflareConnection(
+      const connection = await createWorkspaceCloudflareConnection(
         options,
-        spaceId,
+        workspaceId,
       );
       connectionId = connection.rawConnectionId;
       providerConnectionId = connection.providerConnectionId;
-      completeStep("spaceScopedProviderConnection");
+      completeStep("workspaceScopedProviderConnection");
       if (options.cloudflareConnectionMode === "generic-env") {
         beginStep("genericEnvProviderConnection");
         completeStep("genericEnvProviderConnection");
@@ -1186,14 +1199,15 @@ export async function runPlatformControlPlaneSmoke(
     beginStep("compatibilityChecked");
     beginStep("plan");
     const deploy = await deployGitSourceCapsule(options, {
-      spaceId,
+      workspaceId,
       ...(providerConnectionId ? { providerConnectionId } : {}),
     });
     sourceId = deploy.sourceId;
     sourceSyncRunId = deploy.sourceSyncRunId;
     sourceSnapshotId = deploy.sourceSnapshotId;
+    installConfigId = deploy.installConfigId;
     compatibilityReportId = deploy.compatibilityReportId;
-    installationId = deploy.installation.id;
+    capsuleId = deploy.capsule.id;
     planRunId = deploy.planRun?.id ?? deploy.run.id;
     completeStep("sourceRegistered");
     completeStep("sourceSynced");
@@ -1223,49 +1237,49 @@ export async function runPlatformControlPlaneSmoke(
     assertRunSucceeded(completedApply, "apply");
     runTimings.push(smokeRunTiming("apply", completedApply));
     completeStep("apply");
-    beginStep("deploymentLedgerVerified");
+    beginStep("stateVersionLedgerVerified");
     if (options.verificationMode === "cloudflare-worker") {
-      deploymentLedger = await assertDeploymentLedger(options, {
-        spaceId,
-        installationId,
+      stateVersionLedger = await assertStateVersionLedger(options, {
+        workspaceId,
+        capsuleId,
         applyRunId,
       });
     } else {
       beginStep("opentofuApplyVerified");
-      deploymentLedger = await assertGenericDeploymentLedger(options, {
-        spaceId,
-        installationId,
+      stateVersionLedger = await assertGenericStateVersionLedger(options, {
+        workspaceId,
+        capsuleId,
         applyRunId,
       });
       completeStep("opentofuApplyVerified");
     }
-    completeStep("deploymentLedgerVerified");
+    completeStep("stateVersionLedgerVerified");
     if (options.requireReleaseActivation) {
       beginStep("releaseActivationVerified");
       releaseActivation = await assertReleaseActivation(options, {
-        spaceId,
+        workspaceId,
         applyRunId,
-        deploymentId: deploymentLedger.deploymentId,
+        stateVersionId: stateVersionLedger.stateVersionId,
       });
       completeStep("releaseActivationVerified");
     }
-    if (shouldVerifyCloudflareDeployment(options)) {
-      beginStep("deploymentVerified");
+    if (shouldVerifyCloudflareWorker(options)) {
+      beginStep("runtimeVerified");
       await assertCloudflareWorkerExists(
         options,
-        deploymentLedger.outputsPublic,
+        stateVersionLedger.publicOutputs,
       );
-      completeStep("deploymentVerified");
+      completeStep("runtimeVerified");
     }
     if (options.verificationMode === "cloudflare-worker") {
       beginStep("publicUrlVerified");
       if (options.publicUrlChecks.length > 0) {
         publicUrlChecks = await assertConfiguredPublicUrls(
           options,
-          deploymentLedger.outputsPublic,
+          stateVersionLedger.publicOutputs,
         );
       } else {
-        await assertPublicWorkerUrl(options, deploymentLedger.outputsPublic);
+        await assertPublicWorkerUrl(options, stateVersionLedger.publicOutputs);
       }
       completeStep("publicUrlVerified");
     }
@@ -1276,7 +1290,7 @@ export async function runPlatformControlPlaneSmoke(
       beginStep("publicUrlVerified");
       publicUrlChecks = await assertConfiguredPublicUrls(
         options,
-        deploymentLedger.outputsPublic,
+        stateVersionLedger.publicOutputs,
       );
       completeStep("publicUrlVerified");
     }
@@ -1284,25 +1298,25 @@ export async function runPlatformControlPlaneSmoke(
       beginStep("functionalProbe");
       functionalProbe = await runCapsuleFunctionalProbe(
         options,
-        deploymentLedger.outputsPublic ?? {},
+        stateVersionLedger.publicOutputs ?? {},
       );
       completeStep("functionalProbe");
     }
     if (options.backupRestoreRehearsal) {
       beginStep("backupRestoreRehearsal");
       backupRestoreRehearsal = await runBackupRestoreRehearsal(options, {
-        spaceId,
-        installationId,
+        workspaceId,
+        capsuleId,
       });
       completeStep("backupRestoreRehearsal");
     }
 
     beginStep("destroy");
-    const destroyResult = await destroySmokeInstallation(options, {
-      installationId,
+    const destroyResult = await destroySmokeCapsule(options, {
+      capsuleId,
       reason: "Layer-2 platform-control-plane smoke cleanup",
-      verifyCloudflareWorkerGone: shouldVerifyCloudflareDeployment(options),
-      outputsPublic: deploymentLedger.outputsPublic,
+      verifyCloudflareWorkerGone: shouldVerifyCloudflareWorker(options),
+      publicOutputs: stateVersionLedger.publicOutputs,
     });
     destroyPlanRunId = destroyResult.destroyPlanRun.id;
     destroyApplyRunId = destroyResult.destroyApplyRun.id;
@@ -1336,13 +1350,13 @@ export async function runPlatformControlPlaneSmoke(
       finishedAt,
       durationMs: Math.max(0, finishedAtMs - startedAtMs),
       serviceUrl: options.url,
-      scratchSpaceId: spaceId,
+      scratchWorkspaceId: workspaceId,
       capsuleModule: capsuleLabel(options),
       verificationMode: options.verificationMode,
       credentialPath:
         options.cloudflareConnectionMode === "none"
           ? "none"
-          : "space_scoped_provider_connection",
+          : "workspace_scoped_provider_connection",
       providerConnectionMode: options.cloudflareConnectionMode,
       sourceMode: options.sourceMode,
       steps: requiredSteps(options),
@@ -1356,30 +1370,31 @@ export async function runPlatformControlPlaneSmoke(
       sourceId,
       sourceSyncRunId,
       sourceSnapshotId,
+      installConfigId,
       compatibilityReportId,
-      installationId,
+      capsuleId,
       planRunId,
       applyRunId,
       destroyPlanRunId,
       destroyApplyRunId,
       backupRestoreRehearsal,
-      deploymentLedger,
+      stateVersionLedger,
       releaseActivation,
       cloudflareResourcePreflight,
       publicUrlChecks,
       functionalProbe,
       capsuleGateStatus: "passed",
       policyStatus: policyStatus === "denied" ? failPolicy() : "passed",
-      workerUrl: shouldVerifyCloudflareDeployment(options)
-        ? publicDeploymentUrl(options, deploymentLedger.outputsPublic)
+      workerUrl: shouldVerifyCloudflareWorker(options)
+        ? publicRuntimeUrl(options, stateVersionLedger.publicOutputs)
         : "",
       opentofuApplyVerified: options.verificationMode === "opentofu",
-      deploymentVerified: shouldVerifyCloudflareDeployment(options),
+      runtimeVerified: shouldVerifyCloudflareWorker(options),
       publicUrlVerified:
         options.verificationMode === "cloudflare-worker" ||
         options.publicUrlChecks.length > 0,
       publicUrlChecks,
-      deploymentLedgerVerified: true,
+      stateVersionLedgerVerified: true,
       destroyVerified: true,
       ...(connectionId ? { connectionRevoked } : {}),
       inputs: publicInputSummary(options),
@@ -1398,17 +1413,16 @@ export async function runPlatformControlPlaneSmoke(
           "run did not reach a terminal state and cancel did not confirm terminal ownership";
       }
     }
-    if (installationId && applyRunId && !destroyApplyRunId) {
+    if (capsuleId && applyRunId && !destroyApplyRunId) {
       beginStep("destroy");
-      const verifyCloudflareWorkerGone =
-        shouldVerifyCloudflareDeployment(options);
+      const verifyCloudflareWorkerGone = shouldVerifyCloudflareWorker(options);
       try {
-        const destroyResult = await destroySmokeInstallation(options, {
-          installationId,
+        const destroyResult = await destroySmokeCapsule(options, {
+          capsuleId,
           reason:
             "Layer-2 platform-control-plane smoke cleanup after verification failure",
           verifyCloudflareWorkerGone,
-          outputsPublic: deploymentLedger?.outputsPublic,
+          publicOutputs: stateVersionLedger?.publicOutputs,
         });
         destroyPlanRunId = destroyResult.destroyPlanRun.id;
         destroyApplyRunId = destroyResult.destroyApplyRun.id;
@@ -1425,10 +1439,10 @@ export async function runPlatformControlPlaneSmoke(
           cloudflareWorkerGone: verifyCloudflareWorkerGone
             ? await assertCloudflareWorkerGoneForCleanup(
                 options,
-                deploymentLedger?.outputsPublic,
+                stateVersionLedger?.publicOutputs,
               )
             : false,
-          installationMarkedError: false,
+          capsuleMarkedError: false,
           destroyAttempted: true,
           destroyPlanRunId,
           destroyApplyRunId,
@@ -1438,8 +1452,8 @@ export async function runPlatformControlPlaneSmoke(
         connectionRevokeSkippedReason =
           "post-apply cleanup destroy failed; keeping ProviderConnection so the Capsule can be destroyed after the blocker is fixed";
         const fallbackCleanup = await cleanupAppliedSmokeFailure(options, {
-          installationId,
-          outputsPublic: deploymentLedger?.outputsPublic,
+          capsuleId,
+          publicOutputs: stateVersionLedger?.publicOutputs,
         });
         failureCleanup = {
           ...fallbackCleanup,
@@ -1452,9 +1466,9 @@ export async function runPlatformControlPlaneSmoke(
         };
       }
     } else {
-      await markPendingSmokeInstallationError(options, {
-        spaceId,
-        installationId,
+      await markPendingSmokeCapsuleError(options, {
+        workspaceId,
+        capsuleId,
       }).catch(() => undefined);
     }
     failure = error;
@@ -1473,23 +1487,24 @@ export async function runPlatformControlPlaneSmoke(
   return failedResult(options, {
     startedAt,
     startedAtMs,
-    spaceId,
+    workspaceId,
     completedSteps,
     stepTimings,
     runTimings,
     connectionId,
     providerConnectionId,
-    installationId,
+    capsuleId,
     sourceId,
     sourceSyncRunId,
     sourceSnapshotId,
+    installConfigId,
     compatibilityReportId,
     planRunId,
     applyRunId,
     destroyPlanRunId,
     destroyApplyRunId,
     backupRestoreRehearsal,
-    deploymentLedger,
+    stateVersionLedger,
     releaseActivation,
     cloudflareResourcePreflight,
     publicUrlChecks,
@@ -1511,7 +1526,7 @@ function failedResult(
   input: {
     readonly startedAt: string;
     readonly startedAtMs: number;
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly completedSteps: readonly string[];
     readonly stepTimings: readonly SmokeStepTiming[];
     readonly runTimings: readonly SmokeRunTiming[];
@@ -1520,14 +1535,15 @@ function failedResult(
     readonly sourceId?: string;
     readonly sourceSyncRunId?: string;
     readonly sourceSnapshotId?: string;
+    readonly installConfigId?: string;
     readonly compatibilityReportId?: string;
-    readonly installationId?: string;
+    readonly capsuleId?: string;
     readonly planRunId?: string;
     readonly applyRunId?: string;
     readonly destroyPlanRunId?: string;
     readonly destroyApplyRunId?: string;
     readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
-    readonly deploymentLedger?: DeploymentLedgerVerificationResult;
+    readonly stateVersionLedger?: StateVersionLedgerVerificationResult;
     readonly releaseActivation?: ReleaseActivationVerificationResult;
     readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
     readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
@@ -1554,13 +1570,13 @@ function failedResult(
     finishedAt,
     durationMs: Math.max(0, finishedAtMs - input.startedAtMs),
     serviceUrl: options.url,
-    scratchSpaceId: input.spaceId,
+    scratchWorkspaceId: input.workspaceId,
     capsuleModule: capsuleLabel(options),
     verificationMode: options.verificationMode,
     credentialPath:
       options.cloudflareConnectionMode === "none"
         ? "none"
-        : "space_scoped_provider_connection",
+        : "workspace_scoped_provider_connection",
     providerConnectionMode: options.cloudflareConnectionMode,
     sourceMode: options.sourceMode,
     steps: requiredSteps(options),
@@ -1574,14 +1590,15 @@ function failedResult(
     sourceId: input.sourceId,
     sourceSyncRunId: input.sourceSyncRunId,
     sourceSnapshotId: input.sourceSnapshotId,
+    installConfigId: input.installConfigId,
     compatibilityReportId: input.compatibilityReportId,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     planRunId: input.planRunId,
     applyRunId: input.applyRunId,
     destroyPlanRunId: input.destroyPlanRunId,
     destroyApplyRunId: input.destroyApplyRunId,
     backupRestoreRehearsal: input.backupRestoreRehearsal,
-    deploymentLedger: input.deploymentLedger,
+    stateVersionLedger: input.stateVersionLedger,
     releaseActivation: input.releaseActivation,
     cloudflareResourcePreflight: input.cloudflareResourcePreflight,
     publicUrlChecks: input.publicUrlChecks,
@@ -1590,15 +1607,15 @@ function failedResult(
     policyStatus: input.policyStatus,
     workerUrl:
       options.verificationMode === "cloudflare-worker"
-        ? publicDeploymentUrl(options, input.deploymentLedger?.outputsPublic)
+        ? publicRuntimeUrl(options, input.stateVersionLedger?.publicOutputs)
         : "",
     opentofuApplyVerified: input.completedSteps.includes(
       "opentofuApplyVerified",
     ),
-    deploymentVerified: input.completedSteps.includes("deploymentVerified"),
+    runtimeVerified: input.completedSteps.includes("runtimeVerified"),
     publicUrlVerified: input.completedSteps.includes("publicUrlVerified"),
-    deploymentLedgerVerified: input.completedSteps.includes(
-      "deploymentLedgerVerified",
+    stateVersionLedgerVerified: input.completedSteps.includes(
+      "stateVersionLedgerVerified",
     ),
     destroyVerified: input.completedSteps.includes("destroy"),
     ...(input.connectionId
@@ -1616,15 +1633,12 @@ function failedResult(
 }
 
 function failedNextAction(input: {
-  readonly installationId?: string;
+  readonly capsuleId?: string;
   readonly planRunId?: string;
   readonly connectionRevokeSkippedReason?: string;
   readonly error: unknown;
 }): string {
-  if (
-    input.error instanceof Error &&
-    input.error.message.startsWith("cloudflare resource preflight failed:")
-  ) {
+  if (input.error instanceof CloudflareResourcePreflightError) {
     return "Update the operator Cloudflare API token so it can read and create the Cloudflare account resources required by the Capsule, or use a non-resource-creating Capsule smoke before rerunning this apply.";
   }
   if (
@@ -1637,7 +1651,7 @@ function failedNextAction(input: {
   if (input.connectionRevokeSkippedReason !== undefined) {
     return "Inspect the failed cleanup run, destroy the recorded Capsule after fixing the blocker, then revoke the retained ProviderConnection and rerun the smoke.";
   }
-  return "Inspect the recorded run and installation ids, confirm any temporary Cloudflare resources are destroyed, then rerun the smoke after the blocking run reaches a terminal state.";
+  return "Inspect the recorded Run and Capsule ids, confirm any temporary Cloudflare resources are destroyed, then rerun the smoke after the blocking Run reaches a terminal state.";
 }
 
 function failPolicy(): never {
@@ -1648,12 +1662,12 @@ function publicPolicyStatus(run: RunRecord): SmokeCheckStatus {
   return run.policyStatus === "deny" ? "denied" : "passed";
 }
 
-async function resolveSpaceId(
+async function resolveWorkspaceId(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<string> {
-  const normalized = options.space.replace(/^@/, "");
-  if (normalized.startsWith("space_")) {
-    if (options.ensureSpace) {
+  const normalized = options.workspace.replace(/^@/, "");
+  if (/^ws_[0-9a-zA-Z]{3,64}$/u.test(normalized)) {
+    if (options.ensureWorkspace) {
       await requestJson({
         baseUrl: options.url,
         token: options.accountSessionToken,
@@ -1668,18 +1682,15 @@ async function resolveSpaceId(
       readonly handle: string;
       readonly archivedAt?: string;
     }[];
-    readonly spaces?: readonly {
-      readonly id: string;
-      readonly handle: string;
-      readonly archivedAt?: string;
-    }[];
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
     path: `${API_PREFIX}/workspaces?includeArchived=true`,
   });
-  const listedWorkspaces = response.workspaces ?? response.spaces ?? [];
-  const match = listedWorkspaces.find((space) => space.handle === normalized);
+  const listedWorkspaces = response.workspaces ?? [];
+  const match = listedWorkspaces.find(
+    (workspace) => workspace.handle === normalized,
+  );
   if (match?.id) {
     if (typeof match.archivedAt === "string" && match.archivedAt.length > 0) {
       await requestJson({
@@ -1693,10 +1704,9 @@ async function resolveSpaceId(
     return match.id;
   }
   if (!match) {
-    if (options.ensureSpace) {
+    if (options.ensureWorkspace) {
       const created = await requestJson<{
         readonly workspace?: { readonly id?: string };
-        readonly space?: { readonly id?: string };
       }>({
         baseUrl: options.url,
         token: options.accountSessionToken,
@@ -1704,14 +1714,14 @@ async function resolveSpaceId(
         path: `${API_PREFIX}/workspaces`,
         body: {
           handle: normalized,
-          displayName: options.spaceDisplayName ?? normalized,
+          displayName: options.workspaceDisplayName ?? normalized,
           type: "personal",
         },
       });
-      const createdId = created.workspace?.id ?? created.space?.id;
+      const createdId = created.workspace?.id;
       if (!createdId) {
         throw new Error(
-          "Workspace create response did not include workspace.id or space.id",
+          "Workspace create response did not include workspace.id",
         );
       }
       return createdId;
@@ -1722,9 +1732,9 @@ async function resolveSpaceId(
   }
 }
 
-async function createSpaceCloudflareConnection(
+async function createWorkspaceCloudflareConnection(
   options: PlatformControlPlaneSmokeOptions,
-  spaceId: string,
+  workspaceId: string,
 ): Promise<{
   readonly rawConnectionId: string;
   readonly providerConnectionId: string;
@@ -1740,7 +1750,7 @@ async function createSpaceCloudflareConnection(
     body:
       options.cloudflareConnectionMode === "generic-env"
         ? {
-            workspaceId: spaceId,
+            workspaceId,
             provider: "cloudflare",
             kind: "generic_env_provider",
             credentialDriver: "generic_env",
@@ -1755,7 +1765,7 @@ async function createSpaceCloudflareConnection(
             },
           }
         : {
-            workspaceId: spaceId,
+            workspaceId,
             provider: "cloudflare",
             displayName,
             scopeHints: {
@@ -1772,7 +1782,7 @@ async function createSpaceCloudflareConnection(
   await verifyConnection(options, id);
   const providerConnectionId = await lookupPublicProviderConnectionId(
     options,
-    spaceId,
+    workspaceId,
     displayName,
   );
   return { rawConnectionId: id, providerConnectionId };
@@ -1813,7 +1823,8 @@ async function assertCloudflareResourcePreflight(
         "content-type": "application/json",
       },
     }).catch((error) => {
-      throw new Error(
+      throw new CloudflareResourcePreflightError(
+        "request_failed",
         `cloudflare resource preflight request failed: ${check.label}: ${errorMessage(error)}`,
       );
     });
@@ -1823,7 +1834,8 @@ async function assertCloudflareResourcePreflight(
       `cloudflare resource preflight ${check.id}`,
     );
     if (!response.ok || !cloudflareApiSuccess(body)) {
-      throw new Error(
+      throw new CloudflareResourcePreflightError(
+        "capability_denied",
         `cloudflare resource preflight failed: ${check.id} returned http ${
           response.status
         }: ${cloudflareApiErrorCode(body)}. The Cloudflare token is active but cannot read ${check.label} for the configured account; update CLOUDFLARE_API_TOKEN permissions or CLOUDFLARE_ACCOUNT_ID before applying resource-creating Capsules.`,
@@ -1858,7 +1870,7 @@ function cloudflareResourcePreflightChecks(
 
 async function lookupPublicProviderConnectionId(
   options: PlatformControlPlaneSmokeOptions,
-  spaceId: string,
+  workspaceId: string,
   displayName: string,
 ): Promise<string> {
   const response = await requestJson<{
@@ -1866,7 +1878,7 @@ async function lookupPublicProviderConnectionId(
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/provider-connections?workspaceId=${encodeURIComponent(spaceId)}`,
+    path: `${API_PREFIX}/provider-connections?workspaceId=${encodeURIComponent(workspaceId)}`,
   });
   const match = (response.providerConnections ?? []).find((connection) =>
     isSmokeProviderConnectionMatch(connection, {
@@ -1898,7 +1910,7 @@ export function isSmokeProviderConnectionMatch(
 async function deployGitSourceCapsule(
   options: PlatformControlPlaneSmokeOptions,
   input: {
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly providerConnectionId?: string;
   },
 ): Promise<
@@ -1906,12 +1918,13 @@ async function deployGitSourceCapsule(
     readonly sourceId: string;
     readonly sourceSyncRunId: string;
     readonly sourceSnapshotId: string;
+    readonly installConfigId: string;
   }
 > {
   if (!options.sourceGitUrl) {
     throw new Error("sourceGitUrl is required for git source smoke");
   }
-  const source = await createSmokeSource(options, input.spaceId);
+  const source = await createSmokeSource(options, input.workspaceId);
   const sourceSyncRun = await syncSmokeSource(options, source.id);
   const sourceSnapshotId = sourceSyncRun.sourceSnapshotId;
   if (!sourceSnapshotId) {
@@ -1921,21 +1934,21 @@ async function deployGitSourceCapsule(
   }
   const installConfigId = await findSmokeCapsuleInstallConfigId(
     options,
-    input.spaceId,
+    input.workspaceId,
   );
-  const installation = await createSourceInstallation(options, {
-    spaceId: input.spaceId,
+  const capsule = await createSourceCapsule(options, {
+    workspaceId: input.workspaceId,
     sourceId: source.id,
     installConfigId,
   });
   const compatibility = await createSmokeSourceCompatibilityCheck(options, {
     sourceId: source.id,
     sourceSnapshotId,
-    capsuleId: installation.id,
+    capsuleId: capsule.id,
   });
   if (input.providerConnectionId) {
-    await putInstallationProviderConnections(options, {
-      installationId: installation.id,
+    await putCapsuleProviderBindings(options, {
+      capsuleId: capsule.id,
       providerConnectionId: input.providerConnectionId,
     });
   }
@@ -1943,7 +1956,7 @@ async function deployGitSourceCapsule(
     baseUrl: options.url,
     token: options.accountSessionToken,
     method: "POST",
-    path: `${API_PREFIX}/capsules/${encodeURIComponent(installation.id)}/plan`,
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(capsule.id)}/plan`,
     timeoutMs: options.deployTimeoutSeconds * 1000,
     body: {
       ...(options.runnerProfileId ? { runnerId: options.runnerProfileId } : {}),
@@ -1951,13 +1964,14 @@ async function deployGitSourceCapsule(
     },
   });
   return {
-    installation,
+    capsule,
     run: plan.run,
     planRun: plan.run,
     created: true,
     sourceId: source.id,
     sourceSyncRunId: sourceSyncRun.id,
     sourceSnapshotId,
+    installConfigId,
     compatibilityReportId: compatibility.report.id,
   };
 }
@@ -2028,7 +2042,7 @@ export function smokeSourceCompatibilityCheckBody(input: {
 
 async function createSmokeSource(
   options: PlatformControlPlaneSmokeOptions,
-  spaceId: string,
+  workspaceId: string,
 ): Promise<{ readonly id: string }> {
   const response = await requestJson<{
     readonly source?: { readonly id?: string };
@@ -2038,10 +2052,10 @@ async function createSmokeSource(
     method: "POST",
     path: `${API_PREFIX}/sources`,
     body: {
-      workspaceId: spaceId,
+      workspaceId,
       name: options.sourceName ?? `${options.appName}-source`,
       url: options.sourceGitUrl,
-      defaultRef: options.sourceRef,
+      ...(options.sourceRef ? { defaultRef: options.sourceRef } : {}),
       defaultPath: options.sourcePath,
     },
   });
@@ -2073,7 +2087,7 @@ async function syncSmokeSource(
 
 async function findSmokeCapsuleInstallConfigId(
   options: PlatformControlPlaneSmokeOptions,
-  spaceId: string,
+  workspaceId: string,
 ): Promise<string> {
   const response = await requestJson<{
     readonly installConfigs?: readonly InstallConfigRecord[];
@@ -2081,57 +2095,52 @@ async function findSmokeCapsuleInstallConfigId(
     baseUrl: options.url,
     token: options.accountSessionToken,
     path: `${API_PREFIX}/capsule-configs?workspaceId=${encodeURIComponent(
-      spaceId,
+      workspaceId,
     )}`,
   });
   const configs = response.installConfigs ?? [];
-  if (options.installConfigId) {
-    const match = configs.find(
-      (config) => config.id === options.installConfigId,
-    );
-    if (!match?.id) {
+  return selectSmokeInstallConfigId(configs, options.installConfigId);
+}
+
+export function selectSmokeInstallConfigId(
+  configs: readonly InstallConfigRecord[],
+  requestedId?: string,
+): string {
+  const selectable = configs.filter(isSelectableCapsuleInstallConfig);
+  if (requestedId) {
+    const match = selectable.find((config) => config.id === requestedId);
+    if (!match) {
       throw new Error(
-        `install config ${options.installConfigId} was not available to the scratch Workspace`,
+        `install config ${requestedId} was not available to the scratch Workspace`,
       );
     }
     return match.id;
   }
-  const match = configs.find(isSelectableGenericCapsuleInstallConfig);
-  if (!match?.id) {
-    const scopedGenericCount = configs.filter(
-      (config) =>
-        typeof config.id === "string" &&
-        config.sourceKind === "generic_capsule",
-    ).length;
+  if (selectable.length === 0) {
     throw new Error(
-      "selectable generic_capsule install config was not available to the scratch Workspace" +
-        (scopedGenericCount > 0
-          ? `; saw ${scopedGenericCount} scoped/non-selectable generic config(s)`
-          : ""),
+      "selectable Capsule install config was not available to the scratch Workspace",
     );
   }
-  return match.id;
+  if (selectable.length > 1) {
+    throw new Error(
+      "multiple selectable Capsule install configs are available; set --install-config-id explicitly",
+    );
+  }
+  return selectable[0]!.id;
 }
 
-export function isSelectableGenericCapsuleInstallConfig(
+export function isSelectableCapsuleInstallConfig(
   config: InstallConfigRecord,
 ): config is InstallConfigRecord & { readonly id: string } {
   if (typeof config.id !== "string") return false;
-  if (config.sourceKind !== "generic_capsule") return false;
   if (config.internal?.reason === "per_install_overrides") return false;
-  if (
-    (config.workspaceId !== undefined || config.spaceId !== undefined) &&
-    /^icfg_[0-9a-f]{16}$/iu.test(config.id)
-  ) {
-    return false;
-  }
   return true;
 }
 
-async function createSourceInstallation(
+async function createSourceCapsule(
   options: PlatformControlPlaneSmokeOptions,
   input: {
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly sourceId: string;
     readonly installConfigId: string;
   },
@@ -2141,9 +2150,9 @@ async function createSourceInstallation(
     token: options.accountSessionToken,
     method: "POST",
     path: `${API_PREFIX}/workspaces/${encodeURIComponent(
-      input.spaceId,
+      input.workspaceId,
     )}/capsules`,
-    body: smokeSourceInstallationCreateBody(options, input),
+    body: smokeSourceCapsuleCreateBody(options, input),
   });
   const created = createdCapsuleFromCreateResponse(response);
   const id = created.id;
@@ -2153,7 +2162,7 @@ async function createSourceInstallation(
   };
 }
 
-export function smokeSourceInstallationCreateBody(
+export function smokeSourceCapsuleCreateBody(
   options: Pick<
     PlatformControlPlaneSmokeOptions,
     | "appName"
@@ -2186,13 +2195,12 @@ export function smokeSourceInstallationCreateBody(
 
 export interface CapsuleCreateSmokeResponse {
   readonly capsule?: { readonly id?: string; readonly name?: string };
-  readonly installation?: { readonly id?: string; readonly name?: string };
 }
 
 export function createdCapsuleFromCreateResponse(
   response: CapsuleCreateSmokeResponse,
 ): { readonly id: string; readonly name?: string } {
-  const created = response.capsule ?? response.installation;
+  const created = response.capsule;
   const id = created?.id;
   if (!id) {
     throw new Error("capsule create response did not include id");
@@ -2206,7 +2214,7 @@ export function createdCapsuleFromCreateResponse(
 export function capsuleFromLedgerResponse(
   response: CapsuleLedgerResponse,
 ): CapsuleLedgerRecord {
-  const capsule = response.capsule ?? response.installation;
+  const capsule = response.capsule;
   if (!capsule) {
     throw new Error("capsule ledger response did not include capsule");
   }
@@ -2214,19 +2222,19 @@ export function capsuleFromLedgerResponse(
 }
 
 function capsuleWorkspaceId(capsule: CapsuleLedgerRecord): string | undefined {
-  return capsule.workspaceId ?? capsule.spaceId;
+  return capsule.workspaceId;
 }
 
 function capsuleCurrentStateVersionId(
   capsule: CapsuleLedgerRecord,
 ): string | undefined {
-  return capsule.currentStateVersionId ?? capsule.currentDeploymentId;
+  return capsule.currentStateVersionId;
 }
 
-async function putInstallationProviderConnections(
+async function putCapsuleProviderBindings(
   options: PlatformControlPlaneSmokeOptions,
   input: {
-    readonly installationId: string;
+    readonly capsuleId: string;
     readonly providerConnectionId: string;
   },
 ): Promise<void> {
@@ -2235,10 +2243,10 @@ async function putInstallationProviderConnections(
     token: options.accountSessionToken,
     method: "PUT",
     path: `${API_PREFIX}/capsules/${encodeURIComponent(
-      input.installationId,
-    )}/provider-connections`,
+      input.capsuleId,
+    )}/provider-bindings`,
     body: {
-      connections: [
+      bindings: [
         {
           provider: "cloudflare",
           alias: "main",
@@ -2266,13 +2274,13 @@ async function ensurePlanReadyForApply(
   return await pollRun(options, planRunId);
 }
 
-async function destroySmokeInstallation(
+async function destroySmokeCapsule(
   options: PlatformControlPlaneSmokeOptions,
   input: {
-    readonly installationId: string;
+    readonly capsuleId: string;
     readonly reason: string;
     readonly verifyCloudflareWorkerGone: boolean;
-    readonly outputsPublic?: Readonly<Record<string, unknown>>;
+    readonly publicOutputs?: Readonly<Record<string, unknown>>;
   },
 ): Promise<{
   readonly destroyPlanRun: RunRecord;
@@ -2283,7 +2291,7 @@ async function destroySmokeInstallation(
     token: options.accountSessionToken,
     method: "POST",
     path: `${API_PREFIX}/capsules/${encodeURIComponent(
-      input.installationId,
+      input.capsuleId,
     )}/destroy-plan`,
     body: {
       ...(options.runnerProfileId
@@ -2314,8 +2322,8 @@ async function destroySmokeInstallation(
   const completedDestroy = await pollRun(options, destroyApply.run.id);
   assertRunSucceeded(completedDestroy, "destroy apply");
   if (input.verifyCloudflareWorkerGone) {
-    await assertCloudflareWorkerGone(options, input.outputsPublic);
-    await assertPublicWorkerUrlGone(options, input.outputsPublic);
+    await assertCloudflareWorkerGone(options, input.publicOutputs);
+    await assertPublicWorkerUrlGone(options, input.publicOutputs);
   }
   return {
     destroyPlanRun: reviewedDestroyPlan,
@@ -2323,52 +2331,50 @@ async function destroySmokeInstallation(
   };
 }
 
-export function shouldMarkPendingSmokeInstallationError(
-  installation: InstallationRecord,
+export function shouldMarkPendingSmokeCapsuleError(
+  capsule: CapsuleLedgerRecord,
   appName: string,
-): installation is InstallationRecord & { readonly id: string } {
+): capsule is CapsuleLedgerRecord & { readonly id: string } {
   return (
-    typeof installation.id === "string" &&
-    installation.name === appName &&
-    installation.status === "pending" &&
-    (installation.currentStateGeneration ?? 0) === 0
+    typeof capsule.id === "string" &&
+    capsule.name === appName &&
+    capsule.status === "pending" &&
+    (capsule.currentStateGeneration ?? 0) === 0
   );
 }
 
-async function markPendingSmokeInstallationError(
+async function markPendingSmokeCapsuleError(
   options: PlatformControlPlaneSmokeOptions,
   input: {
-    readonly spaceId: string;
-    readonly installationId?: string;
+    readonly workspaceId: string;
+    readonly capsuleId?: string;
   },
 ): Promise<boolean> {
-  const candidates = input.installationId
+  const candidates = input.capsuleId
     ? [
         (
-          await requestJson<{ readonly installation?: InstallationRecord }>({
+          await requestJson<{ readonly capsule?: CapsuleLedgerRecord }>({
             baseUrl: options.url,
             token: options.accountSessionToken,
             path: `${API_PREFIX}/capsules/${encodeURIComponent(
-              input.installationId,
+              input.capsuleId,
             )}`,
           })
-        ).installation,
+        ).capsule,
       ]
     : ((
-        await requestJson<{ readonly installations?: InstallationRecord[] }>({
+        await requestJson<{ readonly capsules?: CapsuleLedgerRecord[] }>({
           baseUrl: options.url,
           token: options.accountSessionToken,
           path: `${API_PREFIX}/workspaces/${encodeURIComponent(
-            input.spaceId,
+            input.workspaceId,
           )}/capsules`,
         })
-      ).installations ?? []);
+      ).capsules ?? []);
 
   const target = candidates
-    .filter((item): item is InstallationRecord => item !== undefined)
-    .find((item) =>
-      shouldMarkPendingSmokeInstallationError(item, options.appName),
-    );
+    .filter((item): item is CapsuleLedgerRecord => item !== undefined)
+    .find((item) => shouldMarkPendingSmokeCapsuleError(item, options.appName));
   if (!target?.id) return false;
   await requestJson({
     baseUrl: options.url,
@@ -2383,15 +2389,15 @@ async function markPendingSmokeInstallationError(
 async function cleanupAppliedSmokeFailure(
   options: PlatformControlPlaneSmokeOptions,
   input: {
-    readonly installationId: string;
-    readonly outputsPublic?: Readonly<Record<string, unknown>>;
+    readonly capsuleId: string;
+    readonly publicOutputs?: Readonly<Record<string, unknown>>;
   },
 ): Promise<FailureCleanupResult> {
   let cloudflareWorkerGone = false;
-  let installationMarkedError = false;
+  let capsuleMarkedError = false;
   let cleanupError: string | undefined;
   try {
-    const workerName = cloudflareWorkerName(options, input.outputsPublic);
+    const workerName = cloudflareWorkerName(options, input.publicOutputs);
     const deleted = await cloudflareScriptRequest(
       options,
       "DELETE",
@@ -2399,7 +2405,7 @@ async function cleanupAppliedSmokeFailure(
     );
     cloudflareWorkerGone = deleted.status === 404 || deleted.ok;
     if (!cloudflareWorkerGone) {
-      await assertCloudflareWorkerGone(options, input.outputsPublic);
+      await assertCloudflareWorkerGone(options, input.publicOutputs);
       cloudflareWorkerGone = true;
     }
   } catch (error) {
@@ -2410,12 +2416,10 @@ async function cleanupAppliedSmokeFailure(
       baseUrl: options.url,
       token: options.accountSessionToken,
       method: "PATCH",
-      path: `${API_PREFIX}/capsules/${encodeURIComponent(
-        input.installationId,
-      )}`,
+      path: `${API_PREFIX}/capsules/${encodeURIComponent(input.capsuleId)}`,
       body: { status: "error" },
     });
-    installationMarkedError = true;
+    capsuleMarkedError = true;
   } catch (error) {
     cleanupError = cleanupError
       ? `${cleanupError}; ${publicErrorMessage(error)}`
@@ -2424,24 +2428,24 @@ async function cleanupAppliedSmokeFailure(
   return {
     attempted: true,
     cloudflareWorkerGone,
-    installationMarkedError,
+    capsuleMarkedError,
     ...(cleanupError ? { error: cleanupError } : {}),
   };
 }
 
 async function assertCloudflareWorkerGoneForCleanup(
   options: PlatformControlPlaneSmokeOptions,
-  outputsPublic?: Readonly<Record<string, unknown>>,
+  publicOutputs?: Readonly<Record<string, unknown>>,
 ): Promise<boolean> {
   try {
-    const workerName = cloudflareWorkerName(options, outputsPublic);
+    const workerName = cloudflareWorkerName(options, publicOutputs);
     const deleted = await cloudflareScriptRequest(
       options,
       "DELETE",
       workerName,
     );
     if (deleted.status === 404 || deleted.ok) return true;
-    await assertCloudflareWorkerGone(options, outputsPublic);
+    await assertCloudflareWorkerGone(options, publicOutputs);
     return true;
   } catch {
     return false;
@@ -2519,13 +2523,13 @@ function assertRunSucceeded(run: RunRecord, phase: string): void {
 async function runBackupRestoreRehearsal(
   options: PlatformControlPlaneSmokeOptions,
   input: {
-    readonly spaceId: string;
-    readonly installationId: string;
+    readonly workspaceId: string;
+    readonly capsuleId: string;
   },
 ): Promise<BackupRestoreRehearsalResult> {
-  const deployment = await latestDeploymentForInstallation(
+  const stateVersion = await latestStateVersionForCapsule(
     options,
-    input.installationId,
+    input.capsuleId,
   );
   const backup = (
     await requestJson<{ readonly backup: BackupRecord }>({
@@ -2533,7 +2537,7 @@ async function runBackupRestoreRehearsal(
       token: options.accountSessionToken,
       method: "POST",
       path: `${API_PREFIX}/capsules/${encodeURIComponent(
-        input.installationId,
+        input.capsuleId,
       )}/backups`,
     })
   ).backup;
@@ -2543,12 +2547,12 @@ async function runBackupRestoreRehearsal(
       token: options.accountSessionToken,
       method: "POST",
       path: `${API_PREFIX}/workspaces/${encodeURIComponent(
-        input.spaceId,
+        input.workspaceId,
       )}/backups/${encodeURIComponent(backup.id)}/restores`,
       body: {
-        installationId: input.installationId,
-        environment: deployment.environment,
-        stateGeneration: deployment.stateGeneration,
+        capsuleId: input.capsuleId,
+        environment: stateVersion.environment,
+        stateGeneration: stateVersion.generation,
         expectedBackupDigest: backup.digest,
       },
     })
@@ -2574,11 +2578,11 @@ async function runBackupRestoreRehearsal(
     backupRunId: backup.createdByRunId,
     backupDigest: backup.digest,
     backupCreatedAt: backup.createdAt,
-    stateGeneration: deployment.stateGeneration,
-    deploymentId: deployment.id,
+    stateGeneration: stateVersion.generation,
+    stateVersionId: stateVersion.id,
     restoreRunId: completedRestore.id,
-    restoredFromStateSnapshotId: completedRestore.restoredFromStateSnapshotId,
-    restoredStateSnapshotId: completedRestore.restoredStateSnapshotId,
+    restoredFromStateVersionId: completedRestore.restoredFromStateVersionId,
+    restoredStateVersionId: completedRestore.restoredStateVersionId,
     restoreCreatedAt: completedRestore.createdAt ?? restore.createdAt,
     restoreStartedAt: completedRestore.startedAt,
     restoreFinishedAt: completedRestore.finishedAt,
@@ -2586,47 +2590,45 @@ async function runBackupRestoreRehearsal(
   };
 }
 
-async function latestDeploymentForInstallation(
+async function latestStateVersionForCapsule(
   options: PlatformControlPlaneSmokeOptions,
-  installationId: string,
-): Promise<DeploymentRecord> {
+  capsuleId: string,
+): Promise<StateVersionRecord> {
   const response = await requestJson<{
-    readonly deployments?: readonly DeploymentRecord[];
+    readonly stateVersions?: readonly StateVersionRecord[];
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
     path: `${API_PREFIX}/capsules/${encodeURIComponent(
-      installationId,
+      capsuleId,
     )}/state-versions`,
   });
-  const deployments = [...(response.deployments ?? [])].sort(
+  const stateVersions = [...(response.stateVersions ?? [])].sort(
     (a, b) =>
       b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
   );
-  const deployment =
-    deployments.find((candidate) => candidate.status === "active") ??
-    deployments[0];
-  if (!deployment) {
+  const stateVersion = stateVersions[0];
+  if (!stateVersion) {
     throw new Error(
-      `installation ${installationId} did not return a deployment for backup/restore rehearsal`,
+      `Capsule ${capsuleId} did not return a StateVersion for backup/restore rehearsal`,
     );
   }
   if (
-    !Number.isInteger(deployment.stateGeneration) ||
-    deployment.stateGeneration < 0
+    !Number.isInteger(stateVersion.generation) ||
+    stateVersion.generation < 0
   ) {
     throw new Error(
-      `deployment ${deployment.id} has invalid stateGeneration for backup/restore rehearsal`,
+      `StateVersion ${stateVersion.id} has invalid generation for backup/restore rehearsal`,
     );
   }
-  return deployment;
+  return stateVersion;
 }
 
 async function assertCloudflareWorkerExists(
   options: PlatformControlPlaneSmokeOptions,
-  outputsPublic?: Readonly<Record<string, unknown>>,
+  publicOutputs?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
-  const workerName = cloudflareWorkerName(options, outputsPublic);
+  const workerName = cloudflareWorkerName(options, publicOutputs);
   const deadline = Date.now() + 60_000;
   let lastStatus = 0;
   while (Date.now() <= deadline) {
@@ -2644,15 +2646,20 @@ function publicWorkerUrl(options: PlatformControlPlaneSmokeOptions): string {
   return publicWorkerUrlForName(options, options.appName);
 }
 
-function publicDeploymentUrl(
+function publicRuntimeUrl(
   options: PlatformControlPlaneSmokeOptions,
-  outputsPublic?: Readonly<Record<string, unknown>>,
+  publicOutputs?: Readonly<Record<string, unknown>>,
 ): string {
-  const outputUrl = outputsPublic?.url;
-  if (typeof outputUrl === "string" && outputUrl.trim()) return outputUrl;
+  if (options.runtimePublicUrlOutput) {
+    return requiredProjectedStringOutput(
+      publicOutputs,
+      options.runtimePublicUrlOutput,
+      "runtime public URL",
+    );
+  }
   return publicWorkerUrlForName(
     options,
-    cloudflareWorkerName(options, outputsPublic),
+    cloudflareWorkerName(options, publicOutputs),
   );
 }
 
@@ -2665,22 +2672,30 @@ function publicWorkerUrlForName(
 
 function cloudflareWorkerName(
   options: PlatformControlPlaneSmokeOptions,
-  outputsPublic?: Readonly<Record<string, unknown>>,
+  publicOutputs?: Readonly<Record<string, unknown>>,
 ): string {
-  for (const outputName of [
-    "cloudflare_worker_script_id",
-    "worker_name",
-    "service_runtime_resource_id",
-    "service_runtime_name",
-  ] as const) {
-    const value = outputsPublic?.[outputName];
-    if (typeof value === "string" && value.trim()) return value;
-  }
-  const configuredWorkerName = options.vars.worker_name;
-  if (typeof configuredWorkerName === "string" && configuredWorkerName.trim()) {
-    return configuredWorkerName;
+  if (options.cloudflareWorkerNameOutput) {
+    return requiredProjectedStringOutput(
+      publicOutputs,
+      options.cloudflareWorkerNameOutput,
+      "Cloudflare Worker name",
+    );
   }
   return options.appName;
+}
+
+function requiredProjectedStringOutput(
+  publicOutputs: Readonly<Record<string, unknown>> | undefined,
+  outputName: string,
+  purpose: string,
+): string {
+  const value = publicOutputs?.[outputName];
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(
+      `${purpose} output ${JSON.stringify(outputName)} is missing or is not a non-empty string`,
+    );
+  }
+  return value.trim();
 }
 
 function isCurrentTakosumiHelloPage(body: string): boolean {
@@ -2694,13 +2709,9 @@ function isCurrentTakosumiHelloPage(body: string): boolean {
 
 async function assertPublicWorkerUrl(
   options: PlatformControlPlaneSmokeOptions,
-  outputsPublic?: Readonly<Record<string, unknown>>,
+  publicOutputs?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
-  const outputUrl = outputsPublic?.url;
-  const url =
-    typeof outputUrl === "string" && outputUrl.trim()
-      ? outputUrl
-      : publicDeploymentUrl(options, outputsPublic);
+  const url = publicRuntimeUrl(options, publicOutputs);
   const deadline = Date.now() + 60_000;
   let lastStatus = 0;
   let lastBody = "";
@@ -2733,16 +2744,16 @@ function dryRunPublicUrl(check: PublicUrlCheck): string {
 
 async function assertConfiguredPublicUrls(
   options: PlatformControlPlaneSmokeOptions,
-  outputsPublic: Readonly<Record<string, unknown>> | undefined,
+  publicOutputs: Readonly<Record<string, unknown>> | undefined,
 ): Promise<readonly PublicUrlCheckResult[]> {
-  if (!outputsPublic) {
+  if (!publicOutputs) {
     throw new Error(
-      "deployment ledger did not expose outputsPublic for URL checks",
+      "Output ledger did not expose publicOutputs for URL checks",
     );
   }
   const results: PublicUrlCheckResult[] = [];
   for (const check of options.publicUrlChecks) {
-    const rawUrl = outputsPublic[check.output];
+    const rawUrl = publicOutputs[check.output];
     if (typeof rawUrl !== "string" || !rawUrl.trim()) {
       throw new Error(
         `public URL check ${check.name} expected string output ${check.output}`,
@@ -2820,264 +2831,166 @@ function publicCheckUrl(rawUrl: string, check: PublicUrlCheck): string {
   return url.toString();
 }
 
-async function assertDeploymentLedger(
+async function assertStateVersionLedger(
   options: PlatformControlPlaneSmokeOptions,
   input: {
-    readonly spaceId: string;
-    readonly installationId: string;
+    readonly workspaceId: string;
+    readonly capsuleId: string;
     readonly applyRunId: string;
   },
-): Promise<DeploymentLedgerVerificationResult> {
-  const capsuleResponse = await requestJson<CapsuleLedgerResponse>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    path: `${API_PREFIX}/capsules/${encodeURIComponent(input.installationId)}`,
-  });
-  const capsule = capsuleFromLedgerResponse(capsuleResponse);
-  if (capsule.id !== input.installationId) {
-    throw new Error("capsule ledger returned an unexpected capsule id");
-  }
-  if (capsuleWorkspaceId(capsule) !== input.spaceId) {
-    throw new Error("capsule ledger returned an unexpected Workspace id");
-  }
-  if (capsule.status !== "active") {
-    throw new Error(
-      `capsule ledger status was ${capsule.status ?? "unknown"}; expected active`,
-    );
-  }
-  if (
-    !Number.isInteger(capsule.currentStateGeneration) ||
-    Number(capsule.currentStateGeneration) < 1
-  ) {
-    throw new Error("capsule ledger did not advance state generation");
-  }
-  const currentStateVersionId = capsuleCurrentStateVersionId(capsule);
-  if (!currentStateVersionId) {
-    throw new Error("capsule ledger did not expose currentStateVersionId");
-  }
-  const currentStateGeneration = capsule.currentStateGeneration;
-
-  const deploymentsResponse = await requestJson<{
-    readonly deployments?: readonly {
-      readonly id?: string;
-      readonly spaceId?: string;
-      readonly installationId?: string;
-      readonly environment?: string;
-      readonly applyRunId?: string;
-      readonly stateGeneration?: number;
-      readonly outputsPublic?: Record<string, unknown>;
-      readonly status?: string;
-    }[];
-  }>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    path: `${API_PREFIX}/capsules/${encodeURIComponent(
-      input.installationId,
-    )}/state-versions`,
-  });
-  const deployments = deploymentsResponse.deployments ?? [];
-  const deployment =
-    deployments.find((item) => item.id === currentStateVersionId) ??
-    deployments.find((item) => item.applyRunId === input.applyRunId);
-  if (!deployment) {
-    throw new Error(
-      "state-version ledger did not include the applied state version",
-    );
-  }
-  if (!deployment.id || deployment.id !== currentStateVersionId) {
-    throw new Error(
-      "state-version ledger does not match currentStateVersionId",
-    );
-  }
-  const deploymentId = deployment.id;
-  if ((deployment.workspaceId ?? deployment.spaceId) !== input.spaceId) {
-    throw new Error("state-version ledger returned an unexpected Workspace id");
-  }
-  if (
-    (deployment.capsuleId ?? deployment.installationId) !== input.installationId
-  ) {
-    throw new Error("state-version ledger returned an unexpected capsule id");
-  }
-  if (deployment.environment !== options.environment) {
-    throw new Error(
-      `deployment ledger environment was ${deployment.environment ?? "unknown"}; expected ${options.environment}`,
-    );
-  }
-  if (deployment.applyRunId !== input.applyRunId) {
-    throw new Error("state-version ledger returned an unexpected applyRunId");
-  }
-  if (deployment.status !== "active") {
-    throw new Error(
-      `state-version ledger status was ${deployment.status ?? "unknown"}; expected active`,
-    );
-  }
-  if (
-    !Number.isInteger(deployment.stateGeneration) ||
-    deployment.stateGeneration !== currentStateGeneration
-  ) {
-    throw new Error(
-      "state-version ledger state generation did not match capsule",
-    );
-  }
-  const stateGeneration = deployment.stateGeneration;
-  const outputsPublic = deployment.outputsPublic;
-  if (!isRecord(outputsPublic)) {
-    throw new Error("state-version ledger did not expose outputsPublic");
-  }
-  const outputUrl = outputsPublic.url;
+): Promise<StateVersionLedgerVerificationResult> {
+  const result = await readStateVersionAndOutputLedger(options, input);
+  const outputUrl = result.publicOutputs?.url;
   if (typeof outputUrl !== "string" || !outputUrl.trim()) {
-    throw new Error("deployment outputsPublic.url was not a non-empty string");
+    throw new Error("Output publicOutputs.url was not a non-empty string");
   }
-  const publicOutputNames = Object.keys(outputsPublic).sort();
-  return {
-    installationStatus: capsule.status,
-    deploymentId,
-    stateGeneration,
-    applyRunId: input.applyRunId,
-    publicOutputNames,
-    publicOutputDigest: digestJson(outputsPublic),
-    outputsPublic,
-  };
+  return result;
 }
 
-async function assertGenericDeploymentLedger(
+async function assertGenericStateVersionLedger(
   options: PlatformControlPlaneSmokeOptions,
   input: {
-    readonly spaceId: string;
-    readonly installationId: string;
+    readonly workspaceId: string;
+    readonly capsuleId: string;
     readonly applyRunId: string;
   },
-): Promise<DeploymentLedgerVerificationResult> {
-  const capsuleResponse = await requestJson<CapsuleLedgerResponse>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    path: `${API_PREFIX}/capsules/${encodeURIComponent(input.installationId)}`,
-  });
-  const capsule = capsuleFromLedgerResponse(capsuleResponse);
-  if (capsule.id !== input.installationId) {
-    throw new Error("capsule ledger returned an unexpected capsule id");
-  }
-  if (capsuleWorkspaceId(capsule) !== input.spaceId) {
-    throw new Error("capsule ledger returned an unexpected Workspace id");
-  }
-  if (capsule.status !== "active") {
-    throw new Error(
-      `capsule ledger status was ${capsule.status ?? "unknown"}; expected active`,
-    );
-  }
-  if (
-    !Number.isInteger(capsule.currentStateGeneration) ||
-    Number(capsule.currentStateGeneration) < 1
-  ) {
-    throw new Error("capsule ledger did not advance state generation");
-  }
-  const currentStateVersionId = capsuleCurrentStateVersionId(capsule);
-  if (!currentStateVersionId) {
-    throw new Error("capsule ledger did not expose currentStateVersionId");
-  }
-  const currentStateGeneration = capsule.currentStateGeneration;
-
-  const deploymentsResponse = await requestJson<{
-    readonly deployments?: readonly {
-      readonly id?: string;
-      readonly spaceId?: string;
-      readonly installationId?: string;
-      readonly environment?: string;
-      readonly applyRunId?: string;
-      readonly stateGeneration?: number;
-      readonly outputsPublic?: Record<string, unknown>;
-      readonly status?: string;
-    }[];
-  }>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    path: `${API_PREFIX}/capsules/${encodeURIComponent(
-      input.installationId,
-    )}/state-versions`,
-  });
-  const deployments = deploymentsResponse.deployments ?? [];
-  const deployment =
-    deployments.find((item) => item.id === currentStateVersionId) ??
-    deployments.find((item) => item.applyRunId === input.applyRunId);
-  if (!deployment) {
-    throw new Error(
-      "state-version ledger did not include the applied state version",
-    );
-  }
-  if (!deployment.id || deployment.id !== currentStateVersionId) {
-    throw new Error(
-      "state-version ledger does not match currentStateVersionId",
-    );
-  }
-  const deploymentId = deployment.id;
-  if ((deployment.workspaceId ?? deployment.spaceId) !== input.spaceId) {
-    throw new Error("state-version ledger returned an unexpected Workspace id");
-  }
-  if (
-    (deployment.capsuleId ?? deployment.installationId) !== input.installationId
-  ) {
-    throw new Error("state-version ledger returned an unexpected capsule id");
-  }
-  if (deployment.environment !== options.environment) {
-    throw new Error(
-      `deployment ledger environment was ${deployment.environment ?? "unknown"}; expected ${options.environment}`,
-    );
-  }
-  if (deployment.applyRunId !== input.applyRunId) {
-    throw new Error("state-version ledger returned an unexpected applyRunId");
-  }
-  if (deployment.status !== "active") {
-    throw new Error(
-      `state-version ledger status was ${deployment.status ?? "unknown"}; expected active`,
-    );
-  }
-  if (
-    !Number.isInteger(deployment.stateGeneration) ||
-    deployment.stateGeneration !== currentStateGeneration
-  ) {
-    throw new Error(
-      "state-version ledger state generation did not match capsule",
-    );
-  }
-  const outputsPublic = deployment.outputsPublic;
-  if (!isRecord(outputsPublic)) {
-    throw new Error("state-version ledger did not expose outputsPublic");
-  }
-  const publicOutputNames = Object.keys(outputsPublic).sort();
+): Promise<StateVersionLedgerVerificationResult> {
+  const result = await readStateVersionAndOutputLedger(options, input);
   const missingRequiredOutputs = Object.entries(options.outputAllowlist)
-    .filter(
-      ([name, spec]) =>
-        spec.required === true &&
-        // `takosumi_release` is intentionally consumed by the release
-        // activator and filtered out of public deployment outputs.
-        name !== "takosumi_release",
-    )
+    .filter(([, spec]) => spec.required === true)
     .map(([name]) => name)
-    .filter((name) => !publicOutputNames.includes(name));
+    .filter((name) => !result.publicOutputNames.includes(name));
   if (missingRequiredOutputs.length > 0) {
     throw new Error(
-      `deployment outputsPublic did not include required output(s): ${missingRequiredOutputs.join(
+      `Output publicOutputs did not include required output(s): ${missingRequiredOutputs.join(
         ", ",
       )}`,
     );
   }
+  return result;
+}
+
+async function readStateVersionAndOutputLedger(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly applyRunId: string;
+  },
+): Promise<StateVersionLedgerVerificationResult> {
+  const capsuleResponse = await requestJson<CapsuleLedgerResponse>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(input.capsuleId)}`,
+  });
+  const capsule = capsuleFromLedgerResponse(capsuleResponse);
+  if (capsule.id !== input.capsuleId) {
+    throw new Error("capsule ledger returned an unexpected capsule id");
+  }
+  if (capsuleWorkspaceId(capsule) !== input.workspaceId) {
+    throw new Error("capsule ledger returned an unexpected Workspace id");
+  }
+  if (capsule.status !== "active") {
+    throw new Error(
+      `capsule ledger status was ${capsule.status ?? "unknown"}; expected active`,
+    );
+  }
+  if (
+    !Number.isInteger(capsule.currentStateGeneration) ||
+    Number(capsule.currentStateGeneration) < 1
+  ) {
+    throw new Error("capsule ledger did not advance state generation");
+  }
+  const currentStateVersionId = capsuleCurrentStateVersionId(capsule);
+  if (!currentStateVersionId) {
+    throw new Error("capsule ledger did not expose currentStateVersionId");
+  }
+  const currentStateGeneration = Number(capsule.currentStateGeneration);
+
+  const stateVersionsResponse = await requestJson<{
+    readonly stateVersions?: readonly StateVersionRecord[];
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(
+      input.capsuleId,
+    )}/state-versions`,
+  });
+  const stateVersion = (stateVersionsResponse.stateVersions ?? []).find(
+    (item) => item.id === currentStateVersionId,
+  );
+  if (!stateVersion) {
+    throw new Error(
+      "StateVersion ledger did not include currentStateVersionId",
+    );
+  }
+  if (stateVersion.workspaceId !== input.workspaceId) {
+    throw new Error("StateVersion ledger returned an unexpected Workspace id");
+  }
+  if (stateVersion.capsuleId !== input.capsuleId) {
+    throw new Error("StateVersion ledger returned an unexpected Capsule id");
+  }
+  if (stateVersion.environment !== options.environment) {
+    throw new Error(
+      `StateVersion environment was ${stateVersion.environment}; expected ${options.environment}`,
+    );
+  }
+  if (stateVersion.createdByRunId !== input.applyRunId) {
+    throw new Error(
+      "StateVersion ledger returned an unexpected createdByRunId",
+    );
+  }
+  if (
+    !Number.isInteger(stateVersion.generation) ||
+    stateVersion.generation !== currentStateGeneration
+  ) {
+    throw new Error("StateVersion generation did not match Capsule");
+  }
+
+  const outputResponse = await requestJson<{
+    readonly output?: OutputRecord | null;
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(input.capsuleId)}/outputs`,
+  });
+  const output = outputResponse.output;
+  if (!output) {
+    throw new Error("Output ledger did not expose the Capsule current Output");
+  }
+  if (output.workspaceId !== input.workspaceId) {
+    throw new Error("Output ledger returned an unexpected Workspace id");
+  }
+  if (output.capsuleId !== input.capsuleId) {
+    throw new Error("Output ledger returned an unexpected Capsule id");
+  }
+  if (output.stateGeneration !== stateVersion.generation) {
+    throw new Error(
+      "Output stateGeneration did not match StateVersion generation",
+    );
+  }
+  if (!isRecord(output.publicOutputs)) {
+    throw new Error("Output ledger did not expose publicOutputs");
+  }
+  const publicOutputs = output.publicOutputs;
+  const publicOutputNames = Object.keys(publicOutputs).sort();
   return {
-    installationStatus: capsule.status,
-    deploymentId,
-    stateGeneration: deployment.stateGeneration,
+    capsuleStatus: capsule.status,
+    stateVersionId: stateVersion.id,
+    generation: stateVersion.generation,
     applyRunId: input.applyRunId,
     publicOutputNames,
-    publicOutputDigest: digestJson(outputsPublic),
-    outputsPublic,
+    publicOutputDigest: digestJson(publicOutputs),
+    publicOutputs,
   };
 }
 
 async function assertReleaseActivation(
   options: PlatformControlPlaneSmokeOptions,
   input: {
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly applyRunId: string;
-    readonly deploymentId: string;
+    readonly stateVersionId: string;
   },
 ): Promise<ReleaseActivationVerificationResult> {
   const deadline = Date.now() + options.deployTimeoutSeconds * 1000;
@@ -3088,7 +3001,7 @@ async function assertReleaseActivation(
     }>({
       baseUrl: options.url,
       token: options.accountSessionToken,
-      path: `${API_PREFIX}/workspaces/${encodeURIComponent(input.spaceId)}/activity?limit=50`,
+      path: `${API_PREFIX}/workspaces/${encodeURIComponent(input.workspaceId)}/activity?limit=50`,
     });
     const events = (response.events ?? []).filter((candidate) =>
       isReleaseActivationEvent(candidate, input),
@@ -3120,7 +3033,7 @@ async function assertReleaseActivation(
     );
   }
   throw new Error(
-    `apply run ${input.applyRunId} did not emit release_activation Activity for deployment ${input.deploymentId}`,
+    `apply Run ${input.applyRunId} did not emit release_activation Activity for StateVersion ${input.stateVersionId}`,
   );
 }
 
@@ -3128,24 +3041,32 @@ function isReleaseActivationEvent(
   candidate: ActivityEventRecord,
   input: {
     readonly applyRunId: string;
-    readonly deploymentId: string;
+    readonly stateVersionId: string;
   },
-): candidate is ActivityEventRecord & { readonly action: string } {
+): candidate is ActivityEventRecord & {
+  readonly action: string;
+  readonly runId: string;
+  readonly targetId: string;
+  readonly targetType: "state_version";
+} {
   if (!candidate.action?.startsWith("release_activation.")) return false;
   if (candidate.runId !== input.applyRunId) return false;
-  if (candidate.targetId !== input.deploymentId) return false;
-  return (
-    candidate.targetType === undefined || candidate.targetType === "deployment"
-  );
+  if (candidate.targetId !== input.stateVersionId) return false;
+  return candidate.targetType === "state_version";
 }
 
 function releaseActivationVerificationResult(
   options: PlatformControlPlaneSmokeOptions,
   input: {
     readonly applyRunId: string;
-    readonly deploymentId: string;
+    readonly stateVersionId: string;
   },
-  event: ActivityEventRecord & { readonly action: string },
+  event: ActivityEventRecord & {
+    readonly action: string;
+    readonly runId: string;
+    readonly targetId: string;
+    readonly targetType: "state_version";
+  },
 ): ReleaseActivationVerificationResult {
   const status = releaseActivationStatusFromAction(event.action);
   if (
@@ -3161,8 +3082,8 @@ function releaseActivationVerificationResult(
     eventId: event.id ?? "",
     action: event.action,
     status,
-    targetId: event.targetId ?? input.deploymentId,
-    runId: event.runId ?? input.applyRunId,
+    targetId: event.targetId,
+    runId: event.runId,
     ...(typeof metadata.activationKind === "string"
       ? { activationKind: metadata.activationKind }
       : {}),
@@ -3188,9 +3109,9 @@ function releaseActivationStatusFromAction(
 
 async function assertCloudflareWorkerGone(
   options: PlatformControlPlaneSmokeOptions,
-  outputsPublic?: Readonly<Record<string, unknown>>,
+  publicOutputs?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
-  const workerName = cloudflareWorkerName(options, outputsPublic);
+  const workerName = cloudflareWorkerName(options, publicOutputs);
   const deadline = Date.now() + 60_000;
   let lastStatus = 0;
   while (Date.now() <= deadline) {
@@ -3206,9 +3127,9 @@ async function assertCloudflareWorkerGone(
 
 async function assertPublicWorkerUrlGone(
   options: PlatformControlPlaneSmokeOptions,
-  outputsPublic?: Readonly<Record<string, unknown>>,
+  publicOutputs?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
-  const url = publicDeploymentUrl(options, outputsPublic);
+  const url = publicRuntimeUrl(options, publicOutputs);
   const deadline = Date.now() + 120_000;
   let lastStatus = 0;
   let lastBody = "";
@@ -3494,7 +3415,7 @@ function nodeHttpTransportEnv(token: string): NodeJS.ProcessEnv {
 
 function isFetchTimeoutError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  return /(?:timed?\s*out|timeout|aborted)/iu.test(error.message);
+  return error.name === "AbortError" || error.name === "TimeoutError";
 }
 
 function parseResponseBody(text: string, label: string): unknown {
@@ -3702,9 +3623,9 @@ function normalizeBaseUrl(value: string): string {
 function parseCloudflareConnectionMode(
   value: string | undefined,
 ): SmokeProviderConnectionMode {
-  if (value === undefined || value.trim() === "" || value === "guided") {
-    return "guided";
-  }
+  if (value === undefined || value.trim() === "" || value === "none")
+    return "none";
+  if (value === "guided") return "guided";
   if (value === "generic-env") return "generic-env";
   if (value === "none") return "none";
   throw new Error(
@@ -3720,29 +3641,12 @@ function parseAuthTokenKind(value: string | undefined): SmokeAuthTokenKind {
   throw new Error("--auth-token-kind must be session or pat");
 }
 
-function assertAccountAuthTokenKind(
-  kind: SmokeAuthTokenKind,
-  token: string,
-): void {
-  if (kind === "pat" && !token.startsWith("takpat_")) {
-    throw new Error("account personal access token must start with takpat_");
-  }
-  if (kind === "session" && !token.startsWith("sess_")) {
-    throw new Error("account session token must start with sess_");
-  }
-}
-
 function parseVerificationMode(
   value: string | undefined,
 ): SmokeVerificationMode {
-  if (
-    value === undefined ||
-    value.trim() === "" ||
-    value === "cloudflare-worker"
-  ) {
-    return "cloudflare-worker";
-  }
-  if (value === "opentofu") return "opentofu";
+  if (value === undefined || value.trim() === "" || value === "opentofu")
+    return "opentofu";
+  if (value === "cloudflare-worker") return "cloudflare-worker";
   throw new Error("--verification-mode must be cloudflare-worker or opentofu");
 }
 
@@ -3784,54 +3688,16 @@ function dryRunReleaseActivationStatus(
   return requirement === "any" ? "succeeded" : requirement;
 }
 
-type DefaultSmokeVariableStyle =
-  "legacy_cloudflare_worker_sample" | "portable_cloudflare_module";
-
-function defaultSmokeVariableStyle(input: {
-  readonly sourceGitUrl?: string;
-  readonly sourcePath?: string;
-  readonly modulePath?: string;
-  readonly installConfigId?: string;
-}): DefaultSmokeVariableStyle {
-  const installConfigId = input.installConfigId?.trim() ?? "";
-  if (
-    installConfigId === "cloudflare-hello-worker" ||
-    installConfigId === "cloudflare-worker-service"
-  ) {
-    return "legacy_cloudflare_worker_sample";
-  }
-  const sourcePath = input.sourcePath?.trim() ?? "";
-  const modulePath = input.modulePath?.trim() ?? "";
-  const moduleKey = `${sourcePath}/${modulePath}`;
-  if (
-    moduleKey.includes(
-      "providers/cloudflare/modules/cloudflare-hello-worker",
-    ) ||
-    moduleKey.includes("providers/cloudflare/modules/cloudflare-worker-service")
-  ) {
-    return "legacy_cloudflare_worker_sample";
-  }
-  return "portable_cloudflare_module";
-}
-
 function defaultSmokeVars(input: {
   readonly accountId: string;
   readonly appName: string;
   readonly workersSubdomain: string;
   readonly providerless?: boolean;
-  readonly variableStyle: DefaultSmokeVariableStyle;
 }): Readonly<Record<string, JsonSmokeValue>> {
   if (input.providerless) {
     return {
       name: input.appName,
       base_url: `https://${input.appName}.example.invalid`,
-    };
-  }
-  if (input.variableStyle === "legacy_cloudflare_worker_sample") {
-    return {
-      accountId: input.accountId,
-      appName: input.appName,
-      workersSubdomain: input.workersSubdomain,
     };
   }
   return {
@@ -3871,7 +3737,23 @@ function isPlainJsonObject(
   );
 }
 
-function defaultSmokeOutputAllowlist(): SmokeOutputAllowlist {
+function defaultSmokeOutputAllowlist(
+  providerless: boolean,
+): SmokeOutputAllowlist {
+  if (providerless) {
+    return {
+      example_label: {
+        from: "example_label",
+        type: "string",
+        required: true,
+      },
+      example_endpoint: {
+        from: "example_endpoint",
+        type: "url",
+        required: true,
+      },
+    };
+  }
   return {
     worker_name: { from: "worker_name", type: "string", required: true },
     url: { from: "url", type: "url", required: true },
@@ -3977,6 +3859,29 @@ function parseOutputAllowlist(
     };
   }
   return out;
+}
+
+function parseExplicitProjectedOutputName(input: {
+  readonly raw?: string;
+  readonly label: string;
+  readonly outputAllowlist: SmokeOutputAllowlist;
+  readonly acceptedTypes: readonly SmokeOutputAllowlistType[];
+}): string | undefined {
+  const name = input.raw?.trim();
+  if (!name) return undefined;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
+    throw new Error(`${input.label} must be an OpenTofu output identifier`);
+  }
+  const projection = input.outputAllowlist[name];
+  if (!projection) {
+    throw new Error(`${input.label} must also be in the output allowlist`);
+  }
+  if (!input.acceptedTypes.includes(projection.type)) {
+    throw new Error(
+      `${input.label} must reference an output projected as ${input.acceptedTypes.join(" or ")}`,
+    );
+  }
+  return name;
 }
 
 function isOutputAllowlistType(
@@ -4103,14 +4008,6 @@ function isJsonSmokeValue(value: unknown): value is JsonSmokeValue {
   return isJsonRecord(value);
 }
 
-function stringRecordValue(
-  record: Readonly<Record<string, JsonSmokeValue>>,
-  key: string,
-): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function normalizeSmokeSourceGitUrl(value: string): string {
   const url = new URL(value);
   if (url.username || url.password) {
@@ -4147,6 +4044,8 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly varsDigest: string;
   readonly outputAllowlistNames: readonly string[];
   readonly publicUrlCheckNames: readonly string[];
+  readonly cloudflareWorkerNameOutput?: string;
+  readonly runtimePublicUrlOutput?: string;
   readonly functionalProbeScriptDigest?: string;
   readonly functionalProbeEnvNames: readonly string[];
   readonly capsuleDir?: string;
@@ -4175,6 +4074,12 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     varsDigest: digestJson(options.vars),
     outputAllowlistNames: Object.keys(options.outputAllowlist).sort(),
     publicUrlCheckNames: options.publicUrlChecks.map((check) => check.name),
+    ...(options.cloudflareWorkerNameOutput
+      ? { cloudflareWorkerNameOutput: options.cloudflareWorkerNameOutput }
+      : {}),
+    ...(options.runtimePublicUrlOutput
+      ? { runtimePublicUrlOutput: options.runtimePublicUrlOutput }
+      : {}),
     ...(options.functionalProbeScriptDigest
       ? { functionalProbeScriptDigest: options.functionalProbeScriptDigest }
       : {}),
@@ -4182,7 +4087,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     ...(options.sourceGitUrl
       ? {
           sourceGitUrlDigest: sha256(options.sourceGitUrl),
-          sourceRef: options.sourceRef ?? "main",
+          ...(options.sourceRef ? { sourceRef: options.sourceRef } : {}),
           sourcePath: options.sourcePath ?? ".",
           ...(options.modulePath ? { modulePath: options.modulePath } : {}),
           ...(options.installConfigId
@@ -4219,30 +4124,23 @@ function stableJson(value: unknown): string {
 
 async function runCapsuleFunctionalProbe(
   options: PlatformControlPlaneSmokeOptions,
-  outputsPublic: Readonly<Record<string, unknown>>,
+  publicOutputs: Readonly<Record<string, unknown>>,
 ): Promise<CapsuleFunctionalProbeEvidence> {
   const script = options.functionalProbeScript;
   if (!script) throw new Error("functional probe script is not configured");
   const startedAtMs = Date.now();
   const tempDir = await mkdtemp(resolve(tmpdir(), "takosumi-capsule-probe-"));
   const outputsFile = resolve(tempDir, "outputs.json");
-  await writeFile(outputsFile, `${JSON.stringify(outputsPublic)}\n`, {
+  await writeFile(outputsFile, `${JSON.stringify(publicOutputs)}\n`, {
     mode: 0o600,
   });
-  const publicUrl = firstStringValue(outputsPublic, [
-    "url",
-    "public_url",
-    "launch_url",
-    "api_url",
-  ]);
   const childEnv: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "",
     HOME: process.env.HOME ?? tempDir,
     TMPDIR: tempDir,
     TAKOSUMI_CAPSULE_OUTPUTS_FILE: outputsFile,
     TAKOSUMI_CAPSULE_APP_NAME: options.appName,
-    TAKOSUMI_CAPSULE_SPACE_ID: options.space,
-    ...(publicUrl ? { TAKOSUMI_CAPSULE_PUBLIC_URL: publicUrl } : {}),
+    TAKOSUMI_CAPSULE_WORKSPACE_ID: options.workspace,
   };
   for (const name of options.functionalProbeEnvNames) {
     const value = process.env[name];
@@ -4395,18 +4293,6 @@ function finalizeFunctionalProbeCleanup(
   return { ...evidence, cleanupVerified: true };
 }
 
-function firstStringValue(
-  value: Readonly<Record<string, unknown>>,
-  names: readonly string[],
-): string | undefined {
-  for (const name of names) {
-    const candidate = value[name];
-    if (typeof candidate === "string" && candidate.trim())
-      return candidate.trim();
-  }
-  return undefined;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -4429,7 +4315,7 @@ function requiredSteps(
   const steps = [
     ...(options?.cloudflareConnectionMode === "none"
       ? ["providerConnectionNotRequired"]
-      : ["spaceScopedProviderConnection"]),
+      : ["workspaceScopedProviderConnection"]),
     ...(options?.cloudflareConnectionMode === "generic-env"
       ? ["genericEnvProviderConnection"]
       : []),
@@ -4449,12 +4335,10 @@ function requiredSteps(
     ...(options?.verificationMode === "opentofu"
       ? [
           "opentofuApplyVerified",
-          ...(shouldVerifyCloudflareDeployment(options)
-            ? ["deploymentVerified"]
-            : []),
+          ...(shouldVerifyCloudflareWorker(options) ? ["runtimeVerified"] : []),
         ]
-      : ["deploymentVerified", "publicUrlVerified"]),
-    "deploymentLedgerVerified",
+      : ["runtimeVerified", "publicUrlVerified"]),
+    "stateVersionLedgerVerified",
   ];
   if (options?.requireReleaseActivation) {
     steps.push("releaseActivationVerified");
@@ -4482,24 +4366,13 @@ function requiredSteps(
   return steps;
 }
 
-function shouldVerifyCloudflareDeployment(
+function shouldVerifyCloudflareWorker(
   options?: Pick<
     PlatformControlPlaneSmokeOptions,
-    | "verificationMode"
-    | "cloudflareConnectionMode"
-    | "publicUrlChecks"
-    | "outputAllowlist"
+    "verificationMode"
   >,
 ): boolean {
-  if (!options) return false;
-  if (options.verificationMode === "cloudflare-worker") return true;
-  if (options.verificationMode !== "opentofu") return false;
-  if (options.cloudflareConnectionMode === "none") return false;
-  if (options.publicUrlChecks.length === 0) return false;
-  return Object.prototype.hasOwnProperty.call(
-    options.outputAllowlist,
-    "worker_name",
-  );
+  return options?.verificationMode === "cloudflare-worker";
 }
 
 async function writeResult(
@@ -4521,7 +4394,7 @@ async function writeResult(
         : "DRY RUN";
   console.log(`${label} ${result.kind}`);
   console.log(`service: ${result.serviceUrl}`);
-  console.log(`workspace: ${result.scratchSpaceId}`);
+  console.log(`workspace: ${result.scratchWorkspaceId}`);
   console.log(`provider connection: ${result.providerConnectionMode}`);
   console.log(`source mode: ${result.sourceMode}`);
   console.log(`verification mode: ${result.verificationMode}`);
@@ -4536,8 +4409,7 @@ async function writeResult(
   if (result.releaseActivation) {
     console.log(`release activation: ${result.releaseActivation.status}`);
   }
-  if (result.installationId)
-    console.log(`installation: ${result.installationId}`);
+  if (result.capsuleId) console.log(`capsule id: ${result.capsuleId}`);
   if (result.sourceSyncRunId)
     console.log(`source sync run: ${result.sourceSyncRunId}`);
   if (result.applyRunId) console.log(`apply run: ${result.applyRunId}`);
@@ -4566,13 +4438,15 @@ async function runSelfTest(): Promise<void> {
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
       cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takosumi-smoke-selftest",
-      ensureSpace: true,
+      ensureWorkspace: true,
       sessionTokenFile: "/private/account-session-token",
       cloudflareApiTokenFile: "/private/cloudflare-token",
+      cloudflareConnectionMode: "guided",
+      verificationMode: "cloudflare-worker",
     },
     {},
   );
@@ -4673,11 +4547,11 @@ async function runSelfTest(): Promise<void> {
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
       cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takosumi-smoke-selftest",
-      ensureSpace: true,
+      ensureWorkspace: true,
       sessionTokenFile: "/private/account-session-token",
       cloudflareApiTokenFile: "/private/cloudflare-token",
       cloudflareConnectionMode: "generic-env",
@@ -4702,12 +4576,12 @@ async function runSelfTest(): Promise<void> {
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
       cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       capsuleDir: "/private/custom-opentofu-module",
       appName: "takosumi-smoke-selftest",
-      ensureSpace: true,
+      ensureWorkspace: true,
       sessionTokenFile: "/private/account-session-token",
       cloudflareApiTokenFile: "/private/cloudflare-token",
       verificationMode: "opentofu",
@@ -4739,10 +4613,10 @@ async function runSelfTest(): Promise<void> {
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       capsuleDir: "/private/keyless-opentofu-module",
       appName: "takosumi-smoke-selftest",
-      ensureSpace: true,
+      ensureWorkspace: true,
       sessionTokenFile: "/private/account-session-token",
       cloudflareConnectionMode: "none",
       verificationMode: "opentofu",
@@ -4765,7 +4639,7 @@ async function runSelfTest(): Promise<void> {
     throw new Error("providerless self-test is missing no-connection step");
   }
   if (
-    providerlessResult.steps.includes("spaceScopedProviderConnection") ||
+    providerlessResult.steps.includes("workspaceScopedProviderConnection") ||
     providerlessResult.steps.includes("connectionVerified") ||
     providerlessResult.steps.includes("connectionRevoked")
   ) {
@@ -4781,17 +4655,19 @@ async function runSelfTest(): Promise<void> {
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       capsuleDir: "/private/takos-opentofu-module",
       appName: "takos-managed-selftest",
-      ensureSpace: true,
+      ensureWorkspace: true,
       sessionTokenFile: "/private/account-session-token",
       cloudflareConnectionMode: "none",
       verificationMode: "opentofu",
       varsJson:
         '{"target":"cloudflare","project_name":"takos-managed-selftest","environment":"selftest","cloudflare":{"account_id":"ts_acc_takosumi_cloud","api_base_url":"https://app.takosumi.com/compat/cloudflare/client/v4","workers_subdomain":"app.takos.jp"}}',
       outputAllowlistJson:
-        '{"url":{"from":"url","type":"url","required":true},"worker_name":{"from":"worker_name","type":"string","required":true}}',
+        '{"published_endpoint":{"from":"url","type":"url","required":true},"runtime_resource":{"from":"worker_name","type":"string","required":true}}',
+      cloudflareWorkerNameOutput: "runtime_resource",
+      runtimePublicUrlOutput: "published_endpoint",
     },
     {},
   );
@@ -4820,40 +4696,39 @@ async function runSelfTest(): Promise<void> {
   }
   if (
     cloudflareWorkerName(managedCompatOptions, {
-      service_runtime_name: "portable-storage-runtime",
+      runtime_resource: "portable-storage-runtime",
     }) !== "portable-storage-runtime"
   ) {
     throw new Error(
-      "self-test did not resolve a vendor-neutral runtime name output",
+      "self-test did not resolve the explicitly mapped Worker name output",
     );
   }
-  const configuredWorkerOptions: PlatformControlPlaneSmokeOptions = {
-    ...managedCompatOptions,
-    vars: {
-      ...managedCompatOptions.vars,
-      worker_name: "configured-worker-runtime",
-    },
-  };
+  const {
+    cloudflareWorkerNameOutput: _explicitWorkerNameOutput,
+    ...configuredWorkerOptions
+  } = managedCompatOptions;
   if (
     cloudflareWorkerName(configuredWorkerOptions) !==
-    "configured-worker-runtime"
+    "takos-managed-selftest"
   ) {
-    throw new Error("self-test did not resolve configured worker_name input");
+    throw new Error("self-test did not use the explicit app name fallback");
   }
   if (
-    publicDeploymentUrl(managedCompatOptions, {
-      url: "https://storage.example.test",
+    publicRuntimeUrl(managedCompatOptions, {
+      published_endpoint: "https://storage.example.test",
     }) !== "https://storage.example.test"
   ) {
-    throw new Error("self-test did not preserve a custom deployment URL");
+    throw new Error(
+      "self-test did not resolve the explicitly mapped runtime URL output",
+    );
   }
   const defaultProviderlessOptions = await resolveOptions(
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       appName: "takosumi-keyless-default-selftest",
-      ensureSpace: true,
+      ensureWorkspace: true,
       sessionTokenFile: "/private/account-session-token",
       cloudflareConnectionMode: "none",
       verificationMode: "opentofu",
@@ -4897,18 +4772,18 @@ async function runSelfTest(): Promise<void> {
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
       cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takos-release-selftest",
-      ensureSpace: true,
+      ensureWorkspace: true,
       sessionTokenFile: "/private/account-session-token",
       cloudflareApiTokenFile: "/private/cloudflare-token",
       sourceGitUrl: "https://github.com/tako0614/takos.git",
       sourcePath: ".",
       modulePath: "deploy/opentofu",
-      varsJson:
-        '{"release_container_images":{"runtime":"registry.cloudflare.com/acc_123/takos-worker-runtime:0.10.0-test","executor":"registry.cloudflare.com/acc_123/takos-agent:0.10.0-test"}}',
+      varsJson: '{"runtime_options":{"mode":"smoke"}}',
+      cloudflareConnectionMode: "guided",
       verificationMode: "opentofu",
     },
     {},
@@ -4935,11 +4810,11 @@ async function runSelfTest(): Promise<void> {
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
       cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "custom-module-selftest",
-      ensureSpace: true,
+      ensureWorkspace: true,
       sessionTokenFile: "/private/account-session-token",
       cloudflareApiTokenFile: "/private/cloudflare-token",
       sourceGitUrl: "https://github.com/example/custom.git",
@@ -4967,14 +4842,14 @@ async function runSelfTest(): Promise<void> {
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
       cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takosumi-smoke-selftest",
-      ensureSpace: true,
+      ensureWorkspace: true,
       sessionTokenFile: "/private/account-session-token",
       cloudflareApiTokenFile: "/private/cloudflare-token",
-      sourceGitUrl: "https://github.example/takosumi-fixture.git",
+      sourceGitUrl: "https://git.example.test/example/takosumi-fixture.git",
       sourceRef: "main",
       sourcePath: "providers/cloudflare/modules/cloudflare-hello-worker/module",
     },
@@ -4992,7 +4867,7 @@ async function runSelfTest(): Promise<void> {
     throw new Error("git self-test result is missing source steps");
   }
   if (
-    serializedGit.includes("github.example") ||
+    serializedGit.includes("git.example.test") ||
     serializedGit.includes("takosumi-fixture.git")
   ) {
     throw new Error("git self-test leaked source Git URL");
@@ -5002,11 +4877,11 @@ async function runSelfTest(): Promise<void> {
       dryRun: true,
       backupRestoreRehearsal: true,
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
       cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takosumi-smoke-selftest",
-      ensureSpace: true,
+      ensureWorkspace: true,
       sessionTokenFile: "/private/account-session-token",
       cloudflareApiTokenFile: "/private/cloudflare-token",
     },
@@ -5024,7 +4899,7 @@ async function runSelfTest(): Promise<void> {
       dryRun: true,
       requireReleaseActivation: "succeeded",
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       cloudflareConnectionMode: "none",
       verificationMode: "opentofu",
       appName: "takosumi-release-selftest",
@@ -5044,7 +4919,7 @@ async function runSelfTest(): Promise<void> {
   const failed = failedResult(options, {
     startedAt: failedStartedAt,
     startedAtMs: failedStartedAtMs,
-    spaceId: "space_selftest",
+    workspaceId: "ws_selftest",
     completedSteps: [],
     stepTimings: [],
     runTimings: [],
@@ -5072,11 +4947,11 @@ async function runSelfTest(): Promise<void> {
   const deployTimeout = failedResult(options, {
     startedAt: failedStartedAt,
     startedAtMs: failedStartedAtMs,
-    spaceId: "space_selftest",
-    completedSteps: ["spaceScopedProviderConnection", "connectionVerified"],
+    workspaceId: "ws_selftest",
+    completedSteps: ["workspaceScopedProviderConnection", "connectionVerified"],
     stepTimings: [
       {
-        step: "spaceScopedProviderConnection",
+        step: "workspaceScopedProviderConnection",
         startedAt: failedStartedAt,
         finishedAt: failedStartedAt,
         durationMs: 0,
@@ -5095,13 +4970,13 @@ async function runSelfTest(): Promise<void> {
     connectionRevoked: true,
     error: new RequestTimeoutError(
       "POST",
-      `${API_PREFIX}/capsules/inst_selftest/plan`,
+      `${API_PREFIX}/capsules/cap_selftest/plan`,
       1,
     ),
   });
   if (
     deployTimeout.status !== "failed" ||
-    deployTimeout.installationId !== undefined ||
+    deployTimeout.capsuleId !== undefined ||
     deployTimeout.planRunId !== undefined ||
     !deployTimeout.nextAction?.includes("Capsule plan request timed out")
   ) {
@@ -5122,7 +4997,7 @@ async function runSelfTest(): Promise<void> {
     ) {
       return new Response(
         JSON.stringify({
-          workspaces: [{ id: "space_existing", handle: "existing-workspace" }],
+          workspaces: [{ id: "ws_existing", handle: "existing-workspace" }],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -5130,12 +5005,12 @@ async function runSelfTest(): Promise<void> {
     throw new Error(`unexpected self-test workspace request: ${url}`);
   }) as typeof fetch;
   try {
-    const resolved = await resolveSpaceId({
+    const resolved = await resolveWorkspaceId({
       ...options,
-      space: "@existing-workspace",
-      ensureSpace: true,
+      workspace: "@existing-workspace",
+      ensureWorkspace: true,
     });
-    if (resolved !== "space_existing") {
+    if (resolved !== "ws_existing") {
       throw new Error("self-test did not resolve existing Workspace id");
     }
     if (workspaceResolveCalls.some((call) => call.startsWith("POST "))) {
@@ -5161,20 +5036,20 @@ async function runSelfTest(): Promise<void> {
       });
     }
     if (url === "https://app-staging.takosumi.com/api/v1/workspaces") {
-      return new Response(
-        JSON.stringify({ workspace: { id: "space_created" } }),
-        { status: 201, headers: { "content-type": "application/json" } },
-      );
+      return new Response(JSON.stringify({ workspace: { id: "ws_created" } }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
     }
     throw new Error(`unexpected self-test workspace create request: ${url}`);
   }) as typeof fetch;
   try {
-    const created = await resolveSpaceId({
+    const created = await resolveWorkspaceId({
       ...options,
-      space: "@created-workspace",
-      ensureSpace: true,
+      workspace: "@created-workspace",
+      ensureWorkspace: true,
     });
-    if (created !== "space_created") {
+    if (created !== "ws_created") {
       throw new Error("self-test did not accept workspace create response");
     }
   } finally {
@@ -5189,11 +5064,11 @@ async function runSelfTest(): Promise<void> {
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      workspace: "space_selftest",
+      workspace: "ws_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
       cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takosumi-smoke-selftest",
-      ensureSpace: true,
+      ensureWorkspace: true,
       sessionTokenFile: "/private/account-session-token",
       cloudflareApiTokenFile: "/private/cloudflare-token",
       deployTimeoutSeconds: "7",
@@ -5222,7 +5097,7 @@ async function runSelfTest(): Promise<void> {
       baseUrl: "https://app-staging.takosumi.com",
       token: "redacted",
       method: "POST",
-      path: `${API_PREFIX}/capsules/inst_selftest/plan`,
+      path: `${API_PREFIX}/capsules/cap_selftest/plan`,
       timeoutMs: 1,
       body: {},
     });
@@ -5235,14 +5110,14 @@ async function runSelfTest(): Promise<void> {
     globalThis.fetch = originalFetch;
   }
   globalThis.fetch = (async () => {
-    throw new Error("The operation timed out.");
+    throw new DOMException("synthetic transport timeout", "TimeoutError");
   }) as typeof fetch;
   try {
     await requestJson({
       baseUrl: "https://app-staging.takosumi.com",
       token: "redacted",
       method: "POST",
-      path: `${API_PREFIX}/capsules/inst_selftest/plan`,
+      path: `${API_PREFIX}/capsules/cap_selftest/plan`,
       timeoutMs: 1,
       body: {},
       transport: "native",
@@ -5251,7 +5126,7 @@ async function runSelfTest(): Promise<void> {
   } catch (error) {
     if (
       !(error instanceof RequestTimeoutError) ||
-      error.path !== `${API_PREFIX}/capsules/inst_selftest/plan`
+      error.path !== `${API_PREFIX}/capsules/cap_selftest/plan`
     ) {
       throw error;
     }
@@ -5267,13 +5142,15 @@ function sleep(ms: number): Promise<void> {
 
 function printHelp(): void {
   console.log(`Usage:
-  bun run smoke:platform-control-plane -- --url <origin> --workspace <workspace_...|@handle> --cloudflare-api-token-file <path> --cloudflare-account-id-file <path>
+  bun run smoke:platform-control-plane -- --url <origin> --workspace <ws_...|@handle> --session-token-file <path> --source-git-url <url>
 
 Required inputs:
   --url <origin>                                  or TAKOSUMI_PLATFORM_URL
-  --workspace <workspace_...|@handle>             or TAKOSUMI_SMOKE_WORKSPACE
+  --workspace <ws_...|@handle>                    or TAKOSUMI_SMOKE_WORKSPACE
   --session-token-file <path>                     or TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE / TAKOSUMI_ACCOUNT_SESSION_TOKEN
   --pat-token-file <path>                         or TAKOSUMI_ACCOUNT_PAT_TOKEN_FILE / TAKOSUMI_ACCOUNT_PAT_TOKEN
+
+Cloudflare reference contribution inputs (only when explicitly enabled):
   --cloudflare-api-token-file <path>              or CLOUDFLARE_API_TOKEN_FILE / CLOUDFLARE_API_TOKEN; not required with --cloudflare-connection-mode none
   --cloudflare-account-id-file <path>             or CLOUDFLARE_ACCOUNT_ID_FILE; not required with --cloudflare-connection-mode none
   --cloudflare-account-id <id>                    or CLOUDFLARE_ACCOUNT_ID; not required with --cloudflare-connection-mode none
@@ -5282,31 +5159,33 @@ Required inputs:
 
 Options:
   --app-name <name>                               default takosumi-smoke-<random>
-  --environment <name>                            default inferred from --url
+  --environment <name>                            explicit evidence label, default smoke
   --ensure-workspace                              create @handle scratch Workspace when missing; validates existing workspace ids
   --workspace-display-name <name>                 display name used with --ensure-workspace
-  --cloudflare-connection-mode <guided|generic-env|none> default guided; none verifies keyless OpenTofu Capsules with --verification-mode opentofu
+  --cloudflare-connection-mode <guided|generic-env|none> default none; guided/generic-env explicitly enable the Cloudflare reference contribution
   --cloudflare-resource-preflight <account-resources|d1|none>
                                                    verify the Cloudflare token can read account resources before resource-creating applies; account-resources checks D1, KV, R2, Queues, Workflows, and Vectorize
   --runner-profile-id <id>                         request an enabled runner profile for Capsule plans; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID; providerless OpenTofu defaults to ${DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID}
-  --auth-token-kind <session|pat>                 explicit bearer kind for validation; inferred from --pat-token-file when omitted
+  --auth-token-kind <session|pat>                 evidence/source label; inferred from --pat-token-file when omitted and never inferred from token prefixes
   --source-git-url <url>                          Git Source URL to sync; required outside dry-run (or TAKOSUMI_SMOKE_SOURCE_GIT_URL)
-  --source-ref <ref>                              Git ref for --source-git-url, default main
+  --source-ref <ref>                              optional Git ref for --source-git-url; omitted delegates HEAD resolution to Git
   --source-path <path>                            Source archive path inside the Git repo, default .
   --module-path <path>                            OpenTofu Capsule module path inside the SourceSnapshot archive
   --install-config-id <id>                        install config to use for the Capsule, default selectable generic Capsule
   --store-metadata-json <json>                    repository/store presentation metadata copied into Capsule creation
   --store-metadata-json-file <path>               read repository/store presentation metadata from JSON
   --source-name <name>                            Source display name, default <app-name>-source
-  --verification-mode <cloudflare-worker|opentofu> default cloudflare-worker; opentofu verifies plan/apply/destroy without public Worker checks
+  --verification-mode <cloudflare-worker|opentofu> default opentofu; cloudflare-worker explicitly enables Cloudflare script/public checks
   --vars-json <json>                              OpenTofu variable object passed to the generated root
   --vars-json-file <path>                         read OpenTofu variable object from a JSON file
   --no-default-vars                               do not merge smoke default variables into --vars-json
-  --output-allowlist-json <json>                  output projection object; default url + worker_name for the hello-worker smoke
+  --output-allowlist-json <json>                  explicit output projection object; defaults only to the selected bundled smoke fixture's exact ordinary Output names
   --output-allowlist-json-file <path>             read output projection object from a JSON file
   --public-url-checks-json <json>                 optional array of {output,path,expectedStatus,bodyIncludes[]} checks against allowlisted public URL outputs
   --public-url-checks-json-file <path>            read public URL checks from a JSON file
-  --functional-probe-script <path>                run a local Bun probe after apply/public checks and before destroy; stdout must be takosumi.capsule-functional-probe@v1 JSON
+  --cloudflare-worker-name-output <name>          optional explicit projected Output name for Cloudflare script verification; otherwise --app-name is authoritative
+  --runtime-public-url-output <name>              optional explicit projected URL Output name; otherwise the Cloudflare reference URL is derived from --app-name
+  --functional-probe-script <path>                run a local Bun probe after apply/public checks and before destroy; ordinary projected Outputs are available through TAKOSUMI_CAPSULE_OUTPUTS_FILE and stdout must be takosumi.capsule-functional-probe@v1 JSON
   --functional-probe-env <NAME,...>               explicitly forward only these environment variables to the functional probe
   --require-release-activation <any|pending|succeeded|failed|none>
                                                    require a release_activation Activity event for the apply Run; default none
@@ -5320,11 +5199,4 @@ Options:
   --json                                          print JSON only
   --self-test                                     run offline redaction/shape self-test
 `);
-}
-
-function defaultSmokeEnvironment(url: string): string {
-  const hostname = new URL(normalizeBaseUrl(url)).hostname;
-  if (hostname === "app.takosumi.com") return "production-smoke";
-  if (hostname === "app-staging.takosumi.com") return "staging-smoke";
-  return "smoke";
 }

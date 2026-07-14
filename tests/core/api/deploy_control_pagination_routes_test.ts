@@ -1,6 +1,6 @@
 /**
  * Keyset-pagination behaviour over the §30 deploy-control list routes
- * (installations / connections). Asserts: a default (no `?limit=`) list caps at
+ * (capsules / connections). Asserts: a default (no `?limit=`) list caps at
  * 100 rows + emits a `nextCursor`; the cursor pages the remainder with no gaps
  * or dupes across the `(createdAt, id)` boundary; an explicit `?limit=` is
  * honoured/clamped; a malformed `?limit=` / `?cursor=` is a 400.
@@ -8,59 +8,56 @@
 import { expect, test } from "bun:test";
 
 import { createApiApp } from "../../../core/api/app.ts";
-import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
+import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import { CapsulesService } from "../../../core/domains/capsules/mod.ts";
-import { builtInInstallConfigs } from "../../../core/domains/capsules/install_config_bootstrap.ts";
-import type { Connection } from "takosumi-contract/connections";
-import type {
-  Installation,
-  InstallConfig,
-} from "takosumi-contract/install-configs";
+import type { Capsule } from "takosumi-contract/capsules";
+import type { ProviderConnection } from "takosumi-contract/connections";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 import { DEFAULT_PAGE_LIMIT } from "takosumi-contract/pagination";
 
-const SPACE_ID = "space_pagination01";
+const WORKSPACE_ID = "ws_pagination01";
 
-function connectionFixture(i: number): Connection {
+function connectionFixture(i: number): ProviderConnection {
   const seq = String(i).padStart(4, "0");
   return {
     id: `conn_${seq}`,
-    spaceId: SPACE_ID,
+    workspaceId: WORKSPACE_ID,
     provider: "cloudflare",
-    scope: "space",
-    authMethod: "static_token",
-    status: "active",
+    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+    scope: "workspace",
+    status: "verified",
+    materialization: "secret",
     envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: `2026-01-01T00:00:00.${seq}Z`,
     updatedAt: `2026-01-01T00:00:00.${seq}Z`,
   };
 }
 
-function installationFixture(i: number): Installation {
+function capsuleFixture(i: number): Capsule {
   const seq = String(i).padStart(4, "0");
   return {
-    id: `inst_${seq}`,
-    spaceId: SPACE_ID,
+    id: `cap_${seq}`,
+    workspaceId: WORKSPACE_ID,
+    projectId: "prj_pagination01",
     name: `app-${seq}`,
     slug: `app-${seq}`,
+    sourceId: "src_pagination01",
     environment: "production",
-    installType: "core",
     installConfigId: "cfg_test",
     currentStateGeneration: 0,
     status: "active",
     createdAt: `2026-01-01T00:00:00.${seq}Z`,
     updatedAt: `2026-01-01T00:00:00.${seq}Z`,
-  } satisfies Installation;
+  } satisfies Capsule;
 }
 
-function installConfigFixture(i: number, spaceId?: string): InstallConfig {
+function installConfigFixture(i: number, workspaceId?: string): InstallConfig {
   const seq = String(i).padStart(4, "0");
   return {
     id: `cfg_${seq}`,
-    ...(spaceId !== undefined ? { spaceId } : {}),
+    ...(workspaceId !== undefined ? { workspaceId } : {}),
     name: `config-${seq}`,
-    installType: "core",
-    trustLevel: "official",
     variableMapping: {},
     outputAllowlist: {},
     policy: {},
@@ -69,23 +66,48 @@ function installConfigFixture(i: number, spaceId?: string): InstallConfig {
   } satisfies InstallConfig;
 }
 
+function storeInstallConfigFixture(
+  i: number,
+  workspaceId?: string,
+): InstallConfig {
+  const config = installConfigFixture(i, workspaceId);
+  return {
+    ...config,
+    store: {
+      source: {
+        url: `https://example.test/app-${i}.git`,
+        ref: "main",
+        path: ".",
+      },
+      order: i,
+      surface: "apps",
+      kind: "app",
+      provider: "fixture",
+      suggestedName: config.name,
+      badge: { ja: "App", en: "App" },
+      name: { ja: config.name, en: config.name },
+      description: { ja: "Fixture", en: "Fixture" },
+    },
+  } satisfies InstallConfig;
+}
+
 async function makeApp(
-  seed: (store: InMemoryOpenTofuDeploymentStore) => Promise<void>,
+  seed: (store: InMemoryOpenTofuControlStore) => Promise<void>,
 ) {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await seed(store);
-  const controller = new OpenTofuDeploymentController({ store });
-  const installationsService = new CapsulesService({ store });
+  const controller = new OpenTofuController({ store });
+  const capsulesService = new CapsulesService({ store });
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
       controller,
-      installationsService,
+      capsulesService,
       authorizeDeployControlBearer: ({ token }) =>
         token === "scoped-token"
           ? {
               actor: "acct_1",
-              spaceIds: [SPACE_ID],
+              workspaceIds: [WORKSPACE_ID],
               operations: "*",
               runnerProfileIds: "*",
             }
@@ -113,8 +135,8 @@ test("GET /internal/v1/connections caps the default page at 100 and pages the re
     pages += 1;
     const url =
       cursor === undefined
-        ? `/internal/v1/connections?spaceId=${SPACE_ID}`
-        : `/internal/v1/connections?spaceId=${SPACE_ID}&cursor=${encodeURIComponent(cursor)}`;
+        ? `/internal/v1/connections?workspaceId=${WORKSPACE_ID}`
+        : `/internal/v1/connections?workspaceId=${WORKSPACE_ID}&cursor=${encodeURIComponent(cursor)}`;
     const res = await app.request(url, { headers: AUTH });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -144,7 +166,7 @@ test("GET /internal/v1/connections honours an explicit ?limit=", async () => {
       await store.putConnection(connectionFixture(i));
   });
   const res = await app.request(
-    `/internal/v1/connections?spaceId=${SPACE_ID}&limit=3`,
+    `/internal/v1/connections?workspaceId=${WORKSPACE_ID}&limit=3`,
     { headers: AUTH },
   );
   expect(res.status).toBe(200);
@@ -161,12 +183,12 @@ test("GET /internal/v1/connections rejects a malformed ?limit= and ?cursor= (400
     await store.putConnection(connectionFixture(0));
   });
   const badLimit = await app.request(
-    `/internal/v1/connections?spaceId=${SPACE_ID}&limit=-1`,
+    `/internal/v1/connections?workspaceId=${WORKSPACE_ID}&limit=-1`,
     { headers: AUTH },
   );
   expect(badLimit.status).toBe(400);
   const badCursor = await app.request(
-    `/internal/v1/connections?spaceId=${SPACE_ID}&cursor=not-a-cursor!!`,
+    `/internal/v1/connections?workspaceId=${WORKSPACE_ID}&cursor=not-a-cursor!!`,
     { headers: AUTH },
   );
   expect(badCursor.status).toBe(400);
@@ -176,11 +198,11 @@ test("GET /internal/v1/workspaces/:id/capsules caps the default page at 100 and 
   const total = 150;
   const app = await makeApp(async (store) => {
     for (let i = 0; i < total; i += 1) {
-      await store.putInstallation(installationFixture(i));
+      await store.putCapsule(capsuleFixture(i));
     }
   });
   const res = await app.request(
-    `/internal/v1/workspaces/${SPACE_ID}/capsules`,
+    `/internal/v1/workspaces/${WORKSPACE_ID}/capsules`,
     { headers: AUTH },
   );
   expect(res.status).toBe(200);
@@ -192,7 +214,7 @@ test("GET /internal/v1/workspaces/:id/capsules caps the default page at 100 and 
   expect(body.nextCursor).toBeDefined();
 
   const next = await app.request(
-    `/internal/v1/workspaces/${SPACE_ID}/capsules?cursor=${encodeURIComponent(body.nextCursor!)}`,
+    `/internal/v1/workspaces/${WORKSPACE_ID}/capsules?cursor=${encodeURIComponent(body.nextCursor!)}`,
     { headers: AUTH },
   );
   const nextBody = (await next.json()) as {
@@ -210,16 +232,16 @@ test("GET /internal/v1/workspaces/:id/capsules caps the default page at 100 and 
 
 test("GET /internal/v1/workspaces/:id/capsules can exclude destroyed Capsules before paging", async () => {
   const app = await makeApp(async (store) => {
-    await store.putInstallation(installationFixture(0));
-    await store.putInstallation({
-      ...installationFixture(1),
+    await store.putCapsule(capsuleFixture(0));
+    await store.putCapsule({
+      ...capsuleFixture(1),
       status: "destroyed",
     });
-    await store.putInstallation(installationFixture(2));
+    await store.putCapsule(capsuleFixture(2));
   });
 
   const res = await app.request(
-    `/internal/v1/workspaces/${SPACE_ID}/capsules?includeDestroyed=false&limit=10`,
+    `/internal/v1/workspaces/${WORKSPACE_ID}/capsules?includeDestroyed=false&limit=10`,
     { headers: AUTH },
   );
   expect(res.status).toBe(200);
@@ -228,8 +250,8 @@ test("GET /internal/v1/workspaces/:id/capsules can exclude destroyed Capsules be
     nextCursor?: string;
   };
   expect(body.capsules.map((capsule) => capsule.id)).toEqual([
-    "inst_0000",
-    "inst_0002",
+    "cap_0000",
+    "cap_0002",
   ]);
   expect(body.capsules.every((capsule) => capsule.status !== "destroyed")).toBe(
     true,
@@ -239,33 +261,29 @@ test("GET /internal/v1/workspaces/:id/capsules can exclude destroyed Capsules be
 
 test("GET /internal/v1/workspaces/:id/capsules rejects malformed includeDestroyed", async () => {
   const app = await makeApp(async (store) => {
-    await store.putInstallation(installationFixture(0));
+    await store.putCapsule(capsuleFixture(0));
   });
 
   const res = await app.request(
-    `/internal/v1/workspaces/${SPACE_ID}/capsules?includeDestroyed=maybe`,
+    `/internal/v1/workspaces/${WORKSPACE_ID}/capsules?includeDestroyed=maybe`,
     { headers: AUTH },
   );
   expect(res.status).toBe(400);
 });
 
 test("GET /internal/v1/install-configs caps the shared+scoped union at 100 and pages the rest", async () => {
-  // 80 stored shared (spaceId-less) configs + shared fallback configs +
-  // 170 space-scoped configs are merged into one sorted, paginated union.
+  // 80 operator-scoped configs + 170 Workspace-scoped configs are merged into
+  // one sorted, paginated union. No provider-specific fallback catalog is
+  // injected by the generic Capsule service.
   const shared = 80;
   const scoped = 170;
-  const fallbackSharedIds = builtInInstallConfigs({
-    now: () => new Date("2026-06-20T00:00:00.000Z"),
-  })
-    .map((config) => config.id)
-    .sort();
-  const total = shared + scoped + fallbackSharedIds.length;
+  const total = shared + scoped;
   const app = await makeApp(async (store) => {
     for (let i = 0; i < shared; i += 1) {
       await store.putInstallConfig(installConfigFixture(i));
     }
     for (let i = shared; i < shared + scoped; i += 1) {
-      await store.putInstallConfig(installConfigFixture(i, SPACE_ID));
+      await store.putInstallConfig(installConfigFixture(i, WORKSPACE_ID));
     }
   });
 
@@ -274,7 +292,7 @@ test("GET /internal/v1/install-configs caps the shared+scoped union at 100 and p
   let pages = 0;
   for (;;) {
     pages += 1;
-    const base = `/internal/v1/install-configs?spaceId=${SPACE_ID}`;
+    const base = `/internal/v1/install-configs?workspaceId=${WORKSPACE_ID}`;
     const url =
       cursor === undefined
         ? base
@@ -295,13 +313,44 @@ test("GET /internal/v1/install-configs caps the shared+scoped union at 100 and p
   expect(pages).toBe(Math.ceil(total / DEFAULT_PAGE_LIMIT));
   expect(seen).toHaveLength(total);
   expect(new Set(seen).size).toBe(total); // no dupes
-  // Merge-sorted by (createdAt, id) across the union: fixture rows first, then
-  // the shared fallback configs created by CapsulesService.
+  // Merge-sorted by (createdAt, id) across the operator + Workspace union.
   const fixtureIds = Array.from(
     { length: shared + scoped },
     (_, i) => `cfg_${String(i).padStart(4, "0")}`,
   );
-  expect(seen).toEqual([...fixtureIds, ...fallbackSharedIds]);
+  expect(seen).toEqual(fixtureIds);
+});
+
+test("GET /internal/v1/install-configs?view=store excludes configs without Store presentation", async () => {
+  const app = await makeApp(async (store) => {
+    await store.putInstallConfig(storeInstallConfigFixture(0));
+    await store.putInstallConfig(installConfigFixture(1));
+    await store.putInstallConfig(storeInstallConfigFixture(2, WORKSPACE_ID));
+  });
+
+  const allResponse = await app.request("/internal/v1/install-configs", {
+    headers: AUTH,
+  });
+  expect(allResponse.status).toBe(200);
+  const all = (await allResponse.json()) as {
+    installConfigs: { id: string }[];
+  };
+  expect(all.installConfigs.map((config) => config.id)).toEqual([
+    "cfg_0000",
+    "cfg_0001",
+  ]);
+
+  const storeResponse = await app.request(
+    `/internal/v1/install-configs?workspaceId=${WORKSPACE_ID}&view=store`,
+    { headers: AUTH },
+  );
+  expect(storeResponse.status).toBe(200);
+  const storeView = (await storeResponse.json()) as {
+    installConfigs: { id: string }[];
+  };
+  expect(storeView.installConfigs.map((config) => config.id)).toEqual([
+    "cfg_0000",
+  ]);
 });
 
 test("GET /internal/v1/install-configs rejects a malformed ?cursor= (400)", async () => {
@@ -309,7 +358,7 @@ test("GET /internal/v1/install-configs rejects a malformed ?cursor= (400)", asyn
     await store.putInstallConfig(installConfigFixture(0));
   });
   const res = await app.request(
-    `/internal/v1/install-configs?spaceId=${SPACE_ID}&cursor=not-a-cursor!!`,
+    `/internal/v1/install-configs?workspaceId=${WORKSPACE_ID}&cursor=not-a-cursor!!`,
     { headers: AUTH },
   );
   expect(res.status).toBe(400);

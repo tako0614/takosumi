@@ -128,7 +128,7 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 def mint_subject_via_oauth() -> str:
     state = "passkey_e2e_" + secrets.token_hex(8)
     status, headers, _body = http_request(
-        "GET", f"/v1/auth/upstream/authorize?provider=google&state={state}",
+        "GET", f"/v1/auth/upstream/authorize?provider=local-oidc&state={state}",
     )
     if status != 302:
         sys.exit(f"oauth authorize did not 302 (got {status})")
@@ -142,7 +142,7 @@ def mint_subject_via_oauth() -> str:
     callback_state = callback_query["state"][0]
     status, _headers, body = http_request(
         "GET",
-        f"/v1/auth/upstream/callback?provider=google&code={code}&state={callback_state}",
+        f"/v1/auth/upstream/callback?provider=local-oidc&code={code}&state={callback_state}",
     )
     if status != 200:
         sys.exit(f"oauth callback failed: {status} {body}")

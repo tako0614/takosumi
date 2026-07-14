@@ -6,6 +6,8 @@ runs. They are not public product vocabulary.
 ## Owns
 
 - runner substrate
+- executor registry adapter bindings
+- typed profile lifecycle and availability
 - runner image
 - queue / worker binding
 - resource limits
@@ -18,9 +20,11 @@ runs. They are not public product vocabulary.
 
 - raw provider secret values
 - ProviderConnection public identity
-- provider-compatible import endpoint backends
-- managed resource backends
-- Takosumi Cloud official resource pools
+- public compatibility API contract
+- adapter capability contract
+- official managed target pools
+- official managed resource backends
+- Takosumi-owned native resource internals
 
 Provider credentials live in ProviderConnections / vault. The boundary only
 receives temporary run-scoped material after policy allows a Run to execute.
@@ -30,14 +34,17 @@ receives temporary run-scoped material after policy allows a Run to execute.
 ```json
 {
   "id": "opentofu-default",
-  "substrate": "cloudflare-containers",
+  "substrate": "operator-managed",
+  "executorId": "opentofu.default",
+  "lifecycle": { "state": "active" },
+  "availability": { "state": "available" },
   "stateBackend": {
     "kind": "operator-managed",
     "ref": "state://takosumi/opentofu-default",
     "lock": { "kind": "operator", "ref": "lock://takosumi/opentofu-default" }
   },
   "allowedProviders": ["*"],
-  "requireCredentialRefs": false,
+  "requireProviderBindings": false,
   "networkPolicy": { "mode": "operator-managed" },
   "resourceLimits": {
     "maxRunSeconds": 900,
@@ -64,6 +71,19 @@ private network, host agent, architecture, or compliance boundary. These
 profiles are selected explicitly and must not be named or selected by provider
 brand. An explicit deny policy or missing runtime capability can reject a Run;
 absence from a Takosumi recipe list cannot.
+
+The stock Worker contributes only `opentofu-default`. A composing Worker can
+inject a runtime `TAKOSUMI_RUNNER_HOST_COMPOSITION` object containing additional
+`profiles` and an optional `executors` map, then explicitly enable profile ids
+with `TAKOSUMI_ENABLED_RUNNER_PROFILES` and choose the fallback with
+`TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID`. The contribution is host code, not a text
+catalog, repository manifest, or OpenTofu Output. Duplicate profile ids and
+unregistered executors fail closed.
+
+`executorId` is an open operator-defined token resolved only by the injected
+executor registry. Labels are descriptive/search metadata; they cannot change
+lifecycle, availability, scheduling, or executor selection. An unregistered
+executor fails closed.
 
 ## Secret Exposure
 

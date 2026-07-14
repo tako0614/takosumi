@@ -13,7 +13,7 @@ export type PrincipalKind = "account" | "service" | "agent" | "system";
 
 export interface ActorContext {
   actorAccountId: string;
-  spaceId?: string;
+  workspaceId?: string;
   roles: string[];
   requestId: string;
   principalKind?: PrincipalKind;
@@ -29,7 +29,7 @@ export interface DomainEvent<TPayload extends JsonObject = JsonObject> {
   type: string;
   aggregateType: string;
   aggregateId: string;
-  spaceId?: string;
+  workspaceId?: string;
   groupId?: string;
   actor?: ActorContext;
   payload: TPayload;
@@ -61,39 +61,6 @@ export type GroupSummaryStatus =
   | "suspended"
   | "deleted";
 
-export type ServiceEndpointProtocol = "http" | "https" | "tcp" | "udp";
-export type TrustLevel = "platform" | "space" | "group" | "public" | "external";
-export type GrantEffect = "allow" | "deny";
-
-export interface ServiceEndpoint {
-  id: string;
-  serviceId: string;
-  name: string;
-  protocol: ServiceEndpointProtocol;
-  url?: string;
-  host?: string;
-  port?: number;
-  pathPrefix?: string;
-  trust?: ServiceEndpointTrust;
-}
-
-export interface ServiceEndpointTrust {
-  level: TrustLevel;
-  audience?: string[];
-  issuer?: string;
-  expiresAt?: IsoTimestamp;
-}
-
-export interface ReferenceServiceGrant {
-  id: string;
-  subject: string;
-  action: string;
-  resource: string;
-  effect: GrantEffect;
-  conditions?: Condition[];
-  expiresAt?: IsoTimestamp;
-}
-
 export interface SpaceCreateRequest {
   actor: ActorContext;
   name: string;
@@ -103,7 +70,7 @@ export interface SpaceCreateRequest {
 
 export interface SpaceUpdateRequest {
   actor: ActorContext;
-  spaceId: string;
+  workspaceId: string;
   name?: string;
   slug?: string;
   metadata?: JsonObject;
@@ -121,7 +88,7 @@ export interface SpaceSummary {
 
 export interface GroupCreateRequest {
   actor: ActorContext;
-  spaceId: string;
+  workspaceId: string;
   name: string;
   envName?: string;
   metadata?: JsonObject;
@@ -129,7 +96,7 @@ export interface GroupCreateRequest {
 
 export interface GroupUpdateRequest {
   actor: ActorContext;
-  spaceId: string;
+  workspaceId: string;
   groupId: string;
   name?: string;
   envName?: string;
@@ -138,12 +105,12 @@ export interface GroupUpdateRequest {
 
 export interface GroupSummary {
   id: string;
-  spaceId: string;
+  workspaceId: string;
   name: string;
   envName?: string;
   status: GroupSummaryStatus;
   generation: number;
-  currentDeploymentId?: string | null;
+  currentStateVersionId?: string | null;
   conditions?: Condition[];
   updatedAt?: IsoTimestamp;
   metadata?: JsonObject;

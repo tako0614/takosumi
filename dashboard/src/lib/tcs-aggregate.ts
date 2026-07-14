@@ -1,6 +1,6 @@
 /**
  * CLIENT-SIDE aggregation across TCS store servers. Fans the read spec out to
- * every known server, merges, and de-duplicates by normalized (git,path)
+ * every known server, merges, and de-duplicates by normalized (url,path)
  * identity (annotating `seenOn`). A slow/failed/non-conforming server is dropped
  * from the render (best-effort) and never blocks the others. No server-to-server
  * traffic — the merge happens here, in the dashboard.

@@ -1,26 +1,8 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
-  ServiceBindingMaterialRecord,
-  ServiceGrantMaterialRecord,
-  CapsuleEventRecord,
-  CapsuleRecord,
-  LedgerAccountRecord,
-  RuntimeBindingRecord,
-  WorkspaceRecord,
-} from "./ledger.ts";
-import type {
   AccountSessionRecord,
   AccountsStore,
   AuthorizationCodeRecord,
-  BillingAccountRecord,
-  BillingUsageExportMark,
-  BillingUsageRecord,
-  BillingWebhookEventClaimResult,
-  BillingWebhookEventRecord,
-  LaunchTokenConsumeResult,
-  LaunchTokenConsumptionRecord,
-  LaunchTokenPruneResult,
-  LaunchTokenRecord,
   OidcClientRecord,
   PasskeyCredentialRecord,
   PersonalAccessTokenRecord,
@@ -35,9 +17,6 @@ import type {
   PostgresQueryResult,
 } from "./postgres/internal.ts";
 import * as accounts from "./postgres/accounts.ts";
-import * as billing from "./postgres/billing.ts";
-import * as installations from "./postgres/installations.ts";
-import * as launchTokens from "./postgres/launch-tokens.ts";
 import * as oidc from "./postgres/oidc.ts";
 import * as passkeys from "./postgres/passkeys.ts";
 import * as privacy from "./postgres/privacy.ts";
@@ -130,90 +109,6 @@ export class PostgresAccountsStore implements AccountsStore {
 
   deleteAccountSession(sessionId: string): Promise<void> {
     return sessions.deleteAccountSession(this.#client, sessionId);
-  }
-
-  saveBillingAccount(record: BillingAccountRecord): Promise<void> {
-    return billing.saveBillingAccount(this.#client, record);
-  }
-
-  saveBillingAccountIfVersion(
-    record: BillingAccountRecord,
-    expectedVersion: number,
-  ): Promise<boolean> {
-    return billing.saveBillingAccountIfVersion(
-      this.#client,
-      record,
-      expectedVersion,
-    );
-  }
-
-  findBillingAccount(
-    billingAccountId: string,
-  ): Promise<BillingAccountRecord | undefined> {
-    return billing.findBillingAccount(this.#client, billingAccountId);
-  }
-
-  findBillingAccountForSubject(
-    subject: TakosumiSubject,
-  ): Promise<BillingAccountRecord | undefined> {
-    return billing.findBillingAccountForSubject(this.#client, subject);
-  }
-
-  findBillingAccountByStripeCustomerId(
-    stripeCustomerId: string,
-  ): Promise<BillingAccountRecord | undefined> {
-    return billing.findBillingAccountByStripeCustomerId(
-      this.#client,
-      stripeCustomerId,
-    );
-  }
-
-  saveBillingWebhookEvent(record: BillingWebhookEventRecord): Promise<void> {
-    return billing.saveBillingWebhookEvent(this.#client, record);
-  }
-
-  findBillingWebhookEvent(
-    eventId: string,
-  ): Promise<BillingWebhookEventRecord | undefined> {
-    return billing.findBillingWebhookEvent(this.#client, eventId);
-  }
-
-  claimBillingWebhookEvent(
-    record: BillingWebhookEventRecord,
-  ): Promise<BillingWebhookEventClaimResult> {
-    return billing.claimBillingWebhookEvent(this.#client, record);
-  }
-
-  saveBillingUsageRecord(record: BillingUsageRecord): Promise<void> {
-    return billing.saveBillingUsageRecord(this.#client, record);
-  }
-
-  findBillingUsageRecord(
-    usageReportId: string,
-  ): Promise<BillingUsageRecord | undefined> {
-    return billing.findBillingUsageRecord(this.#client, usageReportId);
-  }
-
-  listBillingUsageRecordsForCapsule(
-    capsuleId: string,
-  ): Promise<readonly BillingUsageRecord[]> {
-    return billing.listBillingUsageRecordsForCapsule(
-      this.#client,
-      capsuleId,
-    );
-  }
-
-  listBillingUsageRecordsForBillingAccount(
-    billingAccountId: string,
-  ): Promise<readonly BillingUsageRecord[]> {
-    return billing.listBillingUsageRecordsForBillingAccount(
-      this.#client,
-      billingAccountId,
-    );
-  }
-
-  markBillingUsageRecordsExported(mark: BillingUsageExportMark): Promise<void> {
-    return billing.markBillingUsageRecordsExported(this.#client, mark);
   }
 
   savePrivacyRequest(record: PrivacyRequestRecord): Promise<void> {
@@ -313,32 +208,6 @@ export class PostgresAccountsStore implements AccountsStore {
     );
   }
 
-  consumeLaunchTokenJti(
-    record: LaunchTokenConsumptionRecord,
-  ): Promise<boolean> {
-    return launchTokens.consumeLaunchTokenJti(this.#client, record);
-  }
-
-  saveLaunchToken(record: LaunchTokenRecord): Promise<void> {
-    return launchTokens.saveLaunchToken(this.#client, record);
-  }
-
-  consumeLaunchToken(input: {
-    tokenHash: string;
-    capsuleId: string;
-    redirectUri: string;
-    consumedAt: number;
-  }): Promise<LaunchTokenConsumeResult> {
-    return launchTokens.consumeLaunchToken(this.#client, input);
-  }
-
-  pruneLaunchTokens(input: {
-    expiredBefore: number;
-    usedBefore: number;
-  }): Promise<LaunchTokenPruneResult> {
-    return launchTokens.pruneLaunchTokens(this.#client, input);
-  }
-
   saveOidcClient(record: OidcClientRecord): Promise<void> {
     return oidc.saveOidcClient(this.#client, record);
   }
@@ -419,112 +288,5 @@ export class PostgresAccountsStore implements AccountsStore {
 
   isRefreshRootRevoked(token: string): Promise<boolean> {
     return refreshChain.isRefreshRootRevoked(this.#client, token);
-  }
-
-  saveLedgerAccount(record: LedgerAccountRecord): Promise<void> {
-    return installations.saveLedgerAccount(this.#client, record);
-  }
-
-  findLedgerAccount(
-    accountId: string,
-  ): Promise<LedgerAccountRecord | undefined> {
-    return installations.findLedgerAccount(this.#client, accountId);
-  }
-
-  saveWorkspace(record: WorkspaceRecord): Promise<void> {
-    return installations.saveWorkspace(this.#client, record);
-  }
-
-  findWorkspace(workspaceId: string): Promise<WorkspaceRecord | undefined> {
-    return installations.findWorkspace(this.#client, workspaceId);
-  }
-
-  listWorkspacesForAccount(accountId: string): Promise<readonly WorkspaceRecord[]> {
-    return installations.listWorkspacesForAccount(this.#client, accountId);
-  }
-
-  listWorkspacesForOwner(
-    subject: TakosumiSubject,
-  ): Promise<readonly WorkspaceRecord[]> {
-    return installations.listWorkspacesForOwner(this.#client, subject);
-  }
-
-  saveAppCapsule(record: CapsuleRecord): Promise<void> {
-    return installations.saveAppCapsule(this.#client, record);
-  }
-
-  findAppCapsule(
-    capsuleId: string,
-  ): Promise<CapsuleRecord | undefined> {
-    return installations.findAppCapsule(this.#client, capsuleId);
-  }
-
-  listAppCapsulesForWorkspace(
-    workspaceId: string,
-  ): Promise<readonly CapsuleRecord[]> {
-    return installations.listAppCapsulesForWorkspace(this.#client, workspaceId);
-  }
-
-  listAppCapsulesForBillingAccount(
-    billingAccountId: string,
-  ): Promise<readonly CapsuleRecord[]> {
-    return installations.listAppCapsulesForBillingAccount(
-      this.#client,
-      billingAccountId,
-    );
-  }
-
-  saveRuntimeBinding(record: RuntimeBindingRecord): Promise<void> {
-    return installations.saveRuntimeBinding(this.#client, record);
-  }
-
-  findRuntimeBinding(
-    runtimeBindingId: string,
-  ): Promise<RuntimeBindingRecord | undefined> {
-    return installations.findRuntimeBinding(this.#client, runtimeBindingId);
-  }
-
-  saveServiceBindingMaterial(
-    record: ServiceBindingMaterialRecord,
-  ): Promise<void> {
-    return installations.saveServiceBindingMaterial(this.#client, record);
-  }
-
-  listServiceBindingMaterialsForCapsule(
-    capsuleId: string,
-  ): Promise<readonly ServiceBindingMaterialRecord[]> {
-    return installations.listServiceBindingMaterialsForCapsule(
-      this.#client,
-      capsuleId,
-    );
-  }
-
-  saveServiceGrantMaterial(record: ServiceGrantMaterialRecord): Promise<void> {
-    return installations.saveServiceGrantMaterial(this.#client, record);
-  }
-
-  findServiceGrantMaterial(
-    grantId: string,
-  ): Promise<ServiceGrantMaterialRecord | undefined> {
-    return installations.findServiceGrantMaterial(this.#client, grantId);
-  }
-
-  listServiceGrantMaterialsForCapsule(
-    capsuleId: string,
-  ): Promise<readonly ServiceGrantMaterialRecord[]> {
-    return installations.listServiceGrantMaterialsForCapsule(
-      this.#client,
-      capsuleId,
-    );
-  }
-
-  appendCapsuleEvent(record: CapsuleEventRecord): Promise<void> {
-    return installations.appendCapsuleEvent(this.#client, record);
-  }
-
-  listCapsuleEvents(
-    capsuleId: string,
-  ): Promise<readonly CapsuleEventRecord[]> {
-    return installations.listCapsuleEvents(this.#client, capsuleId);
   }
 }

@@ -16,7 +16,7 @@ test("platform worker wrangler wires D1/R2 and the OpenTofu runner container", a
   assert.doesNotMatch(wrangler, /TAKOS_WORKLOAD_CONTAINER/);
   assert.doesNotMatch(wrangler, /TAKOS_SERVICE_CONTAINER/);
   // The single composed worker: accounts ledger + control-plane ledger.
-  assert.match(wrangler, /name = "takosumi"/);
+  assert.match(wrangler, /name = "takosumi-platform"/);
   assert.match(wrangler, /main = "worker\.ts"/);
   assert.match(wrangler, /binding = "TAKOSUMI_ACCOUNTS_DB"/);
   assert.match(wrangler, /binding = "TAKOSUMI_CONTROL_DB"/);
@@ -40,7 +40,6 @@ test("platform worker wrangler wires D1/R2 and the OpenTofu runner container", a
   assert.match(wrangler, /new_sqlite_classes = \[[^\]]*"CoordinationObject"/);
   assert.match(wrangler, /new_sqlite_classes = \[[^\]]*"OpenTofuRunnerObject"/);
   assert.match(wrangler, /new_sqlite_classes = \["OpenTofuRunOwnerObject"\]/);
-  assert.match(workerService, /providerEnvRunner: opentofuRunner/);
 });
 
 test("platform scaffold exposes production hardening evidence gates", async () => {
@@ -48,15 +47,16 @@ test("platform scaffold exposes production hardening evidence gates", async () =
   const worker = await readText(new URL("worker.ts", platformRoot));
 
   assert.match(wrangler, /TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"/);
-  assert.match(wrangler, /TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF/);
-  assert.match(wrangler, /TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF/);
-  assert.match(wrangler, /TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF/);
-  assert.match(wrangler, /TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF/);
+  assert.match(wrangler, /TAKOSUMI_PLATFORM_HARDENING_EVIDENCE/);
+  assert.doesNotMatch(wrangler, /CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE/);
   // The OSS platform template names no Cloud feature: the generic Seam A is
   // config-driven (TAKOSUMI_CLOUD_EXTENSIONS + Cloud-supplied handler keys),
   // so no `TAKOSUMI_CLOUD_*` extension handler is hardcoded in the OSS wrangler.
   assert.doesNotMatch(wrangler, /TAKOSUMI_CLOUD_AI_GATEWAY/);
-  assert.doesNotMatch(wrangler, /TAKOSUMI_CLOUD_PROVIDER_COMPAT_CLOUDFLARE_WORKERS/);
+  assert.doesNotMatch(
+    wrangler,
+    /TAKOSUMI_CLOUD_PROVIDER_COMPAT_CLOUDFLARE_WORKERS/,
+  );
   assert.match(worker, /\/internal\/platform\/hardening-gates/);
   assert.match(worker, /evaluateProductionHardeningGates/);
 });
@@ -75,17 +75,12 @@ test("OpenTofu runner image stays isolated from the Worker browser bundle", asyn
   assert.match(server, /Bun\.spawn\(\[\.\.\.command\]/);
   assert.match(server, /prepareGeneratedRootWorkspace/);
   assert.match(server, /restoreGeneratedRootApplyWorkspace/);
-  assert.match(server, /materializeSource/);
+  assert.match(server, /ensureSourceAvailable/);
+  assert.match(server, /Git SourceSnapshot archive must be restored/);
   assert.match(server, /handlePlanArtifactRequest/);
   assert.match(server, /verifyPlanArtifact/);
-  assert.match(server, /assertHttpsSourceUrl\(source\.url, "git source url"\)/);
-  assert.match(
-    server,
-    /assertHttpsSourceUrl\(source\.url, "prepared source url"\)/,
-  );
-  assert.match(server, /fetch\(source\.url, \{ redirect: "error" \}\)/);
-  assert.match(server, /readResponseBytesWithCap/);
-  assert.match(server, /PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES/);
+  assert.match(server, /parseSourceSyncSource/);
+  assert.match(server, /DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES/);
   assert.match(server, /maxSourceArchiveBytes/);
   assert.match(server, /maxSourceDecompressedBytes/);
   assert.match(server, /--no-same-owner/);
@@ -94,16 +89,17 @@ test("OpenTofu runner image stays isolated from the Worker browser bundle", asyn
   assert.match(server, /unsupported entry type/);
   assert.match(server, /assertRealPathInsideSourceRoot/);
   assert.match(server, /after symlink resolution/);
-  assert.match(server, /does not allow local source paths/);
-  assert.match(server, /return provider === rule \|\| provider\.endsWith/);
+  assert.match(server, /return exactProviderSourceMatch\(provider, rule\)/);
   assert.match(server, /"tofu",\s*"plan"/);
   assert.match(server, /"tofu",\s*"apply"/);
   // M2: the source-archive restore route extracts the snapshot tar.zst into the
-  // source root through the SAME tar-slip hardening (escape quoting, file/dir
-  // only, decompressed cap) used for prepared sources.
+  // source root through the canonical tar-slip hardening (escape quoting,
+  // file/dir only, decompressed cap).
   assert.match(server, /handleSourceArchiveRestoreRequest/);
   assert.match(server, /assertSafeZstdTarArchive/);
   assert.match(server, /"tar",\s*"-x",\s*"--zstd"/);
+  assert.doesNotMatch(server, /kind === "prepared"|case "prepared"/);
+  assert.doesNotMatch(server, /kind === "local"|case "local"/);
   assert.doesNotMatch(server, /existingWorkspace/);
   assert.doesNotMatch(server, /-auto-approve/);
   assert.doesNotMatch(server, /rule\.endsWith/);
@@ -120,7 +116,7 @@ test("OpenTofu runner DO routes M2 state through R2_STATE with at-rest encryptio
   // State goes to the R2_STATE bucket under the spec key layout, encrypted at
   // rest, with current.json written AFTER the state object.
   assert.match(container, /env\.R2_STATE/);
-  assert.match(container, /spaces\/\$\{[\s\S]*?states/);
+  assert.match(container, /workspaces\/\$\{[\s\S]*?state-versions/);
   assert.match(container, /\.tfstate\.enc/);
   assert.match(container, /current\.json/);
   assert.match(container, /padStart\(8, "0"\)/);

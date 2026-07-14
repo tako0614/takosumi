@@ -11,7 +11,6 @@ COPY src /work/src
 COPY core /work/core
 COPY accounts/contract /work/accounts/contract
 COPY accounts/service /work/accounts/service
-COPY accounts/platform-services /work/accounts/platform-services
 COPY cli /work/cli
 COPY deploy/node-postgres/package.json /work/deploy/node-postgres/package.json
 COPY deploy/node-postgres/src /work/deploy/node-postgres/src

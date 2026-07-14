@@ -41,26 +41,29 @@ OpenTofu module とその普通の変数で表現し、Takosumi 側に独自の 
 Takosumi はひとつの OSS ですが、handler は `tsconfig` alias を通して host worker に **in-process** で組み込まれ、
 2 つの構成で使われます。
 
-- operator が運用する Takosumi platform worker (`app.takosumi.com`)
+- operator 自身の origin で運用する Takosumi platform worker (公式 Takosumi Cloud は
+  `app.takosumi.com`)
 - self-host された Takos distribution worker (Takos product surface が、自分の origin で accounts /
   deploy-control / dashboard / runner を組み込む)
 
 これは組み込みの仕組みであって、別々の製品ではありません。npm で配布する service package もありません。
-`takosumi.com` は landing / software docs のサイトです。
+一般の operator は明示した自身の origin で platform を公開し、私たちの公式 hosted deployment だけが
+`app.takosumi.com` を使います。`takosumi.com` は landing / software docs のサイトです。
 
 ### In-process entry points
 
-| Handler        | File                                                                   | Mount                                                                               |
-| -------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Account plane  | `deploy/accounts-cloudflare/src/handler.ts` (`createAccountsHandler`)  | platform worker または takos worker の origin root。issuer は素の origin            |
-| Deploy control | `worker/src/handler.ts`                                                | platform worker では `/api`。takos worker では typed な in-process operations seam |
+| Handler        | File                                                                  | Mount                                                                              |
+| -------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Account plane  | `deploy/accounts-cloudflare/src/handler.ts` (`createAccountsHandler`) | platform worker または takos worker の origin root。issuer は素の origin           |
+| Deploy control | `worker/src/handler.ts`                                               | platform worker では `/api`。takos worker では typed な in-process operations seam |
 
 `/install?git=...&ref=...&path=...` は dashboard SPA の入口であって、deploy-control の handler ではありません。
 SPA は query を保持したまま `/new` に転送して Git form に値を入れるだけで、互換性チェックと明示的な確認は
 `/new` の中で行われます。
 
-`deploy/accounts-cloudflare/` は account-plane の状態を D1 に保存します。Capsule の backup / export 成果物は
-deploy-control 側の backup / export flow とその R2 バケットに属し、account-plane の持ち物ではありません。
+`deploy/accounts-cloudflare/` は account-plane の状態を D1 に保存します。Capsule の backup 成果物は
+control-plane の Backup ledger と artifact store に属し、account-plane の持ち物ではありません。Accounts の
+privacy export request は operator 処理の状態と参照だけを記録し、Capsule export bundle や signed download は持ちません。
 Cloudflare Container は account-plane では使わず、deploy-control の runner が OpenTofu `plan` / `apply` に使います。
 
 `deploy/node-postgres/` は、local-substrate の cloud profile で同じ `createAccountsHandler` を支える
@@ -71,26 +74,26 @@ Bun + Postgres の実行基盤です (`deploy/local-substrate/` の cloud wrappe
 
 使い方の流れは意図的に小さくしています: **Workspace** と **Project** を選び、Git **Source** を登録して
 **Capsule** を作り、**ProviderConnection** / **CredentialRecipe** / **ProviderBinding** で provider を接続し、
-**Run** を確認して、**StateVersion** / **Output** / **AuditEvent** を見る。現在のモデルは
-[AGENTS.md](AGENTS.md) の "Public Surface" と [docs/internal/final-plan.md](docs/internal/final-plan.md) を
-参照してください。用語のひとこと説明は [用語集](docs/reference/glossary.md) にあります。
+**Run** を確認して、**StateVersion** / **Output** / **AuditEvent** を見る。公開モデルは
+[Model reference](docs/reference/model.md) と [用語集](docs/reference/glossary.md) を参照してください。
+実装者向けの最終方針は [docs/internal/final-plan.md](docs/internal/final-plan.md) (非公開) にあります。
 
-| 用語                 | 意味                                                                                             |
-| -------------------- | ------------------------------------------------------------------------------------------------ |
-| `Workspace`          | ユーザー / チームの境界。プロジェクト、接続、シークレット、状態、監査がこの中で分離されます     |
-| `Project`            | 1 つの製品・サービス・インフラのまとまり                                                         |
-| `Capsule`            | 1 つの OpenTofu/Terraform module の実行単位。ふつうは Git URL + ref + path から取り込みます      |
-| `Source`             | Git URL / ブランチ / ref / commit / module path。upload 系の取り込みは内部 / operator 互換のみ   |
-| `ProviderConnection` | 保管された provider の認証情報。Run の実行中だけ一時的な env / file として解決されます           |
-| `CredentialRecipe`   | その provider を動かすための env / file / 事前処理の定義                                         |
-| `ProviderBinding`    | provider (と alias) にどの接続を使うかの対応付け                                                 |
-| `Secret`             | 暗号化された秘密の値。API からは書き込み専用で、ログには出ません                                 |
-| `Run`                | init / validate / plan / apply / destroy / refresh / output の 1 回の実行記録                    |
-| `StateVersion`       | 保存された Capsule state の世代                                                                  |
-| `Output`             | `tofu output -json` で取り出した値。別の Capsule の入力にもつなげます                            |
-| `Runner`             | checkout、OpenTofu 実行、state 同期、output 取得、後片付けを行う隔離された実行境界               |
-| `AuditEvent`         | 誰が・何を・どうしたかの証跡                                                                     |
-| `Operator`           | Takosumi を自分のユーザーのために運用する人・組織                                                |
+| 用語                 | 意味                                                                                           |
+| -------------------- | ---------------------------------------------------------------------------------------------- |
+| `Workspace`          | ユーザー / チームの境界。プロジェクト、接続、シークレット、状態、監査がこの中で分離されます    |
+| `Project`            | 1 つの製品・サービス・インフラのまとまり                                                       |
+| `Capsule`            | 1 つの OpenTofu/Terraform module の実行単位。ふつうは Git URL + ref + path から取り込みます    |
+| `Source`             | Git URL / ブランチ / ref / commit / module path。upload 系の取り込みは内部 / operator 互換のみ |
+| `ProviderConnection` | 保管された provider の認証情報。Run の実行中だけ一時的な env / file として解決されます         |
+| `CredentialRecipe`   | その provider を動かすための env / file / 事前処理の定義                                       |
+| `ProviderBinding`    | provider (と alias) にどの接続を使うかの対応付け                                               |
+| `Secret`             | 暗号化された秘密の値。API からは書き込み専用で、ログには出ません                               |
+| `Run`                | init / validate / plan / apply / destroy / refresh / output の 1 回の実行記録                  |
+| `StateVersion`       | 保存された Capsule state の世代                                                                |
+| `Output`             | `tofu output -json` で取り出した値。別の Capsule の入力にもつなげます                          |
+| `Runner`             | checkout、OpenTofu 実行、state 同期、output 取得、後片付けを行う隔離された実行境界             |
+| `AuditEvent`         | 誰が・何を・どうしたかの証跡                                                                   |
+| `Operator`           | Takosumi を自分のユーザーのために運用する人・組織                                              |
 
 旧 Space / Installation / Deployment / OutputSnapshot / `takos_provided` などの言葉は、移行メモや内部実装名に
 残ることはあっても、現在の公開モデルではありません。
@@ -102,11 +105,11 @@ backend は Takosumi for Operator / Takosumi Cloud 側にあります。
 
 ## エディション
 
-| Edition                   | 内容                                                                                                                                                                              |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Edition                   | 内容                                                                                                                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Takosumi OSS**          | この repo。Git を起点にした OpenTofu/Terraform control plane、Resource Shape API、Compatibility API framework、Adapter system、接続管理、runner、状態 / 出力 / 監査。課金は disabled / showback のみで apply を止めません |
-| **Takosumi for Operator** | Takosumi を顧客向けにホストする operator 向けエディション。マルチテナントの顧客管理、quota / metering / プラン、DB 管理の operator 設定、CLI / API / runbook 運用、managed target catalog、サポート、商用監査          |
-| **Takosumi Cloud**        | `app.takosumi.com` で私たちが運営する公式ホスティング。公式 managed targets、Takosumi 自社リソース、AI Gateway、Stripe による課金、quota、usage、support、abuse controls、SLA                                        |
+| **Takosumi for Operator** | Takosumi を顧客向けにホストする operator 向けエディション。マルチテナントの顧客管理、quota / metering / プラン、DB 管理の operator 設定、CLI / API / runbook 運用、managed target catalog、サポート、商用監査             |
+| **Takosumi Cloud**        | `app.takosumi.com` で私たちが運営する公式ホスティング。公式 managed targets、Takosumi 自社リソース、AI Gateway、Stripe による課金、quota、usage、support、abuse controls、SLA                                             |
 
 依存方向は **Cloud -> OSS の一方向**です。hosted Cloud は OSS の contract と組み込み口だけを使い、OSS は
 Cloud のものが何もなくてもそのまま動きます。

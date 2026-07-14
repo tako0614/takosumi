@@ -5,14 +5,15 @@
  * is gone). Secret values are write-only — kept in component state only until
  * the submit resolves, then cleared.
  *
- * The Cloudflare OAuth callback redirects to `/connections?connected=1` plus an
+ * A credential OAuth callback redirects to `/connections?connected=1` plus an
  * opaque `connection_id` / `connection_status`, which the router forwards here
  * query-intact; the one-time banner reads and strips those params. `/new` links
  * may also include a safe `return=/new?...` target so users can create a
- * Provider Connection, then jump back to the add flow.
+ * ProviderConnection, then jump back to the add flow.
  */
 import "../../../styles/wave-c.css";
 import {
+  createEffect,
   createMemo,
   createResource,
   createSignal,
@@ -22,12 +23,15 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { ArrowLeft, Link, Plug, Plus, Trash } from "lucide-solid";
+import { ArrowLeft, Plug, Plus, Trash } from "lucide-solid";
 import {
   isProviderEnvName,
   isReservedProviderEnvName,
 } from "takosumi-contract";
-import { PROVIDERS, providerDescriptor } from "../../account/lib/api.ts";
+import {
+  providerSetupOptionsFromCredentialRecipes,
+  type ProviderConnectionSetupOption,
+} from "../../account/lib/api.ts";
 import { ActionError, createAction } from "../../account/lib/action.tsx";
 import {
   providerConnectionStatusLabel,
@@ -43,14 +47,15 @@ import {
   type InstallReturnContext,
 } from "../../../lib/install-return-context.ts";
 import {
-  type Connection,
   type ProviderConnection,
   createConnection,
+  listCredentialRecipes,
   listProviderConnections,
   revokeConnection,
   testConnection,
 } from "../../../lib/control-api.ts";
-import { formatDateTime, t } from "../../../i18n/index.ts";
+import { readableProviderSourceLabel } from "../../../lib/provider-labels.ts";
+import { formatDateTime, locale, t } from "../../../i18n/index.ts";
 import {
   Badge,
   Button,
@@ -73,23 +78,25 @@ interface EnvPair {
   readonly value: string;
 }
 
-function providerTail(providerSource: string): string {
-  return providerSource.split("/").at(-1) ?? providerSource;
-}
-
 function providerConnectionProviderLabel(
   connection: ProviderConnection,
+  options: readonly ProviderConnectionSetupOption[],
 ): string {
-  const tail = providerTail(connection.providerSource);
-  return (
-    providerDescriptor(connection.providerSource)?.label ??
-    providerDescriptor(tail)?.label ??
-    tail
+  const recipe = connection.credentialRecipe;
+  const exact = options.find(
+    (option) =>
+      (recipe
+        ? option.credentialRecipe.id === recipe.id &&
+          option.credentialRecipe.authMode === recipe.authMode
+        : false) ||
+      option.providerSource === connection.providerSource ||
+      option.providerAliases.includes(connection.providerSource),
   );
+  return exact?.label ?? readableProviderSourceLabel(connection.providerSource);
 }
 
 /**
- * Maps a known Cloudflare-OAuth callback failure code (`missing_code` /
+ * Maps a provider-owned OAuth callback failure code (`missing_code` /
  * `oauth_failed` / `forbidden`, per the account-plane redirect) to a localized
  * hint. Unknown codes fall back to the generic sentence; the raw code always
  * rides along in a folded detail area so support can still see it.
@@ -115,6 +122,15 @@ export default function ConnectionsTab(props: {
 
   const [providerConnections, { refetch: refetchProviderConnections }] =
     createResource(workspaceId, listProviderConnections);
+  const [credentialRecipes] = createResource(listCredentialRecipes);
+  const installedCredentialRecipes = () =>
+    credentialRecipes.error ? [] : (credentialRecipes.latest ?? []);
+  const providerOptions = createMemo(() =>
+    providerSetupOptionsFromCredentialRecipes(
+      installedCredentialRecipes(),
+      locale(),
+    ),
+  );
   const [lastCreatedConnectionName, setLastCreatedConnectionName] =
     createSignal<string | null>(null);
   const [lastCreatedConnectionId, setLastCreatedConnectionId] = createSignal<
@@ -138,12 +154,16 @@ export default function ConnectionsTab(props: {
     await refetchProviderConnections();
   };
 
-  const afterConnectionCreated = async (connection: Connection) => {
+  const afterConnectionCreated = async (connection: ProviderConnection) => {
     // Never show a raw conn_… id in the toast — fall back to the provider name.
     setLastCreatedConnectionName(
       connection.displayName ||
-        providerDescriptor(connection.provider)?.label ||
-        connection.provider,
+        providerOptions().find(
+          (candidate) =>
+            candidate.providerSource === connection.providerSource ||
+            candidate.providerAliases.includes(connection.providerSource),
+        )?.label ||
+        readableProviderSourceLabel(connection.providerSource),
     );
     setLastCreatedConnectionId(connection.id);
     setLastCreatedVerifiedHint(false);
@@ -155,68 +175,37 @@ export default function ConnectionsTab(props: {
     ? installReturnPathFromContext(installReturn)
     : undefined;
   // ----- register form state -----------------------------------------------
-  // Default to the GUIDED presets (Cloudflare pre-scoped token link, AWS, GCP,
-  // Hetzner, R2): they are the polished path most users need. The raw
-  // bring-your-own-key env editor stays fully supported — any provider, no
-  // allowlist / approval / billing — but as the quiet advanced path behind
-  // openByokEditor below.
-  const [provider, setProvider] = createSignal<string>(
-    PROVIDERS[0]?.provider ?? GENERIC_ENV_PROVIDER_OPTION,
-  );
+  // Service-installed recipes are the guided path. The raw bring-your-own-key
+  // editor stays available for any provider and is never gated by this list.
+  const [provider, setProvider] = createSignal("");
   const [displayName, setDisplayName] = createSignal("");
   // Secret material lives ONLY for the lifetime of the form; cleared on submit.
   const [values, setValues] = createSignal<Record<string, string>>({});
-  const [helperToken, setHelperToken] = createSignal("");
-  const [helperCloudflareAccountId, setHelperCloudflareAccountId] =
-    createSignal("");
-  const [
-    helperCloudflareWorkersSubdomain,
-    setHelperCloudflareWorkersSubdomain,
-  ] = createSignal("");
   const [genericEnvProvider, setGenericEnvProvider] = createSignal("");
   const [envPairs, setEnvPairs] = createSignal<readonly EnvPair[]>([
     { name: "", value: "" },
   ]);
   const isGenericEnvProvider = () => provider() === GENERIC_ENV_PROVIDER_OPTION;
 
-  const descriptor = createMemo(() =>
-    isGenericEnvProvider() ? undefined : providerDescriptor(provider()),
-  );
-  const fields = createMemo(() => descriptor()?.fields ?? []);
-  const tokenHelper = createMemo(() => descriptor()?.tokenHelper);
-  const setupGuide = createMemo(() => descriptor()?.setupGuide);
+  createEffect(() => {
+    const options = providerOptions();
+    if (isGenericEnvProvider()) return;
+    if (options.some((option) => option.id === provider())) return;
+    if (options[0]) setProvider(options[0].id);
+    else if (!credentialRecipes.loading)
+      setProvider(GENERIC_ENV_PROVIDER_OPTION);
+  });
+
+  const setupOption = createMemo(() => {
+    if (isGenericEnvProvider()) return undefined;
+    return providerOptions().find((candidate) => candidate.id === provider());
+  });
+  const fields = createMemo(() => setupOption()?.fields ?? []);
+  const setupGuide = createMemo(() => setupOption()?.setupGuide);
 
   const setFieldValue = (envName: string, value: string) => {
     setValues((prev) => ({ ...prev, [envName]: value }));
   };
-  const scopeHintsFromConnectionValues = (
-    providerId: string,
-    connectionValues: Readonly<Record<string, string>>,
-  ):
-    | {
-        readonly accountId?: string;
-        readonly workersSubdomain?: string;
-        readonly awsRegion?: string;
-        readonly gcpProjectId?: string;
-      }
-    | undefined => {
-    if (providerId === "cloudflare") {
-      const accountId = connectionValues.CLOUDFLARE_ACCOUNT_ID?.trim();
-      return accountId ? { accountId } : undefined;
-    }
-    if (providerId === "aws" || providerId === "hashicorp/aws") {
-      const awsRegion = connectionValues.AWS_REGION?.trim();
-      return awsRegion ? { awsRegion } : undefined;
-    }
-    if (providerId === "gcp" || providerId === "google") {
-      const gcpProjectId =
-        connectionValues.GOOGLE_CLOUD_PROJECT?.trim() ||
-        connectionValues.GOOGLE_PROJECT?.trim();
-      return gcpProjectId ? { gcpProjectId } : undefined;
-    }
-    return undefined;
-  };
-
   const setEnvPair = (index: number, patch: Partial<EnvPair>) => {
     setEnvPairs((prev) =>
       prev.map((p, i) => (i === index ? { ...p, ...patch } : p)),
@@ -231,9 +220,6 @@ export default function ConnectionsTab(props: {
 
   const clearForm = () => {
     setValues({});
-    setHelperToken("");
-    setHelperCloudflareAccountId("");
-    setHelperCloudflareWorkersSubdomain("");
     setDisplayName("");
     setGenericEnvProvider("");
     setEnvPairs([{ name: "", value: "" }]);
@@ -244,7 +230,6 @@ export default function ConnectionsTab(props: {
   const openByokEditor = () => {
     setProvider(GENERIC_ENV_PROVIDER_OPTION);
     setValues({});
-    setHelperToken("");
     setGenericEnvProvider("");
     setEnvPairs([{ name: "", value: "" }]);
   };
@@ -291,51 +276,12 @@ export default function ConnectionsTab(props: {
     }
   }
 
-  // Primary guided-token submit.
-  const createFromHelper = createAction(async () => {
-    const helper = tokenHelper();
-    const d = descriptor();
-    if (!helper || !d) throw new Error(t("conn.error.invalidProvider"));
-    const token = helperToken().trim();
-    if (!token) throw new Error(t("conn.error.tokenRequired"));
-    const cloudflareAccountId = helperCloudflareAccountId().trim();
-    if (d.provider === "cloudflare" && !cloudflareAccountId) {
-      throw new Error(
-        t("conn.error.fieldRequired", {
-          field: t("conn.provider.cloudflare.accountId.label"),
-        }),
-      );
-    }
-    const submitValues: Record<string, string> = { [helper.envName]: token };
-    if (cloudflareAccountId) {
-      submitValues.CLOUDFLARE_ACCOUNT_ID = cloudflareAccountId;
-    }
-    const workersSubdomain = helperCloudflareWorkersSubdomain().trim();
-    const scopeHints = scopeHintsFromConnectionValues(
-      d.providerSource ?? d.provider,
-      submitValues,
-    );
-    const connection = await createConnection({
-      workspaceId: workspaceId(),
-      provider: d.providerSource ?? d.provider,
-      displayName:
-        displayName().trim() || (d.providerSource ? d.label : undefined),
-      scopeHints:
-        workersSubdomain && d.provider === "cloudflare"
-          ? { ...(scopeHints ?? {}), workersSubdomain }
-          : scopeHints,
-      values: submitValues,
-    });
-    await afterConnectionCreated(connection);
-    await runTest(connection.id);
-  });
-
-  // Advanced raw-field submit.
-  const create = createAction(async () => {
-    const d = descriptor();
-    if (!d) throw new Error(t("conn.error.invalidProvider"));
+  // One generic submit path for every service-described setup option.
+  const createFromRecipe = createAction(async () => {
+    const option = setupOption();
+    if (!option) throw new Error(t("conn.error.invalidProvider"));
     const submitValues: Record<string, string> = {};
-    for (const field of d.fields) {
+    for (const field of option.fields) {
       const raw = (values()[field.envName] ?? "").trim();
       if (field.required && raw.length === 0) {
         throw new Error(t("conn.error.fieldRequired", { field: field.label }));
@@ -344,20 +290,16 @@ export default function ConnectionsTab(props: {
     }
     const connection = await createConnection({
       workspaceId: workspaceId(),
-      provider: d.providerSource ?? d.provider,
-      displayName:
-        displayName().trim() || (d.providerSource ? d.label : undefined),
-      scopeHints: scopeHintsFromConnectionValues(
-        d.providerSource ?? d.provider,
-        submitValues,
-      ),
+      provider: option.providerSource,
+      credentialRecipe: option.credentialRecipe,
+      displayName: displayName().trim() || option.label,
       values: submitValues,
     });
     await afterConnectionCreated(connection);
     await runTest(connection.id);
   });
 
-  // Generic Provider Connection submit. This is the first-class path for any
+  // Generic ProviderConnection submit. This is the first-class path for any
   // provider not covered by a guided recipe.
   const createGenericEnvProvider = createAction(async () => {
     const name = genericEnvProvider().trim();
@@ -386,10 +328,23 @@ export default function ConnectionsTab(props: {
     if (Object.keys(submitValues).length === 0) {
       throw new Error(t("conn.genericEnv.oneRequired"));
     }
+    const genericRecipe = installedCredentialRecipes().find(
+      (recipe) =>
+        recipe.id === "generic-env" &&
+        recipe.authModes.env !== undefined &&
+        recipe.secretPartition,
+    );
+    if (!genericRecipe?.secretPartition) {
+      throw new Error(t("conn.error.invalidProvider"));
+    }
     const connection = await createConnection({
       workspaceId: workspaceId(),
       provider: name,
-      kind: "generic_env_provider",
+      credentialRecipe: {
+        id: "generic-env",
+        authMode: "env",
+        secretPartition: genericRecipe.secretPartition,
+      },
       displayName: displayName().trim() || undefined,
       values: submitValues,
     });
@@ -504,7 +459,8 @@ export default function ConnectionsTab(props: {
     // Same name fallback as the list row: never a raw conn_… id, and an
     // empty-string displayName must not slip through `??` and render 「」.
     const name =
-      connection.displayName || providerConnectionProviderLabel(connection);
+      connection.displayName ||
+      providerConnectionProviderLabel(connection, providerOptions());
     const ok = await confirm({
       title: t("conn.remove.confirmTitle"),
       // Warn that live Capsules' ProviderBindings referencing this connection
@@ -527,14 +483,19 @@ export default function ConnectionsTab(props: {
             <div class="wc-conn-head">
               <span class="wc-conn-name">
                 {connection.displayName ||
-                  providerConnectionProviderLabel(connection)}
+                  providerConnectionProviderLabel(
+                    connection,
+                    providerOptions(),
+                  )}
               </span>
               <Badge tone={providerConnectionTone(connection.status)}>
                 {providerConnectionStatusLabel(connection.status)}
               </Badge>
             </div>
             <div class="wc-conn-meta">
-              <span>{providerConnectionProviderLabel(connection)}</span>
+              <span>
+                {providerConnectionProviderLabel(connection, providerOptions())}
+              </span>
               <Show when={connection.expiresAt}>
                 {(expiresAt) => (
                   <span>
@@ -590,7 +551,7 @@ export default function ConnectionsTab(props: {
 
   return (
     <div class="wc-stack">
-      {/* Result banner from the Cloudflare OAuth backend callback redirect. */}
+      {/* Result banner from a credential OAuth backend callback redirect. */}
       <Show when={oauthNotice()}>
         {(notice) => (
           <Switch>
@@ -794,9 +755,7 @@ export default function ConnectionsTab(props: {
           />
           <div class="wc-form">
             <Show when={!isGenericEnvProvider()}>
-              {/* Guided presets are the default surface: pick a provider and
-                  follow its pre-scoped token flow. The raw BYOK env editor is
-                  the advanced path behind the quiet control at the bottom. */}
+              {/* Every option and field comes from the service recipe list. */}
               <FormField label={t("conn.add.provider")}>
                 <Select
                   id="connection-provider"
@@ -806,13 +765,14 @@ export default function ConnectionsTab(props: {
                     setProvider(e.currentTarget.value);
                     // Switching provider drops any half-entered secret values.
                     setValues({});
-                    setHelperToken("");
                     setGenericEnvProvider("");
                     setEnvPairs([{ name: "", value: "" }]);
                   }}
                 >
-                  <For each={PROVIDERS}>
-                    {(p) => <option value={p.provider}>{p.label}</option>}
+                  <For each={providerOptions()}>
+                    {(option) => (
+                      <option value={option.id}>{option.label}</option>
+                    )}
                   </For>
                 </Select>
               </FormField>
@@ -836,210 +796,83 @@ export default function ConnectionsTab(props: {
             <Show
               when={isGenericEnvProvider()}
               fallback={
-                <Show
-                  when={tokenHelper()}
-                  fallback={
-                    <>
-                      <Show when={setupGuide()}>
-                        {(guide) => (
-                          <div class="wc-guided">
-                            <div class="wc-form-actions">
-                              <Button
-                                variant="secondary"
-                                href={guide().url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                              >
-                                {t("conn.guided.openProvider", {
-                                  provider: descriptor()?.label ?? "",
-                                })}
-                              </Button>
-                            </div>
-                            <details class="connection-instructions">
-                              <summary>{t("conn.guided.instructions")}</summary>
-                              <ol class="wc-steps">
-                                <For each={guide().steps}>
-                                  {(s) => <li>{s}</li>}
-                                </For>
-                              </ol>
-                            </details>
-                          </div>
-                        )}
-                      </Show>
-                      <details
-                        class="connection-advanced connection-help"
-                        open={Boolean(setupGuide())}
-                      >
-                        <summary>{t("conn.advanced.summary")}</summary>
-                        <form
-                          class="wc-form"
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            void create.run();
-                          }}
-                        >
-                          <Index each={fields()}>
-                            {(field) => (
-                              <FormField
-                                label={field().label}
-                                required={field().required}
-                              >
-                                <Input
-                                  id={`connection-field-${field().envName}`}
-                                  name={`field:${field().envName}`}
-                                  type={field().secret ? "password" : "text"}
-                                  value={values()[field().envName] ?? ""}
-                                  onInput={(e) =>
-                                    setFieldValue(
-                                      field().envName,
-                                      e.currentTarget.value,
-                                    )
-                                  }
-                                  placeholder={field().placeholder}
-                                  autocomplete="off"
-                                  spellcheck={false}
-                                />
-                              </FormField>
-                            )}
-                          </Index>
-                          <div class="wc-form-actions">
-                            <Button
-                              variant="primary"
-                              type="submit"
-                              busy={create.busy()}
-                            >
-                              {create.busy()
-                                ? t("conn.registering")
-                                : t("conn.register")}
-                            </Button>
-                          </div>
-                          <ActionError error={create.error} />
-                        </form>
-                      </details>
-                    </>
-                  }
-                >
-                  {(helper) => (
-                    <>
+                <>
+                  <Show when={setupOption()?.description}>
+                    {(description) => <p class="muted">{description()}</p>}
+                  </Show>
+                  <Show when={setupGuide()}>
+                    {(guide) => (
                       <div class="wc-guided">
-                        <details
-                          class="connection-advanced connection-help"
-                          open
-                        >
-                          <summary>{t("conn.guided.stepsSummary")}</summary>
-                          <div class="wc-form-actions">
-                            <Button
-                              variant="secondary"
-                              href={helper().createTokenUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              {t("conn.guided.openProvider", {
-                                provider: descriptor()?.label ?? "",
-                              })}
-                            </Button>
-                          </div>
+                        <div class="wc-form-actions">
+                          <Button
+                            variant="secondary"
+                            href={guide().url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {t("conn.guided.openProvider", {
+                              provider: setupOption()?.label ?? "",
+                            })}
+                          </Button>
+                        </div>
+                        <Show when={guide().steps.length > 0}>
                           <details class="connection-instructions">
                             <summary>{t("conn.guided.instructions")}</summary>
                             <ol class="wc-steps">
-                              <For each={helper().steps}>
-                                {(s) => <li>{s}</li>}
+                              <For each={guide().steps}>
+                                {(step) => <li>{step}</li>}
                               </For>
                             </ol>
                           </details>
-
-                          <form
-                            class="wc-form"
-                            onSubmit={(e) => {
-                              e.preventDefault();
-                              void createFromHelper.run();
-                            }}
-                          >
-                            <FormField
-                              label={t("conn.guided.pasteLabel")}
-                              required
-                            >
-                              <Input
-                                id="connection-helper-token"
-                                name="helperToken"
-                                type="password"
-                                value={helperToken()}
-                                onInput={(e) =>
-                                  setHelperToken(e.currentTarget.value)
-                                }
-                                placeholder={t("conn.guided.pastePlaceholder")}
-                                autocomplete="off"
-                                spellcheck={false}
-                              />
-                            </FormField>
-                            <Show
-                              when={descriptor()?.provider === "cloudflare"}
-                            >
-                              <FormField
-                                label={t(
-                                  "conn.provider.cloudflare.accountId.label",
-                                )}
-                                required
-                              >
-                                <Input
-                                  id="connection-helper-cloudflare-account-id"
-                                  name="helperCloudflareAccountId"
-                                  type="text"
-                                  value={helperCloudflareAccountId()}
-                                  onInput={(e) =>
-                                    setHelperCloudflareAccountId(
-                                      e.currentTarget.value,
-                                    )
-                                  }
-                                  placeholder={t(
-                                    "conn.provider.cloudflare.accountId.placeholder",
-                                  )}
-                                  autocomplete="off"
-                                  spellcheck={false}
-                                />
-                              </FormField>
-                              <FormField
-                                label={t(
-                                  "conn.provider.cloudflare.workersSubdomain.label",
-                                )}
-                              >
-                                <Input
-                                  id="connection-helper-cloudflare-workers-subdomain"
-                                  name="helperCloudflareWorkersSubdomain"
-                                  type="text"
-                                  value={helperCloudflareWorkersSubdomain()}
-                                  onInput={(e) =>
-                                    setHelperCloudflareWorkersSubdomain(
-                                      e.currentTarget.value,
-                                    )
-                                  }
-                                  placeholder={t(
-                                    "conn.provider.cloudflare.workersSubdomain.placeholder",
-                                  )}
-                                  autocomplete="off"
-                                  spellcheck={false}
-                                />
-                              </FormField>
-                            </Show>
-                            <div class="wc-form-actions">
-                              <Button
-                                variant="secondary"
-                                type="submit"
-                                busy={createFromHelper.busy()}
-                                icon={<Link size={16} />}
-                              >
-                                {createFromHelper.busy()
-                                  ? t("conn.guided.connecting")
-                                  : t("conn.guided.connect")}
-                              </Button>
-                            </div>
-                            <ActionError error={createFromHelper.error} />
-                          </form>
-                        </details>
+                        </Show>
                       </div>
-                    </>
-                  )}
-                </Show>
+                    )}
+                  </Show>
+                  <form
+                    class="wc-form"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void createFromRecipe.run();
+                    }}
+                  >
+                    <Index each={fields()}>
+                      {(field) => (
+                        <FormField
+                          label={field().label}
+                          required={field().required}
+                        >
+                          <Input
+                            id={`connection-field-${field().envName}`}
+                            name={`field:${field().envName}`}
+                            type={field().secret ? "password" : "text"}
+                            value={values()[field().envName] ?? ""}
+                            onInput={(e) =>
+                              setFieldValue(
+                                field().envName,
+                                e.currentTarget.value,
+                              )
+                            }
+                            placeholder={field().placeholder}
+                            autocomplete="off"
+                            spellcheck={false}
+                          />
+                        </FormField>
+                      )}
+                    </Index>
+                    <div class="wc-form-actions">
+                      <Button
+                        variant="primary"
+                        type="submit"
+                        busy={createFromRecipe.busy()}
+                      >
+                        {createFromRecipe.busy()
+                          ? t("conn.registering")
+                          : t("conn.register")}
+                      </Button>
+                    </div>
+                    <ActionError error={createFromRecipe.error} />
+                  </form>
+                </>
               }
             >
               {/* Advanced bring-your-own-key editor: any OpenTofu provider,
@@ -1056,7 +889,7 @@ export default function ConnectionsTab(props: {
                     variant="ghost"
                     type="button"
                     onClick={() => {
-                      setProvider(PROVIDERS[0]?.provider ?? "");
+                      setProvider(providerOptions()[0]?.id ?? "");
                       setGenericEnvProvider("");
                       setEnvPairs([{ name: "", value: "" }]);
                     }}

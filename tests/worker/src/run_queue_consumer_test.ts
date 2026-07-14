@@ -4,7 +4,7 @@ import {
   type ConsumeOpenTofuRunDeps,
   safeParseOpenTofuRunQueueMessage,
 } from "../../../worker/src/run_queue_consumer.ts";
-import { InstallationLeaseBusyError } from "../../../core/domains/deploy-control/installation_lease.ts";
+import { CapsuleLeaseBusyError } from "../../../core/domains/deploy-control/capsule_lease.ts";
 import { InMemoryObservabilitySink } from "../../../core/domains/observability/mod.ts";
 import type {
   CloudflareWorkerEnv,
@@ -17,7 +17,7 @@ const validBody = (action: string) => ({
   kind: "takosumi.opentofu-run@v1",
   action,
   runId: "run_1",
-  spaceId: "space_1",
+  workspaceId: "space_1",
 });
 
 /** A recording queue message so a test can assert ack vs retry-with-delay. */
@@ -95,7 +95,7 @@ test("a lease-busy schedule failure retries with a delay and never marks retries
   const deps: ConsumeOpenTofuRunDeps = {
     dispatch: () =>
       Promise.reject(
-        new InstallationLeaseBusyError("installation:i:production"),
+        new CapsuleLeaseBusyError("capsule:i:production"),
       ),
     markRetriesExhausted: () => {
       exhaustedCalls += 1;
@@ -197,9 +197,9 @@ test("run queue consumer records queue age metrics from requestedAt", async () =
   expect(metrics[0]?.value).toBeGreaterThanOrEqual(0);
   expect(metrics[0]?.tags).toMatchObject({
     environment: "development",
-    operationKind: "plan",
-    runtime_cell_id: "platform-default",
-    space_id: "space_1",
+    operation_kind: "plan",
+    runner_profile_id: "opentofu-default",
+    workspace_id: "space_1",
     status: "dequeued",
   });
 });

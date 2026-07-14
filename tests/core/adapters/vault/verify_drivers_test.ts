@@ -1,25 +1,19 @@
 import { expect, test } from "bun:test";
 
-import type { Connection } from "takosumi-contract/connections";
+import type { ProviderConnection } from "takosumi-contract/connections";
 import {
   verifyDriverForKind,
-  verifyGcpReserved,
-  verifyGcpServiceAccountJson,
   verifyGitHttps,
   verifyGitSsh,
-  verifyGenericEnvProvider,
   type VerifyFetch,
 } from "../../../../core/adapters/vault/verify_drivers.ts";
 
-const TEST_GCP_PRIVATE_KEY =
-  "-----BEGIN " + "PRIVATE KEY-----\\nsecret\\n-----END " + "PRIVATE KEY-----\\n";
-
-function connection(overrides: Partial<Connection> = {}): Connection {
+function connection(overrides: Partial<ProviderConnection> = {}): ProviderConnection {
   return {
     id: "conn_x",
     provider: "git",
-    scope: "space",
-    spaceId: "space_1",
+    scope: "workspace",
+    workspaceId: "workspace_1",
     authMethod: "static_secret",
     status: "pending",
     envNames: [],
@@ -52,7 +46,11 @@ test("git_https: live smart-http probe 200 ⇒ verified", async () => {
   const result = await verifyGitHttps({
     connection: connection({
       kind: "source_git_https_token",
-      scopeHints: { repoUrl: "https://git.example.com/o/r.git" } as never,
+      scopeHints: {
+        providerSettings: {
+          repositoryUrl: "https://git.example.com/o/r.git",
+        },
+      },
     }),
     values: { GIT_HTTPS_TOKEN: "ghp_token" },
     fetch,
@@ -68,7 +66,11 @@ test("git_https: live smart-http probe 401 ⇒ pending bad credential", async ()
   const result = await verifyGitHttps({
     connection: connection({
       kind: "source_git_https_token",
-      scopeHints: { repoUrl: "https://git.example.com/o/r.git" } as never,
+      scopeHints: {
+        providerSettings: {
+          repositoryUrl: "https://git.example.com/o/r.git",
+        },
+      },
     }),
     values: { GIT_HTTPS_TOKEN: "ghp_token" },
     fetch,
@@ -82,7 +84,11 @@ test("git_https: 403 ⇒ pending bad credential", async () => {
   const result = await verifyGitHttps({
     connection: connection({
       kind: "source_git_https_token",
-      scopeHints: { repoUrl: "https://git.example.com/o/r.git" } as never,
+      scopeHints: {
+        providerSettings: {
+          repositoryUrl: "https://git.example.com/o/r.git",
+        },
+      },
     }),
     values: { GIT_HTTPS_TOKEN: "ghp_token" },
     fetch,
@@ -117,7 +123,11 @@ test("git_ssh: with known_hosts ⇒ reserved structural verified, no fetch", asy
   const result = await verifyGitSsh({
     connection: connection({
       kind: "source_git_ssh_key",
-      scopeHints: { knownHostsEntry: "git.example.com ssh-ed25519 AAAA..." },
+      scopeHints: {
+        providerSettings: {
+          knownHostsEntry: "git.example.com ssh-ed25519 AAAA...",
+        },
+      },
     }),
     values: { GIT_SSH_PRIVATE_KEY: "-----BEGIN-----" },
     fetch: noFetch,
@@ -136,115 +146,10 @@ test("git_ssh: missing known_hosts ⇒ pending", async () => {
   expect(result.detail).toContain("known_hosts");
 });
 
-// --- generic_env_provider (structural) ----------------------------------------
-
-test("generic_env_provider: all declared envNames present ⇒ verified", async () => {
-  const result = await verifyGenericEnvProvider({
-    connection: connection({
-      kind: "generic_env_provider",
-      provider: "datadog",
-      envNames: ["DD_API_KEY", "DD_APP_KEY"],
-    }),
-    values: { DD_API_KEY: "a", DD_APP_KEY: "b" },
-    fetch: noFetch,
-  });
-  expect(result.ok).toBe(true);
-});
-
-test("generic_env_provider: a declared envName missing ⇒ pending", async () => {
-  const result = await verifyGenericEnvProvider({
-    connection: connection({
-      kind: "generic_env_provider",
-      provider: "datadog",
-      envNames: ["DD_API_KEY", "DD_APP_KEY"],
-    }),
-    values: { DD_API_KEY: "a" },
-    fetch: noFetch,
-  });
-  expect(result.ok).toBe(false);
-  expect(result.detail).toContain("DD_APP_KEY");
-});
-
-test("generic_env_provider: no declared envNames ⇒ pending", async () => {
-  const result = await verifyGenericEnvProvider({
-    connection: connection({ kind: "generic_env_provider", envNames: [] }),
-    values: {},
-    fetch: noFetch,
-  });
-  expect(result.ok).toBe(false);
-});
-
-// --- gcp ------------------------------------------------------------------
-
-test("gcp_service_account_json: structural service account JSON ⇒ verified", async () => {
-  const result = await verifyGcpServiceAccountJson({
-    connection: connection({
-      kind: "gcp_service_account_json",
-      provider: "google",
-    }),
-    values: {
-      GOOGLE_CREDENTIALS: JSON.stringify({
-        type: "service_account",
-        project_id: "project-1",
-        client_email: "svc@project-1.iam.gserviceaccount.com",
-        private_key: TEST_GCP_PRIVATE_KEY,
-      }),
-    },
-    fetch: noFetch,
-  });
-  expect(result.ok).toBe(true);
-});
-
-test("gcp_service_account_json: missing project ⇒ pending", async () => {
-  const result = await verifyGcpServiceAccountJson({
-    connection: connection({
-      kind: "gcp_service_account_json",
-      provider: "google",
-    }),
-    values: {
-      GOOGLE_CREDENTIALS: JSON.stringify({
-        type: "service_account",
-        client_email: "svc@project-1.iam.gserviceaccount.com",
-        private_key: TEST_GCP_PRIVATE_KEY,
-      }),
-    },
-    fetch: noFetch,
-  });
-  expect(result.ok).toBe(false);
-  expect(result.detail).toContain("GOOGLE_CLOUD_PROJECT");
-});
-
-test("gcp: reserved ⇒ pending, no fetch", async () => {
-  const result = await verifyGcpReserved({
-    connection: connection({
-      kind: "gcp_service_account_impersonation",
-      provider: "gcp",
-    }),
-    values: {},
-    fetch: noFetch,
-  });
-  expect(result.ok).toBe(false);
-  expect(result.detail).toContain("reserved");
-});
-
 // --- registry routing -----------------------------------------------------
 
-test("verifyDriverForKind routes each verifiable kind and is undefined otherwise", () => {
+test("verifyDriverForKind routes only the two Git Source credential kinds", () => {
   expect(verifyDriverForKind("source_git_https_token")).toBe(verifyGitHttps);
   expect(verifyDriverForKind("source_git_ssh_key")).toBe(verifyGitSsh);
-  expect(verifyDriverForKind("generic_env_provider")).toBe(
-    verifyGenericEnvProvider,
-  );
-  expect(verifyDriverForKind("gcp_service_account_json")).toBe(
-    verifyGcpServiceAccountJson,
-  );
-  expect(verifyDriverForKind("gcp_oauth_bootstrap")).toBe(verifyGcpReserved);
-  expect(verifyDriverForKind("gcp_service_account_impersonation")).toBe(
-    verifyGcpReserved,
-  );
-  // Cloudflare / AWS keep their live provider-id branches in the vault, and an
-  // unknown kind has no registry entry.
-  expect(verifyDriverForKind("cloudflare_api_token")).toBeUndefined();
-  expect(verifyDriverForKind("aws_assume_role")).toBeUndefined();
   expect(verifyDriverForKind(undefined)).toBeUndefined();
 });

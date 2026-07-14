@@ -29,6 +29,7 @@ import type {
 import { readEnvVar } from "./read-env.ts";
 import { requireAccountSession } from "./account-session.ts";
 import { findActiveAccessToken } from "./access-token-activity.ts";
+import type { ControlPlaneOperations } from "./control-operations.ts";
 
 // OIDC token / code lifetimes. These have safe production defaults and are
 // operator-configurable via env (mirroring how passkey/session TTLs are
@@ -133,6 +134,7 @@ async function resolveOidcClient(input: {
     return {
       clientId: staticClient.clientId,
       redirectUris: staticClient.redirectUris,
+      allowedScopes: staticClient.allowedScopes,
       tokenEndpointAuthMethod:
         staticClient.tokenEndpointAuthMethod ??
         (staticClient.clientSecret ? "client_secret_post" : "none"),
@@ -201,27 +203,13 @@ async function authenticateOidcClient(input: {
   secret: string | undefined;
   clients: ReadonlyMap<string, OidcClientRegistration>;
   store: AccountsStore;
-  /**
-   * When the host wiring did not supply a `clients` map (clientsSupplied =
-   * false) and no static or dynamic client is known yet, the handler runs in
-   * a transitional degraded mode: requests without a `client_id` are
-   * accepted only in degraded mode. Once the host wires `clients` (or
-   * any dynamic registration exists), strict RFC 7009 §2.1 / RFC 7662 §2.1
-   * client authentication is enforced.
-   */
-  clientsSupplied: boolean;
+  /** Introspection is confidential-client only; revocation also permits public clients. */
+  requireConfidential: boolean;
 }): Promise<
-  | { ok: true; client: ResolvedOidcClient | undefined }
+  | { ok: true; client: ResolvedOidcClient }
   | { ok: false; error: "invalid_client"; status: 401 }
 > {
   if (!input.clientId) {
-    if (!input.clientsSupplied && input.clients.size === 0) {
-      // Degraded mode: no static clients wired. Accept the
-      // anonymous request to preserve transitional compatibility. Once
-      // mod.ts wires `clients` through (Agent 7 follow-up), this branch
-      // becomes unreachable for production deployments.
-      return { ok: true, client: undefined };
-    }
     return { ok: false, error: "invalid_client", status: 401 };
   }
   const client = await resolveOidcClient({
@@ -230,7 +218,9 @@ async function authenticateOidcClient(input: {
     store: input.store,
   });
   if (!client) {
-    // Unknown client_id is always rejected regardless of degraded mode.
+    return { ok: false, error: "invalid_client", status: 401 };
+  }
+  if (input.requireConfidential && client.tokenEndpointAuthMethod === "none") {
     return { ok: false, error: "invalid_client", status: 401 };
   }
   if (!(await validateOidcClientSecret(client, input.secret))) {
@@ -244,6 +234,7 @@ async function resolveOidcAuthorizationSubject(input: {
   flow: OidcAuthorizationCodeFlow;
   sessionSubject: TakosumiSubject;
   store: AccountsStore;
+  operations?: ControlPlaneOperations;
 }): Promise<
   | {
       ok: true;
@@ -251,7 +242,6 @@ async function resolveOidcAuthorizationSubject(input: {
         subject: string;
         takosumiSubject?: TakosumiSubject;
         capsuleId?: string;
-        appId?: string;
         workspaceId?: string;
         role?: string;
       };
@@ -272,38 +262,67 @@ async function resolveOidcAuthorizationSubject(input: {
       ok: false,
       status: 500,
       error: "server_error",
-      errorDescription:
-        "per-installation OIDC clients require pairwiseSubjectSecret",
+      errorDescription: "Capsule OIDC clients require pairwiseSubjectSecret",
     };
   }
-  const installation = await input.store.findAppCapsule(input.client.capsuleId);
-  if (!installation) {
+  if (!input.operations) {
     return {
       ok: false,
       status: 400,
       error: "unauthorized_client",
-      errorDescription: "OIDC client installation was not found",
+      errorDescription: "OIDC client Capsule authority is not available",
+    };
+  }
+  let capsule;
+  try {
+    capsule = await input.operations.capsules.getCapsule(
+      input.client.capsuleId,
+    );
+  } catch {
+    return {
+      ok: false,
+      status: 400,
+      error: "unauthorized_client",
+      errorDescription: "OIDC client Capsule was not found",
+    };
+  }
+  const member = (
+    await input.operations.members.listMembers(capsule.workspaceId)
+  ).find(
+    (candidate) =>
+      candidate.accountId === input.sessionSubject &&
+      candidate.status === "active",
+  );
+  if (!member) {
+    return {
+      ok: false,
+      status: 403,
+      error: "access_denied",
+      errorDescription: "the account cannot access this Capsule Workspace",
     };
   }
   const pairwiseSubject = await derivePairwiseSubject({
     secret: input.flow.pairwiseSubjectSecret,
     takosumiSubject: input.sessionSubject,
-    clientId: `${installation.appId}:${installation.capsuleId}:${input.client.clientId}`,
+    clientId: `${capsule.name}:${capsule.id}:${input.client.clientId}`,
   });
   return {
     ok: true,
     record: {
       subject: pairwiseSubject,
       takosumiSubject: input.sessionSubject,
-      capsuleId: installation.capsuleId,
-      appId: installation.appId,
-      workspaceId: installation.workspaceId,
-      role:
-        installation.createdBySubject === input.sessionSubject
-          ? "owner"
-          : "member",
+      capsuleId: capsule.id,
+      workspaceId: capsule.workspaceId,
+      role: preferredWorkspaceRole(member.roles),
     },
   };
+}
+
+function preferredWorkspaceRole(roles: readonly string[]): string {
+  for (const role of ["owner", "admin", "member", "viewer"] as const) {
+    if (roles.includes(role)) return role;
+  }
+  return "member";
 }
 
 function scopeIsAllowed(
@@ -321,6 +340,7 @@ export async function handleAuthorize(input: {
   flow: OidcAuthorizationCodeFlow;
   clients: ReadonlyMap<string, OidcClientRegistration>;
   store: AccountsStore;
+  operations?: ControlPlaneOperations;
 }): Promise<Response> {
   const responseType = input.url.searchParams.get("response_type");
   const clientId = input.url.searchParams.get("client_id");
@@ -384,7 +404,7 @@ export async function handleAuthorize(input: {
     return json(
       {
         error: "invalid_scope",
-        error_description: "requested scope is outside the installation grant",
+        error_description: "requested scope is outside the Capsule grant",
       },
       400,
     );
@@ -399,6 +419,7 @@ export async function handleAuthorize(input: {
     flow: input.flow,
     sessionSubject: session.subject,
     store: input.store,
+    operations: input.operations,
   });
   if (!subject.ok) {
     return json(
@@ -418,7 +439,6 @@ export async function handleAuthorize(input: {
     subject: subject.record.subject,
     takosumiSubject: subject.record.takosumiSubject,
     capsuleId: subject.record.capsuleId,
-    appId: subject.record.appId,
     workspaceId: subject.record.workspaceId,
     role: subject.record.role,
     nonce: input.url.searchParams.get("nonce") ?? undefined,
@@ -519,7 +539,6 @@ export async function handleToken(input: {
       subject: record.subject,
       takosumiSubject: record.takosumiSubject,
       capsuleId: record.capsuleId,
-      appId: record.appId,
       workspaceId: record.workspaceId,
       role: record.role,
       expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
@@ -538,7 +557,6 @@ export async function handleToken(input: {
     subject: record.subject,
     takosumiSubject: record.takosumiSubject,
     capsuleId: record.capsuleId,
-    appId: record.appId,
     workspaceId: record.workspaceId,
     role: record.role,
     nonce: record.nonce,
@@ -647,7 +665,6 @@ async function handleRefreshToken(input: {
       subject: record.subject,
       takosumiSubject: record.takosumiSubject,
       capsuleId: record.capsuleId,
-      appId: record.appId,
       workspaceId: record.workspaceId,
       role: record.role,
       expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
@@ -665,7 +682,6 @@ async function handleRefreshToken(input: {
       subject: record.subject,
       takosumiSubject: record.takosumiSubject,
       capsuleId: record.capsuleId,
-      appId: record.appId,
       workspaceId: record.workspaceId,
       role: record.role,
       refreshToken: newRefreshToken,
@@ -694,7 +710,6 @@ async function issueTokenResponse(input: {
   subject: string;
   takosumiSubject?: TakosumiSubject;
   capsuleId?: string;
-  appId?: string;
   workspaceId?: string;
   role?: string;
   nonce?: string;
@@ -711,9 +726,8 @@ async function issueTokenResponse(input: {
     : undefined;
   const takosumiClaims = input.capsuleId
     ? {
-        installation_id: input.capsuleId,
-        ...(input.appId ? { app_id: input.appId } : {}),
-        ...(input.workspaceId ? { space_id: input.workspaceId } : {}),
+        capsule_id: input.capsuleId,
+        ...(input.workspaceId ? { workspace_id: input.workspaceId } : {}),
         ...(input.role ? { role: input.role } : {}),
       }
     : undefined;
@@ -723,14 +737,21 @@ async function issueTokenResponse(input: {
   // persisted it yet) we default to false rather than silently asserting
   // verification.
   const emailVerified = readAccountEmailVerified(account);
+  const includesEmailClaims = includesScope(input.scope, "email");
+  const includesProfileClaims = includesScope(input.scope, "profile");
   const idToken = await input.flow.issueIdToken({
     iss: input.issuer,
     sub: input.subject,
     aud: input.clientId,
-    ...(account?.email
+    ...(includesEmailClaims && account?.email
       ? { email: account.email, email_verified: emailVerified }
       : {}),
-    ...(account?.displayName ? { name: account.displayName } : {}),
+    ...(includesProfileClaims && account?.displayName
+      ? { name: account.displayName }
+      : {}),
+    ...(includesProfileClaims && account?.picture
+      ? { picture: account.picture }
+      : {}),
     ...(takosumiClaims ? { takosumi: takosumiClaims } : {}),
     ...(input.nonce ? { nonce: input.nonce } : {}),
     iat: issuedAt,
@@ -743,7 +764,6 @@ async function issueTokenResponse(input: {
     subject: input.subject,
     takosumiSubject: input.takosumiSubject,
     capsuleId: input.capsuleId,
-    appId: input.appId,
     workspaceId: input.workspaceId,
     role: input.role,
     expiresAt: (issuedAt + expiresIn) * 1000,
@@ -792,11 +812,11 @@ export async function handleUserInfo(input: {
   store: AccountsStore;
   /**
    * Optional expected audience for the access token. When provided, the
-   * access token's recorded clientId must match. When not provided, the
-   * UserInfo endpoint accepts any audience the access token already binds
-   * to — RFC 7662 §2.2 leaves audience enforcement to the issuer. Callers
-   * that need strict per-client audience enforcement should pass
-   * expectedAudience to confine the response to a single client surface.
+   * access token's recorded audience (or ordinary-token clientId fallback)
+   * must match. When not provided, the UserInfo endpoint accepts any audience
+   * the access token already binds to — RFC 7662 §2.2 leaves audience
+   * enforcement to the issuer. Callers that need strict per-resource audience
+   * enforcement should pass expectedAudience.
    */
   expectedAudience?: string;
 }): Promise<Response> {
@@ -808,38 +828,64 @@ export async function handleUserInfo(input: {
     token: accessToken,
   });
   if (record) {
-    // Audience enforcement: the access token records the clientId it was
-    // issued for. If the caller declared an expected audience, reject any
-    // access token whose recorded audience does not match.
+    const audience = record.audience ?? record.clientId;
+    // Interface OAuth tokens bind directly to a resolved resource URI;
+    // ordinary OAuth tokens retain the OIDC clientId audience fallback.
     if (
       input.expectedAudience !== undefined &&
-      record.clientId !== input.expectedAudience
+      audience !== input.expectedAudience
     ) {
       return bearerChallenge("invalid_token");
     }
 
     const body: Record<string, unknown> = {
       sub: record.subject,
-      aud: record.clientId,
+      aud: audience,
       scope: record.scope,
     };
+    if (record.role === "interface-runtime") {
+      body.token_use = "interface_oauth";
+      body.takosumi = {
+        workspace_id: record.workspaceId,
+        ...(record.capsuleId ? { capsule_id: record.capsuleId } : {}),
+        interface_id: record.interfaceId,
+        interface_binding_id: record.interfaceBindingId,
+        interface_resolved_revision: record.interfaceResolvedRevision,
+      };
+      return json(body, 200, {
+        "cache-control": "no-store",
+        pragma: "no-cache",
+      });
+    }
     if (record.capsuleId) {
       body.takosumi = {
-        installation_id: record.capsuleId,
-        ...(record.appId ? { app_id: record.appId } : {}),
-        ...(record.workspaceId ? { space_id: record.workspaceId } : {}),
+        capsule_id: record.capsuleId,
+        ...(record.workspaceId ? { workspace_id: record.workspaceId } : {}),
         ...(record.role ? { role: record.role } : {}),
       };
-      // Emit a flat `space_memberships` claim that installable apps, including
-      // takos-office's docs / slide / sheet surfaces, read directly for their
+      // Emit a flat `workspace_memberships` claim that installable apps, including
+      // Installed Capsule surfaces read directly for their
       // membership checks. The token record binds a single accessible
-      // space, so the claim is a one-element array derived from it. Apps
-      // keep reading the nested `takosumi.space_id` as a fallback.
+      // Workspace, so the claim is a one-element array derived from it.
       if (record.workspaceId) {
-        body.space_memberships = [record.workspaceId];
+        body.workspace_memberships = [record.workspaceId];
       }
     }
-    return json(body);
+    const account = record.takosumiSubject
+      ? await input.store.findAccount(record.takosumiSubject)
+      : undefined;
+    if (includesScope(record.scope, "email")) {
+      if (account?.email) body.email = account.email;
+      if (account) body.email_verified = readAccountEmailVerified(account);
+    }
+    if (includesScope(record.scope, "profile")) {
+      if (account?.displayName) body.name = account.displayName;
+      if (account?.picture) body.picture = account.picture;
+    }
+    return json(body, 200, {
+      "cache-control": "no-store",
+      pragma: "no-cache",
+    });
   }
 
   const patRecord = await input.store.findPersonalAccessToken(accessToken);
@@ -859,19 +905,10 @@ export async function handleUserInfo(input: {
 export async function handleRevoke(input: {
   request: Request;
   store: AccountsStore;
-  /**
-   * Static OIDC client registrations. Required for RFC 7009 §2.1 client
-   * authentication on the revoke endpoint. When omitted, the handler runs
-   * in transitional degraded mode (see authenticateOidcClient): anonymous
-   * revoke is accepted only when neither static nor dynamic clients exist.
-   * Wiring `clients` from the host accounts handler is the Agent 7
-   * follow-up that engages strict spec compliance for confidential clients.
-   */
-  clients?: ReadonlyMap<string, OidcClientRegistration>;
+  /** Static OIDC clients are always supplied by the Accounts composition root. */
+  clients: ReadonlyMap<string, OidcClientRegistration>;
 }): Promise<Response> {
   const params = new URLSearchParams(await input.request.text());
-  const clientsSupplied = input.clients !== undefined;
-  const clients = input.clients ?? new Map<string, OidcClientRegistration>();
   // RFC 7009 §2.1: the authorization server MUST require client
   // authentication for confidential clients and MUST authenticate clients
   // that issued access/refresh tokens. We honor that universally for the
@@ -880,9 +917,9 @@ export async function handleRevoke(input: {
   const auth = await authenticateOidcClient({
     clientId: credentials.clientId,
     secret: credentials.secret,
-    clients,
+    clients: input.clients,
     store: input.store,
-    clientsSupplied,
+    requireConfidential: false,
   });
   if (!auth.ok) {
     return json({ error: auth.error }, auth.status);
@@ -891,11 +928,9 @@ export async function handleRevoke(input: {
   if (!token) {
     return new Response(null, { status: 200 });
   }
-  const authenticatedClientId = auth.client?.clientId;
+  const authenticatedClientId = auth.client.clientId;
   // Only revoke tokens that were issued for the authenticated client. This
   // protects against a malicious client revoking another client's tokens.
-  // In degraded mode (no static clients wired) the caller is unauthenticated
-  // and we fall back to delete-by-token behavior.
   const accessRecord = await input.store.findAccessToken(token);
   if (accessRecord) {
     if (
@@ -934,67 +969,62 @@ export async function handleIntrospect(input: {
   issuer: string;
   request: Request;
   store: AccountsStore;
-  /**
-   * Static OIDC client registrations. Required for RFC 7662 §2.1 client
-   * authentication on the introspect endpoint. When omitted, the handler
-   * runs in transitional degraded mode (see authenticateOidcClient):
-   * anonymous introspect is accepted only when neither static nor dynamic
-   * clients exist. Wiring `clients` from the host accounts handler is the
-   * Agent 7 follow-up that engages strict spec compliance.
-   */
-  clients?: ReadonlyMap<string, OidcClientRegistration>;
+  /** Static OIDC clients are always supplied by the Accounts composition root. */
+  clients: ReadonlyMap<string, OidcClientRegistration>;
 }): Promise<Response> {
   const params = new URLSearchParams(await input.request.text());
   // RFC 7662 §2.1: the introspection endpoint MUST require client
   // authentication for any introspection request. Reject unauthenticated
   // calls with 401 invalid_client.
-  const clientsSupplied = input.clients !== undefined;
-  const clients = input.clients ?? new Map<string, OidcClientRegistration>();
   const credentials = oidcTokenClientCredentials(input.request, params);
   const auth = await authenticateOidcClient({
     clientId: credentials.clientId,
     secret: credentials.secret,
-    clients,
+    clients: input.clients,
     store: input.store,
-    clientsSupplied,
+    requireConfidential: true,
   });
   if (!auth.ok) {
     // RFC 7662 §2.2 allows responding with `{ active: false }` when the
     // request fails authentication so that introspection cannot be used as
     // a token-existence oracle. We still set 401 because the caller did not
-    // authenticate. PAT tokens are out of scope of OIDC client auth — they
-    // are introspected through dedicated PAT routes — so an unauthenticated
-    // OIDC client cannot use this endpoint at all.
+    // authenticate. OAuth access, Interface OAuth, refresh, and personal
+    // access credentials all remain undiscoverable to anonymous callers.
     return json({ error: auth.error }, auth.status);
   }
   const token = params.get("token");
   if (!token) return json({ active: false });
-  const authenticatedClientId = auth.client?.clientId;
+  const authenticatedClientId = auth.client.clientId;
+  const requestedResource = params.get("resource");
 
   const accessRecord = await findActiveAccessToken({
     store: input.store,
     token,
   });
   if (accessRecord) {
-    // Only reveal token contents to the client that owns the token. In
-    // degraded mode (no static clients wired) the delete-by-token behavior is kept.
-    if (
-      authenticatedClientId !== undefined &&
-      accessRecord.clientId !== authenticatedClientId
-    ) {
+    const interfaceOAuth = accessRecord.role === "interface-runtime";
+    // Ordinary OAuth tokens remain client-owned. Interface invocation tokens
+    // are resource-owned: a confidential Accounts client may introspect them
+    // only when it supplies the exact resource audience it is serving.
+    if (interfaceOAuth) {
+      if (
+        !requestedResource ||
+        !accessRecord.audience ||
+        requestedResource !== accessRecord.audience
+      ) {
+        return json({ active: false });
+      }
+    } else if (accessRecord.clientId !== authenticatedClientId) {
       return json({ active: false });
     }
-    return json(introspectionBody(accessRecord));
+    return json(introspectionBody(accessRecord, "oauth_access"));
   }
   const refreshRecord = await input.store.findRefreshToken(token);
   if (refreshRecord) {
-    if (
-      authenticatedClientId !== undefined &&
-      refreshRecord.clientId !== authenticatedClientId
-    ) {
+    if (refreshRecord.clientId !== authenticatedClientId) {
       return json({ active: false });
     }
-    return json(introspectionBody(refreshRecord));
+    return json(introspectionBody(refreshRecord, "refresh_token"));
   }
   const patRecord = await input.store.findPersonalAccessToken(token);
   if (patRecord) {
@@ -1034,25 +1064,42 @@ async function isPkceVerifierValid(
   );
 }
 
-function introspectionBody(record: TokenRecord): Record<string, unknown> {
+function introspectionBody(
+  record: TokenRecord,
+  ordinaryTokenUse: "oauth_access" | "refresh_token",
+): Record<string, unknown> {
   if (record.expiresAt < Date.now()) {
     return { active: false };
   }
+  const interfaceOAuth = record.role === "interface-runtime";
   return {
     active: true,
+    token_use: interfaceOAuth ? "interface_oauth" : ordinaryTokenUse,
     client_id: record.clientId,
     sub: record.subject,
+    aud: record.audience ?? record.clientId,
     scope: record.scope,
-    ...(record.capsuleId
+    ...(interfaceOAuth
       ? {
           takosumi: {
-            installation_id: record.capsuleId,
-            ...(record.appId ? { app_id: record.appId } : {}),
-            ...(record.workspaceId ? { space_id: record.workspaceId } : {}),
-            ...(record.role ? { role: record.role } : {}),
+            workspace_id: record.workspaceId,
+            ...(record.capsuleId ? { capsule_id: record.capsuleId } : {}),
+            interface_id: record.interfaceId,
+            interface_binding_id: record.interfaceBindingId,
+            interface_resolved_revision: record.interfaceResolvedRevision,
           },
         }
-      : {}),
+      : record.capsuleId
+        ? {
+            takosumi: {
+              capsule_id: record.capsuleId,
+              ...(record.workspaceId
+                ? { workspace_id: record.workspaceId }
+                : {}),
+              ...(record.role ? { role: record.role } : {}),
+            },
+          }
+        : {}),
     exp: Math.floor(record.expiresAt / 1000),
   };
 }

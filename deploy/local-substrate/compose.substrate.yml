@@ -135,52 +135,6 @@ services:
     networks:
       - takos-local-internal
 
-  # ---- Takosumi runtime-agent (execution plane, postgres profile) ----
-  #
-  # The `cloud` control plane dispatches source / lifecycle / capability
-  # execution here over TAKOSUMI_AGENT_URL. This is the execution half split out
-  # of the old monolithic `service` service; it carries docker.sock + subprocess
-  # privilege so handlers can spawn `docker compose`. Image is a thin overlay
-  # on a Bun base that adds the docker CLI.
-  agent:
-    profiles: ["postgres"]
-    build:
-      context: .
-      dockerfile: wrappers/Dockerfile.service
-    restart: unless-stopped
-    depends_on:
-      substrate-postgres-init:
-        condition: service_completed_successfully
-      substrate-minio-init:
-        condition: service_completed_successfully
-    working_dir: /workspace
-    command:
-      - bun
-      - /wrappers/agent.ts
-    env_file:
-      - env/agent.env
-    volumes:
-      - ../../../takosumi:/workspace
-      - ../../../takos:/sources/takos:ro
-      - ./wrappers:/wrappers:ro
-      - ./factories:/local-substrate-factories:ro
-      - ./caddy/runtime:/local-substrate-runtime
-      - /var/run/docker.sock:/var/run/docker.sock
-    healthcheck:
-      test:
-        - CMD
-        - bun
-        - -e
-        - "const r = await fetch('http://127.0.0.1:8789/v1/health'); if(!r.ok) throw new Error('agent unhealthy')"
-      interval: 10s
-      timeout: 5s
-      retries: 15
-      start_period: 90s
-    networks:
-      takos-local-internal:
-        aliases:
-          - agent
-
   # ---- OpenTofu runner container (postgres profile) ----
   #
   # Runs the same HTTP envelope as the production Cloudflare Container runner,
@@ -214,20 +168,17 @@ services:
   # plane (OIDC issuer, billing, dashboard, install UI) + the embedded Takosumi
   # service (wrappers/cloud.ts -> buildComposedServer). Mirrors production's one
   # app.takosumi.com; replaces the old separate accounts + service services.
-  # Holds NO docker.sock — execution is dispatched to `agent`. Imports straddle
+  # Holds NO docker.sock — OpenTofu execution is dispatched to the dedicated
+  # runner service. Imports straddle
   # /workspace (takosumi) and /takosumi (the dev-seam @takosjp/takosumi
   # target), run under the takosumi config.
   cloud:
     profiles: ["postgres"]
-    build:
-      context: .
-      dockerfile: wrappers/Dockerfile.service
+    image: oven/bun:1
     restart: unless-stopped
     depends_on:
       cloud-migrate:
         condition: service_completed_successfully
-      agent:
-        condition: service_healthy
       opentofu-runner:
         condition: service_healthy
     working_dir: /workspace
@@ -244,7 +195,6 @@ services:
       - ../../../takosumi:/workspace
       - ../../../takosumi:/takosumi:ro
       - ./wrappers:/wrappers:ro
-      - ./factories:/local-substrate-factories:ro
       - ./caddy/runtime:/local-substrate-runtime
     healthcheck:
       test:
@@ -427,9 +377,9 @@ services:
         aliases:
           - mailpit
 
-  # ---- oauth-mock (stands in for accounts.google.com) ----
+  # ---- generic local OIDC mock ----
   # Auto-approves /authorize and returns deterministic /userinfo so the
-  # cloud sign-in flow (Google button) completes without external network.
+  # cloud sign-in flow completes through a generic OIDC descriptor without external network.
   # Reachable from browser + worker via Caddy at oauth-mock.test.
   oauth-mock:
     profiles: ["postgres", "workers"]
@@ -456,11 +406,6 @@ services:
         if [ ! -d node_modules ]; then
           bun install --frozen-lockfile
         fi
-        export VITE_TAKOSUMI_DASHBOARD_DEV_SIGN_IN="true"
-        export VITE_TAKOSUMI_DASHBOARD_DEV_SUBJECT="tsub_takosumi_accounts_local"
-        export VITE_TAKOSUMI_DASHBOARD_DEV_SESSION_ID="sess_local_substrate"
-        export VITE_TAKOSUMI_DASHBOARD_DEV_ACCOUNT_ID="acct_local"
-        export VITE_TAKOSUMI_DASHBOARD_DEV_SPACE_ID="space_local"
         bun run build
         cd /work && bash scripts/build-app-docs.sh
     volumes:

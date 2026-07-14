@@ -1,6 +1,7 @@
 /**
  * Typed client for the session-authenticated Takosumi control-plane
- * `/api/v1/*` route family.
+ * `/api/v1/*` route family and the origin-level Resource Shape `/v1/*`
+ * provider API.
  *
  * The dashboard SPA authenticates with the Accounts HttpOnly `takosumi_session`
  * cookie, not the operator deploy-control bearer. Accounts resolves the cookie
@@ -8,9 +9,8 @@
  * `/api/v1/*` remains the product control API for Workspaces, Capsules, Runs,
  * Connections, and related resources.
  *
- * Unlike the account-plane `/v1/capsule-projections` routes (snake_case wire
- * shape for identity/billing/export projections), the `/api/v1/*` routes
- * pass the deploy-control contract types through `JSON.stringify` UNCHANGED, so
+ * The `/api/v1/*` routes pass the control-plane contract types through
+ * `JSON.stringify` unchanged, so
  * the wire shape is the camelCase contract shape. The exported DTOs below are
  * the dashboard's local view-model mirrors of the deploy-control contract. The
  * type-only assertions near the mirror definitions ensure contract response
@@ -20,28 +20,37 @@
 import type {
   ActivityEvent as ContractActivityEvent,
   BackupRecord as ContractBackupRecord,
-  Connection as ContractConnection,
   CredentialRecipe as ContractCredentialRecipe,
-  CreditReservation as ContractCreditReservation,
   Dependency as ContractDependency,
   InstallConfig as ContractInstallConfig,
+  InstallConfigVariableDefault as ContractInstallConfigVariableDefault,
   Capsule as ContractCapsule,
-  CapsuleProviderConnectionSet as ContractCapsuleProviderConnectionSet,
+  JsonObject as ContractJsonObject,
   JsonValue as ContractJsonValue,
   ManagedPublicHostnameAllocation,
-  OutputShare as ContractOutputShare,
+  NativeResourceRef as ContractNativeResourceRef,
+  ProviderBinding as ContractProviderBinding,
+  ProviderBindings as ContractProviderBindings,
+  ProviderBindingSet as ContractProviderBindingSet,
   ProviderConnection as ContractProviderConnection,
   ProviderResolution as ContractProviderResolution,
+  PublicStateVersion as ContractPublicStateVersion,
+  ResourceEvent as ContractResourceEvent,
+  ResourceDeploymentQuote as ContractResourceDeploymentQuote,
+  ResourceDeploymentReview as ContractResourceDeploymentReview,
+  ResourceObject as ContractResourceObject,
+  ResourceShapeKind as ContractResourceShapeKind,
   Run as ContractRun,
   RunCostInfo as ContractRunCostInfo,
   RunLogsResponse as ContractRunLogsResponse,
   Source as ContractSource,
   SourceBuildConfig,
   SourceSnapshot as ContractSourceSnapshot,
+  SpacePolicySpec as ContractSpacePolicySpec,
+  TargetPoolSpec as ContractTargetPoolSpec,
   Workspace as ContractWorkspace,
   UsageEvent as ContractUsageEvent,
 } from "takosumi-contract";
-import type { PublicDeployment as ContractPublicDeployment } from "takosumi-contract/deployments";
 
 // ===========================================================================
 // Transport — same-origin fetch with the session cookie (mirrors the account
@@ -71,12 +80,7 @@ export class ControlApiError extends Error {
 
   /** True when the backend rejected because the Source has no synced snapshot. */
   get isSourceSyncRequired(): boolean {
-    return (
-      this.status === 409 &&
-      (this.code === "source_sync_required" ||
-        (this.code === "failed_precondition" &&
-          /source_sync_required/u.test(this.message)))
-    );
+    return this.status === 409 && this.reason === "source_sync_required";
   }
 
   /** Typed detail payload from deploy-control error envelopes, when present. */
@@ -108,21 +112,12 @@ export class ControlApiError extends Error {
 
   /** True when creating a service hit the Workspace/name/environment guard. */
   get isDuplicateService(): boolean {
-    return (
-      this.reason === "duplicate_capsule" ||
-      this.reason === "duplicate_installation" ||
-      (this.status === 409 &&
-        /\b(?:capsule|installation)\b\s+.*already exists/iu.test(this.message))
-    );
+    return this.status === 409 && this.reason === "duplicate_capsule";
   }
 
   /** True when a requested public app hostname is already reserved. */
   get isAppHostnameUnavailable(): boolean {
-    return (
-      this.reason === "app_hostname_unavailable" ||
-      /^app_hostname_unavailable\b/u.test(this.message) ||
-      /\balready claimed by Capsule\b.*\bWorkspace\b/iu.test(this.message)
-    );
+    return this.status === 409 && this.reason === "app_hostname_unavailable";
   }
 
   /** True when the owner has no remaining short managed-hostname slot. */
@@ -261,14 +256,7 @@ async function fetchAllPages<T>(
 }
 
 const BASE = "/api/v1";
-const BILLING_PLANS_CACHE_TTL_MS = 60_000;
-let billingPlansCache:
-  | {
-      readonly expiresAt: number;
-      readonly plans: readonly PublicBillingPlan[];
-    }
-  | undefined;
-let billingPlansRequest: Promise<readonly PublicBillingPlan[]> | undefined;
+const RESOURCE_SHAPE_BASE = "/v1";
 
 // ===========================================================================
 // Wire shapes (local mirror of the deploy-control contract — see module header)
@@ -276,13 +264,30 @@ let billingPlansRequest: Promise<readonly PublicBillingPlan[]> | undefined;
 
 export type WorkspaceType = "personal" | "organization";
 
+export type PlanScopeScalar = string | number | boolean;
+
+export interface ScopeBoundaryDimension {
+  readonly selector: string;
+  readonly allowedValues: readonly PlanScopeScalar[];
+}
+
+export interface ScopeBoundaryRule {
+  readonly resourceTypePattern: string;
+  readonly dimensions: Readonly<Record<string, ScopeBoundaryDimension>>;
+}
+
+export interface ScopeBoundaryPolicy {
+  readonly mode?: "permissive" | "strict";
+  readonly rules: readonly ScopeBoundaryRule[];
+}
+
 export interface PolicyConfig {
   readonly allowedProviders?: readonly string[];
   readonly allowedResourceTypes?: readonly string[];
   readonly destructiveChanges?: {
     readonly requireExplicitConfirmation: boolean;
   };
-  readonly scopeBoundary?: Readonly<Record<string, unknown>>;
+  readonly scopeBoundary?: ScopeBoundaryPolicy;
   readonly quota?: Readonly<Record<string, number>>;
 }
 
@@ -292,7 +297,6 @@ export interface Workspace {
   readonly displayName: string;
   readonly type: WorkspaceType;
   readonly ownerUserId: string;
-  readonly billingAccountId?: string;
   readonly billingSettings?: BillingSettings;
   readonly policy?: PolicyConfig;
   /** Set when the workspace is archived (restore via updateWorkspace). */
@@ -301,97 +305,9 @@ export interface Workspace {
   readonly updatedAt: string;
 }
 
-export type BillingMode = "disabled" | "showback" | "enforce";
-export type BillingProvider = "stripe" | "manual" | "none";
+export type BillingMode = "disabled" | "showback";
 
-export type BillingSettings =
-  | {
-      readonly mode: "disabled";
-      readonly provider: "none";
-      readonly reservationRequired?: false;
-    }
-  | {
-      readonly mode: "showback";
-      readonly provider: BillingProvider;
-      readonly reservationRequired?: false;
-    }
-  | {
-      readonly mode: "enforce";
-      readonly provider: Exclude<BillingProvider, "none">;
-      readonly reservationRequired: true;
-      readonly autoRecharge?: {
-        readonly enabled: boolean;
-        readonly thresholdUsdMicros: number;
-        readonly rechargeUsdMicros: number;
-        readonly monthlyLimitUsdMicros?: number;
-      };
-    };
-
-export interface CreditBalance {
-  readonly workspaceId: string;
-  readonly availableUsdMicros?: number;
-  readonly reservedUsdMicros?: number;
-  readonly monthlyIncludedUsdMicros?: number;
-  readonly purchasedUsdMicros?: number;
-  readonly availableCredits: number;
-  readonly reservedCredits: number;
-  readonly monthlyIncludedCredits: number;
-  readonly purchasedCredits: number;
-  readonly updatedAt: string;
-}
-
-export interface BillingAccount {
-  readonly id: string;
-  readonly ownerType: "user";
-  readonly ownerId: string;
-  readonly provider: "stripe" | "manual" | "none";
-  readonly stripeCustomerId?: string;
-  readonly stripeDefaultPaymentMethodId?: string;
-  readonly status: "active" | "past_due" | "disabled" | "trialing";
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export interface SpaceSubscription {
-  readonly id: string;
-  readonly workspaceId?: string;
-  readonly spaceId?: string;
-  readonly billingAccountId: string;
-  readonly planId: string;
-  readonly status: "active" | "trialing" | "past_due" | "cancelled";
-  readonly currentPeriodStart: string;
-  readonly currentPeriodEnd: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export interface BillingPlan {
-  readonly id: string;
-  readonly name: string;
-  readonly monthlyBasePrice: number;
-  readonly includedUsdMicros?: number;
-  readonly includedCredits: number;
-  readonly limits: {
-    readonly maxEstimatedUsdMicrosPerRun?: number;
-    readonly maxEstimatedCreditsPerRun?: number;
-    readonly quota?: Readonly<Record<string, number>>;
-  };
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export interface CreditReservation {
-  readonly id: string;
-  // Rename convergence: contract carries both as optional during transition.
-  readonly workspaceId?: string;
-  readonly spaceId?: string;
-  readonly runId: string;
-  readonly estimatedCredits: number;
-  readonly status: "reserved" | "captured" | "released" | "expired";
-  readonly mode: BillingMode;
-  readonly createdAt: string;
-  readonly expiresAt: string;
-}
+export type BillingSettings = { readonly mode: BillingMode };
 
 export interface BackupRecord {
   readonly id: string;
@@ -404,11 +320,11 @@ export interface BackupRecord {
     readonly stateGeneration: number;
     readonly stateVersionId: string;
   };
-  readonly objectKey: string;
+  readonly ref: string;
   readonly digest: string;
   readonly sizeBytes: number;
   readonly serviceData?: {
-    readonly objectKey: string;
+    readonly ref: string;
     readonly digest: string;
     readonly sizeBytes: number;
     readonly exportedCount: number;
@@ -419,23 +335,11 @@ export interface BackupRecord {
   readonly createdAt: string;
 }
 
-export type UsageEventKind =
-  | "runner_minute"
-  | "gateway_compute"
-  | "gateway_storage_gb_hour"
-  | "ai_request"
-  | "ai_input_token"
-  | "ai_output_token"
-  | "artifact_storage_gb_hour"
-  | "backup_storage_gb_hour"
-  | "egress_gb"
-  | "operation";
+export type UsageEventKind = string;
 
 export interface UsageEvent {
   readonly id: string;
-  // Rename convergence: contract carries both as optional during transition.
-  readonly workspaceId?: string;
-  readonly spaceId?: string;
+  readonly workspaceId: string;
   readonly capsuleId?: string;
   readonly runId?: string;
   readonly meterId?: string;
@@ -445,8 +349,8 @@ export interface UsageEvent {
   readonly resourceMetadata?: Readonly<Record<string, unknown>>;
   readonly kind: UsageEventKind;
   readonly quantity: number;
-  readonly usdMicros?: number;
-  readonly credits: number;
+  readonly usdMicros: number;
+  readonly ratingStatus: "rated" | "unrated";
   readonly source: string;
   readonly idempotencyKey: string;
   readonly createdAt: string;
@@ -459,13 +363,7 @@ export interface UsageEventsPage {
 
 export interface WorkspaceBilling {
   readonly settings: BillingSettings;
-  readonly balance?: CreditBalance;
-  readonly account?: BillingAccount;
-  readonly subscription?: SpaceSubscription;
-  readonly plan?: BillingPlan;
 }
-
-export type TrustLevel = "official" | "trusted" | "space" | "raw";
 
 export type CapsuleStatus =
   "pending" | "active" | "stale" | "error" | "disabled" | "destroyed";
@@ -479,8 +377,6 @@ export interface Capsule {
   readonly installConfigId: string;
   readonly environment: string;
   readonly currentStateVersionId?: string;
-  /** @deprecated Older rows used Deployment as the state-version ledger id. */
-  readonly currentDeploymentId?: string;
   readonly currentStateGeneration: number;
   readonly status: CapsuleStatus;
   /**
@@ -502,25 +398,9 @@ export interface Capsule {
   readonly updatedAt: string;
 }
 
-export interface CapsuleProviderConnectionBinding {
-  readonly provider: string;
-  readonly alias?: string;
-  readonly connectionId: string;
-  readonly region?: string;
-}
-
-export type CapsuleProviderConnectionBindings =
-  readonly CapsuleProviderConnectionBinding[];
-
-export interface CapsuleProviderConnectionSet {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly capsuleId: string;
-  readonly environment: string;
-  readonly bindings: CapsuleProviderConnectionBindings;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
+export type ProviderBinding = ContractProviderBinding;
+export type ProviderBindings = ContractProviderBindings;
+export type ProviderBindingSet = ContractProviderBindingSet;
 
 export type ProviderResolution = ContractProviderResolution;
 
@@ -528,92 +408,17 @@ export interface InstallConfig {
   readonly id: string;
   readonly workspaceId?: string;
   readonly name: string;
-  readonly sourceKind: "generic_capsule" | "first_party_capsule";
-  readonly trustLevel: TrustLevel;
   readonly modulePath?: string;
   readonly sourceBuild?: SourceBuildConfig;
+  readonly lifecycleActions?: ContractInstallConfig["lifecycleActions"];
+  readonly policy: ContractInstallConfig["policy"];
   readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
   readonly variableMapping: Readonly<Record<string, unknown>>;
+  readonly variablePresentation?: ContractInstallConfig["variablePresentation"];
+  readonly installExperience?: ContractInstallConfig["installExperience"];
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
-  readonly store?: {
-    readonly templateId?: string;
-    readonly templateVersion?: string;
-    readonly source?: {
-      readonly git: string;
-      readonly ref?: string;
-      readonly path: string;
-    };
-    readonly order: number;
-    readonly surface: "service" | "building_block" | "example";
-    readonly kind: "worker" | "storage" | "site";
-    readonly provider: string;
-    readonly suggestedName: string;
-    readonly badge: { readonly ja: string; readonly en: string };
-    readonly name: { readonly ja: string; readonly en: string };
-    readonly description: { readonly ja: string; readonly en: string };
-    readonly iconUrl?: string;
-    readonly inputs: readonly {
-      readonly name: string;
-      readonly type?: "string" | "number" | "boolean" | "json";
-      readonly format?:
-        | "text"
-        | "url"
-        | "hostname"
-        | "subdomain"
-        | "password"
-        | "token"
-        | "email"
-        | "sha256";
-      readonly required?: boolean;
-      readonly advanced?: boolean;
-      readonly secret?: boolean;
-      readonly defaultValue?: string;
-      readonly label: { readonly ja: string; readonly en: string };
-      readonly helper?: { readonly ja: string; readonly en: string };
-      readonly placeholder?: string;
-    }[];
-    readonly installExperience?: {
-      readonly projections?: readonly (
-        | {
-            readonly kind: "service_name";
-            readonly variable: string;
-          }
-        | {
-            readonly kind: "public_endpoint";
-            readonly variables: {
-              readonly subdomain?: string;
-              readonly url?: string;
-              readonly routePattern?: string;
-            };
-            readonly baseDomain?: string;
-          }
-        | {
-            readonly kind: "initial_secret";
-            readonly variable: string;
-            readonly secretKind?: "password" | "password_or_hash" | "token";
-            readonly optional?: boolean;
-          }
-        | {
-            readonly kind: "oidc_client";
-            readonly variables: {
-              readonly issuerUrl?: string;
-              readonly accountsUrl?: string;
-              readonly clientId?: string;
-              readonly redirectUri?: string;
-            };
-            readonly callbackPath?: string;
-            readonly scopes?: readonly string[];
-          }
-        | {
-            readonly kind: "artifact";
-            readonly variables: {
-              readonly url?: string;
-              readonly sha256?: string;
-            };
-          }
-      )[];
-    };
-  };
+  readonly interfaceBlueprints?: ContractInstallConfig["interfaceBlueprints"];
+  readonly store?: ContractInstallConfig["store"];
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -623,7 +428,7 @@ type OutputAllowlistEntry = ContractInstallConfig["outputAllowlist"][string];
 export type DependencyMode =
   "remote_state" | "variable_injection" | "published_output";
 
-export type DependencyVisibility = "space" | "cross_space";
+export type DependencyVisibility = "workspace" | "cross_workspace";
 
 export interface DependencyOutputMapping {
   readonly from: string;
@@ -635,12 +440,8 @@ export interface DependencyOutputMapping {
 export interface Dependency {
   readonly id: string;
   readonly workspaceId: string;
-  // Rename convergence: contract keeps `producer/consumerInstallationId`
-  // canonical, the `*CapsuleId` aliases optional. Read with `?? *InstallationId`.
-  readonly producerCapsuleId?: string;
-  readonly consumerCapsuleId?: string;
-  readonly producerInstallationId: string;
-  readonly consumerInstallationId: string;
+  readonly producerCapsuleId: string;
+  readonly consumerCapsuleId: string;
   readonly mode: DependencyMode;
   readonly outputs: Readonly<Record<string, DependencyOutputMapping>>;
   readonly visibility: DependencyVisibility;
@@ -657,7 +458,7 @@ export interface DashboardOverview {
   readonly workspaces: readonly Workspace[];
   readonly workspace: Workspace | null;
   readonly capsules: readonly Capsule[];
-  readonly currentStateVersions: readonly PublicDeployment[];
+  readonly currentStateVersions: readonly PublicStateVersion[];
   readonly activity: readonly ActivityEvent[];
   readonly installConfigs: readonly InstallConfig[];
   readonly nextCapsuleCursor?: string;
@@ -710,18 +511,13 @@ export interface RunPlanResource {
   readonly type: string;
   readonly actions: readonly string[];
   readonly scope?: {
-    readonly cloudflareAccountId?: string;
-    readonly cloudflareZoneId?: string;
-    readonly awsAccountId?: string;
-    readonly awsRegion?: string;
+    readonly facts: Readonly<Record<string, string | number | boolean>>;
   };
 }
 
 export interface RunApplyExpectedGuard {
   readonly planId: string;
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
   readonly currentStateVersionId?: string | null;
   readonly runnerId: string;
   readonly sourceDigest: string;
@@ -731,12 +527,12 @@ export interface RunApplyExpectedGuard {
   readonly planArtifactDigest: string;
   readonly sourceCommit?: string;
   readonly providerLockDigest?: string;
-  readonly resolvedProviderEnvBindingsDigest?: string;
+  readonly resolvedProviderBindingsDigest?: string;
 }
 
 export interface RunServiceDataRestoreResult {
   readonly status: "restored";
-  readonly objectKey: string;
+  readonly ref: string;
   readonly digest: string;
   readonly sizeBytes: number;
   readonly restoredCount?: number;
@@ -756,7 +552,7 @@ export interface Run {
   readonly compatibilityReportId?: string;
   readonly baseStateGeneration?: number;
   readonly planDigest?: string;
-  readonly planArtifactKey?: string;
+  readonly planArtifactRef?: string;
   readonly applyExpected?: RunApplyExpectedGuard;
   readonly summary?: RunChangeSummary;
   readonly planResources?: readonly RunPlanResource[];
@@ -786,6 +582,7 @@ export interface SourceSnapshotWaitProgress {
 
 export interface RunDiagnostic {
   readonly severity: "info" | "warning" | "error";
+  readonly code?: string;
   readonly message: string;
   readonly detail?: string;
 }
@@ -809,35 +606,15 @@ export interface RunLogs {
   readonly auditEvents: readonly RunAuditEvent[];
 }
 
-/**
- * `GET /api/v1/runs/:id/cost` projection (RunCostInfo). The public,
- * non-secret billing reservation values the controller already computed at plan
- * time, so the Run view can explain — BEFORE apply — why an apply would be
- * blocked under `enforce` mode (a USD balance shortfall or a billing-plan limit). It
- * carries no cost formula and no secret material.
- */
+/** Provider-neutral plan showback projection. */
 export interface RunCostInfo {
   readonly runId: string;
-  /** The Workspace's billing mode at plan time. */
-  readonly billingMode: "disabled" | "showback" | "enforce";
-  /** USD amount the controller estimated this plan would consume on apply. */
+  readonly billingMode: "disabled" | "showback";
   readonly estimatedUsdMicros: number;
-  /** Available USD balance observed when a reservation was attempted. */
-  readonly availableUsdMicros?: number;
-  /** Missing USD micros (`estimated - available`) when positive. */
-  readonly shortfallUsdMicros?: number;
-  /** @deprecated Use estimatedUsdMicros. */
-  readonly estimatedCredits: number;
-  /** @deprecated Use availableUsdMicros. */
-  readonly availableCredits?: number;
-  /** `reserved` when credits were held; `insufficient_credits` when not. */
-  readonly reservationStatus?: "reserved" | "insufficient_credits";
-  /** @deprecated Use shortfallUsdMicros. */
-  readonly creditShortfall?: number;
-  /** True when billing blocks this plan from applying under `enforce` mode. */
+  readonly ratingStatus: "not_applicable" | "rated" | "unrated";
   readonly blocked: boolean;
-  /** Public-safe human reasons billing blocked the plan (empty when none). */
   readonly reasons: readonly string[];
+  readonly extension?: Readonly<Record<string, ContractJsonValue>>;
 }
 
 export type RunGroupStatus =
@@ -873,18 +650,18 @@ export interface Source {
   readonly updatedAt: string;
 }
 
-export type SourceSnapshotOrigin = "git" | "upload" | "artifact";
+export type SourceSnapshotOrigin = "git";
 
 export interface SourceSnapshot {
   readonly id: string;
   readonly origin: SourceSnapshotOrigin;
   readonly workspaceId: string;
-  readonly sourceId?: string;
+  readonly sourceId: string;
   readonly url: string;
   readonly ref: string;
   readonly resolvedCommit: string;
   readonly path: string;
-  readonly archiveObjectKey: string;
+  readonly archiveRef: string;
   readonly archiveDigest: string;
   readonly archiveSizeBytes: number;
   readonly repositoryInstallMetadata?: ContractSourceSnapshot["repositoryInstallMetadata"];
@@ -892,32 +669,17 @@ export interface SourceSnapshot {
   readonly fetchedAt: string;
 }
 
-export type DeploymentStatus =
-  "active" | "superseded" | "rolled_back" | "destroyed";
-
 /**
- * Public projection of a Deployment as returned by the session control surface
- * (`GET /api/v1/capsules/:id/state-versions` and
- * `GET /api/v1/state-versions/:id`). The backend intentionally drops the raw
- * `outputSnapshotId` pointer and returns ONLY the allowlist-projected
- * `outputsPublic` map (sensitive outputs never enter the ledger row), so the
- * dashboard read never exposes a handle to the un-projected output envelope.
- * Mirror of `takosumi-contract/deployments.PublicDeployment` — the RETIRED
- * Deployment ledger deliberately keeps the legacy `spaceId` / `installationId`
- * field names (kept read-only for audit; not part of the 17-noun rename).
+ * Browser-safe StateVersion ledger projection. State refs and digests
+ * remain on the internal runner seam.
  */
-export interface PublicDeployment {
+export interface PublicStateVersion {
   readonly id: string;
-  readonly spaceId: string;
-  readonly capsuleId?: string;
-  readonly installationId: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
   readonly environment: string;
-  readonly applyRunId: string;
-  readonly sourceSnapshotId: string;
-  readonly dependencySnapshotId?: string;
-  readonly stateGeneration: number;
-  readonly outputsPublic: Readonly<Record<string, unknown>>;
-  readonly status: DeploymentStatus;
+  readonly generation: number;
+  readonly createdByRunId: string;
   readonly createdAt: string;
 }
 
@@ -929,14 +691,9 @@ export interface OutputShareEntry {
 
 export interface OutputShare {
   readonly id: string;
-  // Rename convergence: contract keeps `from/toSpaceId` + `producerInstallationId`
-  // canonical, the new aliases optional. Read with `?? <legacy>`.
-  readonly fromWorkspaceId?: string;
-  readonly toWorkspaceId?: string;
-  readonly producerCapsuleId?: string;
-  readonly fromSpaceId: string;
-  readonly toSpaceId: string;
-  readonly producerInstallationId: string;
+  readonly fromWorkspaceId: string;
+  readonly toWorkspaceId: string;
+  readonly producerCapsuleId: string;
   readonly outputs: readonly OutputShareEntry[];
   readonly status: "pending" | "active" | "revoked";
   readonly createdAt: string;
@@ -956,68 +713,27 @@ export interface ActivityEvent {
   readonly createdAt: string;
 }
 
-export type ConnectionStatus =
-  "pending" | "verified" | "revoked" | "expired" | "error";
-export type ConnectionScopeKind = "operator" | "space";
-
-export interface ConnectionScopeHints {
-  readonly accountId?: string;
-  readonly zoneId?: string;
-  readonly workersSubdomain?: string;
-  readonly managedProvider?: boolean;
-  readonly providerConfig?: Readonly<Record<string, ContractJsonValue>>;
-  readonly moduleInputDefaults?: Readonly<Record<string, ContractJsonValue>>;
-  readonly managedProviderProfile?: string;
-  readonly managedPublicBaseDomain?: string;
-  readonly awsRegion?: string;
-  readonly gcpProjectId?: string;
-  readonly gcpServiceAccountEmail?: string;
-  readonly repoUrl?: string;
-  readonly username?: string;
-  readonly knownHostsEntry?: string;
-  readonly templateId?: string;
-}
-
-export type ProviderConnectionMaterialization = "oauth" | "secret";
-
-/**
- * Unified Provider Connection credential record (mirrors the collapsed contract
- * `ProviderConnection`). The former separate `Connection` / `ProviderConnection`
- * / `ProviderEnv` shapes are one row now; `Connection` is kept as an alias for
- * call sites that read the operator/workspace connection listing.
- */
-export interface Connection {
-  readonly id: string;
-  readonly workspaceId?: string;
-  readonly provider: string;
-  readonly providerSource: string;
-  readonly kind?: string;
-  readonly scope: ConnectionScopeKind;
-  readonly displayName?: string;
-  readonly status: ConnectionStatus;
-  readonly materialization: ProviderConnectionMaterialization;
-  readonly scopeHints?: ConnectionScopeHints;
-  readonly envNames: readonly string[];
-  readonly fileEnvNames?: readonly string[];
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly verifiedAt?: string;
-  readonly expiresAt?: string;
-}
-
-export type ProviderConnection = Connection;
+export type ConnectionStatus = ContractProviderConnection["status"];
+export type ConnectionScopeKind = ContractProviderConnection["scope"];
+export type ConnectionScopeHints = NonNullable<
+  ContractProviderConnection["scopeHints"]
+>;
+export type ProviderConnectionMaterialization =
+  ContractProviderConnection["materialization"];
+export type ProviderConnection = ContractProviderConnection;
 
 export type CredentialRecipe = ContractCredentialRecipe;
 
-export type CapsuleCompatibilityLevel =
-  "ready" | "auto_capsulized" | "needs_patch" | "unsupported";
+export type CapsuleCompatibilityLevel = "ready" | "needs_patch" | "unsupported";
 
 export interface CapsuleCompatibilityDiagnostic {
   readonly code?: string;
   readonly severity: "info" | "warning" | "error";
+  readonly compatibilityImpact?: "none" | "needs_patch" | "unsupported";
   readonly message: string;
   readonly detail?: string;
   readonly path?: string;
+  readonly context?: Readonly<Record<string, string>>;
 }
 
 export interface CapsuleCompatibilityProvider {
@@ -1025,6 +741,7 @@ export interface CapsuleCompatibilityProvider {
   readonly versionConstraint?: string;
   readonly aliases: readonly string[];
   readonly allowed: boolean;
+  readonly credentialRequired?: boolean;
 }
 
 export interface CapsuleCompatibilityResource {
@@ -1058,19 +775,16 @@ type _ContractResponseAssignableToDashboardMirrors = [
   AssertAssignable<RunLogs, ContractRunLogsResponse>,
   AssertAssignable<Source, ContractSource>,
   AssertAssignable<SourceSnapshot, ContractSourceSnapshot>,
-  AssertAssignable<PublicDeployment, ContractPublicDeployment>,
-  AssertAssignable<OutputShare, ContractOutputShare>,
+  AssertAssignable<PublicStateVersion, ContractPublicStateVersion>,
+  // Accounts normalizes the internal OutputShare contract into a canonical
+  // Workspace/Capsule-only public view before the dashboard sees it.
   AssertAssignable<ActivityEvent, ContractActivityEvent>,
-  AssertAssignable<Connection, ContractConnection>,
   AssertAssignable<ProviderConnection, ContractProviderConnection>,
-  AssertAssignable<CreditReservation, ContractCreditReservation>,
   AssertAssignable<UsageEvent, ContractUsageEvent>,
   AssertAssignable<RunCostInfo, ContractRunCostInfo>,
   AssertAssignable<BackupRecord, ContractBackupRecord>,
-  AssertAssignable<
-    CapsuleProviderConnectionSet,
-    ContractCapsuleProviderConnectionSet
-  >,
+  AssertAssignable<ProviderBinding, ContractProviderBinding>,
+  AssertAssignable<ProviderBindingSet, ContractProviderBindingSet>,
 ];
 
 // ===========================================================================
@@ -1079,25 +793,16 @@ type _ContractResponseAssignableToDashboardMirrors = [
 
 // --- Workspaces ----------------------------------------------------------------
 
-// NOTE (rename convergence): the dashboard hits the account-plane control
-// routes, which still emit the legacy `{ spaces } / { space } / { installation }`
-// response envelope keys (and read legacy `spaceId` request-body keys). The
-// reads below prefer the new `workspaces / workspace / capsule(s)` envelope key
-// and fall back to the legacy key so the SPA works against both the pre- and
-// post-convergence backend; the create bodies send both id keys for the same
-// reason. Drop the legacy halves once the backend envelope/body keys converge.
 type WorkspaceListEnvelope = {
-  readonly workspaces?: readonly Workspace[];
-  readonly spaces?: readonly Workspace[];
+  readonly workspaces: readonly Workspace[];
 };
 type WorkspaceEnvelope = {
-  readonly workspace?: Workspace;
-  readonly space?: Workspace;
+  readonly workspace: Workspace;
 };
 
 export async function listWorkspaces(): Promise<readonly Workspace[]> {
   const body = await controlFetch<WorkspaceListEnvelope>(`${BASE}/workspaces`);
-  return body.workspaces ?? body.spaces ?? [];
+  return body.workspaces;
 }
 
 export async function getDashboardOverview(
@@ -1122,7 +827,7 @@ export async function listWorkspacesIncludingArchived(): Promise<
   const body = await controlFetch<WorkspaceListEnvelope>(
     `${BASE}/workspaces${query({ includeArchived: "true" })}`,
   );
-  return body.workspaces ?? body.spaces ?? [];
+  return body.workspaces;
 }
 
 export async function createWorkspace(input: {
@@ -1138,14 +843,14 @@ export async function createWorkspace(input: {
       type: input.type ?? "personal",
     },
   });
-  return (body.workspace ?? body.space)!;
+  return body.workspace;
 }
 
 export async function getWorkspace(workspaceId: string): Promise<Workspace> {
   const body = await controlFetch<WorkspaceEnvelope>(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}`,
   );
-  return (body.workspace ?? body.space)!;
+  return body.workspace;
 }
 
 export async function updateWorkspace(
@@ -1160,7 +865,7 @@ export async function updateWorkspace(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}`,
     { method: "PATCH", body: input },
   );
-  return (body.workspace ?? body.space)!;
+  return body.workspace;
 }
 
 export async function getWorkspaceBilling(
@@ -1200,6 +905,8 @@ export interface CapsuleUsageSummary {
   readonly capsuleId: string;
   readonly usdMicros: number;
   readonly eventCount: number;
+  readonly ratedEventCount: number;
+  readonly unratedEventCount: number;
 }
 
 export async function getCapsuleUsageSummary(
@@ -1209,60 +916,6 @@ export async function getCapsuleUsageSummary(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/usage-summary`,
   );
   return body.summary;
-}
-
-export async function listWorkspaceCreditReservations(
-  workspaceId: string,
-): Promise<readonly CreditReservation[]> {
-  const body = await controlFetch<{
-    creditReservations?: readonly CreditReservation[];
-  }>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/credit-reservations`,
-  );
-  return body.creditReservations ?? [];
-}
-
-// NOTE: top-up / subscription-change are operator mutations on the bearer-gated
-// `/internal/v1` surface (spec §32: billing mode is operator-selected and USD
-// balance enters through paid checkout). The session surface has no client fns
-// for them on purpose.
-
-/**
- * Public projection of one operator-offered billing plan
- * (`GET /api/v1/billing/plans`, spec §32). The server resolves the Stripe
- * price and internal usage allowance from `planId`; the public projection does
- * not expose Stripe ids or the subscription allowance amount.
- */
-export interface PublicBillingPlan {
-  readonly id: string;
-  readonly kind: "subscription";
-  readonly name: { readonly ja: string; readonly en: string };
-  readonly priceDisplay: { readonly ja: string; readonly en: string };
-}
-
-export async function listBillingPlans(): Promise<
-  readonly PublicBillingPlan[]
-> {
-  const now = Date.now();
-  if (billingPlansCache && billingPlansCache.expiresAt > now) {
-    return billingPlansCache.plans;
-  }
-  if (billingPlansRequest) return billingPlansRequest;
-  billingPlansRequest = controlFetch<{
-    plans?: readonly PublicBillingPlan[];
-  }>(`${BASE}/billing/plans`)
-    .then((body) => {
-      const plans = body.plans ?? [];
-      billingPlansCache = {
-        expiresAt: Date.now() + BILLING_PLANS_CACHE_TTL_MS,
-        plans,
-      };
-      return plans;
-    })
-    .finally(() => {
-      billingPlansRequest = undefined;
-    });
-  return billingPlansRequest;
 }
 
 // --- Members (Workspace membership / roles) ------------------------------------
@@ -1390,15 +1043,15 @@ export async function listCapsules(
 export async function listWorkspaceCurrentStateVersions(
   workspaceId: string,
   options: { readonly includeDestroyed?: boolean } = {},
-): Promise<readonly PublicDeployment[]> {
+): Promise<readonly PublicStateVersion[]> {
   const qs = query({
     ...(options.includeDestroyed === false
       ? { includeDestroyed: "false" }
       : {}),
   });
-  return await fetchAllPages<PublicDeployment>(
+  return await fetchAllPages<PublicStateVersion>(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/current-state-versions${qs}`,
-    (body) => (body.deployments as readonly PublicDeployment[]) ?? [],
+    (body) => (body.stateVersions as readonly PublicStateVersion[]) ?? [],
   );
 }
 
@@ -1419,7 +1072,6 @@ export async function createCapsule(input: {
   readonly sourceBuild?: SourceBuildConfig;
   readonly vars?: Readonly<Record<string, ContractJsonValue>>;
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
-  readonly store?: NonNullable<InstallConfig["store"]>;
   readonly autoUpdate?: boolean;
   readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
 }): Promise<Capsule> {
@@ -1442,7 +1094,6 @@ export async function createCapsule(input: {
       ...(input.outputAllowlist && Object.keys(input.outputAllowlist).length > 0
         ? { outputAllowlist: input.outputAllowlist }
         : {}),
-      ...(input.store ? { store: input.store } : {}),
       ...(input.autoUpdate === true ? { autoUpdate: true } : {}),
       ...(input.managedPublicHostname
         ? { managedPublicHostname: input.managedPublicHostname }
@@ -1487,26 +1138,26 @@ export async function deleteCapsule(
   );
 }
 
-export async function getCapsuleProviderConnectionSet(
+export async function getCapsuleProviderBindingSet(
   capsuleId: string,
-): Promise<CapsuleProviderConnectionSet | null> {
+): Promise<ProviderBindingSet | null> {
   const body = await controlFetch<{
-    providerConnectionSet: CapsuleProviderConnectionSet | null;
-  }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-connections`);
-  return body.providerConnectionSet;
+    providerBindingSet: ProviderBindingSet | null;
+  }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-bindings`);
+  return body.providerBindingSet;
 }
 
-export async function putCapsuleProviderConnectionSet(
+export async function putCapsuleProviderBindingSet(
   capsuleId: string,
-  connections: CapsuleProviderConnectionBindings,
-): Promise<CapsuleProviderConnectionSet> {
+  bindings: ProviderBindings,
+): Promise<ProviderBindingSet> {
   const body = await controlFetch<{
-    providerConnectionSet: CapsuleProviderConnectionSet;
-  }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-connections`, {
+    providerBindingSet: ProviderBindingSet;
+  }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-bindings`, {
     method: "PUT",
-    body: { connections },
+    body: { bindings },
   });
-  return body.providerConnectionSet;
+  return body.providerBindingSet;
 }
 
 // --- Capsule configs -------------------------------------------------------
@@ -1540,8 +1191,15 @@ export async function patchInstallConfig(
   input: {
     readonly variableMapping?: Readonly<Record<string, ContractJsonValue>>;
     readonly removeVariables?: readonly string[];
-    readonly storeInputDefaults?: Readonly<Record<string, string>>;
+    readonly variablePresentationDefaults?: Readonly<
+      Record<string, ContractInstallConfigVariableDefault>
+    >;
     readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
+    readonly interfaceBlueprints?: ContractInstallConfig["interfaceBlueprints"];
+    readonly lifecycleActions?: ContractInstallConfig["lifecycleActions"];
+    readonly lifecycleActionPolicy?: NonNullable<
+      ContractInstallConfig["policy"]["lifecycleActions"]
+    > | null;
   },
 ): Promise<InstallConfig> {
   const body = await controlFetch<{ installConfig: InstallConfig }>(
@@ -1555,23 +1213,26 @@ export async function patchInstallConfig(
         ...(input.removeVariables && input.removeVariables.length > 0
           ? { removeVariables: input.removeVariables }
           : {}),
-        ...(input.storeInputDefaults
-          ? { storeInputDefaults: input.storeInputDefaults }
+        ...(input.variablePresentationDefaults
+          ? { variablePresentationDefaults: input.variablePresentationDefaults }
           : {}),
         ...(input.outputAllowlist &&
         Object.keys(input.outputAllowlist).length > 0
           ? { outputAllowlist: input.outputAllowlist }
           : {}),
+        ...(input.interfaceBlueprints !== undefined
+          ? { interfaceBlueprints: input.interfaceBlueprints }
+          : {}),
+        ...(input.lifecycleActions !== undefined
+          ? { lifecycleActions: input.lifecycleActions }
+          : {}),
+        ...(input.lifecycleActionPolicy !== undefined
+          ? { lifecycleActionPolicy: input.lifecycleActionPolicy }
+          : {}),
       },
     },
   );
   return body.installConfig;
-}
-
-export async function listTemplateStoreInstallConfigs(
-  workspaceId?: string,
-): Promise<readonly InstallConfig[]> {
-  return await listInstallConfigs(workspaceId, { view: STORE_VIEW });
 }
 
 // --- OpenTofu Capsule compatibility ---------------------------------------
@@ -1621,10 +1282,12 @@ export async function checkCapsuleCompatibility(input: {
       readonly level: CapsuleCompatibilityLevel;
       readonly findings?: readonly {
         readonly severity?: "info" | "warning" | "error";
+        readonly compatibilityImpact?: "none" | "needs_patch" | "unsupported";
         readonly code?: string;
         readonly message?: string;
         readonly path?: string;
         readonly suggestion?: string;
+        readonly context?: Readonly<Record<string, string>>;
       }[];
       readonly providers?: readonly {
         readonly source?: string;
@@ -1654,10 +1317,14 @@ export async function checkCapsuleCompatibility(input: {
   });
   const diagnostics = (body.report.findings ?? []).map((finding) => ({
     severity: finding.severity ?? "info",
+    ...(finding.compatibilityImpact
+      ? { compatibilityImpact: finding.compatibilityImpact }
+      : {}),
     ...(finding.code ? { code: finding.code } : {}),
     message: finding.message ?? finding.code ?? "Compatibility finding",
     ...(finding.suggestion ? { detail: finding.suggestion } : {}),
     ...(finding.path ? { path: finding.path } : {}),
+    ...(finding.context ? { context: finding.context } : {}),
   }));
   const providers = (body.report.providers ?? [])
     .filter((provider) => provider.source !== undefined)
@@ -1751,8 +1418,7 @@ export async function createBackupRestore(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/backups/${encodeURIComponent(backupId)}/restores`,
     {
       method: "POST",
-      // Legacy backend reads `installationId`; send both until converged.
-      body: { ...input, installationId: input.capsuleId },
+      body: input,
     },
   );
   return body.run;
@@ -1775,8 +1441,6 @@ export async function createDependency(
       method: "POST",
       body: {
         producerCapsuleId: input.producerCapsuleId,
-        // Legacy backend reads `producerInstallationId`; send both until converged.
-        producerInstallationId: input.producerCapsuleId,
         ...(input.mode ? { mode: input.mode } : {}),
         ...(input.outputs ? { outputs: input.outputs } : {}),
         ...(input.visibility ? { visibility: input.visibility } : {}),
@@ -1844,8 +1508,6 @@ export async function createSource(input: {
     method: "POST",
     body: {
       workspaceId: input.workspaceId,
-      // Legacy backend reads `spaceId`; send both until converged.
-      spaceId: input.workspaceId,
       name: input.name,
       url: input.url,
       ...(input.defaultRef ? { defaultRef: input.defaultRef } : {}),
@@ -2166,8 +1828,8 @@ export async function getRunLogs(id: string): Promise<RunLogs> {
 /**
  * Reads a plan / destroy_plan Run's public cost projection (`GET
  * /api/v1/runs/:id/cost`). Used by the Run view to surface, before apply,
- * the estimated USD amount and any USD balance shortfall that would block the apply
- * under `enforce` mode. The values are the ones the controller already computed
+ * the estimated USD amount and any host extension decision that would block the
+ * apply. The values are the ones the controller already computed
  * at plan time; this never computes cost and returns no secret material.
  */
 export async function getRunCostInfo(id: string): Promise<RunCostInfo> {
@@ -2180,14 +1842,11 @@ export async function getRunCostInfo(id: string): Promise<RunCostInfo> {
 /**
  * Applies a reviewed plan Run through the unified Run surface. `planRunId` is
  * the id of the `plan` Run shown in the Run detail view. The backend rebuilds
- * the apply guard from the reviewed plan and re-checks every precondition; pass
- * `confirmDestructive: true` only after the operator has confirmed a destructive
- * plan. Returns the public Run wrapper.
+ * the apply guard from the reviewed plan and re-checks every precondition.
  */
 export async function createApplyRun(
   planRunId: string,
   input: {
-    readonly confirmDestructive?: boolean;
     readonly timeoutMs?: number;
   } = {},
 ): Promise<{ readonly run: Run }> {
@@ -2203,7 +1862,7 @@ export async function createApplyRun(
       {
         method: "POST",
         signal: controller?.signal,
-        body: input.confirmDestructive ? { confirmDestructive: true } : {},
+        body: {},
       },
     );
   } catch (error) {
@@ -2232,52 +1891,41 @@ export async function cancelRun(runId: string): Promise<{ readonly run: Run }> {
   );
 }
 
-// --- Deployments -----------------------------------------------------------
+// --- StateVersions ---------------------------------------------------------
 
 /**
- * Lists an Capsule's Deployment ledger (current + past) for the dashboard
- * session (`GET /api/v1/capsules/:id/state-versions`). The backend
- * resolves the Capsule's owning Workspace and workspace-permission gates first;
- * each row carries only the allowlist-projected `outputsPublic` (no sensitive
- * outputs, no raw output-snapshot pointer). Rows arrive newest-first.
+ * Lists a Capsule's StateVersion history for the dashboard session. Rows are
+ * browser-safe metadata and arrive newest-first.
  */
-export async function listDeployments(
+export async function listStateVersions(
   capsuleId: string,
-): Promise<readonly PublicDeployment[]> {
-  return await fetchAllPages<PublicDeployment>(
+): Promise<readonly PublicStateVersion[]> {
+  return await fetchAllPages<PublicStateVersion>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/state-versions`,
-    (body) => (body.deployments as readonly PublicDeployment[]) ?? [],
+    (body) => (body.stateVersions as readonly PublicStateVersion[]) ?? [],
   );
 }
 
 /**
- * Reads one Deployment ledger record by id (`GET
- * /api/v1/state-versions/:id`). Workspace-permission gated server-side; the
- * returned record is the public projection (outputsPublic only, no
- * outputId, no sensitive values).
+ * Reads one browser-safe StateVersion ledger record by id.
  */
-export async function getDeployment(
-  deploymentId: string,
-): Promise<PublicDeployment> {
-  const body = await controlFetch<{ deployment: PublicDeployment }>(
-    `${BASE}/state-versions/${encodeURIComponent(deploymentId)}`,
+export async function getStateVersion(
+  stateVersionId: string,
+): Promise<PublicStateVersion> {
+  const body = await controlFetch<{ stateVersion: PublicStateVersion }>(
+    `${BASE}/state-versions/${encodeURIComponent(stateVersionId)}`,
   );
-  return body.deployment;
+  return body.stateVersion;
 }
 
 /**
- * Creates a rollback PLAN run for a Deployment ("この状態に戻す" —
- * `POST /api/v1/state-versions/:id/rollback-plan`): re-plans the Deployment's
- * Capsule pinned to that Deployment's source snapshot. The plan then flows
- * through the normal approve -> apply path, so the response is the public Run
- * envelope (`{ run: { id, ... } }`) and the caller navigates to the Run
- * screen (extract the id with {@link extractRunId}).
+ * Creates a rollback PLAN run from a StateVersion's creating Run provenance.
  */
-export async function createDeploymentRollbackPlan(
-  deploymentId: string,
+export async function createStateVersionRollbackPlan(
+  stateVersionId: string,
 ): Promise<unknown> {
   return await controlFetch<unknown>(
-    `${BASE}/state-versions/${encodeURIComponent(deploymentId)}/rollback-plan`,
+    `${BASE}/state-versions/${encodeURIComponent(stateVersionId)}/rollback-plan`,
     { method: "POST" },
   );
 }
@@ -2314,12 +1962,12 @@ function normalizedWorkspaceId(value: string): string {
 
 export async function listConnections(
   workspaceId: string,
-): Promise<readonly Connection[]> {
+): Promise<readonly ProviderConnection[]> {
   const normalized = normalizedWorkspaceId(workspaceId);
   if (!normalized) return [];
-  return await fetchAllPages<Connection>(
+  return await fetchAllPages<ProviderConnection>(
     `${BASE}/connections${query({ workspaceId: normalized })}`,
-    (body) => (body.connections as readonly Connection[]) ?? [],
+    (body) => (body.connections as readonly ProviderConnection[]) ?? [],
   );
 }
 
@@ -2335,29 +1983,33 @@ export async function listProviderConnections(
 }
 
 /**
- * Registers a Workspace-owned provider-credential Connection. `values` are
+ * Registers a Workspace-owned provider-credential ProviderConnection. `values` are
  * write-only credential material (e.g. `{ CLOUDFLARE_API_TOKEN }`) and must be
  * cleared from caller memory immediately after this resolves; the returned
- * {@link Connection} projection carries no secret values. The backend forces
- * `scope: "space"`, so this creates only a Workspace-owned ProviderConnection.
+ * {@link ProviderConnection} projection carries no secret values. The backend forces
+ * `scope: "workspace"`, so this creates only a Workspace-owned ProviderConnection.
  */
 export async function createConnection(input: {
   readonly workspaceId: string;
   readonly provider: string;
+  readonly credentialRecipe: {
+    readonly id: string;
+    readonly authMode: string;
+    readonly secretPartition: string;
+  };
   readonly kind?: string;
   readonly displayName?: string;
   readonly scopeHints?: ConnectionScopeHints;
   readonly values: Readonly<Record<string, string>>;
-}): Promise<Connection> {
-  const body = await controlFetch<{ connection: Connection }>(
+}): Promise<ProviderConnection> {
+  const body = await controlFetch<{ connection: ProviderConnection }>(
     `${BASE}/connections`,
     {
       method: "POST",
       body: {
         workspaceId: input.workspaceId,
-        // Legacy backend reads `spaceId`; send both until converged.
-        spaceId: input.workspaceId,
         provider: input.provider,
+        credentialRecipe: input.credentialRecipe,
         ...(input.kind ? { kind: input.kind } : {}),
         ...(input.displayName ? { displayName: input.displayName } : {}),
         ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
@@ -2374,19 +2026,19 @@ export async function createSourceHttpsTokenConnection(input: {
   readonly repoUrl?: string;
   readonly username?: string;
   readonly token: string;
-}): Promise<Connection> {
-  const scopeHints: ConnectionScopeHints = {
-    ...(input.repoUrl ? { repoUrl: input.repoUrl } : {}),
+}): Promise<ProviderConnection> {
+  const providerSettings: Readonly<Record<string, ContractJsonValue>> = {
+    ...(input.repoUrl ? { repositoryUrl: input.repoUrl } : {}),
     ...(input.username ? { username: input.username } : {}),
   };
-  const body = await controlFetch<{ connection: Connection }>(
+  const scopeHints: ConnectionScopeHints =
+    Object.keys(providerSettings).length > 0 ? { providerSettings } : {};
+  const body = await controlFetch<{ connection: ProviderConnection }>(
     `${BASE}/connections`,
     {
       method: "POST",
       body: {
         workspaceId: input.workspaceId,
-        // Legacy backend reads `spaceId`; send both until converged.
-        spaceId: input.workspaceId,
         provider: "source_git_https_token",
         kind: "source_git_https_token",
         ...(input.displayName ? { displayName: input.displayName } : {}),
@@ -2399,7 +2051,7 @@ export async function createSourceHttpsTokenConnection(input: {
 }
 
 /**
- * Re-verifies a Workspace-owned Connection's stored credential
+ * Re-verifies a Workspace-owned ProviderConnection's stored credential
  * (`POST /api/v1/connections/:id/test`). Returns the backend's verification
  * projection (status etc.); secret values never round-trip.
  */
@@ -2411,7 +2063,7 @@ export async function testConnection(connectionId: string): Promise<unknown> {
 }
 
 /**
- * Revokes a Workspace-owned Connection (`POST /api/v1/connections/:id/revoke`,
+ * Revokes a Workspace-owned ProviderConnection (`POST /api/v1/connections/:id/revoke`,
  * 204). The sealed credential blob is deleted server-side.
  */
 export async function revokeConnection(connectionId: string): Promise<void> {
@@ -2421,32 +2073,31 @@ export async function revokeConnection(connectionId: string): Promise<void> {
   );
 }
 
-export interface CloudflareOAuthStart {
+export interface ConnectionOAuthStart {
   readonly authorizationUrl: string;
   readonly state: string;
   readonly expiresAt?: string;
 }
 
 /**
- * Begins the OPTIONAL Cloudflare credential OAuth helper flow. Resolves with the
+ * Begins an OPTIONAL provider-owned credential OAuth helper flow. Resolves with the
  * provider authorize URL the browser is sent to; the backend callback then
- * mints the Connection and redirects back to `/connections`. When the operator
+ * mints the ProviderConnection and redirects back to `/connections`. When the operator
  * has NOT wired the upstream OAuth client, the backend answers 501 — callers
  * detect this via {@link isOAuthUnavailable} and fall back to the guided-token
  * deep-link path (so no dead OAuth button is ever shown).
  */
-export async function startCloudflareOAuth(input: {
+export async function startConnectionOAuth(input: {
+  readonly helperId: string;
   readonly workspaceId: string;
   readonly displayName?: string;
-}): Promise<CloudflareOAuthStart> {
-  return await controlFetch<CloudflareOAuthStart>(
-    `${BASE}/connections/cloudflare/oauth/start`,
+}): Promise<ConnectionOAuthStart> {
+  return await controlFetch<ConnectionOAuthStart>(
+    `${BASE}/connections/oauth/${encodeURIComponent(input.helperId)}/start`,
     {
       method: "POST",
       body: {
         workspaceId: input.workspaceId,
-        // Legacy backend reads `spaceId`; send both until converged.
-        spaceId: input.workspaceId,
         ...(input.displayName ? { displayName: input.displayName } : {}),
       },
     },
@@ -2501,14 +2152,7 @@ export async function createOutputShare(input: {
     `${BASE}/output-shares`,
     {
       method: "POST",
-      // Legacy backend reads `fromSpaceId / toSpaceId / producerInstallationId`;
-      // send both until converged.
-      body: {
-        ...input,
-        fromSpaceId: input.fromWorkspaceId,
-        toSpaceId: input.toWorkspaceId,
-        producerInstallationId: input.producerCapsuleId,
-      },
+      body: input,
     },
   );
   return body.share;
@@ -2528,6 +2172,307 @@ export async function revokeOutputShare(id: string): Promise<OutputShare> {
     { method: "POST" },
   );
   return body.share;
+}
+
+// --- Resource Shape API ---------------------------------------------------
+//
+// Resource Shape routes intentionally live at the origin-level `/v1/*`
+// provider API, not under the Workspace/Capsule `/api/v1/*` family. The
+// platform worker accepts the same HttpOnly dashboard session, re-resolves the
+// selected Workspace server-side, then injects the internal deploy-control
+// actor. Every call therefore carries both `workspaceId` (authorization owner
+// boundary) and `space` (Resource Shape placement/policy namespace).
+
+export type ResourceShape = ContractResourceObject;
+export type ResourceShapeKind = ContractResourceShapeKind;
+export type ResourceShapeEvent = ContractResourceEvent;
+export type ResourceShapeNativeResource = ContractNativeResourceRef;
+export type ResourceShapeJsonObject = ContractJsonObject;
+export type ResourceDeploymentQuote = ContractResourceDeploymentQuote;
+export type ResourceDeploymentReview = ContractResourceDeploymentReview;
+export type ResourceTargetPoolSpec = ContractTargetPoolSpec;
+export type ResourceSpacePolicySpec = ContractSpacePolicySpec;
+
+export interface ResourceShapeWriteInput {
+  readonly workspaceId: string;
+  readonly space: string;
+  readonly kind: ResourceShapeKind;
+  readonly name: string;
+  readonly spec: ResourceShapeJsonObject;
+  readonly project?: string;
+  readonly environment?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly targetPoolName?: string;
+  readonly spacePolicyName?: string;
+}
+
+export interface ResourceShapePreview {
+  readonly resource: ResourceShape;
+  readonly selectedImplementation: string;
+  readonly selectedTarget: string;
+  readonly portability: string;
+  readonly nativeResourcePlan: readonly ResourceShapeNativeResource[];
+  readonly riskNotes: readonly string[];
+  readonly summary: string;
+  readonly planDigest: string;
+  readonly specDigest: string;
+  readonly resolutionFingerprint: string;
+  readonly quote?: ResourceDeploymentQuote;
+}
+
+export type ResourceShapeResult = ResourceShape & {
+  readonly id: string;
+  readonly observation?: {
+    readonly status: string;
+    readonly summary: string;
+    readonly runId?: string;
+  };
+  readonly refresh?: {
+    readonly summary: string;
+    readonly runId?: string;
+  };
+  readonly import?: {
+    readonly summary: string;
+    readonly runId?: string;
+  };
+};
+
+/** Durable operator configuration projection returned by `/v1/target-pools`. */
+export interface ResourceTargetPool {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly name: string;
+  readonly spec: ResourceTargetPoolSpec;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** Durable operator configuration projection returned by SpacePolicy APIs. */
+export interface ResourceSpacePolicy {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly name: string;
+  readonly spec: ResourceSpacePolicySpec;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+function resourceShapePath(kind: ResourceShapeKind, name: string): string {
+  return `${RESOURCE_SHAPE_BASE}/resources/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`;
+}
+
+function resourceShapeWriteBody(
+  input: ResourceShapeWriteInput,
+  review?: ResourceDeploymentReview,
+): Record<string, unknown> {
+  return {
+    workspaceId: input.workspaceId,
+    kind: input.kind,
+    metadata: {
+      name: input.name,
+      space: input.space,
+      ...(input.project ? { project: input.project } : {}),
+      ...(input.environment ? { environment: input.environment } : {}),
+      ...(input.labels ? { labels: input.labels } : {}),
+    },
+    spec: input.spec,
+    ...(input.targetPoolName ? { targetPoolName: input.targetPoolName } : {}),
+    ...(input.spacePolicyName
+      ? { spacePolicyName: input.spacePolicyName }
+      : {}),
+    ...(review ? { review } : {}),
+  };
+}
+
+export async function listResourceShapes(
+  workspaceId: string,
+  space: string,
+): Promise<readonly ResourceShape[]> {
+  return await fetchAllPages<ResourceShape>(
+    `${RESOURCE_SHAPE_BASE}/resources${query({ workspaceId, space })}`,
+    (body) => (body.resources as readonly ResourceShape[]) ?? [],
+  );
+}
+
+export async function getResourceShape(
+  workspaceId: string,
+  space: string,
+  kind: ResourceShapeKind,
+  name: string,
+): Promise<ResourceShapeResult> {
+  return await controlFetch<ResourceShapeResult>(
+    `${resourceShapePath(kind, name)}${query({ workspaceId, space })}`,
+  );
+}
+
+export async function listResourceShapeEvents(
+  workspaceId: string,
+  space: string,
+  kind: ResourceShapeKind,
+  name: string,
+): Promise<readonly ResourceShapeEvent[]> {
+  return await fetchAllPages<ResourceShapeEvent>(
+    `${resourceShapePath(kind, name)}/events${query({ workspaceId, space })}`,
+    (body) => (body.events as readonly ResourceShapeEvent[]) ?? [],
+  );
+}
+
+export async function previewResourceShape(
+  input: ResourceShapeWriteInput,
+): Promise<ResourceShapePreview> {
+  return await controlFetch<ResourceShapePreview>(
+    `${RESOURCE_SHAPE_BASE}/resources/preview`,
+    { method: "POST", body: resourceShapeWriteBody(input) },
+  );
+}
+
+export async function applyResourceShape(
+  input: ResourceShapeWriteInput,
+  review: ResourceDeploymentReview,
+): Promise<ResourceShapeResult> {
+  return await controlFetch<ResourceShapeResult>(
+    resourceShapePath(input.kind, input.name),
+    { method: "PUT", body: resourceShapeWriteBody(input, review) },
+  );
+}
+
+export async function importResourceShape(
+  input: ResourceShapeWriteInput & { readonly nativeId: string },
+): Promise<ResourceShapeResult> {
+  return await controlFetch<ResourceShapeResult>(
+    `${resourceShapePath(input.kind, input.name)}/import`,
+    {
+      method: "POST",
+      body: { ...resourceShapeWriteBody(input), nativeId: input.nativeId },
+    },
+  );
+}
+
+export async function observeResourceShape(
+  workspaceId: string,
+  space: string,
+  kind: ResourceShapeKind,
+  name: string,
+): Promise<ResourceShapeResult> {
+  return await controlFetch<ResourceShapeResult>(
+    `${resourceShapePath(kind, name)}/observe${query({ workspaceId, space })}`,
+    { method: "POST" },
+  );
+}
+
+export async function refreshResourceShape(
+  workspaceId: string,
+  space: string,
+  kind: ResourceShapeKind,
+  name: string,
+): Promise<ResourceShapeResult> {
+  return await controlFetch<ResourceShapeResult>(
+    `${resourceShapePath(kind, name)}/refresh${query({ workspaceId, space })}`,
+    { method: "POST" },
+  );
+}
+
+export async function deleteResourceShape(
+  workspaceId: string,
+  space: string,
+  kind: ResourceShapeKind,
+  name: string,
+): Promise<void> {
+  await controlFetch<void>(
+    `${resourceShapePath(kind, name)}${query({ workspaceId, space })}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function listResourceTargetPools(
+  workspaceId: string,
+  space: string,
+): Promise<readonly ResourceTargetPool[]> {
+  return await fetchAllPages<ResourceTargetPool>(
+    `${RESOURCE_SHAPE_BASE}/target-pools${query({ workspaceId, space })}`,
+    (body) => (body.targetPools as readonly ResourceTargetPool[]) ?? [],
+  );
+}
+
+export async function putResourceTargetPool(input: {
+  readonly workspaceId: string;
+  readonly space: string;
+  readonly name: string;
+  readonly spec: ResourceTargetPoolSpec;
+}): Promise<ResourceTargetPool> {
+  return await controlFetch<ResourceTargetPool>(
+    `${RESOURCE_SHAPE_BASE}/target-pools/${encodeURIComponent(input.name)}`,
+    {
+      method: "PUT",
+      body: {
+        workspaceId: input.workspaceId,
+        space: input.space,
+        spec: input.spec,
+      },
+    },
+  );
+}
+
+export async function deleteResourceTargetPool(
+  workspaceId: string,
+  space: string,
+  name: string,
+): Promise<void> {
+  await controlFetch<void>(
+    `${RESOURCE_SHAPE_BASE}/target-pools/${encodeURIComponent(name)}${query({ workspaceId, space })}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function putResourceSpacePolicy(input: {
+  readonly workspaceId: string;
+  readonly space: string;
+  readonly name: string;
+  readonly spec: ResourceSpacePolicySpec;
+}): Promise<ResourceSpacePolicy> {
+  return await controlFetch<ResourceSpacePolicy>(
+    `${RESOURCE_SHAPE_BASE}/space-policies/${encodeURIComponent(input.name)}`,
+    {
+      method: "PUT",
+      body: {
+        workspaceId: input.workspaceId,
+        space: input.space,
+        spec: input.spec,
+      },
+    },
+  );
+}
+
+export async function listResourceSpacePolicies(
+  workspaceId: string,
+  space: string,
+): Promise<readonly ResourceSpacePolicy[]> {
+  return await fetchAllPages<ResourceSpacePolicy>(
+    `${RESOURCE_SHAPE_BASE}/space-policies${query({ workspaceId, space })}`,
+    (body) =>
+      (body.spacePolicies as readonly ResourceSpacePolicy[] | undefined) ?? [],
+  );
+}
+
+export async function getResourceSpacePolicy(
+  workspaceId: string,
+  space: string,
+  name: string,
+): Promise<ResourceSpacePolicy> {
+  return await controlFetch<ResourceSpacePolicy>(
+    `${RESOURCE_SHAPE_BASE}/space-policies/${encodeURIComponent(name)}${query({ workspaceId, space })}`,
+  );
+}
+
+export async function deleteResourceSpacePolicy(
+  workspaceId: string,
+  space: string,
+  name: string,
+): Promise<void> {
+  await controlFetch<void>(
+    `${RESOURCE_SHAPE_BASE}/space-policies/${encodeURIComponent(name)}${query({ workspaceId, space })}`,
+    { method: "DELETE" },
+  );
 }
 
 // ===========================================================================

@@ -11,21 +11,26 @@
 
 ## Artifact Matrix
 
-| Artifact                                      | Owning path                                                              | Build / publish behavior                                  | Promotion evidence                                                                      |
-| --------------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Platform worker script                        | `takosumi/deploy/platform/worker.ts`, `takosumi/worker`, `takosumi/core` | built by Wrangler deploy from source                      | commit SHA, wrangler dry-run/deploy output, worker version id                           |
-| Dashboard SPA + hosted Cloud docs             | `takosumi/dashboard`, `takosumi/app-docs`                                | `bun run check:dashboard`; served through worker `ASSETS` | dashboard build output, app docs overlay, asset digest / deploy log                     |
-| Runner container                              | `takosumi/runner/Dockerfile`                                             | built by Cloudflare Containers during deploy              | image digest / Cloudflare Container smoke evidence                                      |
-| Platform control DB migrations / schema       | `takosumi/core/adapters/storage`                                         | applied by platform deploy / migration runner             | storage migration transcript, schema mirror test                                        |
-| CredentialRecipe seed / provider policy packs | schema/store/policy packages and `docs/internal/core-spec.md`            | shipped with platform worker and Takosumi storage seed    | recipe seed diff, provider allowlist diff, ProviderConnection policy evidence           |
-| Custom provider runner policy                 | runner image / operator boundary policy                                  | shipped with runner and policy code                       | secret-backed provider policy / egress / custom runner class evidence                   |
-| Release activator materializer                | operator/Cloud deployment outside OSS                                    | optional webhook target for post-apply app publication    | activation success/failure surfacing, app URL/health proof, no rollback of apply ledger |
-| Official OpenTofu modules                     | `takosumi/opentofu-modules`                                              | shipped as repo source; consumed by Source / runner       | commit SHA, fixture plan evidence where available                                       |
+| Artifact                                | Owning path / port                                                       | Build / publish behavior                                         | Promotion evidence                                                                       |
+| --------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Platform service bundle                 | `takosumi/deploy/platform/worker.ts`, `takosumi/worker`, `takosumi/core` | built by the selected host composition                           | commit SHA, composition build result, immutable deployment revision                      |
+| Dashboard SPA                           | `takosumi/dashboard`                                                     | `bun run check:dashboard`; mounted by the selected asset adapter | dashboard build result, asset digest, deployment log                                     |
+| Runner executor artifact                | `RunnerProfile.executorId` + operator executor adapter                   | image/binary/remote service format is adapter-owned              | immutable executor revision and contributed runner smoke                                 |
+| Control-store migrations / schema       | `takosumi/core/adapters/storage`                                         | applied by the selected storage migration adapter                | migration transcript and logical-schema tests                                            |
+| Credential Recipe contribution          | operator/provider contribution + `docs/internal/core-spec.md`            | registered explicitly by the composition; no implicit seed       | contribution diff, driver availability, ProviderConnection policy evidence               |
+| Operator-defined runner / egress policy | runner and policy ports                                                  | deployed with the selected executor and network adapters         | explicit executor, credential phase, and egress evidence                                 |
+| Release activator materializer          | optional operator/Cloud service outside OSS                              | executor for declared service-side Capsule lifecycle actions     | terminal success/failure proof, app URL/health proof, retained provider state on failure |
+| Maintained OpenTofu module sources      | `takosumi/opentofu-modules`                                              | ordinary Git Sources consumed through the same Capsule flow      | commit SHA and fixture plan evidence where available                                     |
 
-Takosumi does not publish a separate npm or OCI product artifact for the
-control plane. The operator deploys one Cloudflare Worker at
-`app.takosumi.com`; realized Wrangler config and secret values live in
-`takosumi-private` / operator vault, outside the public repo.
+Takosumi does not require one universal npm, OCI, Worker, or container artifact
+format for the control plane. The operator exposes one logical Takosumi origin
+and selects a composition that binds storage, queue/dispatch, assets, and
+runner ports. `deploy/platform` is the Cloudflare reference adapter;
+`deploy/node-postgres` is another composition. Realized config and secrets live
+in operator-owned state outside source repositories. The official
+`app.takosumi.com` deployment, Cloud wrapper, hosted docs overlay, and realized
+Cloudflare revisions are Takosumi Cloud artifacts documented under
+`takosumi-cloud/docs/operations`.
 
 Capsule application artifacts are not Takosumi platform release artifacts. If a
 Git-hosted OpenTofu module needs a prebuilt Worker bundle, container image,
@@ -46,9 +51,10 @@ bun test
 bun run check:dashboard
 ```
 
-`bun run check` is the package-level Takosumi gate and includes the root
-typecheck, worker typecheck, and Cloudflare worker build checks. Production
-promotion must not use raw `tsc --noEmit` as a replacement.
+`bun run check` is the package-level Takosumi software gate and includes the
+supported reference-distribution builds. Production promotion must not use raw
+`tsc --noEmit` as a replacement, and the selected host composition must add its
+own build/deployment verification.
 
 If docs or public contract changed:
 
@@ -62,49 +68,69 @@ bun run check:design-docs
 bun run check:legacy-names
 ```
 
-If runner image, queue, Durable Object, or binding config changed, add staging
-Cloudflare Container smoke and platform hardening-gate evidence. If app
-publication is enabled through `TAKOSUMI_RELEASE_ACTIVATOR_URL`, add release
-activation materializer evidence: successful activation, failed/pending
-activation surfacing, and proof that the OpenTofu apply ledger remains committed
-independently of app publication status.
-
-From the ecosystem root on the operator machine, write the stable activator
-endpoint and bearer token to the private repo before enabling the platform
-worker setting:
+If runner, dispatch, lease/ownership, storage, or binding config changed, add
+staging evidence through the selected adapters and the platform hardening
+registry. The OSS baseline is provider/substrate neutral; a host adds a
+versioned `takosumi.platform-hardening-contribution@v1` definition for any
+additional checks. Generate and validate the private manifest with every
+installed contribution:
 
 ```bash
-bun run write:takosumi-release-activator-secrets -- \
-  --url https://<stable-operator-release-activator>/activate \
-  --generate-token
+cd takosumi
+bun run production-hardening:evidence -- --print-template \
+  --contribution "$OPERATOR_HARDENING_CONTRIBUTION" \
+  > "$OPERATOR_EVIDENCE_ROOT/evidence/production-hardening.json"
+
+bun run production-hardening:evidence -- --update-digests \
+  "$OPERATOR_EVIDENCE_ROOT/evidence/production-hardening.json" \
+  --contribution "$OPERATOR_HARDENING_CONTRIBUTION"
 ```
 
-The helper writes `TAKOSUMI_RELEASE_ACTIVATOR_URL` and
-`TAKOSUMI_RELEASE_ACTIVATOR_TOKEN` as `0600` files under `takosumi-private` and
-does not print the token. It rejects localhost and trycloudflare URLs because
-GA evidence must point at a stable operator endpoint.
+Omit `--contribution` when the composition uses only the OSS baseline. Repeat it
+once for each installed host contribution; the manifest must cover the exact
+composed registry.
+
+The validator emits one non-secret
+`TAKOSUMI_PLATFORM_HARDENING_EVIDENCE` JSON bundle. The platform route composes
+the OSS baseline with host-code `TAKOSUMI_PLATFORM_HARDENING_CONTRIBUTIONS` and
+fails closed on a missing/unknown contribution, capability drift, missing
+check, mutable reference, or digest drift. Check-specific documents remain in
+private operator evidence storage. There is no per-provider env family and no
+fallback reader for the retired fixed six-check schema.
+
+If app publication is enabled through `TAKOSUMI_RELEASE_ACTIVATOR_URL`, add
+release activation materializer evidence: successful activation, fail-closed
+failed/pending activation surfacing, and proof that provider-applied
+StateVersion/Output plus usage remain committed while the Run is failed and
+the Capsule/Interface runtime stays non-ready.
+
+Store the stable activator endpoint and bearer secret through the operator's
+approved config/vault workflow before enabling the platform setting. Official
+Cloud operator helpers and their private file layout are not an OSS contract;
+they live in the Cloud operations docs.
 
 Validate release activation evidence before promotion:
 
 ```bash
 cd takosumi
-mkdir -p "$TAKOSUMI_PRIVATE/evidence"
+mkdir -p "$OPERATOR_EVIDENCE_ROOT/evidence"
 bun run release-activation:evidence -- --print-template \
-  > "$TAKOSUMI_PRIVATE/evidence/release-activation.json"
+  > "$OPERATOR_EVIDENCE_ROOT/evidence/release-activation.json"
 
 # Fill the four evidence/*.md files and replace run ids, StateVersion / Output
 # ids, activation record ids, health URLs, and evidence refs with live operator
 # values. Do not add legacy runtime ids to the manifest; compatibility rows can
 # stay in operator notes, but the structured claim uses the final model only.
 bun run release-activation:evidence -- --update-digests \
-  "$TAKOSUMI_PRIVATE/evidence/release-activation.json"
+  "$OPERATOR_EVIDENCE_ROOT/evidence/release-activation.json"
 ```
 
 The release activation manifest is required only when the release activator is
 enabled. It is intentionally separate from the production hardening manifest:
 hardening proves the platform can open; release activation proves optional
-post-apply app publication is observable, redacted, and independent from the
-committed OpenTofu apply ledger. If `TAKOSUMI_RELEASE_ACTIVATOR_URL` is set,
+service-side lifecycle execution is observable and redacted, and that a failed
+action retains the committed provider state without falsely succeeding the Run.
+If `TAKOSUMI_RELEASE_ACTIVATOR_URL` is set,
 platform readiness `open` also requires the validator output's four
 `TAKOSUMI_RELEASE_ACTIVATION_*_EVIDENCE_REF` / `_DIGEST` pairs in realized
 operator config.
@@ -116,7 +142,8 @@ tools, an operator checkout outside the source snapshot, or credentials that are
 not represented as ProviderConnections should declare `executor = "operator"`
 and be handled by the configured release activator materializer.
 
-The bundled Cloudflare-hosted operator helper is intentionally small:
+The bundled Cloudflare release-activator is a reference-adapter helper, not the
+Takosumi release protocol or an Operator requirement:
 
 ```bash
 cd takosumi
@@ -137,35 +164,42 @@ depend on a shared tmpfs `/tmp`.
 Takosumi does not add database-specific migration resources, product-specific
 publication code, or resource-aware activation plugins. Any work after apply is
 just a command owned by the Capsule/operator; Takosumi only runs it, records
-logs/status, and keeps that result separate from the committed OpenTofu ledger.
+logs/status, and gates Run/Capsule/Interface readiness on terminal success. A
+failure never discards provider-applied state/output, but it consumes the Plan;
+operators recover through a fresh reviewed plan/apply.
 Credentials required by this helper itself, such as R2 archive fetch auth, remain
 materializer tooling env and are not forwarded to the restored source commands.
 Credentials required by the opaque operator command are forwarded only when the
 operator explicitly names them in `--command-env-allowlist` (or
-`TAKOSUMI_RELEASE_COMMAND_ENV_ALLOWLIST`). The OpenTofu
-`takosumi_release.post_apply.env` descriptor remains non-secret and cannot carry
-provider tokens, database URLs, DSNs, or other credential material.
-For Takos releases that roll out Cloudflare Containers, allowlist
+`TAKOSUMI_RELEASE_COMMAND_ENV_ALLOWLIST`). The service-side InstallConfig
+lifecycle action may carry only non-secret env and cannot carry provider tokens,
+database URLs, DSNs, or other credential material. Provider credentials require
+an explicit action opt-in, policy permission, and runner capability; operator
+actions use only their explicitly configured operator environment.
+For a composition that explicitly rolls out Cloudflare Containers, allowlist
 `CLOUDFLARE_CONTAINERS_API_TOKEN` as an operator-held deploy token. The Takos
 release command uses it only for the final `wrangler deploy` step by mapping it
 to Wrangler's standard `CLOUDFLARE_API_TOKEN` / `CF_API_TOKEN` env names; D1
-migrations, output verification, and other Cloudflare API checks keep using the
-normal Provider Connection credential from the activation payload.
+migrations, output verification, and other provider API checks that require a
+Provider Connection run as runner lifecycle actions. If an operator action
+needs separate authority, it uses a separately configured operator-held env
+allowlist; Provider Connection material is never copied into the operator
+activation payload.
 
 ## Promotion Record
 
 Release sign-off record includes:
 
 - commit SHA
-- wrangler config path used (`takosumi-private/platform/wrangler.toml`)
-- worker version id after deploy
+- composition/config revision used (path stays private)
+- immutable platform deployment revision
 - dashboard build summary
-- runner image digest or Cloudflare Container smoke reference
+- immutable executor revision and the applicable contributed runner-smoke reference
 - release activation materializer reference when enabled
 - `takosumi.release-activation-evidence@v1` validation output when enabled
 - platform control DB migration transcript when Takosumi storage schema changed
 - targeted test / typecheck summary
-- rollback worker version id and previous commit SHA
+- rollback deployment revision and previous commit SHA
 
 Do not include provider account ids, secret values, raw R2 object keys, payment
 processor ids, or customer identifiers in public release notes.
@@ -174,7 +208,7 @@ processor ids, or customer identifiers in public release notes.
 
 Rollback targets must be immutable:
 
-- Cloudflare worker version id
+- composition-native immutable deployment revision
 - commit SHA
 - runner image digest
 - control-plane storage migration id / restore plan when Takosumi schema changed

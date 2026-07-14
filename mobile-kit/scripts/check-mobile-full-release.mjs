@@ -10,6 +10,10 @@ const checks = [
     label: "store/signing/device release evidence",
     args: ["run", "release:evidence-check"],
   },
+  {
+    label: "release status parity",
+    args: ["run", "release:status", "--", "--fail-on-blockers"],
+  },
 ];
 
 const failures = [];

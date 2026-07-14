@@ -1,6 +1,6 @@
 id: openstack
 display_name: OpenStack
-provider_rule: openstack
+secret_partition: provider-credentials
 terraform_source:
   - terraform-provider-openstack/openstack
   - registry.opentofu.org/terraform-provider-openstack/openstack
@@ -30,6 +30,32 @@ auth_modes:
         from: value
         name: cloud
   password:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: Username and password, ja: ユーザー名とパスワード }
+    input_hints:
+      OS_AUTH_URL:
+        label: { en: Identity endpoint, ja: Identity endpoint }
+        placeholder: https://identity.example.com/v3
+        required: true
+      OS_USERNAME:
+        label: { en: Username, ja: ユーザー名 }
+        required: true
+      OS_PASSWORD:
+        label: { en: Password, ja: パスワード }
+        required: true
+      OS_PROJECT_NAME:
+        label: { en: Project name, ja: プロジェクト名 }
+        required: true
+      OS_USER_DOMAIN_NAME:
+        label: { en: User domain, ja: ユーザードメイン }
+        required: false
+      OS_PROJECT_DOMAIN_NAME:
+        label: { en: Project domain, ja: プロジェクトドメイン }
+        required: false
+      OS_REGION_NAME:
+        label: { en: Region, ja: リージョン }
+        required: false
     env:
       OS_AUTH_URL:
         from: value
@@ -53,6 +79,27 @@ auth_modes:
         from: value
         name: region
   application_credential:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: Application credential, ja: Application credential }
+    input_hints:
+      OS_AUTH_URL:
+        label: { en: Identity endpoint, ja: Identity endpoint }
+        placeholder: https://identity.example.com/v3
+        required: true
+      OS_APPLICATION_CREDENTIAL_ID:
+        label: { en: Application credential ID, ja: Application credential ID }
+        required: true
+      OS_APPLICATION_CREDENTIAL_SECRET:
+        label:
+          {
+            en: Application credential secret,
+            ja: Application credential secret,
+          }
+        required: true
+      OS_REGION_NAME:
+        label: { en: Region, ja: リージョン }
+        required: false
     env:
       OS_AUTH_URL:
         from: value

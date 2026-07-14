@@ -8,8 +8,7 @@
  * client router owns deep links. API namespaces are excluded so the accounts /
  * service handler keeps owning them.
  *
- * Bun-first: file reads go through `Bun.file` (consistent with the
- * export-download path in `server.ts`). Under the Node serve fallback (`Bun`
+ * Bun-first: file reads go through `Bun.file`. Under the Node serve fallback (`Bun`
  * undefined, used by tests / external embedders) static serving is disabled,
  * preserving the prior JSON-404 behavior.
  */
@@ -23,8 +22,8 @@ import {
 // Both derive from the same prefix registry (`takosumi-contract/api-surface`)
 // and a test asserts they do not drift. Every non-`/dashboard` path the
 // accounts/service handler routes must be covered, or the SPA fallback would
-// shadow it. `/healthz` and signed export downloads are handled by `preHandle`
-// before static serving, so they are not repeated here. `/dashboard/*` is
+// shadow it. `/healthz` is handled by `preHandle` before static serving, so it
+// is not repeated here. `/dashboard/*` is
 // intentionally absent: the SPA owns the dashboard UI now that the former
 // server-HTML dashboard has been removed from accounts-service.
 export const ACCOUNTS_API_PREFIXES = [

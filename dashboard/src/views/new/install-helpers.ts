@@ -27,6 +27,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
 import type { Tone } from "../../components/ui/index.ts";
+import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
 
 type StepState = "idle" | "running" | "done" | "error";
 type FlowRun = {
@@ -39,8 +40,7 @@ interface ProviderConnectionRow {
   readonly provider: string;
   readonly alias: string;
   readonly connectionId: string;
-  readonly resourceTypes: readonly string[];
-  readonly rootModuleVariables: readonly string[];
+  readonly credentialRequired: boolean;
 }
 
 interface InputVariableRow {
@@ -61,8 +61,8 @@ const DEFAULT_STORE_BADGE = {
   en: "Installable",
 } satisfies StoreMetadata["badge"];
 
-const INSTALLATION_NAME_PATTERN = /^[a-z0-9-]+$/u;
-const INSTALLATION_DONE: StepState = "done";
+const CAPSULE_NAME_PATTERN = /^[a-z0-9-]+$/u;
+const CAPSULE_DONE: StepState = "done";
 
 type StoreEntry = NonNullable<InstallConfig["store"]> & {
   readonly id: string;
@@ -70,13 +70,14 @@ type StoreEntry = NonNullable<InstallConfig["store"]> & {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly source: NonNullable<NonNullable<InstallConfig["store"]>["source"]>;
+  readonly inputs: NonNullable<InstallConfig["variablePresentation"]>;
+  readonly installExperience?: InstallConfig["installExperience"];
 };
 type StoreInputField = StoreEntry["inputs"][number];
 
 function compatibilityTone(level: CapsuleCompatibilityLevel): Tone {
   switch (level) {
     case "ready":
-    case "auto_capsulized":
       return "ok";
     case "needs_patch":
       return "warn";
@@ -89,8 +90,6 @@ function compatibilityLabel(level: CapsuleCompatibilityLevel): string {
   switch (level) {
     case "ready":
       return t("new.compat.ready");
-    case "auto_capsulized":
-      return t("new.compat.auto");
     case "needs_patch":
       return t("new.compat.patch");
     case "unsupported":
@@ -101,27 +100,11 @@ function compatibilityLabel(level: CapsuleCompatibilityLevel): string {
 function providerNameFromDiagnostic(
   diagnostic: CapsuleCompatibilityDiagnostic,
 ): string {
-  const match =
-    /^Provider\s+([a-zA-Z0-9_.-]+)\s+(?:contains|can be lifted)/u.exec(
-      diagnostic.message,
-    );
-  return match?.[1] ?? "provider";
+  return diagnostic.context?.provider ?? "provider";
 }
 
 function providerDisplayName(provider: string): string {
-  const normalized = provider.toLowerCase();
-  switch (normalized) {
-    case "aws":
-      return "AWS";
-    case "cloudflare":
-      return "Cloudflare";
-    case "google":
-      return "Google Cloud";
-    case "hcloud":
-      return "Hetzner Cloud";
-    default:
-      return provider;
-  }
+  return readableProviderSourceLabel(provider);
 }
 
 function compatibilityDiagnosticDisplay(
@@ -133,12 +116,7 @@ function compatibilityDiagnosticDisplay(
 } {
   const provider = providerDisplayName(providerNameFromDiagnostic(diagnostic));
   const code = diagnostic.code;
-  if (
-    code === "provider_credentials_in_source" ||
-    /^Provider\s+[a-zA-Z0-9_.-]+\s+contains credential-like attributes\.?$/u.test(
-      diagnostic.message,
-    )
-  ) {
+  if (code === "provider_credentials_in_source") {
     return {
       message: t("new.compat.issue.providerCredentials.message", {
         provider,
@@ -146,21 +124,15 @@ function compatibilityDiagnosticDisplay(
       detail: t("new.compat.issue.providerCredentials.detail", { provider }),
     };
   }
-  if (
-    code === "provider_block_lift_candidate" ||
-    /^Provider\s+[a-zA-Z0-9_.-]+\s+can be lifted into the generated root/u.test(
-      diagnostic.message,
-    )
-  ) {
+  if (code === "provider_configuration_preserved") {
     return {
-      message: t("new.compat.issue.providerLift.message", { provider }),
+      message: t("new.compat.issue.providerPreserved.message", { provider }),
     };
   }
-  if (
-    code === "dependency_lock_detected" ||
-    diagnostic.message ===
-      "A provider dependency lockfile is present and will be reviewed by the provider lockfile policy after credential-free init."
-  ) {
+  if (code === "backend_state_isolated") {
+    return { message: t("new.compat.issue.backendIsolated.message") };
+  }
+  if (code === "dependency_lock_detected") {
     return { message: t("new.compat.issue.lockfile.message") };
   }
   return {
@@ -174,18 +146,9 @@ function compatibilitySummaryDisplay(
   result: CapsuleCompatibilityResult,
 ): string {
   const credentialDiagnostic = result.diagnostics.find(
-    (diagnostic) =>
-      diagnostic.code === "provider_credentials_in_source" ||
-      /^Provider\s+[a-zA-Z0-9_.-]+\s+contains credential-like attributes\.?$/u.test(
-        diagnostic.message,
-      ),
+    (diagnostic) => diagnostic.code === "provider_credentials_in_source",
   );
-  if (
-    credentialDiagnostic &&
-    /^Provider\s+[a-zA-Z0-9_.-]+\s+contains credential-like attributes\.?$/u.test(
-      result.summary,
-    )
-  ) {
+  if (credentialDiagnostic) {
     return t("new.compat.summary.providerCredentials", {
       provider: providerDisplayName(
         providerNameFromDiagnostic(credentialDiagnostic),
@@ -198,23 +161,11 @@ function compatibilitySummaryDisplay(
 function compatibilityCheckLooksTransient(
   result: CapsuleCompatibilityResult,
 ): boolean {
-  if (result.level === "ready" || result.level === "auto_capsulized") {
-    return false;
-  }
-  const text = [
-    result.summary,
-    ...result.diagnostics.flatMap((diagnostic) => [
-      diagnostic.code ?? "",
-      diagnostic.message,
-      diagnostic.detail ?? "",
-    ]),
-  ]
-    .join("\n")
-    .toLowerCase();
   return (
-    (text.includes("retry") && text.includes("source sync")) ||
-    text.includes("operation was aborted") ||
-    text.includes("compatibility_check runner")
+    result.level !== "ready" &&
+    result.diagnostics.some(
+      (diagnostic) => diagnostic.code === "capsule_compatibility_check_failed",
+    )
   );
 }
 
@@ -279,18 +230,12 @@ function addFlowErrorMessage(apiError: ControlApiError | undefined): string {
   if (apiError?.isDuplicateService) {
     return t("new.error.alreadyExistsGeneric");
   }
-  // The controller's "provider connection is required for providers: …" is an
-  // internal sentence — a general user gets the friendly connection ask.
-  if (/provider connection is required/iu.test(apiError?.message ?? "")) {
+  if (apiError?.reason === "provider_connection_setup_required") {
     return t("new.error.connectionRequired");
   }
   // Scoped managed hosts: the slug + workspace handle exceeded the hostname
   // budget — ask for a shorter name instead of the raw English sentence.
-  if (
-    /invalid_app_hostname|public hostname slug is invalid/iu.test(
-      apiError?.message ?? "",
-    )
-  ) {
+  if (apiError?.reason === "invalid_app_hostname") {
     return t("new.error.invalidHostname");
   }
   const message = safeControlApiErrorMessage(apiError);
@@ -449,7 +394,7 @@ function storePublicEndpointSubdomainField(
 }
 
 function storeServiceNameVariable(
-  store: Pick<StoreEntry, "installExperience"> | StoreMetadata,
+  store: Pick<StoreEntry, "installExperience">,
 ): string | undefined {
   return installExperienceServiceNameVariable(store.installExperience);
 }
@@ -484,7 +429,7 @@ function storeDefaultInputValue(
   managedPublicHostnameMode: "scoped" | "vanity" = "scoped",
 ): string {
   const base = slugInputValue(entry.suggestedName);
-  const requestedServiceSlug = serviceSlug || base;
+  const requestedServiceSlug = slugInputValue(serviceSlug || base);
   const scopedServiceSlug = managedServiceLabel(
     workspaceHandle,
     requestedServiceSlug,
@@ -497,34 +442,38 @@ function storeDefaultInputValue(
     field.name === publicEndpoint?.urlVariable &&
     (managedPublicBaseDomain || publicEndpoint.baseDomain)
   ) {
-    // Normalize the base domain (strip a wildcard `*.` / trailing `.`) exactly
-    // like every other consumer — otherwise a listing declaring
-    // `*.app.takos.jp` yields `https://slug.*.app.takos.jp`, which fails URL
-    // validation and blocks the install.
+    // Normalize the operator/listing-owned base domain (strip wildcard and
+    // trailing dot) exactly like the control plane.
     const publicServiceSlug =
       managedPublicHostnameMode === "vanity"
         ? requestedServiceSlug
         : scopedServiceSlug;
-    return publicServiceSlug
-      ? `https://${publicServiceSlug}.${managedBaseDomain(managedPublicBaseDomain ?? publicEndpoint.baseDomain)}`
+    const baseDomain = managedBaseDomain(
+      managedPublicBaseDomain ?? publicEndpoint.baseDomain,
+    );
+    return publicServiceSlug && baseDomain
+      ? `https://${publicServiceSlug}.${baseDomain}`
       : "";
   }
-  switch (field.defaultValue) {
-    case "service-name":
-      return base;
-    case "service-name-with-space":
+  switch (field.defaultValue?.source) {
+    case "capsule_name":
+      return requestedServiceSlug;
+    case "workspace_scoped_capsule_name":
       return scopedServiceSlug;
-    case "main":
-      return "main";
-    case "us-east-1":
-      return "us-east-1";
+    case "literal":
+      return installVariableDisplayValue(field.defaultValue.value);
     default:
-      return field.defaultValue ?? "";
+      return "";
   }
 }
 
-function serviceNameHintIsGenerated(value: string | undefined): boolean {
-  return value === "service-name" || value === "service-name-with-space";
+function serviceNameHintIsGenerated(
+  value: StoreInputField["defaultValue"],
+): boolean {
+  return (
+    value?.source === "capsule_name" ||
+    value?.source === "workspace_scoped_capsule_name"
+  );
 }
 
 function storeVariablePath(name: string): readonly string[] | undefined {
@@ -648,7 +597,7 @@ function routePatternFromAppUrl(
   }
 }
 
-function managedBaseDomain(value: string | undefined): string {
+function managedBaseDomain(value: string | undefined): string | undefined {
   const trimmed = (value ?? "")
     .trim()
     .toLowerCase()
@@ -658,55 +607,24 @@ function managedBaseDomain(value: string | undefined): string {
     trimmed,
   )
     ? trimmed
-    : "app.takos.jp";
-}
-
-function inputVariableRowsFromPrefill(
-  vars: Readonly<Record<string, JsonValue>> | undefined,
-): readonly InputVariableRow[] {
-  return Object.entries(vars ?? {})
-    .filter(([name]) => name !== "env")
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, value]) => ({
-      name,
-      value: installVariableDisplayValue(value),
-      ...(typeof value === "string" ? {} : { jsonValue: value }),
-    }));
-}
-
-function envVariableRowsFromPrefill(
-  vars: Readonly<Record<string, JsonValue>> | undefined,
-): readonly EnvVariableRow[] {
-  const env = vars?.env;
-  if (!isJsonRecord(env)) return [];
-  return Object.entries(env)
-    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, value]) => ({ name, value }));
+    : undefined;
 }
 
 function isSafePlainEnvName(name: string): boolean {
   const trimmed = name.trim();
-  if (!/^[A-Z_][A-Z0-9_]{0,127}$/u.test(trimmed)) return false;
-  return !/(SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE_?KEY|API_?KEY)/iu.test(
-    trimmed,
-  );
+  return /^[A-Z_][A-Z0-9_]{0,127}$/u.test(trimmed);
 }
 
 function storeKindFromStoreListing(
   kind: TcsListing["kind"],
 ): StoreMetadata["kind"] {
-  if (kind === "storage") return "storage";
-  if (kind === "site") return "site";
-  return "worker";
+  return safeStoreToken(kind) ?? "other";
 }
 
 function storeSurfaceFromStoreListing(
   surface: TcsListing["surface"],
 ): StoreMetadata["surface"] {
-  if (surface === "building_block") return "building_block";
-  if (surface === "example") return "example";
-  return "service";
+  return safeStoreToken(surface) ?? "service";
 }
 
 function safeStoreToken(value: string): string | undefined {
@@ -722,6 +640,43 @@ function nonEmptyStoreText(
   return value.ja.trim() && value.en.trim() ? value : undefined;
 }
 
+function storeSourceMatchesListing(
+  source: StoreMetadata["source"],
+  listing: TcsListing,
+): boolean {
+  return storeSourceMatchesCoordinate(
+    source,
+    listing.source.url,
+    listing.source.path,
+  );
+}
+
+function storeSourceMatchesCoordinate(
+  source: StoreMetadata["source"],
+  url: string,
+  path: string,
+): boolean {
+  const sourceUrl = source?.url.trim();
+  const sourcePath = source?.path.trim();
+  return Boolean(
+    sourceUrl &&
+    sourcePath &&
+    sameGitUrl(sourceUrl, url) &&
+    normalizeSourcePath(sourcePath) === normalizeSourcePath(path),
+  );
+}
+
+function storeInstallConfigsForSource(
+  configs: readonly InstallConfig[],
+  url: string,
+  path: string,
+): readonly InstallConfig[] {
+  if (!url.trim()) return [];
+  return configs.filter((config) =>
+    storeSourceMatchesCoordinate(config.store?.source, url, path),
+  );
+}
+
 function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
   const fallbackName = {
     ja: listing.suggestedName,
@@ -729,7 +684,7 @@ function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
   };
   return {
     source: {
-      git: listing.source.git,
+      url: listing.source.url,
       path: listing.source.path || ".",
     },
     order: 1_000,
@@ -741,10 +696,6 @@ function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
     name: nonEmptyStoreText(listing.name) ?? fallbackName,
     description: nonEmptyStoreText(listing.description) ?? fallbackName,
     ...(listing.iconUrl ? { iconUrl: listing.iconUrl } : {}),
-    inputs: listing.inputs ?? [],
-    ...(listing.installExperience
-      ? { installExperience: listing.installExperience }
-      : {}),
   };
 }
 
@@ -754,17 +705,21 @@ function storeEntryIdFromStoreListing(listing: TcsListing): string {
 
 function storeEntryFromStoreListing(
   listing: TcsListing,
-  installConfigId: string,
+  installConfig: InstallConfig,
 ): StoreEntry {
   const store = storeMetadataFromStoreListing(listing);
   return {
     id: storeEntryIdFromStoreListing(listing),
-    installConfigId,
+    installConfigId: installConfig.id,
     createdAt: listing.createdAt,
     updatedAt: listing.updatedAt,
     ...store,
+    inputs: installConfig.variablePresentation ?? [],
+    ...(installConfig.installExperience
+      ? { installExperience: installConfig.installExperience }
+      : {}),
     source: store.source ?? {
-      git: listing.source.git,
+      url: listing.source.url,
       path: listing.source.path || ".",
     },
   };
@@ -856,8 +811,8 @@ export type {
 };
 export {
   DEFAULT_STORE_BADGE,
-  INSTALLATION_NAME_PATTERN,
-  INSTALLATION_DONE,
+  CAPSULE_NAME_PATTERN,
+  CAPSULE_DONE,
   compatibilityTone,
   compatibilityLabel,
   providerNameFromDiagnostic,
@@ -905,13 +860,14 @@ export {
   installVariableDisplayValue,
   routePatternFromAppUrl,
   managedBaseDomain,
-  inputVariableRowsFromPrefill,
-  envVariableRowsFromPrefill,
   isSafePlainEnvName,
   storeKindFromStoreListing,
   storeSurfaceFromStoreListing,
   safeStoreToken,
   nonEmptyStoreText,
+  storeSourceMatchesListing,
+  storeSourceMatchesCoordinate,
+  storeInstallConfigsForSource,
   storeMetadataFromStoreListing,
   storeEntryIdFromStoreListing,
   storeEntryFromStoreListing,

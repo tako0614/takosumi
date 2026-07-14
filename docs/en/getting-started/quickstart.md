@@ -15,16 +15,19 @@ the Takosumi Cloud flow when you want the hosted service.
 
 ## OSS / local runner
 
-Takosumi OSS runs existing OpenTofu/Terraform providers as-is. The shortest
-useful check is to register a provider credential such as a Cloudflare API token
-as a ProviderConnection and plan/apply a normal provider manifest.
+Takosumi runs plain OpenTofu stacks as-is with existing OpenTofu/Terraform
+providers. The shortest
+useful check is to register `examples/opentofu-basic` as a Git Source and
+verify normal plan/apply/destroy and Output recording without any provider or
+credential. When a selected module uses a provider, register the credentials
+defined by that provider as a ProviderConnection.
 
 ### Prerequisites
 
 - Bun
 - OpenTofu CLI (`tofu`)
 - Git
-- provider credential, such as a Cloudflare API token
+- a provider credential only when the selected module requires one
 
 ### 1. Start the service
 
@@ -60,24 +63,25 @@ plan result
 apply approval
 ```
 
-### 3. ProviderConnection
+### 3. ProviderConnection (when provider authentication is required)
 
 Credentials are stored in ProviderConnections, not in `.env` files or
 manifests.
 
-```yaml
-connections:
-  cloudflare-main:
-    provider: cloudflare
-    auth_type: api_token
-    secrets:
-      api_token: sec_cloudflare_token
-    values:
-      account_id: xxxxx
+```bash
+takosumi connections create \
+  --provider registry.opentofu.org/example/example \
+  --recipe generic-env \
+  --auth-mode env \
+  --secret-partition provider-credentials \
+  --values-file <path-to-provider-credential-env-json>
 ```
 
-At run time, Takosumi injects env/files such as `CLOUDFLARE_API_TOKEN` only into
-the runner sandbox.
+`example/example` is a placeholder. Use the source and env/file names declared
+by the module's `required_providers` block and the provider's own documentation.
+Takosumi injects those values only into the runner sandbox while the Run is
+active; it does not infer a credential schema or RunnerProfile from the
+provider name.
 
 ### 4. Result
 

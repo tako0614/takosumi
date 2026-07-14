@@ -1,14 +1,18 @@
 {
   "kind": "takosumi.opentofu-output-snapshot-proof-input@v1",
   "live": false,
-  "spaceId": "space_opentofu_fixture",
+  "workspaceId": "ws_opentofu_fixture",
   "source": {
-    "kind": "local",
-    "path": "source"
+    "kind": "git",
+    "url": "https://git.example.com/example/opentofu-output-proof.git",
+    "commit": "0123456789abcdef0123456789abcdef01234567"
   },
-  "requiredProviders": [
-    "registry.opentofu.org/cloudflare/cloudflare"
-  ],
+  "requiredProviders": ["registry.opentofu.org/cloudflare/cloudflare"],
+  "outputKinds": {
+    "site_origin": "launch_url",
+    "management_origin": "admin_url",
+    "health_probe": "health_url"
+  },
   "outputs": {
     "file": "tofu-output.json",
     "ref": "fixture://opentofu-output-snapshot-proof/tofu-output.json"

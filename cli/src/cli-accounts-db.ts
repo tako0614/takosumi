@@ -9,9 +9,7 @@ import {
 } from "@takosjp/takosumi-accounts-service";
 import {
   booleanOption,
-  kebabCase,
   optionalEnvString,
-  optionalNonNegativeIntegerStrictOption,
   optionalStringOption,
   validatePostgresUrl,
 } from "./cli-options.ts";
@@ -85,21 +83,6 @@ interface AppliedMigrationRow {
   version: number;
   name: string;
   checksum: string;
-}
-
-export interface LaunchTokenCleanupPlan {
-  kind: "takosumi.accounts.launch-token-cleanup@v1";
-  database: { configured: boolean; driver: "postgres"; source?: string };
-  dryRun: boolean;
-  now: string;
-  retention: {
-    expiredRetentionHours: number;
-    usedRetentionHours: number;
-  };
-  cutoffs: {
-    expiredBefore: string;
-    usedBefore: string;
-  };
 }
 
 export async function buildAccountsDatabaseConfig(
@@ -206,58 +189,6 @@ export function accountsMigratePlan(
   };
 }
 
-export function launchTokenCleanupPlan(
-  databaseConfig: AccountsDatabaseConfig | undefined,
-  options: Record<string, string | boolean>,
-): LaunchTokenCleanupPlan {
-  const now = parseOptionalIsoDateOption(options, "now") ?? new Date();
-  const expiredRetentionHours =
-    optionalNonNegativeIntegerStrictOption(options, "expiredRetentionHours") ??
-    24;
-  const usedRetentionHours =
-    optionalNonNegativeIntegerStrictOption(options, "usedRetentionHours") ?? 24;
-  return {
-    kind: "takosumi.accounts.launch-token-cleanup@v1",
-    database: databaseConfig
-      ? {
-          configured: true,
-          driver: "postgres",
-          source: databaseConfig.source,
-        }
-      : { configured: false, driver: "postgres" },
-    dryRun: booleanOption(options, "dryRun"),
-    now: now.toISOString(),
-    retention: {
-      expiredRetentionHours,
-      usedRetentionHours,
-    },
-    cutoffs: {
-      expiredBefore: new Date(
-        now.getTime() - expiredRetentionHours * 60 * 60 * 1000,
-      ).toISOString(),
-      usedBefore: new Date(
-        now.getTime() - usedRetentionHours * 60 * 60 * 1000,
-      ).toISOString(),
-    },
-  };
-}
-
-function parseOptionalIsoDateOption(
-  options: Record<string, string | boolean>,
-  key: string,
-): Date | undefined {
-  const value = options[key];
-  if (value === undefined || value === false) return undefined;
-  if (value === true) {
-    throw new TypeError(`--${kebabCase(key)} requires an ISO timestamp`);
-  }
-  const ms = Date.parse(value);
-  if (!Number.isFinite(ms)) {
-    throw new TypeError(`--${kebabCase(key)} must be an ISO timestamp`);
-  }
-  return new Date(ms);
-}
-
 /**
  * Postgres advisory lock ID for the Takosumi accounts migration runner.
  *
@@ -329,6 +260,8 @@ const D1_SCHEMA_MIGRATIONS_TABLE_SQL =
 // Single-line, idempotent statements only — Cloudflare D1's `exec` treats
 // each line as a separate statement, so multi-line SQL would fail. Keep new
 // migration entries to one statement per element of `sql`.
+// Immutable account-plane schema migration catalog begins. Historical field
+// names inside this region are migration input only, never current authority.
 const D1_ACCOUNTS_MIGRATIONS: readonly D1AccountsMigration[] = [
   {
     // Version 0 = the bootstrap baseline the Worker self-applies via
@@ -346,7 +279,29 @@ const D1_ACCOUNTS_MIGRATIONS: readonly D1AccountsMigration[] = [
       "CREATE INDEX IF NOT EXISTS takosumi_accounts_indexes_document ON takosumi_accounts_indexes (bucket, document_key);",
     ].join("\n"),
   },
+  {
+    version: 1,
+    name: "generalize_billing_provider_storage",
+    sql: [
+      "UPDATE takosumi_accounts_documents SET document = json_set(document, '$.providerCustomerId', json_extract(document, '$.stripeCustomerId')) WHERE bucket = 'billing_accounts' AND json_type(document, '$.providerCustomerId') IS NULL AND json_type(document, '$.stripeCustomerId') IS NOT NULL;",
+      "UPDATE takosumi_accounts_documents SET document = json_set(document, '$.providerSubscriptionId', json_extract(document, '$.stripeSubscriptionId')) WHERE bucket = 'billing_accounts' AND json_type(document, '$.providerSubscriptionId') IS NULL AND json_type(document, '$.stripeSubscriptionId') IS NOT NULL;",
+      "UPDATE takosumi_accounts_documents SET document = json_set(document, '$.providerPriceId', json_extract(document, '$.stripePriceId')) WHERE bucket = 'billing_accounts' AND json_type(document, '$.providerPriceId') IS NULL AND json_type(document, '$.stripePriceId') IS NOT NULL;",
+      "UPDATE takosumi_accounts_documents SET document = json_set(document, '$.providerDefaultPaymentMethodId', json_extract(document, '$.stripeDefaultPaymentMethodId')) WHERE bucket = 'billing_accounts' AND json_type(document, '$.providerDefaultPaymentMethodId') IS NULL AND json_type(document, '$.stripeDefaultPaymentMethodId') IS NOT NULL;",
+      "UPDATE takosumi_accounts_documents SET document = json_remove(document, '$.stripeCustomerId', '$.stripeSubscriptionId', '$.stripePriceId', '$.stripeDefaultPaymentMethodId') WHERE bucket = 'billing_accounts';",
+      "INSERT OR IGNORE INTO takosumi_accounts_indexes (index_name, index_key, bucket, document_key, sort_key) SELECT 'billing_accounts_by_provider_customer', index_key, bucket, document_key, sort_key FROM takosumi_accounts_indexes WHERE index_name = 'billing_accounts_by_stripe_customer';",
+      "DELETE FROM takosumi_accounts_indexes WHERE index_name = 'billing_accounts_by_stripe_customer';",
+    ].join("\n"),
+  },
+  {
+    version: 2,
+    name: "remove_commercial_billing_persistence",
+    sql: [
+      "DELETE FROM takosumi_accounts_indexes WHERE bucket IN ('billing_accounts', 'billing_webhook_events', 'billing_usage_records');",
+      "DELETE FROM takosumi_accounts_documents WHERE bucket IN ('billing_accounts', 'billing_webhook_events', 'billing_usage_records');",
+    ].join("\n"),
+  },
 ];
+// Immutable account-plane schema migration catalog ends.
 
 export function listD1AccountsMigrations(): readonly D1AccountsMigration[] {
   return D1_ACCOUNTS_MIGRATIONS;

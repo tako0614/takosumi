@@ -47,7 +47,7 @@ export class SqliteFakeD1 implements D1Database {
   /**
    * Atomic multi-statement batch, mirroring D1's `batch()`. Runs every statement
    * inside ONE SQLite transaction (BEGIN / COMMIT, ROLLBACK on any error) so the
-   * store's atomic `commitAppliedDeployment` path gets real all-or-nothing
+   * store's atomic `commitRunState` path gets real all-or-nothing
    * semantics under test.
    */
   async batch<T = unknown>(

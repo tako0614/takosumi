@@ -21,11 +21,13 @@ import type {
   ReleaseCommandRunJob,
   ReleaseCommandRunResult,
 } from "../../core/domains/deploy-control/mod.ts";
+import { OpenTofuRunnerInfrastructureError } from "../../core/domains/deploy-control/mod.ts";
 import type {
   CloudflareWorkerEnv,
   OpenTofuRunQueueMessage,
 } from "./bindings.ts";
 import { redactString } from "takosumi-contract/redaction";
+import { normalizePlanResourceScope } from "takosumi-contract";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 
 /**
@@ -41,6 +43,8 @@ const MAX_RUNNER_CAPACITY_RETRY_ATTEMPTS = 10;
 const MAX_RUNNER_CAPACITY_RETRY_DELAY_MS = 10_000;
 const RUNNER_CAPACITY_EXCEEDED_PATTERN =
   /maximum number of running container instances exceeded/i;
+const RUNNER_SUBSTRATE_RESET_PATTERN =
+  /durable object reset because its code was updated/i;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 type ContainerRunnerAction = OpenTofuRunQueueMessage["action"] | "release";
 
@@ -118,10 +122,9 @@ export class CloudflareContainerOpenTofuRunner
       runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
     );
-    // The DO echoes the persisted state pointer (`state.digest`) and, for an
-    // apply that produced outputs, the encrypted raw-output artifact key
-    // (`rawOutputsKey`, spec §26). Thread both onto the result so the controller
-    // records them on the StateSnapshot / OutputSnapshot.
+    // The DO echoes the persisted state digest and opaque raw-output ref. Thread
+    // both onto the result so the controller
+    // records them on the StateVersion / Output.
     const state = recordFromRecord(result, "state");
     return {
       ...(recordFromRecord(result, "outputs")
@@ -135,8 +138,8 @@ export class CloudflareContainerOpenTofuRunner
       ...(state && stringFromRecord(state, "digest")
         ? { stateDigest: stringFromRecord(state, "digest") }
         : {}),
-      ...(stringFromRecord(result, "rawOutputsKey")
-        ? { rawOutputsKey: stringFromRecord(result, "rawOutputsKey") }
+      ...(stringFromRecord(result, "rawOutputRef")
+        ? { rawOutputRef: stringFromRecord(result, "rawOutputRef") }
         : {}),
       ...(providerInstallationFromContainerResult(result)
         ? {
@@ -172,15 +175,15 @@ export class CloudflareContainerOpenTofuRunner
     });
     const state = recordFromRecord(result, "state");
     const generation = state?.generation;
-    const objectKey = state ? stringFromRecord(state, "objectKey") : undefined;
+    const stateRef = state ? stringFromRecord(state, "stateRef") : undefined;
     const digest = state ? stringFromRecord(state, "digest") : undefined;
-    if (typeof generation !== "number" || !objectKey || !digest) {
+    if (typeof generation !== "number" || !stateRef || !digest) {
       throw new Error(
         `OpenTofu runner restore ${job.runId} returned an incomplete state result`,
       );
     }
     return {
-      state: { generation, objectKey, digest },
+      state: { generation, stateRef, digest },
       diagnostics: diagnosticsFromContainerResult(result),
     };
   }
@@ -201,7 +204,7 @@ export class CloudflareContainerOpenTofuRunner
         })),
       },
       sourceArchive: {
-        objectKey: job.sourceSnapshot.archiveObjectKey,
+        ref: job.sourceSnapshot.archiveRef,
         digest: job.sourceSnapshot.archiveDigest,
       },
       outputs: job.nonSensitiveOutputs,
@@ -209,9 +212,9 @@ export class CloudflareContainerOpenTofuRunner
       activation: {
         applyRunId: job.applyRunId,
         ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
-        ...(job.workspaceId ? { spaceId: job.workspaceId } : {}),
-        installationId: job.installationId,
-        deploymentId: job.deploymentId,
+        ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
+        capsuleId: job.capsuleId,
+        stateVersionId: job.stateVersionId,
       },
     });
     const status = stringFromRecord(result, "status");
@@ -238,14 +241,14 @@ export class CloudflareContainerOpenTofuRunner
   ): Promise<OpenTofuSourceSyncResult> {
     // The runner resolves the ref, fetches a shallow checkout, builds the
     // deterministic archive, and PUTs its bytes to the source-archive route on
-    // the DO (which persists them to R2_SOURCE under archiveObjectKey). It then
+    // the DO (which persists them through the allocated archiveRef). It then
     // returns only the resolved commit + archive metadata. The request carries
     // the source-phase mint result (git env + files); never logged.
     const result = await this.#runContainer("source_sync", job.runId, {
       action: "source_sync",
       runId: job.runId,
       source: job.source,
-      archiveObjectKey: job.archiveObjectKey,
+      archiveRef: job.archiveRef,
       ...(job.reuseSnapshot ? { reuseSnapshot: job.reuseSnapshot } : {}),
       ...(job.credentials ? { credentials: job.credentials } : {}),
     });
@@ -264,9 +267,9 @@ export class CloudflareContainerOpenTofuRunner
         : archive && typeof archive.sizeBytes === "number"
           ? archive.sizeBytes
           : undefined;
-    const archiveObjectKey =
-      stringFromRecord(result, "archiveObjectKey") ??
-      (archive ? stringFromRecord(archive, "archiveObjectKey") : undefined);
+    const archiveRef =
+      stringFromRecord(result, "archiveRef") ??
+      (archive ? stringFromRecord(archive, "ref") : undefined);
     const repositoryInstallMetadata =
       repositoryInstallMetadataFromContainerResult(result);
     if (!resolvedCommit || !archiveDigest || archiveSizeBytes === undefined) {
@@ -280,7 +283,7 @@ export class CloudflareContainerOpenTofuRunner
       archiveDigest,
       archiveSizeBytes,
       ...(repositoryInstallMetadata ? { repositoryInstallMetadata } : {}),
-      ...(archiveObjectKey ? { archiveObjectKey } : {}),
+      ...(archiveRef ? { archiveRef } : {}),
       ...(phaseTimings ? { phaseTimings } : {}),
     };
   }
@@ -293,7 +296,7 @@ export class CloudflareContainerOpenTofuRunner
       job.runId,
       {
         sourceArchive: {
-          objectKey: job.sourceSnapshot.archiveObjectKey,
+          ref: job.sourceSnapshot.archiveRef,
           digest: job.sourceSnapshot.archiveDigest,
         },
         source: {
@@ -341,13 +344,13 @@ export class CloudflareContainerOpenTofuRunner
       backup: {
         mode: input.mode,
         outputPath: input.outputPath,
-        ...(input.provider ? { provider: input.provider } : {}),
+        ...(input.adapterId ? { adapterId: input.adapterId } : {}),
         ...(input.command ? { command: input.command } : {}),
       },
       ...(input.sourceSnapshot
         ? {
             sourceArchive: {
-              objectKey: input.sourceSnapshot.archiveObjectKey,
+              ref: input.sourceSnapshot.archiveRef,
               digest: input.sourceSnapshot.archiveDigest,
             },
           }
@@ -426,7 +429,7 @@ export class CloudflareContainerOpenTofuRunner
               name: "takosumi_runner_container_startup_seconds",
               kind: "histogram",
               value: startupSeconds,
-              tags: { operationKind: action, status: "ready" },
+              tags: { operation_kind: action, status: "ready" },
             });
           }
           if (!response.ok) {
@@ -439,7 +442,10 @@ export class CloudflareContainerOpenTofuRunner
               await sleepBeforeCapacityRetry(this.env, attempt, controller);
               continue;
             }
-            throw new Error(message);
+            throw (
+              runnerInfrastructureErrorFromMessage(message) ??
+              new Error(message)
+            );
           }
           return payload;
         } catch (error) {
@@ -452,11 +458,12 @@ export class CloudflareContainerOpenTofuRunner
             await sleepBeforeCapacityRetry(this.env, attempt, controller);
             continue;
           }
-          throw error;
+          throw runnerInfrastructureErrorFromUnknown(error) ?? error;
         }
       }
-      throw new Error(
+      throw new OpenTofuRunnerInfrastructureError(
         `OpenTofu runner ${action} run ${runId} exhausted capacity retries`,
+        { reason: "capacity_exhausted" },
       );
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -479,7 +486,7 @@ export class CloudflareContainerOpenTofuRunner
       name: "takosumi_runner_active_runs",
       kind: "gauge",
       value: next,
-      tags: { operationKind: action, status: "running" },
+      tags: { operation_kind: action, status: "running" },
     });
   }
 }
@@ -544,6 +551,31 @@ function isRunnerCapacityExceededError(error: unknown): boolean {
 
 function isRunnerCapacityExceededMessage(message: string): boolean {
   return RUNNER_CAPACITY_EXCEEDED_PATTERN.test(message);
+}
+
+function runnerInfrastructureErrorFromUnknown(
+  error: unknown,
+): OpenTofuRunnerInfrastructureError | undefined {
+  if (error instanceof OpenTofuRunnerInfrastructureError) return error;
+  if (!(error instanceof Error)) return undefined;
+  return runnerInfrastructureErrorFromMessage(error.message, error);
+}
+
+function runnerInfrastructureErrorFromMessage(
+  message: string,
+  originalError?: unknown,
+): OpenTofuRunnerInfrastructureError | undefined {
+  const reason = RUNNER_CAPACITY_EXCEEDED_PATTERN.test(message)
+    ? "capacity_exhausted"
+    : RUNNER_SUBSTRATE_RESET_PATTERN.test(message)
+      ? "substrate_reset"
+      : undefined;
+  return reason
+    ? new OpenTofuRunnerInfrastructureError(message, {
+        reason,
+        originalError,
+      })
+    : undefined;
 }
 
 function compatibilityCheckTimeoutMs(env: CloudflareWorkerEnv): number {
@@ -750,35 +782,13 @@ function planResourceChangesFromContainerResult(
     const actions = stringArrayFromRecord(entry, "actions");
     if (!address || !type || !actions) return [];
     const scope = recordFromRecord(entry, "scope");
-    const projectedScope = scope
-      ? {
-          ...(stringFromRecord(scope, "cloudflareAccountId")
-            ? {
-                cloudflareAccountId: stringFromRecord(
-                  scope,
-                  "cloudflareAccountId",
-                ),
-              }
-            : {}),
-          ...(stringFromRecord(scope, "cloudflareZoneId")
-            ? { cloudflareZoneId: stringFromRecord(scope, "cloudflareZoneId") }
-            : {}),
-          ...(stringFromRecord(scope, "awsAccountId")
-            ? { awsAccountId: stringFromRecord(scope, "awsAccountId") }
-            : {}),
-          ...(stringFromRecord(scope, "awsRegion")
-            ? { awsRegion: stringFromRecord(scope, "awsRegion") }
-            : {}),
-        }
-      : undefined;
+    const projectedScope = normalizePlanResourceScope(scope);
     return [
       {
         address,
         type,
         actions,
-        ...(projectedScope && Object.keys(projectedScope).length > 0
-          ? { scope: projectedScope }
-          : {}),
+        ...(projectedScope ? { scope: projectedScope } : {}),
       },
     ];
   });

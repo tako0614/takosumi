@@ -12,11 +12,6 @@ const upScriptPath = resolve(
   "../../deploy/local-substrate/scripts/up.sh",
 );
 const upScript = readFileSync(upScriptPath, "utf8");
-const serviceDockerfilePath = resolve(
-  import.meta.dir,
-  "../../deploy/local-substrate/wrappers/Dockerfile.service",
-);
-const serviceDockerfile = readFileSync(serviceDockerfilePath, "utf8");
 const miniflareDockerfilePath = resolve(
   import.meta.dir,
   "../../deploy/local-substrate/wrappers/Dockerfile.miniflare",
@@ -117,7 +112,7 @@ test("local-substrate cloud migration prepares core and accounts tables", () => 
 
 test("node-postgres dashboard handler receives real control-plane operations", () => {
   expect(nodePostgresServer).toContain(
-    "buildAccountsHandler(\n        config,\n        store,\n        deployControl,\n        controlPlaneOperations,\n      )",
+    "buildAccountsHandler(config, store, controlPlaneOperations)",
   );
   expect(nodePostgresServer).toContain("{ controlPlaneOperations }");
 });
@@ -153,7 +148,7 @@ test("local-substrate AppArmor override removes docker-healthcheck dependency", 
     "substrate-postgres",
     "substrate-redis",
     "substrate-minio",
-    "agent",
+    "opentofu-runner",
     "cloud",
     "takosumi-service-worker",
   ]) {
@@ -180,18 +175,6 @@ test("local-substrate up rebuilds runtime images before starting", () => {
   );
 });
 
-test("local-substrate service image copies the current Docker compose plugin path", () => {
-  expect(serviceDockerfile).toContain("/usr/local/libexec/docker/cli-plugins");
-  expect(serviceDockerfile).not.toContain("cli-implementations");
-});
-
-test("local-substrate service image includes OpenTofu runner dependencies", () => {
-  expect(serviceDockerfile).toContain("ARG OPENTOFU_VERSION=");
-  expect(serviceDockerfile).toContain("/usr/local/bin/tofu");
-  expect(serviceDockerfile).toContain("apt-get install");
-  expect(serviceDockerfile).toContain("zstd");
-});
-
 test("local-substrate postgres profile runs OpenTofu through the mirrored runner container", () => {
   const runnerBlock = compose.match(
     /opentofu-runner:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,
@@ -213,14 +196,14 @@ test("local-substrate postgres profile runs OpenTofu through the mirrored runner
   );
 });
 
-test("local-substrate cloud service uses the OpenTofu-capable service image", () => {
+test("local-substrate cloud service is an unprivileged Bun control plane", () => {
   const cloudBlock = compose.match(
     /cloud:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,
   )?.[0];
   expect(cloudBlock).toBeDefined();
-  expect(cloudBlock).toContain("dockerfile: wrappers/Dockerfile.service");
-  expect(cloudBlock).not.toContain("image: oven/bun:1");
+  expect(cloudBlock).toContain("image: oven/bun:1");
   expect(cloudBlock).not.toContain("/var/run/docker.sock:/var/run/docker.sock");
+  expect(cloudBlock).not.toContain("agent:");
 });
 
 test("local-substrate cli smoke exercises Git Source Capsule plan/apply", () => {
@@ -229,13 +212,15 @@ test("local-substrate cli smoke exercises Git Source Capsule plan/apply", () => 
     'post_json "/internal/v1/sources/$SOURCE_ID/sync"',
   );
   expect(cliSmoke).toContain(
-    'post_json "/internal/v1/workspaces/$SPACE_ID/capsules"',
+    'post_json "/internal/v1/workspaces/$WORKSPACE_ID/capsules"',
   );
   expect(cliSmoke).toContain(
-    'post_json "/internal/v1/capsules/$INSTALLATION_ID/plan"',
+    'post_json "/internal/v1/capsules/$CAPSULE_ID/plan"',
   );
   expect(cliSmoke).toContain('post_json "/internal/v1/apply-runs"');
-  expect(cliSmoke).not.toContain("/internal/v1/workspaces/$SPACE_ID/uploads");
+  expect(cliSmoke).not.toContain(
+    "/internal/v1/workspaces/$WORKSPACE_ID/uploads",
+  );
   expect(cliSmoke).not.toContain('post_json "/internal/v1/deploy"');
   expect(cliSmoke).not.toContain("/internal/v1/plan-runs");
 });
@@ -258,20 +243,24 @@ test("local-substrate platform worker is reachable through the ingress proxy", (
   expect(caddyfile).toContain("reverse_proxy host.docker.internal:18788");
 });
 
-test("local-substrate cloud env is wired for Google-only OAuth and a real dev session", () => {
-  expect(cloudEnv).toContain("TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID=");
+test("local-substrate cloud env uses explicit upstream descriptors and a real dev session", () => {
+  expect(cloudEnv).toContain("TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS=");
   expect(cloudEnv).toContain(
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_AUTHORIZATION_ENDPOINT=https://oauth-mock.test/google/authorize",
+    '\"authorizationEndpoint\":\"https://oauth-mock.test/local-oidc/authorize\"',
   );
+  expect(cloudEnv).toContain(
+    '\"clientSecretEnv\":\"TAKOSUMI_LOCAL_OIDC_CLIENT_SECRET\"',
+  );
+  expect(cloudEnv).not.toContain("UPSTREAM_GOOGLE_CLIENT_ID");
+  expect(cloudEnv).not.toContain("TAKOSUMI_ACCOUNTS_LOCAL_DEV_SPACE_ID");
+  expect(cloudEnv).not.toContain("TAKOSUMI_ACCOUNTS_LOCAL_DEV_ACCOUNT_ID");
   expect(cloudEnv).toContain(
     "TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID=sess_local_substrate",
   );
   expect(cloudEnv).toContain(
     "TAKOSUMI_ACCOUNTS_PASSKEY_RP_ID=app.takosumi.test",
   );
-  expect(cloudEnv).toContain(
-    "TAKOSUMI_ACCOUNTS_STRIPE_API_KEY=sk_test_local_substrate_fixture",
-  );
+  expect(cloudEnv).not.toContain("TAKOSUMI_ACCOUNTS_STRIPE");
   expect(cloudEnv).not.toContain("UPSTREAM_GITHUB");
 });
 

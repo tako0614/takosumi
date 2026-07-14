@@ -1,10 +1,5 @@
-import { CORE_CONDITION_REASONS } from "takosumi-contract/reference/compat";
 import { PUBLIC_PROVIDER_RESOLUTION_STATUSES } from "takosumi-contract/provider-resolution";
-import {
-  PROVIDER_CONNECTION_KINDS,
-  PROVIDER_CONNECTION_MATERIALIZATIONS,
-  PROVIDER_CONNECTION_STATUSES,
-} from "takosumi-contract/connections";
+import { SOURCE_GIT_CONNECTION_KINDS } from "takosumi-contract/sources";
 import {
   type ApiEndpoint,
   endpointTag,
@@ -66,8 +61,6 @@ export interface OpenApiOperation {
 
 export interface CreateTakosumiOpenApiDocumentOptions {
   readonly deployControlInternalRoutesMounted?: boolean;
-  readonly artifactRoutesMounted?: boolean;
-  readonly runtimeAgentRoutesMounted?: boolean;
   readonly readinessRoutesMounted?: boolean;
   /**
    * Mounted when `registerMetricsRoutes` is enabled on `takosumi-api`
@@ -110,18 +103,6 @@ export function createTakosumiOpenApiDocument(
     paths: buildPaths(),
     components: {
       securitySchemes: {
-        deployBearer: {
-          type: "http",
-          scheme: "bearer",
-          description:
-            "Artifact write bearer from TAKOSUMI_DEPLOY_TOKEN for /internal/v1/artifacts write routes.",
-        },
-        artifactFetchBearer: {
-          type: "http",
-          scheme: "bearer",
-          description:
-            "Read-only artifact bearer from TAKOSUMI_ARTIFACT_FETCH_TOKEN for runtime-agent artifact fetches.",
-        },
         internalService: {
           type: "apiKey",
           in: "header",
@@ -299,8 +280,6 @@ function operation(input: {
   readonly tag: string;
   readonly auth:
     | "none"
-    | "deploy-token"
-    | "artifact-read"
     | "inventory-bearer"
     | "deploy-control-token"
     | "internal-service"
@@ -353,6 +332,15 @@ function operation(input: {
             "501": errorResponse(),
           }
         : {}),
+      ...(input.tag === "resource-shape"
+        ? {
+            "400": errorResponse(),
+            "403": errorResponse(),
+            "404": errorResponse(),
+            "409": errorResponse(),
+            "502": errorResponse(),
+          }
+        : {}),
     },
     "x-takos-auth": input.auth,
     ...(input.mountedPath ? { "x-takos-mounted-path": input.mountedPath } : {}),
@@ -363,20 +351,14 @@ function operation(input: {
 function securityRequirements(
   auth:
     | "actor"
-    | "deploy-token"
-    | "artifact-read"
     | "inventory-bearer"
     | "deploy-control-token"
     | "internal-service"
     | "metrics-scrape",
 ): readonly Record<string, readonly string[]>[] {
   if (auth === "inventory-bearer") return [{ inventoryBearer: [] }];
-  if (auth === "deploy-token") return [{ deployBearer: [] }];
   if (auth === "deploy-control-token") return [{ deployControlBearer: [] }];
   if (auth === "metrics-scrape") return [{ metricsBearer: [] }];
-  if (auth === "artifact-read") {
-    return [{ deployBearer: [] }, { artifactFetchBearer: [] }];
-  }
   return [{ internalService: [] }];
 }
 
@@ -501,25 +483,983 @@ const jsonObject = {
 function createSchemas(): Record<string, Record<string, unknown>> {
   return {
     ...processSchemas(),
+    ...policySchemas(),
+    ...interfaceSchemas(),
+    ...resourceShapeSchemas(),
     ...runnerSchemas(),
-    ...installationSchemas(),
+    ...capsuleAndInstallConfigSchemas(),
     ...capsuleSchemas(),
     ...providerConnectionAndRecipeSchemas(),
     ...providerResolutionSchemas(),
     ...outputSchemas(),
     ...connectionSchemas(),
     ...sourceSchemas(),
-    ...deploySchemas(),
-    ...artifactSchemas(),
+    ...responseSchemas(),
     ...billingSchemas(),
     ...dependencySchemas(),
-    ...spaceSchemas(),
+    ...workspaceProjectAndCapsuleRequestSchemas(),
     ...runSchemas(),
     ...activitySchemas(),
     ...backupSchemas(),
     ...outputShareSchemas(),
-    ...runtimeAgentSchemas(),
     ...errorSchemas(),
+  };
+}
+
+/** Provider-neutral plan policy and scope-selector contracts. */
+function policySchemas(): Record<string, Record<string, unknown>> {
+  const scopeScalar = {
+    oneOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }],
+  };
+  return {
+    ScopeBoundaryDimension: {
+      type: "object",
+      required: ["selector", "allowedValues"],
+      properties: {
+        selector: {
+          type: "string",
+          minLength: 1,
+          maxLength: 512,
+          pattern: "^/",
+          description:
+            "RFC 6901 JSON Pointer relative to the resource before/after value.",
+        },
+        allowedValues: {
+          type: "array",
+          maxItems: 256,
+          items: scopeScalar,
+        },
+      },
+      additionalProperties: false,
+    },
+    ScopeBoundaryRule: {
+      type: "object",
+      required: ["resourceTypePattern", "dimensions"],
+      properties: {
+        resourceTypePattern: {
+          type: "string",
+          minLength: 1,
+          maxLength: 256,
+          pattern: "^[A-Za-z0-9_*?.:-]+$",
+          description: "OpenTofu resource type glob supporting * and ?.",
+        },
+        dimensions: {
+          type: "object",
+          maxProperties: 32,
+          additionalProperties: ref("ScopeBoundaryDimension"),
+        },
+      },
+      additionalProperties: false,
+    },
+    ScopeBoundaryPolicy: {
+      type: "object",
+      required: ["rules"],
+      properties: {
+        mode: { enum: ["permissive", "strict"] },
+        rules: {
+          type: "array",
+          maxItems: 64,
+          items: ref("ScopeBoundaryRule"),
+        },
+      },
+      additionalProperties: false,
+    },
+    PolicyConfig: {
+      type: "object",
+      properties: {
+        allowedProviders: { type: "array", items: { type: "string" } },
+        allowedResourceTypes: {
+          type: "array",
+          items: { type: "string" },
+        },
+        allowedDataSourceTypes: {
+          type: "array",
+          items: { type: "string" },
+        },
+        allowedProvisionerTypes: {
+          type: "array",
+          items: { type: "string" },
+        },
+        destructiveChanges: {
+          type: "object",
+          required: ["requireExplicitConfirmation"],
+          properties: { requireExplicitConfirmation: { type: "boolean" } },
+          additionalProperties: false,
+        },
+        providerLockfile: {
+          type: "object",
+          required: ["requireDigest"],
+          properties: { requireDigest: { type: "boolean" } },
+          additionalProperties: false,
+        },
+        providerInstallation: {
+          type: "object",
+          required: ["requireMirror"],
+          properties: { requireMirror: { type: "boolean" } },
+          additionalProperties: false,
+        },
+        providerCredentials: {
+          type: "object",
+          properties: {
+            requireTemporary: { type: "boolean" },
+            requireTtlEnforced: { type: "boolean" },
+          },
+          additionalProperties: false,
+        },
+        lifecycleActions: {
+          type: "object",
+          required: ["allowedExecutors", "allowedRunnerCapabilities"],
+          properties: {
+            allowedExecutors: {
+              type: "array",
+              items: { enum: ["runner", "operator"] },
+            },
+            allowedRunnerCapabilities: {
+              type: "array",
+              items: { type: "string" },
+            },
+            allowProviderCredentials: { type: "boolean" },
+          },
+          additionalProperties: false,
+        },
+        scopeBoundary: ref("ScopeBoundaryPolicy"),
+        quota: {
+          type: "object",
+          additionalProperties: { type: "number", minimum: 0 },
+        },
+      },
+      additionalProperties: false,
+    },
+  };
+}
+
+/** Public Resource Shape, TargetPool, and SpacePolicy response contracts. */
+function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
+  const timestamp = { type: "string", format: "date-time" };
+  const stateAdoptionCandidateProperties = {
+    resourceId: { type: "string", minLength: 1 },
+    resourceUpdatedAt: timestamp,
+    expectedLegacyCapsuleName: { type: "string", minLength: 1 },
+    capsuleId: { type: "string", minLength: 1 },
+    stateVersionId: { type: "string", minLength: 1 },
+    stateGeneration: { type: "integer", minimum: 0 },
+    stateRef: { type: "string", minLength: 1 },
+    stateDigest: { type: "string", minLength: 1 },
+  };
+  const stateAdoptionCandidateRequired = Object.keys(
+    stateAdoptionCandidateProperties,
+  );
+  const nativeResource = {
+    type: "object",
+    required: ["type", "id"],
+    properties: {
+      type: { type: "string", minLength: 1 },
+      id: { type: "string", minLength: 1 },
+    },
+    additionalProperties: false,
+  };
+  const resourceShape = {
+    type: "object",
+    required: ["apiVersion", "kind", "metadata", "spec"],
+    properties: {
+      id: { type: "string" },
+      apiVersion: { const: "takosumi.dev/v1alpha1" },
+      kind: {
+        type: "string",
+        pattern: "^[A-Za-z][A-Za-z0-9._-]{0,127}$",
+        examples: [
+          "EdgeWorker",
+          "ObjectBucket",
+          "KVStore",
+          "Queue",
+          "SQLDatabase",
+          "ContainerService",
+        ],
+        description:
+          "Bundled kinds have typed provider schemas. Additional tokens require an explicitly installed host schema and adapter/plugin.",
+      },
+      metadata: {
+        type: "object",
+        required: ["name", "space", "managedBy"],
+        properties: {
+          name: { type: "string", minLength: 1 },
+          space: { type: "string", minLength: 1 },
+          project: { type: "string" },
+          environment: { type: "string" },
+          owner: { type: "string" },
+          managedBy: { type: "string" },
+          labels: {
+            type: "object",
+            additionalProperties: { type: "string" },
+          },
+        },
+        additionalProperties: false,
+      },
+      spec: jsonObject,
+      status: jsonObject,
+    },
+    additionalProperties: false,
+  };
+  const targetPoolRecord = {
+    type: "object",
+    required: ["id", "spaceId", "name", "spec", "createdAt", "updatedAt"],
+    properties: {
+      id: { type: "string" },
+      spaceId: { type: "string" },
+      name: { type: "string" },
+      spec: jsonObject,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+    additionalProperties: false,
+  };
+  const spacePolicyRecord = {
+    type: "object",
+    required: ["id", "spaceId", "name", "spec", "createdAt", "updatedAt"],
+    properties: {
+      id: { type: "string" },
+      spaceId: { type: "string" },
+      name: { type: "string" },
+      spec: jsonObject,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+    additionalProperties: false,
+  };
+  return {
+    ResourceShapeResponse: resourceShape,
+    ResourceDeploymentReview: {
+      type: "object",
+      required: ["planDigest"],
+      properties: {
+        planDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        quoteId: { type: "string", minLength: 1 },
+        quoteDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+      },
+      additionalProperties: false,
+    },
+    ResourceDeploymentQuote: {
+      type: "object",
+      required: [
+        "quoteId",
+        "quoteDigest",
+        "planDigest",
+        "specDigest",
+        "resolutionFingerprint",
+        "ratingStatus",
+        "currency",
+        "lineItems",
+        "estimatedTotalUsdMicros",
+        "expiresAt",
+      ],
+      properties: {
+        quoteId: { type: "string", minLength: 1 },
+        quoteDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        planDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        specDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        resolutionFingerprint: { type: "string", minLength: 1 },
+        ratingStatus: { enum: ["rated", "unrated"] },
+        currency: { type: "string", pattern: "^[A-Z]{3}$" },
+        catalogId: { type: "string", minLength: 1 },
+        catalogVersion: { type: "string", minLength: 1 },
+        offeringId: { type: "string", minLength: 1 },
+        offeringVersion: { type: "string", minLength: 1 },
+        region: { type: "string", minLength: 1 },
+        lineItems: {
+          type: "array",
+          items: {
+            type: "object",
+            required: [
+              "sku",
+              "skuVersion",
+              "chargeKind",
+              "unit",
+              "quantity",
+              "unitPriceUsdMicros",
+              "amountUsdMicros",
+            ],
+            properties: {
+              sku: { type: "string", minLength: 1 },
+              skuVersion: { type: "string", minLength: 1 },
+              description: { type: "string" },
+              chargeKind: {
+                enum: ["one_time", "recurring", "usage_estimate"],
+              },
+              meterId: { type: "string", minLength: 1 },
+              unit: { type: "string", minLength: 1 },
+              quantity: { type: "number", minimum: 0 },
+              unitPriceUsdMicros: { type: "integer", minimum: 0 },
+              amountUsdMicros: { type: "integer", minimum: 0 },
+            },
+            additionalProperties: false,
+          },
+        },
+        estimatedTotalUsdMicros: { type: "integer", minimum: 0 },
+        expiresAt: timestamp,
+      },
+      additionalProperties: false,
+    },
+    ResourceShapeApplyRequest: {
+      type: "object",
+      required: ["metadata", "spec", "review"],
+      properties: {
+        apiVersion: { const: "takosumi.dev/v1alpha1" },
+        kind: resourceShape.properties.kind,
+        metadata: {
+          type: "object",
+          required: ["space"],
+          properties: resourceShape.properties.metadata.properties,
+          additionalProperties: false,
+        },
+        spec: jsonObject,
+        targetPoolName: { type: "string", minLength: 1 },
+        spacePolicyName: { type: "string", minLength: 1 },
+        review: ref("ResourceDeploymentReview"),
+      },
+      additionalProperties: false,
+    },
+    ResourceShapeImportRequest: {
+      type: "object",
+      required: ["metadata", "spec", "nativeId"],
+      properties: {
+        apiVersion: { const: "takosumi.dev/v1alpha1" },
+        kind: resourceShape.properties.kind,
+        metadata: {
+          type: "object",
+          required: ["space"],
+          properties: resourceShape.properties.metadata.properties,
+          additionalProperties: false,
+        },
+        spec: jsonObject,
+        nativeId: { type: "string", minLength: 1, maxLength: 2048 },
+        targetPoolName: { type: "string", minLength: 1 },
+        spacePolicyName: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    ResourceShapeImportResponse: {
+      ...resourceShape,
+      required: [...resourceShape.required, "import"],
+      properties: {
+        ...resourceShape.properties,
+        import: {
+          type: "object",
+          required: ["summary"],
+          properties: {
+            summary: { type: "string", minLength: 1 },
+            runId: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    ResourceEvent: {
+      type: "object",
+      required: [
+        "id",
+        "space",
+        "resourceId",
+        "action",
+        "metadata",
+        "createdAt",
+      ],
+      properties: {
+        id: { type: "string", minLength: 1 },
+        space: { type: "string", minLength: 1 },
+        resourceId: { type: "string", minLength: 1 },
+        action: { type: "string", minLength: 1 },
+        actorId: { type: "string", minLength: 1 },
+        runId: { type: "string", minLength: 1 },
+        metadata: jsonObject,
+        createdAt: timestamp,
+      },
+      additionalProperties: false,
+    },
+    ListResourceEventsResponse: {
+      type: "object",
+      required: ["events"],
+      properties: {
+        events: { type: "array", items: ref("ResourceEvent") },
+        nextCursor: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    ListResourceShapesResponse: {
+      type: "object",
+      required: ["resources"],
+      properties: {
+        resources: { type: "array", items: ref("ResourceShapeResponse") },
+        nextCursor: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    ResourceShapePreviewResponse: {
+      type: "object",
+      required: [
+        "resource",
+        "planDigest",
+        "specDigest",
+        "resolutionFingerprint",
+        "selectedImplementation",
+        "selectedTarget",
+        "portability",
+        "nativeResourcePlan",
+        "riskNotes",
+        "summary",
+      ],
+      properties: {
+        resource: ref("ResourceShapeResponse"),
+        planDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        specDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        resolutionFingerprint: { type: "string", minLength: 1 },
+        quote: ref("ResourceDeploymentQuote"),
+        selectedImplementation: { type: "string" },
+        selectedTarget: { type: "string" },
+        portability: { type: "string" },
+        nativeResourcePlan: { type: "array", items: nativeResource },
+        riskNotes: { type: "array", items: { type: "string" } },
+        summary: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    LegacyResourceStateAdoptionCandidate: {
+      type: "object",
+      required: stateAdoptionCandidateRequired,
+      properties: stateAdoptionCandidateProperties,
+      additionalProperties: false,
+    },
+    LegacyResourceStateAdoptionIssue: {
+      type: "object",
+      required: ["resourceId", "expectedLegacyCapsuleName", "reason", "detail"],
+      properties: {
+        resourceId: { type: "string", minLength: 1 },
+        expectedLegacyCapsuleName: { type: "string", minLength: 1 },
+        reason: {
+          enum: [
+            "resource_state_already_owned",
+            "adoption_already_pending",
+            "legacy_capsule_not_found",
+            "legacy_capsule_ambiguous",
+            "legacy_capsule_destroyed",
+            "legacy_state_version_missing",
+            "legacy_state_pointer_invalid",
+          ],
+        },
+        capsuleIds: { type: "array", items: { type: "string" } },
+        detail: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    LegacyResourceStateAdoptionReportResponse: {
+      type: "object",
+      required: ["workspaceId", "candidates", "issues"],
+      properties: {
+        workspaceId: { type: "string", minLength: 1 },
+        candidates: {
+          type: "array",
+          items: ref("LegacyResourceStateAdoptionCandidate"),
+        },
+        issues: {
+          type: "array",
+          items: ref("LegacyResourceStateAdoptionIssue"),
+        },
+      },
+      additionalProperties: false,
+    },
+    ConfirmLegacyResourceStateAdoptionRequest: {
+      type: "object",
+      required: stateAdoptionCandidateRequired,
+      properties: stateAdoptionCandidateProperties,
+      additionalProperties: false,
+    },
+    ResourceShapeStateAdoptionDescriptor: {
+      type: "object",
+      required: [
+        "kind",
+        "sourceWorkspaceId",
+        "sourceCapsuleId",
+        "sourceEnvironment",
+        "sourceStateVersionId",
+        "stateGeneration",
+        "stateRef",
+        "stateDigest",
+        "confirmedBy",
+        "confirmedAt",
+      ],
+      properties: {
+        kind: { const: "legacy_backing_capsule_state" },
+        sourceWorkspaceId: { type: "string", minLength: 1 },
+        sourceCapsuleId: { type: "string", minLength: 1 },
+        sourceEnvironment: { type: "string", minLength: 1 },
+        sourceStateVersionId: { type: "string", minLength: 1 },
+        stateGeneration: { type: "integer", minimum: 0 },
+        stateRef: { type: "string", minLength: 1 },
+        stateDigest: { type: "string", minLength: 1 },
+        confirmedBy: { type: "string", minLength: 1 },
+        confirmedAt: timestamp,
+      },
+      additionalProperties: false,
+    },
+    ConfirmLegacyResourceStateAdoptionResponse: {
+      type: "object",
+      required: ["descriptor"],
+      properties: {
+        descriptor: ref("ResourceShapeStateAdoptionDescriptor"),
+      },
+      additionalProperties: false,
+    },
+    TargetPoolResponse: targetPoolRecord,
+    ListTargetPoolsResponse: {
+      type: "object",
+      required: ["targetPools"],
+      properties: {
+        targetPools: { type: "array", items: ref("TargetPoolResponse") },
+        nextCursor: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    SpacePolicyResponse: spacePolicyRecord,
+    ListSpacePoliciesResponse: {
+      type: "object",
+      required: ["spacePolicies"],
+      properties: {
+        spacePolicies: {
+          type: "array",
+          items: ref("SpacePolicyResponse"),
+        },
+        nextCursor: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  };
+}
+
+/** Shared runtime Interface and InterfaceBinding HTTP contract. */
+function interfaceSchemas(): Record<string, Record<string, unknown>> {
+  const labels = {
+    type: "object",
+    maxProperties: 64,
+    additionalProperties: { type: "string" },
+  };
+  const interfaceCondition = {
+    type: "object",
+    required: ["type", "status"],
+    properties: {
+      type: { type: "string" },
+      status: { enum: ["true", "false", "unknown"] },
+      reason: { type: "string" },
+      message: { type: "string" },
+      observedGeneration: { type: "integer", minimum: 0 },
+      lastTransitionAt: { type: "string", format: "date-time" },
+    },
+    additionalProperties: false,
+  };
+  return {
+    InterfaceOwnerRef: {
+      type: "object",
+      required: ["kind", "id"],
+      properties: {
+        kind: { enum: ["Workspace", "Capsule", "Resource"] },
+        id: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    InterfaceLiteralInput: {
+      type: "object",
+      required: ["source", "value"],
+      properties: { source: { const: "literal" }, value: {} },
+      additionalProperties: false,
+    },
+    InterfaceCapsuleOutputInput: {
+      type: "object",
+      required: ["source", "capsuleId", "outputName"],
+      properties: {
+        source: { const: "capsule_output" },
+        capsuleId: { type: "string", minLength: 1 },
+        outputName: { type: "string", minLength: 1 },
+        pointer: { type: "string", pattern: "^(|/)" },
+      },
+      additionalProperties: false,
+    },
+    InterfaceResourceOutputInput: {
+      type: "object",
+      required: ["source", "resourceId", "outputName"],
+      properties: {
+        source: { const: "resource_output" },
+        resourceId: { type: "string", minLength: 1 },
+        outputName: { type: "string", minLength: 1 },
+        pointer: { type: "string", pattern: "^(|/)" },
+      },
+      additionalProperties: false,
+    },
+    InterfaceInput: {
+      oneOf: [
+        ref("InterfaceLiteralInput"),
+        ref("InterfaceCapsuleOutputInput"),
+        ref("InterfaceResourceOutputInput"),
+      ],
+    },
+    CapsuleInterfaceBlueprintCapsuleOutputInput: {
+      type: "object",
+      required: ["source", "outputName"],
+      properties: {
+        source: { const: "capsule_output" },
+        outputName: { type: "string", minLength: 1 },
+        pointer: { type: "string", pattern: "^(|/)" },
+      },
+      additionalProperties: false,
+    },
+    CapsuleInterfaceBlueprintInput: {
+      oneOf: [
+        ref("InterfaceLiteralInput"),
+        ref("CapsuleInterfaceBlueprintCapsuleOutputInput"),
+        ref("InterfaceResourceOutputInput"),
+      ],
+    },
+    CapsuleInterfaceBlueprintSpec: {
+      type: "object",
+      required: ["type", "version", "document", "access"],
+      properties: {
+        type: {
+          type: "string",
+          minLength: 1,
+          maxLength: 256,
+          pattern: "^\\S+$",
+        },
+        version: {
+          type: "string",
+          minLength: 1,
+          maxLength: 256,
+          pattern: "^\\S+$",
+        },
+        document: {},
+        inputs: {
+          type: "object",
+          maxProperties: 64,
+          additionalProperties: ref("CapsuleInterfaceBlueprintInput"),
+        },
+        access: ref("InterfaceAccess"),
+      },
+      additionalProperties: false,
+    },
+    CapsuleInterfaceBindingProposal: {
+      type: "object",
+      required: ["key", "permissions", "delivery"],
+      properties: {
+        key: {
+          type: "string",
+          minLength: 1,
+          maxLength: 256,
+          pattern: "^\\S+$",
+        },
+        subjectRef: ref("InterfaceSubjectRef"),
+        subject: {
+          type: "object",
+          required: ["source"],
+          properties: {
+            source: { enum: ["installing_principal"] },
+          },
+          additionalProperties: false,
+        },
+        permissions: {
+          type: "array",
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: "string", minLength: 1, maxLength: 256 },
+        },
+        delivery: ref("InterfaceBindingDelivery"),
+      },
+      oneOf: [{ required: ["subjectRef"] }, { required: ["subject"] }],
+      additionalProperties: false,
+    },
+    CapsuleInterfaceBlueprint: {
+      type: "object",
+      required: ["key", "name", "spec"],
+      properties: {
+        key: {
+          type: "string",
+          minLength: 1,
+          maxLength: 256,
+          pattern: "^\\S+$",
+        },
+        name: {
+          type: "string",
+          pattern: "^[A-Za-z][A-Za-z0-9_.-]{0,127}$",
+        },
+        labels,
+        spec: ref("CapsuleInterfaceBlueprintSpec"),
+        bindings: {
+          type: "array",
+          maxItems: 64,
+          items: ref("CapsuleInterfaceBindingProposal"),
+        },
+      },
+      additionalProperties: false,
+    },
+    InterfaceAccess: {
+      type: "object",
+      required: ["visibility"],
+      properties: {
+        visibility: { enum: ["private", "workspace", "public"] },
+        policyRef: { type: "string", minLength: 1 },
+        resourceUriInput: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    InterfaceSpec: {
+      type: "object",
+      required: ["type", "version", "document", "access"],
+      properties: {
+        type: { type: "string", minLength: 1 },
+        version: { type: "string", minLength: 1 },
+        document: {},
+        inputs: {
+          type: "object",
+          maxProperties: 64,
+          additionalProperties: ref("InterfaceInput"),
+        },
+        access: ref("InterfaceAccess"),
+      },
+      additionalProperties: false,
+    },
+    InterfaceMetadata: {
+      type: "object",
+      required: [
+        "id",
+        "workspaceId",
+        "name",
+        "ownerRef",
+        "generation",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        id: { type: "string" },
+        workspaceId: { type: "string" },
+        name: { type: "string" },
+        ownerRef: ref("InterfaceOwnerRef"),
+        generation: { type: "integer", minimum: 1 },
+        labels,
+        materializedFrom: {
+          type: "object",
+          required: ["source", "key"],
+          properties: {
+            source: { const: "capsule_blueprint" },
+            key: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    InterfaceStatus: {
+      type: "object",
+      required: ["phase", "observedGeneration", "resolvedRevision"],
+      properties: {
+        phase: {
+          enum: [
+            "Pending",
+            "Resolved",
+            "NotReady",
+            "Unknown",
+            "Terminating",
+            "Retired",
+          ],
+        },
+        observedGeneration: { type: "integer", minimum: 0 },
+        resolvedRevision: { type: "integer", minimum: 0 },
+        resolvedInputs: { type: "object", additionalProperties: true },
+        provenance: { type: "object", additionalProperties: true },
+        conditions: { type: "array", items: interfaceCondition },
+      },
+      additionalProperties: false,
+    },
+    Interface: {
+      type: "object",
+      required: ["apiVersion", "kind", "metadata", "spec", "status"],
+      properties: {
+        apiVersion: { const: "takosumi.dev/v1alpha1" },
+        kind: { const: "Interface" },
+        metadata: ref("InterfaceMetadata"),
+        spec: ref("InterfaceSpec"),
+        status: ref("InterfaceStatus"),
+      },
+      additionalProperties: false,
+    },
+    CreateInterfaceRequest: {
+      type: "object",
+      required: ["workspaceId", "name", "ownerRef", "spec"],
+      properties: {
+        workspaceId: { type: "string", minLength: 1 },
+        name: { type: "string", minLength: 1 },
+        ownerRef: ref("InterfaceOwnerRef"),
+        labels,
+        spec: ref("InterfaceSpec"),
+      },
+      additionalProperties: false,
+    },
+    UpdateInterfaceRequest: {
+      type: "object",
+      minProperties: 1,
+      properties: {
+        name: { type: "string", minLength: 1 },
+        labels,
+        spec: ref("InterfaceSpec"),
+      },
+      additionalProperties: false,
+    },
+    ListInterfacesResponse: {
+      type: "object",
+      required: ["interfaces"],
+      properties: {
+        interfaces: { type: "array", items: ref("Interface") },
+      },
+      additionalProperties: false,
+    },
+    InterfaceSubjectRef: {
+      type: "object",
+      required: ["kind", "id"],
+      properties: {
+        kind: {
+          enum: ["Principal", "ServiceAccount", "Capsule", "Resource"],
+        },
+        id: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    InterfaceBindingDelivery: {
+      type: "object",
+      required: ["type"],
+      properties: {
+        type: { type: "string", minLength: 1 },
+        credentialRef: {
+          type: "string",
+          minLength: 3,
+          maxLength: 256,
+          pattern: "^(secret|credential)[/:][A-Za-z0-9][A-Za-z0-9._:/-]*$",
+        },
+        options: { type: "object", additionalProperties: true },
+      },
+      additionalProperties: false,
+    },
+    InterfaceBindingSpec: {
+      type: "object",
+      required: ["interfaceId", "subjectRef", "permissions", "delivery"],
+      properties: {
+        interfaceId: { type: "string" },
+        subjectRef: ref("InterfaceSubjectRef"),
+        permissions: {
+          type: "array",
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: "string" },
+        },
+        delivery: ref("InterfaceBindingDelivery"),
+      },
+      additionalProperties: false,
+    },
+    InterfaceBindingStatus: {
+      type: "object",
+      required: ["phase", "observedInterfaceRevision"],
+      properties: {
+        phase: { enum: ["Pending", "Ready", "NotReady", "Revoked"] },
+        observedInterfaceRevision: { type: "integer", minimum: 0 },
+        conditions: { type: "array", items: interfaceCondition },
+      },
+      additionalProperties: false,
+    },
+    InterfaceBinding: {
+      type: "object",
+      required: ["apiVersion", "kind", "metadata", "spec", "status"],
+      properties: {
+        apiVersion: { const: "takosumi.dev/v1alpha1" },
+        kind: { const: "InterfaceBinding" },
+        metadata: {
+          type: "object",
+          required: [
+            "id",
+            "workspaceId",
+            "generation",
+            "createdAt",
+            "updatedAt",
+          ],
+          properties: {
+            id: { type: "string" },
+            workspaceId: { type: "string" },
+            generation: { type: "integer", minimum: 1 },
+            materializedFrom: {
+              type: "object",
+              required: ["source", "interfaceKey", "key"],
+              properties: {
+                source: { const: "capsule_blueprint" },
+                interfaceKey: { type: "string", minLength: 1 },
+                key: { type: "string", minLength: 1 },
+              },
+              additionalProperties: false,
+            },
+            createdAt: { type: "string", format: "date-time" },
+            updatedAt: { type: "string", format: "date-time" },
+          },
+          additionalProperties: false,
+        },
+        spec: ref("InterfaceBindingSpec"),
+        status: ref("InterfaceBindingStatus"),
+      },
+      additionalProperties: false,
+    },
+    CreateInterfaceBindingRequest: {
+      type: "object",
+      required: ["subjectRef", "permissions", "delivery"],
+      properties: {
+        subjectRef: ref("InterfaceSubjectRef"),
+        permissions: {
+          type: "array",
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: "string" },
+        },
+        delivery: ref("InterfaceBindingDelivery"),
+      },
+      additionalProperties: false,
+    },
+    IssueInterfaceTokenRequest: {
+      type: "object",
+      required: ["permission"],
+      properties: {
+        permission: { type: "string", minLength: 1, maxLength: 256 },
+      },
+      additionalProperties: false,
+    },
+    IssueInterfaceTokenResponse: {
+      type: "object",
+      required: [
+        "access_token",
+        "token_type",
+        "expires_in",
+        "expires_at",
+        "scope",
+        "resource",
+      ],
+      properties: {
+        access_token: { type: "string", minLength: 1 },
+        token_type: { const: "Bearer" },
+        expires_in: { type: "integer", minimum: 1, maximum: 60 },
+        expires_at: { type: "string", format: "date-time" },
+        scope: { type: "string", minLength: 1 },
+        resource: { type: "string", format: "uri" },
+      },
+      additionalProperties: false,
+    },
+    ListInterfaceBindingsResponse: {
+      type: "object",
+      required: ["bindings"],
+      properties: {
+        bindings: { type: "array", items: ref("InterfaceBinding") },
+      },
+      additionalProperties: false,
+    },
   };
 }
 
@@ -531,7 +1471,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
     properties: {
       type: { type: "string" },
       status: { enum: ["true", "false", "unknown"] },
-      reason: { $ref: "#/components/schemas/CoreConditionReason" },
+      reason: { $ref: "#/components/schemas/ConditionReason" },
       message: { type: "string" },
       observedGeneration: { type: "number" },
       lastTransitionAt: { type: "string", format: "date-time" },
@@ -548,10 +1488,13 @@ function processSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    CoreConditionReason: {
-      enum: [...CORE_CONDITION_REASONS],
+    ConditionReason: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      pattern: "^[A-Za-z][A-Za-z0-9._:-]*$",
       description:
-        "Canonical condition reason catalog exported by takosumi-contract. CLI, app UI, API clients, controllers, and status projections must use these values for condition.reason.",
+        "Open machine-readable condition reason token. Core emits its documented reasons, while installed adapters may add versioned extension reasons without changing the Takosumi API schema.",
     },
     Condition: condition,
     ApiEndpointDescription: {
@@ -565,8 +1508,6 @@ function processSchemas(): Record<string, Record<string, unknown>> {
           enum: [
             "none",
             "inventory-bearer",
-            "deploy-token",
-            "artifact-read",
             "deploy-control-token",
             "metrics-scrape",
           ],
@@ -579,7 +1520,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
       required: ["role", "description"],
       properties: {
         role: {
-          enum: ["takosumi-api", "takosumi-worker", "takosumi-runtime-agent"],
+          enum: ["takosumi-api"],
         },
         description: { type: "string" },
       },
@@ -591,7 +1532,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         service: { const: "takosumi" },
         role: {
-          enum: ["takosumi-api", "takosumi-worker", "takosumi-runtime-agent"],
+          enum: ["takosumi-api"],
         },
         roleDescription: ref("ProcessRoleDescription"),
         endpoints: {
@@ -609,14 +1550,9 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         "opentofu_runner",
         "oidc",
         "workload_identity",
-        "billing",
-        "operator_tenants",
         "compat_framework",
-        "compat_s3",
-        "compat_oci",
-        "compat_cloudevents",
-        "compat_provider_cloudflare_workers",
-        "output_sync",
+        "compatibility_profiles",
+        "interfaces",
       ],
       properties: {
         stacks: { type: "boolean" },
@@ -624,14 +1560,12 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         opentofu_runner: { type: "boolean" },
         oidc: { type: "boolean" },
         workload_identity: { type: "boolean" },
-        billing: { type: "boolean" },
-        operator_tenants: { type: "boolean" },
         compat_framework: { type: "boolean" },
-        compat_s3: { type: "boolean" },
-        compat_oci: { type: "boolean" },
-        compat_cloudevents: { type: "boolean" },
-        compat_provider_cloudflare_workers: { type: "boolean" },
-        output_sync: { type: "boolean" },
+        compatibility_profiles: {
+          type: "array",
+          items: { type: "string" },
+        },
+        interfaces: { type: "boolean" },
       },
       additionalProperties: false,
     },
@@ -642,8 +1576,10 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         api: { type: "string", format: "uri" },
         capabilities: { type: "string", format: "uri" },
         oidc_issuer: { type: "string", format: "uri" },
-        s3: { type: "string", format: "uri" },
-        oci: { type: "string", format: "uri" },
+        extensions: {
+          type: "object",
+          additionalProperties: { type: "string", format: "uri" },
+        },
       },
       additionalProperties: false,
     },
@@ -654,12 +1590,6 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         api_versions: {
           type: "array",
           items: { const: "takosumi.dev/v1alpha1" },
-        },
-        edition: {
-          enum: ["core", "operator", "cloud"],
-          deprecated: true,
-          description:
-            "Deprecated compatibility hint. Clients must branch on capabilities, not edition names.",
         },
         features: ref("TakosumiWellKnownFeatures"),
         endpoints: ref("TakosumiWellKnownEndpoints"),
@@ -686,45 +1616,23 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         SQLDatabase: { type: "boolean" },
         ContainerService: { type: "boolean" },
       },
-      additionalProperties: false,
+      additionalProperties: { type: "boolean" },
     },
     TakosumiAdapterCapabilities: {
       type: "object",
-      required: [
-        "opentofu",
-        "aws",
-        "cloudflare",
-        "kubernetes",
-        "vm",
-        "takosumi_native",
-      ],
+      required: ["opentofu"],
       properties: {
         opentofu: { type: "boolean" },
-        aws: { type: "boolean" },
-        cloudflare: { type: "boolean" },
-        kubernetes: { type: "boolean" },
-        vm: { type: "boolean" },
-        takosumi_native: { type: "boolean" },
       },
       additionalProperties: { type: "boolean" },
     },
     TakosumiCompatCapabilities: {
       type: "object",
-      required: [
-        "framework",
-        "s3",
-        "oci",
-        "cloudevents",
-        "provider_cloudflare_workers",
-      ],
+      required: ["framework"],
       properties: {
         framework: { type: "boolean" },
-        s3: { type: "boolean" },
-        oci: { type: "boolean" },
-        cloudevents: { type: "boolean" },
-        provider_cloudflare_workers: { type: "boolean" },
       },
-      additionalProperties: false,
+      additionalProperties: { type: "boolean" },
     },
     TakosumiIdentityCapabilities: {
       type: "object",
@@ -760,17 +1668,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         usage_showback: { type: "boolean" },
         audit_evidence: { type: "boolean" },
       },
-      additionalProperties: false,
-    },
-    TakosumiCommercialCapabilities: {
-      type: "object",
-      required: ["billing", "operator_tenants", "payment_enforcement"],
-      properties: {
-        billing: { type: "boolean" },
-        operator_tenants: { type: "boolean" },
-        payment_enforcement: { type: "boolean" },
-      },
-      additionalProperties: false,
+      additionalProperties: { type: "boolean" },
     },
     TakosumiProductCapabilitiesResponse: {
       type: "object",
@@ -781,7 +1679,6 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         "compat",
         "identity",
         "operator",
-        "commercial",
         "extensions",
       ],
       properties: {
@@ -791,7 +1688,6 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         compat: ref("TakosumiCompatCapabilities"),
         identity: ref("TakosumiIdentityCapabilities"),
         operator: ref("TakosumiOperatorCapabilities"),
-        commercial: ref("TakosumiCommercialCapabilities"),
         extensions: { type: "array", items: { type: "string" } },
       },
       additionalProperties: false,
@@ -838,35 +1734,10 @@ function runnerSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    OpenTofuPreparedModuleSource: {
-      type: "object",
-      required: ["kind", "url", "digest"],
-      properties: {
-        kind: { const: "prepared" },
-        url: { type: "string" },
-        digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-        modulePath: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    OpenTofuLocalModuleSource: {
-      type: "object",
-      required: ["kind", "path"],
-      properties: {
-        kind: { const: "local" },
-        path: { type: "string" },
-        modulePath: { type: "string" },
-      },
-      additionalProperties: false,
-    },
     OpenTofuModuleSource: {
-      oneOf: [
-        ref("OpenTofuGitModuleSource"),
-        ref("OpenTofuPreparedModuleSource"),
-        ref("OpenTofuLocalModuleSource"),
-      ],
+      allOf: [ref("OpenTofuGitModuleSource")],
       description:
-        "Plain OpenTofu module source. Display metadata comes from Git identity, module path, and OpenTofu outputs.",
+        "Git-backed OpenTofu module source. Source authoring is Git-only; immutable archives are runner transport, not another source kind.",
     },
     RunnerStateLockPolicy: {
       type: "object",
@@ -884,23 +1755,6 @@ function runnerSchemas(): Record<string, Record<string, unknown>> {
         kind: { type: "string" },
         ref: { type: "string" },
         lock: ref("RunnerStateLockPolicy"),
-      },
-      additionalProperties: false,
-    },
-    RunnerCredentialReference: {
-      type: "object",
-      required: ["provider", "ref"],
-      properties: {
-        provider: { type: "string" },
-        ref: { type: "string" },
-        required: { type: "boolean" },
-      },
-      additionalProperties: false,
-    },
-    RunnerSourcePolicy: {
-      type: "object",
-      properties: {
-        allowLocalSource: { type: "boolean" },
       },
       additionalProperties: false,
     },
@@ -922,17 +1776,6 @@ function runnerSchemas(): Record<string, Record<string, unknown>> {
         mode: { type: "string" },
         allowedHosts: { type: "array", items: { type: "string" } },
         allowedHostPatterns: { type: "array", items: { type: "string" } },
-      },
-      additionalProperties: false,
-    },
-    CloudflareContainerExecution: {
-      type: "object",
-      required: ["image"],
-      properties: {
-        image: { type: "string" },
-        queueName: { type: "string" },
-        durableObjectBinding: { type: "string" },
-        workDir: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -975,6 +1818,11 @@ function runnerSchemas(): Record<string, Record<string, unknown>> {
       required: ["severity", "message"],
       properties: {
         severity: { enum: ["info", "warning", "error"] },
+        code: {
+          type: "string",
+          description:
+            "Stable machine-readable classification. Clients must not parse message or detail.",
+        },
         message: { type: "string" },
         detail: { type: "string" },
       },
@@ -1008,14 +1856,18 @@ function runnerSchemas(): Record<string, Record<string, unknown>> {
   };
 }
 
-/** Installation records and their service-side InstallConfig. */
-function installationSchemas(): Record<string, Record<string, unknown>> {
+/** Capsule records and their service-side InstallConfig. */
+function capsuleAndInstallConfigSchemas(): Record<
+  string,
+  Record<string, unknown>
+> {
   return {
-    Installation: {
+    Capsule: {
       type: "object",
       required: [
         "id",
-        "spaceId",
+        "workspaceId",
+        "projectId",
         "name",
         "slug",
         "sourceId",
@@ -1028,16 +1880,18 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         id: { type: "string" },
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
+        projectId: { type: "string" },
         name: { type: "string" },
         slug: { type: "string" },
         sourceId: { type: "string" },
         installConfigId: { type: "string" },
         environment: { type: "string" },
-        currentDeploymentId: { type: "string" },
+        currentStateVersionId: { type: "string" },
         currentStateGeneration: { type: "number" },
+        compatibilityReportId: { type: "string" },
         compatibilityStatus: {
-          enum: ["ready", "auto_capsulized", "needs_patch", "unsupported"],
+          enum: ["ready", "needs_patch", "unsupported"],
         },
         status: {
           enum: [
@@ -1049,6 +1903,7 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
             "destroyed",
           ],
         },
+        autoUpdate: { type: "boolean" },
         createdAt: { type: "string" },
         updatedAt: { type: "string" },
       },
@@ -1059,8 +1914,6 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
       required: [
         "id",
         "name",
-        "sourceKind",
-        "trustLevel",
         "variableMapping",
         "outputAllowlist",
         "policy",
@@ -1069,30 +1922,167 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         id: { type: "string" },
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
         name: { type: "string" },
-        sourceKind: {
-          enum: ["generic_capsule", "first_party_capsule"],
-        },
-        trustLevel: {
-          enum: ["official", "trusted", "space", "raw"],
-        },
         modulePath: { type: "string" },
-        normalization: {
+        lifecycleActions: {
+          type: "array",
+          maxItems: 20,
+          items: {
+            type: "object",
+            required: [
+              "apiVersion",
+              "kind",
+              "id",
+              "phase",
+              "executor",
+              "command",
+              "runnerCapability",
+            ],
+            properties: {
+              apiVersion: { const: "takosumi.dev/v1alpha1" },
+              kind: { const: "command" },
+              id: { type: "string" },
+              phase: { enum: ["post_apply", "pre_destroy"] },
+              executor: { enum: ["runner", "operator"] },
+              command: {
+                type: "array",
+                minItems: 1,
+                maxItems: 40,
+                items: { type: "string" },
+              },
+              workingDirectory: { type: "string" },
+              env: {
+                type: "object",
+                additionalProperties: { type: "string" },
+              },
+              timeoutSeconds: {
+                type: "integer",
+                minimum: 1,
+                maximum: 21600,
+              },
+              runnerCapability: { type: "string" },
+              useProviderCredentials: { type: "boolean" },
+            },
+            additionalProperties: false,
+          },
+        },
+        variableMapping: { type: "object", additionalProperties: true },
+        installContextVariableMapping: {
           type: "object",
-          required: [
-            "allowBackendRewrite",
-            "allowProviderLift",
-            "allowAliasInjection",
-          ],
+          propertyNames: {
+            pattern: "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*$",
+          },
+          additionalProperties: { enum: ["workspace_id", "capsule_id"] },
+        },
+        variablePresentation: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["name", "label"],
+            properties: {
+              name: { type: "string" },
+              type: { enum: ["string", "number", "boolean", "json"] },
+              format: {
+                type: "string",
+                minLength: 1,
+                maxLength: 64,
+                pattern: "^[A-Za-z][A-Za-z0-9._:-]*$",
+                description:
+                  "Open presentation hint. Unknown hints fall back to a generic input and never grant execution authority.",
+              },
+              required: { type: "boolean" },
+              advanced: { type: "boolean" },
+              secret: { type: "boolean" },
+              defaultValue: {
+                oneOf: [
+                  {
+                    type: "object",
+                    required: ["source", "value"],
+                    properties: {
+                      source: { const: "literal" },
+                      value: {},
+                    },
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    required: ["source"],
+                    properties: { source: { const: "capsule_name" } },
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    required: ["source"],
+                    properties: {
+                      source: {
+                        const: "workspace_scoped_capsule_name",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
+              label: { $ref: "#/components/schemas/LocalizedText" },
+              helper: { $ref: "#/components/schemas/LocalizedText" },
+              placeholder: { type: "string" },
+            },
+            additionalProperties: false,
+          },
+        },
+        installExperience: {
+          type: "object",
           properties: {
-            allowBackendRewrite: { type: "boolean" },
-            allowProviderLift: { type: "boolean" },
-            allowAliasInjection: { type: "boolean" },
+            projections: {
+              type: "array",
+              maxItems: 20,
+              items: {
+                type: "object",
+                required: ["kind"],
+                allOf: [
+                  {
+                    if: {
+                      properties: { kind: { const: "oidc_client" } },
+                      required: ["kind"],
+                    },
+                    then: { required: ["variables", "callbackPath"] },
+                  },
+                ],
+                properties: {
+                  kind: {
+                    enum: [
+                      "service_name",
+                      "public_endpoint",
+                      "initial_secret",
+                      "oidc_client",
+                      "artifact",
+                    ],
+                  },
+                  variable: { type: "string" },
+                  variables: { type: "object", additionalProperties: true },
+                  baseDomain: { type: "string" },
+                  secretKind: {
+                    enum: ["password", "password_or_hash", "token"],
+                  },
+                  optional: { type: "boolean" },
+                  callbackPath: {
+                    type: "string",
+                    minLength: 1,
+                    pattern: "^/",
+                  },
+                  scopes: { type: "array", items: { type: "string" } },
+                },
+                additionalProperties: false,
+              },
+            },
           },
           additionalProperties: false,
         },
-        variableMapping: { type: "object", additionalProperties: true },
+        interfaceBlueprints: {
+          type: "array",
+          maxItems: 64,
+          items: ref("CapsuleInterfaceBlueprint"),
+        },
         outputAllowlist: {
           type: "object",
           additionalProperties: {
@@ -1116,7 +2106,7 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
             additionalProperties: false,
           },
         },
-        policy: { type: "object", additionalProperties: true },
+        policy: ref("PolicyConfig"),
         store: {
           type: "object",
           required: [
@@ -1128,60 +2118,35 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
             "badge",
             "name",
             "description",
-            "inputs",
           ],
           properties: {
-            templateId: { type: "string" },
-            templateVersion: { type: "string" },
             source: {
               type: "object",
-              required: ["git", "path"],
+              required: ["url", "path"],
               properties: {
-                git: { type: "string" },
+                url: { type: "string" },
                 ref: { type: "string" },
                 path: { type: "string" },
               },
               additionalProperties: false,
             },
             order: { type: "integer", minimum: 0 },
-            surface: { enum: ["service", "building_block", "example"] },
-            kind: { enum: ["worker", "storage", "site"] },
+            surface: {
+              type: "string",
+              description:
+                "Operator-defined discovery surface with no execution semantics.",
+            },
+            kind: {
+              type: "string",
+              description:
+                "Operator-defined discovery kind with no execution semantics.",
+            },
             provider: { type: "string" },
             suggestedName: { type: "string" },
             badge: { $ref: "#/components/schemas/LocalizedText" },
             name: { $ref: "#/components/schemas/LocalizedText" },
             description: { $ref: "#/components/schemas/LocalizedText" },
-            inputs: {
-              type: "array",
-              items: {
-                type: "object",
-                required: ["name", "label"],
-                properties: {
-                  name: { type: "string" },
-                  type: { enum: ["string", "number", "boolean", "json"] },
-                  format: {
-                    enum: [
-                      "text",
-                      "url",
-                      "hostname",
-                      "subdomain",
-                      "password",
-                      "token",
-                      "email",
-                      "sha256",
-                    ],
-                  },
-                  required: { type: "boolean" },
-                  advanced: { type: "boolean" },
-                  secret: { type: "boolean" },
-                  defaultValue: { type: "string" },
-                  label: { $ref: "#/components/schemas/LocalizedText" },
-                  helper: { $ref: "#/components/schemas/LocalizedText" },
-                  placeholder: { type: "string" },
-                },
-                additionalProperties: false,
-              },
-            },
+            iconUrl: { type: "string" },
           },
           additionalProperties: false,
         },
@@ -1197,6 +2162,12 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
                 "provider_snapshot",
                 "custom_command",
               ],
+            },
+            adapterId: {
+              type: "string",
+              pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+              description:
+                "Exact operator-installed producer adapter; required for provider_snapshot.",
             },
             command: { type: "array", items: { type: "string" } },
             outputPath: { type: "string" },
@@ -1219,9 +2190,14 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
   return {
     CapsuleCompatibilityFinding: {
       type: "object",
-      required: ["severity", "code", "message"],
+      required: ["severity", "compatibilityImpact", "code", "message"],
       properties: {
         severity: { enum: ["info", "warning", "error"] },
+        compatibilityImpact: {
+          enum: ["none", "needs_patch", "unsupported"],
+          description:
+            "Structured effect on the aggregate compatibility level; clients must not infer it from the finding code.",
+        },
         code: { type: "string" },
         message: { type: "string" },
         path: { type: "string" },
@@ -1272,6 +2248,7 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: [
         "id",
+        "sourceId",
         "sourceSnapshotId",
         "level",
         "findings",
@@ -1284,10 +2261,10 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         id: { type: "string" },
         sourceId: { type: "string" },
-        installationId: { type: "string" },
+        capsuleId: { type: "string" },
         sourceSnapshotId: { type: "string" },
         level: {
-          enum: ["ready", "auto_capsulized", "needs_patch", "unsupported"],
+          enum: ["ready", "needs_patch", "unsupported"],
         },
         findings: {
           type: "array",
@@ -1315,7 +2292,16 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
         },
         rootModuleOutputs: {
           type: "array",
-          items: { type: "string" },
+          items: {
+            type: "object",
+            required: ["name", "sensitive", "ephemeral"],
+            properties: {
+              name: { type: "string" },
+              sensitive: { type: ["boolean", "null"] },
+              ephemeral: { type: ["boolean", "null"] },
+            },
+            additionalProperties: false,
+          },
         },
         providerRequirements: {
           type: "array",
@@ -1325,8 +2311,6 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
           type: "array",
           items: ref("ProviderResolution"),
         },
-        normalizedObjectKey: { type: "string" },
-        normalizedDigest: { type: "string" },
         createdAt: { type: "string" },
       },
       additionalProperties: false,
@@ -1337,7 +2321,10 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
 function providerResolutionSchemas(): Record<string, Record<string, unknown>> {
   return {
     ProviderConnectionMaterialization: {
-      enum: [...PROVIDER_CONNECTION_MATERIALIZATIONS],
+      type: "string",
+      description:
+        "Opaque inert audit/UI label. CredentialRecipe controls execution.",
+      examples: ["secret", "oauth"],
     },
     ProviderResolutionStatus: {
       enum: [...PUBLIC_PROVIDER_RESOLUTION_STATUSES],
@@ -1408,26 +2395,6 @@ function providerResolutionSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    RuntimeGrantProjection: {
-      type: "object",
-      required: [
-        "grantId",
-        "serviceExportId",
-        "serviceBindingId",
-        "installationId",
-        "capability",
-      ],
-      properties: {
-        grantId: { type: "string" },
-        serviceExportId: { type: "string" },
-        serviceBindingId: { type: "string" },
-        installationId: { type: "string" },
-        capability: { type: "string" },
-        expiresAt: { type: "string", format: "date-time" },
-        rotationPolicyId: { type: "string" },
-      },
-      additionalProperties: false,
-    },
   };
 }
 
@@ -1439,7 +2406,40 @@ function providerConnectionAndRecipeSchemas(): Record<
   Record<string, unknown>
 > {
   return {
-    ProviderConnectionKind: { enum: [...PROVIDER_CONNECTION_KINDS] },
+    SourceGitConnectionKind: {
+      enum: [...SOURCE_GIT_CONNECTION_KINDS],
+      description:
+        "Source-phase Git credential transport. Provider Connections select a CredentialRecipe instead.",
+    },
+    ProviderConnectionRecipeRef: {
+      type: "object",
+      required: ["id", "authMode"],
+      properties: {
+        id: { type: "string" },
+        authMode: { type: "string" },
+        secretPartition: {
+          type: "string",
+          description:
+            "Opaque at-rest partition pinned when the connection is created.",
+        },
+        envNames: { type: "array", items: { type: "string" } },
+        fileEnvNames: { type: "array", items: { type: "string" } },
+        requiredEnvGroups: {
+          type: "array",
+          items: { type: "array", items: { type: "string" } },
+        },
+        declaredEnv: {
+          type: "boolean",
+          description:
+            "Resolved installed-recipe capability pinned by the service; caller values cannot enable it.",
+        },
+        preRunAction: {
+          type: "string",
+          description: "Opaque installed pre-run driver token, when selected.",
+        },
+      },
+      additionalProperties: false,
+    },
     CredentialRecipeMaterial: {
       type: "object",
       required: ["from"],
@@ -1464,6 +2464,51 @@ function providerConnectionAndRecipeSchemas(): Record<
         },
       ],
     },
+    CredentialRecipePresentationText: {
+      oneOf: [
+        { type: "string" },
+        {
+          type: "object",
+          additionalProperties: { type: "string" },
+        },
+      ],
+      description:
+        "Presentation-only text. Locale keys are open language tags and never affect credential execution.",
+    },
+    CredentialRecipeInputHint: {
+      type: "object",
+      properties: {
+        label: ref("CredentialRecipePresentationText"),
+        placeholder: ref("CredentialRecipePresentationText"),
+        required: { type: "boolean" },
+        secret: { type: "boolean" },
+        hidden: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    CredentialRecipeAuthModePresentation: {
+      type: "object",
+      properties: {
+        showInConnectionSetup: { type: "boolean" },
+        displayName: ref("CredentialRecipePresentationText"),
+        description: ref("CredentialRecipePresentationText"),
+        setupGuide: {
+          type: "object",
+          required: ["url"],
+          properties: {
+            url: { type: "string", format: "uri" },
+            steps: {
+              type: "array",
+              items: ref("CredentialRecipePresentationText"),
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+      description:
+        "Optional setup presentation. env/files/preRun remain the only execution authority.",
+    },
     CredentialRecipeAuthMode: {
       type: "object",
       properties: {
@@ -1487,6 +2532,11 @@ function providerConnectionAndRecipeSchemas(): Record<
           },
           additionalProperties: false,
         },
+        inputHints: {
+          type: "object",
+          additionalProperties: ref("CredentialRecipeInputHint"),
+        },
+        presentation: ref("CredentialRecipeAuthModePresentation"),
       },
       additionalProperties: false,
     },
@@ -1496,7 +2546,7 @@ function providerConnectionAndRecipeSchemas(): Record<
       properties: {
         id: { type: "string" },
         displayName: { type: "string" },
-        providerRule: { type: "string" },
+        secretPartition: { type: "string" },
         terraformSource: {
           oneOf: [{ const: "*" }, { type: "array", items: { type: "string" } }],
         },
@@ -1513,7 +2563,6 @@ function providerConnectionAndRecipeSchemas(): Record<
       },
       additionalProperties: false,
     },
-    ProviderConnectionStatus: { enum: [...PROVIDER_CONNECTION_STATUSES] },
     ProviderConnection: {
       type: "object",
       required: [
@@ -1529,16 +2578,18 @@ function providerConnectionAndRecipeSchemas(): Record<
       ],
       properties: {
         id: { type: "string" },
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
         provider: { type: "string" },
         providerSource: { type: "string" },
-        kind: ref("ProviderConnectionKind"),
-        scope: { enum: ["operator", "space"] },
+        credentialRecipe: ref("ProviderConnectionRecipeRef"),
+        kind: ref("SourceGitConnectionKind"),
+        scope: { enum: ["operator", "workspace"] },
         displayName: { type: "string" },
         status: {
           enum: ["pending", "verified", "revoked", "expired", "error"],
         },
         materialization: ref("ProviderConnectionMaterialization"),
+        scopeHints: ref("ConnectionScope"),
         envNames: { type: "array", items: { type: "string" } },
         fileEnvNames: { type: "array", items: { type: "string" } },
         expiresAt: { type: "string", format: "date-time" },
@@ -1571,7 +2622,7 @@ function providerConnectionAndRecipeSchemas(): Record<
           description:
             "Safe relative OpenTofu/Terraform module path inside the SourceSnapshot archive.",
         },
-        installationId: { type: "string" },
+        capsuleId: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -1587,76 +2638,77 @@ function providerConnectionAndRecipeSchemas(): Record<
   };
 }
 
-/** OutputSnapshot / Deployment projections and their read wrappers. */
+/** Output / StateVersion projections and their read wrappers. */
 function outputSchemas(): Record<string, Record<string, unknown>> {
   return {
-    OutputSnapshot: {
+    Output: {
       type: "object",
       description:
-        "Public tofu output generation projection. Raw output JSON remains an encrypted artifact on the internal ledger and is not exposed on this schema; publicOutputs and spaceOutputs are allowlisted non-secret projections.",
+        "Public OpenTofu output projection. Raw output JSON remains an encrypted internal artifact; publicOutputs is the explicit InstallConfig projection and workspaceOutputs is a bounded non-secret Workspace-local capture for Dependency and Interface resolution.",
       required: [
         "id",
-        "spaceId",
-        "installationId",
+        "workspaceId",
+        "capsuleId",
         "stateGeneration",
         "publicOutputs",
-        "spaceOutputs",
+        "workspaceOutputs",
         "outputDigest",
         "createdAt",
       ],
       properties: {
         id: { type: "string" },
-        spaceId: { type: "string" },
-        installationId: { type: "string" },
+        workspaceId: { type: "string" },
+        capsuleId: { type: "string" },
         stateGeneration: { type: "number" },
         publicOutputs: { type: "object", additionalProperties: true },
-        spaceOutputs: { type: "object", additionalProperties: true },
+        workspaceOutputs: { type: "object", additionalProperties: true },
         outputDigest: { type: "string" },
         createdAt: { type: "string" },
       },
       additionalProperties: false,
     },
-    Deployment: {
+    OutputResponse: {
+      type: "object",
+      required: ["output"],
+      properties: {
+        output: {
+          oneOf: [ref("Output"), { type: "null" }],
+        },
+      },
+      additionalProperties: false,
+    },
+    StateVersion: {
       type: "object",
       required: [
         "id",
-        "spaceId",
-        "installationId",
+        "workspaceId",
+        "capsuleId",
         "environment",
-        "applyRunId",
-        "stateGeneration",
-        "outputsPublic",
-        "status",
+        "generation",
+        "stateRef",
+        "digest",
+        "createdByRunId",
         "createdAt",
       ],
       properties: {
         id: { type: "string" },
-        spaceId: { type: "string" },
-        installationId: { type: "string" },
+        workspaceId: { type: "string" },
+        capsuleId: { type: "string" },
         environment: { type: "string" },
-        applyRunId: { type: "string" },
-        sourceSnapshotId: { type: "string" },
-        dependencySnapshotId: { type: "string" },
-        stateGeneration: { type: "number" },
-        outputsPublic: { type: "object", additionalProperties: true },
-        status: { enum: ["active", "superseded", "rolled_back", "destroyed"] },
+        generation: { type: "integer" },
+        stateRef: { type: "string" },
+        digest: { type: "string" },
+        createdByRunId: { type: "string" },
         createdAt: { type: "string" },
       },
       additionalProperties: false,
     },
-    GetInstallationResponse: {
+    ListStateVersionsResponse: {
       type: "object",
-      required: ["installation"],
+      required: ["stateVersions"],
       properties: {
-        installation: ref("Installation"),
-      },
-      additionalProperties: false,
-    },
-    ListDeploymentsResponse: {
-      type: "object",
-      required: ["deployments"],
-      properties: {
-        deployments: { type: "array", items: ref("Deployment") },
+        stateVersions: { type: "array", items: ref("StateVersion") },
+        nextCursor: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -1672,97 +2724,27 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
     ConnectionScope: {
       type: "object",
       properties: {
-        accountId: { type: "string" },
-        zoneId: { type: "string" },
-        managedPublicBaseDomain: { type: "string", format: "hostname" },
-        cloudflareTokenVending: {
+        managedProvider: { type: "boolean" },
+        providerConfig: {
           type: "object",
-          required: ["policies"],
-          properties: {
-            policies: {
-              type: "array",
-              items: {
-                type: "object",
-                required: ["effect", "permission_groups", "resources"],
-                properties: {
-                  id: { type: "string" },
-                  effect: { enum: ["allow", "deny"] },
-                  permission_groups: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      required: ["id"],
-                      properties: {
-                        id: { type: "string" },
-                        meta: {
-                          type: "object",
-                          additionalProperties: { type: "string" },
-                        },
-                        name: { type: "string" },
-                      },
-                      additionalProperties: false,
-                    },
-                  },
-                  resources: {
-                    type: "object",
-                    additionalProperties: true,
-                  },
-                },
-                additionalProperties: false,
-              },
-            },
-            ttlSeconds: { type: "integer", minimum: 60, maximum: 86400 },
-            namePrefix: { type: "string" },
-            condition: {
-              type: "object",
-              additionalProperties: true,
-            },
-          },
-          additionalProperties: false,
+          additionalProperties: true,
         },
-        username: { type: "string" },
-        knownHostsEntry: { type: "string" },
-        awsRoleArn: { type: "string" },
-        awsExternalId: { type: "string" },
-        awsRegion: { type: "string" },
-        gcpServiceAccountEmail: { type: "string" },
-        gcpProjectId: { type: "string" },
-        templateId: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    Connection: {
-      type: "object",
-      required: [
-        "id",
-        "provider",
-        "providerSource",
-        "scope",
-        "status",
-        "materialization",
-        "envNames",
-        "createdAt",
-        "updatedAt",
-      ],
-      properties: {
-        id: { type: "string" },
-        spaceId: { type: "string" },
-        provider: { type: "string" },
-        providerSource: { type: "string" },
-        kind: ref("ProviderConnectionKind"),
-        scope: { enum: ["operator", "space"] },
-        displayName: { type: "string" },
-        status: {
-          enum: ["pending", "verified", "revoked", "expired", "error"],
+        moduleInputDefaults: {
+          type: "object",
+          additionalProperties: true,
         },
-        materialization: ref("ProviderConnectionMaterialization"),
-        scopeHints: ref("ConnectionScope"),
-        envNames: { type: "array", items: { type: "string" } },
-        fileEnvNames: { type: "array", items: { type: "string" } },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-        verifiedAt: { type: "string", format: "date-time" },
-        expiresAt: { type: "string", format: "date-time" },
+        providerSettings: {
+          type: "object",
+          description:
+            "Opaque non-secret settings decoded only by the explicitly selected provider helper or credential recipe driver.",
+          additionalProperties: true,
+        },
+        managedProviderProfile: {
+          type: "string",
+          description:
+            "Opaque operator-owned profile authorizing this public managed Provider Connection. It must exactly match the receiving extension profile and is never inferred from providerConfig.",
+        },
+        managedPublicBaseDomain: { type: "string", format: "hostname" },
       },
       additionalProperties: false,
     },
@@ -1799,12 +2781,13 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: ["provider", "values"],
       properties: {
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
         provider: { type: "string" },
-        kind: ref("ProviderConnectionKind"),
+        credentialRecipe: ref("ProviderConnectionRecipeRef"),
+        kind: ref("SourceGitConnectionKind"),
         materialization: ref("ProviderConnectionMaterialization"),
         displayName: { type: "string" },
-        scope: { enum: ["operator", "space"] },
+        scope: { enum: ["operator", "workspace"] },
         scopeHints: ref("ConnectionScope"),
         expiresAt: { type: "string", format: "date-time" },
         values: {
@@ -1826,7 +2809,7 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: ["connection"],
       properties: {
-        connection: ref("Connection"),
+        connection: ref("ProviderConnection"),
       },
       additionalProperties: false,
     },
@@ -1834,31 +2817,31 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: ["connections"],
       properties: {
-        connections: { type: "array", items: ref("Connection") },
+        connections: { type: "array", items: ref("ProviderConnection") },
       },
       additionalProperties: false,
     },
-    CreateConnectionSubrouteRequest: {
+    ConnectionSetupRequest: {
       type: "object",
       required: ["values"],
       properties: {
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
         provider: { type: "string" },
         displayName: { type: "string" },
-        scope: { enum: ["operator", "space"] },
+        scope: { enum: ["operator", "workspace"] },
         scopeHints: ref("ConnectionScope"),
         expiresAt: { type: "string", format: "date-time" },
         values: {
           type: "object",
           additionalProperties: { type: "string" },
           description:
-            "Write-only credential values keyed by env name. The subroute fixes provider, kind, and authMethod; values are never echoed.",
+            "Write-only credential values passed to the explicitly selected provider-owned setup helper; values are never echoed.",
         },
         files: {
           type: "array",
           items: ref("CreateConnectionFile"),
           description:
-            "Write-only credential files accepted by the generic-env provider subroute. Fixed provider subroutes reject credential files.",
+            "Write-only credential files passed to the explicitly selected provider-owned setup helper.",
         },
       },
       additionalProperties: false,
@@ -1866,9 +2849,9 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
     ConnectionOAuthStartRequest: {
       type: "object",
       properties: {
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
         displayName: { type: "string" },
-        scope: { enum: ["operator", "space"] },
+        scope: { enum: ["operator", "workspace"] },
         scopeHints: ref("ConnectionScope"),
         expiresAt: { type: "string", format: "date-time" },
         redirectUri: { type: "string" },
@@ -1883,24 +2866,6 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
         authorizationUrl: { type: "string" },
         state: { type: "string" },
         expiresAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
-    GcpImpersonationConnectionRequest: {
-      type: "object",
-      required: ["scopeHints", "values"],
-      properties: {
-        spaceId: { type: "string" },
-        displayName: { type: "string" },
-        scope: { enum: ["operator", "space"] },
-        scopeHints: ref("ConnectionScope"),
-        expiresAt: { type: "string", format: "date-time" },
-        values: {
-          type: "object",
-          additionalProperties: { type: "string" },
-          description:
-            "Write-only Google provider bootstrap env values. Never echoed.",
-        },
       },
       additionalProperties: false,
     },
@@ -1923,7 +2888,7 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: [
         "id",
-        "spaceId",
+        "workspaceId",
         "name",
         "url",
         "defaultRef",
@@ -1935,7 +2900,7 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         id: { type: "string" },
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
         name: { type: "string" },
         url: { type: "string" },
         defaultRef: { type: "string" },
@@ -1953,12 +2918,13 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       required: [
         "id",
         "origin",
-        "spaceId",
+        "workspaceId",
+        "sourceId",
         "url",
         "ref",
         "resolvedCommit",
         "path",
-        "archiveObjectKey",
+        "archiveRef",
         "archiveDigest",
         "archiveSizeBytes",
         "fetchedByRunId",
@@ -1966,14 +2932,14 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         id: { type: "string" },
-        origin: { enum: ["git", "upload", "artifact"] },
-        spaceId: { type: "string" },
+        origin: { const: "git" },
+        workspaceId: { type: "string" },
         sourceId: { type: "string" },
         url: { type: "string" },
         ref: { type: "string" },
         resolvedCommit: { type: "string" },
         path: { type: "string" },
-        archiveObjectKey: { type: "string" },
+        archiveRef: { type: "string" },
         archiveDigest: { type: "string" },
         archiveSizeBytes: { type: "number" },
         fetchedByRunId: { type: "string" },
@@ -1986,12 +2952,12 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       required: [
         "id",
         "kind",
-        "spaceId",
+        "workspaceId",
         "sourceId",
         "url",
         "ref",
         "path",
-        "archiveObjectKey",
+        "archiveRef",
         "status",
         "createdAt",
         "updatedAt",
@@ -1999,12 +2965,12 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         id: { type: "string" },
         kind: { enum: ["source_sync"] },
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
         sourceId: { type: "string" },
         url: { type: "string" },
         ref: { type: "string" },
         path: { type: "string" },
-        archiveObjectKey: { type: "string" },
+        archiveRef: { type: "string" },
         intent: { enum: ["observe", "manual_plan"] },
         status: { enum: ["queued", "running", "succeeded", "failed"] },
         createdAt: { type: "string", format: "date-time" },
@@ -2035,9 +3001,9 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
     },
     CreateSourceRequest: {
       type: "object",
-      required: ["spaceId", "name", "url"],
+      required: ["workspaceId", "name", "url"],
       properties: {
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
         name: { type: "string" },
         url: { type: "string" },
         defaultRef: { type: "string" },
@@ -2098,354 +3064,72 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    UploadSnapshotResponse: {
-      type: "object",
-      required: ["snapshot"],
-      properties: { snapshot: ref("SourceSnapshot") },
-      additionalProperties: false,
-    },
-    ArtifactSnapshotRequest: {
-      type: "object",
-      required: ["url", "digest"],
-      description:
-        "Legacy/operator prepared Capsule source archive ingest. Despite the route name, this is not a deployable app artifact fetch path.",
-      properties: {
-        url: {
-          type: "string",
-          format: "uri",
-          description: "HTTPS URL of a prepared source.tar.zst archive.",
-        },
-        digest: {
-          type: "string",
-          description: "sha256 digest of the prepared source archive bytes.",
-        },
-        format: { enum: ["tar.zst"] },
-        path: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    ArtifactSnapshotResponse: {
-      type: "object",
-      required: ["snapshot"],
-      properties: { snapshot: ref("SourceSnapshot") },
-      additionalProperties: false,
-    },
   };
 }
 
-/** Direct upload deploy entry point shapes. */
-function deploySchemas(): Record<string, Record<string, unknown>> {
-  const installationProviderConnectionBinding = {
-    type: "object",
-    required: ["provider", "connectionId"],
-    properties: {
-      provider: { type: "string" },
-      alias: { type: "string" },
-      connectionId: { type: "string" },
-      region: { type: "string" },
-    },
-    additionalProperties: false,
-  };
-  const internalProviderResolverBinding = {
-    type: "object",
-    required: ["provider", "envId"],
-    properties: {
-      provider: { type: "string" },
-      alias: { type: "string" },
-      envId: { type: "string" },
-      region: { type: "string" },
-    },
-    additionalProperties: false,
-  };
-  const jsonValue = {
-    oneOf: [
-      { type: "string" },
-      { type: "number" },
-      { type: "integer" },
-      { type: "boolean" },
-      { type: "array" },
-      { type: "object" },
-      { type: "null" },
-    ],
-  };
+/** Shared response stubs used by no-content process and control routes. */
+function responseSchemas(): Record<string, Record<string, unknown>> {
   return {
-    DeployRequest: {
-      type: "object",
-      required: ["spaceId", "name", "snapshotId"],
-      properties: {
-        spaceId: { type: "string" },
-        name: { type: "string" },
-        environment: { type: "string" },
-        snapshotId: { type: "string" },
-        modulePath: { type: "string" },
-        runnerId: { type: "string" },
-        vars: {
-          type: "object",
-          additionalProperties: jsonValue,
-        },
-        outputAllowlist: {
-          type: "object",
-          additionalProperties: {
-            type: "object",
-            required: ["from", "type"],
-            properties: {
-              from: { type: "string" },
-              type: {
-                enum: [
-                  "string",
-                  "url",
-                  "hostname",
-                  "number",
-                  "boolean",
-                  "json",
-                ],
-              },
-              sensitive: { type: "boolean" },
-              required: { type: "boolean" },
-            },
-            additionalProperties: false,
-          },
-        },
-        providerConnections: {
-          type: "array",
-          items: installationProviderConnectionBinding,
-        },
-        planOnly: { type: "boolean" },
-        autoApprove: { type: "boolean" },
-      },
-      additionalProperties: false,
-    },
-    DeployUploadSnapshotRequest: {
-      type: "object",
-      required: ["spaceId", "name", "snapshotId"],
-      properties: {
-        spaceId: { type: "string" },
-        name: { type: "string" },
-        environment: { type: "string" },
-        snapshotId: { type: "string" },
-        modulePath: { type: "string" },
-        runnerId: { type: "string" },
-        vars: {
-          type: "object",
-          additionalProperties: jsonValue,
-        },
-        outputAllowlist: {
-          type: "object",
-          additionalProperties: {
-            type: "object",
-            required: ["from", "type"],
-            properties: {
-              from: { type: "string" },
-              type: {
-                enum: [
-                  "string",
-                  "url",
-                  "hostname",
-                  "number",
-                  "boolean",
-                  "json",
-                ],
-              },
-              sensitive: { type: "boolean" },
-              required: { type: "boolean" },
-            },
-            additionalProperties: false,
-          },
-        },
-        providerEnvBindings: {
-          type: "array",
-          items: internalProviderResolverBinding,
-        },
-        planOnly: { type: "boolean" },
-        autoApprove: { type: "boolean" },
-      },
-      additionalProperties: false,
-    },
-    DeployResponse: {
-      type: "object",
-      required: ["installation", "installConfigId", "run", "created"],
-      properties: {
-        installation: ref("Installation"),
-        installConfigId: { type: "string" },
-        run: ref("Run"),
-        planRun: ref("Run"),
-        applyRun: ref("Run"),
-        status: {
-          enum: [
-            "planned",
-            "applying",
-            "applied",
-            "waiting_approval",
-            "failed",
-          ],
-        },
-        runGroupId: { type: "string" },
-        created: { type: "boolean" },
-      },
-      additionalProperties: false,
-    },
-  };
-}
-
-/** Artifact store shapes plus the shared binary / empty response stubs. */
-function artifactSchemas(): Record<string, Record<string, unknown>> {
-  return {
-    ArtifactStored: {
-      type: "object",
-      required: ["hash", "kind", "size", "uploadedAt"],
-      properties: {
-        hash: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-        kind: { type: "string" },
-        size: { type: "number" },
-        uploadedAt: { type: "string", format: "date-time" },
-        metadata: jsonObject,
-      },
-      additionalProperties: false,
-    },
-    ArtifactListResponse: {
-      type: "object",
-      required: ["artifacts"],
-      properties: {
-        artifacts: { type: "array", items: ref("ArtifactStored") },
-        nextCursor: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    ArtifactGcResponse: {
-      type: "object",
-      required: ["deleted", "retained", "dryRun"],
-      properties: {
-        deleted: {
-          type: "array",
-          items: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-        },
-        retained: { type: "integer", minimum: 0 },
-        dryRun: { type: "boolean" },
-        warning: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    RegisteredArtifactKind: {
-      type: "object",
-      required: ["kind", "description"],
-      properties: {
-        kind: { type: "string" },
-        description: { type: "string" },
-        contentTypeHint: { type: "string" },
-        maxSize: { type: "number" },
-      },
-      additionalProperties: false,
-    },
-    ArtifactKindsResponse: {
-      type: "object",
-      required: ["kinds"],
-      properties: {
-        kinds: { type: "array", items: ref("RegisteredArtifactKind") },
-      },
-      additionalProperties: false,
-    },
-    BinaryResponse: {
-      type: "string",
-      format: "binary",
-    },
     EmptyResponse: {
       description: "No response body.",
     },
   };
 }
 
-/**
- * Owner-account billing ledger: settings, USD balance/usage/reservation,
- * account/subscription/plan records, and the billing request+response wrappers.
- */
+/** Provider-neutral OSS disabled/showback settings and usage records. */
 function billingSchemas(): Record<string, Record<string, unknown>> {
   return {
     BillingSettings: {
       oneOf: [
         {
           type: "object",
-          required: ["mode", "provider"],
+          required: ["mode"],
           properties: {
             mode: { const: "disabled" },
-            provider: { const: "none" },
-            reservationRequired: { const: false },
           },
           additionalProperties: false,
         },
         {
           type: "object",
-          required: ["mode", "provider"],
+          required: ["mode"],
           properties: {
             mode: { const: "showback" },
-            provider: { enum: ["stripe", "manual", "none"] },
-            reservationRequired: { const: false },
           },
           additionalProperties: false,
         },
       ],
     },
-    CreditBalance: {
-      type: "object",
-      required: [
-        "spaceId",
-        "availableUsdMicros",
-        "reservedUsdMicros",
-        "monthlyIncludedUsdMicros",
-        "purchasedUsdMicros",
-        "availableCredits",
-        "reservedCredits",
-        "monthlyIncludedCredits",
-        "purchasedCredits",
-        "updatedAt",
-      ],
-      properties: {
-        spaceId: { type: "string" },
-        availableUsdMicros: { type: "integer" },
-        reservedUsdMicros: { type: "integer" },
-        monthlyIncludedUsdMicros: { type: "integer" },
-        purchasedUsdMicros: { type: "integer" },
-        availableCredits: { type: "number", deprecated: true },
-        reservedCredits: { type: "number", deprecated: true },
-        monthlyIncludedCredits: { type: "number", deprecated: true },
-        purchasedCredits: { type: "number", deprecated: true },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
     UsageEvent: {
       type: "object",
       required: [
         "id",
-        "spaceId",
+        "workspaceId",
         "kind",
         "quantity",
         "usdMicros",
-        "credits",
+        "ratingStatus",
         "source",
         "idempotencyKey",
         "createdAt",
       ],
       properties: {
         id: { type: "string" },
-        spaceId: { type: "string" },
-        installationId: { type: "string" },
+        workspaceId: { type: "string" },
+        capsuleId: { type: "string" },
         runId: { type: "string" },
         meterId: {
           type: "string",
-          description:
-            "Stable customer-facing Cloud resource meter id. Internal Cloud resource backend names must not appear here.",
+          description: "Stable producer-defined resource meter id.",
         },
         resourceFamily: {
           type: "string",
-          description:
-            "Stable customer-facing resource family such as cloudflare.workers_script, cloudflare.kv, cloudflare.r2, cloudflare.d1, cloudflare.queues, cloudflare.workflows, or cloudflare.containers. Internal backends must not appear in public usage payloads.",
+          description: "Stable producer-defined resource family token.",
         },
         resourceId: { type: "string" },
         operation: { type: "string" },
         resourceMetadata: {
           type: "object",
-          description:
-            "Optional non-secret customer-facing metadata. Internal Cloud resource backend hints must not appear here.",
+          description: "Optional non-secret producer-defined metadata.",
           additionalProperties: {
             anyOf: [
               { type: "string" },
@@ -2462,146 +3146,26 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
           description:
             "USD-denominated usage amount in micros. 1 USD = 1,000,000 micros.",
         },
-        credits: {
-          type: "number",
-          deprecated: true,
-          description: "Compatibility alias for the USD amount. Use usdMicros.",
+        ratingStatus: {
+          type: "string",
+          enum: ["rated", "unrated"],
+          description:
+            "Whether usdMicros came from an explicit host rating policy. Unrated events always carry zero.",
         },
         source: {
           type: "string",
-          enum: [
-            "runner",
-            "resource_meter",
-            "billing_reconciliation",
-            "manual_adjustment",
-          ],
+          minLength: 1,
+          maxLength: 128,
+          pattern: "^[a-z0-9][a-z0-9_.:-]*$",
+          description:
+            "Open usage producer token. runner is reserved for Core; operator-installed meters use their own stable token.",
         },
         idempotencyKey: { type: "string" },
         createdAt: { type: "string", format: "date-time" },
       },
       additionalProperties: false,
     },
-    CreditReservation: {
-      type: "object",
-      required: [
-        "id",
-        "spaceId",
-        "runId",
-        "estimatedUsdMicros",
-        "estimatedCredits",
-        "status",
-        "mode",
-        "createdAt",
-        "expiresAt",
-      ],
-      properties: {
-        id: { type: "string" },
-        spaceId: { type: "string" },
-        runId: { type: "string" },
-        estimatedUsdMicros: { type: "integer" },
-        estimatedCredits: { type: "number", deprecated: true },
-        status: {
-          type: "string",
-          enum: ["reserved", "captured", "released", "expired"],
-        },
-        mode: { type: "string", enum: ["disabled", "showback"] },
-        createdAt: { type: "string", format: "date-time" },
-        expiresAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
-    BillingAccount: {
-      type: "object",
-      required: [
-        "id",
-        "ownerType",
-        "ownerId",
-        "provider",
-        "status",
-        "createdAt",
-        "updatedAt",
-      ],
-      properties: {
-        id: { type: "string" },
-        ownerType: { type: "string", enum: ["user"] },
-        ownerId: { type: "string" },
-        provider: { type: "string", enum: ["stripe", "manual", "none"] },
-        stripeCustomerId: { type: "string" },
-        stripeDefaultPaymentMethodId: { type: "string" },
-        status: {
-          type: "string",
-          enum: ["active", "past_due", "disabled", "trialing"],
-        },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
-    SpaceSubscription: {
-      type: "object",
-      required: [
-        "id",
-        "spaceId",
-        "billingAccountId",
-        "planId",
-        "status",
-        "currentPeriodStart",
-        "currentPeriodEnd",
-        "createdAt",
-        "updatedAt",
-      ],
-      properties: {
-        id: { type: "string" },
-        spaceId: { type: "string" },
-        billingAccountId: { type: "string" },
-        planId: { type: "string" },
-        status: {
-          type: "string",
-          enum: ["active", "trialing", "past_due", "cancelled"],
-        },
-        currentPeriodStart: { type: "string", format: "date-time" },
-        currentPeriodEnd: { type: "string", format: "date-time" },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
-    BillingPlan: {
-      type: "object",
-      required: [
-        "id",
-        "name",
-        "monthlyBasePrice",
-        "includedUsdMicros",
-        "includedCredits",
-        "limits",
-        "createdAt",
-        "updatedAt",
-      ],
-      properties: {
-        id: { type: "string" },
-        name: { type: "string" },
-        monthlyBasePrice: { type: "number" },
-        includedUsdMicros: { type: "integer" },
-        includedCredits: { type: "number", deprecated: true },
-        limits: {
-          type: "object",
-          properties: {
-            maxEstimatedUsdMicrosPerRun: { type: "integer" },
-            maxEstimatedCreditsPerRun: { type: "number", deprecated: true },
-            quota: {
-              type: "object",
-              additionalProperties: { type: "number" },
-            },
-          },
-          additionalProperties: false,
-        },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
-    SpaceBillingResponse: {
+    WorkspaceBillingResponse: {
       type: "object",
       required: ["billing"],
       properties: {
@@ -2610,17 +3174,13 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
           required: ["settings"],
           properties: {
             settings: ref("BillingSettings"),
-            balance: ref("CreditBalance"),
-            account: ref("BillingAccount"),
-            subscription: ref("SpaceSubscription"),
-            plan: ref("BillingPlan"),
           },
           additionalProperties: false,
         },
       },
       additionalProperties: false,
     },
-    SpaceUsageResponse: {
+    WorkspaceUsageResponse: {
       type: "object",
       required: ["usageEvents"],
       properties: {
@@ -2628,44 +3188,7 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    SpaceCreditReservationsResponse: {
-      type: "object",
-      required: ["creditReservations"],
-      properties: {
-        creditReservations: {
-          type: "array",
-          items: ref("CreditReservation"),
-        },
-      },
-      additionalProperties: false,
-    },
-    CreditsTopUpRequest: {
-      type: "object",
-      properties: {
-        usdMicros: {
-          type: "integer",
-          minimum: 1,
-          description:
-            "USD amount to grant, in micros. 1 USD = 1,000,000 micros.",
-        },
-        credits: {
-          type: "number",
-          minimum: 0,
-          deprecated: true,
-          description: "Compatibility alias interpreted as a USD amount.",
-        },
-      },
-      additionalProperties: false,
-    },
-    CreditBalanceResponse: {
-      type: "object",
-      required: ["balance"],
-      properties: {
-        balance: ref("CreditBalance"),
-      },
-      additionalProperties: false,
-    },
-    SubscriptionChangeRequest: {
+    BillingSettingsUpdateRequest: {
       type: "object",
       required: ["billingSettings"],
       properties: {
@@ -2696,9 +3219,9 @@ function dependencySchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: [
         "id",
-        "spaceId",
-        "producerInstallationId",
-        "consumerInstallationId",
+        "workspaceId",
+        "producerCapsuleId",
+        "consumerCapsuleId",
         "mode",
         "outputs",
         "visibility",
@@ -2706,9 +3229,9 @@ function dependencySchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         id: { type: "string" },
-        spaceId: { type: "string" },
-        producerInstallationId: { type: "string" },
-        consumerInstallationId: { type: "string" },
+        workspaceId: { type: "string" },
+        producerCapsuleId: { type: "string" },
+        consumerCapsuleId: { type: "string" },
         mode: {
           enum: ["variable_injection", "remote_state", "published_output"],
         },
@@ -2716,16 +3239,16 @@ function dependencySchemas(): Record<string, Record<string, unknown>> {
           type: "object",
           additionalProperties: ref("DependencyOutputMapping"),
         },
-        visibility: { enum: ["space", "cross_space"] },
+        visibility: { enum: ["workspace", "cross_workspace"] },
         createdAt: { type: "string", format: "date-time" },
       },
       additionalProperties: false,
     },
     CreateDependencyRequest: {
       type: "object",
-      required: ["producerInstallationId", "mode", "outputs"],
+      required: ["producerCapsuleId", "mode", "outputs", "visibility"],
       properties: {
-        producerInstallationId: { type: "string" },
+        producerCapsuleId: { type: "string" },
         mode: {
           enum: ["variable_injection", "remote_state", "published_output"],
         },
@@ -2733,7 +3256,7 @@ function dependencySchemas(): Record<string, Record<string, unknown>> {
           type: "object",
           additionalProperties: ref("DependencyOutputMapping"),
         },
-        visibility: { enum: ["space", "cross_space"] },
+        visibility: { enum: ["workspace", "cross_workspace"] },
       },
       additionalProperties: false,
     },
@@ -2743,24 +3266,25 @@ function dependencySchemas(): Record<string, Record<string, unknown>> {
       properties: { dependency: ref("Dependency") },
       additionalProperties: false,
     },
-    InstallationDependenciesResponse: {
+    CapsuleDependenciesResponse: {
       type: "object",
-      required: ["dependencies"],
+      required: ["asProducer", "asConsumer"],
       properties: {
-        dependencies: { type: "array", items: ref("Dependency") },
+        asProducer: { type: "array", items: ref("Dependency") },
+        asConsumer: { type: "array", items: ref("Dependency") },
       },
       additionalProperties: false,
     },
   };
 }
 
-/**
- * Space records plus the Installation create/patch/read wrappers and
- * InstallConfig list/read responses that hang off a Space.
- */
-function spaceSchemas(): Record<string, Record<string, unknown>> {
+/** Workspace, Project, Capsule request/response, and InstallConfig wrappers. */
+function workspaceProjectAndCapsuleRequestSchemas(): Record<
+  string,
+  Record<string, unknown>
+> {
   return {
-    Space: {
+    Workspace: {
       type: "object",
       required: [
         "id",
@@ -2777,16 +3301,15 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
         displayName: { type: "string" },
         type: { enum: ["personal", "organization"] },
         ownerUserId: { type: "string" },
-        billingAccountId: { type: "string" },
         billingSettings: ref("BillingSettings"),
         archivedAt: { type: "string", format: "date-time" },
-        policy: { type: "object", additionalProperties: true },
+        policy: ref("PolicyConfig"),
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },
       },
       additionalProperties: false,
     },
-    CreateSpaceRequest: {
+    CreateWorkspaceRequest: {
       type: "object",
       required: ["handle", "displayName", "type", "ownerUserId"],
       properties: {
@@ -2794,32 +3317,85 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
         displayName: { type: "string" },
         type: { enum: ["personal", "organization"] },
         ownerUserId: { type: "string" },
-        billingAccountId: { type: "string" },
       },
       additionalProperties: false,
     },
-    SpaceResponse: {
+    WorkspaceResponse: {
       type: "object",
-      required: ["space"],
-      properties: { space: ref("Space") },
+      required: ["workspace"],
+      properties: { workspace: ref("Workspace") },
       additionalProperties: false,
     },
-    ListSpacesResponse: {
+    ListWorkspacesResponse: {
       type: "object",
-      required: ["spaces"],
+      required: ["workspaces"],
       properties: {
-        spaces: { type: "array", items: ref("Space") },
+        workspaces: { type: "array", items: ref("Workspace") },
       },
       additionalProperties: false,
     },
-    CreateInstallationRequest: {
+    Project: {
+      type: "object",
+      required: [
+        "id",
+        "workspaceId",
+        "name",
+        "slug",
+        "projectJson",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        id: { type: "string" },
+        workspaceId: { type: "string" },
+        name: { type: "string" },
+        slug: {
+          type: "string",
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$",
+        },
+        projectJson: { type: "object", additionalProperties: true },
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    CreateProjectRequest: {
+      type: "object",
+      required: ["name", "slug"],
+      properties: {
+        name: { type: "string", minLength: 1 },
+        slug: {
+          type: "string",
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$",
+        },
+        projectJson: { type: "object", additionalProperties: true },
+      },
+      additionalProperties: false,
+    },
+    ProjectResponse: {
+      type: "object",
+      required: ["project"],
+      properties: { project: ref("Project") },
+      additionalProperties: false,
+    },
+    ListProjectsResponse: {
+      type: "object",
+      required: ["projects"],
+      properties: {
+        projects: { type: "array", items: ref("Project") },
+      },
+      additionalProperties: false,
+    },
+    CreateCapsuleRequest: {
       type: "object",
       required: ["name", "environment", "sourceId", "installConfigId"],
       properties: {
         name: { type: "string" },
         environment: { type: "string" },
+        projectId: { type: "string" },
         sourceId: { type: "string" },
         installConfigId: { type: "string" },
+        autoUpdate: { type: "boolean" },
         modulePath: { type: "string" },
         runnerId: { type: "string" },
         outputAllowlist: {
@@ -2845,6 +3421,11 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
             additionalProperties: false,
           },
         },
+        interfaceBlueprints: {
+          type: "array",
+          maxItems: 64,
+          items: ref("CapsuleInterfaceBlueprint"),
+        },
         vars: { type: "object", additionalProperties: true },
         managedPublicHostname: {
           type: "object",
@@ -2857,7 +3438,7 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    PatchInstallationRequest: {
+    PatchCapsuleRequest: {
       type: "object",
       required: ["status"],
       properties: {
@@ -2865,26 +3446,27 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    InstallationPlanRequest: {
+    CapsulePlanRequest: {
       type: "object",
       properties: {
+        compatibilityReportId: { type: "string" },
         runnerId: { type: "string" },
       },
       additionalProperties: false,
     },
-    InstallationResponse: {
+    CapsuleResponse: {
       type: "object",
-      required: ["installation"],
+      required: ["capsule"],
       properties: {
-        installation: ref("Installation"),
+        capsule: ref("Capsule"),
       },
       additionalProperties: false,
     },
-    ListInstallationsResponse: {
+    ListCapsulesResponse: {
       type: "object",
-      required: ["installations"],
+      required: ["capsules"],
       properties: {
-        installations: { type: "array", items: ref("Installation") },
+        capsules: { type: "array", items: ref("Capsule") },
       },
       additionalProperties: false,
     },
@@ -2904,6 +3486,16 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+    PatchWorkspaceRequest: {
+      type: "object",
+      properties: {
+        displayName: { type: "string" },
+        policy: ref("PolicyConfig"),
+        archived: { type: "boolean" },
+      },
+      additionalProperties: false,
+      minProperties: 1,
+    },
   };
 }
 
@@ -2912,13 +3504,29 @@ function runSchemas(): Record<string, Record<string, unknown>> {
   return {
     Run: {
       type: "object",
-      required: ["id", "spaceId", "type", "status", "createdBy", "createdAt"],
+      required: [
+        "id",
+        "workspaceId",
+        "type",
+        "status",
+        "createdBy",
+        "createdAt",
+      ],
       properties: {
         id: { type: "string" },
         runGroupId: { type: "string" },
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
         sourceId: { type: "string" },
-        installationId: { type: "string" },
+        subject: {
+          type: "object",
+          required: ["kind", "id"],
+          properties: {
+            kind: { enum: ["capsule", "resource", "source"] },
+            id: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        capsuleId: { type: "string" },
         environment: { type: "string" },
         type: {
           description:
@@ -2951,7 +3559,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         compatibilityReportId: { type: "string" },
         baseStateGeneration: { type: "integer" },
         planDigest: { type: "string" },
-        planArtifactKey: { type: "string" },
+        planArtifactRef: { type: "string" },
         applyExpected: { $ref: "#/components/schemas/RunApplyExpectedGuard" },
         summary: { $ref: "#/components/schemas/RunChangeSummary" },
         planResources: {
@@ -2965,6 +3573,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         },
         runEnvironmentEvidenceDigest: { type: "string" },
         redactionProfileId: { type: "string" },
+        requiresApproval: { type: "boolean" },
         backupId: { type: "string" },
         restoreStateGeneration: { type: "integer" },
         restoreServiceData: { type: "boolean" },
@@ -2981,10 +3590,10 @@ function runSchemas(): Record<string, Record<string, unknown>> {
     },
     RunServiceDataRestoreResult: {
       type: "object",
-      required: ["status", "objectKey", "digest", "sizeBytes"],
+      required: ["status", "ref", "digest", "sizeBytes"],
       properties: {
         status: { enum: ["restored"] },
-        objectKey: { type: "string" },
+        ref: { type: "string" },
         digest: { type: "string" },
         sizeBytes: { type: "integer" },
         restoredCount: { type: "integer" },
@@ -3005,7 +3614,6 @@ function runSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         planId: { type: "string" },
         capsuleId: { type: "string" },
-        installationId: { type: "string" },
         currentStateVersionId: {
           oneOf: [{ type: "string" }, { type: "null" }],
         },
@@ -3017,7 +3625,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         planArtifactDigest: { type: "string" },
         sourceCommit: { type: "string" },
         providerLockDigest: { type: "string" },
-        resolvedProviderEnvBindingsDigest: { type: "string" },
+        resolvedProviderBindingsDigest: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -3042,11 +3650,18 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         },
         scope: {
           type: "object",
+          required: ["facts"],
           properties: {
-            cloudflareAccountId: { type: "string" },
-            cloudflareZoneId: { type: "string" },
-            awsAccountId: { type: "string" },
-            awsRegion: { type: "string" },
+            facts: {
+              type: "object",
+              additionalProperties: {
+                oneOf: [
+                  { type: "string" },
+                  { type: "number" },
+                  { type: "boolean" },
+                ],
+              },
+            },
           },
           additionalProperties: false,
         },
@@ -3065,7 +3680,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         "runId",
         "billingMode",
         "estimatedUsdMicros",
-        "estimatedCredits",
+        "ratingStatus",
         "blocked",
         "reasons",
       ],
@@ -3077,22 +3692,19 @@ function runSchemas(): Record<string, Record<string, unknown>> {
           description:
             "Estimated USD amount for this run in micros. 1 USD = 1,000,000 micros.",
         },
-        availableUsdMicros: {
-          type: "integer",
+        ratingStatus: {
+          enum: ["not_applicable", "rated", "unrated"],
           description:
-            "Available USD balance observed when a reservation was attempted, in micros.",
+            "Whether the estimate came from an explicit host rating policy; disabled plans are not_applicable.",
         },
-        shortfallUsdMicros: {
-          type: "integer",
-          description:
-            "Missing USD balance in micros when the run is short of balance.",
-        },
-        estimatedCredits: { type: "number", deprecated: true },
-        availableCredits: { type: "number", deprecated: true },
-        reservationStatus: { enum: ["reserved", "insufficient_credits"] },
-        creditShortfall: { type: "number", deprecated: true },
         blocked: { type: "boolean" },
         reasons: { type: "array", items: { type: "string" } },
+        extension: {
+          type: "object",
+          description:
+            "Opaque non-secret data supplied by a host billing extension.",
+          additionalProperties: true,
+        },
       },
       additionalProperties: false,
     },
@@ -3121,18 +3733,24 @@ function runSchemas(): Record<string, Record<string, unknown>> {
     },
     RunGroup: {
       type: "object",
-      required: ["id", "spaceId", "type", "status", "graphJson", "createdAt"],
+      required: [
+        "id",
+        "workspaceId",
+        "type",
+        "status",
+        "graphJson",
+        "createdAt",
+      ],
       properties: {
         id: { type: "string" },
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
         type: {
           enum: [
-            "space_update",
-            "workspace_output_sync",
-            "space_drift_check",
-            "installation_install",
-            "installation_update",
-            "installation_destroy",
+            "workspace_update",
+            "workspace_drift_check",
+            "capsule_install",
+            "capsule_update",
+            "capsule_destroy",
           ],
         },
         status: {
@@ -3160,105 +3778,17 @@ function runSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    PatchWorkspaceOutputSyncRequest: {
-      type: "object",
-      required: ["enabled"],
-      properties: { enabled: { type: "boolean" } },
-      additionalProperties: false,
-    },
-    WorkspaceOutputSyncState: {
-      type: "object",
-      required: [
-        "workspaceId",
-        "enabled",
-        "outputRevision",
-        "reconciledRevision",
-        "consecutivePasses",
-        "updatedAt",
-      ],
-      properties: {
-        workspaceId: { type: "string" },
-        enabled: { type: "boolean" },
-        outputRevision: { type: "integer", minimum: 0 },
-        reconciledRevision: { type: "integer", minimum: 0 },
-        activeRunGroupId: { type: "string" },
-        consecutivePasses: { type: "integer", minimum: 0, maximum: 5 },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
-    WorkspaceOutputSyncStatusResponse: {
-      type: "object",
-      required: ["capability", "state"],
-      properties: {
-        capability: { const: "takosumi.output-sync.v1" },
-        state: ref("WorkspaceOutputSyncState"),
-      },
-      additionalProperties: false,
-    },
-    WorkspaceOutputSyncSnapshotEntry: {
-      type: "object",
-      required: [
-        "capsuleId",
-        "outputId",
-        "stateGeneration",
-        "outputDigest",
-        "publicOutputs",
-        "workspaceOutputs",
-        "createdAt",
-      ],
-      properties: {
-        capsuleId: { type: "string" },
-        outputId: { type: "string" },
-        stateGeneration: { type: "integer", minimum: 0 },
-        outputDigest: { type: "string" },
-        publicOutputs: { type: "object", additionalProperties: true },
-        workspaceOutputs: { type: "object", additionalProperties: true },
-        createdAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
-    WorkspaceOutputSyncSnapshotResponse: {
-      type: "object",
-      required: ["snapshot"],
-      properties: {
-        snapshot: {
-          type: "object",
-          required: ["workspaceId", "revision", "outputs"],
-          properties: {
-            workspaceId: { type: "string" },
-            revision: { type: "integer", minimum: 0 },
-            outputs: {
-              type: "array",
-              items: ref("WorkspaceOutputSyncSnapshotEntry"),
-            },
-          },
-          additionalProperties: false,
-        },
-      },
-      additionalProperties: false,
-    },
-    WorkspaceOutputSyncReconcileResponse: {
-      type: "object",
-      required: ["capability", "state"],
-      properties: {
-        capability: { const: "takosumi.output-sync.v1" },
-        state: ref("WorkspaceOutputSyncState"),
-        reconciliation: ref("RunGroupResponse"),
-      },
-      additionalProperties: false,
-    },
   };
 }
 
-/** Space-scoped Activity audit-trail shapes. */
+/** Workspace-scoped Activity audit-trail shapes. */
 function activitySchemas(): Record<string, Record<string, unknown>> {
   return {
     ActivityEvent: {
       type: "object",
       required: [
         "id",
-        "spaceId",
+        "workspaceId",
         "action",
         "targetType",
         "targetId",
@@ -3267,7 +3797,7 @@ function activitySchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         id: { type: "string" },
-        spaceId: { type: "string" },
+        workspaceId: { type: "string" },
         actorId: { type: "string" },
         action: { type: "string" },
         targetType: { type: "string" },
@@ -3289,17 +3819,14 @@ function activitySchemas(): Record<string, Record<string, unknown>> {
   };
 }
 
-/**
- * Backup record / artifact-pointer shapes, plus the co-located PatchSpace and
- * Deployment read wrappers.
- */
+/** Backup record / artifact-pointer shapes and StateVersion read wrappers. */
 function backupSchemas(): Record<string, Record<string, unknown>> {
   return {
     BackupArtifactPointer: {
       type: "object",
-      required: ["objectKey", "digest", "sizeBytes"],
+      required: ["ref", "digest", "sizeBytes"],
       properties: {
-        objectKey: { type: "string" },
+        ref: { type: "string" },
         digest: { type: "string" },
         sizeBytes: { type: "integer" },
       },
@@ -3308,7 +3835,7 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
     ServiceDataBackupPointer: {
       type: "object",
       required: [
-        "objectKey",
+        "ref",
         "digest",
         "sizeBytes",
         "exportedCount",
@@ -3316,7 +3843,7 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
         "missingCount",
       ],
       properties: {
-        objectKey: { type: "string" },
+        ref: { type: "string" },
         digest: { type: "string" },
         sizeBytes: { type: "integer" },
         exportedCount: { type: "integer" },
@@ -3328,16 +3855,16 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
     BackupRestoreTarget: {
       type: "object",
       required: [
-        "installationId",
+        "capsuleId",
         "environment",
         "stateGeneration",
-        "stateSnapshotId",
+        "stateVersionId",
       ],
       properties: {
-        installationId: { type: "string" },
+        capsuleId: { type: "string" },
         environment: { type: "string" },
         stateGeneration: { type: "integer" },
-        stateSnapshotId: { type: "string" },
+        stateVersionId: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -3345,19 +3872,19 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: [
         "id",
-        "spaceId",
-        "objectKey",
+        "workspaceId",
+        "ref",
         "digest",
         "sizeBytes",
         "createdAt",
       ],
       properties: {
         id: { type: "string" },
-        spaceId: { type: "string" },
-        installationId: { type: "string" },
+        workspaceId: { type: "string" },
+        capsuleId: { type: "string" },
         environment: { type: "string" },
         restoreTarget: ref("BackupRestoreTarget"),
-        objectKey: { type: "string" },
+        ref: { type: "string" },
         digest: { type: "string" },
         sizeBytes: { type: "integer" },
         stateArchive: ref("BackupArtifactPointer"),
@@ -3378,7 +3905,7 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: ["stateGeneration"],
       properties: {
-        installationId: { type: "string" },
+        capsuleId: { type: "string" },
         environment: { type: "string" },
         stateGeneration: { type: "integer", minimum: 0 },
         expectedBackupDigest: { type: "string" },
@@ -3400,28 +3927,16 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    PatchSpaceRequest: {
+    StateVersionResponse: {
       type: "object",
-      properties: {
-        displayName: { type: "string" },
-        policy: { type: "object", additionalProperties: true },
-        archived: { type: "boolean" },
-      },
-      additionalProperties: false,
-      minProperties: 1,
-    },
-    DeploymentResponse: {
-      type: "object",
-      required: ["deployment"],
-      properties: { deployment: ref("Deployment") },
+      required: ["stateVersion"],
+      properties: { stateVersion: ref("StateVersion") },
       additionalProperties: false,
     },
   };
 }
 
-/**
- * Cross-Space OutputShare shapes plus the co-located ApproveRun request body.
- */
+/** Cross-Workspace OutputShare shapes plus the ApproveRun request body. */
 function outputShareSchemas(): Record<string, Record<string, unknown>> {
   return {
     OutputShareEntry: {
@@ -3458,18 +3973,18 @@ function outputShareSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: [
         "id",
-        "fromSpaceId",
-        "toSpaceId",
-        "producerInstallationId",
+        "fromWorkspaceId",
+        "toWorkspaceId",
+        "producerCapsuleId",
         "outputs",
         "status",
         "createdAt",
       ],
       properties: {
         id: { type: "string" },
-        fromSpaceId: { type: "string" },
-        toSpaceId: { type: "string" },
-        producerInstallationId: { type: "string" },
+        fromWorkspaceId: { type: "string" },
+        toWorkspaceId: { type: "string" },
+        producerCapsuleId: { type: "string" },
         outputs: { type: "array", items: ref("OutputShareEntry") },
         status: { enum: ["pending", "active", "revoked"] },
         createdAt: { type: "string", format: "date-time" },
@@ -3481,15 +3996,15 @@ function outputShareSchemas(): Record<string, Record<string, unknown>> {
     CreateOutputShareRequest: {
       type: "object",
       required: [
-        "fromSpaceId",
-        "toSpaceId",
-        "producerInstallationId",
+        "fromWorkspaceId",
+        "toWorkspaceId",
+        "producerCapsuleId",
         "outputs",
       ],
       properties: {
-        fromSpaceId: { type: "string" },
-        toSpaceId: { type: "string" },
-        producerInstallationId: { type: "string" },
+        fromWorkspaceId: { type: "string" },
+        toWorkspaceId: { type: "string" },
+        producerCapsuleId: { type: "string" },
         outputs: { type: "array", items: ref("CreateOutputShareEntry") },
         sensitivePolicy: ref("SensitiveOutputSharePolicy"),
       },
@@ -3513,282 +4028,6 @@ function outputShareSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       properties: {
         reason: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-  };
-}
-
-/**
- * Runtime-agent enrollment / lease / heartbeat / report shapes and the gateway
- * manifest contract for external runners outside the configured Takosumi runner policy.
- */
-function runtimeAgentSchemas(): Record<string, Record<string, unknown>> {
-  return {
-    RuntimeAgentCapabilities: {
-      type: "object",
-      required: ["providers"],
-      properties: {
-        providers: { type: "array", items: { type: "string" } },
-        maxConcurrentLeases: { type: "integer", minimum: 1 },
-        labels: {
-          type: "object",
-          additionalProperties: { type: "string" },
-        },
-      },
-      additionalProperties: false,
-    },
-    RuntimeAgentRecord: {
-      type: "object",
-      required: [
-        "id",
-        "provider",
-        "capabilities",
-        "status",
-        "registeredAt",
-        "lastHeartbeatAt",
-        "metadata",
-      ],
-      properties: {
-        id: { type: "string" },
-        provider: { type: "string" },
-        endpoint: { type: "string" },
-        capabilities: ref("RuntimeAgentCapabilities"),
-        status: {
-          enum: ["registered", "ready", "draining", "revoked", "expired"],
-        },
-        registeredAt: { type: "string", format: "date-time" },
-        lastHeartbeatAt: { type: "string", format: "date-time" },
-        drainRequestedAt: { type: "string", format: "date-time" },
-        revokedAt: { type: "string", format: "date-time" },
-        expiredAt: { type: "string", format: "date-time" },
-        hostKeyDigest: { type: "string" },
-        metadata: { type: "object", additionalProperties: true },
-      },
-      additionalProperties: false,
-    },
-    RuntimeAgentWorkItem: {
-      type: "object",
-      required: [
-        "id",
-        "kind",
-        "status",
-        "payload",
-        "priority",
-        "queuedAt",
-        "attempts",
-        "metadata",
-      ],
-      properties: {
-        id: { type: "string" },
-        kind: { type: "string" },
-        status: {
-          enum: ["queued", "leased", "completed", "failed", "cancelled"],
-        },
-        payload: { type: "object", additionalProperties: true },
-        provider: { type: "string" },
-        priority: { type: "integer" },
-        queuedAt: { type: "string", format: "date-time" },
-        leasedByAgentId: { type: "string" },
-        leaseId: { type: "string" },
-        leaseExpiresAt: { type: "string", format: "date-time" },
-        completedAt: { type: "string", format: "date-time" },
-        failedAt: { type: "string", format: "date-time" },
-        failureReason: { type: "string" },
-        attempts: { type: "integer", minimum: 0 },
-        metadata: { type: "object", additionalProperties: true },
-        idempotencyKey: { type: "string" },
-        lastProgress: { type: "object", additionalProperties: true },
-        lastProgressAt: { type: "string", format: "date-time" },
-        result: { type: "object", additionalProperties: true },
-      },
-      additionalProperties: false,
-    },
-    RuntimeAgentWorkLease: {
-      type: "object",
-      required: [
-        "id",
-        "workId",
-        "agentId",
-        "leasedAt",
-        "expiresAt",
-        "renewAfter",
-        "work",
-      ],
-      properties: {
-        id: { type: "string" },
-        workId: { type: "string" },
-        agentId: { type: "string" },
-        leasedAt: { type: "string", format: "date-time" },
-        expiresAt: { type: "string", format: "date-time" },
-        renewAfter: { type: "string", format: "date-time" },
-        work: ref("RuntimeAgentWorkItem"),
-      },
-      additionalProperties: false,
-    },
-    RuntimeAgentEnrollRequest: {
-      type: "object",
-      required: ["provider"],
-      properties: {
-        agentId: { type: "string" },
-        provider: { type: "string" },
-        endpoint: { type: "string" },
-        capabilities: ref("RuntimeAgentCapabilities"),
-        metadata: { type: "object", additionalProperties: true },
-        heartbeatAt: { type: "string", format: "date-time" },
-        enrolledAt: { type: "string", format: "date-time" },
-        hostKeyDigest: { type: "string" },
-        spaceId: { type: "string" },
-        groupId: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    RuntimeAgentHeartbeatRequest: {
-      type: "object",
-      properties: {
-        agentId: { type: "string" },
-        heartbeatAt: { type: "string", format: "date-time" },
-        status: { enum: ["ready", "draining"] },
-        inFlightLeases: { type: "integer", minimum: 0 },
-        ttlMs: { type: "integer", minimum: 1 },
-        metadata: { type: "object", additionalProperties: true },
-        spaceId: { type: "string" },
-        groupId: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    RuntimeAgentLeaseRequest: {
-      type: "object",
-      properties: {
-        agentId: { type: "string" },
-        leaseTtlMs: { type: "integer", minimum: 1 },
-        now: { type: "string", format: "date-time" },
-        spaceId: { type: "string" },
-        groupId: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    RuntimeAgentReportRequest: {
-      oneOf: [
-        {
-          type: "object",
-          required: ["leaseId", "status"],
-          properties: {
-            agentId: { type: "string" },
-            leaseId: { type: "string" },
-            status: { const: "progress" },
-            reportedAt: { type: "string", format: "date-time" },
-            progress: { type: "object", additionalProperties: true },
-            extendUntil: { type: "string", format: "date-time" },
-            spaceId: { type: "string" },
-            groupId: { type: "string" },
-          },
-          additionalProperties: false,
-        },
-        {
-          type: "object",
-          required: ["leaseId", "status"],
-          properties: {
-            agentId: { type: "string" },
-            leaseId: { type: "string" },
-            status: { const: "completed" },
-            reportedAt: { type: "string", format: "date-time" },
-            completedAt: { type: "string", format: "date-time" },
-            result: { type: "object", additionalProperties: true },
-            spaceId: { type: "string" },
-            groupId: { type: "string" },
-          },
-          additionalProperties: false,
-        },
-        {
-          type: "object",
-          required: ["leaseId", "status"],
-          properties: {
-            agentId: { type: "string" },
-            leaseId: { type: "string" },
-            status: { const: "failed" },
-            reportedAt: { type: "string", format: "date-time" },
-            reason: { type: "string" },
-            retry: { type: "boolean" },
-            failedAt: { type: "string", format: "date-time" },
-            result: { type: "object", additionalProperties: true },
-            spaceId: { type: "string" },
-            groupId: { type: "string" },
-          },
-          additionalProperties: false,
-        },
-      ],
-    },
-    RuntimeAgentDrainRequest: {
-      type: "object",
-      properties: {
-        agentId: { type: "string" },
-        drainRequestedAt: { type: "string", format: "date-time" },
-        reason: { type: "string" },
-        spaceId: { type: "string" },
-        groupId: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    RuntimeAgentResponse: {
-      type: "object",
-      required: ["agent"],
-      properties: {
-        agent: ref("RuntimeAgentRecord"),
-        renewAfterMs: { type: "integer", minimum: 1 },
-      },
-      additionalProperties: false,
-    },
-    RuntimeAgentLeaseResponse: {
-      type: "object",
-      required: ["lease"],
-      properties: {
-        lease: {
-          anyOf: [ref("RuntimeAgentWorkLease"), { type: "null" }],
-        },
-      },
-      additionalProperties: false,
-    },
-    RuntimeAgentWorkResponse: {
-      type: "object",
-      required: ["work"],
-      properties: { work: ref("RuntimeAgentWorkItem") },
-      additionalProperties: false,
-    },
-    GatewayManifest: {
-      type: "object",
-      required: [
-        "gatewayUrl",
-        "issuer",
-        "agentId",
-        "issuedAt",
-        "expiresAt",
-        "allowedProviderKinds",
-        "pubkey",
-        "pubkeyFingerprint",
-      ],
-      properties: {
-        gatewayUrl: { type: "string" },
-        issuer: { type: "string" },
-        agentId: { type: "string" },
-        issuedAt: { type: "string", format: "date-time" },
-        expiresAt: { type: "string", format: "date-time" },
-        allowedProviderKinds: {
-          type: "array",
-          items: { type: "string" },
-        },
-        pubkey: { type: "string" },
-        pubkeyFingerprint: { type: "string" },
-        tlsPubkeySha256: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    GatewayManifestResponse: {
-      type: "object",
-      required: ["manifest", "signature"],
-      properties: {
-        manifest: ref("GatewayManifest"),
-        signature: { type: "string" },
       },
       additionalProperties: false,
     },

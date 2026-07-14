@@ -27,7 +27,7 @@ function label(
 }
 
 /** Capsule lifecycle status: pending/active/stale/error/disabled/destroyed. */
-const INSTALLATION: Record<string, MessageKey> = {
+const CAPSULE: Record<string, MessageKey> = {
   pending: "status.capsule.pending",
   needs_attention: "status.capsule.needsAttention",
   active: "status.capsule.active",
@@ -36,8 +36,7 @@ const INSTALLATION: Record<string, MessageKey> = {
   disabled: "status.capsule.disabled",
   destroyed: "status.capsule.destroyed",
 };
-export const capsuleStatusLabel = (status?: string) =>
-  label(INSTALLATION, status);
+export const capsuleStatusLabel = (status?: string) => label(CAPSULE, status);
 
 /** Run status (spec §19). */
 const RUN: Record<string, MessageKey> = {
@@ -73,16 +72,6 @@ const DIAGNOSTIC_SEVERITY: Record<string, MessageKey> = {
 };
 export const diagnosticSeverityLabel = (severity?: string) =>
   label(DIAGNOSTIC_SEVERITY, severity);
-
-/** Legacy deployment evidence status retained for current compatibility views. */
-const DEPLOYMENT: Record<string, MessageKey> = {
-  active: "status.deployment.active",
-  superseded: "status.deployment.superseded",
-  rolled_back: "status.deployment.rolled_back",
-  destroyed: "status.deployment.destroyed",
-};
-export const deploymentStatusLabel = (status?: string) =>
-  label(DEPLOYMENT, status);
 
 /** Connection status. */
 const CONNECTION: Record<string, MessageKey> = {
@@ -180,19 +169,6 @@ export function policyTone(status: string | undefined): Tone {
       return "warn";
     case "deny":
       return "danger";
-    default:
-      return "neutral";
-  }
-}
-
-export function deploymentTone(status: string | undefined): Tone {
-  switch (status) {
-    case "active":
-      return "ok";
-    case "superseded":
-    case "rolled_back":
-    case "destroyed":
-      return "muted";
     default:
       return "neutral";
   }

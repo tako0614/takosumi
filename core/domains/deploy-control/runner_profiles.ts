@@ -9,15 +9,13 @@
  */
 
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
+import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-configs";
 import { log } from "../../shared/log.ts";
-
-export {
-  CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES,
-  isCredentialFreeUtilityProvider,
-} from "takosumi-contract/provider-env-rules";
 
 /** The provider-neutral runner selected for ordinary OpenTofu Capsules. */
 export const DEFAULT_OPENTOFU_RUNNER_PROFILE_ID = "opentofu-default";
+/** Explicit registry key used by the reference OpenTofu executor adapter. */
+export const DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID = "opentofu.default";
 
 /**
  * Resolve the operator-configured execution profiles. The default is the one
@@ -28,7 +26,6 @@ export const DEFAULT_OPENTOFU_RUNNER_PROFILE_ID = "opentofu-default";
 export function resolveEnabledRunnerProfiles(
   allProfiles: readonly RunnerProfile[],
   envValue: string | undefined,
-  options: RunnerProfileEnablementOptions = {},
 ): readonly RunnerProfile[] {
   const byId = new Map(allProfiles.map((profile) => [profile.id, profile]));
   const requestedIds = parseEnabledRunnerProfileIds(envValue);
@@ -40,7 +37,7 @@ export function resolveEnabledRunnerProfiles(
       unknownIds.push(id);
       continue;
     }
-    enabled.push(withProfileEnabledLabel(profile, options));
+    enabled.push(activateRequestedProfile(profile));
   }
   if (unknownIds.length > 0) {
     log.warn("service.runner_profiles.unknown_enabled_ids", {
@@ -49,12 +46,6 @@ export function resolveEnabledRunnerProfiles(
     });
   }
   return enabled;
-}
-
-export interface RunnerProfileEnablementOptions {
-  readonly requireGatewayEgressEvidence?: boolean;
-  readonly egressEnforcementEvidenceRef?: string;
-  readonly egressEnforcementEvidenceDigest?: string;
 }
 
 /** Parse a deduplicated CSV profile list; an empty value selects the default. */
@@ -77,17 +68,12 @@ export function parseEnabledRunnerProfileIds(
   return deduped;
 }
 
-function withProfileEnabledLabel(
-  profile: RunnerProfile,
-  _options: RunnerProfileEnablementOptions,
-): RunnerProfile {
+function activateRequestedProfile(profile: RunnerProfile): RunnerProfile {
   assertRunnerProfileAvailable(profile);
+  if (profile.lifecycle.state === "active") return profile;
   return {
     ...profile,
-    labels: {
-      ...(profile.labels ?? {}),
-      "takosumi.com/profile-enabled": "true",
-    },
+    lifecycle: { state: "active" },
   };
 }
 
@@ -96,15 +82,6 @@ export function createDefaultRunnerProfiles(
 ): readonly RunnerProfile[] {
   return [createDefaultOpenTofuRunnerProfile(now)];
 }
-
-const DEFAULT_CLOUDFLARE_CONTAINER_EXECUTION: NonNullable<
-  RunnerProfile["cloudflareContainer"]
-> = {
-  image: "ghcr.io/takosjp/takosumi-opentofu-runner:1",
-  queueName: "takosumi-runs",
-  durableObjectBinding: "RUNNER",
-  workDir: "/workspace",
-};
 
 const DEFAULT_RESOURCE_LIMITS: NonNullable<RunnerProfile["resourceLimits"]> = {
   maxRunSeconds: 900,
@@ -128,7 +105,10 @@ function createDefaultOpenTofuRunnerProfile(now: number): RunnerProfile {
   return {
     id,
     name: "OpenTofu default",
-    substrate: "cloudflare-containers",
+    substrate: "operator-managed",
+    executorId: DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
+    lifecycle: { state: "active" },
+    availability: { state: "available" },
     description:
       "Isolated provider-neutral runner for plain OpenTofu modules. Provider packages use the configured mirror/cache when present and the OpenTofu registry path otherwise.",
     tofuVersion: "operator-managed",
@@ -140,28 +120,47 @@ function createDefaultOpenTofuRunnerProfile(now: number): RunnerProfile {
         ref: `lock://takosumi/${id}`,
       },
     },
+    capabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
     allowedProviders: ["*"],
-    requireCredentialRefs: false,
+    requireProviderBindings: false,
     resourceLimits: DEFAULT_RESOURCE_LIMITS,
     // The runner host enforces public-egress isolation. Private, link-local,
     // metadata, control-plane, or host-socket access requires a separate
     // operator-defined execution profile.
     networkPolicy: { mode: "operator-managed" },
-    cloudflareContainer: DEFAULT_CLOUDFLARE_CONTAINER_EXECUTION,
     secretExposurePolicy: DEFAULT_SECRET_EXPOSURE_POLICY,
-    labels: {
-      "takosumi.com/opentofu-runner": "true",
-      "takosumi.com/provider-installation": "direct-allowed",
-    },
     createdAt: now,
   };
 }
 
 function assertRunnerProfileAvailable(profile: RunnerProfile): void {
-  if (profile.labels?.["takosumi.com/profile-state"] !== "reserved") return;
-  const reason = profile.labels["takosumi.com/profile-reserved-reason"];
+  if (!profile.executorId?.trim()) {
+    throw new Error(`runner profile ${profile.id} requires executorId`);
+  }
+  if (!profile.lifecycle) {
+    throw new Error(`runner profile ${profile.id} requires lifecycle`);
+  }
+  if (!profile.availability) {
+    throw new Error(`runner profile ${profile.id} requires availability`);
+  }
+  if (
+    profile.lifecycle.state !== "active" &&
+    profile.lifecycle.state !== "candidate" &&
+    profile.lifecycle.state !== "reserved"
+  ) {
+    throw new Error(
+      `runner profile ${profile.id} has invalid lifecycle state ${String(profile.lifecycle.state)}`,
+    );
+  }
+  if (profile.availability.state !== "available") {
+    throw new Error(
+      `runner profile ${profile.id} is unavailable` +
+        (profile.availability.reason ? `: ${profile.availability.reason}` : ""),
+    );
+  }
+  if (profile.lifecycle.state !== "reserved") return;
   throw new Error(
-    `runner profile ${profile.id} is reserved and cannot be enabled` +
-      (reason ? `: ${reason}` : ""),
+    `runner profile ${profile.id} is reserved and cannot be activated` +
+      (profile.lifecycle.reason ? `: ${profile.lifecycle.reason}` : ""),
   );
 }

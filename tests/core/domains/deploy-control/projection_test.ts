@@ -2,13 +2,18 @@ import { expect, test } from "bun:test";
 
 import {
   errorDiagnostic,
+  projectAllWorkspaceOutputs,
   projectOutputAllowlistPublicOutputs,
   projectOutputAllowlistSpaceOutputs,
-  projectTemplatePublicOutputs,
+  WORKSPACE_OUTPUT_PROJECTION_LIMITS,
 } from "../../../../core/domains/deploy-control/projection.ts";
-import { compactErrorCode } from "../../../../core/domains/deploy-control/projection_run.ts";
+import {
+  OpenTofuControllerError,
+  OpenTofuRunnerExecutionError,
+  runErrorCode,
+} from "../../../../core/domains/deploy-control/errors.ts";
 
-test("output allowlist projection drops optional nested JSON secret material", () => {
+test("Workspace Output capture preserves opaque non-sensitive JSON while public projection filters it", () => {
   const outputs = {
     config: {
       sensitive: false,
@@ -30,7 +35,12 @@ test("output allowlist projection drops optional nested JSON secret material", (
       },
       outputs,
     ),
-  ).toEqual({});
+  ).toEqual({
+    config: {
+      endpoint: "https://api.example.test",
+      database: { password: "do-not-project" },
+    },
+  });
 
   expect(
     projectOutputAllowlistPublicOutputs(
@@ -43,29 +53,65 @@ test("output allowlist projection drops optional nested JSON secret material", (
       },
       outputs,
     ),
-  ).toEqual([]);
+  ).toEqual({});
+});
+
+test("ordinary root outputs are captured without requiring an allowlist", () => {
+  expect(
+    projectAllWorkspaceOutputs({
+      endpoint: {
+        sensitive: false,
+        value: "https://api.example.test",
+      },
+      metadata: {
+        sensitive: false,
+        value: { region: "example-1" },
+      },
+      token: {
+        sensitive: true,
+        value: "must-not-cross-the-runner-boundary",
+      },
+    }),
+  ).toEqual({
+    endpoint: "https://api.example.test",
+    metadata: { region: "example-1" },
+  });
 });
 
 test("output allowlist projection never publishes entries marked sensitive by config", () => {
   const outputs = {
-    service_grant_signing_key: {
+    private_signing_material: {
       sensitive: false,
       value: "raw-signing-key",
     },
   };
   const allowlist = {
-    service_grant_signing_key: {
-      from: "service_grant_signing_key",
+    private_signing_material: {
+      from: "private_signing_material",
       type: "string",
       sensitive: true,
     },
   } as const;
 
   expect(projectOutputAllowlistSpaceOutputs(allowlist, outputs)).toEqual({});
-  expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual([]);
+  expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual({});
 });
 
-test("output allowlist projection fails closed for required nested JSON secret material", () => {
+test("Workspace Output capture does not infer sensitivity from source names", () => {
+  const allowlist = {
+    status: { from: "api_token", type: "string" },
+  } as const;
+  const outputs = {
+    api_token: { sensitive: false, value: "healthy" },
+  };
+
+  expect(projectOutputAllowlistSpaceOutputs(allowlist, outputs)).toEqual({
+    status: "healthy",
+  });
+  expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual({});
+});
+
+test("required opaque JSON is captured locally but fails closed at public projection", () => {
   const outputs = {
     config: {
       sensitive: false,
@@ -76,213 +122,59 @@ test("output allowlist projection fails closed for required nested JSON secret m
     },
   };
 
-  expect(() =>
-    projectOutputAllowlistSpaceOutputs(
-      {
-        config: {
-          from: "config",
-          type: "json",
-          required: true,
-        },
-      },
-      outputs,
-    ),
-  ).toThrow("cannot be projected");
-});
-
-test("output allowlist projection accepts app_deployment service projection with resource descriptors", () => {
-  const outputs = {
-    app_deployment: {
-      sensitive: false,
-      value: {
-        name: "yurucommu",
-        version: "2.0.0",
-        compute: {
-          web: {
-            kind: "worker",
-            consume: [
-              {
-                publication: "identity.oidc",
-                inject: {
-                  env: {
-                    issuerUrl: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
-                    clientId: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
-                    token: "OBJECT_STORAGE_ACCESS_TOKEN",
-                  },
-                },
-              },
-            ],
-          },
-        },
-        resources: {
-          database: {
-            type: "sql",
-            bind: "DB",
-            to: ["web"],
-          },
-          media: {
-            type: "object-store",
-            bind: "MEDIA",
-            to: ["web"],
-          },
-        },
-        publish: [
-          {
-            name: "launcher",
-            publisher: "web",
-            type: "UiSurface",
-            outputs: { url: { kind: "url", routeRef: "root" } },
-          },
-        ],
-      },
-    },
-  };
   const allowlist = {
-    app_deployment: { from: "app_deployment", type: "json", required: true },
-  } as const;
-
-  expect(projectOutputAllowlistSpaceOutputs(allowlist, outputs)).toEqual({
-    app_deployment: outputs.app_deployment.value,
-  });
-  expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual([
-    {
-      name: "app_deployment",
-      kind: "json",
-      value: outputs.app_deployment.value,
-      sensitive: false,
-    },
-  ]);
-});
-
-test("output allowlist projection accepts declarative secret references without publishing values", () => {
-  const value = {
-    name: "takos-git",
-    version: "0.3.0",
-    compute: { web: { kind: "worker" } },
-    resources: {
-      published_mcp_auth_token: {
-        type: "secret",
-        bind: "PUBLISHED_MCP_AUTH_TOKEN",
-        to: ["web"],
-        generate: true,
-      },
-    },
-    publish: [
-      {
-        name: "takos-git-mcp",
-        publisher: "web",
-        type: "protocol.mcp.server",
-        auth: {
-          bearer: { secretRef: "PUBLISHED_MCP_AUTH_TOKEN" },
-        },
-      },
-    ],
-  };
-  expect(
-    projectOutputAllowlistSpaceOutputs(
-      {
-        app_deployment: {
-          from: "app_deployment",
-          type: "json",
-          required: true,
-        },
-      },
-      { app_deployment: { sensitive: false, value } },
-    ),
-  ).toEqual({ app_deployment: value });
-});
-
-test("output allowlist projection rejects secret resource descriptors carrying values", () => {
-  const value = {
-    name: "bad-app",
-    resources: {
-      api_token: {
-        type: "secret",
-        bind: "API_TOKEN",
-        to: ["web"],
-        value: "must-not-be-projected",
-      },
-    },
-  };
-  expect(() =>
-    projectOutputAllowlistSpaceOutputs(
-      {
-        app_deployment: {
-          from: "app_deployment",
-          type: "json",
-          required: true,
-        },
-      },
-      { app_deployment: { sensitive: false, value } },
-    ),
-  ).toThrow("cannot be projected");
-});
-
-test("output allowlist projection accepts service auth contracts but rejects auth material", () => {
-  const safe = [
-    {
-      name: "source.git.smart_http",
-      capabilities: ["source.git.smart_http", "protocol.http.api"],
-      endpoints: [
-        {
-          name: "smart-http",
-          protocol: "https",
-          url: "https://git.example.test/git",
-        },
-      ],
-      auth: [{ scheme: "bearer", scopes: ["repos:read", "repos:write"] }],
-      metadata: { title: "Git Smart HTTP" },
-      visibility: "space",
-    },
-  ];
-  const allowlist = {
-    service_exports: {
-      from: "service_exports",
+    config: {
+      from: "config",
       type: "json",
       required: true,
     },
   } as const;
-  expect(
-    projectOutputAllowlistSpaceOutputs(allowlist, {
-      service_exports: { sensitive: false, value: safe },
-    }),
-  ).toEqual({ service_exports: safe });
 
-  const unsafe = structuredClone(safe) as Array<Record<string, unknown>>;
-  unsafe[0]!.metadata = { api_token: "sk-live-do-not-project" };
-  expect(() =>
-    projectOutputAllowlistSpaceOutputs(allowlist, {
-      service_exports: {
-        sensitive: false,
-        value: unsafe as never,
-      },
-    }),
-  ).toThrow("cannot be projected");
+  expect(projectOutputAllowlistSpaceOutputs(allowlist, outputs)).toEqual({
+    config: {
+      endpoint: "https://api.example.test",
+      token: "do-not-project",
+    },
+  });
+  expect(() => projectOutputAllowlistPublicOutputs(allowlist, outputs)).toThrow(
+    "cannot be published",
+  );
 });
 
-test("output allowlist projection still rejects app_deployment values with concrete secret material", () => {
-  const outputs = {
+test("former runtime declaration names remain ordinary opaque Outputs", () => {
+  const allowlist = {
     app_deployment: {
-      sensitive: false,
-      value: {
-        name: "bad-app",
-        password: "sk_test_1234567890abcdef",
-      },
+      from: "app_deployment",
+      type: "json",
+      required: true,
     },
+    service_exports: {
+      from: "ordinary_json",
+      type: "json",
+      required: true,
+    },
+    renamed_bindings: {
+      from: "service_bindings",
+      type: "json",
+      required: true,
+    },
+  } as const;
+  const outputs = {
+    app_deployment: { sensitive: false, value: { name: "legacy-app" } },
+    ordinary_json: { sensitive: false, value: [{ name: "legacy-service" }] },
+    service_bindings: { sensitive: false, value: [{ name: "legacy-binding" }] },
   };
 
-  expect(() =>
-    projectOutputAllowlistSpaceOutputs(
-      {
-        app_deployment: {
-          from: "app_deployment",
-          type: "json",
-          required: true,
-        },
-      },
-      outputs,
-    ),
-  ).toThrow("cannot be projected");
+  expect(projectOutputAllowlistSpaceOutputs(allowlist, outputs)).toEqual({
+    app_deployment: { name: "legacy-app" },
+    renamed_bindings: [{ name: "legacy-binding" }],
+    service_exports: [{ name: "legacy-service" }],
+  });
+  expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual({
+    app_deployment: { name: "legacy-app" },
+    service_exports: [{ name: "legacy-service" }],
+    renamed_bindings: [{ name: "legacy-binding" }],
+  });
 });
 
 test("output allowlist projection drops optional empty generated output shims", () => {
@@ -309,7 +201,7 @@ test("output allowlist projection drops optional empty generated output shims", 
   } as const;
 
   expect(projectOutputAllowlistSpaceOutputs(allowlist, outputs)).toEqual({});
-  expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual([]);
+  expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual({});
 });
 
 test("output allowlist projection drops optional outputs removed by destroy", () => {
@@ -327,7 +219,7 @@ test("output allowlist projection drops optional outputs removed by destroy", ()
   } as const;
 
   expect(projectOutputAllowlistSpaceOutputs(optional, outputs)).toEqual({});
-  expect(projectOutputAllowlistPublicOutputs(optional, outputs)).toEqual([]);
+  expect(projectOutputAllowlistPublicOutputs(optional, outputs)).toEqual({});
 
   expect(() =>
     projectOutputAllowlistSpaceOutputs(
@@ -343,20 +235,77 @@ test("output allowlist projection drops optional outputs removed by destroy", ()
   ).toThrow("does not match declared projection type url");
 });
 
-test("template public string outputs allow ordinary labels containing secret words", () => {
-  const template = {
-    id: "cloudflare-hello-worker",
-    version: "1.0.0",
-    outputs: {
-      public: {
-        worker_name: { from: "worker_name", type: "string" },
-        url: { from: "url", type: "string" },
+test("Workspace Output capture skips optional values that exceed its per-value bound", () => {
+  const oversized = "x".repeat(
+    WORKSPACE_OUTPUT_PROJECTION_LIMITS.maxValueBytes,
+  );
+
+  expect(
+    projectOutputAllowlistSpaceOutputs(
+      { payload: { from: "payload", type: "json" } },
+      { payload: { sensitive: false, value: oversized } },
+    ),
+  ).toEqual({});
+});
+
+test("Workspace Output capture is deterministically bounded by count and total bytes", () => {
+  const countAllowlist = Object.fromEntries(
+    Array.from(
+      { length: WORKSPACE_OUTPUT_PROJECTION_LIMITS.maxEntries + 1 },
+      (_, index) => {
+        const name = `output_${String(index).padStart(3, "0")}`;
+        return [name, { from: name, type: "json" as const }];
       },
-    },
+    ),
+  );
+  const countOutputs = Object.fromEntries(
+    Object.keys(countAllowlist).map((name) => [
+      name,
+      { sensitive: false, value: name },
+    ]),
+  );
+  const countProjection = projectOutputAllowlistSpaceOutputs(
+    countAllowlist,
+    countOutputs,
+  );
+  expect(Object.keys(countProjection)).toHaveLength(
+    WORKSPACE_OUTPUT_PROJECTION_LIMITS.maxEntries,
+  );
+  expect(countProjection).not.toHaveProperty("output_128");
+
+  const chunk = "x".repeat(32 * 1024);
+  const totalAllowlist = Object.fromEntries(
+    Array.from({ length: 9 }, (_, index) => [
+      `chunk_${index}`,
+      { from: `chunk_${index}`, type: "json" as const },
+    ]),
+  );
+  const totalOutputs = Object.fromEntries(
+    Object.keys(totalAllowlist).map((name) => [
+      name,
+      { sensitive: false, value: chunk },
+    ]),
+  );
+  const totalProjection = projectOutputAllowlistSpaceOutputs(
+    totalAllowlist,
+    totalOutputs,
+  );
+  expect(Object.keys(totalProjection).length).toBeLessThan(9);
+  expect(
+    new TextEncoder().encode(JSON.stringify(totalProjection)).byteLength,
+  ).toBeLessThanOrEqual(
+    WORKSPACE_OUTPUT_PROJECTION_LIMITS.maxTotalBytes + 9 * 32,
+  );
+});
+
+test("explicit public string outputs allow ordinary labels containing secret words", () => {
+  const outputAllowlist = {
+    worker_name: { from: "worker_name", type: "string" },
+    url: { from: "url", type: "string" },
   } as const;
 
   expect(
-    projectTemplatePublicOutputs(template as never, {
+    projectOutputAllowlistPublicOutputs(outputAllowlist, {
       worker_name: {
         sensitive: false,
         value: "takosumi-credential-recipes-demo",
@@ -366,102 +315,148 @@ test("template public string outputs allow ordinary labels containing secret wor
         value: "https://takosumi-credential-recipes-demo.example.test",
       },
     }),
-  ).toEqual([
-    {
-      name: "worker_name",
-      kind: "string",
-      value: "takosumi-credential-recipes-demo",
-      sensitive: false,
-    },
-    {
-      name: "url",
-      kind: "string",
-      value: "https://takosumi-credential-recipes-demo.example.test",
-      sensitive: false,
-    },
-  ]);
+  ).toEqual({
+    worker_name: "takosumi-credential-recipes-demo",
+    url: "https://takosumi-credential-recipes-demo.example.test",
+  });
 });
 
-test("compact error codes classify managed Cloud credit gates as credit-required", () => {
+test("explicit url outputs reject credential-bearing query parameters regardless of Output name", () => {
+  const outputAllowlist = {
+    endpoint: { from: "ordinary_result", type: "url", required: true },
+  } as const;
+
+  expect(() =>
+    projectOutputAllowlistPublicOutputs(outputAllowlist, {
+      ordinary_result: {
+        sensitive: false,
+        value: "https://api.example.test/invoke?access_token=secret-value",
+      },
+    }),
+  ).toThrow("cannot be published");
+});
+
+test("structured error reasons preserve an injected billing extension denial", () => {
   expect(
-    compactErrorCode(
-      'OpenTofu runner rejected apply run plan_123: 500 (POST "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/d1/database": 402 Payment Required {"error":"cloud_extension_insufficient_credits","reason":"insufficient_credits"})',
+    runErrorCode(
+      new OpenTofuControllerError(
+        "failed_precondition",
+        "billing extension denied the operation",
+        { reason: "credits_required" },
+      ),
+      "run_failed",
     ),
   ).toBe("credits_required");
 
   expect(
-    compactErrorCode(
-      "USD balance reservation failed: $0.01 estimated but only $0.00 available",
+    runErrorCode(
+      new Error(
+        "credits_required: the injected policy reported insufficient capacity",
+      ),
+      "run_failed",
     ),
-  ).toBe("credits_required");
+  ).toBe("run_failed");
 });
 
-test("error diagnostics summarize managed Cloud credit gates before raw runner detail", () => {
+test("error diagnostics do not infer host billing semantics from free-form text", () => {
   const diagnostic = errorDiagnostic(
-    new Error(
-      'OpenTofu runner rejected apply run plan_123: 500 (POST "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/d1/database": 402 Payment Required {"error":"cloud_extension_insufficient_credits","reason":"insufficient_credits"})',
+    new Error("billing extension reported insufficient credits"),
+  );
+
+  expect(diagnostic).toEqual({
+    severity: "error",
+    message: "billing extension reported insufficient credits",
+  });
+});
+
+test("error diagnostics carry an explicit structured reason separately from prose", () => {
+  const diagnostic = errorDiagnostic(
+    new OpenTofuControllerError(
+      "failed_precondition",
+      "the reviewed connection changed",
+      { reason: "provider_connection_changed" },
     ),
   );
 
-  expect(diagnostic.message).toBe(
-    "credits_required: insufficient credits for this Takosumi Cloud operation",
-  );
-  expect(diagnostic.detail).toContain("OpenTofu runner rejected apply run");
-  expect(diagnostic.detail).toContain("cloud_extension_insufficient_credits");
+  expect(diagnostic).toEqual({
+    severity: "error",
+    code: "provider_connection_changed",
+    message: "the reviewed connection changed",
+  });
 });
 
-test("compact error codes classify provider credential preparation failures", () => {
+test("structured error reasons classify provider credential preparation failures", () => {
   expect(
-    compactErrorCode(
-      "credential_mint_failed: connection conn_operator_takosumi_cloud_cloudflare_compat is pending (not verified)",
+    runErrorCode(
+      new OpenTofuControllerError(
+        "failed_precondition",
+        "the selected connection is pending verification",
+        { reason: "provider_connection_not_ready" },
+      ),
+      "run_failed",
     ),
   ).toBe("provider_connection_not_ready");
 
   expect(
-    compactErrorCode(
-      "credential_mint_failed: installation provider connection resolution is required",
+    runErrorCode(
+      new OpenTofuControllerError(
+        "failed_precondition",
+        "a connection must be selected",
+        { reason: "provider_connection_setup_required" },
+      ),
+      "run_failed",
     ),
   ).toBe("provider_connection_setup_required");
 
   expect(
-    compactErrorCode(
-      "resolved_bindings_changed: plan run plan_123 was reviewed against different provider connections than are now resolved; re-plan before apply",
+    runErrorCode(
+      new OpenTofuControllerError(
+        "failed_precondition",
+        "the reviewed bindings no longer match",
+        { reason: "provider_connection_changed" },
+      ),
+      "run_failed",
     ),
   ).toBe("provider_connection_changed");
 
   expect(
-    compactErrorCode(
-      "credential_mint_failed: managed provider connection conn_cloud requires a managed provider credential issuer",
+    runErrorCode(
+      new OpenTofuControllerError(
+        "failed_precondition",
+        "credential preparation is unavailable",
+        { reason: "credential_service_unavailable" },
+      ),
+      "run_failed",
     ),
   ).toBe("credential_service_unavailable");
 });
 
-test("compact error codes preserve concrete provider runtime failures", () => {
+test("runner adapters preserve concrete provider runtime reasons", () => {
   expect(
-    compactErrorCode(
-      "OpenTofu runner rejected plan run plan_123: 500 (provider_package_unavailable: registry lookup failed)",
+    runErrorCode(
+      new OpenTofuRunnerExecutionError("registry lookup failed", {
+        reason: "provider_package_unavailable",
+      }),
+      "plan_failed",
     ),
   ).toBe("provider_package_unavailable");
   expect(
-    compactErrorCode(
-      "OpenTofu runner rejected plan run plan_123: 500 (opentofu_init_failed: init exited 1)",
+    runErrorCode(
+      new OpenTofuRunnerExecutionError("init exited 1", {
+        reason: "opentofu_init_failed",
+      }),
+      "plan_failed",
     ),
   ).toBe("opentofu_init_failed");
 });
 
-test("template public string outputs still reject concrete secret-shaped values", () => {
-  const template = {
-    id: "cloudflare-hello-worker",
-    version: "1.0.0",
-    outputs: {
-      public: {
-        worker_name: { from: "worker_name", type: "string" },
-      },
-    },
+test("explicit public string outputs still reject concrete secret-shaped values", () => {
+  const outputAllowlist = {
+    worker_name: { from: "worker_name", type: "string", required: true },
   } as const;
 
   expect(() =>
-    projectTemplatePublicOutputs(template as never, {
+    projectOutputAllowlistPublicOutputs(outputAllowlist, {
       worker_name: {
         sensitive: false,
         value: "token=abc123",

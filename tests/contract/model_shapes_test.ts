@@ -7,42 +7,31 @@
 import { expect, test } from "bun:test";
 
 import type {
-  CapsuleProviderEnvBinding,
+  ProviderBinding,
   ProviderConnection,
 } from "../../contract/connections.ts";
+import { isProviderConnectionMaterialization } from "../../contract/connections.ts";
 import type { CredentialRecipe } from "../../contract/credential-recipes.ts";
 import {
-  isProviderDeliveryMode,
   isProviderResolutionStatus,
-  PROVIDER_DELIVERY_MODES,
   PROVIDER_RESOLUTION_STATUSES,
   type PublicProviderResolution,
   type ProviderRequirement,
   type ProviderResolution,
   type RunEnvironment,
-  type RuntimeGrantProjection,
 } from "../../contract/provider-resolution.ts";
+import type { BillingSettings, UsageEvent } from "../../contract/billing.ts";
+import { NOOP_SHOWBACK_RATER } from "../../contract/billing.ts";
 import type {
-  BillingAccount,
-  BillingAutoRechargeAttempt,
-  BillingPlan,
-  BillingSettings,
-  CreditReservation,
-  InvoiceUsageReconciliation,
-  UsageEvent,
-} from "../../contract/billing.ts";
-import {
-  RUNNER_MINUTE_USD_MICROS,
-  runnerMinuteUsdMicros,
-} from "../../contract/billing.ts";
-import type { CapsuleCompatibilityReport } from "../../contract/capsules.ts";
+  Capsule,
+  CapsuleCompatibilityReport,
+} from "../../contract/capsules.ts";
 import type {
   Dependency,
   DependencySnapshot,
 } from "../../contract/dependencies.ts";
-import type { Connection } from "../../contract/internal-deploy-control-api.ts";
-import type { Deployment, StateVersion } from "../../contract/deployments.ts";
-import type { InstallConfig, Capsule } from "../../contract/installations.ts";
+import type { StateVersion } from "../../contract/state-versions.ts";
+import type { InstallConfig } from "../../contract/install-configs.ts";
 import type { OutputShare, Output } from "../../contract/outputs.ts";
 import type { Run, RunGroup } from "../../contract/runs.ts";
 import type {
@@ -73,33 +62,10 @@ test("Workspace shape", () => {
   ).toBe("@acme/chat");
 });
 
-test("BillingPlan shape", () => {
-  const plan: BillingPlan = {
-    id: "pro",
-    name: "Pro",
-    monthlyBasePrice: 2000,
-    includedCredits: 1000,
-    limits: {
-      maxEstimatedCreditsPerRun: 100,
-      quota: { resources: 20 },
-    },
-    createdAt: "2026-06-07T00:00:00Z",
-    updatedAt: "2026-06-07T00:00:00Z",
-  };
-  expect(plan.limits.quota?.resources).toBe(20);
-});
-
 test("Capsule + InstallConfig shape", () => {
   const config: InstallConfig = {
     id: "cfg_talk",
     name: "talk",
-    installType: "opentofu_module",
-    trustLevel: "official",
-    normalization: {
-      allowBackendRewrite: true,
-      allowProviderLift: true,
-      allowAliasInjection: true,
-    },
     modulePath: "deploy",
     variableMapping: {},
     outputAllowlist: {
@@ -114,20 +80,32 @@ test("Capsule + InstallConfig shape", () => {
       providerCredentials: {
         requireTemporary: true,
         requireTtlEnforced: true,
-        requireRootOnly: true,
+      },
+      scopeBoundary: {
+        mode: "strict",
+        rules: [
+          {
+            resourceTypePattern: "cloudflare_*",
+            dimensions: {
+              account_id: {
+                selector: "/account_id",
+                allowedValues: ["acct_public"],
+              },
+            },
+          },
+        ],
       },
     },
     createdAt: "2026-06-06T00:00:00Z",
     updatedAt: "2026-06-06T00:00:00Z",
   };
-  const installation: Capsule = {
+  const capsule: Capsule = {
     id: "inst_talk",
     workspaceId: "ws_1",
     projectId: "prj_default",
     name: "talk",
     slug: "talk",
     sourceId: "src_talk",
-    installType: config.installType,
     installConfigId: config.id,
     environment: "production",
     currentStateGeneration: 0,
@@ -136,7 +114,7 @@ test("Capsule + InstallConfig shape", () => {
     createdAt: "2026-06-06T00:00:00Z",
     updatedAt: "2026-06-06T00:00:00Z",
   };
-  expect(installation.environment).toBe("production");
+  expect(capsule.environment).toBe("production");
   expect(config.outputAllowlist.public_url?.type).toBe("url");
 });
 
@@ -144,15 +122,14 @@ test("Capsule compatibility report shape", () => {
   const report: CapsuleCompatibilityReport = {
     id: "caprep_1",
     sourceSnapshotId: "snap_1",
-    level: "auto_capsulized",
+    level: "ready",
     findings: [
       {
-        severity: "warning",
-        code: "backend_overridden",
+        severity: "info",
+        code: "backend_state_isolated",
         message:
-          "backend block will be overridden by Takosumi-controlled state",
+          "backend block remains unchanged while Takosumi isolates Run state",
         path: "main.tf",
-        suggestion: "Remove the backend block and let Takosumi manage state.",
       },
     ],
     providers: [
@@ -185,32 +162,30 @@ test("Capsule compatibility report shape", () => {
           discoveredFrom: "required_providers",
           requiredForPhases: ["plan", "apply"],
         },
-        status: "blocked_missing_env",
-        blockedReason: "AWS Provider Connection is required",
+        status: "blocked_missing_connection",
+        blockedReason: "AWS Provider ProviderConnection is required",
         evidence: {
           kind: "blocked",
           provider: "aws",
-          reason: "AWS Provider Connection is required",
+          reason: "AWS Provider ProviderConnection is required",
         },
       },
     ],
-    normalizedObjectKey:
-      "spaces/space_1/sources/src_talk/snapshots/snap_1/normalized-module.json",
-    normalizedDigest: "sha256:normalized",
     createdAt: "2026-06-07T00:00:00Z",
   };
-  expect(report.level).toBe("auto_capsulized");
-  expect(report.providerResolutions?.[0]?.status).toBe("blocked_missing_env");
+  expect(report.level).toBe("ready");
+  expect(report.providerResolutions?.[0]?.status).toBe(
+    "blocked_missing_connection",
+  );
 });
 
-test("unified Provider Connection + binding shape uses concrete connection ids", () => {
+test("ProviderConnection + binding shape uses canonical Workspace connection ids", () => {
   const providerConnection: ProviderConnection = {
     id: "conn_space_cf",
-    workspaceId: "space_1",
+    workspaceId: "ws_1",
     provider: "cloudflare",
     providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-    kind: "cloudflare_api_token",
-    scope: "space",
+    scope: "workspace",
     displayName: "Cloudflare",
     status: "verified",
     materialization: "secret",
@@ -218,7 +193,7 @@ test("unified Provider Connection + binding shape uses concrete connection ids",
     createdAt: "2026-06-06T00:00:00Z",
     updatedAt: "2026-06-06T00:00:00Z",
   };
-  const binding: CapsuleProviderEnvBinding = {
+  const binding: ProviderBinding = {
     provider: "cloudflare",
     alias: "main",
     connectionId: providerConnection.id,
@@ -226,7 +201,6 @@ test("unified Provider Connection + binding shape uses concrete connection ids",
   const recipe: CredentialRecipe = {
     id: "cloudflare",
     displayName: "Cloudflare",
-    providerRule: "cloudflare",
     terraformSource: ["cloudflare/cloudflare"],
     envNames: ["CLOUDFLARE_API_TOKEN"],
     requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
@@ -238,7 +212,7 @@ test("unified Provider Connection + binding shape uses concrete connection ids",
       },
     },
   };
-  const bindings: readonly CapsuleProviderEnvBinding[] = [
+  const bindings: readonly ProviderBinding[] = [
     { provider: "cloudflare", alias: "main", connectionId: "conn_cf_other" },
     {
       provider: "cloudflare",
@@ -264,13 +238,13 @@ test("Provider resolution exposes OSS ProviderConnection delivery without Gatewa
   };
   const resolution: ProviderResolution = {
     requirement,
-    status: "resolved_provider_env",
-    envId: "penv_cf_secret",
+    status: "resolved_provider_connection",
+    connectionId: "penv_cf_secret",
     materialization: "secret",
     evidence: {
       kind: "provider_env",
       provider: "cloudflare",
-      envId: "penv_cf_secret",
+      connectionId: "penv_cf_secret",
       materialization: "secret",
       requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
     },
@@ -309,24 +283,18 @@ test("Provider resolution exposes OSS ProviderConnection delivery without Gatewa
     stateBackendRef: "state_backend_run_plan",
     savedPlanDigest: "sha256:plan",
   };
-  const runtimeGrant: RuntimeGrantProjection = {
-    grantId: "sg_1",
-    serviceExportId: "se_1",
-    serviceBindingId: "sb_1",
-    capsuleId: "inst_1",
-    capability: "object.readwrite",
-    rotationPolicyId: "rotate_runtime_grants",
-  };
-
-  expect(PROVIDER_DELIVERY_MODES).toEqual(["oauth", "secret"]);
-  expect(PROVIDER_RESOLUTION_STATUSES).toContain("resolved_provider_env");
-  expect(isProviderDeliveryMode("gateway")).toBe(false);
-  expect(isProviderDeliveryMode("runner_token")).toBe(false);
+  expect(PROVIDER_RESOLUTION_STATUSES).toContain(
+    "resolved_provider_connection",
+  );
+  expect(isProviderConnectionMaterialization("custom.adapter.v2")).toBe(true);
+  expect(isProviderConnectionMaterialization("gateway")).toBe(false);
+  expect(isProviderConnectionMaterialization("runner_token")).toBe(false);
   expect(isProviderResolutionStatus(resolution.status)).toBe(true);
   expect(runEnvironment.providerResolutions[0]?.materialization).toBe("secret");
-  expect(runEnvironment.providerResolutions[0]?.envId).toBe("penv_cf_secret");
+  expect(runEnvironment.providerResolutions[0]?.connectionId).toBe(
+    "penv_cf_secret",
+  );
   expect(publicResolution.connectionId).toBe("conn_cf_main");
-  expect(runtimeGrant.serviceBindingId).toBe("sb_1");
 });
 
 test("TargetPool can carry operator-declared implementation capabilities", () => {
@@ -363,8 +331,8 @@ test("TargetPool can carry operator-declared implementation capabilities", () =>
   expect(implementation?.interfaces["custom.mesh"]).toBe("native");
 });
 
-test("Connection expiry shape", () => {
-  const connection: Connection = {
+test("ProviderConnection expiry shape", () => {
+  const connection: ProviderConnection = {
     id: "conn_1",
     workspaceId: "space_1",
     provider: "cloudflare",
@@ -415,8 +383,8 @@ test("Dependency + DependencySnapshot shape", () => {
         producerCapsuleId: dependency.producerCapsuleId,
         producerStateGeneration: 3,
         producerStateVersionId: "state_3",
-        producerStateObjectKey:
-          "spaces/space_1/installations/inst_core/envs/production/states/00000003.tfstate.enc",
+        producerStateRef:
+          "workspaces/space_1/capsules/inst_core/environments/production/state-versions/00000003.tfstate.enc",
         producerStateDigest: "sha256:state",
         producerOutputId: "out_3",
         producerOutputDigest: "sha256:abc",
@@ -431,20 +399,20 @@ test("Dependency + DependencySnapshot shape", () => {
   expect(snapshot.dependencies[0]?.producerStateGeneration).toBe(3);
 });
 
-test("Output projects raw -> space/public lanes", () => {
+test("Output projects raw -> Workspace/public lanes", () => {
   const snapshot: Output = {
     id: "out_1",
     workspaceId: "space_1",
     capsuleId: "inst_core",
     stateGeneration: 1,
-    rawOutputArtifactKey:
-      "spaces/space_1/installations/inst_core/runs/run_1/outputs.raw.json.enc",
+    rawArtifactRef:
+      "workspaces/space_1/capsules/inst_core/runs/run_1/outputs.raw.json.enc",
     publicOutputs: { public_origin: "https://shota.example.com" },
     workspaceOutputs: { base_domain: "shota.example.com" },
     outputDigest: "sha256:abc",
     createdAt: "2026-06-06T00:00:00Z",
   };
-  expect(snapshot.rawOutputArtifactKey.endsWith(".enc")).toBe(true);
+  expect(snapshot.rawArtifactRef.endsWith(".enc")).toBe(true);
 });
 
 test("OutputShare lifecycle states", () => {
@@ -478,7 +446,7 @@ test("single Run table covers all run kinds", () => {
         address: "cloudflare_workers_script.app",
         type: "cloudflare_workers_script",
         actions: ["delete", "create"],
-        scope: { cloudflareAccountId: "acct_public" },
+        scope: { facts: { account_id: "acct_public" } },
       },
     ],
     providerResolutions: [
@@ -490,13 +458,13 @@ test("single Run table covers all run kinds", () => {
           discoveredFrom: "required_providers",
           requiredForPhases: ["plan", "apply"],
         },
-        status: "resolved_provider_env",
-        envId: "penv_space_cf",
+        status: "resolved_provider_connection",
+        connectionId: "penv_space_cf",
         materialization: "secret",
         evidence: {
           kind: "provider_env",
           provider: "cloudflare",
-          envId: "penv_space_cf",
+          connectionId: "penv_space_cf",
           materialization: "secret",
           requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
         },
@@ -510,24 +478,24 @@ test("single Run table covers all run kinds", () => {
   const group: RunGroup = {
     id: "rg_1",
     workspaceId: "space_1",
-    type: "space_update",
+    type: "workspace_update",
     status: "queued",
     graphJson: JSON.stringify({ order: [["inst_core"], ["inst_talk"]] }),
     createdAt: "2026-06-06T00:00:00Z",
   };
   expect(run.type).toBe("plan");
   expect(run.planResources?.[0]?.actions).toEqual(["delete", "create"]);
-  expect(run.planResources?.[0]?.scope?.cloudflareAccountId).toBe(
-    "acct_public",
+  expect(run.planResources?.[0]?.scope?.facts.account_id).toBe("acct_public");
+  expect(run.providerResolutions?.[0]?.status).toBe(
+    "resolved_provider_connection",
   );
-  expect(run.providerResolutions?.[0]?.status).toBe("resolved_provider_env");
-  expect(group.type).toBe("space_update");
+  expect(group.type).toBe("workspace_update");
   const driftGroup: RunGroup = {
     ...group,
     id: "rg_drift",
-    type: "space_drift_check",
+    type: "workspace_drift_check",
   };
-  expect(driftGroup.type).toBe("space_drift_check");
+  expect(driftGroup.type).toBe("workspace_drift_check");
 });
 
 test("compatibility_check Run kind is part of the unified ledger", () => {
@@ -546,60 +514,26 @@ test("compatibility_check Run kind is part of the unified ledger", () => {
   expect(run.type).toBe("compatibility_check");
 });
 
-test("Deployment + StateVersion shape", () => {
-  // Retired Deployment ledger keeps its frozen legacy field names.
-  const deployment: Deployment = {
-    id: "dpl_1",
-    spaceId: "space_1",
-    installationId: "inst_talk",
-    environment: "production",
-    applyRunId: "run_2",
-    sourceSnapshotId: "snap_1",
-    dependencySnapshotId: "depsnap_1",
-    stateGeneration: 4,
-    outputSnapshotId: "out_4",
-    outputsPublic: { public_url: "https://talk.shota.example.com" },
-    status: "active",
-    createdAt: "2026-06-06T00:00:00Z",
-  };
+test("StateVersion shape", () => {
   const state: StateVersion = {
     id: "state_4",
     workspaceId: "space_1",
     capsuleId: "inst_talk",
     environment: "production",
     generation: 4,
-    objectKey:
-      "spaces/space_1/installations/inst_talk/envs/production/states/00000004.tfstate.enc",
+    stateRef:
+      "workspaces/space_1/capsules/inst_talk/environments/production/state-versions/00000004.tfstate.enc",
     digest: "sha256:abc",
     createdByRunId: "run_2",
     createdAt: "2026-06-06T00:00:00Z",
   };
-  expect(deployment.stateGeneration).toBe(state.generation);
+  expect(state.generation).toBe(4);
+  expect(state.createdByRunId).toBe("run_2");
 });
 
-test("Billing and security ledger shapes", () => {
-  const billing: BillingAccount = {
-    id: "ba_1",
-    ownerType: "user",
-    ownerId: "user_1",
-    provider: "stripe",
-    status: "active",
-    createdAt: "2026-06-07T00:00:00Z",
-    updatedAt: "2026-06-07T00:00:00Z",
-  };
+test("showback usage and security ledger shapes", () => {
   const settings: BillingSettings = {
     mode: "showback",
-    provider: "none",
-  };
-  const reservation: CreditReservation = {
-    id: "cr_1",
-    workspaceId: "space_1",
-    runId: "run_1",
-    estimatedCredits: 32,
-    status: "reserved",
-    mode: "showback",
-    createdAt: "2026-06-07T00:00:00Z",
-    expiresAt: "2026-06-07T01:00:00Z",
   };
   const usage: UsageEvent = {
     id: "usage_1",
@@ -608,45 +542,11 @@ test("Billing and security ledger shapes", () => {
     runId: "run_1",
     kind: "runner_minute",
     quantity: 3,
-    credits: 3,
+    usdMicros: 30_000,
+    ratingStatus: "rated",
     source: "runner",
     idempotencyKey: "run_1:runner",
     createdAt: "2026-06-07T00:00:00Z",
-  };
-  const autoRechargeAttempt: BillingAutoRechargeAttempt = {
-    id: "takosumi-autorecharge:space_1:run_1",
-    workspaceId: "space_1",
-    runId: "run_1",
-    billingAccountId: "ba_1",
-    idempotencyKey: "takosumi-autorecharge:space_1:run_1",
-    periodStart: "2026-06-01T00:00:00Z",
-    periodEnd: "2026-07-01T00:00:00Z",
-    requestedUsdMicros: 1_000_000,
-    monthlyLimitUsdMicros: 10_000_000,
-    chargedUsdMicros: 1_000_000,
-    status: "succeeded",
-    stripePaymentIntentId: "pi_123",
-    providerStatus: "succeeded",
-    createdAt: "2026-06-07T00:00:00Z",
-    updatedAt: "2026-06-07T00:00:01Z",
-  };
-  const invoiceReconciliation: InvoiceUsageReconciliation = {
-    invoiceId: "in_123",
-    periodStart: "2026-06-07T00:00:00Z",
-    periodEnd: "2026-06-08T00:00:00Z",
-    meteredCredits: 3,
-    invoicedCredits: 4,
-    adjustmentCredits: 1,
-    usageEvent: {
-      id: "usage_reconcile",
-      workspaceId: "space_1",
-      kind: "operation",
-      quantity: 1,
-      credits: 1,
-      source: "billing_reconciliation",
-      idempotencyKey: "invoice-reconciliation:space_1:in_123",
-      createdAt: "2026-06-08T00:00:00Z",
-    },
   };
   const mint: CredentialMintEvent = {
     id: "mint_1",
@@ -669,23 +569,33 @@ test("Billing and security ledger shapes", () => {
     metadata: { code: "backend_overridden" },
     createdAt: "2026-06-07T00:00:00Z",
   };
-  expect(billing.provider).toBe("stripe");
   expect(settings.mode).toBe("showback");
-  expect(reservation.estimatedCredits).toBe(32);
   expect(usage.kind).toBe("runner_minute");
-  expect(autoRechargeAttempt.status).toBe("succeeded");
-  expect(invoiceReconciliation.adjustmentCredits).toBe(1);
+  expect(usage.usdMicros).toBe(30_000);
+  expect(usage.ratingStatus).toBe("rated");
   expect(mint.capabilities).toEqual(["cloudflare"]);
   expect(finding.severity).toBe("warning");
 });
 
-test("runner minute billing uses fine grained USD micros", () => {
-  expect(RUNNER_MINUTE_USD_MICROS).toBe(10_000);
-  expect(runnerMinuteUsdMicros(0)).toBe(0);
-  expect(runnerMinuteUsdMicros(0.00001)).toBe(1);
-  expect(runnerMinuteUsdMicros(0.5)).toBe(5_000);
-  expect(runnerMinuteUsdMicros(1)).toBe(10_000);
-  expect(() => runnerMinuteUsdMicros(-1)).toThrow(
-    "runner minute quantity must be non-negative",
-  );
+test("OSS showback keeps measurements explicitly unrated without a host price", async () => {
+  expect(
+    await NOOP_SHOWBACK_RATER.ratePlan({
+      workspaceId: "ws_1",
+      billingSubjectId: "user_1",
+      runId: "run_1",
+      planResourceChanges: [],
+      now: 1,
+    }),
+  ).toEqual({ ratingStatus: "unrated", usdMicros: 0 });
+  expect(
+    await NOOP_SHOWBACK_RATER.rateUsage({
+      workspaceId: "ws_1",
+      billingSubjectId: "user_1",
+      runId: "run_1",
+      kind: "runner_minute",
+      quantity: 0.5,
+      source: "runner",
+      createdAt: "2026-06-07T00:00:00.000Z",
+    }),
+  ).toEqual({ ratingStatus: "unrated", usdMicros: 0 });
 });

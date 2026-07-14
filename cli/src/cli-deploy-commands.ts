@@ -1,11 +1,4 @@
-/**
- * Retired `takosumi deploy` command family.
- *
- * Git URL Source/Capsule install is the standard product flow. This file keeps
- * only the public read companions (`logs` / `status`) plus a compatibility
- * `runDeploy` implementation that returns the same retirement message as
- * `main.ts` if imported by an older wrapper.
- */
+/** Public Run read companions (`logs` / `status`). */
 
 import process from "node:process";
 import { optionalStringOption } from "./cli-options.ts";
@@ -18,19 +11,6 @@ interface RunRecord {
   readonly status: string;
   readonly type: string;
   readonly policyStatus?: string;
-}
-
-export async function runDeploy(
-  args: string[],
-  io: CliIo,
-  options: { planOnly: boolean },
-): Promise<number> {
-  void args;
-  void options;
-  io.stderr(
-    "`takosumi deploy` local upload is retired. Use the dashboard /install?git=... flow or create a Git URL Source/Capsule and run plan/apply.",
-  );
-  return 2;
 }
 
 export async function runDeployLogs(

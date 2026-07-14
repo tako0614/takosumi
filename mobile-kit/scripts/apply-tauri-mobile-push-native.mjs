@@ -5,19 +5,36 @@ import path from "node:path";
 
 const args = parseArgs(process.argv.slice(2));
 const appDir = path.resolve(args.appDir ?? process.cwd());
-const appleEnvironment = args.appleEnvironment ?? "development";
+const appleEnvironment = args.appleEnvironment;
+const platform = args.platform ?? "all";
 const dryRun = Boolean(args.dryRun);
 const strict = Boolean(args.strict);
 const results = [];
 
-if (appleEnvironment !== "development" && appleEnvironment !== "production") {
-  fail("--apple-environment must be development or production");
+if (!new Set(["all", "android", "ios"]).has(platform)) {
+  fail("--platform must be all, android, or ios");
   printResults();
   process.exit(2);
 }
 
-await applyApplePushEntitlement();
-await applyAndroidFirebaseWiring();
+if (
+  platform !== "android" &&
+  appleEnvironment !== "development" &&
+  appleEnvironment !== "production"
+) {
+  fail(
+    "--apple-environment is required for iOS and must be development or production",
+  );
+  printResults();
+  process.exit(2);
+}
+
+if (platform === "all" || platform === "ios") {
+  await applyApplePushEntitlement();
+}
+if (platform === "all" || platform === "android") {
+  await applyAndroidFirebaseWiring();
+}
 printResults();
 
 if (
@@ -79,9 +96,6 @@ async function applyAndroidFirebaseWiring() {
     "app/build.gradle.kts",
     "app/build.gradle",
   ]);
-  const manifest = androidFiles.find((filePath) =>
-    filePath.endsWith("AndroidManifest.xml"),
-  );
 
   if (projectGradle) {
     writeIfChanged(
@@ -105,16 +119,6 @@ async function applyAndroidFirebaseWiring() {
   } else {
     warn("Android app Gradle file is missing");
   }
-
-  if (manifest) {
-    writeIfChanged(
-      manifest,
-      patchAndroidManifest(readText(manifest)),
-      "Android FCM service manifest entry",
-    );
-  } else {
-    warn("AndroidManifest.xml is missing under src-tauri/gen/android");
-  }
 }
 
 function upsertApsEnvironment(xml, environment) {
@@ -132,9 +136,13 @@ function upsertApsEnvironment(xml, environment) {
 
 function patchProjectGradle(text, kotlinDsl) {
   const pluginLine = kotlinDsl
-    ? '    id("com.google.gms.google-services") version "4.4.2" apply false'
-    : "    id 'com.google.gms.google-services' version '4.4.2' apply false";
-  return ensurePluginsLine(text, pluginLine);
+    ? '    id("com.google.gms.google-services") version "4.5.0" apply false'
+    : "    id 'com.google.gms.google-services' version '4.5.0' apply false";
+  const current = text.replace(
+    /(id\(?["']com\.google\.gms\.google-services["']\)?\s+version\s+["'])[^"']+(["']\s+apply\s+false)/,
+    (_, prefix, suffix) => `${prefix}4.5.0${suffix}`,
+  );
+  return ensurePluginsLine(current, pluginLine);
 }
 
 function patchAppGradle(text, kotlinDsl) {
@@ -142,13 +150,23 @@ function patchAppGradle(text, kotlinDsl) {
     ? '    id("com.google.gms.google-services")'
     : "    id 'com.google.gms.google-services'";
   const bomLine = kotlinDsl
-    ? '    implementation(platform("com.google.firebase:firebase-bom:33.8.0"))'
-    : "    implementation platform('com.google.firebase:firebase-bom:33.8.0')";
+    ? '    implementation(platform("com.google.firebase:firebase-bom:34.15.0"))'
+    : "    implementation platform('com.google.firebase:firebase-bom:34.15.0')";
   const messagingLine = kotlinDsl
     ? '    implementation("com.google.firebase:firebase-messaging")'
     : "    implementation 'com.google.firebase:firebase-messaging'";
+  const installationsLine = kotlinDsl
+    ? '    implementation("com.google.firebase:firebase-installations")'
+    : "    implementation 'com.google.firebase:firebase-installations'";
+  const current = text.replace(
+    /(com\.google\.firebase:firebase-bom:)[^"']+/g,
+    (_, prefix) => `${prefix}34.15.0`,
+  );
   return ensureDependenciesLine(
-    ensureDependenciesLine(ensurePluginsLine(text, pluginLine), bomLine),
+    ensureDependenciesLine(
+      ensureDependenciesLine(ensurePluginsLine(current, pluginLine), bomLine),
+      installationsLine,
+    ),
     messagingLine,
   );
 }
@@ -167,23 +185,6 @@ function ensureDependenciesLine(text, line) {
     return text.replace(/dependencies\s*\{/, (match) => `${match}\n${line}`);
   }
   return `${text.trimEnd()}\n\ndependencies {\n${line}\n}\n`;
-}
-
-function patchAndroidManifest(text) {
-  if (text.includes("app.tauri.mobilepush.FCMService")) return text;
-  const service = [
-    "        <service",
-    '            android:name="app.tauri.mobilepush.FCMService"',
-    '            android:exported="false">',
-    "            <intent-filter>",
-    '                <action android:name="com.google.firebase.MESSAGING_EVENT" />',
-    "            </intent-filter>",
-    "        </service>",
-  ].join("\n");
-  if (text.includes("</application>")) {
-    return text.replace("</application>", `${service}\n    </application>`);
-  }
-  return text;
 }
 
 function findByRelative(files, root, relativePaths) {
@@ -242,7 +243,7 @@ function fail(message) {
 }
 
 function printResults() {
-  console.log(`Tauri mobile push native apply: ${appDir}`);
+  console.log(`Tauri mobile push native apply (${platform}): ${appDir}`);
   for (const result of results) {
     const label =
       result.kind === "ok" ? "OK" : result.kind === "warn" ? "WARN" : "FAIL";

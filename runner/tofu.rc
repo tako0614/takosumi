@@ -1,34 +1,16 @@
 # Baked OpenTofu CLI config for the runner container (TF_CLI_CONFIG_FILE).
 #
-# provider_installation:
-#   filesystem_mirror is authoritative for the providers pre-mirrored into the
-#   image at build time (cloudflare/cloudflare, hashicorp/random, hashicorp/tls,
-#   hashicorp/http).
-#   `direct { exclude = [...] }` forbids the registry/network path
-#   for exactly those providers, so a `tofu init` for bundled first-party modules
-#   resolves them from disk with no network. Any provider NOT in these lists
-#   (e.g. aws/google) falls through to `direct` and is fetched from the registry
-#   as usual. Runtime-generated per-run CLI configs may use a run-local cache or
-#   the operator-configured
+# provider_installation is provider-neutral: every provider may be resolved from
+# the image mirror when present and from its ordinary registry otherwise. A run
+# that requires mirror-only installation gets a generated CLI config with an
+# explicit provider allowlist and a disabled direct path. Runtime-generated
+# per-run CLI configs may use a run-local cache or the operator-configured
 #   TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR for provider binaries only; this baked
 #   fallback deliberately has no shared mutable plugin cache.
 
 provider_installation {
   filesystem_mirror {
     path = "/opt/opentofu/provider-mirror"
-    include = [
-      "registry.opentofu.org/cloudflare/cloudflare",
-      "registry.opentofu.org/hashicorp/random",
-      "registry.opentofu.org/hashicorp/tls",
-      "registry.opentofu.org/hashicorp/http",
-    ]
   }
-  direct {
-    exclude = [
-      "registry.opentofu.org/cloudflare/cloudflare",
-      "registry.opentofu.org/hashicorp/random",
-      "registry.opentofu.org/hashicorp/tls",
-      "registry.opentofu.org/hashicorp/http",
-    ]
-  }
+  direct {}
 }

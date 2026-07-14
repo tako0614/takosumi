@@ -59,6 +59,8 @@ customer-facing usage rates.
 | Containers           | vCPU-second | `$1.00` / 1M vCPU-seconds |
 | Queues               | operation   | `$0.0005` / operation     |
 | Durable Objects      | operation   | `$0.0005` / operation     |
+| OpenTofu plan        | changed resource | `$0.002` / changed resource |
+| OpenTofu runner      | runner-minute | `$0.02` / runner-minute  |
 
 Preview and Planned resources are billed only for Workspaces where that service
 is actually enabled. This table is the pricing contract; it does not mean every

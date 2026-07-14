@@ -1,40 +1,25 @@
 /**
  * Service-side Capsule execution configuration.
  *
- * InstallConfig describes trust, normalization policy, variable mapping, output
+ * InstallConfig describes execution policy, variable mapping, output
  * allowlist, policy, and presentation metadata for a Capsule. Capsule ledger
  * records live in `./capsules.ts`; this module intentionally exports no retired
  * Capsule aliases.
  *
- * A SourceSnapshot is normalized as an OpenTofu Capsule before plan / apply.
- * User repos carry NO Takosumi manifest.
+ * A SourceSnapshot is analyzed and then executed without Takosumi rewriting.
+ * User repos carry NO Takosumi manifest or reserved schema.
  */
 
-import type { InstallType } from "./capsules.ts";
+import type { CapsuleInterfaceBlueprint } from "./interfaces.ts";
+import type { ScopeBoundaryPolicy } from "./plan-scope.ts";
+import type { JsonValue } from "./types.ts";
 
-export type { InstallType } from "./capsules.ts";
 export type { Capsule, PublicCapsule, CapsuleStatus } from "./capsules.ts";
 export type {
-  CapsuleProviderEnvBinding,
-  CapsuleProviderEnvBindings,
-  CapsuleProviderEnvBindingSet,
+  ProviderBinding,
+  ProviderBindings,
+  ProviderBindingSet,
 } from "./connections.ts";
-
-export type TrustLevel = "official" | "trusted" | "space" | "raw";
-
-/**
- * Public discriminator for choosing an InstallConfig without exposing internal
- * `installType` or generated-root authoring details.
- */
-export type PublicInstallConfigSourceKind =
-  "generic_capsule" | "first_party_capsule";
-
-/**
- * Stored sourceKind. The old `official_template` value may exist in pre-v1
- * rows and is normalized out of every public projection.
- */
-export type InstallConfigSourceKind =
-  PublicInstallConfigSourceKind | "official_template";
 
 export type OutputValueType =
   "string" | "url" | "hostname" | "number" | "boolean" | "json";
@@ -46,9 +31,9 @@ export interface OutputAllowlistEntry {
   readonly required?: boolean;
   /**
    * Re-export this child-module output from the Takosumi-generated root as a
-   * sensitive OpenTofu output. Sensitive outputs stay available in the raw
-   * encrypted runner artifact for credential issuers, but never enter public
-   * Output/Deployment projections.
+   * sensitive OpenTofu output. Sensitive outputs remain only in encrypted
+   * OpenTofu state/raw runner artifacts and are ineligible for Interface,
+   * Workspace, and explicit public Output projections.
    */
   readonly sensitive?: boolean;
 }
@@ -70,6 +55,59 @@ export interface SourceBuildConfig {
   readonly commands: readonly SourceBuildCommand[];
   readonly outputs: readonly string[];
 }
+
+/** Stable lifecycle-command capability token used by policy and runner actions. */
+export const CAPSULE_LIFECYCLE_COMMAND_CAPABILITY =
+  "capsule.lifecycle.command.v1" as const;
+
+/**
+ * Stable Run error code when a required Capsule lifecycle action did not reach
+ * terminal success. The action phase/result is carried by Run audit evidence;
+ * clients must not recover it by parsing the human-readable diagnostic.
+ */
+export const CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE =
+  "capsule_lifecycle_action_failed" as const;
+
+export type InstallConfigLifecyclePhase = "post_apply" | "pre_destroy";
+export type InstallConfigLifecycleExecutor = "runner" | "operator";
+
+/**
+ * One versioned, service-side Capsule lifecycle action.
+ *
+ * This record is stored in Takosumi's InstallConfig. It is never discovered
+ * from a repository manifest or OpenTofu Output. Commands are deliberately
+ * argv arrays rather than shell strings and may carry only non-secret env.
+ * A pinned `post_apply` action must return terminal `succeeded` before the
+ * Capsule becomes active and its Interface blueprints can materialize. Any
+ * other result leaves the provider-applied StateVersion/Output committed but
+ * terminalizes the Apply Run as failed and the Capsule as error. A pinned
+ * `pre_destroy` action must terminal-succeed before provider destroy starts.
+ */
+export interface InstallConfigLifecycleCommandAction {
+  readonly apiVersion: "takosumi.dev/v1alpha1";
+  readonly kind: "command";
+  readonly id: string;
+  readonly phase: InstallConfigLifecyclePhase;
+  readonly executor: InstallConfigLifecycleExecutor;
+  readonly command: readonly string[];
+  readonly workingDirectory?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly timeoutSeconds?: number;
+  /**
+   * Must be allowed by InstallConfig policy. A `runner` action additionally
+   * requires the selected RunnerProfile to advertise it; an `operator` action
+   * is executed by the separately composed operator activator and does not
+   * inherit RunnerProfile execution authority.
+   */
+  readonly runnerCapability: string;
+  /**
+   * Opt in to dispatch-only ProviderConnection material. Runner commands only;
+   * operator actions use the operator activator's own explicit environment.
+   */
+  readonly useProviderCredentials?: boolean;
+}
+
+export type InstallConfigLifecycleAction = InstallConfigLifecycleCommandAction;
 
 /**
  * Allocation mode for one operator-managed public hostname.
@@ -153,34 +191,22 @@ export interface PolicyConfig {
   readonly providerCredentials?: {
     /**
      * Require provider credential mint evidence to show provider-specific
-     * temporary credentials. Static provider secrets remain a compatibility
-     * path unless this policy is enabled.
+     * temporary credentials. Static provider secrets are an explicit supported
+     * recipe choice unless this policy is enabled.
      */
     readonly requireTemporary?: boolean;
     /**
      * Require the mint evidence to include provider-enforced expiry / TTL.
      */
     readonly requireTtlEnforced?: boolean;
-    /**
-     * Require credentials to be delivered only through generated-root variables.
-     */
-    readonly requireRootOnly?: boolean;
   };
-  readonly scopeBoundary?: {
-    /**
-     * `strict` denies scoped provider resources when the plan projection lacks
-     * the metadata needed to prove the resource is inside the boundary.
-     */
-    readonly mode?: "permissive" | "strict";
-    readonly cloudflare?: {
-      readonly accountIds?: readonly string[];
-      readonly zoneIds?: readonly string[];
-    };
-    readonly aws?: {
-      readonly accountIds?: readonly string[];
-      readonly regions?: readonly string[];
-    };
+  /** Explicit authority for service-side lifecycle command execution. */
+  readonly lifecycleActions?: {
+    readonly allowedExecutors: readonly InstallConfigLifecycleExecutor[];
+    readonly allowedRunnerCapabilities: readonly string[];
+    readonly allowProviderCredentials?: boolean;
   };
+  readonly scopeBoundary?: ScopeBoundaryPolicy;
   readonly quota?: Readonly<Record<string, number>>;
 }
 
@@ -189,36 +215,39 @@ export interface BackupConfig {
   readonly enabled: boolean;
   readonly mode:
     "none" | "artifact_export" | "provider_snapshot" | "custom_command";
+  /**
+   * Exact operator-installed producer adapter. Required for
+   * `provider_snapshot`; provider names and environment-variable suffixes never
+   * select a producer.
+   */
+  readonly adapterId?: string;
   readonly command?: readonly string[];
   readonly outputPath?: string;
 }
 
-export interface NormalizationConfig {
-  readonly allowBackendRewrite: boolean;
-  readonly allowProviderLift: boolean;
-  readonly allowAliasInjection: boolean;
-}
-
-export type InstallConfigStoreSurface =
-  "service" | "building_block" | "example";
-export type InstallConfigStoreKind = "worker" | "storage" | "site";
-export type InstallConfigStoreDefault =
-  "service-name" | "service-name-with-space" | "main" | "us-east-1";
+/** Operator-defined discovery grouping. It has no execution-policy meaning. */
+export type InstallConfigStoreSurface = string;
+/** Operator-defined discovery kind. It has no execution-policy meaning. */
+export type InstallConfigStoreKind = string;
+export type InstallConfigVariableDefault =
+  | {
+      readonly source: "literal";
+      readonly value: JsonValue;
+    }
+  | { readonly source: "capsule_name" }
+  | { readonly source: "workspace_scoped_capsule_name" };
 
 export interface InstallConfigStoreText {
   readonly ja: string;
   readonly en: string;
 }
 
-export type InstallConfigStoreInputFormat =
-  | "text"
-  | "url"
-  | "hostname"
-  | "subdomain"
-  | "password"
-  | "token"
-  | "email"
-  | "sha256";
+/**
+ * Open presentation hint token. The bundled dashboard enhances known hints
+ * and safely renders unknown operator-installed hints as a generic input;
+ * execution and validation authority never comes from this field.
+ */
+export type InstallConfigVariableInputFormat = string;
 
 export type InstallConfigInstallProjection =
   | {
@@ -248,7 +277,8 @@ export type InstallConfigInstallProjection =
         readonly clientId?: string;
         readonly redirectUri?: string;
       };
-      readonly callbackPath?: string;
+      /** Explicit application callback path; Takosumi never assumes one. */
+      readonly callbackPath: string;
       readonly scopes?: readonly string[];
     }
   | {
@@ -263,19 +293,38 @@ export interface InstallConfigInstallExperience {
   readonly projections?: readonly InstallConfigInstallProjection[];
 }
 
+/**
+ * Authenticated Capsule context projected into ordinary OpenTofu variables at
+ * Run preparation time. Keys are dot-separated variable paths (for example
+ * `env.APP_CAPSULE_ID`); values select only non-secret ledger identities.
+ */
+export type InstallContextVariableValue = "workspace_id" | "capsule_id";
+export type InstallContextVariableMapping = Readonly<
+  Record<string, InstallContextVariableValue>
+>;
+
 export interface InstallConfigStoreSource {
-  readonly git: string;
+  readonly url: string;
+  /** Optional display hint only; never part of InstallConfig selection. */
+  readonly ref?: string;
   readonly path: string;
 }
 
-export interface InstallConfigStoreInput {
+/**
+ * Service-side presentation for one ordinary OpenTofu input variable.
+ *
+ * This is Takosumi DB configuration. It is deliberately not nested under
+ * Store metadata and is never adopted from a Store listing or repository
+ * metadata file.
+ */
+export interface InstallConfigVariablePresentation {
   readonly name: string;
   readonly type?: "string" | "number" | "boolean" | "json";
-  readonly format?: InstallConfigStoreInputFormat;
+  readonly format?: InstallConfigVariableInputFormat;
   readonly required?: boolean;
   readonly advanced?: boolean;
   readonly secret?: boolean;
-  readonly defaultValue?: string;
+  readonly defaultValue?: InstallConfigVariableDefault;
   readonly label: InstallConfigStoreText;
   readonly helper?: InstallConfigStoreText;
   readonly placeholder?: string;
@@ -287,8 +336,6 @@ export interface InstallConfigStoreInput {
  * resolution remain the execution authority.
  */
 export interface InstallConfigStoreMetadata {
-  readonly templateId?: string;
-  readonly templateVersion?: string;
   readonly source?: InstallConfigStoreSource;
   readonly order: number;
   readonly surface: InstallConfigStoreSurface;
@@ -299,27 +346,26 @@ export interface InstallConfigStoreMetadata {
   readonly name: InstallConfigStoreText;
   readonly description: InstallConfigStoreText;
   readonly iconUrl?: string;
-  readonly inputs: readonly InstallConfigStoreInput[];
-  readonly installExperience?: InstallConfigInstallExperience;
 }
 
 /**
- * Service-side install configuration. `workspaceId` is absent for built-in
- * first-party configs shared across Workspaces.
+ * Service-side install configuration. Workspace-neutral rows are operator
+ * catalog presentation only; their Git pointer is metadata, never an execution
+ * shortcut or bundled-module authority.
  */
 export interface InstallConfig {
   readonly id: string;
   readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
   readonly name: string;
-  readonly sourceKind?: InstallConfigSourceKind;
-  readonly installType: InstallType;
-  readonly trustLevel: TrustLevel;
   /** Path inside the SourceSnapshot that contains the OpenTofu Capsule. */
   readonly modulePath?: string;
-  readonly normalization?: NormalizationConfig;
   readonly sourceBuild?: SourceBuildConfig;
+  /**
+   * Versioned lifecycle actions owned by Takosumi service configuration.
+   * OpenTofu Outputs remain ordinary return values and are never interpreted
+   * as lifecycle declarations.
+   */
+  readonly lifecycleActions?: readonly InstallConfigLifecycleAction[];
   /** Managed hostname allocation choice. Absent means `scoped`. */
   readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
   /**
@@ -329,32 +375,39 @@ export interface InstallConfig {
   readonly runnerId?: string;
   /** Internal service-side config rows are addressable by id but not selectable. */
   readonly internal?: {
-    readonly reason: "per_install_overrides" | "resource_shape_backing_capsule";
+    readonly reason: "per_install_overrides";
   };
   readonly variableMapping: Readonly<Record<string, unknown>>;
+  /**
+   * Service-owned context mapping. This does not read repository metadata or
+   * Outputs and cannot inject credentials.
+   */
+  readonly installContextVariableMapping?: InstallContextVariableMapping;
+  /**
+   * Optional service-side UI declaration for ordinary OpenTofu variables.
+   * Store and repository metadata can never add, replace, or default these
+   * entries.
+   */
+  readonly variablePresentation?: readonly InstallConfigVariablePresentation[];
+  /**
+   * Optional service-side semantic projections used by Takosumi UX and
+   * automation. This declaration is DB-owned and is not repository discovery
+   * metadata or an OpenTofu Output convention.
+   */
+  readonly installExperience?: InstallConfigInstallExperience;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly policy: PolicyConfig;
   readonly backup?: BackupConfig;
   readonly store?: InstallConfigStoreMetadata;
   /**
-   * Internal seam: binds a built-in first-party config to its bundled module.
-   * New runs normalize the bundled module into generatedRoot.moduleFiles, the
-   * same dispatch shape used by Git-sourced OpenTofu Capsules. Absent for
-   * workspace-authored configs.
+   * Takosumi DB-owned runtime declarations proposed for Capsules created from
+   * this config. This is service configuration, never a repository manifest or
+   * an OpenTofu Output convention.
    */
-  readonly templateBinding?: {
-    readonly templateId: string;
-    readonly templateVersion: string;
-  };
+  readonly interfaceBlueprints?: readonly CapsuleInterfaceBlueprint[];
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
 /** Public InstallConfig projection returned by `/api` and dashboard session routes. */
-export type PublicInstallConfig = Omit<
-  InstallConfig,
-  "installType" | "templateBinding" | "sourceKind" | "runnerId" | "internal"
-> & {
-  readonly sourceKind: PublicInstallConfigSourceKind;
-  readonly store?: InstallConfigStoreMetadata;
-};
+export type PublicInstallConfig = Omit<InstallConfig, "runnerId" | "internal">;

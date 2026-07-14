@@ -1,6 +1,6 @@
 id: github
 display_name: GitHub
-provider_rule: github
+secret_partition: provider-credentials
 terraform_source:
   - integrations/github
   - github/github
@@ -12,6 +12,13 @@ required_env_groups:
   - [GITHUB_TOKEN]
 auth_modes:
   token:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: Personal access token, ja: Personal access token }
+    input_hints:
+      GITHUB_TOKEN:
+        label: { en: Token, ja: トークン }
+        required: true
     env:
       GITHUB_TOKEN:
         from: secret

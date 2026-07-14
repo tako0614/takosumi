@@ -16,13 +16,15 @@ import type {
   ReleaseCommandRunJob,
   ReleaseCommandRunResult,
 } from "../../../core/domains/deploy-control/mod.ts";
+import { DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID } from "../../../core/domains/deploy-control/mod.ts";
+import { OpenTofuRunnerExecutionError } from "../../../core/domains/deploy-control/errors.ts";
+import { normalizePlanResourceScope } from "takosumi-contract";
 import type {
   OpenTofuPlanArtifact,
   PlanResourceChange,
   RunnerProfile,
   RunDiagnostic,
 } from "@takosumi/internal/deploy-control-api";
-import type { SourceArchiveWriter } from "../../../core/api/deploy_control_shared.ts";
 import { handleRunnerRequest } from "../../../runner/entrypoint.ts";
 
 export const LOCAL_OPENTOFU_RUNNER_PROFILE_ID = "local-opentofu";
@@ -32,7 +34,7 @@ interface RunnerTransport {
 }
 
 export interface SourceArchiveStore {
-  readonly write: SourceArchiveWriter;
+  write(key: string, bytes: Uint8Array): Promise<void>;
   read(key: string): Promise<Uint8Array>;
 }
 
@@ -72,6 +74,9 @@ export function createLocalOpenTofuRunnerProfile(
     id: LOCAL_OPENTOFU_RUNNER_PROFILE_ID,
     name: "Local OpenTofu",
     substrate: "local",
+    executorId: DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
+    lifecycle: { state: "active" },
+    availability: { state: "available" },
     description:
       "Local-substrate OpenTofu runner for provider-free smoke deployments.",
     tofuVersion: "operator-managed",
@@ -81,7 +86,6 @@ export function createLocalOpenTofuRunnerProfile(
       lock: { kind: "operator", ref: "lock://local-substrate/opentofu" },
     },
     allowedProviders: [],
-    sourcePolicy: { allowLocalSource: true },
     resourceLimits: {
       maxRunSeconds: 300,
       maxSourceArchiveBytes: 64 * 1024 * 1024,
@@ -96,10 +100,7 @@ export function createLocalOpenTofuRunnerProfile(
       redactLogs: true,
       blockSensitiveOutputs: true,
     },
-    labels: {
-      "takosumi.com/local-substrate": "true",
-      "takosumi.com/profile-enabled": "true",
-    },
+    labels: { environment: "local-substrate" },
     createdAt: now,
   };
 }
@@ -111,6 +112,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
   ) {}
 
   async plan(job: OpenTofuPlanJob): Promise<OpenTofuPlanResult> {
+    assertNoObjectStoreStateAdoption(job);
     await this.restoreSourceArchive(job.planRun.id, job.sourceArchive);
     const result = await runRunner(this.transport, "plan", job.planRun.id, job);
     const planDigest = requiredString(result, "planDigest");
@@ -145,6 +147,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
   }
 
   async apply(job: OpenTofuApplyJob): Promise<OpenTofuApplyResult> {
+    assertNoObjectStoreStateAdoption(job);
     await this.restoreSourceArchive(job.applyRun.id, job.sourceArchive);
     await copyRunnerLocalPlanArtifact(
       this.transport,
@@ -170,8 +173,8 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       ...(stringValue(result, "stateDigest")
         ? { stateDigest: stringValue(result, "stateDigest") }
         : {}),
-      ...(stringValue(result, "rawOutputsKey")
-        ? { rawOutputsKey: stringValue(result, "rawOutputsKey") }
+      ...(stringValue(result, "rawOutputRef")
+        ? { rawOutputRef: stringValue(result, "rawOutputRef") }
         : {}),
       ...(providerInstallation(result)
         ? { providerInstallation: providerInstallation(result) }
@@ -181,6 +184,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
   }
 
   async destroy(job: OpenTofuDestroyJob): Promise<OpenTofuDestroyResult> {
+    assertNoObjectStoreStateAdoption(job);
     await this.restoreSourceArchive(job.applyRun.id, job.sourceArchive);
     await copyRunnerLocalPlanArtifact(
       this.transport,
@@ -204,7 +208,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
 
   async release(job: ReleaseCommandRunJob): Promise<ReleaseCommandRunResult> {
     await this.restoreSourceArchive(job.runId, {
-      objectKey: job.sourceSnapshot.archiveObjectKey,
+      ref: job.sourceSnapshot.archiveRef,
       digest: job.sourceSnapshot.archiveDigest,
     });
     const result = await runRunner(this.transport, "release", job.runId, {
@@ -214,9 +218,8 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       activation: {
         applyRunId: job.applyRunId,
         ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
-        ...(job.workspaceId ? { spaceId: job.workspaceId } : {}),
-        installationId: job.installationId,
-        deploymentId: job.deploymentId,
+        capsuleId: job.capsuleId,
+        stateVersionId: job.stateVersionId,
       },
     });
     return {
@@ -236,7 +239,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       action: "source_sync",
       runId: job.runId,
       source: job.source,
-      archiveObjectKey: job.archiveObjectKey,
+      archiveRef: job.archiveRef,
       ...(job.credentials ? { credentials: job.credentials } : {}),
     });
     const archive = recordValue(result, "sourceArchive");
@@ -256,7 +259,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       `/runs/${encodeURIComponent(job.runId)}/artifacts/source-archive`,
     );
     await assertDigest(bytes, archiveDigest, "source_sync archive");
-    await this.archiveStore.write(job.archiveObjectKey, bytes);
+    await this.archiveStore.write(job.archiveRef, bytes);
     return { resolvedCommit, archiveDigest, archiveSizeBytes };
   }
 
@@ -264,7 +267,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     job: OpenTofuCapsuleSourceFilesJob,
   ): Promise<readonly OpenTofuCapsuleSourceFile[]> {
     await this.restoreSourceArchive(job.runId, {
-      objectKey: job.sourceSnapshot.archiveObjectKey,
+      ref: job.sourceSnapshot.archiveRef,
       digest: job.sourceSnapshot.archiveDigest,
     });
     const result = await runRunner(
@@ -296,7 +299,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     sourceArchive: OpenTofuPlanJob["sourceArchive"],
   ): Promise<void> {
     if (!sourceArchive) return;
-    const bytes = await this.archiveStore.read(sourceArchive.objectKey);
+    const bytes = await this.archiveStore.read(sourceArchive.ref);
     await assertDigest(bytes, sourceArchive.digest, "source archive");
     const response = await this.transport.fetch(
       `/runs/${encodeURIComponent(runId)}/source-archive/restore`,
@@ -405,13 +408,15 @@ async function runRunner(
   const text = await response.text();
   const body = text.trim().length > 0 ? parseObject(text) : {};
   if (!response.ok) {
+    const reason = stringValue(body, "errorCode");
     const detail =
       stringValue(body, "detail") ??
       stringValue(body, "error") ??
       stringValue(body, "stderr") ??
       text.slice(0, 500);
-    throw new Error(
+    throw new OpenTofuRunnerExecutionError(
       `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`,
+      { ...(reason ? { reason } : {}) },
     );
   }
   return body;
@@ -521,30 +526,13 @@ function planResourceChanges(
     const actions = stringArray(entry, "actions");
     if (!address || !type || !actions) return [];
     const scope = recordValue(entry, "scope");
-    const projectedScope = scope
-      ? {
-          ...(stringValue(scope, "cloudflareAccountId")
-            ? { cloudflareAccountId: stringValue(scope, "cloudflareAccountId") }
-            : {}),
-          ...(stringValue(scope, "cloudflareZoneId")
-            ? { cloudflareZoneId: stringValue(scope, "cloudflareZoneId") }
-            : {}),
-          ...(stringValue(scope, "awsAccountId")
-            ? { awsAccountId: stringValue(scope, "awsAccountId") }
-            : {}),
-          ...(stringValue(scope, "awsRegion")
-            ? { awsRegion: stringValue(scope, "awsRegion") }
-            : {}),
-        }
-      : undefined;
+    const projectedScope = normalizePlanResourceScope(scope);
     return [
       {
         address,
         type,
         actions,
-        ...(projectedScope && Object.keys(projectedScope).length > 0
-          ? { scope: projectedScope }
-          : {}),
+        ...(projectedScope ? { scope: projectedScope } : {}),
       },
     ];
   });
@@ -597,7 +585,7 @@ function archivePath(root: string, key: string): string {
     key.includes("\\") ||
     key.includes("\0") ||
     key.split("/").some((segment) => segment === "..") ||
-    key.startsWith("spaces/") === false
+    key.startsWith("workspaces/") === false
   ) {
     throw new Error(`unsafe source archive key: ${key}`);
   }
@@ -606,6 +594,16 @@ function archivePath(root: string, key: string): string {
     throw new Error(`source archive key escapes root: ${key}`);
   }
   return path;
+}
+
+function assertNoObjectStoreStateAdoption(job: {
+  readonly stateAdoption?: unknown;
+}): void {
+  if (job.stateAdoption !== undefined) {
+    throw new Error(
+      "confirmed legacy state adoption requires an object-storage runner; the local runner refuses to start from empty state",
+    );
+  }
 }
 
 function parseObject(text: string): Record<string, unknown> {

@@ -25,7 +25,7 @@ describe("createStaticAssetResponder", () => {
     const dir = await buildFixture();
     try {
       const serve = createStaticAssetResponder(dir);
-      for (const path of ["/", "/apps", "/dashboard/installations"]) {
+      for (const path of ["/", "/apps", "/services/capsule_example"]) {
         const res = await serve(get(path));
         expect(res?.status).toBe(200);
         expect(res?.headers.get("content-type")).toContain("text/html");
@@ -68,11 +68,11 @@ describe("createStaticAssetResponder", () => {
       const serve = createStaticAssetResponder(dir);
       const apiPaths = [
         "/v1/account/session/me",
-        "/v1/capsule-projections",
+        "/v1/privacy/requests",
         "/v1/auth/upstream/callback",
         "/oauth/authorize",
         "/.well-known/openid-configuration",
-        "/internal/runtime-projection/materials/resolve",
+        "/internal/v1/run-callback",
       ];
       for (const path of apiPaths) {
         expect(await serve(get(path))).toBeUndefined();

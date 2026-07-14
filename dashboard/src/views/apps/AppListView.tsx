@@ -1,11 +1,9 @@
 /**
- * Apps home (`/`) — the Workspace app launcher. Services appear when they
- * declare app surfaces through well-known OpenTofu outputs, or while pending
- * when their install config has store service metadata. A service may declare
- * several launchable surfaces (e.g. a blog's public site + its admin screen),
- * each shown as its own tile. Tapping a tile opens that surface's URL, or the
- * service screen when it has none. The full service list (all Capsules, → the
- * OpenTofu detail) lives on the separate `/services` page.
+ * Apps home (`/`) — the Workspace app launcher. Installed state comes from
+ * Capsule records, while every visible/openable tile comes from an authorized
+ * Capsule-owned `interface.ui.surface` Interface. Store metadata and OpenTofu
+ * Outputs are never launcher authorities. The full Capsule list and OpenTofu
+ * detail live on the separate `/services` page.
  */
 import {
   createEffect,
@@ -34,47 +32,31 @@ import {
   clearCapsuleListCache,
   listCapsulesCached,
 } from "../../lib/capsule-list.ts";
-import {
-  clearCurrentStateVersionCache,
-  listCurrentStateVersionsCached,
-} from "../../lib/current-state-versions.ts";
-import {
-  clearInstallConfigListCache,
-  listInstallConfigsCached,
-} from "../../lib/install-config-list.ts";
+import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
+import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
 import {
   type ControlApiError,
   createWorkspace,
   type Capsule,
-  type InstallConfig,
   type Workspace,
 } from "../../lib/control-api.ts";
 import {
   type AppSurface,
-  appSurfacesFromDeployment,
-  appSurfaceFromInstallConfigStore,
-  effectiveCapsuleStatus,
   isUrlString,
   isVisibleServiceCapsule,
   needsAttention,
 } from "../../lib/capsules-ui.ts";
-import { capsuleStatusLabel } from "../../lib/labels.ts";
+import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
+import { refreshSession } from "../account/lib/session.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { Button, Toast } from "../../components/ui/index.ts";
 import { createAction } from "../account/lib/action.tsx";
 
-/** One launcher tile: a declared surface belonging to a service. */
+/** One launcher tile: a Takosumi-owned surface belonging to a service. */
 interface AppTile {
   readonly inst: Capsule;
   readonly surface: AppSurface;
   readonly key: string;
-  /**
-   * True only when the service has actually deployed (a current StateVersion
-   * exists). A never-deployed / half-failed install still gets a tile, but its
-   * planned URL from the install config must not render as a live link — it
-   * would 404. The tile falls back to opening the service screen instead.
-   */
-  readonly deployed: boolean;
 }
 
 export default function AppListView() {
@@ -94,47 +76,14 @@ function kindClass(kind: string | undefined): string {
 }
 
 /**
- * Fallback face for an app that declares no icon: its initials on a kind-tinted
- * tile. Distinct-by-name + distinct-by-kind so a screen of undeclared apps
- * never reads as identical boxes (declared image / emoji icons are preferred).
+ * Fallback face when Takosumi has no icon metadata: initials on a kind-tinted
+ * tile. Distinct-by-name + distinct-by-kind keeps unknown services from reading
+ * as identical boxes (configured image / emoji icons are preferred).
  */
 function monogramInitials(name: string): string {
-  const segments = name
-    .replace(/^(ts-e2e-|takosumi-|takos-)/i, "")
-    .split(/[-_\s./]+/)
-    .filter(Boolean);
+  const segments = name.split(/[-_\s./]+/).filter(Boolean);
   const chars = (segments[0]?.[0] ?? name[0] ?? "?") + (segments[1]?.[0] ?? "");
   return chars.toUpperCase().slice(0, 2);
-}
-
-interface CuratedAppIcon {
-  readonly image?: string;
-  readonly emoji?: string;
-}
-
-/**
- * Curated marks for first-party apps that declare no icon of their own, so
- * official services (Takos, yurucommu, …) show a real graphic instead of an
- * initials monogram. Takos uses its logo image; the others use a
- * representative emoji. Matched by display name (most specific first); unknown
- * apps still fall through to the monogram.
- */
-const CURATED_APP_ICONS: readonly (readonly [RegExp, CuratedAppIcon])[] = [
-  [/yurucommu/i, { emoji: "🌐" }],
-  [/yurumeet/i, { emoji: "💬" }],
-  [/takos[-_\s]?office/i, { emoji: "📄" }],
-  [/takos[-_\s]?computer/i, { emoji: "🖥️" }],
-  [/road[-_\s]?to[-_\s]?me/i, { emoji: "🎯" }],
-  // Anchored so only the official Takos app (name starting "takos" at a word
-  // boundary) gets the logo — NOT "takosumi" or any name merely containing
-  // "takos". The more specific first-party marks above are matched first.
-  [/^takos\b/i, { image: "/tako.png" }],
-];
-function curatedAppIcon(name: string): CuratedAppIcon | undefined {
-  for (const [pattern, icon] of CURATED_APP_ICONS) {
-    if (pattern.test(name)) return icon;
-  }
-  return undefined;
 }
 
 function Inner() {
@@ -202,26 +151,22 @@ function Inner() {
     fullProjectionWorkspaceId,
     (id) => listCapsulesCached(id, { includeDestroyed: false }),
   );
-  const [fullStateVersions, { refetch: refetchFullStateVersions }] =
-    createResource(fullProjectionWorkspaceId, (id) =>
-      listCurrentStateVersionsCached(id, { includeDestroyed: false }),
-    );
-  const [fullInstallConfigs, { refetch: refetchFullInstallConfigs }] =
-    createResource(fullProjectionWorkspaceId, (id) =>
-      listInstallConfigsCached(id),
-    );
+  const [uiSurfaces, { refetch: refetchUiSurfaces }] = createResource(
+    workspaceId,
+    async (id) => {
+      const session = await refreshSession();
+      if (!session) throw new Error("dashboard session is unavailable");
+      return await listAuthorizedUiSurfaces(id, session.subject);
+    },
+  );
   // The supplemental full-list fetches can fail independently of the overview;
   // without surfacing it the launcher silently truncates to the first page.
   const fullFetchError = createMemo(
-    () =>
-      (fullCapsules.error ??
-        fullStateVersions.error ??
-        fullInstallConfigs.error) as ControlApiError | undefined,
+    () => (fullCapsules.error ?? uiSurfaces.error) as Error | undefined,
   );
   const retryFullFetch = () => {
     if (fullCapsules.error) void refetchFullCapsules();
-    if (fullStateVersions.error) void refetchFullStateVersions();
-    if (fullInstallConfigs.error) void refetchFullInstallConfigs();
+    if (uiSurfaces.error) void refetchUiSurfaces();
   };
   // `.error` first: reading an errored resource THROWS. A failed supplemental
   // full-list fetch must degrade to the overview's first page (with the
@@ -235,96 +180,41 @@ function Inner() {
   const visibleCapsules = createMemo(() =>
     (capsules() ?? []).filter(isVisibleServiceCapsule),
   );
-  const currentStateVersions = createMemo(() =>
-    mergeById(
-      overview()?.currentStateVersions ?? [],
-      fullStateVersions.error ? [] : (fullStateVersions() ?? []),
-    ),
-  );
-  // Services that have actually deployed at least once (a current StateVersion
-  // exists). Everything else is still installing / failed before first apply.
-  const deployedCapsuleIds = createMemo(() => {
-    const ids = new Set<string>();
-    for (const deployment of currentStateVersions() ?? []) {
-      ids.add(deployment.capsuleId ?? deployment.installationId);
-    }
-    return ids;
-  });
-
-  // Map each Capsule to a type-specific icon via its install config's
-  // store kind (site / storage / worker) — the fallback when a surface
-  // declares no image or icon of its own.
-  const installConfigs = createMemo(() =>
-    mergeById(
-      overview()?.installConfigs ?? [],
-      fullInstallConfigs.error ? [] : (fullInstallConfigs() ?? []),
-    ),
-  );
-  const configById = createMemo(() => {
-    const map = new Map<string, InstallConfig>();
-    for (const config of installConfigs() ?? []) {
-      map.set(config.id, config);
-    }
-    return map;
-  });
-  const kindForCapsule = (inst: Capsule): string | undefined =>
-    configById().get(inst.installConfigId)?.store?.kind;
-
-  // Declared app surfaces per service. The current StateVersion rows are loaded
-  // through one Workspace projection request instead of N `getDeployment` reads.
+  // Capsule is the installed-app ledger. Interface is the only launcher/runtime
+  // surface authority; its explicit URL mapping has already been resolved and
+  // its exact Principal Binding checked by listAuthorizedUiSurfaces.
   const surfacesByCapsule = createMemo(() => {
-    const deployments = new Map(
-      (currentStateVersions() ?? []).map((deployment) => [
-        deployment.capsuleId ?? deployment.installationId,
-        deployment,
-      ]),
-    );
     const map = new Map<string, AppSurface[]>();
-    for (const inst of visibleCapsules()) {
-      const deployment = deployments.get(inst.id);
-      if (!deployment) continue;
-      // Gate the tile's launch URL on release activation, matching the detail
-      // screen and the post-deploy "アプリを開く" button: a live-looking tile
-      // that 404s during/after activation disagrees with those surfaces. The
-      // launcher has no activity feed, so gating relies on the deployment's own
-      // takosumi_release output; a not-yet-activated surface keeps its tile but
-      // drops the URL (falls back to the detail screen) rather than linking a
-      // dead address.
-      const surfaces = appSurfacesFromDeployment(deployment, [], inst.id);
-      if (surfaces.length > 0) map.set(inst.id, surfaces);
+    if (uiSurfaces.error) return map;
+    for (const surface of uiSurfaces() ?? []) {
+      const entries = map.get(surface.capsuleId) ?? [];
+      entries.push({
+        interfaceId: surface.interfaceId,
+        url: surface.url,
+        ...(surface.name ? { name: surface.name } : {}),
+        ...(surface.icon ? { icon: surface.icon } : {}),
+        ...(surface.category ? { category: surface.category } : {}),
+        ...(surface.sortOrder !== undefined
+          ? { sortOrder: surface.sortOrder }
+          : {}),
+      });
+      map.set(surface.capsuleId, entries);
     }
     return map;
   });
-  const fallbackSurfaceForCapsule = (inst: Capsule): AppSurface | undefined => {
-    return appSurfaceFromInstallConfigStore(
-      configById().get(inst.installConfigId),
-      locale(),
-      overview()?.workspace?.handle,
-    );
-  };
 
   const appTiles = createMemo<AppTile[]>(() => {
     const map = surfacesByCapsule();
-    if (!map) return [];
     const tiles: AppTile[] = [];
     for (const inst of visibleCapsules()) {
       const surfaces = map.get(inst.id);
-      const deployed = deployedCapsuleIds().has(inst.id);
-      if (!surfaces) {
-        // Every installed service gets a tile — one concept, not アプリ vs
-        // サービス. Without a declared surface the tile has no launch URL, so
-        // tapping it opens the service screen instead of an app window.
-        const fallback = fallbackSurfaceForCapsule(inst);
+      if (!surfaces) continue;
+      surfaces.forEach((surface, i) =>
         tiles.push({
           inst,
-          surface: fallback ?? { name: inst.name },
-          key: `${inst.id}:store`,
-          deployed,
-        });
-        continue;
-      }
-      surfaces.forEach((surface, i) =>
-        tiles.push({ inst, surface, key: `${inst.id}:${i}`, deployed }),
+          surface: surface.name ? surface : { ...surface, name: inst.name },
+          key: surface.interfaceId || `${inst.id}:${i}`,
+        }),
       );
     }
     return tiles.sort(compareAppTiles);
@@ -342,9 +232,6 @@ function Inner() {
     return workspace;
   });
 
-  const openDetail = (inst: Capsule) =>
-    navigate(`/services/${encodeURIComponent(inst.id)}`);
-
   return (
     <>
       <Show
@@ -358,7 +245,7 @@ function Inner() {
         }
       >
         <Switch>
-          <Match when={overview.loading}>
+          <Match when={overview.loading || uiSurfaces.loading}>
             <LauncherSkeleton />
           </Match>
           <Match when={overview.error}>
@@ -391,14 +278,10 @@ function Inner() {
               </Toast>
             </Show>
             <Show
-              when={visibleCapsules().length > 0}
+              when={appTiles().length > 0}
               fallback={<WorkspaceStartPanel />}
             >
-              <AppLauncher
-                tiles={appTiles()}
-                openDetail={openDetail}
-                kindFor={kindForCapsule}
-              />
+              <AppLauncher tiles={appTiles()} />
             </Show>
           </Match>
         </Switch>
@@ -423,6 +306,10 @@ function mergeById<T extends { readonly id: string }>(
 }
 
 function compareAppTiles(a: AppTile, b: AppTile): number {
+  const declaredOrder =
+    (a.surface.sortOrder ?? Number.MAX_SAFE_INTEGER) -
+    (b.surface.sortOrder ?? Number.MAX_SAFE_INTEGER);
+  if (declaredOrder !== 0) return declaredOrder;
   // Prioritize apps that need attention so broken/stale installs do not get
   // buried behind healthy services on the everyday launcher.
   const attentionRank =
@@ -483,11 +370,7 @@ function NoWorkspaceStartPanel(props: {
   );
 }
 
-function AppLauncher(props: {
-  readonly tiles: readonly AppTile[];
-  readonly openDetail: (inst: Capsule) => void;
-  readonly kindFor: (inst: Capsule) => string | undefined;
-}) {
+function AppLauncher(props: { readonly tiles: readonly AppTile[] }) {
   return (
     <>
       <div class="av-section-head">
@@ -499,11 +382,7 @@ function AppLauncher(props: {
         <For each={props.tiles}>
           {(tile) => (
             <li>
-              <AppTileView
-                tile={tile}
-                kind={props.kindFor(tile.inst)}
-                onOpenDetail={() => props.openDetail(tile.inst)}
-              />
+              <AppTileView tile={tile} />
             </li>
           )}
         </For>
@@ -521,25 +400,16 @@ function AppLauncher(props: {
 }
 
 /**
- * One surface tile. The face is the declared image, else a declared emoji icon,
- * else the app's initials on a kind-tinted monogram tile — so undeclared apps
- * stay distinct rather than reading as identical boxes. A live surface URL on a
- * DEPLOYED service renders an anchor (new tab); otherwise a button opens the
- * service screen — a never-deployed install's planned URL is a dead link.
- * Needs-attention shows as a corner dot (+ screen-reader text); a
- * never-deployed service shows its status (準備中 / エラー) under the name.
+ * One authorized Interface tile. The face is an Interface-declared icon or the
+ * app initials; the resolved URL opens in a new tab. Needs-attention is Capsule
+ * lifecycle presentation only and never changes the runtime URL authority.
  */
-function AppTileView(props: {
-  readonly tile: AppTile;
-  readonly kind: string | undefined;
-  readonly onOpenDetail: () => void;
-}) {
+function AppTileView(props: { readonly tile: AppTile }) {
   const surface = () => props.tile.surface;
   const attention = () => needsAttention(props.tile.inst);
   const name = () => surface().name ?? props.tile.inst.name;
-  const openUrl = () => (props.tile.deployed ? surface().url : undefined);
+  const openUrl = () => surface().url;
   const imageSrc = () => {
-    if (surface().image) return surface().image;
     const icon = surface().icon;
     if (!icon) return undefined;
     if (isUrlString(icon)) return icon;
@@ -561,23 +431,17 @@ function AppTileView(props: {
     if (!icon || isUrlString(icon) || /[./]/.test(icon)) return undefined;
     return icon;
   };
-  // First-party apps that declare no icon fall back to a curated mark (Takos
-  // logo / representative emoji) before the initials monogram, so official
-  // services never read as plain letters.
-  const curated = () =>
-    imageSrc() || emojiIcon() ? undefined : curatedAppIcon(name());
-  const curatedImage = () => curated()?.image;
-  const curatedEmoji = () => curated()?.emoji;
-  const isMonogram = () =>
-    !imageSrc() && !emojiIcon() && !curatedImage() && !curatedEmoji();
+  // Product-specific marks come only from the Interface document. A Capsule
+  // name is fallback presentation text, never an implicit product identity.
+  const isMonogram = () => !imageSrc() && !emojiIcon();
 
   const body = () => (
     <>
       <span
         class="av-tile-icon"
         classList={{
-          "av-tile-icon-image": Boolean(imageSrc()) || Boolean(curatedImage()),
-          [kindClass(props.kind)]: isMonogram(),
+          "av-tile-icon-image": Boolean(imageSrc()),
+          [kindClass(surface().category)]: isMonogram(),
         }}
         aria-hidden="true"
       >
@@ -594,25 +458,12 @@ function AppTileView(props: {
           <Match when={emojiIcon()}>
             {(emo) => <span class="av-tile-emoji">{emo()}</span>}
           </Match>
-          <Match when={curatedImage()}>
-            {(src) => (
-              <img class="av-tile-image" src={src()} alt="" loading="lazy" />
-            )}
-          </Match>
-          <Match when={curatedEmoji()}>
-            {(emo) => <span class="av-tile-emoji">{emo()}</span>}
-          </Match>
         </Switch>
         <Show when={attention()}>
           <span class="av-tile-dot" />
         </Show>
       </span>
       <span class="av-tile-name">{name()}</span>
-      <Show when={!props.tile.deployed}>
-        <span class="av-tile-state">
-          {capsuleStatusLabel(effectiveCapsuleStatus(props.tile.inst))}
-        </span>
-      </Show>
       <Show when={attention()}>
         <span class="sr-only">{t("apps.needsAttention")}</span>
       </Show>
@@ -624,14 +475,7 @@ function AppTileView(props: {
 
   return (
     <span class="av-tile-wrap">
-      <Show
-        when={openUrl()}
-        fallback={
-          <button type="button" class="av-tile" onClick={props.onOpenDetail}>
-            {body()}
-          </button>
-        }
-      >
+      <Show when={openUrl()}>
         {(url) => (
           <>
             <a
@@ -667,7 +511,7 @@ function defaultWorkspaceHandle(): string {
   return `workspace-${time}-${random}`.slice(0, 39);
 }
 
-/** Workspace exists but holds no services at all — first-run onboarding. */
+/** Workspace exists but has no authorized Capsule UI-surface Interfaces. */
 function WorkspaceStartPanel() {
   return (
     <section class="av-start" aria-label={t("apps.start.aria")}>

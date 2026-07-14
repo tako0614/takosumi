@@ -18,10 +18,10 @@ resource "null_resource" "marker" {
   }
 }
 
-output "worker_name" {
+output "example_label" {
   value = null_resource.marker.triggers.name
 }
 
-output "url" {
+output "example_endpoint" {
   value = "https://example.invalid/${null_resource.marker.triggers.name}"
 }

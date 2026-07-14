@@ -1,11 +1,11 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  cloudPartitionEnvKeys,
   MemoryEncryptedSecretStore,
-  MultiCloudSecretBoundaryCrypto,
+  PartitionedSecretBoundaryCrypto,
   PlaceholderSecretBoundaryCrypto,
   SECRET_STORE_KEY_ENV_KEYS,
+  SECRET_STORE_PARTITION_KEYS_ENV,
   SecretEncryptionConfigurationError,
   selectSecretBoundaryCrypto,
 } from "../../../../core/adapters/secret-store/mod.ts";
@@ -23,7 +23,7 @@ test("memory encrypted secret store keeps versioned secret boundary", async () =
   });
 
   assert.equal(record.version, "secret_version_v1");
-  assert.equal(record.cloudPartition, "global");
+  assert.equal(record.secretPartition, "global");
   // latestSecret reflects the freshly-written record (no read yet).
   assert.deepEqual(await store.latestSecret("DATABASE_URL"), record);
   assert.equal(await store.getSecret(record), "postgres://example");
@@ -78,7 +78,7 @@ test("selectSecretBoundaryCrypto rejects production opt-in attempts", () => {
   );
 });
 
-test("selectSecretBoundaryCrypto returns multi-cloud AES-GCM crypto when global key supplied", async () => {
+test("selectSecretBoundaryCrypto returns partitioned AES-GCM crypto when global key supplied", async () => {
   const crypto = selectSecretBoundaryCrypto({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
@@ -86,7 +86,7 @@ test("selectSecretBoundaryCrypto returns multi-cloud AES-GCM crypto when global 
         "test-passphrase-with-enough-entropy-32",
     },
   });
-  assert.ok(crypto instanceof MultiCloudSecretBoundaryCrypto);
+  assert.ok(crypto instanceof PartitionedSecretBoundaryCrypto);
   const sealed = await crypto.seal("hello", "global");
   // AES-GCM output begins with a 12-byte IV and is opaque (not base64).
   assert.ok(sealed.length > 12);
@@ -145,101 +145,90 @@ test("MemoryEncryptedSecretStore env option uses AES-GCM with key", async () => 
 });
 
 // ---------------------------------------------------------------------------
-// Phase 18.2 H14: per-cloud secret partition isolation
+// Phase 18.2 H14: per-partition secret partition isolation
 // ---------------------------------------------------------------------------
 
-test("cloudPartitionEnvKeys derives per-cloud env names", () => {
-  assert.deepEqual(cloudPartitionEnvKeys("global"), SECRET_STORE_KEY_ENV_KEYS);
-  assert.deepEqual(cloudPartitionEnvKeys("aws"), [
-    "TAKOSUMI_SECRET_STORE_PASSPHRASE_AWS",
-    "TAKOSUMI_SECRET_STORE_KEY_AWS",
-  ]);
-});
-
-test("MultiCloudSecretBoundaryCrypto isolates partitions: aws ciphertext is unreadable with global key only", async () => {
-  // The "aws" cloud has a dedicated override key; "gcp" inherits from global.
-  const crypto = new MultiCloudSecretBoundaryCrypto({
+test("PartitionedSecretBoundaryCrypto isolates arbitrary partitions", async () => {
+  const crypto = new PartitionedSecretBoundaryCrypto({
     globalPassphrase: "global-passphrase-32-byte-x".padEnd(40, "x"),
-    perCloudPassphrases: {
-      aws: "aws-only-passphrase-32-byte".padEnd(40, "y"),
-      gcp: "gcp-only-passphrase-32-byte".padEnd(40, "z"),
+    perPartitionPassphrases: {
+      "recipe:alpha": "alpha-only-passphrase-32-byte".padEnd(40, "y"),
+      "tenant:beta": "beta-only-passphrase-32-byte".padEnd(40, "z"),
     },
   });
-  const awsCipher = await crypto.seal("aws-secret", "aws");
-  const gcpCipher = await crypto.seal("gcp-secret", "gcp");
+  const alphaCipher = await crypto.seal("alpha-secret", "recipe:alpha");
+  const betaCipher = await crypto.seal("beta-secret", "tenant:beta");
 
   // Same partition opens fine.
-  assert.equal(await crypto.open(awsCipher, "aws"), "aws-secret");
-  assert.equal(await crypto.open(gcpCipher, "gcp"), "gcp-secret");
+  assert.equal(
+    await crypto.open(alphaCipher, "recipe:alpha"),
+    "alpha-secret",
+  );
+  assert.equal(await crypto.open(betaCipher, "tenant:beta"), "beta-secret");
 
   // Cross-partition open MUST fail (AAD + key mismatch).
-  await assert.rejects(() => crypto.open(awsCipher, "gcp"));
-  await assert.rejects(() => crypto.open(awsCipher, "global"));
-  await assert.rejects(() => crypto.open(gcpCipher, "aws"));
+  await assert.rejects(() => crypto.open(alphaCipher, "tenant:beta"));
+  await assert.rejects(() => crypto.open(alphaCipher, "global"));
+  await assert.rejects(() => crypto.open(betaCipher, "recipe:alpha"));
 });
 
-test("MultiCloudSecretBoundaryCrypto: aws key compromise does not unlock other partitions", async () => {
-  const sealing = new MultiCloudSecretBoundaryCrypto({
+test("PartitionedSecretBoundaryCrypto: one partition key does not unlock others", async () => {
+  const sealing = new PartitionedSecretBoundaryCrypto({
     globalPassphrase: "global-pass-".padEnd(40, "g"),
-    perCloudPassphrases: {
-      aws: "aws-pass-".padEnd(40, "a"),
-      gcp: "gcp-pass-".padEnd(40, "c"),
+    perPartitionPassphrases: {
+      alpha: "alpha-pass-".padEnd(40, "a"),
+      beta: "beta-pass-".padEnd(40, "b"),
     },
   });
-  const gcpCipher = await sealing.seal("top-secret-gcp", "gcp");
-  const cloudflareCipher = await sealing.seal(
-    "cloudflare-secret",
-    "cloudflare",
-  );
+  const betaCipher = await sealing.seal("top-secret-beta", "beta");
+  const gammaCipher = await sealing.seal("gamma-secret", "gamma");
 
-  // Simulate adversary who compromised ONLY the AWS key (and does not know
-  // the global / gcp / cloudflare passphrases). Construct a crypto that
-  // believes the AWS key is also the global / gcp / cloudflare key.
-  const compromised = new MultiCloudSecretBoundaryCrypto({
-    globalPassphrase: "aws-pass-".padEnd(40, "a"),
-    perCloudPassphrases: {
-      aws: "aws-pass-".padEnd(40, "a"),
-      gcp: "aws-pass-".padEnd(40, "a"),
-      cloudflare: "aws-pass-".padEnd(40, "a"),
+  // Simulate an adversary who compromised only the alpha partition key.
+  const compromised = new PartitionedSecretBoundaryCrypto({
+    globalPassphrase: "alpha-pass-".padEnd(40, "a"),
+    perPartitionPassphrases: {
+      alpha: "alpha-pass-".padEnd(40, "a"),
+      beta: "alpha-pass-".padEnd(40, "a"),
+      gamma: "alpha-pass-".padEnd(40, "a"),
     },
   });
-  await assert.rejects(() => compromised.open(gcpCipher, "gcp"));
-  await assert.rejects(() => compromised.open(cloudflareCipher, "cloudflare"));
+  await assert.rejects(() => compromised.open(betaCipher, "beta"));
+  await assert.rejects(() => compromised.open(gammaCipher, "gamma"));
 });
 
-test("MemoryEncryptedSecretStore stores per-cloud partition and rejects cross-partition reads", async () => {
+test("MemoryEncryptedSecretStore stores and filters arbitrary partitions", async () => {
   const store = new MemoryEncryptedSecretStore({
     clock: () => new Date("2026-04-27T00:00:00.000Z"),
-    crypto: new MultiCloudSecretBoundaryCrypto({
+    crypto: new PartitionedSecretBoundaryCrypto({
       globalPassphrase: "global-".padEnd(40, "g"),
-      perCloudPassphrases: {
-        aws: "aws-".padEnd(40, "a"),
-        gcp: "gcp-".padEnd(40, "c"),
+      perPartitionPassphrases: {
+        alpha: "alpha-".padEnd(40, "a"),
+        beta: "beta-".padEnd(40, "b"),
       },
     }),
   });
-  const awsRecord = await store.putSecret({
-    name: "AWS_ACCESS_KEY_ID",
-    value: "AKIA-FAKE",
-    cloudPartition: "aws",
+  const alphaRecord = await store.putSecret({
+    name: "ALPHA_TOKEN",
+    value: "alpha-fake",
+    secretPartition: "alpha",
   });
-  const gcpRecord = await store.putSecret({
-    name: "GCP_API_KEY",
-    value: "gcp-fake",
-    cloudPartition: "gcp",
+  const betaRecord = await store.putSecret({
+    name: "BETA_TOKEN",
+    value: "beta-fake",
+    secretPartition: "beta",
   });
-  assert.equal(awsRecord.cloudPartition, "aws");
-  assert.equal(gcpRecord.cloudPartition, "gcp");
-  assert.equal(await store.getSecret(awsRecord), "AKIA-FAKE");
-  assert.equal(await store.getSecret(gcpRecord), "gcp-fake");
+  assert.equal(alphaRecord.secretPartition, "alpha");
+  assert.equal(betaRecord.secretPartition, "beta");
+  assert.equal(await store.getSecret(alphaRecord), "alpha-fake");
+  assert.equal(await store.getSecret(betaRecord), "beta-fake");
 
-  const awsList = await store.listSecrets({ cloudPartition: "aws" });
-  assert.equal(awsList.length, 1);
-  assert.equal(awsList[0].name, "AWS_ACCESS_KEY_ID");
+  const alphaList = await store.listSecrets({ secretPartition: "alpha" });
+  assert.equal(alphaList.length, 1);
+  assert.equal(alphaList[0].name, "ALPHA_TOKEN");
 });
 
-test("MultiCloudSecretBoundaryCrypto binds the canonical aad context", async () => {
-  const crypto = new MultiCloudSecretBoundaryCrypto({
+test("PartitionedSecretBoundaryCrypto binds the canonical aad context", async () => {
+  const crypto = new PartitionedSecretBoundaryCrypto({
     globalPassphrase: "global-".padEnd(40, "g"),
   });
   const aad = new TextEncoder().encode("connection=conn_a");
@@ -269,20 +258,20 @@ test("PlaceholderSecretBoundaryCrypto binds the canonical aad context", async ()
   await assert.rejects(() => crypto.open(sealed, "local-adapters"));
 });
 
-test("MultiCloudSecretBoundaryCrypto no-aad round-trip is unchanged", async () => {
+test("PartitionedSecretBoundaryCrypto no-aad round-trip is unchanged", async () => {
   // State/plan artifacts seal without a canonical aad; that path must stay
   // byte-compatible (bare partition label) so existing at-rest data round-trips.
-  const crypto = new MultiCloudSecretBoundaryCrypto({
+  const crypto = new PartitionedSecretBoundaryCrypto({
     globalPassphrase: "global-".padEnd(40, "g"),
   });
   const sealed = await crypto.seal("artifact", "global");
   assert.equal(await crypto.open(sealed, "global"), "artifact");
 });
 
-test("MultiCloudSecretBoundaryCrypto rejects a too-short global passphrase", () => {
+test("PartitionedSecretBoundaryCrypto rejects a too-short global passphrase", () => {
   assert.throws(
     () =>
-      new MultiCloudSecretBoundaryCrypto({
+      new PartitionedSecretBoundaryCrypto({
         // 31 bytes: one short of the 32-byte minimum.
         globalPassphrase: "x".repeat(31),
       }),
@@ -294,37 +283,37 @@ test("MultiCloudSecretBoundaryCrypto rejects a too-short global passphrase", () 
   );
 });
 
-test("MultiCloudSecretBoundaryCrypto rejects a too-short per-cloud override", () => {
+test("PartitionedSecretBoundaryCrypto rejects a too-short per-partition override", () => {
   assert.throws(
     () =>
-      new MultiCloudSecretBoundaryCrypto({
+      new PartitionedSecretBoundaryCrypto({
         globalPassphrase: "g".repeat(32),
-        perCloudPassphrases: { aws: "short-aws-key" },
+        perPartitionPassphrases: { alpha: "short-key" },
       }),
     (error: unknown) => {
       assert.ok(error instanceof SecretEncryptionConfigurationError);
       assert.match(
         (error as Error).message,
-        /perCloudPassphrases\.aws is too short/,
+        /perPartitionPassphrases\.alpha is too short/,
       );
       return true;
     },
   );
 });
 
-test("MultiCloudSecretBoundaryCrypto accepts a passphrase exactly at the minimum", async () => {
-  const crypto = new MultiCloudSecretBoundaryCrypto({
+test("PartitionedSecretBoundaryCrypto accepts a passphrase exactly at the minimum", async () => {
+  const crypto = new PartitionedSecretBoundaryCrypto({
     globalPassphrase: "z".repeat(32),
   });
   const sealed = await crypto.seal("ok", "global");
   assert.equal(await crypto.open(sealed, "global"), "ok");
 });
 
-test("MultiCloudSecretBoundaryCrypto.keyVersion changes when the passphrase rotates", () => {
-  const before = new MultiCloudSecretBoundaryCrypto({
+test("PartitionedSecretBoundaryCrypto.keyVersion changes when the passphrase rotates", () => {
+  const before = new PartitionedSecretBoundaryCrypto({
     globalPassphrase: "old-global-passphrase-".padEnd(40, "o"),
   });
-  const after = new MultiCloudSecretBoundaryCrypto({
+  const after = new PartitionedSecretBoundaryCrypto({
     globalPassphrase: "new-global-passphrase-".padEnd(40, "n"),
   });
   const v1 = before.keyVersion("global");
@@ -336,30 +325,45 @@ test("MultiCloudSecretBoundaryCrypto.keyVersion changes when the passphrase rota
   assert.notEqual(v1, v2);
 });
 
-test("MultiCloudSecretBoundaryCrypto.keyVersion is per-partition for per-cloud overrides", () => {
-  const crypto = new MultiCloudSecretBoundaryCrypto({
+test("PartitionedSecretBoundaryCrypto.keyVersion is per-partition for per-partition overrides", () => {
+  const crypto = new PartitionedSecretBoundaryCrypto({
     globalPassphrase: "global-passphrase-".padEnd(40, "g"),
-    perCloudPassphrases: { aws: "aws-only-passphrase-".padEnd(40, "a") },
+    perPartitionPassphrases: {
+      alpha: "alpha-only-passphrase-".padEnd(40, "a"),
+    },
   });
   // A partition with a dedicated override fingerprints differently from one
   // that inherits the (derived) global passphrase.
-  assert.notEqual(crypto.keyVersion("aws"), crypto.keyVersion("gcp"));
+  assert.notEqual(crypto.keyVersion("alpha"), crypto.keyVersion("beta"));
 });
 
-test("MultiCloudSecretBoundaryCrypto.fromEnv picks per-cloud overrides", async () => {
+test("PartitionedSecretBoundaryCrypto.fromEnv reads an explicit partition map", async () => {
   const env = {
     TAKOSUMI_SECRET_STORE_PASSPHRASE: "global-passphrase-".padEnd(40, "g"),
-    TAKOSUMI_SECRET_STORE_PASSPHRASE_AWS: "aws-only-".padEnd(40, "a"),
+    [SECRET_STORE_PARTITION_KEYS_ENV]: JSON.stringify({
+      "recipe:alpha": "alpha-only-".padEnd(40, "a"),
+    }),
   };
-  const crypto = MultiCloudSecretBoundaryCrypto.fromEnv(
+  const crypto = PartitionedSecretBoundaryCrypto.fromEnv(
     env,
     env.TAKOSUMI_SECRET_STORE_PASSPHRASE,
   );
   // Sanity: roundtrip works.
-  const sealed = await crypto.seal("ok", "aws");
-  assert.equal(await crypto.open(sealed, "aws"), "ok");
-  // Cross partition still fails when sealed with aws key.
+  const sealed = await crypto.seal("ok", "recipe:alpha");
+  assert.equal(await crypto.open(sealed, "recipe:alpha"), "ok");
+  // Cross partition still fails when sealed with the explicit override.
   await assert.rejects(() => crypto.open(sealed, "global"));
+});
+
+test("PartitionedSecretBoundaryCrypto.fromEnv rejects malformed partition maps", () => {
+  assert.throws(
+    () =>
+      PartitionedSecretBoundaryCrypto.fromEnv(
+        { [SECRET_STORE_PARTITION_KEYS_ENV]: "not-json" },
+        "global-passphrase-".padEnd(40, "g"),
+      ),
+    SecretEncryptionConfigurationError,
+  );
 });
 
 // ---------------------------------------------------------------------------

@@ -23,7 +23,9 @@
       "takosumi-contract/provider-env-rules": [
         "../contract/provider-env-rules.ts"
       ],
-      "takosumi-contract/deployments": ["../contract/deployments.ts"]
+      "takosumi-contract/redaction": [
+        "../contract/redaction.ts"
+      ]
     }
   },
   "include": ["src/**/*", "*.ts"],

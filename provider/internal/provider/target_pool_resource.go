@@ -20,22 +20,7 @@ import (
 	"github.com/takosjp/terraform-provider-takosumi/internal/client"
 )
 
-var (
-	wellKnownTargetTypes = []string{
-		"aws",
-		"cloudflare",
-		"gcp",
-		"azure",
-		"kubernetes",
-		"vm",
-		"proxmox",
-		"libvirt",
-		"ssh",
-		"takosumi_native",
-		"opentofu",
-	}
-	targetCapabilityLevels = []string{"native", "shim", "emulated", "unsupported"}
-)
+var targetCapabilityLevels = []string{"native", "shim", "emulated", "unsupported"}
 
 var (
 	_ resource.Resource              = (*targetPoolResource)(nil)
@@ -72,17 +57,29 @@ type targetPoolImplementationModel struct {
 	Implementation     types.String `tfsdk:"implementation"`
 	NativeResourceType types.String `tfsdk:"native_resource_type"`
 	Plugin             types.String `tfsdk:"plugin"`
+	ProviderSource     types.String `tfsdk:"provider_source"`
+	ProviderAlias      types.String `tfsdk:"provider_alias"`
+	ProviderConfigJSON types.String `tfsdk:"provider_config_json"`
+	ModuleTemplate     types.String `tfsdk:"module_template"`
+	ModuleInputsJSON   types.String `tfsdk:"module_input_mappings_json"`
+	ModuleOutputsJSON  types.String `tfsdk:"module_outputs_json"`
 	OptionsJSON        types.String `tfsdk:"options_json"`
 	Interfaces         types.Map    `tfsdk:"interfaces"`
 }
 
 var targetPoolImplementationAttrTypes = map[string]attr.Type{
-	"shape":                types.StringType,
-	"implementation":       types.StringType,
-	"native_resource_type": types.StringType,
-	"plugin":               types.StringType,
-	"options_json":         types.StringType,
-	"interfaces":           types.MapType{ElemType: types.StringType},
+	"shape":                      types.StringType,
+	"implementation":             types.StringType,
+	"native_resource_type":       types.StringType,
+	"plugin":                     types.StringType,
+	"provider_source":            types.StringType,
+	"provider_alias":             types.StringType,
+	"provider_config_json":       types.StringType,
+	"module_template":            types.StringType,
+	"module_input_mappings_json": types.StringType,
+	"module_outputs_json":        types.StringType,
+	"options_json":               types.StringType,
+	"interfaces":                 types.MapType{ElemType: types.StringType},
 }
 
 var targetPoolTargetAttrTypes = map[string]attr.Type{
@@ -101,7 +98,7 @@ func (r *targetPoolResource) Metadata(_ context.Context, req resource.MetadataRe
 
 func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "A Takosumi TargetPool admin resource. It declares which Targets and implementation capabilities the Takosumi Resolver may use. Provider/backend support is declared here as capability evidence and optional plugin wiring, not hard-coded in the provider binary.",
+		Description: "A Takosumi TargetPool admin resource. Each implementation carries complete provider/module or plugin execution evidence; the provider binary does not infer a backend from target type, shape, or implementation names.",
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
 				Required:    true,
@@ -124,7 +121,7 @@ func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 			"target": schema.ListNestedAttribute{
 				Required:    true,
-				Description: "Ranked Targets available to the Resolver. Type is an extensible token; known examples include " + strings.Join(wellKnownTargetTypes, ", ") + ", but operator/backend plugin tokens are also valid.",
+				Description: "Ranked Targets available to the Resolver. Type is an opaque operator-owned token and never selects a provider implicitly.",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"name": schema.StringAttribute{
@@ -136,7 +133,7 @@ func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest,
 						},
 						"type": schema.StringAttribute{
 							Required:    true,
-							Description: "Target type token. Known examples: " + strings.Join(wellKnownTargetTypes, ", ") + ". Custom provider/backend plugin tokens are intentionally allowed.",
+							Description: "Opaque operator-owned Target type token. Takosumi Core does not attach vendor semantics to this value.",
 							Validators: []validator.String{
 								StringToken(),
 							},
@@ -174,14 +171,14 @@ func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest,
 									},
 									"implementation": schema.StringAttribute{
 										Required:    true,
-										Description: "Implementation token, for example kubernetes_deployment or an operator-defined plugin token. This is not a provider-binary enum.",
+										Description: "Opaque operator-owned implementation token. This is not a provider-binary enum.",
 										Validators: []validator.String{
 											StringToken(),
 										},
 									},
 									"native_resource_type": schema.StringAttribute{
 										Optional:    true,
-										Description: "Optional native resource type exposed in ResolutionLock evidence, for example kubernetes.deployment.",
+										Description: "Optional opaque native resource type exposed in ResolutionLock evidence.",
 										Validators: []validator.String{
 											StringToken(),
 										},
@@ -192,6 +189,30 @@ func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest,
 										Validators: []validator.String{
 											StringToken(),
 										},
+									},
+									"provider_source": schema.StringAttribute{
+										Optional:    true,
+										Description: "Explicit OpenTofu provider source for a module-backed implementation, such as namespace/type or hostname/namespace/type.",
+									},
+									"provider_alias": schema.StringAttribute{
+										Optional:    true,
+										Description: "Optional explicit provider alias. It is never derived from Target type.",
+									},
+									"provider_config_json": schema.StringAttribute{
+										Optional:    true,
+										Description: "Explicit non-secret provider block configuration as a JSON object. Provider credentials stay in ProviderConnection/CredentialRecipe.",
+									},
+									"module_template": schema.StringAttribute{
+										Optional:    true,
+										Description: "Explicit bundled module template id for a module-backed implementation.",
+									},
+									"module_input_mappings_json": schema.StringAttribute{
+										Optional:    true,
+										Description: "JSON object mapping child-module variable names to explicit spec, target, or literal projections.",
+									},
+									"module_outputs_json": schema.StringAttribute{
+										Optional:    true,
+										Description: "JSON array of public child outputs, each with name and type.",
 									},
 									"options_json": schema.StringAttribute{
 										Optional:    true,
@@ -382,7 +403,7 @@ func (m targetPoolModel) toSpec(ctx context.Context, defaultSpace string) (strin
 	return space, spec, diags
 }
 
-func targetPoolImplementations(ctx context.Context, targetIndex int, value types.List) ([]client.TargetPoolImplementation, diag.Diagnostics) {
+func targetPoolImplementations(ctx context.Context, targetIndex int, value types.List) ([]client.TargetImplementationDescriptor, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	if value.IsNull() || value.IsUnknown() {
 		return nil, diags
@@ -392,11 +413,12 @@ func targetPoolImplementations(ctx context.Context, targetIndex int, value types
 	if diags.HasError() {
 		return nil, diags
 	}
-	implementations := make([]client.TargetPoolImplementation, 0, len(raw))
+	implementations := make([]client.TargetImplementationDescriptor, 0, len(raw))
 	for index, item := range raw {
+		implementationPath := path.Root("target").AtListIndex(targetIndex).AtName("implementation").AtListIndex(index)
 		interfaces, d := targetPoolInterfaces(ctx, targetIndex, index, item.Interfaces)
 		diags.Append(d...)
-		impl := client.TargetPoolImplementation{
+		impl := client.TargetImplementationDescriptor{
 			Shape:          item.Shape.ValueString(),
 			Implementation: item.Implementation.ValueString(),
 			Interfaces:     interfaces,
@@ -421,17 +443,40 @@ func targetPoolImplementations(ctx context.Context, targetIndex int, value types
 		if !item.Plugin.IsNull() && !item.Plugin.IsUnknown() {
 			impl.Plugin = item.Plugin.ValueString()
 		}
-		if !item.OptionsJSON.IsNull() && !item.OptionsJSON.IsUnknown() && strings.TrimSpace(item.OptionsJSON.ValueString()) != "" {
-			var options map[string]any
-			if err := json.Unmarshal([]byte(item.OptionsJSON.ValueString()), &options); err != nil {
-				diags.AddAttributeError(
-					path.Root("target").AtListIndex(targetIndex).AtName("implementation").AtListIndex(index).AtName("options_json"),
-					"Invalid plugin options JSON",
-					"implementation.options_json must be a JSON object when set.",
-				)
-			} else {
-				impl.Options = options
-			}
+		if !item.ProviderSource.IsNull() && !item.ProviderSource.IsUnknown() {
+			impl.ProviderSource = item.ProviderSource.ValueString()
+		}
+		if !item.ProviderAlias.IsNull() && !item.ProviderAlias.IsUnknown() {
+			impl.ProviderAlias = item.ProviderAlias.ValueString()
+		}
+		if !item.ModuleTemplate.IsNull() && !item.ModuleTemplate.IsUnknown() {
+			impl.ModuleTemplate = item.ModuleTemplate.ValueString()
+		}
+		impl.ProviderConfig = decodeJSONObjectAttribute(
+			item.ProviderConfigJSON,
+			implementationPath.AtName("provider_config_json"),
+			"provider_config_json",
+			&diags,
+		)
+		impl.ModuleInputMappings = decodeJSONObjectAttribute(
+			item.ModuleInputsJSON,
+			implementationPath.AtName("module_input_mappings_json"),
+			"module_input_mappings_json",
+			&diags,
+		)
+		impl.ModuleOutputs = decodeModuleOutputsAttribute(
+			item.ModuleOutputsJSON,
+			implementationPath.AtName("module_outputs_json"),
+			&diags,
+		)
+		impl.Options = decodeJSONObjectAttribute(
+			item.OptionsJSON,
+			implementationPath.AtName("options_json"),
+			"options_json",
+			&diags,
+		)
+		if diags.HasError() {
+			continue
 		}
 		implementations = append(implementations, impl)
 	}
@@ -453,14 +498,6 @@ func targetPoolInterfaces(ctx context.Context, targetIndex int, implementationIn
 	if diags.HasError() {
 		return nil, diags
 	}
-	if len(raw) == 0 {
-		diags.AddAttributeError(
-			path.Root("target").AtListIndex(targetIndex).AtName("implementation").AtListIndex(implementationIndex).AtName("interfaces"),
-			"Missing interfaces",
-			"At least one interface capability is required.",
-		)
-		return nil, diags
-	}
 	interfaces := make(map[string]string, len(raw))
 	for key, value := range raw {
 		level := value.ValueString()
@@ -475,6 +512,38 @@ func targetPoolInterfaces(ctx context.Context, targetIndex int, implementationIn
 		interfaces[key] = level
 	}
 	return interfaces, diags
+}
+
+func decodeJSONObjectAttribute(value types.String, attributePath path.Path, field string, diags *diag.Diagnostics) map[string]any {
+	if value.IsNull() || value.IsUnknown() || strings.TrimSpace(value.ValueString()) == "" {
+		return nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(value.ValueString()), &decoded); err != nil || decoded == nil {
+		diags.AddAttributeError(
+			attributePath,
+			"Invalid JSON object",
+			fmt.Sprintf("implementation.%s must be a JSON object when set.", field),
+		)
+		return nil
+	}
+	return decoded
+}
+
+func decodeModuleOutputsAttribute(value types.String, attributePath path.Path, diags *diag.Diagnostics) []client.TargetModuleOutput {
+	if value.IsNull() || value.IsUnknown() || strings.TrimSpace(value.ValueString()) == "" {
+		return nil
+	}
+	var decoded []client.TargetModuleOutput
+	if err := json.Unmarshal([]byte(value.ValueString()), &decoded); err != nil || decoded == nil {
+		diags.AddAttributeError(
+			attributePath,
+			"Invalid module outputs JSON",
+			"implementation.module_outputs_json must be a JSON array when set.",
+		)
+		return nil
+	}
+	return decoded
 }
 
 func applyTargetPoolRecord(record *client.TargetPoolRecord, fallbackSpace string, m *targetPoolModel) {

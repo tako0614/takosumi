@@ -1,4 +1,4 @@
-# cloudflare-hello-worker (first-party sample Capsule module)
+# cloudflare-hello-worker (example Capsule module)
 
 A runnable Cloudflare Worker with **no build step** — the Worker source is
 baked inline, so `tofu apply` creates a real Worker script without a separate
@@ -14,10 +14,11 @@ install produces a browser-openable URL.
   `compatibilityDate` (string, optional).
 - Outputs: `worker_name`, `url`.
 
-Unlike `cloudflare-worker-service` (which uploads a built artifact) and
-`cloudflare-static-site` (which needs a Pages deployment), this module has no
-build or deploy prerequisite — it is a genuine standalone Git capsule.
+Unlike the static-site example (which needs a Pages deployment), this module
+has no build or deploy prerequisite. It is a standalone Git Capsule, not a
+built-in Takosumi template.
 
-This directory is baked into the runner image at
-`/app/templates/cloudflare-hello-worker/module`. Takosumi generates a root
-module that wires it via `source = "./template-module"` with the typed inputs.
+Install it by selecting this repository, a pinned ref/commit, and this module
+path. Takosumi snapshots those Git bytes and generates a root module that wires
+the selected child through `source = "./module"`. The runner image contains no
+copy of this module.

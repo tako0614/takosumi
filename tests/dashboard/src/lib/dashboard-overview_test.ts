@@ -32,7 +32,7 @@ function stubOverviewFetch(): () => readonly string[] {
       JSON.stringify({
         workspaces: [
           {
-            id: "space_1",
+            id: "workspace_1",
             handle: "prod",
             displayName: "Production",
             type: "personal",
@@ -42,7 +42,7 @@ function stubOverviewFetch(): () => readonly string[] {
           },
         ],
         workspace: {
-          id: "space_1",
+          id: "workspace_1",
           handle: "prod",
           displayName: "Production",
           type: "personal",
@@ -52,13 +52,13 @@ function stubOverviewFetch(): () => readonly string[] {
         },
         capsules: [
           {
-            id: "inst_1",
-            workspaceId: "space_1",
+            id: "capsule_1",
+            workspaceId: "workspace_1",
             name: "Yurucommu",
             slug: "yurucommu",
             installConfigId: "cfg_yurucommu",
             environment: "prod",
-            currentStateVersionId: "dep_1",
+            currentStateVersionId: "state_1",
             currentStateGeneration: 2,
             status: "active",
             createdAt: "2026-07-02T00:00:00.000Z",
@@ -67,15 +67,12 @@ function stubOverviewFetch(): () => readonly string[] {
         ],
         currentStateVersions: [
           {
-            id: "dep_1",
-            spaceId: "space_1",
-            installationId: "inst_1",
+            id: "state_1",
+            workspaceId: "workspace_1",
+            capsuleId: "capsule_1",
             environment: "prod",
-            applyRunId: "apply_1",
-            sourceSnapshotId: "snap_1",
-            stateGeneration: 2,
-            outputsPublic: { launch_url: "https://yuru.example.test" },
-            status: "active",
+            generation: 2,
+            createdByRunId: "apply_1",
             createdAt: "2026-07-02T00:00:00.000Z",
           },
         ],
@@ -85,7 +82,6 @@ function stubOverviewFetch(): () => readonly string[] {
             id: "cfg_yurucommu",
             name: "yurucommu",
             sourceKind: "first_party_capsule",
-            trustLevel: "official",
             createdAt: "2026-07-02T00:00:00.000Z",
             updatedAt: "2026-07-02T00:00:00.000Z",
           },
@@ -111,35 +107,35 @@ describe("getDashboardOverviewCached", () => {
     const calls = stubOverviewFetch();
 
     const [a, b] = await Promise.all([
-      getDashboardOverviewCached("space_1"),
-      getDashboardOverviewCached("space_1"),
+      getDashboardOverviewCached("workspace_1"),
+      getDashboardOverviewCached("workspace_1"),
     ]);
 
     expect(a).toEqual(b);
     expect(calls()).toEqual([
-      "/api/v1/dashboard/overview?workspaceId=space_1&includeWorkspaces=false",
+      "/api/v1/dashboard/overview?workspaceId=workspace_1&includeWorkspaces=false",
     ]);
 
-    expect((await listWorkspacesCached())[0]?.id).toBe("space_1");
+    expect((await listWorkspacesCached())[0]?.id).toBe("workspace_1");
     expect(
       (
-        await listCapsulesCached("space_1", {
+        await listCapsulesCached("workspace_1", {
           includeDestroyed: false,
         })
       )[0]?.id,
-    ).toBe("inst_1");
+    ).toBe("capsule_1");
     expect(
       (
-        await listCurrentStateVersionsCached("space_1", {
+        await listCurrentStateVersionsCached("workspace_1", {
           includeDestroyed: false,
         })
       )[0]?.id,
-    ).toBe("dep_1");
-    expect((await listInstallConfigsCached("space_1"))[0]?.id).toBe(
+    ).toBe("state_1");
+    expect((await listInstallConfigsCached("workspace_1"))[0]?.id).toBe(
       "cfg_yurucommu",
     );
     expect(calls()).toHaveLength(2);
-    expect(calls()[1]).toBe("/api/v1/capsule-configs?workspaceId=space_1");
+    expect(calls()[1]).toBe("/api/v1/capsule-configs?workspaceId=workspace_1");
   });
 
   test("does not prime full-list caches from a capped overview page", async () => {
@@ -147,13 +143,13 @@ describe("getDashboardOverviewCached", () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const path = typeof input === "string" ? input : String(input);
       calls.push(path);
-      if (path.startsWith("/api/v1/workspaces/space_1/capsules")) {
+      if (path.startsWith("/api/v1/workspaces/workspace_1/capsules")) {
         return new Response(
           JSON.stringify({
             capsules: [
               {
-                id: "inst_full",
-                workspaceId: "space_1",
+                id: "capsule_full",
+                workspaceId: "workspace_1",
                 name: "Full list app",
                 slug: "full-list-app",
                 installConfigId: "cfg_full",
@@ -172,7 +168,7 @@ describe("getDashboardOverviewCached", () => {
         JSON.stringify({
           workspaces: [
             {
-              id: "space_1",
+              id: "workspace_1",
               handle: "prod",
               displayName: "Production",
               type: "personal",
@@ -182,7 +178,7 @@ describe("getDashboardOverviewCached", () => {
             },
           ],
           workspace: {
-            id: "space_1",
+            id: "workspace_1",
             handle: "prod",
             displayName: "Production",
             type: "personal",
@@ -192,8 +188,8 @@ describe("getDashboardOverviewCached", () => {
           },
           capsules: [
             {
-              id: "inst_page",
-              workspaceId: "space_1",
+              id: "capsule_page",
+              workspaceId: "workspace_1",
               name: "First page app",
               slug: "first-page-app",
               installConfigId: "cfg_page",
@@ -213,25 +209,25 @@ describe("getDashboardOverviewCached", () => {
       );
     }) as typeof fetch;
 
-    await getDashboardOverviewCached("space_1");
+    await getDashboardOverviewCached("workspace_1");
 
     expect(
       (
-        await listCapsulesCached("space_1", {
+        await listCapsulesCached("workspace_1", {
           includeDestroyed: false,
         })
       )[0]?.id,
-    ).toBe("inst_full");
+    ).toBe("capsule_full");
     expect(calls).toEqual([
-      "/api/v1/dashboard/overview?workspaceId=space_1&includeWorkspaces=false",
-      "/api/v1/workspaces/space_1/capsules?includeDestroyed=false",
+      "/api/v1/dashboard/overview?workspaceId=workspace_1&includeWorkspaces=false",
+      "/api/v1/workspaces/workspace_1/capsules?includeDestroyed=false",
     ]);
   });
 
   test("does not clear the primed Workspace list when overview omits Workspaces", async () => {
     primeWorkspaceListCache([
       {
-        id: "space_1",
+        id: "workspace_1",
         handle: "prod",
         displayName: "Production",
         type: "personal",
@@ -248,7 +244,7 @@ describe("getDashboardOverviewCached", () => {
         JSON.stringify({
           workspaces: [],
           workspace: {
-            id: "space_1",
+            id: "workspace_1",
             handle: "prod",
             displayName: "Production",
             type: "personal",
@@ -265,11 +261,11 @@ describe("getDashboardOverviewCached", () => {
       );
     }) as typeof fetch;
 
-    await getDashboardOverviewCached("space_1");
+    await getDashboardOverviewCached("workspace_1");
 
-    expect((await listWorkspacesCached())[0]?.id).toBe("space_1");
+    expect((await listWorkspacesCached())[0]?.id).toBe("workspace_1");
     expect(calls).toEqual([
-      "/api/v1/dashboard/overview?workspaceId=space_1&includeWorkspaces=false",
+      "/api/v1/dashboard/overview?workspaceId=workspace_1&includeWorkspaces=false",
     ]);
   });
 });

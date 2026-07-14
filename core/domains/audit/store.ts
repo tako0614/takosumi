@@ -32,8 +32,9 @@ export class InMemoryAuditStore implements AuditStore {
 }
 
 function matchesQuery(event: AuditEvent, query: AuditEventQuery): boolean {
-  if (query.spaceId && event.spaceId !== query.spaceId) return false;
-  if (query.groupId && event.groupId !== query.groupId) return false;
+  if (query.workspaceId && event.workspaceId !== query.workspaceId)
+    return false;
+  if (query.runGroupId && event.runGroupId !== query.runGroupId) return false;
   if (query.targetType && event.targetType !== query.targetType) return false;
   if (query.targetId && event.targetId !== query.targetId) return false;
   if (query.type && event.type !== query.type) return false;

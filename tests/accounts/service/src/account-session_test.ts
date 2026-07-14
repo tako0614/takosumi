@@ -7,6 +7,7 @@ import {
   handleAccountSessionMeDelete,
   handleAccountSessionMeGet,
   mintAccountSessionId,
+  requireAccountsBearer,
   rotateAccountSession,
   serializeAccountSessionCookie,
   TAKOSUMI_ACCOUNTS_SESSION_ME_PATH,
@@ -282,3 +283,208 @@ test("handleAccountSessionMeDelete is idempotent when no session is presented", 
     (response.headers.get("set-cookie") ?? "").includes("Max-Age=0"),
   ).toEqual(true);
 });
+
+test("requireAccountsBearer resolves an arbitrary-prefix session by exact record", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  const token = "opaque.browser-session.without-a-type-prefix";
+  store.saveAccount({
+    subject: "tsub_arbitrary_session",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAccountSession({
+    sessionId: token,
+    subject: "tsub_arbitrary_session",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+
+  const result = await requireAccountsBearer({
+    request: bearerRequest(token),
+    store,
+    scope: "read",
+  });
+
+  expect(result.ok).toEqual(true);
+  if (result.ok) {
+    expect(result.auth).toEqual({
+      subject: "tsub_arbitrary_session",
+      credential: "session",
+    });
+  }
+});
+
+test("requireAccountsBearer resolves an arbitrary-prefix OAuth token by exact record", async () => {
+  const store = new InMemoryAccountsStore();
+  const token = "opaque.oauth-secret.without-a-type-prefix";
+  store.saveAccessToken(token, {
+    clientId: "client_arbitrary_oauth",
+    scope: "capsules:read",
+    subject: "client-local-principal",
+    takosumiSubject: "tsub_arbitrary_oauth",
+    workspaceId: "workspace_oauth",
+    expiresAt: Date.now() + 60_000,
+  });
+
+  const result = await requireAccountsBearer({
+    request: bearerRequest(token),
+    store,
+    scope: "read",
+  });
+
+  expect(result.ok).toEqual(true);
+  if (result.ok) {
+    expect(result.auth).toEqual({
+      subject: "tsub_arbitrary_oauth",
+      principalSubject: "client-local-principal",
+      credential: "oauth-access-token",
+      workspaceId: "workspace_oauth",
+    });
+  }
+});
+
+test("requireAccountsBearer resolves an arbitrary-prefix PAT and records use", async () => {
+  const store = new InMemoryAccountsStore();
+  const token = "opaque.personal-secret.without-a-type-prefix";
+  store.savePersonalAccessToken(token, {
+    tokenId: "pat_arbitrary",
+    tokenPrefix: "display-only",
+    subject: "tsub_arbitrary_pat",
+    name: "arbitrary PAT",
+    scopes: ["read"],
+    workspaceId: "workspace_pat",
+    createdAt: Date.now(),
+  });
+
+  const result = await requireAccountsBearer({
+    request: bearerRequest(token),
+    store,
+    scope: "read",
+  });
+
+  expect(result.ok).toEqual(true);
+  if (result.ok) {
+    expect(result.auth).toEqual({
+      subject: "tsub_arbitrary_pat",
+      credential: "personal-access-token",
+      workspaceId: "workspace_pat",
+    });
+  }
+  expect(store.findPersonalAccessToken(token)?.lastUsedAt).toBeNumber();
+});
+
+test("requireAccountsBearer rejects Interface OAuth on account routes", async () => {
+  const store = new InMemoryAccountsStore();
+  const token = "opaque.interface-invocation-secret";
+  store.saveAccessToken(token, {
+    clientId: "client_interface",
+    audience: "https://capsule.example.test/mcp",
+    scope: "mcp.invoke",
+    subject: "principal_interface",
+    takosumiSubject: "tsub_interface",
+    workspaceId: "workspace_interface",
+    role: "interface-runtime",
+    interfaceId: "interface_mcp",
+    interfaceBindingId: "binding_mcp",
+    interfaceResolvedRevision: 3,
+    expiresAt: Date.now() + 60_000,
+  });
+
+  const result = await requireAccountsBearer({
+    request: bearerRequest(token),
+    store,
+    scope: "read",
+  });
+
+  expect(result.ok).toEqual(false);
+  if (!result.ok) expect(result.response.status).toEqual(401);
+});
+
+test("requireAccountsBearer rejects an active cross-store token collision", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  const token = "opaque.colliding-secret";
+  store.saveAccount({
+    subject: "tsub_collision_session",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAccountSession({
+    sessionId: token,
+    subject: "tsub_collision_session",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  store.saveAccessToken(token, {
+    clientId: "client_collision",
+    scope: "capsules:read",
+    subject: "principal_collision",
+    takosumiSubject: "tsub_collision_oauth",
+    expiresAt: now + 60_000,
+  });
+  store.savePersonalAccessToken(token, {
+    tokenId: "pat_collision",
+    tokenPrefix: "display-only",
+    subject: "tsub_collision_pat",
+    name: "collision PAT",
+    scopes: ["read"],
+    createdAt: now,
+  });
+
+  const result = await requireAccountsBearer({
+    request: bearerRequest(token),
+    store,
+    scope: "read",
+  });
+
+  expect(result.ok).toEqual(false);
+  if (!result.ok) expect(result.response.status).toEqual(401);
+  expect(store.findPersonalAccessToken(token)?.lastUsedAt).toEqual(undefined);
+});
+
+test("requireAccountsBearer keeps Authorization precedence over a session cookie", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  const cookieToken = "opaque.cookie-session";
+  const headerToken = "opaque.header-pat";
+  store.saveAccount({
+    subject: "tsub_cookie",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAccountSession({
+    sessionId: cookieToken,
+    subject: "tsub_cookie",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  store.savePersonalAccessToken(headerToken, {
+    tokenId: "pat_header",
+    tokenPrefix: "display-only",
+    subject: "tsub_header",
+    name: "header PAT",
+    scopes: ["read"],
+    createdAt: now,
+  });
+
+  const result = await requireAccountsBearer({
+    request: new Request("https://accounts.example.test/v1/control", {
+      headers: {
+        authorization: `Bearer ${headerToken}`,
+        cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${cookieToken}`,
+      },
+    }),
+    store,
+    scope: "read",
+  });
+
+  expect(result.ok).toEqual(true);
+  if (result.ok) expect(result.auth.subject).toEqual("tsub_header");
+});
+
+function bearerRequest(token: string): Request {
+  return new Request("https://accounts.example.test/v1/control", {
+    headers: { authorization: `Bearer ${token}` },
+  });
+}

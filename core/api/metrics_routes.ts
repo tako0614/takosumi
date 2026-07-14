@@ -191,19 +191,19 @@ function defaultDashboardMetricSeries(
 ): readonly DefaultMetricSeries[] {
   const baseTags = {
     environment: normalizedDefaultTag(inputTags.environment) ?? "local",
-    runtime_cell_id:
-      normalizedDefaultTag(inputTags.runtime_cell_id) ?? "platform-default",
+    runner_profile_id:
+      normalizedDefaultTag(inputTags.runner_profile_id) ?? "opentofu-default",
   };
   const deployTags = {
     ...baseTags,
-    space_id: "none",
+    workspace_id: "none",
     capsule_id: "none",
-    operationKind: "none",
+    operation_kind: "none",
     status: "idle",
   };
   const runnerTags = {
     ...baseTags,
-    operationKind: "none",
+    operation_kind: "none",
     status: "idle",
   };
   return [
@@ -222,7 +222,7 @@ function defaultDashboardMetricSeries(
       kind: "gauge",
       tags: {
         ...runnerTags,
-        space_id: "none",
+        workspace_id: "none",
       },
     },
     {
@@ -318,8 +318,8 @@ function groupByLabels(
 function labelsForEvent(event: MetricEvent): Record<string, string> {
   return Object.fromEntries(
     Object.entries({
-      ...(event.spaceId ? { spaceId: event.spaceId } : {}),
-      ...(event.groupId ? { groupId: event.groupId } : {}),
+      ...(event.workspaceId ? { workspace_id: event.workspaceId } : {}),
+      ...(event.runGroupId ? { run_group_id: event.runGroupId } : {}),
       ...(event.tags ?? {}),
     }).sort(([left], [right]) => left.localeCompare(right)),
   );

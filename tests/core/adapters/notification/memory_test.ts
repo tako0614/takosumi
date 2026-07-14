@@ -12,7 +12,7 @@ test("memory notification sink stores published notifications", async () => {
     type: "deploy.applied",
     subject: "Deploy applied",
     severity: "info",
-    metadata: { deploymentId: "dep_1" },
+    metadata: { stateVersionId: "state_1" },
   });
 
   assert.deepEqual(record, {
@@ -21,7 +21,7 @@ test("memory notification sink stores published notifications", async () => {
     subject: "Deploy applied",
     body: undefined,
     severity: "info",
-    metadata: { deploymentId: "dep_1" },
+    metadata: { stateVersionId: "state_1" },
     createdAt: "2026-04-27T00:00:00.000Z",
   });
   assert.deepEqual(await sink.list(), [record]);

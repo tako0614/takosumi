@@ -1,14 +1,14 @@
 /**
  * Test-only {@link SqlClient} backed by an in-process PGlite (WASM Postgres).
  *
- * The {@link SqlOpenTofuDeploymentStore} drives a real Postgres dialect through
+ * The {@link SqlOpenTofuControlStore} drives a real Postgres dialect through
  * the drizzle pg-proxy: positional `$N` parameters and jsonb / bigint columns.
  * Running those statements against PGlite exercises the store's actual SQL and
  * the canonical migration DDL — a far stronger guarantee than a hand-rolled
  * in-memory fake — without needing a live Postgres server.
  *
  * `transaction` opens a real PGlite transaction (BEGIN / COMMIT, ROLLBACK on
- * throw) so the atomic `commitAppliedDeployment` path gets genuine all-or-
+ * throw) so the atomic `commitRunState` path gets genuine all-or-
  * nothing semantics under test.
  */
 import {

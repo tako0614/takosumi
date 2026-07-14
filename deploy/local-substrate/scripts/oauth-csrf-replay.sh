@@ -15,7 +15,7 @@
 # control, which is the bug we exist to catch.
 set -euo pipefail
 
-PROVIDER="${PROVIDER:-google}"
+PROVIDER="${PROVIDER:-local-oidc}"
 APP_HOST="${TAKOSUMI_LOCAL_APP_HOST:-app.takosumi.test}"
 OAUTH_HOST="${TAKOSUMI_LOCAL_OAUTH_MOCK_HOST:-oauth-mock.test}"
 BASE="https://${APP_HOST}"

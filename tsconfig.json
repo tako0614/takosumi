@@ -15,9 +15,6 @@
       "@takosjp/takosumi-accounts-contract": ["./accounts/contract/src/mod.ts"],
       "@takosjp/takosumi-accounts-service": ["./accounts/service/src/mod.ts"],
       "@takosjp/takosumi-cli": ["./cli/src/main.ts"],
-      "@takosjp/takosumi-platform-services": [
-        "./accounts/platform-services/src/mod.ts"
-      ],
       "takosumi-contract": ["./contract/index.ts"],
       "takosumi-contract/api-surface": ["./contract/api-surface.ts"],
       "takosumi-contract/capabilities": ["./contract/capabilities.ts"],
@@ -34,38 +31,18 @@
         "./contract/provider-env-rules.ts"
       ],
       "takosumi-contract/reference/compat": ["./contract/reference-compat.ts"],
-      "takosumi-contract/reference/catalog": ["./contract/catalog.ts"],
-      "takosumi-contract/reference/implementation": [
-        "./contract/implementation.ts"
-      ],
-      "takosumi-contract/reference/runtime-agent": [
-        "./contract/runtime-agent.ts"
-      ],
-      "takosumi-contract/reference/runtime-agent-lifecycle": [
-        "./contract/runtime-agent-lifecycle.ts"
-      ],
-      "takosumi-contract/reference/runtime-capability": [
-        "./contract/runtime-capability.ts"
-      ],
       "takosumi-contract/reference/host-blocklist": [
         "./contract/reference/host-blocklist.ts"
       ],
       "takosumi-contract/reference/ip-classification": [
         "./contract/reference/ip-classification.ts"
       ],
-      "takosumi-contract/reference/prepared-source-core": [
-        "./contract/reference/prepared-source-core.ts"
-      ],
       "takosumi-contract/reference/types": ["./contract/types.ts"],
       "takosumi-contract/internal/api": ["./contract/internal-api.ts"],
-      "takosumi-contract/internal/provider-adapter": [
-        "./contract/provider-adapter.ts"
-      ],
       "takosumi-contract/internal/rpc": ["./contract/internal-rpc.ts"],
       "takosumi-contract/internal/crypto": ["./contract/internal-crypto.ts"],
       "takosumi-contract/workspaces": ["./contract/workspaces.ts"],
       "takosumi-contract/projects": ["./contract/projects.ts"],
-      "takosumi-contract/installations": ["./contract/installations.ts"],
       "takosumi-contract/install-configs": ["./contract/install-configs.ts"],
       "takosumi-contract/deploy": ["./contract/deploy.ts"],
       "takosumi-contract/capsules": ["./contract/capsules.ts"],
@@ -80,13 +57,9 @@
       "takosumi-contract/activity": ["./contract/activity.ts"],
       "takosumi-contract/pagination": ["./contract/pagination.ts"],
       "takosumi-contract/outputs": ["./contract/outputs.ts"],
-      "takosumi-contract/output-sync": ["./contract/output-sync.ts"],
-      "takosumi-contract/output-projection": [
-        "./contract/output-projection.ts"
-      ],
+      "takosumi-contract/interfaces": ["./contract/interfaces.ts"],
       "takosumi-contract/runs": ["./contract/runs.ts"],
       "takosumi-contract/state-versions": ["./contract/state-versions.ts"],
-      "takosumi-contract/deployments": ["./contract/deployments.ts"],
       "takosumi-contract/install-link": ["./contract/install-link.ts"],
       "takosumi-contract/backups": ["./contract/backups.ts"],
       "takosumi-contract/billing": ["./contract/billing.ts"],
@@ -94,19 +67,12 @@
       "takosumi-contract/credential-recipes": [
         "./contract/credential-recipes.ts"
       ],
-      "takosumi-contract/runtime-projection": [
-        "./contract/runtime-projection.ts"
-      ],
       "takosumi-rootgen": ["./lib/rootgen/src/mod.ts"],
       "takosumi-graph": ["./lib/graph/src/mod.ts"],
       "takosumi-policy": ["./lib/policy/src/mod.ts"],
       "@takosumi/providers": ["./providers/registry.ts"],
       "@takosumi/providers/types": ["./providers/types.ts"],
-      "@takosumi/providers/*": ["./providers/*"],
-
-      "takosumi-runtime-agent/prepared-source-reader": [
-        "./core/runtime-agent/prepared_source_reader.ts"
-      ]
+      "@takosumi/providers/*": ["./providers/*"]
     }
   },
   "include": [
@@ -118,7 +84,6 @@
     "lib/graph",
     "accounts/contract",
     "accounts/service",
-    "accounts/platform-services",
     "cli",
     "deploy/accounts-cloudflare",
     "deploy/node-postgres",

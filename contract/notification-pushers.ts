@@ -6,6 +6,16 @@ export const NOTIFICATION_PUSHER_REGISTRATION_PATH =
 export const MATRIX_PUSH_GATEWAY_NOTIFY_PATH =
   "/_matrix/push/v1/notify" as const;
 
+/** Maximum UTF-8 JSON size persisted for `pusher.data` after removing `url`. */
+export const MAX_NOTIFICATION_PUSHER_DATA_BYTES = 2 * 1024;
+
+const MAX_NOTIFICATION_PUSHER_DATA_DEPTH = 8;
+const MAX_NOTIFICATION_PUSHER_DATA_ENTRIES = 64;
+const MAX_NOTIFICATION_PUSHER_DATA_ARRAY_LENGTH = 64;
+const MAX_NOTIFICATION_PUSHER_DATA_KEY_BYTES = 128;
+const MAX_NOTIFICATION_PUSHER_DATA_STRING_BYTES = 1024;
+const UTF8_ENCODER = new TextEncoder();
+
 export type NotificationPusherKind = "http";
 export type NotificationPushFormat = "event_id_only" | "full";
 export type NotificationPushPriority = "high" | "low";
@@ -114,6 +124,14 @@ export interface NotificationPushGatewayRequest {
 
 export interface NotificationPushGatewayResponse {
   readonly rejected: readonly string[];
+  /**
+   * Optional Takos extension for partial transient failure. When present on a
+   * retryable response, the host retries only these pushkeys instead of
+   * redelivering devices that already succeeded.
+   */
+  readonly retryable?: readonly string[];
+  /** Permanent delivery failures that must not be retried or deleted. */
+  readonly failed?: readonly string[];
 }
 
 export interface NotificationPushEventInput {
@@ -141,6 +159,31 @@ export interface NotificationPusherParseError {
   readonly code: "BAD_REQUEST";
   readonly error: string;
   readonly field?: string;
+}
+
+/**
+ * Normalize a pusher gateway endpoint without widening host egress to
+ * credential-bearing or cleartext remote URLs. HTTP is reserved for local
+ * loopback development.
+ */
+export function normalizeNotificationPusherGatewayUrl(
+  value: unknown,
+): string | null {
+  const text = parseNonEmptyString(value);
+  if (!text || text.length > 2048) return null;
+  try {
+    const url = new URL(text);
+    if (url.username || url.password || url.hash) return null;
+    if (url.protocol === "https:") {
+      return url.port && url.port !== "443" ? null : url.toString();
+    }
+    if (url.protocol !== "http:" || !isLoopbackHostname(url.hostname)) {
+      return null;
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 export type NotificationPusherSetParseResult =
@@ -384,24 +427,45 @@ function parseNotificationPusher(value: unknown):
 }
 
 function parsePusherData(value: unknown): NotificationPusherData | null {
-  if (!isRecord(value)) return null;
-  const url = parseHttpUrl(value.url);
+  const entries = readStrictJsonObjectEntries(value);
+  if (!entries) return null;
+
+  let rawUrl: unknown;
+  let hasUrl = false;
+  let rawFormat: unknown;
+  const extraData: Record<string, unknown> = {};
+  for (const [key, nested] of entries) {
+    if (key === "url") {
+      hasUrl = true;
+      rawUrl = nested;
+      continue;
+    }
+    if (key === "format") {
+      rawFormat = nested;
+      continue;
+    }
+    defineJsonProperty(extraData, key, nested);
+  }
+
+  if (!hasUrl) return null;
+  const url = parseHttpUrl(rawUrl);
   if (!url) return null;
   const format =
-    value.format == null
+    rawFormat == null
       ? undefined
-      : value.format === "event_id_only" || value.format === "full"
-        ? value.format
+      : rawFormat === "event_id_only" || rawFormat === "full"
+        ? rawFormat
         : null;
   if (format === null) return null;
 
-  const data: Record<string, JsonValue> = {};
-  for (const [key, nested] of Object.entries(value)) {
-    if (key === "url" || key === "format") continue;
-    if (!isJsonValue(nested)) return null;
-    data[key] = nested;
+  if (format !== undefined) {
+    defineJsonProperty(extraData, "format", format);
   }
-  return format === undefined ? { ...data, url } : { ...data, url, format };
+  const data = parseBoundedPusherDataObject(extraData);
+  if (!data) return null;
+
+  const { format: _format, ...rest } = data;
+  return format === undefined ? { ...rest, url } : { ...rest, url, format };
 }
 
 function withoutUrl(
@@ -646,17 +710,14 @@ function parseGatewayDevice(
 function parseGatewayDeviceData(
   value: unknown,
 ): Omit<NotificationPusherData, "url"> | null {
-  if (!isRecord(value)) return null;
-  const data: Record<string, JsonValue> = {};
-  for (const [key, nested] of Object.entries(value)) {
-    if (key === "url") return null;
-    if (key === "format") {
-      if (nested !== "event_id_only" && nested !== "full") return null;
-      data.format = nested;
-      continue;
-    }
-    if (!isJsonValue(nested)) return null;
-    data[key] = nested;
+  const data = parseBoundedPusherDataObject(value);
+  if (!data || Object.prototype.hasOwnProperty.call(data, "url")) return null;
+  if (
+    data.format !== undefined &&
+    data.format !== "event_id_only" &&
+    data.format !== "full"
+  ) {
+    return null;
   }
   return data as Omit<NotificationPusherData, "url">;
 }
@@ -752,15 +813,17 @@ function parseOptionalShortIdentifier(
 }
 
 function parseHttpUrl(value: unknown): string | null {
-  const text = parseNonEmptyString(value);
-  if (!text || text.length > 2048) return null;
-  try {
-    const url = new URL(text);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-    return url.toString();
-  } catch {
-    return null;
-  }
+  return normalizeNotificationPusherGatewayUrl(value);
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/\.$/u, "");
+  return (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/u.test(normalized)
+  );
 }
 
 function parseNonEmptyString(value: unknown): string | null {
@@ -781,6 +844,187 @@ function isJsonValue(value: unknown): value is JsonValue {
   if (Array.isArray(value)) return value.every(isJsonValue);
   if (!isRecord(value)) return false;
   return Object.values(value).every(isJsonValue);
+}
+
+type BoundedJsonParseResult =
+  { readonly ok: true; readonly value: JsonValue } | { readonly ok: false };
+
+function parseBoundedPusherDataObject(value: unknown): JsonObject | null {
+  const parsed = cloneBoundedJsonValue(
+    value,
+    0,
+    { entries: 0 },
+    new WeakSet<object>(),
+  );
+  if (!parsed.ok || !isRecord(parsed.value)) return null;
+
+  const serialized = JSON.stringify(parsed.value);
+  if (
+    UTF8_ENCODER.encode(serialized).byteLength >
+    MAX_NOTIFICATION_PUSHER_DATA_BYTES
+  ) {
+    return null;
+  }
+  return parsed.value;
+}
+
+function cloneBoundedJsonValue(
+  value: unknown,
+  depth: number,
+  budget: { entries: number },
+  ancestors: WeakSet<object>,
+): BoundedJsonParseResult {
+  if (value === null || typeof value === "boolean") {
+    return { ok: true, value };
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? { ok: true, value } : { ok: false };
+  }
+  if (typeof value === "string") {
+    return UTF8_ENCODER.encode(value).byteLength <=
+      MAX_NOTIFICATION_PUSHER_DATA_STRING_BYTES
+      ? { ok: true, value }
+      : { ok: false };
+  }
+  if (!value || typeof value !== "object") return { ok: false };
+  if (depth > MAX_NOTIFICATION_PUSHER_DATA_DEPTH || ancestors.has(value)) {
+    return { ok: false };
+  }
+
+  if (Array.isArray(value)) {
+    const entries = readStrictJsonArrayEntries(value);
+    if (
+      !entries ||
+      entries.length > MAX_NOTIFICATION_PUSHER_DATA_ARRAY_LENGTH
+    ) {
+      return { ok: false };
+    }
+    budget.entries += entries.length;
+    if (budget.entries > MAX_NOTIFICATION_PUSHER_DATA_ENTRIES) {
+      return { ok: false };
+    }
+
+    ancestors.add(value);
+    const clone: JsonValue[] = [];
+    for (const nested of entries) {
+      const parsed = cloneBoundedJsonValue(
+        nested,
+        depth + 1,
+        budget,
+        ancestors,
+      );
+      if (!parsed.ok) {
+        ancestors.delete(value);
+        return parsed;
+      }
+      clone.push(parsed.value);
+    }
+    ancestors.delete(value);
+    return { ok: true, value: clone };
+  }
+
+  const entries = readStrictJsonObjectEntries(value);
+  if (!entries) return { ok: false };
+  budget.entries += entries.length;
+  if (budget.entries > MAX_NOTIFICATION_PUSHER_DATA_ENTRIES) {
+    return { ok: false };
+  }
+
+  ancestors.add(value);
+  const clone: Record<string, JsonValue> = {};
+  for (const [key, nested] of entries) {
+    if (
+      UTF8_ENCODER.encode(key).byteLength >
+      MAX_NOTIFICATION_PUSHER_DATA_KEY_BYTES
+    ) {
+      ancestors.delete(value);
+      return { ok: false };
+    }
+    const parsed = cloneBoundedJsonValue(nested, depth + 1, budget, ancestors);
+    if (!parsed.ok) {
+      ancestors.delete(value);
+      return parsed;
+    }
+    defineJsonProperty(clone, key, parsed.value);
+  }
+  ancestors.delete(value);
+  return { ok: true, value: clone };
+}
+
+function readStrictJsonObjectEntries(
+  value: unknown,
+): readonly (readonly [string, unknown])[] | null {
+  if (!isRecord(value)) return null;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return null;
+
+    const keys = Reflect.ownKeys(value);
+    // Registration data may additionally contain the separately stored `url`
+    // and an omitted nullish `format`, hence the two-entry parsing allowance.
+    if (keys.length > MAX_NOTIFICATION_PUSHER_DATA_ENTRIES + 2) return null;
+    const entries: [string, unknown][] = [];
+    for (const key of keys) {
+      if (typeof key !== "string") return null;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) {
+        return null;
+      }
+      entries.push([key, descriptor.value]);
+    }
+    return entries;
+  } catch {
+    return null;
+  }
+}
+
+function readStrictJsonArrayEntries(
+  value: unknown[],
+): readonly unknown[] | null {
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Array.prototype && prototype !== null) return null;
+
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (!lengthDescriptor || !("value" in lengthDescriptor)) return null;
+    const length = lengthDescriptor.value;
+    if (
+      typeof length !== "number" ||
+      !Number.isSafeInteger(length) ||
+      length < 0 ||
+      length > MAX_NOTIFICATION_PUSHER_DATA_ARRAY_LENGTH
+    ) {
+      return null;
+    }
+
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== length + 1 || !keys.includes("length")) return null;
+
+    const entries: unknown[] = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) {
+        return null;
+      }
+      entries.push(descriptor.value);
+    }
+    return entries;
+  } catch {
+    return null;
+  }
+}
+
+function defineJsonProperty(
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void {
+  Object.defineProperty(target, key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
 }
 
 function stripUndefinedNotification(

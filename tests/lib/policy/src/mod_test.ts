@@ -16,15 +16,17 @@ import {
 
 // --- §25 layer 4: provider allowlist ---------------------------------------
 
-test("provider allowlist admits a fully-qualified provider against a short rule", () => {
+test("provider allowlist does not widen a bare local name into a provider source", () => {
   const result = evaluateProviderAllowlist(
     ["registry.opentofu.org/cloudflare/cloudflare"],
     { allowed: ["cloudflare"] },
   );
-  expect(result.notAllowed).toEqual([]);
+  expect(result.notAllowed).toEqual([
+    "registry.opentofu.org/cloudflare/cloudflare",
+  ]);
   expect(result.denied).toEqual([]);
   expect(result.missingProviders).toBe(false);
-  expect(result.reasons).toEqual([]);
+  expect(result.reasons.join("\n")).toMatch(/not allowed/);
 });
 
 test("provider allowlist rejects a provider not admitted by any rule", () => {
@@ -39,7 +41,7 @@ test("provider allowlist rejects a provider not admitted by any rule", () => {
 test("provider allowlist denial overrides an allow", () => {
   const result = evaluateProviderAllowlist(
     ["registry.opentofu.org/hashicorp/aws"],
-    { allowed: ["*"], denied: ["aws"] },
+    { allowed: ["*"], denied: ["hashicorp/aws"] },
   );
   expect(result.denied).toEqual(["registry.opentofu.org/hashicorp/aws"]);
   expect(result.notAllowed).toEqual([]);
@@ -75,14 +77,17 @@ test("provider allowlist with no allowed rules does not trip the gate", () => {
   expect(result.missingProviders).toBe(false);
 });
 
-test("providerMatches is one-directional", () => {
+test("providerMatches requires an explicit provider source", () => {
+  expect(providerMatches("registry.opentofu.org/hashicorp/aws", "aws")).toBe(
+    false,
+  );
   expect(
-    providerMatches("registry.opentofu.org/hashicorp/aws", "aws"),
+    providerMatches("registry.opentofu.org/hashicorp/aws", "hashicorp/aws"),
   ).toBe(true);
   // A bare provider must NOT satisfy a fully-qualified rule.
-  expect(
-    providerMatches("aws", "registry.opentofu.org/hashicorp/aws"),
-  ).toBe(false);
+  expect(providerMatches("aws", "registry.opentofu.org/hashicorp/aws")).toBe(
+    false,
+  );
 });
 
 // --- §25 layer 5: resource-type allowlist ----------------------------------
@@ -189,92 +194,122 @@ test("action policy de-duplicates destructive reasons by type", () => {
 
 // --- §25 layer 6: scope boundary -------------------------------------------
 
-test("scope boundary admits resources with matching Cloudflare metadata", () => {
-  const result = evaluateScopeBoundary([
+const ACCOUNT_SCOPE_POLICY = {
+  mode: "strict" as const,
+  rules: [
     {
-      address: "cloudflare_r2_bucket.files",
-      type: "cloudflare_r2_bucket",
-      actions: ["create"],
-      scope: { cloudflareAccountId: "acct_allowed" },
+      resourceTypePattern: "cloudflare_*",
+      dimensions: {
+        account_id: {
+          selector: "/account_id",
+          allowedValues: ["acct_allowed"],
+        },
+      },
     },
-  ], {
-    mode: "strict",
-    cloudflare: { accountIds: ["acct_allowed"] },
-  });
+  ],
+};
+
+test("scope boundary admits resources with matching generic facts", () => {
+  const result = evaluateScopeBoundary(
+    [
+      {
+        address: "cloudflare_r2_bucket.files",
+        type: "cloudflare_r2_bucket",
+        actions: ["create"],
+        scope: { facts: { account_id: "acct_allowed" } },
+      },
+    ],
+    ACCOUNT_SCOPE_POLICY,
+  );
   expect(result.outOfScope).toEqual([]);
   expect(result.reasons).toEqual([]);
 });
 
 test("strict scope boundary fails closed when configured metadata is missing", () => {
-  const result = evaluateScopeBoundary([
-    {
-      address: "cloudflare_r2_bucket.files",
-      type: "cloudflare_r2_bucket",
-      actions: ["create"],
-    },
-  ], {
-    mode: "strict",
-    cloudflare: { accountIds: ["acct_allowed"] },
-  });
+  const result = evaluateScopeBoundary(
+    [
+      {
+        address: "cloudflare_r2_bucket.files",
+        type: "cloudflare_r2_bucket",
+        actions: ["create"],
+      },
+    ],
+    ACCOUNT_SCOPE_POLICY,
+  );
   expect(result.outOfScope).toEqual([
-    "cloudflare_r2_bucket.files missing Cloudflare account metadata",
+    "cloudflare_r2_bucket.files missing scope dimension account_id",
   ]);
   expect(result.reasons.join("\n")).toMatch(/out of scope/);
 });
 
 test("permissive scope boundary validates available metadata but skips missing metadata", () => {
-  const missing = evaluateScopeBoundary([
-    {
-      address: "cloudflare_r2_bucket.files",
-      type: "cloudflare_r2_bucket",
-      actions: ["create"],
-    },
-  ], {
-    cloudflare: { accountIds: ["acct_allowed"] },
-  });
+  const missing = evaluateScopeBoundary(
+    [
+      {
+        address: "cloudflare_r2_bucket.files",
+        type: "cloudflare_r2_bucket",
+        actions: ["create"],
+      },
+    ],
+    { ...ACCOUNT_SCOPE_POLICY, mode: "permissive" },
+  );
   expect(missing.outOfScope).toEqual([]);
 
-  const observed = evaluateScopeBoundary([
-    {
-      address: "cloudflare_r2_bucket.files",
-      type: "cloudflare_r2_bucket",
-      actions: ["create"],
-      scope: { cloudflareAccountId: "acct_other" },
-    },
-  ], {
-    cloudflare: { accountIds: ["acct_allowed"] },
-  });
+  const observed = evaluateScopeBoundary(
+    [
+      {
+        address: "cloudflare_r2_bucket.files",
+        type: "cloudflare_r2_bucket",
+        actions: ["create"],
+        scope: { facts: { account_id: "acct_other" } },
+      },
+    ],
+    { ...ACCOUNT_SCOPE_POLICY, mode: "permissive" },
+  );
   expect(observed.outOfScope).toEqual([
-    "cloudflare_r2_bucket.files Cloudflare account acct_other",
+    "cloudflare_r2_bucket.files scope dimension account_id acct_other",
   ]);
 });
 
 test("scope boundary ignores read-only resources", () => {
-  const result = evaluateScopeBoundary([
+  const result = evaluateScopeBoundary(
+    [
+      {
+        address: "aws_s3_bucket.files",
+        type: "aws_s3_bucket",
+        actions: ["read"],
+        scope: { facts: { region: "us-east-1" } },
+      },
+    ],
     {
-      address: "aws_s3_bucket.files",
-      type: "aws_s3_bucket",
-      actions: ["read"],
-      scope: { awsRegion: "us-east-1" },
+      mode: "strict",
+      rules: [
+        {
+          resourceTypePattern: "aws_*",
+          dimensions: {
+            region: { selector: "/region", allowedValues: ["us-west-2"] },
+          },
+        },
+      ],
     },
-  ], {
-    mode: "strict",
-    aws: { regions: ["us-west-2"] },
-  });
+  );
   expect(result.outOfScope).toEqual([]);
 });
 
 // --- §25 layer 10: quota ----------------------------------------------------
 
 test("quota policy enforces total and per-resource mutating counts", () => {
-  const result = evaluateQuotaPolicy([
-    { address: "a", type: "cloudflare_r2_bucket", actions: ["create"] },
-    { address: "b", type: "cloudflare_r2_bucket", actions: ["update"] },
-    { address: "c", type: "random_id", actions: ["no-op"] },
-  ], {
-    "resources.total": 1,
-    cloudflare_r2_bucket: 1,
-  });
+  const result = evaluateQuotaPolicy(
+    [
+      { address: "a", type: "cloudflare_r2_bucket", actions: ["create"] },
+      { address: "b", type: "cloudflare_r2_bucket", actions: ["update"] },
+      { address: "c", type: "random_id", actions: ["no-op"] },
+    ],
+    {
+      "resources.total": 1,
+      cloudflare_r2_bucket: 1,
+    },
+  );
   expect(result.exceeded).toEqual([
     "cloudflare_r2_bucket count 2 exceeds 1",
     "resources.total count 2 exceeds 1",

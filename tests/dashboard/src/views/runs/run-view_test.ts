@@ -66,6 +66,11 @@ describe("RunView", () => {
     expect(source).toContain(
       "if (!runHasChangeSummary(r) && logs.loading) return;",
     );
+    // Confirmation is a local review step over structured Run facts. There is
+    // no server-error prose fallback and no retired confirmDestructive field.
+    expect(source).toContain("confirmedReview !== true");
+    expect(source).not.toContain("isDestructiveConfirmationRequired");
+    expect(source).not.toContain("confirmDestructive");
   });
 
   test("refetches never unmount the console into a skeleton", () => {

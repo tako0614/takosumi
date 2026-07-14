@@ -1,11 +1,11 @@
 import type {
-  CloudPartition,
+  SecretPartition,
   SecretRecord,
   SecretRotationPolicy,
   SecretStorePort,
   SecretVersionRef,
 } from "./types.ts";
-import { CLOUD_PARTITIONS } from "./types.ts";
+import { isSecretPartition } from "./types.ts";
 import { isDevMode } from "../../config/dev_mode.ts";
 
 export interface MemoryEncryptedSecretStoreOptions {
@@ -33,7 +33,7 @@ export interface SecretVersionRetentionConfig {
 
 export interface SecretBoundaryCrypto {
   /**
-   * Seal `plaintext` for the given cloud partition. Implementations MUST
+   * Seal `plaintext` for the given opaque secret partition. Implementations MUST
    * use a partition-bound key so that opening the resulting ciphertext
    * with another partition's key fails.
    *
@@ -45,7 +45,7 @@ export interface SecretBoundaryCrypto {
    */
   seal(
     plaintext: string,
-    cloudPartition: CloudPartition,
+    secretPartition: SecretPartition,
     aad?: Uint8Array,
   ): Promise<Uint8Array>;
   /**
@@ -54,23 +54,21 @@ export interface SecretBoundaryCrypto {
    */
   open(
     ciphertext: Uint8Array,
-    cloudPartition: CloudPartition,
+    secretPartition: SecretPartition,
     aad?: Uint8Array,
   ): Promise<string>;
   /**
-   * Optional stable fingerprint of the ACTIVE key material for `cloudPartition`,
+   * Optional stable fingerprint of the ACTIVE key material for `secretPartition`,
    * recorded alongside sealed blobs so a key rotation is detectable (the value
    * changes when the passphrase changes). It is a one-way fold and never leaks
    * the key. Implementations without keyed material may omit this; callers fall
    * back to a constant version.
    */
-  keyVersion?(cloudPartition: CloudPartition): number;
+  keyVersion?(secretPartition: SecretPartition): number;
 }
 
 /** Minimal env shape consumed by {@link selectSecretBoundaryCrypto}. */
-export type SecretCryptoEnvLike = Readonly<
-  Record<string, string | undefined>
->;
+export type SecretCryptoEnvLike = Readonly<Record<string, string | undefined>>;
 
 /**
  * Error thrown when the secret-boundary crypto cannot be selected without
@@ -87,29 +85,16 @@ export class SecretEncryptionConfigurationError extends Error {
 
 /**
  * Environment variable names recognised as supplying a secret-store
- * encryption passphrase / key for the `global` partition. Per-cloud
- * passphrases are derived from {@link cloudPartitionEnvKeys}.
+ * encryption passphrase / key for the `global` partition.
  */
 export const SECRET_STORE_KEY_ENV_KEYS: readonly string[] = [
   "TAKOSUMI_SECRET_STORE_PASSPHRASE",
   "TAKOSUMI_SECRET_STORE_KEY",
 ];
 
-/**
- * Returns the env keys searched for a per-cloud partition passphrase.
- *
- * For partition `aws` the keys are `TAKOSUMI_SECRET_STORE_PASSPHRASE_AWS`,
- * `TAKOSUMI_SECRET_STORE_KEY_AWS`, etc. The plain `TAKOSUMI_SECRET_STORE_PASSPHRASE`
- * (without suffix) is treated as the `global` partition's key, which also
- * acts as a fallback for partitions that do not have a dedicated key.
- */
-export function cloudPartitionEnvKeys(
-  partition: CloudPartition,
-): readonly string[] {
-  if (partition === "global") return SECRET_STORE_KEY_ENV_KEYS;
-  const suffix = partition.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
-  return SECRET_STORE_KEY_ENV_KEYS.map((key) => `${key}_${suffix}`);
-}
+/** Optional JSON object env containing explicit `partition -> passphrase` overrides. */
+export const SECRET_STORE_PARTITION_KEYS_ENV =
+  "TAKOSUMI_SECRET_STORE_PARTITION_PASSPHRASES";
 
 const PRODUCTION_LIKE_ENVIRONMENTS = new Set([
   "production",
@@ -135,10 +120,10 @@ export interface SelectSecretBoundaryCryptoOptions {
  * Selects a {@link SecretBoundaryCrypto} implementation given the boot
  * environment. Behavior:
  *
- *  - Production / staging require AT LEAST a global passphrase via
- *    {@link SECRET_STORE_KEY_ENV_KEYS}. Per-cloud overrides are picked up
- *    from {@link cloudPartitionEnvKeys} when present, so a compromise of
- *    one cloud key does not affect other partitions (Phase 18.2 H14).
+ *  - Production / staging require at least a global passphrase via
+ *    {@link SECRET_STORE_KEY_ENV_KEYS}. Optional partition overrides are an
+ *    explicit JSON map in {@link SECRET_STORE_PARTITION_KEYS_ENV}; the core
+ *    never guesses provider names or provider-specific environment variables.
  *  - Production / staging without a global key throw
  *    {@link SecretEncryptionConfigurationError}.
  *  - Local / dev / test require explicit opt-in via
@@ -151,7 +136,7 @@ export function selectSecretBoundaryCrypto(
   const env = options.env;
   const globalPassphrase = firstNonEmpty(env, SECRET_STORE_KEY_ENV_KEYS);
   if (globalPassphrase !== undefined) {
-    return MultiCloudSecretBoundaryCrypto.fromEnv(env, globalPassphrase);
+    return PartitionedSecretBoundaryCrypto.fromEnv(env, globalPassphrase);
   }
   const environment = normalizeEnvironment(
     env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
@@ -161,7 +146,7 @@ export function selectSecretBoundaryCrypto(
       `secret-store encryption key missing in ${environment}: ` +
         `set one of ${SECRET_STORE_KEY_ENV_KEYS.join(", ")} ` +
         `to a 32+ byte high-entropy passphrase ` +
-        `(per-provider overrides via *_AWS / *_GCP / *_CLOUDFLARE / *_K8S / *_LOCAL_ADAPTERS). ` +
+        `(optional partition overrides use ${SECRET_STORE_PARTITION_KEYS_ENV}). ` +
         `Refusing to fall back to plaintext (base64) secret storage.`,
     );
   }
@@ -187,6 +172,37 @@ function firstNonEmpty(
   return undefined;
 }
 
+function parsePartitionPassphrasesEnv(
+  env: SecretCryptoEnvLike,
+): Readonly<Record<SecretPartition, string>> {
+  const raw = env[SECRET_STORE_PARTITION_KEYS_ENV];
+  if (raw === undefined || raw.trim() === "") return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new SecretEncryptionConfigurationError(
+      `${SECRET_STORE_PARTITION_KEYS_ENV} must be a JSON object of ` +
+        `{"partition":"32+ byte passphrase"}`,
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new SecretEncryptionConfigurationError(
+      `${SECRET_STORE_PARTITION_KEYS_ENV} must be a JSON object`,
+    );
+  }
+  const result: Record<SecretPartition, string> = {};
+  for (const [partition, passphrase] of Object.entries(parsed)) {
+    if (!isSecretPartition(partition) || typeof passphrase !== "string") {
+      throw new SecretEncryptionConfigurationError(
+        `${SECRET_STORE_PARTITION_KEYS_ENV} contains an invalid partition or passphrase`,
+      );
+    }
+    result[partition] = passphrase;
+  }
+  return result;
+}
+
 function normalizeEnvironment(raw: string | undefined): string {
   return (raw ?? "local").trim().toLowerCase() || "local";
 }
@@ -201,7 +217,7 @@ interface StoredSecret extends SecretRecord {
 export interface SecretRotationStatus {
   readonly name: string;
   readonly version: string;
-  readonly cloudPartition: CloudPartition;
+  readonly secretPartition: SecretPartition;
   readonly createdAt: string;
   readonly intervalDays: number;
   readonly gracePeriodDays: number;
@@ -241,28 +257,26 @@ export class MemoryEncryptedSecretStore implements SecretStorePort {
     } else {
       this.#crypto = new PlaceholderSecretBoundaryCrypto();
     }
-    this.#versionRetention = options.versionRetention ??
-      DEFAULT_VERSION_RETENTION;
+    this.#versionRetention =
+      options.versionRetention ?? DEFAULT_VERSION_RETENTION;
   }
 
-  async putSecret(
-    input: {
-      readonly name: string;
-      readonly value: string;
-      readonly metadata?: Record<string, unknown>;
-      readonly cloudPartition?: CloudPartition;
-      readonly rotationPolicy?: SecretRotationPolicy;
-    },
-  ): Promise<SecretRecord> {
-    const partition: CloudPartition = input.cloudPartition ?? "global";
-    if (!CLOUD_PARTITIONS.includes(partition)) {
-      throw new Error(`unsupported cloud partition: ${partition}`);
+  async putSecret(input: {
+    readonly name: string;
+    readonly value: string;
+    readonly metadata?: Record<string, unknown>;
+    readonly secretPartition?: SecretPartition;
+    readonly rotationPolicy?: SecretRotationPolicy;
+  }): Promise<SecretRecord> {
+    const partition: SecretPartition = input.secretPartition ?? "global";
+    if (!isSecretPartition(partition)) {
+      throw new Error(`invalid secret partition: ${partition}`);
     }
     const version = `secret_version_${this.#idGenerator()}`;
     const record: StoredSecret = {
       name: input.name,
       version,
-      cloudPartition: partition,
+      secretPartition: partition,
       createdAt: this.#clock().toISOString(),
       metadata: { ...(input.metadata ?? {}) },
       rotationPolicy: input.rotationPolicy
@@ -280,7 +294,7 @@ export class MemoryEncryptedSecretStore implements SecretStorePort {
     if (!record) return undefined;
     const plaintext = await this.#crypto.open(
       record.ciphertext,
-      record.cloudPartition,
+      record.secretPartition,
     );
     record.mutableLastAccessedAt = this.#clock().toISOString();
     return plaintext;
@@ -300,13 +314,13 @@ export class MemoryEncryptedSecretStore implements SecretStorePort {
   }
 
   listSecrets(filter?: {
-    readonly cloudPartition?: CloudPartition;
+    readonly secretPartition?: SecretPartition;
     readonly name?: string;
   }): Promise<readonly SecretRecord[]> {
     const records = [...this.#records.values()].filter((record) => {
       if (
-        filter?.cloudPartition &&
-        record.cloudPartition !== filter.cloudPartition
+        filter?.secretPartition &&
+        record.secretPartition !== filter.secretPartition
       ) {
         return false;
       }
@@ -345,16 +359,16 @@ export class MemoryEncryptedSecretStore implements SecretStorePort {
       const expiresAt = new Date(
         created + (policy.intervalDays + policy.gracePeriodDays) * DAY_MS,
       );
-      const state: SecretRotationStatus["state"] = now.getTime() >=
-          expiresAt.getTime()
-        ? "expired"
-        : now.getTime() >= dueAt.getTime()
-        ? "due"
-        : "active";
+      const state: SecretRotationStatus["state"] =
+        now.getTime() >= expiresAt.getTime()
+          ? "expired"
+          : now.getTime() >= dueAt.getTime()
+            ? "due"
+            : "active";
       results.push({
         name: record.name,
         version: record.version,
-        cloudPartition: record.cloudPartition,
+        secretPartition: record.secretPartition,
         createdAt: record.createdAt,
         intervalDays: policy.intervalDays,
         gracePeriodDays: policy.gracePeriodDays,
@@ -418,13 +432,13 @@ export class PlaceholderSecretBoundaryCrypto implements SecretBoundaryCrypto {
 
   seal(
     plaintext: string,
-    cloudPartition: CloudPartition,
+    secretPartition: SecretPartition,
     aad?: Uint8Array,
   ): Promise<Uint8Array> {
     // The placeholder mirrors the AES-GCM impl's binding by tagging the
     // partition and the canonical aad context (base64 of the hex digest, so
     // `|` can never appear inside it) into the payload prefix.
-    const payload = `${cloudPartition}|${aadTag(aad)}|${plaintext}`;
+    const payload = `${secretPartition}|${aadTag(aad)}|${plaintext}`;
     return Promise.resolve(
       new TextEncoder().encode(`${this.#prefix}${btoa(payload)}`),
     );
@@ -434,7 +448,7 @@ export class PlaceholderSecretBoundaryCrypto implements SecretBoundaryCrypto {
   // (matching the AES-GCM impl's contract) rather than a synchronous throw.
   open(
     ciphertext: Uint8Array,
-    cloudPartition: CloudPartition,
+    secretPartition: SecretPartition,
     aad?: Uint8Array,
   ): Promise<string> {
     return Promise.resolve().then(() => {
@@ -450,9 +464,9 @@ export class PlaceholderSecretBoundaryCrypto implements SecretBoundaryCrypto {
         );
       }
       const sealedPartition = payload.slice(0, sep);
-      if (sealedPartition !== cloudPartition) {
+      if (sealedPartition !== secretPartition) {
         throw new Error(
-          `placeholder secret partition mismatch: sealed=${sealedPartition} requested=${cloudPartition}`,
+          `placeholder secret partition mismatch: sealed=${sealedPartition} requested=${secretPartition}`,
         );
       }
       const rest = payload.slice(sep + 1);
@@ -478,85 +492,76 @@ function aadTag(aad: Uint8Array | undefined): string {
 }
 
 /**
- * AES-GCM crypto that derives an INDEPENDENT key per cloud partition.
+ * AES-GCM crypto that derives an independent key per opaque secret partition.
  *
  * Construction takes a map `partition -> passphrase`. The `global`
  * partition's passphrase MUST be supplied; partitions without an explicit
  * override fall back to the global passphrase mixed with the partition
  * label (HKDF-style salt) so that a leaked global passphrase cannot
- * be reused as-is to open per-cloud ciphertext that was sealed with a
+ * be reused as-is to open another partition's ciphertext that was sealed with a
  * different override key (Phase 18.2 H14).
  *
  * Authentication is reinforced by binding the partition label into the
  * AES-GCM additional authenticated data (AAD), so swapping the
  * partition tag of a sealed payload causes `open` to fail.
  */
-export class MultiCloudSecretBoundaryCrypto implements SecretBoundaryCrypto {
-  readonly #passphrases: Map<CloudPartition, string>;
-  readonly #keyPromises = new Map<CloudPartition, Promise<CryptoKey>>();
+export class PartitionedSecretBoundaryCrypto implements SecretBoundaryCrypto {
+  readonly #passphrases: Map<SecretPartition, string>;
+  readonly #keyPromises = new Map<SecretPartition, Promise<CryptoKey>>();
   readonly #fallbackPassphrase: string;
 
-  constructor(
-    options: {
-      readonly globalPassphrase: string;
-      readonly perCloudPassphrases?: Partial<Record<CloudPartition, string>>;
-    },
-  ) {
+  constructor(options: {
+    readonly globalPassphrase: string;
+    readonly perPartitionPassphrases?: Readonly<Record<SecretPartition, string>>;
+  }) {
     if (!options.globalPassphrase || options.globalPassphrase.trim() === "") {
       throw new SecretEncryptionConfigurationError(
-        "MultiCloudSecretBoundaryCrypto requires a non-empty globalPassphrase",
+        "PartitionedSecretBoundaryCrypto requires a non-empty globalPassphrase",
       );
     }
     guardPassphraseLength(options.globalPassphrase, "globalPassphrase");
     this.#fallbackPassphrase = options.globalPassphrase;
     this.#passphrases = new Map();
-    for (const partition of CLOUD_PARTITIONS) {
-      const override = options.perCloudPassphrases?.[partition];
-      let passphrase: string;
-      if (override && override.trim() !== "") {
-        guardPassphraseLength(override, `perCloudPassphrases.${partition}`);
-        passphrase = override;
-      } else {
-        // Derived partition passphrases are the global passphrase plus a label
-        // suffix, so they are always at least as long as the (already guarded)
-        // global passphrase — no separate length check is needed.
-        passphrase = this.#derivePartitionPassphrase(partition);
+    for (const [partition, override] of Object.entries(
+      options.perPartitionPassphrases ?? {},
+    )) {
+      if (!isSecretPartition(partition) || !override || override.trim() === "") {
+        continue;
       }
-      this.#passphrases.set(partition, passphrase);
+      guardPassphraseLength(override, `perPartitionPassphrases.${partition}`);
+      this.#passphrases.set(partition, override);
     }
   }
 
   static fromEnv(
     env: SecretCryptoEnvLike,
     globalPassphrase: string,
-  ): MultiCloudSecretBoundaryCrypto {
-    const perCloud: Partial<Record<CloudPartition, string>> = {};
-    for (const partition of CLOUD_PARTITIONS) {
-      if (partition === "global") continue;
-      const value = firstNonEmpty(env, cloudPartitionEnvKeys(partition));
-      if (value) perCloud[partition] = value;
-    }
-    return new MultiCloudSecretBoundaryCrypto({
+  ): PartitionedSecretBoundaryCrypto {
+    const perPartitionPassphrases = parsePartitionPassphrasesEnv(env);
+    return new PartitionedSecretBoundaryCrypto({
       globalPassphrase,
-      perCloudPassphrases: perCloud,
+      perPartitionPassphrases,
     });
   }
 
-  #derivePartitionPassphrase(partition: CloudPartition): string {
+  #derivePartitionPassphrase(partition: SecretPartition): string {
+    // Keep the v1 derivation label byte-identical so existing ciphertext remains
+    // readable; "cloud" here is a historical crypto wire label, not a provider
+    // registry or an active partition taxonomy.
     return `${this.#fallbackPassphrase}|takos.cloud.partition=${partition}`;
   }
 
   async seal(
     plaintext: string,
-    cloudPartition: CloudPartition,
+    secretPartition: SecretPartition,
     aad?: Uint8Array,
   ): Promise<Uint8Array> {
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const additionalData = additionalDataFor(cloudPartition, aad);
+    const additionalData = additionalDataFor(secretPartition, aad);
     const encrypted = new Uint8Array(
       await crypto.subtle.encrypt(
         { name: "AES-GCM", iv, additionalData: toArrayBuffer(additionalData) },
-        await this.#key(cloudPartition),
+        await this.#key(secretPartition),
         toArrayBuffer(new TextEncoder().encode(plaintext)),
       ),
     );
@@ -568,15 +573,15 @@ export class MultiCloudSecretBoundaryCrypto implements SecretBoundaryCrypto {
 
   async open(
     ciphertext: Uint8Array,
-    cloudPartition: CloudPartition,
+    secretPartition: SecretPartition,
     aad?: Uint8Array,
   ): Promise<string> {
     const iv = ciphertext.slice(0, 12);
     const payload = ciphertext.slice(12);
-    const additionalData = additionalDataFor(cloudPartition, aad);
+    const additionalData = additionalDataFor(secretPartition, aad);
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv, additionalData: toArrayBuffer(additionalData) },
-      await this.#key(cloudPartition),
+      await this.#key(secretPartition),
       toArrayBuffer(payload),
     );
     return new TextDecoder().decode(plaintext);
@@ -584,29 +589,32 @@ export class MultiCloudSecretBoundaryCrypto implements SecretBoundaryCrypto {
 
   /**
    * Stable fingerprint of the active passphrase for `partition`, so a rotation
-   * (global or a per-cloud override) is detectable in recorded blobs. The fold
+   * (global or a per-partition override) is detectable in recorded blobs. The fold
    * is one-way and the digest is truncated to a positive 31-bit integer, so the
    * passphrase is never recoverable from the version tag.
    */
-  keyVersion(cloudPartition: CloudPartition): number {
-    const passphrase = this.#passphrases.get(cloudPartition);
-    if (!passphrase) {
-      throw new Error(`unsupported cloud partition: ${cloudPartition}`);
-    }
-    return passphraseFingerprint(passphrase);
+  keyVersion(secretPartition: SecretPartition): number {
+    return passphraseFingerprint(this.#passphrase(secretPartition));
   }
 
-  #key(partition: CloudPartition): Promise<CryptoKey> {
-    const passphrase = this.#passphrases.get(partition);
-    if (!passphrase) {
-      throw new Error(`unsupported cloud partition: ${partition}`);
-    }
+  #key(partition: SecretPartition): Promise<CryptoKey> {
     let promise = this.#keyPromises.get(partition);
     if (!promise) {
-      promise = deriveAesKey(passphrase);
+      promise = deriveAesKey(this.#passphrase(partition));
       this.#keyPromises.set(partition, promise);
     }
     return promise;
+  }
+
+  #passphrase(partition: SecretPartition): string {
+    if (!isSecretPartition(partition)) {
+      throw new Error(`invalid secret partition: ${partition}`);
+    }
+    const configured = this.#passphrases.get(partition);
+    if (configured) return configured;
+    const derived = this.#derivePartitionPassphrase(partition);
+    this.#passphrases.set(partition, derived);
+    return derived;
   }
 }
 
@@ -665,10 +673,12 @@ async function deriveAesKey(passphrase: string): Promise<CryptoKey> {
  * `(partitionA, aadB)` cannot collide with `(partitionA||aadB, undefined)`.
  */
 function additionalDataFor(
-  cloudPartition: CloudPartition,
+  secretPartition: SecretPartition,
   aad: Uint8Array | undefined,
 ): Uint8Array {
-  const label = new TextEncoder().encode(`takos.cloud:${cloudPartition}`);
+  // Historical v1 AAD wire label. Changing it would make existing ciphertext
+  // unreadable; active APIs still expose only the generic SecretPartition.
+  const label = new TextEncoder().encode(`takos.cloud:${secretPartition}`);
   if (aad === undefined || aad.length === 0) return label;
   const out = new Uint8Array(4 + label.length + aad.length);
   new DataView(out.buffer).setUint32(0, label.length);
@@ -682,15 +692,17 @@ function key(ref: SecretVersionRef): string {
 }
 
 function publicRecord(record: StoredSecret): SecretRecord {
-  return Object.freeze(structuredClone({
-    name: record.name,
-    version: record.version,
-    cloudPartition: record.cloudPartition,
-    createdAt: record.createdAt,
-    metadata: record.metadata,
-    rotationPolicy: record.rotationPolicy,
-    lastAccessedAt: record.mutableLastAccessedAt,
-  }));
+  return Object.freeze(
+    structuredClone({
+      name: record.name,
+      version: record.version,
+      secretPartition: record.secretPartition,
+      createdAt: record.createdAt,
+      metadata: record.metadata,
+      rotationPolicy: record.rotationPolicy,
+      lastAccessedAt: record.mutableLastAccessedAt,
+    }),
+  );
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {

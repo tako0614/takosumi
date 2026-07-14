@@ -16,8 +16,6 @@ export function formatUsdMicros(value: number): string {
   }).format(value / 1_000_000);
 }
 
-export function usageUsdMicros(
-  event: Pick<UsageEvent, "credits" | "usdMicros">,
-): number {
-  return event.usdMicros ?? Math.round(event.credits * 1_000_000);
+export function usageUsdMicros(event: Pick<UsageEvent, "usdMicros">): number {
+  return event.usdMicros;
 }

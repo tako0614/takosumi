@@ -9,19 +9,20 @@
  */
 
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
-import {
-  providerEnvRule,
-  sameProviderFamily,
-} from "takosumi-contract/provider-env-rules";
+import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import type {
   ProviderRequirement,
   ProviderRequirementPhase,
   ProviderResolution,
 } from "takosumi-contract/provider-resolution";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
-import type { ResolvedInstallationProviderEnvBinding } from "../connections/mod.ts";
+import type { ResolvedCapsuleProviderBinding } from "../connections/mod.ts";
 import type { RunCredentials } from "./mod.ts";
 import type { RunCredentialBroker } from "./run_credential_broker.ts";
+import {
+  OpenTofuControllerError,
+  PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
+} from "./errors.ts";
 
 export const RUN_ENV_REDACTION_PROFILE_ID = "redact_provider_material" as const;
 
@@ -30,30 +31,11 @@ type RunCredentialMintPort = Pick<
   "mintRunCredentials" | "mintReleaseCommandCredentials"
 >;
 
-/**
- * Optional bind-time service-grant mint. Returns the `TF_VAR_*` env to inject
- * for a consumer's scoped service consume (for example `storage.object` or
- * `source.git.smart_http`), or `undefined` when the run has no scoped service
- * consume. Merged into the dispatch-only credential env (never persisted).
- */
-export interface ServiceGrantMintPort {
-  mintServiceGrantEnv(
-    planRun: PlanRun,
-    phase: "plan" | "apply" | "destroy",
-    auditRunId: string,
-    consumerOutputs?: Readonly<
-      Record<string, import("takosumi-contract").JsonValue>
-    >,
-  ): Promise<Record<string, string> | undefined>;
-}
-
 export interface RunEnvResolverDependencies {
   readonly credentials: RunCredentialMintPort;
-  readonly resolveRunInstallationProviderEnvBindings: (
+  readonly resolveRunProviderBindings: (
     planRun: PlanRun,
-  ) => Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined>;
-  /** Optional bind-time service-grant issuer (absent on builds without it). */
-  readonly serviceGrant?: ServiceGrantMintPort;
+  ) => Promise<readonly ResolvedCapsuleProviderBinding[] | undefined>;
 }
 
 export interface ResolveRunEnvironmentInput {
@@ -61,10 +43,6 @@ export interface ResolveRunEnvironmentInput {
   readonly phase: "plan" | "apply" | "destroy";
   readonly auditRunId: string;
   readonly credentialContext?: "opentofu" | "release_command";
-  /** Safe, allowlisted output projection from the current OpenTofu plan. */
-  readonly plannedWorkspaceOutputs?: Readonly<
-    Record<string, import("takosumi-contract").JsonValue>
-  >;
 }
 
 export interface ResolvedRunEnvironment {
@@ -72,24 +50,15 @@ export interface ResolvedRunEnvironment {
   readonly providerResolutions: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest: string;
   readonly redactionProfileId: typeof RUN_ENV_REDACTION_PROFILE_ID;
-  /** Non-secret names of service connection values added to the runner env. */
-  readonly serviceGrantEnvNames: readonly string[];
 }
 
-export interface EnrichRunEnvironmentWithPlannedServiceGrantsInput {
-  readonly planRun: PlanRun;
-  readonly auditRunId: string;
-  readonly plannedWorkspaceOutputs: Readonly<
-    Record<string, import("takosumi-contract").JsonValue>
-  >;
-  readonly base: ResolvedRunEnvironment;
-}
-
-export class RunEnvironmentResolutionError extends Error {
+export class RunEnvironmentResolutionError extends OpenTofuControllerError {
   readonly runEnvironment: ResolvedRunEnvironment;
 
   constructor(message: string, runEnvironment: ResolvedRunEnvironment) {
-    super(message);
+    super("failed_precondition", message, {
+      reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
+    });
     this.name = "RunEnvironmentResolutionError";
     this.runEnvironment = runEnvironment;
   }
@@ -97,24 +66,21 @@ export class RunEnvironmentResolutionError extends Error {
 
 export class RunEnvResolver {
   readonly #credentials: RunCredentialMintPort;
-  readonly #resolveRunInstallationProviderEnvBindings: (
+  readonly #resolveRunProviderBindings: (
     planRun: PlanRun,
-  ) => Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined>;
-  readonly #serviceGrant?: ServiceGrantMintPort;
+  ) => Promise<readonly ResolvedCapsuleProviderBinding[] | undefined>;
 
   constructor(dependencies: RunEnvResolverDependencies) {
     this.#credentials = dependencies.credentials;
-    this.#resolveRunInstallationProviderEnvBindings =
-      dependencies.resolveRunInstallationProviderEnvBindings;
-    this.#serviceGrant = dependencies.serviceGrant;
+    this.#resolveRunProviderBindings = dependencies.resolveRunProviderBindings;
   }
 
   async resolveRunEnvironment(
     input: ResolveRunEnvironmentInput,
   ): Promise<ResolvedRunEnvironment> {
     const providerResolutions = await this.#providerResolutions(input);
-    const blocked = providerResolutions.find((resolution) =>
-      resolution.status.startsWith("blocked_"),
+    const blocked = providerResolutions.find(
+      (resolution) => resolution.evidence.kind === "blocked",
     );
     if (blocked) {
       const runEnvironment = await this.#buildRunEnvironmentEvidence(
@@ -140,69 +106,10 @@ export class RunEnvResolver {
             input.phase,
             input.auditRunId,
           );
-    // Bind-time service grant: for the OpenTofu run (not release commands), mint
-    // scoped tokens for standard service consumes and merge their TF_VAR_* env
-    // into the dispatch-only credential channel.
-    const withServiceGrants =
-      this.#serviceGrant &&
-      input.credentialContext !== "release_command" &&
-      input.phase === "plan"
-        ? mergeServiceGrantEnvIntoCredentials(
-            credentials,
-            await this.#serviceGrant.mintServiceGrantEnv(
-              input.planRun,
-              input.phase,
-              input.auditRunId,
-              input.plannedWorkspaceOutputs,
-            ),
-          )
-        : credentials;
-    const serviceGrantEnvNames = serviceGrantEnvNamesFromCredentials(
-      credentials,
-      withServiceGrants,
-    );
     return await this.#buildRunEnvironmentEvidence(
       input,
       providerResolutions,
-      withServiceGrants,
-      serviceGrantEnvNames,
-    );
-  }
-
-  /**
-   * Adds service credentials discovered from the current plan without minting
-   * provider credentials a second time. The controller calls this once between
-   * the discovery plan and the final saved plan.
-   */
-  async enrichRunEnvironmentWithPlannedServiceGrants(
-    input: EnrichRunEnvironmentWithPlannedServiceGrantsInput,
-  ): Promise<ResolvedRunEnvironment> {
-    if (!this.#serviceGrant) return input.base;
-    const env = await this.#serviceGrant.mintServiceGrantEnv(
-      input.planRun,
-      "plan",
-      input.auditRunId,
-      input.plannedWorkspaceOutputs,
-    );
-    const credentials = mergeServiceGrantEnvIntoCredentials(
-      input.base.credentials,
-      env,
-    );
-    const serviceGrantEnvNames = serviceGrantEnvNamesFromCredentials(
-      input.base.credentials,
       credentials,
-    );
-    if (serviceGrantEnvNames.length === 0) return input.base;
-    return await this.#buildRunEnvironmentEvidence(
-      {
-        planRun: input.planRun,
-        phase: "plan",
-        auditRunId: input.auditRunId,
-        plannedWorkspaceOutputs: input.plannedWorkspaceOutputs,
-      },
-      input.base.providerResolutions,
-      credentials,
-      [...input.base.serviceGrantEnvNames, ...serviceGrantEnvNames],
     );
   }
 
@@ -210,7 +117,6 @@ export class RunEnvResolver {
     input: ResolveRunEnvironmentInput,
     providerResolutions: readonly ProviderResolution[],
     credentials: RunCredentials | undefined,
-    serviceGrantEnvNames: readonly string[] = [],
   ): Promise<ResolvedRunEnvironment> {
     const credentialEnvNames =
       credentialEnvNamesFromRunCredentials(credentials);
@@ -220,15 +126,14 @@ export class RunEnvResolver {
       credentialContext: input.credentialContext ?? "opentofu",
       providerResolutions,
       credentialEnvNames,
+      credentialManifest: credentials?.manifest ?? null,
       redactionProfileId: RUN_ENV_REDACTION_PROFILE_ID,
-      serviceGrantEnvNames,
     });
     return {
       ...(credentials ? { credentials } : {}),
       providerResolutions,
       runEnvironmentEvidenceDigest,
       redactionProfileId: RUN_ENV_REDACTION_PROFILE_ID,
-      serviceGrantEnvNames,
     };
   }
 
@@ -237,34 +142,33 @@ export class RunEnvResolver {
   ): Promise<readonly ProviderResolution[]> {
     const planRun = input.planRun;
     if (planRun.requiredProviders.length === 0) return [];
-    if (!planRun.installationContext) {
+    if (!planRun.capsuleContext && !planRun.resourceContext) {
       return planRun.requiredProviders.map((provider) => {
         const requirement = providerRequirement(planRun, provider);
         return {
           requirement,
-          status: "blocked_missing_env",
-          blockedReason: `installation provider connection evidence is required for provider ${provider}`,
+          status: "blocked_missing_connection",
+          blockedReason: `capsule provider connection evidence is required for provider ${provider}`,
           evidence: {
             kind: "blocked",
             provider,
-            reason: `installation provider connection evidence is required for provider ${provider}`,
+            reason: `capsule provider connection evidence is required for provider ${provider}`,
           },
         };
       });
     }
-    const resolved =
-      await this.#resolveRunInstallationProviderEnvBindings(planRun);
+    const resolved = await this.#resolveRunProviderBindings(planRun);
     if (!resolved) {
       return planRun.requiredProviders.map((provider) => {
         const requirement = providerRequirement(planRun, provider);
         return {
           requirement,
-          status: "blocked_missing_env",
-          blockedReason: `installation provider connection resolution is required for provider ${provider}`,
+          status: "blocked_missing_connection",
+          blockedReason: `capsule provider connection resolution is required for provider ${provider}`,
           evidence: {
             kind: "blocked",
             provider,
-            reason: `installation provider connection resolution is required for provider ${provider}`,
+            reason: `capsule provider connection resolution is required for provider ${provider}`,
           },
         };
       });
@@ -273,11 +177,11 @@ export class RunEnvResolver {
     const resolutions: ProviderResolution[] = [];
     for (const provider of planRun.requiredProviders) {
       const match = resolved.find((entry) =>
-        sameProviderFamily(provider, entry.provider),
+        sameProviderSource(provider, entry.provider),
       );
       const requirement = providerRequirement(planRun, provider);
       if (!match) {
-        // `resolveRunInstallationProviderEnvBindings` has already enforced the
+        // `resolveRunProviderBindings` has already enforced the
         // subset of providers whose RunnerProfile requires Takosumi-managed
         // credential material. Providers still present on PlanRun.requiredProviders
         // may be optional/no-op for this variable set, or intentionally handled
@@ -301,57 +205,16 @@ function releaseCommandCredentialPhase(
   );
 }
 
-function mergeServiceGrantEnvIntoCredentials(
-  credentials: RunCredentials | undefined,
-  serviceGrantEnv: Record<string, string> | undefined,
-): RunCredentials | undefined {
-  if (!serviceGrantEnv || Object.keys(serviceGrantEnv).length === 0)
-    return credentials;
-  if (!credentials) return { ...serviceGrantEnv };
-  if (isStructuredRunCredentials(credentials)) {
-    return { ...credentials, env: { ...credentials.env, ...serviceGrantEnv } };
-  }
-  return { ...credentials, ...serviceGrantEnv };
-}
-
 function credentialEnvNamesFromRunCredentials(
   credentials: RunCredentials | undefined,
 ): readonly string[] {
   if (!credentials) return [];
-  if (isStructuredRunCredentials(credentials)) {
-    return [
-      ...Object.keys(credentials.env),
-      ...(credentials.files ?? []).flatMap((file) =>
-        file.envName ? [file.envName] : [],
-      ),
-    ].sort();
-  }
-  return Object.keys(credentials).sort();
-}
-
-function serviceGrantEnvNamesFromCredentials(
-  before: RunCredentials | undefined,
-  after: RunCredentials | undefined,
-): readonly string[] {
-  const beforeNames = new Set(credentialEnvNamesFromRunCredentials(before));
-  return credentialEnvNamesFromRunCredentials(after).filter(
-    (name) => !beforeNames.has(name),
-  );
-}
-
-function isStructuredRunCredentials(
-  credentials: RunCredentials,
-): credentials is Extract<
-  RunCredentials,
-  { readonly env: Readonly<Record<string, string>> }
-> {
-  return (
-    credentials !== null &&
-    typeof credentials === "object" &&
-    "env" in credentials &&
-    typeof credentials.env === "object" &&
-    credentials.env !== null
-  );
+  return [
+    ...Object.keys(credentials.env),
+    ...(credentials.files ?? []).flatMap((file) =>
+      file.envName ? [file.envName] : [],
+    ),
+  ].sort();
 }
 
 function providerRequirement(
@@ -361,7 +224,10 @@ function providerRequirement(
   return {
     providerSource: provider,
     providerName: providerName(provider),
-    modulePath: planRun.source.modulePath ?? ".",
+    modulePath:
+      planRun.source.kind === "operator_module"
+        ? "."
+        : (planRun.source.modulePath ?? "."),
     discoveredFrom: "required_providers",
     requiredForPhases: requiredPhases(planRun.operation),
   };
@@ -370,36 +236,18 @@ function providerRequirement(
 function providerResolutionFromResolved(
   _input: ResolveRunEnvironmentInput,
   requirement: ProviderRequirement,
-  resolved: ResolvedInstallationProviderEnvBinding,
+  resolved: ResolvedCapsuleProviderBinding,
 ): ProviderResolution {
   const provider = resolved.provider;
-  if ((resolved.materialization as string) === "gateway") {
-    return {
-      requirement,
-      status: "blocked_policy",
-      envId: resolved.connection.id,
-      materialization: resolved.materialization,
-      blockedReason:
-        "gateway materialization is Takosumi Cloud-only and is not available in OSS",
-      evidence: {
-        kind: "blocked",
-        provider,
-        envId: resolved.connection.id,
-        materialization: resolved.materialization,
-        reason:
-          "gateway materialization is Takosumi Cloud-only and is not available in OSS",
-      },
-    };
-  }
   return {
     requirement,
-    status: "resolved_provider_env",
-    envId: resolved.connection.id,
+    status: "resolved_provider_connection",
+    connectionId: resolved.connection.id,
     materialization: resolved.materialization,
     evidence: {
-      kind: "provider_env",
+      kind: "provider_connection",
       provider,
-      envId: resolved.connection.id,
+      connectionId: resolved.connection.id,
       materialization: resolved.materialization,
       requiredEnvNames: resolved.connection.envNames,
     },

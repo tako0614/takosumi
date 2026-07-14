@@ -41,11 +41,6 @@ services:
       - "true"
     security_opt:
       - apparmor=unconfined
-  agent:
-    security_opt:
-      - apparmor=unconfined
-    healthcheck:
-      disable: true
   opentofu-runner:
     security_opt:
       - apparmor=unconfined
@@ -53,8 +48,6 @@ services:
       disable: true
   cloud:
     depends_on:
-      agent:
-        condition: service_started
       cloud-migrate:
         condition: service_completed_successfully
       opentofu-runner:

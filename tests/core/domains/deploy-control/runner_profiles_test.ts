@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import {
   createDefaultRunnerProfiles,
+  DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
   DEFAULT_OPENTOFU_RUNNER_PROFILE_ID,
   parseEnabledRunnerProfileIds,
   resolveEnabledRunnerProfiles,
-} from "../../../../core/domains/deploy-control/mod.ts";
+} from "../../../../core/domains/deploy-control/runner_profiles.ts";
 import { evaluatePolicy } from "../../../../core/domains/deploy-control/policy.ts";
 
 const SEEDS = createDefaultRunnerProfiles(123);
@@ -13,14 +14,14 @@ test("seeds one provider-neutral OpenTofu profile", () => {
   expect(SEEDS).toHaveLength(1);
   expect(SEEDS[0]).toMatchObject({
     id: DEFAULT_OPENTOFU_RUNNER_PROFILE_ID,
+    executorId: DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
+    lifecycle: { state: "active" },
+    availability: { state: "available" },
     allowedProviders: ["*"],
-    requireCredentialRefs: false,
+    requireProviderBindings: false,
     networkPolicy: { mode: "operator-managed" },
   });
-  expect(SEEDS[0]?.labels).toMatchObject({
-    "takosumi.com/opentofu-runner": "true",
-    "takosumi.com/provider-installation": "direct-allowed",
-  });
+  expect(SEEDS[0]?.labels).toBeUndefined();
   expect(SEEDS[0]?.networkPolicy?.allowedHosts).toBeUndefined();
   expect(SEEDS[0]?.networkPolicy?.allowedHostPatterns).toBeUndefined();
 });
@@ -30,9 +31,9 @@ test("empty profile configuration selects the provider-neutral default", () => {
     expect(parseEnabledRunnerProfileIds(input)).toEqual([
       DEFAULT_OPENTOFU_RUNNER_PROFILE_ID,
     ]);
-    expect(resolveEnabledRunnerProfiles(SEEDS, input).map((row) => row.id)).toEqual(
-      [DEFAULT_OPENTOFU_RUNNER_PROFILE_ID],
-    );
+    expect(
+      resolveEnabledRunnerProfiles(SEEDS, input).map((row) => row.id),
+    ).toEqual([DEFAULT_OPENTOFU_RUNNER_PROFILE_ID]);
   }
 });
 
@@ -40,6 +41,7 @@ test("explicit profile ids are trimmed, deduplicated, and operator-curated", () 
   const privateNetwork = {
     ...SEEDS[0]!,
     id: "private-network",
+    lifecycle: { state: "candidate" } as const,
     networkPolicy: { mode: "operator-managed" },
   };
   const enabled = resolveEnabledRunnerProfiles(
@@ -50,11 +52,8 @@ test("explicit profile ids are trimmed, deduplicated, and operator-curated", () 
     "private-network",
     DEFAULT_OPENTOFU_RUNNER_PROFILE_ID,
   ]);
-  expect(
-    enabled.every(
-      (row) => row.labels?.["takosumi.com/profile-enabled"] === "true",
-    ),
-  ).toBe(true);
+  expect(enabled.every((row) => row.lifecycle.state === "active")).toBe(true);
+  expect(enabled.every((row) => row.labels === undefined)).toBe(true);
 });
 
 test("an all-unknown explicit profile set fails closed", () => {
@@ -92,6 +91,54 @@ test("an explicit provider deny remains authoritative", () => {
 });
 
 test("enabling a profile does not mutate its seed", () => {
-  resolveEnabledRunnerProfiles(SEEDS, undefined);
-  expect(SEEDS[0]?.labels?.["takosumi.com/profile-enabled"]).toBeUndefined();
+  const candidate = {
+    ...SEEDS[0]!,
+    id: "candidate",
+    lifecycle: { state: "candidate" } as const,
+  };
+  resolveEnabledRunnerProfiles([candidate], "candidate");
+  expect(candidate.lifecycle.state).toBe("candidate");
+  expect(candidate.labels).toBeUndefined();
+});
+
+test("reserved and unavailable profiles fail closed without label overrides", () => {
+  const seed = SEEDS[0]!;
+  expect(() =>
+    resolveEnabledRunnerProfiles(
+      [
+        {
+          ...seed,
+          lifecycle: { state: "reserved", reason: "operator hold" },
+        },
+      ],
+      seed.id,
+    ),
+  ).toThrow("reserved");
+  expect(() =>
+    resolveEnabledRunnerProfiles(
+      [
+        {
+          ...seed,
+          availability: { state: "unavailable", reason: "maintenance" },
+          labels: { enabled: "true" },
+        },
+      ],
+      seed.id,
+    ),
+  ).toThrow("maintenance");
+});
+
+test("labels cannot activate a candidate profile", () => {
+  const profile = {
+    ...SEEDS[0]!,
+    lifecycle: { state: "candidate" } as const,
+    labels: { enabled: "true", state: "active" },
+  };
+  const decision = evaluatePolicy({
+    profile,
+    requiredProviders: ["registry.example.com/acme/custom"],
+    checkedAt: 123,
+  });
+  expect(decision.status).toBe("blocked");
+  expect(decision.reasons.join("\n")).toContain("lifecycle is candidate");
 });

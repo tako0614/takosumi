@@ -1,6 +1,6 @@
 /**
- * In-process OpenTofu deployment-control-plane HTTP seam (Space-direct
- * Installation model). This `core/api` Hono table is the `/internal/v1/*` seam
+ * In-process OpenTofu deployment-control-plane HTTP seam (Workspace-direct
+ * Capsule model). This `core/api` Hono table is the `/internal/v1/*` seam
  * contract dialed in-process by the accounts composition; it is NOT edge-public.
  * The single edge-public deploy-control surface is `/api/v1/*`, owned by the
  * accounts router, which delegates to these `operations`. The canonical route
@@ -10,7 +10,7 @@
  * hand-written list in this header.
  *
  * The PlanRun / ApplyRun / operator execution boundary ledger routes and the
- * Installation read (+ deployments / deployment-outputs) used by the accounts
+ * Capsule read plus StateVersion/Output reads used by the accounts
  * plane + CLI live on the same `/internal/v1/*` seam (see
  * `deploy-control-api.ts`); they are not surfaced through `/capabilities` or
  * `/openapi.json` and mount only when `mountInternalLedgerRoutes` is set.
@@ -47,17 +47,17 @@ import {
   mountDeployControlSourceRoutes,
 } from "./deploy_control_source_routes.ts";
 import {
-  DEPLOY_CONTROL_DEPLOY_ENDPOINTS,
-  mountDeployControlDeployRoutes,
-} from "./deploy_control_deploy_routes.ts";
+  DEPLOY_CONTROL_WORKSPACE_ENDPOINTS,
+  mountDeployControlWorkspaceRoutes,
+} from "./deploy_control_workspace_routes.ts";
 import {
-  DEPLOY_CONTROL_SPACE_ENDPOINTS,
-  mountDeployControlSpaceRoutes,
-} from "./deploy_control_space_routes.ts";
+  DEPLOY_CONTROL_PROJECT_ENDPOINTS,
+  mountDeployControlProjectRoutes,
+} from "./deploy_control_project_routes.ts";
 import {
-  DEPLOY_CONTROL_INSTALLATION_ENDPOINTS,
-  mountDeployControlInstallationRoutes,
-} from "./deploy_control_installation_routes.ts";
+  DEPLOY_CONTROL_CAPSULE_ENDPOINTS,
+  mountDeployControlCapsuleRoutes,
+} from "./deploy_control_capsule_routes.ts";
 import {
   DEPLOY_CONTROL_RUN_ENDPOINTS,
   mountDeployControlRunRoutes,
@@ -82,6 +82,10 @@ import {
   DEPLOY_CONTROL_BILLING_ENDPOINTS,
   mountDeployControlBillingRoutes,
 } from "./deploy_control_billing_routes.ts";
+import {
+  DEPLOY_CONTROL_RESOURCE_STATE_ADOPTION_ENDPOINTS,
+  mountDeployControlResourceStateAdoptionRoutes,
+} from "./deploy_control_resource_state_adoption_routes.ts";
 
 // Internal route-family entrypoint for shared dependency / principal types plus
 // the body-limit constant used by app composition and route inventory.
@@ -112,15 +116,16 @@ const DEPLOY_CONTROL_INTERNAL_ENDPOINTS_RICH: readonly DeployControlEndpoint[] =
     ...DEPLOY_CONTROL_CONNECTION_ENDPOINTS,
   ...DEPLOY_CONTROL_CREDENTIAL_ENDPOINTS,
     ...DEPLOY_CONTROL_SOURCE_ENDPOINTS,
-    ...DEPLOY_CONTROL_DEPLOY_ENDPOINTS,
-    ...DEPLOY_CONTROL_SPACE_ENDPOINTS,
-    ...DEPLOY_CONTROL_INSTALLATION_ENDPOINTS,
+    ...DEPLOY_CONTROL_WORKSPACE_ENDPOINTS,
+    ...DEPLOY_CONTROL_PROJECT_ENDPOINTS,
+    ...DEPLOY_CONTROL_CAPSULE_ENDPOINTS,
     ...DEPLOY_CONTROL_RUN_ENDPOINTS,
     ...DEPLOY_CONTROL_DEPENDENCY_ENDPOINTS,
     ...DEPLOY_CONTROL_OUTPUT_SHARE_ENDPOINTS,
     ...DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS,
     ...DEPLOY_CONTROL_ACTIVITY_ENDPOINTS,
     ...DEPLOY_CONTROL_BILLING_ENDPOINTS,
+    ...DEPLOY_CONTROL_RESOURCE_STATE_ADOPTION_ENDPOINTS,
   ];
 
 export const DEPLOY_CONTROL_INTERNAL_ENDPOINTS: readonly ApiEndpoint[] =
@@ -152,15 +157,16 @@ export function mountDeployControlInternalRoutes(
   mountDeployControlConnectionRoutes(ctx);
   mountDeployControlCredentialRoutes(ctx);
   mountDeployControlSourceRoutes(ctx);
-  mountDeployControlDeployRoutes(ctx);
-  mountDeployControlSpaceRoutes(ctx);
-  mountDeployControlInstallationRoutes(ctx);
+  mountDeployControlWorkspaceRoutes(ctx);
+  mountDeployControlProjectRoutes(ctx);
+  mountDeployControlCapsuleRoutes(ctx);
   mountDeployControlRunRoutes(ctx);
   mountDeployControlDependencyRoutes(ctx);
   mountDeployControlOutputShareRoutes(ctx);
   mountDeployControlRunGroupRoutes(ctx);
   mountDeployControlActivityRoutes(ctx);
   mountDeployControlBillingRoutes(ctx);
+  mountDeployControlResourceStateAdoptionRoutes(ctx);
 }
 
 /**

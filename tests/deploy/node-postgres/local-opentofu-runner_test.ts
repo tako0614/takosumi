@@ -67,7 +67,7 @@ function sourceSnapshot(archiveDigest: string): SourceSnapshot {
     ref: "main",
     resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
     path: "deploy/opentofu",
-    archiveObjectKey: "sources/snap_1.tar.zst",
+    archiveRef: "sources/snap_1.tar.zst",
     archiveDigest,
     archiveSizeBytes: 7,
     fetchedByRunId: "sync_1",

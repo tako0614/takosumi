@@ -223,10 +223,10 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("blob_json"),
   ]);
 
-  expect(getTableName(d1Schema.providerEnvBindingSets)).toBe(
+  expect(getTableName(d1Schema.providerBindingSets)).toBe(
     "provider_env_binding_sets",
   );
-  expect(columnsOf(d1Schema.providerEnvBindingSets)).toEqual([
+  expect(columnsOf(d1Schema.providerBindingSets)).toEqual([
     pk("id"),
     nn("space_id"),
     nn("installation_id"),
@@ -235,29 +235,23 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("created_at"),
     nn("updated_at"),
   ]);
-  expect(sqliteUniqueIndexesOf(d1Schema.providerEnvBindingSets)).toContainEqual(
-    {
-      name: "provider_env_binding_sets_installation_environment_unique",
-      columns: ["installation_id", "environment"],
-      unique: true,
-    },
-  );
+  expect(sqliteUniqueIndexesOf(d1Schema.providerBindingSets)).toContainEqual({
+    name: "provider_env_binding_sets_installation_environment_unique",
+    columns: ["installation_id", "environment"],
+    unique: true,
+  });
 
-  // P4: physical table `installations` -> `capsules`; the Drizzle export stays
-  // `installations`. space_id / slug / install_type / current_output_snapshot_id
-  // are KEPT physical (deferred to convergence); the genuinely-moved columns are
-  // project_id (added) and current_state_version_id (renamed from
-  // current_deployment_id).
-  expect(getTableName(d1Schema.installations)).toBe("capsules");
-  expect(columnsOf(d1Schema.installations)).toEqual([
+  // Project is the required ownership boundary; the source column stays
+  // nullable only for historical operator migration rows.
+  expect(getTableName(d1Schema.capsules)).toBe("capsules");
+  expect(columnsOf(d1Schema.capsules)).toEqual([
     pk("id"),
     nn("space_id"),
-    nullable("project_id"),
+    nn("project_id"),
     nn("name"),
     nn("slug"),
-    // Nullable: legacy upload-origin capsules have no Git Source.
+    // Physically nullable only for historical source-less Capsule rows.
     nullable("source_id"),
-    nn("install_type"),
     nn("install_config_id"),
     nn("environment"),
     nullable("current_state_version_id"),
@@ -301,8 +295,6 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("provisioners_json"),
     defaulted("root_module_variables_json"),
     defaulted("root_module_outputs_json"),
-    nullable("normalized_object_key"),
-    nullable("normalized_digest"),
     nn("created_at"),
   ]);
 
@@ -322,8 +314,8 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     defaulted("created_at"),
   ]);
 
-  expect(getTableName(d1Schema.stateSnapshots)).toBe("state_versions");
-  expect(columnsOf(d1Schema.stateSnapshots)).toEqual([
+  expect(getTableName(d1Schema.stateVersions)).toBe("state_versions");
+  expect(columnsOf(d1Schema.stateVersions)).toEqual([
     pk("id"),
     nn("space_id"),
     nn("installation_id"),
@@ -332,22 +324,6 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("object_key"),
     nn("digest"),
     nn("created_by_run_id"),
-    nn("created_at"),
-  ]);
-
-  expect(getTableName(d1Schema.deployments)).toBe("deployments");
-  expect(columnsOf(d1Schema.deployments)).toEqual([
-    pk("id"),
-    nn("space_id"),
-    nn("installation_id"),
-    nn("environment"),
-    nn("apply_run_id"),
-    nn("source_snapshot_id"),
-    nullable("dependency_snapshot_id"),
-    nn("state_generation"),
-    nn("output_snapshot_id"),
-    nn("outputs_public_json"),
-    nn("status"),
     nn("created_at"),
   ]);
 
@@ -362,62 +338,11 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("created_at"),
   ]);
 
-  expect(getTableName(d1Schema.billingAccounts)).toBe("billing_accounts");
-  expect(columnsOf(d1Schema.billingAccounts)).toEqual([
-    pk("id"),
-    nn("owner_type"),
-    nn("owner_id"),
-    nn("provider"),
-    nn("status"),
-    nn("record_json"),
-    nn("created_at"),
-    nn("updated_at"),
-  ]);
-
-  expect(getTableName(d1Schema.billingPlans)).toBe("plans");
-  expect(columnsOf(d1Schema.billingPlans)).toEqual([
-    pk("id"),
-    nn("name"),
-    nn("monthly_base_price"),
-    nullable("included_usd_micros"),
-    nn("included_credits"),
-    nn("limits_json"),
-    nn("record_json"),
-    nn("created_at"),
-    nn("updated_at"),
-  ]);
-
-  expect(getTableName(d1Schema.spaceSubscriptions)).toBe("space_subscriptions");
-  expect(columnsOf(d1Schema.spaceSubscriptions)).toEqual([
-    pk("id"),
-    nn("space_id"),
-    nn("billing_account_id"),
-    nn("plan_id"),
-    nn("status"),
-    nn("record_json"),
-    nn("created_at"),
-    nn("updated_at"),
-  ]);
-
-  expect(getTableName(d1Schema.creditBalances)).toBe("credit_balances");
-  expect(columnsOf(d1Schema.creditBalances)).toEqual([
-    pk("space_id"),
-    nullable("available_usd_micros"),
-    nullable("reserved_usd_micros"),
-    nullable("monthly_included_usd_micros"),
-    nullable("purchased_usd_micros"),
-    nn("available_credits"),
-    nn("reserved_credits"),
-    nn("monthly_included_credits"),
-    nn("purchased_credits"),
-    nn("updated_at"),
-  ]);
-
   expect(getTableName(d1Schema.usageEvents)).toBe("usage_events");
   expect(columnsOf(d1Schema.usageEvents)).toEqual([
     pk("id"),
-    nn("space_id"),
-    nullable("installation_id"),
+    nn("workspace_id"),
+    nullable("capsule_id"),
     nullable("run_id"),
     nullable("meter_id"),
     nullable("resource_family"),
@@ -426,25 +351,11 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nullable("resource_metadata_json"),
     nn("kind"),
     nn("quantity"),
-    nullable("usd_micros"),
-    nn("credits"),
+    nn("usd_micros"),
+    nn("rating_status"),
     nn("source"),
     nn("idempotency_key"),
     nn("created_at"),
-  ]);
-
-  expect(getTableName(d1Schema.creditReservations)).toBe("credit_reservations");
-  expect(columnsOf(d1Schema.creditReservations)).toEqual([
-    pk("id"),
-    nn("space_id"),
-    nn("run_id"),
-    nullable("estimated_usd_micros"),
-    nn("estimated_credits"),
-    nn("status"),
-    nn("mode"),
-    nn("record_json"),
-    nn("created_at"),
-    nn("expires_at"),
   ]);
 
   expect(getTableName(d1Schema.publicHostReservations)).toBe(
@@ -568,15 +479,14 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     .all<D1SchemaMigrationRow>();
   const rows = migrationRows.results ?? [];
   expect(rows.map((row) => row.version)).toEqual([
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-    22, 23, 24, 25, 26,
+    1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+    25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
     "d1_opentofu_installations_output_snapshot_pointer",
     "d1_opentofu_runs_projection_columns",
     "d1_opentofu_credential_mint_source_scope",
-    "d1_opentofu_credit_reservation_mode",
     "d1_opentofu_backups_installation_run_projection",
     "d1_opentofu_provider_catalog_table",
     "d1_opentofu_provider_materialization_values",
@@ -585,8 +495,6 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_opentofu_provider_catalog_ownership_repair",
     "d1_opentofu_upload_origin_nullable_source_repair",
     "d1_opentofu_usage_event_meter_metadata",
-    "d1_opentofu_billing_usd_micros",
-    "d1_opentofu_billing_auto_recharge_attempts",
     "d1_opentofu_provider_credential_collapse",
     "d1_opentofu_workspace_capsule_rename",
     "d1_opentofu_compatibility_report_root_interface",
@@ -598,6 +506,22 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_opentofu_public_host_legacy_grandfather",
     "d1_opentofu_install_config_runner_profile",
     "d1_opentofu_workspace_output_sync",
+    "d1_opentofu_workspace_output_sync_retire",
+    "d1_resource_shape_resolution_lock_identity",
+    "d1_capsule_compatibility_auto_rewrite_retire",
+    "d1_workspace_members_create",
+    "d1_capsule_install_discriminators_retire",
+    "d1_capsule_project_boundary_enforce",
+    "d1_resource_execution_state_add",
+    "d1_connection_secret_partition_backfill",
+    "d1_resource_legacy_state_adoption_add",
+    "d1_install_config_trust_level_retire",
+    "d1_oss_usage_ledger_clean_cut",
+    "d1_install_config_variable_defaults_normalize",
+    "d1_usage_event_rating_status",
+    "d1_resource_list_keyset_indexes",
+    "d1_resource_event_target_keyset_index",
+    "d1_resource_observation_schedule_lease",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -605,6 +529,253 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
     );
   }
+});
+
+test("Worker D1 migration persists historical Connection secret partitions once", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const now = "2026-07-13T00:00:00.000Z";
+  const connection = {
+    id: "conn_legacy_cloudflare",
+    provider: "cloudflare",
+    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+    scope: "space",
+    spaceId: "ws_legacy",
+    status: "verified",
+    materialization: "secret",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt: now,
+    updatedAt: now,
+  };
+  await db
+    .prepare(
+      `insert into connections (
+        id, space_id, provider, status, connection_json, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      connection.id,
+      connection.spaceId,
+      connection.provider,
+      connection.status,
+      JSON.stringify(connection),
+      now,
+      now,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into secret_blobs (
+        id, connection_id, space_id, kind, ciphertext, encrypted_dek, nonce,
+        aad, key_version, created_at, rotated_at, blob_json
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?)`,
+    )
+    .bind(
+      "secret_conn_legacy_cloudflare",
+      connection.id,
+      connection.spaceId,
+      "cloudflare_api_token",
+      "ciphertext",
+      "dek",
+      "nonce",
+      "{}",
+      1,
+      now,
+      JSON.stringify({
+        id: "secret_conn_legacy_cloudflare",
+        connectionId: connection.id,
+        kind: "cloudflare_api_token",
+      }),
+    )
+    .run();
+  await db.prepare(`delete from schema_migrations where version = 34`).run();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  const migratedConnection = await db
+    .prepare(`select connection_json from connections where id = ?`)
+    .bind(connection.id)
+    .first<{ readonly connection_json: string }>();
+  expect(
+    JSON.parse(migratedConnection?.connection_json ?? "{}").secretPartition,
+  ).toBe("cloudflare");
+  const migratedBlob = await db
+    .prepare(`select kind, blob_json from secret_blobs where connection_id = ?`)
+    .bind(connection.id)
+    .first<{ readonly kind: string; readonly blob_json: string }>();
+  expect(migratedBlob?.kind).toBe("cloudflare");
+  expect(JSON.parse(migratedBlob?.blob_json ?? "{}").kind).toBe("cloudflare");
+});
+
+test("Worker D1 migration normalizes historical InstallConfig defaults once", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const now = "2026-07-13T00:00:00.000Z";
+  const record = {
+    id: "cfg_legacy_defaults",
+    name: "Legacy defaults",
+    variableMapping: {},
+    variablePresentation: [
+      {
+        name: "name",
+        label: { ja: "名前", en: "Name" },
+        defaultValue: "service-name",
+      },
+      {
+        name: "scoped",
+        label: { ja: "範囲名", en: "Scoped name" },
+        defaultValue: "service-name-with-space",
+      },
+      {
+        name: "region",
+        label: { ja: "地域", en: "Region" },
+        defaultValue: "global",
+      },
+    ],
+    outputAllowlist: {},
+    policy: {},
+    createdAt: now,
+    updatedAt: now,
+  };
+  await db
+    .prepare(
+      `insert into install_configs
+        (id, space_id, record_json, created_at, updated_at)
+       values (?, null, ?, ?, ?)`,
+    )
+    .bind(record.id, JSON.stringify(record), now, now)
+    .run();
+  await db.prepare(`delete from schema_migrations where version = 38`).run();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  const row = await db
+    .prepare(`select record_json from install_configs where id = ?`)
+    .bind(record.id)
+    .first<{ readonly record_json: string }>();
+  const migrated = JSON.parse(row?.record_json ?? "{}") as {
+    readonly variablePresentation: readonly {
+      readonly defaultValue: unknown;
+    }[];
+  };
+  expect(
+    migrated.variablePresentation.map((item) => item.defaultValue),
+  ).toEqual([
+    { source: "capsule_name" },
+    { source: "workspace_scoped_capsule_name" },
+    { source: "literal", value: "global" },
+  ]);
+});
+
+test("Worker D1 migration retires legacy auto-rewritten compatibility reports", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await db
+    .prepare(
+      `alter table capsule_compatibility_reports
+       add column normalized_object_key text`,
+    )
+    .run();
+  await db
+    .prepare(
+      `alter table capsule_compatibility_reports
+       add column normalized_digest text`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into capsule_compatibility_reports (
+         id, source_snapshot_id, level, findings_json, providers_json,
+         resources_json, data_sources_json, provisioners_json,
+         root_module_variables_json, root_module_outputs_json,
+         normalized_object_key, normalized_digest, created_at
+       ) values (?, ?, ?, '[]', '[]', '[]', '[]', '[]', '[]', '[]', ?, ?, ?)`,
+    )
+    .bind(
+      "caprep_legacy_auto",
+      "snap_legacy",
+      "auto_capsulized",
+      "legacy/normalized-module.json",
+      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "2026-07-13T00:00:00.000Z",
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into capsules (
+         id, space_id, project_id, name, slug, install_config_id,
+         environment, current_state_generation, status, record_json,
+         created_at, updated_at
+       ) values (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "cap_legacy_auto",
+      "ws_legacy",
+      "prj_legacy",
+      "legacy",
+      "legacy",
+      "cfg_legacy",
+      "default",
+      "active",
+      JSON.stringify({
+        id: "cap_legacy_auto",
+        compatibilityStatus: "auto_capsulized",
+      }),
+      "2026-07-13T00:00:00.000Z",
+      "2026-07-13T00:00:00.000Z",
+    )
+    .run();
+  await db.prepare(`delete from schema_migrations where version = 29`).run();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  expect(
+    await db
+      .prepare(
+        `select level, normalized_object_key, normalized_digest
+         from capsule_compatibility_reports where id = ?`,
+      )
+      .bind("caprep_legacy_auto")
+      .first(),
+  ).toEqual({
+    level: "ready",
+    normalized_object_key: null,
+    normalized_digest: null,
+  });
+  expect(
+    await db
+      .prepare(
+        `select json_extract(record_json, '$.compatibilityStatus') as status
+         from capsules where id = ?`,
+      )
+      .bind("cap_legacy_auto")
+      .first(),
+  ).toEqual({ status: "ready" });
+});
+
+test("Worker D1 bootstrap retires Workspace Output Sync storage", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  expect(await liveD1ColumnsOf(db, "workspace_output_sync")).toEqual([]);
+
+  await db.prepare(`delete from schema_migrations where version = 27`).run();
+  await db
+    .prepare(
+      `create table workspace_output_sync (
+        workspace_id text primary key,
+        enabled integer not null default 1,
+        output_revision integer not null default 0,
+        reconciled_revision integer not null default 0,
+        active_run_group_id text,
+        consecutive_passes integer not null default 0,
+        updated_at text not null
+      )`,
+    )
+    .run();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+  expect(await liveD1ColumnsOf(db, "workspace_output_sync")).toEqual([]);
 });
 
 test("Worker D1 owner-slot migrations grandfather legacy reservations", async () => {
@@ -918,43 +1089,6 @@ test("Worker D1 bootstrap additively migrates older ledger tables", async () => 
     .run();
   await db
     .prepare(
-      `create table credit_reservations (
-      id text primary key,
-      space_id text not null,
-      run_id text not null,
-      estimated_credits integer not null,
-      status text not null,
-      record_json text not null,
-      created_at text not null,
-      expires_at text not null
-    )`,
-    )
-    .run();
-  await db
-    .prepare(
-      `insert into credit_reservations (
-      id,
-      space_id,
-      run_id,
-      estimated_credits,
-      status,
-      record_json,
-      created_at,
-      expires_at
-    ) values (
-      'cr_old',
-      'space_1',
-      'run_1',
-      10,
-      'reserved',
-      '{}',
-      '2026-06-08T00:00:00.000Z',
-      '2026-06-08T01:00:00.000Z'
-    )`,
-    )
-    .run();
-  await db
-    .prepare(
       `create table backups (
       id text primary key,
       space_id text not null,
@@ -1033,9 +1167,9 @@ test("Worker D1 bootstrap additively migrates older ledger tables", async () => 
   expect(await liveD1ColumnsOf(db, "connections")).toContainEqual(
     nn("connection_json"),
   );
-  // P4: the seeded `installations` table is renamed aside to `capsules` and
-  // column-moved (current_deployment_id -> current_state_version_id, project_id
-  // added) by the v17 migration.
+  // The seeded `installations` table is renamed to `capsules`, Project is
+  // backfilled and then made required, and the retired install discriminator is
+  // removed by the later convergence migrations.
   expect(await liveD1ColumnsOf(db, "capsules")).toContainEqual(
     nullable("current_output_snapshot_id"),
   );
@@ -1046,7 +1180,7 @@ test("Worker D1 bootstrap additively migrates older ledger tables", async () => 
     nullable("current_state_version_id"),
   );
   expect(await liveD1ColumnsOf(db, "capsules")).toContainEqual(
-    nullable("project_id"),
+    nn("project_id"),
   );
   expect(await liveD1ColumnsOf(db, "source_snapshots")).toContainEqual(
     nullable("source_id"),
@@ -1058,13 +1192,6 @@ test("Worker D1 bootstrap additively migrates older ledger tables", async () => 
   expect(await liveD1ColumnsOf(db, "credential_mint_events")).toContainEqual(
     nullable("source_id"),
   );
-  expect(await liveD1ColumnsOf(db, "credit_reservations")).toContainEqual(
-    defaulted("mode"),
-  );
-  const migratedReservation = await db
-    .prepare(`select mode from credit_reservations where id = 'cr_old'`)
-    .first<{ mode: string }>();
-  expect(migratedReservation?.mode).toBe("disabled");
   const backupColumns = await liveD1ColumnsOf(db, "backups");
   expect(backupColumns).toContainEqual(nullable("installation_id"));
   expect(backupColumns).toContainEqual(nullable("environment"));
@@ -1127,10 +1254,10 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("blob_json"),
   ]);
 
-  expect(getTableName(postgresSchema.providerEnvBindingSets)).toBe(
+  expect(getTableName(postgresSchema.providerBindingSets)).toBe(
     "takosumi_provider_env_binding_sets",
   );
-  expect(columnsOf(postgresSchema.providerEnvBindingSets)).toEqual([
+  expect(columnsOf(postgresSchema.providerBindingSets)).toEqual([
     pk("id"),
     nn("space_id"),
     nn("installation_id"),
@@ -1139,22 +1266,20 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("created_at"),
     nn("updated_at"),
   ]);
-  expect(
-    pgUniqueIndexesOf(postgresSchema.providerEnvBindingSets),
-  ).toContainEqual({
+  expect(pgUniqueIndexesOf(postgresSchema.providerBindingSets)).toContainEqual({
     name: "takosumi_provider_env_bindings_installation_environment_unique",
     columns: ["installation_id", "environment"],
     unique: true,
   });
 
-  expect(getTableName(postgresSchema.installations)).toBe("takosumi_capsules");
-  expect(columnsOf(postgresSchema.installations)).toEqual([
+  expect(getTableName(postgresSchema.capsules)).toBe("takosumi_capsules");
+  expect(columnsOf(postgresSchema.capsules)).toEqual([
     pk("id"),
     nn("space_id"),
-    nullable("project_id"),
+    nn("project_id"),
     nn("name"),
     nn("environment"),
-    // Nullable: legacy upload-origin capsules have no Git Source.
+    // Physically nullable only for historical source-less Capsule rows.
     nullable("source_id"),
     nn("install_config_id"),
     nullable("current_state_version_id"),
@@ -1191,8 +1316,6 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("provisioners_json"),
     defaulted("root_module_variables_json"),
     defaulted("root_module_outputs_json"),
-    nullable("normalized_object_key"),
-    nullable("normalized_digest"),
     nn("created_at"),
   ]);
 
@@ -1210,10 +1333,10 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("run_json"),
   ]);
 
-  expect(getTableName(postgresSchema.stateSnapshots)).toBe(
+  expect(getTableName(postgresSchema.stateVersions)).toBe(
     "takosumi_state_versions",
   );
-  expect(columnsOf(postgresSchema.stateSnapshots)).toEqual([
+  expect(columnsOf(postgresSchema.stateVersions)).toEqual([
     pk("id"),
     nn("space_id"),
     nn("installation_id"),
@@ -1223,88 +1346,13 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("created_at"),
   ]);
 
-  expect(getTableName(postgresSchema.deployments)).toBe(
-    "takosumi_opentofu_deployments",
-  );
-  expect(columnsOf(postgresSchema.deployments)).toEqual([
-    pk("id"),
-    nn("space_id"),
-    nn("installation_id"),
-    nn("environment"),
-    nn("apply_run_id"),
-    nn("source_snapshot_id"),
-    nullable("dependency_snapshot_id"),
-    nn("state_generation"),
-    nn("output_snapshot_id"),
-    nn("status"),
-    nn("deployment_json"),
-    nn("created_at"),
-  ]);
-
-  expect(getTableName(postgresSchema.billingAccounts)).toBe(
-    "takosumi_billing_accounts",
-  );
-  expect(columnsOf(postgresSchema.billingAccounts)).toEqual([
-    pk("id"),
-    nn("owner_type"),
-    nn("owner_id"),
-    nn("provider"),
-    nn("status"),
-    nn("account_json"),
-    nn("created_at"),
-    nn("updated_at"),
-  ]);
-
-  expect(getTableName(postgresSchema.billingPlans)).toBe("takosumi_plans");
-  expect(columnsOf(postgresSchema.billingPlans)).toEqual([
-    pk("id"),
-    nn("name"),
-    nn("monthly_base_price"),
-    nullable("included_usd_micros"),
-    nn("included_credits"),
-    nn("limits_json"),
-    nn("plan_json"),
-    nn("created_at"),
-    nn("updated_at"),
-  ]);
-
-  expect(getTableName(postgresSchema.spaceSubscriptions)).toBe(
-    "takosumi_space_subscriptions",
-  );
-  expect(columnsOf(postgresSchema.spaceSubscriptions)).toEqual([
-    pk("id"),
-    nn("space_id"),
-    nn("billing_account_id"),
-    nn("plan_id"),
-    nn("status"),
-    nn("subscription_json"),
-    nn("created_at"),
-    nn("updated_at"),
-  ]);
-
-  expect(getTableName(postgresSchema.creditBalances)).toBe(
-    "takosumi_credit_balances",
-  );
-  expect(columnsOf(postgresSchema.creditBalances)).toEqual([
-    pk("space_id"),
-    nullable("available_usd_micros"),
-    nullable("reserved_usd_micros"),
-    nullable("monthly_included_usd_micros"),
-    nullable("purchased_usd_micros"),
-    nn("available_credits"),
-    nn("reserved_credits"),
-    nn("monthly_included_credits"),
-    nn("purchased_credits"),
-    nn("updated_at"),
-  ]);
-
   expect(getTableName(postgresSchema.usageEvents)).toBe(
     "takosumi_usage_events",
   );
   expect(columnsOf(postgresSchema.usageEvents)).toEqual([
     pk("id"),
-    nn("space_id"),
-    nullable("installation_id"),
+    nn("workspace_id"),
+    nullable("capsule_id"),
     nullable("run_id"),
     nullable("meter_id"),
     nullable("resource_family"),
@@ -1313,27 +1361,11 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nullable("resource_metadata_json"),
     nn("kind"),
     nn("quantity"),
-    nullable("usd_micros"),
-    nn("credits"),
+    nn("usd_micros"),
+    nn("rating_status"),
     nn("source"),
     nn("idempotency_key"),
     nn("created_at"),
-  ]);
-
-  expect(getTableName(postgresSchema.creditReservations)).toBe(
-    "takosumi_credit_reservations",
-  );
-  expect(columnsOf(postgresSchema.creditReservations)).toEqual([
-    pk("id"),
-    nn("space_id"),
-    nn("run_id"),
-    nullable("estimated_usd_micros"),
-    nn("estimated_credits"),
-    nn("status"),
-    nn("mode"),
-    nn("reservation_json"),
-    nn("created_at"),
-    nn("expires_at"),
   ]);
 
   expect(getTableName(postgresSchema.publicHostReservations)).toBe(
@@ -1504,6 +1536,53 @@ test("Postgres migration end-state mirrors Drizzle indexes for every deploy tabl
     }
   } finally {
     await client.close();
+  }
+});
+
+test("Postgres migration normalizes historical InstallConfig defaults once", async () => {
+  const migration = postgresStorageMigrationStatements.find(
+    (entry) => entry.id === "deploy.install_config_variable_defaults.normalize",
+  );
+  expect(migration).toBeDefined();
+  const db = new PGlite();
+  try {
+    await db.exec(`create table takosumi_install_configs (
+      id text primary key,
+      config_json jsonb not null
+    )`);
+    await db.exec(`insert into takosumi_install_configs values (
+      'cfg_legacy_defaults',
+      '{"variablePresentation":[
+        {"name":"name","defaultValue":"service-name"},
+        {"name":"scoped","defaultValue":"service-name-with-workspace"},
+        {"name":"region","defaultValue":"global"},
+        {"name":"count","defaultValue":{"source":"literal","value":3}}
+      ]}'::jsonb
+    )`);
+    for (const statement of splitSqlStatements(migration!.sql)) {
+      await db.exec(statement);
+    }
+    const result = await db.query<{
+      config_json: string | Record<string, unknown>;
+    }>(
+      `select config_json from takosumi_install_configs where id = 'cfg_legacy_defaults'`,
+    );
+    const raw = result.rows[0]!.config_json;
+    const config = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
+      readonly variablePresentation: readonly {
+        readonly defaultValue: unknown;
+      }[];
+    };
+    expect(
+      config.variablePresentation.map((item) => item.defaultValue),
+    ).toEqual([
+      { source: "capsule_name" },
+      { source: "workspace_scoped_capsule_name" },
+      { source: "literal", value: "global" },
+      { source: "literal", value: 3 },
+    ]);
+  } finally {
+    await db.close();
   }
 });
 

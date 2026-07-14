@@ -1,6 +1,5 @@
 export * from "./constant_time.ts";
 export * from "./errors.ts";
-export * from "./events.ts";
 export * from "./freeze.ts";
 export * from "./guards.ts";
 export * from "./ids.ts";

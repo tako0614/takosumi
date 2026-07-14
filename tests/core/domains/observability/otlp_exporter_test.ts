@@ -6,7 +6,10 @@ import {
   otlpOptionsFromEnv,
   wrapObservabilitySinkWithOtlpMetrics,
 } from "../../../../core/domains/observability/otlp_exporter.ts";
-import type { MetricEvent, TraceSpanEvent } from "../../../../core/domains/observability/types.ts";
+import type {
+  MetricEvent,
+  TraceSpanEvent,
+} from "../../../../core/domains/observability/types.ts";
 
 const metric: MetricEvent = {
   id: "metric_1",
@@ -15,7 +18,7 @@ const metric: MetricEvent = {
   value: 1.25,
   unit: "s",
   tags: { provider: "filesystem" },
-  spaceId: "space_a",
+  workspaceId: "space_a",
   observedAt: "2026-05-05T00:00:00.000Z",
 };
 
@@ -41,10 +44,10 @@ test("OtlpObservabilitySink records locally and exports OTLP JSON metrics", asyn
   const calls: Array<{ url: string; init?: RequestInit; body: unknown }> = [];
   const fetchImpl: typeof fetch = (input, init) => {
     const requestInit = init as
-      | (
-        & { readonly body?: BodyInit; readonly headers?: HeadersInit }
-        & RequestInit
-      )
+      | ({
+          readonly body?: BodyInit;
+          readonly headers?: HeadersInit;
+        } & RequestInit)
       | undefined;
     calls.push({
       url: String(input),
@@ -102,10 +105,10 @@ test("OtlpObservabilitySink records locally and exports OTLP JSON traces", async
   const calls: Array<{ url: string; init?: RequestInit; body: unknown }> = [];
   const fetchImpl: typeof fetch = (input, init) => {
     const requestInit = init as
-      | (
-        & { readonly body?: BodyInit; readonly headers?: HeadersInit }
-        & RequestInit
-      )
+      | ({
+          readonly body?: BodyInit;
+          readonly headers?: HeadersInit;
+        } & RequestInit)
       | undefined;
     calls.push({
       url: String(input),
@@ -153,9 +156,10 @@ test("OtlpObservabilitySink records locally and exports OTLP JSON traces", async
   assert.equal(exported?.startTimeUnixNano, "1777939200000000000");
   assert.equal(exported?.endTimeUnixNano, "1777939201000000000");
   assert.ok(
-    exported?.attributes.some((attribute) =>
-      attribute.key === "takosumi.request_id" &&
-      attribute.value.stringValue === "req_1"
+    exported?.attributes.some(
+      (attribute) =>
+        attribute.key === "takosumi.request_id" &&
+        attribute.value.stringValue === "req_1",
     ),
   );
 });

@@ -7,13 +7,13 @@
 #      and an HttpOnly takosumi_session cookie.
 #   4. Worker /v1/account/session/me       -> 200 with the same subject via cookie.
 #
-# Run as: bash scripts/oauth-e2e.sh [google]
+# Run as: bash scripts/oauth-e2e.sh [local-oidc]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
-PROVIDER="${1:-google}"
+PROVIDER="${1:-local-oidc}"
 APP_HOST="${TAKOSUMI_LOCAL_APP_HOST:-app.takosumi.test}"
 OAUTH_HOST="${TAKOSUMI_LOCAL_OAUTH_MOCK_HOST:-oauth-mock.test}"
 BASE="https://${APP_HOST}"
@@ -26,11 +26,6 @@ if [[ ! -f "$CA" ]]; then
 	echo "Pebble CA not found at $CA — run scripts/up.sh first" >&2
 	exit 1
 fi
-if [[ "$PROVIDER" != "google" ]]; then
-	echo "Unsupported local OAuth provider '$PROVIDER'; Takosumi sign-in is Google-only." >&2
-	exit 2
-fi
-
 # 1. /v1/auth/upstream/authorize → 302 to mock /authorize
 LOC1=$(curl -sk --cacert "$CA" -o /dev/null -w "%{redirect_url}" \
 	"${CURL_TLS[@]}" \

@@ -26,7 +26,7 @@
       "id": 1,
       "targets": [
         {
-          "expr": "sum(rate(takosumi_deploy_operation_count{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\",space_id=~\"$space_id\",capsule_id=~\"$capsule_id\",operationKind=\"apply\",status=\"succeeded\"}[5m])) / clamp_min(sum(rate(takosumi_deploy_operation_count{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\",space_id=~\"$space_id\",capsule_id=~\"$capsule_id\",operationKind=\"apply\"}[5m])), 1)",
+          "expr": "sum(rate(takosumi_deploy_operation_count{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\",workspace_id=~\"$workspace_id\",capsule_id=~\"$capsule_id\",operation_kind=\"apply\",status=\"succeeded\"}[5m])) / clamp_min(sum(rate(takosumi_deploy_operation_count{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\",workspace_id=~\"$workspace_id\",capsule_id=~\"$capsule_id\",operation_kind=\"apply\"}[5m])), 1)",
           "legendFormat": "apply success rate",
           "refId": "A"
         }
@@ -54,7 +54,7 @@
       "id": 2,
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(takosumi_apply_duration_seconds_bucket{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\",space_id=~\"$space_id\",capsule_id=~\"$capsule_id\",operationKind=\"apply\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(takosumi_apply_duration_seconds_bucket{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\",workspace_id=~\"$workspace_id\",capsule_id=~\"$capsule_id\",operation_kind=\"apply\"}[5m])) by (le))",
           "legendFormat": "p95 apply latency",
           "refId": "A"
         }
@@ -82,8 +82,8 @@
       "id": 3,
       "targets": [
         {
-          "expr": "max(takosumi_runner_queue_age_seconds{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\"})",
-          "legendFormat": "{{runtime_cell_id}} queue age",
+          "expr": "max(takosumi_runner_queue_age_seconds{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\"})",
+          "legendFormat": "{{runner_profile_id}} queue age",
           "refId": "A"
         }
       ],
@@ -110,12 +110,12 @@
       "id": 4,
       "targets": [
         {
-          "expr": "sum by (runtime_cell_id, status) (rate(takosumi_deploy_operation_count{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\",operationKind=~\"plan|apply|destroy_apply\"}[5m]))",
-          "legendFormat": "{{runtime_cell_id}} / {{status}}",
+          "expr": "sum by (runner_profile_id, status) (rate(takosumi_deploy_operation_count{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\",operation_kind=~\"plan|apply|destroy_apply\"}[5m]))",
+          "legendFormat": "{{runner_profile_id}} / {{status}}",
           "refId": "A"
         }
       ],
-      "title": "Run Throughput By Runtime Cell",
+      "title": "Run Throughput By Runner Profile",
       "type": "timeseries"
     },
     {
@@ -138,8 +138,8 @@
       "id": 5,
       "targets": [
         {
-          "expr": "sum by (runtime_cell_id) (takosumi_runner_active_runs{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\"})",
-          "legendFormat": "{{runtime_cell_id}} active",
+          "expr": "sum by (runner_profile_id) (takosumi_runner_active_runs{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\"})",
+          "legendFormat": "{{runner_profile_id}} active",
           "refId": "A"
         }
       ],
@@ -166,8 +166,8 @@
       "id": 6,
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(takosumi_runner_container_startup_seconds_bucket{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\"}[5m])) by (le, runtime_cell_id))",
-          "legendFormat": "{{runtime_cell_id}} p95 startup",
+          "expr": "histogram_quantile(0.95, sum(rate(takosumi_runner_container_startup_seconds_bucket{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\"}[5m])) by (le, runner_profile_id))",
+          "legendFormat": "{{runner_profile_id}} p95 startup",
           "refId": "A"
         }
       ],
@@ -222,8 +222,8 @@
       "id": 8,
       "targets": [
         {
-          "expr": "sum by (space_id, capsule_id, operationKind, status) (increase(takosumi_deploy_operation_count{environment=~\"$environment\",space_id=~\"$space_id\",capsule_id=~\"$capsule_id\"}[1h]))",
-          "legendFormat": "{{space_id}} / {{capsule_id}} / {{operationKind}} / {{status}}",
+          "expr": "sum by (workspace_id, capsule_id, operation_kind, status) (increase(takosumi_deploy_operation_count{environment=~\"$environment\",workspace_id=~\"$workspace_id\",capsule_id=~\"$capsule_id\"}[1h]))",
+          "legendFormat": "{{workspace_id}} / {{capsule_id}} / {{operation_kind}} / {{status}}",
           "refId": "A"
         }
       ],
@@ -301,9 +301,9 @@
         },
         "hide": 0,
         "includeAll": true,
-        "label": "Runtime Cell",
-        "name": "runtime_cell_id",
-        "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\"}, runtime_cell_id)",
+        "label": "Runner Profile",
+        "name": "runner_profile_id",
+        "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\"}, runner_profile_id)",
         "refresh": 1,
         "regex": "",
         "type": "query"
@@ -317,9 +317,9 @@
         },
         "hide": 0,
         "includeAll": true,
-        "label": "Space",
-        "name": "space_id",
-        "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\"}, space_id)",
+        "label": "Workspace",
+        "name": "workspace_id",
+        "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\"}, workspace_id)",
         "refresh": 1,
         "regex": "",
         "type": "query"
@@ -335,7 +335,7 @@
         "includeAll": true,
         "label": "Capsule",
         "name": "capsule_id",
-        "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\",space_id=~\"$space_id\"}, capsule_id)",
+        "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\",workspace_id=~\"$workspace_id\"}, capsule_id)",
         "refresh": 1,
         "regex": "",
         "type": "query"

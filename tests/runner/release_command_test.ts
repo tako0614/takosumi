@@ -25,7 +25,7 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
                 [
                   `const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON)`,
                   `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
-                  `await Bun.write("release-output.txt", [Bun.env.RELEASE_LABEL, process.cwd().split("/").pop(), outputs.public_url, context.outputs.public_url, context.applyRunId, context.workspaceId, Bun.env.TAKOSUMI_WORKSPACE_ID, Bun.env.TAKOSUMI_CLOUD_BILLING_WORKSPACE_ID, context.installation.id, Bun.env.TAKOSUMI_CAPSULE_ID, Bun.env.TAKOSUMI_CLOUD_BILLING_CAPSULE_ID, context.deploymentId, Bun.env.TAKOSUMI_STATE_VERSION_ID].join(":"))`,
+                  `await Bun.write("release-output.txt", [Bun.env.RELEASE_LABEL, process.cwd().split("/").pop(), outputs.public_url, context.outputs.public_url, context.applyRunId, context.workspaceId, Bun.env.TAKOSUMI_WORKSPACE_ID, context.capsuleId, Bun.env.TAKOSUMI_CAPSULE_ID, context.stateVersionId, Bun.env.TAKOSUMI_STATE_VERSION_ID].join(":"))`,
                   `console.log("release ok")`,
                 ].join(";"),
               ],
@@ -38,8 +38,8 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
         activation: {
           applyRunId: "run_apply_1",
           workspaceId: "space_1",
-          installationId: "inst_1",
-          deploymentId: "dep_1",
+          capsuleId: "inst_1",
+          stateVersionId: "state_1",
         },
       }),
     );
@@ -57,7 +57,7 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
     await expect(
       readFile(join(sourceRoot, "scripts", "release-output.txt"), "utf8"),
     ).resolves.toBe(
-      "public:scripts:https://app.example.test:https://app.example.test:run_apply_1:space_1:space_1:space_1:inst_1:inst_1:inst_1:dep_1:dep_1",
+      "public:scripts:https://app.example.test:https://app.example.test:run_apply_1:space_1:space_1:inst_1:inst_1:state_1:state_1",
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -143,6 +143,19 @@ test("release action admits dispatch-only provider credentials", async () => {
         credentials: {
           env: {
             CLOUDFLARE_API_TOKEN: secret,
+          },
+          manifest: {
+            bindings: [
+              {
+                providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+                connectionId: "conn_release_fixture",
+                recipeId: "cloudflare",
+                authMode: "api_token",
+                envNames: ["CLOUDFLARE_API_TOKEN"],
+                fileEnvNames: [],
+                requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
+              },
+            ],
           },
         },
       }),
@@ -272,7 +285,7 @@ test("release action rejects provider credential and reserved env", async () => 
       exitCode: 1,
     });
     expect(body.stderr).toContain(
-      "command env unexpectedly carries provider credential env name CLOUDFLARE_API_TOKEN",
+      "release command env must not include secret-like CLOUDFLARE_API_TOKEN",
     );
     expect(JSON.stringify(body)).not.toContain(secret);
   } finally {

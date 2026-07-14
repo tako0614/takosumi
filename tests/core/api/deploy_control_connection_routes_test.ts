@@ -1,33 +1,40 @@
 import { expect, test } from "bun:test";
 
 import { createApiApp } from "../../../core/api/app.ts";
-import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
+import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import { StaticSecretConnectionVault } from "../../../core/adapters/vault/mod.ts";
-import { MultiCloudSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
+import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { ActivityService } from "../../../core/domains/activity/mod.ts";
 import { ConnectionsService } from "../../../core/domains/connections/mod.ts";
 import type { DeployControlInternalRouteDependencies } from "../../../core/api/deploy_control_internal_routes.ts";
+import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../providers/registry.ts";
 
-const SPACE_ID = "space_10000001";
+const WORKSPACE_ID = "ws_10000001";
 
 function makeApp(
   options: {
     fetch?: typeof fetch;
     connectionOAuthHelpers?: DeployControlInternalRouteDependencies["connectionOAuthHelpers"];
-    allowOperatorBackedProviderEnvs?: boolean;
+    allowOperatorScopedProviderConnections?: boolean;
   } = {},
 ) {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   let counter = 0;
   const vault = new StaticSecretConnectionVault({
     store,
-    crypto: new MultiCloudSecretBoundaryCrypto({
+    crypto: new PartitionedSecretBoundaryCrypto({
       globalPassphrase: "route-test-passphrase-0123456789-abcdef",
     }),
     now: () => new Date("2026-06-04T00:00:00.000Z"),
     newId: () => `conn_route${(counter += 1).toString().padStart(11, "0")}`,
     fetch: options.fetch as never,
+    credentialRecipeResolver: (id) =>
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(
+        (recipe) => recipe.id === id,
+      ),
+    credentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
   });
   const activityService = new ActivityService({
     store,
@@ -37,14 +44,14 @@ function makeApp(
     store,
     now: () => "2026-06-04T00:00:00.000Z",
     newId: (prefix) => `${prefix}_route_default`,
-    allowOperatorBackedProviderEnvs:
-      options.allowOperatorBackedProviderEnvs === true,
+    allowOperatorScopedProviderConnections:
+      options.allowOperatorScopedProviderConnections === true,
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
     store,
     vault,
-    allowOperatorBackedProviderEnvs:
-      options.allowOperatorBackedProviderEnvs === true,
+    allowOperatorScopedProviderConnections:
+      options.allowOperatorScopedProviderConnections === true,
   });
   return createApiApp({
     registerDeployControlInternalRoutes: true,
@@ -52,6 +59,8 @@ function makeApp(
       controller,
       activityService,
       connectionsService,
+      buildConnectionSetupRequest:
+        REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
       ...(options.connectionOAuthHelpers
         ? { connectionOAuthHelpers: options.connectionOAuthHelpers }
         : {}),
@@ -59,14 +68,14 @@ function makeApp(
         token === "scoped-token"
           ? {
               actor: "acct_1",
-              spaceIds: [SPACE_ID],
+              workspaceIds: [WORKSPACE_ID],
               operations: "*",
               runnerProfileIds: "*",
             }
           : token === "operator-token"
             ? {
                 actor: "op",
-                spaceIds: "*",
+                workspaceIds: "*",
                 operations: "*",
                 runnerProfileIds: "*",
               }
@@ -76,20 +85,20 @@ function makeApp(
   });
 }
 
-const CF_PATH = "/internal/v1/connections/cloudflare/token";
-const HTTPS_PATH = "/internal/v1/connections/source/https-token";
-const SSH_PATH = "/internal/v1/connections/source/ssh-key";
-const AWS_PATH = "/internal/v1/connections/aws/assume-role";
-const GCP_IMPERSONATION_PATH = "/internal/v1/connections/gcp/impersonation";
+const CF_PATH = "/internal/v1/connections/setups/cloudflare-api-token";
+const HTTPS_PATH = "/internal/v1/connections/setups/git-https-token";
+const SSH_PATH = "/internal/v1/connections/setups/git-ssh-key";
+const AWS_PATH = "/internal/v1/connections/setups/aws-assume-role";
+const GCP_IMPERSONATION_PATH =
+  "/internal/v1/connections/setups/google-impersonation";
 const GCP_SERVICE_ACCOUNT_JSON_PATH =
-  "/internal/v1/connections/gcp/service-account-json";
-const GENERIC_ENV_PROVIDER_PATH =
-  "/internal/v1/connections/generic-env-provider";
+  "/internal/v1/connections/setups/google-service-account-json";
+const GENERIC_ENV_PROVIDER_PATH = "/internal/v1/connections/setups/generic-env";
 const RESERVED_DRIVER_PATHS = [
-  ["POST", "/internal/v1/connections/cloudflare/oauth/start"],
-  ["GET", "/internal/v1/connections/cloudflare/oauth/callback"],
-  ["POST", "/internal/v1/connections/gcp/oauth/start"],
-  ["GET", "/internal/v1/connections/gcp/oauth/callback"],
+  ["POST", "/internal/v1/connections/oauth/cloudflare/start"],
+  ["GET", "/internal/v1/connections/oauth/cloudflare/callback"],
+  ["POST", "/internal/v1/connections/oauth/gcp/start"],
+  ["GET", "/internal/v1/connections/oauth/gcp/callback"],
 ] as const;
 
 const HEADERS = {
@@ -111,13 +120,13 @@ function stsSuccessXml(): string {
 </AssumeRoleResponse>`;
 }
 
-test("POST /internal/v1/connections/cloudflare/token requires a bearer (401)", async () => {
+test("POST /internal/v1/connections/setups/cloudflare-api-token requires a bearer (401)", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       values: { CLOUDFLARE_API_TOKEN: "cf" },
     }),
   });
@@ -125,13 +134,13 @@ test("POST /internal/v1/connections/cloudflare/token requires a bearer (401)", a
   expect((await response.json()).error.code).toBe("unauthenticated");
 });
 
-test("POST /internal/v1/connections/cloudflare/token rejects an unknown body field (400)", async () => {
+test("POST /internal/v1/connections/setups/cloudflare-api-token rejects an unknown body field (400)", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       values: { CLOUDFLARE_API_TOKEN: "cf" },
       sneaky: "field",
     }),
@@ -140,13 +149,13 @@ test("POST /internal/v1/connections/cloudflare/token rejects an unknown body fie
   expect((await response.json()).error.code).toBe("invalid_argument");
 });
 
-test("POST /internal/v1/connections/cloudflare/token rejects credential files", async () => {
+test("POST /internal/v1/connections/setups/cloudflare-api-token rejects credential files", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       values: { CLOUDFLARE_API_TOKEN: "cf" },
       files: [
         {
@@ -160,16 +169,16 @@ test("POST /internal/v1/connections/cloudflare/token rejects credential files", 
   expect(response.status).toBe(400);
   const payload = await response.json();
   expect(payload.error.code).toBe("invalid_argument");
-  expect(payload.error.message).toContain("generic-env provider route");
+  expect(payload.error.message).toContain("does not accept credential files");
 });
 
-test("POST /internal/v1/connections/cloudflare/token enforces space scope (403)", async () => {
+test("POST /internal/v1/connections/setups/cloudflare-api-token enforces Workspace scope (403)", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: "space_denied",
+      workspaceId: "space_denied",
       values: { CLOUDFLARE_API_TOKEN: "cf" },
     }),
   });
@@ -177,17 +186,17 @@ test("POST /internal/v1/connections/cloudflare/token enforces space scope (403)"
   expect((await response.json()).error.code).toBe("permission_denied");
 });
 
-test("POST /internal/v1/connections/cloudflare/token rejects a space session asking scope:operator (403)", async () => {
+test("POST /internal/v1/connections/setups/cloudflare-api-token rejects a Workspace session asking scope:operator (403)", async () => {
   const app = await makeApp();
-  // Privilege-escalation guard: a space session (scoped-token, spaceIds:
-  // [SPACE_ID]) supplies its OWN spaceId but asks for `scope: "operator"`. The
-  // spaceId alone would pass the space permission check, so the gate must
+  // Privilege-escalation guard: a Workspace session (scoped-token, workspaceIds:
+  // [WORKSPACE_ID]) supplies its OWN workspaceId but asks for `scope: "operator"`. The
+  // workspaceId alone would pass the Workspace permission check, so the gate must
   // additionally require the unrestricted bearer for any operator-scope request.
   const response = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       scope: "operator",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
     }),
@@ -196,13 +205,13 @@ test("POST /internal/v1/connections/cloudflare/token rejects a space session ask
   expect((await response.json()).error.code).toBe("permission_denied");
 });
 
-test("POST /internal/v1/connections/cloudflare/token happy path returns 201 and never echoes values", async () => {
+test("POST /internal/v1/connections/setups/cloudflare-api-token happy path returns 201 and never echoes values", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       displayName: "prod",
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
     }),
@@ -212,13 +221,20 @@ test("POST /internal/v1/connections/cloudflare/token happy path returns 201 and 
   expect(text).not.toContain("cf-secret-token");
   const payload = JSON.parse(text);
   expect(payload.connection.status).toBe("pending");
-  expect(payload.connection.provider).toBe("cloudflare");
-  expect(payload.connection.kind).toBe("cloudflare_api_token");
+  expect(payload.connection.provider).toBe(
+    "registry.opentofu.org/cloudflare/cloudflare",
+  );
+  expect(payload.connection.kind).toBeUndefined();
+  expect(payload.connection.credentialRecipe).toMatchObject({
+    id: "cloudflare",
+    authMode: "api_token",
+    secretPartition: "provider-credentials",
+  });
   expect(payload.connection.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
   expect(payload.connection.values).toBeUndefined();
 
   const activity = await app.request(
-    `/internal/v1/workspaces/${SPACE_ID}/activity`,
+    `/internal/v1/workspaces/${WORKSPACE_ID}/activity`,
     {
       headers: { authorization: "Bearer scoped-token" },
     },
@@ -230,22 +246,23 @@ test("POST /internal/v1/connections/cloudflare/token happy path returns 201 and 
   );
   expect(createdEvent).toBeDefined();
   expect(createdEvent.metadata).toEqual({
-    provider: "cloudflare",
-    kind: "cloudflare_api_token",
-    scope: "space",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    recipeId: "cloudflare",
+    recipeAuthMode: "api_token",
+    scope: "workspace",
   });
   expect(JSON.stringify(events)).not.toContain("cf-secret-token");
 });
 
-test("POST /internal/v1/connections/source/https-token returns 201 with the source kind", async () => {
+test("POST /internal/v1/connections/setups/git-https-token returns 201 with the source kind", async () => {
   const app = await makeApp();
   const response = await app.request(HTTPS_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       displayName: "github",
-      scopeHints: { username: "git" },
+      scopeHints: { providerSettings: { username: "git" } },
       values: { GIT_HTTPS_TOKEN: "ghp-secret" },
     }),
   });
@@ -256,13 +273,13 @@ test("POST /internal/v1/connections/source/https-token returns 201 with the sour
   expect(payload.connection.kind).toBe("source_git_https_token");
 });
 
-test("POST /internal/v1/connections/source/ssh-key requires knownHosts (400)", async () => {
+test("POST /internal/v1/connections/setups/git-ssh-key requires knownHosts (400)", async () => {
   const app = await makeApp();
   const response = await app.request(SSH_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       values: { GIT_SSH_PRIVATE_KEY: "-----BEGIN KEY-----" },
     }),
   });
@@ -272,14 +289,18 @@ test("POST /internal/v1/connections/source/ssh-key requires knownHosts (400)", a
   expect(payload.error.message).toContain("knownHostsEntry");
 });
 
-test("POST /internal/v1/connections/source/ssh-key with knownHosts returns 201", async () => {
+test("POST /internal/v1/connections/setups/git-ssh-key with knownHosts returns 201", async () => {
   const app = await makeApp();
   const response = await app.request(SSH_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
-      scopeHints: { knownHostsEntry: "github.com ssh-ed25519 AAAA..." },
+      workspaceId: WORKSPACE_ID,
+      scopeHints: {
+        providerSettings: {
+          knownHostsEntry: "github.com ssh-ed25519 AAAA...",
+        },
+      },
       values: {
         GIT_SSH_PRIVATE_KEY:
           "-----BEGIN KEY-----\nprivatekeymaterial\n-----END KEY-----",
@@ -292,13 +313,13 @@ test("POST /internal/v1/connections/source/ssh-key with knownHosts returns 201",
   expect(JSON.parse(text).connection.kind).toBe("source_git_ssh_key");
 });
 
-test("POST /internal/v1/connections/aws/assume-role requires a role ARN hint (400)", async () => {
+test("POST /internal/v1/connections/setups/aws-assume-role requires a role ARN hint (400)", async () => {
   const app = await makeApp();
   const response = await app.request(AWS_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       values: {
         AWS_ACCESS_KEY_ID: "akid",
         AWS_SECRET_ACCESS_KEY: "aws-secret",
@@ -308,21 +329,23 @@ test("POST /internal/v1/connections/aws/assume-role requires a role ARN hint (40
   expect(response.status).toBe(400);
   const payload = await response.json();
   expect(payload.error.code).toBe("invalid_argument");
-  expect(payload.error.message).toContain("awsRoleArn");
+  expect(payload.error.message).toContain("providerSettings.roleArn");
 });
 
-test("POST /internal/v1/connections/aws/assume-role returns 201 and never echoes values", async () => {
+test("POST /internal/v1/connections/setups/aws-assume-role returns 201 and never echoes values", async () => {
   const app = await makeApp();
   const response = await app.request(AWS_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       displayName: "prod aws",
       scopeHints: {
-        awsRoleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
-        awsExternalId: SPACE_ID,
-        awsRegion: "us-east-1",
+        providerSettings: {
+          roleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
+          externalId: WORKSPACE_ID,
+          region: "us-east-1",
+        },
       },
       values: {
         AWS_ACCESS_KEY_ID: "akid",
@@ -334,9 +357,16 @@ test("POST /internal/v1/connections/aws/assume-role returns 201 and never echoes
   const text = await response.text();
   expect(text).not.toContain("aws-secret");
   const payload = JSON.parse(text);
-  expect(payload.connection.provider).toBe("aws");
-  expect(payload.connection.kind).toBe("aws_assume_role");
-  expect(payload.connection.scopeHints.awsRoleArn).toBe(
+  expect(payload.connection.provider).toBe(
+    "registry.opentofu.org/hashicorp/aws",
+  );
+  expect(payload.connection.kind).toBeUndefined();
+  expect(payload.connection.credentialRecipe).toMatchObject({
+    id: "aws",
+    authMode: "assume_role",
+    secretPartition: "provider-credentials",
+  });
+  expect(payload.connection.scopeHints.providerSettings.roleArn).toBe(
     "arn:aws:iam::123456789012:role/takosumi-prod",
   );
   expect(payload.connection.envNames).toEqual([
@@ -348,13 +378,13 @@ test("POST /internal/v1/connections/aws/assume-role returns 201 and never echoes
   expect(payload.connection.values).toBeUndefined();
 });
 
-test("POST /internal/v1/connections/generic-env-provider registers a secret-backed Provider Connection", async () => {
+test("POST /internal/v1/connections/setups/generic-env registers a secret-backed Provider Connection", async () => {
   const app = await makeApp();
   const response = await app.request(GENERIC_ENV_PROVIDER_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       provider: "registry.opentofu.org/integrations/github",
       displayName: "github",
       values: {
@@ -370,21 +400,26 @@ test("POST /internal/v1/connections/generic-env-provider registers a secret-back
   expect(payload.connection.provider).toBe(
     "registry.opentofu.org/integrations/github",
   );
-  expect(payload.connection.kind).toBe("generic_env_provider");
-  expect(payload.connection.scope).toBe("space");
+  expect(payload.connection.kind).toBeUndefined();
+  expect(payload.connection.credentialRecipe).toMatchObject({
+    id: "generic-env",
+    authMode: "env",
+    secretPartition: "provider-credentials",
+  });
+  expect(payload.connection.scope).toBe("workspace");
   expect(payload.connection.envNames).toEqual([
     "GITHUB_CUSTOM_ENDPOINT",
     "GITHUB_TOKEN",
   ]);
 });
 
-test("POST /internal/v1/connections/generic-env-provider registers env and file credentials", async () => {
+test("POST /internal/v1/connections/setups/generic-env registers env and file credentials", async () => {
   const app = await makeApp();
   const response = await app.request(GENERIC_ENV_PROVIDER_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       provider: "registry.opentofu.org/example/envfile",
       displayName: "envfile",
       values: {
@@ -408,8 +443,13 @@ test("POST /internal/v1/connections/generic-env-provider registers env and file 
   expect(payload.connection.provider).toBe(
     "registry.opentofu.org/example/envfile",
   );
-  expect(payload.connection.kind).toBe("generic_env_provider");
-  expect(payload.connection.scope).toBe("space");
+  expect(payload.connection.kind).toBeUndefined();
+  expect(payload.connection.credentialRecipe).toMatchObject({
+    id: "generic-env",
+    authMode: "env",
+    secretPartition: "provider-credentials",
+  });
+  expect(payload.connection.scope).toBe("workspace");
   expect(payload.connection.envNames).toEqual([
     "GENERIC_API_TOKEN",
     "GENERIC_CREDENTIALS_FILE",
@@ -417,14 +457,14 @@ test("POST /internal/v1/connections/generic-env-provider registers env and file 
   expect(payload.connection.fileEnvNames).toEqual(["GENERIC_CREDENTIALS_FILE"]);
 });
 
-test("POST /internal/v1/connections/generic-env-provider registers an arbitrary OpenTofu provider recipe", async () => {
+test("POST /internal/v1/connections/setups/generic-env registers an arbitrary OpenTofu provider recipe", async () => {
   const app = await makeApp();
   const provider = "registry.opentofu.org/snowflake-labs/snowflake";
   const response = await app.request(GENERIC_ENV_PROVIDER_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       provider,
       displayName: "Snowflake",
       values: {
@@ -439,7 +479,12 @@ test("POST /internal/v1/connections/generic-env-provider registers an arbitrary 
   expect(text).not.toContain("snowflake-secret");
   const payload = JSON.parse(text);
   expect(payload.connection.provider).toBe(provider);
-  expect(payload.connection.kind).toBe("generic_env_provider");
+  expect(payload.connection.kind).toBeUndefined();
+  expect(payload.connection.credentialRecipe).toMatchObject({
+    id: "generic-env",
+    authMode: "env",
+    secretPartition: "provider-credentials",
+  });
   expect(payload.connection.envNames).toEqual([
     "SNOWFLAKE_ACCOUNT",
     "SNOWFLAKE_PASSWORD",
@@ -447,7 +492,44 @@ test("POST /internal/v1/connections/generic-env-provider registers an arbitrary 
   ]);
 });
 
-test("POST /internal/v1/connections/generic-env-provider rejects operator scope", async () => {
+test("POST /internal/v1/connections accepts an explicit provider source and Credential Recipe", async () => {
+  const app = await makeApp();
+  const provider = "registry.opentofu.org/example/acme";
+  const response = await app.request("/internal/v1/connections", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      workspaceId: WORKSPACE_ID,
+      provider,
+      credentialRecipe: {
+        id: "generic-env",
+        authMode: "env",
+        secretPartition: "provider-credentials",
+      },
+      displayName: "Acme",
+      values: { ACME_API_TOKEN: "acme-secret" },
+    }),
+  });
+
+  expect(response.status).toBe(201);
+  const text = await response.text();
+  expect(text).not.toContain("acme-secret");
+  const payload = JSON.parse(text);
+  expect(payload.connection).toMatchObject({
+    provider,
+    providerSource: provider,
+    credentialRecipe: {
+      id: "generic-env",
+      authMode: "env",
+      secretPartition: "provider-credentials",
+      envNames: ["ACME_API_TOKEN"],
+      fileEnvNames: [],
+      requiredEnvGroups: [],
+    },
+  });
+});
+
+test("POST /internal/v1/connections/setups/generic-env rejects operator scope", async () => {
   const app = await makeApp();
   const response = await app.request(GENERIC_ENV_PROVIDER_PATH, {
     method: "POST",
@@ -456,7 +538,7 @@ test("POST /internal/v1/connections/generic-env-provider rejects operator scope"
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       scope: "operator",
       provider: "registry.opentofu.org/integrations/github",
       values: { GITHUB_TOKEN: "github-secret-token" },
@@ -465,7 +547,7 @@ test("POST /internal/v1/connections/generic-env-provider rejects operator scope"
   expect(response.status).toBe(400);
   const payload = await response.json();
   expect(payload.error.code).toBe("invalid_argument");
-  expect(payload.error.message).toContain("Space-scoped");
+  expect(payload.error.message).toContain("Workspace-scoped");
 });
 
 test("unconfigured OAuth helper routes authenticate first then return 501", async () => {
@@ -482,7 +564,7 @@ test("unconfigured OAuth helper routes authenticate first then return 501", asyn
     expect(reserved.status).toBe(501);
     const payload = await reserved.json();
     expect(payload.error.code).toBe("not_implemented");
-    expect(payload.error.message).toContain("connection driver not wired");
+    expect(payload.error.message).toContain("connection helper");
   }
 });
 
@@ -498,9 +580,13 @@ test("Cloudflare OAuth helper starts and completes as a write-only Provider Conn
         }),
         complete: async ({ code, state }) => ({
           request: {
-            spaceId: SPACE_ID,
-            provider: "cloudflare",
-            kind: "generic_env_provider",
+            workspaceId: WORKSPACE_ID,
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            credentialRecipe: {
+              id: "cloudflare",
+              authMode: "oauth",
+              secretPartition: "provider-credentials",
+            },
             materialization: "oauth",
             displayName: "cf oauth",
             values: {
@@ -513,12 +599,12 @@ test("Cloudflare OAuth helper starts and completes as a write-only Provider Conn
   });
 
   const started = await app.request(
-    "/internal/v1/connections/cloudflare/oauth/start",
+    "/internal/v1/connections/oauth/cloudflare/start",
     {
       method: "POST",
       headers: HEADERS,
       body: JSON.stringify({
-        spaceId: SPACE_ID,
+        workspaceId: WORKSPACE_ID,
         displayName: "cf oauth",
         redirectUri: "https://app.example.test/callback",
       }),
@@ -531,7 +617,7 @@ test("Cloudflare OAuth helper starts and completes as a write-only Provider Conn
   });
 
   const completed = await app.request(
-    "/internal/v1/connections/cloudflare/oauth/callback?code=code_cf&state=state_cf",
+    "/internal/v1/connections/oauth/cloudflare/callback?code=code_cf&state=state_cf",
     {
       method: "GET",
       headers: { authorization: "Bearer scoped-token" },
@@ -541,10 +627,55 @@ test("Cloudflare OAuth helper starts and completes as a write-only Provider Conn
   const text = await completed.text();
   expect(text).not.toContain("oauth-token-code_cf-state_cf");
   const payload = JSON.parse(text);
-  expect(payload.connection.provider).toBe("cloudflare");
-  expect(payload.connection.kind).toBe("generic_env_provider");
+  expect(payload.connection.provider).toBe(
+    "registry.opentofu.org/cloudflare/cloudflare",
+  );
+  expect(payload.connection.kind).toBeUndefined();
+  expect(payload.connection.credentialRecipe).toMatchObject({
+    id: "cloudflare",
+    authMode: "oauth",
+    secretPartition: "provider-credentials",
+  });
   expect(payload.connection.materialization).toBe("oauth");
   expect(payload.connection.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
+});
+
+test("OAuth helper cannot smuggle a Source Git connection discriminator", async () => {
+  const app = await makeApp({
+    connectionOAuthHelpers: {
+      example: {
+        start: async () => ({
+          authorizationUrl: "https://identity.example.test/authorize",
+          state: "state_example",
+        }),
+        complete: async () => ({
+          request: {
+            workspaceId: WORKSPACE_ID,
+            provider: "registry.opentofu.org/example/provider",
+            credentialRecipe: {
+              id: "example",
+              authMode: "oauth",
+              secretPartition: "provider-credentials",
+            },
+            kind: "source_git_https_token",
+            values: { EXAMPLE_TOKEN: "secret" },
+          },
+        }),
+      },
+    },
+  });
+
+  const response = await app.request(
+    "/internal/v1/connections/oauth/example/callback?code=code&state=state_example",
+    {
+      method: "GET",
+      headers: { authorization: "Bearer scoped-token" },
+    },
+  );
+  expect(response.status).toBe(400);
+  const payload = await response.json();
+  expect(payload.error.code).toBe("invalid_argument");
+  expect(payload.error.message).toContain("Source Git connection kind");
 });
 
 test("OAuth callback requires code and state once helper is configured", async () => {
@@ -557,9 +688,13 @@ test("OAuth callback requires code and state once helper is configured", async (
         }),
         complete: async () => ({
           request: {
-            spaceId: SPACE_ID,
-            provider: "google",
-            kind: "generic_env_provider",
+            workspaceId: WORKSPACE_ID,
+            provider: "registry.opentofu.org/hashicorp/google",
+            credentialRecipe: {
+              id: "google",
+              authMode: "oauth",
+              secretPartition: "provider-credentials",
+            },
             materialization: "oauth",
             values: { GOOGLE_CREDENTIALS: "{}" },
           },
@@ -569,7 +704,7 @@ test("OAuth callback requires code and state once helper is configured", async (
   });
 
   const missing = await app.request(
-    "/internal/v1/connections/gcp/oauth/callback",
+    "/internal/v1/connections/oauth/gcp/callback",
     {
       method: "GET",
       headers: { authorization: "Bearer scoped-token" },
@@ -579,18 +714,20 @@ test("OAuth callback requires code and state once helper is configured", async (
   expect((await missing.json()).error.message).toContain("code");
 });
 
-test("POST /internal/v1/connections/gcp/impersonation registers a Google Provider Connection", async () => {
+test("unimplemented Google impersonation setup is not advertised as installed", async () => {
   const app = await makeApp();
   const response = await app.request(GCP_IMPERSONATION_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       displayName: "gcp impersonation",
       scopeHints: {
-        gcpServiceAccountEmail:
-          "takosumi-runner@project-1.iam.gserviceaccount.com",
-        gcpProjectId: "project-1",
+        providerSettings: {
+          serviceAccountEmail:
+            "takosumi-runner@project-1.iam.gserviceaccount.com",
+          projectId: "project-1",
+        },
       },
       values: {
         GOOGLE_CREDENTIALS:
@@ -599,20 +736,13 @@ test("POST /internal/v1/connections/gcp/impersonation registers a Google Provide
     }),
   });
 
-  expect(response.status).toBe(201);
-  const text = await response.text();
-  expect(text).not.toContain("secret-refresh");
-  const payload = JSON.parse(text);
-  expect(payload.connection.provider).toBe("google");
-  expect(payload.connection.kind).toBe("gcp_service_account_impersonation");
-  expect(payload.connection.envNames).toEqual(["GOOGLE_CREDENTIALS"]);
-  expect(payload.connection.scopeHints).toEqual({
-    gcpServiceAccountEmail: "takosumi-runner@project-1.iam.gserviceaccount.com",
-    gcpProjectId: "project-1",
-  });
+  expect(response.status).toBe(400);
+  expect((await response.json()).error.message).toContain(
+    "guided connection setup google-impersonation is not installed",
+  );
 });
 
-test("POST /internal/v1/connections/gcp/service-account-json registers a runnable Google Provider Connection", async () => {
+test("POST /internal/v1/connections/setups/google-service-account-json registers a runnable Google Provider Connection", async () => {
   const app = await makeApp();
   const serviceAccountJson = JSON.stringify({
     type: "service_account",
@@ -625,7 +755,7 @@ test("POST /internal/v1/connections/gcp/service-account-json registers a runnabl
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       displayName: "gcp service account",
       values: {
         GOOGLE_CREDENTIALS: serviceAccountJson,
@@ -638,30 +768,17 @@ test("POST /internal/v1/connections/gcp/service-account-json registers a runnabl
   expect(text).not.toContain("private_key");
   expect(text).not.toContain("BEGIN PRIVATE KEY");
   const payload = JSON.parse(text);
-  expect(payload.connection.provider).toBe("google");
-  expect(payload.connection.kind).toBe("gcp_service_account_json");
-  expect(payload.connection.envNames).toEqual([
-    "GOOGLE_CLOUD_PROJECT",
-    "GOOGLE_CREDENTIALS",
-  ]);
-  expect(payload.connection.scopeHints).toBeUndefined();
-});
-
-test("POST /internal/v1/connections/gcp/impersonation requires service account and project hints", async () => {
-  const app = await makeApp();
-  const response = await app.request(GCP_IMPERSONATION_PATH, {
-    method: "POST",
-    headers: HEADERS,
-    body: JSON.stringify({
-      spaceId: SPACE_ID,
-      scopeHints: {
-        gcpServiceAccountEmail: "svc@example.iam.gserviceaccount.com",
-      },
-      values: { GOOGLE_CREDENTIALS: "{}" },
-    }),
+  expect(payload.connection.provider).toBe(
+    "registry.opentofu.org/hashicorp/google",
+  );
+  expect(payload.connection.kind).toBeUndefined();
+  expect(payload.connection.credentialRecipe).toMatchObject({
+    id: "google",
+    authMode: "service_account_json",
+    secretPartition: "provider-credentials",
   });
-  expect(response.status).toBe(400);
-  expect((await response.json()).error.message).toContain("gcpProjectId");
+  expect(payload.connection.envNames).toEqual(["GOOGLE_CREDENTIALS"]);
+  expect(payload.connection.scopeHints).toBeUndefined();
 });
 
 test("GET /internal/v1/connections lists connections without secret values", async () => {
@@ -670,13 +787,13 @@ test("GET /internal/v1/connections lists connections without secret values", asy
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
     }),
   });
 
   const response = await app.request(
-    `/internal/v1/connections?spaceId=${SPACE_ID}`,
+    `/internal/v1/connections?workspaceId=${WORKSPACE_ID}`,
     {
       headers: { authorization: "Bearer scoped-token" },
     },
@@ -686,12 +803,14 @@ test("GET /internal/v1/connections lists connections without secret values", asy
   expect(text).not.toContain("cf-secret-token");
   const payload = JSON.parse(text);
   expect(payload.connections).toHaveLength(1);
-  expect(payload.connections[0].provider).toBe("cloudflare");
+  expect(payload.connections[0].provider).toBe(
+    "registry.opentofu.org/cloudflare/cloudflare",
+  );
 });
 
-test("GET /internal/v1/connections with no spaceId lists operator-scoped connections for the unrestricted bearer", async () => {
+test("GET /internal/v1/connections with no workspaceId lists operator-scoped connections for the unrestricted bearer", async () => {
   const app = await makeApp();
-  // Operator-scoped connection (no spaceId): only the unrestricted bearer.
+  // Operator-scoped connection (no workspaceId): only the unrestricted bearer.
   await app.request(CF_PATH, {
     method: "POST",
     headers: {
@@ -713,7 +832,7 @@ test("GET /internal/v1/connections with no spaceId lists operator-scoped connect
   expect(payload.connections[0].scope).toBe("operator");
 });
 
-test("GET /internal/v1/connections with no spaceId is denied for a scoped bearer (403)", async () => {
+test("GET /internal/v1/connections with no workspaceId is denied for a scoped bearer (403)", async () => {
   const app = await makeApp();
   const response = await app.request("/internal/v1/connections", {
     headers: { authorization: "Bearer scoped-token" },
@@ -726,26 +845,26 @@ test("canonical Connection list/get routes never leak secret material", async ()
   const app = await makeApp();
 
   const empty = await app.request(
-    `/internal/v1/connections?spaceId=${SPACE_ID}`,
+    `/internal/v1/connections?workspaceId=${WORKSPACE_ID}`,
     { headers: HEADERS },
   );
   expect(empty.status).toBe(200);
   expect((await empty.json()).connections).toHaveLength(0);
 
-  // Registering a Space connection creates the resolver record directly.
+  // Registering a Workspace connection creates the resolver record directly.
   const spaceCreated = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
-      values: { CLOUDFLARE_API_TOKEN: "space-secret-token" },
+      workspaceId: WORKSPACE_ID,
+      values: { CLOUDFLARE_API_TOKEN: "workspace-secret-token" },
     }),
   });
   expect(spaceCreated.status).toBe(201);
   const spaceConnection = (await spaceCreated.json()).connection;
 
   const listedConnections = await app.request(
-    `/internal/v1/connections?spaceId=${SPACE_ID}`,
+    `/internal/v1/connections?workspaceId=${WORKSPACE_ID}`,
     { headers: HEADERS },
   );
   expect(listedConnections.status).toBe(200);
@@ -753,14 +872,12 @@ test("canonical Connection list/get routes never leak secret material", async ()
   expect(listedPayload.connections).toHaveLength(1);
   expect(listedPayload.connections[0]).toMatchObject({
     id: spaceConnection.id,
-    spaceId: SPACE_ID,
-    provider: "cloudflare",
+    workspaceId: WORKSPACE_ID,
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
     materialization: "secret",
   });
   expect(JSON.stringify(listedPayload)).not.toContain("secretRef");
-  expect(JSON.stringify(listedPayload)).not.toContain(
-    "space-secret-token",
-  );
+  expect(JSON.stringify(listedPayload)).not.toContain("workspace-secret-token");
 
   // And readable by id, still never echoing sealed material.
   const readConnection = await app.request(
@@ -771,13 +888,11 @@ test("canonical Connection list/get routes never leak secret material", async ()
   const readPayload = await readConnection.json();
   expect(readPayload.connection).toMatchObject({
     id: spaceConnection.id,
-    spaceId: SPACE_ID,
+    workspaceId: WORKSPACE_ID,
     materialization: "secret",
   });
   expect(JSON.stringify(readPayload)).not.toContain("secretRef");
-  expect(JSON.stringify(readPayload)).not.toContain(
-    "space-secret-token",
-  );
+  expect(JSON.stringify(readPayload)).not.toContain("workspace-secret-token");
 });
 
 test("operator-scoped Connection reads are operator-gated", async () => {
@@ -798,7 +913,7 @@ test("operator-scoped Connection reads are operator-gated", async () => {
     .connection;
   expect(operatorConnection.scope).toBe("operator");
 
-  // A scoped (Space) bearer cannot read an operator-scoped resolver record.
+  // A scoped Workspace bearer cannot read an operator-scoped resolver record.
   const scopedDenied = await app.request(
     `/internal/v1/connections/${operatorConnection.id}`,
     { headers: HEADERS },
@@ -836,7 +951,7 @@ test("POST /internal/v1/connections/{id}/test verifies via injected fetch (200 v
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
     }),
   });
@@ -879,11 +994,13 @@ test("POST /internal/v1/connections/{id}/test verifies aws assume-role via STS (
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       scopeHints: {
-        awsRoleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
-        awsExternalId: SPACE_ID,
-        awsRegion: "us-west-2",
+        providerSettings: {
+          roleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
+          externalId: WORKSPACE_ID,
+          region: "us-west-2",
+        },
       },
       values: {
         AWS_ACCESS_KEY_ID: "AKIA_source",
@@ -917,7 +1034,7 @@ test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async 
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: SPACE_ID,
+      workspaceId: WORKSPACE_ID,
       values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
     }),
   });
@@ -933,7 +1050,7 @@ test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async 
   expect(revoked.status).toBe(204);
 
   const list = await app.request(
-    `/internal/v1/connections?spaceId=${SPACE_ID}`,
+    `/internal/v1/connections?workspaceId=${WORKSPACE_ID}`,
     {
       headers: { authorization: "Bearer scoped-token" },
     },
@@ -941,7 +1058,7 @@ test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async 
   expect((await list.json()).connections).toHaveLength(0);
 
   const activity = await app.request(
-    `/internal/v1/workspaces/${SPACE_ID}/activity`,
+    `/internal/v1/workspaces/${WORKSPACE_ID}/activity`,
     {
       headers: { authorization: "Bearer scoped-token" },
     },
@@ -956,9 +1073,10 @@ test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async 
   expect(revokedEvent.targetType).toBe("connection");
   expect(revokedEvent.targetId).toBe(connection.id);
   expect(revokedEvent.metadata).toEqual({
-    provider: "cloudflare",
-    kind: "cloudflare_api_token",
-    scope: "space",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    recipeId: "cloudflare",
+    recipeAuthMode: "api_token",
+    scope: "workspace",
   });
   expect(JSON.stringify(events)).not.toContain("cf-secret-token");
 });

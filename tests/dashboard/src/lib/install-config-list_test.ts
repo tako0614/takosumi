@@ -18,7 +18,6 @@ function stubInstallConfigFetch(): () => readonly string[] {
             id: "cfg_1",
             name: "Worker",
             sourceKind: "first_party_capsule",
-            trustLevel: "official",
             createdAt: "2026-07-01T00:00:00.000Z",
             updatedAt: "2026-07-01T00:00:00.000Z",
           },

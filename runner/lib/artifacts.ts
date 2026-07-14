@@ -6,18 +6,9 @@
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type {
-  RunWorkspace,
-} from "./types.ts";
-import {
-  RUN_ROOT,
-  DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES,
-} from "./constants.ts";
-import {
-  isRecord,
-  safeRunId,
-  digestBytes,
-} from "./util.ts";
+import type { RunWorkspace } from "./types.ts";
+import { RUN_ROOT, DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES } from "./constants.ts";
+import { isRecord, safeRunId, digestBytes } from "./util.ts";
 
 // Stores the full `tofu show -json tfplan` JSON next to the plan binary so the
 // DO/relay can promote it. The DO already promotes the tfplan binary; the
@@ -130,7 +121,7 @@ export function workspaceForRun(runId: string): RunWorkspace {
     restoredStatePath: join(root, "restored.tfstate"),
     moduleInfoPath: join(root, "module-info.json"),
     generatedRootDir: join(root, "generated-root"),
-    templateModuleDir: join(root, "generated-root", "template-module"),
+    childModuleDir: join(root, "generated-root", "module"),
     artifactDir: join(root, "artifact"),
     // The deps dir is a SIBLING of root (not under it) so the producer state
     // files restored BEFORE the run POST survive the plan/apply workspace prep,

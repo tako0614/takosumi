@@ -17,7 +17,6 @@ import {
   type D1ExecuteCommand,
 } from "../../../cli/src/cli-accounts-db.ts";
 import { integerOption, parseOptions } from "../../../cli/src/cli-options.ts";
-import { runPlatformSecrets } from "../../../cli/src/cli-platform-secrets-commands.ts";
 
 const textEncoder = new TextEncoder();
 
@@ -177,14 +176,13 @@ const platformReadinessRehearsalStepIdsForTest = [
   "capsule-launch",
   "git-url-install",
   "quota-abuse-drill",
-  "shared-cell-load",
-  "dedicated-materialize",
-  "export-self-host-import",
+  "runner-pool-load",
+  "runner-profile-migration",
+  "export-self-host-migration",
   "backup-restore",
   "sev-simulation",
   "release-rollback",
   "privacy-operation",
-  "billing-operation",
 ];
 
 async function platformReadinessTemplateForTest(): Promise<PlatformReadinessTemplateForTest> {
@@ -309,64 +307,6 @@ function structuredEvidenceFieldsForTest(
         signoffId: "signoff_launch_rehearsal",
         signedBy: "operator-owner",
       };
-    case "stripe-sandbox":
-      return {
-        mode: "sandbox",
-        checkoutSessionId: "cs_test_sandbox",
-        webhookEventId: "evt_test_sandbox",
-      };
-    case "stripe-live":
-      return {
-        mode: "live",
-        checkoutSessionId: "cs_live_rehearsal",
-        webhookEventId: "evt_live_rehearsal",
-      };
-    case "entitlement":
-      return {
-        accountId: "acct_rehearsal",
-        workspaceId: "ws_rehearsal",
-        entitlementStatus: "active",
-      };
-    case "usage-meter":
-      return {
-        meter: "agent-compute-minutes",
-        quantity: 42,
-        usageReportId: "usage_rehearsal",
-      };
-    case "usage-aggregation-policy":
-      return {
-        policyRef: "runbook://billing/usage-aggregation-policy",
-        windowStart: "2026-05-01T00:00:00Z",
-        windowEnd: "2026-05-12T00:00:00Z",
-      };
-    case "invoice":
-      return { invoiceId: "in_rehearsal", status: "paid" };
-    case "tax-policy":
-      return {
-        policyRef: "runbook://billing/tax-policy",
-        jurisdiction: "US",
-      };
-    case "plan-transition":
-      return {
-        subscriptionId: "sub_rehearsal",
-        fromPlan: "lite",
-        toPlan: "pro",
-      };
-    case "failed-payment":
-      return {
-        invoiceId: "in_failed_rehearsal",
-        webhookEventId: "evt_payment_failed",
-      };
-    case "dunning":
-      return {
-        dunningRunId: "dunning_rehearsal",
-        action: "suspend",
-      };
-    case "refund-credit":
-      return {
-        accountId: "acct_rehearsal",
-        creditNoteId: "cn_rehearsal",
-      };
     case "suspend-recover":
       return {
         suspensionEventId: "event_suspend_rehearsal",
@@ -479,11 +419,11 @@ function structuredEvidenceFieldsForTest(
       };
     case "load-test":
       return {
-        loadRunId: "shared_cell_load_rehearsal",
+        loadRunId: "runner_pool_load_rehearsal",
         tenantCount: 2,
         tenantACapsuleId: "cap_tenant_a",
         tenantBCapsuleId: "cap_tenant_b",
-        runtimeCellId: "cell_rehearsal",
+        runnerPoolId: "pool_rehearsal",
       };
     case "isolation-test":
       return {
@@ -497,17 +437,17 @@ function structuredEvidenceFieldsForTest(
       };
     case "scale-drain-event":
       return {
-        runtimeCellId: "cell_rehearsal",
+        runnerPoolId: "pool_rehearsal",
         eventId: "scale_drain_event",
       };
     case "evacuation-record":
       return {
         evacuationRunId: "evacuation_rehearsal",
-        runtimeCellId: "cell_rehearsal",
+        runnerPoolId: "pool_rehearsal",
       };
-    case "materialize-drill":
+    case "runner-profile-migration-drill":
       return {
-        materializeOperationId: "mat_rehearsal",
+        migrationOperationId: "migration_rehearsal",
         capsuleId: "cap_rehearsal",
       };
     case "readiness-probe":
@@ -523,7 +463,7 @@ function structuredEvidenceFieldsForTest(
         oidcClientId: "oidc_client_rehearsal",
         domainName: "api.acme.example",
         dataNamespace: "namespace_rehearsal",
-        serviceGrantDigest: testSha256Digest,
+        interfaceBindingDigest: testSha256Digest,
         noDataLossCheckId: "no_data_loss_rehearsal",
       };
     case "encrypted-export":
@@ -532,9 +472,9 @@ function structuredEvidenceFieldsForTest(
         archiveDigest: testSha256Digest,
         ageRecipient: "age1rehearsal",
       };
-    case "self-host-import":
+    case "self-host-migration":
       return {
-        importId: "import_rehearsal",
+        migrationId: "migration_rehearsal",
         targetHost: "selfhost.takos.local",
         oidcIssuer: "https://selfhost.takos.local/accounts",
       };
@@ -621,10 +561,10 @@ function structuredEvidenceFieldsForTest(
         reviewId: "sandbox_review_rehearsal",
         decision: "accepted",
       };
-    case "vulnerability-sla":
+    case "vulnerability-response-policy":
       return {
-        policyRef: "doc://security/vulnerability-sla",
-        dashboardRef: "dashboard://vuln-sla",
+        policyRef: "doc://security/vulnerability-response-policy",
+        dashboardRef: "dashboard://vulnerability-response",
       };
     case "secret-inventory":
       return {
@@ -748,12 +688,6 @@ function structuredEvidenceFieldsForTest(
         accountId: "acct_rehearsal",
         entitlementId: "ent_rehearsal",
       };
-    case "launch-token-consume":
-      return {
-        capsuleId: "cap_rehearsal",
-        launchTokenJti: "jti_rehearsal",
-        sessionId: "session_rehearsal",
-      };
     case "capsule-created":
       return {
         capsuleId: "cap_rehearsal",
@@ -822,7 +756,7 @@ function structuredEvidenceFieldsForTest(
       return {
         tenantACapsuleId: "cap_tenant_a",
         tenantBCapsuleId: "cap_tenant_b",
-        runtimeCellId: "cell_rehearsal",
+        runnerPoolId: "pool_rehearsal",
         loadRunId: "two_tenant_load",
       };
     case "isolation-proof":
@@ -833,14 +767,14 @@ function structuredEvidenceFieldsForTest(
       };
     case "per-capsule-metrics":
       return {
-        runtimeCellId: "cell_rehearsal",
+        runnerPoolId: "pool_rehearsal",
         tenantACapsuleId: "cap_tenant_a",
         tenantBCapsuleId: "cap_tenant_b",
         metricsDashboardRef: "dashboard://runtime/per-capsule",
       };
     case "scale-or-drain":
       return {
-        runtimeCellId: "cell_rehearsal",
+        runnerPoolId: "pool_rehearsal",
         eventId: "scale_or_drain_event",
         action: "drain",
       };
@@ -848,19 +782,19 @@ function structuredEvidenceFieldsForTest(
       return {
         capsuleId: "cap_rehearsal",
         probeRunId: "readiness_before_cutover",
-        targetRuntimeTargetId: "rtb_dedicated",
+        targetRunnerProfileId: "runner_profile_target",
       };
-    case "materialize-cutover":
+    case "runner-profile-cutover":
       return {
         capsuleId: "cap_rehearsal",
-        materializeOperationId: "mat_rehearsal",
-        targetRuntimeTargetId: "rtb_dedicated",
+        migrationOperationId: "migration_rehearsal",
+        targetRunnerProfileId: "runner_profile_target",
       };
     case "rollback-before-final":
       return {
         capsuleId: "cap_rehearsal",
         rollbackOperationId: "rollback_before_final",
-        sourceRuntimeTargetId: "rtb_shared",
+        sourceRunnerProfileId: "runner_profile_source",
       };
     case "domain-preservation":
       return {
@@ -876,15 +810,15 @@ function structuredEvidenceFieldsForTest(
         domainName: "api.acme.example",
         dataNamespace: "ns_rehearsal",
       };
-    case "clean-import":
+    case "clean-migration":
       return {
-        importId: "import_rehearsal",
+        migrationId: "migration_rehearsal",
         targetHost: "selfhost.takosumi.local",
         result: "passed",
       };
-    case "post-import-login":
+    case "post-migration-login":
       return {
-        importId: "import_rehearsal",
+        migrationId: "migration_rehearsal",
         accountId: "acct_rehearsal",
         sessionId: "selfhost_session_rehearsal",
       };
@@ -923,10 +857,10 @@ function structuredEvidenceFieldsForTest(
         rollbackRunId: "rollback_rehearsal",
         targetDigest: testSha256Digest,
       };
-    case "support-note":
+    case "release-note":
       return {
         releaseCandidate: "takosumi@1.0.0-rc.1",
-        supportNoteRef: "doc://support/release-note",
+        releaseNoteRef: "doc://release/operation-note",
       };
     case "export-or-delete-request":
       return {
@@ -945,23 +879,6 @@ function structuredEvidenceFieldsForTest(
         requestId: "privacy_request_rehearsal",
         retentionRecordId: "retention_rehearsal",
         policyRef: "policy://privacy/retention",
-      };
-    case "invoice-paid":
-      return {
-        invoiceId: "in_paid_rehearsal",
-        webhookEventId: "evt_invoice_paid",
-      };
-    case "dunning-suspension":
-      return {
-        invoiceId: "in_failed_rehearsal",
-        dunningRunId: "dunning_rehearsal",
-        suspensionEventId: "billing_suspend_event",
-      };
-    case "recovery-refund-credit":
-      return {
-        accountId: "acct_rehearsal",
-        recoveryEventId: "billing_recovery_event",
-        creditNoteId: "cn_recovery_rehearsal",
       };
     default:
       return {};
@@ -982,28 +899,15 @@ function completeRehearsalRun(id = "rehearsal-2026-05-13") {
 const testSha256Digest =
   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-function completeWranglerConfigValidationForTest(): Record<string, unknown> {
+function completeRuntimeValidationForTest(): Record<string, unknown> {
   return {
-    kind: "takosumi.cloudflare-rendered-config-validation@v1",
+    kind: "operator.runtime-validation@v1",
     ok: true,
-    configDigest: testSha256Digest,
-    mainPointsAtWorkerBundle: true,
-    bareOriginIssuerConfigured: true,
-    platformAccessClosed: true,
-    d1BindingPresent: true,
-    d1DatabaseBlockPresent: true,
-    d1DatabaseIdPresent: true,
-    d1DatabaseIdValid: true,
-    d1DatabaseIdPlaceholder: false,
-    controlD1BindingPresent: true,
-    r2BindingPresent: true,
-    r2BucketBlockPresent: true,
-    containerConfigured: true,
-    durableObjectPersistenceConfigured: true,
-    runnerDurableObjectBindingPresent: true,
-    runQueueConfigured: true,
-    workersDev: true,
-    routeConfigured: false,
+    evidenceDigest: testSha256Digest,
+    checks: {
+      artifactVerified: true,
+      configurationReviewed: true,
+    },
   };
 }
 
@@ -1037,18 +941,14 @@ function completeProductionTopologyForTest(
       id: role,
       role,
       healthProbeRef: `probe://${environment}/${role}`,
-      ...(role === "accounts"
-        ? {
-            runtime: "cloudflare-worker",
-            containerRuntime: true,
-            wranglerConfigRef: `artifact://topology/${environment}/accounts/wrangler.toml`,
-            wranglerConfigValidation: completeWranglerConfigValidationForTest(),
-            bindings: [
-              "D1:TAKOSUMI_ACCOUNTS_DB",
-              "R2:TAKOSUMI_ACCOUNTS_EXPORTS",
-            ],
-          }
-        : {}),
+      ...(role === "object-storage" || role === "dns-tls"
+        ? {}
+        : {
+            runtime: "operator.test-runtime",
+            runtimeEvidenceRef: `artifact://topology/${environment}/${role}/runtime.json`,
+            runtimeValidation: completeRuntimeValidationForTest(),
+            bindings: [`binding:${role}`],
+          }),
       ...(role === "object-storage" || role === "dns-tls"
         ? {}
         : { artifactDigest: testSha256Digest }),
@@ -1083,7 +983,7 @@ test("launch-readiness validate accepts complete platform readiness evidence", a
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     const report = JSON.parse(stdout.join("\n"));
-    expect(report.kind).toEqual("takosumi.platform-readiness-report@v1");
+    expect(report.kind).toEqual("takosumi.platform-readiness-report@v2");
     expect(report.ready).toEqual(true);
     expect(report.evidenceDigest).toEqual(await testSha256HexDigest(document));
     expect(report.missingDomains).toEqual([]);
@@ -1094,7 +994,7 @@ test("launch-readiness validate accepts complete platform readiness evidence", a
   }
 });
 
-test("launch-readiness validate accepts upload source digest identities", async () => {
+test("launch-readiness validate accepts Git SHA-256 object identities", async () => {
   const file = await makeTempFile({ suffix: ".json" });
   const document = await platformReadinessTemplateForTest();
   const rehearsalRun = completeRehearsalRun();
@@ -1105,12 +1005,12 @@ test("launch-readiness validate accepts upload source digest identities", async 
   document.rehearsal = document.rehearsal.map((entry) =>
     completePlatformReadinessEntry(entry, rehearsalRun.id),
   );
-  const sourceDigest =
+  const gitSha256ObjectId =
     "c9913a5e25d1c58da061f59d72bb0903be1a25e8b42bfbefb244def32349cbc1";
   for (const entry of [...document.domains, ...document.rehearsal]) {
     for (const evidence of entry.evidence as Record<string, unknown>[]) {
       if (typeof evidence.sourceCommit === "string") {
-        evidence.sourceCommit = sourceDigest;
+        evidence.sourceCommit = gitSha256ObjectId;
       }
     }
   }
@@ -1149,7 +1049,7 @@ test("launch-readiness validate accepts zero caps for quota guard drills", async
   );
 
   const quotaDomainEvidence = document.domains.find(
-    (entry) => entry.id === "quota-abuse-spend-control",
+    (entry) => entry.id === "quota-abuse-control",
   )!.evidence as Record<string, unknown>[];
   quotaDomainEvidence.find((entry) => entry.type === "quota-spike-drill")!.cap =
     0;
@@ -1229,13 +1129,13 @@ test("launch-readiness validate allows independent operation drills outside user
   document.rehearsal = document.rehearsal.map((entry, index: number) =>
     completePlatformReadinessEntry(entry, `operation-drill-${index}`),
   );
-  const sharedCell = document.rehearsal.find(
-    (entry) => entry.id === "shared-cell-load",
+  const runnerPool = document.rehearsal.find(
+    (entry) => entry.id === "runner-pool-load",
   )!;
   const backupRestore = document.rehearsal.find(
     (entry) => entry.id === "backup-restore",
   )!;
-  sharedCell.completedAt = "2026-05-12T01:50:00Z";
+  runnerPool.completedAt = "2026-05-12T01:50:00Z";
   backupRestore.completedAt = "2026-05-12T01:20:00Z";
   await writeTextFile(file, JSON.stringify(document));
 
@@ -1297,7 +1197,7 @@ test("launch-readiness public-summary emits a public-safe ready summary", async 
     expect(stderr).toEqual([]);
     const summary = JSON.parse(stdout.join("\n"));
     expect(summary.kind).toEqual(
-      "takosumi.platform-readiness-public-summary@v1",
+      "takosumi.platform-readiness-public-summary@v2",
     );
     expect(summary.ready).toEqual(true);
     expect(summary.status).toEqual("validator-passed");
@@ -1445,7 +1345,7 @@ test("launch-readiness public-summary rejects sensitive public text", async () =
         "--evidence-ref",
         "vault://platform-readiness/staging/rehearsal.json",
         "--public-summary",
-        "P0 evidence and one staged launch rehearsal passed for support@example.test arn:aws:iam::123456789012:role/internal acct_sensitive1 cs_live_sensitive1.",
+        "P0 evidence and one staged launch rehearsal passed for support@example.test arn:aws:iam::123456789012:role/internal acct_sensitive1.",
       ],
       {
         stdout: (line) => stdout.push(line),
@@ -1472,13 +1372,6 @@ test("launch-readiness public-summary rejects sensitive public text", async () =
         .join("\n")
         .includes(
           "--platform-public-summary must not contain internal resource IDs",
-        ),
-    ).toBeTruthy();
-    expect(
-      stderr
-        .join("\n")
-        .includes(
-          "--platform-public-summary must not contain Stripe object IDs",
         ),
     ).toBeTruthy();
   } finally {
@@ -1544,7 +1437,7 @@ test("launch-readiness public-summary validate accepts generated summaries", asy
     expect(stderr).toEqual([]);
     const report = JSON.parse(stdout.join("\n"));
     expect(report.kind).toEqual(
-      "takosumi.platform-readiness-public-summary-report@v1",
+      "takosumi.platform-readiness-public-summary-report@v2",
     );
     expect(report.valid).toEqual(true);
     expect(report.ready).toEqual(true);
@@ -1650,7 +1543,7 @@ test("launch-readiness public-summary validate rejects drifted summaries", async
     summary.validator.incompleteDomains = ["offering-definition"];
     summary.validator.missingRehearsalSteps = ["fresh-signup"];
     summary.publicResult =
-      "P0 evidence and one staged launch rehearsal passed for cus_sensitive1.";
+      "P0 evidence and one staged launch rehearsal passed for acct_sensitive1.";
     await writeTextFile(summaryFile, JSON.stringify(summary));
 
     const stdout: string[] = [];
@@ -1693,11 +1586,6 @@ test("launch-readiness public-summary validate rejects drifted summaries", async
     ).toBeTruthy();
     expect(
       report.errors.includes("rehearsalRun must match readiness file"),
-    ).toBeTruthy();
-    expect(
-      report.errors.includes(
-        "--platform-public-summary must not contain Stripe object IDs",
-      ),
     ).toBeTruthy();
   } finally {
     await removePath(readinessFile);
@@ -1805,7 +1693,8 @@ test("launch-readiness validate fails closed for incomplete evidence", async () 
   await writeTextFile(
     file,
     JSON.stringify({
-      kind: "takosumi.platform-readiness@v1",
+      kind: "takosumi.platform-readiness@v2",
+      contributions: [],
       rehearsalRun: {
         id: "",
         environment: "",
@@ -1904,10 +1793,11 @@ test("launch-readiness template prints all required evidence ids as blocked", as
   expect(code).toEqual(0);
   expect(stderr).toEqual([]);
   const template = JSON.parse(stdout.join("\n"));
-  expect(template.kind).toEqual("takosumi.platform-readiness@v1");
+  expect(template.kind).toEqual("takosumi.platform-readiness@v2");
+  expect(template.contributions).toEqual([]);
   expect(template.rehearsalRun.id).toEqual("");
-  expect(template.domains.length).toEqual(15);
-  expect(template.rehearsal.length).toEqual(12);
+  expect(template.domains.length).toEqual(13);
+  expect(template.rehearsal.length).toEqual(11);
   expect(
     template.domains.every(
       (entry: { status: string }) => entry.status === "blocked",
@@ -1939,14 +1829,6 @@ test("launch-readiness template prints all required evidence ids as blocked", as
   expect(offeringDefinition.evidence[0].briefRef).toEqual(
     "vault://platform-readiness/<briefRef>",
   );
-  const billingOperation = template.rehearsal.find(
-    (entry: { id: string }) => entry.id === "billing-operation",
-  );
-  expect(billingOperation).toBeTruthy();
-  expect(
-    billingOperation.evidence.map((entry: { type: string }) => entry.type),
-  ).toEqual(billingOperation.requiredEvidenceTypes);
-  expect(billingOperation.evidence[0].invoiceId).toEqual("<invoiceId>");
   expect(
     Object.fromEntries(
       template.domains.map(
@@ -1983,52 +1865,33 @@ test("launch-readiness template prints all required evidence ids as blocked", as
       "fresh-user-smoke",
       "email-assurance",
       "team-membership",
-      "launch-token-consume",
       "capsule-created",
-      "terms-acceptance",
       "suspend-recover",
     ],
-    "billing-entitlement": [
-      "stripe-sandbox",
-      "stripe-live",
-      "entitlement",
-      "usage-meter",
-      "usage-aggregation-policy",
-      "invoice",
-      "tax-policy",
-      "plan-transition",
-      "failed-payment",
-      "dunning",
-      "refund-credit",
-      "suspend-recover",
-    ],
-    "quota-abuse-spend-control": [
+    "quota-abuse-control": [
       "quota-plan",
-      "spend-cap",
-      "llm-tool-usage-cap",
       "quota-spike-drill",
       "noisy-tenant-throttle",
       "run-kill-switch",
-      "abuse-queue-review",
       "operator-override",
       "audit-event",
     ],
-    "shared-cell-production-runtime": [
+    "runner-pool-production-runtime": [
       "load-test",
       "isolation-test",
       "metric-labels",
       "scale-drain-event",
       "evacuation-record",
     ],
-    "dedicated-materialize": [
-      "materialize-drill",
+    "runner-profile-migration": [
+      "runner-profile-migration-drill",
       "readiness-probe",
       "rollback-drill",
       "continuity-evidence",
     ],
     "export-self-host-sovereignty": [
       "encrypted-export",
-      "self-host-import",
+      "self-host-migration",
       "sample-data-verification",
     ],
     "backup-dr": [
@@ -2058,27 +1921,13 @@ test("launch-readiness template prints all required evidence ids as blocked", as
     "security-operations": [
       "threat-model",
       "sandbox-review",
-      "vulnerability-sla",
+      "vulnerability-response-policy",
       "secret-inventory",
       "secret-rotation-run-log",
       "security-contact",
       "deploy-control-abuse-blocked",
     ],
-    "legal-privacy-support": [
-      "legal-signoff",
-      "public-legal-pages",
-      "support-mailbox-test",
-      "sar-delete-rehearsal",
-      "billing-support-runbook",
-    ],
-    "customer-operations": [
-      "onboarding-guide",
-      "admin-guide",
-      "billing-faq",
-      "export-guide",
-      "escalation-matrix",
-      "suspension-delete-export-wording",
-    ],
+    "legal-privacy": ["sar-delete-rehearsal"],
   });
   expect(
     Object.fromEntries(
@@ -2090,18 +1939,8 @@ test("launch-readiness template prints all required evidence ids as blocked", as
       ),
     ),
   ).toEqual({
-    "fresh-signup": [
-      "signup-event",
-      "email-assurance",
-      "team-membership",
-      "terms-acceptance",
-      "entitlement-event",
-    ],
-    "capsule-launch": [
-      "launch-token-consume",
-      "capsule-created",
-      "capsule-session",
-    ],
+    "fresh-signup": ["signup-event", "email-assurance", "team-membership"],
+    "capsule-launch": ["capsule-created", "capsule-session"],
     "git-url-install": [
       "capsule-plan-run",
       "cost-review",
@@ -2110,23 +1949,23 @@ test("launch-readiness template prints all required evidence ids as blocked", as
       "event-hash-chain",
     ],
     "quota-abuse-drill": ["quota-exceeded", "guard-action", "override-audit"],
-    "shared-cell-load": [
+    "runner-pool-load": [
       "two-tenant-load",
       "isolation-proof",
       "per-capsule-metrics",
       "scale-or-drain",
     ],
-    "dedicated-materialize": [
+    "runner-profile-migration": [
       "readiness-before-cutover",
-      "materialize-cutover",
+      "runner-profile-cutover",
       "rollback-before-final",
       "domain-preservation",
       "preserve-evidence",
     ],
-    "export-self-host-import": [
+    "export-self-host-migration": [
       "encrypted-export",
-      "clean-import",
-      "post-import-login",
+      "clean-migration",
+      "post-migration-login",
       "sample-data-verification",
       "source-retention-state",
     ],
@@ -2137,19 +1976,159 @@ test("launch-readiness template prints all required evidence ids as blocked", as
       "rpo-rto-sample",
     ],
     "sev-simulation": ["alert", "ack", "status-update", "postmortem"],
-    "release-rollback": ["release-promotion", "rollback", "support-note"],
+    "release-rollback": ["release-promotion", "rollback", "release-note"],
     "privacy-operation": [
       "export-or-delete-request",
       "login-disabled-or-exported",
       "retention-record",
     ],
-    "billing-operation": [
-      "invoice-paid",
-      "failed-payment",
-      "dunning-suspension",
-      "recovery-refund-credit",
-    ],
   });
+});
+
+test("launch-readiness composes an extension contribution through template, validation, and public summary", async () => {
+  const contributionFile = await makeTempFile({ suffix: ".json" });
+  const readinessFile = await makeTempFile({ suffix: ".json" });
+  const contribution = {
+    kind: "takosumi.platform-readiness-contribution@v1",
+    id: "operator-external-system",
+    version: "2.1.0",
+    capability: "operator.external-system.v1",
+    domains: [
+      {
+        id: "external-system-operation",
+        requiredEvidenceTypes: ["external-system-proof"],
+      },
+    ],
+    evidenceSchemas: {
+      "external-system-proof": {
+        fields: ["proofId"],
+        patterns: { proofId: "^proof_[a-z0-9]{6,}$" },
+      },
+    },
+    collectionClassHints: {
+      "external-provider": ["external-system-proof"],
+    },
+    forbiddenSummaryPatterns: ["\\bproof_[a-z0-9]{6,}\\b"],
+  };
+  await writeTextFile(contributionFile, JSON.stringify(contribution));
+
+  try {
+    const templateStdout: string[] = [];
+    const templateCode = await main(
+      ["launch-readiness", "template", "--contribution-file", contributionFile],
+      {
+        stdout: (line) => templateStdout.push(line),
+        stderr: () => undefined,
+      },
+    );
+    expect(templateCode).toEqual(0);
+    const document = JSON.parse(templateStdout.join("\n"));
+    expect(document.contributions).toEqual([contribution]);
+    expect(
+      document.domains.some(
+        (entry: Record<string, unknown>) =>
+          entry.id === "external-system-operation",
+      ),
+    ).toBe(true);
+
+    const rehearsalRun = completeRehearsalRun();
+    document.rehearsalRun = rehearsalRun;
+    document.domains = document.domains.map((entry: Record<string, unknown>) =>
+      completePlatformReadinessEntry(entry),
+    );
+    document.rehearsal = document.rehearsal.map(
+      (entry: Record<string, unknown>) =>
+        completePlatformReadinessEntry(entry, rehearsalRun.id),
+    );
+    const extensionEntry = document.domains.find(
+      (entry: Record<string, unknown>) =>
+        entry.id === "external-system-operation",
+    );
+    extensionEntry.evidence[0].proofId = "proof_abcdef";
+    await writeTextFile(readinessFile, JSON.stringify(document));
+
+    const validateStdout: string[] = [];
+    const validateCode = await main(
+      ["launch-readiness", "validate", "--file", readinessFile, "--json"],
+      {
+        stdout: (line) => validateStdout.push(line),
+        stderr: () => undefined,
+      },
+    );
+    expect(validateCode).toEqual(0);
+    const report = JSON.parse(validateStdout.join("\n"));
+    expect(report.contributions).toEqual([
+      {
+        id: contribution.id,
+        version: contribution.version,
+        capability: contribution.capability,
+      },
+    ]);
+    expect(report.collectionClassHints).toEqual({
+      "external-provider": ["external-system-proof"],
+    });
+
+    const summaryStdout: string[] = [];
+    const summaryCode = await main(
+      [
+        "launch-readiness",
+        "public-summary",
+        "--file",
+        readinessFile,
+        "--evidence-ref",
+        "vault://readiness/operator-extension",
+        "--public-summary",
+        "P0 evidence and the staged launch rehearsal passed for the selected operator extension.",
+      ],
+      {
+        stdout: (line) => summaryStdout.push(line),
+        stderr: () => undefined,
+      },
+    );
+    expect(summaryCode).toEqual(0);
+    expect(JSON.parse(summaryStdout.join("\n")).profile.contributions).toEqual(
+      report.contributions,
+    );
+  } finally {
+    await removePath(contributionFile);
+    await removePath(readinessFile);
+  }
+});
+
+test("launch-readiness rejects contribution definitions that are not self-contained", async () => {
+  const contributionFile = await makeTempFile({ suffix: ".json" });
+  await writeTextFile(
+    contributionFile,
+    JSON.stringify({
+      kind: "takosumi.platform-readiness-contribution@v1",
+      id: "incomplete-operator-extension",
+      version: "1.0.0",
+      capability: "operator.incomplete-extension.v1",
+      domains: [
+        {
+          id: "external-system-operation",
+          requiredEvidenceTypes: ["missing-extension-proof-schema"],
+        },
+      ],
+    }),
+  );
+
+  try {
+    const stderr: string[] = [];
+    const code = await main(
+      ["launch-readiness", "template", "--contribution-file", contributionFile],
+      {
+        stdout: () => undefined,
+        stderr: (line) => stderr.push(line),
+      },
+    );
+    expect(code).toEqual(2);
+    expect(stderr.join("\n")).toContain(
+      "requires evidence schema missing-extension-proof-schema",
+    );
+  } finally {
+    await removePath(contributionFile);
+  }
 });
 
 test("launch-readiness oidc-account-security evidence merges verified JWKS evidence", async () => {
@@ -2343,8 +2322,12 @@ test("launch-readiness migrate-final-model rewrites legacy evidence names withou
     kind: "takosumi.platform-readiness@v1",
     domains: [
       {
-        id: "signup-tenant-lifecycle",
-        requiredEvidenceTypes: ["launch-token-consume", "installation-created"],
+        id: "quota-abuse-spend-control",
+        requiredEvidenceTypes: [
+          "launch-token-consume",
+          "installation-created",
+          "vulnerability-sla",
+        ],
         evidence: [
           {
             type: "launch-token-consume",
@@ -2367,6 +2350,50 @@ test("launch-readiness migrate-final-model rewrites legacy evidence names withou
             type: "metric-labels",
             labelSet: "installation_id,tenant_id",
           },
+          {
+            type: "vulnerability-sla",
+            policyRef: "doc://security/vulnerability-policy",
+          },
+        ],
+      },
+      {
+        id: "legal-privacy-support",
+        requiredEvidenceTypes: [],
+        evidence: [],
+      },
+      {
+        id: "shared-cell-production-runtime",
+        requiredEvidenceTypes: ["load-test"],
+        evidence: [
+          {
+            type: "load-test",
+            runtimeCellId: "cell_private_rehearsal",
+          },
+        ],
+      },
+      {
+        id: "dedicated-materialize",
+        requiredEvidenceTypes: ["materialize-drill", "continuity-evidence"],
+        evidence: [
+          {
+            type: "materialize-drill",
+            materializeOperationId: "materialize_private_rehearsal",
+            installationId: "inst_private_rehearsal",
+          },
+          {
+            type: "continuity-evidence",
+            serviceGrantDigest: `sha256:${"1".repeat(64)}`,
+          },
+        ],
+      },
+      {
+        id: "export-self-host-sovereignty",
+        requiredEvidenceTypes: ["self-host-import"],
+        evidence: [
+          {
+            type: "self-host-import",
+            importId: "import_private_rehearsal",
+          },
         ],
       },
     ],
@@ -2388,13 +2415,64 @@ test("launch-readiness migrate-final-model rewrites legacy evidence names withou
         ],
       },
       {
-        id: "shared-cell-load",
-        requiredEvidenceTypes: ["per-installation-metrics"],
+        id: "release-rollback",
+        requiredEvidenceTypes: ["per-installation-metrics", "support-note"],
         evidence: [
           {
             type: "per-installation-metrics",
             tenantAInstallationId: "inst_tenant_a_private",
             tenantBInstallationId: "inst_tenant_b_private",
+          },
+          {
+            type: "support-note",
+            supportNoteRef: "doc://release/operation-note",
+          },
+        ],
+      },
+      {
+        id: "shared-cell-load",
+        requiredEvidenceTypes: ["two-tenant-load"],
+        evidence: [
+          {
+            type: "two-tenant-load",
+            runtimeCellId: "cell_private_rehearsal",
+          },
+        ],
+      },
+      {
+        id: "dedicated-materialize",
+        requiredEvidenceTypes: [
+          "readiness-before-cutover",
+          "materialize-cutover",
+          "rollback-before-final",
+        ],
+        evidence: [
+          {
+            type: "readiness-before-cutover",
+            targetRuntimeTargetId: "runtime_target_private_rehearsal",
+          },
+          {
+            type: "materialize-cutover",
+            materializeOperationId: "materialize_private_rehearsal",
+            targetRuntimeTargetId: "runtime_target_private_rehearsal",
+          },
+          {
+            type: "rollback-before-final",
+            sourceRuntimeTargetId: "runtime_source_private_rehearsal",
+          },
+        ],
+      },
+      {
+        id: "export-self-host-import",
+        requiredEvidenceTypes: ["clean-import", "post-import-login"],
+        evidence: [
+          {
+            type: "clean-import",
+            importId: "import_private_rehearsal",
+          },
+          {
+            type: "post-import-login",
+            importId: "import_private_rehearsal",
           },
         ],
       },
@@ -2435,19 +2513,149 @@ test("launch-readiness migrate-final-model rewrites legacy evidence names withou
     ).toEqual(true);
 
     const migrated = JSON.parse(await readFile(out, "utf8"));
+    expect(migrated.kind).toEqual("takosumi.platform-readiness@v2");
+    expect(migrated.contributions).toEqual([]);
     const migratedText = JSON.stringify(migrated);
     expect(migratedText).not.toContain("installation-created");
+    expect(migratedText).not.toContain("launch-token-consume");
     expect(migratedText).not.toContain('"installationId"');
     expect(migratedText).not.toContain('"spaceId"');
     expect(migratedText).not.toContain('"deploymentId"');
     expect(migratedText).not.toContain("per-installation-metrics");
+    expect(migratedText).not.toContain("quota-abuse-spend-control");
+    expect(migratedText).not.toContain("legal-privacy-support");
+    expect(migratedText).not.toContain("shared-cell-production-runtime");
+    expect(migratedText).not.toContain("shared-cell-load");
+    expect(migratedText).not.toContain("dedicated-materialize");
+    expect(migratedText).not.toContain("export-self-host-import");
+    expect(migratedText).not.toContain("runtimeCellId");
+    expect(migratedText).not.toContain("materializeOperationId");
+    expect(migratedText).not.toContain("targetRuntimeTargetId");
+    expect(migratedText).not.toContain("sourceRuntimeTargetId");
+    expect(migratedText).not.toContain('"importId"');
+    expect(migratedText).not.toContain("serviceGrantDigest");
+    expect(migratedText).not.toContain("materialize-drill");
+    expect(migratedText).not.toContain("materialize-cutover");
+    expect(migratedText).not.toContain("self-host-import");
+    expect(migratedText).not.toContain("clean-import");
+    expect(migratedText).not.toContain("post-import-login");
+    expect(migratedText).not.toContain("support-note");
+    expect(migratedText).not.toContain("supportNoteRef");
+    expect(migratedText).not.toContain("vulnerability-sla");
     expect(migratedText).toContain("capsule-created");
     expect(migratedText).toContain("capsuleId");
     expect(migratedText).toContain("workspaceId");
     expect(migratedText).toContain("stateVersionId");
     expect(migratedText).toContain("per-capsule-metrics");
+    expect(migratedText).toContain("quota-abuse-control");
+    expect(migratedText).toContain("legal-privacy");
+    expect(migratedText).toContain("runner-pool-production-runtime");
+    expect(migratedText).toContain("runner-pool-load");
+    expect(migratedText).toContain("runner-profile-migration");
+    expect(migratedText).toContain("export-self-host-migration");
+    expect(migratedText).toContain("runnerPoolId");
+    expect(migratedText).toContain("migrationOperationId");
+    expect(migratedText).toContain("targetRunnerProfileId");
+    expect(migratedText).toContain("sourceRunnerProfileId");
+    expect(migratedText).toContain('"migrationId"');
+    expect(migratedText).toContain("interfaceBindingDigest");
+    expect(migratedText).toContain("runner-profile-migration-drill");
+    expect(migratedText).toContain("runner-profile-cutover");
+    expect(migratedText).toContain("self-host-migration");
+    expect(migratedText).toContain("clean-migration");
+    expect(migratedText).toContain("post-migration-login");
+    expect(migratedText).toContain("release-note");
+    expect(migratedText).toContain("releaseNoteRef");
+    expect(migratedText).toContain("vulnerability-response-policy");
     expect(migratedText).toContain("account,workspace,capsule,run,output");
     expect(migratedText).toContain("capsule_id,tenant_id");
+  } finally {
+    await removePath(file);
+    await removePath(out);
+  }
+});
+
+test("launch-readiness migrate-final-model preserves an operation drill envelope", async () => {
+  const file = await makeTempFile({ suffix: ".json" });
+  const out = await makeTempFile({ suffix: ".json" });
+  await writeTextFile(
+    file,
+    JSON.stringify({
+      kind: "takosumi.operation-drill-evidence@v1",
+      generatedAt: "2026-05-13T00:00:00Z",
+      readinessPatch: {
+        domains: [
+          {
+            id: "shared-cell-production-runtime",
+            evidence: [
+              {
+                type: "load-test",
+                runtimeCellId: "cell_private_rehearsal",
+              },
+            ],
+          },
+        ],
+        rehearsal: [
+          {
+            id: "dedicated-materialize",
+            evidence: [
+              {
+                type: "materialize-cutover",
+                materializeOperationId: "materialize_private_rehearsal",
+                targetRuntimeTargetId: "runtime_target_private_rehearsal",
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+
+  try {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await main(
+      [
+        "launch-readiness",
+        "migrate-final-model",
+        "--file",
+        file,
+        "--out",
+        out,
+        "--json",
+      ],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    expect(stdout.join("\n")).not.toContain("cell_private_rehearsal");
+    const migrated = JSON.parse(await readFile(out, "utf8"));
+    expect(migrated.kind).toEqual("takosumi.operation-drill-evidence@v1");
+    expect(migrated.generatedAt).toEqual("2026-05-13T00:00:00Z");
+    expect(migrated.contributions).toBeUndefined();
+    expect(migrated.readinessPatch.domains[0]).toMatchObject({
+      id: "runner-pool-production-runtime",
+      evidence: [
+        {
+          type: "load-test",
+          runnerPoolId: "cell_private_rehearsal",
+        },
+      ],
+    });
+    expect(migrated.readinessPatch.rehearsal[0]).toMatchObject({
+      id: "runner-profile-migration",
+      evidence: [
+        {
+          type: "runner-profile-cutover",
+          migrationOperationId: "materialize_private_rehearsal",
+          targetRunnerProfileId: "runtime_target_private_rehearsal",
+        },
+      ],
+    });
   } finally {
     await removePath(file);
     await removePath(out);
@@ -2513,7 +2721,8 @@ test("launch-readiness validate rejects shallow evidence references", async () =
   await writeTextFile(
     file,
     JSON.stringify({
-      kind: "takosumi.platform-readiness@v1",
+      kind: "takosumi.platform-readiness@v2",
+      contributions: [],
       rehearsalRun: {
         id: "rehearsal-2026-05-13",
         environment: "staging",
@@ -2777,48 +2986,6 @@ test("launch-readiness validate rejects sensitive public summaries for private e
   }
 });
 
-test("launch-readiness validate requires billing launch policy evidence", async () => {
-  const file = await makeTempFile({ suffix: ".json" });
-  const document = await platformReadinessTemplateForTest();
-  const rehearsalRun = completeRehearsalRun();
-  document.rehearsalRun = rehearsalRun;
-  document.domains = document.domains.map((entry) =>
-    completePlatformReadinessEntry(entry),
-  );
-  document.rehearsal = document.rehearsal.map((entry) =>
-    completePlatformReadinessEntry(entry, rehearsalRun.id),
-  );
-  const billing = document.domains.find(
-    (entry) => entry.id === "billing-entitlement",
-  ) as Record<string, unknown>;
-  billing.evidence = (billing.evidence as Record<string, unknown>[]).filter(
-    (entry) => entry.type !== "tax-policy",
-  );
-  await writeTextFile(file, JSON.stringify(document));
-
-  try {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    const code = await main(
-      ["launch-readiness", "validate", "--file", file, "--json"],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(1);
-    expect(stderr).toEqual([]);
-    const report = JSON.parse(stdout.join("\n"));
-    expect(report.ready).toEqual(false);
-    expect(
-      report.incompleteDomains.includes("billing-entitlement"),
-    ).toBeTruthy();
-  } finally {
-    await removePath(file);
-  }
-});
-
 test("launch-readiness validate requires structured high-risk P0 evidence", async () => {
   const file = await makeTempFile({ suffix: ".json" });
   const document = await platformReadinessTemplateForTest();
@@ -2895,9 +3062,6 @@ test("launch-readiness validate requires structured staged rehearsal evidence", 
   const gitInstall = document.rehearsal.find(
     (entry) => entry.id === "git-url-install",
   )!;
-  const billingOperation = document.rehearsal.find(
-    (entry) => entry.id === "billing-operation",
-  )!;
   delete (freshSignup.evidence as Array<Record<string, unknown>>).find(
     (entry) => entry.type === "team-membership",
   )!.membershipEventId;
@@ -2907,9 +3071,6 @@ test("launch-readiness validate requires structured staged rehearsal evidence", 
   delete (gitInstall.evidence as Array<Record<string, unknown>>).find(
     (entry) => entry.type === "capsule-apply",
   )!.planDigest;
-  delete (billingOperation.evidence as Array<Record<string, unknown>>).find(
-    (entry) => entry.type === "recovery-refund-credit",
-  )!.creditNoteId;
 
   try {
     await writeTextFile(file, JSON.stringify(document));
@@ -2934,9 +3095,6 @@ test("launch-readiness validate requires structured staged rehearsal evidence", 
     expect(
       report.incompleteRehearsalSteps.includes("git-url-install"),
     ).toBeTruthy();
-    expect(
-      report.incompleteRehearsalSteps.includes("billing-operation"),
-    ).toBeTruthy();
   } finally {
     await removePath(file);
   }
@@ -2954,12 +3112,6 @@ test("launch-readiness validate rejects malformed structured evidence field shap
     completePlatformReadinessEntry(entry, rehearsalRun.id),
   );
 
-  const billingEvidence = document.domains.find(
-    (entry) => entry.id === "billing-entitlement",
-  )!.evidence as Record<string, unknown>[];
-  billingEvidence.find(
-    (entry) => entry.type === "usage-aggregation-policy",
-  )!.windowEnd = "2026-04-01T00:00:00Z";
   const releaseEvidence = document.domains.find(
     (entry) => entry.id === "release-provenance",
   )!.evidence as Record<string, unknown>[];
@@ -2977,21 +3129,21 @@ test("launch-readiness validate rejects malformed structured evidence field shap
   freshSignupEvidence.find(
     (entry) => entry.type === "email-assurance",
   )!.verifiedAt = "not-a-date";
-  const dedicatedEvidence = document.rehearsal.find(
-    (entry) => entry.id === "dedicated-materialize",
+  const runnerProfileEvidence = document.rehearsal.find(
+    (entry) => entry.id === "runner-profile-migration",
   )!.evidence as Record<string, unknown>[];
-  dedicatedEvidence.find(
+  runnerProfileEvidence.find(
     (entry) => entry.type === "preserve-evidence",
   )!.sourceCommit = "main";
-  const sharedCellEvidence = document.domains.find(
-    (entry) => entry.id === "shared-cell-production-runtime",
+  const runnerPoolEvidence = document.domains.find(
+    (entry) => entry.id === "runner-pool-production-runtime",
   )!.evidence as Record<string, unknown>[];
-  sharedCellEvidence.find((entry) => entry.type === "load-test")!.tenantCount =
+  runnerPoolEvidence.find((entry) => entry.type === "load-test")!.tenantCount =
     1;
-  const materializeEvidence = document.domains.find(
-    (entry) => entry.id === "dedicated-materialize",
+  const runnerProfileDomainEvidence = document.domains.find(
+    (entry) => entry.id === "runner-profile-migration",
   )!.evidence as Record<string, unknown>[];
-  materializeEvidence.find(
+  runnerProfileDomainEvidence.find(
     (entry) => entry.type === "continuity-evidence",
   )!.sourceCommit = "main";
   const exportEvidence = document.domains.find(
@@ -3018,10 +3170,7 @@ test("launch-readiness validate rejects malformed structured evidence field shap
     const report = JSON.parse(stdout.join("\n"));
     expect(report.ready).toEqual(false);
     expect(
-      report.incompleteDomains.includes("billing-entitlement"),
-    ).toBeTruthy();
-    expect(
-      report.incompleteDomains.includes("dedicated-materialize"),
+      report.incompleteDomains.includes("runner-profile-migration"),
     ).toBeTruthy();
     expect(
       report.incompleteDomains.includes("export-self-host-sovereignty"),
@@ -3030,7 +3179,7 @@ test("launch-readiness validate rejects malformed structured evidence field shap
       report.incompleteDomains.includes("release-provenance"),
     ).toBeTruthy();
     expect(
-      report.incompleteDomains.includes("shared-cell-production-runtime"),
+      report.incompleteDomains.includes("runner-pool-production-runtime"),
     ).toBeTruthy();
     expect(
       report.incompleteRehearsalSteps.includes("fresh-signup"),
@@ -3039,7 +3188,7 @@ test("launch-readiness validate rejects malformed structured evidence field shap
       report.incompleteRehearsalSteps.includes("git-url-install"),
     ).toBeTruthy();
     expect(
-      report.incompleteRehearsalSteps.includes("dedicated-materialize"),
+      report.incompleteRehearsalSteps.includes("runner-profile-migration"),
     ).toBeTruthy();
   } finally {
     await removePath(file);
@@ -3058,10 +3207,6 @@ test("launch-readiness validate rejects non-passing structured evidence values",
     completePlatformReadinessEntry(entry, rehearsalRun.id),
   );
 
-  const billingEvidence = document.domains.find(
-    (entry) => entry.id === "billing-entitlement",
-  )!.evidence as Record<string, unknown>[];
-  billingEvidence.find((entry) => entry.type === "invoice")!.status = "draft";
   const releaseEvidence = document.domains.find(
     (entry) => entry.id === "release-provenance",
   )!.evidence as Record<string, unknown>[];
@@ -3094,9 +3239,6 @@ test("launch-readiness validate rejects non-passing structured evidence values",
     expect(stderr).toEqual([]);
     const report = JSON.parse(stdout.join("\n"));
     expect(report.ready).toEqual(false);
-    expect(
-      report.incompleteDomains.includes("billing-entitlement"),
-    ).toBeTruthy();
     expect(
       report.incompleteDomains.includes("release-provenance"),
     ).toBeTruthy();
@@ -3136,10 +3278,10 @@ test("launch-readiness validate rejects placeholder structured evidence refs", a
     (entry) => entry.type === "threat-model",
   )!.threatModelRef = "https://example.com/threat-model";
   const legalEvidence = document.domains.find(
-    (entry) => entry.id === "legal-privacy-support",
+    (entry) => entry.id === "legal-privacy",
   )!.evidence as Record<string, unknown>[];
-  legalEvidence.find((entry) => entry.type === "public-legal-pages")!.termsUrl =
-    "https://accounts.example.invalid/terms";
+  legalEvidence.find((entry) => entry.type === "sar-delete-rehearsal")!.result =
+    "placeholder";
   await writeTextFile(file, JSON.stringify(document));
 
   try {
@@ -3163,9 +3305,7 @@ test("launch-readiness validate rejects placeholder structured evidence refs", a
     expect(
       report.incompleteDomains.includes("security-operations"),
     ).toBeTruthy();
-    expect(
-      report.incompleteDomains.includes("legal-privacy-support"),
-    ).toBeTruthy();
+    expect(report.incompleteDomains.includes("legal-privacy")).toBeTruthy();
   } finally {
     await removePath(file);
   }
@@ -3275,11 +3415,11 @@ test("launch-readiness validate rejects sensitive evidence summaries", async () 
     completePlatformReadinessEntry(entry, rehearsalRun.id),
   );
 
-  const billingEvidence = document.domains.find(
-    (entry) => entry.id === "billing-entitlement",
+  const offeringEvidence = document.domains.find(
+    (entry) => entry.id === "offering-definition",
   )!.evidence as Record<string, unknown>[];
-  billingEvidence.find((entry) => entry.type === "stripe-live")!.summary =
-    "Live billing evidence used sk_live_sensitive12345 during rehearsal.";
+  offeringEvidence[0]!.summary =
+    "Readiness evidence used Bearer sensitive_token_123456 during rehearsal.";
   await writeTextFile(file, JSON.stringify(document));
 
   try {
@@ -3298,7 +3438,7 @@ test("launch-readiness validate rejects sensitive evidence summaries", async () 
     const report = JSON.parse(stdout.join("\n"));
     expect(report.ready).toEqual(false);
     expect(
-      report.incompleteDomains.includes("billing-entitlement"),
+      report.incompleteDomains.includes("offering-definition"),
     ).toBeTruthy();
   } finally {
     await removePath(file);
@@ -3430,33 +3570,27 @@ test("launch-readiness validate rejects inconsistent staged rehearsal references
     (entry) => entry.id === "fresh-signup",
   )!.evidence as Record<string, unknown>[];
   freshSignupEvidence.find(
-    (entry) => entry.type === "terms-acceptance",
+    (entry) => entry.type === "email-assurance",
   )!.accountId = "acct_other";
   const gitInstallEvidence = document.rehearsal.find(
     (entry) => entry.id === "git-url-install",
   )!.evidence as Record<string, unknown>[];
   gitInstallEvidence.find((entry) => entry.type === "oidc-login")!.capsuleId =
     "cap_other";
-  const billingEvidence = document.rehearsal.find(
-    (entry) => entry.id === "billing-operation",
+  const runnerPoolEvidence = document.rehearsal.find(
+    (entry) => entry.id === "runner-pool-load",
   )!.evidence as Record<string, unknown>[];
-  billingEvidence.find(
-    (entry) => entry.type === "dunning-suspension",
-  )!.invoiceId = "in_other";
-  const sharedCellEvidence = document.rehearsal.find(
-    (entry) => entry.id === "shared-cell-load",
-  )!.evidence as Record<string, unknown>[];
-  sharedCellEvidence.find(
+  runnerPoolEvidence.find(
     (entry) => entry.type === "per-capsule-metrics",
-  )!.runtimeCellId = "cell_other";
-  const dedicatedEvidence = document.rehearsal.find(
-    (entry) => entry.id === "dedicated-materialize",
+  )!.runnerPoolId = "pool_other";
+  const runnerProfileEvidence = document.rehearsal.find(
+    (entry) => entry.id === "runner-profile-migration",
   )!.evidence as Record<string, unknown>[];
-  dedicatedEvidence.find(
+  runnerProfileEvidence.find(
     (entry) => entry.type === "domain-preservation",
   )!.domainName = "other.acme.example";
   const exportEvidence = document.rehearsal.find(
-    (entry) => entry.id === "export-self-host-import",
+    (entry) => entry.id === "export-self-host-migration",
   )!.evidence as Record<string, unknown>[];
   exportEvidence.find(
     (entry) => entry.type === "source-retention-state",
@@ -3485,75 +3619,13 @@ test("launch-readiness validate rejects inconsistent staged rehearsal references
       report.incompleteRehearsalSteps.includes("git-url-install"),
     ).toBeTruthy();
     expect(
-      report.incompleteRehearsalSteps.includes("shared-cell-load"),
+      report.incompleteRehearsalSteps.includes("runner-pool-load"),
     ).toBeTruthy();
     expect(
-      report.incompleteRehearsalSteps.includes("dedicated-materialize"),
+      report.incompleteRehearsalSteps.includes("runner-profile-migration"),
     ).toBeTruthy();
     expect(
-      report.incompleteRehearsalSteps.includes("export-self-host-import"),
-    ).toBeTruthy();
-    expect(
-      report.incompleteRehearsalSteps.includes("billing-operation"),
-    ).toBeTruthy();
-  } finally {
-    await removePath(file);
-  }
-});
-
-test("launch-readiness validate rejects generic IDs for structured billing evidence", async () => {
-  const file = await makeTempFile({ suffix: ".json" });
-  const document = await platformReadinessTemplateForTest();
-  const rehearsalRun = completeRehearsalRun();
-  document.rehearsalRun = rehearsalRun;
-  document.domains = document.domains.map((entry) =>
-    completePlatformReadinessEntry(entry),
-  );
-  document.rehearsal = document.rehearsal.map((entry) =>
-    completePlatformReadinessEntry(entry, rehearsalRun.id),
-  );
-  const billing = document.domains.find(
-    (entry) => entry.id === "billing-entitlement",
-  ) as Record<string, unknown>;
-  const evidence = billing.evidence as Record<string, unknown>[];
-  const stripeLive = evidence.find((entry) => entry.type === "stripe-live");
-  expect(stripeLive).toBeTruthy();
-  stripeLive.checkoutSessionId = "checkout_live_rehearsal";
-  stripeLive.webhookEventId = "webhook_live_rehearsal";
-  const billingOperation = document.rehearsal.find(
-    (entry) => entry.id === "billing-operation",
-  ) as Record<string, unknown>;
-  const operationEvidence = billingOperation.evidence as Record<
-    string,
-    unknown
-  >[];
-  operationEvidence.find((entry) => entry.type === "invoice-paid")!.invoiceId =
-    "invoice_paid_rehearsal";
-  operationEvidence.find(
-    (entry) => entry.type === "recovery-refund-credit",
-  )!.creditNoteId = "credit_note_recovery_rehearsal";
-  await writeTextFile(file, JSON.stringify(document));
-
-  try {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    const code = await main(
-      ["launch-readiness", "validate", "--file", file, "--json"],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(1);
-    expect(stderr).toEqual([]);
-    const report = JSON.parse(stdout.join("\n"));
-    expect(report.ready).toEqual(false);
-    expect(
-      report.incompleteDomains.includes("billing-entitlement"),
-    ).toBeTruthy();
-    expect(
-      report.incompleteRehearsalSteps.includes("billing-operation"),
+      report.incompleteRehearsalSteps.includes("export-self-host-migration"),
     ).toBeTruthy();
   } finally {
     await removePath(file);
@@ -3695,12 +3767,6 @@ test("launch-readiness validate rejects loose or non-UTC evidence timestamps", a
   );
   document.domains[0].completedAt = "2026-05-12T01:00:00+09:00";
   document.rehearsal[0].completedAt = "2026-05-12 01:00:00";
-  const billingEvidence = document.domains.find(
-    (entry) => entry.id === "billing-entitlement",
-  )!.evidence as Record<string, unknown>[];
-  billingEvidence.find(
-    (entry) => entry.type === "usage-aggregation-policy",
-  )!.windowStart = "2026-05-01";
   await writeTextFile(file, JSON.stringify(document));
 
   try {
@@ -3723,9 +3789,6 @@ test("launch-readiness validate rejects loose or non-UTC evidence timestamps", a
     ).toBeTruthy();
     expect(
       report.incompleteDomains.includes("offering-definition"),
-    ).toBeTruthy();
-    expect(
-      report.incompleteDomains.includes("billing-entitlement"),
     ).toBeTruthy();
     expect(
       report.incompleteRehearsalSteps.includes("fresh-signup"),
@@ -4022,14 +4085,12 @@ test("launch-readiness production-topology template prints preflight input shape
   const accountsTemplate = template.components.find(
     (entry: { role: string }) => entry.role === "accounts",
   );
-  expect(accountsTemplate.wranglerConfigValidation.kind).toEqual(
-    "takosumi.cloudflare-rendered-config-validation@v1",
+  expect(accountsTemplate.runtime).toEqual("<operator-runtime-token>");
+  expect(accountsTemplate.runtimeValidation.kind).toEqual(
+    "operator.runtime-validation@v1",
   );
-  expect(accountsTemplate.wranglerConfigValidation.ok).toEqual(true);
-  expect(accountsTemplate.wranglerConfigValidation.d1BindingPresent).toEqual(
-    true,
-  );
-  expect(accountsTemplate.wranglerConfigValidation.r2BindingPresent).toEqual(
+  expect(accountsTemplate.runtimeValidation.ok).toEqual(true);
+  expect(accountsTemplate.runtimeValidation.checks.operatorReviewed).toEqual(
     true,
   );
 
@@ -4718,18 +4779,17 @@ test("launch-readiness production-topology preflight rejects missing field-level
   }
 });
 
-test("launch-readiness production-topology preflight requires Accounts Worker D1/R2 evidence", async () => {
+test("launch-readiness production-topology preflight requires generic runtime evidence", async () => {
   const file = await makeTempFile({ suffix: ".json" });
   const topology = completeProductionTopologyForTest("staging");
   const components = topology.components as Record<string, unknown>[];
   const accounts = components.find(
     (component) => component.role === "accounts",
   )!;
-  accounts.runtime = "cloudflare-container";
-  accounts.containerRuntime = false;
-  accounts.bindings = ["KV:TAKOSUMI_ACCOUNTS_CACHE"];
-  delete accounts.wranglerConfigRef;
-  delete accounts.wranglerConfigValidation;
+  accounts.runtime = "";
+  accounts.bindings = [""];
+  delete accounts.runtimeEvidenceRef;
+  delete accounts.runtimeValidation;
   await writeTextFile(file, JSON.stringify(topology));
 
   try {
@@ -4746,27 +4806,19 @@ test("launch-readiness production-topology preflight requires Accounts Worker D1
     expect(code).toEqual(1);
     const output = [...stdout, ...stderr].join("\n");
     expect(
-      output.includes("accounts component runtime must be cloudflare-worker"),
-    ).toBeTruthy();
-    expect(
-      output.includes("accounts component containerRuntime must be true"),
-    ).toBeTruthy();
-    expect(
-      output.includes("accounts component wranglerConfigRef is required"),
-    ).toBeTruthy();
-    expect(
       output.includes(
-        "accounts component wranglerConfigValidation must be an object",
+        "accounts component runtime must be a non-empty implementation token",
       ),
     ).toBeTruthy();
     expect(
-      output.includes(
-        "accounts component bindings must include D1:TAKOSUMI_ACCOUNTS_DB",
-      ),
+      output.includes("accounts component runtimeEvidenceRef is required"),
+    ).toBeTruthy();
+    expect(
+      output.includes("accounts component runtimeValidation must be an object"),
     ).toBeTruthy();
     expect(
       output.includes(
-        "accounts component bindings must include R2:TAKOSUMI_ACCOUNTS_EXPORTS",
+        "accounts component bindings must be an array of non-empty tokens",
       ),
     ).toBeTruthy();
   } finally {
@@ -4774,25 +4826,21 @@ test("launch-readiness production-topology preflight requires Accounts Worker D1
   }
 });
 
-test("launch-readiness production-topology preflight rejects weak Accounts rendered config validation", async () => {
+test("launch-readiness production-topology preflight rejects weak generic runtime validation", async () => {
   const file = await makeTempFile({ suffix: ".json" });
   const topology = completeProductionTopologyForTest("staging");
   const components = topology.components as Record<string, unknown>[];
   const accounts = components.find(
     (component) => component.role === "accounts",
   )!;
-  accounts.wranglerConfigValidation = {
-    ...completeWranglerConfigValidationForTest(),
+  accounts.runtimeValidation = {
+    ...completeRuntimeValidationForTest(),
     ok: false,
-    configDigest: "sha256:not-a-digest",
-    bareOriginIssuerConfigured: false,
-    d1DatabaseIdPlaceholder: true,
-    controlD1BindingPresent: false,
-    r2BindingPresent: false,
-    containerConfigured: false,
-    durableObjectPersistenceConfigured: false,
-    runnerDurableObjectBindingPresent: false,
-    runQueueConfigured: false,
+    evidenceDigest: "sha256:not-a-digest",
+    checks: {
+      artifactVerified: false,
+      "not a token": true,
+    },
   };
   await writeTextFile(file, JSON.stringify(topology));
 
@@ -4810,53 +4858,21 @@ test("launch-readiness production-topology preflight rejects weak Accounts rende
     expect(code).toEqual(1);
     const output = [...stdout, ...stderr].join("\n");
     expect(
+      output.includes("accounts component runtimeValidation.ok must be true"),
+    ).toBeTruthy();
+    expect(
       output.includes(
-        "accounts component wranglerConfigValidation.ok must be true",
+        "accounts component runtimeValidation.evidenceDigest must be a sha256: digest",
       ),
     ).toBeTruthy();
     expect(
       output.includes(
-        "accounts component wranglerConfigValidation.configDigest must be a sha256: digest",
+        "accounts component runtimeValidation.checks.artifactVerified must be true",
       ),
     ).toBeTruthy();
     expect(
       output.includes(
-        "accounts component wranglerConfigValidation.bareOriginIssuerConfigured must be true",
-      ),
-    ).toBeTruthy();
-    expect(
-      output.includes(
-        "accounts component wranglerConfigValidation.d1DatabaseIdPlaceholder must be false",
-      ),
-    ).toBeTruthy();
-    expect(
-      output.includes(
-        "accounts component wranglerConfigValidation.controlD1BindingPresent must be true",
-      ),
-    ).toBeTruthy();
-    expect(
-      output.includes(
-        "accounts component wranglerConfigValidation.r2BindingPresent must be true",
-      ),
-    ).toBeTruthy();
-    expect(
-      output.includes(
-        "accounts component wranglerConfigValidation.containerConfigured must be true",
-      ),
-    ).toBeTruthy();
-    expect(
-      output.includes(
-        "accounts component wranglerConfigValidation.durableObjectPersistenceConfigured must be true",
-      ),
-    ).toBeTruthy();
-    expect(
-      output.includes(
-        "accounts component wranglerConfigValidation.runnerDurableObjectBindingPresent must be true",
-      ),
-    ).toBeTruthy();
-    expect(
-      output.includes(
-        "accounts component wranglerConfigValidation.runQueueConfigured must be true",
+        "accounts component runtimeValidation.checks.not a token must be true",
       ),
     ).toBeTruthy();
   } finally {
@@ -4900,10 +4916,7 @@ test("accounts serve dry-run prints server plan", async () => {
   expect(plan.oidcClient.clientId).toEqual("takos-test");
   expect(plan.upstreamOAuth.configured).toEqual(false);
   expect(plan.passkeys.configured).toEqual(false);
-  expect(plan.platformAccess).toEqual({
-    status: "closed",
-    source: "default",
-  });
+  expect(plan.platformAccess).toEqual(undefined);
   expect(plan.persistence).toEqual({
     configured: false,
     driver: "memory",
@@ -4911,19 +4924,11 @@ test("accounts serve dry-run prints server plan", async () => {
   expect(plan.devSession).toEqual({
     configured: false,
   });
-  expect(
-    plan.runtimeProjectionMaterialResolver.paths.includes(
-      "takosumi.identity.oidc",
-    ),
-  ).toEqual(true);
-  expect(
-    plan.runtimeProjectionMaterialResolver.paths.includes(
-      "takosumi.billing.usage",
-    ),
-  ).toEqual(true);
   expect(plan.accountPlaneFacades).toEqual([
-    "dashboard web/API",
-    "Takosumi Accounts deploy facade",
+    "identity",
+    "sessions",
+    "OIDC",
+    "PAT",
   ]);
 });
 
@@ -4984,797 +4989,6 @@ test("accounts serve rejects dev sessions with Postgres persistence", async () =
   ]);
 });
 
-test("accounts serve dry-run requires readiness evidence before opening platform readiness access", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    ["accounts", "serve", "--dry-run", "--platform-access", "open"],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "--platform-access open requires --platform-readiness-file",
-  ]);
-});
-
-test("accounts serve dry-run rejects incomplete platform readiness evidence", async () => {
-  const file = await makeTempFile({ suffix: ".json" });
-  const document = {
-    kind: "takosumi.platform-readiness@v1",
-    domains: [],
-    rehearsal: [],
-  };
-  const readinessDigest = await writePlatformReadinessForTest(file, document);
-  try {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    const code = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--platform-access",
-        "open",
-        "--platform-readiness-file",
-        file,
-        "--platform-readiness-digest",
-        readinessDigest,
-        "--platform-evidence-ref",
-        "vault://platform-readiness/staging/rehearsal.json",
-        "--platform-approval-ref",
-        "approval://platform-readiness/staging/operator-approval.json",
-        "--platform-public-summary",
-        "P0 evidence and one staged launch rehearsal passed.",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(2);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n").includes("Missing P0 domains")).toBeTruthy();
-  } finally {
-    await removePath(file);
-  }
-});
-
-test("accounts serve dry-run requires matching platform readiness digest", async () => {
-  const file = await makeTempFile({ suffix: ".json" });
-  const document = await platformReadinessTemplateForTest();
-  document.rehearsalRun = completeRehearsalRun("rehearsal-2026-05-13-staging");
-  document.domains = document.domains.map((entry) =>
-    completePlatformReadinessEntry(entry),
-  );
-  document.rehearsal = document.rehearsal.map((entry) =>
-    completePlatformReadinessEntry(entry, "rehearsal-2026-05-13-staging"),
-  );
-  await writePlatformReadinessForTest(file, document);
-
-  try {
-    const missingDigestStdout: string[] = [];
-    const missingDigestStderr: string[] = [];
-    const missingDigestCode = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--platform-access",
-        "open",
-        "--platform-readiness-file",
-        file,
-        "--platform-evidence-ref",
-        "vault://platform-readiness/staging/rehearsal.json",
-        "--platform-approval-ref",
-        "approval://platform-readiness/staging/operator-approval.json",
-        "--platform-public-summary",
-        "P0 evidence and one staged launch rehearsal passed.",
-      ],
-      {
-        stdout: (line) => missingDigestStdout.push(line),
-        stderr: (line) => missingDigestStderr.push(line),
-      },
-    );
-
-    expect(missingDigestCode).toEqual(2);
-    expect(missingDigestStdout).toEqual([]);
-    expect(missingDigestStderr).toEqual([
-      "--platform-access open requires --platform-readiness-digest",
-    ]);
-
-    const mismatchStdout: string[] = [];
-    const mismatchStderr: string[] = [];
-    const mismatchCode = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--platform-access",
-        "open",
-        "--platform-readiness-file",
-        file,
-        "--platform-readiness-digest",
-        testSha256Digest,
-        "--platform-evidence-ref",
-        "vault://platform-readiness/staging/rehearsal.json",
-        "--platform-approval-ref",
-        "approval://platform-readiness/staging/operator-approval.json",
-        "--platform-public-summary",
-        "P0 evidence and one staged launch rehearsal passed.",
-      ],
-      {
-        stdout: (line) => mismatchStdout.push(line),
-        stderr: (line) => mismatchStderr.push(line),
-      },
-    );
-
-    expect(mismatchCode).toEqual(2);
-    expect(mismatchStdout).toEqual([]);
-    expect(mismatchStderr).toEqual([
-      "--platform-readiness-digest must match the readiness file digest",
-    ]);
-  } finally {
-    await removePath(file);
-  }
-});
-
-test("accounts serve dry-run requires separate platform readiness approval", async () => {
-  const file = await makeTempFile({ suffix: ".json" });
-  const document = await platformReadinessTemplateForTest();
-  document.rehearsalRun = completeRehearsalRun("rehearsal-2026-05-13-staging");
-  document.domains = document.domains.map((entry) =>
-    completePlatformReadinessEntry(entry),
-  );
-  document.rehearsal = document.rehearsal.map((entry) =>
-    completePlatformReadinessEntry(entry, "rehearsal-2026-05-13-staging"),
-  );
-  const readinessDigest = await writePlatformReadinessForTest(file, document);
-
-  try {
-    const missingApprovalStdout: string[] = [];
-    const missingApprovalStderr: string[] = [];
-    const missingApprovalCode = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--platform-access",
-        "open",
-        "--platform-readiness-file",
-        file,
-        "--platform-readiness-digest",
-        readinessDigest,
-        "--platform-evidence-ref",
-        "vault://platform-readiness/staging/rehearsal.json",
-        "--platform-public-summary",
-        "P0 evidence and one staged launch rehearsal passed.",
-      ],
-      {
-        stdout: (line) => missingApprovalStdout.push(line),
-        stderr: (line) => missingApprovalStderr.push(line),
-      },
-    );
-
-    expect(missingApprovalCode).toEqual(2);
-    expect(missingApprovalStdout).toEqual([]);
-    expect(missingApprovalStderr).toEqual([
-      "--platform-access open requires --platform-evidence-ref, --platform-public-summary, and --platform-approval-ref",
-    ]);
-
-    const placeholderApprovalStdout: string[] = [];
-    const placeholderApprovalStderr: string[] = [];
-    const placeholderApprovalCode = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--platform-access",
-        "open",
-        "--platform-readiness-file",
-        file,
-        "--platform-readiness-digest",
-        readinessDigest,
-        "--platform-evidence-ref",
-        "vault://platform-readiness/staging/rehearsal.json",
-        "--platform-approval-ref",
-        "approval://todo",
-        "--platform-public-summary",
-        "P0 evidence and one staged launch rehearsal passed.",
-      ],
-      {
-        stdout: (line) => placeholderApprovalStdout.push(line),
-        stderr: (line) => placeholderApprovalStderr.push(line),
-      },
-    );
-
-    expect(placeholderApprovalCode).toEqual(2);
-    expect(placeholderApprovalStdout).toEqual([]);
-    expect(placeholderApprovalStderr).toEqual([
-      "--platform-approval-ref must not be a placeholder",
-    ]);
-
-    const sameApprovalStdout: string[] = [];
-    const sameApprovalStderr: string[] = [];
-    const sameApprovalCode = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--platform-access",
-        "open",
-        "--platform-readiness-file",
-        file,
-        "--platform-readiness-digest",
-        readinessDigest,
-        "--platform-evidence-ref",
-        "vault://platform-readiness/staging/rehearsal.json",
-        "--platform-approval-ref",
-        "vault://platform-readiness/staging/rehearsal.json",
-        "--platform-public-summary",
-        "P0 evidence and one staged launch rehearsal passed.",
-      ],
-      {
-        stdout: (line) => sameApprovalStdout.push(line),
-        stderr: (line) => sameApprovalStderr.push(line),
-      },
-    );
-
-    expect(sameApprovalCode).toEqual(2);
-    expect(sameApprovalStdout).toEqual([]);
-    expect(sameApprovalStderr).toEqual([
-      "--platform-approval-ref must differ from --platform-evidence-ref",
-    ]);
-  } finally {
-    await removePath(file);
-  }
-});
-
-test("accounts serve dry-run rejects placeholder platform readiness access summaries", async () => {
-  const file = await makeTempFile({ suffix: ".json" });
-  const document = await platformReadinessTemplateForTest();
-  document.rehearsalRun = completeRehearsalRun("rehearsal-2026-05-13-staging");
-  document.domains = document.domains.map((entry) =>
-    completePlatformReadinessEntry(entry),
-  );
-  document.rehearsal = document.rehearsal.map((entry) =>
-    completePlatformReadinessEntry(entry, "rehearsal-2026-05-13-staging"),
-  );
-  const readinessDigest = await writePlatformReadinessForTest(file, document);
-
-  try {
-    const placeholderRefStdout: string[] = [];
-    const placeholderRefStderr: string[] = [];
-    const placeholderRefCode = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--platform-access",
-        "open",
-        "--platform-readiness-file",
-        file,
-        "--platform-readiness-digest",
-        readinessDigest,
-        "--platform-evidence-ref",
-        "evidence://todo",
-        "--platform-approval-ref",
-        "approval://platform-readiness/staging/operator-approval.json",
-        "--platform-public-summary",
-        "P0 evidence and one staged launch rehearsal passed.",
-      ],
-      {
-        stdout: (line) => placeholderRefStdout.push(line),
-        stderr: (line) => placeholderRefStderr.push(line),
-      },
-    );
-
-    expect(placeholderRefCode).toEqual(2);
-    expect(placeholderRefStdout).toEqual([]);
-    expect(placeholderRefStderr).toEqual([
-      "--platform-evidence-ref must not be a placeholder",
-    ]);
-
-    const shallowSummaryStdout: string[] = [];
-    const shallowSummaryStderr: string[] = [];
-    const shallowSummaryCode = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--platform-access",
-        "open",
-        "--platform-readiness-file",
-        file,
-        "--platform-readiness-digest",
-        readinessDigest,
-        "--platform-evidence-ref",
-        "vault://platform-readiness/staging/rehearsal.json",
-        "--platform-approval-ref",
-        "approval://platform-readiness/staging/operator-approval.json",
-        "--platform-public-summary",
-        "todo",
-      ],
-      {
-        stdout: (line) => shallowSummaryStdout.push(line),
-        stderr: (line) => shallowSummaryStderr.push(line),
-      },
-    );
-
-    expect(shallowSummaryCode).toEqual(2);
-    expect(shallowSummaryStdout).toEqual([]);
-    const shallowSummaryError = shallowSummaryStderr.join("\n");
-    expect(
-      shallowSummaryError.includes(
-        "--platform-public-summary must be at least 40 characters",
-      ),
-    ).toBeTruthy();
-    expect(
-      shallowSummaryError.includes(
-        "--platform-public-summary must not be a placeholder",
-      ),
-    ).toBeTruthy();
-
-    const genericSummaryStdout: string[] = [];
-    const genericSummaryStderr: string[] = [];
-    const genericSummaryCode = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--platform-access",
-        "open",
-        "--platform-readiness-file",
-        file,
-        "--platform-readiness-digest",
-        readinessDigest,
-        "--platform-evidence-ref",
-        "vault://platform-readiness/staging/rehearsal.json",
-        "--platform-approval-ref",
-        "approval://platform-readiness/staging/operator-approval.json",
-        "--platform-public-summary",
-        "Launch readiness was reviewed and approved by the operator team.",
-      ],
-      {
-        stdout: (line) => genericSummaryStdout.push(line),
-        stderr: (line) => genericSummaryStderr.push(line),
-      },
-    );
-
-    expect(genericSummaryCode).toEqual(2);
-    expect(genericSummaryStdout).toEqual([]);
-    const genericSummaryError = genericSummaryStderr.join("\n");
-    expect(
-      genericSummaryError.includes(
-        "--platform-public-summary must mention P0 evidence",
-      ),
-    ).toBeTruthy();
-    expect(
-      genericSummaryError.includes(
-        "--platform-public-summary must mention the staged launch rehearsal",
-      ),
-    ).toBeTruthy();
-
-    const sensitiveSummaryStdout: string[] = [];
-    const sensitiveSummaryStderr: string[] = [];
-    const sensitiveSummaryCode = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--platform-access",
-        "open",
-        "--platform-readiness-file",
-        file,
-        "--platform-readiness-digest",
-        readinessDigest,
-        "--platform-evidence-ref",
-        "vault://platform-readiness/staging/rehearsal.json",
-        "--platform-approval-ref",
-        "approval://platform-readiness/staging/operator-approval.json",
-        "--platform-public-summary",
-        "P0 evidence and one staged launch rehearsal passed for cus_sensitive1.",
-      ],
-      {
-        stdout: (line) => sensitiveSummaryStdout.push(line),
-        stderr: (line) => sensitiveSummaryStderr.push(line),
-      },
-    );
-
-    expect(sensitiveSummaryCode).toEqual(2);
-    expect(sensitiveSummaryStdout).toEqual([]);
-    expect(
-      sensitiveSummaryStderr
-        .join("\n")
-        .includes(
-          "--platform-public-summary must not contain Stripe object IDs",
-        ),
-    ).toBeTruthy();
-  } finally {
-    await removePath(file);
-  }
-});
-
-test("accounts serve dry-run records open platform readiness access after readiness evidence passes", async () => {
-  const file = await makeTempFile({ suffix: ".json" });
-  const document = await platformReadinessTemplateForTest();
-  document.rehearsalRun = completeRehearsalRun("rehearsal-2026-05-13-staging");
-  document.domains = document.domains.map((entry) =>
-    completePlatformReadinessEntry(entry),
-  );
-  document.rehearsal = document.rehearsal.map((entry) =>
-    completePlatformReadinessEntry(entry, "rehearsal-2026-05-13-staging"),
-  );
-  const readinessDigest = await writePlatformReadinessForTest(file, document);
-
-  try {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    const code = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--platform-access",
-        "open",
-        "--platform-readiness-file",
-        file,
-        "--platform-readiness-digest",
-        readinessDigest,
-        "--platform-evidence-ref",
-        "vault://platform-readiness/staging/rehearsal.json",
-        "--platform-approval-ref",
-        "approval://platform-readiness/staging/operator-approval.json",
-        "--platform-public-summary",
-        "P0 evidence and one staged launch rehearsal passed.",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    const plan = JSON.parse(stdout.join("\n"));
-    expect(plan.platformAccess).toEqual({
-      status: "open",
-      source: "--platform-access",
-      readinessFile: file,
-      readinessDigest,
-      evidenceRef: "vault://platform-readiness/staging/rehearsal.json",
-      approvalRef:
-        "approval://platform-readiness/staging/operator-approval.json",
-      publicSummary: "P0 evidence and one staged launch rehearsal passed.",
-    });
-  } finally {
-    await removePath(file);
-  }
-});
-
-test("accounts serve dry-run prints shared-cell warm pool slots", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--shared-cell-slots",
-      "tokyo-cell-01:2,tokyo-cell-02:1",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(0);
-  expect(stderr).toEqual([]);
-  const plan = JSON.parse(stdout.join("\n"));
-  expect(plan.sharedCellRuntime).toEqual({
-    configured: true,
-    source: "--shared-cell-slots",
-    slots: [
-      { cellId: "tokyo-cell-01", capacity: 2 },
-      { cellId: "tokyo-cell-02", capacity: 1 },
-    ],
-  });
-});
-
-test("accounts serve dry-run prints shared-cell scale-out policy", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--shared-cell-slots",
-      "tokyo-cell-01:2",
-      "--shared-cell-scale-out-policy",
-      JSON.stringify({
-        strategy: "available-slots",
-        minAvailableSlots: 1,
-        maxCells: 3,
-      }),
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(0);
-  expect(stderr).toEqual([]);
-  const plan = JSON.parse(stdout.join("\n"));
-  expect(plan.sharedCellRuntime.scaleOutPolicy).toEqual({
-    source: "--shared-cell-scale-out-policy",
-    policy: {
-      strategy: "available-slots",
-      minAvailableSlots: 1,
-      maxCells: 3,
-    },
-  });
-});
-
-test("accounts serve dry-run reads shared-cell warm pool slots from env", async () => {
-  const previous = envGet("TAKOSUMI_ACCOUNTS_SHARED_CELL_SLOTS");
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  try {
-    envSet("TAKOSUMI_ACCOUNTS_SHARED_CELL_SLOTS", "tokyo-cell-01:1");
-    const code = await main(["accounts", "serve", "--dry-run"], {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    });
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    const plan = JSON.parse(stdout.join("\n"));
-    expect(plan.sharedCellRuntime).toEqual({
-      configured: true,
-      source: "TAKOSUMI_ACCOUNTS_SHARED_CELL_SLOTS",
-      slots: [{ cellId: "tokyo-cell-01", capacity: 1 }],
-    });
-  } finally {
-    if (previous === undefined) {
-      envDelete("TAKOSUMI_ACCOUNTS_SHARED_CELL_SLOTS");
-    } else {
-      envSet("TAKOSUMI_ACCOUNTS_SHARED_CELL_SLOTS", previous);
-    }
-  }
-});
-
-test("accounts serve dry-run prints materialize worker config", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--materialize-worker-url",
-      "https://workers.example.test/materialize",
-      "--materialize-worker-token",
-      "secret-worker-token",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(0);
-  expect(stderr).toEqual([]);
-  const plan = JSON.parse(stdout.join("\n"));
-  expect(plan.materializeWorker).toEqual({
-    configured: true,
-    source: "--materialize-worker-url",
-    url: "https://workers.example.test/materialize",
-    tokenConfigured: true,
-  });
-});
-
-test("accounts serve dry-run prints runtime projection material resolver config", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--runtime-projection-material-resolver-token",
-      "resolver-token",
-      "--billing-portal-url",
-      "https://cloud.example.test/account/billing",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(0);
-  expect(stderr).toEqual([]);
-  const plan = JSON.parse(stdout.join("\n"));
-  expect(plan.runtimeProjectionMaterialResolver.resolver).toEqual({
-    configured: true,
-    source: "--runtime-projection-material-resolver-token",
-    tokenConfigured: true,
-    billingPortalUrl: "https://cloud.example.test/account/billing",
-  });
-});
-
-test("accounts serve dry-run prints metadata export worker config", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--export-output-dir",
-      "/var/lib/takosumi/exports",
-      "--export-download-base-url",
-      "https://downloads.example.test/accounts/exports",
-      "--export-download-ttl-ms",
-      "60000",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(0);
-  expect(stderr).toEqual([]);
-  const plan = JSON.parse(stdout.join("\n"));
-  expect(plan.exportWorker).toEqual({
-    configured: true,
-    source: "--export-output-dir/--export-download-base-url",
-    outputDirectory: "/var/lib/takosumi/exports",
-    downloadBaseUrl: "https://downloads.example.test/accounts/exports",
-    ttlMs: 60000,
-  });
-});
-
-test("accounts serve dry-run prints static data export config", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--export-output-dir",
-      "/var/lib/takosumi/exports",
-      "--export-download-base-url",
-      "https://downloads.example.test/accounts/exports",
-      "--export-data-dir",
-      "/var/lib/takosumi/export-data",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(0);
-  expect(stderr).toEqual([]);
-  const plan = JSON.parse(stdout.join("\n"));
-  expect(plan.exportWorker).toEqual({
-    configured: true,
-    source: "--export-output-dir/--export-download-base-url",
-    outputDirectory: "/var/lib/takosumi/exports",
-    downloadBaseUrl: "https://downloads.example.test/accounts/exports",
-    dataDirectory: "/var/lib/takosumi/export-data",
-  });
-});
-
-test("accounts serve rejects partial materialize worker config", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--materialize-worker-token",
-      "secret-worker-token",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "Materialize worker requires --materialize-worker-url or TAKOSUMI_ACCOUNTS_MATERIALIZE_WORKER_URL",
-  ]);
-});
-
-test("accounts serve rejects billing portal without runtime projection material resolver token", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--billing-portal-url",
-      "https://cloud.example.test/account/billing",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "--billing-portal-url requires --runtime-projection-material-resolver-token or TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN",
-  ]);
-});
-
-test("accounts serve rejects partial metadata export worker config", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--export-output-dir",
-      "/var/lib/takosumi/exports",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "Metadata export worker requires --export-output-dir and --export-download-base-url",
-  ]);
-});
-
-test("accounts serve rejects non-HTTPS export download base outside loopback", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--export-output-dir",
-      "/var/lib/takosumi/exports",
-      "--export-download-base-url",
-      "http://downloads.example.test/accounts/exports",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "--export-download-base-url must be https:// or loopback http://",
-  ]);
-});
-
 test("accounts serve dry-run redacts Postgres persistence URL", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -5807,9 +5021,20 @@ test("accounts serve dry-run redacts Postgres persistence URL", async () => {
   expect(stdout.join("\n").includes("db.internal")).toEqual(false);
 });
 
-test("accounts serve dry-run redacts upstream OAuth secrets", async () => {
+test("accounts serve dry-run accepts arbitrary upstream descriptors without exposing subject secrets", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
+  const providers = JSON.stringify([
+    {
+      providerId: "company-sso",
+      issuer: "https://id.example.test",
+      authorizationEndpoint: "https://id.example.test/oauth/authorize",
+      tokenEndpoint: "https://id.example.test/oauth/token",
+      userInfoEndpoint: "https://id.example.test/oauth/userinfo",
+      clientId: "accounts-client",
+      redirectUri: "https://accounts.example.test/sign-in/callback",
+    },
+  ]);
   const code = await main(
     [
       "accounts",
@@ -5817,12 +5042,8 @@ test("accounts serve dry-run redacts upstream OAuth secrets", async () => {
       "--dry-run",
       "--subject-secret",
       "subject-secret",
-      "--google-client-id",
-      "google-client",
-      "--google-client-secret",
-      "google-secret",
-      "--google-redirect-uri",
-      "https://accounts.example.test/v1/auth/upstream/callback",
+      "--upstream-providers",
+      providers,
       "--upstream-session-ttl-ms",
       "60000",
     ],
@@ -5837,11 +5058,11 @@ test("accounts serve dry-run redacts upstream OAuth secrets", async () => {
   const plan = JSON.parse(stdout.join("\n"));
   expect(plan.upstreamOAuth).toEqual({
     configured: true,
-    providers: ["google"],
+    providers: ["company-sso"],
     sessionTtlMs: 60000,
   });
   expect(stdout.join("\n").includes("subject-secret")).toEqual(false);
-  expect(stdout.join("\n").includes("google-secret")).toEqual(false);
+  expect(stdout.join("\n").includes("id.example.test")).toEqual(false);
 });
 
 test("accounts serve dry-run treats subject secret without providers as disabled upstream OAuth", async () => {
@@ -5867,6 +5088,21 @@ test("accounts serve dry-run treats subject secret without providers as disabled
 test("accounts serve dry-run accepts custom upstream OIDC provider", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
+  const providers = JSON.stringify([
+    {
+      providerId: "keycloak",
+      issuer: "https://idp.example.test/realms/takos",
+      authorizationEndpoint:
+        "https://idp.example.test/realms/takos/protocol/openid-connect/auth",
+      tokenEndpoint:
+        "https://idp.example.test/realms/takos/protocol/openid-connect/token",
+      userInfoEndpoint:
+        "https://idp.example.test/realms/takos/protocol/openid-connect/userinfo",
+      clientId: "keycloak-client",
+      redirectUri: "https://accounts.example.test/sign-in/callback",
+      scopes: ["openid", "email", "profile"],
+    },
+  ]);
   const code = await main(
     [
       "accounts",
@@ -5874,24 +5110,8 @@ test("accounts serve dry-run accepts custom upstream OIDC provider", async () =>
       "--dry-run",
       "--subject-secret",
       "subject-secret",
-      "--oidc-provider-id",
-      "keycloak",
-      "--oidc-issuer",
-      "https://idp.example.test/realms/takos",
-      "--oidc-authorization-endpoint",
-      "https://idp.example.test/realms/takos/protocol/openid-connect/auth",
-      "--oidc-token-endpoint",
-      "https://idp.example.test/realms/takos/protocol/openid-connect/token",
-      "--oidc-userinfo-endpoint",
-      "https://idp.example.test/realms/takos/protocol/openid-connect/userinfo",
-      "--oidc-client-id",
-      "keycloak-client",
-      "--oidc-client-secret",
-      "keycloak-secret",
-      "--oidc-redirect-uri",
-      "https://accounts.example.test/v1/auth/upstream/callback",
-      "--oidc-scopes",
-      "openid,email,profile",
+      "--upstream-providers",
+      providers,
     ],
     {
       stdout: (line) => stdout.push(line),
@@ -5907,7 +5127,7 @@ test("accounts serve dry-run accepts custom upstream OIDC provider", async () =>
     providers: ["keycloak"],
   });
   expect(stdout.join("\n").includes("subject-secret")).toEqual(false);
-  expect(stdout.join("\n").includes("keycloak-secret")).toEqual(false);
+  expect(stdout.join("\n").includes("idp.example.test")).toEqual(false);
 });
 
 test("accounts serve dry-run prints passkey relying party config", async () => {
@@ -5943,257 +5163,6 @@ test("accounts serve dry-run prints passkey relying party config", async () => {
     origin: "https://accounts.example.test",
     sessionTtlMs: 60000,
   });
-});
-
-test("accounts serve dry-run redacts deploy control token", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--deploy-control-url",
-      "http://takosumi.internal:8788",
-      "--deploy-control-token",
-      "deploy-control-secret",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(0);
-  expect(stderr).toEqual([]);
-  const plan = JSON.parse(stdout.join("\n"));
-  expect(plan.deployControl).toEqual({
-    configured: true,
-    url: "http://takosumi.internal:8788",
-    tokenConfigured: true,
-  });
-  expect(stdout.join("\n").includes("deploy-control-secret")).toEqual(false);
-});
-
-test("accounts serve dry-run redacts static service binding materials", async () => {
-  const root = await makeTempDir({ prefix: "takosumi-service-bindings-" });
-  const materialsPath = `${root}/service-bindings.json`;
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  try {
-    await writeTextFile(
-      materialsPath,
-      JSON.stringify({
-        db: {
-          kind: "storage.sql",
-          configRef: "takosumi-accounts://installations/template/db",
-          secretRefs: ["secret://db/password"],
-          env: {
-            DATABASE_HOST: "db.internal",
-            DATABASE_NAME: "takos",
-          },
-        },
-      }),
-    );
-    const code = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--service-binding-materials-file",
-        materialsPath,
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    const plan = JSON.parse(stdout.join("\n"));
-    expect(plan.bindingMaterializer).toEqual({
-      configured: true,
-      source: "--service-binding-materials-file",
-      bindings: ["db"],
-    });
-    expect(stdout.join("\n").includes("postgres://takos:secret")).toEqual(
-      false,
-    );
-    expect(stdout.join("\n").includes("secret://db/password")).toEqual(false);
-  } finally {
-    await removePath(root, { recursive: true });
-  }
-});
-
-test("accounts serve rejects secret-bearing static service binding env material", async () => {
-  const root = await makeTempDir({ prefix: "takosumi-service-bindings-" });
-  const materialsPath = `${root}/service-bindings.json`;
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  try {
-    await writeTextFile(
-      materialsPath,
-      JSON.stringify({
-        db: {
-          kind: "storage.sql",
-          configRef: "takosumi-accounts://installations/template/db",
-          secretRefs: ["secret://db/password"],
-          env: {
-            DATABASE_URL: "postgres://takos:must-not-leak@db.internal/takos",
-          },
-        },
-      }),
-    );
-    const code = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--service-binding-materials-file",
-        materialsPath,
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(2);
-    expect(stdout).toEqual([]);
-    expect(stderr).toEqual([
-      "service binding material 'db'.env.DATABASE_URL may carry secret material; use secretRefs",
-    ]);
-    expect(stderr.join("\n")).not.toContain("must-not-leak");
-  } finally {
-    await removePath(root, { recursive: true });
-  }
-});
-
-test("accounts serve rejects malformed static service binding materials", async () => {
-  const root = await makeTempDir({ prefix: "takosumi-service-bindings-" });
-  const materialsPath = `${root}/service-bindings.json`;
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  try {
-    await writeTextFile(
-      materialsPath,
-      JSON.stringify({
-        db: { env: { DATABASE_URL: "postgres://takos:secret@db/takos" } },
-      }),
-    );
-    const code = await main(
-      [
-        "accounts",
-        "serve",
-        "--dry-run",
-        "--service-binding-materials-file",
-        materialsPath,
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(2);
-    expect(stdout).toEqual([]);
-    expect(stderr).toEqual([
-      "service binding material 'db' requires configRef",
-    ]);
-  } finally {
-    await removePath(root, { recursive: true });
-  }
-});
-
-test("accounts serve rejects malformed shared-cell warm pool slot shape", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    ["accounts", "serve", "--dry-run", "--shared-cell-slots", "bad-entry"],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "shared-cell slots must use cell-id:capacity entries",
-  ]);
-});
-
-test("accounts serve rejects malformed shared-cell warm pool slots", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    ["accounts", "serve", "--dry-run", "--shared-cell-slots", "Tokyo Cell:0"],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "shared-cell slot capacity must be a positive integer",
-  ]);
-});
-
-test("accounts serve rejects shared-cell scale-out policy without slots", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--shared-cell-scale-out-policy",
-      JSON.stringify({ strategy: "manual" }),
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "shared-cell scale-out policy requires shared-cell slots",
-  ]);
-});
-
-test("accounts serve rejects malformed shared-cell scale-out policy", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--shared-cell-slots",
-      "tokyo-cell-01:2",
-      "--shared-cell-scale-out-policy",
-      JSON.stringify({
-        strategy: "available-slots",
-        minAvailableSlots: -1,
-        maxCells: 3,
-      }),
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "shared-cell scale-out policy minAvailableSlots must be a non-negative integer",
-  ]);
 });
 
 test("accounts serve rejects invalid ports", async () => {
@@ -6236,19 +5205,22 @@ test("accounts serve rejects invalid database URLs", async () => {
   ]);
 });
 
-test("accounts serve rejects partial upstream OAuth config", async () => {
+test("accounts serve rejects upstream provider descriptors without a subject secret", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
+  const providers = JSON.stringify([
+    {
+      providerId: "company-sso",
+      issuer: "https://id.example.test",
+      authorizationEndpoint: "https://id.example.test/oauth/authorize",
+      tokenEndpoint: "https://id.example.test/oauth/token",
+      userInfoEndpoint: "https://id.example.test/oauth/userinfo",
+      clientId: "accounts-client",
+      redirectUri: "https://accounts.example.test/sign-in/callback",
+    },
+  ]);
   const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--subject-secret",
-      "subject-secret",
-      "--google-client-id",
-      "google-client",
-    ],
+    ["accounts", "serve", "--dry-run", "--upstream-providers", providers],
     {
       stdout: (line) => stdout.push(line),
       stderr: (line) => stderr.push(line),
@@ -6258,11 +5230,11 @@ test("accounts serve rejects partial upstream OAuth config", async () => {
   expect(code).toEqual(2);
   expect(stdout).toEqual([]);
   expect(stderr).toEqual([
-    "--google-client-id and --google-redirect-uri are required together",
+    "TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS requires TAKOSUMI_ACCOUNTS_SUBJECT_SECRET",
   ]);
 });
 
-test("accounts serve rejects partial custom upstream OIDC config", async () => {
+test("accounts serve rejects incomplete upstream provider descriptors", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const code = await main(
@@ -6272,10 +5244,8 @@ test("accounts serve rejects partial custom upstream OIDC config", async () => {
       "--dry-run",
       "--subject-secret",
       "subject-secret",
-      "--oidc-provider-id",
-      "keycloak",
-      "--oidc-client-id",
-      "keycloak-client",
+      "--upstream-providers",
+      JSON.stringify([{ providerId: "company-sso" }]),
     ],
     {
       stdout: (line) => stdout.push(line),
@@ -6286,7 +5256,7 @@ test("accounts serve rejects partial custom upstream OIDC config", async () => {
   expect(code).toEqual(2);
   expect(stdout).toEqual([]);
   expect(stderr).toEqual([
-    "OIDC upstream provider requires --oidc-issuer, --oidc-authorization-endpoint, --oidc-token-endpoint, --oidc-userinfo-endpoint, --oidc-redirect-uri",
+    "TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS[0].issuer must be a non-empty string",
   ]);
 });
 
@@ -6340,7 +5310,7 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
     driver: "postgres",
     source: "--database-url",
   });
-  expect(plan.migrations.length).toEqual(30);
+  expect(plan.migrations.length).toEqual(35);
   expect(plan.migrations[0].name).toEqual("001_app_installation_ledger.sql");
   expect(plan.migrations[16].name).toEqual(
     "017_drop_binding_grant_runtime_binding.sql",
@@ -6353,6 +5323,19 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
   expect(plan.migrations[29].name).toEqual(
     "030_oidc_clients_drop_installation_fkey.sql",
   );
+  expect(plan.migrations[30].name).toEqual(
+    "031_interface_oauth_token_evidence.sql",
+  );
+  expect(plan.migrations[31].name).toEqual(
+    "032_retire_accounts_capsule_projection_ledger.sql",
+  );
+  expect(plan.migrations[32].name).toEqual(
+    "033_generalize_billing_provider_storage.sql",
+  );
+  expect(plan.migrations[33].name).toEqual(
+    "034_remove_commercial_billing_persistence.sql",
+  );
+  expect(plan.migrations[34].name).toEqual("035_account_picture.sql");
   expect(plan.migrations[0].checksum.startsWith("sha256:")).toEqual(true);
   expect(stdout.join("\n").includes("accounts:secret")).toEqual(false);
   expect(stdout.join("\n").includes("db.internal")).toEqual(false);
@@ -6362,61 +5345,6 @@ test("accounts migrate requires database URL when applying", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const code = await main(["accounts", "migrate"], {
-    stdout: (line) => stdout.push(line),
-    stderr: (line) => stderr.push(line),
-  });
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "--database-url or TAKOSUMI_ACCOUNTS_DATABASE_URL is required",
-  ]);
-});
-
-test("accounts launch-tokens cleanup dry-run prints retention cutoffs", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "launch-tokens",
-      "cleanup",
-      "--dry-run",
-      "--database-url",
-      "postgres://accounts:secret@db.internal:5432/takosumi_accounts",
-      "--now",
-      "2026-05-13T12:00:00Z",
-      "--expired-retention-hours",
-      "1",
-      "--used-retention-hours",
-      "2",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(0);
-  expect(stderr).toEqual([]);
-  const plan = JSON.parse(stdout.join("\n"));
-  expect(plan.kind).toEqual("takosumi.accounts.launch-token-cleanup@v1");
-  expect(plan.database).toEqual({
-    configured: true,
-    driver: "postgres",
-    source: "--database-url",
-  });
-  expect(plan.dryRun).toEqual(true);
-  expect(plan.cutoffs.expiredBefore).toEqual("2026-05-13T11:00:00.000Z");
-  expect(plan.cutoffs.usedBefore).toEqual("2026-05-13T10:00:00.000Z");
-  expect(stdout.join("\n").includes("accounts:secret")).toEqual(false);
-  expect(stdout.join("\n").includes("db.internal")).toEqual(false);
-});
-
-test("accounts launch-tokens cleanup requires database URL when applying", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(["accounts", "launch-tokens", "cleanup"], {
     stdout: (line) => stdout.push(line),
     stderr: (line) => stderr.push(line),
   });
@@ -6649,1597 +5577,10 @@ test("top-level installations command is retired from the public CLI surface", a
 
   expect(code).toEqual(2);
   expect(stdout).toEqual([]);
-  expect(stderr.join("\n")).toContain("not a public command");
-  expect(stderr.join("\n")).toContain("takosumi internal installations");
-});
-
-test("internal installations list calls Takosumi Accounts with the target space", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  const originalWorkspaceId = envGet("TAKOS_SPACE_ID");
-  globalThis.fetch = ((input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Promise.resolve(
-      Response.json({
-        installations: [
-          {
-            id: "inst_1",
-            capsule_id: "takos.chat",
-            status: "ready",
-            mode: "shared-cell",
-          },
-        ],
-      }),
-    );
-  }) as typeof fetch;
-  envSet("TAKOS_SPACE_ID", "space_1");
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "list",
-        "--accounts-url",
-        "http://accounts.local/",
-        "--token",
-        "sess_accounts",
-        "--json",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/capsule-projections?space_id=space_1",
-    );
-    expect(requests[0]?.headers.get("authorization")).toEqual(
-      "Bearer sess_accounts",
-    );
-    expect(JSON.parse(stdout.join("\n")).installations[0].id).toEqual("inst_1");
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalWorkspaceId === undefined) {
-      envDelete("TAKOS_SPACE_ID");
-    } else {
-      envSet("TAKOS_SPACE_ID", originalWorkspaceId);
-    }
-  }
-});
-
-test("internal installations inspect prints service bindings and service grants", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Promise.resolve(
-      Response.json({
-        installation: {
-          id: "inst_1",
-          capsule_id: "takos.chat",
-          status: "ready",
-          mode: "shared-cell",
-          space_id: "space_1",
-          source: {
-            url: "https://github.com/takos/takos",
-            ref: "v1.2.3",
-          },
-        },
-        service_bindings: [
-          {
-            name: "auth",
-            kind: "identity.oidc",
-          },
-        ],
-        service_grants: [
-          {
-            capability: "deploy.intent.write",
-            revoked_at: null,
-          },
-          {
-            capability: "logs.read.own",
-            revoked_at: "2026-05-09T00:00:00.000Z",
-          },
-        ],
-        oidc_client: {
-          client_id: "toc_inst_1",
-          token_endpoint_auth_method: "client_secret_post",
-          redirect_uris: ["http://localhost:8787/auth/oidc/callback"],
-        },
-        runtime_target: null,
-      }),
-    );
-  }) as typeof fetch;
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "inspect",
-        "inst_1",
-        "--accounts-url",
-        "http://accounts.local",
-        "--token",
-        "sess_accounts",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/capsule-projections/inst_1",
-    );
-    expect(requests[0]?.headers.get("authorization")).toEqual(
-      "Bearer sess_accounts",
-    );
-    const output = stdout.join("\n");
-    expect(output.includes("Capsule inst_1")).toEqual(true);
-    expect(output.includes("  capsule: takos.chat")).toEqual(true);
-    expect(output.includes("Service bindings:")).toEqual(true);
-    expect(output.includes("auth  identity.oidc")).toEqual(true);
-    expect(output.includes("toc_inst_1  client_secret_post")).toEqual(true);
-    expect(output.includes("http://localhost:8787/auth/oidc/callback")).toEqual(
-      true,
-    );
-    expect(output.includes("Service grants:")).toEqual(true);
-    expect(output.includes("deploy.intent.write  active")).toEqual(true);
-    expect(output.includes("logs.read.own  revoked")).toEqual(true);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("internal installations uninstall deletes through ledger-retained Accounts route", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Promise.resolve(
-      Response.json({
-        installation: {
-          id: "inst_1",
-          status: "suspended",
-        },
-        revoked_service_grants: [
-          {
-            id: "grant_logs",
-            capability: "logs.read.own",
-            revoked_at: "2026-05-09T01:00:00.000Z",
-          },
-        ],
-        event: {
-          type: "installation.uninstalled",
-        },
-      }),
-    );
-  }) as typeof fetch;
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "uninstall",
-        "inst_1",
-        "--reason",
-        "user removed app",
-        "--accounts-url",
-        "http://accounts.local",
-        "--token",
-        "accounts-token",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/capsule-projections/inst_1",
-    );
-    expect(requests[0]?.method).toEqual("DELETE");
-    expect(requests[0]?.headers.get("authorization")).toEqual(
-      "Bearer accounts-token",
-    );
-    expect(requests[0]?.headers.get("content-type")).toEqual(
-      "application/json",
-    );
-    expect(await requests[0]?.json()).toEqual({ reason: "user removed app" });
-    expect(stdout.join("\n")).toEqual(
-      [
-        "Capsule inst_1",
-        "  status: suspended",
-        "  revoked service grants: 1",
-        "  event: installation.uninstalled",
-      ].join("\n"),
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("internal installations status patches the target installation", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Promise.resolve(
-      Response.json({
-        installation: {
-          id: "inst_1",
-          status: "ready",
-        },
-      }),
-    );
-  }) as typeof fetch;
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "status",
-        "inst_1",
-        "--status",
-        "ready",
-        "--reason",
-        "healthcheck passed",
-        "--accounts-url",
-        "http://accounts.local",
-        "--token",
-        "accounts-token",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/capsule-projections/inst_1/status",
-    );
-    expect(requests[0]?.method).toEqual("PATCH");
-    expect(requests[0]?.headers.get("authorization")).toEqual(
-      "Bearer accounts-token",
-    );
-    expect(requests[0]?.headers.get("content-type")).toEqual(
-      "application/json",
-    );
-    expect(await requests[0]?.json()).toEqual({
-      status: "ready",
-      reason: "healthcheck passed",
-    });
-    expect(stdout.join("\n")).toEqual("Capsule inst_1\n  status: ready");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("internal installations status sends operation completion metadata", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Promise.resolve(
-      Response.json({
-        installation: {
-          id: "inst_1",
-          status: "ready",
-          mode: "dedicated",
-        },
-        event: {
-          type: "installation.materialize-succeeded",
-        },
-      }),
-    );
-  }) as typeof fetch;
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "status",
-        "inst_1",
-        "--status",
-        "ready",
-        "--mode",
-        "dedicated",
-        "--operation-id",
-        "op_materialize",
-        "--preserve-digest",
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "--runtime-target-record-id",
-        "rtb_1",
-        "--runtime-target-type",
-        "dedicated",
-        "--runtime-target-id",
-        "tokyo-dedicated-01",
-        "--reason",
-        "dedicated runtime ready",
-        "--accounts-url",
-        "http://accounts.local",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(await requests[0]?.json()).toEqual({
-      status: "ready",
-      reason: "dedicated runtime ready",
-      mode: "dedicated",
-      operationId: "op_materialize",
-      preserveDigest:
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      runtimeTarget: {
-        runtimeTargetId: "rtb_1",
-        targetType: "dedicated",
-        targetId: "tokyo-dedicated-01",
-      },
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("internal installations status sends export archive digest metadata", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Promise.resolve(
-      Response.json({
-        installation: {
-          id: "inst_1",
-          status: "exported",
-        },
-        event: {
-          type: "installation.exported",
-        },
-      }),
-    );
-  }) as typeof fetch;
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "status",
-        "inst_1",
-        "--status",
-        "exported",
-        "--operation-id",
-        "op_export",
-        "--download-url",
-        "https://downloads.example.test/export.tar.zst.age",
-        "--download-expires-at",
-        "2999-05-10T00:00:00.000Z",
-        "--archive-digest",
-        `sha256:${"c".repeat(64)}`,
-        "--accounts-url",
-        "http://accounts.local",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(await requests[0]?.json()).toEqual({
-      status: "exported",
-      operationId: "op_export",
-      downloadUrl: "https://downloads.example.test/export.tar.zst.age",
-      downloadExpiresAt: "2999-05-10T00:00:00.000Z",
-      archiveDigest: `sha256:${"c".repeat(64)}`,
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("internal installations status sends operation failure metadata", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Promise.resolve(
-      Response.json({
-        installation: {
-          id: "inst_1",
-          status: "failed",
-        },
-        event: {
-          type: "installation.export-failed",
-        },
-      }),
-    );
-  }) as typeof fetch;
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "status",
-        "inst_1",
-        "--status",
-        "failed",
-        "--operation",
-        "export",
-        "--operation-id",
-        "op_export",
-        "--reason",
-        "bundle writer failed",
-        "--error",
-        "bundle writer failed",
-        "--accounts-url",
-        "http://accounts.local",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(await requests[0]?.json()).toEqual({
-      status: "failed",
-      reason: "bundle writer failed",
-      operation: "export",
-      operationId: "op_export",
-      error: "bundle writer failed",
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("internal installations status rejects missing or invalid status", async () => {
-  const missingStdout: string[] = [];
-  const missingStderr: string[] = [];
-  const missingCode = await main(
-    ["internal", "installations", "status", "inst_1"],
-    {
-      stdout: (line) => missingStdout.push(line),
-      stderr: (line) => missingStderr.push(line),
-    },
-  );
-  expect(missingCode).toEqual(2);
-  expect(missingStdout).toEqual([]);
-  expect(missingStderr).toEqual(["--status is required"]);
-
-  const invalidStdout: string[] = [];
-  const invalidStderr: string[] = [];
-  const invalidCode = await main(
-    ["internal", "installations", "status", "inst_1", "--status", "paused"],
-    {
-      stdout: (line) => invalidStdout.push(line),
-      stderr: (line) => invalidStderr.push(line),
-    },
-  );
-  expect(invalidCode).toEqual(2);
-  expect(invalidStdout).toEqual([]);
-  expect(invalidStderr).toEqual([
-    "--status must be one of: installing, ready, suspended, exported, failed",
-  ]);
-});
-
-test("internal installations materialize posts a dedicated request", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Promise.resolve(
-      Response.json({
-        operationId: "op_materialize",
-        capsuleId: "inst_1",
-        fromMode: "shared-cell",
-        toMode: "dedicated",
-        trackingUrl:
-          "/v1/capsule-projections/inst_1/events?types=installation.materialize-requested",
-      }),
-    );
-  }) as typeof fetch;
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "materialize",
-        "inst_1",
-        "--mode",
-        "dedicated",
-        "--region",
-        "tokyo",
-        "--compute",
-        "small",
-        "--database",
-        "small",
-        "--object-store",
-        "standard",
-        "--cutover-strategy",
-        "blue-green",
-        "--drain-seconds",
-        "30",
-        "--cost-ack",
-        "--idempotency-key",
-        "idem-materialize",
-        "--accounts-url",
-        "http://accounts.local",
-        "--token",
-        "accounts-token",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/capsule-projections/inst_1/materialize",
-    );
-    expect(requests[0]?.method).toEqual("POST");
-    expect(requests[0]?.headers.get("authorization")).toEqual(
-      "Bearer accounts-token",
-    );
-    expect(requests[0]?.headers.get("idempotency-key")).toEqual(
-      "idem-materialize",
-    );
-    expect(await requests[0]?.json()).toEqual({
-      mode: "dedicated",
-      region: "tokyo",
-      plan: {
-        compute: "small",
-        database: "small",
-        objectStore: "standard",
-      },
-      cutover: {
-        strategy: "blue-green",
-        drainSeconds: 30,
-      },
-      confirm: {
-        costAck: true,
-        permissionDigest: await testSha256HexDigest({
-          operation: "materialize",
-          capsuleId: "inst_1",
-          mode: "dedicated",
-          region: "tokyo",
-          plan: {
-            compute: "small",
-            database: "small",
-            objectStore: "standard",
-          },
-          cutover: {
-            strategy: "blue-green",
-            drainSeconds: 30,
-          },
-        }),
-      },
-    });
-    expect(stdout.join("\n")).toEqual(
-      [
-        "Materialize operation op_materialize",
-        "  installation: inst_1",
-        "  mode: shared-cell -> dedicated",
-        "  tracking: /v1/capsule-projections/inst_1/events?types=installation.materialize-requested",
-      ].join("\n"),
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("internal installations materialize rejects unsupported modes", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "internal",
-      "installations",
-      "materialize",
-      "inst_1",
-      "--mode",
-      "shared-cell",
-      "--region",
-      "tokyo",
-      "--cost-ack",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual(["--mode must be dedicated"]);
-});
-
-test("internal installations materialize requires explicit cost acknowledgement", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    ["internal", "installations", "materialize", "inst_1", "--region", "tokyo"],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual(["--cost-ack is required"]);
-});
-
-test("internal installations export posts a pending bundle request", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Promise.resolve(
-      Response.json({
-        operationId: "op_export",
-        status: "preparing",
-        trackingUrl:
-          "/v1/capsule-projections/inst_1/events?types=installation.export-requested",
-        downloadUrl: null,
-        downloadExpiresAt: null,
-      }),
-    );
-  }) as typeof fetch;
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "export",
-        "inst_1",
-        "--include-data",
-        "--encryption-method",
-        "age",
-        "--recipient",
-        "age1one,age1two",
-        "--data",
-        "postgres,blobs",
-        "--secrets",
-        "templates-only",
-        "--idempotency-key",
-        "idem-export",
-        "--accounts-url",
-        "http://accounts.local",
-        "--token",
-        "accounts-token",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/capsule-projections/inst_1/export",
-    );
-    expect(requests[0]?.method).toEqual("POST");
-    expect(requests[0]?.headers.get("idempotency-key")).toEqual("idem-export");
-    expect(await requests[0]?.json()).toEqual({
-      includeData: true,
-      format: "bundle",
-      encryption: {
-        method: "age",
-        recipients: ["age1one", "age1two"],
-      },
-      scope: {
-        data: ["postgres", "blobs"],
-        secrets: "templates-only",
-      },
-    });
-    expect(stdout.join("\n")).toEqual(
-      [
-        "Export operation op_export",
-        "  status: preparing",
-        "  tracking: /v1/capsule-projections/inst_1/events?types=installation.export-requested",
-      ].join("\n"),
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("internal installations export-operation reads operation status", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    return Promise.resolve(
-      Response.json({
-        operationId: "op_export",
-        capsuleId: "inst_1",
-        status: "ready",
-        downloadUrl: "https://exports.example/download",
-      }),
-    );
-  }) as typeof fetch;
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "export-operation",
-        "inst_1",
-        "op_export",
-        "--accounts-url",
-        "http://accounts.local",
-        "--token",
-        "accounts-token",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/capsule-projections/inst_1/exports/op_export",
-    );
-    expect(requests[0]?.method).toEqual("GET");
-    expect(requests[0]?.headers.get("authorization")).toEqual(
-      "Bearer accounts-token",
-    );
-    expect(stdout.join("\n")).toEqual(
-      [
-        "Export operation op_export",
-        "  installation: inst_1",
-        "  status: ready",
-        "  download: https://exports.example/download",
-      ].join("\n"),
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("internal installations export-operation requires operation id", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    ["internal", "installations", "export-operation", "inst_1"],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual(["operation id is required"]);
-});
-
-test("internal installations export requires age recipients", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "internal",
-      "installations",
-      "export",
-      "inst_1",
-      "--encryption-method",
-      "age",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
   expect(stderr).toEqual([
-    "--recipient is required when --encryption-method age",
+    "`takosumi installations` is retired. Use canonical Source/Capsule plan/apply operations.",
   ]);
-});
-
-test("internal installations import-plan emits a target restore request", async () => {
-  const bundleFile = await makeTempFile({ suffix: ".json" });
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (() => {
-    throw new Error("import-plan must not call the retired import route");
-  }) as typeof fetch;
-  await writeTextFile(
-    bundleFile,
-    JSON.stringify({
-      kind: "takosumi.accounts.capsule-export-bundle@v1",
-      version: "v1",
-      exportedAt: "2026-06-23T13:00:00.000Z",
-      installation: {
-        capsuleId: "inst_source",
-        accountId: "acct_source",
-        workspaceId: "space_source",
-        appId: "takos.chat",
-        billingAccountId: null,
-        mode: "dedicated",
-        status: "exported",
-      },
-      source: {
-        gitUrl: "https://github.com/takos/takos",
-        ref: "v1.2.3",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        path: "deploy/opentofu",
-        planDigest: "sha256:app",
-        artifactDigest: "sha256:compiled",
-      },
-      runtimeTarget: null,
-      oidcClient: {
-        clientId: "oidc_source",
-        serviceBinding: "auth",
-        servicePath: "takosumi.identity.oidc",
-        issuerUrl: "https://accounts.source.test",
-        redirectUris: ["https://accounts.source.test/auth/callback"],
-        allowedScopes: ["openid", "profile"],
-        subjectMode: "pairwise",
-        tokenEndpointAuthMethod: "none",
-      },
-      serviceBindings: [
-        {
-          serviceBindingId: "bind_auth",
-          name: "auth",
-          kind: "identity.oidc",
-          template: {
-            configRef:
-              "https://accounts.source.test/.well-known/openid-configuration",
-          },
-        },
-      ],
-      serviceGrants: [
-        {
-          serviceGrantId: "grant_threads",
-          capability: "threads:read",
-          scope: {
-            pathPrefix: "threads/",
-            apiKey: "sk-secret-from-source",
-          },
-          grantedAt: "2026-06-23T13:00:00.000Z",
-          revokedAt: null,
-        },
-      ],
-      events: [],
-    }),
-  );
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "import-plan",
-        "--bundle-file",
-        bundleFile,
-        "--target-issuer",
-        "https://selfhost.example.test",
-        "--target-account",
-        "acct_target",
-        "--target-workspace",
-        "space_target",
-        "--target-capsule-id",
-        "inst_target",
-        "--created-by-subject",
-        "tsub_target",
-        "--mode",
-        "shared-cell",
-        "--variables-json",
-        '{"accountId":"acct_cf_target","workersSubdomain":"target-subdomain"}',
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    const plan = JSON.parse(stdout.join("\n"));
-    expect(plan.kind).toEqual("takosumi.accounts.capsule-import-plan@v1");
-    expect(plan.sourceIssuer).toEqual("https://accounts.source.test");
-    expect(plan.targetIssuer).toEqual("https://selfhost.example.test");
-    expect(plan.target.requestedCapsuleId).toEqual("inst_target");
-    expect(plan.deployControlPlanRequest).toEqual({
-      workspaceId: "space_target",
-      source: {
-        kind: "git",
-        url: "https://github.com/takos/takos",
-        ref: "v1.2.3",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        path: "deploy/opentofu",
-      },
-      variables: {
-        accountId: "acct_cf_target",
-        workersSubdomain: "target-subdomain",
-      },
-    });
-    expect(plan.request.capsuleId).toEqual(undefined);
-    expect(plan.request.accountId).toEqual("acct_target");
-    expect(plan.request.workspaceId).toEqual("space_target");
-    expect(plan.request.mode).toEqual("shared-cell");
-    expect(plan.request.source.url).toEqual("https://github.com/takos/takos");
-    expect(plan.request.source.gitUrl).toEqual(
-      "https://github.com/takos/takos",
-    );
-    expect(plan.request.source.path).toEqual("deploy/opentofu");
-    expect(plan.request.oidcClients[0].issuerUrl).toEqual(
-      "https://selfhost.example.test",
-    );
-    expect(plan.request.oidcClients[0].redirectUris).toEqual([
-      "https://selfhost.example.test/auth/callback",
-    ]);
-    expect(JSON.stringify(plan)).not.toContain("sk-secret-from-source");
-    expect(plan.request.serviceGrants[0].scope.apiKey).toEqual("[REDACTED]");
-    expect(plan.request.serviceGrants[0].declaration).toEqual({
-      sourceServiceGrantId: "grant_threads",
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-    await removePath(bundleFile);
-  }
-});
-
-test("internal installations import-plan accepts Cloudflare R2 export documents", async () => {
-  const bundleFile = await makeTempFile({ suffix: ".json" });
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (() => {
-    throw new Error("import-plan must not call the retired import route");
-  }) as typeof fetch;
-  await writeTextFile(
-    bundleFile,
-    JSON.stringify({
-      kind: "takosumi.accounts.cloudflare-r2-capsule-export@v1",
-      version: "v1",
-      exportedAt: "2026-06-23T22:30:00.000Z",
-      operationId: "op_r2_export",
-      request: {
-        includeData: false,
-        format: "bundle",
-        encryption: { method: "age", recipients: ["age1recipient"] },
-        scope: { installation: true, ledger: true, outputs: true },
-      },
-      bundle: {
-        kind: "takosumi.accounts.capsule-export-bundle@v1",
-        version: "v1",
-        exportedAt: "2026-06-23T22:30:00.000Z",
-        installation: {
-          capsuleId: "inst_source",
-          accountId: "acct_source",
-          workspaceId: "space_source",
-          appId: "takos.chat",
-          billingAccountId: null,
-          mode: "dedicated",
-          status: "exported",
-        },
-        source: {
-          gitUrl: "https://github.com/takos/takos",
-          ref: "v1.2.3",
-          commit: "0123456789abcdef0123456789abcdef01234567",
-          path: "deploy/opentofu",
-          planDigest: "sha256:app",
-          artifactDigest: null,
-        },
-        runtimeTarget: null,
-        oidcClient: null,
-        serviceBindings: [],
-        serviceGrants: [],
-        events: [],
-      },
-    }),
-  );
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "import-plan",
-        "--bundle-file",
-        bundleFile,
-        "--target-issuer",
-        "https://selfhost.example.test",
-        "--target-account",
-        "acct_target",
-        "--target-workspace",
-        "space_target",
-        "--created-by-subject",
-        "tsub_target",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    const plan = JSON.parse(stdout.join("\n"));
-    expect(plan.kind).toEqual("takosumi.accounts.capsule-import-plan@v1");
-    expect(plan.request.capsuleId).toEqual(undefined);
-    expect(plan.deployControlPlanRequest.source.url).toEqual(
-      "https://github.com/takos/takos",
-    );
-    expect(plan.request.accountId).toEqual("acct_target");
-    expect(plan.request.workspaceId).toEqual("space_target");
-    expect(plan.request.mode).toEqual("self-hosted");
-  } finally {
-    globalThis.fetch = originalFetch;
-    await removePath(bundleFile);
-  }
-});
-
-test("internal installations import-apply creates a target plan and projection", async () => {
-  const bundleFile = await makeTempFile({ suffix: ".json" });
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    const url = new URL(request.url);
-    if (url.pathname === "/api/v1/sources") {
-      return Promise.resolve(
-        Response.json({ source: { id: "src_import" } }, { status: 201 }),
-      );
-    }
-    if (url.pathname === "/api/v1/sources/src_import/sync") {
-      return Promise.resolve(
-        Response.json(
-          { run: { id: "ssr_import", status: "succeeded" } },
-          { status: 201 },
-        ),
-      );
-    }
-    if (url.pathname === "/api/v1/workspaces/space_target/capsules") {
-      return Promise.resolve(
-        Response.json(
-          { installation: { id: "inst_import_target" } },
-          { status: 201 },
-        ),
-      );
-    }
-    if (
-      url.pathname ===
-      "/api/v1/capsules/inst_import_target/provider-connections"
-    ) {
-      return Promise.resolve(
-        Response.json(
-          {
-            providerConnectionSet: {
-              connections: [
-                {
-                  provider: "cloudflare",
-                  alias: "main",
-                  connectionId: "pcn_cf_target",
-                },
-                {
-                  provider: "registry.opentofu.org/vercel/vercel",
-                  alias: "edge",
-                  connectionId: "pcn_vercel_target",
-                },
-              ],
-            },
-          },
-          { status: 200 },
-        ),
-      );
-    }
-    if (url.pathname === "/v1/capsule-projections/plan-runs") {
-      return Promise.resolve(
-        Response.json(
-          {
-            kind: "takosumi.deploy-control.plan-run@v1",
-            planRunId: "plan_import",
-            planRun: {
-              id: "plan_import",
-              status: "succeeded",
-            },
-            expected: {
-              planRunId: "plan_import",
-              runnerProfileId: "runner_default",
-              sourceDigest: "sha256:source",
-              variablesDigest: "sha256:variables",
-              policyDecisionDigest: "sha256:policy",
-              planDigest: "sha256:plan",
-              planArtifactDigest: "sha256:artifact",
-              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
-            },
-          },
-          { status: 201 },
-        ),
-      );
-    }
-    if (url.pathname === "/v1/capsule-projections") {
-      return Promise.resolve(
-        Response.json(
-          {
-            status: "ready",
-            installation: {
-              id: "inst_target_canonical",
-              workspaceId: "space_target",
-            },
-          },
-          { status: 202 },
-        ),
-      );
-    }
-    return Promise.reject(
-      new Error(`unexpected import-apply request: ${request.url}`),
-    );
-  }) as typeof fetch;
-  await writeTextFile(
-    bundleFile,
-    JSON.stringify({
-      kind: "takosumi.accounts.capsule-export-bundle@v1",
-      version: "v1",
-      exportedAt: "2026-06-23T13:00:00.000Z",
-      installation: {
-        capsuleId: "inst_source",
-        accountId: "acct_source",
-        workspaceId: "space_source",
-        appId: "takos.chat",
-        billingAccountId: null,
-        mode: "dedicated",
-        status: "exported",
-      },
-      source: {
-        gitUrl: "https://github.com/takos/takos",
-        ref: "v1.2.3",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        path: "deploy/opentofu",
-        planDigest: "sha256:app",
-        artifactDigest: null,
-      },
-      runtimeTarget: null,
-      oidcClient: null,
-      serviceBindings: [],
-      serviceGrants: [],
-      events: [],
-    }),
-  );
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "import-apply",
-        "--bundle-file",
-        bundleFile,
-        "--target-issuer",
-        "https://selfhost.example.test",
-        "--target-account",
-        "acct_target",
-        "--target-workspace",
-        "space_target",
-        "--created-by-subject",
-        "tsub_target",
-        "--accounts-url",
-        "https://accounts.target.test",
-        "--token",
-        "takpat_write",
-        "--idempotency-key",
-        "idem-import-apply",
-        "--provider",
-        "cloudflare=pcn_cf_target,registry.opentofu.org/vercel/vercel@edge=pcn_vercel_target",
-        "--variables-json",
-        '{"accountId":"acct_cf_target","workersSubdomain":"target-subdomain"}',
-        "--json",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect({ code, stderr }).toEqual({ code: 0, stderr: [] });
-    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
-      "/api/v1/sources",
-      "/api/v1/sources/src_import/sync",
-      "/api/v1/workspaces/space_target/capsules",
-      "/api/v1/capsules/inst_import_target/provider-connections",
-      "/v1/capsule-projections/plan-runs",
-      "/v1/capsule-projections",
-    ]);
-    expect(requests[0]?.headers.get("authorization")).toEqual(
-      "Bearer takpat_write",
-    );
-    expect(requests[5]?.headers.get("idempotency-key")).toEqual(
-      "idem-import-apply",
-    );
-    expect(await requests[0]?.json()).toEqual({
-      workspaceId: "space_target",
-      name: "takos.chat-source",
-      url: "https://github.com/takos/takos",
-      defaultRef: "v1.2.3",
-      defaultPath: "deploy/opentofu",
-    });
-    expect(await requests[2]?.json()).toEqual({
-      name: "takos.chat-installation",
-      environment: "production",
-      sourceId: "src_import",
-      installConfigId: "cfg-default-opentofu-capsule",
-    });
-    expect(await requests[3]?.json()).toEqual({
-      connections: [
-        {
-          provider: "cloudflare",
-          alias: "main",
-          connectionId: "pcn_cf_target",
-        },
-        {
-          provider: "registry.opentofu.org/vercel/vercel",
-          alias: "edge",
-          connectionId: "pcn_vercel_target",
-        },
-      ],
-    });
-    expect(await requests[4]?.json()).toEqual({
-      workspaceId: "space_target",
-      source: {
-        kind: "git",
-        url: "https://github.com/takos/takos",
-        ref: "v1.2.3",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        path: "deploy/opentofu",
-      },
-      capsuleId: "inst_import_target",
-      operation: "create",
-      requiredProviders: [
-        "registry.opentofu.org/cloudflare/cloudflare",
-        "registry.opentofu.org/vercel/vercel",
-      ],
-      variables: {
-        accountId: "acct_cf_target",
-        workersSubdomain: "target-subdomain",
-      },
-    });
-    const projectionRequest = await requests[5]?.json();
-    expect(projectionRequest.capsuleId).toEqual(undefined);
-    expect(projectionRequest.planRunId).toEqual("plan_import");
-    expect(projectionRequest.expected.planArtifactDigest).toEqual(
-      "sha256:artifact",
-    );
-    expect(projectionRequest.source.url).toEqual(
-      "https://github.com/takos/takos",
-    );
-    const result = JSON.parse(stdout.join("\n"));
-    expect(result.kind).toEqual(
-      "takosumi.accounts.installation-import-apply-result@v1",
-    );
-    expect(result.planRunId).toEqual("plan_import");
-    expect(result.projection.installation.id).toEqual("inst_target_canonical");
-  } finally {
-    globalThis.fetch = originalFetch;
-    await removePath(bundleFile);
-  }
-});
-
-test("internal installations import-apply reuses duplicate target installation", async () => {
-  const bundleFile = await makeTempFile({ suffix: ".json" });
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    const url = new URL(request.url);
-    if (url.pathname === "/api/v1/sources") {
-      return Promise.resolve(
-        Response.json({ source: { id: "src_import" } }, { status: 201 }),
-      );
-    }
-    if (url.pathname === "/api/v1/sources/src_import/sync") {
-      return Promise.resolve(
-        Response.json(
-          { run: { id: "ssr_import", status: "succeeded" } },
-          { status: 201 },
-        ),
-      );
-    }
-    if (url.pathname === "/api/v1/workspaces/space_target/capsules") {
-      return Promise.resolve(
-        Response.json(
-          {
-            error: {
-              code: "failed_precondition",
-              message: "installation already exists",
-              details: {
-                reason: "duplicate_installation",
-                capsuleId: "inst_existing_target",
-              },
-            },
-          },
-          { status: 409 },
-        ),
-      );
-    }
-    if (
-      url.pathname ===
-      "/api/v1/capsules/inst_existing_target/provider-connections"
-    ) {
-      return Promise.resolve(
-        Response.json(
-          {
-            providerConnectionSet: {
-              connections: [
-                {
-                  provider: "cloudflare",
-                  alias: "main",
-                  connectionId: "pcn_cf_target",
-                },
-              ],
-            },
-          },
-          { status: 200 },
-        ),
-      );
-    }
-    if (url.pathname === "/v1/capsule-projections/plan-runs") {
-      return Promise.resolve(
-        Response.json(
-          {
-            kind: "takosumi.deploy-control.plan-run@v1",
-            planRunId: "plan_import",
-            planRun: {
-              id: "plan_import",
-              status: "succeeded",
-            },
-            expected: {
-              planRunId: "plan_import",
-              runnerProfileId: "runner_default",
-              sourceDigest: "sha256:source",
-              variablesDigest: "sha256:variables",
-              policyDecisionDigest: "sha256:policy",
-              planDigest: "sha256:plan",
-              planArtifactDigest: "sha256:artifact",
-            },
-          },
-          { status: 201 },
-        ),
-      );
-    }
-    if (url.pathname === "/v1/capsule-projections") {
-      return Promise.resolve(
-        Response.json(
-          {
-            status: "ready",
-            installation: { id: "inst_target_canonical" },
-          },
-          { status: 202 },
-        ),
-      );
-    }
-    return Promise.reject(
-      new Error(`unexpected duplicate import request: ${request.url}`),
-    );
-  }) as typeof fetch;
-  await writeTextFile(
-    bundleFile,
-    JSON.stringify({
-      kind: "takosumi.accounts.capsule-export-bundle@v1",
-      version: "v1",
-      exportedAt: "2026-06-23T13:00:00.000Z",
-      installation: {
-        capsuleId: "inst_source",
-        accountId: "acct_source",
-        workspaceId: "space_source",
-        appId: "takos.chat",
-        billingAccountId: null,
-        mode: "dedicated",
-        status: "exported",
-      },
-      source: {
-        gitUrl: "https://github.com/takos/takos",
-        ref: "v1.2.3",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        path: "deploy/opentofu",
-        planDigest: "sha256:app",
-        artifactDigest: null,
-      },
-      runtimeTarget: null,
-      oidcClient: null,
-      serviceBindings: [],
-      serviceGrants: [],
-      events: [],
-    }),
-  );
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "import-apply",
-        "--bundle-file",
-        bundleFile,
-        "--target-issuer",
-        "https://selfhost.example.test",
-        "--target-account",
-        "acct_target",
-        "--target-workspace",
-        "space_target",
-        "--created-by-subject",
-        "tsub_target",
-        "--accounts-url",
-        "https://accounts.target.test",
-        "--token",
-        "takpat_write",
-        "--provider",
-        "cloudflare=pcn_cf_target",
-        "--json",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect({ code, stderr }).toEqual({ code: 0, stderr: [] });
-    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
-      "/api/v1/sources",
-      "/api/v1/sources/src_import/sync",
-      "/api/v1/workspaces/space_target/capsules",
-      "/api/v1/capsules/inst_existing_target/provider-connections",
-      "/v1/capsule-projections/plan-runs",
-      "/v1/capsule-projections",
-    ]);
-    expect(await requests[3]?.json()).toEqual({
-      connections: [
-        {
-          provider: "cloudflare",
-          alias: "main",
-          connectionId: "pcn_cf_target",
-        },
-      ],
-    });
-    expect(await requests[4]?.json()).toMatchObject({
-      capsuleId: "inst_existing_target",
-    });
-    const result = JSON.parse(stdout.join("\n"));
-    expect(result.planRunId).toEqual("plan_import");
-  } finally {
-    globalThis.fetch = originalFetch;
-    await removePath(bundleFile);
-  }
-});
-
-test("internal installations import-apply rejects metadata-only upload sources", async () => {
-  const bundleFile = await makeTempFile({ suffix: ".json" });
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  await writeTextFile(
-    bundleFile,
-    JSON.stringify({
-      kind: "takosumi.accounts.capsule-export-bundle@v1",
-      version: "v1",
-      exportedAt: "2026-06-23T13:00:00.000Z",
-      installation: {
-        capsuleId: "inst_source",
-        accountId: "acct_source",
-        workspaceId: "space_source",
-        appId: "takos.chat",
-        billingAccountId: null,
-        mode: "dedicated",
-        status: "exported",
-      },
-      source: {
-        gitUrl: "https://uploads.takosumi.com/space_source",
-        ref: "upload",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        planDigest: "sha256:app",
-        artifactDigest: null,
-      },
-      runtimeTarget: null,
-      oidcClient: null,
-      serviceBindings: [],
-      serviceGrants: [],
-      events: [],
-    }),
-  );
-
-  try {
-    const code = await main(
-      [
-        "internal",
-        "installations",
-        "import-apply",
-        "--bundle-file",
-        bundleFile,
-        "--target-issuer",
-        "https://selfhost.example.test",
-        "--target-account",
-        "acct_target",
-        "--target-workspace",
-        "space_target",
-        "--created-by-subject",
-        "tsub_target",
-        "--accounts-url",
-        "https://accounts.target.test",
-        "--token",
-        "takpat_write",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(1);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain("metadata-only upload source");
-  } finally {
-    await removePath(bundleFile);
-  }
+  expect(stderr.join("\n")).not.toContain("internal installations");
 });
 
 // ---------------------------------------------------------------------------
@@ -8327,9 +5668,17 @@ test("migrate-d1 dry-run makes zero wrangler calls", async () => {
   expect(report.dryRun).toEqual(true);
   // The plan lists the bootstrap migration (version 0) without applying it.
   expect(report.migrations[0].version).toEqual(0);
+  expect(report.migrations[1]).toEqual({
+    version: 1,
+    name: "generalize_billing_provider_storage",
+  });
+  expect(report.migrations[2]).toEqual({
+    version: 2,
+    name: "remove_commercial_billing_persistence",
+  });
 });
 
-test("migrate-d1 applies the bootstrap version on a clean DB", async () => {
+test("migrate-d1 applies the bootstrap and retires commercial billing persistence on a clean DB", async () => {
   const fake = createFakeD1Command();
   const report = await applyD1AccountsMigrations({
     databaseId: "db-uuid",
@@ -8337,11 +5686,11 @@ test("migrate-d1 applies the bootstrap version on a clean DB", async () => {
     dryRun: false,
     command: fake.command,
   });
-  expect(report.applied).toEqual([0]);
+  expect(report.applied).toEqual([0, 1, 2]);
   expect(report.skipped).toEqual([]);
   // Records the version the Worker's ensureD1SchemaVersion later reads
-  // (EXPECTED_D1_SCHEMA_VERSION = 0) into the same table name.
-  expect(fake.versions()).toEqual([0]);
+  // (EXPECTED_D1_SCHEMA_VERSION = 2) into the same table name.
+  expect(fake.versions()).toEqual([0, 1, 2]);
   // First write ensures the tracking table exists, with the exact name the
   // Worker reads.
   expect(
@@ -8355,17 +5704,30 @@ test("migrate-d1 applies the bootstrap version on a clean DB", async () => {
     call.sql.startsWith("INSERT INTO takosumi_accounts_schema_migrations"),
   );
   expect(inserted).toBeTruthy();
+  const billingMigration = fake.calls.find((call) =>
+    call.sql.includes("billing_accounts_by_provider_customer"),
+  );
+  expect(billingMigration?.sql).toContain(
+    "json_remove(document, '$.stripeCustomerId'",
+  );
+  expect(billingMigration?.sql).toContain("'$.providerDefaultPaymentMethodId'");
+  const removalMigration = fake.calls.find((call) =>
+    call.sql.includes("DELETE FROM takosumi_accounts_documents"),
+  );
+  expect(removalMigration?.sql).toContain("'billing_accounts'");
+  expect(removalMigration?.sql).toContain("'billing_webhook_events'");
+  expect(removalMigration?.sql).toContain("'billing_usage_records'");
 });
 
-test("migrate-d1 skips an already-applied version (idempotent re-run)", async () => {
-  const fake = createFakeD1Command({ seedVersions: [0] });
+test("migrate-d1 skips already-applied versions (idempotent re-run)", async () => {
+  const fake = createFakeD1Command({ seedVersions: [0, 1, 2] });
   const report = await applyD1AccountsMigrations({
     databaseId: "db-uuid",
     dryRun: false,
     command: fake.command,
   });
   expect(report.applied).toEqual([]);
-  expect(report.skipped).toEqual([0]);
+  expect(report.skipped).toEqual([0, 1, 2]);
   // No tracking INSERT and no migration body execute on the skip path; the
   // only writes are the idempotent CREATE TABLE + the SELECT.
   const inserts = fake.calls.filter((call) =>
@@ -8380,7 +5742,9 @@ test("migrate-d1 parses the wrangler --json array-of-envelopes shape", async () 
   // for the array-wrapped and bare-object envelope shapes wrangler emits.
   const captured: string[] = [];
   const wranglerJson = JSON.stringify([
-    { results: [{ results: [{ version: 0 }] }] },
+    {
+      results: [{ results: [{ version: 0 }, { version: 1 }, { version: 2 }] }],
+    },
   ]);
   const command: D1ExecuteCommand = {
     execute(input) {
@@ -8405,8 +5769,8 @@ test("migrate-d1 parses the wrangler --json array-of-envelopes shape", async () 
     dryRun: false,
     command,
   });
-  // version 0 came back from the parsed envelope, so it is skipped.
-  expect(report.skipped).toEqual([0]);
+  // Both versions came back from the parsed envelope, so both are skipped.
+  expect(report.skipped).toEqual([0, 1, 2]);
   expect(report.applied).toEqual([]);
 });
 
@@ -8468,8 +5832,8 @@ test("accounts migrate-d1 CLI applies via the injected command and exits 0", asy
   expect(code).toEqual(0);
   expect(stderr).toEqual([]);
   const report = JSON.parse(stdout.join("\n"));
-  expect(report.applied).toEqual([0]);
-  expect(fake.versions()).toEqual([0]);
+  expect(report.applied).toEqual([0, 1, 2]);
+  expect(fake.versions()).toEqual([0, 1, 2]);
 });
 
 test("accounts migrate-d1 CLI surfaces a wrangler failure as exit 1", async () => {
@@ -8593,9 +5957,12 @@ test("integerOption returns the fallback when the flag is absent", () => {
   expect(integerOption({ port: "443" }, "port", 8787)).toEqual(443);
 });
 
-test("connections set-cloudflare-token reads token file and never prints the secret", async () => {
+test("connections create uses explicit recipe data and never prints the secret", async () => {
   const tokenFile = await makeTempFile();
-  await writeTextFile(tokenFile, "cf_live_secret\n");
+  await writeTextFile(
+    tokenFile,
+    JSON.stringify({ CLOUDFLARE_API_TOKEN: "cf_live_secret" }),
+  );
   const stdout: string[] = [];
   const stderr: string[] = [];
   const requests: Array<{ request: Request; body: string }> = [];
@@ -8609,9 +5976,7 @@ test("connections set-cloudflare-token reads token file and never prints the sec
         connection: {
           id: "conn_cf",
           scope: "operator",
-          provider: "cloudflare",
-          kind: "cloudflare_api_token",
-          authMethod: "static_secret",
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
           status: "pending",
           envNames: ["CLOUDFLARE_API_TOKEN"],
           createdAt: "2026-06-09T00:00:00.000Z",
@@ -8626,15 +5991,21 @@ test("connections set-cloudflare-token reads token file and never prints the sec
     const code = await main(
       [
         "connections",
-        "set-cloudflare-token",
+        "create",
         "--url",
         "https://app.takosumi.test",
         "--token",
         "operator-bearer",
-        "--api-token-file",
+        "--provider",
+        "registry.opentofu.org/cloudflare/cloudflare",
+        "--recipe",
+        "cloudflare",
+        "--auth-mode",
+        "api_token",
+        "--secret-partition",
+        "provider-credentials",
+        "--values-file",
         tokenFile,
-        "--account-id",
-        "acct_1",
       ],
       {
         stdout: (line) => stdout.push(line),
@@ -8646,17 +6017,20 @@ test("connections set-cloudflare-token reads token file and never prints the sec
     expect(stderr).toEqual([]);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.request.url).toEqual(
-      "https://app.takosumi.test/internal/v1/connections/cloudflare/token",
+      "https://app.takosumi.test/internal/v1/connections",
     );
     expect(requests[0]?.request.headers.get("authorization")).toEqual(
       "Bearer operator-bearer",
     );
     const createBody = JSON.parse(requests[0]!.body);
     expect(createBody).toMatchObject({
-      provider: "cloudflare",
-      kind: "cloudflare_api_token",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      credentialRecipe: {
+        id: "cloudflare",
+        authMode: "api_token",
+        secretPartition: "provider-credentials",
+      },
       scope: "operator",
-      scopeHints: { accountId: "acct_1" },
       values: { CLOUDFLARE_API_TOKEN: "cf_live_secret" },
     });
     const output = stdout.concat(stderr).join("\n");
@@ -8679,7 +6053,7 @@ test("root help shows only the stable operator CLI surface", async () => {
   expect(code).toEqual(0);
   expect(stderr).toEqual([]);
   expect(stdout.join("\n")).toContain("connections");
-  expect(stdout.join("\n")).toContain("secrets");
+  expect(stdout.join("\n")).not.toContain("Worker secrets");
   expect(stdout.join("\n")).not.toContain("accounts seed");
 });
 
@@ -8708,7 +6082,7 @@ test("operator CLI help supports Japanese output", async () => {
   }
 });
 
-test("connections create-generic-env creates a Workspace-owned arbitrary provider connection", async () => {
+test("connections create creates a Workspace-owned arbitrary provider connection", async () => {
   const valuesFile = await makeTempFile({ suffix: ".json" });
   const filesFile = await makeTempFile({ suffix: ".json" });
   const scopeHintsFile = await makeTempFile({ suffix: ".json" });
@@ -8746,9 +6120,8 @@ test("connections create-generic-env creates a Workspace-owned arbitrary provide
       {
         connection: {
           id: "conn_vercel",
-          scope: "space",
+          scope: "workspace",
           provider: "registry.opentofu.org/vercel/vercel",
-          kind: "generic_env_provider",
           status: "verified",
           envNames: [
             "VERCEL_API_TOKEN",
@@ -8765,15 +6138,21 @@ test("connections create-generic-env creates a Workspace-owned arbitrary provide
     const code = await main(
       [
         "connections",
-        "create-generic-env",
+        "create",
         "--url",
         "https://app.takosumi.test",
         "--token",
         "operator-bearer",
-        "--space",
-        "space_1",
+        "--workspace",
+        "ws_1",
         "--provider",
         "registry.opentofu.org/vercel/vercel",
+        "--recipe",
+        "generic-env",
+        "--auth-mode",
+        "env",
+        "--secret-partition",
+        "tenant:vercel",
         "--values-file",
         valuesFile,
         "--files-file",
@@ -8790,7 +6169,7 @@ test("connections create-generic-env creates a Workspace-owned arbitrary provide
     expect({ code, stderr }).toEqual({ code: 0, stderr: [] });
     expect(requests).toHaveLength(1);
     expect(requests[0]?.request.url).toEqual(
-      "https://app.takosumi.test/internal/v1/connections/generic-env-provider",
+      "https://app.takosumi.test/internal/v1/connections",
     );
     expect(requests[0]?.request.headers.get("authorization")).toEqual(
       "Bearer operator-bearer",
@@ -8798,10 +6177,13 @@ test("connections create-generic-env creates a Workspace-owned arbitrary provide
     const createBody = JSON.parse(requests[0]!.body);
     expect(createBody).toEqual({
       provider: "registry.opentofu.org/vercel/vercel",
-      workspaceId: "space_1",
-      kind: "generic_env_provider",
-      authMethod: "static_secret",
-      scope: "space",
+      workspaceId: "ws_1",
+      credentialRecipe: {
+        id: "generic-env",
+        authMode: "env",
+        secretPartition: "tenant:vercel",
+      },
+      scope: "workspace",
       scopeHints: { templateId: "vercel-project" },
       values: {
         VERCEL_API_TOKEN: "vercel_secret",
@@ -8828,9 +6210,9 @@ test("connections create-generic-env creates a Workspace-owned arbitrary provide
   }
 });
 
-test("connections set-cloudflare-token rejects Workspace-owned connection flags", async () => {
+test("connections create rejects operator scope combined with a Workspace", async () => {
   const tokenFile = await makeTempFile();
-  await writeTextFile(tokenFile, "cf_live_secret\n");
+  await writeTextFile(tokenFile, JSON.stringify({ TOKEN: "cf_live_secret" }));
   const stdout: string[] = [];
   const stderr: string[] = [];
   const originalFetch = globalThis.fetch;
@@ -8842,14 +6224,24 @@ test("connections set-cloudflare-token rejects Workspace-owned connection flags"
     const code = await main(
       [
         "connections",
-        "set-cloudflare-token",
+        "create",
         "--url",
         "https://app.takosumi.test",
         "--token",
         "operator-bearer",
-        "--space",
-        "space_1",
-        "--api-token-file",
+        "--workspace",
+        "ws_1",
+        "--scope",
+        "operator",
+        "--provider",
+        "registry.opentofu.org/example/example",
+        "--recipe",
+        "generic-env",
+        "--auth-mode",
+        "env",
+        "--secret-partition",
+        "tenant:example",
+        "--values-file",
         tokenFile,
       ],
       {
@@ -8861,91 +6253,12 @@ test("connections set-cloudflare-token rejects Workspace-owned connection flags"
     expect(code).toEqual(2);
     expect(stdout).toEqual([]);
     expect(stderr.join("\n")).toContain(
-      "operator CLI does not create Workspace-owned Provider Connection backing material",
+      "--workspace cannot be combined with --scope operator",
     );
     expect(stderr.join("\n")).not.toContain("cf_live_secret");
   } finally {
     globalThis.fetch = originalFetch;
     await removePath(tokenFile);
-  }
-});
-
-test("deploy local upload is retired before network access", async () => {
-  const capsuleDir = await makeTempDir();
-  await writeTextFile(pathJoin(capsuleDir, "main.tf"), "terraform {}\n");
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input, init) => {
-    requests.push(new Request(input, init));
-    throw new Error("fetch must not be called for retired deploy");
-  }) as typeof fetch;
-
-  try {
-    const code = await main(
-      [
-        "deploy",
-        capsuleDir,
-        "--space",
-        "@me",
-        "--name",
-        "my-app",
-        "--url",
-        "https://app.takosumi.test",
-        "--token",
-        "session-bearer",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(2);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain("local upload is retired");
-    expect(requests).toEqual([]);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await removePath(capsuleDir, { recursive: true });
-  }
-});
-
-test("plan local upload is retired before network access", async () => {
-  const capsuleDir = await makeTempDir();
-  await writeTextFile(pathJoin(capsuleDir, "main.tf"), "terraform {}\n");
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const requests: Request[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((input, init) => {
-    requests.push(new Request(input, init));
-    throw new Error("fetch must not be called for retired plan");
-  }) as typeof fetch;
-
-  try {
-    const code = await main(
-      [
-        "plan",
-        capsuleDir,
-        "--space=space_direct",
-        "--url=https://app.takosumi.test",
-        "--token=session-bearer",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-    );
-
-    expect(code).toEqual(2);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain("local upload is retired");
-    expect(requests).toEqual([]);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await removePath(capsuleDir, { recursive: true });
   }
 });
 
@@ -8964,960 +6277,4 @@ test("connections provider-envs is hidden from the normal CLI surface", async ()
     "Unknown connections command: provider-envs",
   );
   expect(stderr.join("\n")).not.toContain("gateway|oauth|secret");
-});
-
-test("platform-secrets status compares local vault with remote names", async () => {
-  const dir = await makeTempDir();
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_DEPLOY_CONTROL_TOKEN"),
-    "secret-one",
-  );
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"),
-    "secret-two",
-  );
-  await writeTextFile(pathJoin(dir, ".gitignore"), "*");
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const commands: string[][] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", "/operator/wrangler.toml", "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async (args) => {
-        commands.push([...args]);
-        return {
-          code: 0,
-          stdout: JSON.stringify([
-            { name: "TAKOSUMI_DEPLOY_CONTROL_TOKEN", type: "secret_text" },
-            { name: "REMOTE_ONLY_SECRET", type: "secret_text" },
-          ]),
-          stderr: "",
-        };
-      },
-    );
-
-    expect(code).toEqual(1);
-    expect(stderr).toEqual([]);
-    expect(commands).toEqual([
-      [
-        "bunx",
-        "wrangler",
-        "secret",
-        "list",
-        "--config",
-        "/operator/wrangler.toml",
-      ],
-    ]);
-    const output = stdout.join("\n");
-    expect(output).toContain("Local secrets: 2");
-    expect(output).toContain("Remote secrets: 2");
-    expect(output).toContain(
-      "Generated present: TAKOSUMI_DEPLOY_CONTROL_TOKEN",
-    );
-    expect(output).toContain(
-      "Protected present: TAKOSUMI_SECRET_STORE_PASSPHRASE",
-    );
-    expect(output).toContain(
-      "Missing generated: TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
-    );
-    expect(output).toContain("TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN");
-    expect(output).toContain("Missing required manual: none");
-    expect(output).toContain("AI Gateway profiles: none");
-    expect(output).toContain("AI Gateway OpenAI-compatible profiles: 0");
-    expect(output).toContain("AI Gateway missing credential secrets: none");
-    expect(output).toContain("Remote only: REMOTE_ONLY_SECRET");
-    expect(output).not.toContain("secret-one");
-    expect(output).not.toContain("secret-two");
-  } finally {
-    await removePath(dir, { recursive: true });
-  }
-});
-
-test("platform-secrets status infers sibling takosumi-private defaults", async () => {
-  const root = await makeTempDir();
-  const appDir = pathJoin(root, "takosumi");
-  const privateDir = pathJoin(root, "takosumi-private");
-  const secretsDir = pathJoin(privateDir, ".secrets", "production");
-  await Bun.$`mkdir -p ${appDir} ${pathJoin(privateDir, "platform")} ${secretsDir}`.quiet();
-  await writeTextFile(
-    pathJoin(privateDir, "platform", "wrangler.toml"),
-    'name = "takosumi"\n',
-  );
-  await writeTextFile(
-    pathJoin(secretsDir, "TAKOSUMI_DEPLOY_CONTROL_TOKEN"),
-    "secret-one",
-  );
-  const previousCwd = process.cwd();
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const commands: string[][] = [];
-
-  try {
-    process.chdir(appDir);
-    const code = await runPlatformSecrets(
-      ["status"],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async (args) => {
-        commands.push([...args]);
-        return { code: 0, stdout: "[]", stderr: "" };
-      },
-    );
-
-    expect(code).toEqual(1);
-    expect(stderr).toEqual([]);
-    expect(commands).toEqual([
-      [
-        "bunx",
-        "wrangler",
-        "secret",
-        "list",
-        "--config",
-        pathJoin(privateDir, "platform", "wrangler.toml"),
-      ],
-    ]);
-    expect(stdout.join("\n")).toContain(
-      "Generated present: TAKOSUMI_DEPLOY_CONTROL_TOKEN",
-    );
-  } finally {
-    process.chdir(previousCwd);
-    await removePath(root, { recursive: true });
-  }
-});
-
-test("platform-secrets status requires AI Gateway profile apiKeyEnv secrets", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      'TAKOSUMI_AI_GATEWAY_PROFILES = \'[{"id":"deepseek","provider":"deepseek","baseUrl":"https://api.deepseek.example/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY","models":[{"publicModel":"deepseek/chat","upstreamModel":"deepseek-chat","endpoints":["chat.completions"]}]}]\'',
-    ].join("\n"),
-  );
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY"),
-    "deepseek-token",
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async () => ({ code: 0, stdout: "[]", stderr: "" }),
-    );
-
-    expect(code).toEqual(1);
-    expect(stderr).toEqual([]);
-    const output = stdout.join("\n");
-    expect(output).toContain(
-      "Required manual present: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
-    );
-    expect(output).toContain("Missing required manual: none");
-    expect(output).toContain("AI Gateway profiles: 1");
-    expect(output).toContain("AI Gateway providers: deepseek");
-    expect(output).toContain("AI Gateway OpenAI-compatible profiles: 1");
-    expect(output).toContain(
-      "AI Gateway required credential secrets: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
-    );
-    expect(output).toContain("AI Gateway missing credential secrets: none");
-    expect(output).not.toContain("deepseek-token");
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets status accepts Cloudflare Unified Billing API token profiles", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      "TAKOSUMI_AI_GATEWAY_PROFILES = '''",
-      "[",
-      '  {"id":"cloudflare-unified","provider":"cloudflare_unified_billing","baseUrl":"https://api.cloudflare.com/client/v4/accounts/account_123/ai/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN","headers":{"cf-aig-gateway-id":"default"},"models":[{"publicModel":"takosumi/default","upstreamModel":"openai/gpt-4.1-mini","endpoints":["chat.completions"],"default":true,"billingClass":"operator-paid-preview"}]}',
-      "]",
-      "'''",
-    ].join("\n"),
-  );
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN"),
-    "cf-token",
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async () => ({ code: 0, stdout: "[]", stderr: "" }),
-    );
-
-    expect(code).toEqual(1);
-    expect(stderr).toEqual([]);
-    const output = stdout.join("\n");
-    expect(output).toContain(
-      "Required manual present: TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN",
-    );
-    expect(output).toContain("Missing required manual: none");
-    expect(output).toContain("AI Gateway profiles: 1");
-    expect(output).toContain(
-      "AI Gateway providers: cloudflare_unified_billing",
-    );
-    expect(output).toContain("AI Gateway OpenAI-compatible profiles: 1");
-    expect(output).toContain(
-      "AI Gateway required credential secrets: TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN",
-    );
-    expect(output).toContain("AI Gateway missing credential secrets: none");
-    expect(output).not.toContain("cf-token");
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets status requires configured upstream OAuth client secret", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      'TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID = "google-client"',
-      'TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_REDIRECT_URI = "https://app.takosumi.com/sign-in/callback"',
-    ].join("\n"),
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async () => ({ code: 0, stdout: "[]", stderr: "" }),
-    );
-
-    expect(code).toEqual(1);
-    expect(stderr).toEqual([]);
-    const output = stdout.join("\n");
-    expect(output).toContain(
-      "Missing required manual: TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET",
-    );
-    expect(output).toContain("Manual present: none");
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets status reads multiline AI Gateway profiles from wrangler vars", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      "TAKOSUMI_AI_GATEWAY_PROFILES = '''",
-      "[",
-      '  {"id":"deepseek","provider":"deepseek","baseUrl":"https://api.deepseek.example/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY","models":[{"publicModel":"deepseek/chat","upstreamModel":"deepseek-chat","endpoints":["chat.completions"]}]}',
-      "]",
-      "'''",
-    ].join("\n"),
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async () => ({ code: 0, stdout: "[]", stderr: "" }),
-    );
-
-    expect(code).toEqual(1);
-    expect(stderr).toEqual([]);
-    const output = stdout.join("\n");
-    expect(output).toContain(
-      "Missing required manual: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
-    );
-    expect(output).toContain("AI Gateway profiles: 1");
-    expect(output).toContain(
-      "AI Gateway missing credential secrets: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
-    );
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets status accepts Workers AI binding profiles without manual upstream secrets", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      "TAKOSUMI_AI_GATEWAY_PROFILES = '''",
-      "[",
-      '  {"type":"workers_ai_binding","id":"workers-ai","provider":"workers_ai","models":[{"publicModel":"workers-ai/llama-3.1-8b-instruct-fast","upstreamModel":"@cf/meta/llama-3.1-8b-instruct-fast","endpoints":["chat.completions"],"default":true}]}',
-      "]",
-      "'''",
-    ].join("\n"),
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async () => ({ code: 0, stdout: "[]", stderr: "" }),
-    );
-
-    expect(code).toEqual(1);
-    expect(stderr).toEqual([]);
-    const output = stdout.join("\n");
-    expect(output).toContain("Missing required manual: none");
-    expect(output).toContain("AI Gateway profiles: 1");
-    expect(output).toContain("AI Gateway providers: workers_ai");
-    expect(output).toContain("AI Gateway OpenAI-compatible profiles: 0");
-    expect(output).toContain("AI Gateway Workers AI profiles: 1");
-    expect(output).toContain("AI Gateway required credential secrets: none");
-    expect(output).not.toContain("TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY");
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets status rejects Workers AI binding profiles with upstream secret fields", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      'TAKOSUMI_AI_GATEWAY_PROFILES = \'[{"type":"workers_ai_binding","id":"workers-ai","provider":"workers_ai","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_UNSAFE_API_KEY","models":[{"publicModel":"workers-ai/chat","upstreamModel":"@cf/meta/llama-3.1-8b-instruct-fast","endpoints":["chat.completions"]}]}]\'',
-    ].join("\n"),
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async () => ({ code: 0, stdout: "[]", stderr: "" }),
-    );
-
-    expect(code).toEqual(1);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain("must not define apiKeyEnv");
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets status rejects AI Gateway static secret headers", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      'TAKOSUMI_AI_GATEWAY_PROFILES = \'[{"id":"unsafe","provider":"openai_compatible","baseUrl":"https://api.example.test/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_UNSAFE_API_KEY","headers":{"x-api-key":"must-not-be-here"},"models":[{"publicModel":"unsafe/chat","upstreamModel":"unsafe-chat","endpoints":["chat.completions"]}]}]\'',
-    ].join("\n"),
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async () => ({ code: 0, stdout: "[]", stderr: "" }),
-    );
-
-    expect(code).toEqual(1);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain("may carry secrets");
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets status rejects AI Gateway static secret header values", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      'TAKOSUMI_AI_GATEWAY_PROFILES = \'[{"id":"unsafe","provider":"openai_compatible","baseUrl":"https://api.example.test/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_UNSAFE_API_KEY","headers":{"x-provider-metadata":"Authorization: Bearer static"},"models":[{"publicModel":"unsafe/chat","upstreamModel":"unsafe-chat","endpoints":["chat.completions"]}]}]\'',
-    ].join("\n"),
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async () => ({ code: 0, stdout: "[]", stderr: "" }),
-    );
-
-    expect(code).toEqual(1);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain("value may carry secrets");
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets status rejects AI Gateway public metadata secrets", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      'TAKOSUMI_AI_GATEWAY_PROFILES = \'[{"id":"unsafe","provider":"openai_compatible","baseUrl":"https://api.example.test/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_UNSAFE_API_KEY","models":[{"publicModel":"unsafe/chat","upstreamModel":"unsafe-chat","endpoints":["chat.completions"],"metadata":{"apiKey":"must-not-be-public","notes":["Authorization: Bearer metadata-token"]}}]}]\'',
-    ].join("\n"),
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async () => ({ code: 0, stdout: "[]", stderr: "" }),
-    );
-
-    expect(code).toEqual(1);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain(
-      "AI Gateway profile unsafe.models[0].metadata.apiKey may carry secrets",
-    );
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets status rejects AI Gateway token-shaped metadata values", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      'TAKOSUMI_AI_GATEWAY_PROFILES = \'[{"id":"unsafe","provider":"openai_compatible","baseUrl":"https://api.example.test/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_UNSAFE_API_KEY","models":[{"publicModel":"unsafe/chat","upstreamModel":"unsafe-chat","endpoints":["chat.completions"],"metadata":{"notes":["Authorization: Bearer metadata-token"]}}]}]\'',
-    ].join("\n"),
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async () => ({ code: 0, stdout: "[]", stderr: "" }),
-    );
-
-    expect(code).toEqual(1);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain(
-      "AI Gateway profile unsafe.models[0].metadata.notes[0] may carry secrets",
-    );
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets apply generates missing safe secrets and pushes value files", async () => {
-  const dir = await makeTempDir();
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"),
-    "protected-key",
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const commands: string[][] = [];
-  const stdinByName = new Map<string, string | undefined>();
-
-  try {
-    const code = await runPlatformSecrets(
-      ["apply", "--config", "/operator/wrangler.toml", "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async (args, input) => {
-        commands.push([...args]);
-        stdinByName.set(args[4] ?? "", input);
-        return { code: 0, stdout: "ok", stderr: "" };
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    const pushedNames = commands.map((command) => command[4]).sort();
-    expect(pushedNames).toEqual([
-      "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
-      "TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN",
-      "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
-      "TAKOSUMI_DEPLOY_CONTROL_TOKEN",
-      "TAKOSUMI_MANAGED_AGENT_START_TOKEN",
-      "TAKOSUMI_SECRET_STORE_PASSPHRASE",
-    ]);
-    for (const command of commands) {
-      expect(command.slice(0, 4)).toEqual([
-        "bunx",
-        "wrangler",
-        "secret",
-        "put",
-      ]);
-      expect(command.slice(5, 7)).toEqual([
-        "--config",
-        "/operator/wrangler.toml",
-      ]);
-      expect(command).not.toContain("--value-file");
-      expect(command).not.toContain(pathJoin(dir, command[4]!));
-    }
-    const generated = await readFile(
-      pathJoin(dir, "TAKOSUMI_DEPLOY_CONTROL_TOKEN"),
-      "utf8",
-    );
-    expect(stdinByName.get("TAKOSUMI_SECRET_STORE_PASSPHRASE")).toEqual(
-      "protected-key",
-    );
-    expect(stdinByName.get("TAKOSUMI_DEPLOY_CONTROL_TOKEN")).toEqual(generated);
-    expect(generated.trim().length).toBeGreaterThan(40);
-    expect(
-      (await stat(pathJoin(dir, "TAKOSUMI_DEPLOY_CONTROL_TOKEN"))).mode & 0o777,
-    ).toEqual(0o600);
-    const output = stdout.concat(stderr).join("\n");
-    expect(output).toContain("Generated: TAKOSUMI_DEPLOY_CONTROL_TOKEN");
-    expect(output).toContain("Pushed 6 platform secret(s)");
-    expect(output).not.toContain("protected-key");
-    expect(output).not.toContain(generated.trim());
-  } finally {
-    await removePath(dir, { recursive: true });
-  }
-});
-
-test("platform-secrets apply pushes optional metrics scrape token when present", async () => {
-  const dir = await makeTempDir();
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"),
-    "protected-key",
-  );
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_METRICS_SCRAPE_TOKEN"),
-    "metrics-token",
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const commands: string[][] = [];
-  const stdinByName = new Map<string, string | undefined>();
-
-  try {
-    const code = await runPlatformSecrets(
-      ["apply", "--config", "/operator/wrangler.toml", "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async (args, input) => {
-        commands.push([...args]);
-        stdinByName.set(args[4] ?? "", input);
-        return { code: 0, stdout: "ok", stderr: "" };
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    const pushedNames = commands.map((command) => command[4]).sort();
-    expect(pushedNames).toEqual([
-      "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
-      "TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN",
-      "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
-      "TAKOSUMI_DEPLOY_CONTROL_TOKEN",
-      "TAKOSUMI_MANAGED_AGENT_START_TOKEN",
-      "TAKOSUMI_METRICS_SCRAPE_TOKEN",
-      "TAKOSUMI_SECRET_STORE_PASSPHRASE",
-    ]);
-    expect(stdinByName.get("TAKOSUMI_METRICS_SCRAPE_TOKEN")).toEqual(
-      "metrics-token",
-    );
-    const output = stdout.concat(stderr).join("\n");
-    expect(output).toContain("Pushed 7 platform secret(s)");
-    expect(output).not.toContain("metrics-token");
-  } finally {
-    await removePath(dir, { recursive: true });
-  }
-});
-
-test("platform-secrets apply fails when configured upstream OAuth client secret is missing", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      'TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID = "google-client"',
-      'TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_REDIRECT_URI = "https://app.takosumi.com/sign-in/callback"',
-    ].join("\n"),
-  );
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"),
-    "protected-key",
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const commands: string[][] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["apply", "--config", config, "--secrets-dir", dir, "--dry-run"],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async (args) => {
-        commands.push([...args]);
-        return { code: 0, stdout: "ok", stderr: "" };
-      },
-    );
-
-    expect(code).toEqual(2);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain(
-      "missing required manual platform secret(s): TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET",
-    );
-    expect(commands).toEqual([]);
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets apply fails when configured Cloud extension client secret is missing", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      'TAKOSUMI_ACCOUNTS_CLIENT_ID = "takosumi-cloud-extensions"',
-      'TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION = "enabled"',
-    ].join("\n"),
-  );
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"),
-    "protected-key",
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const commands: string[][] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["apply", "--config", config, "--secrets-dir", dir, "--dry-run"],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async (args) => {
-        commands.push([...args]);
-        return { code: 0, stdout: "ok", stderr: "" };
-      },
-    );
-
-    expect(code).toEqual(2);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain(
-      "missing required manual platform secret(s): TAKOSUMI_ACCOUNTS_CLIENT_SECRET",
-    );
-    expect(commands).toEqual([]);
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets apply pushes Cloud extension confidential client secret when configured", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      'TAKOSUMI_ACCOUNTS_CLIENT_ID = "takosumi-cloud-extensions"',
-      'TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION = "enabled"',
-    ].join("\n"),
-  );
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"),
-    "protected-key",
-  );
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_ACCOUNTS_CLIENT_SECRET"),
-    "cloud-extension-client-secret",
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const commands: string[][] = [];
-  const stdinByName = new Map<string, string | undefined>();
-
-  try {
-    const code = await runPlatformSecrets(
-      ["apply", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async (args, input) => {
-        commands.push([...args]);
-        stdinByName.set(args[4] ?? "", input);
-        return { code: 0, stdout: "ok", stderr: "" };
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    const pushedNames = commands.map((command) => command[4]).sort();
-    expect(pushedNames).toContain("TAKOSUMI_ACCOUNTS_CLIENT_SECRET");
-    expect(stdinByName.get("TAKOSUMI_ACCOUNTS_CLIENT_SECRET")).toEqual(
-      "cloud-extension-client-secret",
-    );
-    const output = stdout.concat(stderr).join("\n");
-    expect(output).toContain("Pushed 7 platform secret(s)");
-    expect(output).not.toContain("cloud-extension-client-secret");
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets apply can explicitly initialize missing protected secrets", async () => {
-  const dir = await makeTempDir();
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const commands: string[][] = [];
-  const stdinByName = new Map<string, string | undefined>();
-
-  try {
-    const code = await runPlatformSecrets(
-      [
-        "apply",
-        "--config",
-        "/operator/wrangler.toml",
-        "--secrets-dir",
-        dir,
-        "--init-protected",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async (args, input) => {
-        commands.push([...args]);
-        stdinByName.set(args[4] ?? "", input);
-        return { code: 0, stdout: "ok", stderr: "" };
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    const pushedNames = commands.map((command) => command[4]).sort();
-    expect(pushedNames).toEqual([
-      "TAKOSUMI_ACCOUNTS_ES256_KEY_ID",
-      "TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK",
-      "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
-      "TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET",
-      "TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET",
-      "TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN",
-      "TAKOSUMI_ACCOUNTS_SUBJECT_SECRET",
-      "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT",
-      "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
-      "TAKOSUMI_DEPLOY_CONTROL_TOKEN",
-      "TAKOSUMI_MANAGED_AGENT_START_TOKEN",
-      "TAKOSUMI_SECRET_STORE_PASSPHRASE",
-    ]);
-    const privateJwkRaw = await readFile(
-      pathJoin(dir, "TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK"),
-      "utf8",
-    );
-    const privateJwk = JSON.parse(privateJwkRaw);
-    expect(privateJwk.kty).toEqual("EC");
-    expect(privateJwk.crv).toEqual("P-256");
-    expect(typeof privateJwk.d).toEqual("string");
-    expect(typeof privateJwk.x).toEqual("string");
-    expect(typeof privateJwk.y).toEqual("string");
-    for (const name of pushedNames) {
-      expect((await stat(pathJoin(dir, name))).mode & 0o777).toEqual(0o600);
-      expect(stdinByName.get(name)).toEqual(
-        await readFile(pathJoin(dir, name), "utf8"),
-      );
-    }
-    const output = stdout.join("\n");
-    expect(output).toContain("Generated: TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK");
-    expect(output).toContain("Pushed 12 platform secret(s)");
-    expect(output).not.toContain(privateJwk.d);
-  } finally {
-    await removePath(dir, { recursive: true });
-  }
-});
-
-test("platform-secrets apply local-only initializes the vault without wrangler", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(config, 'name = "test-platform"\n');
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const commands: string[][] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      [
-        "apply",
-        "--config",
-        config,
-        "--secrets-dir",
-        dir,
-        "--init-protected",
-        "--local-only",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async (args) => {
-        commands.push([...args]);
-        return { code: 0, stdout: "ok", stderr: "" };
-      },
-    );
-
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(commands).toEqual([]);
-    expect(
-      await pathExists(pathJoin(dir, "TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK")),
-    ).toEqual(true);
-    expect(
-      await pathExists(pathJoin(dir, "TAKOSUMI_DEPLOY_CONTROL_TOKEN")),
-    ).toEqual(true);
-    expect(stdout.join("\n")).toContain("Initialized local vault with 12");
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets apply rejects protected key regeneration", async () => {
-  const dir = await makeTempDir();
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const commands: string[][] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      [
-        "apply",
-        "--config",
-        "/operator/wrangler.toml",
-        "--secrets-dir",
-        dir,
-        "--regenerate",
-        "TAKOSUMI_SECRET_STORE_PASSPHRASE",
-      ],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async (args) => {
-        commands.push([...args]);
-        return { code: 0, stdout: "ok", stderr: "" };
-      },
-    );
-
-    expect(code).toEqual(2);
-    expect(stdout).toEqual([]);
-    expect(commands).toEqual([]);
-    expect(stderr.join("\n")).toContain(
-      "TAKOSUMI_SECRET_STORE_PASSPHRASE is protected_key",
-    );
-  } finally {
-    await removePath(dir, { recursive: true });
-  }
-});
-
-test("platform-secrets legacy low-level commands are hidden and rejected", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await runPlatformSecrets(
-    ["sync"],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-    async () => {
-      throw new Error("wrangler must not be called");
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr.join("\n")).toContain("Unknown platform-secrets command: sync");
-  expect(stderr.join("\n")).toContain("status");
-  expect(stderr.join("\n")).toContain("apply");
-  expect(stderr.join("\n")).not.toContain("put <secret-name>");
 });

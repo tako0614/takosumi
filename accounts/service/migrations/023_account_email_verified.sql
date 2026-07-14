@@ -2,7 +2,7 @@
 -- provider's `email_verified` assertion on the account so it survives the
 -- re-read performed at OIDC token issuance. Before this column the Postgres
 -- store dropped the value on save and `readAccountEmailVerified` always
--- resolved to false, so a Google sign-in asserting email_verified:true still
+-- resolved to false, so an upstream sign-in asserting email_verified:true still
 -- produced `email_verified:false`/omitted in the issued id_token.
 --
 -- Tri-state on purpose: the column is NULLable with NO DEFAULT. Existing rows

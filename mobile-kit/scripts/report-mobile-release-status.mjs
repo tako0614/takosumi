@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { inspectMobileReleaseVersions } from "./mobile-release-versions.mjs";
+import { validateMobileReleaseEvidence } from "./mobile-release-evidence-validation.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const appDir = path.resolve(args.appDir ?? process.cwd());
@@ -16,7 +18,10 @@ const evidenceFile = path.resolve(
 );
 const jsonOutput = Boolean(args.json);
 const failOnBlockers = Boolean(args.failOnBlockers);
+const failOnRepoBlockers = Boolean(args.failOnRepoBlockers);
 const skipToolchainProbe = Boolean(args.skipToolchainProbe);
+const requireSecureKeystore = Boolean(args.requireSecureKeystore);
+const requireRemotePush = Boolean(args.requireRemotePush);
 
 const blockers = [];
 const facts = {
@@ -27,8 +32,31 @@ const facts = {
   evidenceFile,
 };
 
-const tauriConfig = readJson(path.join(appDir, "src-tauri/tauri.conf.json"));
+const REPO_ACTION = {
+  actionability: "repo",
+  owner: "product-maintainer",
+};
+const RELEASE_ENVIRONMENT_ACTION = {
+  actionability: "release-environment",
+  owner: "release-engineer",
+};
+const OPERATOR_CONFIG_ACTION = {
+  actionability: "operator-config",
+  owner: "mobile-operator",
+};
+const STORE_EVIDENCE_ACTION = {
+  actionability: "store-evidence",
+  owner: "store-release-operator",
+};
+
+const tauriConfig = readJson(
+  path.join(appDir, "src-tauri/tauri.conf.json"),
+  REPO_ACTION,
+);
 checkTauriConfig(tauriConfig);
+checkReleaseVersionSources();
+if (requireSecureKeystore) checkSecureKeystoreImplementation();
+if (requireRemotePush) checkRemotePushImplementation();
 checkGeneratedNativeProjects();
 if (!skipToolchainProbe) checkLocalToolchain();
 checkEvidenceFile();
@@ -51,6 +79,12 @@ if (jsonOutput) {
 }
 
 if (failOnBlockers && blockers.length > 0) process.exit(1);
+if (
+  failOnRepoBlockers &&
+  blockers.some((item) => item.actionability === "repo")
+) {
+  process.exit(1);
+}
 
 function checkTauriConfig(config) {
   if (!config) return;
@@ -100,6 +134,139 @@ function checkTauriConfig(config) {
   }
 }
 
+function checkReleaseVersionSources() {
+  const inspection = inspectMobileReleaseVersions(appDir, facts.tauriVersion);
+  facts.packageVersion = inspection.packageVersion;
+  facts.cargoVersion = inspection.cargoVersion;
+  facts.cargoLockVersion = inspection.cargoLockVersion;
+  for (const issue of inspection.issues) {
+    blocker(issue.id, issue.label, issue.detail, issue.action);
+  }
+}
+
+function checkSecureKeystoreImplementation() {
+  const cargoTomlPath = path.join(appDir, "src-tauri/Cargo.toml");
+  const cargoToml = readText(cargoTomlPath);
+  const pluginRoot = path.join(appDir, "src-tauri/plugins/keystore");
+  facts.secureKeystore = {
+    dependency: "plugins/keystore",
+    pluginRoot: relative(pluginRoot),
+  };
+  if (
+    !cargoToml ||
+    !/tauri-plugin-keystore\s*=\s*\{\s*path\s*=\s*["']plugins\/keystore["']\s*\}/.test(
+      cargoToml,
+    )
+  ) {
+    blocker(
+      "security.keystore_product_owned_dependency_missing",
+      "Product-owned native keystore dependency is missing.",
+      "src-tauri/Cargo.toml must use the audited plugins/keystore path dependency.",
+      "Use the product-owned Android Keystore / iOS Keychain plugin; do not ship the alpha community package.",
+    );
+  }
+  for (const nativeFile of [
+    "Cargo.toml",
+    "android/src/main/java/KeystorePlugin.kt",
+    "ios/Sources/KeystorePlugin.swift",
+  ]) {
+    const filePath = path.join(pluginRoot, nativeFile);
+    if (!existsSync(filePath)) {
+      blocker(
+        "security.keystore_native_source_missing",
+        "Product-owned native keystore source is incomplete.",
+        `${relative(filePath)} does not exist.`,
+        "Restore the audited Android and iOS secure-storage implementation before release.",
+      );
+    }
+  }
+  if (/tauri-plugin-keystore\s*=\s*["'][^"']*alpha/i.test(cargoToml ?? "")) {
+    blocker(
+      "security.keystore_alpha_dependency",
+      "Unsafe alpha keystore dependency is still enabled.",
+      "The alpha package has unrelated hard-coded identifiers and can report success before persistence.",
+      "Remove the alpha dependency and use the product-owned native keystore.",
+    );
+  }
+}
+
+function checkRemotePushImplementation() {
+  const cargoToml = readText(path.join(appDir, "src-tauri/Cargo.toml")) ?? "";
+  const productPluginRoot = path.join(appDir, "src-tauri/plugins/mobile-push");
+  const backendFile = args.remotePushBackendFile
+    ? path.resolve(appDir, args.remotePushBackendFile)
+    : undefined;
+  const productOwnedDependency =
+    /tauri-plugin-mobile-push\s*=\s*\{\s*path\s*=\s*["']plugins\/mobile-push["']\s*\}/.test(
+      cargoToml,
+    );
+  facts.remotePush = {
+    required: true,
+    enabled: productOwnedDependency,
+    pluginRoot: relative(productPluginRoot),
+    providers: ["apns", "fcm"],
+    backendFile: backendFile ? relative(backendFile) : undefined,
+  };
+  if (/tauri-plugin-mobile-push\s*=\s*["']0\.1\.4["']/.test(cargoToml)) {
+    blocker(
+      "remote_push.community_plugin_unverified",
+      "Community remote-push plugin is not a GA implementation.",
+      "The locked plugin does not provide a verified Android command path or complete lifecycle events.",
+      "Replace it with a product-owned APNs/FCM plugin and physical-device evidence.",
+    );
+  } else if (!productOwnedDependency || !hasProductOwnedPushSources()) {
+    blocker(
+      "remote_push.native_implementation_missing",
+      "Product-owned APNs/FCM native implementation is missing.",
+      "Remote push is intentionally feature-off in the shipping bridge.",
+      "Implement the product-owned native plugin, token rotation, and iOS/Android device tests before enabling it.",
+    );
+  }
+  if (!backendFile || !existsSync(backendFile)) {
+    blocker(
+      "remote_push.delivery_backend_missing",
+      "Remote-push delivery backend is missing.",
+      backendFile
+        ? `${relative(backendFile)} does not exist.`
+        : "No --remote-push-backend-file was configured.",
+      "Implement event-id-only gateway dispatch, rejected-pushkey cleanup, bounded retries, and retention handling; provider credentials stay in the gateway.",
+    );
+  } else {
+    const backendSource = readText(backendFile) ?? "";
+    const requiredGatewayMarkers = [
+      "NOTIFICATION_PUSH_DELIVERY_BACKEND",
+      "createNotificationPushGatewayRequest",
+      "deliverNotificationToPushers",
+      "pruneStaleNotificationPushers",
+      "TAKOS_EGRESS",
+    ];
+    const missingMarkers = requiredGatewayMarkers.filter(
+      (marker) => !backendSource.includes(marker),
+    );
+    facts.remotePush.deliveryBackend = "takos.notification-pusher-gateway.v1";
+    if (missingMarkers.length > 0) {
+      blocker(
+        "remote_push.delivery_backend_incomplete",
+        "Remote-push gateway dispatcher is incomplete.",
+        `${relative(backendFile)} is missing required implementation markers: ${missingMarkers.join(", ")}.`,
+        "Restore event-id-only gateway dispatch, rejected-pushkey cleanup, SSRF-gated egress, and retention handling.",
+      );
+    }
+  }
+
+  function hasProductOwnedPushSources() {
+    return [
+      "Cargo.toml",
+      "android/src/main/AndroidManifest.xml",
+      "android/src/main/java/MobilePushPlugin.kt",
+      "android/src/main/java/TakosFirebaseMessagingService.kt",
+      "ios/Sources/MobilePushPlugin.swift",
+    ].every((relativePath) =>
+      existsSync(path.join(productPluginRoot, relativePath)),
+    );
+  }
+}
+
 function checkGeneratedNativeProjects() {
   const appleProject = path.join(appDir, "src-tauri/gen/apple");
   const androidProject = path.join(appDir, "src-tauri/gen/android");
@@ -115,15 +282,19 @@ function checkGeneratedNativeProjects() {
       "native.apple.generated_project_missing",
       "Generated iOS project is missing.",
       `${relative(appleProject)} does not exist.`,
-      "Run the product tauri:ios:init script on macOS/Xcode, then apply native push wiring.",
+      "Run the product tauri:ios:init script on macOS/Xcode, then run native integration checks.",
+      RELEASE_ENVIRONMENT_ACTION,
     );
+  } else {
+    checkAppleProductionEnvironment(appleProject);
   }
   if (!existsSync(androidProject)) {
     blocker(
       "native.android.generated_project_missing",
       "Generated Android project is missing.",
       `${relative(androidProject)} does not exist.`,
-      "Run the product tauri:android:init script, then apply native push wiring.",
+      "Run the product tauri:android:init script, then run native integration checks.",
+      RELEASE_ENVIRONMENT_ACTION,
     );
     return;
   }
@@ -133,8 +304,144 @@ function checkGeneratedNativeProjects() {
       "Android Firebase configuration is missing.",
       `${relative(googleServices)} does not exist.`,
       "Add product-owned Firebase/FCM google-services.json outside shared mobile-kit.",
+      OPERATOR_CONFIG_ACTION,
+    );
+    return;
+  }
+  checkAndroidFirebaseConfiguration(androidProject, googleServices);
+}
+
+function checkAndroidFirebaseConfiguration(androidProject, googleServices) {
+  let config;
+  try {
+    config = JSON.parse(readFileSync(googleServices, "utf8"));
+  } catch (cause) {
+    blocker(
+      "native.android.google_services_invalid_json",
+      "Android Firebase configuration is invalid JSON.",
+      `${relative(googleServices)}: ${cause.message}`,
+      "Replace google-services.json with the product's Firebase Android app configuration.",
+      OPERATOR_CONFIG_ACTION,
+    );
+    return;
+  }
+
+  const projectInfo = config?.project_info;
+  const clients = Array.isArray(config?.client) ? config.client : [];
+  const matchingClient = clients.find(
+    (client) =>
+      client?.client_info?.android_client_info?.package_name === bundleId,
+  );
+  const projectNumber = optionalText(projectInfo?.project_number);
+  const appId = optionalText(matchingClient?.client_info?.mobilesdk_app_id);
+  const apiKeys = Array.isArray(matchingClient?.api_key)
+    ? matchingClient.api_key
+        .map((entry) => optionalText(entry?.current_key))
+        .filter(Boolean)
+    : [];
+  const invalidFields = [];
+  if (!projectNumber || /^0+$/.test(projectNumber)) {
+    invalidFields.push("project_info.project_number");
+  }
+  if (!matchingClient) {
+    invalidFields.push(`client package ${bundleId}`);
+  }
+  if (!appId || /:0+$/.test(appId)) {
+    invalidFields.push("client_info.mobilesdk_app_id");
+  }
+  if (
+    apiKeys.length === 0 ||
+    apiKeys.some((key) =>
+      key.includes("ci-preflight-not-a-provider-credential"),
+    )
+  ) {
+    invalidFields.push("api_key.current_key");
+  }
+  if (String(config?.configuration_version ?? "") !== "1") {
+    invalidFields.push("configuration_version");
+  }
+  facts.googleServicesPackageNames = clients
+    .map((client) =>
+      optionalText(client?.client_info?.android_client_info?.package_name),
+    )
+    .filter(Boolean);
+  if (invalidFields.length > 0) {
+    blocker(
+      "native.android.google_services_invalid",
+      "Android Firebase configuration is not release-usable.",
+      `${relative(googleServices)} has missing, mismatched, or CI-only fields: ${invalidFields.join(", ")}.`,
+      "Use the real Firebase Android app configuration for the release bundle id; CI compile fixtures are not release configuration.",
+      OPERATOR_CONFIG_ACTION,
     );
   }
+
+  const gradleText = collectFiles(androidProject)
+    .filter(
+      (filePath) =>
+        filePath.endsWith("build.gradle") ||
+        filePath.endsWith("build.gradle.kts"),
+    )
+    .map((filePath) => readText(filePath) ?? "")
+    .join("\n");
+  const missingGradleMarkers = [
+    "com.google.gms.google-services",
+    "firebase-messaging",
+    "firebase-installations",
+  ].filter((marker) => !gradleText.includes(marker));
+  if (missingGradleMarkers.length > 0) {
+    blocker(
+      "native.android.firebase_gradle_wiring_missing",
+      "Generated Android Firebase wiring is incomplete.",
+      `Generated Gradle files are missing: ${missingGradleMarkers.join(", ")}.`,
+      "Rerun the integrated tauri:android:init script or tauri:native-push:apply before release packaging.",
+      RELEASE_ENVIRONMENT_ACTION,
+    );
+  }
+}
+
+function checkAppleProductionEnvironment(appleProject) {
+  const entitlementFiles = collectFiles(appleProject).filter((filePath) =>
+    filePath.endsWith(".entitlements"),
+  );
+  const environments = entitlementFiles
+    .map((filePath) => readApsEnvironment(readText(filePath) ?? ""))
+    .filter((value) => value !== undefined);
+  facts.appleApsEnvironments = [...new Set(environments)];
+  if (environments.length === 0) {
+    blocker(
+      "native.apple.aps_entitlement_missing",
+      "iOS APNs entitlement is missing.",
+      "No generated .entitlements file declares aps-environment.",
+      "Enable Push Notifications and apply the production native-push wiring before a release build.",
+      RELEASE_ENVIRONMENT_ACTION,
+    );
+    return;
+  }
+  if (environments.some((environment) => environment !== "production")) {
+    blocker(
+      "native.apple.aps_environment_not_production",
+      "iOS release APNs entitlement is not production.",
+      `Found aps-environment values: ${[...new Set(environments)].join(", ")}.`,
+      "Run tauri:native-push:apply:release and verify the signed release entitlement is production.",
+      RELEASE_ENVIRONMENT_ACTION,
+    );
+  }
+}
+
+function collectFiles(directory) {
+  const files = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const filePath = path.join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...collectFiles(filePath));
+    else if (entry.isFile()) files.push(filePath);
+  }
+  return files;
+}
+
+function readApsEnvironment(xml) {
+  return xml.match(
+    /<key>\s*aps-environment\s*<\/key>\s*<string>\s*([^<]+?)\s*<\/string>/,
+  )?.[1];
 }
 
 function checkLocalToolchain() {
@@ -145,15 +452,36 @@ function checkLocalToolchain() {
       "Java is unavailable for Android builds.",
       "The java command is not available in this environment.",
       "Install a JDK supported by the Tauri Android toolchain.",
+      RELEASE_ENVIRONMENT_ACTION,
     );
   }
-  for (const name of ["JAVA_HOME", "ANDROID_HOME", "NDK_HOME"]) {
-    if (!process.env[name]) {
+  const requiredDirectories = [
+    ["JAVA_HOME", "bin/java"],
+    ["ANDROID_HOME", undefined],
+    ["NDK_HOME", undefined],
+  ];
+  for (const [name, requiredChild] of requiredDirectories) {
+    const value = process.env[name];
+    if (!value) {
       blocker(
         `toolchain.${name.toLowerCase()}_missing`,
         `${name} is not set.`,
         `${name} is required for Android release builds.`,
         `Set ${name} in the native release environment.`,
+        RELEASE_ENVIRONMENT_ACTION,
+      );
+      continue;
+    }
+    const requiredPath = requiredChild
+      ? path.join(value, requiredChild)
+      : value;
+    if (!existsSync(requiredPath)) {
+      blocker(
+        `toolchain.${name.toLowerCase()}_invalid`,
+        `${name} does not point to a usable toolchain path.`,
+        `${requiredPath} does not exist.`,
+        `Set ${name} to the native release toolchain path.`,
+        RELEASE_ENVIRONMENT_ACTION,
       );
     }
   }
@@ -163,7 +491,82 @@ function checkLocalToolchain() {
       "iOS release builds require macOS with Xcode.",
       `Current platform is ${process.platform}.`,
       "Run iOS init/build/signing on a macOS/Xcode release machine.",
+      RELEASE_ENVIRONMENT_ACTION,
     );
+  } else {
+    for (const [id, command, commandArgs, label, action] of [
+      [
+        "xcode_missing",
+        "xcodebuild",
+        ["-version"],
+        "Xcode command line tools are unavailable.",
+        "Install and select the release Xcode toolchain.",
+      ],
+      [
+        "simctl_missing",
+        "xcrun",
+        ["simctl", "help"],
+        "xcrun simctl is unavailable.",
+        "Install the Xcode simulator tooling used by iOS preflight.",
+      ],
+      [
+        "cocoapods_missing",
+        "pod",
+        ["--version"],
+        "CocoaPods is unavailable.",
+        "Install CocoaPods in the hosted iOS build environment.",
+      ],
+    ]) {
+      if (!commandAvailable(command, commandArgs)) {
+        blocker(
+          `toolchain.${id}`,
+          label,
+          `${command} ${commandArgs.join(" ")} failed.`,
+          action,
+          RELEASE_ENVIRONMENT_ACTION,
+        );
+      }
+    }
+  }
+
+  const rustTargets = spawnSync("rustup", ["target", "list", "--installed"], {
+    encoding: "utf8",
+  });
+  if (rustTargets.status !== 0) {
+    blocker(
+      "toolchain.rustup_targets_unavailable",
+      "Installed Rust mobile targets cannot be inspected.",
+      "rustup target list --installed failed in this environment.",
+      "Install rustup and the Android/iOS Rust targets in the native release environment.",
+      RELEASE_ENVIRONMENT_ACTION,
+    );
+    return;
+  }
+  const installedTargets = new Set(
+    String(rustTargets.stdout ?? "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean),
+  );
+  facts.installedRustTargets = [...installedTargets].sort();
+  for (const target of [
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "i686-linux-android",
+    "x86_64-linux-android",
+    "aarch64-apple-ios",
+    "aarch64-apple-ios-sim",
+    "x86_64-apple-ios",
+  ]) {
+    if (!installedTargets.has(target)) {
+      blocker(
+        `toolchain.rust_target_${target.replaceAll("-", "_")}_missing`,
+        `Rust mobile target ${target} is missing.`,
+        `${target} is not installed for the selected Rust toolchain.`,
+        `Run rustup target add ${target} in the native release environment.`,
+        RELEASE_ENVIRONMENT_ACTION,
+      );
+    }
   }
 }
 
@@ -175,43 +578,28 @@ function checkEvidenceFile() {
       "Release evidence file is missing.",
       `${relative(evidenceFile)} does not exist.`,
       "Create release/mobile-release-evidence.json from the example or set MOBILE_RELEASE_EVIDENCE_FILE.",
+      STORE_EVIDENCE_ACTION,
     );
     return;
   }
-  const evidence = readJson(evidenceFile);
+  const evidence = readJson(evidenceFile, STORE_EVIDENCE_ACTION);
   if (!evidence) return;
-  if (evidence.product !== product) {
+  const validation = validateMobileReleaseEvidence({
+    evidence,
+    product,
+    productName,
+    bundleId,
+    releaseVersion: facts.tauriVersion,
+  });
+  facts.evidenceSchema = evidence.schema;
+  facts.evidenceValid = validation.valid;
+  for (const issue of validation.issues) {
     blocker(
-      "evidence.product_mismatch",
-      "Release evidence product does not match.",
-      `Expected ${product}, found ${String(evidence.product ?? "")}.`,
-      "Use the evidence file for this product shell.",
-    );
-  }
-  if (evidence.bundleId !== bundleId) {
-    blocker(
-      "evidence.bundle_id_mismatch",
-      "Release evidence bundle id does not match.",
-      `Expected ${bundleId}, found ${String(evidence.bundleId ?? "")}.`,
-      "Update release evidence to match the Tauri identifier.",
-    );
-  }
-  if (facts.tauriVersion && evidence.releaseVersion !== facts.tauriVersion) {
-    blocker(
-      "evidence.version_mismatch",
-      "Release evidence version does not match Tauri version.",
-      `Evidence ${String(evidence.releaseVersion ?? "")}, Tauri ${facts.tauriVersion}.`,
-      "Update evidence.releaseVersion or src-tauri/tauri.conf.json version.",
-    );
-  }
-  const zeroDigestPaths = [];
-  collectZeroDigestPaths(evidence, [], zeroDigestPaths);
-  for (const digestPath of zeroDigestPaths) {
-    blocker(
-      "evidence.zero_digest",
-      "Release evidence still uses an example zero digest.",
-      `${digestPath} is sha256:0000...`,
-      "Replace example digest values with real artifact, screenshot, or upload sha256 digests.",
+      issue.id,
+      "Release evidence is incomplete or invalid.",
+      issue.message,
+      issue.action,
+      STORE_EVIDENCE_ACTION,
     );
   }
 }
@@ -231,23 +619,7 @@ function printTextReport(report) {
     console.log(`- ${item.id}: ${item.label}`);
     console.log(`  detail: ${item.detail}`);
     console.log(`  next: ${item.action}`);
-  }
-}
-
-function collectZeroDigestPaths(value, pathParts, output) {
-  if (typeof value === "string") {
-    if (/^sha256:0{64}$/i.test(value)) output.push(pathParts.join("."));
-    return;
-  }
-  if (!value || typeof value !== "object") return;
-  if (Array.isArray(value)) {
-    value.forEach((item, index) =>
-      collectZeroDigestPaths(item, [...pathParts, String(index)], output),
-    );
-    return;
-  }
-  for (const [key, nested] of Object.entries(value)) {
-    collectZeroDigestPaths(nested, [...pathParts, key], output);
+    console.log(`  owner: ${item.owner} (${item.actionability})`);
   }
 }
 
@@ -256,13 +628,14 @@ function commandAvailable(command, commandArgs) {
   return result.status === 0;
 }
 
-function readJson(filePath) {
+function readJson(filePath, classification) {
   if (!existsSync(filePath)) {
     blocker(
       "file.missing",
       "Required JSON file is missing.",
       `${relative(filePath)} does not exist.`,
       "Create the required file before release.",
+      classification,
     );
     return undefined;
   }
@@ -274,13 +647,37 @@ function readJson(filePath) {
       "Required JSON file is invalid.",
       `${relative(filePath)}: ${cause.message}`,
       "Fix the JSON syntax before release.",
+      classification,
     );
     return undefined;
   }
 }
 
-function blocker(id, label, detail, action) {
-  blockers.push({ id, label, detail, action });
+function readText(filePath) {
+  if (!existsSync(filePath)) return undefined;
+  return readFileSync(filePath, "utf8");
+}
+
+function blocker(id, label, detail, action, classification) {
+  const resolvedClassification = classification ?? classifyBlocker(id);
+  blockers.push({
+    id,
+    label,
+    detail,
+    action,
+    ...resolvedClassification,
+  });
+}
+
+function classifyBlocker(id) {
+  if (id.startsWith("tauri.") || id.startsWith("version.")) {
+    return REPO_ACTION;
+  }
+  if (id.startsWith("toolchain.") || id.startsWith("native.")) {
+    return RELEASE_ENVIRONMENT_ACTION;
+  }
+  if (id.startsWith("evidence.")) return STORE_EVIDENCE_ACTION;
+  return REPO_ACTION;
 }
 
 function optionalText(value) {

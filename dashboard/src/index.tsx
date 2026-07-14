@@ -9,6 +9,7 @@ import {
   useParams,
 } from "@solidjs/router";
 import { installStaleAssetReload } from "./lib/chunk-reload.ts";
+import { initializeTakosumiRuntimeCapabilities } from "./lib/runtime-capabilities.ts";
 import ErrorBoundary from "./components/ErrorBoundary.tsx";
 import "./lib/theme.ts";
 
@@ -29,6 +30,7 @@ import "./styles/views.css";
 import "./styles/app-views.css";
 
 installStaleAssetReload();
+void initializeTakosumiRuntimeCapabilities();
 
 // --- auth (public) ----------------------------------------------------------
 const SignInView = lazy(() => import("./views/auth/SignInView.tsx"));
@@ -57,12 +59,13 @@ const RunsListView = lazy(() => import("./views/runs/RunsListView.tsx"));
 const RunView = lazy(() => import("./views/runs/RunView.tsx"));
 const RunGroupView = lazy(() => import("./views/runs/RunGroupView.tsx"));
 const GraphView = lazy(() => import("./views/graph/GraphView.tsx"));
+const ResourcesView = lazy(() => import("./views/resources/ResourcesView.tsx"));
+const ResourceDetailView = lazy(
+  () => import("./views/resources/ResourceDetailView.tsx"),
+);
 const ActivityView = lazy(() => import("./views/activity/ActivityView.tsx"));
 const NotificationsView = lazy(
   () => import("./views/notifications/NotificationsView.tsx"),
-);
-const CloudResourcesView = lazy(
-  () => import("./views/cloud/CloudResourcesView.tsx"),
 );
 const WorkspaceSettingsView = lazy(
   () => import("./views/workspace/WorkspaceSettingsView.tsx"),
@@ -103,7 +106,7 @@ function ServerOwnedRouteReload() {
 }
 
 /** Redirect preserving the query string (the external install link's
- * `/install?git=…` prefill and the Cloudflare OAuth callback's
+ * `/install?git=…` prefill and a provider OAuth helper callback's
  * `/connections?connected=1` both carry load-bearing params). */
 function RedirectWithQuery(props: { readonly to: string }) {
   const loc = useLocation();
@@ -112,14 +115,6 @@ function RedirectWithQuery(props: { readonly to: string }) {
 
 /** `/apps/:id` -> `/services/:id` (legacy dashboard links). */
 function RedirectLegacyAppDetail() {
-  const params = useParams();
-  const id = encodeURIComponent(params.id ?? "");
-  const tab = params.tab ? `/${encodeURIComponent(params.tab)}` : "";
-  return <Navigate href={`/services/${id}${tab}`} />;
-}
-
-/** `/installations/:id` -> `/services/:id` while legacy URLs age out. */
-function RedirectLegacyInstallationDetail() {
   const params = useParams();
   const id = encodeURIComponent(params.id ?? "");
   const tab = params.tab ? `/${encodeURIComponent(params.tab)}` : "";
@@ -142,7 +137,7 @@ function App() {
       <Route path="/sign-in/callback" component={SignInCallbackView} />
       <Route path="/oauth" component={ServerOwnedRouteReload} />
       <Route path="/oauth/*path" component={ServerOwnedRouteReload} />
-      <Route path="/legal/:page" component={LegalView} />
+      <Route path="/legal/:page" component={() => <LegalView />} />
       <Route path="/support" component={() => <LegalView page="support" />} />
       {/* Legacy external aliases. Current website CTAs avoid open signup, but
           old links should still land on the only sign-in screen. */}
@@ -167,7 +162,6 @@ function App() {
         <Route path="/settings/manage" component={ManageView} />
         <Route path="/services" component={ServiceListView} />
         <Route path="/new" component={NewAppView} />
-        <Route path="/cloud" component={CloudResourcesView} />
         <Route path="/connections" component={ConnectionsView} />
         <Route path="/services/:id" component={AppDetailView} />
         <Route path="/services/:id/:tab" component={AppDetailView} />
@@ -175,6 +169,8 @@ function App() {
         <Route path="/runs/:id" component={RunView} />
         <Route path="/run-groups/:id" component={RunGroupView} />
         <Route path="/graph" component={GraphView} />
+        <Route path="/resources" component={ResourcesView} />
+        <Route path="/resources/:kind/:name" component={ResourceDetailView} />
         <Route path="/activity" component={ActivityView} />
         <Route path="/notifications" component={NotificationsView} />
         <Route path="/advanced/workspace" component={AdvancedWorkspaceView} />
@@ -205,23 +201,11 @@ function App() {
       {/* Old paths → new homes. /install is the external install link
           (client-handled): it forwards its query to /new, where
           lib/install-link.ts pre-fills the Git form — pre-fill only, the visitor
-          always confirms before anything installs. The Cloudflare OAuth
+          always confirms before anything installs. A provider OAuth helper
           callback's /connections keeps its result query too. */}
       <Route
         path="/install"
         component={() => <RedirectWithQuery to="/new" />}
-      />
-      <Route
-        path="/installations"
-        component={() => <RedirectWithQuery to="/services" />}
-      />
-      <Route
-        path="/installations/:id"
-        component={RedirectLegacyInstallationDetail}
-      />
-      <Route
-        path="/installations/:id/:tab"
-        component={RedirectLegacyInstallationDetail}
       />
       <Route path="/home" component={() => <Navigate href="/" />} />
       <Route path="/apps" component={() => <Navigate href="/" />} />
@@ -266,17 +250,6 @@ function App() {
         path="/account/sessions"
         component={() => <Navigate href="/settings/account" />}
       />
-      <Route
-        path="/space/settings"
-        component={() => <RedirectWithQuery to="/advanced/workspace" />}
-      />
-      <Route
-        path="/space/settings/:tab"
-        component={(props) => (
-          <RedirectWithQuery to={`/advanced/workspace/${props.params.tab}`} />
-        )}
-      />
-
       {/* Anything else is a real 404 — no silent bounce to home. */}
       <Route path="*" component={NotFoundView} />
     </Router>

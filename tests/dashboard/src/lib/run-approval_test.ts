@@ -4,7 +4,6 @@ import {
   awaitsDeployApproval,
   isDeployApprovalCandidate,
   isReviewRun,
-  runCapsuleId,
 } from "../../../../dashboard/src/lib/run-approval.ts";
 import type { Run } from "../../../../dashboard/src/lib/control-api.ts";
 
@@ -76,16 +75,6 @@ describe("shared deploy-approval predicate (run list ↔ run view)", () => {
     expect(awaitsDeployApproval(planRun({ capsuleId: undefined }), [])).toBe(
       false,
     );
-  });
-
-  test("reads the legacy installationId alias for backup-era rows", () => {
-    const aliased = {
-      ...planRun({ capsuleId: undefined }),
-      installationId: "capsule_1",
-    } as Run;
-    expect(runCapsuleId(aliased)).toBe("capsule_1");
-    expect(awaitsDeployApproval(aliased, [aliased, applyRun()])).toBe(false);
-    expect(awaitsDeployApproval(aliased, [aliased])).toBe(true);
   });
 
   test("an unparseable plan timestamp fails safe: any apply for the capsule consumes", () => {

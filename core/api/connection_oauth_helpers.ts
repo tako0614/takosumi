@@ -1,4 +1,5 @@
 import type { CreateConnectionRequest } from "@takosumi/internal/deploy-control-api";
+import type { ConnectionOAuthDescriptor } from "@takosumi/providers";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import type {
   ConnectionOAuthCallbackInput,
@@ -9,20 +10,12 @@ import type {
   ConnectionOAuthStartResponse,
 } from "./deploy_control_shared.ts";
 
-interface OAuthProviderConfig {
-  readonly provider: "cloudflare" | "gcp";
-  readonly clientId: string;
-  readonly clientSecret?: string;
-  readonly authorizationUrl: string;
-  readonly tokenUrl: string;
-  readonly redirectUri: string;
-  readonly scopes: readonly string[];
+interface OAuthProviderConfig extends ConnectionOAuthDescriptor {
   readonly stateSecret: string;
-  readonly authorizationParams?: Readonly<Record<string, string>>;
 }
 
 interface SignedOAuthState {
-  readonly provider: "cloudflare" | "gcp";
+  readonly helperId: string;
   readonly expiresAt: number;
   readonly body: ConnectionOAuthStartInput["body"];
   /**
@@ -35,86 +28,44 @@ interface SignedOAuthState {
   readonly subject?: string;
 }
 
-export function createConnectionOAuthHelpersFromEnv(
-  env: Readonly<Record<string, string | undefined>>,
-  fetchImpl: typeof fetch = fetch,
-): ConnectionOAuthHelpers | undefined {
-  const stateSecret = env.TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET;
-  if (!stateSecret) return undefined;
-  const cloudflare = createOAuthHelperFromConfig(
-    oauthConfigFromEnv(env, stateSecret, "cloudflare"),
-    fetchImpl,
-  );
-  const gcp = createOAuthHelperFromConfig(
-    oauthConfigFromEnv(env, stateSecret, "gcp"),
-    fetchImpl,
-  );
-  if (!cloudflare && !gcp) return undefined;
-  return {
-    ...(cloudflare ? { cloudflare } : {}),
-    ...(gcp ? { gcp } : {}),
-  };
+export interface ConnectionOAuthHelperComposition {
+  /** Host-owned HMAC secret for short-lived OAuth state. */
+  readonly stateSecret?: string;
+  /** Complete host-installed helper descriptor set. */
+  readonly descriptors: readonly ConnectionOAuthDescriptor[];
 }
 
-function oauthConfigFromEnv(
-  env: Readonly<Record<string, string | undefined>>,
-  stateSecret: string,
-  provider: "cloudflare" | "gcp",
-): OAuthProviderConfig | undefined {
-  if (provider === "cloudflare") {
-    const clientId = env.TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID;
-    const redirectUri = env.TAKOSUMI_CLOUDFLARE_OAUTH_REDIRECT_URI;
-    const authorizationUrl = env.TAKOSUMI_CLOUDFLARE_OAUTH_AUTHORIZATION_URL;
-    const tokenUrl = env.TAKOSUMI_CLOUDFLARE_OAUTH_TOKEN_URL;
-    if (!clientId || !redirectUri || !authorizationUrl || !tokenUrl) {
-      return undefined;
+/**
+ * Build the provider-neutral OAuth engine from an explicit host contribution.
+ * Core never discovers vendor descriptors from environment variables.
+ */
+export function createConnectionOAuthHelpers(
+  composition: ConnectionOAuthHelperComposition,
+  fetchImpl: typeof fetch = fetch,
+): ConnectionOAuthHelpers | undefined {
+  const stateSecret = composition.stateSecret?.trim();
+  if (!stateSecret) return undefined;
+  const helpers: Record<string, ConnectionOAuthHelper> = {};
+  for (const descriptor of composition.descriptors) {
+    const helperId = descriptor.id.trim();
+    if (!helperId) {
+      throw new Error("Connection OAuth helper id must be non-empty");
     }
-    return {
-      provider,
-      clientId,
-      ...(env.TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_SECRET
-        ? { clientSecret: env.TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_SECRET }
-        : {}),
-      authorizationUrl,
-      tokenUrl,
-      redirectUri,
-      scopes: splitScopes(env.TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES),
-      stateSecret,
-    };
+    if (helpers[helperId]) {
+      throw new Error(`duplicate Connection OAuth helper id: ${helperId}`);
+    }
+    helpers[helperId] = createOAuthHelperFromConfig(
+      { ...descriptor, id: helperId, stateSecret },
+      fetchImpl,
+    );
   }
-
-  const clientId = env.TAKOSUMI_GCP_OAUTH_CLIENT_ID;
-  const redirectUri = env.TAKOSUMI_GCP_OAUTH_REDIRECT_URI;
-  if (!clientId || !redirectUri) return undefined;
-  return {
-    provider,
-    clientId,
-    ...(env.TAKOSUMI_GCP_OAUTH_CLIENT_SECRET
-      ? { clientSecret: env.TAKOSUMI_GCP_OAUTH_CLIENT_SECRET }
-      : {}),
-    authorizationUrl:
-      env.TAKOSUMI_GCP_OAUTH_AUTHORIZATION_URL ??
-      "https://accounts.google.com/o/oauth2/v2/auth",
-    tokenUrl:
-      env.TAKOSUMI_GCP_OAUTH_TOKEN_URL ?? "https://oauth2.googleapis.com/token",
-    redirectUri,
-    scopes: splitScopes(
-      env.TAKOSUMI_GCP_OAUTH_SCOPES ??
-        "https://www.googleapis.com/auth/cloud-platform",
-    ),
-    stateSecret,
-    authorizationParams: {
-      access_type: "offline",
-      prompt: "consent",
-    },
-  };
+  return Object.keys(helpers).length > 0 ? helpers : undefined;
 }
 
 function createOAuthHelperFromConfig(
-  config: OAuthProviderConfig | undefined,
+  config: OAuthProviderConfig,
   fetchImpl: typeof fetch,
-): ConnectionOAuthHelper | undefined {
-  if (!config) return undefined;
+): ConnectionOAuthHelper {
   return {
     start: async (input) => startOAuth(config, input),
     complete: async (input) => completeOAuth(config, input, fetchImpl),
@@ -128,7 +79,7 @@ async function startOAuth(
   const expiresAt = Date.now() + 10 * 60 * 1000;
   const state = await signState(
     {
-      provider: config.provider,
+      helperId: config.id,
       expiresAt,
       body: input.body,
       // Bind the OAuth state to the authenticated subject so the cross-site
@@ -162,10 +113,10 @@ async function completeOAuth(
   fetchImpl: typeof fetch,
 ): Promise<ConnectionOAuthCompletion> {
   const state = await verifyState(input.state, config.stateSecret);
-  if (state.provider !== config.provider) {
+  if (state.helperId !== config.id) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "OAuth state provider does not match callback route",
+      "OAuth state helper id does not match callback route",
     );
   }
   if (state.expiresAt < Date.now()) {
@@ -183,9 +134,9 @@ async function completeOAuth(
   );
   const values = valuesFromTokenResponse(config, tokenResponse);
   const request: CreateConnectionRequest = {
-    ...(state.body.spaceId ? { spaceId: state.body.spaceId } : {}),
-    provider: config.provider === "gcp" ? "google" : "cloudflare",
-    kind: "generic_env_provider",
+    ...(state.body.workspaceId ? { workspaceId: state.body.workspaceId } : {}),
+    provider: config.providerSource,
+    credentialRecipe: config.credentialRecipe,
     materialization: "oauth",
     ...(state.body.displayName ? { displayName: state.body.displayName } : {}),
     ...(state.body.scope ? { scope: state.body.scope } : {}),
@@ -242,32 +193,36 @@ function valuesFromTokenResponse(
   config: OAuthProviderConfig,
   tokenResponse: Record<string, unknown>,
 ): Readonly<Record<string, string>> {
-  if (config.provider === "cloudflare") {
-    const accessToken = tokenResponse.access_token;
-    if (typeof accessToken !== "string" || accessToken.length === 0) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "Cloudflare OAuth token response did not include access_token",
-      );
-    }
-    return { CLOUDFLARE_API_TOKEN: accessToken };
-  }
-
-  const refreshToken = tokenResponse.refresh_token;
-  if (typeof refreshToken !== "string" || refreshToken.length === 0) {
+  let mapped: Readonly<Record<string, string>>;
+  try {
+    mapped = config.mapTokenResponse({
+      tokenResponse,
+      helperId: config.id,
+      clientId: config.clientId,
+      ...(config.clientSecret ? { clientSecret: config.clientSecret } : {}),
+    });
+  } catch (error) {
     throw new OpenTofuControllerError(
       "failed_precondition",
-      "Google OAuth token response did not include refresh_token",
+      error instanceof Error && error.message.trim() !== ""
+        ? error.message
+        : `OAuth token response mapping failed for helper ${config.id}`,
     );
   }
-  return {
-    GOOGLE_CREDENTIALS: JSON.stringify({
-      type: "authorized_user",
-      client_id: config.clientId,
-      ...(config.clientSecret ? { client_secret: config.clientSecret } : {}),
-      refresh_token: refreshToken,
-    }),
-  };
+  const entries = Object.entries(mapped);
+  if (
+    entries.length === 0 ||
+    entries.some(
+      ([key, value]) =>
+        key.trim() === "" || typeof value !== "string" || value.length === 0,
+    )
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `OAuth token response mapping for helper ${config.id} returned invalid connection values`,
+    );
+  }
+  return Object.fromEntries(entries);
 }
 
 async function signState(
@@ -333,13 +288,6 @@ async function hmac(payload: string, secret: string): Promise<string> {
   return base64UrlEncode(new Uint8Array(signature));
 }
 
-function splitScopes(value: string | undefined): readonly string[] {
-  return (value ?? "")
-    .split(/[\s,]+/)
-    .map((scope) => scope.trim())
-    .filter((scope) => scope.length > 0);
-}
-
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -374,7 +322,8 @@ function constantTimeStringEquals(a: string, b: string): boolean {
 function isSignedOAuthState(value: unknown): value is SignedOAuthState {
   if (!isRecord(value)) return false;
   return (
-    (value.provider === "cloudflare" || value.provider === "gcp") &&
+    typeof value.helperId === "string" &&
+    value.helperId.trim() !== "" &&
     typeof value.expiresAt === "number" &&
     isRecord(value.body)
   );

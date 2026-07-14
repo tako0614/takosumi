@@ -164,12 +164,6 @@ export function commaSeparatedOption(
     .filter(Boolean);
 }
 
-export function installationIdempotencyKey(
-  options: Record<string, string | boolean>,
-): string {
-  return optionalStringOption(options, "idempotencyKey") ?? crypto.randomUUID();
-}
-
 export async function optionalEnvString(
   key: string,
 ): Promise<string | undefined> {

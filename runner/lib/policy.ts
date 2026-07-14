@@ -5,22 +5,18 @@
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 import { isAbsolute, normalize } from "node:path";
+import { lookup } from "node:dns/promises";
 import {
   assertHostNotBlocked,
   BlockedHostError,
 } from "../../contract/reference/host-blocklist.ts";
-import type {
-  CommandContext,
-  TarVerboseEntry,
-} from "./types.ts";
+import type { CommandContext, TarVerboseEntry } from "./types.ts";
 import {
   RUN_ROOT,
-  DEFAULT_PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES,
+  DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES,
   INTERNAL_NAME_SUFFIXES,
 } from "./constants.ts";
-import {
-  runCommand,
-} from "./exec.ts";
+import { runCommand } from "./exec.ts";
 
 // URL policy (spec 7.1): allow https://host/path(.git), ssh://git@host/...,
 // git@host:path. Forbid file://, absolute/relative filesystem paths, git://,
@@ -88,11 +84,7 @@ export function assertSourceUrlPolicy(url: string): void {
 
 export function assertSourceHostAllowed(host: string): void {
   const normalized = host.toLowerCase();
-  if (
-    normalized === "localhost" ||
-    normalized.endsWith(".localhost") ||
-    normalized === "metadata.google.internal"
-  ) {
+  if (normalized === "localhost" || normalized.endsWith(".localhost")) {
     throw new Error("source url host is blocked");
   }
   try {
@@ -133,8 +125,8 @@ export function normalizeSourceSubtreePath(path: string): string {
 }
 
 // The R2_SOURCE archive object key (agreed layout
-// spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst) is
-// minted by the service and persisted by the DO. The runner forwards it to the
+// workspaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst) is
+// allocated by the host and persisted by the DO. The runner forwards it to the
 // DO; re-assert here that it is a safe, traversal-free relative key.
 export function assertSafeArchiveObjectKey(key: string): void {
   if (
@@ -143,7 +135,7 @@ export function assertSafeArchiveObjectKey(key: string): void {
     key.includes("\0") ||
     key.includes("..") ||
     key.includes("\\") ||
-    key.startsWith("spaces/") === false
+    key.startsWith("workspaces/") === false
   ) {
     throw new Error(`unsafe source archive object key: ${key}`);
   }
@@ -179,7 +171,7 @@ export function assertSafeCredentialFileMode(mode: number): void {
 
 // A remote_state dependency name must be a single safe path segment so it can
 // only ever name <depsDir>/<name>.tfstate. Reject empty / traversal / separator
-// / NUL / drive-letter names (the producer Installation name is `[a-z0-9-]`-ish,
+// / NUL / drive-letter names (the producer Capsule name is `[a-z0-9-]`-ish,
 // but harden against a crafted dispatch).
 export function safeDepName(name: string): string {
   if (
@@ -197,8 +189,8 @@ export function safeDepName(name: string): string {
   return name;
 }
 
-// Same tar-slip / link-target / zip-bomb hardening as assertSafeTarArchive but
-// for a zstd-compressed tar (the source_sync archive format). Reuses the shared
+// Tar-slip / link-target / zip-bomb hardening for the zstd-compressed
+// source_sync archive format. Reuses the shared
 // per-entry validators (escape quoting, duplicate normalized paths, file/dir
 // only, decompressed-size cap).
 export async function assertSafeZstdTarArchive(
@@ -243,7 +235,7 @@ export async function assertSafeZstdTarArchive(
     decompressedBytes += entry.size;
     const decompressedCap =
       context.sourceArchiveMaxDecompressedBytes ??
-      DEFAULT_PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES;
+      DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES;
     if (decompressedBytes > decompressedCap) {
       throw new Error(
         `source archive decompresses to more than ${decompressedCap} bytes`,
@@ -252,10 +244,9 @@ export async function assertSafeZstdTarArchive(
   }
 }
 
-// Like normalizeArchiveEntryPath but tolerant of the deterministic source
-// archive's `.` / `./` ROOT entry (returns "" for it). Everything else must be a
-// traversal-free, absolute-free relative path so extraction stays inside
-// /work/source.
+// The deterministic source archive may contain a `.` / `./` root entry (which
+// maps to ""). Every other entry must be a traversal-free, absolute-free
+// relative path so extraction stays inside /work/source.
 export function normalizeSourceArchiveEntryPath(path: string): string {
   if (path === "." || path === "./") return "";
   if (path.includes("\0") || isAbsolute(path) || /^[A-Za-z]:[\\/]/.test(path)) {
@@ -273,65 +264,6 @@ export function normalizeSourceArchiveEntryPath(path: string): string {
     throw new Error(`source archive contains unsafe path: ${path}`);
   }
   return normalized;
-}
-
-export async function assertSafeTarArchive(
-  archivePath: string,
-  context: CommandContext,
-): Promise<void> {
-  // SECURITY (tar-slip / link-target bypass): use `--quoting-style=escape`, NOT
-  // `literal`. Literal quoting lets a newline byte in an entry name split the
-  // listing across two lines, so the traversal / duplicate checks see a harmless
-  // first line and silently skip the dangerous fragment while `tar -x` still
-  // extracts the real entry. Escape quoting renders control chars as backslash
-  // sequences so a name can never span lines. This matches the hardened shared
-  // core (contract/reference/prepared-source-core.ts).
-  const verbose = await runCommand(
-    ["tar", "-t", "-v", "--quoting-style=escape", "-z", "-f", archivePath],
-    {
-      cwd: RUN_ROOT,
-      context,
-    },
-  );
-  if (verbose.exitCode !== 0) {
-    throw new Error(
-      `prepared source archive metadata list failed: ${verbose.stderr || verbose.stdout}`,
-    );
-  }
-  const seenPaths = new Set<string>();
-  let decompressedBytes = 0;
-  for (const line of verbose.stdout.split(/\r?\n/)) {
-    if (!line) continue;
-    const entry = parseTarVerboseLine(line);
-    // REJECT any unparseable non-empty line instead of skipping it: a skipped
-    // line is exactly how a smuggled entry would evade the path / type checks.
-    if (!entry) {
-      throw new Error(
-        `prepared source archive has an unparseable metadata line: ${line}`,
-      );
-    }
-    const normalizedPath = normalizeArchiveEntryPath(entry.path);
-    if (seenPaths.has(normalizedPath)) {
-      throw new Error(
-        `prepared source archive duplicates normalized path: ${entry.path}`,
-      );
-    }
-    seenPaths.add(normalizedPath);
-    if (entry.type !== "-" && entry.type !== "d") {
-      throw new Error(
-        `prepared source archive contains unsupported entry type: ${entry.type}`,
-      );
-    }
-    decompressedBytes += entry.size;
-    const decompressedCap =
-      context.sourceArchiveMaxDecompressedBytes ??
-      DEFAULT_PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES;
-    if (decompressedBytes > decompressedCap) {
-      throw new Error(
-        `prepared source archive decompresses to more than ${decompressedCap} bytes`,
-      );
-    }
-  }
 }
 
 export function parseTarVerboseLine(line: string): TarVerboseEntry | undefined {
@@ -352,62 +284,13 @@ export function parseTarVerboseLine(line: string): TarVerboseEntry | undefined {
   return { type: line[0] ?? "", path, size };
 }
 
-export function normalizeArchiveEntryPath(path: string): string {
-  if (
-    path === "." ||
-    path === "./" ||
-    path.includes("\0") ||
-    isAbsolute(path) ||
-    /^[A-Za-z]:[\\/]/.test(path)
-  ) {
-    throw new Error(`prepared source archive contains unsafe path: ${path}`);
-  }
-  const normalized = normalize(path).replaceAll("\\", "/").replace(/\/+$/, "");
-  if (
-    normalized.length === 0 ||
-    normalized === "." ||
-    normalized === ".." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../")
-  ) {
-    throw new Error(`prepared source archive contains unsafe path: ${path}`);
-  }
-  return normalized;
-}
-
-export async function assertHttpsSourceUrl(url: string, label: string): Promise<void> {
-  // Git/libcurl and WHATWG URL parsing disagree on backslashes. Reject the raw
-  // URL before validating `new URL(url).hostname` and before handing it to git.
-  if (/[\\\r\n\0]/.test(url)) {
-    throw new Error(`${label} is malformed`);
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`${label} must be a valid URL`);
-  }
-  if (parsed.protocol !== "https:") {
-    throw new Error(`${label} must use https://`);
-  }
-  if (!parsed.hostname) {
-    throw new Error(`${label} must include a host`);
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error(`${label} must not embed credentials`);
-  }
-  assertHostLiteralNotBlocked(parsed.hostname, `${label} host`);
-  // SECURITY (SSRF): the literal check above only rejects IP literals. A DNS
-  // NAME that resolves to a private/loopback/link-local address would otherwise
-  // pass and let the credentialed runner fetch/clone from internal hosts. Reject
-  // internal-only name suffixes and resolve the host (DoH), rejecting if ANY
-  // resolved address is blocked. Fails closed when the host cannot be resolved.
-  await assertResolvedHostNotBlocked(parsed.hostname, `${label} host`);
-}
+/** Operator/runner-owned DNS resolution seam used by the SSRF pre-flight. */
+export type HostAddressResolver = (host: string) => Promise<readonly string[]>;
 
 export async function assertResolvedHostNotBlocked(
   host: string,
   label: string,
+  resolveAddresses: HostAddressResolver = resolveHostAddresses,
 ): Promise<void> {
   const literal =
     host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
@@ -419,7 +302,7 @@ export async function assertResolvedHostNotBlocked(
   if (lower === "localhost" || INTERNAL_NAME_SUFFIXES.test(lower)) {
     throw new Error(`${label} is an internal-only name: ${host}`);
   }
-  const addresses = await resolveHostAddresses(literal);
+  const addresses = await resolveAddresses(literal);
   if (addresses.length === 0) {
     throw new Error(
       `${label} could not be resolved for SSRF validation: ${host}`,
@@ -434,38 +317,23 @@ export async function assertResolvedHostNotBlocked(
   }
 }
 
-/** Resolve A/AAAA records via DNS-over-HTTPS for SSRF pre-flight validation. */
+/**
+ * Resolve every address returned by the runner substrate's system resolver.
+ *
+ * This intentionally uses the runtime resolver (including operator-controlled
+ * `/etc/hosts`, split DNS, and resolver policy) instead of coupling the generic
+ * runner to a specific public DNS-over-HTTPS service.
+ */
 export async function resolveHostAddresses(host: string): Promise<string[]> {
-  const addresses: string[] = [];
-  for (const type of ["A", "AAAA"]) {
-    try {
-      const response = await fetch(
-        `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(
-          host,
-        )}&type=${type}`,
-        {
-          headers: { accept: "application/dns-json" },
-          signal: AbortSignal.timeout(5_000),
-        },
-      );
-      if (!response.ok) continue;
-      const body = (await response.json()) as {
-        Answer?: Array<{ type: number; data: string }>;
-      };
-      for (const answer of body.Answer ?? []) {
-        // RR type 1 = A, 28 = AAAA. Ignore CNAME/other chain records.
-        if (
-          (answer.type === 1 || answer.type === 28) &&
-          typeof answer.data === "string"
-        ) {
-          addresses.push(answer.data.trim());
-        }
-      }
-    } catch {
-      // Treat a failed lookup as "unresolved"; the caller fails closed.
-    }
+  try {
+    const results = await lookup(host, { all: true, verbatim: true });
+    return [...new Set(results.map((result) => result.address.trim()))].filter(
+      (address) => address.length > 0,
+    );
+  } catch {
+    // Treat a failed lookup as "unresolved"; the caller fails closed.
+    return [];
   }
-  return addresses;
 }
 
 export function assertSafeGitSelector(value: string, label: string): void {
@@ -473,12 +341,6 @@ export function assertSafeGitSelector(value: string, label: string): void {
     throw new Error(
       `${label} must not start with '-' or contain control characters`,
     );
-  }
-}
-
-export function assertFullGitObjectId(value: string, label: string): void {
-  if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(value)) {
-    throw new Error(`${label} must be a full git object id`);
   }
 }
 

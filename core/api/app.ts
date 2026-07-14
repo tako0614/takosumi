@@ -1,8 +1,5 @@
 import { Hono, type Context, type Hono as HonoApp } from "hono";
-import type { AppContext } from "../app_context.ts";
-import { InMemoryRuntimeAgentRegistry } from "../agents/registry.ts";
 import type { TakosumiProcessRole } from "../process/mod.ts";
-import { currentRuntime } from "../shared/runtime/index.ts";
 import { createApiCapabilitiesDescription } from "./capabilities.ts";
 import {
   createTakosumiProductCapabilities,
@@ -12,6 +9,7 @@ import {
   type TakosumiOperatorCapabilities,
   type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
+import { RESOURCE_SHAPE_KINDS } from "takosumi-contract";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
@@ -28,14 +26,6 @@ import {
   registerReadinessRoutes,
 } from "./readiness_routes.ts";
 import {
-  registerRuntimeAgentRoutes,
-  type RegisterRuntimeAgentRoutesOptions,
-} from "./runtime_agent_routes.ts";
-import {
-  registerArtifactRoutes,
-  type RegisterArtifactRoutesOptions,
-} from "./artifact_routes.ts";
-import {
   type DeployControlInternalRouteDependencies,
   mountDeployControlInternalRoutes,
 } from "./deploy_control_internal_routes.ts";
@@ -48,6 +38,10 @@ import {
   registerResourceShapeRoutes,
 } from "./resource_routes.ts";
 import {
+  type RegisterInterfaceRoutesOptions,
+  registerInterfaceRoutes,
+} from "./interface_routes.ts";
+import {
   registerRequestCorrelation,
   type RegisterRequestCorrelationOptions,
 } from "./request_correlation.ts";
@@ -59,18 +53,12 @@ import {
 
 export interface CreateApiAppOptions {
   readonly role?: TakosumiProcessRole;
-  readonly context?: AppContext;
-  readonly getInternalServiceSecret?: () => string | undefined;
   readonly registerOpenApiRoute?: boolean;
   readonly registerReadinessRoutes?: boolean;
   readonly readinessRouteProbes?: ReadinessRouteProbes;
   readonly createOpenApiDocument?: () =>
     OpenApiDocument | Promise<OpenApiDocument>;
   readonly getOpenApiBearerToken?: () => string | undefined;
-  readonly registerRuntimeAgentRoutes?: boolean;
-  readonly runtimeAgentRouteOptions?: RegisterRuntimeAgentRoutesOptions;
-  readonly registerArtifactRoutes?: boolean;
-  readonly artifactRouteOptions?: RegisterArtifactRoutesOptions;
   /** When set, mounts the v1 OpenTofu plan/apply/destroy internal seam. */
   readonly registerDeployControlInternalRoutes?: boolean;
   readonly deployControlInternalRouteOptions?: DeployControlInternalRouteDependencies;
@@ -79,6 +67,9 @@ export interface CreateApiAppOptions {
   /** When set, mounts the `/v1/resources` Resource Shape API (Flow B). */
   readonly registerResourceShapeRoutes?: boolean;
   readonly resourceShapeRouteOptions?: RegisterResourceShapeRoutesOptions;
+  /** Takosumi-managed runtime declaration API shared by both authoring flows. */
+  readonly registerInterfaceRoutes?: boolean;
+  readonly interfaceRouteOptions?: RegisterInterfaceRoutesOptions;
   readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
@@ -102,14 +93,13 @@ export async function createApiApp(
   }
 
   const mounted = resolveMountedRouteFamilies(role, options);
-  const runtimeAgentRoutesMounted = mounted.runtimeAgentRoutesMounted;
   const openApiRouteMounted = mounted.openApiRouteMounted;
   const readinessRoutesMounted = mounted.readinessRoutesMounted;
-  const artifactRoutesMounted = mounted.artifactRoutesMounted;
   const deployControlInternalRoutesMounted =
     mounted.deployControlInternalRoutesMounted;
   const metricsRoutesMounted = mounted.metricsRoutesMounted;
   const resourceShapeRoutesMounted = mounted.resourceShapeRoutesMounted;
+  const interfaceRoutesMounted = mounted.interfaceRoutesMounted;
 
   app.get("/capabilities", (c) => {
     const guard = authorizeInventoryRoute(c, options, "capabilities");
@@ -124,6 +114,8 @@ export async function createApiApp(
           origin: new URL(c.req.url).origin,
           mounted,
           resourceCapabilities: options.resourceCapabilities,
+          enabledResourceShapeKinds:
+            options.resourceShapeRouteOptions?.enabledResourceShapeKinds,
           adapterCapabilities: options.adapterCapabilities,
           operatorCapabilities: options.operatorCapabilities,
         }),
@@ -138,26 +130,14 @@ export async function createApiApp(
           origin: new URL(c.req.url).origin,
           mounted,
           resourceCapabilities: options.resourceCapabilities,
+          enabledResourceShapeKinds:
+            options.resourceShapeRouteOptions?.enabledResourceShapeKinds,
           adapterCapabilities: options.adapterCapabilities,
           operatorCapabilities: options.operatorCapabilities,
         }),
       ),
     );
   });
-
-  if (runtimeAgentRoutesMounted) {
-    registerRuntimeAgentRoutes(app, createRuntimeAgentRouteOptions(options));
-  }
-
-  if (artifactRoutesMounted) {
-    if (!options.artifactRouteOptions) {
-      throw new Error(
-        "registerArtifactRoutes was requested but artifactRouteOptions " +
-          "(with objectStorage) was not supplied",
-      );
-    }
-    registerArtifactRoutes(app, options.artifactRouteOptions);
-  }
 
   if (deployControlInternalRoutesMounted) {
     mountDeployControlInternalRoutes(
@@ -184,6 +164,16 @@ export async function createApiApp(
       );
     }
     registerResourceShapeRoutes(app, options.resourceShapeRouteOptions);
+  }
+
+  if (interfaceRoutesMounted) {
+    if (!options.interfaceRouteOptions) {
+      throw new Error(
+        "registerInterfaceRoutes was requested but " +
+          "interfaceRouteOptions (with service) was not supplied",
+      );
+    }
+    registerInterfaceRoutes(app, options.interfaceRouteOptions);
   }
 
   if (readinessRoutesMounted) {
@@ -252,10 +242,6 @@ function routeFamilyMountInputs(
   { readonly override: boolean | undefined; readonly hasOptions: boolean }
 > {
   return {
-    runtimeAgentRoutesMounted: {
-      override: options.registerRuntimeAgentRoutes,
-      hasOptions: options.runtimeAgentRouteOptions !== undefined,
-    },
     openApiRouteMounted: {
       override: options.registerOpenApiRoute,
       hasOptions: options.createOpenApiDocument !== undefined,
@@ -263,10 +249,6 @@ function routeFamilyMountInputs(
     readinessRoutesMounted: {
       override: options.registerReadinessRoutes,
       hasOptions: options.readinessRouteProbes !== undefined,
-    },
-    artifactRoutesMounted: {
-      override: options.registerArtifactRoutes,
-      hasOptions: options.artifactRouteOptions !== undefined,
     },
     deployControlInternalRoutesMounted: {
       override: options.registerDeployControlInternalRoutes,
@@ -279,6 +261,10 @@ function routeFamilyMountInputs(
     resourceShapeRoutesMounted: {
       override: options.registerResourceShapeRoutes,
       hasOptions: options.resourceShapeRouteOptions !== undefined,
+    },
+    interfaceRoutesMounted: {
+      override: options.registerInterfaceRoutes,
+      hasOptions: options.interfaceRouteOptions !== undefined,
     },
   };
 }
@@ -306,6 +292,7 @@ function createProductDiscoveryOptions(input: {
   readonly origin: string;
   readonly mounted: RouteFamilyMountedFlags;
   readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
+  readonly enabledResourceShapeKinds?: readonly string[];
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
 }): CreateTakosumiDiscoveryOptions {
@@ -313,21 +300,15 @@ function createProductDiscoveryOptions(input: {
   const stacks = input.mounted.deployControlInternalRoutesMounted;
   const resources: Partial<TakosumiResourceCapabilities> = {
     Stack: stacks,
-    EdgeWorker: resourceShapes,
-    ObjectBucket: resourceShapes,
-    KVStore: resourceShapes,
-    Queue: resourceShapes,
-    SQLDatabase: resourceShapes,
-    ContainerService: resourceShapes,
+    ...Object.fromEntries(
+      (
+        input.enabledResourceShapeKinds ?? RESOURCE_SHAPE_KINDS
+      ).map((kind) => [kind, resourceShapes]),
+    ),
     ...(input.resourceCapabilities ?? {}),
   };
   const adapters: Partial<TakosumiAdapterCapabilities> = {
     opentofu: stacks || resourceShapes,
-    aws: false,
-    cloudflare: false,
-    kubernetes: false,
-    vm: false,
-    takosumi_native: false,
     ...(input.adapterCapabilities ?? {}),
   };
   return {
@@ -341,43 +322,16 @@ function createProductDiscoveryOptions(input: {
       input.resourceCapabilities === undefined
         ? resourceShapes
         : resourceShapeCapabilitiesEnabled(resources),
+    interfacesEnabled: input.mounted.interfaceRoutesMounted,
   };
 }
 
 function resourceShapeCapabilitiesEnabled(
   resources: Partial<TakosumiResourceCapabilities>,
 ): boolean {
-  return (
-    resources.EdgeWorker === true ||
-    resources.ObjectBucket === true ||
-    resources.KVStore === true ||
-    resources.Queue === true ||
-    resources.SQLDatabase === true ||
-    resources.ContainerService === true
+  return Object.entries(resources).some(
+    ([token, enabled]) => token !== "Stack" && enabled === true,
   );
-}
-
-function createRuntimeAgentRouteOptions(
-  options: CreateApiAppOptions,
-): RegisterRuntimeAgentRoutesOptions {
-  if (options.runtimeAgentRouteOptions) {
-    return {
-      getInternalServiceSecret:
-        options.getInternalServiceSecret ?? defaultInternalServiceSecret,
-      ...options.runtimeAgentRouteOptions,
-    };
-  }
-  return {
-    registry:
-      options.context?.adapters.runtimeAgent ??
-      new InMemoryRuntimeAgentRegistry(),
-    getInternalServiceSecret:
-      options.getInternalServiceSecret ?? defaultInternalServiceSecret,
-  };
-}
-
-function defaultInternalServiceSecret(): string | undefined {
-  return currentRuntime().env.get("TAKOSUMI_INTERNAL_API_SECRET");
 }
 
 function bearerTokenFromAuthorization(header: string): string | undefined {

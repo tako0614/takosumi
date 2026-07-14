@@ -6,28 +6,16 @@
  * header workspace selector and every control view agree on it without prop
  * drilling.
  *
- * Persistence convention matches the existing dashboard screens, which remember
- * the last picked workspace in `localStorage` under `tg_apps_space_id` (see
- * legacy capsule-list and connection views). We reuse
- * the SAME key so a workspace picked in either world carries across both. The value
- * here is a deploy-control Workspace id (`workspace_...`), which is what the control
- * routes expect.
+ * The selected Workspace is persisted under one canonical dashboard key. The
+ * value is opaque to the client and is passed only to Workspace-scoped APIs.
  */
 import { createSignal } from "solid-js";
 
-const STORAGE_KEY = "tg_apps_space_id";
-const LEGACY_STORAGE_KEYS = ["takosumi.currentWorkspaceId"] as const;
+const STORAGE_KEY = "takosumi.currentWorkspaceId";
 
 function readInitial(): string {
   if (typeof localStorage === "undefined") return "";
-  clearLegacyWorkspaceStorageKeys();
   return localStorage.getItem(STORAGE_KEY) ?? "";
-}
-
-function clearLegacyWorkspaceStorageKeys(): void {
-  for (const key of LEGACY_STORAGE_KEYS) {
-    localStorage.removeItem(key);
-  }
 }
 
 // Module-level singletons so every view shares one reactive source of truth.
@@ -52,7 +40,6 @@ export function setCurrentWorkspaceId(workspaceId: string): void {
   const next = workspaceId.trim();
   setCurrentWorkspaceIdSignal(next);
   if (typeof localStorage === "undefined") return;
-  clearLegacyWorkspaceStorageKeys();
   if (next) localStorage.setItem(STORAGE_KEY, next);
   else localStorage.removeItem(STORAGE_KEY);
 }

@@ -5,22 +5,19 @@
 import { expect, test } from "bun:test";
 
 import {
-  InMemoryOpenTofuDeploymentStore,
+  InMemoryOpenTofuControlStore,
   type StoredSource,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { toPublicSource } from "../../../../core/domains/sources/mod.ts";
-import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
-import type {
-  SourceSnapshot,
-  SourceSyncRun,
-} from "takosumi-contract/sources";
+import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 
 interface D1SourceStoreSlice {
   putSource(source: StoredSource): Promise<StoredSource>;
   getSource(id: string): Promise<StoredSource | undefined>;
-  listSources(spaceId?: string): Promise<readonly StoredSource[]>;
+  listSources(workspaceId?: string): Promise<readonly StoredSource[]>;
   deleteSource(id: string): Promise<boolean>;
 
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
@@ -39,7 +36,7 @@ interface D1SourceStoreSlice {
 function source(overrides: Partial<StoredSource> = {}): StoredSource {
   return {
     id: "src_abcdef0123456789",
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "repo",
     url: "https://github.com/acme/repo.git",
     defaultRef: "main",
@@ -57,18 +54,15 @@ function snapshot(overrides: Partial<SourceSnapshot> = {}): SourceSnapshot {
   return {
     id: "snap_0000000000000001",
     origin: "git",
-    // A SourceSnapshot always carries a populated Workspace identity (contract:
-    // workspaceId is required and "Always present (derived from the Source for
-    // git)"). The deprecated spaceId mirrors it, so both stores normalize this
-    // shape identically instead of one backfilling "" and the other undefined.
-    workspaceId: "space_1",
-    spaceId: "space_1",
+    // A SourceSnapshot always carries its owning Workspace, derived from Source.
+    workspaceId: "workspace_1",
     sourceId: "src_abcdef0123456789",
     url: "https://github.com/acme/repo.git",
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveObjectKey: "spaces/space_1/sources/src_abcdef0123456789/snapshots/snap_0000000000000001/source.tar.zst",
+    archiveRef:
+      "opaque-source-archive-1",
     archiveDigest: "sha256:" + "a".repeat(64),
     archiveSizeBytes: 1024,
     fetchedByRunId: "ssr_0000000000000001",
@@ -81,12 +75,13 @@ function syncRun(overrides: Partial<SourceSyncRun> = {}): SourceSyncRun {
   return {
     id: "ssr_0000000000000001",
     kind: "source_sync",
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     sourceId: "src_abcdef0123456789",
     url: "https://github.com/acme/repo.git",
     ref: "main",
     path: ".",
-    archiveObjectKey: "spaces/space_1/sources/src_abcdef0123456789/snapshots/snap_x/source.tar.zst",
+    archiveRef:
+      "opaque-source-archive-sync",
     status: "queued",
     createdAt: "2026-06-06T00:00:30.000Z",
     updatedAt: "2026-06-06T00:00:30.000Z",
@@ -95,14 +90,13 @@ function syncRun(overrides: Partial<SourceSyncRun> = {}): SourceSyncRun {
 }
 
 const STORES: ReadonlyArray<[string, () => D1SourceStoreSlice]> = [
-  ["in-memory", () => new InMemoryOpenTofuDeploymentStore()],
-  ["d1", () => new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1())],
+  ["in-memory", () => new InMemoryOpenTofuControlStore()],
+  ["d1", () => new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
 ];
 
-test("toPublicSource backfills legacy Source workspaceId from spaceId", () => {
+test("toPublicSource strips service-only Source fields", () => {
   const publicSource = toPublicSource(source());
-  expect(publicSource.workspaceId).toEqual("space_1");
-  expect(publicSource.spaceId).toEqual("space_1");
+  expect(publicSource.workspaceId).toEqual("workspace_1");
   expect("hookSecretHash" in publicSource).toBe(false);
   expect("lastSeenCommit" in publicSource).toBe(false);
 });
@@ -114,11 +108,14 @@ for (const [name, make] of STORES) {
     await store.putSource(s);
     expect(await store.getSource(s.id)).toEqual(s);
 
-    const other = source({ id: "src_zzzzzzzz11111111", spaceId: "space_2" });
+    const other = source({
+      id: "src_zzzzzzzz11111111",
+      workspaceId: "workspace_2",
+    });
     await store.putSource(other);
 
-    const inSpace1 = await store.listSources("space_1");
-    expect(inSpace1.map((x) => x.id)).toEqual([s.id]);
+    const inWorkspace1 = await store.listSources("workspace_1");
+    expect(inWorkspace1.map((x) => x.id)).toEqual([s.id]);
 
     const all = await store.listSources();
     expect(all.length).toBe(2);
@@ -146,6 +143,18 @@ for (const [name, make] of STORES) {
     expect(await store.getSourceSnapshot(a.id)).toEqual(a);
     const list = await store.listSourceSnapshots("src_abcdef0123456789");
     expect(list.map((x) => x.id)).toEqual([a.id, b.id]);
+  });
+
+  test(`${name}: source snapshots require a registered Git Source`, async () => {
+    const store = make();
+    const legacy = {
+      ...snapshot(),
+      origin: "upload",
+      sourceId: undefined,
+    } as unknown as SourceSnapshot;
+    await expect(
+      Promise.resolve().then(() => store.putSourceSnapshot(legacy)),
+    ).rejects.toThrow("registered Git Source");
   });
 
   test(`${name}: source snapshot keyset page caps + round-trips the fetchedAt cursor`, async () => {

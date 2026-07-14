@@ -156,17 +156,29 @@ func TestServiceShapeCreatePutsEachResourceOnce(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			putCount := 0
+			previewCount := 0
 			var gotName string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPut {
-					t.Errorf("expected PUT, got %s", r.Method)
-				}
-				putCount++
 				var got client.Resource
 				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 					t.Errorf("decode request: %v", err)
 				}
 				gotName, _ = got.Spec["name"].(string)
+				if r.Method == http.MethodPost && r.URL.Path == "/v1/resources/preview" {
+					previewCount++
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(client.PreviewResourceResult{
+						Resource:              got,
+						PlanDigest:            "sha256:plan",
+						SpecDigest:            "sha256:spec",
+						ResolutionFingerprint: "sha256:resolution",
+					})
+					return
+				}
+				if r.Method != http.MethodPut {
+					t.Errorf("expected PUT, got %s", r.Method)
+				}
+				putCount++
 				wantPath := "/v1/resources/" + tt.kind + "/" + gotName
 				if r.URL.Path != wantPath {
 					t.Errorf("unexpected path %q, want %q", r.URL.Path, wantPath)
@@ -235,6 +247,9 @@ func TestServiceShapeCreatePutsEachResourceOnce(t *testing.T) {
 			}
 			if putCount != 1 {
 				t.Fatalf("expected exactly one PUT during create, got %d", putCount)
+			}
+			if previewCount != 1 {
+				t.Fatalf("expected exactly one preview during create, got %d", previewCount)
 			}
 		})
 	}

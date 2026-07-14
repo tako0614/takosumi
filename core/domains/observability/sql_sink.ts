@@ -30,12 +30,7 @@ import type {
 import type { ResolvedAuditRetention } from "../audit-replication/policy.ts";
 import { and, asc, desc, eq, isNotNull, lt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
-import {
-  boolean,
-  integer,
-  pgTable,
-  text,
-} from "drizzle-orm/pg-core";
+import { boolean, integer, pgTable, text } from "drizzle-orm/pg-core";
 
 /**
  * Options for the SQL-backed audit sink.
@@ -102,9 +97,7 @@ export class SqlObservabilitySink implements ObservabilitySink {
   readonly #auditRetentionDays: number | undefined;
   readonly #retentionPolicy: ResolvedAuditRetention | undefined;
   readonly #replication:
-    | AuditReplicationDriver
-    | AuditReplicationSink
-    | undefined;
+    AuditReplicationDriver | AuditReplicationSink | undefined;
   readonly #metrics: MetricEvent[] = [];
   readonly #traces: TraceSpanEvent[] = [];
 
@@ -112,14 +105,15 @@ export class SqlObservabilitySink implements ObservabilitySink {
     this.#client = options.client;
     this.#db = createDrizzleSqlBuilder();
     this.#clock = options.clock ?? (() => new Date());
-    const directDays = options.auditRetentionDays !== undefined &&
-        Number.isFinite(options.auditRetentionDays) &&
-        options.auditRetentionDays > 0
-      ? Math.floor(options.auditRetentionDays)
-      : undefined;
+    const directDays =
+      options.auditRetentionDays !== undefined &&
+      Number.isFinite(options.auditRetentionDays) &&
+      options.auditRetentionDays > 0
+        ? Math.floor(options.auditRetentionDays)
+        : undefined;
     this.#retentionPolicy = options.retentionPolicy;
-    this.#auditRetentionDays = directDays ??
-      options.retentionPolicy?.retentionDays;
+    this.#auditRetentionDays =
+      directDays ?? options.retentionPolicy?.retentionDays;
     if (options.replication !== undefined) {
       this.#replication = options.replication;
     }
@@ -163,11 +157,14 @@ export class SqlObservabilitySink implements ObservabilitySink {
   async listAudit(): Promise<readonly ChainedAuditEvent[]> {
     const result = await drizzleQuery<AuditEventRow>(
       this.#client,
-      this.#db.select().from(auditChainEvents).orderBy(
-        asc(auditChainEvents.sequence),
-        asc(auditChainEvents.occurredAt),
-        asc(auditChainEvents.id),
-      ),
+      this.#db
+        .select()
+        .from(auditChainEvents)
+        .orderBy(
+          asc(auditChainEvents.sequence),
+          asc(auditChainEvents.occurredAt),
+          asc(auditChainEvents.id),
+        ),
     );
     return result.rows.map(rowToChained);
   }
@@ -226,20 +223,23 @@ export class SqlObservabilitySink implements ObservabilitySink {
       now - this.#auditRetentionDays * 86_400_000,
     ).toISOString();
     const existing = this.#replication ? await this.listAudit() : [];
-    const archiveCandidates = existing.filter((record) =>
-      record.event.occurredAt < archiveCutoff
+    const archiveCandidates = existing.filter(
+      (record) => record.event.occurredAt < archiveCutoff,
     );
     if (archiveCandidates.length > 0) {
       await replicateRetentionRecords(this.#replication, archiveCandidates);
     }
     const archived = await drizzleQuery(
       this.#client,
-      this.#db.update(auditChainEvents).set({ archived: true }).where(
-        and(
-          eq(auditChainEvents.archived, false),
-          lt(auditChainEvents.occurredAt, archiveCutoff),
+      this.#db
+        .update(auditChainEvents)
+        .set({ archived: true })
+        .where(
+          and(
+            eq(auditChainEvents.archived, false),
+            lt(auditChainEvents.occurredAt, archiveCutoff),
+          ),
         ),
-      ),
     );
 
     let deleted = 0;
@@ -255,20 +255,22 @@ export class SqlObservabilitySink implements ObservabilitySink {
           (this.#auditRetentionDays + policy.archiveGracePeriodDays) *
             86_400_000,
       ).toISOString();
-      const deleteCandidates = existing.filter((record) =>
-        record.event.occurredAt < deleteCutoff
+      const deleteCandidates = existing.filter(
+        (record) => record.event.occurredAt < deleteCutoff,
       );
       if (deleteCandidates.length > 0) {
         await replicateRetentionRecords(this.#replication, deleteCandidates);
       }
       const deletion = await drizzleQuery(
         this.#client,
-        this.#db.delete(auditChainEvents).where(
-          and(
-            eq(auditChainEvents.archived, true),
-            lt(auditChainEvents.occurredAt, deleteCutoff),
+        this.#db
+          .delete(auditChainEvents)
+          .where(
+            and(
+              eq(auditChainEvents.archived, true),
+              lt(auditChainEvents.occurredAt, deleteCutoff),
+            ),
           ),
-        ),
       );
       deleted = deletion.rowCount;
     }
@@ -321,9 +323,12 @@ async function readChainTail(
 ): Promise<ChainedAuditEvent | undefined> {
   const result = await drizzleQuery<AuditEventRow>(
     sql,
-    db.select().from(auditChainEvents).where(
-      isNotNull(auditChainEvents.sequence),
-    ).orderBy(desc(auditChainEvents.sequence)).limit(1),
+    db
+      .select()
+      .from(auditChainEvents)
+      .where(isNotNull(auditChainEvents.sequence))
+      .orderBy(desc(auditChainEvents.sequence))
+      .limit(1),
   );
   const row = result.rows[0];
   return row ? rowToChained(row) : undefined;
@@ -352,8 +357,8 @@ function renderInsertValues(record: ChainedAuditEvent) {
     actorJson: jsonOrNull(
       event.actor ? actorContextToJsonObject(event.actor) : undefined,
     ),
-    spaceId: event.spaceId ?? null,
-    groupId: event.groupId ?? null,
+    workspaceId: event.workspaceId ?? null,
+    runGroupId: event.runGroupId ?? null,
     targetType: event.targetType,
     targetId: event.targetId ?? null,
     payloadJson: jsonOrNull(event.payload),
@@ -380,7 +385,7 @@ function actorContextToJsonObject(actor: ActorContext): JsonObject {
     actorAccountId: actor.actorAccountId,
     roles: [...actor.roles],
     requestId: actor.requestId,
-    ...(actor.spaceId ? { spaceId: actor.spaceId } : {}),
+    ...(actor.workspaceId ? { workspaceId: actor.workspaceId } : {}),
     ...(actor.principalKind ? { principalKind: actor.principalKind } : {}),
     ...(actor.serviceId ? { serviceId: actor.serviceId } : {}),
     ...(actor.agentId ? { agentId: actor.agentId } : {}),
@@ -392,16 +397,17 @@ function actorContextToJsonObject(actor: ActorContext): JsonObject {
 
 function rowToChained(row: AuditEventRow): ChainedAuditEvent {
   const actor = parseJson(row.actor_json) as AuditEvent["actor"] | undefined;
-  const payload = (parseJson(row.payload_json) as JsonObject | null) ??
-    {} satisfies JsonObject;
+  const payload =
+    (parseJson(row.payload_json) as JsonObject | null) ??
+    ({} satisfies JsonObject);
   const event: AuditEvent = {
     id: String(row.id),
     eventClass: row.event_class as AuditEvent["eventClass"],
     type: String(row.type),
     severity: row.severity as AuditEvent["severity"],
     ...(actor ? { actor } : {}),
-    ...(row.space_id ? { spaceId: String(row.space_id) } : {}),
-    ...(row.group_id ? { groupId: String(row.group_id) } : {}),
+    ...(row.space_id ? { workspaceId: String(row.space_id) } : {}),
+    ...(row.group_id ? { runGroupId: String(row.group_id) } : {}),
     targetType: String(row.target_type),
     ...(row.target_id ? { targetId: String(row.target_id) } : {}),
     payload: payload as JsonObject,
@@ -446,8 +452,9 @@ function matchesMetricQuery(
 ): boolean {
   if (query.name && event.name !== query.name) return false;
   if (query.kind && event.kind !== query.kind) return false;
-  if (query.spaceId && event.spaceId !== query.spaceId) return false;
-  if (query.groupId && event.groupId !== query.groupId) return false;
+  if (query.workspaceId && event.workspaceId !== query.workspaceId)
+    return false;
+  if (query.runGroupId && event.runGroupId !== query.runGroupId) return false;
   if (query.since && event.observedAt < query.since) return false;
   if (query.until && event.observedAt > query.until) return false;
   return true;
@@ -462,8 +469,9 @@ function matchesTraceSpanQuery(
   if (query.name && event.name !== query.name) return false;
   if (query.kind && event.kind !== query.kind) return false;
   if (query.status && event.status !== query.status) return false;
-  if (query.spaceId && event.spaceId !== query.spaceId) return false;
-  if (query.groupId && event.groupId !== query.groupId) return false;
+  if (query.workspaceId && event.workspaceId !== query.workspaceId)
+    return false;
+  if (query.runGroupId && event.runGroupId !== query.runGroupId) return false;
   if (query.since && event.startTime < query.since) return false;
   if (query.until && event.endTime > query.until) return false;
   return true;
@@ -474,8 +482,9 @@ function isUniqueViolation(error: unknown): boolean {
   const code = (error as { code?: unknown }).code;
   if (typeof code === "string" && code === "23505") return true;
   const message = (error as { message?: unknown }).message;
-  return typeof message === "string" &&
-    /(duplicate|unique|UNIQUE)/i.test(message);
+  return (
+    typeof message === "string" && /(duplicate|unique|UNIQUE)/i.test(message)
+  );
 }
 
 const auditChainEvents = pgTable("audit_events", {
@@ -484,8 +493,8 @@ const auditChainEvents = pgTable("audit_events", {
   type: text("type").notNull(),
   severity: text("severity").notNull(),
   actorJson: text("actor_json"),
-  spaceId: text("space_id"),
-  groupId: text("group_id"),
+  workspaceId: text("space_id"),
+  runGroupId: text("group_id"),
   targetType: text("target_type").notNull(),
   targetId: text("target_id"),
   payloadJson: text("payload_json"),
@@ -511,10 +520,7 @@ function createDrizzleSqlBuilder() {
 
 function drizzleQuery<
   Row extends Record<string, unknown> = Record<string, unknown>,
->(
-  client: SqlClient,
-  query: DrizzleQuery,
-): Promise<SqlQueryResult<Row>> {
+>(client: SqlClient, query: DrizzleQuery): Promise<SqlQueryResult<Row>> {
   const { sql, params } = query.toSQL();
   return client.query<Row>(sql, params as SqlParameters);
 }

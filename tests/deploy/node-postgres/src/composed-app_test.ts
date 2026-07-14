@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import {
+  InMemoryAccountsStore,
   PostgresAccountsStore,
   type PostgresQueryClient,
 } from "@takosjp/takosumi-accounts-service";
+import { handleUserInfo } from "../../../../accounts/service/src/oidc-routes.ts";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { ComposedAppInput } from "../../../../deploy/node-postgres/src/composed-app.ts";
 import type { NodeAccountsServerConfig } from "../../../../deploy/node-postgres/src/handler.ts";
 
@@ -20,19 +23,12 @@ const TEST_DEPLOY_CONTROL_TOKEN = "test-deploy-control-token";
 // `createTakosumiService` boots the in-memory adapters.
 process.env.TAKOSUMI_DEV_MODE = "1";
 
-/**
- * Regression coverage for composed-app routing. The account-plane owns
- * `/v1/capsule-projections/*` for identity/billing/export projections,
- * while the embedded service owns the primary `/api/v1/*` deploy-control
- * surface. `buildComposedApp` mounts the projection route on the outer app so it
- * reaches the accounts handler while service routes stay reachable.
- */
+/** Regression coverage for canonical control-plane + Accounts composition. */
 
 function stubQueryClient(): PostgresQueryClient {
   return {
-    // The runtime projection material resolver only touches the store lazily at
-    // resolve time; these tests never trigger a resolve, so a throwing query
-    // surfaces an accidental DB dependency rather than silently passing.
+    // A throwing query surfaces an accidental DB dependency in construction
+    // and route-classification tests rather than silently passing.
     queryObject: () => {
       throw new Error("unexpected DB query in composed-app route test");
     },
@@ -47,12 +43,12 @@ function testConfig(): NodeAccountsServerConfig {
     managedPublicBaseDomain: undefined,
     databaseUrl: "postgres://unused",
     clients: undefined,
-    platformAccess: { status: "closed" },
-    runtimeProjectionMaterialResolver: undefined,
+    loginEmailAllowlist: undefined,
     passkeys: undefined,
     upstreamOAuth: undefined,
     stableOidc: undefined,
-    exportDownload: undefined,
+    privacyOperationsToken: undefined,
+    privacyRetentionPolicyRef: undefined,
     subject: undefined,
   };
 }
@@ -95,96 +91,36 @@ async function buildTestApp() {
     runtimeEnv: {
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
     },
+    // This test exercises the account/token composition rather than hostname
+    // reservation; the host authority seam is covered in Interface tests.
+    interfaceOAuth2ResourceAuthorizer: () => true,
   });
   return { app: created.app, spy };
 }
 
-test("composed app routes POST /v1/capsule-projections to the account plane, not the service", async () => {
-  const { app, spy } = await buildTestApp();
-  const res = await app.fetch(
-    new Request("http://localhost/v1/capsule-projections", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ spaceId: "space_1" }),
-    }),
-  );
-  // Account-plane sentinel proves the projection route reached the accounts
-  // handler rather than the embedded service fallback.
-  assert.equal(res.headers.get("x-handled-by"), "accounts");
-  assert.deepEqual(spy.calls, [
-    {
-      method: "POST",
-      pathname: "/v1/capsule-projections",
-    },
-  ]);
-});
-
-test("composed app builds accounts handler with an in-process service deploy control facade", async () => {
+test("composed app builds Accounts with the canonical control operations facade", async () => {
   const spy = accountsHandlerSpy();
-  let operationsWired = false;
   let controlPlaneOperationsWired = false;
   const { buildComposedApp } =
     await import("../../../../deploy/node-postgres/src/composed-app.ts");
   const created = await buildComposedApp({
     config: testConfig(),
     store: new PostgresAccountsStore(stubQueryClient()),
-    createAccountsHandler: async (deployControl, controlPlaneOperations) => {
-      // The account-plane deploy-control facade is in-process only: it dispatches
-      // through the injected typed `operations` facade (no HTTP `fetch` seam, no
-      // Bearer handshake). Assert the embedded service's facade is wired in.
-      operationsWired =
-        typeof deployControl.operations.createPlanRun === "function" &&
-        typeof deployControl.operations.getCapsule === "function";
-      // The session-authed dashboard API needs the full control-plane facade
-      // (`/api/v1/workspaces`, connections, run groups, etc.), not just the narrow
-      // plan/apply deploy-control facade above.
+    createAccountsHandler: async (controlPlaneOperations) => {
       controlPlaneOperationsWired =
-        typeof controlPlaneOperations.spaces.listWorkspacesByOwner ===
+        typeof controlPlaneOperations.workspaces.listWorkspacesForAccount ===
           "function" &&
-        typeof controlPlaneOperations.connections.listProviderConnections ===
-          "function";
+        typeof controlPlaneOperations.projects.listProjects === "function" &&
+        typeof controlPlaneOperations.capsules.getCapsule === "function";
       return spy.handler;
     },
   });
 
-  assert.equal(operationsWired, true);
   assert.equal(controlPlaneOperationsWired, true);
   const res = await created.app.fetch(
     new Request("http://localhost/dashboard"),
   );
   assert.equal(res.headers.get("x-handled-by"), "accounts");
-});
-
-test("composed app routes per-installation deployment mutation to the account plane", async () => {
-  const { app, spy } = await buildTestApp();
-  // `inst_<uuid>` is the account-plane id shape; the service id guard rejects it.
-  const res = await app.fetch(
-    new Request(
-      "http://localhost/v1/capsule-projections/inst_abc123/revisions",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      },
-    ),
-  );
-  assert.equal(res.headers.get("x-handled-by"), "accounts");
-  assert.deepEqual(spy.calls, [
-    {
-      method: "POST",
-      pathname: "/v1/capsule-projections/inst_abc123/revisions",
-    },
-  ]);
-});
-
-test("composed app routes GET /v1/capsule-projections list to the account plane", async () => {
-  const { app, spy } = await buildTestApp();
-  const res = await app.fetch(
-    new Request("http://localhost/v1/capsule-projections?space_id=space_1"),
-  );
-  assert.equal(res.headers.get("x-handled-by"), "accounts");
-  assert.equal(spy.calls.length, 1);
-  assert.equal(spy.calls[0].pathname, "/v1/capsule-projections");
 });
 
 test("composed app still serves an embedded service process route", async () => {
@@ -210,6 +146,291 @@ test("composed app still serves an embedded service process route", async () => 
   assert.equal(body.service, "takosumi");
   // The account-plane handler must NOT have seen the service process probe.
   assert.equal(spy.calls.length, 0);
+});
+
+test("composed Interface API scopes sessions and PATs to current Workspace ownership", async () => {
+  const now = Date.now();
+  const store = new InMemoryAccountsStore();
+  for (const subject of ["tsub_owner_a", "tsub_owner_b"] as const) {
+    store.saveAccount({ subject, createdAt: now, updatedAt: now });
+  }
+  store.saveAccountSession({
+    sessionId: "sess_owner_a",
+    subject: "tsub_owner_a",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  store.savePersonalAccessToken("takpat_owner_a", {
+    tokenId: "pat_owner_a",
+    tokenPrefix: "takpat_own",
+    subject: "tsub_owner_a",
+    name: "Interface test",
+    scopes: ["read", "write"],
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  const spy = accountsHandlerSpy();
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const created = await buildComposedApp({
+    config: testConfig(),
+    store: store as unknown as PostgresAccountsStore,
+    accountsHandler: spy.handler,
+    runtimeEnv: {
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
+    },
+    interfaceOAuth2ResourceAuthorizer: () => true,
+  });
+  const app = created.app;
+  const workspaceA = await created.operations.workspaces.createWorkspace({
+    handle: "owner-a",
+    displayName: "Owner A",
+    type: "personal",
+    ownerUserId: "tsub_owner_a",
+  });
+  const workspaceB = await created.operations.workspaces.createWorkspace({
+    handle: "owner-b",
+    displayName: "Owner B",
+    type: "personal",
+    ownerUserId: "tsub_owner_b",
+  });
+  const interfaceBody = (workspaceId: string, name: string) =>
+    JSON.stringify({
+      workspaceId,
+      name,
+      ownerRef: { kind: "Workspace", id: workspaceId },
+      spec: {
+        type: "mcp.server",
+        version: "2025-11-25",
+        document: {},
+        access: { visibility: "private" },
+      },
+    });
+  const internal = {
+    authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}`,
+    "content-type": "application/json",
+  };
+  const session = {
+    authorization: "Bearer sess_owner_a",
+    "content-type": "application/json",
+  };
+  const pat = {
+    authorization: "Bearer takpat_owner_a",
+    "content-type": "application/json",
+  };
+
+  const foreignSeed = await app.fetch(
+    new Request("http://localhost/v1/interfaces", {
+      method: "POST",
+      headers: internal,
+      body: interfaceBody(workspaceB.id, "foreign-seed"),
+    }),
+  );
+  assert.equal(foreignSeed.status, 201);
+  const foreignInterfaceId = (await foreignSeed.json()).metadata.id as string;
+
+  const crossCreate = await app.fetch(
+    new Request("http://localhost/v1/interfaces", {
+      method: "POST",
+      headers: session,
+      body: interfaceBody(workspaceB.id, "cross-create"),
+    }),
+  );
+  assert.equal(crossCreate.status, 403);
+  const crossList = await app.fetch(
+    new Request(`http://localhost/v1/interfaces?workspaceId=${workspaceB.id}`, {
+      headers: pat,
+    }),
+  );
+  assert.equal(crossList.status, 403);
+  const crossBinding = await app.fetch(
+    new Request(
+      `http://localhost/v1/interfaces/${foreignInterfaceId}/bindings`,
+      {
+        method: "POST",
+        headers: pat,
+        body: JSON.stringify({
+          subjectRef: { kind: "Principal", id: "principal_a" },
+          permissions: ["mcp.invoke"],
+          delivery: { type: "none" },
+        }),
+      },
+    ),
+  );
+  assert.equal(crossBinding.status, 403);
+
+  const ownedCreate = await app.fetch(
+    new Request("http://localhost/v1/interfaces", {
+      method: "POST",
+      headers: session,
+      body: interfaceBody(workspaceA.id, "owned"),
+    }),
+  );
+  assert.equal(ownedCreate.status, 201);
+  const ownedInterfaceId = (await ownedCreate.json()).metadata.id as string;
+  const ownedList = await app.fetch(
+    new Request(`http://localhost/v1/interfaces?workspaceId=${workspaceA.id}`, {
+      headers: pat,
+    }),
+  );
+  assert.equal(ownedList.status, 200);
+  const ownedBinding = await app.fetch(
+    new Request(`http://localhost/v1/interfaces/${ownedInterfaceId}/bindings`, {
+      method: "POST",
+      headers: pat,
+      body: JSON.stringify({
+        subjectRef: { kind: "Principal", id: "principal_a" },
+        permissions: ["mcp.invoke"],
+        delivery: { type: "none" },
+      }),
+    }),
+  );
+  assert.equal(ownedBinding.status, 201);
+});
+
+test("composed Capsule Interface OAuth uses canonical Capsule authority without an Accounts projection", async () => {
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const store = new InMemoryAccountsStore();
+  const spy = accountsHandlerSpy();
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const created = await buildComposedApp({
+    config: testConfig(),
+    store: store as unknown as PostgresAccountsStore,
+    accountsHandler: spy.handler,
+    runtimeEnv: {
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
+    },
+    // This E2E focuses on Accounts issuance/UserInfo evidence. The default
+    // reservation-backed authority is covered by the Core host seam tests.
+    interfaceOAuth2ResourceAuthorizer: () => true,
+  });
+
+  const workspace = await created.operations.workspaces.createWorkspace({
+    handle: "interface-oauth-e2e",
+    displayName: "Interface OAuth E2E",
+    type: "personal",
+    ownerUserId: "tsub_interface_owner",
+  });
+  const installConfig: InstallConfig = {
+    id: "cfg_interfaceoauth1",
+    workspaceId: workspace.id,
+    name: "interface-oauth-capsule",
+    sourceKind: "generic_capsule",
+    installType: "opentofu_module",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+  await created.operations.capsules.putInstallConfig(installConfig);
+  const { source } = await created.operations.createSource({
+    workspaceId: workspace.id,
+    name: "interface-oauth-source",
+    url: "https://github.com/takosjp/takos-office.git",
+  });
+  const capsule = await created.operations.capsules.createCapsule({
+    workspaceId: workspace.id,
+    name: "office",
+    environment: "test",
+    installConfigId: installConfig.id,
+    sourceId: source.id,
+  });
+  await created.operations.capsules.patchCapsuleStatus(
+    capsule.id,
+    "active",
+  );
+
+  const delegatedToken = "takat_interface_oauth_e2e";
+  const principalSubject = "pairwise_takos_interface_e2e";
+  await store.saveAccessToken(delegatedToken, {
+    clientId: "takos-interface-client",
+    scope: "openid capsules:read",
+    subject: principalSubject,
+    takosumiSubject: "tsub_interface_owner",
+    workspaceId: workspace.id,
+    role: "owner",
+    expiresAt: now + 60_000,
+  });
+
+  const audience = "https://office.example.test/mcp";
+  const iface = await created.operations.interfaces.create({
+    workspaceId: workspace.id,
+    name: "office-mcp",
+    ownerRef: { kind: "Capsule", id: capsule.id },
+    spec: {
+      type: "mcp.server",
+      version: "2025-11-25",
+      document: { transport: "streamable-http" },
+      inputs: {
+        endpoint: { source: "literal", value: audience },
+      },
+      access: {
+        visibility: "private",
+        resourceUriInput: "endpoint",
+      },
+    },
+  });
+  const binding = await created.operations.interfaces.createBinding(
+    iface.metadata.id,
+    {
+      subjectRef: { kind: "Principal", id: principalSubject },
+      permissions: ["mcp.invoke"],
+      delivery: { type: "oauth2" },
+    },
+  );
+  assert.equal(iface.status.phase, "Resolved");
+  assert.equal(binding.status.phase, "Ready");
+
+  const tokenResponse = await created.app.fetch(
+    new Request(
+      `http://localhost/v1/interfaces/${encodeURIComponent(iface.metadata.id)}/token`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${delegatedToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ permission: "mcp.invoke" }),
+      },
+    ),
+  );
+  assert.equal(tokenResponse.status, 200);
+  assert.equal(tokenResponse.headers.get("cache-control"), "no-store");
+  const issued = (await tokenResponse.json()) as {
+    access_token: string;
+    resource: string;
+    scope: string;
+  };
+  assert.match(issued.access_token, /^taksrv_/u);
+  assert.notEqual(issued.access_token, delegatedToken);
+  assert.equal(issued.resource, audience);
+  assert.equal(issued.scope, "mcp.invoke");
+
+  const userInfo = await handleUserInfo({
+    request: new Request("http://localhost/oauth/userinfo", {
+      headers: { authorization: `Bearer ${issued.access_token}` },
+    }),
+    store,
+    expectedAudience: audience,
+  });
+  assert.equal(userInfo.status, 200);
+  assert.deepEqual(await userInfo.json(), {
+    sub: principalSubject,
+    aud: audience,
+    scope: "mcp.invoke",
+    token_use: "interface_oauth",
+    takosumi: {
+      workspace_id: workspace.id,
+      capsule_id: capsule.id,
+      interface_id: iface.metadata.id,
+      interface_binding_id: binding.metadata.id,
+      interface_resolved_revision: iface.status.resolvedRevision,
+    },
+  });
+
 });
 
 test("composed app owns Takosumi product discovery before account fallback", async () => {
@@ -258,7 +479,7 @@ test("composed app product discovery uses forwarded public origin", async () => 
   assert.equal(spy.calls.length, 0);
 });
 
-test("composed app delegates non-installation paths to the account-plane fallback", async () => {
+test("composed app delegates dashboard paths to the Accounts fallback", async () => {
   const { app, spy } = await buildTestApp();
   // `/dashboard` is an account-plane surface the service never registers; it
   // reaches the accounts handler via the service app's catch-all fallback.
@@ -267,7 +488,7 @@ test("composed app delegates non-installation paths to the account-plane fallbac
   assert.deepEqual(spy.calls, [{ method: "GET", pathname: "/dashboard" }]);
 });
 
-test("composed app runs preHandle ahead of installation routing", async () => {
+test("composed app runs preHandle ahead of composed routing", async () => {
   const spy = accountsHandlerSpy();
   const { buildComposedApp } =
     await import("../../../../deploy/node-postgres/src/composed-app.ts");

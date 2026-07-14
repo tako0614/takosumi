@@ -15,6 +15,7 @@ export type {
   MobileHostableProductKind,
   MobilePushNotification,
   MobilePushNotificationEventKind,
+  MobilePushProvider,
   MobilePushRegistration,
   MobilePushRegistrationInput,
   MobileRoutePayload,
@@ -39,14 +40,19 @@ export type {
 export { discoverHost } from "./discovery.ts";
 export {
   createMobileApiClient,
-  MOBILE_PUSH_REGISTRATION_PATH,
-  registerMobilePushWithHost,
-  resolveMobilePushRegistrationEndpoint,
-  unregisterMobilePushWithHost,
+  MobileApiError,
+  NOTIFICATION_PUSHER_REGISTRATION_PATH,
+  registerNotificationPusherWithHost,
+  resolveNotificationPusherEndpoint,
+  unregisterNotificationPusherWithHost,
   type MobileApiClient,
-  type MobileHostPushRegistrationInput,
-  type MobileHostPushUnregistrationInput,
+  type MobileHostNotificationPusherRegistrationInput,
+  type MobileHostNotificationPusherUnregistrationInput,
 } from "./api.ts";
+export {
+  normalizeNotificationPusherGatewayUrl,
+  type NotificationPusher,
+} from "../../contract/notification-pushers.ts";
 export {
   createMobileClientController,
   type CreateMobileClientControllerOptions,
@@ -89,11 +95,13 @@ export {
   loadMobileSession,
   mobileAuthRequestStorageKey,
   mobileSessionStorageKey,
+  persistMobileSession,
   refreshMobileSession,
   type BeginMobileOidcSignInInput,
   type BeginMobileOidcSignInResult,
   type CompleteMobileOidcSignInInput,
   type EnsureFreshMobileSessionInput,
+  type PersistMobileSessionInput,
   type RefreshMobileSessionInput,
 } from "./auth.ts";
 export {

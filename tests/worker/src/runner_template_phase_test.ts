@@ -7,14 +7,15 @@ import {
   plannedOutputsFromPlanJson,
   resourceChangesFromPlanJson,
 } from "../../../runner/entrypoint.ts";
-import { PROVIDER_CREDENTIAL_ENV_RULES } from "takosumi-contract/provider-env-rules";
+import { parseOperatorModule } from "../../../runner/lib/parsing.ts";
+import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-recipes.generated.ts";
 
 // Credential-free helper commands must never carry known provider credential env
 // names, regardless of what is present in the runner's own process env.
 test("buildPhaseEnv carries no known credential env name", () => {
   const credentialNames = new Set<string>();
-  for (const rule of PROVIDER_CREDENTIAL_ENV_RULES) {
-    for (const name of rule.envNames) credentialNames.add(name);
+  for (const recipe of REFERENCE_CREDENTIAL_RECIPES) {
+    for (const name of recipe.envNames ?? []) credentialNames.add(name);
   }
 
   const polluted = [
@@ -63,21 +64,28 @@ test("buildPhaseEnv preserves the baked tofu CLI config pointer", () => {
   }
 });
 
-test("parseGeneratedRoot validates filenames and content", () => {
+test("generatedRoot contains only wrapper files and operatorModule is separate", () => {
   expect(parseGeneratedRoot({})).toBeUndefined();
   const ok = parseGeneratedRoot({
     generatedRoot: { files: { "main.tf": "terraform {}" } },
   });
   expect(ok).toEqual({ files: { "main.tf": "terraform {}" } });
-  const withModuleFiles = parseGeneratedRoot({
-    generatedRoot: {
-      files: { "main.tf": 'module "app" {}' },
-      moduleFiles: [{ path: "modules/app/main.tf", text: 'output "x" {}' }],
-    },
-  });
-  expect(withModuleFiles).toEqual({
-    files: { "main.tf": 'module "app" {}' },
-    moduleFiles: [{ path: "modules/app/main.tf", text: 'output "x" {}' }],
+  expect(() =>
+    parseGeneratedRoot({
+      generatedRoot: {
+        files: { "main.tf": 'module "child" {}' },
+        moduleFiles: [{ path: "main.tf", text: 'output "x" {}' }],
+      },
+    }),
+  ).toThrow(/generatedRoot\.moduleFiles is retired/);
+  expect(
+    parseOperatorModule({
+      operatorModule: {
+        files: [{ path: "main.tf", text: 'output "x" {}' }],
+      },
+    }),
+  ).toEqual({
+    files: [{ path: "main.tf", text: 'output "x" {}' }],
   });
   expect(() =>
     parseGeneratedRoot({ generatedRoot: { files: { "../escape.tf": "x" } } }),
@@ -90,10 +98,9 @@ test("parseGeneratedRoot validates filenames and content", () => {
     parseGeneratedRoot({ generatedRoot: { files: { "main.tf": 5 } } }),
   ).toThrow();
   expect(() =>
-    parseGeneratedRoot({
-      generatedRoot: {
-        files: { "main.tf": "terraform {}" },
-        moduleFiles: [{ path: "../escape.tf", text: "x" }],
+    parseOperatorModule({
+      operatorModule: {
+        files: [{ path: "../escape.tf", text: "x" }],
       },
     }),
   ).toThrow();
@@ -170,7 +177,7 @@ test("runner rejects retired app build and prebuilt artifact dispatch", () => {
   ).toThrow(/prebuiltArtifact dispatch is retired/);
 });
 
-test("resourceChangesFromPlanJson trims values and keeps sanitized scope metadata", () => {
+test("resourceChangesFromPlanJson projects only policy-selected generic scope facts", () => {
   const planJson = JSON.stringify({
     resource_changes: [
       {
@@ -195,31 +202,97 @@ test("resourceChangesFromPlanJson trims values and keeps sanitized scope metadat
       {
         address: "random_pet.name",
         type: "random_pet",
-        change: { actions: ["no-op"] },
+        change: { actions: ["no-op"], importing: { id: "redacted" } },
       },
     ],
   });
-  expect(resourceChangesFromPlanJson(planJson)).toEqual([
+  expect(
+    resourceChangesFromPlanJson(planJson, [
+      {
+        resourceTypePattern: "cloudflare_*",
+        dimensions: { account_id: "/account_id" },
+      },
+    ]),
+  ).toEqual([
     {
       address: "cloudflare_r2_bucket.this",
       type: "cloudflare_r2_bucket",
       actions: ["create"],
-      scope: { cloudflareAccountId: "acct_allowed" },
+      scope: { facts: { account_id: "acct_allowed" } },
     },
     {
       address: "random_id.suffix",
       type: "random_id",
       actions: ["delete", "create"],
     },
-    { address: "random_pet.name", type: "random_pet", actions: ["no-op"] },
+    {
+      address: "random_pet.name",
+      type: "random_pet",
+      actions: ["no-op"],
+      importing: true,
+    },
   ]);
   expect(resourceChangesFromPlanJson(JSON.stringify({}))).toEqual([]);
+});
+
+test("scope projection omits sensitive, unknown, non-scalar, and unselected values", () => {
+  const changes = resourceChangesFromPlanJson(
+    JSON.stringify({
+      resource_changes: [
+        {
+          address: "vendor_service.this",
+          type: "vendor_service",
+          change: {
+            actions: ["create"],
+            before: {
+              account: "old-account-must-not-be-used",
+              pending: "old-region-must-not-be-used",
+            },
+            after: {
+              region: "eu-test-1",
+              account: "secret-account",
+              pending: "unknown-value",
+              labels: { environment: "production" },
+              unselected: "must-not-cross-boundary",
+            },
+            after_sensitive: { account: true },
+            after_unknown: { pending: true },
+          },
+        },
+      ],
+    }),
+    [
+      {
+        resourceTypePattern: "vendor_*",
+        dimensions: {
+          region: "/region",
+          account: "/account",
+          pending: "/pending",
+          labels: "/labels",
+        },
+      },
+    ],
+  );
+
+  expect(changes).toEqual([
+    {
+      address: "vendor_service.this",
+      type: "vendor_service",
+      actions: ["create"],
+      scope: { facts: { region: "eu-test-1" } },
+    },
+  ]);
+  expect(JSON.stringify(changes)).not.toContain("must-not-cross-boundary");
+  expect(JSON.stringify(changes)).not.toContain("secret-account");
+  expect(JSON.stringify(changes)).not.toContain("unknown-value");
+  expect(JSON.stringify(changes)).not.toContain("old-account-must-not-be-used");
+  expect(JSON.stringify(changes)).not.toContain("old-region-must-not-be-used");
 });
 
 test("plannedOutputsFromPlanJson returns only allowlisted known non-sensitive outputs", () => {
   const planJson = JSON.stringify({
     output_changes: {
-      app_deployment: {
+      runtime_document: {
         after: {
           name: "office",
           compute: {
@@ -250,12 +323,12 @@ test("plannedOutputsFromPlanJson returns only allowlisted known non-sensitive ou
   });
   expect(
     plannedOutputsFromPlanJson(planJson, {
-      app_deployment: { from: "app_deployment" },
+      runtime_document: { from: "runtime_document" },
       unknown: { from: "unknown" },
       secret: { from: "secret", sensitive: true },
     }),
   ).toEqual({
-    app_deployment: {
+    runtime_document: {
       sensitive: false,
       value: {
         name: "office",
