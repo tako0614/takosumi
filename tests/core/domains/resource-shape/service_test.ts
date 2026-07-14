@@ -667,6 +667,7 @@ class RecordingDeploymentAdmission implements ResourceDeploymentAdmission {
   failCapture = false;
   failSettlementPending = false;
   failRetire = false;
+  failRetireReason: ResourceDeploymentRetireContext["reason"] | undefined;
   reserveReasons: readonly string[] = [];
   importReasons: readonly string[] = [];
   quoteFactory:
@@ -726,7 +727,9 @@ class RecordingDeploymentAdmission implements ResourceDeploymentAdmission {
 
   async retire(context: ResourceDeploymentRetireContext): Promise<void> {
     this.retireContexts.push(context);
-    if (this.failRetire) throw new Error("simulated retirement outage");
+    if (this.failRetire || this.failRetireReason === context.reason) {
+      throw new Error("simulated retirement outage");
+    }
   }
 }
 
@@ -1464,6 +1467,7 @@ test("failed import remains a ledger-only removable record", async () => {
       resourceId: APPLY_ID,
       kind: "ObjectBucket",
       name: "assets",
+      reason: "canonical_delete",
       now: NOW,
     },
   ]);
@@ -3468,6 +3472,118 @@ test("concurrent delete retries replay the idempotent backend and finalize once"
   expect(remaining.ok).toBe(false);
 });
 
+test("force delete restores host capacity when canonical CAS conflicts", async () => {
+  const base = createInMemoryResourceShapeStores();
+  const stores: ResourceShapeStores = {
+    ...base,
+    async removeResource() {
+      return { status: "conflict" };
+    },
+  };
+  const admission = new RecordingDeploymentAdmission();
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new PluginSpyAdapter(),
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+
+  const result = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+    { force: true },
+  );
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.error.code).toBe("reconcile_conflict");
+  expect(await stores.resources.get(APPLY_ID)).toBeDefined();
+  expect(admission.retireContexts.map(({ reason }) => reason)).toEqual([
+    "force_tombstone",
+    "force_tombstone_cancelled",
+  ]);
+});
+
+test("force delete restores host capacity when atomic removal throws before mutation", async () => {
+  const base = createInMemoryResourceShapeStores();
+  const stores: ResourceShapeStores = {
+    ...base,
+    async removeResource() {
+      throw new Error("simulated atomic remove outage");
+    },
+  };
+  const admission = new RecordingDeploymentAdmission();
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new PluginSpyAdapter(),
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+
+  const result = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+    { force: true },
+  );
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.error.code).toBe("delete_failed");
+    expect(result.error.message).toContain("simulated atomic remove outage");
+  }
+  expect(await stores.resources.get(APPLY_ID)).toBeDefined();
+  expect(admission.retireContexts.map(({ reason }) => reason)).toEqual([
+    "force_tombstone",
+    "force_tombstone_cancelled",
+  ]);
+});
+
+test("force delete leaves retained capacity fenced when compensation fails", async () => {
+  const base = createInMemoryResourceShapeStores();
+  const stores: ResourceShapeStores = {
+    ...base,
+    async removeResource() {
+      return { status: "conflict" };
+    },
+  };
+  const admission = new RecordingDeploymentAdmission();
+  admission.failRetireReason = "force_tombstone_cancelled";
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new PluginSpyAdapter(),
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+
+  const result = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+    { force: true },
+  );
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.error.code).toBe("deployment_finalize_pending");
+    expect(result.error.message).toContain("host capacity restore is pending");
+  }
+  expect(await stores.resources.get(APPLY_ID)).toBeDefined();
+  expect(admission.retireContexts.map(({ reason }) => reason)).toEqual([
+    "force_tombstone",
+    "force_tombstone_cancelled",
+  ]);
+});
+
 test("a Deleting Resource retries backend cleanup after atomic finalization recovers", async () => {
   const baseStores = createInMemoryResourceShapeStores();
   let failRemove = true;
@@ -3627,6 +3743,7 @@ test("normal delete retries idempotent host retirement after the Resource is abs
       resourceId: APPLY_ID,
       kind: "ObjectBucket",
       name: "assets",
+      reason: "canonical_delete",
       now: NOW,
     },
     {
@@ -3634,6 +3751,7 @@ test("normal delete retries idempotent host retirement after the Resource is abs
       resourceId: APPLY_ID,
       kind: "ObjectBucket",
       name: "assets",
+      reason: "canonical_delete",
       now: NOW,
     },
   ]);
@@ -3681,13 +3799,33 @@ test("force delete tombstones a failed resource without re-entering the adapter"
   );
   expect(forced.ok).toBe(true);
   expect(adapter.deleteInputs).toHaveLength(1);
-  expect(admission.retireContexts).toHaveLength(0);
+  expect(admission.retireContexts).toEqual([
+    {
+      space: "space_1",
+      resourceId: APPLY_ID,
+      kind: "ObjectBucket",
+      name: "assets",
+      reason: "force_tombstone",
+      now: NOW,
+    },
+  ]);
   expect(await stores.locks.get("tkrn:space_1:ObjectBucket:assets")).toBe(
     undefined,
   );
 
   const remaining = await service.get("space_1", "ObjectBucket", "assets");
   expect(remaining.ok).toBe(false);
+
+  // A later normal idempotent delete may repeat canonical retirement, but the
+  // host can distinguish it from the force tombstone and preserve retained
+  // capacity until explicit backend-absence proof is supplied.
+  expect(
+    (await service.delete("space_1", "ObjectBucket", "assets", ACTOR)).ok,
+  ).toBe(true);
+  expect(admission.retireContexts.map(({ reason }) => reason)).toEqual([
+    "force_tombstone",
+    "canonical_delete",
+  ]);
 });
 
 test("a failed first apply without a durable lock requires explicit force tombstone", async () => {
