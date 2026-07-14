@@ -2,7 +2,7 @@
 
 このページは Takosumi Cloud の公開価格と billing contract です。
 ここに書くのはユーザー向けの価格、無料枠、上限到達時の挙動だけです。
-payment-provider 同期、runtime price book、margin guard、原価見積もり、
+payment-provider 同期、versioned PriceCatalog、原価見積もり、
 reconciliation は公開 contract ではなく運用手順で管理します。
 
 ## Subscription Plans
@@ -38,31 +38,27 @@ subscription:
 利用できる枠が足りない場合、下流の Cloud endpoint / AI upstream / runtime dispatch /
 provider 互換 write へ進む前に安全側に停止します (fail closed)。
 
-## Usage Prices
+## Service Prices
 
-使用量は内部的に `usdMicros` 単位で記録され、これが計算の基準になります。下の単価は
-従量課金でユーザーに適用される価格です。
+Takosumi Cloud の価格単位は provider API family ではなく、versioned
+`ServiceOffering` / SKU です。`EdgeWorker` が内部で Workers for Platforms を使うか、
+`ObjectBucket` が R2 を使うかは価格表の public noun ではありません。作成前の Preview
+には offering version、SKU version、PriceCatalog version、税区分、単価、見積合計、
+有効期限が表示され、Apply はその exact quote を再確認します。
 
-| Family               | Unit        | Customer price            |
-| -------------------- | ----------- | ------------------------- |
-| AI request           | request     | `$0.001` / request        |
-| AI input tokens      | token       | `$0.30` / 1M tokens       |
-| AI output tokens     | token       | `$1.00` / 1M tokens       |
-| Workers Script       | operation   | `$0.001` / operation      |
-| KV / D1 / R2 ops     | operation   | `$0.0005` / operation     |
-| KV / D1 / R2 storage | GB-hour     | `$0.10` / 1M GB-hours     |
-| Vector Index         | operation   | `$0.0005` / operation     |
-| Workflows            | operation   | `$0.001` / operation      |
-| Containers           | vCPU-second | `$1.00` / 1M vCPU-seconds |
-| Queues               | operation   | `$0.0005` / operation     |
-| Durable Objects      | operation   | `$0.0005` / operation     |
-| OpenTofu plan        | changed resource | `$0.002` / changed resource |
-| OpenTofu runner      | runner-minute | `$0.02` / runner-minute  |
+現在、GA 用の Stable offering はまだ operator catalog に activate されていません。
+そのため旧 provider-family 単価表は撤回し、正式な version / effective-at / price が
+Dashboard Preview とこのページの両方に反映されるまで、Cloud Resource の購入と Apply
+は fail closed のままです。GA 時に公開する最小表は次の形式です。
 
-Preview / Planned の resource は、利用可能になった account / Workspace でだけ課金対象になります。
-この表は価格 contract であり、すべての service が全ユーザーに有効化済みであることを
-意味しません。利用可能性は [Takosumi Cloud](./index.md) の rollout matrix と
-Dashboard の endpoint status で確認してください。
+| Service form | Offering / SKU version | Effective at | Billable item / unit | Customer price | Availability |
+| ------------ | ---------------------- | ------------ | -------------------- | -------------- | ------------ |
+| EdgeWorker   | 未 activate            | —            | —                    | —              | Blocked      |
+| ObjectBucket | 未 activate            | —            | —                    | —              | Blocked      |
+
+AI Gateway は Resource lifecycle authority ではありませんが、課金を有効にする場合は同じ
+PriceCatalog に versioned SKU と request/token price を持ちます。価格のない meter、複数
+SKU に曖昧に一致する meter、未発効 catalog は課金や backend 実行へ進みません。
 
 ## Spend Guard
 
