@@ -1164,13 +1164,53 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.editor.createTitle": "Define resource",
   "resources.editor.editTitle": "Change desired state",
   "resources.editor.subtitle":
-    "Preview the selected Target and native plan before applying any change.",
+    "Choose a service and its required inputs, then review price and preview before deploying.",
+  "resources.editor.serviceStep": "Choose a service",
+  "resources.editor.service": "Service",
+  "resources.editor.serviceHint":
+    "Choose the service form you need, not a provider or backend implementation.",
+  "resources.editor.service.edgeWorker": "Edge Worker",
+  "resources.editor.service.objectBucket": "Object Bucket",
+  "resources.editor.service.custom": "Preview / custom Shape",
+  "resources.editor.customHint":
+    "Preview and operator-defined Shapes use a kind and raw Spec JSON under advanced settings. The endpoint decides availability.",
+  "resources.editor.inputsStep": "Required inputs",
+  "resources.editor.inputsHint":
+    "Do not enter credentials or provider-specific configuration here.",
   "resources.editor.kind": "Shape kind",
   "resources.editor.kindHint":
     "Use a bundled shape or a token explicitly registered by the operator.",
   "resources.editor.kindInvalid": "Enter a valid Shape kind.",
-  "resources.editor.name": "Resource name",
-  "resources.editor.nameRequired": "Enter a resource name.",
+  "resources.editor.name": "Service name",
+  "resources.editor.nameRequired": "Enter a service name.",
+  "resources.editor.artifactSource": "Immutable artifact source",
+  "resources.editor.artifactSource.url": "HTTPS release URL",
+  "resources.editor.artifactSource.ref": "Operator-issued artifact ref",
+  "resources.editor.artifactUrl": "Artifact URL",
+  "resources.editor.artifactUrlHint":
+    "An immutable HTTPS URL published by CI or a release. Takosumi does not build the bundle.",
+  "resources.editor.artifactRef": "Artifact ref",
+  "resources.editor.artifactRefHint":
+    "An opaque immutable reference issued by this endpoint. Do not include provider names or credentials.",
+  "resources.editor.artifactSha": "Artifact SHA-256",
+  "resources.editor.artifactShaHint":
+    "The digest that the fetched artifact must match.",
+  "resources.editor.artifactUrlRequired": "Enter the artifact URL.",
+  "resources.editor.artifactUrlHttps":
+    "The artifact URL must start with https://.",
+  "resources.editor.artifactRefRequired": "Enter the artifact ref.",
+  "resources.editor.artifactShaRequired":
+    "Enter the SHA-256 used to verify the immutable artifact.",
+  "resources.editor.compatibilityDate": "Compatibility date (optional)",
+  "resources.editor.compatibilityFlags": "Compatibility flags (optional)",
+  "resources.editor.profiles": "Required profiles (optional)",
+  "resources.editor.profilesHint":
+    "Profile tokens are advertised and validated by the endpoint; the dashboard does not own a fixed list.",
+  "resources.editor.tokenListHint":
+    "Separate multiple tokens with commas or whitespace.",
+  "resources.editor.bucketInterfaces": "Required object interfaces",
+  "resources.editor.bucketInterfacesHint":
+    "For example: s3_api, signed_url. These are endpoint-validated capability tokens, not runtime Interface objects.",
   "resources.editor.project": "Project (optional)",
   "resources.editor.environment": "Environment",
   "resources.editor.targetPool": "TargetPool",
@@ -1178,16 +1218,31 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.editor.spec": "Spec JSON",
   "resources.editor.specHint":
     "Enter only the selected Shape's spec as a JSON object. Do not include credentials.",
-  "resources.editor.advanced": "Labels and advanced settings",
+  "resources.editor.advanced": "Advanced and operator settings",
+  "resources.editor.advancedHint":
+    "Set Project, Environment, TargetPool, SpacePolicy, or labels only when needed. Ordinary deploys can use operator defaults.",
+  "resources.editor.rawOptInHint":
+    "Switch to raw Spec JSON only for connections, lifecycle policy, or operator extensions.",
+  "resources.editor.useRawSpec": "Use raw Spec JSON",
+  "resources.editor.rawWarning":
+    "This is the Preview/custom Shape and operator path. The Deploy API decides schema, availability, and price.",
+  "resources.editor.rawCannotGuide":
+    "The raw Spec JSON contains settings the guided form does not handle. It stayed in raw mode to avoid losing them.",
   "resources.editor.labels": "Labels JSON",
   "resources.editor.labelsHint": "A JSON object whose values are all strings.",
   "resources.editor.specInvalid": "Invalid Spec JSON — {message}",
   "resources.editor.labelsInvalid": "Invalid Labels JSON — {message}",
   "resources.editor.preview": "Preview",
+  "resources.editor.previewStep": "Price and preview",
+  "resources.editor.previewHint":
+    "Resolve the current inputs and fetch the endpoint's price, placement, and execution plan. Nothing is deployed yet.",
   "resources.editor.previewRequired":
     "Preview the current inputs again before continuing.",
-  "resources.editor.apply": "Apply",
-  "resources.editor.applied": "Resource applied.",
+  "resources.editor.deployStep": "Review and deploy",
+  "resources.editor.deployHint":
+    "After preview, confirm that inputs are unchanged and deploy with the exact same plan and quote.",
+  "resources.editor.apply": "Deploy service",
+  "resources.editor.applied": "Service desired state applied.",
   "resources.editor.importExisting": "Import an existing native resource",
   "resources.editor.nativeId": "Native resource ID",
   "resources.editor.nativeIdHint":
@@ -1195,10 +1250,10 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.editor.nativeIdRequired": "Enter the native resource ID.",
   "resources.editor.import": "Import",
   "resources.editor.imported": "Existing resource imported.",
-  "resources.confirm.applyTitle": "Apply this resource?",
+  "resources.confirm.applyTitle": "Deploy this service?",
   "resources.confirm.updateTitle": "Change this desired state?",
   "resources.confirm.applyMessage":
-    "Apply {kind}/{name} to Target {target}. Only the previewed inputs will run.",
+    "Deploy {kind}/{name} to Target {target}. Reviewed price: {price}. Only the exact previewed plan and quote will run.",
   "resources.confirm.importTitle": "Import this existing resource?",
   "resources.confirm.importMessage":
     "Validate native ID {nativeId} and place it under Takosumi management as {kind}/{name}.",
@@ -1209,7 +1264,17 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.preview.implementation": "Implementation",
   "resources.preview.portability": "Portability",
   "resources.preview.price": "Estimated price",
+  "resources.preview.noQuoteShort": "No price quote",
+  "resources.preview.noQuote":
+    "This preview did not include a price quote. OSS Takosumi does not own the Cloud price catalog; check the operator's billing mode and guidance. This does not mean free.",
+  "resources.preview.unratedShort": "Unrated",
+  "resources.preview.unrated":
+    "This quote is unrated. OSS disabled/showback operation may still apply it, but it does not represent a price or charge.",
+  "resources.preview.ratedHint":
+    "Estimated total from the endpoint's versioned quote. Deploy presents this exact quote again.",
+  "resources.preview.quote": "Quote ID",
   "resources.preview.priceExpires": "Quote expires",
+  "resources.preview.technicalDetails": "Placement and native plan details",
   "resources.preview.nativePlan": "Native plan",
   "resources.preview.risks": "Risk notes",
   "resources.preview.noRisks": "No additional risk notes.",

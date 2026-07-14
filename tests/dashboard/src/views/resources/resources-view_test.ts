@@ -10,6 +10,7 @@ const src = (path: string) =>
 const index = src("index.tsx");
 const nav = src("views/account/components/shell/nav.ts");
 const editor = src("views/resources/ResourceEditor.tsx");
+const serviceForm = src("lib/resource-service-form.ts");
 const detail = src("views/resources/ResourceDetailView.tsx");
 const inventory = src("views/resources/ResourcesView.tsx");
 
@@ -31,6 +32,49 @@ describe("Resource Shape dashboard surface", () => {
     expect(editor).toContain("await confirm({");
     expect(editor).toContain("applyResourceShape");
     expect(editor).toContain("importResourceShape");
+    expect(editor).toContain("planDigest: reviewedPreview.planDigest");
+    expect(editor).toContain("quoteId: reviewedPreview.quote.quoteId");
+    expect(editor).toContain("quoteDigest: reviewedPreview.quote.quoteDigest");
+  });
+
+  test("defaults to service-first guided forms before price, preview, and deploy", () => {
+    const service = editor.indexOf('data-step="service"');
+    const inputs = editor.indexOf('data-step="inputs"');
+    const preview = editor.indexOf('data-step="preview"');
+    const price = editor.indexOf('class="rs-price-review"');
+    const deploy = editor.indexOf('data-step="deploy"');
+    expect(service).toBeGreaterThan(-1);
+    expect(inputs).toBeGreaterThan(service);
+    expect(preview).toBeGreaterThan(inputs);
+    expect(price).toBeGreaterThan(preview);
+    expect(deploy).toBeGreaterThan(price);
+    expect(editor).toContain('<option value="EdgeWorker">');
+    expect(editor).toContain('<option value="ObjectBucket">');
+    expect(editor).toContain('value="custom"');
+    expect(editor).toContain("buildEdgeWorkerServiceSpec");
+    expect(editor).toContain("buildObjectBucketServiceSpec");
+  });
+
+  test("keeps raw/custom and placement controls in advanced disclosure", () => {
+    const advanced = editor.indexOf('<details class="rs-advanced"');
+    expect(advanced).toBeGreaterThan(-1);
+    expect(editor.indexOf('t("resources.editor.project")')).toBeGreaterThan(
+      advanced,
+    );
+    expect(editor.indexOf('t("resources.editor.targetPool")')).toBeGreaterThan(
+      advanced,
+    );
+    expect(editor.indexOf('t("resources.editor.spec")')).toBeGreaterThan(
+      advanced,
+    );
+    expect(editor).toContain("setGuidedMode(false)");
+    expect(editor).toContain('setError(t("resources.editor.rawCannotGuide"))');
+    expect(serviceForm).toContain(
+      "the Deploy API remains the schema/capability authority",
+    );
+    expect(serviceForm).not.toMatch(
+      /ServiceOffering|PriceCatalog|cloudflare/iu,
+    );
   });
 
   test("keeps break-glass deletion out of the dashboard and hides Output values", () => {
