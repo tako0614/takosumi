@@ -1,68 +1,84 @@
 # Model Reference
 
-Last updated: 2026-06-29
+Last updated: 2026-07-14
 
-Takosumi OSS has two public flows: run plain OpenTofu from Git, and resolve
-Takosumi Resource Shapes through TargetPools, policy, and Adapters. Compatibility
-APIs are additional capability-scoped surfaces alongside those flows. They are
-peer entrypoints, not provider-internal routes inside `takosumi/takosumi` or
-subordinate Resource Shape APIs.
+Takosumi OSS には、2 つの公開 authoring flow と 1 つの共有 runtime interaction 層があります。
+Git から plain な OpenTofu をそのまま実行する flow と、Takosumi Resource Shape を
+`/v1/resources` Deploy API で解決・実行する flow です。どちらの結果も Interface として公開し、
+consumer の利用は InterfaceBinding で認可します。Compatibility API は、control-plane では
+Deploy API への変換、data-plane では Ready Resource の解決を行う capability 単位の surface です。
 
 ## OpenTofu Stack Concepts
 
-| Concept            | Meaning                                                                    |
-| ------------------ | -------------------------------------------------------------------------- |
-| Workspace          | User/team isolation boundary for projects, state, secrets, runs, and audit |
-| Project            | One product, service, or infrastructure group                              |
-| Capsule            | One OpenTofu/Terraform module execution unit                               |
-| Source             | Git URL/ref/commit/path for a plain OpenTofu/Terraform module              |
-| ProviderConnection | Stored provider credential configuration                                   |
-| CredentialRecipe   | Provider-specific env/file/pre-run materialization recipe                  |
-| ProviderBinding    | Provider name/alias to ProviderConnection mapping                          |
-| Secret             | Encrypted credential or input material                                     |
-| Run                | One init/validate/plan/apply/destroy/refresh/output action                 |
-| StateVersion       | Stored state generation for a Capsule                                      |
-| Output             | Captured OpenTofu output value                                             |
-| Runner             | Local/docker/remote/operator/cloud execution worker                        |
-| AuditEvent         | Actor/action/target/result evidence                                        |
+| Concept            | Meaning                                                                |
+| ------------------ | ---------------------------------------------------------------------- |
+| Workspace          | プロジェクト・状態・シークレット・Run・監査を分離する user/team の境界 |
+| Project            | 1 つの製品・サービス・インフラのまとまり                               |
+| Capsule            | 1 つの OpenTofu/Terraform module の実行単位                            |
+| Source             | plain な OpenTofu/Terraform module を指す Git URL/ref/commit/path      |
+| ProviderConnection | 保存された provider 認証情報の設定                                     |
+| CredentialRecipe   | provider ごとの env/file/pre-run 生成レシピ                            |
+| ProviderBinding    | provider 名/alias から ProviderConnection への対応付け                 |
+| Secret             | 暗号化された認証情報または入力材料                                     |
+| Run                | init/validate/plan/apply/destroy/refresh/output のいずれか 1 回の操作  |
+| StateVersion       | Capsule に保存された state の世代                                      |
+| Output             | 取得済みの OpenTofu output 値                                          |
+| Runner             | local/docker/remote/operator/cloud の実行 worker                       |
+| AuditEvent         | actor/action/target/result の証跡                                      |
 
 ## Resource Shape Concepts
 
-| Concept        | Meaning                                                                   |
-| -------------- | ------------------------------------------------------------------------- |
-| Space          | Resource API namespace and policy scope                                   |
-| Environment    | Deployment environment inside a Space                                     |
-| Stack          | A group of Resource Shape objects and operations                          |
-| Resource       | Desired service-form resource, such as EdgeWorker, ObjectBucket, or Queue |
-| Target         | Concrete implementation destination, such as AWS, Cloudflare, Kubernetes  |
-| TargetPool     | Operator-controlled set of available Targets and capabilities             |
-| Credential     | Runtime authority used by a Target or Adapter                             |
-| Policy         | Rules for placement, cost, region, action, network, and access            |
-| Adapter        | Implementation bridge that can preview, apply, observe, and delete        |
-| ResolutionLock | Recorded resolver decision for a Resource                                 |
-| NativeResource | Concrete provider/platform resource created by an Adapter                 |
-| Condition      | Status and readiness evidence                                             |
+| Concept        | Meaning                                                                |
+| -------------- | ---------------------------------------------------------------------- |
+| Space          | Resource API の namespace および policy scope                          |
+| Environment    | Space 内の deployment 環境                                             |
+| Stack          | Resource Shape object と operation のまとまり                          |
+| Resource       | EdgeWorker、ObjectBucket、Queue などの、あるべきサービス形態のリソース |
+| Target         | AWS、Cloudflare、Kubernetes などの具体的な実装先                       |
+| TargetPool     | operator が管理する、利用可能な Target と capability の集合            |
+| Credential     | Target または Adapter が使う runtime 権限                              |
+| Policy         | 配置・コスト・region・action・network・access のルール                 |
+| Adapter        | preview/apply/observe/delete を行う実装 bridge                         |
+| ResolutionLock | Resource に対する resolver の決定を記録したもの                        |
+| NativeResource | Adapter が作成した具体的な provider/platform リソース                  |
+| Condition      | 状態と readiness の証跡                                                |
 
-`Space` here is the Resource API namespace and policy scope.
+ここでの `Space` は Resource API の namespace および policy scope です。
+
+## Shared Runtime Interaction Concepts
+
+| Concept          | Meaning                                                                                                     |
+| ---------------- | ----------------------------------------------------------------------------------------------------------- |
+| Interface        | Workspace、Capsule、または Resource が所有する、versioned な non-secret runtime 宣言                        |
+| Interface input  | `literal` / `capsule_output` / `resource_output` から得る明示的な public 値。任意で JSON Pointer を指定可能 |
+| InterfaceBinding | Principal、ServiceAccount、Capsule、Resource に特定の permission と delivery 方式を与える認可               |
+| Principal        | Interface を利用する human/account identity                                                                 |
+| ServiceAccount   | Interface を利用する non-human identity                                                                     |
+
+OpenTofu Output は通常の root module 戻り値のままです。Interface は、条件を満たす任意の
+public な Output 名を明示的に mapping できますが、module 側が予約された Takosumi schema を
+公開するわけではありません。Interface の document と解決済み input には認証情報を一切含めません。
+InterfaceBinding の delivery は invocation 時点の認可であり、OpenTofu Run を認可する
+ProviderBinding とは独立しています。
 
 ## OpenTofu Provider Resolution
 
-Upload/prepared-source snapshots are internal/operator compatibility only; they
-are not a public Source kind and do not create new public Capsules.
+Source と Capsule の authoring は Git のみです。登録済みの Source に対して `source_sync` が
+SourceSnapshot を生成します。その変更不可な archive は runner への転送手段であり、別の source 種別や
+Capsule 作成経路ではありません。
 
-`Source.autoSync` enables scheduled Git-ref polling. It prepares newer immutable
-SourceSnapshots when the ref moves. If the resolved commit differs from the
-SourceSnapshot currently applied by an active Capsule, Takosumi marks that
-Capsule `stale` so the normal Workspace update / RunGroup path can create a
-reviewable update plan. It still does not silently apply changes: every
-infrastructure update goes through Plan / Apply as a Run unless an explicit
-operator policy adds a separate auto-apply gate.
+`Source.autoSync` を有効にすると、Git ref の定期 polling が動きます。ref が動くたびに新しい
+変更不可な SourceSnapshot を用意します。解決された commit が、有効な Capsule が現在 apply 済みの
+SourceSnapshot と異なる場合、Takosumi はその Capsule を `stale` にし、通常の Workspace update /
+RunGroup 経路が確認可能な update plan を作れるようにします。それでも変更を黙って適用することは
+ありません。明示的な operator policy が別途 auto-apply gate を追加しない限り、すべてのインフラ
+更新は Run としての Plan / Apply を経由します。
 
 手動更新は `manual_plan` intent の SourceSyncRun を使い、その Run が生成した
 exact SourceSnapshot を plan に固定します。この intent の sync は Capsule を
 `stale` にできますが、同時に別の auto-update plan/apply を開始しません。
 
-Provider resolution has two OSS outcomes:
+Provider resolution には、2 つの OSS outcome に加えて policy による blocking があります。
 
 ```text
 resolved_provider_connection
@@ -70,12 +86,12 @@ blocked_missing_connection
 blocked_policy
 ```
 
-Resolution evidence never includes secret values. Public API, UI, and docs use
-ProviderConnection and ProviderBinding.
+Resolution の証跡に secret 値を含めることはありません。public API、UI、docs では
+ProviderConnection と ProviderBinding を使います。
 
 ## Same Manifest, Different Connection
 
-The core deployment model is:
+中核となる deployment モデルは次のとおりです。
 
 ```text
 same .tf
@@ -83,7 +99,7 @@ different ProviderBinding
 different ProviderConnection
 ```
 
-Example:
+例:
 
 ```yaml
 provider_bindings:
@@ -93,108 +109,112 @@ provider_bindings:
     connection: aws-prod-tokyo
 ```
 
-Takosumi injects the runtime env/files required by the selected
-ProviderConnection. The manifest should not contain secrets.
+Takosumi は、選択された ProviderConnection が必要とする runtime の env/file を注入します。
+manifest 自体に secret を含めるべきではありません。
 
-Built-in Credential Recipes are guided setup shortcuts, not the provider
-boundary. Any provider can use a generic-env ProviderConnection when the user
-declares the provider source from `required_providers` and the explicit
-environment variables documented by that provider. Those declared env names
-must be upper-snake environment identifiers such as `SNOWFLAKE_PASSWORD`; they
-become the run-local CredentialRecipe, subject to runner policy, provider plugin
-policy, and egress policy. Runner/runtime-reserved env names are rejected.
+Operator がインストールした Credential Recipe は、設定を簡単にするための近道であって、
+provider の境界そのものではありません。ユーザーが `required_providers` から provider source を
+宣言し、その provider が文書化している環境変数を明示すれば、どの provider でも generic-env
+ProviderConnection を使えます。宣言する env 名は `EXAMPLE_API_TOKEN` のような upper-snake の
+環境変数識別子でなければならず、それらは run-local な CredentialRecipe になり、runner policy、
+provider plugin policy、egress policy の対象になります。runner/runtime が予約する env 名は
+拒否されます。
 
-Using your own key is not gated by Takosumi. There is no provider allowlist and
-no operator approval: if you supply the credential, any OpenTofu/Terraform
-provider runs. A self-hosted Takosumi enables the wildcard runner surface by
-default, and the control plane auto-selects a runner profile that admits the
-Capsule's providers, so an arbitrary provider runs without naming a profile.
-A ProviderConnection you supply with your own key is never metered or billed by
-Takosumi software. Self-host and OSS operator endpoints may record showback
-usage, but they do not enforce Takosumi Cloud payment. Takosumi Cloud bills
-only Takosumi-provided managed resources; its customer-facing contract lives in
-[Takosumi Cloud pricing](https://app.takosumi.com/docs/pricing).
+自分の key を使う場合、Takosumi による gate はありません。provider allowlist も operator
+承認も不要です。credential さえ渡せば、どの OpenTofu/Terraform provider でも実行できます。
+self-host した Takosumi は既定で wildcard runner surface を有効にし、呼び出し側が別の
+operator 定義 capability profile を選ばない限り、明示的に設定された既定の RunnerProfile を
+使います。provider 名や label が executor を選ぶことはありません。
+自分の key で用意した ProviderConnection を Takosumi software が計測・課金することは
+ありません。self-host および OSS operator の endpoint は showback usage を記録することが
+ありますが、Takosumi OSS 自体に組み込みの価格はなく、operator が `ShowbackRater` を注入しない
+限り測定値は zero / `unrated` のままです。これらは Takosumi Cloud の支払いを強制しません。
+Takosumi Cloud が課金するのは Takosumi が提供する managed resource だけであり、その顧客向け
+契約は [Takosumi Cloud pricing](https://app.takosumi.com/docs/pricing) にあります。
 
 ## Runner Policy
 
-Runner policy, provider allowlists, lockfile/mirror rules, resource limits, and
-network egress policy are internal control-plane safeguards. They decide where a
-Run may execute and which provider plugins/resources may be reached, but they
-are not public product nouns like ProviderConnection or ProviderBinding.
-Operators may configure a runner-local OpenTofu provider plugin cache to speed
-direct provider installs. It stores provider binaries only; credentials and
-generated run files remain per-run. On Cloudflare Containers, the current
-runner Durable Object id is run-scoped, so this cache is only reused while that
-single runner instance is alive; SourceSnapshot reuse and provider mirrors are
-the portable speed mechanisms.
+Runner policy、provider allowlist、lockfile/mirror ルール、resource limit、network
+egress policy は、内部の control-plane safeguard です。これらは Run をどこで実行できるか、
+どの provider plugin/resource に到達できるかを決めますが、ProviderConnection や
+ProviderBinding のような public な製品用語ではありません。RunnerProfile の lifecycle と
+availability は typed field です。その open な `executorId` は host が注入した executor
+registry を通してのみ解決され、label は説明用の metadata であり、Run の有効化・予約・
+スケジューリング・ルーティングを行うことはできません。Operator は provider の直接インストールを
+速くするため、runner ローカルの OpenTofu provider plugin cache を設定できます。これは
+provider バイナリだけを保存し、credential や生成された run ファイルは run ごとのままです。
+Cloudflare Containers では、現在の runner Durable Object id は run-scoped なので、この
+cache はその 1 つの runner インスタンスが生きている間だけ再利用されます。SourceSnapshot の
+再利用と provider mirror が、可搬な高速化の手段です。
 
-The user-facing flow should feel like installing an app, but the model remains
-Git-native and OpenTofu-native. Creating a new service uses the same guided
-install flow as adding an app: choose a template or install link, configure the
-smallest visible inputs, review the plan, then deploy. Takosumi should not add a
-separate low-level "create service" CRUD surface for ordinary users; the full
-service list can expose details after creation, while the add path stays
-install-like.
+ユーザーから見える流れはアプリをインストールする感覚であるべきですが、モデルは Git-native /
+OpenTofu-native のままです。新しいサービスの作成は、アプリを追加するのと同じ guided install
+flow を使います。Git ベースの listing を選ぶか install link を入力し、必要最小限の入力だけを
+設定し、plan を確認してから deploy します。Takosumi は、通常のユーザー向けに別の低レベルな
+「create service」 CRUD surface を追加すべきではありません。サービス一覧は作成後に詳細を
+表示できますが、追加の入口はあくまで install のような体験のままにします。
 
-The Store is only discovery and presentation. A Store node announces a Git
-repository/path, icon, description, and visible setup fields. It is not a
-release authority: branch, tag, commit, SourceSnapshot, and update policy stay
-in the Source / Run flow. Switching Store nodes changes the read source for
-listings and presentation metadata, not the Capsule execution model.
+Store は discovery と presentation だけです。Store node は Git repository/path、
+icon、description を告知します。setup や release の権限元ではありません。branch、tag、
+commit、SourceSnapshot、update policy は Source / Run flow に留まります。Store node を
+切り替えると listing と presentation metadata の読み込み元が変わるだけで、Capsule の実行
+モデルは変わりません。
 
-Repositories may provide `.well-known/tcs.json` for Store indexers. This file is
-optional presentation metadata, not a Takosumi manifest. Direct Git install
-works without it. The file may describe `modulePath`, icon, visible inputs,
-`installExperience`, and output display hints, but it must not own `git`,
-`source`, `ref`, `commit`, `resolvedCommit`, or `installConfigId`.
+Repository は、表示テキスト・icon・`modulePath` を含む `.well-known/tcs.json`
+presentation metadata を任意で公開できます。この文書は `git`、`source`、refs/commits、
+`installConfigId`、variable presentation/defaults、`installExperience`、output
+allowlist、release artifact、domain defaults、OIDC wiring、lifecycle action、
+Interface blueprint を宣言してはいけません。これらは `variablePresentation`、
+`installExperience`、`interfaceBlueprints` のような、top-level で DB が所有する
+InstallConfig field で管理します。DB が所有する `installExperience` の `oidc_client`
+projection は、public な OIDC client metadata (issuer、client id、redirect URI) に
+加えて必要な OAuth scope を宣言できます。`openid` は必須で、scope は重複のない
+non-empty token に限ります。client secret、access token、refresh token を
+repository metadata、OpenTofu 変数、state、Output に投影することはありません。
 
-Git source sync records a bounded observation of this repository-root document
-on the immutable `SourceSnapshot`, separately from the selected OpenTofu module
-archive. This keeps a nested `modulePath` from hiding or drifting the setup and
-OIDC contract. A snapshot created without that observation is not reused by a
-new sync; Store-backed planning fails closed instead of continuing with stale
-presentation metadata.
+DB が所有する `interfaceBlueprints` の各 entry は、明示的で不変な `key` を必須とします。
+Takosumi は、編集可能な表示用 `name` を materialization identity の代わりに使うことは
+ありません。
 
-`installExperience` の `oidc_client` projection は、public OIDC client metadata
-(issuer、client id、redirect URI) に加えて必要な OAuth scope を宣言できます。
-`openid` は必須で、scope は重複のない non-empty token に限ります。client secret、access
-token、refresh token は repository metadata、OpenTofu variables、state、Output に投影しません。
+Git source sync は、選択された OpenTofu module archive とは別に、この
+repository-root document の bounded observation を変更不可な `SourceSnapshot`
+に記録します。この observation は表示用の証跡に過ぎず、欠落や無効さが snapshot の再利用や
+Store-backed planning を止めることはなく、保存済みの InstallConfig を書き換えることも
+ありません。
 
-Takosumi can reuse SourceSnapshots, provider mirrors, provider plugin caches,
-runner capacity controls, package caches, and clear progress phases. The default
-fast path is a Git CI/release artifact consumed and SHA-256-verified by the
-repository's OpenTofu module. A Capsule can instead opt into `sourceBuild` with
-explicit argv commands and expected relative outputs. That phase receives no
-provider credentials and cannot select or create infrastructure; the Git module
-still owns the OpenTofu plan.
+Takosumi は SourceSnapshot、provider mirror、provider plugin cache、runner
+capacity control、package cache、明確な進行 phase を再利用できます。既定の高速経路は、
+repository の OpenTofu module が消費し SHA-256 で検証する Git CI/release artifact です。
+Capsule は代わりに、明示的な argv コマンドと期待される相対 output を持つ `sourceBuild` を
+選ぶこともできます。この phase には provider credential が渡されず、インフラの選択や作成も
+できません。OpenTofu plan の所有者は引き続き Git module です。
 
-`sourceBuild` is service-side Capsule configuration, not Store metadata and not
-an executable field in `.well-known/tcs.json`. Takosumi does not infer commands
-from `package.json`, and it does not silently fall back from a missing release
-artifact to a build. Expensive OCI/container image builds should remain in the
-app repository's CI and registry.
+`sourceBuild` は service-side の Capsule 設定であり、Store metadata ではなく、
+`.well-known/tcs.json` の実行可能な field でもありません。Takosumi は `package.json` から
+コマンドを推測せず、release artifact が見つからない場合に黙って build へ fallback すること
+もありません。コストの高い OCI/container image の build は、app repository の CI と
+registry 側に留めるべきです。
 
-Release/update automation is Git-native: a Source tracks a branch, tag, or
-commit ref; source sync resolves that ref to an immutable commit and archive; a
-Capsule that is active on an older commit becomes `stale`; Workspace update
-plans the change. If the module consumes a prebuilt container/image/bundle, it
-does so through ordinary OpenTofu variables, providers, or data sources. An
-explicit source build runs against that same pinned snapshot before each
-plan/apply/destroy materialization.
+Release/update の自動化は Git-native です。Source は branch、tag、commit ref のいずれかを
+追跡し、source sync がその ref を変更不可な commit と archive に解決します。より古い commit
+で稼働している Capsule は `stale` になり、Workspace update がその変更を plan します。module が
+事前 build 済みの container/image/bundle を使う場合は、通常の OpenTofu 変数、provider、
+data source を通して行います。明示的な source build は、plan/apply/destroy の
+materialization のたびに、同じ pinned snapshot に対して実行されます。
 
-The reference runner keeps successful plan containers warm for
-`TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` seconds (default `0`; official Cloud uses
-`120` so apply / destroy apply can return to the plan runner object while it is
-warm) and shuts down non-plan runs after success plus all failed runs
-immediately. Operators can also pass `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR`,
-`TAKOSUMI_SOURCE_BUILD_CACHE_DIR`, `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`, and runner capacity retry knobs as
-non-secret speed settings. This is not a cross-run source-sync cache.
+reference runner は、成功した plan の container を `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS`
+秒だけ温めた状態で保持し (既定 `0`。公式 Cloud は、warm な間に apply / destroy apply が
+plan runner object へ戻れるよう `120` を使います)、plan 以外の run は成功後に、失敗した run は
+すべて即座にシャットダウンします。Operator は非 secret な速度設定として
+`TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR`、`TAKOSUMI_SOURCE_BUILD_CACHE_DIR`、
+`TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`、runner capacity の retry 設定も渡せます。これは
+run をまたぐ source-sync cache ではありません。
 
 ## Resource Shape Resolution
 
-The Resource Shape flow starts from typed Resource objects and resolves them to
-Targets. Those objects can be submitted through the Resource API,
-`takosumi_*` provider resources, CLI, dashboard, or Kubernetes CRDs:
+Resource Shape flow は typed な Resource object から始まり、それを Target へ解決します。
+これらの object は `/v1/resources` Deploy API、`takosumi_*` provider resources、CLI、dashboard、
+Kubernetes CRD のいずれからでも送信できます。
 
 ```text
 Resource Shape
@@ -204,42 +224,38 @@ Resource Shape
   -> NativeResource
 ```
 
-Users normally describe the shape they want, not the backend. Operators decide
-which Targets are available, which Adapters are enabled, and which policies
-control placement. Resolver decisions are recorded as ResolutionLocks and do
-not move without an explicit migration.
+ユーザーは通常、backend ではなく欲しい shape を記述します。どの Target が利用可能か、
+どの Adapter が有効か、どの policy が配置を制御するかは operator が決めます。Resolver の
+決定は ResolutionLock として記録され、明示的な migration なしに動くことはありません。
+TargetPool / Policy / Adapter は operator/advanced surface で、通常 UX は service form、
+必須入力、価格、preview、deploy に絞ります。
 
-Resource Shapes are not a replacement for every existing provider or standard
-surface. If an industry-standard protocol/API or adequate OpenTofu provider
-already expresses the service cleanly, use that surface through the OpenTofu
-Stack flow or a scoped compatibility profile. Compatibility profiles are peer
-entrypoints for standard tools/protocols, not fallback routes into
-`takosumi/takosumi`. S3-compatible object storage, OCI registry, Kubernetes
-CRDs, CloudEvents, OpenAI-compatible APIs, and scoped Cloudflare
-Workers-compatible import/deploy paths are examples of surfaces that should
-remain standard-facing.
+Resource Shape は、外部インフラ向けの既存 provider を置き換えるものではありません。
+外部 resource に十分な provider/API がある場合は plain Stack flow で使います。一方、
+Takosumi/operator が managed capacity として販売・運用するサービスは、標準 protocol の
+有無にかかわらず provider-neutral な Resource Shape として定義します。標準/compat surface
+はその Resource の control-plane translation または data-plane であり、lifecycle authority
+ではありません。
 
-Add a Takosumi shape when the service form is durable, no adequate standard
-surface exists, and Takosumi needs to own binding projection, resolution lock,
-policy, metering, import path, or managed target placement.
+`/v1/resources` は preview/apply/observe/refresh/import/delete と canonical Resource、
+ResolutionLock、NativeResource、Run、status、Output、audit の唯一の正本です。TargetPool、
+Policy、Adapter、backend manager はこの API の背後にある operator/advanced machinery です。
 
-The inverse is also scoped: when a standard surface does not exist, Takosumi
-does not automatically create a catch-all provider. One-off gaps should stay in
-generic-env ProviderConnections and normal OpenTofu modules. A new
-`takosumi_*` resource is justified only for a repeated Takosumi-owned service
-form that needs a typed schema, planner, adapter, import/drift/state behavior,
-and capability evidence. A provider resource that does not map to either a
-Takosumi-owned service form or an operator/admin object has no reason to exist.
+標準 surface が存在しないだけでは、Takosumi が自動的に catch-all な provider を
+作る理由になりません。一回限りの不足や外部インフラは generic-env
+ProviderConnection と通常の OpenTofu module に留めるべきです。新しい `takosumi_*`
+resource が正当化されるのは、operator が managed capacity として提供し、typed schema、
+planner、adapter、import/drift/state の挙動、capability 証跡を必要とする、繰り返し現れる
+provider-neutral なサービス形態だけです。
+Takosumi 所有のサービス形態にも operator/admin object にも対応しない provider resource は、
+存在する理由がありません。
 
-This is not Takosumi-provider lock-in. If Takosumi defines a shape because no
-adequate universal provider or standard protocol exists, and that surface later
-appears, new designs should prefer the universal surface. The Takosumi shape can
-remain for import continuity, migration, managed-target placement, policy, or
-metering, but it is not mandatory.
+`takosumi/takosumi` provider は任意の typed Deploy API client です。shape、service offering、
+価格、backend selection、lifecycle state の正本ではないため、direct API、CLI、dashboard、
+compatibility client から同じ managed service を利用できます。
 
-Takos is a representative consumer of this rule. Takos should be described as
-the composition of generic Resource Shapes it actually needs, not as a
-product-specific catch-all shape:
+Takos は、この rule の代表的な consumer です。Takos は、製品固有の catch-all shape
+としてではなく、実際に必要な汎用 Resource Shape の合成として説明するべきです。
 
 ```text
 Takos distribution:
@@ -248,40 +264,54 @@ Takos distribution:
   KVStore           -> session/cache/state binding
   ObjectBucket      -> files and workspace objects
   Queue             -> agent jobs and product events
-  ContainerService  -> takos-git and takos-agent containers
+  ContainerService  -> takos-agent container
 ```
 
-Do not add `takosumi_takos` or an equivalent one-resource wrapper. If Takos
-later needs a service form that these generic shapes cannot express, add the
-missing service form only after the same prior-art gate passes.
+別途 install する `takos-git` Capsule は自身の generic service topology を持ち、
+Interface / InterfaceBinding 経由で Takos が利用します。
 
-Adapters report capabilities and perform preview/apply/observe/delete work.
-Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
-and Takosumi-native adapters.
+`takosumi_takos` やそれに相当する one-resource wrapper は追加しません。もし Takos が
+後になって、これらの汎用 shape で表現できないサービス形態を必要とする場合は、同じ prior-art
+gate を通過してから、その不足しているサービス形態だけを追加します。
 
-Extensible surfaces use capability tokens. For example, a
-`ContainerService` target can publish an operator-defined implementation plugin
-with custom interface evidence. The endpoint accepts or rejects those tokens
-through resolver/policy, not through a hard-coded provider binary allow-list.
-That extension is for backends of an existing typed shape. Adding a new
-HCL-facing `takosumi_*` shape still requires a schema/API/provider release so
-OpenTofu can keep typed validation, plan diffs, import, and state upgrade
-behavior.
+`EdgeWorker` や `ContainerService` のような消費側 shape は、利用する shape への
+non-secret な `connections` を宣言できます。connection が運ぶのは resource reference、
+requested permissions、projection kind だけです。credential material と具体的な
+runtime binding の生成は、Credential / ProviderConnection と adapter の実行側に
+留まります。HCL の surface は `connections = [...]` です。`connection` は
+OpenTofu/Terraform の予約語です。
 
-Provider capability documents may include operator-defined adapter tokens as
-additional boolean keys under `adapters`. Known adapter keys remain
-`opentofu`, `aws`, `cloudflare`, `kubernetes`, `vm`, and `takosumi_native`;
-extra keys are endpoint-specific and must be backed by TargetPool evidence and a
-plugin-aware adapter.
+Adapter は capability を報告し、preview/apply/import/observe/refresh/delete の
+作業を行います。初期の adapter family には OpenTofu、Cloudflare、AWS、Kubernetes、VM、
+Takosumi-native adapter を含められます。
 
-Secrets remain Credential/ProviderConnection material and are never placed in
-the Resource Shape spec or OpenTofu state. AI Gateway configuration follows the
-same secret/env projection rule; it is not a default Resource Shape.
+platform scheduler は、現 generation の `Ready` Resource に対して、この同じ read-only な
+`observe` operation を再利用します。bounded な durable lease が isolate 間の重複観測を防ぎ、
+scheduler が refresh、apply、ResolutionLock の変更、別の Resource registry の作成を行う
+ことはありません。1 つの backend 障害は、残りの対象 Resource から分離されます。
+
+拡張可能な surface は capability token を使います。例えば `ContainerService`
+target は、custom な interface 証跡を持つ operator 定義の implementation plugin を
+公開できます。endpoint はこれらの token を、ハードコードされた provider binary
+allow-list ではなく resolver/policy を通して受理・拒否します。この拡張は既存の typed
+shape の backend 向けです。新しい HCL 向けの `takosumi_*` shape を追加するには、
+OpenTofu が typed validation、plan diff、import、state upgrade の挙動を維持できるよう、
+引き続き schema/API/provider の release が必要です。
+
+Provider capability document は、`adapters` 配下の追加 boolean key として
+operator 定義の adapter token を含められます。既知の adapter key は引き続き `opentofu`、
+`aws`、`cloudflare`、`kubernetes`、`vm`、`takosumi_native` です。追加の key は
+endpoint 固有であり、TargetPool の証跡と plugin 対応の adapter に裏付けられている
+必要があります。
+
+Secret は引き続き Credential/ProviderConnection の材料であり、Resource Shape の
+spec や OpenTofu state に置かれることはありません。AI Gateway の設定も同じ secret/env
+projection のルールに従い、既定の Resource Shape ではありません。
 
 ## Compatibility Capabilities
 
-Compatibility APIs are scoped, versioned entrypoints. They are enabled and
-advertised as capabilities, for example:
+Compatibility API は scope と version が明示された入口です。次のように
+capability として有効化・広告されます。
 
 ```text
 compat.s3.v1
@@ -291,31 +321,22 @@ compat.kubernetes.crd.v1
 compat.cloudflare.workers.v1
 ```
 
-They preserve narrow standard facades when Takosumi provides the backend,
-import path, or managed-target control. They are not a claim of full AWS
-compatibility, full Cloudflare API compatibility, an internal provider-specific
-model, or a reason to recreate standards that already work through existing
-providers.
+これらは、Takosumi が backend、import path、managed-target の制御を提供する
+場合に、狭い範囲の標準 facade を維持します。AWS 完全互換、Cloudflare API 完全互換、
+内部の provider 固有モデルを名乗るものではなく、既存 provider ですでに動く標準を
+作り直す理由にもなりません。
 
-Takosumi exposes multiple first-class surfaces with no hierarchy between
-provider, standard protocol, and compatibility profile.
-`takosumi_*` Resource Shapes, S3-compatible APIs, CloudEvents-compatible APIs,
-Kubernetes CRDs, OpenAI-compatible APIs, and scoped Cloudflare-compatible APIs
-can all be valid Takosumi-managed features. A compatibility profile remains a
-feature in its own right when it is the best fit for existing tools. The
-`takosumi` provider exists for durable service forms that lack an adequate
-vendor-independent provider or protocol. Unsupported operations should fail
-closed instead of pretending full vendor compatibility; operators can then add
-another compatibility profile, a standard-provider path, or a typed Takosumi
-shape when the service form warrants it.
+control-plane compatibility profile は request を typed Resource desired state へ変換して
+Deploy API を呼び、独自の lifecycle row や backend dispatch を持ちません。data-plane
+profile は Ready な canonical Resource と認可済み Interface / NativeResource evidence を
+解決します。対応していない操作は完全互換を装わず fail closed します。
 
-The public API boundary is documented in [Takosumi API](./api.md). Internal
-planning and conformance notes live outside the published docs surface.
+public API の境界は [Takosumi API](./api.md) に文書化されています。内部の
+planning と conformance に関するメモは、公開 docs surface の外にあります。
 
 ## Operator / Cloud Concepts
 
-The following are operation or hosted-service concepts, not portable OSS model
-requirements:
+以下は運用・hosted service の概念であり、可搬な OSS モデルの要件ではありません。
 
 ```text
 commercial customer management
@@ -325,6 +346,13 @@ official native runtime / object store / queue / DB / edge gateway internals
 official billing / SLA / support / abuse controls
 ```
 
-Takosumi for Operator can operate its own managed target catalog and commercial
-service. Takosumi Cloud is the official hosted operation with official managed
-capacity.
+Takosumi for Operator は、自身の managed target catalog と商用 service を
+運用できます。Takosumi Cloud は、公式の managed capacity を持つ公式の hosted 運用です。
+
+Cloud の sellable model は versioned `ServiceOffering` と `PriceCatalog` です。preview は
+Resource desired-state digest、resolution fingerprint、offering/catalog version、SKU line
+items、currency、estimated total、expiry、quote digest を固定した `DeploymentQuote` を返します。
+billable apply は quote id/digest を必須とし、backend 作業前に reserve、成功時に capture、
+失敗・cancel 時に release します。captured reservation と rated UsageEvent は payment-provider
+invoice line と照合します。これらは Resource lifecycle を囲む Cloud の商用 record であり、
+retire 済み `Deployment` ledger を戻すものではありません。
