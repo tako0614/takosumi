@@ -641,6 +641,102 @@ for (const backend of backends) {
       await stores.resources.delete(applying.id);
     });
 
+    test("atomic remove fences the exact Resource and ResolutionLock pair", async () => {
+      const record: ResourceShapeRecord = {
+        ...fullShape(),
+        id: formatResourceShapeId(
+          SPACE_A,
+          "ObjectBucket",
+          `atomic-remove-${backend.label}`,
+        ),
+        name: `atomic-remove-${backend.label}`,
+        phase: "Deleting",
+        updatedAt: T2,
+      };
+      const lock = fullLock(record.id);
+      await stores.resources.upsert(record);
+      await stores.locks.put(lock);
+
+      const staleResource = await stores.removeResource({
+        resourceId: record.id,
+        expected: {
+          generation: record.generation,
+          phase: record.phase,
+          updatedAt: T1,
+        },
+        expectedLock: lock,
+      });
+      expect(staleResource.status).toBe("conflict");
+      expect(await stores.resources.get(record.id)).toEqual(record);
+      expect(await stores.locks.get(record.id)).toEqual(lock);
+
+      const competingLock: ResolutionLockRecord = {
+        ...lock,
+        selectedImplementation: "competing_implementation",
+        updatedAt: T2,
+      };
+      await stores.locks.put(competingLock);
+      const staleLock = await stores.removeResource({
+        resourceId: record.id,
+        expected: {
+          generation: record.generation,
+          phase: record.phase,
+          updatedAt: record.updatedAt,
+        },
+        expectedLock: lock,
+      });
+      expect(staleLock.status).toBe("conflict");
+      expect(await stores.resources.get(record.id)).toEqual(record);
+      expect(await stores.locks.get(record.id)).toEqual(competingLock);
+
+      expect(
+        await stores.removeResource({
+          resourceId: record.id,
+          expected: {
+            generation: record.generation,
+            phase: record.phase,
+            updatedAt: record.updatedAt,
+          },
+          expectedLock: competingLock,
+        }),
+      ).toEqual({ status: "removed" });
+      expect(await stores.resources.get(record.id)).toBeUndefined();
+      expect(await stores.locks.get(record.id)).toBeUndefined();
+      expect(
+        await stores.removeResource({
+          resourceId: record.id,
+          expected: {
+            generation: record.generation,
+            phase: record.phase,
+            updatedAt: record.updatedAt,
+          },
+          expectedLock: competingLock,
+        }),
+      ).toEqual({ status: "not_found" });
+
+      const unlocked: ResourceShapeRecord = {
+        ...record,
+        id: formatResourceShapeId(
+          SPACE_A,
+          "ObjectBucket",
+          `atomic-remove-unlocked-${backend.label}`,
+        ),
+        name: `atomic-remove-unlocked-${backend.label}`,
+      };
+      await stores.resources.upsert(unlocked);
+      expect(
+        await stores.removeResource({
+          resourceId: unlocked.id,
+          expected: {
+            generation: unlocked.generation,
+            phase: unlocked.phase,
+            updatedAt: unlocked.updatedAt,
+          },
+          expectedLock: null,
+        }),
+      ).toEqual({ status: "removed" });
+    });
+
     test("resource shape: claimDelete atomically marks one active deleter", async () => {
       const record: ResourceShapeRecord = {
         ...fullShape(),
@@ -1171,6 +1267,113 @@ test("Postgres atomic apply transaction rolls back both Resource and ResolutionL
     ).rejects.toThrow("force_atomic_lock_failure");
     expect(await stores.resources.get(applying.id)).toEqual(applying);
     expect(await stores.locks.get(applying.id)).toEqual(plannedLock);
+  } finally {
+    await client.close();
+  }
+});
+
+test("D1 atomic remove batch rolls back both Resource and ResolutionLock deletes", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const stores = createD1ResourceShapeStores(db);
+  const record: ResourceShapeRecord = {
+    ...readyShape(SPACE_A, "atomic-remove-rollback-d1", T0),
+    phase: "Deleting",
+    updatedAt: T2,
+  };
+  const lock = minimalLock(record.id);
+  await stores.resources.upsert(record);
+  await stores.locks.put(lock);
+  await db
+    .prepare(
+      `create trigger force_atomic_resource_delete_failure
+       before delete on resource_shapes
+       when old.id = '${record.id}'
+       begin
+         select raise(abort, 'forced atomic resource delete failure');
+       end`,
+    )
+    .run();
+
+  await expect(
+    stores.removeResource({
+      resourceId: record.id,
+      expected: {
+        generation: record.generation,
+        phase: record.phase,
+        updatedAt: record.updatedAt,
+      },
+      expectedLock: lock,
+    }),
+  ).rejects.toThrow("forced atomic resource delete failure");
+  expect(await stores.resources.get(record.id)).toEqual(record);
+  expect(await stores.locks.get(record.id)).toEqual(lock);
+
+  await db.prepare("drop trigger force_atomic_resource_delete_failure").run();
+  expect(
+    await stores.removeResource({
+      resourceId: record.id,
+      expected: {
+        generation: record.generation,
+        phase: record.phase,
+        updatedAt: record.updatedAt,
+      },
+      expectedLock: lock,
+    }),
+  ).toEqual({ status: "removed" });
+});
+
+test("Postgres atomic remove transaction rolls back both Resource and ResolutionLock deletes", async () => {
+  const client = await PGliteSqlClient.create();
+  try {
+    const stores = createSqlResourceShapeStores(client);
+    const record: ResourceShapeRecord = {
+      ...readyShape(SPACE_A, "atomic-remove-rollback-postgres", T0),
+      phase: "Deleting",
+      updatedAt: T2,
+    };
+    const lock = minimalLock(record.id);
+    await stores.resources.upsert(record);
+    await stores.locks.put(lock);
+    await client.query(
+      `create table force_atomic_resource_delete_guard (
+        resource_id text primary key references takosumi_resource_shapes(id)
+      )`,
+    );
+    await client.query(
+      "insert into force_atomic_resource_delete_guard (resource_id) values ($1)",
+      [record.id],
+    );
+
+    await expect(
+      stores.removeResource({
+        resourceId: record.id,
+        expected: {
+          generation: record.generation,
+          phase: record.phase,
+          updatedAt: record.updatedAt,
+        },
+        expectedLock: lock,
+      }),
+    ).rejects.toThrow();
+    expect(await stores.resources.get(record.id)).toEqual(record);
+    expect(await stores.locks.get(record.id)).toEqual(lock);
+
+    await client.query(
+      "delete from force_atomic_resource_delete_guard where resource_id = $1",
+      [record.id],
+    );
+    expect(
+      await stores.removeResource({
+        resourceId: record.id,
+        expected: {
+          generation: record.generation,
+          phase: record.phase,
+          updatedAt: record.updatedAt,
+        },
+        expectedLock: lock,
+      }),
+    ).toEqual({ status: "removed" });
   } finally {
     await client.close();
   }

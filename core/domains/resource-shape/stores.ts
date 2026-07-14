@@ -112,6 +112,24 @@ export type ResourceApplyAbortResult =
       readonly lock?: ResolutionLockRecord;
     };
 
+export interface ResourceAtomicRemoveInput {
+  readonly resourceId: ResourceShapeRecordId;
+  /** Exact Resource lifecycle version whose backend operation completed. */
+  readonly expected: ResourceRecordVersion;
+  /** Exact lock version observed by the caller, or explicit expected absence. */
+  readonly expectedLock: ResolutionLockRecord | null;
+}
+
+export type ResourceAtomicRemoveResult =
+  | { readonly status: "removed" }
+  /** Both rows are already absent, so a concurrent finalizer won. */
+  | { readonly status: "not_found" }
+  | {
+      readonly status: "conflict";
+      readonly record?: ResourceShapeRecord;
+      readonly lock?: ResolutionLockRecord;
+    };
+
 /** Durable lease request used by the bounded scheduled Resource observer. */
 export interface ResourceObservationClaimInput {
   readonly leaseId: string;
@@ -256,6 +274,14 @@ export interface ResourceShapeStores {
    * apply's resolution.
    */
   abortApply(input: ResourceApplyAbortInput): Promise<ResourceApplyAbortResult>;
+  /**
+   * Atomically removes one exact Resource lifecycle version together with the
+   * exact ResolutionLock observed by the backend operation. This is the only
+   * delete finalization path; a stale finalizer cannot leave either row torn.
+   */
+  removeResource(
+    input: ResourceAtomicRemoveInput,
+  ): Promise<ResourceAtomicRemoveResult>;
 }
 
 // --- In-memory implementations -----------------------------------------------
@@ -689,6 +715,31 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
       }
       return Promise.resolve({ status: "rolled_back" });
     },
+    removeResource(input) {
+      assertAtomicRemoveInput(input);
+      const current = resources.getSync(input.resourceId);
+      const currentLock = locks.getSync(input.resourceId);
+      if (!current && !currentLock) {
+        return Promise.resolve({ status: "not_found" });
+      }
+      if (
+        !current ||
+        !matchesVersion(current, input.expected) ||
+        !matchesExpectedLock(currentLock, input.expectedLock)
+      ) {
+        return Promise.resolve({
+          status: "conflict",
+          ...(current ? { record: current } : {}),
+          ...(currentLock ? { lock: currentLock } : {}),
+        });
+      }
+      // All predicates are checked before either synchronous mutation, so a
+      // caller can never observe a Resource without its expected lock (or the
+      // inverse) during finalization.
+      locks.deleteSync(input.resourceId);
+      resources.deleteSync(input.resourceId);
+      return Promise.resolve({ status: "removed" });
+    },
   };
 }
 
@@ -746,6 +797,15 @@ export function matchesApplyLock(
   );
 }
 
+export function matchesExpectedLock(
+  current: ResolutionLockRecord | undefined,
+  expected: ResolutionLockRecord | null,
+): boolean {
+  return expected === null
+    ? current === undefined
+    : current !== undefined && matchesApplyLock(current, expected);
+}
+
 function canonicalJson(value: unknown): string {
   if (value === undefined) return "undefined";
   if (value === null || typeof value !== "object") {
@@ -777,6 +837,19 @@ export function assertAbortInput(input: ResourceApplyAbortInput): void {
         "replacement ResolutionLock does not match rollback Resource",
       );
     }
+  }
+}
+
+export function assertAtomicRemoveInput(
+  input: ResourceAtomicRemoveInput,
+): void {
+  if (
+    input.expectedLock &&
+    input.expectedLock.resourceId !== input.resourceId
+  ) {
+    throw new Error(
+      "expected ResolutionLock does not match atomically removed Resource",
+    );
   }
 }
 
