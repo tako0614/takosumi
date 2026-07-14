@@ -322,6 +322,24 @@ for (const backend of backends) {
         }),
       ).toContainEqual(retired);
       expect(await service.get(retired.metadata.id)).toEqual(retired);
+
+      // Host projection recovery must stay a true persistence-level keyset
+      // page on D1/Postgres too; it may not emulate paging by loading every
+      // Workspace or Interface row into the service.
+      const firstProjectionPage = await stores.interfaces.listProjectionPage({
+        limit: 1,
+      });
+      expect(firstProjectionPage).toHaveLength(1);
+      const secondProjectionPage = await stores.interfaces.listProjectionPage({
+        cursor: firstProjectionPage[0]!.metadata.id,
+        limit: 1,
+      });
+      expect(secondProjectionPage).toHaveLength(1);
+      expect(
+        secondProjectionPage[0]!.metadata.id.localeCompare(
+          firstProjectionPage[0]!.metadata.id,
+        ),
+      ).toBeGreaterThan(0);
     } finally {
       await teardown();
     }

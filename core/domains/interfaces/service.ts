@@ -9,6 +9,7 @@ import type {
   InterfaceBinding,
   InterfaceInput,
   InterfaceInputProvenance,
+  InterfaceProjectionSink,
   InterfacePhase,
   InterfaceSpec,
   IssueInterfaceTokenRequest,
@@ -22,6 +23,7 @@ import {
 } from "takosumi-contract";
 import { TAKOSUMI_API_VERSION } from "takosumi-contract/capabilities";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
+import { log } from "../../shared/log.ts";
 import {
   NOOP_ACTIVITY_RECORDER,
   type ActivityRecorder,
@@ -79,6 +81,13 @@ export interface ResourceInterfaceLifecycleSnapshot {
   readonly resourceId: string;
   readonly phase: "ready" | "not_ready" | "unknown" | "terminating" | "retired";
   readonly message?: string;
+}
+
+export interface InterfaceProjectionRepairResult {
+  readonly scanned: number;
+  readonly projected: number;
+  readonly failed: number;
+  readonly nextCursor?: string;
 }
 
 export class LiteralInterfaceInputResolver implements InterfaceInputResolver {
@@ -204,6 +213,12 @@ export interface InterfaceServiceOptions {
   }) => Promise<boolean>;
   /** Workspace-scoped, idempotent declaration repair before runtime discovery. */
   readonly hydrateWorkspace?: (workspaceId: string) => Promise<void>;
+  /**
+   * Host-owned, recoverable runtime projection. Canonical Interface/Binding
+   * writes complete first; sink failures are logged and repaired by a bounded
+   * host scan rather than changing lifecycle authority.
+   */
+  readonly projectionSink?: InterfaceProjectionSink;
 }
 
 export class InterfaceService {
@@ -223,6 +238,7 @@ export class InterfaceService {
   readonly #lifecycleGuard?: InterfaceServiceOptions["lifecycleGuard"];
   readonly #policyAllows?: InterfaceServiceOptions["policyAllows"];
   readonly #hydrateWorkspace?: InterfaceServiceOptions["hydrateWorkspace"];
+  readonly #projectionSink?: InterfaceProjectionSink;
 
   constructor(options: InterfaceServiceOptions) {
     this.#stores = options.stores;
@@ -245,6 +261,7 @@ export class InterfaceService {
     this.#lifecycleGuard = options.lifecycleGuard;
     this.#policyAllows = options.policyAllows;
     this.#hydrateWorkspace = options.hydrateWorkspace;
+    this.#projectionSink = options.projectionSink;
   }
 
   async create(
@@ -305,6 +322,7 @@ export class InterfaceService {
         "an active Interface with this owner and name already exists",
       );
     }
+    await this.#projectInterface(record);
     await this.#recordActivity({
       actor,
       workspaceId: record.metadata.workspaceId,
@@ -467,6 +485,39 @@ export class InterfaceService {
       workspaceId,
       ...(filter.type !== undefined ? { type: filter.type.trim() } : {}),
     });
+  }
+
+  /**
+   * Bounded crash repair for a host projection sink. The canonical Interface
+   * store is traversed by immutable-id keyset pages; the sink remains
+   * idempotent and receives the current Bindings for each row.
+   */
+  async repairProjections(
+    options: { readonly cursor?: string; readonly limit?: number } = {},
+  ): Promise<InterfaceProjectionRepairResult> {
+    if (!this.#projectionSink) {
+      return { scanned: 0, projected: 0, failed: 0 };
+    }
+    const limit = Math.min(100, Math.max(1, options.limit ?? 25));
+    const cursor = options.cursor?.trim();
+    const candidates = await this.#stores.interfaces.listProjectionPage({
+      ...(cursor ? { cursor } : {}),
+      limit: limit + 1,
+    });
+    const page = candidates.slice(0, limit);
+    let projected = 0;
+    let failed = 0;
+    for (const iface of page) {
+      if (await this.#projectInterface(iface)) projected += 1;
+      else failed += 1;
+    }
+    const last = page.at(-1)?.metadata.id;
+    return {
+      scanned: page.length,
+      projected,
+      failed,
+      ...(last && candidates.length > page.length ? { nextCursor: last } : {}),
+    };
   }
 
   async capsuleOutputNames(
@@ -863,6 +914,7 @@ export class InterfaceService {
         "Interface changed concurrently",
       );
     }
+    await this.#projectInterface(next);
     await this.#recordActivity({
       actor,
       workspaceId: next.metadata.workspaceId,
@@ -994,6 +1046,7 @@ export class InterfaceService {
         : unresolvedStatus(current, resolution, now);
       if (await statusSemanticallyEqual(current.status, nextStatus)) {
         await this.#refreshBindings(current.metadata.id);
+        await this.#projectInterface(current);
         return current;
       }
       const next: Interface = {
@@ -1003,6 +1056,7 @@ export class InterfaceService {
       };
       if (await this.#stores.interfaces.compareAndSet(next, guard(current))) {
         await this.#refreshBindings(next.metadata.id);
+        await this.#projectInterface(next);
         return next;
       }
     }
@@ -1328,6 +1382,7 @@ export class InterfaceService {
       },
     });
     await this.#refreshBindings(next.metadata.id);
+    await this.#projectInterface(next);
     return next;
   }
 
@@ -1588,6 +1643,7 @@ export class InterfaceService {
       },
     });
     await this.#refreshBinding(record.metadata.id);
+    await this.#projectInterface(await this.get(interfaceId));
     return await this.getBinding(interfaceId, record.metadata.id);
   }
 
@@ -1671,6 +1727,7 @@ export class InterfaceService {
         subjectId: next.spec.subjectRef.id,
       },
     });
+    await this.#projectInterface(await this.get(interfaceId));
     return next;
   }
 
@@ -1713,6 +1770,7 @@ export class InterfaceService {
         status: nextStatus,
       };
       if (await this.#stores.interfaces.compareAndSet(next, guard(current))) {
+        await this.#projectInterface(next);
         return;
       }
     }
@@ -1759,6 +1817,7 @@ export class InterfaceService {
       };
       if (await this.#stores.interfaces.compareAndSet(next, guard(current))) {
         await this.#refreshBindings(id);
+        await this.#projectInterface(next);
         return;
       }
     }
@@ -1797,6 +1856,7 @@ export class InterfaceService {
       };
       if (await this.#stores.interfaces.compareAndSet(next, guard(current))) {
         await this.#refreshBindings(id);
+        await this.#projectInterface(next);
         return;
       }
     }
@@ -1810,6 +1870,33 @@ export class InterfaceService {
     const bindings = await this.#stores.bindings.listByInterface(interfaceId);
     for (const binding of bindings) {
       await this.#refreshBinding(binding.metadata.id);
+    }
+  }
+
+  async #projectInterface(iface: Interface): Promise<boolean> {
+    if (!this.#projectionSink) return true;
+    try {
+      await this.#projectionSink.project({
+        interface: iface,
+        bindings: await this.#stores.bindings.listByInterface(
+          iface.metadata.id,
+        ),
+      });
+      return true;
+    } catch (error) {
+      // The canonical row is already durable. A projection is an idempotent
+      // cache/materialization and is repaired from the Interface list; it can
+      // never roll back or become authority for this transition.
+      log.warn("service.interface.projection_failed", {
+        workspaceId: iface.metadata.workspaceId,
+        interfaceId: iface.metadata.id,
+        interfaceGeneration: iface.metadata.generation,
+        interfaceResolvedRevision: iface.status.resolvedRevision,
+        interfacePhase: iface.status.phase,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        failure: "projection_failed",
+      });
+      return false;
     }
   }
 

@@ -27,6 +27,11 @@ export interface InterfaceStore {
     readonly name: string;
   }): Promise<Interface | undefined>;
   list(filter: InterfaceListFilter): Promise<readonly Interface[]>;
+  /** Internal global keyset scan used only for bounded host projection repair. */
+  listProjectionPage(input: {
+    readonly cursor?: string;
+    readonly limit: number;
+  }): Promise<readonly Interface[]>;
   compareAndSet(
     record: Interface,
     expected: InterfaceWriteGuard,
@@ -96,6 +101,24 @@ export class InMemoryInterfaceStore implements InterfaceStore {
             left.metadata.name.localeCompare(right.metadata.name) ||
             left.metadata.id.localeCompare(right.metadata.id),
         ),
+    );
+  }
+
+  listProjectionPage(input: {
+    readonly cursor?: string;
+    readonly limit: number;
+  }): Promise<readonly Interface[]> {
+    return Promise.resolve(
+      [...this.#records.values()]
+        .filter(
+          (record) =>
+            !input.cursor || record.metadata.id.localeCompare(input.cursor) > 0,
+        )
+        .sort((left, right) =>
+          left.metadata.id.localeCompare(right.metadata.id),
+        )
+        .slice(0, input.limit)
+        .map(freezeClone),
     );
   }
 
