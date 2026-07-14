@@ -6,6 +6,7 @@
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 import { readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { providerMatches as exactProviderSourceMatch } from "../../contract/provider-env-rules.ts";
 import type {
   OpenTofuRunAction,
   JsonRecord,
@@ -133,7 +134,7 @@ export function stringArray(value: unknown): readonly string[] {
 }
 
 export function providerMatches(provider: string, rule: string): boolean {
-  return provider === rule || provider.endsWith(`/${rule}`);
+  return exactProviderSourceMatch(provider, rule);
 }
 
 export function stringField(value: unknown, key: string): string | undefined {

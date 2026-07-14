@@ -39,18 +39,19 @@ import {
   Globe2,
   HardDrive,
   KeyRound,
+  Package,
   Search,
   Plus,
   Trash,
 } from "lucide-solid";
 import {
+  isPublicManagedProviderConnection,
   installExperienceInitialSecret,
   installExperiencePublicEndpoint,
   installExperienceServiceNameVariable,
   type JsonValue,
   type ManagedPublicHostnameMode,
 } from "takosumi-contract";
-import { isCredentialFreeUtilityProvider } from "takosumi-contract/provider-env-rules";
 import Page from "../account/components/auth/Page.tsx";
 import {
   currentWorkspaceId,
@@ -83,7 +84,7 @@ import {
   createSource,
   extractRunId,
   listCapsules,
-  type CapsuleProviderConnectionBindings,
+  type ProviderBindings,
   type Capsule,
   type CapsuleCompatibilityDiagnostic,
   type CapsuleCompatibilityLevel,
@@ -92,30 +93,20 @@ import {
   listProviderConnections,
   listConnections,
   planCapsule,
-  putCapsuleProviderConnectionSet,
+  putCapsuleProviderBindingSet,
   revokeConnection,
   syncSource,
   testConnection,
   waitForLatestSourceSnapshot,
   type CapsuleCompatibilityProvider,
-  type Connection,
   type ProviderConnection,
   type RunStatus,
-  type SourceSnapshot,
   type Workspace,
 } from "../../lib/control-api.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
-import {
-  fetchTcsRepoMetadata,
-  fetchTcsListing,
-  hydrateRequiredTcsListingWithRepoMetadata,
-  parseTcsRepoMetadata,
-  tcsListingFromRepoMetadata,
-  type TcsListing,
-  type TcsListingSource,
-} from "../../lib/tcs-client.ts";
+import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
 import {
   clearCapsuleListCache,
   listCapsulesCached,
@@ -150,8 +141,8 @@ import {
   type StoreEntry,
   type StoreInputField,
   DEFAULT_STORE_BADGE,
-  INSTALLATION_NAME_PATTERN,
-  INSTALLATION_DONE,
+  CAPSULE_NAME_PATTERN,
+  CAPSULE_DONE,
   compatibilityTone,
   compatibilityLabel,
   providerNameFromDiagnostic,
@@ -199,14 +190,12 @@ import {
   installVariableDisplayValue,
   routePatternFromAppUrl,
   managedBaseDomain,
-  inputVariableRowsFromPrefill,
-  envVariableRowsFromPrefill,
   isSafePlainEnvName,
   storeKindFromStoreListing,
   storeSurfaceFromStoreListing,
   safeStoreToken,
   nonEmptyStoreText,
-  storeMetadataFromStoreListing,
+  storeInstallConfigsForSource,
   storeEntryIdFromStoreListing,
   storeEntryFromStoreListing,
   sourceIdFromControlError,
@@ -217,26 +206,6 @@ import {
   parseInitialTcsHandoff,
   initialAddTab,
 } from "./install-helpers.ts";
-
-/**
- * Well-known credential-free OpenTofu provider tails (short name / local name)
- * that are NOT a credential boundary, so an install must not force a Provider
- * Connection for them. `isCredentialFreeUtilityProvider` already covers the
- * canonical http / random / tls; this set adds the other common credential-free
- * providers and matches bare local-name declarations (e.g. `null`, `local`).
- */
-const CREDENTIAL_FREE_PROVIDER_TAILS: ReadonlySet<string> = new Set([
-  "http",
-  "random",
-  "tls",
-  "null",
-  "local",
-  "time",
-  "external",
-  "archive",
-  "cloudinit",
-  "template",
-]);
 
 /**
  * Pick-busy live region. Mounted EMPTY and filled a microtask later (the
@@ -296,6 +265,8 @@ function StoreIcon(props: { readonly entry: StoreEntry }) {
       return <Globe2 size={20} />;
     case "storage":
       return <HardDrive size={20} />;
+    default:
+      return <Package size={20} />;
   }
 }
 
@@ -378,9 +349,8 @@ function Inner() {
     createSignal<TcsListing | null>(null);
   const [storeMetadataUnavailable, setStoreMetadataUnavailable] =
     createSignal(false);
-  // Store-card pick hydration: visible busy state while the picked listing's
-  // repo-owned install metadata is fetched, and the last failed pick so the
-  // discovery section can offer a one-tap retry.
+  // Store-card pick preparation: visible busy state while the hand-off is
+  // normalized, and the last failed pick so discovery can offer a retry.
   const [storePickBusy, setStorePickBusy] = createSignal(false);
   const [failedStorePick, setFailedStorePick] = createSignal<TcsListing | null>(
     null,
@@ -424,10 +394,10 @@ function Inner() {
     createSignal<ManagedPublicHostnameMode>("scoped");
   const [inputVariables, setInputVariables] = createSignal<
     readonly InputVariableRow[]
-  >(inputVariableRowsFromPrefill(initialInstallPrefill?.vars));
+  >([]);
   const [envVariables, setEnvVariables] = createSignal<
     readonly EnvVariableRow[]
-  >(envVariableRowsFromPrefill(initialInstallPrefill?.vars));
+  >([]);
   const [installConfigId, setInstallConfigId] = createSignal("");
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
@@ -471,7 +441,7 @@ function Inner() {
     (id) => listInstallConfigsCached(id),
   );
   const [connections, setConnections] = createSignal<
-    readonly Connection[] | null
+    readonly ProviderConnection[] | null
   >(null);
   const [providerConnections, setProviderConnections] = createSignal<
     readonly ProviderConnection[] | null
@@ -482,7 +452,7 @@ function Inner() {
   const [providerConnectionsLoadError, setProviderConnectionsLoadError] =
     createSignal<unknown>(null);
   let loadedWorkspaceId: string | null = null;
-  let connectionsPromise: Promise<readonly Connection[]> | null = null;
+  let connectionsPromise: Promise<readonly ProviderConnection[]> | null = null;
   let providerConnectionsPromise: Promise<
     readonly ProviderConnection[]
   > | null = null;
@@ -497,7 +467,7 @@ function Inner() {
 
   const loadConnections = async (
     options: { readonly force?: boolean } = {},
-  ): Promise<readonly Connection[]> => {
+  ): Promise<readonly ProviderConnection[]> => {
     const current = workspaceId();
     if (!current) {
       setConnections(null);
@@ -576,20 +546,35 @@ function Inner() {
       (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
     ) ??
     installConfigList().find(
-      (config) =>
-        config.sourceKind === "generic_capsule" &&
-        config.workspaceId === undefined,
-    ) ??
-    installConfigList().find(
-      (config) => config.sourceKind === "generic_capsule",
+      (config) => config.name === "opentofu-capsule" && !config.store,
     );
+  const sourceCoordinateForInstallConfig = () => {
+    const prefill = activeInstallPrefill();
+    return {
+      url: prefill?.git ?? gitUrl().trim(),
+      path: prefill?.path || path().trim() || ".",
+    };
+  };
+  const installConfigsForCurrentSource = () => {
+    const coordinate = sourceCoordinateForInstallConfig();
+    return storeInstallConfigsForSource(
+      installConfigList(),
+      coordinate.url,
+      coordinate.path,
+    );
+  };
   const ensureConfigSelected = () => {
     const list = installConfigList();
     if (list.length === 0) return list;
+    const sourceMatches = installConfigsForCurrentSource();
+    const desiredId =
+      sourceMatches.length === 1
+        ? sourceMatches[0]!.id
+        : sourceMatches.length === 0
+          ? (defaultGitInstallConfig()?.id ?? "")
+          : "";
     const current = installConfigId();
-    if (!current || !list.some((config) => config.id === current)) {
-      setInstallConfigId(defaultGitInstallConfig()?.id ?? "");
-    }
+    if (current !== desiredId) setInstallConfigId(desiredId);
     return list;
   };
   const installConfigLoading = () =>
@@ -602,13 +587,40 @@ function Inner() {
     const id = selectedInstallConfigId();
     return installConfigList().find((config) => config.id === id) ?? null;
   };
+  createEffect(() => {
+    sourceCoordinateForInstallConfig();
+    installConfigList();
+    ensureConfigSelected();
+  });
+  const genericInstallConfigForSource = (): InstallConfig =>
+    defaultGitInstallConfig() ?? {
+      id: DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+      name: "opentofu-capsule",
+      variableMapping: {},
+      outputAllowlist: {},
+      policy: {},
+      createdAt: "",
+      updatedAt: "",
+    };
+  const installConfigForStoreListing = (
+    listing: TcsListing,
+  ): InstallConfig | null => {
+    const matches = storeInstallConfigsForSource(
+      installConfigList(),
+      listing.source.url,
+      listing.source.path,
+    );
+    if (matches.length > 1) return null;
+    return matches[0] ?? genericInstallConfigForSource();
+  };
+  const storeEntryForListing = (listing: TcsListing): StoreEntry | null => {
+    const config = installConfigForStoreListing(listing);
+    return config ? storeEntryFromStoreListing(listing, config) : null;
+  };
   const storeServiceEntry = (): StoreEntry | null => {
     const listing = selectedStoreListing();
     if (!listing) return null;
-    return storeEntryFromStoreListing(
-      listing,
-      defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
-    );
+    return storeEntryForListing(listing);
   };
   const selectedServiceEntry = () => storeServiceEntry();
   const storeInputValue = (entry: StoreEntry, field: StoreInputField) => {
@@ -656,7 +668,7 @@ function Inner() {
       };
       if (field.name === endpoint?.subdomainVariable) {
         const label = value.trim().toLowerCase();
-        if (isManagedSubdomainLabel(label)) {
+        if (isManagedSubdomainLabel(label) && baseDomain) {
           const managedLabel = managedHostnameLabel(label);
           const host = `${managedLabel}.${baseDomain}`;
           setUntouched(endpoint.urlVariable, `https://${host}`);
@@ -686,17 +698,6 @@ function Inner() {
     }
     return variables;
   };
-  const selectedStoreReturnVariables = (): Readonly<Record<string, string>> => {
-    const entry = selectedServiceEntry();
-    if (!entry) return {};
-    const variables: Record<string, string> = {};
-    for (const field of entry.inputs) {
-      if (!isSafeInstallVariableName(field.name)) continue;
-      const value = storeInputValue(entry, field).trim();
-      if (value) variables[field.name] = value;
-    }
-    return variables;
-  };
   const selectedStoreVariableNames = () => {
     const entry = selectedServiceEntry();
     if (!entry) return new Set<string>();
@@ -715,10 +716,7 @@ function Inner() {
       }
       const value = storeInputValue(entry, field).trim();
       if (field.required && !value) {
-        if (
-          isConnectionScopedStoreInput(entry, field) ||
-          isServiceIdentityStoreInput(entry, field)
-        ) {
+        if (isServiceIdentityStoreInput(entry, field)) {
           continue;
         }
         return t("new.storeInput.errorRequired", {
@@ -739,7 +737,8 @@ function Inner() {
       ) {
         return t("new.storeInput.errorSubdomain", {
           label: field.label[locale()],
-          baseDomain: effectiveManagedBaseDomain(publicEndpoint?.baseDomain),
+          baseDomain:
+            effectiveManagedBaseDomain(publicEndpoint?.baseDomain) ?? "",
         });
       }
       if (
@@ -752,12 +751,13 @@ function Inner() {
         const host = publicEndpointHost(value);
         if (
           !host ||
-          (host.endsWith(`.${baseDomain}`) &&
+          (baseDomain &&
+            host.endsWith(`.${baseDomain}`) &&
             !hostIsManagedBaseDomainSubdomain(host, baseDomain))
         ) {
           return t("new.storeInput.errorCustomDomain", {
             label: field.label[locale()],
-            baseDomain,
+            baseDomain: baseDomain ?? "",
           });
         }
       }
@@ -867,7 +867,7 @@ function Inner() {
     if (!workspaceId()) return t("new.error.workspaceRequired");
     if (!gitUrl().trim()) return t("new.error.urlRequired");
     if (!name().trim()) return t("new.error.nameRequired");
-    if (!INSTALLATION_NAME_PATTERN.test(name().trim())) {
+    if (!CAPSULE_NAME_PATTERN.test(name().trim())) {
       return t("new.error.nameInvalid");
     }
     if (installConfigLoading()) return t("new.error.configLoading");
@@ -907,8 +907,13 @@ function Inner() {
   const activeStoreListing = (): TcsListing | null => {
     const listing = selectedStoreListing();
     if (!listing) return null;
-    if (listing.source.git !== sourceGitUrl()) return null;
-    if ((listing.source.path || ".") !== installModulePath()) return null;
+    if (!sameGitUrl(listing.source.url, sourceGitUrl())) return null;
+    if (
+      normalizeSourcePath(listing.source.path) !==
+      normalizeSourcePath(installModulePath())
+    ) {
+      return null;
+    }
     return listing;
   };
   const storeListingForCurrentSource = (): TcsListing | null => {
@@ -918,78 +923,37 @@ function Inner() {
     if (selected && storeListingMatchesCurrentSource(selected)) {
       return selected;
     }
-    // No hardcoded store: install metadata comes from the repo-owned
-    // `.well-known/tcs.json` hydrated onto the listing the user picked.
+    // A listing is discovery/display only. Setup declarations come from the
+    // separately selected DB-owned InstallConfig, never repository metadata.
     return null;
   };
   const storeListingMatchesCurrentSource = (listing: TcsListing): boolean => {
-    if (!sameGitUrl(listing.source.git, sourceGitUrl())) return false;
+    if (!sameGitUrl(listing.source.url, sourceGitUrl())) return false;
     return (
-      normalizeSourcePath(listing.source.path || ".") ===
+      normalizeSourcePath(listing.source.path) ===
       normalizeSourcePath(installModulePath())
     );
   };
-  const storeMetadataForRun = () => {
-    const listing = storeListingForCurrentSource();
-    return listing ? storeMetadataFromStoreListing(listing) : undefined;
-  };
   const installExperienceForCurrentSource = () =>
-    selectedServiceEntry()?.installExperience ??
-    storeMetadataForRun()?.installExperience;
-  const rootModuleVariableSet = () =>
-    new Set(compatibility()?.rootModuleVariables ?? []);
-  const rootModuleHasVariable = (name: string) =>
-    rootModuleVariableSet().has(name);
-  const firstRootModuleVariable = (
-    names: readonly string[],
-  ): string | undefined => names.find(rootModuleHasVariable);
-  const standardServiceNameVariables = () =>
-    ["project_name", "public_subdomain", "worker_name", "app_name"].filter(
-      rootModuleHasVariable,
-    );
-  const standardServiceNameVariable = () =>
-    firstRootModuleVariable([
-      "project_name",
-      "public_subdomain",
-      "worker_name",
-      "app_name",
-    ]);
-  const standardPublicSubdomainVariable = () =>
-    firstRootModuleVariable(["public_subdomain", "worker_name"]);
-  const standardPublicUrlVariable = () =>
-    firstRootModuleVariable(["public_url", "app_url"]);
-  const standardRoutePatternVariable = () =>
-    firstRootModuleVariable(["cloudflare_route_pattern"]);
+    selectedServiceEntry()?.installExperience;
   const serviceNameVariableForCurrentSource = () =>
     selectedServiceEntry()
       ? storeServiceNameVariable(selectedServiceEntry()!)
-      : (storeServiceNameVariable(storeMetadataForRun() ?? {}) ??
-        standardServiceNameVariable());
+      : undefined;
   const storeServiceNameDefault = () => {
-    const store = storeMetadataForRun();
-    const variable = store ? storeServiceNameVariable(store) : undefined;
+    const entry = selectedServiceEntry();
+    const variable = entry ? storeServiceNameVariable(entry) : undefined;
     return variable
-      ? storeListingForCurrentSource()?.inputs?.find(
-          (input) => input.name === variable,
-        )?.defaultValue
+      ? entry?.inputs.find((input) => input.name === variable)?.defaultValue
       : undefined;
   };
   const storeConfigServiceNameDefault = () =>
     selectedServiceEntry()
       ? storeServiceNameField(selectedServiceEntry()!)?.defaultValue
       : undefined;
-  const prefilledServiceName = () => {
-    const variable = serviceNameVariableForCurrentSource();
-    const value = variable
-      ? currentInstallPrefill()?.vars?.[variable]
-      : undefined;
-    return typeof value === "string" ? value : undefined;
-  };
   const supportsServiceNameInput = () =>
-    prefilledServiceName() !== undefined ||
     serviceNameHintIsGenerated(storeServiceNameDefault()) ||
-    serviceNameHintIsGenerated(storeConfigServiceNameDefault()) ||
-    standardServiceNameVariables().length > 0;
+    serviceNameHintIsGenerated(storeConfigServiceNameDefault());
   const defaultProjectName = () => {
     const base = slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
     return base;
@@ -1004,7 +968,7 @@ function Inner() {
     Boolean(
       installExperiencePublicEndpoint(installExperienceForCurrentSource())
         ?.subdomainVariable &&
-        (selectedManagedProviderConnection() || hasManagedProviderFallback()),
+      (selectedManagedProviderConnection() || hasManagedProviderFallback()),
     );
   // Preview the FINAL managed hostname (workspace-prefixed + base domain) the
   // deploy will use, so the workspace prefix is not a surprise. Empty until
@@ -1084,9 +1048,7 @@ function Inner() {
   const serviceNameFieldError = (): string | null => {
     const value = name().trim();
     if (!value) return null;
-    return INSTALLATION_NAME_PATTERN.test(value)
-      ? null
-      : t("new.error.nameInvalid");
+    return CAPSULE_NAME_PATTERN.test(value) ? null : t("new.error.nameInvalid");
   };
   const updateInputVariable = (
     index: number,
@@ -1152,61 +1114,15 @@ function Inner() {
     variables.env = { ...existing, ...env };
     return variables;
   };
-  const standardCapsuleVariableDefaults = (
-    current: Readonly<Record<string, JsonValue>>,
-  ): Record<string, JsonValue> => {
-    const variables = rootModuleVariableSet();
-    if (variables.size === 0) return {};
-    const defaults: Record<string, JsonValue> = {};
-    const setDefault = (name: string, value: JsonValue | undefined) => {
-      if (!variables.has(name)) return;
-      if (current[name] !== undefined) return;
-      if (value === undefined || value === "") return;
-      defaults[name] = value;
-    };
-    const serviceName = serviceNameInputValue();
-    for (const name of standardServiceNameVariables()) {
-      setDefault(name, serviceName);
-    }
-    const publicSubdomainVariable = standardPublicSubdomainVariable();
-    if (publicSubdomainVariable) {
-      setDefault(publicSubdomainVariable, serviceName);
-    }
-    const managedHost = managedHostPreview();
-    const publicUrlVariable = standardPublicUrlVariable();
-    if (managedHost && publicUrlVariable) {
-      setDefault(publicUrlVariable, `https://${managedHost}`);
-    }
-    const routePatternVariable = standardRoutePatternVariable();
-    if (managedHost && routePatternVariable) {
-      setDefault(routePatternVariable, `${managedHost}/*`);
-    }
-    return defaults;
-  };
   const storeListingDefaultVariables = (): Readonly<
     Record<string, JsonValue>
   > => ({});
   const storeListingVariableNames = () => new Set<string>();
-  const standardVariableNames = () =>
-    new Set([
-      ...standardServiceNameVariables(),
-      ...[
-        standardPublicSubdomainVariable(),
-        standardPublicUrlVariable(),
-        standardRoutePatternVariable(),
-        "takosumi_accounts_url",
-        "takosumi_accounts_issuer_url",
-        "takosumi_accounts_redirect_uri",
-      ].filter((name): name is string =>
-        Boolean(name && rootModuleHasVariable(name)),
-      ),
-    ]);
   const inputVariableError = (): string | null => {
     const seen = new Set<string>();
     const storeNames = new Set([
       ...selectedStoreVariableNames(),
       ...storeListingVariableNames(),
-      ...standardVariableNames(),
     ]);
     const serviceNameVariable = serviceNameVariableForCurrentSource();
     for (const row of inputVariables()) {
@@ -1259,26 +1175,10 @@ function Inner() {
   };
   const shouldOpenServiceAdvanced = () =>
     inputVariables().length > 0 || envVariables().length > 0;
-  const installReturnVariables = (): Readonly<Record<string, JsonValue>> => {
-    const variables: Record<string, JsonValue> = {
-      ...storeListingDefaultVariables(),
-      ...(currentInstallPrefill()?.vars ?? {}),
-    };
-    const serviceNameVariable = serviceNameVariableForCurrentSource();
-    if (serviceNameVariable && supportsServiceNameInput()) {
-      variables[serviceNameVariable] = serviceNameInputValue();
-    }
-    Object.assign(variables, standardCapsuleVariableDefaults(variables));
-    Object.assign(variables, selectedStoreReturnVariables());
-    Object.assign(variables, normalizedInputVariables());
-    mergeEnvVariables(variables, normalizedEnvVariables());
-    return variables;
-  };
   const installVariables = ():
     Readonly<Record<string, JsonValue>> | undefined => {
     const variables: Record<string, JsonValue> = {
       ...storeListingDefaultVariables(),
-      ...(currentInstallPrefill()?.vars ?? {}),
       ...selectedStoreVariables(),
       ...normalizedInputVariables(),
     };
@@ -1286,7 +1186,6 @@ function Inner() {
     if (serviceNameVariable && supportsServiceNameInput()) {
       variables[serviceNameVariable] = serviceNameInputValue();
     }
-    Object.assign(variables, standardCapsuleVariableDefaults(variables));
     mergeEnvVariables(variables, normalizedEnvVariables());
     Object.assign(variables, managedProviderVariableDefaults(variables));
     return Object.keys(variables).length > 0 ? variables : undefined;
@@ -1298,7 +1197,6 @@ function Inner() {
         ref: sourceRef(),
         path: sourcePath(),
         name: name().trim(),
-        vars: installReturnVariables(),
       }),
       appHandoff,
     );
@@ -1314,7 +1212,7 @@ function Inner() {
         (candidate) => candidate.id === row.connectionId,
       );
       if (selected) {
-        return selected.scopeHints?.managedProvider === true
+        return isPublicManagedProviderConnection(selected)
           ? selected
           : undefined;
       }
@@ -1323,11 +1221,11 @@ function Inner() {
     if (!managedProvider) return undefined;
     return readyProviderConnections().find(
       (candidate) =>
-        candidate.scopeHints?.managedProvider === true &&
-        sameProviderFamily(managedProvider, candidate.providerSource),
+        isPublicManagedProviderConnection(candidate) &&
+        sameProviderSource(managedProvider, candidate.providerSource),
     );
   };
-  const effectiveManagedBaseDomain = (declared?: string): string =>
+  const effectiveManagedBaseDomain = (declared?: string): string | undefined =>
     managedBaseDomain(
       selectedManagedProviderConnection()?.scopeHints
         ?.managedPublicBaseDomain ?? declared,
@@ -1354,103 +1252,47 @@ function Inner() {
       setDefault(name, value);
     }
     if (publicEndpoint) {
-        const subdomainVariable = publicEndpoint.subdomainVariable?.trim();
-        const urlVariable = publicEndpoint.urlVariable?.trim();
-        const routePatternVariable =
-          publicEndpoint.routePatternVariable?.trim();
-        const publicBaseDomain = effectiveManagedBaseDomain(
-          publicEndpoint.baseDomain,
-        );
-        const currentSubdomain =
-          subdomainVariable && typeof current[subdomainVariable] === "string"
-            ? current[subdomainVariable].trim()
-            : "";
-        const currentAppUrl =
-          urlVariable && typeof current[urlVariable] === "string"
-            ? current[urlVariable].trim()
-            : "";
-        const managedAppLabel = currentSubdomain
-          ? managedHostnameLabel(currentSubdomain)
+      const subdomainVariable = publicEndpoint.subdomainVariable?.trim();
+      const urlVariable = publicEndpoint.urlVariable?.trim();
+      const routePatternVariable = publicEndpoint.routePatternVariable?.trim();
+      const publicBaseDomain = effectiveManagedBaseDomain(
+        publicEndpoint.baseDomain,
+      );
+      const currentSubdomain =
+        subdomainVariable && typeof current[subdomainVariable] === "string"
+          ? current[subdomainVariable].trim()
           : "";
-        const managedAppHost = managedAppLabel
+      const currentAppUrl =
+        urlVariable && typeof current[urlVariable] === "string"
+          ? current[urlVariable].trim()
+          : "";
+      const managedAppLabel = currentSubdomain
+        ? managedHostnameLabel(currentSubdomain)
+        : "";
+      const managedAppHost =
+        managedAppLabel && publicBaseDomain
           ? `${managedAppLabel}.${publicBaseDomain}`
           : "";
-        const managedAppUrl =
-          currentAppUrl || (managedAppHost ? `https://${managedAppHost}` : "");
-        if (managedAppUrl && urlVariable) {
-          setDefault(urlVariable, managedAppUrl);
-        }
-        if (managedAppUrl && routePatternVariable) {
-          setDefault(
-            routePatternVariable,
-            routePatternFromAppUrl(managedAppUrl) ?? `${managedAppHost}/*`,
-          );
-        }
+      const managedAppUrl =
+        currentAppUrl || (managedAppHost ? `https://${managedAppHost}` : "");
+      if (managedAppUrl && urlVariable) {
+        setDefault(urlVariable, managedAppUrl);
+      }
+      if (managedAppUrl && routePatternVariable) {
+        setDefault(
+          routePatternVariable,
+          routePatternFromAppUrl(managedAppUrl) ?? `${managedAppHost}/*`,
+        );
+      }
     }
     return defaults;
   };
-  const storeScopeHintValue = (
-    entry: StoreEntry,
-    field: StoreInputField,
-  ): string | undefined => {
-    const matchingConnections = visibleConnections().filter(
-      (connection) =>
-        connection.scope === "space" &&
-        connection.status === "verified" &&
-        sameProviderFamily(entry.provider, connection.provider),
-    );
-    const hints = new Set<string>();
-    for (const connection of matchingConnections) {
-      const value = scopeHintValueForStoreInput(connection, field);
-      if (value) hints.add(value);
-    }
-    return hints.size === 1 ? Array.from(hints)[0] : undefined;
-  };
-  const scopeHintValueForStoreInput = (
-    connection: Connection,
-    field: StoreInputField,
-  ): string | undefined => {
-    const name = field.name
-      .trim()
-      .replace(/[^A-Za-z0-9]+/gu, "_")
-      .toLowerCase();
-    const hint =
-      name === "accountid" ||
-      name === "account_id" ||
-      name === "cloudflare_account_id"
-        ? connection.scopeHints?.accountId
-        : name === "zoneid" ||
-            name === "zone_id" ||
-            name === "cloudflare_zone_id" ||
-            name === "cloudflare_route_zone_id"
-          ? connection.scopeHints?.zoneId
-          : name === "region" || name === "aws_region"
-            ? connection.scopeHints?.awsRegion
-            : name === "workerssubdomain" ||
-                name === "workers_subdomain" ||
-                name === "cloudflare_workers_subdomain"
-              ? connection.scopeHints?.workersSubdomain
-              : undefined;
-    const value = hint?.trim();
-    return value || undefined;
-  };
-  const storeInputHasImplicitValue = (
-    entry: StoreEntry,
-    field: StoreInputField,
-  ) =>
-    field.required &&
-    !storeInputTouched()[storeInputKey(entry.id, field.name)] &&
-    storeScopeHintValue(entry, field) !== undefined;
   const isServiceIdentityStoreInput = (
     entry: StoreEntry,
     field: StoreInputField,
   ) =>
     field.name === storeServiceNameVariable(entry) &&
     serviceNameHintIsGenerated(field.defaultValue);
-  const isConnectionScopedStoreInput = (
-    entry: StoreEntry,
-    field: StoreInputField,
-  ) => storeInputHasImplicitValue(entry, field);
   const isInitialSecretStoreInput = (
     entry: StoreEntry,
     field: StoreInputField,
@@ -1458,24 +1300,18 @@ function Inner() {
     installExperienceInitialSecret(entry.installExperience)?.variable ===
     field.name;
   const isAdvancedStoreInput = (entry: StoreEntry, field: StoreInputField) =>
-    storeInputHasImplicitValue(entry, field) ||
-    // `initial_secret` is part of the install contract, so keep it beside
-    // other initial settings even when it is optional. Unprojected optional
-    // secrets remain available under advanced settings.
-    (!field.required &&
-      !isInitialSecretStoreInput(entry, field) &&
-      (field.advanced === true || field.secret === true));
+    field.advanced === true &&
+    // `initial_secret` explicitly projects the field into common setup.
+    !isInitialSecretStoreInput(entry, field);
   const visibleStoreInputs = (entry: StoreEntry) =>
     entry.inputs.filter(
       (field) =>
-        !isConnectionScopedStoreInput(entry, field) &&
         !isServiceIdentityStoreInput(entry, field) &&
         !isAdvancedStoreInput(entry, field),
     );
   const advancedStoreInputs = (entry: StoreEntry) =>
     entry.inputs.filter(
       (field) =>
-        !isConnectionScopedStoreInput(entry, field) &&
         !isServiceIdentityStoreInput(entry, field) &&
         isAdvancedStoreInput(entry, field),
     );
@@ -1489,14 +1325,16 @@ function Inner() {
   const sourceGitConnections = () =>
     visibleConnections().filter(
       (connection) =>
-        connection.scope === "space" &&
+        connection.scope === "workspace" &&
         (connection.kind === "source_git_https_token" ||
           connection.kind === "source_git_ssh_key") &&
         connection.status === "verified",
     );
-  const sourceConnectionLabel = (connection: Connection) =>
+  const sourceConnectionLabel = (connection: ProviderConnection) =>
     connection.displayName ||
-    connection.scopeHints?.repoUrl ||
+    (typeof connection.scopeHints?.providerSettings?.repositoryUrl === "string"
+      ? connection.scopeHints.providerSettings.repositoryUrl
+      : undefined) ||
     (connection.kind === "source_git_ssh_key"
       ? t("new.sourceAccess.sshConnection")
       : t("new.sourceAccess.httpsConnection"));
@@ -1594,36 +1432,27 @@ function Inner() {
   };
   const providerLabel = (provider: string) =>
     providerDisplayName(providerTail(provider));
-  // Any provider that is a credential boundary needs a Provider Connection (the
-  // user's own key) — NOT only the curated preset providers. This is what lets
-  // an install bind a bring-your-own-key connection for an ARBITRARY OpenTofu
-  // provider, not just the presets we ship a guided form for. Credential-free
-  // providers never force a connection: isCredentialFreeUtilityProvider covers
-  // the canonical http / random / tls, and the tail set below covers the other
-  // common credential-free providers (null / local / time / external / archive /
-  // cloudinit / template) — including bare local-name declarations — so a Capsule
-  // that uses e.g. null_resource / local_file / time_static is not falsely
-  // blocked on a bogus key.
-  const providerRequiresConnection = (provider: string) =>
-    !isCredentialFreeUtilityProvider(provider) &&
-    !CREDENTIAL_FREE_PROVIDER_TAILS.has(providerTail(provider));
-  const sameProviderFamily = (
+  const canonicalProviderSource = (provider: string) => {
+    const normalized = canonicalProvider(provider);
+    return normalized.split("/").length === 2
+      ? `registry.opentofu.org/${normalized}`
+      : normalized;
+  };
+  // Matching is exact after registry qualification. A local-name/tail match is
+  // not proof that two provider sources share credentials.
+  const sameProviderSource = (
     requiredProvider: string,
     connectionProvider: string,
-  ) => {
-    const required = canonicalProvider(requiredProvider);
-    const connection = canonicalProvider(connectionProvider);
-    if (required === connection) return true;
-    return providerTail(required) === providerTail(connection);
-  };
+  ) =>
+    canonicalProviderSource(requiredProvider) ===
+    canonicalProviderSource(connectionProvider);
+  const providerRequiresConnection = (row: ProviderConnectionRow) =>
+    row.credentialRequired;
 
   const visibleProviderConnections = () => providerConnections() ?? [];
   const isUsableManagedProviderConnection = (connection: ProviderConnection) =>
     connection.status === "pending" &&
-    connection.scope === "operator" &&
-    connection.scopeHints?.managedProvider === true &&
-    typeof connection.scopeHints.providerConfig?.base_url === "string" &&
-    connection.scopeHints.providerConfig.base_url.trim().length > 0;
+    isPublicManagedProviderConnection(connection);
   const isReadyProviderConnection = (connection: ProviderConnection) =>
     connection.status === "verified" ||
     isUsableManagedProviderConnection(connection);
@@ -1631,54 +1460,14 @@ function Inner() {
     visibleProviderConnections().filter(isReadyProviderConnection);
   const providerConnectionsForProvider = (provider: string) =>
     readyProviderConnections().filter((connection) =>
-      sameProviderFamily(provider, connection.providerSource),
+      sameProviderSource(provider, connection.providerSource),
     );
-  const providerConnectionScore = (
-    row: ProviderConnectionRow,
-    connection: ProviderConnection,
-  ): number => {
-    let score = 0;
-    const provider = providerTail(row.provider);
-    const listing = storeListingForCurrentSource();
-    if (
-      listing &&
-      providerTail(listing.provider) === provider &&
-      connection.scopeHints?.managedProvider === true
-    ) {
-      score += 1_000;
-    }
-    const wantsWorkersSubdomain =
-      row.resourceTypes.includes("cloudflare_workers_script_subdomain") ||
-      row.rootModuleVariables.includes("cloudflare") ||
-      row.rootModuleVariables.includes("cloudflare_workers_subdomain") ||
-      row.rootModuleVariables.includes("workersSubdomain");
-    if (provider === "cloudflare" && connection.scopeHints?.accountId) {
-      score += 10;
-    }
-    if (
-      provider === "cloudflare" &&
-      wantsWorkersSubdomain &&
-      connection.scopeHints?.workersSubdomain
-    ) {
-      score += 100;
-    }
-    return score;
-  };
   const providerConnectionsForRow = (row: ProviderConnectionRow) =>
-    providerConnectionsForProvider(row.provider)
-      .map((connection, index) => ({
-        connection,
-        index,
-        score: providerConnectionScore(row, connection),
-      }))
-      .sort((a, b) => b.score - a.score || a.index - b.index)
-      .map((entry) => entry.connection);
+    providerConnectionsForProvider(row.provider);
   const managedProviderConnectionForRow = (
     row: ProviderConnectionRow,
   ): ProviderConnection | undefined =>
-    providerConnectionsForRow(row).find(
-      (connection) => connection.scopeHints?.managedProvider === true,
-    );
+    providerConnectionsForRow(row).find(isPublicManagedProviderConnection);
   const managedStoreProviderForCurrentSource = (): string | undefined =>
     selectedServiceEntry()?.provider ??
     storeListingForCurrentSource()?.provider;
@@ -1692,7 +1481,7 @@ function Inner() {
     const managedProvider = managedStoreProviderForCurrentSource();
     return (
       managedProvider !== undefined &&
-      providerTail(managedProvider) === providerTail(row.provider) &&
+      sameProviderSource(managedProvider, row.provider) &&
       // The fallback is real only when an operator-managed connection is
       // actually listed (Cloud). A self-host without one must show the
       // friendly connection callout instead of failing server-side.
@@ -1704,18 +1493,18 @@ function Inner() {
   const rowHasManagedProviderDefault = (row: ProviderConnectionRow) => {
     const managedProvider = managedStoreProviderForCurrentSource();
     if (!managedProvider) return false;
-    if (providerTail(managedProvider) !== providerTail(row.provider)) {
+    if (!sameProviderSource(managedProvider, row.provider)) {
       return false;
     }
     const best = providerConnectionsForRow(row)[0];
     return (
       best !== undefined &&
       best.id === row.connectionId &&
-      best.scopeHints?.managedProvider === true
+      isPublicManagedProviderConnection(best)
     );
   };
   const providerNeedsConnection = (row: ProviderConnectionRow) =>
-    providerRequiresConnection(row.provider) &&
+    providerRequiresConnection(row) &&
     !rowCanUseManagedProviderFallback(row) &&
     providerConnectionsForProvider(row.provider).length === 0;
   const needsCloudCredential = () =>
@@ -1723,7 +1512,7 @@ function Inner() {
   const missingProviderRows = () =>
     providerRows().filter(providerNeedsConnection);
   const providerRowNeedsVisibleChoice = (row: ProviderConnectionRow) => {
-    if (!providerRequiresConnection(row.provider)) return false;
+    if (!providerRequiresConnection(row)) return false;
     if (rowCanUseManagedProviderFallback(row)) return false;
     if (rowHasManagedProviderDefault(row)) return false;
     const candidates = providerConnectionsForRow(row);
@@ -1790,27 +1579,22 @@ function Inner() {
     result: CapsuleCompatibilityResult,
   ): ProviderConnectionRow[] =>
     result.providers
-      .filter(
-        (provider) =>
-          provider.allowed && providerRequiresConnection(provider.source),
-      )
+      .filter((provider) => {
+        if (!provider.allowed) return false;
+        if (provider.credentialRequired === true) return true;
+        const managedProvider = managedStoreProviderForCurrentSource();
+        return (
+          managedProvider !== undefined &&
+          sameProviderSource(managedProvider, provider.source)
+        );
+      })
       .flatMap((provider) => {
         const aliases = provider.aliases.length > 0 ? provider.aliases : [""];
-        const resourceTypes = result.resources
-          .filter(
-            (resource) =>
-              resource.allowed &&
-              resource.type
-                .toLowerCase()
-                .startsWith(`${providerTail(provider.source)}_`),
-          )
-          .map((resource) => resource.type);
         return aliases.map((alias) => ({
           provider: provider.source,
           alias,
           connectionId: "",
-          resourceTypes,
-          rootModuleVariables: result.rootModuleVariables,
+          credentialRequired: true,
         }));
       });
 
@@ -1849,9 +1633,9 @@ function Inner() {
     return null;
   };
 
-  const providerConnectionsPayload = (): CapsuleProviderConnectionBindings =>
+  const providerBindingsPayload = (): ProviderBindings =>
     providerRows()
-      .filter((row) => providerRequiresConnection(row.provider))
+      .filter((row) => providerRequiresConnection(row))
       .filter((row) => row.connectionId.trim())
       .map((row) => ({
         provider: row.provider,
@@ -1910,40 +1694,37 @@ function Inner() {
     if (next.name || !name().trim()) {
       setName(next.name ?? capsuleNameFromUrl(next.git));
     }
+    const storeEntry = storeListing ? storeEntryForListing(storeListing) : null;
     if (storeListing) {
-      const entry = storeEntryFromStoreListing(
-        storeListing,
-        defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
-      );
-      const defaults: Record<string, string> = {};
-      for (const field of entry.inputs) {
-        const value = next.vars?.[field.name];
-        if (value === undefined) continue;
-        defaults[storeInputKey(entry.id, field.name)] =
-          installVariableDisplayValue(value);
-      }
-      setStoreInputValues(defaults);
+      setStoreInputValues({});
       setStoreInputTouched({});
       setInputVariables([]);
-      setEnvVariables(envVariableRowsFromPrefill(next.vars));
-      setInstallConfigId(entry.installConfigId);
+      setEnvVariables([]);
+      setInstallConfigId(storeEntry?.installConfigId ?? "");
+      setStoreMetadataUnavailable(storeEntry === null);
     } else {
-      setInputVariables(inputVariableRowsFromPrefill(next.vars));
-      setEnvVariables(envVariableRowsFromPrefill(next.vars));
+      setInputVariables([]);
+      setEnvVariables([]);
     }
-    const nextServiceNameVariable = storeListing
-      ? storeServiceNameVariable(storeMetadataFromStoreListing(storeListing))
+    const nextServiceNameVariable = storeEntry
+      ? storeServiceNameVariable(storeEntry)
       : undefined;
-    const nextProjectName =
-      nextServiceNameVariable &&
-      typeof next.vars?.[nextServiceNameVariable] === "string"
-        ? next.vars[nextServiceNameVariable]
-        : undefined;
-    if (nextProjectName) {
-      const isGeneratedProjectName =
-        serviceNameHintIsGenerated(nextProjectName);
-      setResourcePrefix(isGeneratedProjectName ? "" : nextProjectName);
-      setResourcePrefixTouched(!isGeneratedProjectName);
+    const nextProjectNameDefault = nextServiceNameVariable
+      ? storeServiceNameField(storeEntry!)?.defaultValue
+      : undefined;
+    if (nextProjectNameDefault) {
+      const isGeneratedProjectName = serviceNameHintIsGenerated(
+        nextProjectNameDefault,
+      );
+      const literalProjectName =
+        nextProjectNameDefault.source === "literal" &&
+        typeof nextProjectNameDefault.value === "string"
+          ? nextProjectNameDefault.value
+          : "";
+      setResourcePrefix(isGeneratedProjectName ? "" : literalProjectName);
+      setResourcePrefixTouched(
+        !isGeneratedProjectName && literalProjectName !== "",
+      );
     } else {
       setResourcePrefix("");
       setResourcePrefixTouched(false);
@@ -1951,101 +1732,10 @@ function Inner() {
     resetCompatibility();
   };
 
-  const hydrateStoreListing = async (
+  const prepareStoreListing = async (
     listing: TcsListing,
-    signal?: AbortSignal,
-  ): Promise<TcsListing> =>
-    await hydrateRequiredTcsListingWithRepoMetadata(listing, signal);
-
-  const adoptRepoOwnedListing = (listing: TcsListing): boolean => {
-    if (selectedStoreListing()) return false;
-    setSelectedStoreListing(listing);
-    setStoreMetadataUnavailable(false);
-    const entry = storeEntryFromStoreListing(
-      listing,
-      defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
-    );
-    const prefill = currentInstallPrefill();
-    setStoreInputValues((current) => {
-      const next: Record<string, string> = { ...current };
-      for (const field of entry.inputs) {
-        const value = prefill?.vars?.[field.name];
-        if (value === undefined) continue;
-        next[storeInputKey(entry.id, field.name)] =
-          installVariableDisplayValue(value);
-      }
-      return next;
-    });
-    const ownedNames = new Set(entry.inputs.map((field) => field.name));
-    setInputVariables((rows) =>
-      rows.filter((row) => !ownedNames.has(row.name.trim())),
-    );
-    const serviceNameVariable = storeServiceNameVariable(
-      storeMetadataFromStoreListing(listing),
-    );
-    const serviceName = serviceNameVariable
-      ? prefill?.vars?.[serviceNameVariable]
-      : undefined;
-    if (typeof serviceName === "string") {
-      const generated = serviceNameHintIsGenerated(serviceName);
-      setResourcePrefix(generated ? "" : serviceName);
-      setResourcePrefixTouched(!generated);
-    }
-    void loadConnections();
-    return true;
-  };
-
-  const listingFromSnapshot = (snapshot: SourceSnapshot): TcsListing | null => {
-    const observation = snapshot.repositoryInstallMetadata;
-    if (observation?.status !== "present") return null;
-    try {
-      const metadata = parseTcsRepoMetadata(JSON.parse(observation.text));
-      if (!metadata) return null;
-      const source: TcsListingSource = {
-        git: sourceGitUrl(),
-        ...(sourceRef() ? { ref: sourceRef() } : {}),
-        ...(snapshot.resolvedCommit
-          ? { resolvedCommit: snapshot.resolvedCommit }
-          : {}),
-        path: sourcePath(),
-      };
-      return tcsListingFromRepoMetadata(source, metadata);
-    } catch {
-      return null;
-    }
-  };
-
-  // A public direct-Git hand-off should show repository-owned setup fields
-  // before the visitor presses Add. This is a read-only best effort; private or
-  // non-GitHub sources are hydrated from the immutable SourceSnapshot after the
-  // explicit compatibility action instead.
-  let directRepoHydrationKey = "";
-  createEffect(() => {
-    if (selectedStoreListing() || sourceAccessMode() !== "public") return;
-    const source: TcsListingSource = {
-      git: sourceGitUrl(),
-      ...(sourceRef() ? { ref: sourceRef() } : {}),
-      path: sourcePath(),
-    };
-    if (!source.git) return;
-    const key = JSON.stringify(source);
-    if (key === directRepoHydrationKey) return;
-    directRepoHydrationKey = key;
-    void fetchTcsRepoMetadata(source)
-      .then((metadata) => {
-        if (
-          directRepoHydrationKey !== key ||
-          selectedStoreListing() ||
-          !metadata
-        ) {
-          return;
-        }
-        adoptRepoOwnedListing(tcsListingFromRepoMetadata(source, metadata));
-      })
-      .catch(() => {
-        // The SourceSnapshot path remains the forge-neutral authority.
-      });
-  });
+    _signal?: AbortSignal,
+  ): Promise<TcsListing> => listing;
 
   // Guard out-of-order picks: tapping card A then quickly card B must not let
   // A's slower metadata response overwrite B's form (same reqToken pattern as
@@ -2060,7 +1750,7 @@ function Inner() {
       setStorePickBusy(true);
       let hydratedListing: TcsListing;
       try {
-        hydratedListing = await hydrateStoreListing(listing);
+        hydratedListing = await prepareStoreListing(listing);
       } catch {
         if (token !== storePickToken) return;
         setStorePickBusy(false);
@@ -2085,14 +1775,14 @@ function Inner() {
       setActiveTab("store");
       setActiveInstallPrefill(null);
       setSelectedStoreListing(hydratedListing);
-      setGitUrl(hydratedListing.source.git);
+      setGitUrl(hydratedListing.source.url);
       setRef("");
       setPinnedFullRef(null);
       setPath(hydratedListing.source.path || ".");
       setName(hydratedListing.suggestedName);
-      setInstallConfigId(
-        defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
-      );
+      const config = installConfigForStoreListing(hydratedListing);
+      setInstallConfigId(config?.id ?? "");
+      setStoreMetadataUnavailable(config === null);
       setStoreInputValues({});
       setStoreInputTouched({});
       setInputVariables([]);
@@ -2167,11 +1857,11 @@ function Inner() {
   const hasMeaningfulInstallInput = () =>
     Boolean(
       nameTouched() ||
-        resourcePrefixTouched() ||
-        linkDraft().trim() ||
-        inputVariables().some((row) => row.name.trim() || row.value.trim()) ||
-        envVariables().some((row) => row.name.trim() || row.value.trim()) ||
-        Object.keys(storeInputTouched()).length > 0,
+      resourcePrefixTouched() ||
+      linkDraft().trim() ||
+      inputVariables().some((row) => row.name.trim() || row.value.trim()) ||
+      envVariables().some((row) => row.name.trim() || row.value.trim()) ||
+      Object.keys(storeInputTouched()).length > 0,
     );
   // Back to the picker. Guarded while an install is in flight — an accidental
   // tap must not silently drop a running install (the control is also disabled
@@ -2207,7 +1897,7 @@ function Inner() {
           initialTcsHandoff.listingId,
         );
         if (!listing || !storeListingMatchesCurrentSource(listing)) return;
-        const hydratedListing = await hydrateStoreListing({
+        const hydratedListing = await prepareStoreListing({
           ...listing,
           primaryServer: initialTcsHandoff.base,
         });
@@ -2224,28 +1914,9 @@ function Inner() {
     })();
   });
 
-  createEffect(() => {
-    const entry = selectedServiceEntry();
-    if (!entry) return;
-    setStoreInputValues((current) => {
-      let changed = false;
-      const next: Record<string, string> = { ...current };
-      for (const field of entry.inputs) {
-        const key = storeInputKey(entry.id, field.name);
-        if (storeInputTouched()[key]) continue;
-        if ((next[key] ?? "").trim()) continue;
-        const scopeHint = storeScopeHintValue(entry, field);
-        if (scopeHint === undefined) continue;
-        next[key] = scopeHint;
-        changed = true;
-      }
-      return changed ? next : current;
-    });
-  });
-
   const compatibilityRunnable = () => {
     const level = compatibility()?.level;
-    return level === "ready" || level === "auto_capsulized";
+    return level === "ready";
   };
   const proceedBlocker = (): string =>
     providerConnectionError() ??
@@ -2274,11 +1945,7 @@ function Inner() {
    * panels can explain it — otherwise continue straight through to create + plan.
    */
   const submitInstall = async () => {
-    // validate() exempts connection-scoped required inputs only when the
-    // workspace connections are loaded (storeScopeHintValue reads connections()).
-    // Auto-install fires before any user interaction loaded them, so ensure
-    // they're settled first — otherwise a valid one-tap install is wrongly
-    // blocked as "missing required input".
+    // Ensure source connections settle before validating source access.
     await loadConnections().catch(() => []);
     const validationError = validate();
     if (validationError) {
@@ -2286,15 +1953,9 @@ function Inner() {
       return;
     }
     if (!compatibility()) {
-      const setupWasVisible = selectedServiceEntry() !== null;
       await runCompatibilityCheck();
       // The check failed or could not resolve a result; its own error is shown.
       if (!compatibility()) return;
-      // A private or non-GitHub source may reveal its repository-owned setup
-      // contract only after SourceSnapshot sync. Never apply immediately with
-      // unseen domain/password inputs: render them and require one explicit
-      // confirmation click.
-      if (!setupWasVisible && selectedServiceEntry()) return;
     }
     await loadProviderConnections().catch(() => []);
     await settleProviderConnectionRows();
@@ -2305,7 +1966,7 @@ function Inner() {
   };
 
   // ストア[追加] auto-start: fire the single install action once, as soon as
-  // the workspace / install config / store hydration settle. Validation errors
+  // the workspace / install config / store selection settle. Validation errors
   // and blockers fall back to the visible form — auto never skips a review.
   let autoInstallAttempted = false;
   createEffect(() => {
@@ -2357,15 +2018,6 @@ function Inner() {
     );
   };
 
-  const adoptSourceSnapshotMetadata = (
-    flow: FlowRun,
-    snapshot: SourceSnapshot,
-  ) => {
-    if (!isCurrentFlow(flow)) return;
-    const listing = listingFromSnapshot(snapshot);
-    if (listing) adoptRepoOwnedListing(listing);
-  };
-
   const runCompatibilityCheck = async () => {
     const validationError = validate();
     if (validationError) {
@@ -2400,8 +2052,6 @@ function Inner() {
         onSourceCreated: (sourceId) => {
           if (isCurrentFlow(flow)) recordCreatedSource(sourceId);
         },
-        onSourceSnapshot: (snapshot) =>
-          adoptSourceSnapshotMetadata(flow, snapshot),
         onSourceSyncProgress: (progress) => {
           if (!isCurrentFlow(flow)) return;
           if (progress.run?.status) {
@@ -2429,8 +2079,6 @@ function Inner() {
           onSourceCreated: (sourceId) => {
             if (isCurrentFlow(flow)) recordCreatedSource(sourceId);
           },
-          onSourceSnapshot: (snapshot) =>
-            adoptSourceSnapshotMetadata(flow, snapshot),
           onSourceSyncProgress: (progress) => {
             if (!isCurrentFlow(flow)) return;
             if (progress.run?.status) {
@@ -2522,7 +2170,6 @@ function Inner() {
         compatibility()?.installConfigId ?? selectedInstallConfigId(),
       compatibilityReportId: compatibility()?.reportId,
       vars: installVariables(),
-      store: storeMetadataForRun(),
       managedPublicHostname: supportsManagedPublicHostnameChoice()
         ? { mode: managedPublicHostnameMode() }
         : undefined,
@@ -2590,7 +2237,7 @@ function Inner() {
         setError(proceedBlocker());
         return;
       }
-      const providerConnectionsForRun = providerConnectionsPayload();
+      const providerBindingsForRun = providerBindingsPayload();
 
       // Step 3 — create the current compatibility record bound to the chosen
       // service-side config. Public UI presents this as Capsule creation.
@@ -2605,7 +2252,7 @@ function Inner() {
         ).catch(() => null);
         throwIfStaleFlow(flow);
         if (existing) {
-          setStepInstall(INSTALLATION_DONE);
+          setStepInstall(CAPSULE_DONE);
           setStepPlan("idle");
           setExistingCapsule(existing);
           return;
@@ -2620,14 +2267,9 @@ function Inner() {
             ? { modulePath: flowInput.path }
             : {}),
           ...(flowInput.vars ? { vars: flowInput.vars } : {}),
-          ...(flowInput.store ? { store: flowInput.store } : {}),
           ...(flowInput.managedPublicHostname
             ? { managedPublicHostname: flowInput.managedPublicHostname }
             : {}),
-          // Store installs opt into auto-update by default (app feel): new
-          // source versions re-plan and auto-apply when clean. Link/Git
-          // installs stay manual.
-          ...(flowInput.store ? { autoUpdate: true } : {}),
         });
         throwIfStaleFlow(flow);
         clearCapsuleListCache(workspace);
@@ -2638,10 +2280,7 @@ function Inner() {
       } else {
         setStepInstall("running");
       }
-      await putCapsuleProviderConnectionSet(
-        capsuleId,
-        providerConnectionsForRun,
-      );
+      await putCapsuleProviderBindingSet(capsuleId, providerBindingsForRun);
       throwIfStaleFlow(flow);
       setStepInstall("done");
 
@@ -2699,7 +2338,7 @@ function Inner() {
         // block and surface as an unhandled rejection.
         if (!isCurrentFlow(flow)) return;
         if (existing) {
-          setStepInstall(INSTALLATION_DONE);
+          setStepInstall(CAPSULE_DONE);
           setExistingCapsule(existing);
           setError(null);
         } else {
@@ -2774,7 +2413,7 @@ function Inner() {
           setGitUrl(e.currentTarget.value);
           resetCompatibility();
         }}
-        placeholder="https://github.com/your-name/service.git"
+        placeholder="https://git.example.com/owner/service.git"
         autocomplete="off"
         spellcheck={false}
       />
@@ -2906,11 +2545,12 @@ function Inner() {
             disabled={busy()}
             onInput={(e) => {
               clearSelectedStoreEntry();
+              setActiveInstallPrefill(null);
               setPinnedFullRef(null);
               setRef(e.currentTarget.value);
               resetCompatibility();
             }}
-            placeholder="main"
+            placeholder="HEAD"
             autocomplete="off"
             spellcheck={false}
           />
@@ -2924,6 +2564,7 @@ function Inner() {
             disabled={busy()}
             onInput={(e) => {
               clearSelectedStoreEntry();
+              setActiveInstallPrefill(null);
               setPath(e.currentTarget.value);
               resetCompatibility();
             }}
@@ -3673,8 +3314,7 @@ function Inner() {
                             </Badge>
                           </div>
                           <p class="wb-compat-summary">
-                            {result().level === "ready" ||
-                            result().level === "auto_capsulized"
+                            {result().level === "ready"
                               ? t("new.compat.readyBrief")
                               : compatibilitySummaryDisplay(result())}
                           </p>
@@ -3767,82 +3407,83 @@ function Inner() {
                       }}
                     </Show>
                     <Show when={!providerConnectionsLoadError()}>
-                    <div class="wb-provider-grid">
-                      <For each={providerRowsRequiringChoice()}>
-                        {(row, index) => {
-                          const options = () => providerConnectionsForRow(row);
-                          return (
-                            <div class="wb-provider-row">
-                              <div class="wb-provider-meta">
-                                <span class="wb-provider-title">
-                                  {providerLabel(row.provider)}
-                                </span>
-                                <Show when={row.alias}>
-                                  <span class="muted">
-                                    {t("new.providers.alias", {
-                                      alias: row.alias,
-                                    })}
+                      <div class="wb-provider-grid">
+                        <For each={providerRowsRequiringChoice()}>
+                          {(row, index) => {
+                            const options = () =>
+                              providerConnectionsForRow(row);
+                            return (
+                              <div class="wb-provider-row">
+                                <div class="wb-provider-meta">
+                                  <span class="wb-provider-title">
+                                    {providerLabel(row.provider)}
                                   </span>
-                                </Show>
+                                  <Show when={row.alias}>
+                                    <span class="muted">
+                                      {t("new.providers.alias", {
+                                        alias: row.alias,
+                                      })}
+                                    </span>
+                                  </Show>
+                                </div>
+                                <Select
+                                  id={`provider-connection-${index()}`}
+                                  name={`providerConnection:${row.provider}:${row.alias ?? "default"}`}
+                                  aria-label={`${providerLabel(row.provider)} ${row.alias ? t("new.providers.alias", { alias: row.alias }) : ""} ${t("new.providers.selectConnection")}`.trim()}
+                                  value={row.connectionId}
+                                  onChange={(e) =>
+                                    updateProviderRow(row, {
+                                      connectionId: e.currentTarget.value,
+                                    })
+                                  }
+                                >
+                                  <option value="" selected={!row.connectionId}>
+                                    {t("new.providers.selectConnection")}
+                                  </option>
+                                  <For each={options()}>
+                                    {(connection) => (
+                                      <option
+                                        value={connection.id}
+                                        selected={
+                                          connection.id === row.connectionId
+                                        }
+                                      >
+                                        {providerConnectionLabel(connection)}
+                                      </option>
+                                    )}
+                                  </For>
+                                </Select>
                               </div>
-                              <Select
-                                id={`provider-connection-${index()}`}
-                                name={`providerConnection:${row.provider}:${row.alias ?? "default"}`}
-                                aria-label={`${providerLabel(row.provider)} ${row.alias ? t("new.providers.alias", { alias: row.alias }) : ""} ${t("new.providers.selectConnection")}`.trim()}
-                                value={row.connectionId}
-                                onChange={(e) =>
-                                  updateProviderRow(row, {
-                                    connectionId: e.currentTarget.value,
-                                  })
-                                }
-                              >
-                                <option value="" selected={!row.connectionId}>
-                                  {t("new.providers.selectConnection")}
-                                </option>
-                                <For each={options()}>
-                                  {(connection) => (
-                                    <option
-                                      value={connection.id}
-                                      selected={
-                                        connection.id === row.connectionId
-                                      }
-                                    >
-                                      {providerConnectionLabel(connection)}
-                                    </option>
-                                  )}
-                                </For>
-                              </Select>
-                            </div>
-                          );
-                        }}
-                      </For>
-                    </div>
-                    <Show when={providerConnectionError()}>
-                      {(m) => (
-                        <p class="wb-error" role="alert">
-                          {m()}
-                        </p>
-                      )}
-                    </Show>
-                    <Show when={missingProviderRows().length > 0}>
-                      <div class="wb-action-callout" role="note">
-                        <strong>{t("new.providers.missingTitle")}</strong>
-                        <p>{t("new.providers.missingBody")}</p>
-                        <ul>
-                          <For each={missingProviderRows()}>
-                            {(row) => <li>{providerLabel(row.provider)}</li>}
-                          </For>
-                        </ul>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          href={providerConnectionsHref()}
-                        >
-                          {t("new.providers.setupMissing")}
-                        </Button>
-                        <p class="muted">{t("new.providers.returnNote")}</p>
+                            );
+                          }}
+                        </For>
                       </div>
-                    </Show>
+                      <Show when={providerConnectionError()}>
+                        {(m) => (
+                          <p class="wb-error" role="alert">
+                            {m()}
+                          </p>
+                        )}
+                      </Show>
+                      <Show when={missingProviderRows().length > 0}>
+                        <div class="wb-action-callout" role="note">
+                          <strong>{t("new.providers.missingTitle")}</strong>
+                          <p>{t("new.providers.missingBody")}</p>
+                          <ul>
+                            <For each={missingProviderRows()}>
+                              {(row) => <li>{providerLabel(row.provider)}</li>}
+                            </For>
+                          </ul>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            href={providerConnectionsHref()}
+                          >
+                            {t("new.providers.setupMissing")}
+                          </Button>
+                          <p class="muted">{t("new.providers.returnNote")}</p>
+                        </div>
+                      </Show>
                     </Show>
                   </section>
                 </Show>

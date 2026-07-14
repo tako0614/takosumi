@@ -12,8 +12,6 @@ import type {
   AccountsHandler,
   AccountsJsonWebKey,
   ControlPlaneOperations,
-  AppCapsuleExportWorker,
-  DeployControlFacadeOptions,
   JsonWebKeySet,
   PostgresQueryClient,
 } from "@takosjp/takosumi-accounts-service";
@@ -22,22 +20,16 @@ import {
   createEphemeralAccountsHandler,
   PostgresAccountsStore,
   signEs256Jwt,
-  signExportDownloadUrl,
-  verifyExportDownloadUrl,
 } from "@takosjp/takosumi-accounts-service";
-import {
-  createHttpDirectoryCapsuleExportArchiveUploader,
-  createMetadataOnlyCapsuleExportWorker,
-} from "../../../accounts/service/src/export-archive.ts";
 import pgModule from "pg";
 import {
-  type NodeAccountsExportDownloadConfig,
   type NodeAccountsServerConfig,
   type NodeAccountsStableOidcConfig,
   parseEnv,
 } from "./handler.ts";
 import { buildComposedApp } from "./composed-app.ts";
 import { resolveStaticAssetsDir } from "./static-assets.ts";
+import { isSecretKey, redactString } from "takosumi-contract/redaction";
 
 interface PgPoolConfig {
   connectionString: string;
@@ -84,42 +76,8 @@ type Es256PrivateJwk = JsonWebKey & {
 const healthzPath = "/healthz";
 const healthzTimeoutMs = 1000;
 
-/**
- * Minimal structured logger with PII masking for the node-postgres
- * entry point. Inlined per F26 scope (extraction to a shared package
- * is tracked as a follow-up).
- */
-const SENSITIVE_KEY_RE =
-  /password|secret|token|apikey|api_key|credential|private|cookie|authorization/i;
-const SENSITIVE_STRING_PATTERNS: ReadonlyArray<{
-  pattern: RegExp;
-  replacement: string;
-}> = [
-  {
-    pattern:
-      /\beyJ[A-Za-z0-9_-]{1,2048}\.eyJ[A-Za-z0-9_-]{1,2048}\.[A-Za-z0-9_-]{1,512}/g,
-    replacement: "[REDACTED_JWT]",
-  },
-  {
-    pattern: /\b(Bearer|token)\s+([A-Za-z0-9_.\-+/=]{16,512})/gi,
-    replacement: "$1 [redacted]",
-  },
-  {
-    pattern: /\bsk_live_[A-Za-z0-9]{16,256}/g,
-    replacement: "[REDACTED_STRIPE_LIVE]",
-  },
-  {
-    pattern: /\bsk_test_[A-Za-z0-9]{16,256}/g,
-    replacement: "[REDACTED_STRIPE_TEST]",
-  },
-  { pattern: /\bAKIA[0-9A-Z]{16}/g, replacement: "[REDACTED_AWS_ACCESS_KEY]" },
-];
 function maskString(input: string): string {
-  let r = input;
-  for (const { pattern, replacement } of SENSITIVE_STRING_PATTERNS) {
-    r = r.replace(pattern, replacement);
-  }
-  return r;
+  return redactString(input);
 }
 function maskValue(value: unknown): unknown {
   if (value === null || value === undefined) return value;
@@ -135,7 +93,7 @@ function maskValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(maskValue);
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] = SENSITIVE_KEY_RE.test(k) ? "[redacted]" : maskValue(v);
+    out[k] = isSecretKey(k) ? "[REDACTED]" : maskValue(v);
   }
   return out;
 }
@@ -160,21 +118,18 @@ function structuredLog(
  * Operator-supplied overrides forwarded into the embedded service via
  * {@link buildComposedApp}. The published reference distribution passes none
  * (so `main()` behaves exactly as before); a composer that wants to attach
- * native adapter implementation bindings or a durable SQL ledger — e.g. the
- * local-substrate `cloud` wrapper — supplies them here without duplicating the
+ * a durable SQL ledger — e.g. the local-substrate `cloud` wrapper — supplies
+ * it here without duplicating the
  * pool / store / accounts-handler / serve plumbing.
  */
 export interface ComposedServerOverrides {
-  readonly implementations?: Parameters<
-    typeof buildComposedApp
-  >[0]["implementations"];
   readonly sqlClient?: Parameters<typeof buildComposedApp>[0]["sqlClient"];
   readonly opentofuRunner?: Parameters<
     typeof buildComposedApp
   >[0]["opentofuRunner"];
-  readonly writeSourceArchive?: Parameters<
+  readonly opentofuRunnerExecutors?: Parameters<
     typeof buildComposedApp
-  >[0]["writeSourceArchive"];
+  >[0]["opentofuRunnerExecutors"];
   readonly runnerProfiles?: Parameters<
     typeof buildComposedApp
   >[0]["runnerProfiles"];
@@ -189,8 +144,8 @@ export interface ComposedServerOverrides {
 /**
  * Build and serve the one composed app this distribution runs: embed the
  * Takosumi service (`createTakosumiService`) and extend it with the Takosumi Accounts
- * surfaces. healthz + signed export downloads run ahead of the service +
- * accounts fallback via `preHandle`. Blocks on `serveOnAnyRuntime`.
+ * surfaces. healthz runs ahead of the service + accounts fallback via
+ * `preHandle`. Blocks on `serveOnAnyRuntime`.
  */
 export async function buildComposedServer(
   overrides: ComposedServerOverrides = {},
@@ -221,24 +176,15 @@ export async function buildComposedServer(
   const { app } = await buildComposedApp({
     config,
     store,
-    createAccountsHandler: (deployControl, controlPlaneOperations) =>
-      buildAccountsHandler(
-        config,
-        store,
-        deployControl,
-        controlPlaneOperations,
-      ),
-    preHandle: (req) =>
-      preHandleNonServiceRequest(req, pool, config.exportDownload),
+    createAccountsHandler: (controlPlaneOperations) =>
+      buildAccountsHandler(config, store, controlPlaneOperations),
+    preHandle: (req) => preHandleNonServiceRequest(req, pool),
     ...(staticAssets ? { staticAssets } : {}),
-    ...(overrides.implementations
-      ? { implementations: overrides.implementations }
-      : {}),
     ...(overrides.opentofuRunner
       ? { opentofuRunner: overrides.opentofuRunner }
       : {}),
-    ...(overrides.writeSourceArchive
-      ? { writeSourceArchive: overrides.writeSourceArchive }
+    ...(overrides.opentofuRunnerExecutors
+      ? { opentofuRunnerExecutors: overrides.opentofuRunnerExecutors }
       : {}),
     ...(overrides.runnerProfiles
       ? { runnerProfiles: overrides.runnerProfiles }
@@ -269,29 +215,26 @@ async function main(): Promise<void> {
 }
 
 /**
- * Pre-service request handling shared by the composed app: `/healthz` and signed
- * installation export downloads. Returns a `Response` to short-circuit, or
- * `undefined` to fall through to the embedded service app + accounts fallback.
+ * Pre-service request handling shared by the composed app. Returns a health
+ * response to short-circuit, or `undefined` to fall through to the embedded
+ * service app + accounts fallback.
  */
 async function preHandleNonServiceRequest(
   req: Request,
   pool: PgPool,
-  exportDownload: NodeAccountsExportDownloadConfig | undefined,
 ): Promise<Response | undefined> {
   const url = new URL(req.url);
   if (url.pathname === healthzPath) {
     return await handleHealthz(pool);
   }
-  return await maybeHandleExportDownload(req, exportDownload);
+  return undefined;
 }
 
 async function buildAccountsHandler(
   config: NodeAccountsServerConfig,
   store: PostgresAccountsStore,
-  deployControl?: DeployControlFacadeOptions,
   controlPlaneOperations?: ControlPlaneOperations,
 ): Promise<AccountsHandler> {
-  const exportWorker = buildExportWorker(config.exportDownload);
   const commonOptions = {
     issuer: config.issuer,
     store,
@@ -299,23 +242,17 @@ async function buildAccountsHandler(
       ? { managedPublicBaseDomain: config.managedPublicBaseDomain }
       : {}),
     ...(config.clients ? { clients: config.clients } : {}),
-    platformAccess: config.platformAccess,
-    ...(config.runtimeProjectionMaterialResolver
-      ? {
-          runtimeProjectionMaterialResolver:
-            config.runtimeProjectionMaterialResolver,
-        }
-      : {}),
     ...(config.loginEmailAllowlist
       ? { loginEmailAllowlist: config.loginEmailAllowlist }
       : {}),
     ...(config.passkeys ? { passkeys: config.passkeys } : {}),
     ...(config.upstreamOAuth ? { upstreamOAuth: config.upstreamOAuth } : {}),
-    ...(deployControl ? { deployControl } : {}),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
-    ...(exportWorker ? { exportWorker } : {}),
     ...(config.privacyOperationsToken
       ? { privacyOperationsToken: config.privacyOperationsToken }
+      : {}),
+    ...(config.privacyRetentionPolicyRef
+      ? { privacyRetentionPolicyRef: config.privacyRetentionPolicyRef }
       : {}),
   };
   const stableOidc = await buildStableOidc(config.stableOidc);
@@ -324,57 +261,11 @@ async function buildAccountsHandler(
       ...commonOptions,
       jwks: stableOidc.jwks,
       oidcFlow: stableOidc.oidcFlow,
-      launchTokens: stableOidc.launchTokens,
     });
   }
   return await createEphemeralAccountsHandler({
     ...commonOptions,
     ...(config.subject ? { subject: config.subject } : {}),
-  });
-}
-
-/**
- * Build the metadata-only filesystem installation export worker that
- * mirrors the Cloudflare profile's R2-backed export worker. The
- * Node-Postgres reference distribution writes the export archive to
- * `outputDirectory` and embeds an HMAC-signed `<baseUrl>/<archive-filename>`
- * URL (with `tk_exp` + `tk_sig` query params) in the operation response.
- *
- * The signing secret (`TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET`) is wired
- * through here so download URLs are signed and time-limited, matching the
- * Cloudflare profile rather than emitting guessable unsigned URLs. The
- * in-process `/_export-downloads/...` route (see `maybeHandleExportDownload`)
- * verifies the signature and expiry before serving the file, so the
- * signature is enforced fail-closed even though operators may also place a
- * static server (Caddy / nginx) in front for caching.
- */
-function buildExportWorker(
-  config: NodeAccountsExportDownloadConfig | undefined,
-): AppCapsuleExportWorker | undefined {
-  if (!config) return undefined;
-  // The base uploader copies the archive into `outputDirectory` and returns
-  // an unsigned `<baseUrl>/<objectKey>` URL; we then HMAC-sign it.
-  const baseUploader = createHttpDirectoryCapsuleExportArchiveUploader({
-    downloadBaseUrl: config.baseUrl,
-    outputDirectory: config.outputDirectory,
-  });
-  return createMetadataOnlyCapsuleExportWorker({
-    outputDirectory: config.outputDirectory,
-    downloadBaseUrl: config.baseUrl,
-    ...(config.ttlMs !== undefined ? { ttlMs: config.ttlMs } : {}),
-    uploader: async (input) => {
-      const result = await baseUploader(input);
-      const signed = await signExportDownloadUrl(result.downloadUrl, {
-        secret: config.secret,
-        ...(config.ttlMs !== undefined ? { ttlMs: config.ttlMs } : {}),
-      });
-      return {
-        downloadUrl: signed.url,
-        // Use the signature's own expiry so the embedded `downloadExpiresAt`
-        // matches the `tk_exp` the verifier enforces.
-        downloadExpiresAt: signed.expiresAt,
-      };
-    },
   });
 }
 
@@ -390,7 +281,6 @@ async function buildStableOidc(
           claims: Record<string, unknown>,
         ) => Promise<string>;
       };
-      readonly launchTokens: { readonly pairwiseSubjectSecret: string };
     }
   | undefined
 > {
@@ -434,9 +324,6 @@ async function buildStableOidc(
           claims,
           privateKey,
         }),
-    },
-    launchTokens: {
-      pairwiseSubjectSecret: options.launchTokenPairwiseSecret,
     },
   };
 }
@@ -501,116 +388,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function optionalJwkString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-/**
- * Serve a signed installation export download, verifying the HMAC signature
- * and expiry before reading the archive off disk. Mirrors the Cloudflare
- * profile's `maybeHandleR2ExportDownload`: a request that does not carry a
- * valid `tk_sig` for the (URL, `tk_exp`) tuple is refused fail-closed.
- *
- * Activates only when export downloads are configured AND the request path
- * is under the configured `baseUrl` path (i.e. `baseUrl` points at this
- * server rather than at an external static server). The served file is
- * resolved by basename inside `outputDirectory`, so a traversal attempt
- * cannot escape the export directory.
- */
-async function maybeHandleExportDownload(
-  req: Request,
-  config: NodeAccountsExportDownloadConfig | undefined,
-): Promise<Response | undefined> {
-  if (!config) return undefined;
-  const url = new URL(req.url);
-  let basePath: string;
-  try {
-    basePath = new URL(config.baseUrl).pathname;
-  } catch {
-    return undefined;
-  }
-  if (!basePath.endsWith("/")) basePath = `${basePath}/`;
-  if (!url.pathname.startsWith(basePath)) return undefined;
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    return new Response("method not allowed", {
-      status: 405,
-      headers: { allow: "GET, HEAD" },
-    });
-  }
-  const verdict = await verifyExportDownloadUrl(req.url, {
-    secret: config.secret,
-  });
-  if (!verdict.ok) {
-    // Mirror the Cloudflare handler's status mapping: a malformed/absent
-    // signature is a client error (400), a wrong signature is forbidden
-    // (403), and an expired-but-well-formed URL is gone (410).
-    if (verdict.reason === "expired") {
-      return Response.json(
-        { error: "export_download_expired" },
-        {
-          status: 410,
-        },
-      );
-    }
-    if (verdict.reason === "missing") {
-      return Response.json(
-        { error: "invalid_export_download_url" },
-        {
-          status: 400,
-        },
-      );
-    }
-    return Response.json(
-      { error: "invalid_export_download_signature" },
-      {
-        status: 403,
-      },
-    );
-  }
-  // Resolve the file by basename only so a `..`/absolute path in the request
-  // cannot escape the export output directory.
-  const requestedName = posixBasename(decodeURIComponent(url.pathname));
-  if (
-    !requestedName ||
-    requestedName === "." ||
-    requestedName === ".." ||
-    requestedName.includes("/") ||
-    requestedName.includes("\\")
-  ) {
-    return Response.json(
-      { error: "invalid_export_download_url" },
-      {
-        status: 400,
-      },
-    );
-  }
-  const dir = config.outputDirectory.endsWith("/")
-    ? config.outputDirectory.slice(0, -1)
-    : config.outputDirectory;
-  const filePath = `${dir}/${requestedName}`;
-  const file = Bun.file(filePath);
-  if (!(await file.exists())) {
-    return Response.json(
-      { error: "export_artifact_not_found" },
-      {
-        status: 404,
-      },
-    );
-  }
-  const headers = new Headers({
-    "content-type": "application/zstd",
-    "cache-control": "private, max-age=0, no-store",
-    "x-content-type-options": "nosniff",
-  });
-  if (requestedName.endsWith(".age")) headers.set("content-encoding", "age");
-  if (req.method === "HEAD") {
-    return new Response(null, { headers });
-  }
-  return new Response(file.stream(), { headers });
-}
-
-/** Last path segment of a URL pathname (POSIX-style, no node:path dep). */
-function posixBasename(pathname: string): string {
-  const segments = pathname.split("/");
-  return segments[segments.length - 1] ?? "";
 }
 
 async function handleHealthz(pool: PgPool): Promise<Response> {
@@ -810,7 +587,7 @@ function wrapServiceSqlClient(pool: PgPool): ServiceSqlClient {
     },
     // Interactive transaction over a pinned connection: BEGIN / COMMIT, with a
     // best-effort ROLLBACK on any throw, mirroring core/index.ts. Atomic
-    // ledger commits (commitAppliedDeployment) run their whole write set here so
+    // ledger commits (commitRunState) run their whole write set here so
     // a mid-sequence failure rolls back instead of leaving torn state.
     async transaction<T>(
       fn: (transaction: ServiceSqlTransaction) => T | Promise<T>,

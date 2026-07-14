@@ -23,27 +23,30 @@ client
 
 ## Entry URL
 
-外部公開のエントリポイントはこれです。
+外部公開のエントリポイントは operator が公開した Takosumi origin 上のこれです。
 
 ```text
-https://app.takosumi.com/install
+https://<takosumi-origin>/install
 ```
+
+公式 Takosumi Cloud の origin は `app.takosumi.com` ですが、この protocol は
+self-host / Operator の任意の明示 origin でも同じです。
 
 dashboard 内では `/new` に正規化されることがありますが、外部クライアントは
 `/install` へリンクします。
 
 対応するクエリパラメータ:
 
-| Parameter         | Required | 意味                                               |
-| ----------------- | -------- | -------------------------------------------------- |
-| `git`             | no       | plain OpenTofu/Terraform module の HTTPS Git URL     |
-| `source`          | no       | `git::...?...` 形式の packed module address          |
-| `ref`             | no       | Git branch / tag / commit                            |
-| `path`            | no       | リポジトリ内の module path                           |
-| `name`            | no       | サービスの表示名                                     |
-| `var.<name>`      | no       | secret ではない可視の module input                   |
-| `product`         | no       | `return_uri` とセットで使うクライアント product key  |
-| `return_uri`      | no       | `product` とセットで使う connection payload の返却先 |
+| Parameter    | Required | 意味                                                 |
+| ------------ | -------- | ---------------------------------------------------- |
+| `git`        | no       | plain OpenTofu/Terraform module の HTTPS Git URL     |
+| `source`     | no       | `git::...?...` 形式の packed module address          |
+| `ref`        | no       | Git branch / tag / commit                            |
+| `path`       | no       | リポジトリ内の module path                           |
+| `name`       | no       | サービスの表示名                                     |
+| `var.<name>` | no       | secret ではない可視の module input                   |
+| `product`    | no       | `return_uri` とセットで使うクライアント product key  |
+| `return_uri` | no       | `product` とセットで使う connection payload の返却先 |
 
 `git` または `source` が作成対象を指定します。Store はこの URL を事前入力
 するための探索・表示の入口であり、作成対象や release ref の権限ではありません。
@@ -69,8 +72,8 @@ Protocol には該当しません。
 例:
 
 ```text
-https://app.takosumi.com/install
-  ?git=https%3A%2F%2Fgithub.com%2Facme%2Fnotes.git
+https://takosumi.example.com/install
+  ?git=https%3A%2F%2Fgit.example.com%2Facme%2Fnotes.git
   &ref=v1.2.3
   &path=deploy%2Fopentofu
   &product=notes-app

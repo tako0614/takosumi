@@ -14,6 +14,7 @@ const adapter: MobileProductAdapter = {
   appName: "Takos",
   hostNoun: "Takos host",
   hostCenterLabel: "Host Takos",
+  hostCenterUrl: "https://operator.example/install",
   hostCenterSource: {
     git: "https://github.com/acme/takos.git",
     path: "deploy/opentofu",
@@ -22,7 +23,7 @@ const adapter: MobileProductAdapter = {
   primaryActionLabel: "Connect",
   accentColor: "#166534",
   mobileScheme: "takos",
-  oidcClientId: "takos-mobile",
+  oidcScopes: ["openid", "profile", "offline_access"],
 };
 
 test("mobile client controller connects, signs in, and loads home", async () => {
@@ -31,6 +32,7 @@ test("mobile client controller connects, signs in, and loads home", async () => 
     adapter,
     nativeBridge: bridge,
     fetch: fixtureFetch(),
+    oidcScopes: ["openid", "profile", "spaces:read"],
     loadHome: async (session) => ({
       title: session.hostUrl,
     }),
@@ -46,6 +48,13 @@ test("mobile client controller connects, signs in, and loads home", async () => 
   await controller.startSignIn();
   const authorizeUrl = bridge.opened.at(-1);
   expect(authorizeUrl).toContain("https://host.example/oauth/authorize");
+  const authorize = new URL(authorizeUrl ?? "");
+  expect(authorize.searchParams.get("client_id")).toBe(
+    "takos-mobile-host-example",
+  );
+  expect(authorize.searchParams.get("scope")).toBe(
+    "openid profile spaces:read",
+  );
 
   const state = new URL(authorizeUrl ?? "").searchParams.get("state");
   await controller.completeSignIn(
@@ -178,6 +187,125 @@ test("mobile client controller restores session on start", async () => {
   expect(controller.getState().session?.accessToken).toBe("stored-token");
   expect(controller.getState().home).toEqual({ token: "stored-token" });
   expect(controller.getState().status).toBe("Session restored.");
+});
+
+test("mobile client does not restore stale home state after sign out", async () => {
+  const bridge = memoryBridge();
+  await bridge.storage?.set(
+    mobileSessionStorageKey(adapter),
+    JSON.stringify({
+      hostUrl: "https://host.example",
+      product: "takos",
+      oidcIssuer: "https://host.example",
+      accessToken: "stored-token",
+      tokenType: "Bearer",
+      createdAt: "2026-06-30T00:00:00.000Z",
+    }),
+  );
+  const homeStarted = deferred<void>();
+  const releaseHome = deferred<void>();
+  const controller = createMobileClientController({
+    adapter,
+    nativeBridge: bridge,
+    loadHome: async () => {
+      homeStarted.resolve();
+      await releaseHome.promise;
+      return { stale: true };
+    },
+  });
+
+  const starting = controller.start();
+  await homeStarted.promise;
+  await controller.signOut();
+  releaseHome.resolve();
+  await starting;
+
+  expect(controller.getState().session).toBeUndefined();
+  expect(controller.getState().home).toBeUndefined();
+  expect(controller.getState().homeLoading).toBe(false);
+  expect(controller.getState().status).toBe("Signed out.");
+});
+
+test("mobile client does not persist an OIDC completion that finishes after sign out", async () => {
+  const bridge = memoryBridge();
+  const tokenExchangeStarted = deferred<void>();
+  const releaseTokenExchange = deferred<void>();
+  const baseFetch = fixtureFetch();
+  const fetch: FetchLike = async (input, init) => {
+    if (String(input).endsWith("/oauth/token") && init?.method === "POST") {
+      tokenExchangeStarted.resolve();
+      await releaseTokenExchange.promise;
+    }
+    return await baseFetch(input, init);
+  };
+  const controller = createMobileClientController({
+    adapter,
+    nativeBridge: bridge,
+    fetch,
+  });
+
+  await controller.connectWithInput("https://host.example");
+  await controller.startSignIn();
+  const state = new URL(bridge.opened.at(-1) ?? "").searchParams.get("state");
+  const completion = controller.completeSignIn(
+    `takos://oauth/callback?code=code-1&state=${state}`,
+  );
+  await tokenExchangeStarted.promise;
+  await controller.signOut();
+  releaseTokenExchange.resolve();
+  await completion;
+
+  expect(controller.getState().session).toBeUndefined();
+  expect(
+    await bridge.storage?.get(mobileSessionStorageKey(adapter)),
+  ).toBeUndefined();
+});
+
+test("mobile client does not persist a token refresh that finishes after sign out", async () => {
+  const bridge = memoryBridge();
+  await bridge.storage?.set(
+    mobileSessionStorageKey(adapter),
+    JSON.stringify({
+      hostUrl: "https://host.example",
+      product: "takos",
+      oidcIssuer: "https://host.example",
+      oidcClientId: "takos-mobile-host-example",
+      accessToken: "expired-token",
+      tokenType: "Bearer",
+      refreshToken: "refresh-1",
+      createdAt: "2026-06-30T00:00:00.000Z",
+      expiresAt: "2026-06-30T00:00:01.000Z",
+    }),
+  );
+  const refreshStarted = deferred<void>();
+  const releaseRefresh = deferred<void>();
+  const baseFetch = fixtureFetch();
+  const fetch: FetchLike = async (input, init) => {
+    if (
+      String(input).endsWith("/oauth/token") &&
+      String(init?.body ?? "").includes("grant_type=refresh_token")
+    ) {
+      refreshStarted.resolve();
+      await releaseRefresh.promise;
+    }
+    return await baseFetch(input, init);
+  };
+  const controller = createMobileClientController({
+    adapter,
+    nativeBridge: bridge,
+    fetch,
+  });
+
+  const starting = controller.start();
+  await refreshStarted.promise;
+  await controller.signOut();
+  releaseRefresh.resolve();
+  await starting;
+
+  expect(controller.getState().session).toBeUndefined();
+  expect(
+    await bridge.storage?.get(mobileSessionStorageKey(adapter)),
+  ).toBeUndefined();
 });
 
 test("mobile client controller opens mobile route launch payloads on the current host", async () => {
@@ -382,6 +510,7 @@ test("mobile client controller refreshes an expired restored session", async () 
       hostUrl: "https://host.example",
       product: "takos",
       oidcIssuer: "https://host.example",
+      oidcClientId: "takos-mobile-host-example",
       accessToken: "expired-token",
       tokenType: "Bearer",
       refreshToken: "refresh-1",
@@ -417,6 +546,7 @@ test("mobile client controller clears a restored session when refresh fails", as
       hostUrl: "https://host.example",
       product: "takos",
       oidcIssuer: "https://host.example",
+      oidcClientId: "takos-mobile-host-example",
       accessToken: "expired-token",
       tokenType: "Bearer",
       refreshToken: "refresh-1",
@@ -573,6 +703,45 @@ test("mobile client controller registers push notifications through product call
   ]);
 });
 
+test("mobile client unregisters the previous host before activating push on a new host", async () => {
+  const bridge = memoryBridge({
+    pushRegistration: { token: "push-token", environment: "test" },
+  });
+  const lifecycle: string[] = [];
+  const controller = createMobileClientController({
+    adapter,
+    nativeBridge: bridge,
+    fetch: fixtureFetch(),
+    registerPush: async ({ session }) => {
+      lifecycle.push(`register:${session.hostUrl}`);
+    },
+    unregisterPush: async ({ session }) => {
+      lifecycle.push(`unregister:${session.hostUrl}`);
+    },
+  });
+
+  await controller.connectWithInput("https://first.example");
+  await controller.startSignIn();
+  let state = new URL(bridge.opened.at(-1) ?? "").searchParams.get("state");
+  await controller.completeSignIn(
+    `takos://oauth/callback?code=code-1&state=${state}`,
+  );
+
+  await controller.connectWithInput("https://second.example");
+  await controller.startSignIn();
+  state = new URL(bridge.opened.at(-1) ?? "").searchParams.get("state");
+  await controller.completeSignIn(
+    `takos://oauth/callback?code=code-2&state=${state}`,
+  );
+
+  expect(controller.getState().session?.hostUrl).toBe("https://second.example");
+  expect(lifecycle).toEqual([
+    "register:https://first.example",
+    "unregister:https://first.example",
+    "register:https://second.example",
+  ]);
+});
+
 test("mobile client controller handles push token refresh and notification events", async () => {
   const bridge = memoryBridge({
     pushRegistration: {
@@ -582,6 +751,8 @@ test("mobile client controller handles push token refresh and notification event
     pushEvents: true,
   });
   const registered: unknown[] = [];
+  const unregistered: unknown[] = [];
+  const pushLifecycle: string[] = [];
   const notifications: unknown[] = [];
   const controller = createMobileClientController({
     adapter,
@@ -589,6 +760,11 @@ test("mobile client controller handles push token refresh and notification event
     fetch: fixtureFetch(),
     registerPush: async (input) => {
       registered.push(input);
+      pushLifecycle.push(`register:${input.registration.token}`);
+    },
+    unregisterPush: async (input) => {
+      unregistered.push(input);
+      pushLifecycle.push(`unregister:${input.registration.token}`);
     },
     handlePushNotification: async (input) => {
       notifications.push(input);
@@ -617,6 +793,25 @@ test("mobile client controller handles push token refresh and notification event
     "Push notification token refreshed.",
   );
   expect(registered).toHaveLength(2);
+  expect(unregistered).toEqual([
+    {
+      session: controller.getState().session,
+      registration: { token: "push-token", environment: "test" },
+    },
+  ]);
+  expect(pushLifecycle).toEqual([
+    "register:push-token",
+    "register:rotated-token",
+    "unregister:push-token",
+  ]);
+
+  bridge.emitPushTokenRefresh({
+    token: "rotated-token",
+    environment: "test",
+  });
+  await settle();
+  expect(registered).toHaveLength(2);
+  expect(unregistered).toHaveLength(1);
 
   bridge.emitPushNotification("tapped", {
     title: "Chat",
@@ -652,6 +847,150 @@ test("mobile client controller handles push token refresh and notification event
   expect(registered).toHaveLength(2);
 });
 
+test("mobile client revokes a registration that finishes after sign out", async () => {
+  const bridge = memoryBridge({
+    pushRegistration: { token: "late-token", environment: "test" },
+    pushEvents: true,
+  });
+  const registrationStarted = deferred<void>();
+  const releaseRegistration = deferred<void>();
+  const registered: MobilePushRegistration[] = [];
+  const unregistered: MobilePushRegistration[] = [];
+  const controller = createMobileClientController({
+    adapter,
+    nativeBridge: bridge,
+    fetch: fixtureFetch(),
+    registerPush: async ({ registration }) => {
+      registered.push(registration);
+      registrationStarted.resolve();
+      await releaseRegistration.promise;
+    },
+    unregisterPush: async ({ registration }) => {
+      unregistered.push(registration);
+    },
+  });
+
+  await controller.connectWithInput("https://host.example");
+  await controller.startSignIn();
+  const state = new URL(bridge.opened.at(-1) ?? "").searchParams.get("state");
+  const completion = controller.completeSignIn(
+    `takos://oauth/callback?code=code-1&state=${state}`,
+  );
+  await registrationStarted.promise;
+
+  const signingOut = controller.signOut();
+  await settle();
+  expect(controller.getState().session).toBeUndefined();
+  releaseRegistration.resolve();
+  await signingOut;
+  await completion;
+
+  expect(registered).toEqual([{ token: "late-token", environment: "test" }]);
+  expect(unregistered).toEqual([{ token: "late-token", environment: "test" }]);
+  expect(controller.getState().session).toBeUndefined();
+  expect(controller.getState().pushRegistration).toBeUndefined();
+  expect(controller.getState().pushLoading).toBe(false);
+
+  bridge.emitPushTokenRefresh({ token: "stale-token", environment: "test" });
+  await settle();
+  expect(registered).toHaveLength(1);
+});
+
+test("mobile client serializes refreshes so the newest token remains authoritative", async () => {
+  const bridge = memoryBridge({
+    pushRegistration: { token: "initial-token", environment: "test" },
+    pushEvents: true,
+  });
+  const releaseSlowRefresh = deferred<void>();
+  const refreshStarted = deferred<void>();
+  const lifecycle: string[] = [];
+  const controller = createMobileClientController({
+    adapter,
+    nativeBridge: bridge,
+    fetch: fixtureFetch(),
+    registerPush: async ({ registration }) => {
+      lifecycle.push(`register:${registration.token}`);
+      if (registration.token === "slow-token") {
+        refreshStarted.resolve();
+        await releaseSlowRefresh.promise;
+      }
+    },
+    unregisterPush: async ({ registration }) => {
+      lifecycle.push(`unregister:${registration.token}`);
+    },
+  });
+
+  await controller.connectWithInput("https://host.example");
+  await controller.startSignIn();
+  const state = new URL(bridge.opened.at(-1) ?? "").searchParams.get("state");
+  await controller.completeSignIn(
+    `takos://oauth/callback?code=code-1&state=${state}`,
+  );
+
+  bridge.emitPushTokenRefresh({ token: "slow-token", environment: "test" });
+  await refreshStarted.promise;
+  bridge.emitPushTokenRefresh({ token: "newest-token", environment: "test" });
+  releaseSlowRefresh.resolve();
+  await settle();
+  await settle();
+
+  expect(controller.getState().pushRegistration).toEqual({
+    token: "newest-token",
+    environment: "test",
+  });
+  expect(controller.getState().pushLoading).toBe(false);
+  expect(lifecycle).toEqual([
+    "register:initial-token",
+    "register:slow-token",
+    "unregister:initial-token",
+    "register:newest-token",
+    "unregister:slow-token",
+  ]);
+});
+
+test("mobile client keeps the previous push token when refreshed registration fails", async () => {
+  const bridge = memoryBridge({
+    pushRegistration: { token: "push-token", environment: "test" },
+    pushEvents: true,
+  });
+  const unregistered: MobilePushRegistration[] = [];
+  const controller = createMobileClientController({
+    adapter,
+    nativeBridge: bridge,
+    fetch: fixtureFetch(),
+    registerPush: async ({ registration }) => {
+      if (registration.token === "rejected-token") {
+        throw new Error("host rejected refreshed token");
+      }
+    },
+    unregisterPush: async ({ registration }) => {
+      unregistered.push(registration);
+    },
+  });
+
+  await controller.connectWithInput("https://host.example");
+  await controller.startSignIn();
+  const state = new URL(bridge.opened.at(-1) ?? "").searchParams.get("state");
+  await controller.completeSignIn(
+    `takos://oauth/callback?code=code-1&state=${state}`,
+  );
+
+  bridge.emitPushTokenRefresh({
+    token: "rejected-token",
+    environment: "test",
+  });
+  await settle();
+
+  expect(controller.getState().pushRegistration).toEqual({
+    token: "push-token",
+    environment: "test",
+  });
+  expect(controller.getState().pushStatus).toBe(
+    "host rejected refreshed token",
+  );
+  expect(unregistered).toEqual([]);
+});
+
 test("mobile client controller keeps sign-in usable when push is unavailable", async () => {
   const bridge = memoryBridge();
   const controller = createMobileClientController({
@@ -679,10 +1018,14 @@ test("mobile client controller keeps sign-in usable when push is unavailable", a
 });
 
 test("mobile client controller clears discovered state on sign out", async () => {
+  let nativeUnregisterCount = 0;
   const bridge = memoryBridge({
     pushRegistration: {
       token: "push-token",
       environment: "test",
+    },
+    unregisterPush: async () => {
+      nativeUnregisterCount += 1;
     },
   });
   const unregistered: unknown[] = [];
@@ -735,6 +1078,7 @@ test("mobile client controller clears discovered state on sign out", async () =>
       },
     },
   ]);
+  expect(nativeUnregisterCount).toBe(1);
 });
 
 test("mobile client controller asks UI to focus when sign-in needs a host", async () => {
@@ -753,10 +1097,14 @@ test("mobile client controller asks UI to focus when sign-in needs a host", asyn
 function fixtureFetch(): FetchLike {
   return async (input, init) => {
     const url = String(input);
+    if (url.endsWith("/.well-known/takosumi")) {
+      return json({ issuer: new URL(url).origin });
+    }
     if (url.endsWith("/.well-known/takos")) {
       return json({
         product: "takos",
         issuer: new URL(url).origin,
+        oidcClientId: "takos-mobile-host-example",
       });
     }
     if (url.endsWith("/.well-known/openid-configuration")) {
@@ -769,6 +1117,7 @@ function fixtureFetch(): FetchLike {
     }
     if (url.endsWith("/oauth/token") && init?.method === "POST") {
       const body = String(init.body ?? "");
+      expect(body).toContain("client_id=takos-mobile-host-example");
       if (body.includes("grant_type=refresh_token")) {
         return json({
           access_token: "access-refreshed",
@@ -818,6 +1167,16 @@ async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function memoryBridge(
   options: {
     readonly launchPayload?: string;
@@ -829,6 +1188,7 @@ function memoryBridge(
       readonly environment?: string;
     };
     readonly pushEvents?: boolean;
+    readonly unregisterPush?: () => Promise<void>;
   } = {},
 ): NativeBridge & {
   readonly opened: string[];
@@ -920,6 +1280,7 @@ function memoryBridge(
           environment: options.pushRegistration!.environment ?? input.product,
         })
       : undefined,
+    unregisterPushNotifications: options.unregisterPush,
     onPushNotificationReceived: options.pushEvents
       ? async (handler) => {
           receivedHandlers.add(handler);

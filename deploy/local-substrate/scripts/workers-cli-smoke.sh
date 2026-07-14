@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# Smoke for local workerd/D1/R2 code paths.
+# Smoke for local workerd/D1 code paths.
 #
 # What this script verifies:
-#   1. takosumi Accounts Worker runs on workerd with D1/R2.
-#      The expected persistence=d1+r2 profile must route signed downloads
-#      through /__takosumi/exports and reject bad signatures as
-#      invalid_export_download_signature.
+#   1. takosumi Accounts Worker runs on workerd with D1.
 #   2. takosumi service Worker runs on workerd with Queue and DO
 #      through local-only worker probe ingress. app.takosumi.test remains the
 #      canonical platform host for user-facing flows.
-#   3. The Accounts installation run and OIDC discovery surfaces still answer.
+#   3. The canonical Capsule Run and OIDC discovery surfaces still answer.
 #   4. D1 binding semantics: the sqlite file underneath miniflare's D1
 #      emulator supports json_extract on the document column AND a
 #      multi-statement INSERT/SELECT round-trip — these are the two
@@ -127,38 +124,7 @@ DISC=$(curl -sk --cacert "$CA" --resolve "app.takosumi.test:443:127.0.0.1" https
 ISSUER=$(echo "$DISC" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('issuer',''))")
 [[ -n "$ISSUER" ]] || { echo "FAIL: /.well-known/openid-configuration missing issuer" >&2; exit 1; }
 
-SIGNED_EXPORT_SUMMARY="signed export route skipped on postgres profile"
-if [[ "$APP_HEALTH_KIND" == "worker" ]]; then
-	# 5. R2 export download route is worker-owned, not SPA fallback. A deliberately
-	#    bad signature should be rejected by the Worker with JSON, proving Caddy
-	#    forwards the signed export path to the Accounts Worker.
-	EXPORT_ROUTE_STATUS=""
-	EXPORT_ROUTE_BODY="/tmp/accounts-export-route-smoke.json"
-	probe_export_route() {
-		EXPORT_ROUTE_STATUS=$(curl -sk --cacert "$CA" -o "$EXPORT_ROUTE_BODY" -w "%{http_code}" \
-			--resolve "app.takosumi.test:443:127.0.0.1" \
-			"https://app.takosumi.test/__takosumi/exports/missing-object.json?expires=4102444800000&sig=bad")
-		[[ "$EXPORT_ROUTE_STATUS" == "403" ]] || return 1
-		python3 - "$EXPORT_ROUTE_BODY" <<'PY'
-import json, sys
-d = json.load(open(sys.argv[1]))
-assert d.get("error") == "invalid_export_download_signature", d
-PY
-	}
-
-	if ! probe_export_route; then
-		echo "WARN: /__takosumi/exports did not hit the Accounts Worker; recreating Caddy once to load current routes" >&2
-		compose_ingress_with_project_directory "$SUBSTRATE_DIR" up -d --force-recreate caddy >/dev/null
-		sleep 3
-	fi
-	if ! probe_export_route; then
-		echo "FAIL: /__takosumi/exports did not return Worker signature rejection (status=$EXPORT_ROUTE_STATUS body=$(cat "$EXPORT_ROUTE_BODY"))" >&2
-		exit 1
-	fi
-	SIGNED_EXPORT_SUMMARY="signed export route passed"
-fi
-
-# 6. D1 binding semantics — verify the sqlite file underneath miniflare's
+# 5. D1 binding semantics — verify the sqlite file underneath miniflare's
 #    D1 emulator has the json1 extension AND that a real INSERT-then-
 #    SELECT round-trip with json_extract works. Catches "miniflare image
 #    rebuilt without json1" or "schema migration silently lost the
@@ -182,7 +148,7 @@ for root, _dirs, files in os.walk("/data/d1"):
 PY
 )
 if [[ -z "$SQLITE_PATH" ]]; then
-	echo "OK app=$APP_HEALTH_KIND + service worker healthy via $SERVICE_HOST ($SIGNED_EXPORT_SUMMARY; D1 semantics check SKIPPED — sqlite path not yet materialised); issuer=$ISSUER"
+	echo "OK app=$APP_HEALTH_KIND + service worker healthy via $SERVICE_HOST (D1 semantics check SKIPPED — sqlite path not yet materialised); issuer=$ISSUER"
 	exit 0
 fi
 local_substrate_docker_run --rm -i \
@@ -213,4 +179,4 @@ assert r[0] == ":x\"y{z}", f"expected ':x\\\"y{{z}}', got {r[0]!r}"
 db.close()
 PY
 
-echo "OK app=$APP_HEALTH_KIND + service worker healthy via $SERVICE_HOST; $SIGNED_EXPORT_SUMMARY; D1 json1 + INSERT/SELECT semantics intact; issuer=$ISSUER"
+echo "OK app=$APP_HEALTH_KIND + service worker healthy via $SERVICE_HOST; D1 json1 + INSERT/SELECT semantics intact; issuer=$ISSUER"

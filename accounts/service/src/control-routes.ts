@@ -14,7 +14,7 @@
  * ownership gate, validation, error mapping, response shapes — all unchanged)
  * live in `control/<resource>.ts`; the `ControlPlaneOperations` facade lives in
  * `control-operations.ts`; cross-cutting helpers live in `control/shared.ts` /
- * `control/parse.ts` / `control/projection.ts`. Route ⇄ handler parity is
+ * `control/parse.ts`. Route ⇄ handler parity is
  * gated by `control-route-inventory.ts` (see {@link controlInventoryResourceKey}
  * and the inventory parity test).
  *
@@ -31,7 +31,6 @@ import {
   type AccountsBearerRequiredScope,
 } from "./account-session.ts";
 import type { AccountsStore } from "./store.ts";
-import type { SharedCellRuntimeAllocator } from "./runtime.ts";
 import type { ControlPlaneOperations } from "./control-operations.ts";
 import {
   type ControlDispatchContext,
@@ -54,11 +53,11 @@ import { handleStateVersions } from "./control/state-versions.ts";
 import { handleRuns, handleRunGroups } from "./control/runs.ts";
 import {
   handleConnections,
-  completeCloudflareOAuth,
+  completeConnectionOAuth,
 } from "./control/connections.ts";
 import { handleOutputShares } from "./control/output-shares.ts";
-import { handleBilling } from "./control/billing.ts";
 import { handleDashboard } from "./control/dashboard.ts";
+import { handleProjects } from "./control/projects.ts";
 import {
   appendServerTiming,
   measureServerTiming,
@@ -66,7 +65,7 @@ import {
 } from "./server-timing.ts";
 
 // Re-exports keep the pre-split import surface stable for in-tree consumers
-// (`mod.ts`, `control-personal-space.ts`, and the control-route tests).
+// (`mod.ts`, `control-personal-workspace.ts`, and the control-route tests).
 export type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
@@ -84,35 +83,32 @@ type ControlResourceHandler = (
 ) => Promise<Response | undefined>;
 
 /**
- * Resource dispatch table, keyed by the NORMALIZED first path segment (after
- * {@link normalizePublicControlSegments} maps the public Workspace/Capsule/
- * StateVersion vocabulary onto the historical internal handler names). This is
- * the single source of "which resource handler owns a route", and its key set
- * is gated against {@link control-route-inventory.ts} by the inventory parity
- * test.
+ * Resource dispatch table, keyed directly by the public v1 resource name. This
+ * is the single source of "which resource handler owns a route", and its key
+ * set is gated against {@link control-route-inventory.ts} by the inventory
+ * parity test.
  */
 const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
-  spaces: handleWorkspaces,
-  installations: handleCapsules,
-  "install-configs": handleInstallConfigs,
+  workspaces: handleWorkspaces,
+  projects: handleProjects,
+  capsules: handleCapsules,
+  "capsule-configs": handleInstallConfigs,
   "credential-recipes": handleCredentialRecipes,
   "provider-connections": handleProviderConnections,
   dependencies: handleDependencies,
   sources: handleSources,
   "compatibility-reports": handleCompatibilityReports,
-  deployments: handleStateVersions,
+  "state-versions": handleStateVersions,
   runs: handleRuns,
   "run-groups": handleRunGroups,
   connections: handleConnections,
   "output-shares": handleOutputShares,
-  billing: handleBilling,
   dashboard: handleDashboard,
 };
 
 /**
- * Retired public route roots from the pre-v1 control surface. These strings may
- * still exist as internal handler keys until the deeper ledger rename lands,
- * but they must not be accepted as public API paths.
+ * Retired public route roots from the pre-v1 control surface. They are rejected
+ * instead of being translated into the canonical v1 resources.
  */
 const RETIRED_PUBLIC_CONTROL_SEGMENTS = new Set([
   "spaces",
@@ -127,16 +123,14 @@ export const CONTROL_DISPATCH_RESOURCE_KEYS: readonly string[] =
 
 /**
  * Maps a public `/api/v1` inventory path to the dispatch resource key that
- * serves it, applying the SAME normalization the live dispatcher uses. Returns
- * `undefined` for non-`/api/v1` paths. Used by the inventory parity test to
- * assert every declared route has a registered handler (and vice versa).
+ * serves it. Returns `undefined` for non-`/api/v1` paths. Used by the inventory
+ * parity test to assert every declared route has a registered handler (and vice
+ * versa).
  */
 export function controlInventoryResourceKey(path: string): string | undefined {
   if (!isApiV1Path(path)) return undefined;
   const tail = path.slice(API_V1_PREFIX.length);
-  const segments = normalizePublicControlSegments(
-    tail.split("/").filter(Boolean),
-  );
+  const segments = tail.split("/").filter(Boolean);
   return segments[0];
 }
 
@@ -156,8 +150,6 @@ interface ControlRouteContext {
   readonly operations?: ControlPlaneOperations;
   readonly issuer?: string;
   readonly managedPublicBaseDomain?: string;
-  readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
-  readonly publicBillingPlans?: readonly Record<string, unknown>[];
 }
 
 /**
@@ -182,11 +174,21 @@ export async function handleControlRoute(
   // authenticated subject embedded in the HMAC-signed OAuth state (minted by
   // the cookie-authenticated `start`), not from the session cookie. Route it
   // BEFORE the session gate.
-  if (isCloudflareOAuthCallbackPath(url.pathname, request.method, prefix)) {
+  const connectionOAuthHelperId = connectionOAuthCallbackHelperId(
+    url.pathname,
+    request.method,
+    prefix,
+  );
+  if (connectionOAuthHelperId) {
     const operations = context.operations;
     if (!operations) return controlPlaneUnavailable();
     try {
-      return await completeCloudflareOAuth(operations, store, url);
+      return await completeConnectionOAuth(
+        operations,
+        store,
+        url,
+        connectionOAuthHelperId,
+      );
     } catch (error) {
       return controllerErrorResponse(error);
     }
@@ -194,7 +196,7 @@ export async function handleControlRoute(
 
   // Authn gate: every other control route requires a live account session or a
   // scoped personal access token. The dashboard presents the HttpOnly
-  // `takosumi_session` cookie; automation callers present a `takpat_*` bearer.
+  // `takosumi_session` cookie; automation callers present an opaque PAT bearer.
   // Workspace authorization is enforced per route below after the target Workspace is
   // known.
   const bearer = await measureServerTiming(timings, "tk_control_auth", () =>
@@ -207,9 +209,10 @@ export async function handleControlRoute(
   if (!bearer.ok) return appendServerTiming(bearer.response, timings);
 
   const operations = context.operations;
-  if (!operations) return appendServerTiming(controlPlaneUnavailable(), timings);
+  if (!operations)
+    return appendServerTiming(controlPlaneUnavailable(), timings);
 
-  const tail = url.pathname.slice(prefix.length); // e.g. "/spaces"
+  const tail = url.pathname.slice(prefix.length); // e.g. "/workspaces"
   try {
     const response = await measureServerTiming(
       timings,
@@ -226,8 +229,6 @@ export async function handleControlRoute(
             ? { managedPublicBaseDomain: context.managedPublicBaseDomain }
             : {}),
           session: { subject: bearer.auth.subject },
-          sharedCellRuntime: context.sharedCellRuntime,
-          publicBillingPlans: context.publicBillingPlans,
         }),
     );
     return appendServerTiming(response, timings);
@@ -250,20 +251,29 @@ function controlRouteRequiredScope(
 }
 
 /**
- * True for `GET /api/v1/connections/cloudflare/oauth/callback`. This is the
+ * Returns the opaque helper id for `GET /api/v1/connections/oauth/:id/callback`.
  * only control route reached cross-site, so it is dispatched before the
  * session-cookie gate and authorizes from the signed OAuth state instead
  * (see {@link handleControlRoute}).
  */
-function isCloudflareOAuthCallbackPath(
+function connectionOAuthCallbackHelperId(
   pathname: string,
   method: string,
   prefix: string,
-): boolean {
-  return (
-    method === "GET" &&
-    pathname === `${prefix}/connections/cloudflare/oauth/callback`
+): string | undefined {
+  if (method !== "GET") return undefined;
+  const match = pathname.match(
+    new RegExp(`^${prefix}/connections/oauth/([^/]+)/callback$`, "u"),
   );
+  if (!match?.[1]) return undefined;
+  try {
+    const helperId = decodeURIComponent(match[1]);
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(helperId)
+      ? helperId
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 interface DispatchInput {
@@ -275,8 +285,6 @@ interface DispatchInput {
   readonly issuer?: string;
   readonly managedPublicBaseDomain?: string;
   readonly session: { readonly subject: string };
-  readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
-  readonly publicBillingPlans?: readonly Record<string, unknown>[];
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
@@ -284,7 +292,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   if (RETIRED_PUBLIC_CONTROL_SEGMENTS.has(rawSegments[0] ?? "")) {
     return errorJson("not_found", "not found", 404);
   }
-  const segments = normalizePublicControlSegments(rawSegments);
+  const segments = rawSegments;
   const method = input.request.method;
   const key = segments[0];
   const handler = key !== undefined ? RESOURCE_HANDLERS[key] : undefined;
@@ -299,58 +307,9 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         ? { managedPublicBaseDomain: input.managedPublicBaseDomain }
         : {}),
       session: input.session,
-      ...(input.sharedCellRuntime
-        ? { sharedCellRuntime: input.sharedCellRuntime }
-        : {}),
-      ...(input.publicBillingPlans
-        ? { publicBillingPlans: input.publicBillingPlans }
-        : {}),
     };
     const response = await handler(ctx, segments, method);
     if (response) return response;
   }
   return errorJson("not_found", "not found", 404);
-}
-
-/**
- * Maps the public Workspace / Capsule / Capsule-config / StateVersion vocabulary
- * onto the historical first-segment names the dispatch table and per-resource
- * handlers still key on. Raw retired public paths are rejected before this
- * helper runs.
- */
-function normalizePublicControlSegments(
-  segments: readonly string[],
-): readonly string[] {
-  if (segments[0] === "source-sync-runs") {
-    return segments.map((segment, index) => (index === 0 ? "runs" : segment));
-  }
-  if (segments[0] === "capsule-configs") {
-    return segments.map((segment, index) =>
-      index === 0 ? "install-configs" : segment,
-    );
-  }
-  if (segments[0] === "workspaces") {
-    return segments.map((segment, index) =>
-      index === 0
-        ? "spaces"
-        : index === 2 && segment === "capsules"
-          ? "installations"
-          : segment,
-    );
-  }
-  if (segments[0] === "capsules") {
-    return segments.map((segment, index) =>
-      index === 0
-        ? "installations"
-        : index === 2 && segment === "state-versions"
-          ? "deployments"
-          : segment,
-    );
-  }
-  if (segments[0] === "state-versions") {
-    return segments.map((segment, index) =>
-      index === 0 ? "deployments" : segment,
-    );
-  }
-  return segments;
 }

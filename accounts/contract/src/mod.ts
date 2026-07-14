@@ -35,66 +35,6 @@ export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH =
   "/v1/auth/passkeys/authenticate/options";
 export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH =
   "/v1/auth/passkeys/authenticate/complete";
-/**
- * Base path of the accounts Capsule projection surface.
- *
- * This is a distribution-internal/supporting account-plane projection, not the
- * Takosumi deploy-control Capsule resource served at `/api/v1/capsules`.
- * It exists so installed services can receive identity metadata, billing usage
- * endpoints, export handoff, and service-token projections from the account
- * plane without competing with the public `/api/v1` control API or
- * reintroducing an app-store vocabulary.
- */
-const TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_BASE_PATH =
-  "/v1/capsule-projections";
-export const TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTION_PLAN_RUNS_PATH = `${TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_BASE_PATH}/plan-runs`;
-export const TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH =
-  TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_BASE_PATH;
-export const TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND =
-  "takosumi.accounts.capsule-export-bundle@v1";
-
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC =
-  "takosumi.identity.oidc";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT =
-  "takosumi.billing.usage";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_DEPLOYMENT_OUTPUTS_HTTP =
-  "takosumi.deployment.outputs";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT =
-  "takosumi.events.webhook";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CONTROL_API =
-  "takosumi.control.api";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY =
-  "takosumi.ai.gateway";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_PROVIDER_COMPAT_CLOUDFLARE_WORKERS =
-  "takosumi.provider_compat.cloudflare_workers";
-
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_IDENTITY_OIDC =
-  "identity.oidc";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_BILLING_USAGE =
-  "billing.usage";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_DEPLOYMENT_OUTPUTS =
-  "deployment.outputs";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_EVENTS_WEBHOOK =
-  "events.webhook";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_CONTROL_API = "control.api";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_MODEL = "ai.model";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_EMBEDDING_MODEL =
-  "ai.embedding_model";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_PROTOCOL_MCP_SERVER =
-  "protocol.mcp.server";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_STORAGE_FILESYSTEM =
-  "storage.filesystem";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_STORAGE_OBJECT =
-  "storage.object";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_SOURCE_REPOSITORY =
-  "source.repository";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_SOURCE_GIT_SMART_HTTP =
-  "source.git.smart_http";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_AGENT_RUNTIME =
-  "automation.agent_runtime";
-export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_TOOL_PROVIDER =
-  "automation.tool_provider";
-
 export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = ["read", "write", "admin"] as const;
 
 export const TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES = [
@@ -122,9 +62,7 @@ export interface TakosumiAccountsCreatePatRequest {
   name: string;
   scopes: readonly TakosumiAccountsPatScope[];
   workspace_id?: string;
-  workspaceId?: string;
   expires_at?: string;
-  expiresAt?: string;
 }
 
 export interface TakosumiAccountsCreatePatResponse {
@@ -186,10 +124,6 @@ export interface TakosumiAccountsListPrivacyRequestsResponse {
   requests: readonly TakosumiAccountsPrivacyRequest[];
 }
 
-export function takosumiAccountsCapsulePlanRunsPath(): string {
-  return TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTION_PLAN_RUNS_PATH;
-}
-
 export function takosumiAccountsAccountTokenRevokePath(
   tokenId: string,
 ): string {
@@ -212,105 +146,29 @@ export function takosumiAccountsPrivacyRequestCompletePath(
   return `${takosumiAccountsPrivacyRequestPath(requestId)}/complete`;
 }
 
-export function takosumiAccountsCapsulePath(capsuleId: string): string {
-  return `${TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH}/${pathSegment(
-    capsuleId,
-    "capsuleId",
-  )}`;
-}
-
-export function takosumiAccountsCapsuleStatusPath(capsuleId: string): string {
-  return `${takosumiAccountsCapsulePath(capsuleId)}/status`;
-}
-
-export function takosumiAccountsCapsuleRevisionsPath(
-  capsuleId: string,
-): string {
-  return `${takosumiAccountsCapsulePath(capsuleId)}/revisions`;
-}
-
-export function takosumiAccountsCapsuleRevisionPlanRunsPath(
-  capsuleId: string,
-): string {
-  return `${takosumiAccountsCapsuleRevisionsPath(capsuleId)}/plan-runs`;
-}
-
-export function takosumiAccountsCapsuleRollbackPath(capsuleId: string): string {
-  return `${takosumiAccountsCapsulePath(capsuleId)}/rollback`;
-}
-
-export function takosumiAccountsCapsuleMaterializePath(
-  capsuleId: string,
-): string {
-  return `${takosumiAccountsCapsulePath(capsuleId)}/materialize`;
-}
-
-export function takosumiAccountsCapsuleExportPath(capsuleId: string): string {
-  return `${takosumiAccountsCapsulePath(capsuleId)}/export`;
-}
-
-export function takosumiAccountsCapsuleExportOperationPath(
-  capsuleId: string,
-  operationId: string,
-): string {
-  return `${takosumiAccountsCapsulePath(capsuleId)}/exports/${pathSegment(
-    operationId,
-    "operationId",
-  )}`;
-}
-
-export function takosumiAccountsCapsuleExportDownloadPath(
-  capsuleId: string,
-  operationId: string,
-): string {
-  return `${takosumiAccountsCapsuleExportOperationPath(
-    capsuleId,
-    operationId,
-  )}/download`;
-}
-
-export function takosumiAccountsCapsuleEventsPath(capsuleId: string): string {
-  return `${takosumiAccountsCapsulePath(capsuleId)}/events`;
-}
-
-export function takosumiAccountsCapsuleServiceRotateTokenPath(
-  capsuleId: string,
-  serviceId: string,
-): string {
-  return `${takosumiAccountsCapsulePath(capsuleId)}/services/${pathSegment(
-    serviceId,
-    "serviceId",
-  )}/rotate-token`;
-}
-
-export function takosumiAccountsCapsuleBillingUsageReportsPath(
-  capsuleId: string,
-): string {
-  return `${takosumiAccountsCapsulePath(capsuleId)}/billing/usage-reports`;
-}
-
 export type TakosumiSubject = `tsub_${string}`;
-
-export type TakosumiCapsuleProjectionStatus =
-  "installing" | "ready" | "failed" | "suspended" | "exported";
-
-export type TakosumiCapsuleProjectionMode =
-  "shared-cell" | "dedicated" | "self-hosted";
 
 export interface TakosumiAccountsConfig {
   issuer?: string;
+  /** Optional operator-selected documentation URL advertised by discovery. */
+  serviceDocumentation?: string;
 }
 
 /**
  * A single sign-in method as reported by `GET /v1/auth/providers`. `id` is the
- * upstream provider id (`"google"`, a custom OIDC provider id) or
+ * upstream provider id (for example `"company-oidc"`) or
  * `"passkey"`; `enabled` reflects whether the operator has configured it on
- * this worker. Never carries credentials — only the id + flag the sign-in
- * screen needs to enable/disable its button.
+ * this worker. Current servers always publish `label` and `protocol`, so
+ * clients never infer presentation or behavior from a provider id. Never carries client
+ * identifiers, credentials, endpoints, or redirect URIs.
  */
 export interface TakosumiAccountsAuthProvider {
   readonly id: string;
   readonly enabled: boolean;
+  /** Operator-provided, non-secret display label. */
+  readonly label: string;
+  /** Open protocol token such as `oidc`, `oauth2`, or `webauthn`. */
+  readonly protocol: string;
 }
 
 /** Body of `GET /v1/auth/providers`. */
@@ -344,8 +202,8 @@ export interface OidcDiscoveryDocument {
   request_uri_parameter_supported: false;
   /** Claims parameter is not supported. */
   claims_parameter_supported: false;
-  /** Link to public docs describing the identity surface. */
-  service_documentation: string;
+  /** Operator-selected link describing this identity surface. */
+  service_documentation?: string;
   scopes_supported: readonly string[];
   claims_supported: readonly string[];
 }
@@ -389,67 +247,6 @@ export function normalizeIssuer(issuer?: string): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-/**
- * Deterministic JSON serialization: object keys sorted, arrays preserved,
- * scalars via `JSON.stringify`, `undefined`/missing collapsed to `null`. The
- * account-plane server hashes the same canonical form when it verifies a
- * client-issued permission digest, so this lives in the contract and both
- * sides import it (no drift between client and server encoders).
- */
-export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`;
-  }
-  if (typeof value === "object" && value !== null) {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value ?? null);
-}
-
-/** `sha256:<lowercase-hex>` digest of a UTF-8 string. */
-export async function sha256HexText(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(value),
-  );
-  return `sha256:${[...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("")}`;
-}
-
-export interface TakosumiAccountsCapsuleMaterializeDigestInput {
-  readonly capsuleId: string;
-  readonly mode: "dedicated";
-  readonly region: string;
-  readonly plan: Record<string, unknown>;
-  readonly cutover: Record<string, unknown>;
-}
-
-/**
- * Canonical `confirm.permissionDigest` for an installation materialize
- * (dedicated-cell promotion). The materialize endpoint recomputes this exact
- * digest and rejects the request unless it byte-matches, so the dashboard and
- * the server must derive it from this single function.
- */
-export function takosumiAccountsCapsuleMaterializeDigest(
-  input: TakosumiAccountsCapsuleMaterializeDigestInput,
-): Promise<string> {
-  return sha256HexText(
-    canonicalJson({
-      operation: "materialize",
-      capsuleId: input.capsuleId,
-      mode: input.mode,
-      region: input.region,
-      plan: input.plan,
-      cutover: input.cutover,
-    }),
-  );
-}
-
 export function buildOidcDiscoveryDocument(
   config: TakosumiAccountsConfig = {},
 ): OidcDiscoveryDocument {
@@ -476,7 +273,9 @@ export function buildOidcDiscoveryDocument(
     request_parameter_supported: false,
     request_uri_parameter_supported: false,
     claims_parameter_supported: false,
-    service_documentation: "https://takosumi.com/docs/identity",
+    ...(config.serviceDocumentation
+      ? { service_documentation: config.serviceDocumentation }
+      : {}),
     scopes_supported: [
       "openid",
       "profile",

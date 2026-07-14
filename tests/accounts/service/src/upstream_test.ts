@@ -2,27 +2,36 @@ import { expect, test } from "bun:test";
 import { assertEquals, assertRejects } from "../../../helpers/assert.ts";
 import {
   buildUpstreamAuthorizationUrl,
-  customOidcOAuthProvider,
+  oidcOAuthProvider,
   exchangeUpstreamAuthorizationCode,
-  googleOAuthProvider,
 } from "../../../../accounts/service/src/upstream.ts";
+
+function fixtureProvider() {
+  return oidcOAuthProvider({
+    id: "fixture-oidc",
+    issuer: "https://idp.example.test",
+    authorizationEndpoint: "https://idp.example.test/oauth/authorize",
+    tokenEndpoint: "https://idp.example.test/oauth/token",
+    userInfoEndpoint: "https://idp.example.test/oauth/userinfo",
+  });
+}
 
 test("buildUpstreamAuthorizationUrl includes scopes, state, and PKCE", () => {
   const url = buildUpstreamAuthorizationUrl({
-    provider: googleOAuthProvider(),
-    clientId: "google-client",
-    redirectUri: "https://accounts.example.test/callback/google",
+    provider: fixtureProvider(),
+    clientId: "fixture-client",
+    redirectUri: "https://accounts.example.test/callback/fixture-oidc",
     state: "state-1",
     codeChallenge: "challenge-1",
   });
 
   expect(url.origin + url.pathname).toEqual(
-    "https://accounts.google.com/o/oauth2/v2/auth",
+    "https://idp.example.test/oauth/authorize",
   );
   expect(url.searchParams.get("response_type")).toEqual("code");
-  expect(url.searchParams.get("client_id")).toEqual("google-client");
+  expect(url.searchParams.get("client_id")).toEqual("fixture-client");
   expect(url.searchParams.get("redirect_uri")).toEqual(
-    "https://accounts.example.test/callback/google",
+    "https://accounts.example.test/callback/fixture-oidc",
   );
   expect(url.searchParams.get("scope")).toEqual("openid profile email");
   expect(url.searchParams.get("state")).toEqual("state-1");
@@ -30,8 +39,8 @@ test("buildUpstreamAuthorizationUrl includes scopes, state, and PKCE", () => {
   expect(url.searchParams.get("code_challenge_method")).toEqual("S256");
 });
 
-test("customOidcOAuthProvider builds Keycloak-style authorization requests", () => {
-  const provider = customOidcOAuthProvider({
+test("oidcOAuthProvider builds explicit OIDC authorization requests", () => {
+  const provider = oidcOAuthProvider({
     id: "keycloak",
     issuer: "https://idp.example.test/realms/takos",
     authorizationEndpoint:
@@ -62,42 +71,45 @@ test("exchangeUpstreamAuthorizationCode exchanges token and derives stable subje
   const fetchImpl: typeof fetch = async (input, init) => {
     const request = new Request(input, init);
     requests.push(request);
-    if (request.url === "https://oauth2.googleapis.com/token") {
+    if (request.url === "https://idp.example.test/oauth/token") {
       expect(request.method).toEqual("POST");
       const body = new URLSearchParams(await request.text());
       expect(body.get("grant_type")).toEqual("authorization_code");
-      expect(body.get("client_id")).toEqual("google-client");
-      expect(body.get("client_secret")).toEqual("google-secret");
-      return Response.json({ access_token: "google-access-token" });
+      expect(body.get("client_id")).toEqual("fixture-client");
+      expect(body.get("client_secret")).toEqual("fixture-secret");
+      return Response.json({ access_token: "fixture-access-token" });
     }
-    if (request.url === "https://openidconnect.googleapis.com/v1/userinfo") {
+    if (request.url === "https://idp.example.test/oauth/userinfo") {
       expect(request.headers.get("authorization")).toEqual(
-        "Bearer google-access-token",
+        "Bearer fixture-access-token",
       );
-      return Response.json({ sub: "google-subject-123", name: "Google User" });
+      return Response.json({
+        sub: "fixture-subject-123",
+        name: "Fixture User",
+      });
     }
     return new Response("unexpected request", { status: 500 });
   };
 
   const result = await exchangeUpstreamAuthorizationCode({
-    provider: googleOAuthProvider(),
-    clientId: "google-client",
-    clientSecret: "google-secret",
-    redirectUri: "https://accounts.example.test/callback/google",
+    provider: fixtureProvider(),
+    clientId: "fixture-client",
+    clientSecret: "fixture-secret",
+    redirectUri: "https://accounts.example.test/callback/fixture-oidc",
     code: "code-1",
     subjectSecret: "subject-secret",
     fetch: fetchImpl,
   });
 
   expect(requests.length).toEqual(2);
-  expect(result.providerId).toEqual("google");
-  expect(result.upstreamIssuer).toEqual("https://accounts.google.com");
-  expect(result.upstreamSubject).toEqual("google-subject-123");
+  expect(result.providerId).toEqual("fixture-oidc");
+  expect(result.upstreamIssuer).toEqual("https://idp.example.test");
+  expect(result.upstreamSubject).toEqual("fixture-subject-123");
   expect(result.takosumiSubject.startsWith("tsub_")).toEqual(true);
 });
 
-test("exchangeUpstreamAuthorizationCode supports custom OIDC subject claims", async () => {
-  const provider = customOidcOAuthProvider({
+test("exchangeUpstreamAuthorizationCode supports explicit OIDC subject claims", async () => {
+  const provider = oidcOAuthProvider({
     id: "keycloak",
     issuer: "https://idp.example.test/realms/takos",
     authorizationEndpoint:
@@ -147,9 +159,9 @@ test("exchangeUpstreamAuthorizationCode supports custom OIDC subject claims", as
 test("exchangeUpstreamAuthorizationCode rejects missing upstream subjects", async () => {
   const fetchImpl: typeof fetch = (input, init) => {
     const request = new Request(input, init);
-    if (request.url === "https://oauth2.googleapis.com/token") {
+    if (request.url === "https://idp.example.test/oauth/token") {
       return Promise.resolve(
-        Response.json({ access_token: "google-access-token" }),
+        Response.json({ access_token: "fixture-access-token" }),
       );
     }
     return Promise.resolve(Response.json({ email: "user@example.test" }));
@@ -158,9 +170,9 @@ test("exchangeUpstreamAuthorizationCode rejects missing upstream subjects", asyn
   await assertRejects(
     () =>
       exchangeUpstreamAuthorizationCode({
-        provider: googleOAuthProvider(),
-        clientId: "google-client",
-        redirectUri: "https://accounts.example.test/callback/google",
+        provider: fixtureProvider(),
+        clientId: "fixture-client",
+        redirectUri: "https://accounts.example.test/callback/fixture-oidc",
         code: "code-1",
         subjectSecret: "subject-secret",
         fetch: fetchImpl,

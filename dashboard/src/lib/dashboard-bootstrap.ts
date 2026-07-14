@@ -7,12 +7,9 @@ export const DASHBOARD_WORKSPACE_BOOTSTRAP_PATH = `${DASHBOARD_BOOTSTRAP_PATH}?i
 
 export interface DashboardBootstrapSession {
   readonly subject: string;
-  readonly expires_at?: number;
   readonly expiresAt?: number;
-  readonly primary_account_id?: string;
   readonly primaryAccountId?: string;
   readonly provider?: string;
-  readonly display_name?: string;
   readonly displayName?: string;
   readonly email?: string;
 }

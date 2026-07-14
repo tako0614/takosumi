@@ -17,12 +17,12 @@ import {
 } from "../../../core/api/route_families.ts";
 
 const ALL_MOUNTED: RouteFamilyMountedFlags = {
-  runtimeAgentRoutesMounted: true,
   openApiRouteMounted: true,
   readinessRoutesMounted: true,
-  artifactRoutesMounted: true,
   deployControlInternalRoutesMounted: true,
   metricsRoutesMounted: true,
+  resourceShapeRoutesMounted: true,
+  interfaceRoutesMounted: true,
 };
 
 function toOpenApiPath(path: string): string {
@@ -61,6 +61,60 @@ test("all-mounted capabilities and openapi cover the same endpoint set", () => {
   );
 });
 
+test("Resource Shape OpenAPI publishes fail-closed TargetPool deletion", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const operation = openapi.paths["/v1/target-pools/{name}"]?.delete;
+  assert.ok(operation);
+  assert.ok(operation.responses["204"]);
+  assert.ok(operation.responses["409"]);
+  assert.ok(operation.responses["502"]);
+  assert.deepEqual(
+    operation.parameters?.map((parameter) => parameter.name),
+    ["name", "space"],
+  );
+});
+
+test("Resource Shape OpenAPI publishes bounded list pagination", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  for (const path of [
+    "/v1/resources",
+    "/v1/target-pools",
+    "/v1/space-policies",
+  ] as const) {
+    const operation = openapi.paths[path]?.get;
+    assert.ok(operation, path);
+    assert.deepEqual(
+      operation.parameters?.map((parameter) => parameter.name),
+      ["space", "limit", "cursor"],
+      path,
+    );
+  }
+  for (const schemaName of [
+    "ListResourceShapesResponse",
+    "ListTargetPoolsResponse",
+    "ListSpacePoliciesResponse",
+    "ListResourceEventsResponse",
+  ] as const) {
+    const schema = openapi.components.schemas[schemaName];
+    assert.ok(schema, schemaName);
+    assert.deepEqual(schema.properties.nextCursor, { type: "string" });
+  }
+
+  const events = openapi.paths["/v1/resources/{kind}/{name}/events"]?.get;
+  assert.ok(events);
+  assert.deepEqual(
+    events.parameters?.map((parameter) => parameter.name),
+    ["kind", "name", "space", "limit", "cursor"],
+  );
+  assert.deepEqual(
+    openapi.components.schemas.ListResourceEventsResponse.properties.events,
+    {
+      type: "array",
+      items: { $ref: "#/components/schemas/ResourceEvent" },
+    },
+  );
+});
+
 test("all-mounted inventories suppress internal seams and still publish process routes", () => {
   const capabilities = createApiCapabilitiesDescription(
     "takosumi-api",
@@ -90,10 +144,6 @@ test("all-mounted inventories suppress internal seams and still publish process 
     openapi["x-takos-mounted-route-families"].includes(
       "deployControl-internal",
     ),
-    false,
-  );
-  assert.equal(
-    openapi["x-takos-mounted-route-families"].includes("artifact"),
     false,
   );
 });
@@ -181,7 +231,7 @@ test("all-mounted route inventory keeps retired internal ledger routes hidden", 
     "PlanRun",
     "ApplyRun",
     "RunnerProfile",
-    "DeploymentOutput",
+    "ProjectedOutput",
     "StatusSummaryResponse",
   ] as const) {
     assert.equal(openapi.components.schemas[schemaName], undefined, schemaName);
@@ -207,7 +257,7 @@ test("public openapi component names do not expose internal deploy-control seams
     "PlanRun",
     "ApplyRun",
     "RunnerProfile",
-    "DeploymentOutput",
+    "ProjectedOutput",
   ];
 
   for (const schemaName of Object.keys(openapi.components.schemas)) {
@@ -255,12 +305,10 @@ test("customer-safe process openapi schemas are concrete", () => {
     "CreateOutputShareRequest",
     "OutputShareResponse",
     "ListOutputSharesResponse",
-    "ArtifactGcResponse",
     "ProviderRequirement",
     "ProviderResolution",
     "ProviderResolutionStatus",
     "CapsuleCompatibilityReport",
-    "DeployUploadSnapshotRequest",
     "Run",
   ] as const) {
     assert.equal(
@@ -276,18 +324,6 @@ test("customer-safe process openapi schemas are concrete", () => {
     openapi.components.schemas.ProviderEnvMaterialization,
     undefined,
   );
-  assert.equal(
-    openapi.components.schemas.DeployRequest?.properties?.providerEnvBindings,
-    undefined,
-    "internal upload deploy schema must not expose provider resolver bindings",
-  );
-  assert.equal(
-    openapi.components.schemas.DeployUploadSnapshotRequest,
-    undefined,
-  );
-  assert.equal(openapi.components.schemas.RuntimeAgentEnrollRequest, undefined);
-  assert.equal(openapi.components.schemas.RuntimeAgentResponse, undefined);
-  assert.equal(openapi.components.schemas.GatewayManifestResponse, undefined);
   assert.equal(
     openapi.components.schemas.RunEnvironment,
     undefined,
@@ -318,21 +354,12 @@ test("restore endpoint descriptor carries a concrete restore request schema", ()
   assert.equal(endpoint?.openapi.requestSchema, "CreateRestoreRequest");
 });
 
-test("mountedEndpoints gates families and always includes process endpoints", () => {
+test("mountedEndpoints with no families includes process endpoints", () => {
   const none = mountedEndpoints({});
   assert.deepEqual(
     none.map((e) => e.path),
     ALWAYS_MOUNTED_ENDPOINTS.map((e) => e.path),
   );
-
-  const onlyRuntimeAgent = mountedEndpoints({
-    runtimeAgentRoutesMounted: true,
-  });
-  assert.deepEqual(
-    onlyRuntimeAgent.map((e) => e.path),
-    ALWAYS_MOUNTED_ENDPOINTS.map((e) => e.path),
-  );
-  assert.ok(!onlyRuntimeAgent.some((e) => e.path === "/metrics"));
 });
 
 test("every endpoint descriptor has a unique operationId", () => {

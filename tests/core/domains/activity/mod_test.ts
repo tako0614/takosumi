@@ -2,19 +2,19 @@
  * Activity domain service tests (Core Specification §27 / §34).
  *
  * Covers: record mints id + createdAt and persists; list is newest-first +
- * limit-clamped + space-scoped; record is fire-and-forget (a store error is
+ * limit-clamped + Workspace-scoped; record is fire-and-forget (a store error is
  * swallowed, never thrown into the caller).
  */
 
 import { expect, test } from "bun:test";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import type { ActivityEvent } from "takosumi-contract/activity";
 
 function makeService(
-  store: OpenTofuDeploymentStore = new InMemoryOpenTofuDeploymentStore(),
-): { service: ActivityService; store: OpenTofuDeploymentStore } {
+  store: OpenTofuControlStore = new InMemoryOpenTofuControlStore(),
+): { service: ActivityService; store: OpenTofuControlStore } {
   let counter = 0;
   let clock = 0;
   return {
@@ -30,26 +30,26 @@ function makeService(
 test("record mints id + createdAt and persists", async () => {
   const { service } = makeService();
   const event = await service.record({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     actorId: "user_1",
-    action: "installation.created",
-    targetType: "installation",
-    targetId: "inst_1",
+    action: "capsule.created",
+    targetType: "capsule",
+    targetId: "capsule_1",
     metadata: { name: "shop" },
   });
 
   expect(event?.id).toBe("act_00000001");
   expect(event?.createdAt).toBe("2026-06-06T00:00:01.000Z");
-  expect(event?.spaceId).toBe("space_1");
+  expect(event?.workspaceId).toBe("workspace_1");
 
-  const listed = await service.list("space_1");
+  const listed = await service.list("workspace_1");
   expect(listed.map((e) => e.id)).toEqual(["act_00000001"]);
 });
 
 test("record redacts secret-shaped metadata before persisting", async () => {
   const { service, store } = makeService();
   await service.record({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     action: "connection.created",
     targetType: "connection",
     targetId: "conn_1",
@@ -61,7 +61,7 @@ test("record redacts secret-shaped metadata before persisting", async () => {
     },
   });
 
-  const [event] = await store.listActivityEvents("space_1");
+  const [event] = await store.listActivityEvents("workspace_1");
   expect(event?.metadata).toEqual({
     displayName: "Cloudflare",
     apiToken: "[REDACTED]",
@@ -70,30 +70,66 @@ test("record redacts secret-shaped metadata before persisting", async () => {
   });
 });
 
-test("list is newest-first, space-scoped, and limit-clamped", async () => {
+test("list is newest-first, Workspace-scoped, and limit-clamped", async () => {
   const { service } = makeService();
-  // Three in space_1 (clock advances each record), one in space_2.
-  await service.record(base({ targetId: "inst_a" })); // :01
-  await service.record(base({ targetId: "inst_b" })); // :02
-  await service.record(base({ targetId: "inst_c" })); // :03
-  await service.record(base({ spaceId: "space_2", targetId: "inst_x" })); // :04
+  // Three in workspace_1 (clock advances each record), one in workspace_2.
+  await service.record(base({ targetId: "capsule_a" })); // :01
+  await service.record(base({ targetId: "capsule_b" })); // :02
+  await service.record(base({ targetId: "capsule_c" })); // :03
+  await service.record(
+    base({ workspaceId: "workspace_2", targetId: "capsule_x" }),
+  ); // :04
 
-  // Newest first within the Space.
-  const listed = await service.list("space_1");
-  expect(listed.map((e) => e.targetId)).toEqual(["inst_c", "inst_b", "inst_a"]);
+  // Newest first within the Workspace.
+  const listed = await service.list("workspace_1");
+  expect(listed.map((e) => e.targetId)).toEqual([
+    "capsule_c",
+    "capsule_b",
+    "capsule_a",
+  ]);
 
-  // Space isolation.
-  expect((await service.list("space_2")).map((e) => e.targetId))
-    .toEqual(["inst_x"]);
-  expect((await service.list("space_missing")).length).toBe(0);
+  // Workspace isolation.
+  expect((await service.list("workspace_2")).map((e) => e.targetId)).toEqual([
+    "capsule_x",
+  ]);
+  expect((await service.list("workspace_missing")).length).toBe(0);
 
   // Limit caps the page (newest two).
-  expect((await service.list("space_1", 2)).map((e) => e.targetId))
-    .toEqual(["inst_c", "inst_b"]);
+  expect((await service.list("workspace_1", 2)).map((e) => e.targetId)).toEqual(
+    ["capsule_c", "capsule_b"],
+  );
+});
+
+test("listTargetPage filters one target and carries an opaque cursor", async () => {
+  const { service } = makeService();
+  for (const targetId of ["resource_a", "resource_b", "resource_a"] as const) {
+    await service.record(
+      base({ targetType: "resource", targetId, action: "resource.changed" }),
+    );
+  }
+
+  const first = await service.listTargetPage(
+    "workspace_1",
+    "resource",
+    "resource_a",
+    { limit: 1 },
+  );
+  expect(first.items.map((event) => event.targetId)).toEqual(["resource_a"]);
+  expect(first.nextCursor).toBeDefined();
+
+  const second = await service.listTargetPage(
+    "workspace_1",
+    "resource",
+    "resource_a",
+    { limit: 1, cursor: first.nextCursor! },
+  );
+  expect(second.items.map((event) => event.targetId)).toEqual(["resource_a"]);
+  expect(second.nextCursor).toBeUndefined();
+  expect(second.items[0]?.id).not.toBe(first.items[0]?.id);
 });
 
 test("record is fire-and-forget: a store error is swallowed, not thrown", async () => {
-  const throwingStore = new InMemoryOpenTofuDeploymentStore();
+  const throwingStore = new InMemoryOpenTofuControlStore();
   throwingStore.putActivityEvent = () =>
     Promise.reject(new Error("ledger unavailable"));
   const { service } = makeService(throwingStore);
@@ -107,10 +143,10 @@ function base(
   over: Partial<Omit<ActivityEvent, "id" | "createdAt">>,
 ): Omit<ActivityEvent, "id" | "createdAt"> {
   return {
-    spaceId: "space_1",
-    action: "installation.created",
-    targetType: "installation",
-    targetId: "inst_1",
+    workspaceId: "workspace_1",
+    action: "capsule.created",
+    targetType: "capsule",
+    targetId: "capsule_1",
     metadata: {},
     ...over,
   };

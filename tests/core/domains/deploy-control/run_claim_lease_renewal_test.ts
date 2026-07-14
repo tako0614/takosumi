@@ -1,20 +1,25 @@
 import { expect, test } from "bun:test";
 
 import {
-  OpenTofuDeploymentController,
+  OpenTofuController,
   type OpenTofuPlanResult,
   type OpenTofuApplyResult,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
-  type AcquireInstallationLeaseInput,
-  type InstallationCoordination,
-  InMemoryInstallationCoordination,
-  type InstallationLease,
-  type RenewInstallationLeaseInput,
-  type ReleaseInstallationLeaseInput,
-} from "../../../../core/domains/deploy-control/installation_lease.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import { seedInstallationModel } from "../../../helpers/deploy-control/model_fixture.ts";
+  type AcquireCapsuleLeaseInput,
+  type CapsuleCoordination,
+  InMemoryCapsuleCoordination,
+  type CapsuleLease,
+  type RenewCapsuleLeaseInput,
+  type ReleaseCapsuleLeaseInput,
+} from "../../../../core/domains/deploy-control/capsule_lease.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  type TransitionRunInput,
+  type TransitionRunResult,
+} from "../../../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import type {
   ApplyRun,
   PlanRun,
@@ -33,40 +38,45 @@ function planArtifact() {
 }
 
 /**
- * Seeds the Space-direct Installation model plus a succeeded PlanRun and a
- * QUEUED ApplyRun bound to the same Installation (mirrors apply_lease_test.ts's
+ * Seeds the Workspace-direct Capsule model plus a succeeded PlanRun and a
+ * QUEUED ApplyRun bound to the same Capsule (mirrors apply_lease_test.ts's
  * fixture). Returns the environment so the lease scope can be reconstructed.
  */
 async function seedApply(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   ids: {
-    installationId: string;
+    capsuleId: string;
     planRunId: string;
     applyRunId: string;
     environment?: string;
   },
 ): Promise<{ environment: string }> {
   const environment = ids.environment ?? "production";
-  const seedDeploymentId = `dep_seed_${ids.installationId}`;
-  const { installation, source, snapshot } = await seedInstallationModel(store, {
-    installationId: ids.installationId,
-    spaceId: `space_${ids.installationId}`,
-    sourceId: `src_${ids.installationId}`,
-    snapshotId: `snap_${ids.installationId}`,
-    installConfigId: `cfg_${ids.installationId}`,
+  const seedStateVersionId = `state_seed_${ids.capsuleId}`;
+  const { capsule, source, snapshot } = await seedCapsuleModel(store, {
+    capsuleId: ids.capsuleId,
+    workspaceId: `ws_${ids.capsuleId}`,
+    sourceId: `src_${ids.capsuleId}`,
+    snapshotId: `snap_${ids.capsuleId}`,
+    installConfigId: `cfg_${ids.capsuleId}`,
     environment,
   });
-  await store.putInstallation({
-    ...installation,
-    currentDeploymentId: seedDeploymentId,
+  await store.putCapsule({
+    ...capsule,
+    currentStateVersionId: seedStateVersionId,
     currentStateGeneration: 0,
     status: "active",
   });
   const planRun: PlanRun = {
     id: ids.planRunId,
-    spaceId: installation.spaceId,
-    installationId: ids.installationId,
-    installationCurrentDeploymentId: seedDeploymentId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: ids.capsuleId,
+    capsuleCurrentStateVersionId: seedStateVersionId,
+    capsuleContext: {
+      workspaceId: capsule.workspaceId,
+      capsuleId: ids.capsuleId,
+      environment,
+    },
     source: {
       kind: "git",
       url: source.url,
@@ -93,22 +103,22 @@ async function seedApply(
     planRunId: planRun.id,
     variables: {},
     generatedRoot: {
-      files: { "main.tf": 'module "app" { source = "./template-module" }' },
+      files: { "main.tf": 'module "child" { source = "./module" }' },
       moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
     },
   });
   const applyRun: ApplyRun = {
     id: ids.applyRunId,
     planRunId: ids.planRunId,
-    spaceId: installation.spaceId,
-    installationId: ids.installationId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: ids.capsuleId,
     operation: "update",
     runnerProfileId: "opentofu-default",
     status: "queued",
     expected: {
       planRunId: ids.planRunId,
-      installationId: ids.installationId,
-      currentDeploymentId: seedDeploymentId,
+      capsuleId: ids.capsuleId,
+      currentStateVersionId: seedStateVersionId,
       runnerProfileId: "opentofu-default",
       sourceDigest: "sha256:src",
       variablesDigest: "sha256:vars",
@@ -127,9 +137,9 @@ async function seedApply(
 }
 
 function controllerWith(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   options: {
-    coordination?: InstallationCoordination;
+    coordination?: CapsuleCoordination;
     now?: () => number;
     plan?: () => Promise<OpenTofuPlanResult>;
     apply?: () => Promise<OpenTofuApplyResult>;
@@ -138,7 +148,7 @@ function controllerWith(
     defaultRunnerProfileId?: string;
   } = {},
 ) {
-  return new OpenTofuDeploymentController({
+  return new OpenTofuController({
     store,
     ...(options.runnerProfiles
       ? { runnerProfiles: options.runnerProfiles }
@@ -147,12 +157,13 @@ function controllerWith(
       ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
       : {}),
     ...(options.coordination
-      ? { installationCoordination: options.coordination }
+      ? { capsuleCoordination: options.coordination }
       : {}),
     ...(options.runRenewalIntervalMs !== undefined
       ? { runRenewalIntervalMs: options.runRenewalIntervalMs }
       : {}),
     now: options.now ?? (() => 1),
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     newId: ((): ((p: string) => string) => {
       let n = 0;
       return (p) => `${p}_${(n += 1).toString().padStart(4, "0")}`;
@@ -167,9 +178,9 @@ function controllerWith(
 // --- cancel-vs-claim ---
 
 test("cancel that wins forces a later consumer claim to lose (no dispatch, no resurrection)", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await seedApply(store, {
-    installationId: "ins_cancel_first",
+    capsuleId: "cap_cancel_first",
     planRunId: "plan_cf",
     applyRunId: "apply_cf",
   });
@@ -194,9 +205,9 @@ test("cancel that wins forces a later consumer claim to lose (no dispatch, no re
 });
 
 test("a consumer claim that wins forces a concurrent cancel to be rejected (never clobbers the running apply)", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await seedApply(store, {
-    installationId: "ins_claim_first",
+    capsuleId: "cap_claim_first",
     planRunId: "plan_clf",
     applyRunId: "apply_clf",
   });
@@ -229,17 +240,120 @@ test("a consumer claim that wins forces a concurrent cancel to be rejected (neve
   expect(response.applyRun.status).toBe("succeeded");
 });
 
+test("a requeued destroy after successful pre_destroy cannot be cancelled or clear runtime safety", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedApply(store, {
+    capsuleId: "cap_destroy_requeued",
+    planRunId: "plan_destroy_requeued",
+    applyRunId: "apply_destroy_requeued",
+  });
+  const planRun = (await store.getPlanRun("plan_destroy_requeued"))!;
+  await store.putPlanRun({ ...planRun, operation: "destroy" });
+  const applyRun = (await store.getApplyRun("apply_destroy_requeued"))!;
+  await store.putApplyRun({
+    ...applyRun,
+    operation: "destroy",
+    status: "queued",
+    startedAt: 10,
+    heartbeatAt: undefined,
+    auditEvents: [
+      ...applyRun.auditEvents,
+      {
+        id: "audit_pre_destroy_succeeded",
+        type: "lifecycle_action.pre_destroy.succeeded",
+        at: 11,
+        data: {
+          phase: "pre_destroy",
+          status: "succeeded",
+          commandCount: 1,
+          actionDispatched: true,
+        },
+      },
+      {
+        id: "audit_destroy_retry",
+        type: "destroy.retry_scheduled",
+        at: 12,
+        data: { reason: "runner_infrastructure_error" },
+      },
+    ],
+    updatedAt: 12,
+  });
+  const controller = controllerWith(store);
+
+  await expect(controller.cancelRun("apply_destroy_requeued")).rejects.toThrow(
+    /has already started/,
+  );
+  expect((await store.getApplyRun("apply_destroy_requeued"))?.status).toBe(
+    "queued",
+  );
+  expect(
+    await store.getCapsuleRuntimeSafety("cap_destroy_requeued"),
+  ).toMatchObject({
+    phase: "terminating",
+    runId: "apply_destroy_requeued",
+    runType: "destroy_apply",
+  });
+});
+
+test("cancel loses when an apply is started and requeued between its read and CAS", async () => {
+  class RequeueBeforeCancelStore extends InMemoryOpenTofuControlStore {
+    #interceptCancel = true;
+
+    override async transitionRun(
+      input: TransitionRunInput,
+    ): Promise<TransitionRunResult> {
+      if (
+        this.#interceptCancel &&
+        input.kind === "apply" &&
+        input.run.status === "cancelled"
+      ) {
+        this.#interceptCancel = false;
+        const current = await this.getApplyRun(input.id);
+        if (current) {
+          await this.putApplyRun({
+            ...current,
+            status: "queued",
+            startedAt: 10,
+            updatedAt: 12,
+          });
+        }
+      }
+      return await super.transitionRun(input);
+    }
+  }
+
+  const store = new RequeueBeforeCancelStore();
+  await seedApply(store, {
+    capsuleId: "cap_cancel_requeue_race",
+    planRunId: "plan_cancel_requeue_race",
+    applyRunId: "apply_cancel_requeue_race",
+  });
+  const controller = controllerWith(store);
+
+  await expect(
+    controller.cancelRun("apply_cancel_requeue_race"),
+  ).rejects.toThrow(/has already started/);
+  expect(await store.getApplyRun("apply_cancel_requeue_race")).toMatchObject({
+    status: "queued",
+    startedAt: 10,
+    updatedAt: 12,
+  });
+});
+
 test("cancel that wins forces a later PLAN claim to lose (no dispatch)", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   // Seed a queued plan directly so we can race cancel vs the plan claim.
-  const { installation } = await seedInstallationModel(store, {
-    installationId: "ins_plan_cancel",
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: "ws_plan_cancel",
+    capsuleId: "cap_plan_cancel",
   });
   const planRun: PlanRun = {
     id: "plan_pc",
-    spaceId: installation.spaceId,
-    installationId: installation.id,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
     source: { kind: "git", url: "https://example.test/x.git", ref: "main" },
+    sourceDigest: "sha256:src",
+    variablesDigest: "sha256:vars",
     operation: "update",
     runnerProfileId: "opentofu-default",
     requiredProviders: [],
@@ -252,7 +366,7 @@ test("cancel that wins forces a later PLAN claim to lose (no dispatch)", async (
   };
   await store.putPlanRun(planRun);
   let planned = false;
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
     store,
     now: () => 1,
     newId: (p) => `${p}_x`,
@@ -277,9 +391,9 @@ test("cancel that wins forces a later PLAN claim to lose (no dispatch)", async (
 });
 
 test("two concurrent queued claims for the same apply: exactly one dispatches", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await seedApply(store, {
-    installationId: "ins_race",
+    capsuleId: "cap_race0001",
     planRunId: "plan_race",
     applyRunId: "apply_race",
   });
@@ -303,16 +417,18 @@ test("two concurrent queued claims for the same apply: exactly one dispatches", 
   // The winner reaches `succeeded`; the loser observes the winner's row (either
   // still `running` if it lost mid-flight, or the final `succeeded`). It never
   // re-runs the apply.
-  expect(statuses.every((s) => s === "running" || s === "succeeded")).toBe(true);
+  expect(statuses.every((s) => s === "running" || s === "succeeded")).toBe(
+    true,
+  );
   expect((await store.getApplyRun("apply_race"))?.status).toBe("succeeded");
 });
 
 // --- heartbeat + lease renewal during a long apply ---
 
 test("the run heartbeat is re-stamped AND the lease renewed while a long apply blocks in the runner", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await seedApply(store, {
-    installationId: "ins_hb",
+    capsuleId: "cap_hb000001",
     planRunId: "plan_hb",
     applyRunId: "apply_hb",
   });
@@ -321,19 +437,17 @@ test("the run heartbeat is re-stamped AND the lease renewed while a long apply b
   // heartbeat than the claim's startedAt heartbeat.
   let clock = 1000;
   const now = () => (clock += 1);
-  const coordination = new InMemoryInstallationCoordination({ now });
+  const coordination = new InMemoryCapsuleCoordination({ now });
 
   // Count renewLease calls (the renewal harness should fire at least once while
   // the apply blocks) without changing the in-memory renew semantics.
   let renewCalls = 0;
-  const observingCoordination: InstallationCoordination = {
-    acquireLease: (input: AcquireInstallationLeaseInput) =>
+  const observingCoordination: CapsuleCoordination = {
+    acquireLease: (input: AcquireCapsuleLeaseInput) =>
       coordination.acquireLease(input),
-    releaseLease: (input: ReleaseInstallationLeaseInput) =>
+    releaseLease: (input: ReleaseCapsuleLeaseInput) =>
       coordination.releaseLease(input),
-    renewLease: (
-      input: RenewInstallationLeaseInput,
-    ): Promise<InstallationLease> => {
+    renewLease: (input: RenewCapsuleLeaseInput): Promise<CapsuleLease> => {
       renewCalls += 1;
       return coordination.renewLease(input);
     },
@@ -369,27 +483,33 @@ test("the run heartbeat is re-stamped AND the lease renewed while a long apply b
 
   expect(response.applyRun.status).toBe("succeeded");
   // A renewal tick re-stamped the heartbeat past the claim value and renewed the
-  // installation lease while the apply was blocked in the runner.
+  // capsule lease while the apply was blocked in the runner.
   expect(renewCalls).toBeGreaterThan(0);
   expect(midFlightHeartbeat).toBeGreaterThan(claimHeartbeat);
 });
 
 test("the plan heartbeat is re-stamped while a long plan blocks in the runner", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const { installation, source, snapshot } = await seedInstallationModel(store, {
-    installationId: "ins_plan_hb",
+  const store = new InMemoryOpenTofuControlStore();
+  const { capsule, source, snapshot } = await seedCapsuleModel(store, {
+    workspaceId: "ws_plan_hb",
+    capsuleId: "cap_plan_hb",
   });
-  await store.putInstallation({
-    ...installation,
-    currentDeploymentId: "dep_seed_plan_hb",
+  await store.putCapsule({
+    ...capsule,
+    currentStateVersionId: "state_seed_plan_hb",
     currentStateGeneration: 0,
     status: "active",
   });
   const planRun: PlanRun = {
     id: "plan_hb_long",
-    spaceId: installation.spaceId,
-    installationId: installation.id,
-    installationCurrentDeploymentId: "dep_seed_plan_hb",
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    capsuleCurrentStateVersionId: "state_seed_plan_hb",
+    capsuleContext: {
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+    },
     source: {
       kind: "git",
       url: source.url,
@@ -397,6 +517,7 @@ test("the plan heartbeat is re-stamped while a long plan blocks in the runner", 
     },
     sourceSnapshotId: snapshot.id,
     sourceDigest: "sha256:src",
+    variablesDigest: "sha256:vars",
     operation: "update",
     runnerProfileId: "provider-free",
     requiredProviders: [],
@@ -412,7 +533,7 @@ test("the plan heartbeat is re-stamped while a long plan blocks in the runner", 
     planRunId: planRun.id,
     variables: {},
     generatedRoot: {
-      files: { "main.tf": 'module "app" { source = "./template-module" }' },
+      files: { "main.tf": 'module "child" { source = "./module" }' },
       moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
     },
   });
@@ -429,6 +550,9 @@ test("the plan heartbeat is re-stamped while a long plan blocks in the runner", 
         id: "provider-free",
         name: "Provider-free",
         substrate: "test",
+        executorId: "opentofu.default",
+        lifecycle: { state: "active" },
+        availability: { state: "available" },
         stateBackend: { kind: "local", ref: "state://test" } as never,
         allowedProviders: [],
         createdAt: 1,
@@ -436,7 +560,8 @@ test("the plan heartbeat is re-stamped while a long plan blocks in the runner", 
     ],
     defaultRunnerProfileId: "provider-free",
     plan: async () => {
-      claimHeartbeat = (await store.getPlanRun("plan_hb_long"))?.heartbeatAt ?? 0;
+      claimHeartbeat =
+        (await store.getPlanRun("plan_hb_long"))?.heartbeatAt ?? 0;
       const deadline = Date.now() + 1000;
       while (Date.now() < deadline) {
         const current =

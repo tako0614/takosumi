@@ -22,7 +22,7 @@ export interface OidcClientProjection {
   readonly accountsUrlVariable?: string;
   readonly clientIdVariable?: string;
   readonly redirectUriVariable?: string;
-  readonly callbackPath?: string;
+  readonly callbackPath: string;
   readonly scopes?: readonly string[];
 }
 

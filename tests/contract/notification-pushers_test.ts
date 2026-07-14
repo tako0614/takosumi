@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   createNotificationPusherId,
   createNotificationPushGatewayRequest,
+  MAX_NOTIFICATION_PUSHER_DATA_BYTES,
   MATRIX_PUSH_GATEWAY_NOTIFY_PATH,
   NOTIFICATION_PUSHER_REGISTRATION_PATH,
   parseNotificationPushGatewayRequest,
@@ -45,6 +46,134 @@ test("notification pusher contract parses Matrix-style HTTP pushers", () => {
   });
 });
 
+test("notification pusher data preserves bounded JSON without prototype mutation", () => {
+  const data = JSON.parse(`{
+    "url": "https://push.example/_matrix/push/v1/notify",
+    "format": "full",
+    "provider": "fcm",
+    "nested": { "values": [null, true, 42, "ok"] },
+    "__proto__": { "polluted": true }
+  }`) as unknown;
+  const parsed = parseNotificationPusherSetRequest({
+    product: "takos",
+    pusher: {
+      kind: "http",
+      app_id: "jp.takos.mobile",
+      pushkey: "device-token",
+      data,
+    },
+  });
+
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  expect(parsed.value.pusher.data.url).toBe(
+    "https://push.example/_matrix/push/v1/notify",
+  );
+  expect(parsed.value.pusher.data.format).toBe("full");
+  expect(parsed.value.pusher.data.provider).toBe("fcm");
+  expect(parsed.value.pusher.data.nested).toEqual({
+    values: [null, true, 42, "ok"],
+  });
+  expect(
+    Object.prototype.hasOwnProperty.call(parsed.value.pusher.data, "__proto__"),
+  ).toBe(true);
+  expect(
+    Object.getOwnPropertyDescriptor(parsed.value.pusher.data, "__proto__")
+      ?.value,
+  ).toEqual({ polluted: true });
+  expect(Object.getPrototypeOf(parsed.value.pusher.data)).toBe(
+    Object.prototype,
+  );
+  expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+});
+
+test("notification pusher data rejects oversized or structurally unsafe JSON", () => {
+  const cyclic: Record<string, unknown> = {
+    url: "https://push.example/_matrix/push/v1/notify",
+  };
+  cyclic.self = cyclic;
+
+  let tooDeep: Record<string, unknown> = { leaf: true };
+  for (let depth = 0; depth < 10; depth += 1) {
+    tooDeep = { nested: tooDeep };
+  }
+
+  let getterRead = false;
+  const accessorData: Record<string, unknown> = {
+    url: "https://push.example/_matrix/push/v1/notify",
+  };
+  Object.defineProperty(accessorData, "secret", {
+    enumerable: true,
+    get() {
+      getterRead = true;
+      return "must-not-run";
+    },
+  });
+
+  const inheritedData = Object.assign(Object.create({ inherited: true }), {
+    url: "https://push.example/_matrix/push/v1/notify",
+    provider: "fcm",
+  }) as Record<string, unknown>;
+  const symbolData: Record<string | symbol, unknown> = {
+    url: "https://push.example/_matrix/push/v1/notify",
+  };
+  symbolData[Symbol("hidden")] = true;
+  const sparseArray = Array(2) as unknown[];
+  sparseArray[1] = "present";
+
+  const cases: readonly (readonly [string, unknown])[] = [
+    [
+      "serialized bytes",
+      {
+        url: "https://push.example/_matrix/push/v1/notify",
+        first: "x".repeat(MAX_NOTIFICATION_PUSHER_DATA_BYTES / 2),
+        second: "y".repeat(MAX_NOTIFICATION_PUSHER_DATA_BYTES / 2),
+      },
+    ],
+    [
+      "entry count",
+      {
+        url: "https://push.example/_matrix/push/v1/notify",
+        ...Object.fromEntries(
+          Array.from({ length: 65 }, (_, index) => [`key_${index}`, index]),
+        ),
+      },
+    ],
+    [
+      "array length",
+      {
+        url: "https://push.example/_matrix/push/v1/notify",
+        values: Array.from({ length: 65 }, () => null),
+      },
+    ],
+    ["depth", { url: "https://push.example", nested: tooDeep }],
+    ["cycle", cyclic],
+    ["non-finite number", { url: "https://push.example", value: NaN }],
+    ["undefined", { url: "https://push.example", value: undefined }],
+    ["bigint", { url: "https://push.example", value: 1n }],
+    ["accessor", accessorData],
+    ["inherited prototype", inheritedData],
+    ["symbol property", symbolData],
+    ["non-JSON object", { url: "https://push.example", value: new Date() }],
+    ["sparse array", { url: "https://push.example", value: sparseArray }],
+  ];
+
+  for (const [label, unsafeData] of cases) {
+    const parsed = parseNotificationPusherSetRequest({
+      product: "takos",
+      pusher: {
+        kind: "http",
+        app_id: "jp.takos.mobile",
+        pushkey: `device-token-${label}`,
+        data: unsafeData,
+      },
+    });
+    expect(parsed.ok, label).toBe(false);
+    if (!parsed.ok) expect(parsed.error.field, label).toBe("pusher.data");
+  }
+  expect(getterRead).toBe(false);
+});
+
 test("notification pusher contract rejects invalid gateway URLs and product mismatches", () => {
   const invalidUrl = parseNotificationPusherSetRequest({
     product: "takos",
@@ -76,6 +205,38 @@ test("notification pusher contract rejects invalid gateway URLs and product mism
   );
   expect(mismatch.ok).toBe(false);
   if (!mismatch.ok) expect(mismatch.error.field).toBe("product");
+});
+
+test("notification pusher gateways require credential-free HTTPS outside loopback", () => {
+  for (const url of [
+    "http://push.example/_matrix/push/v1/notify",
+    "https://user:secret@push.example/_matrix/push/v1/notify",
+    "https://push.example:8443/_matrix/push/v1/notify",
+    "https://push.example/_matrix/push/v1/notify#fragment",
+  ]) {
+    const parsed = parseNotificationPusherSetRequest({
+      product: "takos",
+      pusher: {
+        kind: "http",
+        app_id: "jp.takos.mobile",
+        pushkey: "device-token",
+        data: { url },
+      },
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.error.field).toBe("pusher.data");
+  }
+
+  const loopback = parseNotificationPusherSetRequest({
+    product: "takos",
+    pusher: {
+      kind: "http",
+      app_id: "jp.takos.mobile",
+      pushkey: "device-token",
+      data: { url: "http://127.0.0.1:8787/_matrix/push/v1/notify" },
+    },
+  });
+  expect(loopback.ok).toBe(true);
 });
 
 test("notification pusher contract parses delete requests by app id and pushkey", () => {

@@ -6,7 +6,6 @@
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 import {
   chmod,
-  cp,
   lstat,
   mkdir,
   readFile,
@@ -28,7 +27,6 @@ import type {
 import {
   RUN_ROOT,
   CAPSULE_COMPATIBILITY_MAX_FILE_BYTES,
-  DEFAULT_PREPARED_SOURCE_MAX_BYTES,
   DEFAULT_SOURCE_ARCHIVE_MAX_BYTES,
   SOURCE_CREDENTIAL_ENV_NAMES,
 } from "./constants.ts";
@@ -43,11 +41,7 @@ import {
   shredCredentialDir,
 } from "./util.ts";
 import { redactCredentialOutput } from "./redaction.ts";
-import {
-  readResponseBytesWithCap,
-  runRequiredCommand,
-  runCommand,
-} from "./exec.ts";
+import { runRequiredCommand, runCommand } from "./exec.ts";
 import {
   assertSourceUrlPolicy,
   normalizeSourceSubtreePath,
@@ -56,11 +50,8 @@ import {
   assertSafeCredentialFileMode,
   safeDepName,
   assertSafeZstdTarArchive,
-  assertSafeTarArchive,
-  assertHttpsSourceUrl,
   assertResolvedHostNotBlocked,
   assertSafeGitSelector,
-  assertFullGitObjectId,
 } from "./policy.ts";
 import {
   sourceCredentialRedactionValues,
@@ -79,16 +70,21 @@ const REPOSITORY_INSTALL_METADATA_PATH = ".well-known/tcs.json";
 export async function ensureSourceAvailable(
   source: OpenTofuModuleSource,
   sourceRoot: string,
-  context: CommandContext,
 ): Promise<void> {
+  if (source.kind !== "git") {
+    throw new Error(
+      "operator_module source requires an explicit generated root",
+    );
+  }
   try {
     await assertDirectory(sourceRoot, "source root");
     if ((await readdir(sourceRoot)).length > 0) return;
   } catch {
-    // Materialize below.
+    // Report the immutable transport requirement below.
   }
-  await rm(sourceRoot, { recursive: true, force: true });
-  await materializeSource(source, sourceRoot, context);
+  throw new Error(
+    "Git SourceSnapshot archive must be restored before OpenTofu execution",
+  );
 }
 
 // ===========================================================================
@@ -161,7 +157,7 @@ export function parseSourceCredentials(request: unknown): SourceCredentials {
 interface ReusableSourceSnapshot {
   readonly id: string;
   readonly resolvedCommit: string;
-  readonly archiveObjectKey: string;
+  readonly archiveRef: string;
   readonly archiveDigest: string;
   readonly archiveSizeBytes: number;
 }
@@ -173,10 +169,10 @@ function parseReusableSourceSnapshot(
   if (!isRecord(snapshot)) return undefined;
   const id = requiredStringField(snapshot, "id");
   const resolvedCommit = requiredStringField(snapshot, "resolvedCommit");
-  const archiveObjectKey = requiredStringField(snapshot, "archiveObjectKey");
+  const archiveRef = requiredStringField(snapshot, "archiveRef");
   const archiveDigest = requiredStringField(snapshot, "archiveDigest");
   const archiveSizeBytes = snapshot.archiveSizeBytes;
-  assertSafeArchiveObjectKey(archiveObjectKey);
+  assertSafeArchiveObjectKey(archiveRef);
   if (!/^[0-9a-f]{7,64}$/iu.test(resolvedCommit)) {
     throw new Error(
       "reuseSnapshot.resolvedCommit must be a hex git object prefix",
@@ -197,7 +193,7 @@ function parseReusableSourceSnapshot(
   return {
     id,
     resolvedCommit: resolvedCommit.toLowerCase(),
-    archiveObjectKey,
+    archiveRef,
     archiveDigest: archiveDigest.toLowerCase(),
     archiveSizeBytes,
   };
@@ -211,13 +207,9 @@ export async function runSourceSync(
   const credentials = parseSourceCredentials(request);
   const reuseSnapshot = parseReusableSourceSnapshot(request);
   const runnerProfile = parseRunnerProfile(request);
-  // archiveObjectKey may sit at the request root or alongside source; accept
-  // either so the service lane can place it wherever the run record holds it.
-  const archiveObjectKey =
-    stringField(request, "archiveObjectKey") ??
-    stringField(recordField(request, "source"), "archiveObjectKey");
-  if (!archiveObjectKey) throw new Error("archiveObjectKey is required");
-  assertSafeArchiveObjectKey(archiveObjectKey);
+  const archiveRef = stringField(request, "archiveRef");
+  if (!archiveRef) throw new Error("archiveRef is required");
+  assertSafeArchiveObjectKey(archiveRef);
   const maxArchiveBytes =
     positiveIntegerLimitFromProfile(runnerProfile, "maxSourceArchiveBytes") ??
     DEFAULT_SOURCE_ARCHIVE_MAX_BYTES;
@@ -231,10 +223,9 @@ export async function runSourceSync(
   try {
     // SECURITY (SSRF): assertSourceUrlPolicy (run in parseSourceSyncSource) only
     // rejects IP *literals*. Before the credentialed git phase touches the
-    // network, resolve the source host (DoH) and reject if ANY resolved address
-    // is private/loopback/link-local — the same DNS-rebinding protection the
-    // plan/apply git path gets via assertHttpsSourceUrl. Fails closed when the
-    // host cannot be resolved.
+    // network, resolve the source host and reject if ANY resolved address is
+    // private/loopback/link-local. This fails closed when the host cannot be
+    // resolved.
     await timer.measure("source_host_policy", () =>
       assertResolvedHostNotBlocked(
         sourceUrlHost(source.url),
@@ -260,7 +251,7 @@ export async function runSourceSync(
           archiveSizeBytes: reuseSnapshot.archiveSizeBytes,
           sourceArchive: {
             kind: "object-storage",
-            archiveObjectKey: reuseSnapshot.archiveObjectKey,
+            ref: reuseSnapshot.archiveRef,
             digest: reuseSnapshot.archiveDigest,
             contentType: "application/zstd",
             sizeBytes: reuseSnapshot.archiveSizeBytes,
@@ -302,8 +293,8 @@ export async function runSourceSync(
     );
     // The archive is left at sourceArchivePath; the DO pulls it via
     // GET /runs/{runId}/artifacts/source-archive and persists to R2_SOURCE under
-    // archiveObjectKey (mirrors the tfplan pull-then-persist protocol). The key
-    // is echoed back so the DO knows where to write.
+    // the host-allocated archiveRef (mirrors the tfplan pull-then-persist
+    // protocol). The ref is echoed so the storage adapter knows where to write.
     return withPhaseTimings(
       {
         runId,
@@ -316,8 +307,7 @@ export async function runSourceSync(
         repositoryInstallMetadata,
         sourceArchive: {
           kind: "runner-local",
-          ref: `runner-local://${runId}/source-archive`,
-          archiveObjectKey,
+          ref: archiveRef,
           digest: archiveDigest,
           contentType: "application/zstd",
           sizeBytes: archiveBytes.byteLength,
@@ -463,14 +453,12 @@ export function sourceUrlHost(url: string): string {
   return new URL(url).hostname;
 }
 
-const IMPLICIT_DEFAULT_REF = "main";
-
 // Resolve the requested ref to a full commit sha. A full 40/64-hex ref is taken
 // verbatim (it is a commit id already); otherwise ls-remote resolves the
 // branch/tag. The ref is passed as a literal arg (never interpolated into a
-// shell string) and is validated by assertSafeGitSelector. When Takosumi's
-// implicit default `main` does not exist, fall back to the remote default HEAD
-// so older repositories with `master` still install without source metadata.
+// shell string) and is validated by assertSafeGitSelector. An omitted Source
+// ref is persisted as Git's symbolic `HEAD`, so this function never guesses a
+// provider- or convention-specific branch name.
 export async function resolveSourceCommit(
   source: SourceSyncSource,
   git: SourceGitContext,
@@ -488,25 +476,8 @@ export async function resolveSourceCommit(
     );
   }
   const commit = parseLsRemoteCommit(result.stdout, source.ref);
-  if (!commit) {
-    if (source.ref === IMPLICIT_DEFAULT_REF) {
-      const head = await runCommand(
-        ["git", "ls-remote", "--symref", "--", source.url, "HEAD"],
-        { cwd: RUN_ROOT, context: git.context },
-      );
-      if (head.exitCode !== 0) {
-        throw new Error(
-          `git ls-remote HEAD fallback failed: ${redactCredentialOutput(
-            head.stderr || head.stdout,
-            git.context,
-          )}`,
-        );
-      }
-      const headCommit = parseLsRemoteCommit(head.stdout, "HEAD");
-      if (headCommit) return headCommit;
-    }
+  if (!commit)
     throw new Error(`source ref did not resolve to a commit: ${source.ref}`);
-  }
   return commit;
 }
 
@@ -576,23 +547,7 @@ export async function shallowCloneAtCommit(
     ["git", "fetch", "--depth", "1", "--no-tags", "origin", "--", source.ref],
     { cwd: sourceRoot, context: git.context },
   );
-  if (fetchRef.exitCode !== 0 && source.ref === IMPLICIT_DEFAULT_REF) {
-    const fetchHead = await runCommand(
-      ["git", "fetch", "--depth", "1", "--no-tags", "origin", "--", "HEAD"],
-      { cwd: sourceRoot, context: git.context },
-    );
-    if (fetchHead.exitCode !== 0) {
-      throw new Error(
-        `git fetch failed with ${fetchHead.exitCode}: ${redactCredentialOutput(
-          fetchHead.stderr ||
-            fetchHead.stdout ||
-            fetchRef.stderr ||
-            fetchRef.stdout,
-          git.context,
-        )}`,
-      );
-    }
-  } else if (fetchRef.exitCode !== 0) {
+  if (fetchRef.exitCode !== 0) {
     throw new Error(
       `git fetch failed with ${fetchRef.exitCode}: ${redactCredentialOutput(
         fetchRef.stderr || fetchRef.stdout,
@@ -718,7 +673,7 @@ export async function handleSourceArchiveArtifactRequest(
 // M2 SOURCE-ARCHIVE RESTORE: the DO streams the snapshotted source archive
 // (deterministic tar.zst produced by a prior source_sync) to this route. We
 // write the bytes, list+validate the archive metadata with the SAME tar-slip
-// hardening used for prepared sources, then extract into /work/source as the
+// hardening used for all SourceSnapshot archives, then extract into /work/source as the
 // source tree for the generated-root and OpenTofu phases. The archive already
 // contains the snapshot subtree (source_sync archived `source.path`), so it is
 // extracted at the source root with no path remap.
@@ -831,75 +786,6 @@ export async function handleDepStateRestoreRequest(
       },
       { status: 500 },
     );
-  }
-}
-
-export async function materializeSource(
-  source: OpenTofuModuleSource,
-  sourceRoot: string,
-  context: CommandContext,
-): Promise<void> {
-  switch (source.kind) {
-    case "git":
-      await assertHttpsSourceUrl(source.url, "git source url");
-      if (source.ref) assertSafeGitSelector(source.ref, "git source ref");
-      if (source.commit)
-        assertFullGitObjectId(source.commit, "git source commit");
-      await runRequiredCommand(["git", "clone", source.url, sourceRoot], {
-        cwd: RUN_ROOT,
-        context,
-      });
-      if (source.ref) {
-        await runRequiredCommand(["git", "checkout", source.ref], {
-          cwd: sourceRoot,
-          context,
-        });
-      }
-      if (source.commit) {
-        await runRequiredCommand(["git", "checkout", source.commit], {
-          cwd: sourceRoot,
-          context,
-        });
-      }
-      return;
-    case "prepared": {
-      await assertHttpsSourceUrl(source.url, "prepared source url");
-      const response = await fetch(source.url, { redirect: "error" });
-      if (!response.ok) {
-        throw new Error(`prepared source fetch failed: ${response.status}`);
-      }
-      const bytes = await readResponseBytesWithCap(
-        response,
-        context.sourceArchiveMaxBytes ?? DEFAULT_PREPARED_SOURCE_MAX_BYTES,
-        "prepared source archive",
-      );
-      const digest = await digestBytes(bytes);
-      if (digest !== source.digest) {
-        throw new Error(`prepared source digest mismatch: ${digest}`);
-      }
-      const archivePath = join(sourceRoot, "..", "source.tar.gz");
-      await mkdir(sourceRoot, { recursive: true });
-      await writeFile(archivePath, bytes);
-      await assertSafeTarArchive(archivePath, context);
-      await runRequiredCommand(
-        [
-          "tar",
-          "-x",
-          "-z",
-          "-f",
-          archivePath,
-          "--no-same-owner",
-          "--keep-old-files",
-          "-C",
-          sourceRoot,
-        ],
-        { cwd: RUN_ROOT, context },
-      );
-      return;
-    }
-    case "local":
-      await cp(source.path, sourceRoot, { recursive: true });
-      return;
   }
 }
 

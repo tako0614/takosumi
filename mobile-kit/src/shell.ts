@@ -30,7 +30,11 @@ export function createFirstRunActions(
       description: `Use a ${adapter.hostNoun} connection payload.`,
     },
   ];
-  if (adapter.hostCenterLabel && adapter.hostCenterSource) {
+  if (
+    adapter.hostCenterLabel &&
+    adapter.hostCenterUrl &&
+    adapter.hostCenterSource
+  ) {
     actions.push({
       id: "host",
       label: adapter.hostCenterLabel,
@@ -50,7 +54,11 @@ export function createHostCenterHref(input: {
   if (!input.adapter.hostCenterSource) {
     throw new Error("Host Center source is not configured for this app.");
   }
+  if (!input.adapter.hostCenterUrl) {
+    throw new Error("Host Center URL is not configured for this app.");
+  }
   return createTakosumiHostCenterUrl({
+    hostCenterUrl: input.adapter.hostCenterUrl,
     product: requireMobileProductKey(
       input.adapter.hostCenterProduct ?? input.adapter.product,
       "Host Center product",

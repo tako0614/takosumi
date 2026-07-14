@@ -14,8 +14,8 @@ export interface AuditEvent {
   readonly type: string;
   readonly severity: AuditSeverity;
   readonly actor?: ActorContext;
-  readonly spaceId?: string;
-  readonly groupId?: string;
+  readonly workspaceId?: string;
+  readonly runGroupId?: string;
   readonly targetType: string;
   readonly targetId?: string;
   readonly payload: JsonObject;
@@ -25,8 +25,8 @@ export interface AuditEvent {
 }
 
 export interface AuditEventQuery {
-  readonly spaceId?: string;
-  readonly groupId?: string;
+  readonly workspaceId?: string;
+  readonly runGroupId?: string;
   readonly targetType?: string;
   readonly targetId?: string;
   readonly type?: string;

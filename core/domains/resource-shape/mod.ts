@@ -8,7 +8,7 @@ export * from "./records.ts";
 export * from "./stores.ts";
 export * from "./adapter.ts";
 export * from "./plugin_adapter.ts";
-export * from "./backing_capsule.ts";
 export * from "./resolver.ts";
 export * from "./planner.ts";
 export * from "./service.ts";
+export * from "./legacy_state_adoption.ts";

@@ -48,9 +48,9 @@ export class InMemoryObservabilitySink implements ObservabilitySink {
 
   listMetrics(query: MetricEventQuery = {}): Promise<readonly MetricEvent[]> {
     return Promise.resolve(
-      this.#metrics.filter((event) => matchesMetricQuery(event, query)).map(
-        cloneMetricEvent,
-      ),
+      this.#metrics
+        .filter((event) => matchesMetricQuery(event, query))
+        .map(cloneMetricEvent),
     );
   }
 
@@ -61,9 +61,9 @@ export class InMemoryObservabilitySink implements ObservabilitySink {
 
   listTraces(query: TraceSpanQuery = {}): Promise<readonly TraceSpanEvent[]> {
     return Promise.resolve(
-      this.#traces.filter((event) => matchesTraceSpanQuery(event, query)).map(
-        cloneTraceSpanEvent,
-      ),
+      this.#traces
+        .filter((event) => matchesTraceSpanQuery(event, query))
+        .map(cloneTraceSpanEvent),
     );
   }
 }
@@ -74,8 +74,9 @@ function matchesMetricQuery(
 ): boolean {
   if (query.name && event.name !== query.name) return false;
   if (query.kind && event.kind !== query.kind) return false;
-  if (query.spaceId && event.spaceId !== query.spaceId) return false;
-  if (query.groupId && event.groupId !== query.groupId) return false;
+  if (query.workspaceId && event.workspaceId !== query.workspaceId)
+    return false;
+  if (query.runGroupId && event.runGroupId !== query.runGroupId) return false;
   if (query.since && event.observedAt < query.since) return false;
   if (query.until && event.observedAt > query.until) return false;
   return true;
@@ -98,8 +99,9 @@ function matchesTraceSpanQuery(
   if (query.name && event.name !== query.name) return false;
   if (query.kind && event.kind !== query.kind) return false;
   if (query.status && event.status !== query.status) return false;
-  if (query.spaceId && event.spaceId !== query.spaceId) return false;
-  if (query.groupId && event.groupId !== query.groupId) return false;
+  if (query.workspaceId && event.workspaceId !== query.workspaceId)
+    return false;
+  if (query.runGroupId && event.runGroupId !== query.runGroupId) return false;
   if (query.since && event.startTime < query.since) return false;
   if (query.until && event.endTime > query.until) return false;
   return true;

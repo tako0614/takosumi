@@ -1,10 +1,15 @@
-export const platformReadinessKind = "takosumi.platform-readiness@v1";
+import type {
+  PlatformReadinessConsistencyRule,
+  PlatformReadinessEvidenceSchema,
+} from "takosumi-contract";
+
+export const platformReadinessKind = "takosumi.platform-readiness@v2";
 export const platformReadinessReportKind =
-  "takosumi.platform-readiness-report@v1";
+  "takosumi.platform-readiness-report@v2";
 export const platformReadinessPublicSummaryKind =
-  "takosumi.platform-readiness-public-summary@v1";
+  "takosumi.platform-readiness-public-summary@v2";
 export const platformReadinessPublicSummaryReportKind =
-  "takosumi.platform-readiness-public-summary-report@v1";
+  "takosumi.platform-readiness-public-summary-report@v2";
 export const platformReadinessProductionTopologyKind =
   "takosumi.production-topology@v1";
 export const platformReadinessProductionTopologyReportKind =
@@ -16,31 +21,28 @@ export const platformReadinessDomainIds = [
   "production-topology",
   "oidc-account-security",
   "signup-tenant-lifecycle",
-  "billing-entitlement",
-  "quota-abuse-spend-control",
-  "shared-cell-production-runtime",
-  "dedicated-materialize",
+  "quota-abuse-control",
+  "runner-pool-production-runtime",
+  "runner-profile-migration",
   "export-self-host-sovereignty",
   "backup-dr",
   "observability-slo-on-call",
   "release-provenance",
   "security-operations",
-  "legal-privacy-support",
-  "customer-operations",
+  "legal-privacy",
 ] as const;
 export const platformReadinessRehearsalStepIds = [
   "fresh-signup",
   "capsule-launch",
   "git-url-install",
   "quota-abuse-drill",
-  "shared-cell-load",
-  "dedicated-materialize",
-  "export-self-host-import",
+  "runner-pool-load",
+  "runner-profile-migration",
+  "export-self-host-migration",
   "backup-restore",
   "sev-simulation",
   "release-rollback",
   "privacy-operation",
-  "billing-operation",
 ] as const;
 export const platformReadinessEvidenceEnvironments = [
   "staging",
@@ -80,52 +82,33 @@ export const platformReadinessRequiredEvidenceTypes = {
       "fresh-user-smoke",
       "email-assurance",
       "team-membership",
-      "launch-token-consume",
       "capsule-created",
-      "terms-acceptance",
       "suspend-recover",
     ],
-    "billing-entitlement": [
-      "stripe-sandbox",
-      "stripe-live",
-      "entitlement",
-      "usage-meter",
-      "usage-aggregation-policy",
-      "invoice",
-      "tax-policy",
-      "plan-transition",
-      "failed-payment",
-      "dunning",
-      "refund-credit",
-      "suspend-recover",
-    ],
-    "quota-abuse-spend-control": [
+    "quota-abuse-control": [
       "quota-plan",
-      "spend-cap",
-      "llm-tool-usage-cap",
       "quota-spike-drill",
       "noisy-tenant-throttle",
       "run-kill-switch",
-      "abuse-queue-review",
       "operator-override",
       "audit-event",
     ],
-    "shared-cell-production-runtime": [
+    "runner-pool-production-runtime": [
       "load-test",
       "isolation-test",
       "metric-labels",
       "scale-drain-event",
       "evacuation-record",
     ],
-    "dedicated-materialize": [
-      "materialize-drill",
+    "runner-profile-migration": [
+      "runner-profile-migration-drill",
       "readiness-probe",
       "rollback-drill",
       "continuity-evidence",
     ],
     "export-self-host-sovereignty": [
       "encrypted-export",
-      "self-host-import",
+      "self-host-migration",
       "sample-data-verification",
     ],
     "backup-dr": [
@@ -155,41 +138,17 @@ export const platformReadinessRequiredEvidenceTypes = {
     "security-operations": [
       "threat-model",
       "sandbox-review",
-      "vulnerability-sla",
+      "vulnerability-response-policy",
       "secret-inventory",
       "secret-rotation-run-log",
       "security-contact",
       "deploy-control-abuse-blocked",
     ],
-    "legal-privacy-support": [
-      "legal-signoff",
-      "public-legal-pages",
-      "support-mailbox-test",
-      "sar-delete-rehearsal",
-      "billing-support-runbook",
-    ],
-    "customer-operations": [
-      "onboarding-guide",
-      "admin-guide",
-      "billing-faq",
-      "export-guide",
-      "escalation-matrix",
-      "suspension-delete-export-wording",
-    ],
+    "legal-privacy": ["sar-delete-rehearsal"],
   },
   rehearsal: {
-    "fresh-signup": [
-      "signup-event",
-      "email-assurance",
-      "team-membership",
-      "terms-acceptance",
-      "entitlement-event",
-    ],
-    "capsule-launch": [
-      "launch-token-consume",
-      "capsule-created",
-      "capsule-session",
-    ],
+    "fresh-signup": ["signup-event", "email-assurance", "team-membership"],
+    "capsule-launch": ["capsule-created", "capsule-session"],
     "git-url-install": [
       "capsule-plan-run",
       "cost-review",
@@ -198,23 +157,23 @@ export const platformReadinessRequiredEvidenceTypes = {
       "event-hash-chain",
     ],
     "quota-abuse-drill": ["quota-exceeded", "guard-action", "override-audit"],
-    "shared-cell-load": [
+    "runner-pool-load": [
       "two-tenant-load",
       "isolation-proof",
       "per-capsule-metrics",
       "scale-or-drain",
     ],
-    "dedicated-materialize": [
+    "runner-profile-migration": [
       "readiness-before-cutover",
-      "materialize-cutover",
+      "runner-profile-cutover",
       "rollback-before-final",
       "domain-preservation",
       "preserve-evidence",
     ],
-    "export-self-host-import": [
+    "export-self-host-migration": [
       "encrypted-export",
-      "clean-import",
-      "post-import-login",
+      "clean-migration",
+      "post-migration-login",
       "sample-data-verification",
       "source-retention-state",
     ],
@@ -225,28 +184,154 @@ export const platformReadinessRequiredEvidenceTypes = {
       "rpo-rto-sample",
     ],
     "sev-simulation": ["alert", "ack", "status-update", "postmortem"],
-    "release-rollback": ["release-promotion", "rollback", "support-note"],
+    "release-rollback": ["release-promotion", "rollback", "release-note"],
     "privacy-operation": [
       "export-or-delete-request",
       "login-disabled-or-exported",
       "retention-record",
     ],
-    "billing-operation": [
-      "invoice-paid",
-      "failed-payment",
-      "dunning-suspension",
-      "recovery-refund-credit",
-    ],
   },
 } as const;
+
+/** Cross-reference equality rules for the built-in rehearsal evidence. */
+export const platformReadinessConsistencyRules: {
+  readonly domains: Readonly<
+    Record<string, readonly PlatformReadinessConsistencyRule[]>
+  >;
+  readonly rehearsal: Readonly<
+    Record<string, readonly PlatformReadinessConsistencyRule[]>
+  >;
+} = {
+  domains: {},
+  rehearsal: {
+    "fresh-signup": [
+      {
+        field: "accountId",
+        evidenceTypes: ["signup-event", "email-assurance", "team-membership"],
+      },
+      {
+        field: "workspaceId",
+        evidenceTypes: ["signup-event", "team-membership"],
+      },
+    ],
+    "capsule-launch": [
+      {
+        field: "capsuleId",
+        evidenceTypes: ["capsule-created", "capsule-session"],
+      },
+    ],
+    "git-url-install": [
+      {
+        field: "planDigest",
+        evidenceTypes: ["capsule-plan-run", "cost-review", "capsule-apply"],
+      },
+      {
+        field: "capsuleId",
+        evidenceTypes: [
+          "capsule-plan-run",
+          "capsule-apply",
+          "oidc-login",
+          "event-hash-chain",
+        ],
+      },
+    ],
+    "quota-abuse-drill": [
+      {
+        field: "accountId",
+        evidenceTypes: ["quota-exceeded", "guard-action", "override-audit"],
+      },
+    ],
+    "runner-pool-load": [
+      {
+        field: "loadRunId",
+        evidenceTypes: ["two-tenant-load", "isolation-proof"],
+      },
+      {
+        field: "runnerPoolId",
+        evidenceTypes: [
+          "two-tenant-load",
+          "per-capsule-metrics",
+          "scale-or-drain",
+        ],
+      },
+      {
+        field: "tenantACapsuleId",
+        evidenceTypes: ["two-tenant-load", "per-capsule-metrics"],
+      },
+      {
+        field: "tenantBCapsuleId",
+        evidenceTypes: ["two-tenant-load", "per-capsule-metrics"],
+      },
+    ],
+    "runner-profile-migration": [
+      {
+        field: "capsuleId",
+        evidenceTypes: [
+          "readiness-before-cutover",
+          "runner-profile-cutover",
+          "rollback-before-final",
+          "domain-preservation",
+          "preserve-evidence",
+        ],
+      },
+      {
+        field: "targetRunnerProfileId",
+        evidenceTypes: ["readiness-before-cutover", "runner-profile-cutover"],
+      },
+      {
+        field: "oidcClientId",
+        evidenceTypes: ["domain-preservation", "preserve-evidence"],
+      },
+      {
+        field: "domainName",
+        evidenceTypes: ["domain-preservation", "preserve-evidence"],
+      },
+    ],
+    "export-self-host-migration": [
+      {
+        field: "migrationId",
+        evidenceTypes: ["clean-migration", "post-migration-login"],
+      },
+      {
+        field: "accountId",
+        evidenceTypes: ["post-migration-login", "source-retention-state"],
+      },
+    ],
+    "sev-simulation": [
+      {
+        field: "incidentId",
+        evidenceTypes: ["alert", "ack", "status-update", "postmortem"],
+      },
+    ],
+    "release-rollback": [
+      {
+        field: "releaseCandidate",
+        evidenceTypes: ["release-promotion", "rollback", "release-note"],
+      },
+    ],
+    "privacy-operation": [
+      {
+        field: "requestId",
+        evidenceTypes: [
+          "export-or-delete-request",
+          "login-disabled-or-exported",
+          "retention-record",
+        ],
+      },
+      {
+        field: "accountId",
+        evidenceTypes: [
+          "export-or-delete-request",
+          "login-disabled-or-exported",
+        ],
+      },
+    ],
+  },
+};
+
 export const platformReadinessStructuredEvidenceRequirements: Record<
   string,
-  {
-    fields?: readonly string[];
-    anyOf?: readonly (readonly string[])[];
-    values?: Record<string, string>;
-    allowedValues?: Record<string, readonly string[]>;
-  }
+  PlatformReadinessEvidenceSchema
 > = {
   "staging-manifest": {
     fields: ["topologyEnvironment", "manifestRef", "componentCount"],
@@ -327,57 +412,12 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
       "briefRef",
       "targetCustomer",
       "launchScope",
-      "sku",
       "quotaPlanRef",
-      "billingMeterRef",
-      "supportTier",
-      "supportSlaRef",
-      "freeTrialPolicyRef",
       "acceptedUsePolicyRef",
-      "betaScopeRef",
     ],
   },
   "operator-signoff": {
     fields: ["signoffId", "signedBy"],
-  },
-  "stripe-sandbox": {
-    fields: ["checkoutSessionId", "webhookEventId"],
-    values: { mode: "sandbox" },
-  },
-  "stripe-live": {
-    fields: ["checkoutSessionId", "webhookEventId"],
-    values: { mode: "live" },
-  },
-  entitlement: {
-    fields: ["accountId", "workspaceId", "entitlementStatus"],
-    allowedValues: { entitlementStatus: ["active"] },
-  },
-  "usage-meter": {
-    fields: ["meter", "quantity", "usageReportId"],
-  },
-  "usage-aggregation-policy": {
-    fields: ["policyRef", "windowStart", "windowEnd"],
-  },
-  invoice: {
-    fields: ["invoiceId", "status"],
-    allowedValues: { status: ["paid"] },
-  },
-  "tax-policy": {
-    fields: ["policyRef", "jurisdiction"],
-  },
-  "plan-transition": {
-    fields: ["subscriptionId", "fromPlan", "toPlan"],
-  },
-  "failed-payment": {
-    fields: ["invoiceId", "webhookEventId"],
-  },
-  dunning: {
-    fields: ["dunningRunId", "action"],
-    allowedValues: { action: ["dunning-notified", "suspend"] },
-  },
-  "refund-credit": {
-    fields: ["accountId"],
-    anyOf: [["refundId", "creditNoteId"]],
   },
   "suspend-recover": {
     fields: ["suspensionEventId", "recoveryEventId"],
@@ -415,7 +455,7 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     allowedValues: {
       assuranceMethod: [
         "email-verified",
-        "google-oauth-session",
+        "upstream-identity-session",
         "operator-invited",
         "enterprise-idp",
       ],
@@ -427,12 +467,6 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
   },
   "quota-plan": {
     fields: ["planId", "quotaPlanRef"],
-  },
-  "spend-cap": {
-    fields: ["workspaceId", "spendCapRef", "cap", "currency"],
-  },
-  "llm-tool-usage-cap": {
-    fields: ["llmUsageCapRef", "toolUsageCapRef"],
   },
   "quota-spike-drill": {
     fields: [
@@ -453,10 +487,6 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     fields: ["killSwitchRunId", "runId", "guardResult"],
     allowedValues: { guardResult: ["blocked", "suspended", "queued"] },
   },
-  "abuse-queue-review": {
-    fields: ["queueReviewId", "reviewQueueRef", "decision"],
-    allowedValues: { decision: ["reviewed", "blocked", "allowed"] },
-  },
   "operator-override": {
     fields: ["overrideEventId", "operatorId"],
   },
@@ -466,7 +496,7 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
       "tenantCount",
       "tenantACapsuleId",
       "tenantBCapsuleId",
-      "runtimeCellId",
+      "runnerPoolId",
     ],
   },
   "isolation-test": {
@@ -477,13 +507,13 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     fields: ["dashboardRef", "labelSet"],
   },
   "scale-drain-event": {
-    fields: ["runtimeCellId", "eventId"],
+    fields: ["runnerPoolId", "eventId"],
   },
   "evacuation-record": {
-    fields: ["evacuationRunId", "runtimeCellId"],
+    fields: ["evacuationRunId", "runnerPoolId"],
   },
-  "materialize-drill": {
-    fields: ["materializeOperationId", "capsuleId"],
+  "runner-profile-migration-drill": {
+    fields: ["migrationOperationId", "capsuleId"],
   },
   "readiness-probe": {
     fields: ["probeRunId", "endpoint"],
@@ -496,15 +526,15 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
       "oidcClientId",
       "domainName",
       "dataNamespace",
-      "serviceGrantDigest",
+      "interfaceBindingDigest",
       "noDataLossCheckId",
     ],
   },
   "encrypted-export": {
     fields: ["exportId", "archiveDigest", "ageRecipient"],
   },
-  "self-host-import": {
-    fields: ["importId", "targetHost", "oidcIssuer"],
+  "self-host-migration": {
+    fields: ["migrationId", "targetHost", "oidcIssuer"],
   },
   "sample-data-verification": {
     fields: ["verificationRunId", "dataClasses"],
@@ -557,7 +587,7 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     fields: ["reviewId", "decision"],
     allowedValues: { decision: ["accepted"] },
   },
-  "vulnerability-sla": {
+  "vulnerability-response-policy": {
     fields: ["policyRef", "dashboardRef"],
   },
   "secret-inventory": {
@@ -589,58 +619,13 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
   "status-update": {
     fields: ["incidentId", "statusPageUpdateId"],
   },
-  "legal-signoff": {
-    fields: ["signoffId", "signedBy"],
-  },
-  "public-legal-pages": {
-    fields: ["termsUrl", "privacyUrl", "dpaUrl"],
-  },
-  "support-mailbox-test": {
-    fields: ["mailbox", "testId"],
-  },
   "sar-delete-rehearsal": {
     fields: ["requestId", "result"],
     allowedValues: { result: ["passed"] },
   },
-  "billing-support-runbook": {
-    fields: ["runbookRef", "owner"],
-  },
-  "onboarding-guide": {
-    fields: ["guideRef", "reviewedBy"],
-  },
-  "admin-guide": {
-    fields: ["guideRef", "reviewedBy"],
-  },
-  "billing-faq": {
-    fields: ["faqRef", "reviewedBy"],
-  },
-  "export-guide": {
-    fields: ["guideRef", "reviewedBy"],
-  },
-  "escalation-matrix": {
-    fields: ["matrixRef", "reviewedBy"],
-  },
-  "suspension-delete-export-wording": {
-    fields: ["wordingRef", "reviewedBy"],
-  },
   "signup-event": {
     fields: ["eventId", "workspaceId"],
     anyOf: [["accountId", "sessionSubject", "sessionSubjectDigest"]],
-  },
-  "terms-acceptance": {
-    fields: ["eventId", "accountId"],
-    anyOf: [["termsVersion", "termsVisibleAt", "termsPageDigest"]],
-  },
-  "entitlement-event": {
-    fields: ["eventId", "accountId"],
-    anyOf: [["entitlementId", "entitlementStatus"]],
-  },
-  "launch-token-consume": {
-    fields: ["capsuleId"],
-    anyOf: [
-      ["launchTokenJti", "launchUrlDigest"],
-      ["sessionId", "sessionSubject", "sessionSubjectDigest"],
-    ],
   },
   "capsule-created": {
     fields: ["capsuleId", "workspaceId", "sourceUrl", "commitSha"],
@@ -686,7 +671,7 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     fields: [
       "tenantACapsuleId",
       "tenantBCapsuleId",
-      "runtimeCellId",
+      "runnerPoolId",
       "loadRunId",
     ],
   },
@@ -696,24 +681,24 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
   },
   "per-capsule-metrics": {
     fields: [
-      "runtimeCellId",
+      "runnerPoolId",
       "tenantACapsuleId",
       "tenantBCapsuleId",
       "metricsDashboardRef",
     ],
   },
   "scale-or-drain": {
-    fields: ["runtimeCellId", "eventId", "action"],
+    fields: ["runnerPoolId", "eventId", "action"],
     allowedValues: { action: ["scale", "drain"] },
   },
-  "materialize-cutover": {
-    fields: ["capsuleId", "materializeOperationId", "targetRuntimeTargetId"],
+  "runner-profile-cutover": {
+    fields: ["capsuleId", "migrationOperationId", "targetRunnerProfileId"],
   },
   "readiness-before-cutover": {
-    fields: ["capsuleId", "probeRunId", "targetRuntimeTargetId"],
+    fields: ["capsuleId", "probeRunId", "targetRunnerProfileId"],
   },
   "rollback-before-final": {
-    fields: ["capsuleId", "rollbackOperationId", "sourceRuntimeTargetId"],
+    fields: ["capsuleId", "rollbackOperationId", "sourceRunnerProfileId"],
   },
   "domain-preservation": {
     fields: ["capsuleId", "domainName", "oidcClientId"],
@@ -727,12 +712,12 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
       "dataNamespace",
     ],
   },
-  "clean-import": {
-    fields: ["importId", "targetHost", "result"],
+  "clean-migration": {
+    fields: ["migrationId", "targetHost", "result"],
     allowedValues: { result: ["passed"] },
   },
-  "post-import-login": {
-    fields: ["importId", "accountId", "sessionId"],
+  "post-migration-login": {
+    fields: ["migrationId", "accountId", "sessionId"],
   },
   "source-retention-state": {
     fields: ["accountId", "retentionRecordId", "state"],
@@ -758,8 +743,8 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
   rollback: {
     fields: ["releaseCandidate", "rollbackRunId", "targetDigest"],
   },
-  "support-note": {
-    fields: ["releaseCandidate", "supportNoteRef"],
+  "release-note": {
+    fields: ["releaseCandidate", "releaseNoteRef"],
   },
   "export-or-delete-request": {
     fields: ["requestId", "accountId", "requestType"],
@@ -772,17 +757,175 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
   "retention-record": {
     fields: ["requestId", "retentionRecordId", "policyRef"],
   },
-  "invoice-paid": {
-    fields: ["invoiceId", "webhookEventId"],
-  },
-  "dunning-suspension": {
-    fields: ["invoiceId", "dunningRunId", "suspensionEventId"],
-  },
-  "recovery-refund-credit": {
-    fields: ["accountId", "recoveryEventId"],
-    anyOf: [["refundId", "creditNoteId"]],
-  },
 };
+
+const positiveReadinessNumber = {
+  minimum: 0,
+  exclusiveMinimum: true,
+} as const;
+
+/**
+ * Explicit validation metadata for the OSS readiness evidence vocabulary.
+ * Runtime validation never derives semantics from a field suffix or evidence
+ * type token; optional contributions carry the same data in their schemas.
+ */
+export const platformReadinessStructuredEvidenceRules: Readonly<
+  Record<string, PlatformReadinessEvidenceSchema>
+> = {
+  "staging-manifest": {
+    formats: { manifestRef: "evidence-ref" },
+    numericBounds: { componentCount: positiveReadinessNumber },
+  },
+  "staging-artifact-digest": {
+    formats: { artifactDigestEvidenceRef: "evidence-ref" },
+    numericBounds: { deployableComponentCount: positiveReadinessNumber },
+  },
+  "staging-migration-transcript": {
+    formats: { migrationTranscriptRef: "evidence-ref" },
+  },
+  "staging-health-probe": {
+    formats: { healthProbeEvidenceRef: "evidence-ref" },
+    numericBounds: { healthProbeCount: positiveReadinessNumber },
+  },
+  "staging-tls-evidence": {
+    formats: { tlsEvidenceRef: "evidence-ref" },
+  },
+  "staging-rollback-target": {
+    formats: { rollbackRef: "evidence-ref", artifactDigest: "sha256" },
+  },
+  "production-manifest": {
+    formats: { manifestRef: "evidence-ref" },
+    numericBounds: { componentCount: positiveReadinessNumber },
+  },
+  "production-artifact-digest": {
+    formats: { artifactDigestEvidenceRef: "evidence-ref" },
+    numericBounds: { deployableComponentCount: positiveReadinessNumber },
+  },
+  "production-migration-transcript": {
+    formats: { migrationTranscriptRef: "evidence-ref" },
+  },
+  "production-health-probe": {
+    formats: { healthProbeEvidenceRef: "evidence-ref" },
+    numericBounds: { healthProbeCount: positiveReadinessNumber },
+  },
+  "production-tls-evidence": {
+    formats: { tlsEvidenceRef: "evidence-ref" },
+  },
+  "production-rollback-target": {
+    formats: { rollbackRef: "evidence-ref", artifactDigest: "sha256" },
+  },
+  "launch-brief": {
+    formats: {
+      briefRef: "evidence-ref",
+      quotaPlanRef: "evidence-ref",
+      acceptedUsePolicyRef: "evidence-ref",
+    },
+  },
+  "key-rotation-drill": {
+    formats: { overlapJwksDigest: "sha256" },
+  },
+  "client-secret-rotation": {
+    numericBounds: { overlapWindowSeconds: positiveReadinessNumber },
+  },
+  "rate-limit-test": { formats: { policyRef: "evidence-ref" } },
+  "email-assurance": { formats: { verifiedAt: "timestamp" } },
+  "quota-plan": { formats: { quotaPlanRef: "evidence-ref" } },
+  "quota-spike-drill": { numericBounds: { cap: { minimum: 0 } } },
+  "load-test": {
+    numericBounds: { tenantCount: { minimum: 2 } },
+    distinctFields: [["tenantACapsuleId", "tenantBCapsuleId"]],
+  },
+  "metric-labels": { formats: { dashboardRef: "evidence-ref" } },
+  "continuity-evidence": {
+    formats: {
+      sourceCommit: "git-object-id",
+      interfaceBindingDigest: "sha256",
+    },
+  },
+  "encrypted-export": { formats: { archiveDigest: "sha256" } },
+  "sample-data-verification": {
+    requiredItems: {
+      dataClasses: ["account", "workspace", "capsule", "run", "output"],
+    },
+  },
+  "restore-transcript": { formats: { transcriptRef: "evidence-ref" } },
+  "dr-simulation": { formats: { decisionRef: "evidence-ref" } },
+  "rpo-rto-sample": {
+    numericBounds: {
+      rpoSeconds: positiveReadinessNumber,
+      rtoSeconds: positiveReadinessNumber,
+    },
+  },
+  "audit-chain-verification": {
+    formats: { auditChainRef: "evidence-ref" },
+  },
+  sbom: {
+    formats: { sbomRef: "evidence-ref", artifactDigest: "sha256" },
+  },
+  signature: { formats: { signatureRef: "evidence-ref" } },
+  "image-digest": { formats: { imageDigest: "sha256" } },
+  "branch-protection-export": {
+    formats: { exportRef: "evidence-ref", reviewedAt: "timestamp" },
+  },
+  "artifact-policy": {
+    formats: { policyRef: "evidence-ref", immutabilityRef: "evidence-ref" },
+  },
+  "rollback-drill": { formats: { targetDigest: "sha256" } },
+  "threat-model": { formats: { threatModelRef: "evidence-ref" } },
+  "vulnerability-response-policy": {
+    formats: { policyRef: "evidence-ref", dashboardRef: "evidence-ref" },
+  },
+  "secret-inventory": {
+    formats: { inventoryRef: "evidence-ref", reviewedAt: "timestamp" },
+  },
+  "secret-rotation-run-log": { formats: { completedAt: "timestamp" } },
+  "deploy-control-abuse-blocked": {
+    formats: { policyRef: "evidence-ref" },
+  },
+  "dashboard-link": { formats: { dashboardRef: "evidence-ref" } },
+  "synthetic-probe": {
+    requiredItems: {
+      coveredEndpoints: ["signup", "login", "install", "launch", "export"],
+    },
+  },
+  "signup-event": { formats: { sessionSubjectDigest: "sha256" } },
+  "capsule-created": {
+    formats: { sourceUrl: "https-url", commitSha: "git-commit-sha1" },
+  },
+  "capsule-session": { formats: { sessionSubjectDigest: "sha256" } },
+  "capsule-plan-run": {
+    formats: {
+      sourceUrl: "https-url",
+      commitSha: "git-commit-sha1",
+      planDigest: "sha256",
+    },
+  },
+  "cost-review": { formats: { planDigest: "sha256" } },
+  "capsule-apply": { formats: { planDigest: "sha256" } },
+  "oidc-login": { formats: { sessionSubjectDigest: "sha256" } },
+  "event-hash-chain": {
+    formats: { firstEventHash: "sha256", lastEventHash: "sha256" },
+  },
+  "quota-exceeded": { numericBounds: { cap: { minimum: 0 } } },
+  "two-tenant-load": {
+    distinctFields: [["tenantACapsuleId", "tenantBCapsuleId"]],
+  },
+  "per-capsule-metrics": {
+    formats: { metricsDashboardRef: "evidence-ref" },
+  },
+  "preserve-evidence": { formats: { sourceCommit: "git-object-id" } },
+  postmortem: {
+    formats: {
+      postmortemRef: "evidence-ref",
+      actionItemRef: "evidence-ref",
+    },
+  },
+  "release-promotion": { formats: { imageDigest: "sha256" } },
+  rollback: { formats: { targetDigest: "sha256" } },
+  "release-note": { formats: { releaseNoteRef: "evidence-ref" } },
+  "retention-record": { formats: { policyRef: "evidence-ref" } },
+};
+
 export const productionTopologyRequiredRoles = [
   "accounts",
   "dashboard",
@@ -832,6 +975,12 @@ export interface PlatformReadinessEvidenceReference {
 export interface PlatformReadinessReport {
   kind: typeof platformReadinessReportKind;
   ready: boolean;
+  contributions: Array<{
+    id: string;
+    version: string;
+    capability: string;
+  }>;
+  collectionClassHints: Record<string, string[]>;
   evidenceDigest?: string;
   missingDomains: string[];
   incompleteDomains: string[];

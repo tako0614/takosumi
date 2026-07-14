@@ -45,7 +45,7 @@ describe("parseInstallPrefill", () => {
     ).toEqual({ git: "https://github.com/acme/repo.git", ref: "", path: "" });
   });
 
-  test("parses safe variable prefill values", () => {
+  test("ignores variable side channels and keeps only source/display fields", () => {
     expect(
       parseInstallPrefill(
         "?git=https://github.com/acme/repo.git&ref=main&path=deploy&var.project_name=takos-space&var.domain=app.example.com&var.region=ap-northeast-1&var.account_id=acc_123&var.cloudflare.workers_subdomain=team",
@@ -54,30 +54,6 @@ describe("parseInstallPrefill", () => {
       git: "https://github.com/acme/repo.git",
       ref: "main",
       path: "deploy",
-      vars: {
-        account_id: "acc_123",
-        "cloudflare.workers_subdomain": "team",
-        domain: "app.example.com",
-        project_name: "takos-space",
-        region: "ap-northeast-1",
-      },
-    });
-  });
-
-  test("parses typed JSON variable prefill values", () => {
-    expect(
-      parseInstallPrefill(
-        "?git=https://github.com/acme/repo.git&ref=main&path=deploy&var.project_name=takos-space&varjson.enable_cloudflare_resources=true&varjson.cloudflare=%7B%22workers_subdomain%22%3A%22team%22%7D",
-      ),
-    ).toEqual({
-      git: "https://github.com/acme/repo.git",
-      ref: "main",
-      path: "deploy",
-      vars: {
-        cloudflare: { workers_subdomain: "team" },
-        enable_cloudflare_resources: true,
-        project_name: "takos-space",
-      },
     });
   });
 
@@ -106,7 +82,7 @@ describe("parseInstallPrefill", () => {
     });
   });
 
-  test("ignores unsafe variable prefill keys and values", () => {
+  test("never adopts secret or structured values from an install URL", () => {
     expect(
       parseInstallPrefill(
         "?git=https://github.com/acme/repo.git&var.secret=hidden&var.api_key=hidden&var.bad-name=bad&var.cloudflare.api_token=hidden&var.multiline=line%0Abreak&var.zone_id=zone_123&var.project_name=visible&varjson.cloudflare=%7B%22api_token%22%3A%22hidden%22%7D&varjson.enabled=not-json",
@@ -115,22 +91,6 @@ describe("parseInstallPrefill", () => {
       git: "https://github.com/acme/repo.git",
       ref: "",
       path: "",
-      vars: { project_name: "visible", zone_id: "zone_123" },
-    });
-  });
-
-  test("ignores prototype-polluting variable paths and JSON keys", () => {
-    expect(
-      parseInstallPrefill(
-        "?git=https://github.com/acme/repo.git&var.__proto__.polluted=true&var.constructor.prototype=bad&var.prototype.x=bad&varjson.cloudflare=%7B%22__proto__%22%3A%7B%22polluted%22%3Atrue%7D%7D&varjson.safe=%7B%22nested%22%3Atrue%7D",
-      ),
-    ).toEqual({
-      git: "https://github.com/acme/repo.git",
-      ref: "",
-      path: "",
-      vars: {
-        safe: { nested: true },
-      },
     });
     expect(({} as { readonly polluted?: boolean }).polluted).toBeUndefined();
   });

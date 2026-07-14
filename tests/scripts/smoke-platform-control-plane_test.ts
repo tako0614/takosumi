@@ -5,11 +5,12 @@ import {
   createdCapsuleFromCreateResponse,
   dryRunResult,
   isSmokeProviderConnectionMatch,
-  isSelectableGenericCapsuleInstallConfig,
+  isSelectableCapsuleInstallConfig,
   resolveOptions,
-  shouldMarkPendingSmokeInstallationError,
+  selectSmokeInstallConfigId,
+  shouldMarkPendingSmokeCapsuleError,
   smokeSourceCompatibilityCheckBody,
-  smokeSourceInstallationCreateBody,
+  smokeSourceCapsuleCreateBody,
 } from "../../scripts/smoke-platform-control-plane.ts";
 
 test("platform smoke binds compatibility checks to the current Capsule", () => {
@@ -50,7 +51,7 @@ test("platform smoke can reproduce Store-backed managed Provider resolution", as
     {
       dryRun: true,
       url: "https://app.takosumi.com",
-      workspace: "space_test",
+      workspace: "ws_test",
       cloudflareConnectionMode: "none",
       verificationMode: "opentofu",
       sourceGitUrl: "https://github.com/tako0614/takos.git",
@@ -61,7 +62,7 @@ test("platform smoke can reproduce Store-backed managed Provider resolution", as
   );
 
   expect(
-    smokeSourceInstallationCreateBody(options, {
+    smokeSourceCapsuleCreateBody(options, {
       sourceId: "src_test",
       installConfigId: "cfg_generic",
     }),
@@ -83,7 +84,7 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "space_test",
+      workspace: "ws_test",
       appName: "takosumi-smoke-test",
       cloudflareAccountIdFile:
         "/operator/.secrets/staging/CLOUDFLARE_ACCOUNT_ID",
@@ -92,6 +93,8 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
       sessionTokenFile:
         "/operator/.secrets/staging/TAKOSUMI_ACCOUNT_SESSION_TOKEN",
       cloudflareApiTokenFile: "/operator/.secrets/staging/CLOUDFLARE_API_TOKEN",
+      cloudflareConnectionMode: "guided",
+      verificationMode: "cloudflare-worker",
     },
     {},
   );
@@ -101,11 +104,11 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
 
   expect(result.kind).toBe(PLATFORM_CONTROL_PLANE_SMOKE_KIND);
   expect(result.status).toBe("dry_run");
-  expect(result.environment).toBe("staging-smoke");
+  expect(result.environment).toBe("smoke");
   expect(result.capsuleModule).toBe("git-opentofu-capsule");
-  expect(result.credentialPath).toBe("space_scoped_provider_connection");
+  expect(result.credentialPath).toBe("workspace_scoped_provider_connection");
   expect(result.steps).toEqual([
-    "spaceScopedProviderConnection",
+    "workspaceScopedProviderConnection",
     "connectionVerified",
     "sourceRegistered",
     "sourceSynced",
@@ -113,9 +116,9 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
     "compatibilityChecked",
     "plan",
     "apply",
-    "deploymentVerified",
+    "runtimeVerified",
     "publicUrlVerified",
-    "deploymentLedgerVerified",
+    "stateVersionLedgerVerified",
     "destroy",
     "connectionRevoked",
   ]);
@@ -123,13 +126,13 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
     "https://takosumi-smoke-test.<redacted>.workers.dev",
   );
   expect(result.publicUrlVerified).toBe(true);
-  expect(result.deploymentLedgerVerified).toBe(true);
+  expect(result.stateVersionLedgerVerified).toBe(true);
   expect(result.destroyVerified).toBe(true);
   expect(result.connectionRevoked).toBe(true);
-  expect(result.deploymentLedger).toEqual({
-    installationStatus: "active",
-    deploymentId: "dep_dry_run",
-    stateGeneration: 1,
+  expect(result.stateVersionLedger).toEqual({
+    capsuleStatus: "active",
+    stateVersionId: "state_dry_run",
+    generation: 1,
     applyRunId: "apply_dry_run",
     publicOutputNames: ["url", "worker_name"],
     publicOutputDigest: `sha256:${"0".repeat(64)}`,
@@ -147,12 +150,12 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
   expect(json).not.toContain("CLOUDFLARE_API_TOKEN");
 });
 
-test("platform control-plane smoke derives app name from OpenTofu project variables", async () => {
+test("platform control-plane smoke keeps the Capsule name independent from OpenTofu variable names", async () => {
   const projectOptions = await resolveOptions(
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "space_test",
+      workspace: "ws_test",
       cloudflareAccountId: "account",
       cloudflareWorkersSubdomain: "takosumi-smoke",
       varsJson: JSON.stringify({
@@ -165,13 +168,14 @@ test("platform control-plane smoke derives app name from OpenTofu project variab
       CLOUDFLARE_API_TOKEN: "cloudflare-token",
     },
   );
-  expect(projectOptions.appName).toBe("takos-from-project");
+  expect(projectOptions.appName).toMatch(/^takosumi-smoke-[a-z0-9]+$/u);
+  expect(projectOptions.appName).not.toBe("takos-from-project");
 
   const workerOptions = await resolveOptions(
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "space_test",
+      workspace: "ws_test",
       cloudflareAccountId: "account",
       cloudflareWorkersSubdomain: "takosumi-smoke",
       varsJson: JSON.stringify({
@@ -183,13 +187,14 @@ test("platform control-plane smoke derives app name from OpenTofu project variab
       CLOUDFLARE_API_TOKEN: "cloudflare-token",
     },
   );
-  expect(workerOptions.appName).toBe("worker-from-vars");
+  expect(workerOptions.appName).toMatch(/^takosumi-smoke-[a-z0-9]+$/u);
+  expect(workerOptions.appName).not.toBe("worker-from-vars");
 
   const explicitOptions = await resolveOptions(
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "space_test",
+      workspace: "ws_test",
       appName: "explicit-name",
       cloudflareAccountId: "account",
       cloudflareWorkersSubdomain: "takosumi-smoke",
@@ -212,11 +217,11 @@ test("platform control-plane smoke reads current Capsule create responses", () =
       capsule: { id: "inst_current", name: "current capsule" },
     }),
   ).toEqual({ id: "inst_current", name: "current capsule" });
-  expect(
+  expect(() =>
     createdCapsuleFromCreateResponse({
       installation: { id: "inst_legacy", name: "legacy capsule" },
-    }),
-  ).toEqual({ id: "inst_legacy", name: "legacy capsule" });
+    } as never),
+  ).toThrow("capsule create response did not include id");
   expect(() => createdCapsuleFromCreateResponse({ capsule: {} })).toThrow(
     "capsule create response did not include id",
   );
@@ -227,7 +232,7 @@ test("platform control-plane smoke reads current Capsule ledger responses", () =
     capsuleFromLedgerResponse({
       capsule: {
         id: "cap_current",
-        workspaceId: "space_current",
+        workspaceId: "ws_current",
         currentStateVersionId: "state_current",
         currentStateGeneration: 1,
         status: "active",
@@ -235,28 +240,22 @@ test("platform control-plane smoke reads current Capsule ledger responses", () =
     }),
   ).toEqual({
     id: "cap_current",
-    workspaceId: "space_current",
+    workspaceId: "ws_current",
     currentStateVersionId: "state_current",
     currentStateGeneration: 1,
     status: "active",
   });
-  expect(
+  expect(() =>
     capsuleFromLedgerResponse({
       installation: {
         id: "inst_legacy",
         spaceId: "space_legacy",
-        currentDeploymentId: "dep_legacy",
+        currentStateVersionId: "dep_legacy",
         currentStateGeneration: 1,
         status: "active",
       },
-    }),
-  ).toEqual({
-    id: "inst_legacy",
-    spaceId: "space_legacy",
-    currentDeploymentId: "dep_legacy",
-    currentStateGeneration: 1,
-    status: "active",
-  });
+    } as never),
+  ).toThrow("capsule ledger response did not include capsule");
   expect(() => capsuleFromLedgerResponse({})).toThrow(
     "capsule ledger response did not include capsule",
   );
@@ -264,7 +263,7 @@ test("platform control-plane smoke reads current Capsule ledger responses", () =
 
 test("platform control-plane smoke matches canonical provider connection sources", () => {
   const expected = {
-    provider: "cloudflare",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
     displayName: "Layer-2 smoke canonical",
   };
 
@@ -287,7 +286,7 @@ test("platform control-plane smoke matches canonical provider connection sources
       },
       expected,
     ),
-  ).toBe(true);
+  ).toBe(false);
   expect(
     isSmokeProviderConnectionMatch(
       {
@@ -300,12 +299,12 @@ test("platform control-plane smoke matches canonical provider connection sources
   ).toBe(false);
 });
 
-test("platform control-plane smoke infers production environment from URL", async () => {
+test("platform control-plane smoke does not infer operator environment from URL", async () => {
   const options = await resolveOptions(
     {
       dryRun: true,
       url: "https://app.takosumi.com",
-      space: "@smoke-production",
+      workspace: "@smoke-production",
       cloudflareAccountId: "account",
       cloudflareWorkersSubdomain: "takosumi-smoke",
     },
@@ -315,7 +314,49 @@ test("platform control-plane smoke infers production environment from URL", asyn
     },
   );
 
-  expect(options.environment).toBe("production-smoke");
+  expect(options.environment).toBe("smoke");
+
+  const explicit = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://operator.example.test",
+      workspace: "@smoke-production",
+      environment: "production",
+      cloudflareAccountId: "account",
+      cloudflareWorkersSubdomain: "takosumi-smoke",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+  expect(explicit.environment).toBe("production");
+});
+
+test("platform control-plane smoke never infers auth authority from token prefixes", async () => {
+  const sharedArgs = {
+    url: "https://app-staging.takosumi.com",
+    workspace: "ws_test",
+    cloudflareConnectionMode: "none",
+    verificationMode: "opentofu",
+    sourceGitUrl: "https://github.example/takosumi/smoke-fixture.git",
+  } as const;
+
+  const sessionOptions = await resolveOptions(sharedArgs, {
+    TAKOSUMI_ACCOUNT_SESSION_TOKEN: "opaque-token-with-no-session-prefix",
+  });
+  expect(sessionOptions.accountAuthTokenKind).toBe("session");
+  expect(sessionOptions.accountSessionToken).toBe(
+    "opaque-token-with-no-session-prefix",
+  );
+
+  const patOptions = await resolveOptions(sharedArgs, {
+    TAKOSUMI_ACCOUNT_PAT_TOKEN: "another-opaque-token-with-no-pat-prefix",
+  });
+  expect(patOptions.accountAuthTokenKind).toBe("pat");
+  expect(patOptions.accountSessionToken).toBe(
+    "another-opaque-token-with-no-pat-prefix",
+  );
 });
 
 test("platform control-plane smoke records Cloudflare D1 resource preflight", async () => {
@@ -323,7 +364,7 @@ test("platform control-plane smoke records Cloudflare D1 resource preflight", as
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "@scratch",
+      workspace: "@scratch",
       cloudflareResourcePreflight: "d1",
       cloudflareAccountId: "account",
       cloudflareWorkersSubdomain: "takosumi-smoke",
@@ -351,7 +392,7 @@ test("platform control-plane smoke records Cloudflare account resource preflight
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "@scratch",
+      workspace: "@scratch",
       cloudflareResourcePreflight: "account-resources",
       cloudflareAccountId: "account",
       cloudflareWorkersSubdomain: "takosumi-smoke",
@@ -386,7 +427,7 @@ test("platform control-plane smoke labels Git sources as Git OpenTofu Capsules",
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "@scratch",
+      workspace: "@scratch",
       sourceGitUrl: "https://github.com/tako0614/takos.git",
       sourceRef: "main",
       sourcePath: "deploy/opentofu",
@@ -407,34 +448,28 @@ test("platform control-plane smoke can include backup restore rehearsal in dry-r
       dryRun: true,
       backupRestoreRehearsal: true,
       url: "https://app-staging.takosumi.com",
-      space: "space_test",
+      workspace: "ws_test",
       appName: "takosumi-smoke-test",
-      cloudflareAccountId: "account",
-      cloudflareWorkersSubdomain: "takosumi-smoke",
     },
     {
       TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
-      CLOUDFLARE_API_TOKEN: "cloudflare-token",
     },
   );
 
   const result = dryRunResult(options);
 
   expect(result.steps).toEqual([
-    "spaceScopedProviderConnection",
-    "connectionVerified",
+    "providerConnectionNotRequired",
     "sourceRegistered",
     "sourceSynced",
     "scratchInstall",
     "compatibilityChecked",
     "plan",
     "apply",
-    "deploymentVerified",
-    "publicUrlVerified",
-    "deploymentLedgerVerified",
+    "opentofuApplyVerified",
+    "stateVersionLedgerVerified",
     "backupRestoreRehearsal",
     "destroy",
-    "connectionRevoked",
   ]);
   expect(result.backupRestoreRehearsal).toMatchObject({
     backupId: "bkp_dry_run",
@@ -449,7 +484,7 @@ test("platform control-plane smoke can require release activation evidence", asy
       dryRun: true,
       requireReleaseActivation: "succeeded",
       url: "https://app-staging.takosumi.com",
-      space: "@scratch",
+      workspace: "@scratch",
       appName: "takosumi-release-smoke",
       cloudflareConnectionMode: "none",
       verificationMode: "opentofu",
@@ -475,8 +510,10 @@ test("platform control-plane smoke resolves secret sources from environment", as
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "@scratch",
+      workspace: "@scratch",
       cloudflareAccountId: "account",
+      cloudflareConnectionMode: "guided",
+      verificationMode: "cloudflare-worker",
     },
     {
       TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
@@ -500,10 +537,8 @@ test("platform control-plane smoke defaults providerless OpenTofu mode to a keyl
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "@scratch",
+      workspace: "@scratch",
       appName: "takosumi-keyless-test",
-      cloudflareConnectionMode: "none",
-      verificationMode: "opentofu",
     },
     {
       TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
@@ -519,6 +554,12 @@ test("platform control-plane smoke defaults providerless OpenTofu mode to a keyl
   expect(options.runnerProfileId).toBe("opentofu-default");
   expect(result.inputs.cloudflareApiTokenSource).toBe("not_required");
   expect(result.inputs.cloudflareAccountIdSource).toBe("not_required");
+  expect(result.inputs.outputAllowlistNames).toEqual([
+    "example_endpoint",
+    "example_label",
+  ]);
+  expect(options.sourceRef).toBeUndefined();
+  expect(result.inputs).not.toHaveProperty("sourceRef");
   expect(options.vars).toEqual({
     name: "takosumi-keyless-test",
     base_url: "https://takosumi-keyless-test.example.invalid",
@@ -532,7 +573,7 @@ test("platform control-plane smoke defaults providerless OpenTofu mode to a keyl
     "plan",
     "apply",
     "opentofuApplyVerified",
-    "deploymentLedgerVerified",
+    "stateVersionLedgerVerified",
     "destroy",
   ]);
 });
@@ -542,7 +583,7 @@ test("platform control-plane smoke can require public URL checks for generic Ope
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "@scratch",
+      workspace: "@scratch",
       appName: "takosumi-public-url-test",
       cloudflareConnectionMode: "none",
       verificationMode: "opentofu",
@@ -584,7 +625,7 @@ test("platform control-plane smoke can require public URL checks for generic Ope
     "plan",
     "apply",
     "opentofuApplyVerified",
-    "deploymentLedgerVerified",
+    "stateVersionLedgerVerified",
     "publicUrlVerified",
     "destroy",
   ]);
@@ -603,13 +644,86 @@ test("platform control-plane smoke can require public URL checks for generic Ope
   expect(result.inputs.publicUrlCheckNames).toEqual(["launch"]);
 });
 
+test("platform control-plane smoke only reads provider verification Outputs through explicit projection names", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "@scratch",
+      appName: "explicit-runtime",
+      cloudflareConnectionMode: "guided",
+      verificationMode: "cloudflare-worker",
+      cloudflareAccountId: "account",
+      cloudflareWorkersSubdomain: "takosumi-smoke",
+      outputAllowlistJson: JSON.stringify({
+        endpoint_for_probe: {
+          from: "arbitrary_endpoint",
+          type: "url",
+          required: true,
+        },
+        resource_for_probe: {
+          from: "arbitrary_resource_name",
+          type: "string",
+          required: true,
+        },
+      }),
+      runtimePublicUrlOutput: "endpoint_for_probe",
+      cloudflareWorkerNameOutput: "resource_for_probe",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+
+  expect(options.runtimePublicUrlOutput).toBe("endpoint_for_probe");
+  expect(options.cloudflareWorkerNameOutput).toBe("resource_for_probe");
+  expect(dryRunResult(options).inputs).toMatchObject({
+    runtimePublicUrlOutput: "endpoint_for_probe",
+    cloudflareWorkerNameOutput: "resource_for_probe",
+  });
+});
+
+test("platform control-plane smoke rejects implicit or mistyped provider verification Output mappings", async () => {
+  const base = {
+    dryRun: true,
+    url: "https://app-staging.takosumi.com",
+    workspace: "@scratch",
+    cloudflareConnectionMode: "none",
+    verificationMode: "opentofu",
+    outputAllowlistJson: JSON.stringify({
+      endpoint_for_probe: { from: "endpoint", type: "url", required: true },
+    }),
+  } as const;
+
+  await expect(
+    resolveOptions(
+      { ...base, runtimePublicUrlOutput: "unlisted_endpoint" },
+      { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" },
+    ),
+  ).rejects.toThrow(
+    "--runtime-public-url-output must also be in the output allowlist",
+  );
+  await expect(
+    resolveOptions(
+      {
+        ...base,
+        cloudflareWorkerNameOutput: "endpoint_for_probe",
+      },
+      { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" },
+    ),
+  ).rejects.toThrow(
+    "--cloudflare-worker-name-output must reference an output projected as string",
+  );
+});
+
 test("platform control-plane smoke rejects untyped output allowlist entries before live API calls", async () => {
   await expect(
     resolveOptions(
       {
         dryRun: true,
         url: "https://app-staging.takosumi.com",
-        space: "@scratch",
+        workspace: "@scratch",
         appName: "takosumi-untyped-output-test",
         cloudflareConnectionMode: "none",
         verificationMode: "opentofu",
@@ -626,30 +740,44 @@ test("platform control-plane smoke rejects untyped output allowlist entries befo
   );
 });
 
-test("platform control-plane smoke ignores scoped generic Capsule config remnants", () => {
+test("platform control-plane smoke selects InstallConfig from explicit structure, not ids or retired aliases", () => {
   expect(
-    isSelectableGenericCapsuleInstallConfig({
+    isSelectableCapsuleInstallConfig({
       id: "icfg_0123456789abcdef",
-      sourceKind: "generic_capsule",
-      spaceId: "space_old",
-      name: "old-upload",
+      workspaceId: "ws_current",
+      name: "workspace config",
+    }),
+  ).toBe(true);
+  expect(
+    isSelectableCapsuleInstallConfig({
+      id: "any-id-shape",
+      internal: { reason: "per_install_overrides" },
+      name: "internal override",
     }),
   ).toBe(false);
   expect(
-    isSelectableGenericCapsuleInstallConfig({
-      id: "icfg_0123456789abcdef",
-      sourceKind: "generic_capsule",
-      workspaceId: "space_old",
-      name: "old-config",
-    }),
-  ).toBe(false);
-  expect(
-    isSelectableGenericCapsuleInstallConfig({
+    isSelectableCapsuleInstallConfig({
       id: "generic-opentofu-capsule",
-      sourceKind: "generic_capsule",
       name: "Generic OpenTofu Capsule",
     }),
   ).toBe(true);
+
+  expect(
+    selectSmokeInstallConfigId([
+      { id: "workspace-config", workspaceId: "ws_current" },
+    ]),
+  ).toBe("workspace-config");
+  expect(
+    selectSmokeInstallConfigId(
+      [{ id: "one" }, { id: "two" }],
+      "two",
+    ),
+  ).toBe("two");
+  expect(() =>
+    selectSmokeInstallConfigId([{ id: "one" }, { id: "two" }]),
+  ).toThrow(
+    "multiple selectable Capsule install configs are available; set --install-config-id explicitly",
+  );
 });
 
 test("platform control-plane smoke uses configured public checks for app Workers", async () => {
@@ -657,7 +785,7 @@ test("platform control-plane smoke uses configured public checks for app Workers
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "@scratch",
+      workspace: "@scratch",
       appName: "takos-app-public-url-test",
       cloudflareConnectionMode: "generic-env",
       verificationMode: "cloudflare-worker",
@@ -685,7 +813,7 @@ test("platform control-plane smoke uses configured public checks for app Workers
 
   const result = dryRunResult(options);
 
-  expect(result.steps).toContain("deploymentVerified");
+  expect(result.steps).toContain("runtimeVerified");
   expect(result.steps).toContain("publicUrlVerified");
   expect(result.publicUrlVerified).toBe(true);
   expect(result.publicUrlChecks).toEqual([
@@ -701,12 +829,12 @@ test("platform control-plane smoke uses configured public checks for app Workers
   ]);
 });
 
-test("platform control-plane smoke verifies Cloudflare script for OpenTofu app public checks", async () => {
+test("platform control-plane smoke does not infer Cloudflare resource verification from ordinary Outputs", async () => {
   const options = await resolveOptions(
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "@scratch",
+      workspace: "@scratch",
       appName: "takos-opentofu-public-url-test",
       cloudflareConnectionMode: "guided",
       verificationMode: "opentofu",
@@ -735,7 +863,7 @@ test("platform control-plane smoke verifies Cloudflare script for OpenTofu app p
   const result = dryRunResult(options);
 
   expect(result.steps).toEqual([
-    "spaceScopedProviderConnection",
+    "workspaceScopedProviderConnection",
     "connectionVerified",
     "sourceRegistered",
     "sourceSynced",
@@ -744,22 +872,19 @@ test("platform control-plane smoke verifies Cloudflare script for OpenTofu app p
     "plan",
     "apply",
     "opentofuApplyVerified",
-    "deploymentVerified",
-    "deploymentLedgerVerified",
+    "stateVersionLedgerVerified",
     "publicUrlVerified",
     "destroy",
     "connectionRevoked",
   ]);
-  expect(result.workerUrl).toBe(
-    "https://takos-opentofu-public-url-test.<redacted>.workers.dev",
-  );
-  expect(result.deploymentVerified).toBe(true);
+  expect(result.workerUrl).toBe("");
+  expect(result.runtimeVerified).toBe(false);
   expect(result.publicUrlVerified).toBe(true);
 });
 
 test("platform control-plane smoke cleanup only marks failed pending upload remnants", () => {
   expect(
-    shouldMarkPendingSmokeInstallationError(
+    shouldMarkPendingSmokeCapsuleError(
       {
         id: "inst_pending",
         name: "takosumi-smoke-test",
@@ -770,7 +895,7 @@ test("platform control-plane smoke cleanup only marks failed pending upload remn
     ),
   ).toBe(true);
   expect(
-    shouldMarkPendingSmokeInstallationError(
+    shouldMarkPendingSmokeCapsuleError(
       {
         id: "inst_active",
         name: "takosumi-smoke-test",
@@ -781,7 +906,7 @@ test("platform control-plane smoke cleanup only marks failed pending upload remn
     ),
   ).toBe(false);
   expect(
-    shouldMarkPendingSmokeInstallationError(
+    shouldMarkPendingSmokeCapsuleError(
       {
         id: "inst_other",
         name: "other-app",

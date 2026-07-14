@@ -1,20 +1,10 @@
 /**
  * DB encryption-at-rest enforcement (Phase 18.3 M7).
  *
- * The service previously left at-rest encryption to the operator. M7 hardens
- * the boot path so production / staging refuses to start when the configured
- * database connection is missing the encryption flag (TLS in transit + a
- * provider that encrypts at rest).
- *
- * Recognized signals (any one is sufficient):
- *
- *   - Postgres URI with `sslmode=require` / `verify-ca` / `verify-full`
- *   - Postgres URI with `ssl=true`
- *   - Generic `?encrypted=true` query parameter
- *   - Cloudflare D1 (`d1://...` or D1 binding URL): D1 is encrypted at rest
- *     by the provider unconditionally
- *   - SQLCipher / encrypted SQLite (`sqlcipher://...` or
- *     `sqlite://...?key=...`)
+ * Production / staging refuses to start unless the storage adapter or operator
+ * supplies explicit at-rest-encryption evidence. A database URL is deliberately
+ * not inspected: TLS query parameters only prove encryption in transit, while
+ * backend names and URL schemes are not portable security attestations.
  *
  * Local / dev environments may opt into unencrypted DBs by setting
  * `TAKOSUMI_DEV_MODE=1`. Production / staging always fail-closed
@@ -39,6 +29,15 @@ const PRODUCTION_LIKE_ENVIRONMENTS = new Set([
 
 export interface AssertDatabaseEncryptionOptions {
   readonly env: Readonly<Record<string, string | undefined>>;
+  /**
+   * Host-injected evidence from the adapter that owns the configured database.
+   * The identifier is opaque to Core and must not contain secret material.
+   */
+  readonly evidence?: DatabaseEncryptionEvidence;
+}
+
+export interface DatabaseEncryptionEvidence {
+  readonly id: string;
 }
 
 export interface DatabaseEncryptionAssertion {
@@ -60,7 +59,9 @@ export function resolveBootDatabaseUrl(
   const environment = normalizeEnvironment(
     env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
   );
-  return env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
+  return (
+    env.TAKOSUMI_DATABASE_URL ??
+    env.DATABASE_URL ??
     (environment === "production"
       ? env.TAKOSUMI_PRODUCTION_DATABASE_URL
       : undefined) ??
@@ -68,7 +69,8 @@ export function resolveBootDatabaseUrl(
       ? env.TAKOSUMI_STAGING_DATABASE_URL
       : undefined) ??
     env.TAKOSUMI_PRODUCTION_DATABASE_URL ??
-    env.TAKOSUMI_STAGING_DATABASE_URL;
+    env.TAKOSUMI_STAGING_DATABASE_URL
+  );
 }
 
 /**
@@ -92,18 +94,18 @@ export function inspectDatabaseEncryption(
       environment,
       ...(productionLike
         ? {
-          evidence: "no-database-url",
-        }
+            evidence: "no-database-url",
+          }
         : {}),
     };
   }
 
-  const evidence = detectEncryptionEvidence(databaseUrl);
+  const evidence = explicitEncryptionEvidence(options);
   if (evidence) {
     return {
       required: productionLike,
       satisfied: true,
-      evidence,
+      evidence: evidence.id,
       databaseUrl,
       environment,
     };
@@ -148,62 +150,33 @@ export function assertDatabaseEncryptionAtRest(
       (url
         ? `URL ${redactDatabaseUrl(url)} lacks an encryption signal `
         : `no DATABASE_URL set; `) +
-      `expected sslmode=require / ssl=true / encrypted=true on Postgres, ` +
-      `a managed-encrypted backend (D1, sqlcipher, encrypted SQLite), ` +
+      `expected explicit storage-adapter evidence or ` +
+      `TAKOSUMI_DATABASE_ENCRYPTION_AT_REST=verified, ` +
       `or the local override TAKOSUMI_DEV_MODE=1 (non-production only). ` +
       `Refusing to boot with plaintext at-rest storage.`,
   );
 }
 
-function detectEncryptionEvidence(databaseUrl: string): string | undefined {
-  const trimmed = databaseUrl.trim();
-  if (trimmed === "") return undefined;
-  const lower = trimmed.toLowerCase();
-
-  // Cloudflare D1: managed encrypted at rest by Cloudflare.
-  if (
-    lower.startsWith("d1://") ||
-    lower.startsWith("d1+") ||
-    lower.includes("cloudflare-d1")
-  ) {
-    return "d1-managed-encryption";
-  }
-  // SQLCipher: explicit encrypted SQLite distribution.
-  if (lower.startsWith("sqlcipher://") || lower.startsWith("sqlcipher:")) {
-    return "sqlcipher";
-  }
-  // Encrypted SQLite via PRAGMA key.
-  if (lower.startsWith("sqlite://") || lower.startsWith("sqlite:")) {
-    if (/[?&](?:key|cipher_key|cipher)=/i.test(trimmed)) {
-      return "sqlite-with-key";
-    }
-    // Plain sqlite:// without a key has no at-rest encryption.
+function explicitEncryptionEvidence(
+  options: AssertDatabaseEncryptionOptions,
+): DatabaseEncryptionEvidence | undefined {
+  const injected = normalizeEvidenceId(options.evidence?.id);
+  if (injected) return { id: injected };
+  if (options.env.TAKOSUMI_DATABASE_ENCRYPTION_AT_REST !== "verified") {
     return undefined;
   }
-  // Generic encrypted=true override.
-  if (/[?&]encrypted=true\b/i.test(trimmed)) return "encrypted-flag";
-  // Postgres-style sslmode.
-  const sslMatch = /[?&]sslmode=([a-zA-Z\-]+)/i.exec(trimmed);
-  if (sslMatch) {
-    const mode = sslMatch[1]!.toLowerCase();
-    if (
-      mode === "require" || mode === "verify-ca" || mode === "verify-full"
-    ) {
-      return `sslmode=${mode}`;
-    }
-    return undefined;
-  }
-  if (/[?&]ssl=true\b/i.test(trimmed)) return "ssl=true";
+  const rawConfigured = options.env.TAKOSUMI_DATABASE_ENCRYPTION_EVIDENCE;
+  if (rawConfigured === undefined) return { id: "operator-attested" };
+  const configured = normalizeEvidenceId(rawConfigured);
+  return configured ? { id: configured } : undefined;
+}
 
-  // Some managed backends advertise tls/encryption as part of the scheme.
-  if (
-    lower.startsWith("postgres+tls://") ||
-    lower.startsWith("postgresql+tls://")
-  ) {
-    return "postgres-tls-scheme";
-  }
-
-  return undefined;
+function normalizeEvidenceId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized || normalized.length > 160) return undefined;
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(normalized)
+    ? normalized
+    : undefined;
 }
 
 function redactDatabaseUrl(url: string): string {

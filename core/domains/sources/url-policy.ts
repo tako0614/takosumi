@@ -152,8 +152,7 @@ function okHost(scheme: SourceUrlScheme, host: string): SourceUrlPolicyResult {
   const normalized = host.toLowerCase();
   if (
     normalized === "localhost" ||
-    normalized.endsWith(".localhost") ||
-    normalized === "metadata.google.internal"
+    normalized.endsWith(".localhost")
   ) {
     return { ok: false, reason: "blocked_host" };
   }

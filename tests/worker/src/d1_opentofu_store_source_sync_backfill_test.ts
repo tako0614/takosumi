@@ -15,7 +15,7 @@
 import { expect, test } from "bun:test";
 
 import {
-  CloudflareD1OpenTofuDeploymentStore,
+  CloudflareD1OpenTofuControlStore,
   ensureD1OpenTofuLedgerSchema,
 } from "../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
@@ -24,7 +24,13 @@ import type { SourceSyncRun } from "takosumi-contract/sources";
 
 const SOURCE_ID = "src_abcdef0123456789";
 
-function legacyRunJson(overrides: Partial<SourceSyncRun> = {}): SourceSyncRun {
+type LegacySourceSyncRun = Omit<SourceSyncRun, "workspaceId"> & {
+  readonly spaceId: string;
+};
+
+function legacyRunJson(
+  overrides: Partial<LegacySourceSyncRun> = {},
+): LegacySourceSyncRun {
   return {
     id: "ssr_0000000000000001",
     kind: "source_sync",
@@ -33,8 +39,8 @@ function legacyRunJson(overrides: Partial<SourceSyncRun> = {}): SourceSyncRun {
     url: "https://github.com/acme/repo.git",
     ref: "main",
     path: ".",
-    archiveObjectKey:
-      "spaces/space_1/sources/src_abcdef0123456789/snapshots/snap_x/source.tar.zst",
+    archiveRef:
+      "workspaces/space_1/sources/src_abcdef0123456789/snapshots/snap_x/source.tar.zst",
     status: "succeeded",
     createdAt: "2026-06-06T00:00:30.000Z",
     updatedAt: "2026-06-06T00:00:30.000Z",
@@ -68,7 +74,7 @@ async function createLegacyRunsTable(db: D1Database): Promise<void> {
  */
 async function insertLegacySourceSyncRow(
   db: D1Database,
-  run: SourceSyncRun,
+  run: LegacySourceSyncRun,
   installationIdValue: string | null = run.sourceId,
 ): Promise<void> {
   await db
@@ -138,7 +144,7 @@ test("d1: listSourceSyncRuns returns back-filled legacy rows by source id", asyn
 
   await ensureD1OpenTofuLedgerSchema(db);
 
-  const store = new CloudflareD1OpenTofuDeploymentStore(db);
+  const store = new CloudflareD1OpenTofuControlStore(db);
   const list = await store.listSourceSyncRuns(SOURCE_ID);
   expect(list.map((x) => x.id)).toEqual([r1.id, r2.id]);
   // The non-matching source's row stays scoped to its own source id.
@@ -151,7 +157,10 @@ test("d1: source_sync back-fill prefers run_json.sourceId over installation_id",
   await createLegacyRunsTable(db);
 
   // run_json.sourceId is the canonical value; installation_id held a stale id.
-  const run = legacyRunJson({ id: "ssr_0000000000000004", sourceId: SOURCE_ID });
+  const run = legacyRunJson({
+    id: "ssr_0000000000000004",
+    sourceId: SOURCE_ID,
+  });
   await insertLegacySourceSyncRow(db, run, "src_stale00000000");
 
   await ensureD1OpenTofuLedgerSchema(db);
@@ -170,11 +179,13 @@ test("d1: source_sync back-fill is idempotent and leaves current rows intact", a
   await insertLegacySourceSyncRow(db, legacy);
 
   // Current-format row already written through the typed store path.
-  const store = new CloudflareD1OpenTofuDeploymentStore(db);
-  const current = legacyRunJson({
+  const store = new CloudflareD1OpenTofuControlStore(db);
+  const legacyCurrent = legacyRunJson({
     id: "ssr_0000000000000005",
     createdAt: "2026-06-06T00:02:00.000Z",
   });
+  const { spaceId: workspaceId, ...currentFields } = legacyCurrent;
+  const current: SourceSyncRun = { ...currentFields, workspaceId };
   await store.putSourceSyncRun(current);
   const currentBefore = await readRunRow(db, current.id);
   expect(currentBefore.source_id).toBe(SOURCE_ID);

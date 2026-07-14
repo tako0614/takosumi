@@ -5,13 +5,15 @@
  * tabbed view remains for advanced and legacy routes.
  */
 import "../../styles/wave-a.css";
-import { lazy, Match, Show, Switch } from "solid-js";
+import { Match, Show, Switch } from "solid-js";
 import { Settings2 } from "lucide-solid";
 import { useParams } from "@solidjs/router";
 import Page from "../account/components/auth/Page.tsx";
 import type { SessionRecord } from "../account/lib/session.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
-import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
+import {
+  hasPlatformExtensionCapability,
+} from "../../lib/runtime-capabilities.ts";
 import { t } from "../../i18n/index.ts";
 import { EmptyState, PageHeader, Tabs } from "../../components/ui/index.ts";
 import GeneralTab from "./tabs/GeneralTab.tsx";
@@ -26,23 +28,10 @@ type TabId =
   | "members"
   | "connections"
   | "billing"
-  | "cloud"
-  | "keys"
   | "backups"
   | "shares";
 
 type StandaloneTabId = Extract<TabId, "connections" | "billing">;
-
-const CloudResourcesPanel = lazy(() =>
-  import("../cloud/CloudResourcesView.tsx").then((m) => ({
-    default: m.CloudResourcesPanel,
-  })),
-);
-const CloudApiKeysPanel = lazy(() =>
-  import("../cloud/CloudResourcesView.tsx").then((m) => ({
-    default: m.CloudApiKeysPanel,
-  })),
-);
 
 interface WorkspaceSettingsViewProps {
   readonly standaloneTab?: StandaloneTabId;
@@ -71,8 +60,6 @@ function Inner(props: {
     return raw === "members" ||
       raw === "connections" ||
       raw === "billing" ||
-      raw === "cloud" ||
-      raw === "keys" ||
       raw === "backups" ||
       raw === "shares"
       ? raw
@@ -97,22 +84,10 @@ function Inner(props: {
     },
     {
       href: "/advanced/workspace/billing",
-      label: isTakosumiCloudRuntime()
+      label: hasPlatformExtensionCapability("billing.commercial.v1")
         ? t("workspaceSettings.tab.billing")
         : t("workspaceSettings.tab.usageQuota"),
     },
-    ...(isTakosumiCloudRuntime()
-      ? [
-          {
-            href: "/advanced/workspace/cloud",
-            label: t("workspaceSettings.tab.cloud"),
-          },
-          {
-            href: "/advanced/workspace/keys",
-            label: t("workspaceSettings.tab.keys"),
-          },
-        ]
-      : []),
   ];
 
   return (
@@ -159,12 +134,6 @@ function Inner(props: {
               <Match when={tab() === "billing"}>
                 <BillingTab workspaceId={id} />
               </Match>
-              <Match when={tab() === "cloud"}>
-                <CloudResourcesPanel showHeader={false} />
-              </Match>
-              <Match when={tab() === "keys"}>
-                <CloudApiKeysPanel showHeader={false} />
-              </Match>
               <Match when={tab() === "backups"}>
                 <BackupsTab workspaceId={id} />
               </Match>
@@ -199,7 +168,7 @@ function pageSubtitle(tab: StandaloneTabId | undefined): string {
     case "connections":
       return t("conn.subtitle");
     case "billing":
-      return isTakosumiCloudRuntime()
+      return hasPlatformExtensionCapability("billing.commercial.v1")
         ? t("billing.subtitle")
         : t("billing.usageQuotaSubtitle");
     default:

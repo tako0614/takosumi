@@ -4,7 +4,7 @@ import type {
   QueueBatch,
 } from "./bindings.ts";
 import { cachedDeployControlService } from "./deploy_control_seam.ts";
-import { InstallationLeaseBusyError } from "../../core/domains/deploy-control/installation_lease.ts";
+import { CapsuleLeaseBusyError } from "../../core/domains/deploy-control/capsule_lease.ts";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 
 // Queue consumer config (mirrors deploy/*/wrangler.toml `max_retries`): one
@@ -17,8 +17,8 @@ const OPENTOFU_RUN_DLQ_SUFFIX = "-dlq";
 const OPENTOFU_RUN_QUEUE_NAME = "takosumi-runs";
 
 /**
- * Backoff before redelivering a run that is parked on a busy installation lease
- * (another write run for the same (Installation, environment) holds it). The
+ * Backoff before redelivering a run that is parked on a busy Capsule lease
+ * (another write run for the same (Capsule, environment) holds it). The
  * run stays `queued` and is NOT counted toward the retry budget, so a long
  * sibling apply does not exhaust the lease-blocked run's retries.
  */
@@ -107,11 +107,11 @@ export async function consumeOpenTofuRunBatch(
       message.ack?.();
     } catch (error) {
       // Lease-busy is SCHEDULING, not failure: another write run for the same
-      // (Installation, environment) currently holds the lease, so this run could
+      // (Capsule, environment) currently holds the lease, so this run could
       // not be dispatched. Re-enqueue with a backoff and DO NOT count this toward
       // the retry budget — it must never reach the final-attempt
       // "retries-exhausted" branch. The run stays `queued` (no claim happened).
-      if (error instanceof InstallationLeaseBusyError) {
+      if (error instanceof CapsuleLeaseBusyError) {
         if (typeof message.retry === "function") {
           message.retry({
             delaySeconds: OPENTOFU_RUN_LEASE_BUSY_DELAY_SECONDS,
@@ -148,9 +148,9 @@ async function recordQueueAgeMetric(
     kind: "gauge",
     value: queueAgeSeconds,
     tags: {
-      operationKind: run.action,
+      operation_kind: run.action,
       status: "dequeued",
-      space_id: run.spaceId,
+      workspace_id: run.workspaceId,
     },
   });
 }
@@ -182,7 +182,7 @@ async function dispatchOpenTofuRun(
         kind: "takosumi.opentofu-run-owner.start@v1",
         action: run.action,
         runId: run.runId,
-        spaceId: run.spaceId,
+        workspaceId: run.workspaceId,
         ...(run.cause ? { cause: run.cause } : {}),
         queueAttempt: metadata.queueAttempt,
         messageId: metadata.messageId,
@@ -323,9 +323,9 @@ function parseOpenTofuRunQueueMessage(
   if (!runId) {
     throw new Error("OpenTofu run queue message runId is required");
   }
-  const spaceId = nonEmptyString(record.spaceId);
-  if (!spaceId) {
-    throw new Error("OpenTofu run queue message spaceId is required");
+  const workspaceId = nonEmptyString(record.workspaceId);
+  if (!workspaceId) {
+    throw new Error("OpenTofu run queue message workspaceId is required");
   }
   const requestedAt = nonEmptyString(record.requestedAt);
   const cause =
@@ -339,7 +339,7 @@ function parseOpenTofuRunQueueMessage(
     kind: "takosumi.opentofu-run@v1",
     action,
     runId,
-    spaceId,
+    workspaceId,
     ...(cause ? { cause } : {}),
     ...(requestedAt ? { requestedAt } : {}),
     ...(requestObject ? { request: requestObject } : {}),

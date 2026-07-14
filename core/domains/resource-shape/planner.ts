@@ -1,7 +1,7 @@
 // Resource Shape Planner - PURE.
 //
 // The Planner validates one shape-specific spec and lowers a resolved
-// implementation to a first-party OpenTofu module call. It deliberately keeps
+// implementation to an operator-selected OpenTofu module call. It deliberately keeps
 // shape-specific resource types (EdgeWorker, ObjectBucket, Queue, ...) instead of
 // accepting a catch-all `takosumi_resource { type, spec }` object, so OpenTofu
 // plan diffs, validation, import, drift, and state upgrades can remain
@@ -11,6 +11,8 @@
 import type {
   ContainerServiceSpec,
   EdgeWorkerSpec,
+  JsonObject,
+  JsonValue,
   KVStoreSpec,
   ObjectBucketSpec,
   OutputValueType,
@@ -21,18 +23,135 @@ import type {
   ResourceProjectionKind,
   ResourceShapeKind,
   SQLDatabaseSpec,
+  TargetImplementationDescriptor,
+  TargetModuleInputMapping,
   TargetPoolEntry,
 } from "takosumi-contract";
-import { firstPartyModuleFilesByTemplateId } from "../../../opentofu-modules/module-files.ts";
+import {
+  isBundledResourceShapeKind,
+  isResourceShapeKind,
+} from "takosumi-contract";
+import { secretLikeJsonPath } from "./secret_guard.ts";
 
-export interface ResourceShapePlan {
-  readonly shape: ResourceShapeKind;
-  readonly templateId: string;
-  readonly moduleFiles: readonly {
+export interface ResourceShapeOperatorModule {
+  readonly files: readonly {
     readonly path: string;
     readonly text: string;
   }[];
-  readonly inputs: Record<string, unknown>;
+}
+
+/** Operator-owned lookup. Takosumi OSS ships no implicit module catalog. */
+export interface ResourceShapeModuleRegistry {
+  get(moduleTemplate: string): ResourceShapeOperatorModule | undefined;
+}
+
+export const EMPTY_RESOURCE_SHAPE_MODULE_REGISTRY: ResourceShapeModuleRegistry =
+  {
+    get: () => undefined,
+  };
+
+export class MapResourceShapeModuleRegistry implements ResourceShapeModuleRegistry {
+  readonly #modules: ReadonlyMap<string, ResourceShapeOperatorModule>;
+
+  constructor(
+    modules:
+      | ReadonlyMap<string, ResourceShapeOperatorModule>
+      | Readonly<Record<string, ResourceShapeOperatorModule>>,
+  ) {
+    this.#modules =
+      modules instanceof Map ? modules : new Map(Object.entries(modules));
+  }
+
+  get(moduleTemplate: string): ResourceShapeOperatorModule | undefined {
+    const module = this.#modules.get(moduleTemplate);
+    return module
+      ? { files: module.files.map((file) => ({ ...file })) }
+      : undefined;
+  }
+}
+
+/** Normalized result produced by one explicitly installed shape schema. */
+export interface RegisteredResourceShapeSpec {
+  readonly spec: JsonObject;
+  readonly interfaces: readonly string[];
+  readonly lifecyclePolicy?: { readonly delete: ResourceDeletePolicy };
+  readonly connections?: Readonly<Record<string, ResourceConnectionSpec>>;
+}
+
+export type RegisteredResourceShapeSpecResult =
+  | { readonly ok: true; readonly value: RegisteredResourceShapeSpec }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    };
+
+/** Trusted host parser for an operator-defined Resource Shape token. */
+export type ResourceShapeSchemaParser = (
+  spec: unknown,
+) => RegisteredResourceShapeSpecResult;
+
+/**
+ * Explicit schema registry for operator-defined shapes. A registry entry is
+ * validation authority only; execution still requires an exact TargetPool
+ * descriptor and installed adapter plugin/module.
+ */
+export interface ResourceShapeSchemaRegistry {
+  get(kind: ResourceShapeKind): ResourceShapeSchemaParser | undefined;
+  kinds(): readonly ResourceShapeKind[];
+}
+
+export const EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY: ResourceShapeSchemaRegistry =
+  {
+    get: () => undefined,
+    kinds: () => [],
+  };
+
+export class MapResourceShapeSchemaRegistry implements ResourceShapeSchemaRegistry {
+  readonly #schemas: ReadonlyMap<ResourceShapeKind, ResourceShapeSchemaParser>;
+
+  constructor(
+    schemas:
+      | ReadonlyMap<ResourceShapeKind, ResourceShapeSchemaParser>
+      | Readonly<Record<string, ResourceShapeSchemaParser>>,
+  ) {
+    const entries =
+      schemas instanceof Map ? [...schemas.entries()] : Object.entries(schemas);
+    for (const [kind, parser] of entries) {
+      if (!isResourceShapeKind(kind)) {
+        throw new TypeError(`invalid Resource Shape schema token: ${kind}`);
+      }
+      if (isBundledResourceShapeKind(kind)) {
+        throw new TypeError(
+          `registered Resource Shape schema must not shadow bundled kind ${kind}`,
+        );
+      }
+      if (typeof parser !== "function") {
+        throw new TypeError(
+          `registered Resource Shape schema ${kind} must be a parser function`,
+        );
+      }
+    }
+    this.#schemas = new Map(entries);
+  }
+
+  get(kind: ResourceShapeKind): ResourceShapeSchemaParser | undefined {
+    return this.#schemas.get(kind);
+  }
+
+  kinds(): readonly ResourceShapeKind[] {
+    return [...this.#schemas.keys()];
+  }
+}
+
+export interface ResourceShapePlan {
+  readonly shape: ResourceShapeKind;
+  /** Complete shape-specific spec after parser validation and normalization. */
+  readonly validatedSpec: JsonObject;
+  /** Stable adapter-visible execution label; never a Capsule discriminator. */
+  readonly executionId: string;
+  readonly moduleTemplate?: string;
+  readonly operatorModule?: ResourceShapeOperatorModule;
+  readonly inputs: Record<string, JsonValue>;
   readonly publicOutputs: readonly ResourceShapePublicOutput[];
   /**
    * Planner-only control modules describe typed inputs/outputs but do not
@@ -49,40 +168,54 @@ export interface ResourceShapePublicOutput {
 
 export type ParsedResourceSpec =
   | {
+      readonly schema: "bundled";
       readonly kind: "EdgeWorker";
       readonly spec: EdgeWorkerSpec;
       readonly interfaces: readonly string[];
       readonly lifecyclePolicy?: EdgeWorkerSpec["lifecyclePolicy"];
     }
   | {
+      readonly schema: "bundled";
       readonly kind: "ObjectBucket";
       readonly spec: ObjectBucketSpec;
       readonly interfaces: readonly string[];
       readonly lifecyclePolicy?: ObjectBucketSpec["lifecyclePolicy"];
     }
   | {
+      readonly schema: "bundled";
       readonly kind: "KVStore";
       readonly spec: KVStoreSpec;
       readonly interfaces: readonly string[];
       readonly lifecyclePolicy?: KVStoreSpec["lifecyclePolicy"];
     }
   | {
+      readonly schema: "bundled";
       readonly kind: "Queue";
       readonly spec: QueueSpec;
       readonly interfaces: readonly string[];
       readonly lifecyclePolicy?: QueueSpec["lifecyclePolicy"];
     }
   | {
+      readonly schema: "bundled";
       readonly kind: "SQLDatabase";
       readonly spec: SQLDatabaseSpec;
       readonly interfaces: readonly string[];
       readonly lifecyclePolicy?: SQLDatabaseSpec["lifecyclePolicy"];
     }
   | {
+      readonly schema: "bundled";
       readonly kind: "ContainerService";
       readonly spec: ContainerServiceSpec;
       readonly interfaces: readonly string[];
       readonly lifecyclePolicy?: ContainerServiceSpec["lifecyclePolicy"];
+    }
+  | {
+      readonly schema: "registered";
+      readonly kind: ResourceShapeKind;
+      readonly spec: JsonObject;
+      readonly interfaces: readonly string[];
+      readonly lifecyclePolicy?: { readonly delete: ResourceDeletePolicy };
+      readonly connections?: Readonly<Record<string, ResourceConnectionSpec>>;
     };
 
 export type ParseResourceSpecResult =
@@ -140,65 +273,11 @@ const RESOURCE_DELETE_POLICIES: readonly ResourceDeletePolicy[] = [
   "snapshot_then_delete",
   "block",
 ];
-const RESOURCE_CONNECTION_PERMISSIONS: readonly ResourceConnectionPermission[] =
-  ["read", "write", "connect", "publish", "consume"];
-const RESOURCE_PROJECTION_KINDS: readonly ResourceProjectionKind[] = [
-  "env",
-  "database_url",
-  "runtime_binding",
-  "volume_mount",
-  "sdk_client",
-];
-const SECRET_KEY_PATTERN =
-  /(^|[_-])(secret|token|password|passwd|api[_-]?key|private[_-]?key|credential|client[_-]?secret)([_-]|$)/i;
-const SECRET_VALUE_PATTERN =
-  /(-----BEGIN [A-Z ]*PRIVATE KEY-----|github_pat_[A-Za-z0-9_]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|AKIA[0-9A-Z]{12,}|ASIA[0-9A-Z]{12,}|sk-[A-Za-z0-9_-]{12,})/;
-
-/** Map EdgeWorker implementation -> first-party Capsule module template id. */
-export const EDGE_WORKER_IMPLEMENTATION_TEMPLATE: Readonly<
-  Record<string, string>
-> = Object.freeze({
-  cloudflare_workers: "cloudflare-worker-service",
-});
-
-export const OBJECT_BUCKET_IMPLEMENTATION_TEMPLATE: Readonly<
-  Record<string, string>
-> = Object.freeze({
-  cloudflare_r2_bucket: "cloudflare-r2-bucket",
-});
-
-export const KV_STORE_IMPLEMENTATION_TEMPLATE: Readonly<
-  Record<string, string>
-> = Object.freeze({
-  cloudflare_kv_namespace: "cloudflare-kv-store",
-});
-
-export const QUEUE_IMPLEMENTATION_TEMPLATE: Readonly<Record<string, string>> =
-  Object.freeze({
-    cloudflare_queue: "cloudflare-queue",
-  });
-
-export const SQL_DATABASE_IMPLEMENTATION_TEMPLATE: Readonly<
-  Record<string, string>
-> = Object.freeze({
-  cloudflare_d1_database: "cloudflare-sql-database",
-});
-
-export const CONTAINER_SERVICE_GENERIC_TEMPLATE_ID =
-  "takosumi-container-service";
-
-export const CONTAINER_SERVICE_IMPLEMENTATION_TEMPLATE: Readonly<
-  Record<string, string>
-> = Object.freeze({
-  cloudflare_container: CONTAINER_SERVICE_GENERIC_TEMPLATE_ID,
-  kubernetes_deployment: CONTAINER_SERVICE_GENERIC_TEMPLATE_ID,
-  aws_ecs_service: CONTAINER_SERVICE_GENERIC_TEMPLATE_ID,
-  takosumi_container_service: CONTAINER_SERVICE_GENERIC_TEMPLATE_ID,
-});
-
+const RESOURCE_CAPABILITY_TOKEN_RE = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u;
 export function parseResourceSpec(
   kind: ResourceShapeKind,
   spec: unknown,
+  schemaRegistry: ResourceShapeSchemaRegistry = EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY,
 ): ParseResourceSpecResult {
   switch (kind) {
     case "EdgeWorker": {
@@ -207,7 +286,8 @@ export function parseResourceSpec(
         ? {
             ok: true,
             parsed: {
-              kind,
+              schema: "bundled",
+              kind: "EdgeWorker",
               spec: r.spec,
               interfaces: requiredEdgeWorkerInterfaces(r.spec),
               lifecyclePolicy: r.spec.lifecyclePolicy,
@@ -221,7 +301,8 @@ export function parseResourceSpec(
         ? {
             ok: true,
             parsed: {
-              kind,
+              schema: "bundled",
+              kind: "ObjectBucket",
               spec: r.spec,
               interfaces: requiredObjectBucketInterfaces(r.spec),
               lifecyclePolicy: r.spec.lifecyclePolicy,
@@ -235,7 +316,8 @@ export function parseResourceSpec(
         ? {
             ok: true,
             parsed: {
-              kind,
+              schema: "bundled",
+              kind: "KVStore",
               spec: r.spec,
               interfaces: requiredKVStoreInterfaces(r.spec),
               lifecyclePolicy: r.spec.lifecyclePolicy,
@@ -249,7 +331,8 @@ export function parseResourceSpec(
         ? {
             ok: true,
             parsed: {
-              kind,
+              schema: "bundled",
+              kind: "Queue",
               spec: r.spec,
               interfaces: requiredQueueInterfaces(r.spec),
               lifecyclePolicy: r.spec.lifecyclePolicy,
@@ -263,7 +346,8 @@ export function parseResourceSpec(
         ? {
             ok: true,
             parsed: {
-              kind,
+              schema: "bundled",
+              kind: "SQLDatabase",
               spec: r.spec,
               interfaces: requiredSQLDatabaseInterfaces(r.spec),
               lifecyclePolicy: r.spec.lifecyclePolicy,
@@ -277,7 +361,8 @@ export function parseResourceSpec(
         ? {
             ok: true,
             parsed: {
-              kind,
+              schema: "bundled",
+              kind: "ContainerService",
               spec: r.spec,
               interfaces: requiredContainerServiceInterfaces(r.spec),
               lifecyclePolicy: r.spec.lifecyclePolicy,
@@ -286,14 +371,78 @@ export function parseResourceSpec(
         : r;
     }
     default:
-      return {
-        ok: false,
-        error: {
-          code: "unsupported_shape",
-          message: `planner does not implement shape ${kind}`,
-        },
-      };
+      return parseRegisteredResourceSpec(kind, spec, schemaRegistry);
   }
+}
+
+function parseRegisteredResourceSpec(
+  kind: ResourceShapeKind,
+  spec: unknown,
+  schemaRegistry: ResourceShapeSchemaRegistry,
+): ParseResourceSpecResult {
+  const parser = schemaRegistry.get(kind);
+  if (!parser) {
+    return {
+      ok: false,
+      error: {
+        code: "unsupported_shape",
+        message: `Resource Shape kind is not registered: ${String(kind)}`,
+      },
+    };
+  }
+  const candidate = objectCandidate(spec);
+  if (!candidate.ok) return candidate;
+  const secretPath = secretLikeJsonPath(candidate.value, "spec");
+  if (secretPath) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_spec",
+        message: `${secretPath} contains secret-looking material; use Credential or ProviderConnection materialization instead`,
+      },
+    };
+  }
+
+  let result: RegisteredResourceShapeSpecResult;
+  try {
+    result = parser(spec);
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_spec",
+        message:
+          `registered Resource Shape schema ${kind} rejected the spec: ` +
+          (error instanceof Error ? error.message : String(error)),
+      },
+    };
+  }
+  if (!result.ok) return result;
+  const normalized = objectCandidate(result.value.spec);
+  if (!normalized.ok) return normalized;
+  const interfaces = parseExtensibleTokenList(
+    result.value.interfaces,
+    "interfaces",
+    false,
+  );
+  if (!interfaces.ok) return interfaces;
+  const lifecyclePolicy = parseLifecyclePolicy(result.value.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+  const connections = parseConnectionsMap(result.value.connections);
+  if (!connections.ok) return connections;
+  return {
+    ok: true,
+    parsed: {
+      schema: "registered",
+      kind,
+      spec: JSON.parse(JSON.stringify(normalized.value)) as JsonObject,
+      interfaces: [...new Set(interfaces.value)],
+      ...(lifecyclePolicy.value
+        ? { lifecyclePolicy: lifecyclePolicy.value }
+        : {}),
+      ...(connections.value ? { connections: connections.value } : {}),
+    },
+  };
 }
 
 export function parseObjectBucketSpec(
@@ -394,15 +543,13 @@ export function parseSQLDatabaseSpec(
   const engine = candidate.engine;
   if (
     engine !== undefined &&
-    engine !== "sqlite" &&
-    engine !== "postgres" &&
-    engine !== "mysql"
+    (typeof engine !== "string" || !RESOURCE_CAPABILITY_TOKEN_RE.test(engine))
   ) {
     return {
       ok: false,
       error: {
         code: "invalid_engine",
-        message: "spec.engine must be sqlite, postgres, or mysql",
+        message: "spec.engine must be a valid capability token",
       },
     };
   }
@@ -552,223 +699,135 @@ export function parseEdgeWorkerSpec(spec: unknown): ParseEdgeWorkerSpecResult {
 }
 
 export function planResourceShape(
-  implementation: string,
+  descriptor: TargetImplementationDescriptor,
   parsed: ParsedResourceSpec,
   target: TargetPoolEntry,
+  moduleRegistry: ResourceShapeModuleRegistry = EMPTY_RESOURCE_SHAPE_MODULE_REGISTRY,
 ): ResourceShapePlan {
-  switch (parsed.kind) {
-    case "EdgeWorker":
-      return planEdgeWorker(implementation, parsed.spec, target);
-    case "ObjectBucket":
-      return planObjectBucket(implementation, parsed.spec, target);
-    case "KVStore":
-      return planKVStore(implementation, parsed.spec, target);
-    case "Queue":
-      return planQueue(implementation, parsed.spec, target);
-    case "SQLDatabase":
-      return planSQLDatabase(implementation, parsed.spec, target);
-    case "ContainerService":
-      return planContainerService(implementation, parsed.spec, target);
+  if (descriptor.shape !== parsed.kind) {
+    throw new Error(
+      `implementation descriptor shape ${descriptor.shape} does not match Resource ${parsed.kind}`,
+    );
   }
-}
+  const validatedSpec = validatedSpecForPlan(parsed.spec);
+  const publicOutputs = (descriptor.moduleOutputs ?? []).map((output) => ({
+    name: output.name,
+    type: output.type,
+  }));
 
-/**
- * Plan a Worker-compatible EdgeWorker. The module reads a prebuilt artifact
- * with OpenTofu `file(var.artifactPath)` or fetches a CI/release artifact with
- * the declared `artifactUrl` + `artifactSha256`. Takosumi does not own the
- * build or choose the artifact; the generated OpenTofu module consumes the
- * declared source of truth.
- */
-export function planEdgeWorker(
-  implementation: string,
-  spec: EdgeWorkerSpec,
-  target: TargetPoolEntry,
-): ResourceShapePlan {
-  const templateId = EDGE_WORKER_IMPLEMENTATION_TEMPLATE[implementation];
-  if (!templateId) {
+  if (descriptor.plugin) {
+    return {
+      shape: parsed.kind,
+      validatedSpec,
+      executionId: `adapter-plugin:${descriptor.plugin}`,
+      inputs: {},
+      publicOutputs,
+      requiresAdapterPlugin: true,
+    };
+  }
+
+  if (!descriptor.providerSource || !descriptor.moduleTemplate) {
     throw new Error(
-      `planEdgeWorker: no first-party module for implementation "${implementation}"`,
+      `implementation ${descriptor.implementation} must declare either plugin or providerSource + moduleTemplate`,
     );
   }
-  const moduleFiles = moduleFilesFor(templateId, "planEdgeWorker");
-  const artifactPath = spec.source.artifactPath;
-  const artifactUrl = spec.source.artifactUrl;
-  const artifactSha256 = spec.source.artifactSha256;
-  if (!artifactPath && !artifactUrl) {
+  const operatorModule = moduleRegistry.get(descriptor.moduleTemplate);
+  if (!operatorModule || operatorModule.files.length === 0) {
     throw new Error(
-      "planEdgeWorker: cloudflare_workers requires source.artifactPath or source.artifactUrl",
+      `planResourceShape(${descriptor.implementation}): operator module registry has no entry for moduleTemplate "${descriptor.moduleTemplate}"`,
     );
-  }
-  const inputs: Record<string, unknown> = {
-    appName: spec.name,
-    accountId: target.ref ?? "",
-  };
-  if (artifactPath) inputs.artifactPath = artifactPath;
-  if (artifactUrl) inputs.artifactUrl = artifactUrl;
-  if (artifactSha256) inputs.artifactSha256 = artifactSha256;
-  if (spec.compatibilityDate) inputs.compatibilityDate = spec.compatibilityDate;
-  if (spec.compatibilityFlags && spec.compatibilityFlags.length > 0) {
-    inputs.compatibilityFlags = [...spec.compatibilityFlags];
-  }
-  if (spec.connections && Object.keys(spec.connections).length > 0) {
-    inputs.connections = normalizedConnectionsForPlan(spec.connections);
   }
   return {
-    shape: "EdgeWorker",
-    templateId,
-    moduleFiles,
-    inputs,
-    publicOutputs: [
-      { name: "worker_name", type: "string" },
-      { name: "url", type: "url" },
-      { name: "connections", type: "json" },
-    ],
-  };
-}
-
-export function planObjectBucket(
-  implementation: string,
-  spec: ObjectBucketSpec,
-  target: TargetPoolEntry,
-): ResourceShapePlan {
-  const templateId = OBJECT_BUCKET_IMPLEMENTATION_TEMPLATE[implementation];
-  if (!templateId)
-    return planGenericServiceShape(
-      "ObjectBucket",
-      implementation,
-      spec,
+    shape: parsed.kind,
+    validatedSpec,
+    executionId: descriptor.moduleTemplate,
+    moduleTemplate: descriptor.moduleTemplate,
+    operatorModule,
+    inputs: projectModuleInputs(
+      descriptor.moduleInputMappings ?? {},
+      validatedSpec,
       target,
+    ),
+    publicOutputs,
+  };
+}
+
+function validatedSpecForPlan(spec: object): JsonObject {
+  return JSON.parse(JSON.stringify(spec)) as JsonObject;
+}
+
+function projectModuleInputs(
+  mappings: Readonly<Record<string, TargetModuleInputMapping>>,
+  spec: JsonObject,
+  target: TargetPoolEntry,
+): Record<string, JsonValue> {
+  const inputs: Record<string, JsonValue> = {};
+  const targetJson = JSON.parse(JSON.stringify(target)) as JsonObject;
+  for (const [inputName, mapping] of Object.entries(mappings)) {
+    const projected = projectModuleInput(mapping, spec, targetJson);
+    if (projected.found) inputs[inputName] = projected.value;
+  }
+  return inputs;
+}
+
+type ProjectedModuleInput =
+  | { readonly found: true; readonly value: JsonValue }
+  | { readonly found: false };
+
+function projectModuleInput(
+  mapping: TargetModuleInputMapping,
+  spec: JsonObject,
+  target: JsonObject,
+): ProjectedModuleInput {
+  let projected: ProjectedModuleInput;
+  if (mapping.source === "literal") {
+    projected = Object.prototype.hasOwnProperty.call(mapping, "value")
+      ? { found: true, value: mapping.value ?? null }
+      : { found: false };
+  } else {
+    const root = mapping.source === "spec" ? spec : target;
+    projected = jsonPointerValue(root, mapping.path);
+  }
+  if (projected.found) return projected;
+  if (Object.prototype.hasOwnProperty.call(mapping, "default")) {
+    return { found: true, value: mapping.default ?? null };
+  }
+  if (mapping.required) {
+    throw new Error(
+      `required module input mapping is missing (${mapping.source}:${mapping.path ?? ""})`,
     );
-  const moduleFiles = moduleFilesFor(templateId, "planObjectBucket");
-  return {
-    shape: "ObjectBucket",
-    templateId,
-    moduleFiles,
-    inputs: { bucketName: spec.name, accountId: target.ref ?? "" },
-    publicOutputs: [
-      { name: "bucket_name", type: "string" },
-      { name: "s3_endpoint", type: "url" },
-    ],
-  };
+  }
+  return { found: false };
 }
 
-export function planKVStore(
-  implementation: string,
-  spec: KVStoreSpec,
-  target: TargetPoolEntry,
-): ResourceShapePlan {
-  const templateId = KV_STORE_IMPLEMENTATION_TEMPLATE[implementation];
-  if (!templateId)
-    return planGenericServiceShape("KVStore", implementation, spec, target);
-  const moduleFiles = moduleFilesFor(templateId, "planKVStore");
-  return {
-    shape: "KVStore",
-    templateId,
-    moduleFiles,
-    inputs: { namespaceTitle: spec.name, accountId: target.ref ?? "" },
-    publicOutputs: [
-      { name: "namespace_id", type: "string" },
-      { name: "namespace_title", type: "string" },
-    ],
-  };
-}
-
-export function planQueue(
-  implementation: string,
-  spec: QueueSpec,
-  target: TargetPoolEntry,
-): ResourceShapePlan {
-  const templateId = QUEUE_IMPLEMENTATION_TEMPLATE[implementation];
-  if (!templateId)
-    return planGenericServiceShape("Queue", implementation, spec, target);
-  const moduleFiles = moduleFilesFor(templateId, "planQueue");
-  return {
-    shape: "Queue",
-    templateId,
-    moduleFiles,
-    inputs: { queueName: spec.name, accountId: target.ref ?? "" },
-    publicOutputs: [{ name: "queue_name", type: "string" }],
-  };
-}
-
-export function planSQLDatabase(
-  implementation: string,
-  spec: SQLDatabaseSpec,
-  target: TargetPoolEntry,
-): ResourceShapePlan {
-  const templateId = SQL_DATABASE_IMPLEMENTATION_TEMPLATE[implementation];
-  if (!templateId)
-    return planGenericServiceShape("SQLDatabase", implementation, spec, target);
-  const moduleFiles = moduleFilesFor(templateId, "planSQLDatabase");
-  return {
-    shape: "SQLDatabase",
-    templateId,
-    moduleFiles,
-    inputs: { databaseName: spec.name, accountId: target.ref ?? "" },
-    publicOutputs: [
-      { name: "database_id", type: "string" },
-      { name: "database_name", type: "string" },
-    ],
-  };
-}
-
-export function planContainerService(
-  implementation: string,
-  spec: ContainerServiceSpec,
-  target: TargetPoolEntry,
-): ResourceShapePlan {
-  const templateId =
-    CONTAINER_SERVICE_IMPLEMENTATION_TEMPLATE[implementation] ??
-    CONTAINER_SERVICE_GENERIC_TEMPLATE_ID;
-  const moduleFiles = moduleFilesFor(templateId, "planContainerService");
-  return {
-    shape: "ContainerService",
-    templateId,
-    moduleFiles,
-    inputs: {
-      serviceName: spec.name,
-      implementation,
-      targetName: target.name,
-      targetType: target.type,
-      image: spec.image,
-      ports: spec.ports ?? [],
-      publicHttp: spec.publicHttp ?? false,
-      environment: spec.environment ?? {},
-      connections: spec.connections
-        ? normalizedConnectionsForPlan(spec.connections)
-        : {},
-    },
-    publicOutputs: [
-      { name: "service_name", type: "string" },
-      { name: "url", type: "url" },
-      { name: "connections", type: "json" },
-    ],
-    requiresAdapterPlugin: true,
-  };
-}
-
-function planGenericServiceShape(
-  shape: ResourceShapeKind,
-  implementation: string,
-  spec: { readonly name: string },
-  target: TargetPoolEntry,
-): ResourceShapePlan {
-  const templateId = "takosumi-service-shape";
-  const moduleFiles = moduleFilesFor(templateId, "planGenericServiceShape");
-  return {
-    shape,
-    templateId,
-    moduleFiles,
-    inputs: {
-      resourceName: spec.name,
-      shape,
-      implementation,
-      targetName: target.name,
-      targetType: target.type,
-    },
-    publicOutputs: [{ name: "resource_name", type: "string" }],
-    requiresAdapterPlugin: true,
-  };
+function jsonPointerValue(
+  root: JsonValue,
+  pointer: string | undefined,
+): ProjectedModuleInput {
+  if (pointer === undefined || (pointer !== "" && !pointer.startsWith("/"))) {
+    return { found: false };
+  }
+  if (pointer === "") return { found: true, value: root };
+  let current: JsonValue = root;
+  for (const rawToken of pointer.slice(1).split("/")) {
+    const token = rawToken.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (Array.isArray(current)) {
+      if (!/^(0|[1-9][0-9]*)$/u.test(token)) return { found: false };
+      const index = Number(token);
+      if (index >= current.length) return { found: false };
+      current = current[index]!;
+      continue;
+    }
+    if (
+      current === null ||
+      typeof current !== "object" ||
+      !Object.prototype.hasOwnProperty.call(current, token)
+    ) {
+      return { found: false };
+    }
+    current = (current as Readonly<Record<string, JsonValue>>)[token]!;
+  }
+  return { found: true, value: current };
 }
 
 function requiredEdgeWorkerInterfaces(spec: EdgeWorkerSpec): readonly string[] {
@@ -796,7 +855,7 @@ function requiredSQLDatabaseInterfaces(
   spec: SQLDatabaseSpec,
 ): readonly string[] {
   const engine = spec.engine ?? "sqlite";
-  return ["sql", engine === "postgres" ? "postgres_protocol" : engine];
+  return ["sql", engine];
 }
 
 function requiredContainerServiceInterfaces(
@@ -825,19 +884,6 @@ function appendConnectionInterfaces(
       interfaces.push(`grant_${permission}`);
     }
   }
-}
-
-function moduleFilesFor(
-  templateId: string,
-  caller: string,
-): ResourceShapePlan["moduleFiles"] {
-  const moduleFiles = firstPartyModuleFilesByTemplateId[templateId];
-  if (!moduleFiles) {
-    throw new Error(
-      `${caller}: missing module files for template "${templateId}"`,
-    );
-  }
-  return moduleFiles;
 }
 
 type ObjectResult =
@@ -990,7 +1036,7 @@ function parseStringMap(
         },
       };
     }
-    if (SECRET_KEY_PATTERN.test(key) || SECRET_VALUE_PATTERN.test(item)) {
+    if (secretLikeJsonPath({ [key]: item }, `spec.${field}`)) {
       return {
         ok: false,
         error: {
@@ -1077,17 +1123,13 @@ function parseConnectionsMap(value: unknown):
     for (const permission of candidate.permissions) {
       if (
         typeof permission !== "string" ||
-        !RESOURCE_CONNECTION_PERMISSIONS.includes(
-          permission as ResourceConnectionPermission,
-        )
+        !RESOURCE_CAPABILITY_TOKEN_RE.test(permission)
       ) {
         return {
           ok: false,
           error: {
             code: "invalid_connection",
-            message:
-              `spec.connections.${name}.permissions values must be one of: ` +
-              RESOURCE_CONNECTION_PERMISSIONS.join(", "),
+            message: `spec.connections.${name}.permissions values must be valid capability tokens`,
           },
         };
       }
@@ -1095,17 +1137,13 @@ function parseConnectionsMap(value: unknown):
     }
     if (
       typeof candidate.projection !== "string" ||
-      !RESOURCE_PROJECTION_KINDS.includes(
-        candidate.projection as ResourceProjectionKind,
-      )
+      !RESOURCE_CAPABILITY_TOKEN_RE.test(candidate.projection)
     ) {
       return {
         ok: false,
         error: {
           code: "invalid_connection",
-          message:
-            `spec.connections.${name}.projection must be one of: ` +
-            RESOURCE_PROJECTION_KINDS.join(", "),
+          message: `spec.connections.${name}.projection must be a valid capability token`,
         },
       };
     }
@@ -1120,21 +1158,6 @@ function parseConnectionsMap(value: unknown):
     ok: true,
     value: Object.keys(out).length > 0 ? out : undefined,
   };
-}
-
-function normalizedConnectionsForPlan(
-  connections: Readonly<Record<string, ResourceConnectionSpec>>,
-): Record<string, ResourceConnectionSpec> {
-  const normalized: Record<string, ResourceConnectionSpec> = {};
-  for (const name of Object.keys(connections).sort()) {
-    const connection = connections[name]!;
-    normalized[name] = {
-      resource: connection.resource,
-      permissions: [...connection.permissions].sort(),
-      projection: connection.projection,
-    };
-  }
-  return normalized;
 }
 
 function parseQueueDelivery(value: unknown):

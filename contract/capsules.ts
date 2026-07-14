@@ -3,21 +3,17 @@
  * (`capsules` / compatibility reports).
  *
  * A Capsule is the OpenTofu execution unit directly under a Workspace / Project
- * (`@workspace/name`): one Capsule = one generated root + one OpenTofu tfstate +
+ * (`@workspace/name`): one Capsule = one OpenTofu root execution + one tfstate +
  * outputs. The App/Environment/InstallProfile lanes model is retired;
  * `environment` is a column on the Capsule (UNIQUE(project_id, name,
  * environment)).
  *
- * The compatibility report is not a Takosumi-specific source manifest; it is the
- * normalized view of a plain Git-hosted OpenTofu configuration that can be called
- * as a child module from a Takosumi generated root. A SourceSnapshot is
- * normalized as an OpenTofu Capsule before plan / apply. InstallConfig (see
+ * The compatibility report is not a Takosumi-specific source manifest; it is a
+ * read-only analysis of a plain Git-hosted OpenTofu configuration. The original
+ * SourceSnapshot remains the execution source and is never rewritten by this
+ * check. InstallConfig (see
  * `./install-configs.ts`) is the service-side DB record describing Capsule
  * execution policy. User repos carry NO Takosumi manifest.
- *
- * (The Capsule ledger record was formerly `Installation`. The transient
- * `Installation` alias is re-exported from `./install-configs.ts` until the rename
- * converges.)
  */
 
 import type { PublicRun, Run } from "./runs.ts";
@@ -28,9 +24,9 @@ import type {
 } from "./provider-resolution.ts";
 
 export type {
-  CapsuleProviderEnvBinding,
-  CapsuleProviderEnvBindings,
-  CapsuleProviderEnvBindingSet,
+  ProviderBinding,
+  ProviderBindings,
+  ProviderBindingSet,
 } from "./connections.ts";
 
 // ---------------------------------------------------------------------------
@@ -38,24 +34,13 @@ export type {
 // ---------------------------------------------------------------------------
 
 /**
- * Internal compatibility discriminator. `core` is the Workspace base Capsule
- * emitting shared outputs. `opentofu_root` is retained only so old direct-root
- * ledger rows can be read; new InstallConfigs are rejected at the domain-service
- * boundary.
+ * `error` can retain the latest provider-applied StateVersion/Output while a
+ * required post-apply lifecycle action has failed or stayed non-terminal. It
+ * is never runtime Ready; a later successful reviewed plan/apply is the generic
+ * recovery path back to `active`.
  */
-export type InstallType =
-  | "core"
-  | "opentofu_module"
-  | "opentofu_root"
-  | "app_source";
-
 export type CapsuleStatus =
-  | "pending"
-  | "active"
-  | "stale"
-  | "error"
-  | "disabled"
-  | "destroyed";
+  "pending" | "active" | "stale" | "error" | "disabled" | "destroyed";
 
 /**
  * Capsule ledger record.
@@ -68,32 +53,24 @@ export type CapsuleStatus =
 export interface Capsule {
   readonly id: string;
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
   /**
    * Owning Project. Capsules live under a Project; a default Project
-   * (`prj_default`) is backfilled per Workspace for pre-Project rows.
+   * (`prj_default_<workspaceId>`) is backfilled per Workspace for pre-Project
+   * rows.
    */
-  readonly projectId?: string;
+  readonly projectId: string;
   readonly name: string;
   readonly slug: string;
   /**
-   * Registered git {@link Source} this Capsule tracks. Absent only for legacy
-   * source-less Capsules kept for internal/operator compatibility with retired
-   * upload/artifact SourceSnapshots. New public Capsules should be backed by a
-   * Git Source.
+   * Registered Git {@link Source} this Capsule tracks. Capsule authoring is
+   * Git-only; immutable archives are runner transport, not another Source kind.
    */
-  readonly sourceId?: string;
-  readonly installType: InstallType;
+  readonly sourceId: string;
   readonly installConfigId: string;
   readonly environment: string;
   readonly currentStateVersionId?: string;
   readonly currentStateGeneration: number;
   readonly currentOutputId?: string;
-  /** @deprecated Use currentOutputId. */
-  readonly currentOutputSnapshotId?: string;
-  /** @deprecated Retired Deployment ledger pointer. */
-  readonly currentDeploymentId?: string;
   readonly compatibilityReportId?: string;
   readonly compatibilityStatus?: CapsuleCompatibilityLevel;
   readonly status: CapsuleStatus;
@@ -119,29 +96,32 @@ export interface Capsule {
 /** Public Capsule projection returned by `/api` and dashboard session routes. */
 export type PublicCapsule = Omit<
   Capsule,
-  "installType" | "currentOutputId" | "autoUpdateAttemptSourceSnapshotId"
+  "currentOutputId" | "autoUpdateAttemptSourceSnapshotId"
 >;
 
 // ---------------------------------------------------------------------------
 // Capsule compatibility report
 // ---------------------------------------------------------------------------
 
-export type CapsuleCompatibilityLevel =
-  | "ready"
-  | "auto_capsulized"
-  | "needs_patch"
-  | "unsupported";
+export type CapsuleCompatibilityLevel = "ready" | "needs_patch" | "unsupported";
 
 export type CapsuleCompatibility = CapsuleCompatibilityLevel;
 
 export type CapsuleFindingSeverity = "info" | "warning" | "error";
 
+export type CapsuleFindingCompatibilityImpact =
+  "none" | "needs_patch" | "unsupported";
+
 export interface CapsuleGateFinding {
   readonly severity: CapsuleFindingSeverity;
+  /** Structured aggregate effect; consumers must not infer it from `code`. */
+  readonly compatibilityImpact: CapsuleFindingCompatibilityImpact;
   readonly code: string;
   readonly message: string;
   readonly path?: string;
   readonly suggestion?: string;
+  /** Structured presentation context; consumers must not parse `message`. */
+  readonly context?: Readonly<Record<string, string>>;
 }
 
 export interface CapsuleProviderRequirement {
@@ -149,6 +129,13 @@ export interface CapsuleProviderRequirement {
   readonly versionConstraint?: string;
   readonly aliases: readonly string[];
   readonly allowed: boolean;
+  /**
+   * Explicit service-side decision that this provider needs a
+   * ProviderConnection for this run context. HCL source names alone never imply
+   * credentials; absent/false means the compatibility analyzer made no such
+   * requirement.
+   */
+  readonly credentialRequired?: boolean;
 }
 
 export interface CapsuleResourceSummary {
@@ -167,12 +154,24 @@ export interface CapsuleProvisionerSummary {
   readonly allowed: boolean;
 }
 
+/**
+ * OpenTofu metadata for one root-module Output discovered by compatibility
+ * analysis. The generated-root path must preserve `sensitive`; an `ephemeral`
+ * Output cannot be re-exported from a root module and therefore makes the
+ * Capsule incompatible with Takosumi's persisted Output ledger.
+ */
+export interface CapsuleRootModuleOutputDeclaration {
+  readonly name: string;
+  /** `null` means static analysis could not prove the constant boolean. */
+  readonly sensitive: boolean | null;
+  /** `null` means static analysis could not prove the constant boolean. */
+  readonly ephemeral: boolean | null;
+}
+
 export interface CapsuleCompatibilityReport {
   readonly id: string;
-  readonly sourceId?: string;
+  readonly sourceId: string;
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
   readonly sourceSnapshotId: string;
   readonly level: CapsuleCompatibilityLevel;
   readonly findings: readonly CapsuleGateFinding[];
@@ -187,11 +186,9 @@ export interface CapsuleCompatibilityReport {
    * OpenTofu variables/outputs the generated root may project.
    */
   readonly rootModuleVariables?: readonly string[];
-  readonly rootModuleOutputs?: readonly string[];
+  readonly rootModuleOutputs?: readonly CapsuleRootModuleOutputDeclaration[];
   readonly providerRequirements?: readonly ProviderRequirement[];
   readonly providerResolutions?: readonly ProviderResolution[];
-  readonly normalizedObjectKey?: string;
-  readonly normalizedDigest?: string;
   readonly createdAt: string;
 }
 
@@ -209,16 +206,11 @@ export interface CreateSourceCompatibilityCheckRequest {
   /** Safe relative OpenTofu module path inside the SourceSnapshot archive. */
   readonly modulePath?: string;
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
-  /** @deprecated Use workspace-scoped Source/Capsule identity. */
-  readonly spaceId?: string;
   /**
    * Curated InstallConfig to gate the pre-install compatibility check against,
    * used when no Capsule exists yet (e.g. the dashboard's "選んで入れる"
-   * catalog deep-link). Its bounded policy (`allowedResourceTypes` …) is merged
-   * with the Workspace policy as a ceiling and applied to the Capsule Gate, so a
-   * vetted first-party module is gated by its own minimal allowlist WITHOUT
+   * Store deep-link). Its bounded policy (`allowedResourceTypes` …) is merged
+   * with Workspace policy as a ceiling and applied to the Capsule Gate without
    * widening the instance-wide default allowlist. Ignored when `capsuleId` is
    * also present (the Capsule's own InstallConfig wins).
    */

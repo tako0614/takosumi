@@ -1,7 +1,7 @@
 /**
  * Plan-time dependency + output-share resolution (spec §15 / §17 / §18).
  *
- * A cohesive collaborator pulled out of `OpenTofuDeploymentController`: it owns
+ * A cohesive collaborator pulled out of `OpenTofuController`: it owns
  * the plan-time resolution of a consumer Capsule's Dependencies into the
  * injected variable values + pinned `DependencySnapshot` entries
  * ({@link DependencyResolutionService.resolveConsumerDependencies}), the ACTIVE
@@ -23,7 +23,7 @@
  * coverage logic.
  *
  * Dependencies it needs are threaded in as ports: the {@link
- * OpenTofuDeploymentStore} for reads, plus the optional
+ * OpenTofuControlStore} for reads, plus the optional
  * {@link DependencyValueSealer} (seals a resolved sensitive value OUT of the
  * cleartext snapshot) and {@link SensitiveOutputResolver} (resolves a sensitive
  * producer output from the raw output artifact). When either is absent and an
@@ -33,10 +33,10 @@
 
 import type { JsonValue } from "takosumi-contract";
 import type {
-  Installation,
-  StateSnapshot,
+  Capsule,
+  StateVersion,
 } from "@takosumi/internal/deploy-control-api";
-import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
+import type { Output as Output } from "takosumi-contract/outputs";
 import type {
   DependencySnapshotEntry,
   DependencySnapshotMode,
@@ -48,7 +48,7 @@ import type {
 } from "../output-shares/mod.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { OpenTofuControllerError } from "./errors.ts";
-import type { OpenTofuDeploymentStore } from "./store.ts";
+import type { OpenTofuControlStore } from "./store.ts";
 
 /**
  * At-rest sealer for the SENSITIVE pinned values of a DependencySnapshot entry
@@ -65,7 +65,7 @@ export interface DependencyValueSealerPort {
 }
 
 /**
- * Resolution result for a consumer Installation's Dependencies (spec §17):
+ * Resolution result for a consumer Capsule's Dependencies (spec §17):
  *   - `injectedValues` are merged into the plan request's inputs/variables;
  *   - `hasSensitiveInjected` is `true` when at least one injected value came
  *     from a SENSITIVE producer output (the runs_inputs sidecar must then seal);
@@ -81,11 +81,11 @@ export interface ResolvedDependencies {
 }
 
 /**
- * The names a `published_output` cross-Space edge may consume, resolved from the
- * consumer Space's ACTIVE OutputShares for one producer Installation. Maps the
+ * The names a `published_output` cross-Workspace edge may consume, resolved from the
+ * consumer Workspace's active OutputShares for one producer Capsule. Maps the
  * SHARED name (the grant alias, else the producer output name) -> the producer's
  * actual output name plus whether it must be resolved from the raw sensitive
- * output artifact instead of OutputSnapshot.spaceOutputs.
+ * output artifact instead of Output.workspaceOutputs.
  */
 export type ShareCoverage = ReadonlyMap<
   string,
@@ -99,7 +99,7 @@ export type ShareCoverage = ReadonlyMap<
  * that resolves a sensitive value seals / resolves identically.
  */
 export interface DependencyResolutionServiceDependencies {
-  readonly store: OpenTofuDeploymentStore;
+  readonly store: OpenTofuControlStore;
   readonly dependencyValueSealer?: DependencyValueSealerPort;
   readonly sensitiveOutputResolver?: SensitiveOutputResolver;
 }
@@ -109,7 +109,7 @@ export interface DependencyResolutionServiceDependencies {
  * is identical to the prior inline controller methods.
  */
 export class DependencyResolutionService {
-  readonly #store: OpenTofuDeploymentStore;
+  readonly #store: OpenTofuControlStore;
   readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
   readonly #dependencyValueSealer?: DependencyValueSealerPort;
 
@@ -120,18 +120,18 @@ export class DependencyResolutionService {
   }
 
   /**
-   * Resolves a consumer Installation's Dependencies into the injected values +
+   * Resolves a consumer Capsule's Dependencies into the injected values +
    * pinned snapshot entries (spec §15 / §17). For each `variable_injection` edge
-   * it reads the producer's current OutputSnapshot and pulls each mapped output
+   * it reads the producer's current Output and pulls each mapped output
    * (`from`) into the injected values under the consumer input name (`to`). A
-   * required mapping whose producer output is absent (no current OutputSnapshot,
+   * required mapping whose producer output is absent (no current Output,
    * or the named output is missing) is a typed `failed_precondition`
    * (`dependency_outputs_unavailable`). Returns `undefined` when the consumer has
    * no Dependencies. The snapshot `mode` is `strict` for a production environment,
    * else `pinned` (§17).
    */
   async resolveConsumerDependencies(
-    consumer: Installation,
+    consumer: Capsule,
   ): Promise<ResolvedDependencies | undefined> {
     const dependencies = await this.#store.listDependenciesForConsumer(
       consumer.id,
@@ -141,24 +141,25 @@ export class DependencyResolutionService {
     let hasSensitiveInjected = false;
     const entries: DependencySnapshotEntry[] = [];
     for (const dependency of dependencies) {
-      const producer = await this.#store.getInstallation(
-        dependency.producerInstallationId,
+      const producer = await this.#store.getCapsule(
+        dependency.producerCapsuleId,
       );
       if (!producer) {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `dependency_outputs_unavailable: dependency ${dependency.id} producer ` +
-            `installation ${dependency.producerInstallationId} not found`,
+            `Capsule ${dependency.producerCapsuleId} not found`,
+          { reason: "dependency_outputs_unavailable" },
         );
       }
-      // remote_state injects NO values: instead the producer StateSnapshot bytes
+      // remote_state injects NO values: instead the producer StateVersion bytes
       // are pinned here and later materialized into the container at dispatch
       // time. This makes both `strict` and `pinned` plans apply the same producer
       // state bytes that were reviewed at plan time; strict mode additionally
       // rejects a producer whose current generation moved.
       if (dependency.mode === "remote_state") {
-        const stateSnapshot =
-          await this.#latestProducerStateSnapshotForDependency(
+        const stateVersion =
+          await this.#latestProducerStateVersionForDependency(
             dependency.id,
             producer,
           );
@@ -166,12 +167,10 @@ export class DependencyResolutionService {
         entries.push({
           dependencyId: dependency.id,
           producerCapsuleId: producer.id,
-          producerInstallationId: producer.id,
-          producerStateGeneration: stateSnapshot.generation,
-          producerStateVersionId: stateSnapshot.id,
-          producerStateSnapshotId: stateSnapshot.id,
-          producerStateObjectKey: stateSnapshot.objectKey,
-          producerStateDigest: stateSnapshot.digest,
+          producerStateGeneration: stateVersion.generation,
+          producerStateVersionId: stateVersion.id,
+          producerStateRef: stateVersion.stateRef,
+          producerStateDigest: stateVersion.digest,
           producerOutputId: "",
           producerOutputDigest: "",
           valuesDigest: await stableJsonDigest(values),
@@ -179,7 +178,7 @@ export class DependencyResolutionService {
         });
         continue;
       }
-      // variable_injection (same-Space) and published_output (cross-Space via an
+      // variable_injection (same-Workspace) and published_output (cross-Workspace via an
       // active OutputShare) both pull producer outputs into the consumer inputs.
       // published_output restricts the readable names to the active grant and
       // resolves each mapped SHARED name back to the producer output name.
@@ -187,8 +186,8 @@ export class DependencyResolutionService {
         dependency.mode === "published_output"
           ? await this.resolveShareCoverage(producer, consumer)
           : undefined;
-      const outputSnapshot = producer.currentOutputSnapshotId
-        ? await this.#store.getOutputSnapshot(producer.currentOutputSnapshotId)
+      const output = producer.currentOutputId
+        ? await this.#store.getOutput(producer.currentOutputId)
         : undefined;
       // Full plaintext value map for this edge (drives the digest). Sensitive
       // keys are tracked separately so they can be sealed out of `values`
@@ -208,8 +207,9 @@ export class DependencyResolutionService {
             throw new OpenTofuControllerError(
               "failed_precondition",
               `output_share_revoked: dependency ${dependency.id} consumes ` +
-                `shared output ${mapping.from} from producer installation ` +
+                `shared output ${mapping.from} from producer Capsule ` +
                 `${producer.id} but no active OutputShare covers it`,
+              { reason: "output_share_revoked" },
             );
           }
           producerOutputName = resolved.outputName;
@@ -219,7 +219,7 @@ export class DependencyResolutionService {
           dependencyId: dependency.id,
           producer,
           consumer,
-          outputSnapshot,
+          output,
           producerOutputName,
           sensitive,
         });
@@ -229,7 +229,8 @@ export class DependencyResolutionService {
               "failed_precondition",
               `dependency_outputs_unavailable: dependency ${dependency.id} ` +
                 `requires producer output ${producerOutputName} which the ` +
-                `producer installation ${producer.id} has not published`,
+                `producer Capsule ${producer.id} has not published`,
+              { reason: "dependency_outputs_unavailable" },
             );
           }
           // An optional mapping with no producer value contributes nothing.
@@ -259,6 +260,7 @@ export class DependencyResolutionService {
             `dependency_value_sealer_unavailable: dependency ${dependency.id} ` +
               `resolved sensitive output(s) ${sensitiveNames.join(", ")} but no ` +
               `at-rest value sealer is configured`,
+            { reason: "dependency_value_sealer_unavailable" },
           );
         }
         sealedValues = await this.#dependencyValueSealer.seal(sensitiveValues);
@@ -272,10 +274,9 @@ export class DependencyResolutionService {
       entries.push({
         dependencyId: dependency.id,
         producerCapsuleId: producer.id,
-        producerInstallationId: producer.id,
         producerStateGeneration: producer.currentStateGeneration,
-        producerOutputId: outputSnapshot?.id ?? "",
-        producerOutputDigest: outputSnapshot?.outputDigest ?? "",
+        producerOutputId: output?.id ?? "",
+        producerOutputDigest: output?.outputDigest ?? "",
         valuesDigest,
         values: cleartextValues,
         ...(sealedValues ? { sealedValues } : {}),
@@ -296,7 +297,7 @@ export class DependencyResolutionService {
   /**
    * Resolves the ACTIVE OutputShare coverage for a `published_output` edge (spec
    * §18) into a SHARED-name -> producer-output-name map. Reads the consumer
-   * Space's shares granted by the producer Space for this producer Installation,
+   * Workspace's shares granted by the producer Workspace for this producer Capsule,
    * keeps only `active` grants, and exposes each entry under its SHARED name (the
    * grant `alias` when set, else its `name`) mapped to the producer output name.
    * A revoked grant simply drops its entries from the map, so a mapped name the
@@ -305,10 +306,12 @@ export class DependencyResolutionService {
    * so a revoke between plan and apply fails the apply.
    */
   async resolveShareCoverage(
-    producer: Installation,
-    consumer: Installation,
+    producer: Capsule,
+    consumer: Capsule,
   ): Promise<ShareCoverage> {
-    const shares = await this.#store.listOutputSharesToSpace((consumer.workspaceId ?? consumer.spaceId));
+    const shares = await this.#store.listOutputSharesToWorkspace(
+      consumer.workspaceId,
+    );
     const coverage = new Map<
       string,
       { readonly outputName: string; readonly sensitive: boolean }
@@ -316,8 +319,8 @@ export class DependencyResolutionService {
     for (const share of shares) {
       if (
         share.status !== "active" ||
-        share.fromSpaceId !== producer.spaceId ||
-        share.producerInstallationId !== producer.id
+        share.fromWorkspaceId !== producer.workspaceId ||
+        share.producerCapsuleId !== producer.id
       )
         continue;
       for (const entry of share.outputs) {
@@ -332,14 +335,14 @@ export class DependencyResolutionService {
 
   async #resolveDependencyOutputValue(input: {
     readonly dependencyId: string;
-    readonly producer: Installation;
-    readonly consumer: Installation;
-    readonly outputSnapshot: OutputSnapshot | undefined;
+    readonly producer: Capsule;
+    readonly consumer: Capsule;
+    readonly output: Output | undefined;
     readonly producerOutputName: string;
     readonly sensitive: boolean;
   }): Promise<{ readonly value: JsonValue } | undefined> {
     if (!input.sensitive) {
-      const available = input.outputSnapshot?.spaceOutputs ?? {};
+      const available = input.output?.workspaceOutputs ?? {};
       if (
         !Object.prototype.hasOwnProperty.call(
           available,
@@ -350,41 +353,43 @@ export class DependencyResolutionService {
       }
       return { value: available[input.producerOutputName] as JsonValue };
     }
-    if (!input.outputSnapshot) return undefined;
+    if (!input.output) return undefined;
     if (!this.#sensitiveOutputResolver) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `sensitive_output_resolver_unavailable: dependency ${input.dependencyId} ` +
           `requires sensitive output ${input.producerOutputName}`,
+        { reason: "sensitive_output_resolver_unavailable" },
       );
     }
     const resolved: SensitiveOutputValue | undefined =
       await this.#sensitiveOutputResolver.resolve({
-        outputSnapshot: input.outputSnapshot,
+        output: input.output,
         outputName: input.producerOutputName,
-        fromSpaceId: (input.producer.workspaceId ?? input.producer.spaceId),
-        toSpaceId: (input.consumer.workspaceId ?? input.consumer.spaceId),
-        producerInstallationId: input.producer.id,
+        fromWorkspaceId: input.producer.workspaceId,
+        toWorkspaceId: input.consumer.workspaceId,
+        producerCapsuleId: input.producer.id,
       });
     if (!resolved) return undefined;
     return { value: resolved.value };
   }
 
-  async #latestProducerStateSnapshotForDependency(
+  async #latestProducerStateVersionForDependency(
     dependencyId: string,
-    producer: Installation,
-  ): Promise<StateSnapshot> {
-    const stateSnapshot = await this.#store.getLatestStateSnapshot(
+    producer: Capsule,
+  ): Promise<StateVersion> {
+    const stateVersion = await this.#store.getLatestStateVersion(
       producer.id,
       producer.environment,
     );
-    if (!stateSnapshot) {
+    if (!stateVersion) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `dependency_state_unavailable: dependency ${dependencyId} producer ` +
-          `installation ${producer.id} has no StateSnapshot yet (apply it first)`,
+          `Capsule ${producer.id} has no StateVersion yet (apply it first)`,
+        { reason: "dependency_state_unavailable" },
       );
     }
-    return stateSnapshot;
+    return stateVersion;
   }
 }

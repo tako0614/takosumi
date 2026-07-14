@@ -28,6 +28,13 @@
  */
 
 import { providerMatches } from "takosumi-contract/provider-env-rules";
+import {
+  normalizePlanResourceScope,
+  normalizeScopeBoundaryPolicy,
+  resourceTypeMatchesPattern,
+  type PlanResourceScope,
+  type ScopeBoundaryPolicy,
+} from "takosumi-contract";
 
 /**
  * One resource change line projected from `tofu show -json tfplan`
@@ -39,12 +46,7 @@ export interface PlanResourceChange {
   readonly address: string;
   readonly type: string;
   readonly actions: readonly string[];
-  readonly scope?: {
-    readonly cloudflareAccountId?: string;
-    readonly cloudflareZoneId?: string;
-    readonly awsAccountId?: string;
-    readonly awsRegion?: string;
-  };
+  readonly scope?: PlanResourceScope;
 }
 
 const NON_MUTATING_ACTIONS = new Set(["no-op", "read"]);
@@ -97,7 +99,8 @@ export function evaluateProviderAllowlist(
   const notAllowed: string[] = [];
   const reasons: string[] = [];
   const deniedRules = input.denied ?? [];
-  const missingProviders = input.allowed.length > 0 &&
+  const missingProviders =
+    input.allowed.length > 0 &&
     required.length === 0 &&
     input.allowNoProviders !== true;
   if (missingProviders) {
@@ -173,22 +176,6 @@ export interface ActionPolicyResult {
 // §25 layer 6 — scope boundary
 // ---------------------------------------------------------------------------
 
-export interface ScopeBoundaryPolicy {
-  /**
-   * `strict` fails closed when a resource belongs to a configured provider
-   * family but the plan projection lacks the configured scope metadata.
-   */
-  readonly mode?: "permissive" | "strict";
-  readonly cloudflare?: {
-    readonly accountIds?: readonly string[];
-    readonly zoneIds?: readonly string[];
-  };
-  readonly aws?: {
-    readonly accountIds?: readonly string[];
-    readonly regions?: readonly string[];
-  };
-}
-
 export interface ScopeBoundaryResult {
   readonly outOfScope: readonly string[];
   readonly reasons: readonly string[];
@@ -198,46 +185,27 @@ export function evaluateScopeBoundary(
   changes: readonly PlanResourceChange[],
   policy: ScopeBoundaryPolicy | undefined,
 ): ScopeBoundaryResult {
-  if (policy === undefined) return { outOfScope: [], reasons: [] };
-  const strict = policy.mode === "strict";
+  const normalizedPolicy = normalizeScopeBoundaryPolicy(policy);
+  if (normalizedPolicy === undefined) return { outOfScope: [], reasons: [] };
+  const strict = normalizedPolicy.mode === "strict";
   const violations = new Set<string>();
   for (const change of changes) {
     if (!isMutating(change.actions)) continue;
-    if (change.type.startsWith("cloudflare_") && policy.cloudflare) {
-      evaluateScopedValue({
-        change,
-        configuredValues: policy.cloudflare.accountIds,
-        observedValue: change.scope?.cloudflareAccountId,
-        strict,
-        label: "Cloudflare account",
-        violations,
-      });
-      evaluateScopedValue({
-        change,
-        configuredValues: policy.cloudflare.zoneIds,
-        observedValue: change.scope?.cloudflareZoneId,
-        strict,
-        label: "Cloudflare zone",
-        violations,
-      });
-    }
-    if (isAwsResource(change.type) && policy.aws) {
-      evaluateScopedValue({
-        change,
-        configuredValues: policy.aws.accountIds,
-        observedValue: change.scope?.awsAccountId,
-        strict,
-        label: "AWS account",
-        violations,
-      });
-      evaluateScopedValue({
-        change,
-        configuredValues: policy.aws.regions,
-        observedValue: change.scope?.awsRegion,
-        strict,
-        label: "AWS region",
-        violations,
-      });
+    const facts = normalizePlanResourceScope(change.scope)?.facts ?? {};
+    for (const rule of normalizedPolicy.rules) {
+      if (!resourceTypeMatchesPattern(change.type, rule.resourceTypePattern)) {
+        continue;
+      }
+      for (const [dimension, constraint] of Object.entries(rule.dimensions)) {
+        evaluateScopedValue({
+          change,
+          configuredValues: constraint.allowedValues,
+          observedValue: facts[dimension],
+          strict,
+          dimension,
+          violations,
+        });
+      }
     }
   }
   const outOfScope = Array.from(violations).sort();
@@ -305,9 +273,12 @@ export function evaluateActionPolicy(
   }
   const requiresApproval = destructiveTypes.size > 0;
   const reasons = requiresApproval
-    ? Array.from(destructiveTypes).sort().map(
-      (type) => `resource type ${type} has a delete/replace change requiring approval`,
-    )
+    ? Array.from(destructiveTypes)
+        .sort()
+        .map(
+          (type) =>
+            `resource type ${type} has a delete/replace change requiring approval`,
+        )
     : [];
   return { requiresApproval, reasons };
 }
@@ -322,38 +293,33 @@ function isMutating(actions: readonly string[]): boolean {
 
 function evaluateScopedValue(input: {
   readonly change: PlanResourceChange;
-  readonly configuredValues: readonly string[] | undefined;
-  readonly observedValue: string | undefined;
+  readonly configuredValues: readonly (string | number | boolean)[];
+  readonly observedValue: string | number | boolean | undefined;
   readonly strict: boolean;
-  readonly label: string;
+  readonly dimension: string;
   readonly violations: Set<string>;
 }): void {
-  if (input.configuredValues === undefined) return;
-  if (!input.observedValue) {
+  if (input.observedValue === undefined) {
     if (input.strict) {
       input.violations.add(
-        `${input.change.address} missing ${input.label} metadata`,
+        `${input.change.address} missing scope dimension ${input.dimension}`,
       );
     }
     return;
   }
   if (!input.configuredValues.includes(input.observedValue)) {
     input.violations.add(
-      `${input.change.address} ${input.label} ${input.observedValue}`,
+      `${input.change.address} scope dimension ${input.dimension} ${String(input.observedValue)}`,
     );
   }
-}
-
-function isAwsResource(type: string): boolean {
-  return type.startsWith("aws_");
 }
 
 function providerAllowed(
   provider: string,
   allowedProviders: readonly string[],
 ): boolean {
-  return allowedProviders.some((allowed) =>
-    allowed === "*" || providerMatches(provider, allowed)
+  return allowedProviders.some(
+    (allowed) => allowed === "*" || providerMatches(provider, allowed),
   );
 }
 
@@ -364,11 +330,5 @@ function providerDenied(
   return deniedProviders.some((denied) => providerMatches(provider, denied));
 }
 
-/**
- * Hierarchical, one-directional provider match (`registry/namespace/type` vs a
- * trailing short rule), hoisted to the shared provider-env-rule table so the
- * runner, the vault, and the policy layers agree byte-for-byte. Re-exported here
- * so the existing `takosumi-policy` import surface (and its directional test)
- * stays stable. See `sameProviderFamily` for the bidirectional variant.
- */
+/** Exact provider-source policy match after default-registry qualification. */
 export { providerMatches };

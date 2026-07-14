@@ -1,5 +1,6 @@
 id: generic-env
 display_name: Generic environment variables
+secret_partition: provider-credentials
 declared_env: true
 terraform_source: "*"
 auth_modes:

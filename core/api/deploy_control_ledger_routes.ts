@@ -1,12 +1,10 @@
 /**
- * Plan / Apply run ledger + operator execution boundary routes and the INTERNAL
- * `/internal/v1` DeploymentOutput read consumed by the accounts plane + CLI.
- * The Installation + Deployment reads (`/internal/v1/capsules/:id` and
- * `.../deployments`) are owned solely by the installation route group
- * (`mountDeployControlInstallationRoutes`); they used to be duplicated here as a
+ * Plan / Apply run ledger + operator execution boundary routes.
+ * The Capsule + StateVersion reads (`/internal/v1/capsules/:id` and
+ * `.../state-versions`) are owned solely by the Capsule route group
+ * (`mountDeployControlCapsuleRoutes`); they used to be duplicated here as a
  * separate `/v1` seam, but once both groups collapsed onto `/internal/v1` the
- * registrations became byte-identical, so the duplicate is removed and only the
- * DeploymentOutput read (no installation-group equivalent) remains.
+ * registrations became byte-identical, so the duplicate is removed.
  * This group owns its handlers and an internal descriptor slice used only for
  * route metadata; it is intentionally excluded from the internal descriptor
  * inventory surfaced by `/capabilities` and `/openapi.json`.
@@ -22,14 +20,13 @@ import {
   type DeployControlRouteContext,
   ensureApplyPermission,
   ensurePlanCreatePermission,
-  ensureSpacePermission,
+  ensureWorkspacePermission,
   filterRunnerProfilesForPrincipal,
   readJsonBody,
 } from "./deploy_control_shared.ts";
 import {
   TAKOSUMI_APPLY_RUN_ROUTE,
   TAKOSUMI_APPLY_RUNS_ROUTE,
-  TAKOSUMI_CAPSULE_OUTPUTS_ROUTE,
   TAKOSUMI_PLAN_RUN_ROUTE,
   TAKOSUMI_PLAN_RUNS_ROUTE,
   TAKOSUMI_RUNNER_PROFILES_ROUTE,
@@ -51,7 +48,7 @@ export const DEPLOY_CONTROL_LEDGER_ENDPOINTS: readonly DeployControlEndpoint[] =
       method: "POST",
       path: TAKOSUMI_PLAN_RUNS_ROUTE,
       summary:
-        "Creates an OpenTofu plan run for a plain module source or a built-in InstallConfig module (templateId+inputs).",
+        "Creates an OpenTofu plan run for a Git-backed Capsule source.",
       auth: "deploy-control-token",
       operationId: "createPlanRun",
       openapi: {
@@ -73,8 +70,7 @@ export const DEPLOY_CONTROL_LEDGER_ENDPOINTS: readonly DeployControlEndpoint[] =
     {
       method: "POST",
       path: TAKOSUMI_APPLY_RUNS_ROUTE,
-      summary:
-        "Creates an apply run from a succeeded PlanRun (confirmDestructive required for flagged destructive template plans).",
+      summary: "Creates an apply run from a succeeded reviewed PlanRun.",
       auth: "deploy-control-token",
       operationId: "createApplyRun",
       openapi: {
@@ -92,19 +88,6 @@ export const DEPLOY_CONTROL_LEDGER_ENDPOINTS: readonly DeployControlEndpoint[] =
       operationId: "getApplyRun",
       openapi: { pathParams: ["applyRunId"], okSchema: "ApplyRunResponse" },
       notImplementedMessage: "apply runs not wired",
-    },
-    {
-      method: "GET",
-      path: TAKOSUMI_CAPSULE_OUTPUTS_ROUTE,
-      summary:
-        "INTERNAL seam: lists non-sensitive Output records for the current StateVersion of a Capsule (accounts-plane consumer; not part of the public surface).",
-      auth: "deploy-control-token",
-      operationId: "listCapsuleOutputs",
-      openapi: {
-        pathParams: ["capsuleId"],
-        okSchema: "ListDeploymentOutputsResponse",
-      },
-      notImplementedMessage: "deployment outputs not wired",
     },
   ];
 
@@ -155,7 +138,7 @@ export function mountDeployControlLedgerRoutes(
       param: { id: "planRunId" },
       handler: async ({ c, principal, id }) => {
         const response = await controller.getPlanRun(id);
-        ensureSpacePermission(principal, response.planRun.spaceId);
+        ensureWorkspacePermission(principal, response.planRun.workspaceId);
         return c.json(response, 200);
       },
     }),
@@ -189,21 +172,8 @@ export function mountDeployControlLedgerRoutes(
       param: { id: "applyRunId" },
       handler: async ({ c, principal, id }) => {
         const response = await controller.getApplyRun(id);
-        ensureSpacePermission(principal, response.applyRun.spaceId);
+        ensureWorkspacePermission(principal, response.applyRun.workspaceId);
         return c.json(response, 200);
-      },
-    }),
-  );
-
-  app.get(
-    TAKOSUMI_CAPSULE_OUTPUTS_ROUTE,
-    defineRoute({
-      ctx,
-      param: { id: "capsuleId" },
-      handler: async ({ c, principal, id }) => {
-        const installation = await controller.getInstallation(id);
-        ensureSpacePermission(principal, installation.capsule.workspaceId);
-        return c.json(await controller.listDeploymentOutputs(id), 200);
       },
     }),
   );

@@ -2,8 +2,8 @@
 //
 // `docs/internal/final-plan.md` §9/§17 ("opentofu-adapter broad first"): a resolved
 // Resource Shape is materialized by LOWERING it to an internal OpenTofu module
-// call and driving the EXISTING Flow A runner (Source / Capsule / Run /
-// StateVersion / Output), instead of a bespoke per-provider SDK path. This file
+// call and driving the shared Run/runner machinery with a first-class Resource
+// subject, instead of a bespoke per-provider SDK path. This file
 // owns ONLY that lowering + result mapping; the run lifecycle stays inside
 // deploy-control behind the `OpentofuRunPort` seam, so the adapter is unit
 // testable without a live runner or cloud.
@@ -11,48 +11,17 @@
 // Layering:
 //   ResourceShapeService -> OpentofuResourceShapeAdapter (this file)
 //                        -> OpentofuRunPort (seam)
-//                        -> ControllerOpentofuRunPort -> OpenTofuDeploymentController (Flow A)
+//                        -> ControllerOpentofuRunPort -> OpenTofuController
 //
 // The adapter is the only piece that knows ResourceShape/Target vocabulary; the
 // port speaks plain "run this generated root with these inputs and this
 // ProviderBinding". The RunEngine coupling is isolated to
 // `ControllerOpentofuRunPort` and is fully replaceable by `FakeOpentofuRunPort`.
 //
-// ---------------------------------------------------------------------------
-// SOURCE-LESS SYNTHETIC RUN: SEAM / BLOCKER (read before wiring this in prod)
-// ---------------------------------------------------------------------------
-// The current deploy-control public API does NOT support a fully Source-less,
-// Capsule-less synthetic run. `OpenTofuDeploymentController.createPlanRun`
-// (core/domains/deploy-control/run-engine/run_engine.ts ~L376) requires an
-// existing Capsule: `requestCapsuleId = request.capsuleId ?? request.installationId`
-// is resolved through `#requireInstallation` and the call fails closed with
-// "plan requires an existing capsuleId (create the Capsule first)" when absent
-// (run_engine.ts ~L396-401). It also reads the Capsule's InstallConfig,
-// workspace, environment, and current StateVersion for the run's identity,
-// policy, and TOCTOU guard.
-//
-// Consequence: a Resource Shape `apply` cannot, today, dispatch a run purely
-// from `plan.moduleFiles`. The Resource needs a BACKING internal Capsule.
-// `ControllerOpentofuRunPort` therefore takes a `resolveCapsuleBinding` seam:
-// the Resource Shape integration must provision (once, idempotently) a backing
-// Capsule per Resource and a `ProviderBinding` mapping `provider -> connectionId`
-// (== `credentialRef`), then hand its `{ workspaceId, capsuleId, source }` back.
-// `genericRootDispatch.generatedRoot.moduleFiles` then OVERRIDES whatever source
-// that Capsule was registered with (run_engine.ts ~L573-585 uses the supplied
-// generic dispatch verbatim and skips SourceSnapshot module materialization),
-// so the Capsule is just a durable identity/policy/state anchor — the actual
-// HCL is the Resource Shape plan's first-party module.
-//
-// MINIMAL deploy-control change to remove the seam (NOT done here — owned by the
-// deploy-control owner): add a Source-less synthetic plan entry point, e.g.
-// `createSyntheticPlanRun({ workspaceId, resourceId, generatedRoot, inputs,
-// providerBindings, runnerProfileId })` that allocates an ephemeral
-// Resource-Shape-owned Capsule (or a first-class `Resource` run subject) instead
-// of requiring `request.capsuleId` to pre-exist, mints credentials from the
-// supplied `providerBindings` rather than from a stored Capsule
-// `ProviderBindingSet`, and records StateVersion/Output against the Resource id.
-// Everything downstream (policy, runner dispatch, output capture) already keys
-// off `generatedRoot` and would be reused unchanged.
+// Resource runs never allocate a Capsule, InstallConfig, Source, StateVersion,
+// or Output row. The Run stores a Resource subject; encrypted state uses a
+// Resource-scoped R2 key; the Resource record owns the successful run/state
+// pointer and public outputs.
 
 import type {
   ActorContext,
@@ -60,17 +29,14 @@ import type {
   JsonValue,
   NativeResourceRef,
   ResourceDeletePolicy,
-  TargetPoolEntry,
-  TargetType,
+  TargetImplementationDescriptor,
 } from "takosumi-contract";
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
   CreateApplyRunRequest,
   CreatePlanRunRequest,
-  DeploymentOutput,
   DispatchGeneratedRoot,
-  OpenTofuModuleSource,
   OutputAllowlistEntry,
   PlanResourceChange,
   PlanRunResponse,
@@ -82,18 +48,27 @@ import type {
   PlanRunInternalContext,
 } from "../deploy-control/mod.ts";
 import {
-  generateGenericCapsuleRoot,
-  type RootInstallationProviderEnvBinding,
+  generateOpenTofuChildModuleRoot,
+  type RootProviderBinding,
 } from "takosumi-rootgen";
 import { canonicalProviderAddress } from "@takosumi/providers";
+import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import type {
   AdapterApplyInput,
   AdapterApplyResult,
   AdapterDeleteInput,
+  AdapterImportInput,
+  AdapterImportResult,
+  AdapterObserveResult,
   AdapterPreviewResult,
+  AdapterRefreshResult,
   ResourceAdapter,
 } from "./adapter.ts";
 import type { ResourceShapePublicOutput } from "./planner.ts";
+import type {
+  ResourceShapeExecutionRecord,
+  ResourceShapeStateAdoptionDescriptor,
+} from "./records.ts";
 
 // ---------------------------------------------------------------------------
 // OpentofuRunPort: the few run operations the adapter needs. Keeping this narrow
@@ -102,18 +77,13 @@ import type { ResourceShapePublicOutput } from "./planner.ts";
 
 /** OpenTofu provider mapping for one resolved Target. */
 export interface OpentofuProviderBinding {
-  /** OpenTofu provider local name, e.g. `cloudflare`, `aws`, `google`. */
+  /** OpenTofu provider local name derived from the explicit source. */
   readonly provider: string;
-  /** Canonical registry source, e.g. `registry.opentofu.org/cloudflare/cloudflare`. */
+  /** Canonical registry source from the selected descriptor. */
   readonly providerSource: string;
   readonly alias?: string;
-  /**
-   * Optional provider API base URL selected by the Target implementation.
-   * Managed compatibility profiles use this to route an existing provider
-   * through an operator-owned endpoint. It is capability/TargetPool data, not
-   * a Cloud edition branch in the provider binary.
-   */
-  readonly baseUrl?: string;
+  /** Explicit non-secret provider-block arguments from the descriptor. */
+  readonly configuration?: Readonly<Record<string, JsonValue>>;
   /**
    * ProviderConnection id whose credentials the runner mints for this provider.
    * Undefined when no Takosumi-managed credential is bound (the generated root
@@ -122,34 +92,52 @@ export interface OpentofuProviderBinding {
   readonly connectionId?: string;
 }
 
-/** Plan/apply a lowered Resource Shape implementation through Flow A. */
+/** Plan/apply a lowered Resource Shape implementation as a first-class Resource run. */
 export interface OpentofuRunRequest {
   /** Canonical resource id (`tkrn:{space}:{kind}:{name}`). */
   readonly resourceId: string;
-  /** First-party module template id, e.g. `cloudflare-worker-service`. */
-  readonly templateId: string;
-  /** The first-party module's HCL files (child module materialized by the runner). */
-  readonly moduleFiles: readonly {
-    readonly path: string;
-    readonly text: string;
-  }[];
-  /** Module variable values, already augmented (accountId/region) and JSON-coerced. */
+  readonly environment: string;
+  readonly stateGeneration: number;
+  readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
+  /** Operator-selected registry key from the Target descriptor. */
+  readonly moduleTemplate: string;
+  /** Operator-injected child module, resolved fail-closed by the service. */
+  readonly operatorModule: {
+    readonly files: readonly {
+      readonly path: string;
+      readonly text: string;
+    }[];
+  };
+  /** Module values produced by the descriptor's explicit input mappings. */
   readonly inputs: Readonly<Record<string, JsonValue>>;
   /** Typed public OpenTofu outputs projected from the module (`tofu output -json`). */
   readonly publicOutputs: readonly ResourceShapePublicOutput[];
+  /** Native refs currently pinned by the ResolutionLock. */
+  readonly nativeResources?: readonly NativeResourceRef[];
   readonly providerBinding: OpentofuProviderBinding;
   readonly actor: ActorContext;
+}
+
+/** Config-driven import of one existing child-module resource. */
+export interface OpentofuImportRequest extends OpentofuRunRequest {
+  readonly nativeId: string;
+  readonly importAddress: string;
 }
 
 /** Destroy a previously materialized Resource Shape implementation. */
 export interface OpentofuDestroyRequest {
   readonly resourceId: string;
+  readonly environment: string;
+  readonly stateGeneration: number;
+  readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
   /** Re-generated implementation plan. Present for OpenTofu-backed shapes. */
-  readonly templateId?: string;
-  readonly moduleFiles?: readonly {
-    readonly path: string;
-    readonly text: string;
-  }[];
+  readonly moduleTemplate?: string;
+  readonly operatorModule?: {
+    readonly files: readonly {
+      readonly path: string;
+      readonly text: string;
+    }[];
+  };
   readonly inputs?: Readonly<Record<string, JsonValue>>;
   readonly publicOutputs?: readonly ResourceShapePublicOutput[];
   readonly providerBinding: OpentofuProviderBinding;
@@ -160,11 +148,18 @@ export interface OpentofuDestroyRequest {
 }
 
 export interface OpentofuRunResult {
-  /** Underlying Flow A Run id, when one was created. */
+  /** Underlying first-class Resource Run id, when one was created. */
   readonly runId?: string;
   readonly summary: string;
   readonly nativeResources: readonly NativeResourceRef[];
   readonly outputs: JsonObject;
+  readonly execution?: ResourceShapeExecutionRecord;
+}
+
+export interface OpentofuObserveResult {
+  readonly runId?: string;
+  readonly status: "current" | "drifted";
+  readonly summary: string;
 }
 
 /**
@@ -176,38 +171,23 @@ export interface OpentofuRunResult {
 export interface OpentofuRunPort {
   plan(request: OpentofuRunRequest): Promise<OpentofuRunResult>;
   apply(request: OpentofuRunRequest): Promise<OpentofuRunResult>;
+  importResource(request: OpentofuImportRequest): Promise<OpentofuRunResult>;
+  observe(request: OpentofuRunRequest): Promise<OpentofuObserveResult>;
+  refresh(request: OpentofuRunRequest): Promise<OpentofuRunResult>;
   destroy(request: OpentofuDestroyRequest): Promise<OpentofuRunResult>;
 }
 
 // ---------------------------------------------------------------------------
-// Target type -> OpenTofu provider mapping + input augmentation.
+// Generic provider-source normalization. Target type never selects a provider.
 // ---------------------------------------------------------------------------
 
-const PROVIDER_LOCAL_NAME_BY_TARGET_TYPE: Readonly<
-  Partial<Record<TargetType, string>>
-> = Object.freeze({
-  cloudflare: "cloudflare",
-  aws: "aws",
-  gcp: "google",
-});
-
-const PROVIDER_SOURCE_BY_LOCAL_NAME: Readonly<Record<string, string>> =
-  Object.freeze({
-    cloudflare: "cloudflare/cloudflare",
-    aws: "hashicorp/aws",
-    google: "hashicorp/google",
-  });
-
-/** Map a resolved Target type to the OpenTofu provider local name. */
-export function providerLocalNameForTargetType(type: TargetType): string {
-  return PROVIDER_LOCAL_NAME_BY_TARGET_TYPE[type] ?? type;
-}
-
-/** Canonical registry source for an OpenTofu provider local name. */
-export function providerSourceForLocalName(localName: string): string {
-  return canonicalProviderAddress(
-    PROVIDER_SOURCE_BY_LOCAL_NAME[localName] ?? localName,
-  );
+/** Derive the OpenTofu local provider name from an explicit registry source. */
+export function providerLocalNameForSource(source: string): string {
+  const canonical = canonicalProviderAddress(source);
+  const parts = canonical.split("/").filter(Boolean);
+  const localName = parts[parts.length - 1];
+  if (!localName) throw new Error(`invalid provider source: ${source}`);
+  return localName;
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -249,30 +229,6 @@ function coerceJsonValue(value: unknown): JsonValue | undefined {
   return undefined;
 }
 
-/**
- * Augment the planner's module inputs with Target-derived values the planner may
- * not have emitted (`docs/internal/final-plan.md` §8): Cloudflare-backed modules often
- * need `accountId` (carried by the TargetPool entry `ref`); AWS-backed modules
- * commonly take a `region` from the Target. Existing non-empty values are never
- * overwritten.
- */
-export function augmentInputsForTarget(
-  rawInputs: Readonly<Record<string, unknown>>,
-  target: TargetPoolEntry,
-): Record<string, JsonValue> {
-  const inputs = normalizeJsonInputs(rawInputs);
-  if (target.type === "cloudflare") {
-    if (!isNonEmptyString(inputs.accountId) && isNonEmptyString(target.ref)) {
-      inputs.accountId = target.ref;
-    }
-  } else if (target.type === "aws") {
-    if (!isNonEmptyString(inputs.region) && isNonEmptyString(target.region)) {
-      inputs.region = target.region;
-    }
-  }
-  return inputs;
-}
-
 // ---------------------------------------------------------------------------
 // OpentofuResourceShapeAdapter: ResourceAdapter -> OpentofuRunPort.
 // ---------------------------------------------------------------------------
@@ -280,7 +236,7 @@ export function augmentInputsForTarget(
 /**
  * The OpenTofu Resource Shape adapter (id `opentofu`). It maps a resolved
  * shape plan + Target to an {@link OpentofuRunRequest} (provider, augmented inputs,
- * threaded moduleFiles/templateId, ProviderConnection), drives the
+ * explicit operator module and ProviderConnection), drives the
  * {@link OpentofuRunPort}, and maps the run result back to the
  * {@link ResourceAdapter} contract.
  */
@@ -293,7 +249,7 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
   }
 
   async preview(input: AdapterApplyInput): Promise<AdapterPreviewResult> {
-    assertNoImplementationPlugin(input.implementationPlugin, this.id);
+    assertModuleBackedImplementation(input.implementation, this.id);
     const request = this.#runRequest(input);
     const result = await this.#port.plan(request);
     return {
@@ -304,13 +260,55 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
   }
 
   async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
-    assertNoImplementationPlugin(input.implementationPlugin, this.id);
+    assertModuleBackedImplementation(input.implementation, this.id);
     const request = this.#runRequest(input);
     const result = await this.#port.apply(request);
     return {
       nativeResources: result.nativeResources,
       outputs: result.outputs,
       ...(result.runId ? { runId: result.runId } : {}),
+      ...(result.execution ? { execution: result.execution } : {}),
+    };
+  }
+
+  async importResource(
+    input: AdapterImportInput,
+  ): Promise<AdapterImportResult> {
+    assertModuleBackedImplementation(input.implementation, this.id);
+    const importAddress = input.implementation.moduleImportAddress;
+    if (!importAddress) {
+      throw new Error(
+        `Resource Shape implementation "${input.implementation.implementation}" does not declare moduleImportAddress`,
+      );
+    }
+    const result = await this.#port.importResource({
+      ...this.#runRequest(input),
+      nativeId: input.nativeId,
+      importAddress,
+    });
+    return {
+      summary: result.summary,
+      nativeResources: result.nativeResources,
+      outputs: result.outputs,
+      ...(result.runId ? { runId: result.runId } : {}),
+      ...(result.execution ? { execution: result.execution } : {}),
+    };
+  }
+
+  async observe(input: AdapterApplyInput): Promise<AdapterObserveResult> {
+    assertModuleBackedImplementation(input.implementation, this.id);
+    return await this.#port.observe(this.#runRequest(input));
+  }
+
+  async refresh(input: AdapterApplyInput): Promise<AdapterRefreshResult> {
+    assertModuleBackedImplementation(input.implementation, this.id);
+    const result = await this.#port.refresh(this.#runRequest(input));
+    return {
+      summary: result.summary,
+      nativeResources: result.nativeResources,
+      outputs: result.outputs,
+      ...(result.runId ? { runId: result.runId } : {}),
+      ...(result.execution ? { execution: result.execution } : {}),
     };
   }
 
@@ -320,24 +318,24 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
     if (input.deletePolicy === "retain" || input.deletePolicy === "block") {
       return;
     }
-    assertNoImplementationPlugin(input.implementationPlugin, this.id);
-    const provider = providerLocalNameForTargetType(input.target.type);
+    assertModuleBackedImplementation(input.implementation, this.id);
     await this.#port.destroy({
       resourceId: input.resourceId,
+      environment: input.environment,
+      stateGeneration: input.stateGeneration,
+      ...(input.stateAdoption ? { stateAdoption: input.stateAdoption } : {}),
       ...(input.plan
         ? {
-            templateId: input.plan.templateId,
-            moduleFiles: input.plan.moduleFiles,
-            inputs: augmentInputsForTarget(input.plan.inputs, input.target),
+            moduleTemplate: requirePlanModuleTemplate(input.plan),
+            operatorModule: requirePlanOperatorModule(input.plan),
+            inputs: normalizeJsonInputs(input.plan.inputs),
             publicOutputs: input.plan.publicOutputs,
           }
         : {}),
-      providerBinding: {
-        provider,
-        providerSource: providerSourceForLocalName(provider),
-        ...providerBindingOptionsFor(input.implementationOptions),
-        ...(input.credentialRef ? { connectionId: input.credentialRef } : {}),
-      },
+      providerBinding: providerBindingForImplementation(
+        input.implementation,
+        input.credentialRef,
+      ),
       nativeResources: input.nativeResources,
       ...(input.deletePolicy ? { deletePolicy: input.deletePolicy } : {}),
       actor: input.actor,
@@ -345,34 +343,82 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
   }
 
   #runRequest(input: AdapterApplyInput): OpentofuRunRequest {
-    const provider = providerLocalNameForTargetType(input.target.type);
     return {
       resourceId: input.resourceId,
-      templateId: input.plan.templateId,
-      moduleFiles: input.plan.moduleFiles,
-      inputs: augmentInputsForTarget(input.plan.inputs, input.target),
+      environment: input.environment,
+      stateGeneration: input.stateGeneration,
+      ...(input.stateAdoption ? { stateAdoption: input.stateAdoption } : {}),
+      moduleTemplate: requirePlanModuleTemplate(input.plan),
+      operatorModule: requirePlanOperatorModule(input.plan),
+      inputs: normalizeJsonInputs(input.plan.inputs),
       publicOutputs: input.plan.publicOutputs,
-      providerBinding: {
-        provider,
-        providerSource: providerSourceForLocalName(provider),
-        ...providerBindingOptionsFor(input.implementationOptions),
-        // The opentofu-adapter injects the bound ProviderConnection (the Target's
-        // credentialRef) into the runner per-run; absent means no managed cred.
-        ...(input.credentialRef ? { connectionId: input.credentialRef } : {}),
-      },
+      ...(input.nativeResources
+        ? { nativeResources: input.nativeResources }
+        : {}),
+      providerBinding: providerBindingForImplementation(
+        input.implementation,
+        input.credentialRef,
+      ),
       actor: input.actor,
     };
   }
 }
 
-function assertNoImplementationPlugin(
-  implementationPlugin: string | undefined,
+function assertModuleBackedImplementation(
+  implementation: TargetImplementationDescriptor,
   adapterId: string,
 ): void {
-  if (!implementationPlugin) return;
-  throw new Error(
-    `implementation plugin ${implementationPlugin} requires a plugin-aware Resource Shape adapter; ${adapterId} cannot execute it`,
-  );
+  if (implementation.plugin) {
+    throw new Error(
+      `implementation plugin ${implementation.plugin} requires a plugin-aware Resource Shape adapter; ${adapterId} cannot execute it`,
+    );
+  }
+  if (!implementation.providerSource || !implementation.moduleTemplate) {
+    throw new Error(
+      `implementation ${implementation.implementation} has no explicit providerSource + moduleTemplate for ${adapterId}`,
+    );
+  }
+}
+
+function requirePlanModuleTemplate(plan: AdapterApplyInput["plan"]): string {
+  if (!plan.moduleTemplate) {
+    throw new Error("OpenTofu Resource Shape plan has no moduleTemplate");
+  }
+  return plan.moduleTemplate;
+}
+
+function requirePlanOperatorModule(
+  plan: AdapterApplyInput["plan"],
+): NonNullable<AdapterApplyInput["plan"]["operatorModule"]> {
+  if (!plan.operatorModule || plan.operatorModule.files.length === 0) {
+    throw new Error("OpenTofu Resource Shape plan has no operator module");
+  }
+  return plan.operatorModule;
+}
+
+function providerBindingForImplementation(
+  implementation: TargetImplementationDescriptor,
+  connectionId: string | undefined,
+): OpentofuProviderBinding {
+  const source = implementation.providerSource;
+  if (!source) {
+    throw new Error(
+      `implementation ${implementation.implementation} has no providerSource`,
+    );
+  }
+  const providerSource = canonicalProviderAddress(source);
+  return {
+    provider: providerLocalNameForSource(providerSource),
+    providerSource,
+    ...(implementation.providerAlias
+      ? { alias: implementation.providerAlias }
+      : {}),
+    ...(implementation.providerConfig &&
+    Object.keys(implementation.providerConfig).length > 0
+      ? { configuration: implementation.providerConfig }
+      : {}),
+    ...(connectionId ? { connectionId } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -382,8 +428,8 @@ function assertNoImplementationPlugin(
 /**
  * Map runner plan-JSON resource changes (`tofu show -json tfplan`) to
  * NativeResourceRefs. `no-op` / pure `delete` changes are skipped so a preview
- * reports the resources the apply WILL own. `type` is the OpenTofu resource type
- * (e.g. `cloudflare_r2_bucket`); `id` is the plan address (the stable handle
+ * reports the resources the apply WILL own. `type` is the OpenTofu resource type;
+ * `id` is the plan address (the stable handle
  * before apply assigns a provider id).
  */
 export function nativeResourcesFromPlanChanges(
@@ -393,6 +439,10 @@ export function nativeResourcesFromPlanChanges(
   const refs: NativeResourceRef[] = [];
   for (const change of changes) {
     const actions = change.actions ?? [];
+    if (change.importing === true) {
+      refs.push({ type: change.type, id: change.address });
+      continue;
+    }
     const isPureDelete =
       actions.length > 0 && actions.every((a) => a === "delete");
     const isNoOp = actions.length === 0 || actions.every((a) => a === "no-op");
@@ -402,40 +452,12 @@ export function nativeResourcesFromPlanChanges(
   return refs;
 }
 
-/** Map captured Deployment outputs (`tofu output -json`) to a JsonObject. */
-export function outputsFromDeploymentOutputs(
-  outputs: readonly DeploymentOutput[] | undefined,
-): JsonObject {
-  const result: JsonObject = {};
-  for (const output of outputs ?? []) result[output.name] = output.value;
-  return result;
-}
-
 // ---------------------------------------------------------------------------
-// ControllerOpentofuRunPort: REAL implementation backed by Flow A.
+// ControllerOpentofuRunPort: real first-class Resource Run implementation.
 // ---------------------------------------------------------------------------
-
-/** Backing Capsule identity for a Resource (see the SEAM/BLOCKER note above). */
-export interface ResourceCapsuleBinding {
-  readonly workspaceId: string;
-  readonly capsuleId: string;
-  /**
-   * Nominal Source for the run row. `generatedRoot.moduleFiles` overrides the
-   * actual module materialization, so this is just the recorded Source identity
-   * (e.g. a `local` placeholder pointing at the Resource Shape module catalog).
-   */
-  readonly source: OpenTofuModuleSource;
-  readonly runnerProfileId?: string;
-  /**
-   * StateVersion the destroy plan should target. Threaded onto the destroy run
-   * subject when the integration drives destroy through `createPlanRun` rather
-   * than `createInstallationDestroyPlan`.
-   */
-  readonly currentStateVersionId?: string | null;
-}
 
 /**
- * The exact deploy-control surface the real port drives. `OpenTofuDeploymentController`
+ * The exact deploy-control surface the real port drives. `OpenTofuController`
  * structurally satisfies this; depending on the narrow interface (not the whole
  * controller) keeps the coupling explicit and the port mockable.
  */
@@ -462,15 +484,6 @@ export interface DeployControlRunDriver {
 export interface ControllerOpentofuRunPortDeps {
   readonly driver: DeployControlRunDriver;
   /**
-   * Resolve the backing Capsule for a Resource. This is the SEAM that works
-   * around the "createPlanRun requires a pre-existing Capsule" blocker without
-   * touching deploy-control internals (see the file header). The integration
-   * must provision the Capsule + its `provider -> connectionId` ProviderBinding.
-   */
-  readonly resolveCapsuleBinding: (
-    request: OpentofuRunRequest | OpentofuDestroyRequest,
-  ) => Promise<ResourceCapsuleBinding> | ResourceCapsuleBinding;
-  /**
    * Drive `runQueuedPlan` / `runQueuedApply` in-process after create (default
    * `true`). Set `false` when an external queue consumer drives the runner; then
    * the port returns after enqueue and the caller polls.
@@ -482,22 +495,22 @@ export interface ControllerOpentofuRunPortDeps {
 
 export class ControllerOpentofuRunPort implements OpentofuRunPort {
   readonly #driver: DeployControlRunDriver;
-  readonly #resolveCapsuleBinding: ControllerOpentofuRunPortDeps["resolveCapsuleBinding"];
   readonly #drive: boolean;
   readonly #pollIntervalMs: number;
   readonly #waitTimeoutMs: number;
 
   constructor(deps: ControllerOpentofuRunPortDeps) {
     this.#driver = deps.driver;
-    this.#resolveCapsuleBinding = deps.resolveCapsuleBinding;
     this.#drive = deps.driveRunsSynchronously ?? true;
     this.#pollIntervalMs = deps.pollIntervalMs ?? 1000;
     this.#waitTimeoutMs = deps.waitTimeoutMs ?? 60_000;
   }
 
   async plan(request: OpentofuRunRequest): Promise<OpentofuRunResult> {
-    const binding = await this.#resolveCapsuleBinding(request);
-    const planRun = await this.#createAndDrivePlan(request, binding, "create");
+    const planRun = await this.#createAndDrivePlan(
+      request,
+      operationForStateGeneration(request.stateGeneration),
+    );
     return {
       runId: planRun.id,
       summary: summarizePlan(planRun),
@@ -509,12 +522,45 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
   }
 
   async apply(request: OpentofuRunRequest): Promise<OpentofuRunResult> {
-    const binding = await this.#resolveCapsuleBinding(request);
-    const planRun = await this.#createAndDrivePlan(request, binding, "create");
-    const nativeResources = nativeResourcesFromPlanChanges(
-      planRun.planResourceChanges,
+    const planRun = await this.#createAndDrivePlan(
+      request,
+      operationForStateGeneration(request.stateGeneration),
     );
+    return await this.#applyCompletedPlan(request, planRun, "applied");
+  }
 
+  async refresh(request: OpentofuRunRequest): Promise<OpentofuRunResult> {
+    const planRun = await this.#createAndDrivePlan(request, "update", {
+      refreshOnly: true,
+    });
+    return await this.#applyCompletedPlan(request, planRun, "refreshed");
+  }
+
+  async importResource(
+    request: OpentofuImportRequest,
+  ): Promise<OpentofuRunResult> {
+    const planRun = await this.#createAndDrivePlan(request, "create", {
+      resourceImport: true,
+    });
+    const result = await this.#applyCompletedPlan(request, planRun, "imported");
+    return {
+      ...result,
+      nativeResources: result.nativeResources.map((resource) => ({
+        ...resource,
+        id: request.nativeId,
+      })),
+    };
+  }
+
+  async #applyCompletedPlan(
+    request: OpentofuRunRequest,
+    planRun: PublicPlanRun,
+    verb: "applied" | "imported" | "refreshed",
+  ): Promise<OpentofuRunResult> {
+    const nativeResources = resultingNativeResources(
+      planRun.planResourceChanges,
+      request.nativeResources,
+    );
     const applyResponse = await this.#driver.createApplyRun(
       { planRunId: planRun.id, expected: applyGuardFromPlanRun(planRun) },
       { actor: request.actor.actorAccountId },
@@ -524,50 +570,91 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
       applyRun = (await this.#driver.runQueuedApply(applyRun.id)).applyRun;
     }
     applyRun = await this.#waitForApplyCompletion(applyRun);
+    if (!applyRun.resourceResult) {
+      throw new Error(
+        `apply ${applyRun.id} succeeded without a Resource result`,
+      );
+    }
+    const resourceResult = applyRun.resourceResult;
     return {
       runId: applyRun.id,
-      summary: `applied ${nativeResources.length} native resource(s) for ${request.resourceId}`,
+      summary: `${verb} ${nativeResources.length} native resource(s) for ${request.resourceId}`,
       nativeResources,
-      outputs: outputsFromDeploymentOutputs(applyRun.outputs),
+      outputs: { ...resourceResult.outputs },
+      execution: {
+        runId: applyRun.id,
+        stateGeneration: resourceResult.stateGeneration,
+        stateRef: resourceResult.stateRef,
+        ...(resourceResult.stateDigest
+          ? { stateDigest: resourceResult.stateDigest }
+          : {}),
+        ...(resourceResult.rawOutputRef
+          ? { rawOutputRef: resourceResult.rawOutputRef }
+          : {}),
+        updatedAt: new Date(applyRun.finishedAt ?? Date.now()).toISOString(),
+      },
+    };
+  }
+
+  async observe(request: OpentofuRunRequest): Promise<OpentofuObserveResult> {
+    const planRun = await this.#createAndDrivePlan(request, "update", {
+      driftCheck: true,
+    });
+    const counts =
+      planRun.summary ?? observationCounts(planRun.planResourceChanges);
+    const add = counts.add ?? 0;
+    const change = counts.change ?? 0;
+    const destroy = counts.destroy ?? 0;
+    const drifted = add + change + destroy > 0;
+    return {
+      runId: planRun.id,
+      status: drifted ? "drifted" : "current",
+      summary: drifted
+        ? `drift detected: ${add} add, ${change} change, ${destroy} destroy`
+        : "no backend drift detected",
     };
   }
 
   async destroy(request: OpentofuDestroyRequest): Promise<OpentofuRunResult> {
-    const binding = await this.#resolveCapsuleBinding(request);
-    // Destroy must replay the same generated root used to create the resource.
-    // The backing Capsule is only an identity/state anchor, so its nominal local
-    // Source is not executable by itself.
+    // Destroy replays the same operator module used to create the Resource.
     const generatedRootDispatch =
-      request.templateId &&
-      request.moduleFiles &&
+      request.moduleTemplate &&
+      request.operatorModule &&
       request.inputs &&
       request.publicOutputs
         ? this.#genericRootDispatch({
             resourceId: request.resourceId,
-            templateId: request.templateId,
-            moduleFiles: request.moduleFiles,
+            environment: request.environment,
+            stateGeneration: request.stateGeneration,
+            moduleTemplate: request.moduleTemplate,
+            operatorModule: request.operatorModule,
             inputs: request.inputs,
             publicOutputs: request.publicOutputs,
             providerBinding: request.providerBinding,
             actor: request.actor,
           })
         : undefined;
+    if (!generatedRootDispatch) {
+      throw new Error(
+        `Resource ${request.resourceId} destroy requires its pinned operator module`,
+      );
+    }
+    const workspaceId = workspaceIdFromResourceId(request.resourceId);
+    const source = await operatorModuleSource(request);
     const planResponse = await this.#driver.createPlanRun(
       {
-        workspaceId: binding.workspaceId,
-        capsuleId: binding.capsuleId,
-        source: binding.source,
+        workspaceId,
+        source,
         operation: "destroy",
         ...(request.inputs ? { variables: request.inputs } : {}),
         requiredProviders: [request.providerBinding.providerSource],
-        ...(binding.runnerProfileId
-          ? { runnerProfileId: binding.runnerProfileId }
-          : {}),
       },
       { actor: request.actor.actorAccountId },
-      generatedRootDispatch
-        ? { genericRootDispatch: generatedRootDispatch }
-        : undefined,
+      {
+        genericRootDispatch: generatedRootDispatch,
+        baseStateGeneration: request.stateGeneration,
+        resourceContext: resourceRunContext(request, workspaceId),
+      },
     );
     let planRun = planResponse.planRun;
     if (this.#drive && planRun.status === "queued") {
@@ -579,7 +666,6 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
       {
         planRunId: planRun.id,
         expected: applyGuardFromPlanRun(planRun),
-        confirmDestructive: true,
       },
       { actor: request.actor.actorAccountId },
     );
@@ -598,23 +684,32 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
 
   async #createAndDrivePlan(
     request: OpentofuRunRequest,
-    binding: ResourceCapsuleBinding,
     operation: CreatePlanRunRequest["operation"],
+    internal: Pick<
+      PlanRunInternalContext,
+      "driftCheck" | "refreshOnly" | "resourceImport"
+    > = {},
   ): Promise<PublicPlanRun> {
+    const workspaceId = workspaceIdFromResourceId(request.resourceId);
+    const source = await operatorModuleSource(request);
     const response = await this.#driver.createPlanRun(
       {
-        workspaceId: binding.workspaceId,
-        capsuleId: binding.capsuleId,
-        source: binding.source,
+        workspaceId,
+        source,
         ...(operation ? { operation } : {}),
         variables: request.inputs,
         requiredProviders: [request.providerBinding.providerSource],
-        ...(binding.runnerProfileId
-          ? { runnerProfileId: binding.runnerProfileId }
-          : {}),
       },
       { actor: request.actor.actorAccountId },
-      { genericRootDispatch: this.#genericRootDispatch(request) },
+      {
+        genericRootDispatch: this.#genericRootDispatch(
+          request,
+          requestHasImport(request) ? request : undefined,
+        ),
+        baseStateGeneration: request.stateGeneration,
+        resourceContext: resourceRunContext(request, workspaceId),
+        ...internal,
+      },
     );
     if (this.#drive && response.planRun.status === "queued") {
       await this.#driver.runQueuedPlan(response.planRun.id);
@@ -656,39 +751,42 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
   }
 
   /**
-   * Build the generic-Capsule generated root that carries the Resource Shape
-   * module. `genericRootDispatch` overrides the engine's own source-derived root
-   * (run_engine.ts ~L573-585): the first-party `moduleFiles` become the child
-   * `template-module`, inputs are baked as literals, and `publicOutputs` are
-   * projected for `tofu output -json` capture.
+   * Build the generated root that calls the Resource Shape operator module.
+   * The operator module is carried as an internal execution bundle;
+   * generatedRoot contains only the ordinary OpenTofu wrapper HCL.
    */
   #genericRootDispatch(
     request: OpentofuRunRequest,
+    importRequest?: OpentofuImportRequest,
   ): GenericRootDispatchContext {
     const outputAllowlist = outputAllowlistFromPublicOutputs(
       request.publicOutputs,
     );
-    const providerEnvBindings = providerEnvBindingsFor(request.providerBinding);
-    const generatedRoot = generateGenericCapsuleRoot({
+    const providerBindings = providerBindingsFor(request.providerBinding);
+    const generatedRoot = generateOpenTofuChildModuleRoot({
       requiredProviders: [request.providerBinding.providerSource],
       inputs: request.inputs,
       outputAllowlist,
-      ...(providerEnvBindings.length > 0 ? { providerEnvBindings } : {}),
+      ...(providerBindings.length > 0 ? { providerBindings } : {}),
     });
     const dispatch: DispatchGeneratedRoot = {
-      files: generatedRoot.files,
-      moduleFiles: request.moduleFiles.map((file) => ({
-        path: file.path,
-        text: file.text,
-      })),
+      files: importRequest
+        ? {
+            ...generatedRoot.files,
+            "imports.tf": importBlock(importRequest),
+          }
+        : generatedRoot.files,
     };
-    const providerCredentialDelivery = providerCredentialDeliveryFor(
-      request.providerBinding,
-    );
     return {
       generatedRoot: dispatch,
+      operatorModule: {
+        files: request.operatorModule.files.map((file) => ({ ...file })),
+      },
+      workspaceOutputAllowlist: outputAllowlist,
       outputAllowlist,
-      ...(providerCredentialDelivery ? { providerCredentialDelivery } : {}),
+      ...(request.stateAdoption
+        ? { stateAdoption: request.stateAdoption }
+        : {}),
     };
   }
 
@@ -736,36 +834,25 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
 }
 
 /** One provider binding per managed credential or provider base URL override. */
-function providerEnvBindingsFor(
+function providerBindingsFor(
   binding: OpentofuProviderBinding,
-): readonly RootInstallationProviderEnvBinding[] {
-  if (!binding.connectionId && !binding.baseUrl) return [];
-  const credentialDelivery = providerCredentialDeliveryFor(binding);
+): readonly RootProviderBinding[] {
+  if (
+    !binding.connectionId &&
+    !binding.alias &&
+    (!binding.configuration || Object.keys(binding.configuration).length === 0)
+  ) {
+    return [];
+  }
   return [
     {
       provider: binding.providerSource,
       ...(binding.alias ? { alias: binding.alias } : {}),
-      ...(credentialDelivery ? { credentialDelivery } : {}),
-      ...(binding.baseUrl
-        ? { configuration: { base_url: binding.baseUrl } }
+      ...(binding.configuration
+        ? { configuration: binding.configuration }
         : {}),
     },
   ];
-}
-
-function providerCredentialDeliveryFor(
-  binding: OpentofuProviderBinding,
-): RootInstallationProviderEnvBinding["credentialDelivery"] | undefined {
-  if (!binding.connectionId && !binding.baseUrl) return undefined;
-  return binding.baseUrl ? "provider_env" : "generated_root_variable";
-}
-
-function providerBindingOptionsFor(
-  implementationOptions: JsonObject | undefined,
-): Pick<OpentofuProviderBinding, "baseUrl"> {
-  const baseUrl = implementationOptions?.providerBaseUrl;
-  if (typeof baseUrl !== "string" || baseUrl.trim() === "") return {};
-  return { baseUrl: baseUrl.trim() };
 }
 
 /** Project each typed public output as an allowlist passthrough of the same name. */
@@ -784,8 +871,135 @@ function summarizePlan(planRun: PublicPlanRun): string {
   return `plan ${planRun.id}: create ${refs.length} native resource(s)`;
 }
 
+function observationCounts(
+  changes: readonly PlanResourceChange[] | undefined,
+): { readonly add: number; readonly change: number; readonly destroy: number } {
+  let add = 0;
+  let change = 0;
+  let destroy = 0;
+  for (const item of changes ?? []) {
+    const actions = item.actions ?? [];
+    if (actions.length === 0 || actions.every((action) => action === "no-op")) {
+      continue;
+    }
+    if (actions.length === 1 && actions[0] === "create") add += 1;
+    else if (actions.length === 1 && actions[0] === "delete") destroy += 1;
+    else change += 1;
+  }
+  return { add, change, destroy };
+}
+
+function resultingNativeResources(
+  changes: readonly PlanResourceChange[] | undefined,
+  current: readonly NativeResourceRef[] | undefined,
+): readonly NativeResourceRef[] {
+  if (changes?.some((change) => change.importing === true)) {
+    return nativeResourcesFromPlanChanges(changes);
+  }
+  if (
+    !changes ||
+    changes.every(
+      (change) =>
+        !change.actions?.length ||
+        change.actions.every((action) => action === "no-op"),
+    )
+  ) {
+    return current ?? [];
+  }
+  return nativeResourcesFromPlanChanges(changes);
+}
+
+function requestHasImport(
+  request: OpentofuRunRequest,
+): request is OpentofuImportRequest {
+  const candidate = request as Partial<OpentofuImportRequest>;
+  return (
+    typeof candidate.nativeId === "string" &&
+    typeof candidate.importAddress === "string"
+  );
+}
+
+function importBlock(request: OpentofuImportRequest): string {
+  if (
+    !/^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$/.test(
+      request.importAddress,
+    )
+  ) {
+    throw new Error(`invalid module import address: ${request.importAddress}`);
+  }
+  if (
+    request.nativeId.trim() === "" ||
+    request.nativeId.length > 2048 ||
+    /[\u0000-\u001f\u007f]/.test(request.nativeId)
+  ) {
+    throw new Error("native import id must be a non-empty printable string");
+  }
+  return [
+    "import {",
+    `  to = module.child.${request.importAddress}`,
+    `  id = ${JSON.stringify(request.nativeId)}`,
+    "}",
+    "",
+  ].join("\n");
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function workspaceIdFromResourceId(resourceId: string): string {
+  const parts = resourceId.split(":");
+  if (parts.length < 4 || parts[0] !== "tkrn" || !parts[1]) {
+    throw new Error(
+      `resourceId ${resourceId} must be formatted tkrn:{workspace}:{kind}:{name}`,
+    );
+  }
+  return parts[1];
+}
+
+function operationForStateGeneration(
+  stateGeneration: number,
+): "create" | "update" {
+  return stateGeneration === 0 ? "create" : "update";
+}
+
+async function operatorModuleSource(
+  request: OpentofuRunRequest | OpentofuDestroyRequest,
+): Promise<{ readonly kind: "operator_module"; readonly digest: string }> {
+  if (!request.operatorModule) {
+    throw new Error(
+      `Resource ${request.resourceId} has no operator module execution source`,
+    );
+  }
+  return {
+    kind: "operator_module",
+    digest: await stableJsonDigest({
+      resourceId: request.resourceId,
+      moduleTemplate: request.moduleTemplate ?? null,
+      files: request.operatorModule.files,
+    }),
+  };
+}
+
+function resourceRunContext(
+  request: OpentofuRunRequest | OpentofuDestroyRequest,
+  workspaceId: string,
+): NonNullable<PlanRunInternalContext["resourceContext"]> {
+  return {
+    workspaceId,
+    resourceId: request.resourceId,
+    environment: request.environment,
+    providerBinding: {
+      provider: request.providerBinding.provider,
+      providerSource: request.providerBinding.providerSource,
+      ...(request.providerBinding.alias
+        ? { alias: request.providerBinding.alias }
+        : {}),
+      ...(request.providerBinding.connectionId
+        ? { connectionId: request.providerBinding.connectionId }
+        : {}),
+    },
+  };
 }
 
 /**
@@ -804,7 +1018,7 @@ export function applyGuardFromPlanRun(
         "apply requires a runner-produced planDigest + planArtifact",
     );
   }
-  const capsuleId = planRun.capsuleId ?? planRun.installationId;
+  const capsuleId = planRun.capsuleId;
   return {
     planRunId: planRun.id,
     ...(capsuleId ? { capsuleId } : {}),
@@ -821,14 +1035,11 @@ export function applyGuardFromPlanRun(
     ...(planRun.providerLockDigest
       ? { providerLockDigest: planRun.providerLockDigest }
       : {}),
-    ...(planRun.resolvedProviderEnvBindingsDigest
+    ...(planRun.resolvedProviderBindingsDigest
       ? {
-          resolvedProviderEnvBindingsDigest:
-            planRun.resolvedProviderEnvBindingsDigest,
+          resolvedProviderBindingsDigest:
+            planRun.resolvedProviderBindingsDigest,
         }
-      : {}),
-    ...(planRun.providerCredentialDelivery
-      ? { providerCredentialDelivery: planRun.providerCredentialDelivery }
       : {}),
   };
 }
@@ -837,7 +1048,7 @@ export function applyGuardFromPlanRun(
 // FakeOpentofuRunPort: deterministic in-memory port for unit tests. It never
 // touches deploy-control, a runner, or a cloud — it records each request and
 // returns plausible results derived from the request (native resources by
-// provider/template, outputs from the public output names).
+// provider/operator module, outputs from the public output names).
 // ---------------------------------------------------------------------------
 
 export interface FakeOpentofuRunPortOverrides {
@@ -852,6 +1063,9 @@ export interface FakeOpentofuRunPortOverrides {
 export class FakeOpentofuRunPort implements OpentofuRunPort {
   readonly planRequests: OpentofuRunRequest[] = [];
   readonly applyRequests: OpentofuRunRequest[] = [];
+  readonly importRequests: OpentofuImportRequest[] = [];
+  readonly observeRequests: OpentofuRunRequest[] = [];
+  readonly refreshRequests: OpentofuRunRequest[] = [];
   readonly destroyRequests: OpentofuDestroyRequest[] = [];
   readonly #overrides: FakeOpentofuRunPortOverrides;
   #seq = 0;
@@ -865,7 +1079,7 @@ export class FakeOpentofuRunPort implements OpentofuRunPort {
     const nativeResources = this.#nativeResources(request);
     return Promise.resolve({
       runId: `plan_${++this.#seq}`,
-      summary: `plan ${request.templateId}: create ${nativeResources.length} resource(s)`,
+      summary: `plan ${request.moduleTemplate}: create ${nativeResources.length} resource(s)`,
       nativeResources,
       outputs: {},
     });
@@ -875,7 +1089,38 @@ export class FakeOpentofuRunPort implements OpentofuRunPort {
     this.applyRequests.push(request);
     return Promise.resolve({
       runId: `apply_${++this.#seq}`,
-      summary: `apply ${request.templateId}`,
+      summary: `apply ${request.moduleTemplate}`,
+      nativeResources: this.#nativeResources(request),
+      outputs: this.#outputs(request),
+    });
+  }
+
+  importResource(request: OpentofuImportRequest): Promise<OpentofuRunResult> {
+    this.importRequests.push(request);
+    return Promise.resolve({
+      runId: `import_${++this.#seq}`,
+      summary: `import ${request.importAddress}`,
+      nativeResources: [
+        { type: request.importAddress.split(".")[0]!, id: request.nativeId },
+      ],
+      outputs: this.#outputs(request),
+    });
+  }
+
+  observe(request: OpentofuRunRequest): Promise<OpentofuObserveResult> {
+    this.observeRequests.push(request);
+    return Promise.resolve({
+      runId: `observe_${++this.#seq}`,
+      status: "current",
+      summary: `observe ${request.moduleTemplate}: current`,
+    });
+  }
+
+  refresh(request: OpentofuRunRequest): Promise<OpentofuRunResult> {
+    this.refreshRequests.push(request);
+    return Promise.resolve({
+      runId: `refresh_${++this.#seq}`,
+      summary: `refresh ${request.moduleTemplate}`,
       nativeResources: this.#nativeResources(request),
       outputs: this.#outputs(request),
     });
@@ -900,12 +1145,7 @@ export class FakeOpentofuRunPort implements OpentofuRunPort {
     } else if (isNonEmptyString(request.inputs.endpointName)) {
       id = request.inputs.endpointName;
     }
-    const type =
-      request.providerBinding.provider === "cloudflare"
-        ? "cloudflare_resource"
-        : request.providerBinding.provider === "aws"
-          ? "aws_resource"
-          : `${request.providerBinding.provider}_resource`;
+    const type = `${request.providerBinding.provider}_resource`;
     return [{ type, id }];
   }
 

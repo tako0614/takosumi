@@ -10,7 +10,8 @@ import type {
   JsonRecord,
   OpenTofuModuleSource,
   GeneratedRoot,
-  GeneratedRootModuleFile,
+  OperatorModule,
+  PlanScopeSelector,
   SourceBuildConfig,
 } from "./types.ts";
 import {
@@ -36,6 +37,11 @@ export function parseOperation(request: unknown): OpenTofuOperation {
     : "create";
 }
 
+export function parseRefreshOnly(request: unknown): boolean {
+  const planRun = recordField(request, "planRun");
+  return isRecord(planRun) && planRun.refreshOnly === true;
+}
+
 export function parseSource(request: unknown): OpenTofuModuleSource {
   const planRun = recordField(request, "planRun");
   const source = recordField(planRun, "source");
@@ -55,22 +61,13 @@ export function parseSource(request: unknown): OpenTofuModuleSource {
       ...(modulePath ? { modulePath } : {}),
     };
   }
-  if (kind === "prepared") {
+  if (kind === "operator_module") {
     return {
       kind,
-      url: requiredStringField(source, "url"),
       digest: requiredStringField(source, "digest"),
-      ...(modulePath ? { modulePath } : {}),
     };
   }
-  if (kind === "local") {
-    return {
-      kind,
-      path: requiredStringField(source, "path"),
-      ...(modulePath ? { modulePath } : {}),
-    };
-  }
-  throw new Error("planRun.source.kind must be git, prepared, or local");
+  throw new Error("planRun.source.kind must be git or operator_module");
 }
 
 export function parseGeneratedRoot(
@@ -93,42 +90,54 @@ export function parseGeneratedRoot(
   if (Object.keys(out).length === 0) {
     throw new Error("generatedRoot.files must not be empty");
   }
-  const moduleFilesValue = recordField(generated, "moduleFiles");
-  const moduleFiles =
-    moduleFilesValue === undefined
-      ? undefined
-      : parseGeneratedRootModuleFiles(moduleFilesValue);
+  if (recordField(generated, "moduleFiles") !== undefined) {
+    throw new Error(
+      "generatedRoot.moduleFiles is retired; Capsule modules come from SourceSnapshot and Resource Shape modules use operatorModule",
+    );
+  }
+  return { files: out };
+}
+
+export function parseOperatorModule(
+  request: unknown,
+): OperatorModule | undefined {
+  const operatorModule = recordField(request, "operatorModule");
+  if (operatorModule === undefined) return undefined;
+  if (!isRecord(operatorModule)) {
+    throw new Error("operatorModule must be an object");
+  }
+  const value = recordField(operatorModule, "files");
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("operatorModule.files must be a non-empty array");
+  }
   return {
-    files: out,
-    ...(moduleFiles ? { moduleFiles } : {}),
+    files: value.map((entry, index) => {
+      if (!isRecord(entry)) {
+        throw new Error(`operatorModule.files[${index}] must be an object`);
+      }
+      const path = stringField(entry, "path");
+      const text = stringField(entry, "text");
+      if (!path) {
+        throw new Error(`operatorModule.files[${index}].path must be a string`);
+      }
+      if (text === undefined) {
+        throw new Error(`operatorModule.files[${index}].text must be a string`);
+      }
+      assertSafeRelativePath(path, `operatorModule.files[${index}].path`);
+      return { path, text };
+    }),
   };
 }
 
-export function parseGeneratedRootModuleFiles(
-  value: unknown,
-): readonly GeneratedRootModuleFile[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error("generatedRoot.moduleFiles must be a non-empty array");
+export function parseVariables(request: unknown): JsonRecord {
+  const variables = recordField(request, "variables");
+  if (variables === undefined) return {};
+  if (!isRecord(variables)) throw new Error("variables must be an object");
+  try {
+    return JSON.parse(JSON.stringify(variables)) as JsonRecord;
+  } catch {
+    throw new Error("variables must be JSON-serializable");
   }
-  return value.map((entry, index) => {
-    if (!isRecord(entry)) {
-      throw new Error(`generatedRoot.moduleFiles[${index}] must be an object`);
-    }
-    const path = stringField(entry, "path");
-    const text = stringField(entry, "text");
-    if (!path) {
-      throw new Error(
-        `generatedRoot.moduleFiles[${index}].path must be a string`,
-      );
-    }
-    if (text === undefined) {
-      throw new Error(
-        `generatedRoot.moduleFiles[${index}].text must be a string`,
-      );
-    }
-    assertSafeRelativePath(path, `generatedRoot.moduleFiles[${index}].path`);
-    return { path, text };
-  });
 }
 
 export function parseSourceBuild(
@@ -276,6 +285,55 @@ export function parseProviderInstallationPolicy(
   return isRecord(policy) && recordField(policy, "requireMirror") === true
     ? { requireMirror: true }
     : undefined;
+}
+
+/** Parse the selector-only scope projection requested by policy. */
+export function parsePlanScopeSelectors(
+  request: unknown,
+): readonly PlanScopeSelector[] {
+  const value = recordField(request, "scopeSelectors");
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 64) {
+    throw new Error("scopeSelectors must be an array with at most 64 entries");
+  }
+  return value.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`scopeSelectors[${index}] must be an object`);
+    }
+    const resourceTypePattern = stringField(entry, "resourceTypePattern");
+    if (
+      !resourceTypePattern ||
+      resourceTypePattern.length > 256 ||
+      !/^[A-Za-z0-9_*?.:-]+$/u.test(resourceTypePattern)
+    ) {
+      throw new Error(
+        `scopeSelectors[${index}].resourceTypePattern is invalid`,
+      );
+    }
+    const rawDimensions = recordField(entry, "dimensions");
+    if (!isRecord(rawDimensions) || Object.keys(rawDimensions).length > 32) {
+      throw new Error(`scopeSelectors[${index}].dimensions is invalid`);
+    }
+    const dimensions: Record<string, string> = {};
+    for (const [name, selector] of Object.entries(rawDimensions)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$/u.test(name)) {
+        throw new Error(`scopeSelectors[${index}].dimensions key is invalid`);
+      }
+      if (
+        typeof selector !== "string" ||
+        selector.length === 0 ||
+        selector.length > 512 ||
+        !selector.startsWith("/") ||
+        /~(?:[^01]|$)/u.test(selector)
+      ) {
+        throw new Error(
+          `scopeSelectors[${index}].dimensions.${name} must be an RFC 6901 JSON Pointer`,
+        );
+      }
+      dimensions[name] = selector;
+    }
+    return { resourceTypePattern, dimensions };
+  });
 }
 
 export function maxRunSecondsFromProfile(

@@ -582,7 +582,8 @@ class ResourceShapeProofServer {
         adapters: { opentofu: true },
         compat: {},
         identity: { oidc_issuer: true },
-        commercial: { billing: false },
+        operator: {},
+        extensions: [],
       });
     }
     if (request.method === "POST" && url.pathname === "/v1/resources/preview") {
@@ -1840,7 +1841,7 @@ function managedCompatImplementationHcl({
           worker_fetch        = "native"
           workers_bindings    = "native"
           node_compat         = "shim"
-          service_bindings    = "native"
+          runtime_bindings    = "native"
           static_assets       = "native"
           resource_connection = "native"
           runtime_binding     = "native"

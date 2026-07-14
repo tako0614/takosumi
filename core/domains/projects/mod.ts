@@ -3,19 +3,15 @@
  *
  * A Project is a Workspace-owned grouping for one product, service,
  * application, or infrastructure group. Capsules live under a Project
- * (`capsules.projectId`); a default Project (`prj_default`) is backfilled per
+ * (`capsules.projectId`); a deterministic default Project is backfilled per
  * Workspace so existing Workspace-direct Capsules keep a stable owner.
  *
  * This service owns Project creation + lookup and the slug-uniqueness invariant
  * within a Workspace. No secret material flows through it.
  *
- * NOTE (rename convergence): the shared OpenTofu deployment store does not yet
- * expose Project persistence methods. To keep this service self-contained and
- * testable today, it depends on a small {@link ProjectStore} port with an
- * in-memory default. Wiring it onto the durable control-plane ledger (D1 /
- * Postgres `projects` table + `create_projects_table` migration + bootstrap
- * construction) is a converge follow-up once the spine store gains Project
- * accessors.
+ * The production composition injects the shared OpenTofu control store, whose
+ * D1/Postgres implementations persist this port in the canonical `projects`
+ * table. The small in-memory implementation remains an explicit test helper.
  */
 
 import type { Project } from "takosumi-contract/projects";
@@ -24,8 +20,17 @@ import {
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
 
-/** The default per-Workspace Project id Capsules are backfilled under. */
-export const DEFAULT_PROJECT_ID = "prj_default";
+/**
+ * Deterministic default Project id scoped by its owning Workspace.
+ *
+ * A single global `prj_default` id lets the first Workspace occupy the id and
+ * forces every later Workspace onto a different lookup path. The durable D1/
+ * Postgres migration already uses this Workspace-qualified form; the service
+ * must use the same identity rule.
+ */
+export function defaultProjectId(workspaceId: string): string {
+  return `prj_default_${workspaceId}`;
+}
 
 /** The default per-Workspace Project slug. */
 export const DEFAULT_PROJECT_SLUG = "default";
@@ -45,7 +50,7 @@ export interface CreateProjectRequest {
 
 /**
  * Persistence port for Projects. The durable control plane provides a backing
- * implementation; {@link InMemoryProjectStore} is the dev/test default.
+ * implementation; {@link InMemoryProjectStore} is an explicit test helper.
  */
 export interface ProjectStore {
   putProject(project: Project): Promise<Project>;
@@ -155,18 +160,21 @@ export class ProjectsService {
 
   async listProjects(workspaceId: string): Promise<readonly Project[]> {
     requireNonEmptyString(workspaceId, "workspaceId");
-    return await this.#store.listProjectsByWorkspace(workspaceId);
+    const projects = await this.#store.listProjectsByWorkspace(workspaceId);
+    if (projects.length > 0) return projects;
+    return [await this.ensureDefaultProject(workspaceId)];
   }
 
   /**
-   * Idempotently ensures the default Project (`prj_default`) exists for a
+   * Idempotently ensures the Workspace-qualified default Project exists for a
    * Workspace so pre-Project Capsules keep a stable owner. Returns the existing
    * default when already present.
    */
   async ensureDefaultProject(workspaceId: string): Promise<Project> {
     requireNonEmptyString(workspaceId, "workspaceId");
-    const existing = await this.#store.getProject(DEFAULT_PROJECT_ID);
-    if (existing && existing.workspaceId === workspaceId) return existing;
+    const projectId = defaultProjectId(workspaceId);
+    const existing = await this.#store.getProject(projectId);
+    if (existing) return existing;
     const bySlug = await this.#store.getProjectBySlug(
       workspaceId,
       DEFAULT_PROJECT_SLUG,
@@ -174,7 +182,7 @@ export class ProjectsService {
     if (bySlug) return bySlug;
     const nowIso = this.#now().toISOString();
     const project: Project = {
-      id: DEFAULT_PROJECT_ID,
+      id: projectId,
       workspaceId,
       name: "Default",
       slug: DEFAULT_PROJECT_SLUG,

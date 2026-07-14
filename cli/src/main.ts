@@ -2,7 +2,6 @@
 import process from "node:process";
 import { helpText } from "./cli-help.ts";
 import {
-  runAccountsLaunchTokensCleanup,
   runAccountsMigrate,
   runAccountsMigrateD1,
   runAccountsSeed,
@@ -11,16 +10,10 @@ import {
 } from "./cli-accounts-commands.ts";
 import { runConnections } from "./cli-connections-commands.ts";
 import {
-  runCapsulesExport,
-  runCapsulesExportOperation,
-  runCapsulesImportApply,
-  runCapsulesImportPlan,
-  runCapsulesInspect,
-  runCapsulesList,
-  runCapsulesMaterialize,
-  runCapsulesStatus,
-  runCapsulesUninstall,
-} from "./cli-installations-commands.ts";
+  runResources,
+  runSpacePolicies,
+  runTargetPools,
+} from "./cli-resource-shape-commands.ts";
 import {
   runLaunchReadinessMigrateFinalModel,
   runLaunchReadinessOidcAccountSecurityEvidence,
@@ -31,11 +24,7 @@ import {
   runLaunchReadinessTemplate,
   runLaunchReadinessValidate,
 } from "./cli-launch-readiness-commands.ts";
-import { runPlatformSecrets } from "./cli-platform-secrets-commands.ts";
-import {
-  runDeployLogs,
-  runDeployStatus,
-} from "./cli-deploy-commands.ts";
+import { runDeployLogs, runDeployStatus } from "./cli-deploy-commands.ts";
 import type { CliIo } from "./cli-io.ts";
 
 export type { CliIo };
@@ -67,13 +56,6 @@ export async function main(
     return await main(args.slice(1), io);
   }
 
-  if (args[0] === "deploy" || args[0] === "plan") {
-    io.stderr(
-      "`takosumi deploy` local upload is retired. Use the dashboard /install?git=... flow or create a Git URL Source/Capsule and run plan/apply.",
-    );
-    return 2;
-  }
-
   // Public read companions for Run inspection remain available.
   if (args[0] === "logs" || args[0] === "status") {
     try {
@@ -92,12 +74,9 @@ export async function main(
   const [domain, command, ...rest] = args;
   if (domain === "installations") {
     io.stderr(
-      "`takosumi installations` is not a public command. Use dashboard Git URL install or Source/Capsule plan/apply. Internal account-plane projection helpers live under `takosumi internal installations ...`.",
+      "`takosumi installations` is retired. Use canonical Source/Capsule plan/apply operations.",
     );
     return 2;
-  }
-  if (domain === "internal" && command === "installations") {
-    return await runInternalCapsules(rest, io);
   }
   if (domain === "accounts" && command === "seed") {
     return runAccountsSeed(rest, io);
@@ -114,18 +93,17 @@ export async function main(
   if (domain === "accounts" && command === "tokens") {
     return await runAccountsTokens(rest, io);
   }
-  if (
-    domain === "accounts" &&
-    command === "launch-tokens" &&
-    rest[0] === "cleanup"
-  ) {
-    return await runAccountsLaunchTokensCleanup(rest.slice(1), io);
-  }
   if (domain === "connections") {
     return await runConnections([command, ...rest].filter(Boolean), io);
   }
-  if (domain === "secrets" || domain === "platform-secrets") {
-    return await runPlatformSecrets([command, ...rest].filter(Boolean), io);
+  if (domain === "resources") {
+    return await runResources([command, ...rest].filter(Boolean), io);
+  }
+  if (domain === "target-pools") {
+    return await runTargetPools([command, ...rest].filter(Boolean), io);
+  }
+  if (domain === "space-policies") {
+    return await runSpacePolicies([command, ...rest].filter(Boolean), io);
   }
   if (domain === "launch-readiness" && command === "validate") {
     return await runLaunchReadinessValidate(rest, io);
@@ -134,7 +112,7 @@ export async function main(
     return await runLaunchReadinessPublicSummary(rest, io);
   }
   if (domain === "launch-readiness" && command === "template") {
-    return runLaunchReadinessTemplate(rest, io);
+    return await runLaunchReadinessTemplate(rest, io);
   }
   if (domain === "launch-readiness" && command === "migrate-final-model") {
     return await runLaunchReadinessMigrateFinalModel(rest, io);
@@ -176,42 +154,6 @@ export async function main(
 
   io.stderr(`Unknown command: ${args.join(" ")}`);
   io.stderr(helpText());
-  return 2;
-}
-
-async function runInternalCapsules(
-  args: string[],
-  io: CliIo,
-): Promise<number> {
-  const [command, ...rest] = args;
-  if (command === "list") {
-    return await runCapsulesList(rest, io);
-  }
-  if (command === "inspect") {
-    return await runCapsulesInspect(rest, io);
-  }
-  if (command === "uninstall") {
-    return await runCapsulesUninstall(rest, io);
-  }
-  if (command === "status") {
-    return await runCapsulesStatus(rest, io);
-  }
-  if (command === "materialize") {
-    return await runCapsulesMaterialize(rest, io);
-  }
-  if (command === "export") {
-    return await runCapsulesExport(rest, io);
-  }
-  if (command === "export-operation") {
-    return await runCapsulesExportOperation(rest, io);
-  }
-  if (command === "import-plan") {
-    return await runCapsulesImportPlan(rest, io);
-  }
-  if (command === "import-apply") {
-    return await runCapsulesImportApply(rest, io);
-  }
-  io.stderr(`Unknown internal installations command: ${args.join(" ")}`);
   return 2;
 }
 

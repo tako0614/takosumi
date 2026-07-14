@@ -8,7 +8,7 @@ import {
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
-  ensureSpacePermission,
+  ensureWorkspacePermission,
   readOptionalJsonBody,
   RUN_ID_PATTERN,
 } from "./deploy_control_shared.ts";
@@ -100,7 +100,7 @@ export function mountDeployControlRunRoutes(
       param: RUN_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const run = await controller.getRun(id);
-        ensureSpacePermission(principal, run.spaceId);
+        ensureWorkspacePermission(principal, run.workspaceId);
         return c.json({ run }, 200);
       },
     }),
@@ -112,9 +112,9 @@ export function mountDeployControlRunRoutes(
       ctx,
       param: RUN_ID_PARAM,
       handler: async ({ c, principal, id }) => {
-        // Resolve the run's space first so logs are space-permission gated.
+        // Resolve the Run's Workspace before reading logs.
         const run = await controller.getRun(id);
-        ensureSpacePermission(principal, run.spaceId);
+        ensureWorkspacePermission(principal, run.workspaceId);
         return c.json(await controller.getRunLogs(id), 200);
       },
     }),
@@ -127,7 +127,7 @@ export function mountDeployControlRunRoutes(
       param: RUN_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const run = await controller.getRun(id);
-        ensureSpacePermission(principal, run.spaceId);
+        ensureWorkspacePermission(principal, run.workspaceId);
         return c.json(await controller.getRunEvents(id), 200);
       },
     }),
@@ -140,7 +140,7 @@ export function mountDeployControlRunRoutes(
       param: RUN_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const run = await controller.getRun(id);
-        ensureSpacePermission(principal, run.spaceId);
+        ensureWorkspacePermission(principal, run.workspaceId);
         return c.json({ cost: await controller.getRunCost(id) }, 200);
       },
     }),
@@ -153,7 +153,7 @@ export function mountDeployControlRunRoutes(
       param: RUN_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getRun(id);
-        ensureSpacePermission(principal, existing.spaceId);
+        ensureWorkspacePermission(principal, existing.workspaceId);
         const body = await readOptionalJsonBody<{
           readonly reason?: string;
         }>(c, "runApprove");
@@ -176,9 +176,9 @@ export function mountDeployControlRunRoutes(
       ctx,
       param: RUN_ID_PARAM,
       handler: async ({ c, principal, id }) => {
-        // Resolve the run's space first so cancel is space-permission gated.
+        // Resolve the Run's Workspace before cancellation.
         const existing = await controller.getRun(id);
-        ensureSpacePermission(principal, existing.spaceId);
+        ensureWorkspacePermission(principal, existing.workspaceId);
         return c.json({ run: await controller.cancelRun(id) }, 200);
       },
     }),

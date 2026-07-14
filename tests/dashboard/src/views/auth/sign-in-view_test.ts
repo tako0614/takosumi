@@ -14,8 +14,8 @@ const shellCssSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/styles/shell.css"),
   "utf8",
 );
-const deploymentBrandSource = readFileSync(
-  resolve(here, "../../../../../dashboard/src/lib/deployment-brand.ts"),
+const runtimeCapabilitiesSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/lib/runtime-capabilities.ts"),
   "utf8",
 );
 
@@ -96,22 +96,30 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(ja["auth.installContextRootPath"]).not.toContain("module");
   });
 
-  test("uses Google as the only first-party OAuth button", () => {
-    expect(signInViewSource).toContain('type Provider = "google"');
-    expect(signInViewSource).toContain('id: "google"');
-    expect(signInViewSource).not.toContain('id: "github"');
-    expect(signInViewSource).not.toContain("GitHub");
-    expect(signInViewSource).toContain('fill="#4285f4"');
-    expect(signInViewSource).toContain('fill="#34a853"');
+  test("renders generic provider descriptors returned by discovery", () => {
+    expect(signInViewSource).toContain(
+      "readonly TakosumiAccountsAuthProvider[]",
+    );
+    expect(signInViewSource).toContain(
+      "setProviders(res.providers.filter(isDashboardOAuthProvider))",
+    );
+    expect(signInViewSource).toContain(
+      'p.label?.trim() || t("auth.singleSignOn")',
+    );
+    expect(signInViewSource).not.toContain('type Provider = "google"');
+    expect(signInViewSource).not.toContain('fill="#4285f4"');
   });
 
-  test("auto-starts the sole Cloud Google sign-in method with a manual escape hatch", () => {
+  test("auto-starts any sole configured OAuth method with a manual escape hatch", () => {
     expect(signInViewSource).toContain("createEffect(() =>");
     expect(signInViewSource).toContain("const shouldAutoStart = ():");
-    expect(signInViewSource).toContain("if (!isTakosumiCloudRuntime()) return false");
-    expect(signInViewSource).toContain('if (params.manual === "1") return false');
-    expect(signInViewSource).toContain('ids.length === 1 && ids[0] === "google"');
-    expect(signInViewSource).toContain('select("google")');
+    expect(signInViewSource).toContain(
+      'if (params.manual === "1") return false',
+    );
+    expect(signInViewSource).toContain(
+      "return enabledProviders().length === 1",
+    );
+    expect(signInViewSource).toContain("select(provider.id)");
   });
 
   test("auto-start cannot become an inescapable OAuth-failure loop", () => {
@@ -140,21 +148,22 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).toContain("params.return || params.return_to");
   });
 
-  test("uses Cloud-specific copy only on the Takosumi Cloud runtime", () => {
-    expect(signInViewSource).toContain(
-      'isTakosumiCloudRuntime() ? "auth.signInCloud" : "auth.signIn"',
+  test("keeps provider-neutral copy in the OSS sign-in surface", () => {
+    expect(signInViewSource).toContain("dashboardProductName()");
+    expect(signInViewSource).toContain('t("auth.signInSub")');
+    expect(signInViewSource).not.toContain("auth.signInCloud");
+    expect(signInViewSource).not.toContain("isTakosumiCloudRuntime");
+    expect(en["auth.signInSub"]).toContain("identity provider");
+    expect(ja["auth.signInSub"]).toContain("ID プロバイダー");
+    expect(en["auth.signInSub"].toLowerCase()).not.toContain("google");
+    expect(ja["auth.signInSub"]).not.toContain("Google");
+    expect(runtimeCapabilitiesSource).toContain(
+      "initializeTakosumiRuntimeCapabilities",
     );
-    expect(signInViewSource).toContain(
-      'isTakosumiCloudRuntime() ? "auth.signInSubCloud" : "auth.signInSub"',
-    );
-    expect(en["auth.signInCloud"]).toContain("Takosumi Cloud");
-    expect(en["auth.signInSubCloud"]).toContain("Google");
-    expect(ja["auth.signInCloud"]).toContain("Takosumi Cloud");
-    expect(ja["auth.signInSubCloud"]).toContain("Google");
-    expect(deploymentBrandSource).toContain(
-      'import.meta.env.VITE_TAKOSUMI_CLOUD === "1"',
-    );
-    expect(deploymentBrandSource).not.toContain(
+    expect(runtimeCapabilitiesSource).toContain("/v1/capabilities");
+    expect(runtimeCapabilitiesSource).not.toContain("VITE_TAKOSUMI_CLOUD");
+    expect(runtimeCapabilitiesSource).not.toContain("app-staging.takosumi.com");
+    expect(runtimeCapabilitiesSource).not.toContain(
       "as Record<string, string | undefined>",
     );
   });

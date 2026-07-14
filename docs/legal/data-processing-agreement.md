@@ -1,10 +1,12 @@
 # Takosumi Data Processing Addendum
 
-This Data Processing Addendum describes the baseline data-processing boundary
-for the hosted Takosumi reference platform. It is intended for operators and
-customers evaluating the hosted platform worker at `app.takosumi.com`.
-Self-hosted operators may replace this page with their own organization-specific
-DPA.
+This Data Processing Addendum is an operator template describing the baseline
+data-processing boundary of an operator-hosted Takosumi origin. It is not the
+agreement for the official Takosumi Cloud deployment. Cloud-specific legal
+terms, subprocessors, regions, retention, and contact details belong to the
+hosted Cloud documentation and signed customer agreement. Every operator must
+replace this template with its own organization-specific DPA before offering a
+service.
 
 ## Roles
 
@@ -44,8 +46,8 @@ The hosted reference platform is designed around:
 - encrypted secret storage;
 - run-scoped credential materialization;
 - state and output isolation by customer workspace;
-- audit logging for account, provider connection, run, deployment, and operator
-  actions;
+- audit logging for account, provider connection, Run, StateVersion, Output,
+  and operator actions;
 - provider allowlists, source URL restrictions, runner egress policy, and
   redaction of credential material from public payloads and logs;
 - backup and restore procedures for control-plane state.

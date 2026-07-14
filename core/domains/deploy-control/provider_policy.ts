@@ -1,7 +1,7 @@
 /**
  * Provider / Capsule policy evaluation for the deploy-control domain.
  *
- * Pure functions over contract types that layer Space policy and InstallConfig
+ * Pure functions over contract types that layer Workspace policy and InstallConfig
  * policy, gate a Capsule Compatibility Report, and evaluate the provider
  * lockfile / installation-mirror / credential-mint policies. These were lifted
  * verbatim out of `mod.ts`; they take no controller or store state. The
@@ -11,6 +11,8 @@
 import type { PolicyConfig } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
+import { normalizeScopeBoundaryPolicy } from "takosumi-contract";
+import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
 import { providerMatches } from "./policy.ts";
 import { normalizeProviders } from "./validation.ts";
 import {
@@ -26,9 +28,7 @@ import type { ProviderInstallationEvidence } from "./mod.ts";
  * segments) is returned unchanged.
  */
 export function canonicalProviderAddress(rule: string): string {
-  const segments = rule.split("/").filter((part) => part.length > 0);
-  if (segments.length === 2) return `registry.opentofu.org/${rule}`;
-  return rule;
+  return canonicalProviderSource(rule);
 }
 
 export function mergePolicyConfigs(
@@ -108,7 +108,7 @@ export function evaluateCompatibilityReportAgainstPolicy(
     ...dataSourceReasons,
     ...provisionerReasons,
   );
-  if (report.level === "ready" || report.level === "auto_capsulized") {
+  if (report.level === "ready") {
     return { runnable: reasons.length === 0, reasons };
   }
   if (report.level === "needs_patch") {
@@ -165,7 +165,7 @@ function compatibilityProviderPolicyReasons(
   });
   return denied.map(
     (provider) =>
-      `capsule provider ${provider.source} is not allowed by Space/InstallConfig policy`,
+      `capsule provider ${provider.source} is not allowed by Workspace/InstallConfig policy`,
   );
 }
 
@@ -180,7 +180,7 @@ function compatibilityResourcePolicyReasons(
   });
   return denied.map(
     (resource) =>
-      `capsule resource type ${resource.type} is not allowed by Space/InstallConfig policy`,
+      `capsule resource type ${resource.type} is not allowed by Workspace/InstallConfig policy`,
   );
 }
 
@@ -195,7 +195,7 @@ function compatibilityDataSourcePolicyReasons(
   });
   return denied.map(
     (dataSource) =>
-      `capsule data source ${dataSource.type} is not allowed by Space/InstallConfig policy`,
+      `capsule data source ${dataSource.type} is not allowed by Workspace/InstallConfig policy`,
   );
 }
 
@@ -210,7 +210,7 @@ function compatibilityProvisionerPolicyReasons(
   });
   return denied.map(
     (provisioner) =>
-      `capsule provisioner ${provisioner.type} is not allowed by Space/InstallConfig policy`,
+      `capsule provisioner ${provisioner.type} is not allowed by Workspace/InstallConfig policy`,
   );
 }
 
@@ -286,15 +286,13 @@ function mergeProviderCredentialPolicy(
   ceiling: PolicyConfig["providerCredentials"] | undefined,
   local: PolicyConfig["providerCredentials"] | undefined,
 ): PolicyConfig["providerCredentials"] | undefined {
-  if (!ceiling) return local;
-  if (!local) return ceiling;
+  if (!ceiling && !local) return undefined;
   return {
     requireTemporary:
-      ceiling.requireTemporary === true || local.requireTemporary === true,
+      ceiling?.requireTemporary === true || local?.requireTemporary === true,
     requireTtlEnforced:
-      ceiling.requireTtlEnforced === true || local.requireTtlEnforced === true,
-    requireRootOnly:
-      ceiling.requireRootOnly === true || local.requireRootOnly === true,
+      ceiling?.requireTtlEnforced === true ||
+      local?.requireTtlEnforced === true,
   };
 }
 
@@ -344,7 +342,7 @@ export function evaluateProviderCredentialMintPolicy(
       .filter(
         (provider) =>
           !evidenceProviders.some((evidenceProvider) =>
-            providerMatches(provider, evidenceProvider)
+            providerMatches(provider, evidenceProvider),
           ),
       )
       .sort();
@@ -366,12 +364,6 @@ export function evaluateProviderCredentialMintPolicy(
       `provider credential policy requires ttl-enforced credentials; providers without ttl evidence: ${credentialEvidenceProviderList(nonTtl)}`,
     );
   }
-  const nonRootOnly = evidence.filter((row) => row.rootOnly !== true);
-  if (credentialPolicy.requireRootOnly === true && nonRootOnly.length > 0) {
-    reasons.push(
-      `provider credential policy requires generated-root-only delivery; non-root-only providers: ${credentialEvidenceProviderList(nonRootOnly)}`,
-    );
-  }
   return { reasons };
 }
 
@@ -382,9 +374,7 @@ function credentialEvidenceProviderList(
     ...new Set(
       evidence.map(
         (row) =>
-          `${row.provider}:${row.issuer ?? "unknown"}:${row.delivery}:${
-            row.connectionId
-          }`,
+          `${row.provider}:${row.issuer ?? "unknown"}:${row.connectionId}`,
       ),
     ),
   ]
@@ -506,32 +496,19 @@ function mergeScopeBoundary(
   ceiling: PolicyConfig["scopeBoundary"] | undefined,
   local: PolicyConfig["scopeBoundary"] | undefined,
 ): PolicyConfig["scopeBoundary"] | undefined {
-  if (!ceiling) return local;
-  if (!local) return ceiling;
-  const cloudflare = mergeScopeProvider(ceiling.cloudflare, local.cloudflare);
-  const aws = mergeScopeProvider(ceiling.aws, local.aws);
+  const normalizedCeiling = normalizeScopeBoundaryPolicy(ceiling);
+  const normalizedLocal = normalizeScopeBoundaryPolicy(local);
+  if (!normalizedCeiling) return normalizedLocal;
+  if (!normalizedLocal) return normalizedCeiling;
   return {
     mode:
-      ceiling.mode === "strict" || local.mode === "strict"
+      normalizedCeiling.mode === "strict" || normalizedLocal.mode === "strict"
         ? "strict"
-        : (ceiling.mode ?? local.mode),
-    ...(cloudflare ? { cloudflare } : {}),
-    ...(aws ? { aws } : {}),
+        : (normalizedCeiling.mode ?? normalizedLocal.mode),
+    // Both layers remain independently enforceable. Concatenation is the
+    // provider-neutral equivalent of intersecting each provider-specific list.
+    rules: [...normalizedCeiling.rules, ...normalizedLocal.rules],
   };
-}
-
-function mergeScopeProvider<
-  T extends Readonly<Record<string, readonly string[] | undefined>>,
->(ceiling: T | undefined, local: T | undefined): T | undefined {
-  if (!ceiling) return local;
-  if (!local) return ceiling;
-  const out: Record<string, readonly string[]> = {};
-  const keys = new Set([...Object.keys(ceiling), ...Object.keys(local)]);
-  for (const key of keys) {
-    const merged = intersectOptionalLists(ceiling[key], local[key]);
-    if (merged !== undefined) out[key] = merged;
-  }
-  return out as T;
 }
 
 function mergeQuota(

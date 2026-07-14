@@ -1,17 +1,18 @@
 /**
- * Run / installation-lifecycle orchestration engine (P3 god-file split).
+ * Run / Capsule-lifecycle orchestration engine (P3 god-file split).
  *
- * Extracted verbatim from `../mod.ts`'s `OpenTofuDeploymentController`. The
+ * Extracted verbatim from `../mod.ts`'s `OpenTofuController`. The
  * controller constructs exactly ONE `RunEngine`, passing the shared stores,
  * sibling collaborators, clock / id generators, and — critically — the SINGLE
  * `#runSerialized` mutex owner as a `runSerialized` port (there is still only
- * one serialization queue, owned by the controller). All run + installation
+ * one serialization queue, owned by the controller). All Run + Capsule
  * plan + apply + restore orchestration lives here; the controller delegates its
  * public run methods to this engine and keeps the query / billing / connection /
  * source surfaces. Method bodies are moved byte-for-byte.
  */
 import {
   installExperiencePublicEndpoint,
+  planScopeSelectors,
   type JsonValue,
 } from "takosumi-contract";
 import type {
@@ -19,42 +20,42 @@ import type {
   ApplyRunResponse,
   CreateApplyRunRequest,
   CreatePlanRunRequest,
-  Deployment,
-  DeploymentOutput,
   DispatchGeneratedRoot,
   InstallConfig,
-  Installation,
+  Capsule,
   OpenTofuModuleSource,
   PlanRun,
-  PlanRunInstallationContext,
+  PlanRunCapsuleContext,
   PlanRunResponse,
-  PlanRunTemplateBinding,
   PolicyConfig,
   PolicyDecision,
   RunStatus,
   RunnerProfile,
-  StateSnapshot,
 } from "@takosumi/internal/deploy-control-api";
 import type { CreateRestoreRequest } from "takosumi-contract/backups";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import { usesDeclaredEnvCredentialRecipe } from "takosumi-contract/connections";
 import type {
   Dependency,
   DependencySnapshot,
 } from "takosumi-contract/dependencies";
-import type {
-  ManagedPublicHostnameClaimRequest,
-  ManagedPublicHostnameClaimResult,
-  ManagedPublicHostnameMode,
-  OutputAllowlistEntry,
+import {
+  CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
+  type InstallConfigLifecycleAction,
+  type InstallConfigLifecyclePhase,
+  type ManagedPublicHostnameClaimRequest,
+  type ManagedPublicHostnameClaimResult,
+  type ManagedPublicHostnameMode,
+  type OutputAllowlistEntry,
 } from "takosumi-contract/install-configs";
-import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
+import type { Output } from "takosumi-contract/outputs";
+import type { StateVersion } from "takosumi-contract/state-versions";
 import type { Run } from "takosumi-contract/runs";
 import type {
   Source,
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
-import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
 import { redactString } from "takosumi-contract/redaction";
 import { downstreamClosure } from "takosumi-graph";
 import {
@@ -64,17 +65,16 @@ import {
   evaluateScopeBoundary,
 } from "takosumi-policy";
 import {
-  generateGenericCapsuleRoot,
-  type RootInstallationProviderEnvBinding,
+  generateOpenTofuChildModuleRoot,
+  type RootProviderBinding,
 } from "takosumi-rootgen";
 import { stableJsonDigest } from "../../../adapters/source/digest.ts";
 import { log } from "../../../shared/log.ts";
 import {
   ConnectionsService,
-  resolvedProviderEnvBindingsDigest,
-  type ResolvedInstallationProviderEnvBinding,
+  resolvedProviderBindingsDigest,
+  type ResolvedCapsuleProviderBinding,
 } from "../../connections/mod.ts";
-import { validateProjectedServiceExportsFromOutputSnapshot } from "takosumi-contract/output-projection";
 import type { ActivityRecorder } from "../../activity/mod.ts";
 import type { RecordActivityInput } from "../../activity/mod.ts";
 import type { SourcesService } from "../../sources/mod.ts";
@@ -82,40 +82,42 @@ import {
   collectRootModuleOutputDeclarations,
   collectRootModuleVariableNames,
 } from "../../sources/capsule_compatibility.ts";
-import type { TemplateRegistry } from "../../templates/mod.ts";
 import type { ObservabilitySink } from "../../observability/mod.ts";
-import { DeploymentQuery, requireInstallation } from "../deployment_query.ts";
-import { OpenTofuControllerError, requireNonEmptyString } from "../errors.ts";
+import { CapsuleQuery, requireCapsule } from "../capsule_query.ts";
 import {
-  DEFAULT_INSTALLATION_LEASE_TTL_MS,
-  type InstallationCoordination,
+  isRunnerInfrastructureRequeueError,
+  OpenTofuControllerError,
+  OpenTofuRunnerInfrastructureError,
+  RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
+  requireNonEmptyString,
+  runErrorCode,
+  sourceSyncRequiredError,
+} from "../errors.ts";
+import {
+  DEFAULT_CAPSULE_LEASE_TTL_MS,
+  type CapsuleCoordination,
   type LeaseHandle,
-  withInstallationLease,
+  withCapsuleLease,
   withPlanLease,
-} from "../installation_lease.ts";
+} from "../capsule_lease.ts";
 import {
-  type InstallTypePlanContext,
+  type CapsulePlanContext,
   type PlanResolutionService,
-  providerEnvBindingsFromResolved,
+  providerBindingsFromResolved,
 } from "../plan_resolution.ts";
 import { evaluatePolicy } from "../policy.ts";
 import {
   errorDiagnostic,
   errorMessage,
-  normalizeDeploymentOutputs,
   normalizePlanArtifact,
   normalizePlanSummary,
   projectOutputAllowlistPublicOutputs,
   projectOutputAllowlistSpaceOutputs,
-  projectTemplatePublicOutputs,
+  projectAllWorkspaceOutputs,
   redactRunDiagnostics,
   stateLockEvidence,
 } from "../projection.ts";
-import {
-  compactErrorCode,
-  projectApplyRun,
-  projectPlanRun,
-} from "../projection_run.ts";
+import { projectApplyRun, projectPlanRun } from "../projection_run.ts";
 import {
   canonicalProviderAddress,
   compactLayeredPolicy,
@@ -128,9 +130,11 @@ import {
   withDefaultProviderSupplyChainPolicy,
 } from "../provider_policy.ts";
 import {
-  defaultWorkspaceOutputSyncState,
-  InstallationPatchGuardConflict,
-  type OpenTofuDeploymentStore,
+  APPLY_BILLING_CAPTURE_COMPLETED_EVENT,
+  APPLY_BILLING_CAPTURE_PENDING_EVENT,
+  applyRunBillingCapturePending,
+  CapsuleStateVersionGuardConflict,
+  type OpenTofuControlStore,
   type PlanRunInputs,
 } from "../store.ts";
 import {
@@ -143,21 +147,16 @@ import {
   normalizeManagedPublicBaseDomains,
   publicHostPolicyKind,
 } from "../managed_public_domains.ts";
-import { evaluateTemplatePlanPolicy } from "../template_policy.ts";
 import {
+  mergeInstallContextVariables,
   normalizeProviders,
   normalizeVariables,
   validateOperation,
-  validatePlannedInstallationCurrent,
+  validatePlannedCapsuleCurrent,
   validateSource,
-  validateSourceAllowedByProfile,
 } from "../validation.ts";
 import type { RunQueryService } from "../run_query.ts";
 import type { BillingService } from "../billing_service.ts";
-import {
-  runnerMinuteUsdMicros,
-  usdMicrosToLegacyCredits,
-} from "takosumi-contract/billing";
 import type { DriftService } from "../drift_service.ts";
 import type {
   ResolvedRunEnvironment,
@@ -173,43 +172,35 @@ import type { SourceLifecycleService } from "../source_lifecycle.ts";
 // resulting `mod.ts <-> run_engine.ts` cycle is runtime-only (every symbol is
 // used inside a method, never at module-evaluation time).
 import {
-  assertGeneratedRootDispatchPresent,
   assertStateGenerationMatches,
   auditEvent,
   changedOutputNamesBetween,
   checkApplyExpected,
   defaultProviderMirrorRequiredForProfile,
   directChangedDependencyOutputs,
-  installConfigTemplateBinding,
   isTerminalStatus,
   jsonRecordFromPublicOutputs,
   mergeJsonVariableDefaults,
   newId,
   NON_TERMINAL_RUN_STATUSES,
   providerInstallationAuditEvents,
-  providersRequiringProviderEnvBindings,
-  publicInstallation,
+  providersRequiringProviderBindings,
+  publicCapsule,
   publicPlanRun,
-  rawOutputArtifactKey,
   redactRunApproval,
   releaseActivationCommands,
-  releaseActivationCommandsFromOutputRecord,
-  releaseActivationCommandsFromPublicOutputs,
-  releaseActivationDescriptorForWorkspace,
   releaseActivationOutputs,
   applyExpectedGuardFromPlanRun,
   RUN_HEARTBEAT_STALE_MS,
   RUN_RENEWAL_INTERVAL_MS,
   runEnvironmentFailedRun,
   snapshotModuleSource,
-  stateObjectKeyForScope,
-  syntheticUploadSource,
-  templateDispatchFromInputs,
-  updatedTemplateBinding,
+  moduleDispatchFromInputs,
   withRunEnvironmentEvidence,
 } from "../mod.ts";
+import type { ArtifactReferenceAllocator } from "../../../adapters/storage/artifact-references.ts";
 import type {
-  CreateInstallationPlanInternal,
+  CreateCapsulePlanInternal,
   DependencyValueSealer,
   DeployControlActorContext,
   EnqueueRun,
@@ -220,6 +211,7 @@ import type {
   OpenTofuPlanResult,
   OpenTofuRunDispatch,
   OpenTofuRunner,
+  OpenTofuRunnerExecutorRegistry,
   PlanCompletionVerdict,
   PlanPolicyLayers,
   PlanRunInternalContext,
@@ -229,8 +221,8 @@ import type {
   ReleaseActivator,
   RunClaimResult,
   RunCredentials,
-  RunInstallationDispatch,
-  RunTemplateDispatch,
+  RunExecutionDispatch,
+  RunModuleDispatch,
   TerminalRunPersistResult,
 } from "../mod.ts";
 
@@ -238,33 +230,42 @@ function releaseCommandRunId(applyRunId: string): string {
   return `release_${applyRunId.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
 }
 
-function isRetryableRunnerInfrastructureError(error: unknown): boolean {
-  const message = errorMessage(error);
-  return (
-    /Durable Object reset because its code was updated/i.test(message) ||
-    /Maximum number of running container instances exceeded/i.test(message)
+/**
+ * Config-driven import is permitted only when the reviewed plan proves one
+ * import and no provider mutation. OpenTofu may report the imported object as
+ * `no-op` plus `change.importing`; any create/update/delete action would turn
+ * adoption into an infrastructure mutation and is rejected before apply.
+ */
+export function resourceImportPolicyReasons(
+  planRun: PlanRun,
+  result: OpenTofuPlanResult,
+): readonly string[] {
+  if (planRun.resourceImport !== true) return [];
+  const changes = result.planResourceChanges ?? [];
+  const imports = changes.filter((change) => change.importing === true);
+  const reasons: string[] = [];
+  if (imports.length !== 1) {
+    reasons.push(
+      `resource import plan must contain exactly one import; observed ${imports.length}`,
+    );
+  }
+  const mutating = changes.filter((change) =>
+    change.actions.some((action) => action !== "no-op"),
   );
+  if (mutating.length > 0) {
+    reasons.push(
+      `resource import plan contains ${mutating.length} native mutation action(s); align the requested spec with the existing backend resource before import`,
+    );
+  }
+  return reasons;
 }
 
-function isRetryableRunnerRequeueError(error: unknown): boolean {
-  return (
-    error instanceof OpenTofuControllerError &&
-    /retryable_runner_infrastructure_error/i.test(error.message)
-  );
+function isRetryableRunnerInfrastructureError(error: unknown): boolean {
+  return error instanceof OpenTofuRunnerInfrastructureError;
 }
 
 const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
 const PLAN_CREATION_STAGE_TIMEOUT_MS = 25_000;
-
-const SERVICE_CONNECTION_VARIABLES = [
-  { name: "object_storage_api_url" },
-  { name: "object_storage_access_token", sensitive: true },
-  { name: "object_storage_key_prefix" },
-  { name: "object_storage_workspace_id" },
-  { name: "git_http_url" },
-  { name: "git_access_token", sensitive: true },
-  { name: "git_repo_prefix" },
-] as const;
 
 async function planCreationStage<T>(
   stage: string,
@@ -277,7 +278,11 @@ async function planCreationStage<T>(
         new OpenTofuControllerError(
           "failed_precondition",
           `capsule_plan_creation_timeout: stage ${stage} did not return within ${PLAN_CREATION_STAGE_TIMEOUT_MS}ms`,
-          { stage, timeoutMs: PLAN_CREATION_STAGE_TIMEOUT_MS },
+          {
+            reason: "capsule_plan_creation_timeout",
+            stage,
+            timeoutMs: PLAN_CREATION_STAGE_TIMEOUT_MS,
+          },
         ),
       );
     }, PLAN_CREATION_STAGE_TIMEOUT_MS);
@@ -298,8 +303,10 @@ function runnerInfrastructureRetryCount(
 }
 
 function runnerInfrastructureRetryExhaustedError(phase: string): Error {
-  return new Error(
+  return new OpenTofuControllerError(
+    "failed_precondition",
     `runner_infrastructure_retry_exhausted: ${phase} runner infrastructure retry limit exhausted`,
+    { reason: "runner_infrastructure_retry_exhausted", phase },
   );
 }
 
@@ -315,6 +322,51 @@ class PlanAlreadyAppliedReplay extends Error {
   }
 }
 
+type LifecycleActionActivityStatus = Exclude<
+  ReleaseActivationStatus,
+  "skipped"
+>;
+
+interface LifecycleActionOutcome {
+  readonly phase: InstallConfigLifecyclePhase;
+  readonly reportedStatus: ReleaseActivationStatus | "unavailable" | "error";
+  readonly activityStatus: LifecycleActionActivityStatus;
+  readonly actionDispatched: boolean;
+  readonly kind?: string;
+  readonly message?: string;
+  readonly hasHealthUrl?: boolean;
+  readonly metadataKeys?: readonly string[];
+  readonly commandCount: number;
+  readonly outputCount: number;
+}
+
+class CapsuleLifecycleActionError extends OpenTofuControllerError {
+  readonly phase: InstallConfigLifecyclePhase;
+  readonly actionDispatched: boolean;
+  readonly reportedStatus: LifecycleActionOutcome["reportedStatus"];
+  readonly outcome: LifecycleActionOutcome;
+
+  constructor(outcome: LifecycleActionOutcome) {
+    const phaseLabel =
+      outcome.phase === "post_apply" ? "post-apply" : "pre-destroy";
+    super(
+      "failed_precondition",
+      outcome.message ??
+        `${phaseLabel} lifecycle actions did not reach terminal success (${outcome.reportedStatus})`,
+      {
+        reason: CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
+        phase: outcome.phase,
+        status: outcome.reportedStatus,
+      },
+    );
+    this.name = "CapsuleLifecycleActionError";
+    this.phase = outcome.phase;
+    this.actionDispatched = outcome.actionDispatched;
+    this.reportedStatus = outcome.reportedStatus;
+    this.outcome = outcome;
+  }
+}
+
 /**
  * The single-owner run-serialization port. The controller owns the only
  * `#mutationChains` map + `#runSerialized` implementation and passes this
@@ -322,18 +374,13 @@ class PlanAlreadyAppliedReplay extends Error {
  */
 type RunSerialized = <T>(key: string, work: () => Promise<T>) => Promise<T>;
 
-/**
- * Activity input accepting either the canonical `workspaceId` or the deprecated
- * `spaceId` during the Workspace rename. {@link RunEngine.#recordActivity}
- * normalizes both onto the persisted dual fields.
- */
-type RecordActivityArgs = Omit<
-  RecordActivityInput,
-  "workspaceId" | "spaceId"
-> & {
-  readonly workspaceId?: string;
-  readonly spaceId?: string;
-};
+export interface RestoreRunLifecycleEvent {
+  readonly phase: "started" | "succeeded" | "failed";
+  /** The persisted Run projection for this lifecycle transition. */
+  readonly run: Run;
+}
+
+type RecordActivityArgs = RecordActivityInput;
 
 interface DeclaredGenericCapsuleInputs {
   readonly names: ReadonlySet<string>;
@@ -341,16 +388,16 @@ interface DeclaredGenericCapsuleInputs {
 }
 
 function declaredGenericCapsuleInputs(
-  moduleFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
+  sourceFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
   rootModuleVariables: readonly string[] | undefined,
 ): DeclaredGenericCapsuleInputs {
   if (rootModuleVariables !== undefined) {
     return { known: true, names: new Set(rootModuleVariables) };
   }
-  if (moduleFiles !== undefined) {
+  if (sourceFiles !== undefined) {
     return {
       known: true,
-      names: new Set(collectRootModuleVariableNames(moduleFiles)),
+      names: new Set(collectRootModuleVariableNames(sourceFiles)),
     };
   }
   return { known: false, names: new Set() };
@@ -360,7 +407,7 @@ function publicEndpointVariableNames(
   installConfig: InstallConfig,
 ): ReadonlySet<string> {
   const endpoint = installExperiencePublicEndpoint(
-    installConfig.store?.installExperience,
+    installConfig.installExperience,
   );
   if (!endpoint) return new Set();
   return new Set(
@@ -393,47 +440,101 @@ function requestedGenericCapsuleVariables(
   return requested;
 }
 
-function providerEnvResolutionProviders(
+function providerBindingResolutionProviders(
   providers: readonly string[],
-  installConfig: InstallConfig,
-  runnerProfile?: Pick<RunnerProfile, "requireCredentialRefs">,
+  runnerProfile?: Pick<RunnerProfile, "requireProviderBindings">,
 ): readonly string[] {
-  const credentialProviders = providersRequiringProviderEnvBindings(
-    providers,
-    runnerProfile,
-  );
-  const storeProvider = installConfig.store?.provider;
-  if (typeof storeProvider !== "string" || !storeProvider.trim()) {
-    return credentialProviders;
-  }
-  return normalizeProviders([
-    ...credentialProviders,
-    ...providers.filter((provider) =>
-      sameProviderFamily(provider, storeProvider),
-    ),
-  ]);
+  return providersRequiringProviderBindings(providers, runnerProfile);
 }
 
-function genericCapsuleOutputAllowlist(
+const MAX_AUTO_CAPTURED_ROOT_OUTPUTS = 128;
+
+function genericCapsuleWorkspaceOutputAllowlist(
   configured: InstallConfig["outputAllowlist"],
-  moduleFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
-  rootModuleOutputs: readonly string[] | undefined,
+  sourceFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
+  rootModuleOutputs:
+    CapsuleCompatibilityReport["rootModuleOutputs"] | undefined,
+  interfaceSources: readonly string[] = [],
 ): InstallConfig["outputAllowlist"] {
-  const outputDeclarations = moduleFiles
-    ? collectRootModuleOutputDeclarations(moduleFiles)
+  const sourceOutputDeclarations = sourceFiles
+    ? collectRootModuleOutputDeclarations(sourceFiles)
     : [];
+  const reportOutputDeclarations = rootModuleOutputs ?? [];
+  if (
+    reportOutputDeclarations.some(
+      (output) =>
+        !output ||
+        typeof output !== "object" ||
+        typeof output.name !== "string" ||
+        typeof output.sensitive !== "boolean" ||
+        typeof output.ephemeral !== "boolean",
+    )
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "Compatibility report lacks current OpenTofu Output metadata; run compatibility_check again",
+      { reason: "compatibility_report_output_metadata_missing" },
+    );
+  }
+  const outputDeclarations =
+    reportOutputDeclarations.length > 0
+      ? reportOutputDeclarations
+      : sourceOutputDeclarations;
   const outputDeclarationByName = new Map(
     outputDeclarations.map((output) => [output.name, output]),
   );
-  const outputNames =
-    rootModuleOutputs ?? outputDeclarations.map((output) => output.name);
-  if (outputNames.length === 0) return configured;
-  const allowlist: Record<string, OutputAllowlistEntry> = { ...configured };
+  const configuredSourceEntries = Object.values(configured);
+  const configuredSources = [
+    ...new Set(configuredSourceEntries.map((entry) => entry.from)),
+  ].sort((left, right) => left.localeCompare(right));
+  const configuredSourceSet = new Set(configuredSources);
+  const interfaceSourceNames = [...new Set(interfaceSources)].sort(
+    (left, right) => left.localeCompare(right),
+  );
+  const priorityNames = [
+    ...new Set([...interfaceSourceNames, ...configuredSources]),
+  ];
+  if (priorityNames.length > MAX_AUTO_CAPTURED_ROOT_OUTPUTS) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `Interface/public Output mappings require ${priorityNames.length} root ` +
+        `Outputs, exceeding the ${MAX_AUTO_CAPTURED_ROOT_OUTPUTS} capture limit`,
+    );
+  }
+  const ephemeralPriorityNames = priorityNames.filter(
+    (name) => outputDeclarationByName.get(name)?.ephemeral === true,
+  );
+  if (ephemeralPriorityNames.length > 0) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `Ephemeral root Outputs cannot be projected or re-exported: ${ephemeralPriorityNames.join(", ")}`,
+      { reason: "ephemeral_output_projection_unsupported" },
+    );
+  }
+  const configuredSensitiveSources = new Set(
+    configuredSourceEntries
+      .filter((entry) => entry.sensitive === true)
+      .map((entry) => entry.from),
+  );
+  const discoveredSources = [
+    ...new Set(outputDeclarations.map((output) => output.name)),
+  ]
+    .filter(
+      (name) =>
+        outputDeclarationByName.get(name)?.ephemeral !== true &&
+        !configuredSourceSet.has(name) &&
+        !interfaceSourceNames.includes(name),
+    )
+    .sort((left, right) => left.localeCompare(right));
+  const outputNames = [...priorityNames, ...discoveredSources].slice(
+    0,
+    MAX_AUTO_CAPTURED_ROOT_OUTPUTS,
+  );
+  const allowlist: Record<string, OutputAllowlistEntry> = {};
   for (const name of outputNames) {
-    if (Object.prototype.hasOwnProperty.call(allowlist, name)) continue;
     const sensitive =
       outputDeclarationByName.get(name)?.sensitive === true ||
-      looksSensitiveOutputName(name);
+      configuredSensitiveSources.has(name);
     allowlist[name] = {
       from: name,
       type: "json",
@@ -441,12 +542,6 @@ function genericCapsuleOutputAllowlist(
     };
   }
   return allowlist;
-}
-
-function looksSensitiveOutputName(name: string): boolean {
-  return /(^|[_-])(token|secret|password|credential|auth|bearer|session|cookie)([_-]|$)|(^|[_-])(api[_-]?key|private[_-]?key|signing[_-]?key)([_-]|$)/iu.test(
-    name,
-  );
 }
 
 const MANAGED_WORKER_NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
@@ -484,7 +579,7 @@ function publicHostsFromInstallExperienceVariables(
   managedPublicBaseDomain?: string,
 ): readonly string[] {
   const endpoint = installExperiencePublicEndpoint(
-    installConfig?.store?.installExperience,
+    installConfig?.installExperience,
   );
   if (!endpoint) return [];
 
@@ -493,7 +588,7 @@ function publicHostsFromInstallExperienceVariables(
     normalizeManagedPublicBaseDomain(managedPublicBaseDomain) ??
     managedPublicBaseDomainFromInstallConfig(installConfig);
   const subdomainVariable = nonEmptyStringValue(endpoint.subdomainVariable);
-  if (subdomainVariable) {
+  if (subdomainVariable && baseDomain) {
     const host = managedPublicHostFromLabel(
       variables[subdomainVariable],
       baseDomain,
@@ -520,7 +615,7 @@ function publicHostsFromInstallExperienceVariables(
 
 function finalizeManagedPublicHostVariables(input: {
   readonly explicit: Readonly<Record<string, JsonValue>>;
-  readonly installation: Installation;
+  readonly capsule: Capsule;
   readonly installConfig: InstallConfig;
   readonly declaredInputs: DeclaredGenericCapsuleInputs;
   readonly workspaceHandle: string;
@@ -529,7 +624,7 @@ function finalizeManagedPublicHostVariables(input: {
   readonly variables: Readonly<Record<string, JsonValue>>;
 }): Readonly<Record<string, JsonValue>> {
   const endpoint = installExperiencePublicEndpoint(
-    input.installConfig.store?.installExperience,
+    input.installConfig.installExperience,
   );
   if (!endpoint || input.endpointVariables.size === 0) {
     return input.variables;
@@ -543,6 +638,7 @@ function finalizeManagedPublicHostVariables(input: {
   const baseDomain =
     normalizeManagedPublicBaseDomain(input.managedPublicBaseDomain) ??
     managedPublicBaseDomainFromInstallConfig(input.installConfig);
+  if (!baseDomain) return input.variables;
   const declaredBaseDomain = managedPublicBaseDomainFromInstallConfig(
     input.installConfig,
   );
@@ -559,7 +655,7 @@ function finalizeManagedPublicHostVariables(input: {
     !nonEmptyStringValue(input.explicit[subdomainVariable]) &&
     canSet(subdomainVariable)
   ) {
-    requestedSlug = workerNameFromCapsule(input.installation);
+    requestedSlug = workerNameFromCapsule(input.capsule);
   }
   if (!requestedSlug) {
     return out;
@@ -589,11 +685,13 @@ function finalizeManagedPublicHostVariables(input: {
     : undefined;
   const explicitUrlUsesManagedBase =
     explicitUrlHost !== undefined &&
-    [baseDomain, declaredBaseDomain].some(
-      (candidate) =>
-        publicHostPolicyKindForBase(explicitUrlHost, candidate) ===
-        "managed_default_hostname",
-    );
+    [baseDomain, declaredBaseDomain]
+      .filter((candidate): candidate is string => Boolean(candidate))
+      .some(
+        (candidate) =>
+          publicHostPolicyKindForBase(explicitUrlHost, candidate) ===
+          "managed_default_hostname",
+      );
   if (
     urlVariable &&
     (!nonEmptyStringValue(input.explicit[urlVariable]) ||
@@ -606,14 +704,16 @@ function finalizeManagedPublicHostVariables(input: {
     routePatternVariable &&
     canSet(routePatternVariable) &&
     (!nonEmptyStringValue(input.explicit[routePatternVariable]) ||
-      [baseDomain, declaredBaseDomain].some(
-        (candidate) =>
-          publicHostPolicyKindForBase(
-            hostFromRoutePatternValue(input.explicit[routePatternVariable]) ??
-              "",
-            candidate,
-          ) === "managed_default_hostname",
-      ))
+      [baseDomain, declaredBaseDomain]
+        .filter((candidate): candidate is string => Boolean(candidate))
+        .some(
+          (candidate) =>
+            publicHostPolicyKindForBase(
+              hostFromRoutePatternValue(input.explicit[routePatternVariable]) ??
+                "",
+              candidate,
+            ) === "managed_default_hostname",
+        ))
   ) {
     out[routePatternVariable] = `${host}/*`;
   }
@@ -629,10 +729,9 @@ function publicHostPolicyKindForBase(
     : "custom_domain";
 }
 
-function workerNameFromCapsule(installation: Installation): string | undefined {
+function workerNameFromCapsule(capsule: Capsule): string | undefined {
   const preferred =
-    nonEmptyStringValue(installation.slug) ??
-    nonEmptyStringValue(installation.name);
+    nonEmptyStringValue(capsule.slug) ?? nonEmptyStringValue(capsule.name);
   if (!preferred) return undefined;
   const base = preferred
     .toLowerCase()
@@ -647,37 +746,131 @@ function publicHostUnavailableMessage(): string {
   return "app_hostname_unavailable: already exists";
 }
 
-function workspaceOutputsWithReleaseDescriptor(
-  workspaceOutputs: Readonly<Record<string, JsonValue>>,
-  outputs: OpenTofuApplyResult["outputs"],
-): Readonly<Record<string, JsonValue>> {
-  const descriptor = releaseActivationDescriptorForWorkspace(outputs);
-  if (descriptor === undefined) return workspaceOutputs;
-  return {
-    ...workspaceOutputs,
-    takosumi_release: descriptor,
-  };
+function lifecycleActionsForPlan(
+  installConfig: InstallConfig,
+  runnerProfile: RunnerProfile,
+): InstallConfig["lifecycleActions"] {
+  const actions = installConfig.lifecycleActions ?? [];
+  if (actions.length === 0) return undefined;
+  if (actions.length > 20) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "lifecycleActions must contain at most 20 actions",
+    );
+  }
+  const policy = installConfig.policy.lifecycleActions;
+  if (!policy) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "lifecycleActions require policy.lifecycleActions",
+    );
+  }
+  const profileCapabilities = new Set(runnerProfile.capabilities ?? []);
+  for (const action of actions) {
+    if (
+      action.apiVersion !== "takosumi.dev/v1alpha1" ||
+      action.kind !== "command"
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `lifecycle action ${action.id} uses an unsupported version or kind`,
+      );
+    }
+    if (!policy.allowedExecutors.includes(action.executor)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `lifecycle action ${action.id} executor is not allowed by InstallConfig policy`,
+      );
+    }
+    if (!policy.allowedRunnerCapabilities.includes(action.runnerCapability)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `lifecycle action ${action.id} capability is not allowed by InstallConfig policy`,
+      );
+    }
+    if (
+      action.executor === "runner" &&
+      !profileCapabilities.has(action.runnerCapability)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `lifecycle action ${action.id} requires unavailable runner capability ${action.runnerCapability}`,
+      );
+    }
+    if (
+      action.useProviderCredentials === true &&
+      (action.executor !== "runner" || policy.allowProviderCredentials !== true)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `lifecycle action ${action.id} is not allowed to use provider credentials`,
+      );
+    }
+  }
+  assertRunnerLifecycleCredentialModes(actions);
+  return actions;
+}
+
+function assertPinnedLifecycleRunnerCapabilities(
+  actions: InstallConfig["lifecycleActions"],
+  runnerProfile: RunnerProfile,
+): void {
+  const profileCapabilities = new Set(runnerProfile.capabilities ?? []);
+  for (const action of actions ?? []) {
+    if (
+      action.executor === "runner" &&
+      !profileCapabilities.has(action.runnerCapability)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `lifecycle action ${action.id} requires unavailable runner capability ${action.runnerCapability}`,
+      );
+    }
+  }
+  assertRunnerLifecycleCredentialModes(actions ?? []);
+}
+
+function assertRunnerLifecycleCredentialModes(
+  actions: readonly InstallConfigLifecycleAction[],
+): void {
+  for (const phase of ["post_apply", "pre_destroy"] as const) {
+    const runnerActions = actions.filter(
+      (action) => action.phase === phase && action.executor === "runner",
+    );
+    const credentialActions = runnerActions.filter(
+      (action) => action.useProviderCredentials === true,
+    );
+    if (
+      credentialActions.length > 0 &&
+      credentialActions.length !== runnerActions.length
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `${phase} runner lifecycle actions must all opt in to provider credentials or all run without them`,
+      );
+    }
+  }
 }
 
 /** Shared dependencies the controller injects into its single RunEngine. */
 export interface RunEngineDependencies {
-  readonly store: OpenTofuDeploymentStore;
-  readonly runner?: OpenTofuRunner;
-  readonly providerEnvRunner?: OpenTofuRunner;
+  readonly store: OpenTofuControlStore;
+  /** Exact executor-id to runner adapter bindings supplied by the host. */
+  readonly runnerExecutors: OpenTofuRunnerExecutorRegistry;
   readonly sourcesService?: SourcesService;
+  readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   readonly defaultRunnerProfileId: string;
   readonly newId: (prefix: string) => string;
   readonly now: () => number;
   readonly enqueueRun: EnqueueRun;
-  readonly templateRegistry: TemplateRegistry;
-  readonly installationCoordination?: InstallationCoordination;
+  readonly capsuleCoordination?: CapsuleCoordination;
   readonly runRenewalIntervalMs: number;
   readonly activity: ActivityRecorder;
   readonly dependencyValueSealer?: DependencyValueSealer;
   readonly releaseActivator?: ReleaseActivator;
   readonly observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly metricTags: Record<string, string>;
-  readonly allowOperatorBackedProviderEnvs: boolean;
+  readonly allowOperatorScopedProviderConnections: boolean;
   readonly runnerProfiles: readonly RunnerProfile[];
   readonly seededProfiles: Promise<void>;
   readonly runQuery: RunQueryService;
@@ -688,29 +881,28 @@ export interface RunEngineDependencies {
   readonly verification: RunVerificationService;
   readonly planResolution: PlanResolutionService;
   readonly sourceLifecycle: SourceLifecycleService;
-  readonly deployments: DeploymentQuery;
+  readonly capsules: CapsuleQuery;
   readonly runSerialized: RunSerialized;
   readonly managedVanityHostnameSlotsPerOwner?: number;
 }
 
 export class RunEngine {
-  readonly #store: OpenTofuDeploymentStore;
-  readonly #runner?: OpenTofuRunner;
-  readonly #providerEnvRunner?: OpenTofuRunner;
+  readonly #store: OpenTofuControlStore;
+  readonly #runnerExecutors: OpenTofuRunnerExecutorRegistry;
   readonly #sourcesService?: SourcesService;
+  readonly #artifactReferenceAllocator?: ArtifactReferenceAllocator;
   readonly #defaultRunnerProfileId: string;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #enqueueRun: EnqueueRun;
-  readonly #templateRegistry: TemplateRegistry;
-  readonly #installationCoordination?: InstallationCoordination;
+  readonly #capsuleCoordination?: CapsuleCoordination;
   readonly #runRenewalIntervalMs: number;
   readonly #activity: ActivityRecorder;
   readonly #dependencyValueSealer?: DependencyValueSealer;
   readonly #releaseActivator?: ReleaseActivator;
   readonly #observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly #metricTags: Record<string, string>;
-  readonly #allowOperatorBackedProviderEnvs: boolean;
+  readonly #allowOperatorScopedProviderConnections: boolean;
   readonly #runnerProfilesById: ReadonlyMap<string, RunnerProfile>;
   readonly #seededProfiles: Promise<void>;
   readonly #runQuery: RunQueryService;
@@ -721,31 +913,37 @@ export class RunEngine {
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
   readonly #sourceLifecycle: SourceLifecycleService;
-  readonly #deployments: DeploymentQuery;
+  readonly #capsules: CapsuleQuery;
   readonly #runSerialized: RunSerialized;
   readonly #managedVanityHostnameSlotsPerOwner?: number;
   #connectionsService?: ConnectionsService;
   #terminalObserver?: (run: PlanRun | ApplyRun) => Promise<void>;
+  #planQueuedObserver?: (run: PlanRun) => Promise<void>;
+  #applyQueuedObserver?: (run: ApplyRun) => Promise<void>;
+  #restoreObserver?: (event: RestoreRunLifecycleEvent) => Promise<void>;
+  #interfaceOutputSources?: (input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+  }) => Promise<readonly string[]>;
 
   constructor(deps: RunEngineDependencies) {
     this.#store = deps.store;
-    this.#runner = deps.runner;
-    this.#providerEnvRunner = deps.providerEnvRunner;
+    this.#runnerExecutors = deps.runnerExecutors;
     this.#sourcesService = deps.sourcesService;
+    this.#artifactReferenceAllocator = deps.artifactReferenceAllocator;
     this.#defaultRunnerProfileId = deps.defaultRunnerProfileId;
     this.#newId = deps.newId;
     this.#now = deps.now;
     this.#enqueueRun = deps.enqueueRun;
-    this.#templateRegistry = deps.templateRegistry;
-    this.#installationCoordination = deps.installationCoordination;
+    this.#capsuleCoordination = deps.capsuleCoordination;
     this.#runRenewalIntervalMs = deps.runRenewalIntervalMs;
     this.#activity = deps.activity;
     this.#dependencyValueSealer = deps.dependencyValueSealer;
     this.#releaseActivator = deps.releaseActivator;
     this.#observability = deps.observability;
     this.#metricTags = deps.metricTags;
-    this.#allowOperatorBackedProviderEnvs =
-      deps.allowOperatorBackedProviderEnvs;
+    this.#allowOperatorScopedProviderConnections =
+      deps.allowOperatorScopedProviderConnections;
     this.#runnerProfilesById = new Map(
       deps.runnerProfiles.map((profile) => [profile.id, profile]),
     );
@@ -758,7 +956,7 @@ export class RunEngine {
     this.#verification = deps.verification;
     this.#planResolution = deps.planResolution;
     this.#sourceLifecycle = deps.sourceLifecycle;
-    this.#deployments = deps.deployments;
+    this.#capsules = deps.capsules;
     this.#runSerialized = deps.runSerialized;
     this.#managedVanityHostnameSlotsPerOwner =
       deps.managedVanityHostnameSlotsPerOwner;
@@ -768,6 +966,47 @@ export class RunEngine {
     observer: ((run: PlanRun | ApplyRun) => Promise<void>) | undefined,
   ): void {
     this.#terminalObserver = observer;
+  }
+
+  setPlanQueuedObserver(
+    observer: ((run: PlanRun) => Promise<void>) | undefined,
+  ): void {
+    this.#planQueuedObserver = observer;
+  }
+
+  setApplyQueuedObserver(
+    observer: ((run: ApplyRun) => Promise<void>) | undefined,
+  ): void {
+    this.#applyQueuedObserver = observer;
+  }
+
+  setRestoreObserver(
+    observer: ((event: RestoreRunLifecycleEvent) => Promise<void>) | undefined,
+  ): void {
+    this.#restoreObserver = observer;
+  }
+
+  setInterfaceOutputSourcesResolver(
+    resolver:
+      | ((input: {
+          readonly workspaceId: string;
+          readonly capsuleId: string;
+        }) => Promise<readonly string[]>)
+      | undefined,
+  ): void {
+    this.#interfaceOutputSources = resolver;
+  }
+
+  async #notifyApplyQueued(run: ApplyRun): Promise<void> {
+    if (!this.#applyQueuedObserver) return;
+    try {
+      await this.#applyQueuedObserver(run);
+    } catch (error) {
+      log.warn("service.deploy_control.apply_queued_observer_failed", {
+        runId: run.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async #notifyTerminal(run: PlanRun | ApplyRun): Promise<void> {
@@ -782,6 +1021,31 @@ export class RunEngine {
     }
   }
 
+  async #notifyPlanQueued(run: PlanRun): Promise<void> {
+    if (!this.#planQueuedObserver) return;
+    try {
+      await this.#planQueuedObserver(run);
+    } catch (error) {
+      log.warn("service.deploy_control.plan_queued_observer_failed", {
+        runId: run.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async #notifyRestore(event: RestoreRunLifecycleEvent): Promise<void> {
+    if (!this.#restoreObserver) return;
+    try {
+      await this.#restoreObserver(event);
+    } catch (error) {
+      log.warn("service.deploy_control.restore_observer_failed", {
+        runId: event.run.id,
+        phase: event.phase,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   // ---- public bridges: invoked by controller-side collaborator callbacks ----
   // (the controller's BillingService / DriftService / RunCredentialBroker /
   // RunEnvResolver / RunVerificationService / PlanResolutionService / source
@@ -789,7 +1053,7 @@ export class RunEngine {
   // keep a single owner here, while the private bodies stay byte-identical.)
 
   getApplyRun(id: string): Promise<ApplyRunResponse> {
-    return this.#deployments.getApplyRun(id);
+    return this.#capsules.getApplyRun(id);
   }
 
   shouldProcessRun(
@@ -803,24 +1067,19 @@ export class RunEngine {
     return this.#recordActivity(event);
   }
 
-  createInstallationPlanRun(
-    installationId: string,
+  createCapsulePlanRun(
+    capsuleId: string,
     destroy: boolean,
     context: DeployControlActorContext,
-    internal: CreateInstallationPlanInternal = {},
+    internal: CreateCapsulePlanInternal = {},
   ): Promise<PlanRunResponse> {
-    return this.#createInstallationPlanRun(
-      installationId,
-      destroy,
-      context,
-      internal,
-    );
+    return this.#createCapsulePlanRun(capsuleId, destroy, context, internal);
   }
 
-  resolveRunInstallationProviderEnvBindings(
+  resolveRunProviderBindings(
     planRun: PlanRun,
-  ): Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined> {
-    return this.#resolveRunInstallationProviderEnvBindings(planRun);
+  ): Promise<readonly ResolvedCapsuleProviderBinding[] | undefined> {
+    return this.#resolveRunProviderBindings(planRun);
   }
 
   policyForPlanRun(planRun: PlanRun): Promise<PolicyConfig | undefined> {
@@ -834,12 +1093,12 @@ export class RunEngine {
     this.#assertCompatibilityReportRunnable(report, policy);
   }
 
-  resolveInstallationProviderEnvBindingsForRun(
-    installation: Installation,
+  resolveCapsuleProviderBindingsForRun(
+    capsule: Capsule,
     requiredProviders: readonly string[],
-  ): Promise<readonly ResolvedInstallationProviderEnvBinding[]> {
-    return this.#resolveInstallationProviderEnvBindingsForRun(
-      installation,
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    return this.#resolveCapsuleProviderBindingsForRun(
+      capsule,
       requiredProviders,
     );
   }
@@ -849,75 +1108,94 @@ export class RunEngine {
     context: DeployControlActorContext = {},
     internal: PlanRunInternalContext = {},
   ): Promise<PlanRunResponse> {
-    const workspaceId = request.workspaceId ?? request.spaceId;
+    const workspaceId = request.workspaceId;
     requireNonEmptyString(workspaceId, "workspaceId");
-    const requestCapsuleId = request.capsuleId ?? request.installationId;
-    validateSource(request.source);
+    const requestCapsuleId = request.capsuleId;
+    const resourceContext = internal.resourceContext;
+    if (resourceContext) {
+      if (requestCapsuleId) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          "Resource run must not carry capsuleId",
+        );
+      }
+      if (
+        resourceContext.workspaceId !== workspaceId ||
+        request.source.kind !== "operator_module" ||
+        !internal.genericRootDispatch?.generatedRoot ||
+        !internal.genericRootDispatch.operatorModule
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "Resource run requires matching workspace, operator_module source, generated root, and operator module",
+        );
+      }
+    } else {
+      validateSource(request.source);
+    }
     const profile = await this.#requireRunnerProfile(
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
     );
     const operation =
       request.operation ?? (requestCapsuleId ? "update" : "create");
     validateOperation(operation);
-    const installation =
-      requestCapsuleId !== undefined
-        ? await this.#requireInstallation(requestCapsuleId)
+    if (
+      internal.refreshOnly === true &&
+      (operation === "destroy" ||
+        internal.driftCheck === true ||
+        internal.resourceImport === true)
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "refreshOnly cannot be combined with destroy, driftCheck, or resourceImport",
+      );
+    }
+    if (
+      internal.resourceImport === true &&
+      (operation !== "create" ||
+        !resourceContext ||
+        internal.driftCheck === true)
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "resourceImport requires a create operation with Resource context and cannot be a driftCheck",
+      );
+    }
+    const capsule =
+      !resourceContext && requestCapsuleId !== undefined
+        ? await this.#requireCapsule(requestCapsuleId)
         : undefined;
-    if (!installation) {
+    if (!capsule && !resourceContext) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "plan requires an existing capsuleId (create the Capsule first)",
       );
     }
-    if (installation.workspaceId !== workspaceId) {
+    if (capsule && capsule.workspaceId !== workspaceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "capsule is not available to this workspace",
       );
     }
-    const installationContext: PlanRunInstallationContext =
-      internal.installationContext ?? {
-        workspaceId: installation.workspaceId,
-        spaceId: installation.spaceId,
-        capsuleId: installation.id,
-        installationId: installation.id,
-        environment: installation.environment,
-      };
+    const capsuleContext: PlanRunCapsuleContext | undefined = capsule
+      ? (internal.capsuleContext ?? {
+          workspaceId: capsule.workspaceId,
+          capsuleId: capsule.id,
+          environment: capsule.environment,
+        })
+      : undefined;
     const now = this.#now();
     const variables = normalizeVariables(request.variables);
-    // Cloud-only gateway materialization is rejected here; OSS Takosumi never
-    // rewrites a provider base_url. The runner profile is ignored by this step
-    // and by template resolution, so the Capsule's required providers are
-    // profile-independent. Provider identity never selects an execution
-    // profile; callers may explicitly select an operator-defined capability
-    // profile when private-network or host access is required.
-    const installTypePlan =
-      await this.#planResolution.applyGatewayEndpointBaseUrl(
-        internal.installTypePlan,
-        profile,
-        installation,
-      );
-    const templatePlan = this.#planResolution.resolveTemplatePlan(
-      request,
-      installTypePlan,
+    // Provider identity never selects an execution profile; callers may
+    // explicitly select an operator-defined capability profile when
+    // private-network or host access is required.
+    const capsulePlan = capsule ? internal.capsulePlan : undefined;
+    const declaredProviders = normalizeProviders(
+      request.requiredProviders ?? [],
     );
-    const declaredProviders = templatePlan
-      ? normalizeProviders(templatePlan.requiredProviders)
-      : normalizeProviders(request.requiredProviders ?? []);
-    // Resource Shape adapters pass an internal generated root that fully
-    // overrides the backing Capsule's nominal Source. Keep local source
-    // rejection for user-supplied Capsule runs, but do not reject the internal
-    // placeholder source when the runner will execute generatedRoot instead.
-    // Validated against the final (possibly auto-selected) profile.
-    if (!internal.genericRootDispatch?.generatedRoot) {
-      validateSourceAllowedByProfile(request.source, profile);
-    }
     const allowNoProviders =
-      (templatePlan !== undefined &&
-        templatePlan.template.policy.allowedProviders.length === 0) ||
-      (templatePlan === undefined &&
-        declaredProviders.length === 0 &&
-        internal.genericRootDispatch !== undefined) ||
+      (declaredProviders.length === 0 && requestCapsuleId !== undefined) ||
+      (declaredProviders.length === 0 && resourceContext !== undefined) ||
       (declaredProviders.length === 0 &&
         profile.allowedProviders.includes("*"));
     const basePolicy = evaluatePolicy({
@@ -926,16 +1204,15 @@ export class RunEngine {
       checkedAt: now,
       ...(allowNoProviders ? { allowNoProviders: true } : {}),
     });
-    const genericEnvProviderPolicy =
-      await this.#evaluateGenericEnvProviderExecutionPolicy({
+    const declaredEnvProviderPolicy =
+      await this.#evaluateDeclaredEnvProviderExecutionPolicy({
         profile,
-        installation,
+        capsule,
         requiredProviders: declaredProviders,
-        hasProviderEnvRunner: this.#providerEnvRunner !== undefined,
       });
     const policyReasons = [
       ...basePolicy.reasons,
-      ...genericEnvProviderPolicy.reasons,
+      ...declaredEnvProviderPolicy.reasons,
     ];
     const policy: PolicyDecision =
       policyReasons.length === basePolicy.reasons.length
@@ -951,40 +1228,34 @@ export class RunEngine {
     if (
       policy.status === "passed" &&
       operation !== "destroy" &&
-      internal.driftCheck !== true
+      internal.driftCheck !== true &&
+      internal.refreshOnly !== true &&
+      internal.resourceImport !== true
     ) {
-      await this.#reservePublicHostsForPlan(
-        installation,
-        variables,
-        now,
-        installTypePlan?.managedPublicBaseDomain,
-      );
+      if (capsule)
+        await this.#reservePublicHostsForPlan(
+          capsule,
+          variables,
+          now,
+          capsulePlan?.managedPublicBaseDomain,
+        );
     }
     const planRunId = this.#newId("plan");
-    const sourceSnapshotId =
-      internal.sourceSnapshotId ??
-      (internal.genericRootDispatch?.generatedRoot
-        ? await this.#recordGeneratedRootSourceSnapshot({
-            workspaceId,
-            planRunId,
-            generatedRoot: internal.genericRootDispatch.generatedRoot,
-            now,
-          })
-        : await this.#resolvePlanSourceSnapshotId(installation));
+    const sourceSnapshotId = resourceContext
+      ? undefined
+      : (internal.sourceSnapshotId ??
+        (await this.#resolvePlanSourceSnapshotId(capsule!)));
     const baseStateGeneration =
-      internal.baseStateGeneration ?? installation.currentStateGeneration;
-    const providerCredentialDelivery =
-      internal.providerCredentialDelivery ??
-      internal.genericRootDispatch?.providerCredentialDelivery;
+      internal.baseStateGeneration ?? capsule?.currentStateGeneration ?? 0;
     let planRun: PlanRun = {
       id: planRunId,
       workspaceId,
-      spaceId: workspaceId,
-      ...(requestCapsuleId
-        ? { capsuleId: requestCapsuleId, installationId: requestCapsuleId }
+      ...(requestCapsuleId ? { capsuleId: requestCapsuleId } : {}),
+      ...(capsule
+        ? {
+            capsuleCurrentStateVersionId: capsule.currentStateVersionId ?? null,
+          }
         : {}),
-      capsuleCurrentStateVersionId: installation.currentStateVersionId ?? null,
-      installationCurrentDeploymentId: installation.currentDeploymentId,
       source: request.source,
       sourceDigest,
       operation,
@@ -992,24 +1263,18 @@ export class RunEngine {
       variablesDigest,
       requiredProviders: declaredProviders,
       baseStateGeneration,
-      sourceSnapshotId,
+      ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
       ...(internal.compatibilityReportId
         ? { compatibilityReportId: internal.compatibilityReportId }
         : {}),
-      installationContext,
+      ...(capsuleContext ? { capsuleContext } : {}),
+      ...(resourceContext ? { resourceContext } : {}),
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
+      ...(internal.refreshOnly ? { refreshOnly: true as const } : {}),
+      ...(internal.resourceImport ? { resourceImport: true as const } : {}),
       ...(internal.autoApplyRequested
         ? { autoApplyRequested: true as const }
-        : {}),
-      ...(providerCredentialDelivery ? { providerCredentialDelivery } : {}),
-      ...(templatePlan
-        ? {
-            templateBinding: {
-              templateId: templatePlan.template.id,
-              templateVersion: templatePlan.template.version,
-            } satisfies PlanRunTemplateBinding,
-          }
         : {}),
       // A create-time policy denial is a terminal `failed` run carrying the
       // policy reason (the retired `blocked` status is gone); a passed plan is
@@ -1026,12 +1291,8 @@ export class RunEngine {
             sourceDigest,
             variablesDigest,
             runnerProfileId: profile.id,
-            ...(templatePlan
-              ? {
-                  templateId: templatePlan.template.id,
-                  templateVersion: templatePlan.template.version,
-                }
-              : {}),
+            ...(internal.refreshOnly ? { refreshOnly: true } : {}),
+            ...(internal.resourceImport ? { resourceImport: true } : {}),
           },
           context.actor,
         ),
@@ -1059,7 +1320,7 @@ export class RunEngine {
       );
     }
     await this.#recordActivity({
-      spaceId: planRun.spaceId,
+      workspaceId: planRun.workspaceId,
       ...(context.actor ? { actorId: context.actor } : {}),
       action: "run.plan_created",
       targetType: "run",
@@ -1067,8 +1328,10 @@ export class RunEngine {
       runId: planRun.id,
       metadata: {
         operation: planRun.operation,
-        installationId: planRun.installationId,
+        capsuleId: planRun.capsuleId,
         policyStatus: planRun.policy.status,
+        ...(planRun.refreshOnly ? { refreshOnly: true } : {}),
+        ...(planRun.resourceImport ? { resourceImport: true } : {}),
       },
     });
     if (planRun.status === "failed") {
@@ -1080,27 +1343,34 @@ export class RunEngine {
     }
     const genericRootDispatch =
       internal.genericRootDispatch ??
-      (templatePlan
-        ? undefined
-        : await this.#defaultGenericRootDispatchForPlanRun(
+      (capsule
+        ? await this.#defaultGenericRootDispatchForPlanRun(
             request,
-            installation,
+            capsule,
             internal.compatibilityReportId,
-            sourceSnapshotId,
-          ));
-    const generatedRoot =
-      templatePlan?.generatedRoot ?? genericRootDispatch?.generatedRoot;
+          )
+        : undefined);
+    const generatedRoot = genericRootDispatch?.generatedRoot;
+    const operatorModule = genericRootDispatch?.operatorModule;
+    const workspaceOutputAllowlist =
+      genericRootDispatch?.workspaceOutputAllowlist;
     const outputAllowlist = genericRootDispatch?.outputAllowlist;
     const sourceBuild = genericRootDispatch?.sourceBuild;
+    const stateAdoption = genericRootDispatch?.stateAdoption;
+    const lifecycleActions =
+      internal.lifecycleActions ?? genericRootDispatch?.lifecycleActions;
     if (
       Object.keys(variables).length > 0 ||
       generatedRoot !== undefined ||
+      operatorModule !== undefined ||
+      workspaceOutputAllowlist !== undefined ||
       outputAllowlist !== undefined ||
-      sourceBuild !== undefined
+      sourceBuild !== undefined ||
+      stateAdoption !== undefined ||
+      lifecycleActions !== undefined
     ) {
-      // A sensitive dependency-injected value flows into `variables` AND (for a
-      // generic Capsule) is baked as a literal into the generated root's
-      // `main.tf`. Both would persist in cleartext in the runs_inputs sidecar, so
+      // A sensitive dependency-injected value flows into `variables` and may
+      // also enter an optional wrapper. It must not persist in cleartext, so
       // seal the WHOLE sidecar at rest when any sensitive value was injected (spec
       // §11 / §18: secret outputs are never stored as cleartext ledger values).
       // The controller unseals it transparently at plan/apply dispatch.
@@ -1111,17 +1381,28 @@ export class RunEngine {
           planRunId: planRun.id,
           variables,
           ...(generatedRoot ? { generatedRoot } : {}),
+          ...(operatorModule ? { operatorModule } : {}),
+          ...(workspaceOutputAllowlist ? { workspaceOutputAllowlist } : {}),
           ...(outputAllowlist ? { outputAllowlist } : {}),
           ...(sourceBuild ? { sourceBuild } : {}),
+          ...(stateAdoption ? { stateAdoption } : {}),
+          ...(lifecycleActions ? { lifecycleActions } : {}),
         },
         sealSidecar,
       );
+    }
+    if (planRun.status === "queued") {
+      // A queued plan observes desired/provider state but has not changed the
+      // pinned runtime revision. Notify the Interface lifecycle before an
+      // inline queue can complete the plan, so terminal observation can always
+      // clear the matching pending condition deterministically.
+      await this.#notifyPlanQueued(planRun);
     }
     if (policy.status === "passed" && this.#hasRunnerForProfile(profile)) {
       await this.#enqueueRun({
         action: "plan",
         runId: planRun.id,
-        spaceId: planRun.workspaceId ?? planRun.spaceId,
+        workspaceId: planRun.workspaceId,
       });
       const dispatched = await this.#store.getPlanRun(planRun.id);
       return { planRun: publicPlanRun(dispatched ?? planRun) };
@@ -1129,13 +1410,13 @@ export class RunEngine {
     return { planRun: publicPlanRun(planRun) };
   }
 
-  async createInstallationPlan(
-    installationId: string,
+  async createCapsulePlan(
+    capsuleId: string,
     context: DeployControlActorContext = {},
-    internal: CreateInstallationPlanInternal = {},
+    internal: CreateCapsulePlanInternal = {},
   ): Promise<PlanRunResponse> {
-    return await this.#createInstallationPlanRun(
-      installationId,
+    return await this.#createCapsulePlanRun(
+      capsuleId,
       false,
       context,
       internal,
@@ -1145,18 +1426,18 @@ export class RunEngine {
   async claimManagedPublicHostname(
     input: ManagedPublicHostnameClaimRequest,
   ): Promise<ManagedPublicHostnameClaimResult> {
-    const installation = await this.#store.getInstallation(input.capsuleId);
-    const workspaceId = installation?.workspaceId ?? installation?.spaceId;
+    const capsule = await this.#store.getCapsule(input.capsuleId);
+    const workspaceId = capsule?.workspaceId;
     if (
-      !installation ||
-      installation.status === "destroyed" ||
+      !capsule ||
+      capsule.status === "destroyed" ||
       workspaceId !== input.workspaceId
     ) {
       return { ok: false, reason: "invalid_context" };
     }
     const [workspace, installConfig] = await Promise.all([
-      this.#store.getSpace(workspaceId),
-      this.#store.getInstallConfig(installation.installConfigId),
+      this.#store.getWorkspace(workspaceId),
+      this.#store.getInstallConfig(capsule.installConfigId),
     ]);
     if (!workspace || !installConfig) {
       return { ok: false, reason: "invalid_context" };
@@ -1178,7 +1459,7 @@ export class RunEngine {
     const hostname = `${publicLabel}.${baseDomain}`;
     const reserved = await this.#reserveManagedPublicHost({
       hostname,
-      installation,
+      capsule,
       workspaceId,
       mode,
       now: this.#now(),
@@ -1190,22 +1471,17 @@ export class RunEngine {
   }
 
   /**
-   * Installation-driven destroy-plan (spec §23 Destroy). Same resolution as
-   * {@link createInstallationPlan} with a destroy operation; the plan ALWAYS
+   * Capsule-driven destroy-plan (spec §23 Destroy). Same resolution as
+   * {@link createCapsulePlan} with a destroy operation; the plan ALWAYS
    * lands the persisted `waiting_approval` status after completion (a destroy
    * plan is always two-stage).
    */
-  async createInstallationDestroyPlan(
-    installationId: string,
+  async createCapsuleDestroyPlan(
+    capsuleId: string,
     context: DeployControlActorContext = {},
-    internal: Pick<CreateInstallationPlanInternal, "runnerProfileId"> = {},
+    internal: Pick<CreateCapsulePlanInternal, "runnerProfileId"> = {},
   ): Promise<PlanRunResponse> {
-    return await this.#createInstallationPlanRun(
-      installationId,
-      true,
-      context,
-      internal,
-    );
+    return await this.#createCapsulePlanRun(capsuleId, true, context, internal);
   }
 
   /**
@@ -1213,196 +1489,147 @@ export class RunEngine {
    * advanced). Creates a plan-kind internal run flagged
    * {@link PlanRun.driftCheck} that:
    *   - resolves the Capsule config -> Source -> latest snapshot
-   *     exactly like {@link createInstallationPlan} (an `update`-kind plan), so
+   *     exactly like {@link createCapsulePlan} (an `update`-kind plan), so
    *     the runner produces a real `tofu plan` against the live state;
    *   - NEVER parks `waiting_approval` (`RunQueryService.planAwaitsApproval`
    *     short-circuits a drift check) — it is a read-only signal, not an applyable plan;
    *   - can NEVER be applied (`createApplyRun` rejects a drift-check plan with
    *     `failed_precondition`);
-   *   - on completion with a non-empty change summary emits an
-   *     `installation.drift_detected` Activity event with public-safe aggregate
-   *     metadata only (no values, no installation status change; the spec has no
-   *     `drifted` status).
+   *   - on completion with a non-empty change summary emits a subject-specific
+   *     drift Activity event with public-safe aggregate metadata only (no
+   *     values and no subject status mutation).
    * The §19 Run projection maps it to `type: "drift_check"`.
    *
    * The public API exposes drift-check creation as a canonical read-only run
    * route; it records ledger/activity evidence without creating an applyable
    * plan artifact.
    */
-  async createInstallationDriftCheck(
-    installationId: string,
+  async createCapsuleDriftCheck(
+    capsuleId: string,
     context: DeployControlActorContext = {},
-    internal: Pick<CreateInstallationPlanInternal, "runGroupId"> = {},
+    internal: Pick<CreateCapsulePlanInternal, "runGroupId"> = {},
   ): Promise<PlanRunResponse> {
-    return await this.#drift.createInstallationDriftCheck(
-      installationId,
+    return await this.#drift.createCapsuleDriftCheck(
+      capsuleId,
       context,
       internal,
     );
   }
 
-  async #createInstallationPlanRun(
-    installationId: string,
+  async #createCapsulePlanRun(
+    capsuleId: string,
     destroy: boolean,
     context: DeployControlActorContext,
-    internal: CreateInstallationPlanInternal = {},
+    internal: CreateCapsulePlanInternal = {},
   ): Promise<PlanRunResponse> {
-    requireNonEmptyString(installationId, "installationId");
-    const installation = await planCreationStage(
-      "installation_load",
-      this.#requireInstallation(installationId),
+    requireNonEmptyString(capsuleId, "capsuleId");
+    const capsule = await planCreationStage(
+      "capsule_load",
+      this.#requireCapsule(capsuleId),
     );
     const installConfig = await planCreationStage(
       "install_config_load",
-      this.#store.getInstallConfig(installation.installConfigId),
+      this.#store.getInstallConfig(capsule.installConfigId),
     );
     if (!installConfig) {
       throw new OpenTofuControllerError(
         "not_found",
-        `install config ${installation.installConfigId} not found for ` +
-          `installation ${installationId}`,
+        `install config ${capsule.installConfigId} not found for ` +
+          `Capsule ${capsuleId}`,
       );
     }
     const runnerProfileId = internal.runnerProfileId ?? installConfig.runnerId;
-    // Two snapshot-resolution paths share the rest of the pipeline:
-    //   - git installations resolve their registered Source's snapshot;
-    //   - upload installations (no Source) pin the upload snapshot the deploy
-    //     passed in and run against an in-memory synthesized Source. Both feed
-    //     the same Capsule Gate / generated-root / plan dispatch because the
-    //     runner restores the archive from the snapshot's archiveObjectKey
-    //     regardless of origin.
-    let source: Source;
-    let snapshot: SourceSnapshot;
-    if (installation.sourceId) {
-      const stored = await planCreationStage(
-        "source_load",
-        this.#store.getSource(installation.sourceId),
+    const lifecycleActions = lifecycleActionsForPlan(
+      installConfig,
+      await this.#requireRunnerProfile(
+        runnerProfileId ?? this.#defaultRunnerProfileId,
+      ),
+    );
+    const stored = await planCreationStage(
+      "source_load",
+      this.#store.getSource(capsule.sourceId),
+    );
+    if (!stored) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `source ${capsule.sourceId} not found for Capsule ${capsuleId}`,
       );
-      if (!stored) {
-        throw new OpenTofuControllerError(
-          "not_found",
-          `source ${installation.sourceId} not found for installation ${installationId}`,
-        );
-      }
-      source = stored;
-      // The rollback-plan path pins a SPECIFIC SourceSnapshot (a prior
-      // Deployment's snapshot); otherwise resolve the Source's latest snapshot
-      // for its default ref.
-      const destroySnapshotId = destroy
-        ? await this.#destroySourceSnapshotIdForInstallation(installation)
-        : undefined;
-      const resolved = internal.sourceSnapshotId
-        ? await planCreationStage(
-            "source_snapshot_pin",
-            this.#requireSourceSnapshotForSource(
-              stored.id,
-              internal.sourceSnapshotId,
-            ),
-          )
-        : destroySnapshotId
-          ? await planCreationStage(
-              "source_snapshot_destroy_pin",
-              this.#requireSourceSnapshotForSource(
-                stored.id,
-                destroySnapshotId,
-              ),
-            )
-          : await planCreationStage(
-              "source_snapshot_latest",
-              this.#resolveLatestSnapshot(
-                stored.id,
-                stored.defaultRef,
-                stored.defaultPath,
-              ),
-            );
-      if (!resolved) {
-        // Typed 409: the Installation cannot plan until a SourceSnapshot exists
-        // for its source. Callers run a source_sync first.
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `source_sync_required: installation ${installationId} has no ` +
-            `SourceSnapshot for source ${stored.id} ref ${stored.defaultRef} ` +
-            `path ${stored.defaultPath}; run a source sync first`,
-        );
-      }
-      snapshot = resolved;
-    } else {
-      const pinnedSnapshotId =
-        internal.sourceSnapshotId ??
-        (destroy
-          ? await this.#destroySourceSnapshotIdForInstallation(installation)
-          : undefined);
-      if (!pinnedSnapshotId) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `installation ${installationId} has no git Source; a plan requires a ` +
-            `pinned upload/artifact SourceSnapshot through the internal upload-compat seam`,
-        );
-      }
-      const pinned = await planCreationStage(
-        "upload_source_snapshot_load",
-        this.#store.getSourceSnapshot(pinnedSnapshotId),
-      );
-      const installationWorkspaceId =
-        installation.workspaceId ?? installation.spaceId;
-      const pinnedWorkspaceId = pinned?.workspaceId ?? pinned?.spaceId;
-      if (!pinned || pinnedWorkspaceId !== installationWorkspaceId) {
-        throw new OpenTofuControllerError(
-          "not_found",
-          "upload/artifact SourceSnapshot not found in this workspace",
-        );
-      }
-      snapshot = pinned;
-      source = syntheticUploadSource(installation, pinned);
     }
-    // The Installation's current state generation drives the dispatch
-    // restore/persist arithmetic. No prior StateSnapshot -> generation 0.
+    const source: Source = stored;
+    // The rollback-plan path pins a specific SourceSnapshot from a prior
+    // StateVersion; otherwise resolve the registered Source's latest snapshot.
+    const destroySnapshotId = destroy
+      ? await this.#destroySourceSnapshotIdForCapsule(capsule)
+      : undefined;
+    const resolved = internal.sourceSnapshotId
+      ? await planCreationStage(
+          "source_snapshot_pin",
+          this.#requireSourceSnapshotForSource(
+            stored.id,
+            internal.sourceSnapshotId,
+          ),
+        )
+      : destroySnapshotId
+        ? await planCreationStage(
+            "source_snapshot_destroy_pin",
+            this.#requireSourceSnapshotForSource(stored.id, destroySnapshotId),
+          )
+        : await planCreationStage(
+            "source_snapshot_latest",
+            this.#resolveLatestSnapshot(
+              stored.id,
+              stored.defaultRef,
+              stored.defaultPath,
+            ),
+          );
+    if (!resolved) {
+      throw sourceSyncRequiredError(
+        `source_sync_required: Capsule ${capsuleId} has no ` +
+          `SourceSnapshot for source ${stored.id} ref ${stored.defaultRef} ` +
+          `path ${stored.defaultPath}; run a source sync first`,
+      );
+    }
+    const snapshot: SourceSnapshot = resolved;
+    // The Capsule's current state generation drives the dispatch
+    // restore/persist arithmetic. No prior StateVersion -> generation 0.
     const latestState = await planCreationStage(
       "latest_state_load",
-      this.#store.getLatestStateSnapshot(
-        installation.id,
-        installation.environment,
-      ),
+      this.#store.getLatestStateVersion(capsule.id, capsule.environment),
     );
     const baseStateGeneration = latestState?.generation ?? 0;
     const operation = destroy
       ? "destroy"
-      : installation.currentDeploymentId
+      : capsule.currentStateVersionId
         ? "update"
         : "create";
-    const compatibilityReportFromHint =
-      !internal.deferCompatibilityReport && internal.compatibilityReportId
-        ? true
-        : false;
-    const compatibilityReport = internal.deferCompatibilityReport
-      ? undefined
-      : internal.compatibilityReportId
-        ? await planCreationStage(
-            "compatibility_report_hint",
-            this.#useInstallationCompatibilityReportHint(
-              installation,
-              source,
-              snapshot,
-              internal.compatibilityReportId,
-            ),
-          )
-        : await planCreationStage(
-            "compatibility_report_ensure",
-            this.#ensureInstallationCompatibilityReport(
-              installation,
-              source,
-              snapshot,
-              installConfig.modulePath,
-            ),
-          );
+    const compatibilityReportFromHint = Boolean(internal.compatibilityReportId);
+    const compatibilityReport = internal.compatibilityReportId
+      ? await planCreationStage(
+          "compatibility_report_hint",
+          this.#useCapsuleCompatibilityReportHint(
+            capsule,
+            source,
+            snapshot,
+            internal.compatibilityReportId,
+          ),
+        )
+      : await planCreationStage(
+          "compatibility_report_ensure",
+          this.#ensureCapsuleCompatibilityReport(
+            capsule,
+            source,
+            snapshot,
+            installConfig.modulePath,
+          ),
+        );
     const {
       request: planRequest,
-      installTypePlan,
+      capsulePlan,
       genericRootPlan,
     } = await planCreationStage(
-      "installation_plan_request",
-      this.#installationPlanRequest({
-        installation,
+      "capsule_plan_request",
+      this.#capsulePlanRequest({
+        capsule,
         installConfig,
         source,
         snapshot,
@@ -1412,17 +1639,15 @@ export class RunEngine {
         skipReadySourceFileDiscovery: compatibilityReportFromHint,
       }),
     );
-    const installationContext: PlanRunInstallationContext = {
-      workspaceId: installation.workspaceId,
-      spaceId: installation.spaceId,
-      capsuleId: installation.id,
-      installationId: installation.id,
-      environment: installation.environment,
+    const capsuleContext: PlanRunCapsuleContext = {
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      environment: capsule.environment,
     };
     // Dependency variable_injection (spec §15 / §17). A destroy plan does NOT
     // inject dependency values: there is nothing to wire into a teardown, and the
     // pinned producer outputs would be irrelevant. For plan/update, resolve the
-    // consumer's Dependencies, read each producer's OutputSnapshot, build the
+    // consumer's Dependencies, read each producer's Output, build the
     // injected values, and merge them into the generated-root module inputs
     // BEFORE the run is created. The DependencySnapshot is pinned
     // AFTER the run row exists (runId known), then the planRun is re-put with its
@@ -1434,7 +1659,7 @@ export class RunEngine {
       ? undefined
       : await planCreationStage(
           "dependency_resolution",
-          this.#dependencies.resolveConsumerDependencies(installation),
+          this.#dependencies.resolveConsumerDependencies(capsule),
         );
     const injectedRequest = resolvedDeps
       ? this.#injectDependencyValues(
@@ -1449,20 +1674,20 @@ export class RunEngine {
             injectedRequest,
             genericRootPlan,
             compatibilityReport,
-            snapshot,
           ),
         )
       : undefined;
     const response = await planCreationStage(
       "plan_run_create",
       this.createPlanRun(injectedRequest, context, {
-        installationContext,
+        capsuleContext,
         sourceSnapshotId: snapshot.id,
         baseStateGeneration,
         ...(compatibilityReport
           ? { compatibilityReportId: compatibilityReport.id }
           : {}),
-        ...(installTypePlan ? { installTypePlan } : {}),
+        ...(capsulePlan ? { capsulePlan } : {}),
+        ...(lifecycleActions ? { lifecycleActions } : {}),
         ...(finalizedGenericRoot
           ? { genericRootDispatch: finalizedGenericRoot }
           : {}),
@@ -1479,28 +1704,12 @@ export class RunEngine {
     return response;
   }
 
-  /**
-   * Merges the dependency-injected values into a plan request (spec §15). A
-   * template-backed request (carries `templateId`) merges into `inputs` (only
-   * keys the template would accept; `validateTemplateInputs` downstream rejects
-   * unknprovider envs, so the injected `to` names MUST be declared template inputs —
-   * a required mapping to an undeclared input surfaces as `failed_precondition`
-   * via the template validator); a template-less Capsule request merges into
-   * `variables`, which rootgen later exposes as module inputs.
-   * Injected values win on a key collision (they are the resolved producer
-   * outputs the consumer was wired to consume).
-   */
+  /** Merges dependency-injected values into ordinary root-module variables. */
   #injectDependencyValues(
     request: CreatePlanRunRequest,
     injectedValues: Readonly<Record<string, JsonValue>>,
   ): CreatePlanRunRequest {
     if (Object.keys(injectedValues).length === 0) return request;
-    if (request.templateId !== undefined) {
-      return {
-        ...request,
-        inputs: { ...(request.inputs ?? {}), ...injectedValues },
-      };
-    }
     return {
       ...request,
       variables: { ...(request.variables ?? {}), ...injectedValues },
@@ -1551,21 +1760,18 @@ export class RunEngine {
     return matches[matches.length - 1];
   }
 
-  async #resolvePlanSourceSnapshotId(
-    installation: Installation,
-  ): Promise<string> {
-    if (!installation.sourceId) {
+  async #resolvePlanSourceSnapshotId(capsule: Capsule): Promise<string> {
+    if (!capsule.sourceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `installation ${installation.id} has no git Source; ` +
-          `only internal upload-compat callers can plan it without a Git Source`,
+        `capsule ${capsule.id} has no Git Source`,
       );
     }
-    const source = await this.#store.getSource(installation.sourceId);
+    const source = await this.#store.getSource(capsule.sourceId);
     if (!source) {
       throw new OpenTofuControllerError(
         "not_found",
-        `source ${installation.sourceId} not found for installation ${installation.id}`,
+        `source ${capsule.sourceId} not found for capsule ${capsule.id}`,
       );
     }
     const snapshot = await this.#resolveLatestSnapshot(
@@ -1574,45 +1780,16 @@ export class RunEngine {
       source.defaultPath,
     );
     if (!snapshot) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `source_sync_required: installation ${installation.id} has no SourceSnapshot for source ${source.id} ref ${source.defaultRef} path ${source.defaultPath}; run a source sync first`,
+      throw sourceSyncRequiredError(
+        `source_sync_required: capsule ${capsule.id} has no SourceSnapshot for source ${source.id} ref ${source.defaultRef} path ${source.defaultPath}; run a source sync first`,
       );
     }
     return snapshot.id;
   }
 
-  async #recordGeneratedRootSourceSnapshot(input: {
-    readonly workspaceId: string;
-    readonly planRunId: string;
-    readonly generatedRoot: DispatchGeneratedRoot;
-    readonly now: number;
-  }): Promise<string> {
-    const snapshotId = this.#newId("snap");
-    const digest = await stableJsonDigest(input.generatedRoot);
-    const bytes = new TextEncoder().encode(JSON.stringify(input.generatedRoot));
-    const snapshot: SourceSnapshot = {
-      id: snapshotId,
-      origin: "upload",
-      workspaceId: input.workspaceId,
-      spaceId: input.workspaceId,
-      url: `takosumi://generated-root/${input.planRunId}`,
-      ref: "generated-root",
-      resolvedCommit: digest,
-      path: ".",
-      archiveObjectKey: `spaces/${input.workspaceId}/generated-roots/${snapshotId}/generated-root.json`,
-      archiveDigest: digest,
-      archiveSizeBytes: bytes.byteLength,
-      fetchedByRunId: input.planRunId,
-      fetchedAt: new Date(input.now).toISOString(),
-    };
-    await this.#store.putSourceSnapshot(snapshot);
-    return snapshot.id;
-  }
-
   /**
    * Resolves a SourceSnapshot by id and asserts it belongs to the given Source.
-   * Used by the rollback-plan path to pin a prior Deployment's snapshot; a
+   * Used by the rollback-plan path to pin a prior StateVersion's source; a
    * snapshot from another Source (or a missing id) is a typed 404.
    */
   async #requireSourceSnapshotForSource(
@@ -1630,23 +1807,23 @@ export class RunEngine {
     return snapshot;
   }
 
-  async #ensureInstallationCompatibilityReport(
-    installation: Installation,
+  async #ensureCapsuleCompatibilityReport(
+    capsule: Capsule,
     source: Source,
     snapshot: SourceSnapshot,
     modulePath?: string,
   ): Promise<CapsuleCompatibilityReport | undefined> {
-    const existing = installation.compatibilityReportId
+    const existing = capsule.compatibilityReportId
       ? await this.#store.getCapsuleCompatibilityReport(
-          installation.compatibilityReportId,
+          capsule.compatibilityReportId,
         )
       : undefined;
-    const policy = await this.#policyForInstallation(installation);
+    const policy = await this.#policyForCapsule(capsule);
     if (
       existing &&
-      this.#isCompatibilityReportScopedToInstallationPlan(
+      this.#isCompatibilityReportScopedToCapsulePlan(
         existing,
-        installation,
+        capsule,
         source,
         snapshot,
       )
@@ -1659,18 +1836,18 @@ export class RunEngine {
         snapshot.id,
         {
           sourceId: source.id,
-          installationId: installation.id,
+          capsuleId: capsule.id,
         },
       );
     if (preflight) {
-      this.#assertCompatibilityReportScopedToInstallationPlan(
+      this.#assertCompatibilityReportScopedToCapsulePlan(
         preflight,
-        installation,
+        capsule,
         source,
         snapshot,
       );
       this.#assertCompatibilityReportRunnable(preflight, policy);
-      await this.#store.patchInstallation(installation.id, {
+      await this.#store.patchCapsule(capsule.id, {
         compatibilityReportId: preflight.id,
         compatibilityStatus: preflight.level,
         updatedAt: new Date(this.#now()).toISOString(),
@@ -1679,32 +1856,25 @@ export class RunEngine {
     }
     if (!this.#sourcesService) {
       if (existing) {
-        this.#assertCompatibilityReportScopedToInstallationPlan(
+        this.#assertCompatibilityReportScopedToCapsulePlan(
           existing,
-          installation,
+          capsule,
           source,
           snapshot,
         );
       }
       return undefined;
     }
-    // Upload-origin installations have no registered Source; gate the snapshot
-    // directly. Git installations gate through their Source id.
-    const { report } = installation.sourceId
-      ? await this.#sourcesService.createCompatibilityCheck(source.id, {
-          sourceSnapshotId: snapshot.id,
-          installationId: installation.id,
-          ...(modulePath ? { modulePath } : {}),
-        })
-      : await this.#sourcesService.createCompatibilityCheckForSnapshot(
-          snapshot,
-          {
-            installationId: installation.id,
-            ...(modulePath ? { modulePath } : {}),
-          },
-        );
+    const { report } = await this.#sourcesService.createCompatibilityCheck(
+      source.id,
+      {
+        sourceSnapshotId: snapshot.id,
+        capsuleId: capsule.id,
+        ...(modulePath ? { modulePath } : {}),
+      },
+    );
     this.#assertCompatibilityReportRunnable(report, policy);
-    await this.#store.patchInstallation(installation.id, {
+    await this.#store.patchCapsule(capsule.id, {
       compatibilityReportId: report.id,
       compatibilityStatus: report.level,
       updatedAt: new Date(this.#now()).toISOString(),
@@ -1712,8 +1882,8 @@ export class RunEngine {
     return report;
   }
 
-  async #useInstallationCompatibilityReportHint(
-    installation: Installation,
+  async #useCapsuleCompatibilityReportHint(
+    capsule: Capsule,
     source: Source,
     snapshot: SourceSnapshot,
     reportId: string,
@@ -1723,18 +1893,19 @@ export class RunEngine {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `compatibility_report_missing: ${reportId}`,
+        { reason: "compatibility_report_missing" },
       );
     }
-    this.#assertCompatibilityReportScopedToInstallationPlan(
+    this.#assertCompatibilityReportScopedToCapsulePlan(
       report,
-      installation,
+      capsule,
       source,
       snapshot,
     );
-    const policy = await this.#policyForInstallation(installation);
+    const policy = await this.#policyForCapsule(capsule);
     this.#assertCompatibilityReportRunnable(report, policy);
-    if (installation.compatibilityReportId !== report.id) {
-      await this.#store.patchInstallation(installation.id, {
+    if (capsule.compatibilityReportId !== report.id) {
+      await this.#store.patchCapsule(capsule.id, {
         compatibilityReportId: report.id,
         compatibilityStatus: report.level,
         updatedAt: new Date(this.#now()).toISOString(),
@@ -1743,22 +1914,22 @@ export class RunEngine {
     return report;
   }
 
-  #isCompatibilityReportScopedToInstallationPlan(
+  #isCompatibilityReportScopedToCapsulePlan(
     report: CapsuleCompatibilityReport,
-    installation: Installation,
+    capsule: Capsule,
     source: Source,
     snapshot: SourceSnapshot,
   ): boolean {
     return (
       report.sourceSnapshotId === snapshot.id &&
       (!report.sourceId || report.sourceId === source.id) &&
-      (!report.installationId || report.installationId === installation.id)
+      (!report.capsuleId || report.capsuleId === capsule.id)
     );
   }
 
-  #assertCompatibilityReportScopedToInstallationPlan(
+  #assertCompatibilityReportScopedToCapsulePlan(
     report: CapsuleCompatibilityReport,
-    installation: Installation,
+    capsule: Capsule,
     source: Source,
     snapshot: SourceSnapshot,
   ): void {
@@ -1768,6 +1939,7 @@ export class RunEngine {
         `compatibility_report_snapshot_mismatch: plan uses SourceSnapshot ` +
           `${snapshot.id} but report ${report.id} was created for ` +
           `${report.sourceSnapshotId}`,
+        { reason: "compatibility_report_snapshot_mismatch" },
       );
     }
     if (report.sourceId && report.sourceId !== source.id) {
@@ -1775,14 +1947,16 @@ export class RunEngine {
         "failed_precondition",
         `compatibility_report_source_mismatch: plan uses Source ${source.id} ` +
           `but report ${report.id} was created for ${report.sourceId}`,
+        { reason: "compatibility_report_source_mismatch" },
       );
     }
-    if (report.installationId && report.installationId !== installation.id) {
+    if (report.capsuleId && report.capsuleId !== capsule.id) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `compatibility_report_installation_mismatch: plan uses Capsule ` +
-          `${installation.id} but report ${report.id} was created for ` +
-          `${report.installationId}`,
+        `compatibility_report_capsule_mismatch: plan uses Capsule ` +
+          `${capsule.id} but report ${report.id} was created for ` +
+          `${report.capsuleId}`,
+        { reason: "compatibility_report_capsule_mismatch" },
       );
     }
   }
@@ -1799,69 +1973,69 @@ export class RunEngine {
       "failed_precondition",
       evaluation.reasons[0] ??
         `compatibility_report_not_runnable: report ${report.id} is ${report.level}`,
+      { reason: "compatibility_report_not_runnable" },
     );
   }
 
-  async #evaluateGenericEnvProviderExecutionPolicy(input: {
+  async #evaluateDeclaredEnvProviderExecutionPolicy(input: {
     readonly profile: RunnerProfile;
-    readonly installation?: Installation;
+    readonly capsule?: Capsule;
     readonly requiredProviders: readonly string[];
-    readonly hasProviderEnvRunner?: boolean;
   }): Promise<{ readonly reasons: readonly string[] }> {
-    if (!input.installation) return { reasons: [] };
+    if (!input.capsule) return { reasons: [] };
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
-      allowOperatorBackedProviderEnvs: this.#allowOperatorBackedProviderEnvs,
+      allowOperatorScopedProviderConnections:
+        this.#allowOperatorScopedProviderConnections,
     });
-    const resolved = await this.#connectionsService.resolveProviderEnvBindings(
-      input.installation,
+    const resolved = await this.#connectionsService.resolveProviderBindings(
+      input.capsule,
     );
-    const genericEnvConnections = resolved
+    const declaredEnvConnections = resolved
       .map((entry) => entry.connection)
       .filter(
         (connection): connection is NonNullable<typeof connection> =>
           connection !== undefined &&
-          connection.kind === "generic_env_provider",
+          usesDeclaredEnvCredentialRecipe(connection),
       );
-    if (genericEnvConnections.length === 0) return { reasons: [] };
+    if (declaredEnvConnections.length === 0) return { reasons: [] };
 
     const reasons: string[] = [];
-    void input.hasProviderEnvRunner;
     if (input.requiredProviders.length === 0) {
       reasons.push(
-        `generic-env provider bindings on runner profile ${input.profile.id} require requiredProviders before OpenTofu init`,
+        `declared-env provider bindings on runner profile ${input.profile.id} require requiredProviders before OpenTofu init`,
       );
     }
-    for (const connection of genericEnvConnections) {
-      if (connection.scope !== "space") {
+    for (const connection of declaredEnvConnections) {
+      if (connection.scope !== "workspace") {
         reasons.push(
-          `generic-env provider connection ${connection.id} for ${connection.provider} must be Space-scoped`,
+          `declared-env provider connection ${connection.id} for ${connection.provider} must be Workspace-scoped`,
         );
       }
     }
     return { reasons };
   }
 
-  #isCustomRunnerProfile(profile: RunnerProfile): boolean {
-    return profile.labels?.["takosumi.com/runner-class"] === "custom";
-  }
-
   #hasRunnerForProfile(profile: RunnerProfile): boolean {
-    return this.#isCustomRunnerProfile(profile)
-      ? this.#providerEnvRunner !== undefined
-      : this.#runner !== undefined;
+    return (
+      typeof profile.executorId === "string" &&
+      profile.executorId.trim().length > 0 &&
+      this.#runnerExecutors.has(profile.executorId)
+    );
   }
 
   #runnerForProfile(profile: RunnerProfile): OpenTofuRunner {
-    const runner = this.#isCustomRunnerProfile(profile)
-      ? this.#providerEnvRunner
-      : this.#runner;
+    if (!profile.executorId?.trim()) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runner profile ${profile.id} has no executorId`,
+      );
+    }
+    const runner = this.#runnerExecutors.get(profile.executorId);
     if (!runner) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        this.#isCustomRunnerProfile(profile)
-          ? `runner profile ${profile.id} requires a configured custom provider runner`
-          : "OpenTofu runner is not configured",
+        `runner profile ${profile.id} references unregistered executor ${profile.executorId}`,
       );
     }
     return runner;
@@ -1927,22 +2101,9 @@ export class RunEngine {
     return { reasons, audit };
   }
 
-  /**
-   * Builds the {@link CreatePlanRunRequest} (+ install-type plan context) for an
-   * installation-driven plan. The InstallConfig's installType selects the
-   * OpenTofu surface (§10 / §13):
-   *
-   *   - `core` / `opentofu_module` / `app_source`: a template-bound config reuses
-   *     the template plan path with an {@link InstallTypePlanContext} so the
-   *     generated root comes from {@link generateInstallationRoot}. A non-template
-   *     config uses the generic Capsule root builder, wrapping the SourceSnapshot
-   *     module as a child module under Takosumi-owned provider/state/root wiring.
-   *   - `opentofu_root`: legacy direct-root ledger rows remain readable but cannot
-   *     create new plans; Takosumi v1 runs OpenTofu Capsules through a generated
-   *     root.
-   */
-  async #installationPlanRequest(input: {
-    readonly installation: Installation;
+  /** Builds a plan request for the Capsule's selected Git module. */
+  async #capsulePlanRequest(input: {
+    readonly capsule: Capsule;
     readonly installConfig: InstallConfig;
     readonly source: Source;
     readonly snapshot: SourceSnapshot;
@@ -1952,7 +2113,7 @@ export class RunEngine {
     readonly skipReadySourceFileDiscovery?: boolean;
   }): Promise<{
     readonly request: CreatePlanRunRequest;
-    readonly installTypePlan?: InstallTypePlanContext;
+    readonly capsulePlan: CapsulePlanContext;
     readonly genericRootPlan?: GenericRootPlanContext;
   }> {
     const moduleSource = snapshotModuleSource(
@@ -1960,61 +2121,10 @@ export class RunEngine {
       input.snapshot,
       input.installConfig.modulePath,
     );
-    const installType = input.installConfig.installType;
-    const templateBinding = installConfigTemplateBinding(input.installConfig);
-    if (installType === "opentofu_root") {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `install config ${input.installConfig.id} is legacy opentofu_root; ` +
-          `Takosumi v1 plans require an OpenTofu Capsule install type wrapped by ` +
-          `a Takosumi generated root`,
-      );
-    }
-    if (templateBinding) {
-      // Template-backed config (core / opentofu_module / app_source): reuse the
-      // template plan path. The config's variableMapping supplies the template
-      // inputs (public, never secret); the user source archive is a build input
-      // only. The install-type context drives the §13 generated root.
-      //
-      // The required providers MUST match what the dispatch path stores on the
-      // plan run (`#resolveTemplatePlan`: the template's allowed providers
-      // canonicalized) so rootgen and credential mint resolve the same set.
-      const template = this.#templateRegistry.require(
-        templateBinding.templateId,
-        templateBinding.templateVersion,
-      );
-      const requiredProviders = template.policy.allowedProviders.map(
-        canonicalProviderAddress,
-      );
-      const profile = await this.#requireRunnerProfile(
-        input.runnerProfileId ?? this.#defaultRunnerProfileId,
-      );
-      const installTypePlan = await this.#planResolution.resolveInstallTypePlan(
-        input.installation,
-        input.installConfig,
-        installType,
-        providerEnvResolutionProviders(
-          requiredProviders,
-          input.installConfig,
-          profile,
-        ),
-      );
-      return {
-        request: {
-          spaceId: input.installation.spaceId,
-          installationId: input.installation.id,
-          source: moduleSource,
-          operation: input.operation,
-          templateId: templateBinding.templateId,
-          templateVersion: templateBinding.templateVersion,
-          ...(templateBinding.inputs ? { inputs: templateBinding.inputs } : {}),
-        },
-        installTypePlan,
-      };
-    }
     const generic = await this.#genericCapsulePlanRequest(input, moduleSource);
     return {
       request: generic.request,
+      capsulePlan: generic.capsulePlan,
       genericRootPlan: generic.genericRootPlan,
     };
   }
@@ -2027,7 +2137,7 @@ export class RunEngine {
    */
   async #genericCapsulePlanRequest(
     input: {
-      readonly installation: Installation;
+      readonly capsule: Capsule;
       readonly installConfig: InstallConfig;
       readonly operation: "create" | "update" | "destroy";
       readonly runnerProfileId?: string;
@@ -2038,6 +2148,7 @@ export class RunEngine {
     moduleSource: OpenTofuModuleSource,
   ): Promise<{
     readonly request: CreatePlanRunRequest;
+    readonly capsulePlan: CapsulePlanContext;
     readonly genericRootPlan: GenericRootPlanContext;
   }> {
     const profile = await this.#requireRunnerProfile(
@@ -2048,46 +2159,37 @@ export class RunEngine {
       profile.allowedProviders,
     );
     let requiredProviders = compatibilityProviders;
-    let installTypePlan = await this.#planResolution.resolveInstallTypePlan(
-      input.installation,
-      input.installConfig,
-      input.installConfig.installType,
-      providerEnvResolutionProviders(
-        requiredProviders,
-        input.installConfig,
-        profile,
-      ),
+    let capsulePlan = await this.#planResolution.resolveCapsulePlan(
+      input.capsule,
+      providerBindingResolutionProviders(requiredProviders, profile),
     );
-    const bindingProviders = installTypePlan.requiredProvidersFromBindings;
+    const bindingProviders = capsulePlan.requiredProvidersFromBindings;
     if (requiredProviders.length === 0 && bindingProviders.length > 0) {
       requiredProviders = bindingProviders;
-      installTypePlan = await this.#planResolution.resolveInstallTypePlan(
-        input.installation,
-        input.installConfig,
-        input.installConfig.installType,
-        providerEnvResolutionProviders(
-          requiredProviders,
-          input.installConfig,
-          profile,
-        ),
+      capsulePlan = await this.#planResolution.resolveCapsulePlan(
+        input.capsule,
+        providerBindingResolutionProviders(requiredProviders, profile),
       );
     }
-    const moduleFiles = await this.#sourceModuleFilesForGenericCapsule(
+    const sourceFiles = await this.#sourceModuleFilesForGenericCapsule(
       input.compatibilityReport,
       input.snapshot,
       input.installConfig.modulePath,
       { skipReady: input.skipReadySourceFileDiscovery === true },
     );
     const declaredInputs = declaredGenericCapsuleInputs(
-      moduleFiles,
+      sourceFiles,
       input.compatibilityReport?.rootModuleVariables,
     );
-    const explicitVariables = normalizeVariables(
+    const explicitVariables = mergeInstallContextVariables(
       input.installConfig.variableMapping,
+      input.installConfig.installContextVariableMapping,
+      {
+        workspaceId: input.capsule.workspaceId,
+        capsuleId: input.capsule.id,
+      },
     );
-    const workspace = await this.#store.getSpace(
-      input.installation.workspaceId ?? input.installation.spaceId,
-    );
+    const workspace = await this.#store.getWorkspace(input.capsule.workspaceId);
     if (!workspace) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -2096,36 +2198,32 @@ export class RunEngine {
     }
     const variables = finalizeManagedPublicHostVariables({
       explicit: explicitVariables,
-      installation: input.installation,
+      capsule: input.capsule,
       installConfig: input.installConfig,
       declaredInputs,
       workspaceHandle: workspace.handle,
       endpointVariables: publicEndpointVariableNames(input.installConfig),
-      ...(installTypePlan.managedPublicBaseDomain
+      ...(capsulePlan.managedPublicBaseDomain
         ? {
-            managedPublicBaseDomain: installTypePlan.managedPublicBaseDomain,
+            managedPublicBaseDomain: capsulePlan.managedPublicBaseDomain,
           }
         : {}),
       variables: normalizeVariables(
         mergeJsonVariableDefaults(
-          installTypePlan.providerInputDefaults,
+          capsulePlan.providerInputDefaults,
           requestedGenericCapsuleVariables(
             explicitVariables,
-            installTypePlan.providerInputDefaults,
+            capsulePlan.providerInputDefaults,
             declaredInputs,
           ),
         ),
       ),
     });
-    const outputAllowlist = genericCapsuleOutputAllowlist(
-      input.installConfig.outputAllowlist,
-      moduleFiles,
-      input.compatibilityReport?.rootModuleOutputs,
-    );
     return {
+      capsulePlan,
       request: {
-        spaceId: input.installation.spaceId,
-        installationId: input.installation.id,
+        workspaceId: input.capsule.workspaceId,
+        capsuleId: input.capsule.id,
         source: moduleSource,
         operation: input.operation,
         runnerProfileId: profile.id,
@@ -2133,28 +2231,23 @@ export class RunEngine {
         ...(Object.keys(variables).length > 0 ? { variables } : {}),
       },
       genericRootPlan: {
-        providerEnvBindings: installTypePlan.providerEnvBindings,
-        outputAllowlist,
+        providerBindings: capsulePlan.providerBindings,
+        outputAllowlist: input.installConfig.outputAllowlist,
         ...(input.installConfig.sourceBuild
           ? { sourceBuild: input.installConfig.sourceBuild }
-          : {}),
-        ...(input.compatibilityReport?.level === "auto_capsulized" &&
-        moduleFiles &&
-        moduleFiles.length > 0
-          ? { moduleFiles }
           : {}),
       },
     };
   }
 
   async #reservePublicHostsForPlan(
-    installation: Installation,
+    capsule: Capsule,
     variables: Readonly<Record<string, JsonValue>>,
     now: number,
     managedPublicBaseDomain?: string,
   ): Promise<void> {
     const installConfig = await this.#store.getInstallConfig(
-      installation.installConfigId,
+      capsule.installConfigId,
     );
     const requestedHosts = publicHostsFromInstallExperienceVariables(
       variables,
@@ -2175,8 +2268,8 @@ export class RunEngine {
         "managed_default_hostname",
     );
     if (claimableHosts.length === 0) return;
-    const workspaceId = installation.workspaceId ?? installation.spaceId;
-    const workspace = await this.#store.getSpace(workspaceId);
+    const workspaceId = capsule.workspaceId;
+    const workspace = await this.#store.getWorkspace(workspaceId);
     if (!workspace) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -2188,7 +2281,7 @@ export class RunEngine {
       const result = await this.#reserveManagedPublicHost({
         hostname: host,
         workspaceId,
-        installation,
+        capsule,
         mode: allocationKind,
         now,
       });
@@ -2214,7 +2307,7 @@ export class RunEngine {
   async #reserveManagedPublicHost(input: {
     readonly hostname: string;
     readonly workspaceId: string;
-    readonly installation: Installation;
+    readonly capsule: Capsule;
     readonly mode: ManagedPublicHostnameMode;
     readonly now: number;
   }): Promise<
@@ -2228,8 +2321,8 @@ export class RunEngine {
     const result = await this.#store.reservePublicHost({
       hostname: input.hostname,
       workspaceId: input.workspaceId,
-      installationId: input.installation.id,
-      installationName: input.installation.name,
+      capsuleId: input.capsule.id,
+      capsuleName: input.capsule.name,
       allocationKind: input.mode,
       ...(input.mode === "vanity" &&
       this.#managedVanityHostnameSlotsPerOwner !== undefined
@@ -2247,18 +2340,18 @@ export class RunEngine {
       : { ok: false, reason: "unavailable" };
   }
 
-  async #releasePublicHostsForInstallation(
-    installationId: string,
+  async #releasePublicHostsForCapsule(
+    capsuleId: string,
     now: number,
   ): Promise<void> {
     try {
-      await this.#store.releasePublicHostsForInstallation(
-        installationId,
+      await this.#store.releasePublicHostsForCapsule(
+        capsuleId,
         new Date(now).toISOString(),
       );
     } catch (error) {
       log.warn("deploy_control.public_host_release_failed", {
-        installationId,
+        capsuleId,
         error,
       });
     }
@@ -2268,64 +2361,67 @@ export class RunEngine {
     request: CreatePlanRunRequest,
     context: GenericRootPlanContext,
     compatibilityReport: CapsuleCompatibilityReport | undefined,
-    sourceSnapshot: SourceSnapshot | undefined,
   ): Promise<GenericRootDispatchContext> {
     const requiredProviders = normalizeProviders(
       request.requiredProviders ?? [],
     );
-    const moduleFiles =
-      context.moduleFiles ??
-      (compatibilityReport && sourceSnapshot
-        ? await this.#normalizedModuleFilesForReport(
-            compatibilityReport,
-            sourceSnapshot,
-          )
-        : undefined);
-    const declaredInputs = new Set(
-      compatibilityReport?.rootModuleVariables ??
-        (moduleFiles ? collectRootModuleVariableNames(moduleFiles) : []),
+    const interfaceWorkspaceId = request.workspaceId;
+    const interfaceCapsuleId = request.capsuleId;
+    const interfaceSources =
+      interfaceWorkspaceId && interfaceCapsuleId && this.#interfaceOutputSources
+        ? await this.#interfaceOutputSources({
+            workspaceId: interfaceWorkspaceId,
+            capsuleId: interfaceCapsuleId,
+          })
+        : [];
+    const workspaceOutputAllowlist = genericCapsuleWorkspaceOutputAllowlist(
+      context.outputAllowlist,
+      undefined,
+      compatibilityReport?.rootModuleOutputs,
+      interfaceSources,
     );
-    const injectedVariables = SERVICE_CONNECTION_VARIABLES.filter((entry) =>
-      declaredInputs.has(entry.name),
+    const wrapperProviderBindings = context.providerBindings.filter(
+      (binding) =>
+        binding.alias !== undefined ||
+        Object.keys(binding.configuration ?? {}).length > 0,
     );
+    const generatedRoot =
+      wrapperProviderBindings.length > 0
+        ? generateOpenTofuChildModuleRoot({
+            requiredProviders,
+            inputs: normalizeVariables(request.variables),
+            outputAllowlist: workspaceOutputAllowlist,
+            providerBindings: wrapperProviderBindings,
+          })
+        : undefined;
     return {
-      generatedRoot: {
-        ...generateGenericCapsuleRoot({
-          requiredProviders,
-          inputs: normalizeVariables(request.variables),
-          outputAllowlist: context.outputAllowlist,
-          ...(injectedVariables.length > 0 ? { injectedVariables } : {}),
-          ...(context.providerEnvBindings.length > 0
-            ? { providerEnvBindings: context.providerEnvBindings }
-            : {}),
-        }),
-        ...(moduleFiles && moduleFiles.length > 0 ? { moduleFiles } : {}),
-      },
+      ...(generatedRoot ? { generatedRoot } : {}),
+      workspaceOutputAllowlist,
       outputAllowlist: context.outputAllowlist,
       ...(context.sourceBuild ? { sourceBuild: context.sourceBuild } : {}),
+      ...(context.lifecycleActions
+        ? { lifecycleActions: context.lifecycleActions }
+        : {}),
     };
   }
 
   async #defaultGenericRootDispatchForPlanRun(
     request: CreatePlanRunRequest,
-    installation: Installation,
+    capsule: Capsule,
     compatibilityReportId: string | undefined,
-    sourceSnapshotId: string | undefined,
   ): Promise<GenericRootDispatchContext> {
     const installConfig = await this.#store.getInstallConfig(
-      installation.installConfigId,
+      capsule.installConfigId,
     );
     if (!installConfig) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `install_config_not_found: ${installation.installConfigId}`,
+        `install_config_not_found: ${capsule.installConfigId}`,
+        { reason: "install_config_not_found" },
       );
     }
     const compatibilityReport = compatibilityReportId
       ? await this.#store.getCapsuleCompatibilityReport(compatibilityReportId)
-      : undefined;
-    const sourceSnapshot = sourceSnapshotId
-      ? await this.#store.getSourceSnapshot(sourceSnapshotId)
       : undefined;
     const requiredProviders = normalizeProviders(
       request.requiredProviders ?? installConfig.policy.allowedProviders ?? [],
@@ -2333,47 +2429,23 @@ export class RunEngine {
     const profile = await this.#requireRunnerProfile(
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
     );
-    const resolved = await this.#resolveInstallationProviderEnvBindingsForRun(
-      installation,
-      providersRequiringProviderEnvBindings(requiredProviders, profile),
+    const lifecycleActions = lifecycleActionsForPlan(installConfig, profile);
+    const resolved = await this.#resolveCapsuleProviderBindingsForRun(
+      capsule,
+      providersRequiringProviderBindings(requiredProviders, profile),
     );
     return await this.#genericRootDispatchForRequest(
       request,
       {
-        providerEnvBindings: providerEnvBindingsFromResolved(resolved),
+        providerBindings: providerBindingsFromResolved(resolved),
         outputAllowlist: installConfig.outputAllowlist,
         ...(installConfig.sourceBuild
           ? { sourceBuild: installConfig.sourceBuild }
           : {}),
+        ...(lifecycleActions ? { lifecycleActions } : {}),
       },
       compatibilityReport,
-      sourceSnapshot,
     );
-  }
-
-  async #normalizedModuleFilesForReport(
-    report: CapsuleCompatibilityReport,
-    sourceSnapshot: SourceSnapshot,
-  ): Promise<readonly OpenTofuCapsuleSourceFile[] | undefined> {
-    if (report.level !== "auto_capsulized") return undefined;
-    if (!report.normalizedObjectKey || !report.normalizedDigest) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `normalized_capsule_artifact_missing: CompatibilityReport ${report.id} ` +
-          "is auto_capsulized but has no normalizedObjectKey/normalizedDigest",
-      );
-    }
-    if (!this.#sourcesService) {
-      throw new OpenTofuControllerError(
-        "not_implemented",
-        "normalized capsule artifact reader is not configured",
-      );
-    }
-    return await this.#sourcesService.readNormalizedCapsuleArtifact({
-      sourceSnapshot,
-      objectKey: report.normalizedObjectKey,
-      digest: report.normalizedDigest as `sha256:${string}`,
-    });
   }
 
   async #sourceModuleFilesForGenericCapsule(
@@ -2383,9 +2455,6 @@ export class RunEngine {
     options: { readonly skipReady?: boolean } = {},
   ): Promise<readonly OpenTofuCapsuleSourceFile[] | undefined> {
     if (!report) return undefined;
-    if (report.level === "auto_capsulized") {
-      return await this.#normalizedModuleFilesForReport(report, sourceSnapshot);
-    }
     if (report.level !== "ready") return undefined;
     if (options.skipReady) return undefined;
     if (!this.#sourcesService) return undefined;
@@ -2401,77 +2470,55 @@ export class RunEngine {
 
   /**
    * Run-scoped provider env binding resolution. Required providers must be
-   * covered by ProviderBindings, except for Cloud/operator deployments where a
-   * single public managed ProviderConnection may satisfy the provider family.
+   * covered by ProviderBindings. A public operator-managed connection is still
+   * matched by its explicit provider source; Core never widens by family.
    * Lazily constructs the shared {@link ConnectionsService} so the SAME instance
    * resolves provider env bindings for rootgen (via {@link PlanResolutionService}) and for the
-   * mint path (`#resolveRunInstallationProviderEnvBindings`).
+   * mint path (`#resolveRunProviderBindings`).
    */
-  #resolveInstallationProviderEnvBindingsForRun(
-    installation: Installation,
+  #resolveCapsuleProviderBindingsForRun(
+    capsule: Capsule,
     requiredProviders: readonly string[],
-  ): Promise<readonly ResolvedInstallationProviderEnvBinding[]> {
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
-      allowOperatorBackedProviderEnvs: this.#allowOperatorBackedProviderEnvs,
+      allowOperatorScopedProviderConnections:
+        this.#allowOperatorScopedProviderConnections,
     });
-    return this.#connectionsService.resolveProviderEnvBindingsForRun(
-      installation,
+    return this.#connectionsService.resolveProviderBindingsForRun(
+      capsule,
       requiredProviders,
     );
   }
 
-  async #currentDeploymentSourceSnapshotId(
-    installation: Installation,
+  async #destroySourceSnapshotIdForCapsule(
+    capsule: Capsule,
   ): Promise<string | undefined> {
-    if (!installation.currentDeploymentId) return undefined;
-    const deployment = await this.#store.getDeployment(
-      installation.currentDeploymentId,
-    );
-    if (
-      !deployment ||
-      deployment.installationId !== installation.id ||
-      deployment.environment !== installation.environment
-    ) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `installation ${installation.id} current Deployment ${installation.currentDeploymentId} is not available for destroy planning`,
-      );
-    }
-    return deployment.sourceSnapshotId;
-  }
-
-  async #destroySourceSnapshotIdForInstallation(
-    installation: Installation,
-  ): Promise<string | undefined> {
-    return (
-      (await this.#currentDeploymentSourceSnapshotId(installation)) ??
-      (await this.#currentStateSourceSnapshotId(installation))
-    );
+    return await this.#currentStateSourceSnapshotId(capsule);
   }
 
   async #currentStateSourceSnapshotId(
-    installation: Installation,
+    capsule: Capsule,
   ): Promise<string | undefined> {
-    if (installation.currentStateGeneration <= 0) return undefined;
-    const snapshots = await this.#store.listStateSnapshots(
-      installation.id,
-      installation.environment,
+    if (capsule.currentStateGeneration <= 0) return undefined;
+    const snapshots = await this.#store.listStateVersions(
+      capsule.id,
+      capsule.environment,
     );
     const current = snapshots.find(
-      (snapshot) => snapshot.generation === installation.currentStateGeneration,
+      (snapshot) => snapshot.generation === capsule.currentStateGeneration,
     );
     return current
-      ? await this.#sourceSnapshotIdForStateSnapshot(current, new Set())
+      ? await this.#sourceSnapshotIdForStateVersion(current, new Set())
       : undefined;
   }
 
-  async #sourceSnapshotIdForStateSnapshot(
-    snapshot: StateSnapshot,
-    seenStateSnapshotIds: Set<string>,
+  async #sourceSnapshotIdForStateVersion(
+    snapshot: StateVersion,
+    seenStateVersionIds: Set<string>,
   ): Promise<string | undefined> {
-    if (seenStateSnapshotIds.has(snapshot.id)) return undefined;
-    seenStateSnapshotIds.add(snapshot.id);
+    if (seenStateVersionIds.has(snapshot.id)) return undefined;
+    seenStateVersionIds.add(snapshot.id);
 
     const applyRun = await this.#store.getApplyRun(snapshot.createdByRunId);
     if (applyRun) {
@@ -2482,22 +2529,22 @@ export class RunEngine {
     const restoreRun = await this.#store.getBackupRun(snapshot.createdByRunId);
     if (
       restoreRun?.type !== "restore" ||
-      !restoreRun.restoredFromStateSnapshotId
+      !restoreRun.restoredFromStateVersionId
     ) {
       return undefined;
     }
     const restoredSource = (
-      await this.#store.listStateSnapshots(
-        snapshot.capsuleId ?? snapshot.installationId,
+      await this.#store.listStateVersions(
+        snapshot.capsuleId,
         snapshot.environment,
       )
     ).find(
-      (candidate) => candidate.id === restoreRun.restoredFromStateSnapshotId,
+      (candidate) => candidate.id === restoreRun.restoredFromStateVersionId,
     );
     return restoredSource
-      ? await this.#sourceSnapshotIdForStateSnapshot(
+      ? await this.#sourceSnapshotIdForStateVersion(
           restoredSource,
-          seenStateSnapshotIds,
+          seenStateVersionIds,
         )
       : undefined;
   }
@@ -2536,13 +2583,13 @@ export class RunEngine {
       );
     }
     // SECURITY (apply-once / idempotency): a `create` plan never carries an
-    // installationId, so without this guard each apply allocates a brand-new
-    // Installation + Deployment (and real cloud resources). Replays of a
+    // capsuleId, so without this guard each apply allocates a brand-new
+    // Capsule + StateVersion (and real cloud resources). Replays of a
     // successfully-applied PlanRun are idempotent: return the existing apply
     // response instead of creating a visible failed run. (update/destroy were
-    // already replay-protected by the installation currentDeploymentId guard.)
+    // already replay-protected by the capsule currentStateVersionId guard.)
     //
-    // This is an OPTIMISTIC pre-check before the per-(Installation,environment)
+    // This is an OPTIMISTIC pre-check before the per-(Capsule,environment)
     // lease serializes the apply. Two concurrent createApplyRun calls can both
     // pass it and each insert an ApplyRun row + enqueue — wasteful, but NOT a
     // double-apply: the authoritative apply-once re-check runs INSIDE the
@@ -2555,28 +2602,12 @@ export class RunEngine {
       await checkApplyExpected(request.expected, planRun);
       return await this.getApplyRun(planRun.appliedApplyRunId);
     }
-    // Destructive-confirmation gate (Phase 1C): a template plan-JSON policy that
-    // flagged delete/replace under requireExplicitConfirmation requires the apply
-    // request to carry confirmDestructive=true. Non-template and non-destructive
-    // plans are unaffected.
-    if (
-      planRun.templateBinding?.requiresConfirmation === true &&
-      request.confirmDestructive !== true
-    ) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `plan run ${planRun.id} contains destructive changes; resubmit apply with confirmDestructive=true`,
-      );
-    }
     // Approval gate (spec §10.6 always-two-stage destroy / invariant 22). A
     // destroy plan is "always two-stage": it must carry a RECORDED approval
     // (POST /runs/:id/approve, which sets planRun.approval) before it can apply.
     // Without this the approval surfaced as `awaitingApproval` in the dashboard
     // is display-only and the single most destructive operation would apply
-    // unreviewed. (A non-destroy delete/replace flagged `requiresApproval` is
-    // additionally gated by the confirmDestructive flow above for template
-    // Capsules; broadening the recorded-approval requirement to every
-    // requiresApproval plan is a separate, intentional decision.)
+    // unreviewed.
     if (planRun.operation === "destroy" && !planRun.approval) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -2584,8 +2615,8 @@ export class RunEngine {
       );
     }
     await checkApplyExpected(request.expected, planRun);
-    if (planRun.installationId) {
-      await this.#requireCurrentPlannedInstallation(planRun);
+    if (planRun.capsuleId) {
+      await this.#requireCurrentPlannedCapsule(planRun);
     }
     // Source snapshot revalidation (spec invariant 10): an env-driven plan is
     // pinned to a SourceSnapshot; the apply must run against the SAME snapshot
@@ -2596,15 +2627,12 @@ export class RunEngine {
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
     const now = this.#now();
     const approval = redactRunApproval(request.approval);
-    const applyCapsuleId = planRun.capsuleId ?? planRun.installationId;
+    const applyCapsuleId = planRun.capsuleId;
     const applyRun: ApplyRun = {
       id: this.#newId("apply"),
       planRunId: planRun.id,
       workspaceId: planRun.workspaceId,
-      spaceId: planRun.spaceId,
-      ...(applyCapsuleId
-        ? { capsuleId: applyCapsuleId, installationId: applyCapsuleId }
-        : {}),
+      ...(applyCapsuleId ? { capsuleId: applyCapsuleId } : {}),
       operation: planRun.operation,
       runnerProfileId: profile.id,
       status: "queued",
@@ -2628,6 +2656,7 @@ export class RunEngine {
       updatedAt: now,
     };
     await this.#store.putApplyRun(applyRun);
+    await this.#notifyApplyQueued(applyRun);
     if (!this.#hasRunnerForProfile(profile)) return { applyRun };
     // Hand off to the dispatch seam. The default inline dispatcher runs the
     // apply consumer synchronously and returns the terminal ApplyRunResponse;
@@ -2635,7 +2664,7 @@ export class RunEngine {
     await this.#enqueueRun({
       action: "apply",
       runId: applyRun.id,
-      spaceId: applyRun.workspaceId ?? applyRun.spaceId,
+      workspaceId: applyRun.workspaceId,
     });
     const dispatched = await this.getApplyRun(applyRun.id);
     return dispatched;
@@ -2669,7 +2698,7 @@ export class RunEngine {
     if (!run || run.type !== "restore") return undefined;
     if (!this.#shouldProcessRun(run.status, run.heartbeatAt)) return run;
     let leaseTarget: {
-      readonly installationId: string;
+      readonly capsuleId: string;
       readonly environment: string;
     };
     try {
@@ -2680,14 +2709,14 @@ export class RunEngine {
     }
     const runWork = (handle?: LeaseHandle) =>
       this.#runSerialized(
-        `restore:${leaseTarget.installationId}:${leaseTarget.environment}`,
+        `restore:${leaseTarget.capsuleId}:${leaseTarget.environment}`,
         () => this.#executeRestore(run, handle),
       );
-    if (this.#installationCoordination) {
-      return await withInstallationLease(
-        this.#installationCoordination,
+    if (this.#capsuleCoordination) {
+      return await withCapsuleLease(
+        this.#capsuleCoordination,
         {
-          installationId: leaseTarget.installationId,
+          capsuleId: leaseTarget.capsuleId,
           environment: leaseTarget.environment,
           holderId: run.id,
         },
@@ -2698,7 +2727,7 @@ export class RunEngine {
   }
 
   async #restoreLeaseTarget(run: Run): Promise<{
-    readonly installationId: string;
+    readonly capsuleId: string;
     readonly environment: string;
   }> {
     if (!run.backupId || run.restoreStateGeneration === undefined) {
@@ -2708,7 +2737,7 @@ export class RunEngine {
       );
     }
     const backup = await this.#store.getBackupRecord(run.backupId);
-    if (!backup || backup.spaceId !== run.spaceId) {
+    if (!backup || backup.workspaceId !== run.workspaceId) {
       throw new OpenTofuControllerError(
         "not_found",
         `backup ${run.backupId} not found`,
@@ -2720,23 +2749,23 @@ export class RunEngine {
         "backup digest changed before restore dispatch",
       );
     }
-    const installationId = run.installationId ?? backup.installationId;
-    if (!installationId) {
+    const capsuleId = run.capsuleId ?? backup.capsuleId;
+    if (!capsuleId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "restore run has no target installation",
+        "restore run has no target Capsule",
       );
     }
-    const installation = await this.#store.getInstallation(installationId);
-    if (!installation || installation.spaceId !== run.spaceId) {
+    const capsule = await this.#store.getCapsule(capsuleId);
+    if (!capsule || capsule.workspaceId !== run.workspaceId) {
       throw new OpenTofuControllerError(
         "not_found",
-        `installation ${installationId} not found`,
+        `Capsule ${capsuleId} not found`,
       );
     }
     const environment =
-      run.environment ?? backup.environment ?? installation.environment;
-    return { installationId: installation.id, environment };
+      run.environment ?? backup.environment ?? capsule.environment;
+    return { capsuleId: capsule.id, environment };
   }
 
   async #executeRestore(run: Run, lease?: LeaseHandle): Promise<Run> {
@@ -2760,6 +2789,7 @@ export class RunEngine {
       current.heartbeatAt ?? null,
     );
     if (!claim.won) return claim.run;
+    await this.#notifyRestore({ phase: "started", run: claim.run });
     try {
       return await this.#withRunRenewal(
         "restore",
@@ -2782,7 +2812,7 @@ export class RunEngine {
       );
     }
     const backup = await this.#store.getBackupRecord(run.backupId);
-    if (!backup || backup.spaceId !== run.spaceId) {
+    if (!backup || backup.workspaceId !== run.workspaceId) {
       throw new OpenTofuControllerError(
         "not_found",
         `backup ${run.backupId} not found`,
@@ -2794,24 +2824,24 @@ export class RunEngine {
         "backup digest changed before restore dispatch",
       );
     }
-    const installationId = run.installationId ?? backup.installationId;
-    if (!installationId) {
+    const capsuleId = run.capsuleId ?? backup.capsuleId;
+    if (!capsuleId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "restore run has no target installation",
+        "restore run has no target Capsule",
       );
     }
-    const installation = await this.#store.getInstallation(installationId);
-    if (!installation || installation.spaceId !== run.spaceId) {
+    const capsule = await this.#store.getCapsule(capsuleId);
+    if (!capsule || capsule.workspaceId !== run.workspaceId) {
       throw new OpenTofuControllerError(
         "not_found",
-        `installation ${installationId} not found`,
+        `Capsule ${capsuleId} not found`,
       );
     }
     const environment =
-      run.environment ?? backup.environment ?? installation.environment;
+      run.environment ?? backup.environment ?? capsule.environment;
     const source = (
-      await this.#store.listStateSnapshots(installation.id, environment)
+      await this.#store.listStateVersions(capsule.id, environment)
     ).find((snapshot) => snapshot.generation === run.restoreStateGeneration);
     if (!source) {
       throw new OpenTofuControllerError(
@@ -2820,28 +2850,48 @@ export class RunEngine {
       );
     }
     if (
-      run.restoredFromStateSnapshotId &&
-      run.restoredFromStateSnapshotId !== source.id
+      run.restoredFromStateVersionId &&
+      run.restoredFromStateVersionId !== source.id
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "restore source StateSnapshot changed before dispatch",
+        "restore source StateVersion changed before dispatch",
       );
     }
-    const latest = await this.#store.getLatestStateSnapshot(
-      installation.id,
+    const latest = await this.#store.getLatestStateVersion(
+      capsule.id,
       environment,
     );
     const nextGeneration =
-      Math.max(installation.currentStateGeneration, latest?.generation ?? 0) +
-      1;
+      Math.max(capsule.currentStateGeneration, latest?.generation ?? 0) + 1;
     const nowMs = this.#now();
     const now = new Date(nowMs).toISOString();
-    const stateScope = {
-      spaceId: installation.spaceId,
-      installationId: installation.id,
+    const allocator = this.#artifactReferenceAllocator;
+    if (!allocator) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "restore requires an artifact-reference allocator",
+      );
+    }
+    const stateRef = await allocator.allocate({
+      kind: "state",
+      workspaceId: capsule.workspaceId,
+      subject: { kind: "capsule", id: capsule.id },
       environment,
       generation: nextGeneration,
+    });
+    if (!stateRef.trim()) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "artifact-reference allocator returned an empty stateRef for restore",
+      );
+    }
+    const stateScope = {
+      workspaceId: capsule.workspaceId,
+      subject: { kind: "capsule" as const, id: capsule.id },
+      environment,
+      generation: nextGeneration,
+      stateRef,
     };
     const restoreServiceData = run.restoreServiceData === true;
     if (restoreServiceData && !backup.serviceData) {
@@ -2850,28 +2900,41 @@ export class RunEngine {
         "backup service-data artifact disappeared before restore dispatch",
       );
     }
-    if (restoreServiceData && !this.#runner?.restoreServiceData) {
+    const restoreProfile = await this.#requireRunnerProfile(
+      this.#defaultRunnerProfileId,
+    );
+    const restoreRunner = this.#runnerExecutors.get(restoreProfile.executorId);
+    if (restoreServiceData && !restoreRunner?.restoreServiceData) {
       throw new OpenTofuControllerError(
         "not_implemented",
         "service-data restore requires a service-data restore-capable runner",
       );
     }
-    const restoreResult = this.#runner?.restore
-      ? await this.#runner.restore({
+    const restoreResult = restoreRunner?.restore
+      ? await restoreRunner.restore({
           runId: run.id,
           stateScope,
           sourceState: {
-            objectKey: source.objectKey,
+            stateRef: source.stateRef,
             digest: source.digest,
           },
         })
       : undefined;
+    if (
+      restoreResult?.state.stateRef &&
+      restoreResult.state.stateRef !== stateRef
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runner returned a state reference different from the allocated reference for restore run ${run.id}`,
+      );
+    }
     const restoredServiceData = restoreServiceData
-      ? await this.#runner!.restoreServiceData!({
+      ? await restoreRunner!.restoreServiceData!({
           runId: run.id,
           stateScope,
           sourceState: {
-            objectKey: source.objectKey,
+            stateRef: source.stateRef,
             digest: source.digest,
           },
           serviceData: backup.serviceData!,
@@ -2883,48 +2946,44 @@ export class RunEngine {
         "runner did not confirm service-data restore",
       );
     }
-    const restoredState: StateSnapshot = {
+    const restoredState: StateVersion = {
       id: this.#newId("state"),
-      workspaceId: installation.workspaceId,
-      spaceId: installation.spaceId,
-      capsuleId: installation.id,
-      installationId: installation.id,
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
       environment,
       generation: nextGeneration,
-      objectKey: restoreResult?.state.objectKey ?? source.objectKey,
+      stateRef,
       digest: restoreResult?.state.digest ?? source.digest,
       createdByRunId: run.id,
       createdAt: now,
     };
-    const sourceOutput = (
-      await this.#store.listOutputSnapshots(installation.id)
-    ).find((snapshot) => snapshot.stateGeneration === source.generation);
-    const previousOutputSnapshot = installation.currentOutputSnapshotId
-      ? await this.#store.getOutputSnapshot(
-          installation.currentOutputSnapshotId,
-        )
+    const sourceOutput = (await this.#store.listOutputs(capsule.id)).find(
+      (snapshot) => snapshot.stateGeneration === source.generation,
+    );
+    const previousOutput = capsule.currentOutputId
+      ? await this.#store.getOutput(capsule.currentOutputId)
       : undefined;
     const completed: Run = {
       ...run,
       status: "succeeded",
       heartbeatAt: nowMs,
-      restoredStateSnapshotId: restoredState.id,
+      restoredStateVersionId: restoredState.id,
       ...(restoredServiceData ? { restoredServiceData } : {}),
       finishedAt: now,
     };
     const committed = await this.#store.commitRestoredState({
-      stateSnapshot: restoredState,
-      installationPatch: {
-        id: installation.id,
+      stateVersion: restoredState,
+      capsulePatch: {
+        id: capsule.id,
         patch: {
           currentStateGeneration: nextGeneration,
-          ...(sourceOutput ? { currentOutputSnapshotId: sourceOutput.id } : {}),
+          ...(sourceOutput ? { currentOutputId: sourceOutput.id } : {}),
           status: "stale",
           updatedAt: now,
         },
         guard: {
-          currentStateGeneration: installation.currentStateGeneration,
-          status: installation.status,
+          currentStateGeneration: capsule.currentStateGeneration,
+          status: capsule.status,
         },
       },
       restoreRunTerminal: completed,
@@ -2933,31 +2992,32 @@ export class RunEngine {
     if (committed.restoreRunLeaseLost) {
       return (await this.#store.getBackupRun(run.id)) ?? run;
     }
+    await this.#notifyRestore({ phase: "succeeded", run: completed });
     if (sourceOutput) {
-      await this.#markDownstreamInstallationsStale({
-        installation,
-        previousOutputSnapshot,
-        newOutputSnapshot: sourceOutput,
+      await this.#markDownstreamCapsulesStale({
+        capsule,
+        previousOutput,
+        newOutput: sourceOutput,
         now: nowMs,
       });
     }
     await this.#recordActivity({
-      spaceId: run.spaceId,
+      workspaceId: run.workspaceId,
       action: "restore.succeeded",
       targetType: "run",
       targetId: run.id,
       runId: run.id,
       metadata: {
         backupId: backup.id,
-        installationId: installation.id,
+        capsuleId: capsule.id,
         environment,
-        restoredStateSnapshotId: restoredState.id,
-        restoredFromStateSnapshotId: source.id,
+        restoredStateVersionId: restoredState.id,
+        restoredFromStateVersionId: source.id,
         restoredFromGeneration: source.generation,
         currentStateGeneration: nextGeneration,
         ...(restoredServiceData
           ? {
-              restoredServiceDataObjectKey: restoredServiceData.objectKey,
+              restoredServiceDataRef: restoredServiceData.ref,
               restoredServiceDataDigest: restoredServiceData.digest,
               restoredServiceDataCount: restoredServiceData.restoredCount ?? 0,
             }
@@ -3045,6 +3105,9 @@ export class RunEngine {
         clearLeaseToken: true,
         heartbeatAt: failed.heartbeatAt,
       });
+      if (result.won) {
+        await this.#notifyRestore({ phase: "failed", run: failed });
+      }
       return result.won;
     }
     const applyRun = await this.#store.getApplyRun(runId);
@@ -3083,7 +3146,9 @@ export class RunEngine {
       return planRun;
     }
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
-    if (!this.#hasRunnerForProfile(profile)) return planRun;
+    // A queue consumer is execution authority: a missing explicit executor
+    // binding is a hard configuration failure, never a silent fallback.
+    this.#runnerForProfile(profile);
     try {
       planRun = await this.#ensureQueuedPlanCompatibilityReport(planRun);
     } catch (error) {
@@ -3095,10 +3160,9 @@ export class RunEngine {
     // against the same inputs / generated root it was created with.
     const inputs = await this.#getPlanRunInputs(runId);
     const variables = normalizeVariables(inputs?.variables);
-    const dispatch = templateDispatchFromInputs(inputs);
+    const dispatch = moduleDispatchFromInputs(inputs);
     try {
       await this.#verification.assertCapsuleCompatibilityAllowsRun(planRun);
-      assertGeneratedRootDispatchPresent(planRun, dispatch);
     } catch (error) {
       await this.#store.deletePlanRunInputs(runId);
       return await this.#failPlanRun(planRun, undefined, error);
@@ -3130,21 +3194,21 @@ export class RunEngine {
         dispatch,
       );
     } catch (error) {
-      if (isRetryableRunnerRequeueError(error)) throw error;
+      if (isRunnerInfrastructureRequeueError(error)) throw error;
       await this.#store.deletePlanRunInputs(runId);
       const failedRun = runEnvironmentFailedRun(running, error);
       return await this.#failPlanRun(failedRun, claim.leaseToken, error);
     }
-    // Retain the inputs sidecar for an APPLYABLE generated-root run: the apply
-    // consumer re-reads the generated root / build payload (the same generated
-    // root the plan was reviewed against). An applyable plan is one that
+    // Retain the inputs sidecar for an applyable Capsule run: direct-root runs
+    // also need the same variables, Output policy, source build, and lifecycle
+    // actions reviewed by plan. An applyable plan is one that
     // completed `succeeded`, OR parked `waiting_approval` (it becomes applyable
     // once approved — the sidecar must survive the approval gate). It is deleted
     // once the plan is applied (apply-once) or the run is failed. Other terminal
-    // generated-root plans drop the sidecar now.
+    // plans drop the sidecar now.
     const retainForApply =
       (result.status === "succeeded" || result.status === "waiting_approval") &&
-      dispatch.generatedRoot !== undefined;
+      inputs !== undefined;
     if (!retainForApply) {
       await this.#store.deletePlanRunInputs(runId);
     }
@@ -3153,7 +3217,7 @@ export class RunEngine {
 
   /**
    * Apply consumer. Idempotency + stale-heartbeat takeover, generation
-   * pre-flight, credential mint, and serialized execution on the installation
+   * pre-flight, credential mint, and serialized execution on the capsule
    * key. Returns the ApplyRunResponse for the inline dispatcher.
    */
   async runQueuedApply(runId: string): Promise<ApplyRunResponse> {
@@ -3164,22 +3228,36 @@ export class RunEngine {
         `apply run ${runId} not found`,
       );
     }
+    if (
+      (applyRun.status === "succeeded" || applyRun.status === "failed") &&
+      applyRunBillingCapturePending(applyRun)
+    ) {
+      const planRun = await this.#requirePlanRun(applyRun.planRunId);
+      const finalized = await this.#finalizeApplyBilling(planRun, applyRun);
+      const capsule = finalized.capsuleId
+        ? await this.#store.getCapsule(finalized.capsuleId)
+        : undefined;
+      return {
+        applyRun: finalized,
+        ...(capsule ? { capsule } : {}),
+      };
+    }
     if (!this.#shouldProcessRun(applyRun.status, applyRun.heartbeatAt)) {
       return await this.getApplyRun(runId);
     }
     const planRun = await this.#requirePlanRun(applyRun.planRunId);
     const profile = await this.#requireRunnerProfile(applyRun.runnerProfileId);
-    if (!this.#hasRunnerForProfile(profile)) return { applyRun };
+    this.#runnerForProfile(profile);
     // Generated-root dispatch for apply: re-read the retained inputs sidecar so
     // apply runs tofu in the SAME generated root the plan reviewed.
     // #getPlanRunInputs unseals a sealed (sensitive-bearing) sidecar.
     const inputs = await this.#getPlanRunInputs(planRun.id);
-    const dispatch = templateDispatchFromInputs(inputs);
-    const key = planRun.installationId ?? planRun.id;
-    // Installation lease (spec §22 / §23): when a DO-backed coordination seam is
+    const dispatch = moduleDispatchFromInputs(inputs);
+    const key = planRun.capsuleId ?? planRun.id;
+    // Capsule lease (spec §22 / §23): when a durable coordination seam is
     // wired, acquire the cross-isolate
-    // `installation:{installationId}:{environment}` lease so only one write run
-    // per (Installation, environment) executes at a time. A busy lease throws so
+    // `capsule:{capsuleId}:{environment}` lease so only one write Run per
+    // (Capsule, environment) executes at a time. A busy lease throws so
     // the queue redelivers. The in-process serialization stays as the inner
     // guard (single-isolate correctness). The held-lease handle is threaded into
     // #executeApply so a long apply can renew the lease + re-stamp its heartbeat
@@ -3188,30 +3266,30 @@ export class RunEngine {
       this.#runSerialized(key, () =>
         this.#executeApply(applyRun, planRun, profile, dispatch, handle),
       );
-    if (this.#installationCoordination && planRun.installationId) {
+    if (this.#capsuleCoordination && planRun.capsuleId) {
       const environment =
-        planRun.installationContext?.environment ??
-        (await this.#requireInstallation(planRun.installationId)).environment;
-      return await withInstallationLease(
-        this.#installationCoordination,
+        planRun.capsuleContext?.environment ??
+        (await this.#requireCapsule(planRun.capsuleId)).environment;
+      return await withCapsuleLease(
+        this.#capsuleCoordination,
         {
-          installationId: planRun.installationId,
+          capsuleId: planRun.capsuleId,
           environment,
           holderId: applyRun.id,
         },
         runWork,
       );
     }
-    // SECURITY (apply-once / S5): a `create` plan has no installationId yet, so
-    // the installation lease above cannot cover it. Without a cross-isolate
+    // SECURITY (apply-once / S5): a `create` plan has no capsuleId yet, so
+    // the capsule lease above cannot cover it. Without a cross-isolate
     // guard two concurrent create-applies of the SAME plan both observe
-    // `appliedApplyRunId` undefined and each allocate a brand-new Installation +
-    // Deployment (real duplicate cloud resources). Take the `plan:{planRunId}`
+    // `appliedApplyRunId` undefined and each allocate a brand-new Capsule +
+    // apply (real duplicate cloud resources). Take the `plan:{planRunId}`
     // lease so create-applies serialize; the inner #executeApply re-reads the
     // persisted PlanRun and rejects a sibling that already marked it applied.
-    if (this.#installationCoordination) {
+    if (this.#capsuleCoordination) {
       return await withPlanLease(
-        this.#installationCoordination,
+        this.#capsuleCoordination,
         { planRunId: planRun.id, holderId: applyRun.id },
         runWork,
       );
@@ -3240,15 +3318,13 @@ export class RunEngine {
   ): Promise<PlanRun> {
     if (
       planRun.compatibilityReportId ||
-      !planRun.installationId ||
+      !planRun.capsuleId ||
       !planRun.sourceSnapshotId ||
       !this.#sourcesService
     ) {
       return planRun;
     }
-    const installation = await this.#requireInstallation(
-      planRun.installationId,
-    );
+    const capsule = await this.#requireCapsule(planRun.capsuleId);
     const snapshot = await this.#store.getSourceSnapshot(
       planRun.sourceSnapshotId,
     );
@@ -3257,26 +3333,19 @@ export class RunEngine {
         "failed_precondition",
         `source_snapshot_missing: plan run ${planRun.id} references ` +
           `SourceSnapshot ${planRun.sourceSnapshotId} which is no longer present`,
+        { reason: "source_snapshot_missing" },
       );
     }
-    if (isGeneratedRootSourceSnapshot(snapshot)) {
-      return planRun;
-    }
-    const source = installation.sourceId
-      ? await this.#requireSourceForInstallation(installation)
-      : syntheticUploadSource(installation, snapshot);
-    const report = await this.#ensureInstallationCompatibilityReport(
-      installation,
+    const source = await this.#requireSourceForCapsule(capsule);
+    const report = await this.#ensureCapsuleCompatibilityReport(
+      capsule,
       source,
       snapshot,
-      planRun.source.modulePath,
+      planRun.source.kind === "operator_module"
+        ? undefined
+        : planRun.source.modulePath,
     );
     if (!report) return planRun;
-    await this.#refreshPlanRunInputsForCompatibilityReport(
-      planRun,
-      report,
-      snapshot,
-    );
     const updated: PlanRun = {
       ...planRun,
       compatibilityReportId: report.id,
@@ -3286,58 +3355,29 @@ export class RunEngine {
     return updated;
   }
 
-  async #requireSourceForInstallation(
-    installation: Installation,
-  ): Promise<Source> {
-    if (!installation.sourceId) {
+  async #requireSourceForCapsule(capsule: Capsule): Promise<Source> {
+    if (!capsule.sourceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `installation ${installation.id} has no Source`,
+        `capsule ${capsule.id} has no Source`,
       );
     }
-    const source = await this.#store.getSource(installation.sourceId);
+    const source = await this.#store.getSource(capsule.sourceId);
     if (!source) {
       throw new OpenTofuControllerError(
         "not_found",
-        `source ${installation.sourceId} not found for installation ${installation.id}`,
+        `source ${capsule.sourceId} not found for capsule ${capsule.id}`,
       );
     }
     return source;
   }
 
-  async #refreshPlanRunInputsForCompatibilityReport(
-    planRun: PlanRun,
-    report: CapsuleCompatibilityReport,
-    snapshot: SourceSnapshot,
-  ): Promise<void> {
-    if (report.level !== "auto_capsulized") return;
-    const rawInputs = await this.#store.getPlanRunInputs(planRun.id);
-    if (!rawInputs) return;
-    const inputs = await this.#getPlanRunInputs(planRun.id);
-    if (!inputs?.generatedRoot) return;
-    const moduleFiles = await this.#normalizedModuleFilesForReport(
-      report,
-      snapshot,
-    );
-    if (!moduleFiles || moduleFiles.length === 0) return;
-    await this.#putPlanRunInputs(
-      {
-        ...inputs,
-        generatedRoot: {
-          ...inputs.generatedRoot,
-          moduleFiles,
-        },
-      },
-      rawInputs.sealed !== undefined,
-    );
-  }
-
   /**
    * Persists the runs_inputs sidecar (spec §11 / §18). When `seal` is set, the
-   * sidecar carries at least one SENSITIVE dependency-injected value — in
-   * `variables` and (for a generic Capsule) baked as a literal into the generated
-   * `main.tf` — so the WHOLE sealable payload (`variables` / `generatedRoot` /
-   * `outputAllowlist`) is encrypted into {@link PlanRunInputs.sealed}
+   * sidecar carries at least one SENSITIVE dependency-injected value, so the
+   * WHOLE sealable payload (`variables` / `generatedRoot` /
+   * `workspaceOutputAllowlist` / `outputAllowlist`) is encrypted into
+   * {@link PlanRunInputs.sealed}
    * with the SAME at-rest envelope used for state / plan / dependency-value
    * artifacts, and the cleartext fields are dropped from the row. The store only
    * ever sees ciphertext. A sealer is REQUIRED in that case: missing ⇒ fail closed
@@ -3356,6 +3396,7 @@ export class RunEngine {
         `dependency_value_sealer_unavailable: plan run ${inputs.planRunId} ` +
           `carries a sensitive dependency-injected value but no at-rest value ` +
           `sealer is configured to protect the runs_inputs sidecar`,
+        { reason: "dependency_value_sealer_unavailable" },
       );
     }
     const payload: Record<string, JsonValue> = {
@@ -3363,11 +3404,26 @@ export class RunEngine {
       ...(inputs.generatedRoot
         ? { generatedRoot: inputs.generatedRoot as unknown as JsonValue }
         : {}),
+      ...(inputs.operatorModule
+        ? { operatorModule: inputs.operatorModule as unknown as JsonValue }
+        : {}),
+      ...(inputs.workspaceOutputAllowlist
+        ? {
+            workspaceOutputAllowlist:
+              inputs.workspaceOutputAllowlist as unknown as JsonValue,
+          }
+        : {}),
       ...(inputs.outputAllowlist
         ? { outputAllowlist: inputs.outputAllowlist as unknown as JsonValue }
         : {}),
       ...(inputs.sourceBuild
         ? { sourceBuild: inputs.sourceBuild as unknown as JsonValue }
+        : {}),
+      ...(inputs.lifecycleActions
+        ? { lifecycleActions: inputs.lifecycleActions as unknown as JsonValue }
+        : {}),
+      ...(inputs.stateAdoption
+        ? { stateAdoption: inputs.stateAdoption as unknown as JsonValue }
         : {}),
     };
     const sealed = await this.#dependencyValueSealer.seal(payload);
@@ -3398,6 +3454,7 @@ export class RunEngine {
         `dependency_value_sealer_unavailable: plan run ${planRunId} sealed its ` +
           `runs_inputs sidecar but no at-rest value sealer is configured to ` +
           `open it`,
+        { reason: "dependency_value_sealer_unavailable" },
       );
     }
     const payload = await this.#dependencyValueSealer.open(row.sealed);
@@ -3406,49 +3463,87 @@ export class RunEngine {
     >;
     const generatedRoot = payload.generatedRoot as unknown as
       DispatchGeneratedRoot | undefined;
+    const operatorModule = payload.operatorModule as unknown as
+      PlanRunInputs["operatorModule"] | undefined;
+    const workspaceOutputAllowlist =
+      payload.workspaceOutputAllowlist as unknown as
+        Readonly<Record<string, OutputAllowlistEntry>> | undefined;
     const outputAllowlist = payload.outputAllowlist as unknown as
       Readonly<Record<string, OutputAllowlistEntry>> | undefined;
     const sourceBuild = payload.sourceBuild as unknown as
       InstallConfig["sourceBuild"] | undefined;
+    const lifecycleActions = payload.lifecycleActions as unknown as
+      InstallConfig["lifecycleActions"] | undefined;
+    const stateAdoption = payload.stateAdoption as unknown as
+      PlanRunInputs["stateAdoption"] | undefined;
     return {
       planRunId,
       variables,
       ...(generatedRoot ? { generatedRoot } : {}),
+      ...(operatorModule ? { operatorModule } : {}),
+      ...(workspaceOutputAllowlist ? { workspaceOutputAllowlist } : {}),
       ...(outputAllowlist ? { outputAllowlist } : {}),
       ...(sourceBuild ? { sourceBuild } : {}),
+      ...(lifecycleActions ? { lifecycleActions } : {}),
+      ...(stateAdoption ? { stateAdoption } : {}),
     };
   }
 
+  /** Allocates the opaque raw-output destination before runner dispatch. */
+  async #allocateRawOutputRef(
+    applyRun: ApplyRun,
+    dispatch: RunExecutionDispatch,
+  ): Promise<string> {
+    const allocator = this.#artifactReferenceAllocator;
+    const scope = dispatch.stateScope;
+    if (!allocator || !scope?.subject) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `apply run ${applyRun.id} has no artifact-reference allocator or durable subject`,
+      );
+    }
+    const ref = await allocator.allocate({
+      kind: "raw_output",
+      workspaceId: scope.workspaceId,
+      subject: scope.subject,
+      runId: applyRun.id,
+    });
+    if (!ref.trim()) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `artifact-reference allocator returned an empty rawOutputRef for apply run ${applyRun.id}`,
+      );
+    }
+    return ref;
+  }
+
   /**
-   * Builds the §6.9 StateSnapshot metadata for a successful env-driven apply /
-   * destroy state persist. The object key mirrors the DO's R2_STATE key formula
-   * (`spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/{NNNNNNNN}.tfstate.enc`)
-   * so the ledger pointer matches the encrypted object the DO wrote at the same
-   * generation. Returns `undefined` for a run without environment context. The
-   * digest is the plaintext digest the runner DO echoed back, when present. The
-   * record is PERSISTED atomically with the Deployment / OutputSnapshot /
-   * Installation advance by {@link OpenTofuDeploymentStore.commitAppliedDeployment}.
+   * Builds the §6.9 StateVersion metadata for a successful env-driven apply /
+   * destroy state persist. The opaque reference is allocated by the host before
+   * dispatch, so the ledger pointer matches the encrypted object written at the
+   * same generation. Returns `undefined` for a Run without environment context.
+   * The digest is the plaintext digest the runner echoed back, when present. The
+   * record is PERSISTED atomically with the StateVersion / Output /
+   * Capsule advance by {@link OpenTofuControlStore.commitRunState}.
    */
-  #buildStateSnapshot(input: {
-    readonly envDispatch: RunInstallationDispatch;
+  #buildStateVersion(input: {
+    readonly envDispatch: RunExecutionDispatch;
     readonly generation: number;
     readonly stateDigest: string | undefined;
     readonly runId: string;
     readonly now: number;
-  }): StateSnapshot | undefined {
+  }): StateVersion | undefined {
     const scope = input.envDispatch.stateScope;
     if (!scope) return undefined;
-    const workspaceId = scope.workspaceId ?? scope.spaceId ?? "";
-    const capsuleId = scope.capsuleId ?? scope.installationId ?? "";
+    const workspaceId = scope.workspaceId;
+    const capsuleId = scope.subject?.kind === "capsule" ? scope.subject.id : "";
     return {
       id: this.#newId("state"),
       workspaceId,
-      spaceId: scope.spaceId ?? workspaceId,
       capsuleId,
-      installationId: scope.installationId ?? capsuleId,
       environment: scope.environment,
       generation: input.generation,
-      objectKey: stateObjectKeyForScope(scope),
+      stateRef: scope.stateRef,
       digest: input.stateDigest ?? "",
       createdByRunId: input.runId,
       createdAt: new Date(input.now).toISOString(),
@@ -3456,69 +3551,63 @@ export class RunEngine {
   }
 
   /**
-   * Builds the §16 OutputSnapshot for a successful (non-destroy) apply.
+   * Builds the §16 Output for a successful (non-destroy) apply.
    *
-   *   - `spaceOutputs` = InstallConfig.outputAllowlist projection (or template
-   *     public projection for template-backed runs), after sensitive filtering
-   *     and type validation.
-   *   - `publicOutputs` = the same projection surfaced on Deployment.
+   *   - `workspaceOutputs` = the Workspace-local capture projection after sensitive filtering,
+   *     bounded-size checks, and type validation.
+   *   - `publicOutputs` = only the explicit InstallConfig projection surfaced
+   *     on Output.
    *   - Sensitive-flagged outputs appear in NEITHER (invariants 11/12), and a
    *     required sensitive/missing/wrong-type output fails closed.
-   *   - `outputDigest` = stableJsonDigest over `{ spaceOutputs, publicOutputs }`,
+   *   - `outputDigest` = stableJsonDigest over `{ workspaceOutputs, publicOutputs }`,
    *     which drives stale propagation (§24).
-   *   - `rawOutputArtifactKey` = the §26 key the runner DO sealed + wrote the raw
-   *     envelope to (echoed as `result.rawOutputsKey`); falls back to the derived
-   *     key when the runner did not echo one (e.g. runs without env context).
+   *   - `rawArtifactRef` = the opaque host-allocated reference the runner used
+   *     for the sealed raw envelope.
    *
    * The raw envelope itself never enters the ledger — only the projection. The
-   * record is PERSISTED atomically with the Deployment / StateSnapshot /
-   * Installation advance by {@link OpenTofuDeploymentStore.commitAppliedDeployment}.
+   * record is PERSISTED atomically with the StateVersion /
+   * Capsule advance by {@link OpenTofuControlStore.commitRunState}.
    */
-  async #buildOutputSnapshot(input: {
-    readonly installation: Installation;
+  async #buildOutput(input: {
+    readonly capsule: Capsule;
     readonly applyRun: ApplyRun;
     readonly result: OpenTofuApplyResult;
-    readonly publicOutputs: readonly DeploymentOutput[];
-    readonly outputAllowlist?: RunTemplateDispatch["outputAllowlist"];
+    readonly envDispatch: RunExecutionDispatch;
+    readonly publicOutputs: Readonly<Record<string, JsonValue>>;
+    readonly workspaceOutputAllowlist?: RunModuleDispatch["workspaceOutputAllowlist"];
+    readonly outputAllowlist?: RunModuleDispatch["outputAllowlist"];
     readonly stateGeneration: number;
     readonly now: number;
-  }): Promise<OutputSnapshot> {
-    const projectedWorkspaceOutputs = input.outputAllowlist
-      ? projectOutputAllowlistSpaceOutputs(
-          input.outputAllowlist,
-          input.result.outputs,
-        )
-      : Object.fromEntries(
-          input.publicOutputs.map((output) => [output.name, output.value]),
-        );
-    const workspaceOutputs = workspaceOutputsWithReleaseDescriptor(
-      projectedWorkspaceOutputs,
-      input.result.outputs,
-    );
-    const publicOutputs = Object.fromEntries(
-      input.publicOutputs.map((output) => [output.name, output.value]),
-    );
+  }): Promise<Output> {
+    const rawArtifactRef = input.envDispatch.rawOutputRef;
+    if (!rawArtifactRef) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `apply run ${input.applyRun.id} completed without a raw output artifact reference`,
+      );
+    }
+    const projectedWorkspaceOutputs =
+      input.workspaceOutputAllowlist &&
+      Object.keys(input.workspaceOutputAllowlist).length > 0
+        ? projectOutputAllowlistSpaceOutputs(
+            input.workspaceOutputAllowlist,
+            input.result.outputs,
+          )
+        : projectAllWorkspaceOutputs(input.result.outputs);
+    const workspaceOutputs = projectedWorkspaceOutputs;
+    const publicOutputs = input.publicOutputs;
     const outputDigest = await stableJsonDigest({
-      spaceOutputs: workspaceOutputs,
+      workspaceOutputs,
       publicOutputs,
     });
-    const snapshot: OutputSnapshot = {
+    const snapshot: Output = {
       id: this.#newId("out"),
-      workspaceId: input.installation.workspaceId,
-      spaceId: input.installation.workspaceId ?? input.installation.spaceId,
-      capsuleId: input.installation.id,
-      installationId: input.installation.id,
+      workspaceId: input.capsule.workspaceId,
+      capsuleId: input.capsule.id,
       stateGeneration: input.stateGeneration,
-      rawOutputArtifactKey:
-        input.result.rawOutputsKey ??
-        rawOutputArtifactKey({
-          spaceId: input.installation.workspaceId ?? input.installation.spaceId,
-          installationId: input.installation.id,
-          runId: input.applyRun.id,
-        }),
+      rawArtifactRef,
       publicOutputs,
       workspaceOutputs,
-      spaceOutputs: workspaceOutputs,
       outputDigest,
       createdAt: new Date(input.now).toISOString(),
     };
@@ -3526,56 +3615,53 @@ export class RunEngine {
   }
 
   /**
-   * §24 stale propagation. After a successful apply records a new OutputSnapshot,
-   * compares its digest to the Installation's PREVIOUS OutputSnapshot digest;
+   * §24 stale propagation. After a successful apply records a new Output,
+   * compares its digest to the Capsule's PREVIOUS Output digest;
    * when they differ (the outputs changed) every transitive downstream consumer
-   * in the SAME Space that is currently `active` is patched to `stale`.
+   * in the same Workspace that is currently `active` is patched to `stale`.
    *
-   * The downstream closure is computed over the Space's `variable_injection`
+   * The downstream closure is computed over the Workspace's `variable_injection`
    * dependency edges (producer -> consumer) via {@link downstreamClosure}. Only
    * `active` consumers are moved: `pending` / `error` / `destroyed` are left
-   * untouched (a stale flag on a not-yet-applied or torn-down Installation is
+   * untouched (a stale flag on a not-yet-applied or torn-down Capsule is
    * meaningless). No-ops when the digest is unchanged, or when there are no
    * downstream consumers. Each patch carries no guard: stale is an advisory flag,
-   * not a state-generation move, so it never races the currentDeployment pointer.
+   * not a state-generation move, so it never races the current StateVersion pointer.
    */
   async #propagateStale(input: {
-    readonly installation: Installation;
-    readonly previousOutputSnapshot: OutputSnapshot | undefined;
-    readonly newOutputSnapshot: OutputSnapshot;
+    readonly capsule: Capsule;
+    readonly previousOutput: Output | undefined;
+    readonly newOutput: Output;
     readonly now: number;
   }): Promise<void> {
-    if (
-      input.previousOutputSnapshot?.outputDigest ===
-      input.newOutputSnapshot.outputDigest
-    )
+    if (input.previousOutput?.outputDigest === input.newOutput.outputDigest)
       return;
-    const edges = await this.#store.listDependenciesBySpace(
-      input.installation.workspaceId ?? input.installation.spaceId,
+    const edges = await this.#store.listDependenciesByWorkspace(
+      input.capsule.workspaceId,
     );
     if (edges.length === 0) return;
     const changedOutputNames = changedOutputNamesBetween(
-      input.previousOutputSnapshot,
-      input.newOutputSnapshot,
+      input.previousOutput,
+      input.newOutput,
     );
     const producerOutputReasons = changedOutputNames.map(
-      (outputName) => `${input.installation.name}.${outputName} changed`,
+      (outputName) => `${input.capsule.name}.${outputName} changed`,
     );
     const closure = downstreamClosure(
       edges.map((edge) => ({
-        from: edge.producerInstallationId,
-        to: edge.consumerInstallationId,
+        from: edge.producerCapsuleId,
+        to: edge.consumerCapsuleId,
       })),
-      input.installation.id,
+      input.capsule.id,
     );
     if (closure.size === 0) return;
     const updatedAt = new Date(input.now).toISOString();
     for (const consumerId of closure) {
-      const consumer = await this.#store.getInstallation(consumerId);
+      const consumer = await this.#store.getCapsule(consumerId);
       // Only an active consumer becomes stale; skip the rest (and a consumer the
       // ledger no longer holds).
       if (!consumer || consumer.status !== "active") continue;
-      await this.#store.patchInstallation(consumerId, {
+      await this.#store.patchCapsule(consumerId, {
         status: "stale",
         updatedAt,
       });
@@ -3583,27 +3669,27 @@ export class RunEngine {
       // producer's changed outputs (§24). One event per affected consumer.
       const directOutputNames = directChangedDependencyOutputs({
         edges,
-        producerInstallationId: input.installation.id,
-        consumerInstallationId: consumer.id,
+        producerCapsuleId: input.capsule.id,
+        consumerCapsuleId: consumer.id,
         changedOutputNames,
       });
       const directReasons = directOutputNames.map(
-        (outputName) => `${input.installation.name}.${outputName} changed`,
+        (outputName) => `${input.capsule.name}.${outputName} changed`,
       );
       await this.#recordActivity({
-        spaceId: consumer.spaceId,
-        action: "installation.stale",
-        targetType: "installation",
+        workspaceId: consumer.workspaceId,
+        action: "capsule.stale",
+        targetType: "capsule",
         targetId: consumer.id,
         metadata: {
-          producerInstallationId: input.installation.id,
-          producerInstallationName: input.installation.name,
+          producerCapsuleId: input.capsule.id,
+          producerCapsuleName: input.capsule.name,
           changedOutputs: changedOutputNames,
           reasons:
             directReasons.length > 0 ? directReasons : producerOutputReasons,
           directChangedOutputs: directOutputNames,
-          outputSnapshotId: input.newOutputSnapshot.id,
-          previousOutputSnapshotId: input.previousOutputSnapshot?.id ?? null,
+          outputId: input.newOutput.id,
+          previousOutputId: input.previousOutput?.id ?? null,
         },
       });
     }
@@ -3627,7 +3713,7 @@ export class RunEngine {
     if (planRun.requiresApproval === true) return;
     if (planRun.appliedApplyRunId) return;
     // A no-op plan already proves desired and observed state converge. Creating
-    // an apply would only spend runner time and cannot change Output Sync.
+    // an apply would only spend runner time and cannot publish a new StateVersion or Output.
     if (
       planRun.planResourceChanges !== undefined &&
       planRun.planResourceChanges.length === 0
@@ -3643,10 +3729,10 @@ export class RunEngine {
       );
     } catch (error) {
       await this.#recordActivity({
-        workspaceId: planRun.workspaceId ?? planRun.spaceId,
-        action: "installation.auto_update_apply_failed",
-        targetType: "installation",
-        targetId: planRun.installationId ?? planRun.id,
+        workspaceId: planRun.workspaceId,
+        action: "capsule.auto_update_apply_failed",
+        targetType: "capsule",
+        targetId: planRun.capsuleId ?? planRun.id,
         metadata: {
           planRunId: planRun.id,
           message: error instanceof Error ? error.message : String(error),
@@ -3662,16 +3748,8 @@ export class RunEngine {
    * controller-side belt-and-suspenders.
    */
   async #recordActivity(event: RecordActivityArgs): Promise<void> {
-    // Dual-write the renamed Workspace identity during the rename: every caller
-    // may pass either the canonical `workspaceId` or the deprecated `spaceId`;
-    // the persisted ActivityEvent carries both so readers on either name resolve.
-    const workspaceId = event.workspaceId ?? event.spaceId ?? "";
     try {
-      await this.#activity.record({
-        ...event,
-        workspaceId,
-        spaceId: workspaceId,
-      });
+      await this.#activity.record(event);
     } catch (error) {
       log.warn("service.deploy_control.activity_record_failed", {
         action: event.action,
@@ -3681,81 +3759,90 @@ export class RunEngine {
   }
 
   /**
-   * Resolves an installation-driven run's provider env bindings (spec §9) at mint time so
-   * binding changes take effect on the next run. Returns `undefined` only for
-   * runs without installation context. If a run names an Installation that no
-   * longer exists, it fails closed instead of falling back to a Space-wide pool. The result
-   * feeds BOTH {@link mintableConnectionIds} (shared pool) and
-   * {@link providerMintEntriesFromResolved} (the §13 per-alias TF_VAR split),
-   * mirroring `providerEnvBindingsFromResolved` so the minted vars match the
-   * rootgen aliases.
+   * Resolves a subject-bound Run's Provider Bindings at mint time. Resource
+   * subjects resolve the Target-selected binding directly; Capsule subjects
+   * resolve their stored ProviderBinding set. Raw Runs return `undefined`.
+   * Missing, cross-Workspace, mismatched, or unverified Connections fail closed.
    */
-  async #resolveRunInstallationProviderEnvBindings(
+  async #resolveRunProviderBindings(
     planRun: PlanRun,
-  ): Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined> {
-    const ctx = planRun.installationContext;
+  ): Promise<readonly ResolvedCapsuleProviderBinding[] | undefined> {
+    if (planRun.resourceContext) {
+      this.#connectionsService ??= new ConnectionsService({
+        store: this.#store,
+        allowOperatorScopedProviderConnections:
+          this.#allowOperatorScopedProviderConnections,
+      });
+      const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
+      const binding = planRun.resourceContext.providerBinding;
+      return await this.#connectionsService.resolveResourceProviderBinding({
+        workspaceId: planRun.resourceContext.workspaceId,
+        provider: binding.providerSource,
+        ...(binding.alias ? { alias: binding.alias } : {}),
+        ...(binding.connectionId ? { connectionId: binding.connectionId } : {}),
+        required:
+          profile.requireProviderBindings === true &&
+          planRun.requiredProviders.length > 0,
+      });
+    }
+    const ctx = planRun.capsuleContext;
     if (!ctx) return undefined;
-    const installation = await this.#store.getInstallation(
-      ctx.capsuleId ?? ctx.installationId,
-    );
-    if (!installation) {
+    const capsule = await this.#store.getCapsule(ctx.capsuleId);
+    if (!capsule) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `installation_not_found: ${ctx.installationId}`,
+        `capsule_not_found: ${ctx.capsuleId}`,
+        { reason: "capsule_not_found" },
       );
     }
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
-      allowOperatorBackedProviderEnvs: this.#allowOperatorBackedProviderEnvs,
+      allowOperatorScopedProviderConnections:
+        this.#allowOperatorScopedProviderConnections,
     });
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
     const installConfig = await this.#store.getInstallConfig(
-      installation.installConfigId,
+      capsule.installConfigId,
     );
     if (!installConfig) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `install_config_not_found: ${installation.installConfigId}`,
+        `install_config_not_found: ${capsule.installConfigId}`,
+        { reason: "install_config_not_found" },
       );
     }
     // Run-scoped: ProviderBindings plus the same Cloud/operator managed
     // fallback used by rootgen. This keeps minted TF_VAR credentials lined up
     // with the generated provider blocks.
-    return await this.#connectionsService.resolveProviderEnvBindingsForRun(
-      installation,
-      providerEnvResolutionProviders(
-        planRun.requiredProviders,
-        installConfig,
-        profile,
-      ),
+    return await this.#connectionsService.resolveProviderBindingsForRun(
+      capsule,
+      providerBindingResolutionProviders(planRun.requiredProviders, profile),
     );
   }
 
   /**
    * Pins the resolved provider-connection digest (plan→apply TOCTOU) onto a completed plan.
    * Resolves the plan's live provider env bindings ONCE and hashes the
-   * provider→{connectionId,mode,alias} set onto `resolvedProviderEnvBindingsDigest`. Only
-   * pinned for an installation-context run (a raw `/plan-runs` run resolves no
-   * provider env bindings, so there is nothing to fence); the apply mint re-resolves and
-   * asserts this digest is unchanged. A failed/denied plan is never applied, so
-   * the pin is harmless either way.
+   * provider→{connectionId,mode,alias} set onto `resolvedProviderBindingsDigest`. Only
+   * pinned for a subject-bound Run (a raw `/plan-runs` Run resolves no Provider
+   * Bindings, so there is nothing to fence); the apply mint re-resolves and
+   * asserts this digest is unchanged. A failed/denied plan is never applied.
    */
   async #pinResolvedBindingsDigest(planRun: PlanRun): Promise<PlanRun> {
-    if (!planRun.installationContext) return planRun;
-    const resolved =
-      await this.#resolveRunInstallationProviderEnvBindings(planRun);
+    if (!planRun.capsuleContext && !planRun.resourceContext) return planRun;
+    const resolved = await this.#resolveRunProviderBindings(planRun);
     if (resolved === undefined) return planRun;
-    const digest = await resolvedProviderEnvBindingsDigest(resolved);
-    return { ...planRun, resolvedProviderEnvBindingsDigest: digest };
+    const digest = await resolvedProviderBindingsDigest(resolved);
+    return { ...planRun, resolvedProviderBindingsDigest: digest };
   }
 
   async createRestoreRun(
-    spaceId: string,
+    workspaceId: string,
     backupId: string,
     request: CreateRestoreRequest,
     context: DeployControlActorContext = {},
   ): Promise<Run> {
-    requireNonEmptyString(spaceId, "spaceId");
+    requireNonEmptyString(workspaceId, "workspaceId");
     requireNonEmptyString(backupId, "backupId");
     if (
       !Number.isInteger(request.stateGeneration) ||
@@ -3767,7 +3854,7 @@ export class RunEngine {
       );
     }
     const backup = await this.#store.getBackupRecord(backupId);
-    if (!backup || backup.spaceId !== spaceId) {
+    if (!backup || backup.workspaceId !== workspaceId) {
       throw new OpenTofuControllerError(
         "not_found",
         "backup not found in this workspace",
@@ -3780,11 +3867,16 @@ export class RunEngine {
         "backup has no service-data artifact to restore",
       );
     }
-    if (restoreServiceData && !this.#runner?.restoreServiceData) {
-      throw new OpenTofuControllerError(
-        "not_implemented",
-        "service-data restore requires a service-data restore-capable runner",
+    if (restoreServiceData) {
+      const profile = await this.#requireRunnerProfile(
+        this.#defaultRunnerProfileId,
       );
+      if (!this.#runnerForProfile(profile).restoreServiceData) {
+        throw new OpenTofuControllerError(
+          "not_implemented",
+          "service-data restore requires a service-data restore-capable runner",
+        );
+      }
     }
     if (
       request.expectedBackupDigest &&
@@ -3795,25 +3887,24 @@ export class RunEngine {
         "backup digest guard did not match",
       );
     }
-    const installationId =
-      request.capsuleId ?? backup.capsuleId ?? backup.installationId;
-    if (!installationId) {
+    const capsuleId = request.capsuleId ?? backup.capsuleId;
+    if (!capsuleId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        "installationId is required for control/state restore",
+        "capsuleId is required for control/state restore",
       );
     }
-    const installation = await this.#store.getInstallation(installationId);
-    if (!installation || installation.spaceId !== spaceId) {
+    const capsule = await this.#store.getCapsule(capsuleId);
+    if (!capsule || capsule.workspaceId !== workspaceId) {
       throw new OpenTofuControllerError(
         "not_found",
         "capsule not found in this workspace",
       );
     }
     const environment =
-      request.environment ?? backup.environment ?? installation.environment;
+      request.environment ?? backup.environment ?? capsule.environment;
     const source = (
-      await this.#store.listStateSnapshots(installation.id, environment)
+      await this.#store.listStateVersions(capsule.id, environment)
     ).find((snapshot) => snapshot.generation === request.stateGeneration);
     if (!source) {
       throw new OpenTofuControllerError(
@@ -3824,24 +3915,22 @@ export class RunEngine {
     const now = new Date(this.#now()).toISOString();
     const run: Run = {
       id: this.#newId("restore"),
-      workspaceId: installation.workspaceId,
-      spaceId,
-      capsuleId: installation.id,
-      installationId: installation.id,
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
       environment,
       type: "restore",
       status: "waiting_approval",
       backupId: backup.id,
       restoreStateGeneration: source.generation,
       ...(restoreServiceData ? { restoreServiceData: true } : {}),
-      restoredFromStateSnapshotId: source.id,
+      restoredFromStateVersionId: source.id,
       planDigest: backup.digest,
       createdBy: context.actor ?? "system",
       createdAt: now,
     };
     await this.#store.putBackupRun(run);
     await this.#recordActivity({
-      spaceId,
+      workspaceId,
       ...(context.actor ? { actorId: context.actor } : {}),
       action: "restore.created",
       targetType: "run",
@@ -3849,13 +3938,13 @@ export class RunEngine {
       runId: run.id,
       metadata: {
         backupId: backup.id,
-        installationId: installation.id,
+        capsuleId: capsule.id,
         environment,
         stateGeneration: source.generation,
         ...(restoreServiceData
           ? {
               restoreServiceData: true,
-              serviceDataObjectKey: backup.serviceData!.objectKey,
+              serviceDataRef: backup.serviceData!.ref,
               serviceDataDigest: backup.serviceData!.digest,
             }
           : {}),
@@ -3915,17 +4004,23 @@ export class RunEngine {
         );
       }
       await this.#store.deletePlanRunInputs(id);
+      await this.#notifyTerminal(cancelled);
       return projectPlanRun(cancelled, {
         awaitingApproval: false,
-        ...this.#runQuery.installationProjection(cancelled),
+        ...this.#runQuery.capsuleProjection(cancelled),
       });
     }
     const applyRun = await this.#store.getApplyRun(id);
     if (applyRun) {
-      if (applyRun.status !== "queued") {
+      // A retryable runner-infrastructure failure deliberately requeues the
+      // SAME ApplyRun after it has started. Such a row may already carry
+      // provider/lifecycle mutation evidence (notably a succeeded pre_destroy
+      // action), so treating it like a never-started queue item would let
+      // cancellation erase the only fail-closed runtime-safety candidate.
+      if (applyRun.status !== "queued" || applyRun.startedAt !== undefined) {
         throw new OpenTofuControllerError(
           "failed_precondition",
-          `apply run ${id} is ${applyRun.status}; only queued runs can be cancelled`,
+          `apply run ${id} is ${applyRun.status}${applyRun.startedAt !== undefined ? " and has already started" : ""}; only queued runs can be cancelled, and only before they start`,
         );
       }
       const now = this.#now();
@@ -3948,6 +4043,10 @@ export class RunEngine {
         id,
         kind: "apply",
         expectFrom: ["queued"],
+        // Status alone is insufficient: a runner can claim this never-started
+        // row and requeue it after provider/lifecycle execution between our read
+        // and CAS. Require the row to still be genuinely never-started.
+        expectStartedAt: null,
         run: cancelled,
         clearLeaseToken: true,
       });
@@ -3955,9 +4054,10 @@ export class RunEngine {
         const current = (result.run as ApplyRun | undefined) ?? applyRun;
         throw new OpenTofuControllerError(
           "failed_precondition",
-          `apply run ${id} is ${current.status}; only queued runs can be cancelled`,
+          `apply run ${id} is ${current.status}${current.startedAt !== undefined ? " and has already started" : ""}; only queued runs can be cancelled, and only before they start`,
         );
       }
+      await this.#notifyTerminal(cancelled);
       return projectApplyRun(cancelled);
     }
     if (
@@ -3976,7 +4076,7 @@ export class RunEngine {
   /**
    * Records an explicit approval against a `waiting_approval` plan run, clearing
    * the approval gate so its apply may proceed (spec §10.6 destroy approval and
-   * the template destructive-confirmation gate). Idempotent: re-approving an
+   * destructive changes). Idempotent: re-approving an
    * already-approved plan returns it unchanged. Rejects a run that is not a plan
    * or is not parked awaiting approval.
    */
@@ -4009,7 +4109,7 @@ export class RunEngine {
     if (planRun.approval) {
       return projectPlanRun(planRun, {
         awaitingApproval: false,
-        ...this.#runQuery.installationProjection(planRun),
+        ...this.#runQuery.capsuleProjection(planRun),
       });
     }
     if (!(await this.#runQuery.planAwaitsApproval(planRun))) {
@@ -4074,7 +4174,7 @@ export class RunEngine {
     }
     // Activity (§27 / §34): the plan Run was approved.
     await this.#recordActivity({
-      spaceId: approved.spaceId,
+      workspaceId: approved.workspaceId,
       ...(input.approvedBy ? { actorId: input.approvedBy } : {}),
       action: "run.approved",
       targetType: "run",
@@ -4082,12 +4182,12 @@ export class RunEngine {
       runId: approved.id,
       metadata: {
         operation: approved.operation,
-        installationId: approved.installationId,
+        capsuleId: approved.capsuleId,
       },
     });
     return projectPlanRun(approved, {
       awaitingApproval: false,
-      ...this.#runQuery.installationProjection(approved),
+      ...this.#runQuery.capsuleProjection(approved),
     });
   }
 
@@ -4123,7 +4223,7 @@ export class RunEngine {
       return (approveResult.run as Run | undefined) ?? restoreRun;
     }
     await this.#recordActivity({
-      spaceId: approved.spaceId,
+      workspaceId: approved.workspaceId,
       ...(input.approvedBy ? { actorId: input.approvedBy } : {}),
       action: "run.approved",
       targetType: "run",
@@ -4132,7 +4232,7 @@ export class RunEngine {
       metadata: {
         operation: "restore",
         backupId: approved.backupId ?? null,
-        installationId: approved.installationId ?? null,
+        capsuleId: approved.capsuleId ?? null,
         approvedAt: now,
         ...(input.reason ? { reason: redactString(input.reason) } : {}),
       },
@@ -4140,7 +4240,7 @@ export class RunEngine {
     await this.#enqueueRun({
       action: "restore",
       runId: approved.id,
-      spaceId: approved.spaceId,
+      workspaceId: approved.workspaceId,
     });
     return (await this.#store.getBackupRun(approved.id)) ?? approved;
   }
@@ -4309,7 +4409,7 @@ export class RunEngine {
       try {
         await this.#heartbeatRunningRun(kind, run, leaseToken);
         if (lease) {
-          await lease.renew(DEFAULT_INSTALLATION_LEASE_TTL_MS);
+          await lease.renew(DEFAULT_CAPSULE_LEASE_TTL_MS);
         }
       } catch {
         // Best-effort: a transient renewal failure must not kill the apply it is
@@ -4336,7 +4436,7 @@ export class RunEngine {
 
   /**
    * Persists a run that has reached a TERMINAL status (succeeded / failed /
-   * cancelled). Routed through {@link OpenTofuDeploymentStore.transitionRun}
+   * cancelled). Routed through {@link OpenTofuControlStore.transitionRun}
    * instead of a raw `put*` so the lease fence column is CLEARED on the same
    * write (a `put*` would leave a stale `lease_token` behind). Non-terminal →
    * terminal is uncontested (the consumer that reached this point already holds
@@ -4373,7 +4473,7 @@ export class RunEngine {
       ...running,
       status: "failed",
       heartbeatAt: finishedAtMs,
-      errorCode: compactErrorCode(errorMessage(error)),
+      errorCode: runErrorCode(error, "restore_failed"),
       finishedAt: new Date(finishedAtMs).toISOString(),
     };
     const result = await this.#store.transitionRun({
@@ -4385,6 +4485,9 @@ export class RunEngine {
       clearLeaseToken: true,
       heartbeatAt: finishedAtMs,
     });
+    if (result.won) {
+      await this.#notifyRestore({ phase: "failed", run: failed });
+    }
     return (result.won ? failed : (result.run ?? failed)) as Run;
   }
 
@@ -4423,9 +4526,9 @@ export class RunEngine {
     });
     // Activity (§27 / §34): a plan / destroy_plan reached a failed terminal
     // state. Public-safe metadata only — a compact error CODE (never the raw
-    // diagnostic message), the run phase, and the targeted Installation id.
+    // diagnostic message), the run phase, and the targeted Capsule id.
     await this.#recordActivity({
-      spaceId: failed.spaceId,
+      workspaceId: failed.workspaceId,
       action: "run.failed",
       targetType: "run",
       targetId: failed.id,
@@ -4433,10 +4536,8 @@ export class RunEngine {
       metadata: {
         phase: failed.driftCheck === true ? "drift_check" : "plan",
         operation: failed.operation,
-        errorCode: compactErrorCode(errorMessage(error)),
-        ...(failed.installationId
-          ? { installationId: failed.installationId }
-          : {}),
+        errorCode: runErrorCode(error, "plan_failed"),
+        ...(failed.capsuleId ? { capsuleId: failed.capsuleId } : {}),
       },
     });
     return failed;
@@ -4461,7 +4562,7 @@ export class RunEngine {
         ...running.auditEvents,
         auditEvent(running.id, retryEvent, now, {
           reason: "runner_infrastructure_error",
-          errorCode: compactErrorCode(errorMessage(error)),
+          errorCode: runErrorCode(error, "runner_infrastructure_error"),
         }),
       ],
       updatedAt: now,
@@ -4483,7 +4584,7 @@ export class RunEngine {
       status: "queued",
     });
     await this.#recordActivity({
-      spaceId: queued.spaceId,
+      workspaceId: queued.workspaceId,
       action: "run.retry_scheduled",
       targetType: "run",
       targetId: queued.id,
@@ -4496,10 +4597,8 @@ export class RunEngine {
               ? "destroy_plan"
               : "plan",
         operation: queued.operation,
-        errorCode: compactErrorCode(errorMessage(error)),
-        ...(queued.installationId
-          ? { installationId: queued.installationId }
-          : {}),
+        errorCode: runErrorCode(error, "runner_infrastructure_error"),
+        ...(queued.capsuleId ? { capsuleId: queued.capsuleId } : {}),
       },
     });
     await this.#enqueueRequeuedRun("plan", queued);
@@ -4513,6 +4612,9 @@ export class RunEngine {
     startedAt: number,
     eventType: "apply.failed" | "destroy.failed",
     error: unknown,
+    providerDispatched = false,
+    lifecycleActionDispatched = false,
+    lifecycleOutcome?: LifecycleActionOutcome,
   ): Promise<ApplyRun> {
     const now = this.#now();
     const failed: ApplyRun = {
@@ -4527,8 +4629,34 @@ export class RunEngine {
       diagnostics: [errorDiagnostic(error)],
       auditEvents: [
         ...running.auditEvents,
+        ...(lifecycleOutcome
+          ? [
+              auditEvent(
+                running.id,
+                `lifecycle_action.${lifecycleOutcome.phase}.${lifecycleOutcome.activityStatus}`,
+                now,
+                {
+                  phase: lifecycleOutcome.phase,
+                  status: lifecycleOutcome.reportedStatus,
+                  commandCount: lifecycleOutcome.commandCount,
+                  actionDispatched: lifecycleOutcome.actionDispatched,
+                },
+              ),
+            ]
+          : []),
         auditEvent(running.id, eventType, now, {
           message: errorMessage(error),
+          providerDispatched,
+          ...(lifecycleActionDispatched
+            ? { lifecycleActionDispatched: true }
+            : {}),
+          ...(lifecycleOutcome
+            ? {
+                lifecycleActionPhase: lifecycleOutcome.phase,
+                lifecycleActionStatus: lifecycleOutcome.reportedStatus,
+                lifecycleActionCommandCount: lifecycleOutcome.commandCount,
+              }
+            : {}),
         }),
       ],
       updatedAt: now,
@@ -4550,9 +4678,9 @@ export class RunEngine {
     });
     // Activity (§27 / §34): an apply / destroy_apply reached a failed terminal
     // state. Public-safe metadata only — a compact error CODE (never the raw
-    // diagnostic message), the run phase, and the targeted Installation id.
+    // diagnostic message), the run phase, and the targeted Capsule id.
     await this.#recordActivity({
-      spaceId: failed.spaceId,
+      workspaceId: failed.workspaceId,
       action: "run.failed",
       targetType: "run",
       targetId: failed.id,
@@ -4560,10 +4688,11 @@ export class RunEngine {
       metadata: {
         phase: eventType === "destroy.failed" ? "destroy_apply" : "apply",
         operation: failed.operation,
-        errorCode: compactErrorCode(errorMessage(error)),
-        ...(failed.installationId
-          ? { installationId: failed.installationId }
-          : {}),
+        errorCode: runErrorCode(
+          error,
+          eventType === "destroy.failed" ? "destroy_failed" : "apply_failed",
+        ),
+        ...(failed.capsuleId ? { capsuleId: failed.capsuleId } : {}),
       },
     });
     return failed;
@@ -4595,22 +4724,15 @@ export class RunEngine {
     const now = this.#now();
     const replayed: ApplyRun = {
       ...input.running,
-      ...(existing.installationId
+      ...(existing.capsuleId
         ? {
-            capsuleId: existing.capsuleId ?? existing.installationId,
-            installationId: existing.installationId,
-          }
-        : {}),
-      ...(existing.deploymentId ? { deploymentId: existing.deploymentId } : {}),
-      ...(existing.installationCurrentDeploymentId
-        ? {
-            installationCurrentDeploymentId:
-              existing.installationCurrentDeploymentId,
+            capsuleId: existing.capsuleId,
           }
         : {}),
       ...(existing.stateVersionId
         ? { stateVersionId: existing.stateVersionId }
         : {}),
+      ...(existing.outputId ? { outputId: existing.outputId } : {}),
       status: "succeeded",
       stateLock:
         existing.stateLock ??
@@ -4620,7 +4742,6 @@ export class RunEngine {
           now,
           "recorded",
         ),
-      ...(existing.outputs ? { outputs: existing.outputs } : {}),
       ...(existing.providerResolutions
         ? { providerResolutions: existing.providerResolutions }
         : {}),
@@ -4629,8 +4750,8 @@ export class RunEngine {
         auditEvent(input.running.id, "apply.idempotent_replay", now, {
           planRunId: input.planRun.id,
           existingApplyRunId: input.existingApplyRunId,
-          ...(existing.deploymentId
-            ? { deploymentId: existing.deploymentId }
+          ...(existing.stateVersionId
+            ? { stateVersionId: existing.stateVersionId }
             : {}),
         }),
       ],
@@ -4646,7 +4767,7 @@ export class RunEngine {
     const applyRun = persisted.run;
     if (persisted.won) {
       await this.#recordActivity({
-        spaceId: applyRun.spaceId,
+        workspaceId: applyRun.workspaceId,
         action: "run.idempotent_replay",
         targetType: "run",
         targetId: applyRun.id,
@@ -4655,9 +4776,7 @@ export class RunEngine {
           phase: applyRun.operation === "destroy" ? "destroy_apply" : "apply",
           operation: applyRun.operation,
           existingApplyRunId: input.existingApplyRunId,
-          ...(applyRun.installationId
-            ? { installationId: applyRun.installationId }
-            : {}),
+          ...(applyRun.capsuleId ? { capsuleId: applyRun.capsuleId } : {}),
         },
       });
     }
@@ -4695,7 +4814,7 @@ export class RunEngine {
           now,
           {
             reason: "runner_infrastructure_error",
-            errorCode: compactErrorCode(errorMessage(error)),
+            errorCode: runErrorCode(error, "runner_infrastructure_error"),
           },
         ),
       ],
@@ -4721,7 +4840,7 @@ export class RunEngine {
       recordApplyDuration: true,
     });
     await this.#recordActivity({
-      spaceId: queued.spaceId,
+      workspaceId: queued.workspaceId,
       action: "run.retry_scheduled",
       targetType: "run",
       targetId: queued.id,
@@ -4729,10 +4848,8 @@ export class RunEngine {
       metadata: {
         phase,
         operation: queued.operation,
-        errorCode: compactErrorCode(errorMessage(error)),
-        ...(queued.installationId
-          ? { installationId: queued.installationId }
-          : {}),
+        errorCode: runErrorCode(error, "runner_infrastructure_error"),
+        ...(queued.capsuleId ? { capsuleId: queued.capsuleId } : {}),
       },
     });
     await this.#enqueueRequeuedRun("apply", queued);
@@ -4747,7 +4864,7 @@ export class RunEngine {
       await this.#enqueueRun({
         action,
         runId: run.id,
-        spaceId: run.workspaceId ?? run.spaceId,
+        workspaceId: run.workspaceId ?? run.workspaceId,
         cause: "controller_retry",
       });
     } catch (error) {
@@ -4765,22 +4882,24 @@ export class RunEngine {
     profile: RunnerProfile,
     variables: Readonly<Record<string, JsonValue>>,
     runEnvironment: ResolvedRunEnvironment,
-    dispatch: RunTemplateDispatch,
+    dispatch: RunModuleDispatch,
   ): Promise<PlanRun> {
     try {
-      let effectiveRunning = running;
-      let effectiveRunEnvironment = runEnvironment;
+      const effectiveRunning = running;
+      const effectiveRunEnvironment = runEnvironment;
       // A plan restores against the CURRENT generation
-      // (`baseStateGeneration`). Empty for runs without installation context.
-      const envDispatch = await this.#verification.installationDispatch(
+      // (`baseStateGeneration`). Empty for runs without capsule context.
+      const envDispatch = await this.#verification.executionDispatch(
         running,
         running.baseStateGeneration ?? 0,
+        dispatch.stateAdoption,
       );
       const planPolicy = await this.#policyForPlanRun(running);
       const providerInstallationPolicy =
         planPolicy?.providerInstallation?.requireMirror === true
           ? { requireMirror: true }
           : undefined;
+      const scopeSelectors = planScopeSelectors(planPolicy?.scopeBoundary);
       const runner = this.#runnerForProfile(profile);
       const dispatchPlan = (environment: ResolvedRunEnvironment) =>
         runner.plan({
@@ -4788,21 +4907,30 @@ export class RunEngine {
           runnerProfile: profile,
           variables,
           ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
-          // Generated-root dispatch (§7): built-in modules and generic Capsules
-          // use the same generated-root/moduleFiles shape. Empty only for the
-          // lower-level raw `/internal/v1/plan-runs` compatibility path.
+          ...(scopeSelectors.length > 0 ? { scopeSelectors } : {}),
+          // Capsules use a generated root only when explicit provider configuration
+          // requires a child-module wrapper.
           ...(dispatch.generatedRoot
             ? { generatedRoot: dispatch.generatedRoot }
+            : {}),
+          ...(dispatch.operatorModule
+            ? { operatorModule: dispatch.operatorModule }
             : {}),
           ...(dispatch.sourceBuild
             ? { sourceBuild: dispatch.sourceBuild }
             : {}),
-          ...(dispatch.outputAllowlist
-            ? { outputAllowlist: dispatch.outputAllowlist }
+          ...((dispatch.workspaceOutputAllowlist ?? dispatch.outputAllowlist)
+            ? {
+                outputAllowlist:
+                  dispatch.workspaceOutputAllowlist ?? dispatch.outputAllowlist,
+              }
             : {}),
           // M2 env dispatch (state scope + source archive). Absent without env ctx.
           ...(envDispatch.stateScope
             ? { stateScope: envDispatch.stateScope }
+            : {}),
+          ...(envDispatch.stateAdoption
+            ? { stateAdoption: envDispatch.stateAdoption }
             : {}),
           ...(envDispatch.sourceArchive
             ? { sourceArchive: envDispatch.sourceArchive }
@@ -4816,51 +4944,13 @@ export class RunEngine {
             ? { credentials: environment.credentials }
             : {}),
         });
-      let result = await this.#withRunRenewal(
+      const result = await this.#withRunRenewal(
         "plan",
         effectiveRunning,
         leaseToken,
         undefined,
         () => dispatchPlan(effectiveRunEnvironment),
       );
-      // Destroy plans intentionally null projected outputs and never mint new
-      // runtime grants from those values.
-      if (
-        running.operation !== "destroy" &&
-        dispatch.outputAllowlist &&
-        result.plannedOutputs
-      ) {
-        const plannedWorkspaceOutputs = projectOutputAllowlistSpaceOutputs(
-          dispatch.outputAllowlist,
-          result.plannedOutputs,
-        );
-        const enriched =
-          await this.#runEnv.enrichRunEnvironmentWithPlannedServiceGrants({
-            planRun: effectiveRunning,
-            auditRunId: effectiveRunning.id,
-            plannedWorkspaceOutputs,
-            base: effectiveRunEnvironment,
-          });
-        if (
-          enriched.serviceGrantEnvNames.some(
-            (name) =>
-              !effectiveRunEnvironment.serviceGrantEnvNames.includes(name),
-          )
-        ) {
-          effectiveRunEnvironment = enriched;
-          effectiveRunning = withRunEnvironmentEvidence(
-            effectiveRunning,
-            enriched,
-          );
-          result = await this.#withRunRenewal(
-            "plan",
-            effectiveRunning,
-            leaseToken,
-            undefined,
-            () => dispatchPlan(effectiveRunEnvironment),
-          );
-        }
-      }
       const now = this.#now();
       const verdict = await this.#evaluatePlanCompletion({
         running: effectiveRunning,
@@ -4875,7 +4965,7 @@ export class RunEngine {
         now,
       });
       // plan→apply TOCTOU pin (S2): hash the resolved provider env bindings this
-      // plan was reviewed against onto the plan (installation-context runs only),
+      // plan was reviewed against onto the plan (capsule-context runs only),
       // so the apply mint can assert nothing was swapped between plan and apply.
       const updated = await this.#pinResolvedBindingsDigest(completed);
       // Terminal write of the running plan (succeeded / waiting_approval /
@@ -4889,9 +4979,9 @@ export class RunEngine {
       );
       if (!persisted.won) return persisted.run;
       await this.#recordRunnerMinuteUsage({
-        spaceId: updated.workspaceId ?? updated.spaceId,
+        workspaceId: updated.workspaceId ?? updated.workspaceId,
         runId: updated.id,
-        installationId: updated.installationId,
+        capsuleId: updated.capsuleId,
         startedAt: effectiveRunning.startedAt,
         finishedAt: now,
       });
@@ -4939,6 +5029,7 @@ export class RunEngine {
           throw new OpenTofuControllerError(
             "failed_precondition",
             `retryable_runner_infrastructure_error: plan run ${queued.id} requeued after runner infrastructure failure`,
+            { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
           );
         }
       }
@@ -4963,10 +5054,9 @@ export class RunEngine {
       result.requiredProviders ?? running.requiredProviders,
     );
     // Re-evaluate against the SAME provider-free allowance as the create gate:
-    // a provider-free template (e.g. `core`) that observes zero providers at
+    // a provider-free Capsule that observes zero providers at
     // plan time stays passed instead of tripping the "providers before init"
-    // gate. Resolved from the recorded binding so a tampered catalog cannot
-    // retroactively change the allowance.
+    // gate. This is derived from the recorded Capsule run.
     const policy = evaluatePolicy({
       profile,
       requiredProviders,
@@ -4977,18 +5067,12 @@ export class RunEngine {
     });
     // Layered plan-JSON policy (§25). When the runner returned resource
     // changes, evaluate the resource-type allowlist (layer 5) and the action
-    // policy (layer 7) over them for ALL runs — not only template-backed:
-    //   - template-backed runs use the recorded template.policy for resource
-    //     types (tamper-safe) and the target Space/InstallConfig for scope +
-    //     quota;
-    //   - non-template installation-context runs use the Installation's
-    //     Space/InstallConfig policy (resolved via installConfigId);
-    //   - raw `/internal/v1/plan-runs` runs without installation context keep today's
+    // policy (layer 7) over them for all runs. Capsule runs use the DB-owned
+    // Workspace/InstallConfig policy resolved through installConfigId;
+    //   - raw `/internal/v1/plan-runs` runs without capsule context keep today's
     //     behavior (no allowlist source -> no resource enforcement).
     // A disallowed resource type DENIES the plan; a delete/replace marks it
-    // requiresApproval (parked waiting_approval until approved). The template
-    // destructive-confirmation gate (requiresConfirmation) additionally needs
-    // confirmDestructive at apply.
+    // requiresApproval (parked waiting_approval until approved).
     const layered = await this.#evaluatePlanPolicy(running, result);
     const blockedByLayeredPolicy = [
       ...(layered.provider?.reasons ?? []),
@@ -4997,6 +5081,7 @@ export class RunEngine {
       ...(layered.quota?.reasons ?? []),
       ...(layered.providerLockfile?.reasons ?? []),
       ...(layered.providerInstallation?.reasons ?? []),
+      ...resourceImportPolicyReasons(running, result),
     ];
     const runPolicy = await this.#policyForPlanRun(running);
     const compatibilityPolicy = await this.#evaluateCapsuleCompatibilityPolicy({
@@ -5009,7 +5094,7 @@ export class RunEngine {
         : {}),
       ...(runPolicy ? { policy: runPolicy } : {}),
     });
-    const billingPolicy = await this.#billing.evaluatePlanBillingReservation({
+    const billingPolicy = await this.#billing.evaluatePlanBilling({
       planRun: running,
       result,
       now,
@@ -5042,7 +5127,10 @@ export class RunEngine {
     // (RunQueryService.planAwaitsApproval), so they need no field. A drift_check is read-only
     // and can never be applied (Phase 8), so it never carries requiresApproval.
     const requiresApproval =
-      running.driftCheck !== true && layered.action?.requiresApproval === true;
+      running.driftCheck !== true &&
+      running.refreshOnly !== true &&
+      running.resourceImport !== true &&
+      layered.action?.requiresApproval === true;
     return {
       requiredProviders,
       layered,
@@ -5058,7 +5146,7 @@ export class RunEngine {
   /**
    * Assembles the completed PlanRun from the runner result and the policy
    * verdict: the succeeded/blocked status, the normalized plan artifact /
-   * summary / template binding, and the `plan.policy_evaluated` +
+   * summary, and the `plan.policy_evaluated` +
    * `plan.completed` audit events.
    */
   #buildCompletedPlanRun(input: {
@@ -5085,21 +5173,14 @@ export class RunEngine {
       now,
     });
     const summary = normalizePlanSummary(result.summary);
-    const templateBinding = updatedTemplateBinding(
-      running,
-      layered.templatePolicy,
-    );
     // §25 approval gate as a PERSISTED status (S2): a destroy plan is always
     // two-stage — it MUST carry a recorded approval (`approveRun`) before apply —
     // so a passed destroy plan parks in the persisted `waiting_approval` status
     // instead of `succeeded` (it was previously `succeeded` + a read-time
     // derivation). The OTHER gates are NOT approval-mandatory at apply and stay
-    // `succeeded`: a `requiresApproval` (delete/replace) change is a display
-    // signal, and a template `requiresConfirmation` change is enforced by
-    // `confirmDestructive` at apply — both still PROJECT `waiting_approval` via
-    // the read-time `planAwaitsApproval` derivation, so their semantics are
-    // unchanged. A read-only drift_check never parks; a policy-denied plan is
-    // `failed`.
+    // `succeeded`: a `requiresApproval` (delete/replace) change remains a
+    // display/review signal. A read-only drift_check never parks; a
+    // policy-denied plan is `failed`.
     const parksForApproval =
       passedPolicy &&
       running.driftCheck !== true &&
@@ -5126,7 +5207,6 @@ export class RunEngine {
         ? { planResourceChanges: result.planResourceChanges }
         : {}),
       ...(diagnostics ? { diagnostics } : {}),
-      ...(templateBinding ? { templateBinding } : {}),
       ...(requiresApproval ? { requiresApproval: true } : {}),
       auditEvents: [
         ...running.auditEvents,
@@ -5175,12 +5255,6 @@ export class RunEngine {
             ? { quotaPassed: layered.quota.exceeded.length === 0 }
             : {}),
           ...(billingPolicy.audit ? { billing: billingPolicy.audit } : {}),
-          ...(layered.templatePolicy
-            ? {
-                templateRequiresConfirmation:
-                  layered.templatePolicy.requiresConfirmation,
-              }
-            : {}),
         }),
         auditEvent(running.id, "plan.completed", now, {
           planDigest: result.planDigest,
@@ -5197,17 +5271,13 @@ export class RunEngine {
    * Evaluates the layered plan-JSON policy (§25 layers 5 + 7) over the runner's
    * resource changes for ANY run that returned them:
    *   - `resource`: the resource-type allowlist verdict. The allowlist source is
-   *     the recorded template.policy (template-backed runs, tamper-safe) or the
-   *     Space/InstallConfig policy (non-template installation-context runs). A
-   *     raw `/internal/v1/plan-runs` run without installation context has no allowlist
+   *     the recorded Workspace/InstallConfig policy. A
+   *     raw `/internal/v1/plan-runs` run without capsule context has no allowlist
    *     source -> no resource enforcement.
    *   - `scope`: the §25 scope boundary using sanitized provider metadata when
    *     configured.
    *   - `action`: the §25 action policy (delete/replace requires approval).
    *   - `quota`: the §25 simple mutating-resource count quota when configured.
-   *   - `templatePolicy`: the template destructive-confirmation verdict (only
-   *     for template-backed runs) used to fold `requiresConfirmation` onto the
-   *     binding.
    * Returns empty (`undefined` fields) when the runner reported no resource
    * changes.
    */
@@ -5243,36 +5313,9 @@ export class RunEngine {
       });
     }
     const action = evaluateActionPolicy(changes);
-    const binding = planRun.templateBinding;
-    if (binding) {
-      const template = this.#templateRegistry.require(
-        binding.templateId,
-        binding.templateVersion,
-      );
-      const templatePolicy = evaluateTemplatePlanPolicy({
-        policy: template.policy,
-        changes,
-      });
-      const resource = evaluateResourceAllowlist(
-        changes,
-        template.policy.allowedResourceTypes,
-      );
-      const scope = evaluateScopeBoundary(changes, policy?.scopeBoundary);
-      const quota = evaluateQuotaPolicy(changes, policy?.quota);
-      return {
-        provider,
-        providerLockfile,
-        providerInstallation,
-        resource,
-        scope,
-        action,
-        quota,
-        templatePolicy,
-      };
-    }
-    // Non-template installation-context run: enforce the composed
-    // Space/InstallConfig policy. An undefined allowlist (or a run without
-    // installation context) means "not configured" -> no resource enforcement.
+    // Enforce the composed Workspace/InstallConfig policy. An undefined
+    // allowlist (or a run without
+    // capsule context) means "not configured" -> no resource enforcement.
     const resource = evaluateResourceAllowlist(
       changes,
       policy?.allowedResourceTypes,
@@ -5291,31 +5334,40 @@ export class RunEngine {
   }
 
   /**
-   * Resolves the Space + InstallConfig policy for an installation-context plan.
-   * Space policy is a ceiling; InstallConfig policy can narrow it but not widen
-   * it. Returns `undefined` for runs without installation context or when the
-   * Installation / config is absent.
+   * Resolves the Workspace + InstallConfig policy for an capsule-context plan.
+   * Workspace policy is a ceiling; InstallConfig policy can narrow it but not widen
+   * it. Returns `undefined` for runs without capsule context or when the
+   * Capsule / config is absent.
    */
   async #policyForPlanRun(planRun: PlanRun): Promise<PolicyConfig | undefined> {
-    const installationId =
-      planRun.installationContext?.installationId ?? planRun.installationId;
-    if (!installationId) return undefined;
-    const installation = await this.#store.getInstallation(installationId);
-    if (!installation) return undefined;
+    if (planRun.resourceContext) {
+      const [workspace, profile] = await Promise.all([
+        this.#store.getWorkspace(planRun.resourceContext.workspaceId),
+        this.#store.getRunnerProfile(planRun.runnerProfileId),
+      ]);
+      return withDefaultProviderSupplyChainPolicy(workspace?.policy, {
+        providerInstallationRequireMirror:
+          defaultProviderMirrorRequiredForProfile(profile),
+      });
+    }
+    const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
+    if (!capsuleId) return undefined;
+    const capsule = await this.#store.getCapsule(capsuleId);
+    if (!capsule) return undefined;
     const profile = await this.#store.getRunnerProfile(planRun.runnerProfileId);
-    return await this.#policyForInstallation(installation, profile);
+    return await this.#policyForCapsule(capsule, profile);
   }
 
-  async #policyForInstallation(
-    installation: Installation,
+  async #policyForCapsule(
+    capsule: Capsule,
     runnerProfile?: RunnerProfile,
   ): Promise<PolicyConfig | undefined> {
-    const [space, installConfig] = await Promise.all([
-      this.#store.getSpace(installation.workspaceId ?? installation.spaceId),
-      this.#store.getInstallConfig(installation.installConfigId),
+    const [workspace, installConfig] = await Promise.all([
+      this.#store.getWorkspace(capsule.workspaceId),
+      this.#store.getInstallConfig(capsule.installConfigId),
     ]);
     return withDefaultProviderSupplyChainPolicy(
-      mergePolicyConfigs(space?.policy, installConfig?.policy),
+      mergePolicyConfigs(workspace?.policy, installConfig?.policy),
       {
         providerInstallationRequireMirror:
           defaultProviderMirrorRequiredForProfile(runnerProfile),
@@ -5324,34 +5376,39 @@ export class RunEngine {
   }
 
   async #recordRunnerMinuteUsage(input: {
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly runId: string;
-    readonly installationId?: string;
+    readonly capsuleId?: string;
     readonly startedAt?: number;
     readonly finishedAt: number;
   }): Promise<void> {
     if (input.startedAt === undefined) return;
-    const space = await this.#store.getSpace(input.spaceId);
-    const billingSubjectId = space?.ownerUserId ?? input.spaceId;
     const durationMs = Math.max(0, input.finishedAt - input.startedAt);
     const quantity = durationMs / 60_000;
-    const usdMicros = runnerMinuteUsdMicros(quantity);
-    await this.#store.putUsageEvent({
-      id: this.#newId("usage"),
-      workspaceId: billingSubjectId,
-      spaceId: billingSubjectId,
-      ...(input.installationId ? { installationId: input.installationId } : {}),
+    const createdAt = new Date(input.finishedAt).toISOString();
+    const rating = await this.#billing.rateUsageMeasurement({
+      workspaceId: input.workspaceId,
+      ...(input.capsuleId ? { capsuleId: input.capsuleId } : {}),
       runId: input.runId,
-      resourceMetadata: {
-        source_workspace_id: input.spaceId,
-      },
+      meterId: "opentofu.runner",
       kind: "runner_minute",
       quantity,
-      usdMicros,
-      credits: usdMicrosToLegacyCredits(usdMicros),
+      source: "runner",
+      createdAt,
+    });
+    if (!rating) return;
+    await this.#store.putUsageEvent({
+      id: this.#newId("usage"),
+      workspaceId: input.workspaceId,
+      ...(input.capsuleId ? { capsuleId: input.capsuleId } : {}),
+      runId: input.runId,
+      kind: "runner_minute",
+      quantity,
+      usdMicros: rating.usdMicros,
+      ratingStatus: rating.ratingStatus,
       source: "runner",
       idempotencyKey: `${input.runId}:runner_minute`,
-      createdAt: new Date(input.finishedAt).toISOString(),
+      createdAt,
     });
   }
 
@@ -5393,9 +5450,9 @@ export class RunEngine {
   }): Record<string, string> {
     return {
       ...this.#metricTags,
-      space_id: input.run.workspaceId,
-      capsule_id: input.run.installationId ?? "unbound",
-      operationKind: input.operationKind,
+      workspace_id: input.run.workspaceId,
+      capsule_id: input.run.capsuleId ?? "unbound",
+      operation_kind: input.operationKind,
       status: input.status,
     };
   }
@@ -5425,35 +5482,20 @@ export class RunEngine {
     }
   }
 
-  /**
-   * Whether a plan run targets a provider-free §10 install. A provider-free
-   * template (e.g. `core`) declares zero allowed providers, while a generic
-   * OpenTofu Capsule can be provider-free when compatibility preflight found no
-   * required providers and the runner also observed none. Such runs are allowed
-   * to declare/observe zero providers without tripping the profile's
-   * "requiredProviders before init" gate.
-   */
+  /** Whether a Capsule plan legitimately discovered no provider usage. */
   #planAllowsNoProviders(planRun: PlanRun): boolean {
-    const binding = planRun.templateBinding;
-    if (!binding) {
-      return (
-        planRun.installationId !== undefined &&
-        planRun.sourceSnapshotId !== undefined &&
-        planRun.requiredProviders.length === 0
-      );
-    }
-    const template = this.#templateRegistry.require(
-      binding.templateId,
-      binding.templateVersion,
+    return (
+      planRun.capsuleId !== undefined &&
+      planRun.sourceSnapshotId !== undefined &&
+      planRun.requiredProviders.length === 0
     );
-    return template.policy.allowedProviders.length === 0;
   }
 
   async #executeApply(
     applyRun: ApplyRun,
     planRun: PlanRun,
     profile: RunnerProfile,
-    dispatch: RunTemplateDispatch,
+    dispatch: RunModuleDispatch,
     lease?: LeaseHandle,
   ): Promise<ApplyRunResponse> {
     const startedAt = this.#now();
@@ -5467,11 +5509,22 @@ export class RunEngine {
     const leaseToken = claim.leaseToken;
     let runningForFailure = running;
     let runnerDispatched = false;
+    let ledgerCommitted = false;
 
     try {
-      const plannedInstallation = await this.#assertApplyPreconditions(
+      const plannedCapsule = await this.#assertApplyPreconditions(
         planRun,
         dispatch,
+      );
+      // The Plan pins lifecycle action content, but runner execution authority
+      // is revocable operator state. Re-check it immediately before any
+      // provider or lifecycle dispatch so an old Plan cannot retain a removed
+      // capability. This also rejects legacy mixed credential modes before a
+      // shared release-command credential context could expose secrets to a
+      // sibling command that did not opt in.
+      assertPinnedLifecycleRunnerCapabilities(
+        dispatch.lifecycleActions,
+        profile,
       );
       // Mint provider credentials NOW (just before dispatch). Apply runs resolve
       // requiredProviders from the reviewed PlanRun. The bundle is attached to the
@@ -5492,7 +5545,7 @@ export class RunEngine {
           planRun,
           profile,
           startedAt,
-          plannedInstallation,
+          plannedCapsule,
           runEnvironment.credentials,
           dispatch,
           leaseToken,
@@ -5502,7 +5555,7 @@ export class RunEngine {
       // Renewal harness: #dispatchApply's runner.apply() is ONE awaited blocking
       // fetch for the whole tofu run, which can outlive the lease TTL + the
       // heartbeat-stale window. Around it, periodically re-stamp the run
-      // heartbeat AND renew the installation/plan lease so a sibling does not
+      // heartbeat AND renew the capsule/plan lease so a sibling does not
       // treat the run as crashed and take it over mid-apply.
       const {
         result,
@@ -5530,36 +5583,81 @@ export class RunEngine {
           }),
       );
       const now = this.#now();
+      if (planRun.resourceContext) {
+        return await this.#commitResourceApply({
+          running: runningWithEnv,
+          planRun,
+          profile,
+          result,
+          envDispatch,
+          dispatch,
+          persistGeneration,
+          providerInstallationPolicy,
+          leaseToken,
+          startedAt,
+          now,
+        });
+      }
       const projected = await this.#projectAndRecordApplyOutputs({
         planRun,
         applyRun,
-        plannedInstallation,
+        plannedCapsule,
         result,
+        envDispatch,
         dispatch,
         now,
       });
-      const { deployment, supersededDeployment } =
-        await this.#buildApplyDeployment({
-          planRun,
-          applyRun,
-          installation: projected.installation,
-          outputs: projected.outputs,
-          outputSnapshot: projected.outputSnapshot,
-          nextStateGeneration: projected.nextStateGeneration,
-          now,
-        });
-      // Build the terminal ApplyRun + the apply-once PlanRun marker NOW so they
-      // commit atomically with the Deployment (commit-tail fold, S2).
-      const completed = this.#buildCompletedApplyRun({
+      const stateVersion = this.#buildStateVersion({
+        envDispatch,
+        generation: persistGeneration,
+        stateDigest: result.stateDigest,
+        runId: applyRun.id,
+        now,
+      });
+      if (!stateVersion) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "apply completed without a durable Capsule state scope",
+        );
+      }
+      // Build the terminal ApplyRun + apply-once PlanRun marker before the
+      // atomic Run + StateVersion + Output commit.
+      const providerApplied = this.#buildCompletedApplyRun({
         running: runningWithEnv,
         applyRun,
         profile,
-        installation: projected.installation,
-        deployment,
-        outputs: projected.outputs,
+        capsule: projected.capsule,
+        stateVersionId: stateVersion.id,
+        outputId: projected.output.id,
+        outputCount: Object.keys(projected.output.publicOutputs).length,
         result,
         providerInstallationPolicy,
         startedAt,
+        now,
+      });
+      // Required post-apply actions are part of the reviewed Run boundary, not
+      // a best-effort notification after readiness. Execute the Plan-pinned
+      // commands after provider state/output persistence has completed in the
+      // runner, but before the atomic ledger makes the Capsule active.
+      const lifecycleOutcome = await this.#withRunRenewal(
+        "apply",
+        runningWithEnv,
+        leaseToken,
+        lease,
+        () =>
+          this.#activateReleaseAfterApply({
+            planRun,
+            applyRun: providerApplied,
+            capsule: projected.capsule,
+            stateVersion,
+            output: projected.output,
+            result,
+            lifecycleActions: dispatch.lifecycleActions,
+          }),
+      );
+      const completed = this.#applyPostApplyLifecycleOutcome({
+        providerApplied,
+        lifecycleOutcome,
         now,
       });
       const appliedPlan: PlanRun = {
@@ -5567,66 +5665,99 @@ export class RunEngine {
         appliedApplyRunId: applyRun.id,
         updatedAt: now,
       };
-      // ATOMIC ledger commit (spec §20 / §21 / §16): the new (+ superseded)
-      // Deployment, the StateSnapshot, the OutputSnapshot, the guarded
-      // Installation advance, AND the terminal ApplyRun + applied PlanRun marker
-      // land all-or-nothing. A crash mid-write can no longer leave torn state or
-      // a stuck `running` run over a finished Deployment.
+      // Close the observable lifecycle Activity before attempting the guarded
+      // ledger commit. The action has already reached a concrete adapter
+      // outcome; if the commit loses its lease or conflicts, leaving only the
+      // earlier `pending` Activity would falsely imply resumable background
+      // work. This Activity describes the action outcome, not ledger success.
+      if (lifecycleOutcome) {
+        await this.#recordLifecycleActionOutcome({
+          applyRun: completed,
+          capsule: projected.capsule,
+          stateVersion,
+          outcome: lifecycleOutcome,
+        });
+      }
+      // Atomic authority: terminal Run + StateVersion + Output + Capsule cursors.
       const patched = await this.#commitApplyLedger({
         planRun,
-        plannedInstallation,
-        installation: projected.installation,
-        deployment,
-        ...(supersededDeployment ? { supersededDeployment } : {}),
-        outputSnapshot: projected.outputSnapshot,
-        previousOutputSnapshot: projected.previousOutputSnapshot,
-        envDispatch,
-        persistGeneration,
+        plannedCapsule,
+        capsule: projected.capsule,
+        stateVersion,
+        output: projected.output,
+        previousOutput: projected.previousOutput,
         nextStateGeneration: projected.nextStateGeneration,
-        stateDigest: result.stateDigest,
-        runId: applyRun.id,
         applyRunTerminal: completed,
         planRunApplied: appliedPlan,
         applyRunLeaseToken: leaseToken,
+        capsuleStatus: completed.status === "succeeded" ? "active" : "error",
         now,
       });
       if (patched === "lease_lost") {
         return { applyRun: (await this.getApplyRun(applyRun.id)).applyRun };
       }
-      if (patched) {
-        await this.#activateReleaseAfterApply({
-          planRun,
-          applyRun: completed,
-          installation: patched,
-          deployment,
-          outputSnapshot: projected.outputSnapshot,
-          result,
-        });
-      }
+      ledgerCommitted = true;
       // §24 stale propagation: when this apply's projected outputs changed
-      // versus the Installation's PREVIOUS OutputSnapshot, every transitive
-      // downstream consumer in the Space that is currently `active` is marked
-      // `stale`. The just-applied Installation itself stays `active` (patched
-      // above); pending/error/destroyed consumers are left untouched.
-      await this.#markDownstreamInstallationsStale({
-        installation: projected.installation,
-        previousOutputSnapshot: projected.previousOutputSnapshot,
-        newOutputSnapshot: projected.outputSnapshot,
+      // versus the Capsule's PREVIOUS Output, every transitive
+      // downstream consumer in the Workspace that is currently `active` is marked
+      // `stale`. The just-applied Capsule keeps the status selected by the
+      // lifecycle gate (`active` or fail-closed `error`); pending/error/
+      // destroyed consumers are left untouched.
+      await this.#markDownstreamCapsulesStale({
+        capsule: projected.capsule,
+        previousOutput: projected.previousOutput,
+        newOutput: projected.output,
         now,
       });
       return await this.#completeApplyRun({
         completed,
         planRun,
-        installation: projected.installation,
+        capsule: projected.capsule,
         patched,
-        deployment,
-        outputs: projected.outputs,
+        outputCount: Object.keys(projected.output.publicOutputs).length,
         nextStateGeneration: projected.nextStateGeneration,
-        dispatch,
         startedAt,
         now,
       });
     } catch (error) {
+      if (ledgerCommitted) {
+        // The atomic provider ledger is already authoritative. Never route a
+        // downstream cleanup/observer failure through reservation release or
+        // terminal failure rewriting; leave/retry the durable billing marker.
+        const persisted = (await this.#store.getApplyRun(applyRun.id))!;
+        const finalized = await this.#tryFinalizeApplyBilling(
+          planRun,
+          persisted,
+        );
+        log.warn("deploy_control.apply_post_commit_finalization_failed", {
+          planRunId: planRun.id,
+          applyRunId: applyRun.id,
+          message: errorMessage(error),
+        });
+        const currentCapsule = planRun.capsuleId
+          ? await this.#store.getCapsule(planRun.capsuleId)
+          : undefined;
+        return {
+          applyRun: finalized,
+          ...(currentCapsule ? { capsule: currentCapsule } : {}),
+        };
+      }
+      if (isRunnerInfrastructureRequeueError(error)) {
+        // Destroy owns its retry transition inside #executeDestroyApply. Do not
+        // let that structured signal fall through this outer apply catch and
+        // release the still-needed reservation after the row was requeued.
+        const requeued = await this.#store.getApplyRun(applyRun.id);
+        if (requeued?.status === "queued") {
+          const currentCapsule = requeued.capsuleId
+            ? await this.#store.getCapsule(requeued.capsuleId)
+            : undefined;
+          return {
+            applyRun: requeued,
+            ...(currentCapsule ? { capsule: currentCapsule } : {}),
+          };
+        }
+        throw error;
+      }
       if (error instanceof PlanAlreadyAppliedReplay) {
         return await this.#completeApplyRunAsIdempotentReplay({
           running,
@@ -5647,7 +5778,7 @@ export class RunEngine {
             "apply.retry_scheduled",
           ]) >= RUNNER_INFRASTRUCTURE_RETRY_LIMIT
         ) {
-          await this.#billing.releaseApplyBillingReservation(planRun);
+          await this.#billing.releaseApplyBilling(planRun);
           const failed = await this.#failApplyRun(
             runningWithEnvironmentFailure,
             leaseToken,
@@ -5655,12 +5786,13 @@ export class RunEngine {
             startedAt,
             "apply.failed",
             runnerInfrastructureRetryExhaustedError("apply"),
+            true,
           );
           if (failed.finishedAt !== undefined) {
             await this.#recordRunnerMinuteUsage({
-              spaceId: failed.workspaceId,
+              workspaceId: failed.workspaceId,
               runId: failed.id,
-              installationId: failed.installationId,
+              capsuleId: failed.capsuleId,
               startedAt,
               finishedAt: failed.finishedAt,
             });
@@ -5679,12 +5811,13 @@ export class RunEngine {
           const retryError = new OpenTofuControllerError(
             "failed_precondition",
             `retryable_runner_infrastructure_error: apply run ${queued.id} requeued after runner infrastructure failure`,
+            { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
           );
           if (queued.updatedAt !== undefined) {
             await this.#recordRunnerMinuteUsage({
-              spaceId: queued.workspaceId,
+              workspaceId: queued.workspaceId,
               runId: queued.id,
-              installationId: queued.installationId,
+              capsuleId: queued.capsuleId,
               startedAt,
               finishedAt: queued.updatedAt,
             });
@@ -5692,7 +5825,7 @@ export class RunEngine {
           throw retryError;
         }
       }
-      await this.#billing.releaseApplyBillingReservation(planRun);
+      await this.#billing.releaseApplyBilling(planRun);
       const failed = await this.#failApplyRun(
         runEnvironmentFailedRun(runningForFailure, error),
         leaseToken,
@@ -5700,12 +5833,13 @@ export class RunEngine {
         startedAt,
         "apply.failed",
         error,
+        runnerDispatched,
       );
       if (runnerDispatched && failed.finishedAt !== undefined) {
         await this.#recordRunnerMinuteUsage({
-          spaceId: failed.workspaceId,
+          workspaceId: failed.workspaceId,
           runId: failed.id,
-          installationId: failed.installationId,
+          capsuleId: failed.capsuleId,
           startedAt,
           finishedAt: failed.finishedAt,
         });
@@ -5714,33 +5848,164 @@ export class RunEngine {
     }
   }
 
-  /**
-   * Projects the public DeploymentOutputs for an apply result. Template runs are
-   * restricted to the template's allowlisted public outputs (resolved from the
-   * recorded binding); generic Capsule runs use the InstallConfig output
-   * allowlist captured in the generated-root dispatch.
-   * Both run AFTER the sensitive/redaction filter in `projection.ts`.
-   */
-  #projectApplyOutputs(
-    planRun: PlanRun,
-    result: OpenTofuApplyResult,
-    dispatch: RunTemplateDispatch,
-  ): readonly DeploymentOutput[] {
-    const binding = planRun.templateBinding;
-    if (!binding) {
-      if (dispatch.outputAllowlist) {
-        return projectOutputAllowlistPublicOutputs(
-          dispatch.outputAllowlist,
-          result.outputs,
-        );
-      }
-      return normalizeDeploymentOutputs(result.outputs);
+  async #commitResourceApply(input: {
+    readonly running: ApplyRun;
+    readonly planRun: PlanRun;
+    readonly profile: RunnerProfile;
+    readonly result: OpenTofuApplyResult;
+    readonly envDispatch: RunExecutionDispatch;
+    readonly dispatch: RunModuleDispatch;
+    readonly persistGeneration: number;
+    readonly providerInstallationPolicy:
+      { readonly requireMirror: boolean } | undefined;
+    readonly leaseToken: string;
+    readonly startedAt: number;
+    readonly now: number;
+  }): Promise<ApplyRunResponse> {
+    const resource = input.planRun.resourceContext;
+    const scope = input.envDispatch.stateScope;
+    if (!resource || !scope || scope.subject?.kind !== "resource") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Resource apply completed without a durable Resource state scope",
+      );
     }
-    const template = this.#templateRegistry.require(
-      binding.templateId,
-      binding.templateVersion,
+    const outputs = this.#projectApplyOutputs(
+      input.planRun,
+      input.result,
+      input.dispatch,
     );
-    return projectTemplatePublicOutputs(template, result.outputs);
+    const diagnostics = redactRunDiagnostics(input.result.diagnostics);
+    const completed = this.#withPendingApplyBillingCapture(
+      {
+        ...input.running,
+        resourceResult: {
+          resourceId: resource.resourceId,
+          stateGeneration: input.persistGeneration,
+          stateRef: scope.stateRef,
+          ...(input.result.stateDigest
+            ? { stateDigest: input.result.stateDigest }
+            : {}),
+          ...(input.envDispatch.rawOutputRef
+            ? { rawOutputRef: input.envDispatch.rawOutputRef }
+            : {}),
+          outputs,
+        },
+        status: "succeeded",
+        stateLock:
+          input.result.stateLock ??
+          stateLockEvidence(
+            input.profile.stateBackend,
+            input.startedAt,
+            input.now,
+            "recorded",
+          ),
+        ...(diagnostics ? { diagnostics } : {}),
+        auditEvents: [
+          ...input.running.auditEvents,
+          ...providerInstallationAuditEvents(
+            input.running.id,
+            "apply",
+            input.now,
+            input.result.providerInstallation,
+            input.providerInstallationPolicy,
+          ),
+          auditEvent(
+            input.running.id,
+            input.planRun.resourceImport === true
+              ? "resource.import.completed"
+              : input.planRun.refreshOnly === true
+                ? "resource.refresh.completed"
+                : "resource.apply.completed",
+            input.now,
+            {
+              resourceId: resource.resourceId,
+              stateGeneration: input.persistGeneration,
+              outputCount: Object.keys(outputs).length,
+            },
+          ),
+        ],
+        updatedAt: input.now,
+        finishedAt: input.now,
+      },
+      input.now,
+    );
+    const appliedPlan: PlanRun = {
+      ...input.planRun,
+      appliedApplyRunId: input.running.id,
+      updatedAt: input.now,
+    };
+    const committed = await this.#store.commitResourceRun({
+      applyRunTerminal: completed,
+      planRunApplied: appliedPlan,
+      applyRunLeaseToken: input.leaseToken,
+    });
+    if (committed.applyRunLeaseLost) {
+      return { applyRun: (await this.getApplyRun(input.running.id)).applyRun };
+    }
+    await this.#notifyTerminal(completed);
+    const finalized = await this.#tryFinalizeApplyBilling(
+      input.planRun,
+      completed,
+    );
+    try {
+      await this.#recordRunnerMinuteUsage({
+        workspaceId: completed.workspaceId,
+        runId: completed.id,
+        startedAt: input.startedAt,
+        finishedAt: input.now,
+      });
+      await this.#recordDeployOperationMetric({
+        run: completed,
+        operationKind: "apply",
+        status: "succeeded",
+        startedAt: input.startedAt,
+        finishedAt: input.now,
+        recordApplyDuration: true,
+      });
+      await this.#store.deletePlanRunInputs(input.planRun.id);
+    } catch (error) {
+      log.warn("deploy_control.resource_apply_post_commit_cleanup_failed", {
+        planRunId: input.planRun.id,
+        applyRunId: completed.id,
+        message: errorMessage(error),
+      });
+    }
+    await this.#recordActivity({
+      workspaceId: completed.workspaceId,
+      action:
+        input.planRun.resourceImport === true
+          ? "resource.run.imported"
+          : input.planRun.refreshOnly === true
+            ? "resource.run.refreshed"
+            : "resource.run.applied",
+      targetType: "resource",
+      targetId: resource.resourceId,
+      runId: completed.id,
+      metadata: {
+        resourceId: resource.resourceId,
+        stateGeneration: input.persistGeneration,
+        outputCount: Object.keys(outputs).length,
+        ...(input.planRun.refreshOnly ? { refreshOnly: true } : {}),
+        ...(input.planRun.resourceImport ? { resourceImport: true } : {}),
+      },
+    });
+    return { applyRun: finalized };
+  }
+
+  /** Projects only the DB-owned public allowlist after redaction. */
+  #projectApplyOutputs(
+    _planRun: PlanRun,
+    result: OpenTofuApplyResult,
+    dispatch: RunModuleDispatch,
+  ): Readonly<Record<string, JsonValue>> {
+    if (dispatch.outputAllowlist) {
+      return projectOutputAllowlistPublicOutputs(
+        dispatch.outputAllowlist,
+        result.outputs,
+      );
+    }
+    return {};
   }
 
   /**
@@ -5748,12 +6013,12 @@ export class RunEngine {
    * (immutable plan artifact, apply-once, state generation, source snapshot,
    * dependency snapshot, Capsule compatibility, generated-root dispatch, and
    * billing reservation) just before dispatch. Returns the currently-planned
-   * Installation (undefined for runs without installation context).
+   * Capsule (undefined for runs without Capsule context).
    */
   async #assertApplyPreconditions(
     planRun: PlanRun,
-    dispatch: RunTemplateDispatch,
-  ): Promise<Installation | undefined> {
+    dispatch: RunModuleDispatch,
+  ): Promise<Capsule | undefined> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -5772,15 +6037,15 @@ export class RunEngine {
         persistedPlan.appliedApplyRunId,
       );
     }
-    const plannedInstallation = planRun.installationId
-      ? await this.#requireCurrentPlannedInstallation(planRun)
+    const plannedCapsule = planRun.capsuleId
+      ? await this.#requireCurrentPlannedCapsule(planRun)
       : undefined;
     // State generation guard: reject when the target's state advanced past the
     // generation this plan was created against (a stale plan over newer state).
-    assertStateGenerationMatches(planRun, plannedInstallation);
-    // Env-driven runs guard against the Environment's latest StateSnapshot
-    // generation instead of an Installation generation (M2).
-    await this.#verification.assertInstallationStateGeneration(planRun);
+    assertStateGenerationMatches(planRun, plannedCapsule);
+    // Env-driven runs guard against the Environment's latest StateVersion
+    // generation instead of an Capsule generation (M2).
+    await this.#verification.assertCapsuleStateGeneration(planRun);
     // Consumer pre-flight: re-assert the plan still references its SourceSnapshot
     // (spec invariant 10) just before dispatch, mirroring the digest/generation
     // pre-flight checks.
@@ -5793,28 +6058,27 @@ export class RunEngine {
     // `dependency_snapshot_tampered`.
     await this.#verification.verifyDependencySnapshot(planRun);
     await this.#verification.assertCapsuleCompatibilityAllowsRun(planRun);
-    assertGeneratedRootDispatchPresent(planRun, dispatch);
-    await this.#billing.assertApplyBillingReservation(planRun);
-    return plannedInstallation;
+    await this.#billing.assertApplyBillingAllowed(planRun);
+    return plannedCapsule;
   }
 
   /**
    * Dispatches the non-destroy apply to the runner. Resolves the M2 env dispatch
    * (state scope at `base + 1` + source archive + dependency states) and the
-   * provider-installation mirror policy, then runs `runner.apply` with the minted
+   * provider-capsule mirror policy, then runs `runner.apply` with the minted
    * credentials (dispatch-only — never persisted).
    */
   async #dispatchApply(input: {
     readonly running: ApplyRun;
     readonly planRun: PlanRun;
     readonly profile: RunnerProfile;
-    readonly dispatch: RunTemplateDispatch;
+    readonly dispatch: RunModuleDispatch;
     readonly credentials: RunCredentials | undefined;
     /** Fired immediately before the runner is invoked (runner-dispatched flag). */
     readonly onDispatch: () => void;
   }): Promise<{
     result: OpenTofuApplyResult;
-    envDispatch: RunInstallationDispatch;
+    envDispatch: RunExecutionDispatch;
     persistGeneration: number;
     providerInstallationPolicy: { requireMirror: boolean } | undefined;
   }> {
@@ -5830,10 +6094,19 @@ export class RunEngine {
     // M2 env dispatch: an apply persists state at `base + 1` (the DO writes the
     // new state object + current.json at this generation). Empty without env ctx.
     const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
-    const envDispatch = await this.#verification.installationDispatch(
+    const verifiedDispatch = await this.#verification.executionDispatch(
       planRun,
       persistGeneration,
+      dispatch.stateAdoption,
     );
+    const rawOutputRef = await this.#allocateRawOutputRef(
+      running,
+      verifiedDispatch,
+    );
+    const envDispatch: RunExecutionDispatch = {
+      ...verifiedDispatch,
+      rawOutputRef,
+    };
     const planPolicy = await this.#policyForPlanRun(planRun);
     const providerInstallationPolicy =
       planPolicy?.providerInstallation?.requireMirror === true
@@ -5851,9 +6124,16 @@ export class RunEngine {
       ...(dispatch.generatedRoot
         ? { generatedRoot: dispatch.generatedRoot }
         : {}),
+      ...(dispatch.operatorModule
+        ? { operatorModule: dispatch.operatorModule }
+        : {}),
       ...(dispatch.sourceBuild ? { sourceBuild: dispatch.sourceBuild } : {}),
       // M2 env dispatch (state scope at base+1 + source archive).
       ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+      rawOutputRef,
+      ...(envDispatch.stateAdoption
+        ? { stateAdoption: envDispatch.stateAdoption }
+        : {}),
       ...(envDispatch.sourceArchive
         ? { sourceArchive: envDispatch.sourceArchive }
         : {}),
@@ -5861,6 +6141,12 @@ export class RunEngine {
       ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
       ...(credentials ? { credentials } : {}),
     });
+    if (result.rawOutputRef && result.rawOutputRef !== rawOutputRef) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runner returned a raw output reference different from the allocated reference for apply run ${running.id}`,
+      );
+    }
     return {
       result,
       envDispatch,
@@ -5870,318 +6156,162 @@ export class RunEngine {
   }
 
   /**
-   * Projects the apply outputs and BUILDS the §16 OutputSnapshot (persisted
-   * later, atomically, by `commitAppliedDeployment`). Returns the resolved
-   * Installation, the bumped state generation, the new OutputSnapshot, and the
-   * Installation's PREVIOUS OutputSnapshot (which drives §24 stale propagation).
+   * Projects the apply outputs and BUILDS the §16 Output (persisted
+   * later, atomically, by `commitRunState`). Returns the resolved
+   * Capsule, the bumped state generation, the new Output, and the Capsule's
+   * PREVIOUS Output (which drives §24 stale propagation).
    */
   async #projectAndRecordApplyOutputs(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
-    readonly plannedInstallation: Installation | undefined;
+    readonly plannedCapsule: Capsule | undefined;
     readonly result: OpenTofuApplyResult;
-    readonly dispatch: RunTemplateDispatch;
+    readonly envDispatch: RunExecutionDispatch;
+    readonly dispatch: RunModuleDispatch;
     readonly now: number;
   }): Promise<{
-    outputs: readonly DeploymentOutput[];
-    installation: Installation;
+    capsule: Capsule;
     nextStateGeneration: number;
-    previousOutputSnapshot: OutputSnapshot | undefined;
-    outputSnapshot: OutputSnapshot;
+    previousOutput: Output | undefined;
+    output: Output;
   }> {
-    const { planRun, applyRun, result, dispatch, now } = input;
-    // Output allowlist: a template run projects ONLY the template's public
-    // outputs after the existing sensitive/redaction filter. Generic Capsule
-    // runs use InstallConfig.outputAllowlist for both dependency-consumable
-    // space outputs and public Deployment outputs.
-    const outputs = this.#projectApplyOutputs(planRun, result, dispatch);
-    const installation =
-      input.plannedInstallation ??
-      (await this.#requireCurrentPlannedInstallation(planRun));
+    const { planRun, applyRun, result, envDispatch, dispatch, now } = input;
+    // A Capsule keeps its broader non-secret Workspace capture separate from the
+    // explicitly allowlisted public Output projection.
+    const publicOutputs = this.#projectApplyOutputs(planRun, result, dispatch);
+    const capsule =
+      input.plannedCapsule ??
+      (await this.#requireCurrentPlannedCapsule(planRun));
     // Bump the state generation atomically with the state persist (the
-    // currentDeployment pointer move). A create starts at base 0 -> 1; an
-    // update advances the installation's generation by one.
-    const nextStateGeneration = installation.currentStateGeneration + 1;
-    // §16 OutputSnapshot: capture the allowlisted projected outputs after a
+    // current StateVersion pointer move). A create starts at base 0 -> 1; an
+    // update advances the capsule's generation by one.
+    const nextStateGeneration = capsule.currentStateGeneration + 1;
+    // §16 Output: capture the allowlisted projected outputs after a
     // successful apply. Sensitive-flagged outputs appear in NEITHER
     // projection; the raw envelope stays an encrypted artifact referenced by
-    // rawOutputArtifactKey. The Installation's PREVIOUS snapshot digest drives
+    // rawArtifactRef. The Capsule's PREVIOUS snapshot digest drives
     // stale propagation (§24) after this record.
-    const previousOutputSnapshot = installation.currentOutputSnapshotId
-      ? await this.#store.getOutputSnapshot(
-          installation.currentOutputSnapshotId,
-        )
+    const previousOutput = capsule.currentOutputId
+      ? await this.#store.getOutput(capsule.currentOutputId)
       : undefined;
-    const outputSnapshot = await this.#buildOutputSnapshot({
-      installation,
+    const output = await this.#buildOutput({
+      capsule,
       applyRun,
       result,
-      publicOutputs: outputs,
+      envDispatch,
+      publicOutputs,
+      ...(dispatch.workspaceOutputAllowlist
+        ? { workspaceOutputAllowlist: dispatch.workspaceOutputAllowlist }
+        : {}),
       ...(dispatch.outputAllowlist
         ? { outputAllowlist: dispatch.outputAllowlist }
         : {}),
       stateGeneration: nextStateGeneration,
       now,
     });
-    validateProjectedServiceExportsFromOutputSnapshot(
-      outputSnapshot.spaceOutputs as Readonly<Record<string, JsonValue>>,
-    );
     return {
-      outputs,
-      installation,
+      capsule,
       nextStateGeneration,
-      previousOutputSnapshot,
-      outputSnapshot,
+      previousOutput,
+      output,
     };
   }
 
   /**
-   * Builds the §21 Deployment for a successful apply AND the superseded
-   * transition for the Installation's previously-current Deployment. READS the
-   * previous Deployment (so the superseded record carries its full row), but
-   * writes NOTHING: both records are persisted atomically with the StateSnapshot
-   * / OutputSnapshot / Installation advance by `commitAppliedDeployment`.
-   */
-  async #buildApplyDeployment(input: {
-    readonly planRun: PlanRun;
-    readonly applyRun: ApplyRun;
-    readonly installation: Installation;
-    readonly outputs: readonly DeploymentOutput[];
-    readonly outputSnapshot: OutputSnapshot;
-    readonly nextStateGeneration: number;
-    readonly now: number;
-  }): Promise<{
-    readonly deployment: Deployment;
-    readonly supersededDeployment?: Deployment;
-  }> {
-    const { planRun, applyRun, installation, outputs, now } = input;
-    if (!planRun.sourceSnapshotId) {
-      throw new Error(
-        `PlanRun ${planRun.id} has no SourceSnapshot for Deployment recording`,
-      );
-    }
-    const deployment: Deployment = {
-      id: this.#newId("dep"),
-      spaceId: planRun.workspaceId,
-      installationId: installation.id,
-      environment: installation.environment,
-      applyRunId: applyRun.id,
-      sourceSnapshotId: planRun.sourceSnapshotId,
-      ...(planRun.dependencySnapshotId
-        ? { dependencySnapshotId: planRun.dependencySnapshotId }
-        : {}),
-      stateGeneration: input.nextStateGeneration,
-      outputSnapshotId: input.outputSnapshot.id,
-      outputsPublic: Object.fromEntries(
-        outputs.map((output) => [output.name, output.value]),
-      ),
-      status: "active",
-      createdAt: new Date(now).toISOString(),
-    };
-    // §21 status transition: the previously-current Deployment is superseded by
-    // the new active one. Only an `active` previous is flipped (matches the
-    // pre-atomic behavior); the read is done now so the write can be batched.
-    if (installation.currentDeploymentId) {
-      const previous = await this.#store.getDeployment(
-        installation.currentDeploymentId,
-      );
-      if (previous && previous.status === "active") {
-        return {
-          deployment,
-          supersededDeployment: { ...previous, status: "superseded" },
-        };
-      }
-    }
-    return { deployment };
-  }
-
-  /**
-   * Atomically commits the ledger writes that finalize a successful apply:
-   * the new (and superseded) Deployment, the StateSnapshot at `persistGeneration`,
-   * the OutputSnapshot, and the GUARDED Installation advance — as ONE all-or-
-   * nothing unit (spec §20 / §21 / §16) so a crash mid-write cannot leave torn
-   * state. Returns the patched Installation (or undefined when the guarded patch
-   * did not apply), exactly as the prior scattered-awaits sequence.
+   * Atomically commits the provider-applied StateVersion/Output, applied Plan
+   * marker, terminal Run, and runtime-readiness Capsule status. A lifecycle
+   * failure deliberately commits `error` + failed Run without discarding the
+   * successfully materialized provider state.
    */
   async #commitApplyLedger(input: {
     readonly planRun: PlanRun;
-    readonly plannedInstallation: Installation | undefined;
-    readonly installation: Installation;
-    readonly deployment: Deployment;
-    readonly supersededDeployment?: Deployment;
-    readonly outputSnapshot: OutputSnapshot;
-    readonly previousOutputSnapshot: OutputSnapshot | undefined;
-    readonly envDispatch: RunInstallationDispatch;
-    readonly persistGeneration: number;
+    readonly plannedCapsule: Capsule | undefined;
+    readonly capsule: Capsule;
+    readonly stateVersion: StateVersion;
+    readonly output: Output;
+    readonly previousOutput: Output | undefined;
     readonly nextStateGeneration: number;
-    readonly stateDigest: string | undefined;
-    readonly runId: string;
-    /**
-     * Commit-tail fold (S2): the succeeded ApplyRun + the applied PlanRun are
-     * committed in the SAME atomic unit as the Deployment so a crash can never
-     * tear them apart. On the no-state-context fallback path (no atomic unit)
-     * they are written here through the same terminal-run / put paths the tail
-     * used before the fold.
-     */
     readonly applyRunTerminal: ApplyRun;
     readonly planRunApplied: PlanRun;
     readonly applyRunLeaseToken: string;
+    readonly capsuleStatus: "active" | "error";
     readonly now: number;
-  }): Promise<Installation | "lease_lost" | undefined> {
-    const { planRun, installation, deployment, outputSnapshot, now } = input;
-    const outputChanged =
-      input.previousOutputSnapshot?.outputDigest !==
-      outputSnapshot.outputDigest;
-    // StateSnapshot metadata aligned to the SAME generation written to R2_STATE
-    // (persistGeneration); the DO wrote the encrypted object + current.json at
-    // this key, only metadata enters the ledger. Built (not yet persisted) so it
-    // commits together with the installation generation bump.
-    const stateSnapshot = this.#buildStateSnapshot({
-      envDispatch: input.envDispatch,
-      generation: input.persistGeneration,
-      stateDigest: input.stateDigest,
-      runId: input.runId,
-      now,
-    });
-    if (!stateSnapshot) {
-      // No environment context => no StateSnapshot, so there is no atomic unit
-      // to commit beyond the guarded installation patch. Preserve the prior
-      // behavior: patch the installation (deployment/outputSnapshot were already
-      // built and are recorded via the patch's pointers) directly. In practice
-      // an apply that reaches here always has a state scope; this branch only
-      // guards the type.
-      await this.#store.putDeployment(deployment);
-      if (input.supersededDeployment) {
-        await this.#store.putDeployment(input.supersededDeployment);
-      }
-      await this.#store.putOutputSnapshot(outputSnapshot);
-      const patched = await this.#store.patchInstallation(
-        installation.id,
-        {
-          currentDeploymentId: deployment.id,
-          status: "active",
-          updatedAt: new Date(now).toISOString(),
-          currentStateGeneration: input.nextStateGeneration,
-          currentOutputSnapshotId: outputSnapshot.id,
-        },
-        {
-          currentDeploymentId:
-            planRun.installationCurrentDeploymentId ?? undefined,
-          status: input.plannedInstallation?.status,
-        },
-      );
-      // Fallback path (no env context, no atomic unit): write the commit-tail
-      // runs the way the tail did before the fold — the terminal ApplyRun via
-      // the lease-clearing transition, then the apply-once PlanRun marker.
-      const persisted = await this.#persistTerminalRun(
-        "apply",
-        input.applyRunTerminal,
-        input.applyRunLeaseToken,
-      );
-      if (!persisted.won) return "lease_lost";
-      await this.#store.putPlanRun(input.planRunApplied);
-      if (outputChanged) {
-        await this.#bumpWorkspaceOutputSyncRevision(
-          installation.workspaceId ?? installation.spaceId,
-          now,
-        );
-      }
-      return patched;
-    }
-    const committed = await this.#store.commitAppliedDeployment({
-      newDeployment: deployment,
-      ...(input.supersededDeployment
-        ? { supersededDeployment: input.supersededDeployment }
-        : {}),
-      stateSnapshot,
-      outputSnapshot,
-      installationPatch: {
-        id: installation.id,
+  }): Promise<Capsule | "lease_lost" | undefined> {
+    const { planRun, capsule, stateVersion, output, now } = input;
+    const committed = await this.#store.commitRunState({
+      stateVersion,
+      output,
+      capsulePatch: {
+        id: capsule.id,
         patch: {
-          currentDeploymentId: deployment.id,
-          status: "active",
+          currentStateVersionId: stateVersion.id,
+          status: input.capsuleStatus,
           updatedAt: new Date(now).toISOString(),
           currentStateGeneration: input.nextStateGeneration,
-          currentOutputSnapshotId: outputSnapshot.id,
+          currentOutputId: output.id,
         },
         guard: {
-          currentDeploymentId:
-            planRun.installationCurrentDeploymentId ?? undefined,
-          status: input.plannedInstallation?.status,
+          currentStateVersionId:
+            planRun.capsuleCurrentStateVersionId ?? undefined,
+          status: input.plannedCapsule?.status,
         },
       },
       // Commit-tail fold (S2): terminal ApplyRun + applied PlanRun in the unit.
       applyRunTerminal: input.applyRunTerminal,
       planRunApplied: input.planRunApplied,
       applyRunLeaseToken: input.applyRunLeaseToken,
-      ...(outputChanged
-        ? {
-            outputSyncRevisionBump: {
-              workspaceId: installation.workspaceId ?? installation.spaceId,
-              updatedAt: new Date(now).toISOString(),
-            },
-          }
-        : {}),
     });
     if (committed.applyRunLeaseLost) return "lease_lost";
-    return committed.installation;
+    // The atomic commit above is the terminal-state authority. Notify before
+    // billing/activity side effects so Interface safety observes the durable
+    // ApplyRun + Output/State generation immediately.
+    await this.#notifyTerminal(input.applyRunTerminal);
+    return committed.capsule;
   }
 
   async #activateReleaseAfterApply(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
-    readonly installation: Installation;
-    readonly deployment: Deployment;
-    readonly outputSnapshot: OutputSnapshot;
+    readonly capsule: Capsule;
+    readonly stateVersion: StateVersion;
+    readonly output: Output;
     readonly result: OpenTofuApplyResult;
-  }): Promise<void> {
-    let nonSensitiveOutputs = releaseActivationOutputs(input.result.outputs);
-    let commands = releaseActivationCommands(input.result.outputs);
-    if (commands.length === 0) {
-      const snapshotOutputs = jsonRecordFromPublicOutputs(
-        input.outputSnapshot.workspaceOutputs as Readonly<
-          Record<string, unknown>
-        >,
-      );
-      const snapshotCommands = releaseActivationCommandsFromOutputRecord(
-        input.outputSnapshot.workspaceOutputs as Readonly<
-          Record<string, unknown>
-        >,
-        "post_apply",
-      );
-      if (snapshotCommands.length > 0) {
-        commands = snapshotCommands;
-        nonSensitiveOutputs = snapshotOutputs;
-      }
-    }
-    const sourceSnapshot =
-      commands.length > 0
-        ? await this.#store.getSourceSnapshot(input.deployment.sourceSnapshotId)
-        : undefined;
+    readonly lifecycleActions: InstallConfig["lifecycleActions"];
+  }): Promise<LifecycleActionOutcome | undefined> {
+    const commands = releaseActivationCommands(
+      input.lifecycleActions,
+      "post_apply",
+    );
+    if (commands.length === 0) return undefined;
+    const nonSensitiveOutputs = releaseActivationOutputs(input.result.outputs);
+    const base = {
+      phase: "post_apply" as const,
+      commandCount: commands.length,
+      outputCount: Object.keys(nonSensitiveOutputs).length,
+    };
+    const sourceSnapshot = input.planRun.sourceSnapshotId
+      ? await this.#store.getSourceSnapshot(input.planRun.sourceSnapshotId)
+      : undefined;
     if (!this.#releaseActivator) {
-      if (commands.length > 0) {
-        await this.#recordReleaseActivationActivity({
-          ...input,
-          status: "pending",
-          kind: "takosumi.release-commands@v1",
-          message:
-            "post-apply release commands declared but no release activator is configured",
-          commandCount: commands.length,
-          outputCount: Object.keys(nonSensitiveOutputs).length,
-        });
-      }
-      return;
+      return {
+        ...base,
+        reportedStatus: "unavailable",
+        activityStatus: "failed",
+        actionDispatched: false,
+        kind: "takosumi.install-config-actions@v1",
+        message:
+          "post-apply lifecycle actions declared but no release activator is configured",
+      };
     }
-    if (commands.length > 0) {
-      await this.#recordReleaseActivationActivity({
-        ...input,
-        status: "pending",
-        kind: "takosumi.release-commands@v1",
-        message: "post-apply release commands are running",
-        commandCount: commands.length,
-        outputCount: Object.keys(nonSensitiveOutputs).length,
-      });
-    }
+    await this.#recordReleaseActivationActivity({
+      ...input,
+      status: "pending",
+      kind: "takosumi.install-config-actions@v1",
+      message: "post-apply lifecycle actions are running",
+      commandCount: commands.length,
+      outputCount: Object.keys(nonSensitiveOutputs).length,
+    });
+    let actionDispatched = false;
     try {
       const credentials = await this.#releaseCredentialsForCommands({
         planRun: input.planRun,
@@ -6190,98 +6320,222 @@ export class RunEngine {
         phase: "apply",
       });
       let result: ReleaseActivationResult;
+      actionDispatched = true;
       result = await this.#releaseActivator.activate({
         planRun: input.planRun,
         applyRun: input.applyRun,
-        installation: input.installation,
-        deployment: input.deployment,
-        outputSnapshot: input.outputSnapshot,
+        capsule: input.capsule,
+        stateVersion: input.stateVersion,
+        output: input.output,
         nonSensitiveOutputs,
         ...(credentials ? { credentials } : {}),
         commands,
         ...(sourceSnapshot ? { sourceSnapshot } : {}),
       });
       if (result.status === "skipped" && commands.length > 0) {
-        await this.#recordReleaseActivationActivity({
-          ...input,
-          status: "failed",
-          kind: result.kind,
+        return {
+          ...base,
+          reportedStatus: "skipped",
+          activityStatus: "failed",
+          actionDispatched,
+          ...(result.kind ? { kind: result.kind } : {}),
           message:
             result.message ??
             "release activator skipped declared post-apply commands",
-          commandCount: commands.length,
-          outputCount: Object.keys(nonSensitiveOutputs).length,
-        });
-        return;
+        };
       }
-      if (result.status === "skipped") return;
-      await this.#recordReleaseActivationActivity({
-        ...input,
-        status: result.status,
-        kind: result.kind,
-        message: result.message,
-        hasLaunchUrl: Boolean(result.launchUrl),
+      return {
+        ...base,
+        reportedStatus: result.status,
+        // A declared phase has exactly one accepted terminal result. Preserve
+        // the adapter's non-terminal/failed status in Run audit evidence, but
+        // close the Activity event as failed so no durable "pending" record can
+        // be mistaken for work that Takosumi will resume in the background.
+        activityStatus: result.status === "succeeded" ? "succeeded" : "failed",
+        actionDispatched,
+        ...(result.kind ? { kind: result.kind } : {}),
+        ...(result.message ? { message: result.message } : {}),
         hasHealthUrl: Boolean(result.healthUrl),
         metadataKeys: Object.keys(result.metadata ?? {}).sort(),
-        commandCount: commands.length,
-        outputCount: Object.keys(nonSensitiveOutputs).length,
-      });
+      };
     } catch (error) {
-      await this.#recordReleaseActivationActivity({
-        ...input,
-        status: "failed",
+      return {
+        ...base,
+        reportedStatus: "error",
+        activityStatus: "failed",
+        actionDispatched,
         message: errorMessage(error),
-        commandCount: commands.length,
-        outputCount: Object.keys(nonSensitiveOutputs).length,
-      });
-      return;
+      };
     }
+  }
+
+  #applyPostApplyLifecycleOutcome(input: {
+    readonly providerApplied: ApplyRun;
+    readonly lifecycleOutcome: LifecycleActionOutcome | undefined;
+    readonly now: number;
+  }): ApplyRun {
+    const outcome = input.lifecycleOutcome;
+    if (!outcome || outcome.reportedStatus === "succeeded") {
+      return input.providerApplied;
+    }
+    const error = new CapsuleLifecycleActionError(outcome);
+    return {
+      ...input.providerApplied,
+      status: "failed",
+      diagnostics: [
+        ...(input.providerApplied.diagnostics ?? []),
+        errorDiagnostic(error),
+      ],
+      auditEvents: [
+        ...input.providerApplied.auditEvents,
+        auditEvent(
+          input.providerApplied.id,
+          `lifecycle_action.${outcome.phase}.${outcome.activityStatus}`,
+          input.now,
+          {
+            phase: outcome.phase,
+            status: outcome.reportedStatus,
+            commandCount: outcome.commandCount,
+            actionDispatched: outcome.actionDispatched,
+          },
+        ),
+        auditEvent(input.providerApplied.id, "apply.failed", input.now, {
+          message: error.message,
+          providerDispatched: true,
+          providerApplySucceeded: true,
+          lifecycleActionDispatched: outcome.actionDispatched,
+          lifecycleActionPhase: outcome.phase,
+          lifecycleActionStatus: outcome.reportedStatus,
+        }),
+      ],
+      updatedAt: input.now,
+      finishedAt: input.now,
+    };
+  }
+
+  async #recordLifecycleActionOutcome(input: {
+    readonly applyRun: ApplyRun;
+    readonly capsule: Capsule;
+    readonly stateVersion: StateVersion;
+    readonly outcome: LifecycleActionOutcome;
+  }): Promise<void> {
+    await this.#recordReleaseActivationActivity({
+      applyRun: input.applyRun,
+      capsule: input.capsule,
+      stateVersion: input.stateVersion,
+      status: input.outcome.activityStatus,
+      ...(input.outcome.kind ? { kind: input.outcome.kind } : {}),
+      ...(input.outcome.message ? { message: input.outcome.message } : {}),
+      ...(input.outcome.hasHealthUrl === undefined
+        ? {}
+        : { hasHealthUrl: input.outcome.hasHealthUrl }),
+      ...(input.outcome.metadataKeys
+        ? { metadataKeys: input.outcome.metadataKeys }
+        : {}),
+      commandCount: input.outcome.commandCount,
+      outputCount: input.outcome.outputCount,
+    });
   }
 
   async #activateReleaseBeforeDestroy(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
-    readonly installation: Installation;
-  }): Promise<void> {
-    const deploymentId = input.installation.currentDeploymentId;
-    if (!deploymentId) return;
-    const deployment = await this.#store.getDeployment(deploymentId);
-    if (!deployment || deployment.status === "destroyed") return;
-    const outputSnapshot = await this.#store.getOutputSnapshot(
-      deployment.outputSnapshotId,
-    );
-    if (!outputSnapshot) return;
-    const nonSensitiveOutputs = {
-      ...jsonRecordFromPublicOutputs(deployment.outputsPublic),
-      ...jsonRecordFromPublicOutputs(
-        outputSnapshot.workspaceOutputs as Readonly<Record<string, unknown>>,
-      ),
-    };
-    const commands = releaseActivationCommandsFromPublicOutputs(
-      nonSensitiveOutputs,
+    readonly capsule: Capsule;
+    readonly lifecycleActions: InstallConfig["lifecycleActions"];
+  }): Promise<LifecycleActionOutcome | undefined> {
+    const commands = releaseActivationCommands(
+      input.lifecycleActions,
       "pre_destroy",
     );
-    if (commands.length === 0) return;
-    const sourceSnapshot = await this.#store.getSourceSnapshot(
-      deployment.sourceSnapshotId,
+    if (commands.length === 0) return undefined;
+    const stateVersionId = input.capsule.currentStateVersionId;
+    if (!stateVersionId) {
+      throw new CapsuleLifecycleActionError({
+        phase: "pre_destroy",
+        reportedStatus: "unavailable",
+        activityStatus: "failed",
+        actionDispatched: false,
+        message: "pre-destroy lifecycle actions require a current StateVersion",
+        commandCount: commands.length,
+        outputCount: 0,
+      });
+    }
+    const stateVersion = await this.#store.getStateVersion(stateVersionId);
+    if (!stateVersion) {
+      throw new CapsuleLifecycleActionError({
+        phase: "pre_destroy",
+        reportedStatus: "unavailable",
+        activityStatus: "failed",
+        actionDispatched: false,
+        message:
+          "pre-destroy lifecycle actions require the current StateVersion ledger row",
+        commandCount: commands.length,
+        outputCount: 0,
+      });
+    }
+    const output = input.capsule.currentOutputId
+      ? await this.#store.getOutput(input.capsule.currentOutputId)
+      : undefined;
+    if (!output) {
+      throw new CapsuleLifecycleActionError({
+        phase: "pre_destroy",
+        reportedStatus: "unavailable",
+        activityStatus: "failed",
+        actionDispatched: false,
+        message: "pre-destroy lifecycle actions require the current Output",
+        commandCount: commands.length,
+        outputCount: 0,
+      });
+    }
+    const nonSensitiveOutputs = {
+      ...jsonRecordFromPublicOutputs(output.publicOutputs),
+      ...jsonRecordFromPublicOutputs(
+        output.workspaceOutputs as Readonly<Record<string, unknown>>,
+      ),
+    };
+    const sourceSnapshotId = await this.#sourceSnapshotIdForStateVersion(
+      stateVersion,
+      new Set(),
     );
+    const sourceSnapshot = sourceSnapshotId
+      ? await this.#store.getSourceSnapshot(sourceSnapshotId)
+      : undefined;
     if (!this.#releaseActivator) {
       await this.#recordReleaseActivationActivity({
         applyRun: input.applyRun,
-        installation: input.installation,
-        deployment,
+        capsule: input.capsule,
+        stateVersion,
         status: "failed",
-        kind: "takosumi.release-commands@v1",
+        kind: "takosumi.install-config-actions@v1",
         message:
-          "pre-destroy release commands declared but no release activator is configured",
+          "pre-destroy lifecycle actions declared but no release activator is configured",
         commandCount: commands.length,
         outputCount: Object.keys(nonSensitiveOutputs).length,
       });
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "pre-destroy release commands require a release activator",
-      );
+      throw new CapsuleLifecycleActionError({
+        phase: "pre_destroy",
+        reportedStatus: "unavailable",
+        activityStatus: "failed",
+        actionDispatched: false,
+        kind: "takosumi.install-config-actions@v1",
+        message:
+          "pre-destroy lifecycle actions declared but no release activator is configured",
+        commandCount: commands.length,
+        outputCount: Object.keys(nonSensitiveOutputs).length,
+      });
     }
+    await this.#recordReleaseActivationActivity({
+      applyRun: input.applyRun,
+      capsule: input.capsule,
+      stateVersion,
+      status: "pending",
+      kind: "takosumi.install-config-actions@v1",
+      message: "pre-destroy lifecycle actions are running",
+      commandCount: commands.length,
+      outputCount: Object.keys(nonSensitiveOutputs).length,
+    });
+    let result: ReleaseActivationResult;
+    let actionDispatched = false;
     try {
       const credentials = await this.#releaseCredentialsForCommands({
         planRun: input.planRun,
@@ -6289,58 +6543,68 @@ export class RunEngine {
         commands,
         phase: "destroy",
       });
-      let result: ReleaseActivationResult;
+      actionDispatched = true;
       result = await this.#releaseActivator.activate({
         planRun: input.planRun,
         applyRun: input.applyRun,
-        installation: input.installation,
-        deployment,
-        outputSnapshot,
+        capsule: input.capsule,
+        stateVersion,
+        output,
         nonSensitiveOutputs,
         ...(credentials ? { credentials } : {}),
         commands,
         ...(sourceSnapshot ? { sourceSnapshot } : {}),
       });
-      if (result.status === "skipped") {
-        await this.#recordReleaseActivationActivity({
-          applyRun: input.applyRun,
-          installation: input.installation,
-          deployment,
-          status: "failed",
-          kind: result.kind,
-          message:
-            result.message ??
-            "release activator skipped declared pre-destroy commands",
-          commandCount: commands.length,
-          outputCount: Object.keys(nonSensitiveOutputs).length,
-        });
-        return;
-      }
-      await this.#recordReleaseActivationActivity({
-        applyRun: input.applyRun,
-        installation: input.installation,
-        deployment,
-        status: result.status,
-        kind: result.kind,
-        message: result.message,
-        hasLaunchUrl: Boolean(result.launchUrl),
-        hasHealthUrl: Boolean(result.healthUrl),
-        metadataKeys: Object.keys(result.metadata ?? {}).sort(),
-        commandCount: commands.length,
-        outputCount: Object.keys(nonSensitiveOutputs).length,
-      });
     } catch (error) {
-      await this.#recordReleaseActivationActivity({
-        applyRun: input.applyRun,
-        installation: input.installation,
-        deployment,
-        status: "failed",
+      const outcome: LifecycleActionOutcome = {
+        phase: "pre_destroy",
+        reportedStatus: "error",
+        activityStatus: "failed",
+        actionDispatched,
         message: errorMessage(error),
         commandCount: commands.length,
         outputCount: Object.keys(nonSensitiveOutputs).length,
+      };
+      await this.#recordReleaseActivationActivity({
+        applyRun: input.applyRun,
+        capsule: input.capsule,
+        stateVersion,
+        status: outcome.activityStatus,
+        message: outcome.message,
+        commandCount: commands.length,
+        outputCount: Object.keys(nonSensitiveOutputs).length,
       });
-      return;
+      throw new CapsuleLifecycleActionError(outcome);
     }
+    const skipped = result.status === "skipped";
+    const outcome: LifecycleActionOutcome = {
+      phase: "pre_destroy",
+      reportedStatus: result.status,
+      activityStatus: result.status === "succeeded" ? "succeeded" : "failed",
+      actionDispatched,
+      ...(result.kind ? { kind: result.kind } : {}),
+      ...(result.message || skipped
+        ? {
+            message:
+              result.message ??
+              "release activator skipped declared pre-destroy commands",
+          }
+        : {}),
+      hasHealthUrl: Boolean(result.healthUrl),
+      metadataKeys: Object.keys(result.metadata ?? {}).sort(),
+      commandCount: commands.length,
+      outputCount: Object.keys(nonSensitiveOutputs).length,
+    };
+    await this.#recordLifecycleActionOutcome({
+      applyRun: input.applyRun,
+      capsule: input.capsule,
+      stateVersion,
+      outcome,
+    });
+    if (result.status !== "succeeded") {
+      throw new CapsuleLifecycleActionError(outcome);
+    }
+    return outcome;
   }
 
   async #releaseCredentialsForCommands(input: {
@@ -6349,7 +6613,11 @@ export class RunEngine {
     readonly commands: readonly ReleaseActivationCommand[];
     readonly phase: "apply" | "destroy";
   }): Promise<RunCredentials | undefined> {
-    if (input.commands.length === 0) return undefined;
+    if (
+      !input.commands.some((command) => command.useProviderCredentials === true)
+    ) {
+      return undefined;
+    }
     return (
       await this.#runEnv.resolveRunEnvironment({
         planRun: input.planRun,
@@ -6362,33 +6630,29 @@ export class RunEngine {
 
   async #recordReleaseActivationActivity(input: {
     readonly applyRun: ApplyRun;
-    readonly installation: Installation;
-    readonly deployment: Deployment;
+    readonly capsule: Capsule;
+    readonly stateVersion: StateVersion;
     readonly status: Exclude<ReleaseActivationStatus, "skipped">;
     readonly kind?: string;
     readonly message?: string;
-    readonly hasLaunchUrl?: boolean;
     readonly hasHealthUrl?: boolean;
     readonly metadataKeys?: readonly string[];
     readonly commandCount?: number;
     readonly outputCount: number;
   }): Promise<void> {
     await this.#recordActivity({
-      spaceId: input.applyRun.spaceId,
+      workspaceId: input.applyRun.workspaceId,
       action: `release_activation.${input.status}`,
-      targetType: "deployment",
-      targetId: input.deployment.id,
+      targetType: "state_version",
+      targetId: input.stateVersion.id,
       runId: input.applyRun.id,
       metadata: {
-        installationId: input.installation.id,
-        deploymentId: input.deployment.id,
+        capsuleId: input.capsule.id,
+        stateVersionId: input.stateVersion.id,
         applyRunId: input.applyRun.id,
         outputCount: input.outputCount,
         ...(input.kind ? { activationKind: input.kind } : {}),
         ...(input.message ? { message: input.message } : {}),
-        ...(input.hasLaunchUrl === undefined
-          ? {}
-          : { hasLaunchUrl: input.hasLaunchUrl }),
         ...(input.hasHealthUrl === undefined
           ? {}
           : { hasHealthUrl: input.hasHealthUrl }),
@@ -6407,46 +6671,42 @@ export class RunEngine {
    * `#propagateStale` so the top-level apply flow reads as a sequence of named
    * steps.
    */
-  async #markDownstreamInstallationsStale(input: {
-    readonly installation: Installation;
-    readonly previousOutputSnapshot: OutputSnapshot | undefined;
-    readonly newOutputSnapshot: OutputSnapshot;
+  async #markDownstreamCapsulesStale(input: {
+    readonly capsule: Capsule;
+    readonly previousOutput: Output | undefined;
+    readonly newOutput: Output;
     readonly now: number;
   }): Promise<void> {
     await this.#propagateStale(input);
   }
 
-  /**
-   * Builds the terminal (`succeeded`) ApplyRun for a non-destroy apply. The run
-   * is BUILT here (not persisted): it is committed atomically with the Deployment
-   * by {@link #commitApplyLedger} (commit-tail fold, S2) so the terminal status
-   * can never tear from the Deployment it produced.
-   */
+  /** Builds the terminal ApplyRun committed with StateVersion and Output. */
   #buildCompletedApplyRun(input: {
     readonly running: ApplyRun;
     readonly applyRun: ApplyRun;
     readonly profile: RunnerProfile;
-    readonly installation: Installation;
-    readonly deployment: Deployment;
-    readonly outputs: readonly DeploymentOutput[];
+    readonly capsule: Capsule;
+    readonly stateVersionId: string;
+    readonly outputId: string;
+    readonly outputCount: number;
     readonly result: OpenTofuApplyResult;
     readonly providerInstallationPolicy: { requireMirror: boolean } | undefined;
     readonly startedAt: number;
     readonly now: number;
   }): ApplyRun {
-    const { running, applyRun, profile, installation, deployment, outputs } =
+    const { running, applyRun, profile, capsule, stateVersionId, outputId } =
       input;
     const { result, startedAt, now } = input;
     const diagnostics = redactRunDiagnostics(result.diagnostics);
-    return {
+    const completed: ApplyRun = {
       ...running,
-      installationId: installation.id,
-      deploymentId: deployment.id,
+      capsuleId: capsule.id,
+      stateVersionId,
+      outputId,
       status: "succeeded",
       stateLock:
         result.stateLock ??
         stateLockEvidence(profile.stateBackend, startedAt, now, "recorded"),
-      outputs,
       ...(diagnostics ? { diagnostics } : {}),
       auditEvents: [
         ...running.auditEvents,
@@ -6458,90 +6718,166 @@ export class RunEngine {
           input.providerInstallationPolicy,
         ),
         auditEvent(applyRun.id, "apply.completed", now, {
-          deploymentId: deployment.id,
-          outputCount: outputs.length,
+          stateVersionId,
+          outputId,
+          outputCount: input.outputCount,
         }),
       ],
       updatedAt: now,
       finishedAt: now,
     };
+    return this.#withPendingApplyBillingCapture(completed, now);
   }
 
   /**
-   * Finalizes a successful apply AFTER the atomic commit-tail fold has already
-   * persisted the terminal ApplyRun + the applied PlanRun marker (S2): records
-   * runner-minute usage, captures billing usage (own idempotencyKey, so it stays
-   * OUTSIDE the atomic unit), drops the retained generated-root inputs sidecar,
-   * and emits the §27 / §34 activity. Returns the apply response.
+   * The pending marker lands in the same atomic write as the terminal ApplyRun
+   * and provider state. It is deliberately present even in OSS-disabled mode:
+   * the no-op finalizer immediately closes it, while a process crash still
+   * leaves an unambiguous durable repair target on every substrate.
+   */
+  #withPendingApplyBillingCapture(run: ApplyRun, now: number): ApplyRun {
+    if (applyRunBillingCapturePending(run)) return run;
+    return {
+      ...run,
+      auditEvents: [
+        ...run.auditEvents,
+        auditEvent(run.id, APPLY_BILLING_CAPTURE_PENDING_EVENT, now, {
+          planRunId: run.planRunId,
+          providerMutationCommitted: true,
+        }),
+      ],
+    };
+  }
+
+  /**
+   * Retries the idempotent UsageEvent + host capture and only then closes the
+   * durable marker. Concurrent repair workers may both call the host port; the
+   * BillingEnforcement contract keys capture by applyRunId, and the OSS usage
+   * write is already idempotent by `${applyRun.id}:opentofu.apply`.
+   */
+  async #finalizeApplyBilling(
+    planRun: PlanRun,
+    applyRun: ApplyRun,
+  ): Promise<ApplyRun> {
+    if (!applyRunBillingCapturePending(applyRun)) return applyRun;
+    const capturedAt = applyRun.finishedAt ?? applyRun.updatedAt ?? this.#now();
+    await this.#billing.captureApplyBillingUsage({
+      planRun,
+      applyRun,
+      now: capturedAt,
+    });
+    const completedMarker = auditEvent(
+      applyRun.id,
+      APPLY_BILLING_CAPTURE_COMPLETED_EVENT,
+      this.#now(),
+      {
+        planRunId: planRun.id,
+        applyRunId: applyRun.id,
+      },
+    );
+    const result = await this.#store.transitionRun({
+      id: applyRun.id,
+      kind: "apply",
+      expectFrom: [applyRun.status],
+      run: {
+        ...applyRun,
+        auditEvents: [...applyRun.auditEvents, completedMarker],
+      },
+    });
+    return (result.run as ApplyRun | undefined) ?? applyRun;
+  }
+
+  async #tryFinalizeApplyBilling(
+    planRun: PlanRun,
+    applyRun: ApplyRun,
+  ): Promise<ApplyRun> {
+    try {
+      return await this.#finalizeApplyBilling(planRun, applyRun);
+    } catch (error) {
+      log.warn("deploy_control.billing_capture_finalization_deferred", {
+        planRunId: planRun.id,
+        applyRunId: applyRun.id,
+        message: errorMessage(error),
+      });
+      return applyRun;
+    }
+  }
+
+  /**
+   * Finalizes a provider-applied Run AFTER the atomic commit-tail fold. Billing
+   * and runner usage are captured even when a required post-apply action made
+   * the terminal Run failed: the provider mutation and retained state already
+   * happened, so releasing that usage would be incorrect.
    */
   async #completeApplyRun(input: {
     readonly completed: ApplyRun;
     readonly planRun: PlanRun;
-    readonly installation: Installation;
-    readonly patched: Installation | undefined;
-    readonly deployment: Deployment;
-    readonly outputs: readonly DeploymentOutput[];
+    readonly capsule: Capsule;
+    readonly patched: Capsule | undefined;
+    readonly outputCount: number;
     readonly nextStateGeneration: number;
-    readonly dispatch: RunTemplateDispatch;
     readonly startedAt: number;
     readonly now: number;
   }): Promise<ApplyRunResponse> {
-    const {
-      completed,
-      planRun,
-      installation,
-      deployment,
-      outputs,
-      dispatch,
-      startedAt,
-      now,
-    } = input;
-    await this.#recordRunnerMinuteUsage({
-      spaceId: completed.workspaceId,
-      runId: completed.id,
-      installationId: completed.installationId,
-      startedAt,
-      finishedAt: now,
-    });
-    await this.#recordDeployOperationMetric({
-      run: completed,
-      operationKind: "apply",
-      status: "succeeded",
-      startedAt,
-      finishedAt: now,
-      recordApplyDuration: true,
-    });
-    await this.#billing.captureApplyBillingUsage({
-      planRun,
-      applyRun: completed,
-      now,
-    });
-    // The retained generated-root inputs sidecar is no longer needed once applied.
-    if (dispatch.generatedRoot) {
+    const { completed, planRun, capsule, outputCount, startedAt, now } = input;
+    const finalized = await this.#tryFinalizeApplyBilling(planRun, completed);
+    // Everything below is post-commit observability/cleanup. A failure must not
+    // escape to the pre-commit catch path, which would incorrectly release a
+    // reservation after provider state and the terminal Run are already durable.
+    try {
+      await this.#recordRunnerMinuteUsage({
+        workspaceId: completed.workspaceId,
+        runId: completed.id,
+        capsuleId: completed.capsuleId,
+        startedAt,
+        finishedAt: now,
+      });
+      await this.#recordDeployOperationMetric({
+        run: completed,
+        operationKind: "apply",
+        status: completed.status,
+        startedAt,
+        finishedAt: now,
+        recordApplyDuration: true,
+      });
       await this.#store.deletePlanRunInputs(planRun.id);
+    } catch (error) {
+      log.warn("deploy_control.apply_post_commit_cleanup_failed", {
+        planRunId: planRun.id,
+        applyRunId: completed.id,
+        message: errorMessage(error),
+      });
     }
-    // Activity (§27 / §34): a successful apply produced a new Deployment. Run
-    // id + deployment id + state generation + output COUNT only (never output
-    // values).
+    const lifecycleFailed = completed.status === "failed";
+    const lifecycleErrorCode = lifecycleFailed
+      ? CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE
+      : undefined;
+    // A failed lifecycle action is still explicit that the provider-applied
+    // StateVersion/Output were retained; callers must not retry the same Plan.
     await this.#recordActivity({
-      spaceId: completed.spaceId,
-      action: "run.applied",
+      workspaceId: completed.workspaceId,
+      action: lifecycleFailed ? "run.failed" : "run.applied",
       targetType: "run",
       targetId: completed.id,
       runId: completed.id,
       metadata: {
-        installationId: installation.id,
-        deploymentId: deployment.id,
+        capsuleId: capsule.id,
+        stateVersionId: completed.stateVersionId,
         stateGeneration: input.nextStateGeneration,
-        outputCount: outputs.length,
+        outputId: completed.outputId,
+        outputCount,
+        ...(lifecycleFailed
+          ? {
+              errorCode: lifecycleErrorCode!,
+              providerApplySucceeded: true,
+              appliedStateRetained: true,
+            }
+          : {}),
       },
     });
-    await this.#notifyTerminal(completed);
     return {
-      applyRun: completed,
-      capsule: input.patched ?? installation,
-      installation: input.patched ?? installation,
-      deployment,
+      applyRun: finalized,
+      capsule: input.patched ?? capsule,
     };
   }
 
@@ -6550,9 +6886,9 @@ export class RunEngine {
     planRun: PlanRun,
     profile: RunnerProfile,
     startedAt: number,
-    plannedInstallation: Installation | undefined,
+    plannedCapsule: Capsule | undefined,
     credentials: RunCredentials | undefined,
-    dispatch: RunTemplateDispatch,
+    dispatch: RunModuleDispatch,
     leaseToken: string,
     lease?: LeaseHandle,
   ): Promise<ApplyRunResponse> {
@@ -6562,21 +6898,33 @@ export class RunEngine {
         `plan run ${planRun.id} has no immutable destroy plan artifact`,
       );
     }
-    if (!planRun.installationId) {
+    if (planRun.resourceContext) {
+      return await this.#executeResourceDestroyApply({
+        running,
+        planRun,
+        profile,
+        startedAt,
+        credentials,
+        dispatch,
+        leaseToken,
+        lease,
+      });
+    }
+    if (!planRun.capsuleId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "destroy apply requires a PlanRun with installationId",
+        "destroy apply requires a PlanRun with capsuleId",
       );
     }
-    const installation =
-      plannedInstallation ??
-      (await this.#requireCurrentPlannedInstallation(planRun));
+    const capsule =
+      plannedCapsule ?? (await this.#requireCurrentPlannedCapsule(planRun));
     // A destroy_apply persists the post-teardown state at `base + 1`. Empty for
-    // runs without installation context.
+    // runs without capsule context.
     const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
-    const envDispatch = await this.#verification.installationDispatch(
+    const envDispatch = await this.#verification.executionDispatch(
       planRun,
       persistGeneration,
+      dispatch.stateAdoption,
     );
     const planPolicy = await this.#policyForPlanRun(planRun);
     const providerInstallationPolicy =
@@ -6584,22 +6932,76 @@ export class RunEngine {
         ? { requireMirror: true }
         : undefined;
     let runnerDispatched = false;
+    let effectiveRunning = running;
+    let ledgerCommitted = false;
     try {
       const runner = this.#runnerForProfile(profile);
       if (typeof runner.destroy !== "function") {
-        // Without a real teardown the Installation must NOT be marked
+        // Without a real teardown the Capsule must NOT be marked
         // destroyed: doing so would record a successful destroy in the ledger
         // while the underlying cloud resources keep running (silent leak).
         throw new OpenTofuControllerError(
           "failed_precondition",
-          "runner does not implement destroy; refusing to mark installation destroyed without teardown",
+          "runner does not implement destroy; refusing to mark capsule destroyed without teardown",
         );
       }
-      await this.#activateReleaseBeforeDestroy({
-        planRun,
-        applyRun: running,
-        installation,
-      });
+      const lifecycleOutcome = await this.#withRunRenewal(
+        "apply",
+        running,
+        leaseToken,
+        lease,
+        () =>
+          this.#activateReleaseBeforeDestroy({
+            planRun,
+            applyRun: running,
+            capsule: capsule,
+            lifecycleActions: dispatch.lifecycleActions,
+          }),
+      );
+      if (lifecycleOutcome) {
+        const lifecycleCompletedAt = this.#now();
+        const lifecycleAudited: ApplyRun = {
+          ...running,
+          auditEvents: [
+            ...running.auditEvents,
+            auditEvent(
+              running.id,
+              `lifecycle_action.${lifecycleOutcome.phase}.${lifecycleOutcome.activityStatus}`,
+              lifecycleCompletedAt,
+              {
+                phase: lifecycleOutcome.phase,
+                status: lifecycleOutcome.reportedStatus,
+                commandCount: lifecycleOutcome.commandCount,
+                actionDispatched: lifecycleOutcome.actionDispatched,
+              },
+            ),
+          ],
+          updatedAt: lifecycleCompletedAt,
+        };
+        // Persist the successful pre_destroy evidence BEFORE provider destroy.
+        // Otherwise a process crash after the lifecycle action but before the
+        // terminal/requeue write would erase the only structured proof that the
+        // external action ran and a takeover could dispatch it again blindly.
+        const persistedLifecycle = await this.#store.transitionRun({
+          id: running.id,
+          kind: "apply",
+          expectFrom: ["running"],
+          expectLeaseToken: leaseToken,
+          run: lifecycleAudited,
+          heartbeatAt: lifecycleCompletedAt,
+        });
+        if (!persistedLifecycle.won) {
+          // The lifecycle action already happened, but this owner lost its
+          // execution fence. Never continue into provider destroy under a stale
+          // lease; the current owner/terminal row is authoritative.
+          return {
+            applyRun:
+              (persistedLifecycle.run as ApplyRun | undefined) ?? running,
+            capsule: publicCapsule(capsule),
+          };
+        }
+        effectiveRunning = persistedLifecycle.run as ApplyRun;
+      }
       runnerDispatched = true;
       const destroyFn = runner.destroy;
       // Renewal harness: destroy is ONE awaited blocking fetch for the whole
@@ -6607,15 +7009,15 @@ export class RunEngine {
       // long destroy is not taken over by a sibling. clearInterval on every exit.
       const result = await this.#withRunRenewal(
         "apply",
-        running,
+        effectiveRunning,
         leaseToken,
         lease,
         () =>
           destroyFn.call(runner, {
-            applyRun: running,
+            applyRun: effectiveRunning,
             planRun,
             planArtifact: planRun.planArtifact!,
-            installation,
+            capsule,
             runnerProfile: profile,
             ...(providerInstallationPolicy
               ? { providerInstallationPolicy }
@@ -6624,12 +7026,18 @@ export class RunEngine {
             ...(dispatch.generatedRoot
               ? { generatedRoot: dispatch.generatedRoot }
               : {}),
+            ...(dispatch.operatorModule
+              ? { operatorModule: dispatch.operatorModule }
+              : {}),
             ...(dispatch.sourceBuild
               ? { sourceBuild: dispatch.sourceBuild }
               : {}),
             // M2 env dispatch (state scope at base+1 + source archive).
             ...(envDispatch.stateScope
               ? { stateScope: envDispatch.stateScope }
+              : {}),
+            ...(envDispatch.stateAdoption
+              ? { stateAdoption: envDispatch.stateAdoption }
               : {}),
             ...(envDispatch.sourceArchive
               ? { sourceArchive: envDispatch.sourceArchive }
@@ -6644,41 +7052,35 @@ export class RunEngine {
           }),
       );
       const now = this.#now();
-      // Build the post-teardown StateSnapshot at the SAME generation the DO
-      // wrote to R2_STATE, plus the destroyed-Deployment transition, then commit
-      // them ATOMICALLY with the Installation generation advance so a stale plan
-      // created against the pre-destroy generation cannot re-apply and a crash
-      // mid-write cannot leave torn state (spec §20 / §21).
-      const stateSnapshot = this.#buildStateSnapshot({
+      // Build the post-teardown StateVersion at the generation persisted by the
+      // runner, then atomically advance the Capsule and terminal Run.
+      const stateVersion = this.#buildStateVersion({
         envDispatch,
         generation: persistGeneration,
         stateDigest: undefined,
         runId: running.id,
         now,
       });
-      let destroyedDeployment: Deployment | undefined;
-      if (installation.currentDeploymentId) {
-        const previous = await this.#store.getDeployment(
-          installation.currentDeploymentId,
+      if (!stateVersion) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "destroy completed without a durable Capsule state scope",
         );
-        if (previous && previous.status !== "destroyed") {
-          destroyedDeployment = { ...previous, status: "destroyed" };
-        }
       }
-      const nextStateGeneration = installation.currentStateGeneration + 1;
+      const nextStateGeneration = capsule.currentStateGeneration + 1;
       const destroyPatch = {
-        id: installation.id,
+        id: capsule.id,
         patch: {
-          currentDeploymentId: undefined,
+          currentStateVersionId: stateVersion.id,
           status: "destroyed" as const,
           updatedAt: new Date(now).toISOString(),
           currentStateGeneration: nextStateGeneration,
-          currentOutputSnapshotId: undefined,
+          currentOutputId: undefined,
         },
         guard: {
-          currentDeploymentId:
-            planRun.installationCurrentDeploymentId ?? undefined,
-          status: installation.status,
+          currentStateVersionId:
+            planRun.capsuleCurrentStateVersionId ?? undefined,
+          status: capsule.status,
         },
       };
       // Build the terminal (`succeeded`) destroy-apply ApplyRun + the apply-once
@@ -6686,144 +7088,125 @@ export class RunEngine {
       // writes (commit-tail fold, S2): a torn tail can no longer leave a stuck
       // `running` destroy run over a finished teardown.
       const diagnostics = redactRunDiagnostics(result?.diagnostics);
-      const completed: ApplyRun = {
-        ...running,
-        status: "succeeded",
-        stateLock: stateLockEvidence(
-          profile.stateBackend,
-          startedAt,
-          now,
-          "recorded",
-        ),
-        ...(diagnostics ? { diagnostics } : {}),
-        auditEvents: [
-          ...running.auditEvents,
-          ...providerInstallationAuditEvents(
-            running.id,
-            "destroy",
+      const completed = this.#withPendingApplyBillingCapture(
+        {
+          ...effectiveRunning,
+          stateVersionId: stateVersion.id,
+          status: "succeeded",
+          stateLock: stateLockEvidence(
+            profile.stateBackend,
+            startedAt,
             now,
-            result?.providerInstallation,
-            providerInstallationPolicy,
+            "recorded",
           ),
-          auditEvent(running.id, "destroy.completed", now, {
-            installationId: installation.id,
-          }),
-          auditEvent(running.id, "apply.completed", now, {
-            operation: "destroy",
-            installationId: installation.id,
-          }),
-        ],
-        updatedAt: now,
-        finishedAt: now,
-      };
+          ...(diagnostics ? { diagnostics } : {}),
+          auditEvents: [
+            ...effectiveRunning.auditEvents,
+            ...providerInstallationAuditEvents(
+              running.id,
+              "destroy",
+              now,
+              result?.providerInstallation,
+              providerInstallationPolicy,
+            ),
+            auditEvent(running.id, "destroy.completed", now, {
+              capsuleId: capsule.id,
+            }),
+            auditEvent(running.id, "apply.completed", now, {
+              operation: "destroy",
+              capsuleId: capsule.id,
+            }),
+          ],
+          updatedAt: now,
+          finishedAt: now,
+        },
+        now,
+      );
       const appliedPlan: PlanRun = {
         ...planRun,
         appliedApplyRunId: running.id,
         updatedAt: now,
       };
-      let patched: Installation | undefined;
-      if (stateSnapshot) {
-        const committed = await this.#store.commitAppliedDeployment({
-          ...(destroyedDeployment
-            ? { supersededDeployment: destroyedDeployment }
-            : {}),
-          stateSnapshot,
-          installationPatch: destroyPatch,
-          // Commit-tail fold (S2): terminal destroy-apply + applied PlanRun.
-          applyRunTerminal: completed,
-          planRunApplied: appliedPlan,
-          applyRunLeaseToken: leaseToken,
-          ...(installation.currentOutputSnapshotId
-            ? {
-                outputSyncRevisionBump: {
-                  workspaceId: installation.workspaceId ?? installation.spaceId,
-                  updatedAt: new Date(now).toISOString(),
-                },
-              }
-            : {}),
+      const committed = await this.#store.commitRunState({
+        stateVersion,
+        capsulePatch: destroyPatch,
+        applyRunTerminal: completed,
+        planRunApplied: appliedPlan,
+        applyRunLeaseToken: leaseToken,
+      });
+      if (committed.applyRunLeaseLost) {
+        return { applyRun: (await this.getApplyRun(running.id)).applyRun };
+      }
+      ledgerCommitted = true;
+      await this.#notifyTerminal(completed);
+      const patched = committed.capsule;
+      const finalized = await this.#tryFinalizeApplyBilling(planRun, completed);
+      try {
+        await this.#recordRunnerMinuteUsage({
+          workspaceId: completed.workspaceId,
+          runId: completed.id,
+          capsuleId: completed.capsuleId,
+          startedAt,
+          finishedAt: now,
         });
-        if (committed.applyRunLeaseLost) {
-          return { applyRun: (await this.getApplyRun(running.id)).applyRun };
-        }
-        patched = committed.installation;
-      } else {
-        // No environment context => no StateSnapshot, no atomic unit. Preserve
-        // the prior (deployment flip + guarded patch) sequence and write the
-        // commit-tail runs the way the tail did before the fold.
-        if (destroyedDeployment) {
-          await this.#store.putDeployment(destroyedDeployment);
-        }
-        patched = await this.#store.patchInstallation(
-          destroyPatch.id,
-          destroyPatch.patch,
-          destroyPatch.guard,
-        );
-        const persisted = await this.#persistTerminalRun(
-          "apply",
-          completed,
-          leaseToken,
-        );
-        if (!persisted.won) {
-          return { applyRun: persisted.run };
-        }
-        await this.#store.putPlanRun(appliedPlan);
-        if (installation.currentOutputSnapshotId) {
-          await this.#bumpWorkspaceOutputSyncRevision(
-            installation.workspaceId ?? installation.spaceId,
-            now,
-          );
-        }
-      }
-      await this.#recordRunnerMinuteUsage({
-        spaceId: completed.workspaceId,
-        runId: completed.id,
-        installationId: completed.installationId,
-        startedAt,
-        finishedAt: now,
-      });
-      await this.#recordDeployOperationMetric({
-        run: completed,
-        operationKind: "destroy_apply",
-        status: "succeeded",
-        startedAt,
-        finishedAt: now,
-        recordApplyDuration: true,
-      });
-      await this.#billing.captureApplyBillingUsage({
-        planRun,
-        applyRun: completed,
-        now,
-      });
-      if (dispatch.generatedRoot) {
+        await this.#recordDeployOperationMetric({
+          run: completed,
+          operationKind: "destroy_apply",
+          status: "succeeded",
+          startedAt,
+          finishedAt: now,
+          recordApplyDuration: true,
+        });
         await this.#store.deletePlanRunInputs(planRun.id);
+        await this.#releasePublicHostsForCapsule(capsule.id, now);
+      } catch (error) {
+        log.warn("deploy_control.destroy_post_commit_cleanup_failed", {
+          planRunId: planRun.id,
+          applyRunId: completed.id,
+          message: errorMessage(error),
+        });
       }
-      await this.#releasePublicHostsForInstallation(installation.id, now);
-      // Activity (§27 / §34): a successful destroy tore the Installation down.
+      // Activity (§27 / §34): a successful destroy tore the Capsule down.
       await this.#recordActivity({
-        spaceId: completed.spaceId,
+        workspaceId: completed.workspaceId,
         action: "run.destroyed",
         targetType: "run",
         targetId: completed.id,
         runId: completed.id,
         metadata: {
-          installationId: installation.id,
+          capsuleId: capsule.id,
           stateGeneration: nextStateGeneration,
         },
       });
-      await this.#notifyTerminal(completed);
       return {
-        applyRun: completed,
-        capsule: publicInstallation(patched ?? installation),
-        installation: publicInstallation(patched ?? installation),
+        applyRun: finalized,
+        capsule: publicCapsule(patched ?? capsule),
       };
     } catch (error) {
-      if (error instanceof InstallationPatchGuardConflict) {
-        await this.#billing.releaseApplyBillingReservation(planRun);
+      if (ledgerCommitted) {
+        const persisted = (await this.#store.getApplyRun(running.id))!;
+        const finalized = await this.#tryFinalizeApplyBilling(
+          planRun,
+          persisted,
+        );
+        log.warn("deploy_control.destroy_post_commit_finalization_failed", {
+          planRunId: planRun.id,
+          applyRunId: running.id,
+          message: errorMessage(error),
+        });
+        const currentCapsule = await this.#store.getCapsule(capsule.id);
+        return {
+          applyRun: finalized,
+          capsule: publicCapsule(currentCapsule ?? capsule),
+        };
+      }
+      if (error instanceof CapsuleStateVersionGuardConflict) {
+        await this.#billing.releaseApplyBilling(planRun);
         throw new OpenTofuControllerError("failed_precondition", error.message);
       }
       if (runnerDispatched && isRetryableRunnerInfrastructureError(error)) {
         const runningWithEnvironmentFailure = runEnvironmentFailedRun(
-          running,
+          effectiveRunning,
           error,
         );
         if (
@@ -6831,7 +7214,7 @@ export class RunEngine {
             "destroy.retry_scheduled",
           ]) >= RUNNER_INFRASTRUCTURE_RETRY_LIMIT
         ) {
-          await this.#billing.releaseApplyBillingReservation(planRun);
+          await this.#billing.releaseApplyBilling(planRun);
           const failed = await this.#failApplyRun(
             runningWithEnvironmentFailure,
             leaseToken,
@@ -6839,20 +7222,20 @@ export class RunEngine {
             startedAt,
             "destroy.failed",
             runnerInfrastructureRetryExhaustedError("destroy_apply"),
+            true,
           );
           if (failed.finishedAt !== undefined) {
             await this.#recordRunnerMinuteUsage({
-              spaceId: failed.workspaceId,
+              workspaceId: failed.workspaceId,
               runId: failed.id,
-              installationId: failed.installationId,
+              capsuleId: failed.capsuleId,
               startedAt,
               finishedAt: failed.finishedAt,
             });
           }
           return {
             applyRun: failed,
-            capsule: publicInstallation(installation),
-            installation: publicInstallation(installation),
+            capsule: publicCapsule(capsule),
           };
         }
         const queued =
@@ -6868,12 +7251,13 @@ export class RunEngine {
           const retryError = new OpenTofuControllerError(
             "failed_precondition",
             `retryable_runner_infrastructure_error: destroy apply run ${queued.id} requeued after runner infrastructure failure`,
+            { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
           );
           if (queued.updatedAt !== undefined) {
             await this.#recordRunnerMinuteUsage({
-              spaceId: queued.workspaceId,
+              workspaceId: queued.workspaceId,
               runId: queued.id,
-              installationId: queued.installationId,
+              capsuleId: queued.capsuleId,
               startedAt,
               finishedAt: queued.updatedAt,
             });
@@ -6881,30 +7265,195 @@ export class RunEngine {
           throw retryError;
         }
       }
-      await this.#billing.releaseApplyBillingReservation(planRun);
+      await this.#billing.releaseApplyBilling(planRun);
+      const lifecycleActionDispatched =
+        error instanceof CapsuleLifecycleActionError && error.actionDispatched;
+      const lifecycleOutcome =
+        error instanceof CapsuleLifecycleActionError
+          ? error.outcome
+          : undefined;
       const failed = await this.#failApplyRun(
-        running,
+        effectiveRunning,
         leaseToken,
         profile,
         startedAt,
         "destroy.failed",
         error,
+        runnerDispatched,
+        lifecycleActionDispatched,
+        lifecycleOutcome,
       );
       if (runnerDispatched && failed.finishedAt !== undefined) {
         await this.#recordRunnerMinuteUsage({
-          spaceId: failed.workspaceId,
+          workspaceId: failed.workspaceId,
           runId: failed.id,
-          installationId: failed.installationId,
+          capsuleId: failed.capsuleId,
           startedAt,
           finishedAt: failed.finishedAt,
         });
       }
       return {
         applyRun: failed,
-        capsule: publicInstallation(installation),
-        installation: publicInstallation(installation),
+        capsule: publicCapsule(capsule),
       };
     }
+  }
+
+  async #executeResourceDestroyApply(input: {
+    readonly running: ApplyRun;
+    readonly planRun: PlanRun;
+    readonly profile: RunnerProfile;
+    readonly startedAt: number;
+    readonly credentials: RunCredentials | undefined;
+    readonly dispatch: RunModuleDispatch;
+    readonly leaseToken: string;
+    readonly lease?: LeaseHandle;
+  }): Promise<ApplyRunResponse> {
+    const { running, planRun, profile, dispatch } = input;
+    const resource = planRun.resourceContext;
+    if (!resource || !planRun.planArtifact) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Resource destroy requires a Resource subject and immutable plan artifact",
+      );
+    }
+    const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
+    const envDispatch = await this.#verification.executionDispatch(
+      planRun,
+      persistGeneration,
+      dispatch.stateAdoption,
+    );
+    const scope = envDispatch.stateScope;
+    if (!scope || scope.subject?.kind !== "resource") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Resource destroy has no Resource state scope",
+      );
+    }
+    const planPolicy = await this.#policyForPlanRun(planRun);
+    const providerInstallationPolicy =
+      planPolicy?.providerInstallation?.requireMirror === true
+        ? { requireMirror: true }
+        : undefined;
+    const runner = this.#runnerForProfile(profile);
+    if (typeof runner.destroy !== "function") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "runner does not implement destroy",
+      );
+    }
+    const result = await this.#withRunRenewal(
+      "apply",
+      running,
+      input.leaseToken,
+      input.lease,
+      () =>
+        runner.destroy!({
+          applyRun: running,
+          planRun,
+          planArtifact: planRun.planArtifact!,
+          runnerProfile: profile,
+          ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
+          ...(dispatch.generatedRoot
+            ? { generatedRoot: dispatch.generatedRoot }
+            : {}),
+          ...(dispatch.operatorModule
+            ? { operatorModule: dispatch.operatorModule }
+            : {}),
+          ...(envDispatch.stateScope
+            ? { stateScope: envDispatch.stateScope }
+            : {}),
+          ...(envDispatch.stateAdoption
+            ? { stateAdoption: envDispatch.stateAdoption }
+            : {}),
+          ...(input.credentials ? { credentials: input.credentials } : {}),
+        }),
+    );
+    const now = this.#now();
+    const diagnostics = redactRunDiagnostics(result.diagnostics);
+    const completed = this.#withPendingApplyBillingCapture(
+      {
+        ...running,
+        resourceResult: {
+          resourceId: resource.resourceId,
+          stateGeneration: persistGeneration,
+          stateRef: scope.stateRef,
+          outputs: {},
+        },
+        status: "succeeded",
+        stateLock: stateLockEvidence(
+          profile.stateBackend,
+          input.startedAt,
+          now,
+          "recorded",
+        ),
+        ...(diagnostics ? { diagnostics } : {}),
+        auditEvents: [
+          ...running.auditEvents,
+          ...providerInstallationAuditEvents(
+            running.id,
+            "destroy",
+            now,
+            result.providerInstallation,
+            providerInstallationPolicy,
+          ),
+          auditEvent(running.id, "resource.destroy.completed", now, {
+            resourceId: resource.resourceId,
+            stateGeneration: persistGeneration,
+          }),
+        ],
+        updatedAt: now,
+        finishedAt: now,
+      },
+      now,
+    );
+    const appliedPlan: PlanRun = {
+      ...planRun,
+      appliedApplyRunId: running.id,
+      updatedAt: now,
+    };
+    const committed = await this.#store.commitResourceRun({
+      applyRunTerminal: completed,
+      planRunApplied: appliedPlan,
+      applyRunLeaseToken: input.leaseToken,
+    });
+    if (committed.applyRunLeaseLost) {
+      return { applyRun: (await this.getApplyRun(running.id)).applyRun };
+    }
+    await this.#notifyTerminal(completed);
+    const finalized = await this.#tryFinalizeApplyBilling(planRun, completed);
+    try {
+      await this.#recordRunnerMinuteUsage({
+        workspaceId: completed.workspaceId,
+        runId: completed.id,
+        startedAt: input.startedAt,
+        finishedAt: now,
+      });
+      await this.#recordDeployOperationMetric({
+        run: completed,
+        operationKind: "destroy_apply",
+        status: "succeeded",
+        startedAt: input.startedAt,
+        finishedAt: now,
+        recordApplyDuration: true,
+      });
+      await this.#store.deletePlanRunInputs(planRun.id);
+    } catch (error) {
+      log.warn("deploy_control.resource_destroy_post_commit_cleanup_failed", {
+        planRunId: planRun.id,
+        applyRunId: completed.id,
+        message: errorMessage(error),
+      });
+    }
+    await this.#recordActivity({
+      workspaceId: completed.workspaceId,
+      action: "resource.run.destroyed",
+      targetType: "resource",
+      targetId: resource.resourceId,
+      runId: completed.id,
+      metadata: { resourceId: resource.resourceId },
+    });
+    return { applyRun: finalized };
   }
 
   async #requireRunnerProfile(id: string): Promise<RunnerProfile> {
@@ -6932,42 +7481,19 @@ export class RunEngine {
     return planRun;
   }
 
-  async #requireInstallation(id: string): Promise<Installation> {
-    return await requireInstallation(this.#store, id);
+  async #requireCapsule(id: string): Promise<Capsule> {
+    return await requireCapsule(this.#store, id);
   }
 
-  async #bumpWorkspaceOutputSyncRevision(
-    workspaceId: string,
-    now: number,
-  ): Promise<void> {
-    const updatedAt = new Date(now).toISOString();
-    const current =
-      (await this.#store.getWorkspaceOutputSyncState(workspaceId)) ??
-      defaultWorkspaceOutputSyncState(workspaceId, updatedAt);
-    await this.#store.putWorkspaceOutputSyncState({
-      ...current,
-      outputRevision: current.outputRevision + 1,
-      updatedAt,
-    });
-  }
-
-  async #requireCurrentPlannedInstallation(
-    planRun: PlanRun,
-  ): Promise<Installation> {
-    if (!planRun.installationId) {
+  async #requireCurrentPlannedCapsule(planRun: PlanRun): Promise<Capsule> {
+    if (!planRun.capsuleId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "PlanRun does not target an existing Installation",
+        "PlanRun does not target an existing Capsule",
       );
     }
-    const installation = await this.#requireInstallation(
-      planRun.installationId,
-    );
-    validatePlannedInstallationCurrent({ planRun, installation });
-    return installation;
+    const capsule = await this.#requireCapsule(planRun.capsuleId);
+    validatePlannedCapsuleCurrent({ planRun, capsule: capsule });
+    return capsule;
   }
-}
-
-function isGeneratedRootSourceSnapshot(snapshot: SourceSnapshot): boolean {
-  return snapshot.url.startsWith("takosumi://generated-root/");
 }

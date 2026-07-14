@@ -30,9 +30,7 @@ describe("AccountView", () => {
     expect(
       source.indexOf('label: t("account.profile.subject")'),
     ).toBeGreaterThan(source.indexOf('t("account.session.debug")'));
-    expect(source.indexOf('label: t("account.session.id")')).toBeGreaterThan(
-      source.indexOf('t("account.session.debug")'),
-    );
+    expect(source).not.toContain('label: t("account.session.id")');
     expect(en["account.session.details"]).toBe("Session details");
     expect(ja["account.session.details"]).toBe("セッション詳細");
     expect(en["account.session.debug"]).toBe("Reference ID");

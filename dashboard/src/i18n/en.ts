@@ -37,11 +37,11 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.store": "Store",
   "nav.settings": "Settings",
   "nav.graph": "Dependencies",
+  "nav.resources": "Resources",
   "store.title": "Store",
   "store.subtitle": "Find services to add from the store.",
   "store.manualEntry":
     "Can't find what you need? Add from a Git URL / your own source",
-  "nav.cloudResources": "Cloud",
   "nav.runs": "Activity",
   "nav.connections": "Connected accounts",
   "nav.billing": "Billing",
@@ -66,19 +66,17 @@ export const en: Record<keyof typeof ja, string> = {
   // --- settings hub -----------------------------------------------------------
   "settings.title": "Settings",
   "settings.subtitle":
-    "Account, billing, notifications, and the detailed management tools.",
+    "Account, usage, notifications, and the detailed management tools.",
   "settings.section.general": "General",
   "settings.section.advanced": "Advanced",
   "settings.account.title": "Account",
   "settings.account.desc": "Profile and sign-in details",
-  "settings.billing.title": "Plan & billing",
-  "settings.billing.desc": "Plan, usage, and invoices",
+  "settings.billing.title": "Usage",
+  "settings.billing.desc": "Usage and operator-provided showback",
   "settings.notifications.title": "Notifications",
   "settings.notifications.desc": "Updates and items needing attention",
-  "settings.billingSummary.noPlan": "No plan yet",
   "settings.billingSummary.manage": "Manage",
-  "settings.billingSummary.fix": "Review payment",
-  "settings.billingSummary.error": "Couldn't load billing status.",
+  "settings.billingSummary.error": "Couldn't load usage status.",
   "settings.manage.entry": "Management tools",
   "settings.manage.entryDesc":
     "Detailed screens for service internals, connections, and run history",
@@ -87,9 +85,10 @@ export const en: Record<keyof typeof ja, string> = {
     "Screens that work directly with hosting internals. You won't need these for everyday use.",
   "settings.manage.services": "Every service and its status",
   "settings.manage.connections": "Cloud account connections and keys",
-  "settings.manage.cloud": "Cloud resource inventory and usage",
   "settings.manage.runs": "Deploy and change execution records",
   "settings.manage.graph": "Dependencies between services",
+  "settings.manage.resources":
+    "Manage Resource Shapes, TargetPools, and SpacePolicy",
   "settings.manage.activity": "Who changed what, and when",
   "settings.manage.workspace": "Members, keys, backups, shares, policy",
   "settings.manage.backups": "Create and restore restore points",
@@ -128,12 +127,9 @@ export const en: Record<keyof typeof ja, string> = {
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
   "legal.langLabel": "Language",
-  "legal.policiesNav": "Takosumi Cloud policies",
-  "auth.signInSub": "Use your Google account to continue.",
-  "auth.signInCloud": "Takosumi Cloud",
-  "auth.signInSubCloud": "Sign in with your Google account.",
-  "auth.signInCloudPreview":
-    "Only invited Google accounts can sign in for now.",
+  "legal.policiesNav": "Operator policies",
+  "auth.signInSub": "Sign in with a configured identity provider.",
+  "auth.singleSignOn": "Single sign-on",
   "auth.continueWith": "Continue with {provider}",
   "auth.providerChecking": "Checking availability",
   "auth.providerUnavailable": "Currently unavailable",
@@ -200,10 +196,7 @@ export const en: Record<keyof typeof ja, string> = {
   "status.policy.pass": "Pass",
   "status.policy.warn": "Warnings",
   "status.policy.deny": "Denied",
-  "status.deployment.active": "Current",
-  "status.deployment.superseded": "Superseded",
-  "status.deployment.rolled_back": "Rolled back",
-  "status.deployment.destroyed": "Destroyed",
+  "status.stateVersion.current": "Current",
   "status.connection.pending": "Unverified",
   "status.connection.verified": "Verified",
   "status.connection.revoked": "Revoked",
@@ -293,25 +286,22 @@ export const en: Record<keyof typeof ja, string> = {
   "app.refreshFailed":
     "Couldn't fetch the latest state — showing the last loaded version.",
   "app.notFoundMessage": "It may have been deleted, or the link may be wrong.",
-  "app.outputs.title": "Public links",
-  "app.outputs.subtitle": "Visible screens and addresses appear here.",
-  "app.outputs.deletedSubtitle":
-    "This service has been deleted. Previous addresses are shown as records only.",
-  "app.outputs.activationPending":
+  "app.surfaces.title": "Public links",
+  "app.surfaces.subtitle":
+    "Screens this service declares and you are allowed to open appear here.",
+  "app.surfaces.deletedSubtitle":
+    "This service has been deleted. Its runtime links are no longer available.",
+  "app.surfaces.activationPending":
     "You can open this address after service activation finishes.",
-  "app.outputs.activationFailed":
+  "app.surfaces.activationFailed":
     "Service activation failed. Check recent updates for details.",
-  "app.outputs.empty": "Links appear after a deploy.",
-  "app.outputs.loadError":
+  "app.surfaces.empty":
+    "Links appear after deployment and access setup finish.",
+  "app.surfaces.loadError":
     "The public links could not be loaded. Reopen this page shortly.",
-  "app.outputs.none": "This service has no public link.",
-  "app.outputs.valuesTitle": "Other values",
-  "app.output.launchUrl": "Public address",
-  "app.output.openPublicLink": "Open public link",
-  "app.output.url": "URL",
-  "app.output.publicUrl": "Public URL",
-  "app.output.endpoint": "Endpoint",
-  "app.output.hostname": "Hostname",
+  "app.surfaces.none": "This service has no authorized public link.",
+  "app.surfaces.defaultName": "Screen {n}",
+  "app.surfaces.open": "Open public link",
   "app.deps.title": "Connected services",
   "app.deps.dependsOn": "Services this uses",
   "app.deps.usedBy": "Used by",
@@ -387,6 +377,16 @@ export const en: Record<keyof typeof ja, string> = {
   "app.config.errorNameDuplicate": "{name} is duplicated.",
   "app.config.errorNumber": "{name} must be a number.",
   "app.config.errorJson": "{name} must be valid JSON.",
+  "app.interfaces.title": "Runtime interfaces (advanced)",
+  "app.interfaces.subtitle":
+    "Declare runtime surfaces separately from ordinary OpenTofu outputs. Changes apply on the next deploy review.",
+  "app.interfaces.editorLabel": "Interface blueprints (JSON)",
+  "app.interfaces.editorHint":
+    "Use an array. Each declaration explicitly provides key, name, and spec. Put dynamic mappings under spec.inputs with a literal, capsule_output, or resource_output source. Do not put secrets here.",
+  "app.interfaces.notReady": "Interface declarations are not available yet.",
+  "app.interfaces.errorJson": "Enter valid JSON.",
+  "app.interfaces.errorArray":
+    "Interface blueprint JSON must be an array. Use [] to remove all declarations.",
   "app.settings.openCta": "Open settings",
   "app.settings.supportDetails": "Reference info",
   "app.settings.leaveConfirm.title": "Discard your changes?",
@@ -394,8 +394,11 @@ export const en: Record<keyof typeof ja, string> = {
     "You have unsaved settings changes. Leaving will discard them.",
   "app.settings.leaveConfirm.confirm": "Discard and leave",
   "app.usage.title": "Estimated cost (total)",
-  "app.usage.body": "The sum of this service's recorded usage.",
+  "app.usage.body":
+    "Rated cost for this service; unrated usage is shown separately.",
   "app.usage.subCent": "< $0.01",
+  "app.usage.unrated": "Unrated",
+  "app.usage.unratedCount": "Unrated usage records: {n}",
   "app.config.savedNeedsDeploy": "Saved. Deploy to apply the change.",
   "app.config.deployChanges": "Deploy changes",
   "app.updateNow": "Update",
@@ -463,9 +466,6 @@ export const en: Record<keyof typeof ja, string> = {
     "The restore point could not be created. Please try again.",
   "run.summary.failedHint":
     "Check the diagnostics and logs below for the cause.",
-  "run.summary.creditsRequired": "Credits are required.",
-  "run.summary.creditsRequiredHint":
-    "Add credits to your account, then run the deploy again.",
   "run.summary.hostnameSlotLimit": "No short URL slots are available.",
   "run.summary.hostnameSlotLimitHint":
     "Use a standard URL or release an existing short URL, then run again.",
@@ -515,10 +515,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.cancelConfirm.cta": "Cancel run",
   "run.cancelConfirm.keep": "Keep running",
   "run.cost.required": "Estimated cost: ~{n}",
-  "run.cost.balance": "Available capacity: {n}",
-  "run.cost.shortfall":
-    "This cannot run because of your usage limit or payment state.",
-  "run.cost.blocked": "This cannot run due to payment state or limits.",
+  "run.cost.unrated": "Usage measured; no price policy is configured.",
   "run.cost.capacityBlocked": "This workspace cannot run this action.",
   "run.cost.billingCta": "Open billing",
   "run.cost.operatorHelp":
@@ -542,10 +539,6 @@ export const en: Record<keyof typeof ja, string> = {
   "run.resources.address": "Address",
   "run.resources.type": "Type",
   "run.resources.scope": "Scope",
-  "run.scope.cloudflareAccount": "Cloudflare account {id}",
-  "run.scope.cloudflareZone": "Cloudflare zone {id}",
-  "run.scope.awsAccount": "AWS account {id}",
-  "run.scope.awsRegion": "AWS {region}",
   "run.details.title": "Reference info",
   "run.details.runId": "Run ID",
   "run.details.type": "Type",
@@ -580,14 +573,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.diag.severity.info": "Info",
   "run.diagnostics.failed":
     "This did not finish. Open details only when you need troubleshooting information.",
-  "run.diagnostics.creditsRequired":
-    "This stopped because the owner account does not have enough credits. Add credits, then run the same change again.",
-  "run.diagnostics.creditsRequiredShort":
-    "The owner account does not have enough credits.",
-  "run.diagnostics.creditsRequiredDetail":
-    "Add credits from billing, then run the deploy again.",
-  "run.diagnostics.hostnameSlotLimitShort":
-    "No short URL slots are available.",
+  "run.diagnostics.hostnameSlotLimitShort": "No short URL slots are available.",
   "run.diagnostics.hostnameSlotLimitDetail":
     "Use a standard URL or release an existing short URL, then run again.",
   "run.diagnostics.connectionVerificationRequired":
@@ -728,7 +714,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.env.errorNameRequired":
     "Enter an environment variable name or remove the empty row.",
   "new.env.errorUnsafeName":
-    "“{name}” cannot be passed as a plain environment variable. Use connected accounts for private values.",
+    "“{name}” must use uppercase letters, digits, and underscores.",
   "new.env.errorUnsafeValue":
     "The value for “{name}” is too long or contains an unsupported character.",
   "new.env.errorDuplicate":
@@ -775,7 +761,6 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.details": "Detailed check result",
   "new.compat.readyBrief": "Ready to continue.",
   "new.compat.ready": "Can be added as is",
-  "new.compat.auto": "Can be added with automatic adjustments",
   "new.compat.patch": "Needs manual changes",
   "new.compat.unsupported": "Cannot be added right now",
   "new.compat.diagnostic.technicalNote":
@@ -790,8 +775,10 @@ export const en: Record<keyof typeof ja, string> = {
     "{provider} private values are written in the source.",
   "new.compat.issue.providerCredentials.detail":
     "Do not keep API tokens or account IDs in code. Remove those values, then connect {provider} access so Takosumi can pass them only while deploying.",
-  "new.compat.issue.providerLift.message":
-    "The {provider} connection settings can be handled safely once private values are removed.",
+  "new.compat.issue.providerPreserved.message":
+    "The repository's non-secret {provider} configuration will be preserved.",
+  "new.compat.issue.backendIsolated.message":
+    "The repository backend configuration is preserved while Takosumi isolates the Run state boundary.",
   "new.compat.issue.lockfile.message":
     "Pinned connection target information is included. After private values are removed, the pinned targets will be reviewed during add.",
   "new.compat.issue.reviewRequired.message":
@@ -871,7 +858,6 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.tab.connections": "Connections",
   "workspaceSettings.tab.billing": "Billing",
   "workspaceSettings.tab.usageQuota": "Usage / quota",
-  "workspaceSettings.tab.cloud": "Cloud resources",
   "workspaceSettings.tab.keys": "API keys",
   "workspaceSettings.tab.backups": "Backups",
   "workspaceSettings.tab.shares": "Shared values",
@@ -936,7 +922,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Save your own keys (cloud tokens and access keys). With your key, any provider runs — no restrictions, no approval needed.",
   "conn.providerConnections.title": "Connected accounts",
   "conn.expiresAt": "Expires: {date}",
-  "conn.oauth.connected": "Connected to Cloudflare.",
+  "conn.oauth.connected": "Provider connection saved.",
   "conn.oauth.failed": "Connection failed. Please try again.",
   "conn.oauth.error.missingCode":
     "The authorization response was incomplete. Please try again.",
@@ -962,91 +948,32 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.add.optionalSettings": "Name this connection",
   "conn.add.displayName": "Connection name",
   "conn.add.displayNamePlaceholder": "Optional label",
-  "conn.provider.cloudflare.label": "Cloudflare",
-  "conn.provider.cloudflare.helper.stepOpen":
-    "Use the button below only if automatic connection is unavailable.",
-  "conn.provider.cloudflare.helper.stepCreate":
-    "On Cloudflare, continue to the summary, then create the token. The permissions are preselected.",
-  "conn.provider.cloudflare.helper.stepPaste":
-    "Copy the token Cloudflare shows, then paste it here.",
-  "conn.provider.cloudflare.apiToken.label": "Access token",
-  "conn.provider.cloudflare.apiToken.placeholder": "Paste the access token",
-  "conn.provider.cloudflare.accountId.label": "Account ID",
-  "conn.provider.cloudflare.accountId.placeholder": "0123abcd...",
-  "conn.provider.cloudflare.workersSubdomain.label":
-    "workers.dev subdomain (optional)",
-  "conn.provider.cloudflare.workersSubdomain.placeholder": "your-team",
-  "conn.provider.aws.label": "AWS",
-  "conn.provider.aws.accessKeyId.label": "Access key ID",
-  "conn.provider.aws.secretAccessKey.label": "Secret access key",
-  "conn.provider.aws.secretAccessKey.placeholder": "Paste the secret key",
-  "conn.provider.aws.region.label": "Region",
-  "conn.provider.aws.sessionToken.label": "Session token (optional)",
-  "conn.provider.aws.sessionToken.placeholder":
-    "Paste the STS session token if you use one",
-  "conn.provider.gcp.label": "Google Cloud",
-  "conn.provider.gcp.credentials.label": "Service account JSON",
-  "conn.provider.gcp.credentials.placeholder": "Paste the service account JSON",
-  "conn.provider.gcp.project.label": "Project ID",
-  "conn.provider.hcloud.label": "Hetzner Cloud",
-  "conn.provider.hcloud.token.label": "API token",
-  "conn.provider.hcloud.token.placeholder": "Paste the Hetzner API token",
-  "conn.provider.s3.label": "Cloudflare R2 / S3-compatible storage",
-  "conn.provider.s3.endpoint.label": "S3 endpoint URL",
-  "conn.provider.aws.guide.step1": "Open the IAM users page.",
-  "conn.provider.aws.guide.step2":
-    "Create or select a dedicated deploy user, then create a least-privileged access key.",
-  "conn.provider.aws.guide.step3":
-    "Paste those values and your region into the fields below.",
-  "conn.provider.gcp.guide.step1":
-    "Open the Google Cloud service accounts page.",
-  "conn.provider.gcp.guide.step2":
-    "Create a service account, then create and download a JSON key.",
-  "conn.provider.gcp.guide.step3":
-    "Paste the JSON and project ID into the fields below.",
-  "conn.provider.hcloud.guide.step1": "Open the Hetzner Cloud Console.",
-  "conn.provider.hcloud.guide.step2":
-    "Under Project → Security → API Tokens, create a Read & Write token.",
-  "conn.provider.hcloud.guide.step3":
-    "Paste the issued token into the field below.",
-  "conn.provider.s3.guide.step1": "Open the R2 API tokens page.",
-  "conn.provider.s3.guide.step2":
-    "Create an S3-compatible access key ID and secret access key.",
-  "conn.provider.s3.guide.step3":
-    "Paste the access key and endpoint URL into the fields below.",
   "conn.guided.openProvider": "Open {provider} access page",
-  "conn.guided.stepsSummary": "Use an access token instead",
   "conn.guided.instructions": "Show steps",
-  "conn.guided.pasteLabel": "Access token",
-  "conn.guided.pastePlaceholder": "Paste the token here",
-  "conn.guided.connect": "Save connection",
-  "conn.guided.connecting": "Connecting...",
   "conn.byok.title": "Connect any provider with your own key",
   "conn.byok.body":
     "Just enter where the provider comes from (its source) and the environment variables (keys) it uses. No restrictions, no approval — any OpenTofu / Terraform provider runs.",
   "conn.byok.noBillingNote":
     "Connections that use your own key are never billed by Takosumi. Only resources Takosumi provides are billed.",
-  "conn.byok.usePreset": "Use a guided preset instead",
-  "conn.advanced.summary": "Enter access values",
+  "conn.byok.usePreset": "Use an installed recipe instead",
   "conn.register": "Save connection",
   "conn.registering": "Saving...",
   "conn.genericEnv.providerName": "Provider source",
-  "conn.genericEnv.providerPlaceholder": "snowflake-labs/snowflake",
+  "conn.genericEnv.providerPlaceholder": "examplecorp/example",
   "conn.genericEnv.envName": "Env name",
-  "conn.genericEnv.envNamePlaceholder": "SNOWFLAKE_PASSWORD",
+  "conn.genericEnv.envNamePlaceholder": "EXAMPLE_API_TOKEN",
   "conn.genericEnv.value": "Value",
   "conn.genericEnv.valuePlaceholder": "Paste the value",
   "conn.genericEnv.addRow": "Add value",
   "conn.genericEnv.providerRequired": "Enter a provider source.",
   "conn.genericEnv.nameRequired": "Rows with a value need a value name.",
   "conn.genericEnv.invalidName":
-    "“{name}” isn’t a valid env name. Use an uppercase env name like SNOWFLAKE_PASSWORD.",
+    "“{name}” isn’t a valid env name. Use an uppercase env name like EXAMPLE_API_TOKEN.",
   "conn.genericEnv.reservedName":
     "“{name}” is reserved for the runner. Use a provider-specific env name.",
   "conn.genericEnv.duplicateName": "“{name}” is already added.",
   "conn.genericEnv.oneRequired": "Enter at least one value.",
   "conn.error.invalidProvider": "Invalid connection target.",
-  "conn.error.tokenRequired": "Paste a token.",
   "conn.error.fieldRequired": "{field} is required.",
   "conn.empty.title": "Connect any provider with your own key",
   "conn.empty.message":
@@ -1058,7 +985,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.remove.confirmMessage":
     "Really delete {name}? Its saved access values are deleted too. This cannot be undone.",
   "conn.remove.bindingWarning":
-    "Deployments that use this connection will fail.",
+    "Capsule runs that use this connection will fail.",
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle": "Manage restore points for this workspace.",
@@ -1214,6 +1141,152 @@ export const en: Record<keyof typeof ja, string> = {
   "graph.noEdges.message":
     "Connections appear here once a service uses values from another service.",
 
+  // --- Resource Shape ----------------------------------------------------------
+  "resources.title": "Resources",
+  "resources.subtitle":
+    "Manage desired state, placement, and observations for Resource Shapes.",
+  "resources.define": "Define resource",
+  "resources.empty": "This Resource Space has no resources.",
+  "resources.column.resource": "Resource",
+  "resources.column.phase": "Phase",
+  "resources.column.target": "Target",
+  "resources.column.managedBy": "Managed by",
+  "resources.scope.title": "Resource Space",
+  "resources.scope.subtitle":
+    "For dashboard sessions, the verified Workspace ID is the Resource Space boundary.",
+  "resources.scope.label": "Space ID",
+  "resources.scope.required": "A Resource Space is required.",
+  "resources.unavailable.title": "Resource Shape API is disabled",
+  "resources.unavailable.message":
+    "This operator has not enabled the durable Resource Shape API and runner yet.",
+  "resources.inventory.title": "Resource inventory",
+  "resources.inventory.subtitle": "Desired and observed state in Space {space}",
+  "resources.editor.createTitle": "Define resource",
+  "resources.editor.editTitle": "Change desired state",
+  "resources.editor.subtitle":
+    "Preview the selected Target and native plan before applying any change.",
+  "resources.editor.kind": "Shape kind",
+  "resources.editor.kindHint":
+    "Use a bundled shape or a token explicitly registered by the operator.",
+  "resources.editor.kindInvalid": "Enter a valid Shape kind.",
+  "resources.editor.name": "Resource name",
+  "resources.editor.nameRequired": "Enter a resource name.",
+  "resources.editor.project": "Project (optional)",
+  "resources.editor.environment": "Environment",
+  "resources.editor.targetPool": "TargetPool",
+  "resources.editor.policy": "SpacePolicy",
+  "resources.editor.spec": "Spec JSON",
+  "resources.editor.specHint":
+    "Enter only the selected Shape's spec as a JSON object. Do not include credentials.",
+  "resources.editor.advanced": "Labels and advanced settings",
+  "resources.editor.labels": "Labels JSON",
+  "resources.editor.labelsHint": "A JSON object whose values are all strings.",
+  "resources.editor.specInvalid": "Invalid Spec JSON — {message}",
+  "resources.editor.labelsInvalid": "Invalid Labels JSON — {message}",
+  "resources.editor.preview": "Preview",
+  "resources.editor.previewRequired":
+    "Preview the current inputs again before continuing.",
+  "resources.editor.apply": "Apply",
+  "resources.editor.applied": "Resource applied.",
+  "resources.editor.importExisting": "Import an existing native resource",
+  "resources.editor.nativeId": "Native resource ID",
+  "resources.editor.nativeIdHint":
+    "The identifier issued by the provider. Do not enter credentials.",
+  "resources.editor.nativeIdRequired": "Enter the native resource ID.",
+  "resources.editor.import": "Import",
+  "resources.editor.imported": "Existing resource imported.",
+  "resources.confirm.applyTitle": "Apply this resource?",
+  "resources.confirm.updateTitle": "Change this desired state?",
+  "resources.confirm.applyMessage":
+    "Apply {kind}/{name} to Target {target}. Only the previewed inputs will run.",
+  "resources.confirm.importTitle": "Import this existing resource?",
+  "resources.confirm.importMessage":
+    "Validate native ID {nativeId} and place it under Takosumi management as {kind}/{name}.",
+  "resources.preview.title": "Preview result",
+  "resources.preview.current": "Current inputs",
+  "resources.preview.changed": "Inputs have changed",
+  "resources.preview.target": "Target",
+  "resources.preview.implementation": "Implementation",
+  "resources.preview.portability": "Portability",
+  "resources.preview.price": "Estimated price",
+  "resources.preview.priceExpires": "Quote expires",
+  "resources.preview.nativePlan": "Native plan",
+  "resources.preview.risks": "Risk notes",
+  "resources.preview.noRisks": "No additional risk notes.",
+  "resources.targetPools.title": "TargetPools",
+  "resources.targetPools.subtitle":
+    "Declare available Targets and implementation descriptors in priority order.",
+  "resources.targetPools.add": "Add TargetPool",
+  "resources.targetPools.empty": "No TargetPools.",
+  "resources.targetPools.column.name": "Name",
+  "resources.targetPools.column.targets": "Targets",
+  "resources.targetPools.column.updated": "Updated",
+  "resources.targetPools.edit": "Edit",
+  "resources.targetPools.editorTitle": "TargetPool configuration",
+  "resources.targetPools.name": "TargetPool name",
+  "resources.targetPools.nameRequired": "Enter a TargetPool name.",
+  "resources.targetPools.spec": "TargetPool spec JSON",
+  "resources.targetPools.specInvalid":
+    "Enter a valid JSON object containing a targets array.",
+  "resources.targetPools.saved": "TargetPool saved.",
+  "resources.targetPools.deleteTitle": "Delete this TargetPool?",
+  "resources.targetPools.deleteMessage":
+    "Delete TargetPool {name}. The request is rejected while a Resource pins it.",
+  "resources.targetPools.deleteAria": "Delete TargetPool {name}",
+  "resources.config.noSecrets":
+    "Enter only non-secret descriptors here. Store credentials in a Provider Connection.",
+  "resources.policy.title": "Advanced SpacePolicy",
+  "resources.policy.subtitle":
+    "Configure placement constraints, preferences, and approvals as JSON",
+  "resources.policy.add": "Add SpacePolicy",
+  "resources.policy.empty": "No SpacePolicies.",
+  "resources.policy.column.name": "Name",
+  "resources.policy.column.updated": "Updated",
+  "resources.policy.edit": "Edit",
+  "resources.policy.editorTitle": "SpacePolicy configuration",
+  "resources.policy.name": "SpacePolicy name",
+  "resources.policy.nameRequired": "Enter a SpacePolicy name.",
+  "resources.policy.spec": "SpacePolicy spec JSON",
+  "resources.policy.specInvalid": "Enter a valid JSON object.",
+  "resources.policy.saved": "SpacePolicy saved.",
+  "resources.policy.deleteTitle": "Delete this SpacePolicy?",
+  "resources.policy.deleteMessage": "Delete SpacePolicy {name}.",
+  "resources.policy.deleteAria": "Delete SpacePolicy {name}",
+  "resources.policy.writeOnlyHint":
+    "Saving replaces the policy with the same name. Do not include credentials or secrets.",
+  "resources.detail.subtitle":
+    "State and operation history in Resource Space {space}",
+  "resources.detail.back": "Resource inventory",
+  "resources.detail.observe": "Observe",
+  "resources.detail.refresh": "Refresh state",
+  "resources.detail.actionComplete": "Operation complete.",
+  "resources.detail.loadFailed": "Could not load this resource",
+  "resources.detail.status": "Current status",
+  "resources.detail.kind": "Kind",
+  "resources.detail.space": "Space",
+  "resources.detail.managedBy": "Managed by",
+  "resources.detail.generation": "Observed generation",
+  "resources.detail.resolution": "ResolutionLock",
+  "resources.detail.locked": "Locked",
+  "resources.detail.yes": "Yes",
+  "resources.detail.no": "No",
+  "resources.detail.desired": "Desired state",
+  "resources.detail.desiredHint":
+    "The spec stays folded, and every change must be previewed again.",
+  "resources.detail.change": "Change",
+  "resources.detail.showSpec": "Show Spec JSON",
+  "resources.detail.conditions": "Conditions",
+  "resources.detail.conditionsHint": "Public reconcile and drift status",
+  "resources.detail.outputs": "Output keys",
+  "resources.detail.outputsHint":
+    "Values stay hidden here; only public key names are listed.",
+  "resources.detail.events": "Operation history",
+  "resources.detail.eventsHint": "Non-secret Activity / Run projections",
+  "resources.detail.noEvents": "No operation history yet.",
+  "resources.detail.deleteTitle": "Delete this resource?",
+  "resources.detail.deleteMessage":
+    "Run normal deletion for {kind}/{name} and its native resources. This screen never uses force delete.",
+
   // --- account ---------------------------------------------------------------------
   "account.title": "Account",
   "account.subtitle": "Sign-in info, language, and appearance.",
@@ -1224,7 +1297,6 @@ export const en: Record<keyof typeof ja, string> = {
   "account.profile.notSet": "Not set",
   "account.profile.provider": "Sign-in method",
   "account.profile.expires": "Session expires",
-  "account.session.id": "Session reference",
   "account.session.userAgent": "Browser",
   "account.session.details": "Session details",
   "account.session.debug": "Reference ID",
@@ -1237,204 +1309,31 @@ export const en: Record<keyof typeof ja, string> = {
   "account.preferences.title": "Display settings",
   "account.preferences.body": "Change language and appearance.",
 
-  // --- cloud resources -------------------------------------------------------------
-  "cloudResources.title": "Cloud resources",
-  "cloudResources.subtitle":
-    "Review current-month usage, estimated cost, and resource inventory by type.",
-  "cloudResources.unavailable.title": "Takosumi Cloud only",
-  "cloudResources.unavailable.body":
-    "Cloud-only endpoints are not provided in this runtime.",
-  "cloudResources.error": "Could not load cloud resources: {message}",
-  "cloudResources.partialError": "A check failed: {message}",
-  "cloudResources.resources.noAccount":
-    "No connected account found, so resources cannot be deleted.",
-  "cloudResources.resources.deleteTitle": "Delete resource",
-  "cloudResources.resources.deleteMessage":
-    "Delete “{name}”. This cannot be undone.",
-  "cloudResources.resources.deleted": "Deleted “{name}”.",
-  "cloudResources.resources.copyId": "Copy ID",
-  "cloudResources.copied": "Copied.",
-  "cloudResources.copyFailed":
-    "Copy failed. Clipboard access may be blocked — select the value and copy it manually.",
-  "cloudResources.status.ready": "Ready",
-  "cloudResources.status.check": "Needs check",
-  "cloudResources.keys.title": "External API keys",
-  "cloudResources.keys.subtitle":
-    "Create and review keys for apps that call the Takosumi Cloud API.",
-  "cloudResources.keys.scope": "Read / write",
-  "cloudResources.keys.defaultName": "Takosumi Cloud external API key",
-  "cloudResources.keys.name": "Key name",
-  "cloudResources.keys.nameRequired": "Enter a key name.",
-  "cloudResources.keys.create": "Create key",
-  "cloudResources.keys.created": "Created key",
-  "cloudResources.keys.createdNotice":
-    "Copy this key now. The full key is shown only once.",
-  "cloudResources.keys.lastUsed": "Last used",
-  "cloudResources.keys.empty": "No external API keys yet.",
-  "cloudResources.keys.error": "Couldn't load API keys: {message}",
-  "cloudResources.keys.secretNotice":
-    "Existing keys show their prefix only. Create a new key if you need a full key value again.",
-  "cloudResources.keys.revoke": "Revoke",
-  "cloudResources.keys.revokeTitle": "Revoke external API key",
-  "cloudResources.keys.revokeMessage":
-    "Revoke “{name}”. Apps using this key will no longer be able to connect.",
-  "cloudResources.usage.title": "This month",
-  "cloudResources.usage.subtitle": "{period} usage and estimated cost.",
-  "cloudResources.usage.currentMonth": "Current month",
-  "cloudResources.usage.totalCost": "Estimated cost",
-  "cloudResources.usage.resourceTypes": "Resource types",
-  "cloudResources.usage.events": "Usage events",
-  "cloudResources.usage.tableTitle": "Usage by resource type",
-  "cloudResources.usage.tableSubtitle":
-    "All reported resource families are grouped the same way, with inventory counts when a management surface is available.",
-  "cloudResources.usage.resourceType": "Resource type",
-  "cloudResources.usage.resourceCount": "Resources",
-  "cloudResources.usage.quantity": "Usage",
-  "cloudResources.usage.estimatedCost": "Estimated cost",
-  "cloudResources.usage.lastUsed": "Last used",
-  "cloudResources.usage.management": "Management",
-  "cloudResources.usage.manageAvailable": "Inventory",
-  "cloudResources.usage.usageOnly": "Usage only",
-  "cloudResources.usage.checkInventory": "Check",
-  "cloudResources.usage.noUsage": "No usage this month",
-  "cloudResources.usage.empty": "No cloud resource usage this month.",
-  "cloudResources.usage.error": "Could not load usage: {message}",
-  "cloudResources.usage.unit.runnerMinute": "runner minutes",
-  "cloudResources.usage.unit.gbHour": "GB-hours",
-  "cloudResources.usage.unit.gb": "GB",
-  "cloudResources.usage.unit.compute": "compute units",
-  "cloudResources.usage.unit.aiRequest": "AI requests",
-  "cloudResources.usage.unit.inputToken": "input tokens",
-  "cloudResources.usage.unit.outputToken": "output tokens",
-  "cloudResources.usage.unit.operation": "operations",
-  "cloudResources.management.title": "Management status",
-  "cloudResources.management.subtitle":
-    "Status for the resource management profile used by this workspace.",
-  "cloudResources.management.profile": "Management profile",
-  "cloudResources.management.auth": "Auth status",
-  "cloudResources.management.account": "Account",
-  "cloudResources.management.capabilities": "Capabilities",
-  "cloudResources.inventory.title": "Resource inventory",
-  "cloudResources.inventory.subtitle":
-    "Inspect or delete resources exposed through available management surfaces.",
-  "cloudResources.inventory.error": "Could not load inventory: {message}",
-  "cloudResources.inventory.kv": "KV",
-  "cloudResources.inventory.r2": "Object Storage",
-  "cloudResources.inventory.d1": "Database",
-  "cloudResources.inventory.queues": "Queues",
-  "cloudResources.inventory.workflows": "Workflows",
-  "cloudResources.inventory.workers": "Edge apps",
-  "cloudResources.inventory.showAll": "Show all {count}",
-  "cloudResources.inventory.showLess": "Collapse",
-  "cloudResources.inventory.remaining": "Show {count} more",
-
   // --- billing -------------------------------------------------------------------
-  "billing.subtitle":
-    "Review plans, usage, and payment settings for your account.",
-  "billing.usageQuotaTitle": "Usage / quota",
+  "billing.subtitle": "Review provider-neutral usage and showback records.",
+  "billing.usageQuotaTitle": "Showback",
   "billing.usageQuotaSubtitle":
-    "Review your credits, which workspace used them, and usage.",
-  "billing.mode.disabled": "Billing is disabled for this account.",
-  "billing.mode.checkoutOpen":
-    "Choose a plan to start using Takosumi Cloud resources. Paid operations are checked against limits and payment state before execution.",
-  "billing.mode.cloudCredits":
-    "Credits are shared across your account. Paid operations check this balance before execution.",
+    "Review this Workspace's recording mode and provider-neutral usage.",
+  "billing.mode.disabled": "Showback is disabled for this Workspace.",
+  "billing.mode.label": "Mode",
   "billing.mode.showback": "Usage is recorded, but nothing is charged.",
-  "billing.mode.enforce":
-    "Paid operations are checked against your plan, limits, and payment state before execution.",
-  "billing.loading": "Loading billing status...",
-  "billing.error": "Could not load billing status: {message}",
-  "billing.error.unknown": "Unknown error",
-  "billing.status.unavailable": "Currently unavailable.",
-  "billing.balance.title": "Usage status",
-  "billing.balance.availableUsd": "Available balance",
-  "billing.balance.status": "Status",
-  "billing.balance.ready": "Ready",
-  "billing.balance.actionRequired": "Plan or payment setup required",
-  "billing.balance.reserved": "Pending use",
-  "billing.quota.available": "Available capacity",
-  "billing.quota.reserved": "Pending use",
-  "billing.quota.disabledHint":
-    "Billing is disabled, so there is no capacity limit.",
-  "billing.pendingUse.title": "Pending use",
-  "billing.subscription.title": "Subscription",
-  "billing.subscription.subtitle":
-    "Current plan status and next billing period.",
-  "billing.subscription.loading": "Loading subscription...",
-  "billing.subscription.error": "Could not load subscription: {message}",
-  "billing.subscription.empty": "No active subscription yet.",
-  "billing.subscription.plan": "Plan",
-  "billing.subscription.status": "Status",
-  "billing.subscription.nextBilling": "Next billing",
-  "billing.subscription.endsOn": "Ends on",
-  "billing.subscription.status.cancelAtPeriodEnd": "Cancels at period end",
-  "billing.subscription.cancelNotice":
-    "This subscription will be cancelled at the end of the current billing period. Resume the plan to keep it active.",
-  "billing.subscription.manage": "Manage or cancel subscription",
-  "billing.subscription.manageHint":
-    "Open Stripe to manage payment methods, invoices, plan changes, and cancellation.",
-  "billing.subscription.status.active": "Active",
-  "billing.subscription.status.trialing": "Trialing",
-  "billing.subscription.status.past_due": "Past due",
-  "billing.subscription.status.unpaid": "Unpaid",
-  "billing.subscription.status.incomplete": "Incomplete",
-  "billing.subscription.status.incomplete_expired": "Incomplete",
-  "billing.subscription.status.canceled": "Cancelled",
-  "billing.subscription.status.cancelled": "Cancelled",
-  "billing.subscription.status.paused": "Paused",
-  "billing.subscription.status.disputed": "Disputed",
-  "billing.plans.title": "Plans",
-  "billing.plans.loading": "Loading plans...",
-  "billing.plans.error": "Could not load plans: {message}",
-  "billing.plans.none": "No plans are offered right now.",
-  "billing.plans.nonRefundable":
-    "Review the amount and contents before checkout. Used services and completed usage are generally not refundable. Card statements generally show TAKOSUMI.",
-  "billing.plans.subscribe": "Choose this plan",
-  "billing.policies.aria": "Billing policies",
-  "billing.policies.refund": "Refunds",
-  "billing.policies.cancellation": "Cancellation",
-  "billing.policies.terms": "Terms",
-  "billing.policies.privacy": "Privacy",
-  "billing.policies.support": "Support",
-  "billing.portalOpening": "Opening...",
-  "billing.checkout.starting": "Redirecting to checkout...",
-  "billing.checkout.failed": "Could not start checkout — {message}",
-  "billing.checkout.noUrl":
-    "Could not get the checkout page URL. Please try again in a moment.",
-  "billing.portal.noUrl":
-    "Could not get the billing portal URL. Please try again in a moment.",
-  "billing.sessionExpired": "Your session has expired. Please sign in again.",
-  "billing.checkout.success":
-    "Plan checkout complete. It may take a moment to update.",
-  "billing.checkout.cancelled": "Checkout cancelled.",
-  "billing.invoices.title": "Billing history",
-  "billing.invoices.subtitle": "Recent Stripe invoices for this account.",
-  "billing.invoices.loading": "Loading billing history...",
-  "billing.invoices.error": "Could not load billing history: {message}",
-  "billing.invoices.empty": "No invoices yet.",
-  "billing.invoices.date": "Date",
-  "billing.invoices.status": "Status",
-  "billing.invoices.status.paid": "Paid",
-  "billing.invoices.status.open": "Open",
-  "billing.invoices.status.draft": "Draft",
-  "billing.invoices.status.void": "Void",
-  "billing.invoices.status.uncollectible": "Uncollectible",
-  "billing.invoices.amount": "Amount",
-  "billing.invoices.invoice": "Invoice",
-  "billing.invoices.open": "Open",
+  "billing.loadError": "Could not load usage settings: {message}",
   "billing.usage.title": "Usage",
+  "billing.usage.subtitle": "Provider-neutral usage events for this Workspace.",
+  "billing.usage.load": "Load usage",
+  "billing.usage.more": "Load more",
   "billing.usage.openHint": "Open usage history to load recent entries.",
   "billing.usage.moreAvailable": "Showing the most recent usage entries.",
   "billing.usage.loading": "Loading usage...",
   "billing.usage.error": "Could not load usage: {message}",
   "billing.usage.empty": "No usage yet.",
   "billing.usage.kind": "Kind",
+  "billing.usage.time": "Time",
   "billing.usage.kind.runnerMinute": "Runner time",
   "billing.usage.kind.operation": "Service operation",
   "billing.usage.kind.compute": "Compute",
   "billing.usage.kind.storage": "Storage",
   "billing.usage.quantity": "Quantity",
-  "billing.usage.credits": "USD",
-  "billing.usage.created": "Created",
-  "billing.ledger.title": "Usage history",
+  "billing.usage.amount": "Estimated amount",
+  "billing.usage.unrated": "Unrated",
 };

@@ -7,13 +7,9 @@
  * already-decrypted values in. The driver only talks to the Cloudflare API
  * (token-vending mint + token verify).
  *
- * `isProvider` mirrors the inline vault `isCloudflareProvider` predicate
- * (`providerEnvRule(provider)?.shortName === "cloudflare"`) so the vault can
- * route a connection to this driver without duplicating address matching.
+ * Selection is performed by the explicit CredentialRecipe driver registry.
  */
-import type { Connection } from "takosumi-contract/connections";
-import { providerEnvRule } from "takosumi-contract/provider-env-rules";
-import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
+import type { ProviderConnection } from "takosumi-contract/connections";
 import {
   type CloudflareFetch,
   type CloudflareMintedProviderValues,
@@ -24,35 +20,21 @@ import {
 } from "./credentials.ts";
 
 /**
- * Whether a provider short-name/registry path resolves to Cloudflare. Mirrors
- * the inline vault `isCloudflareProvider` (env-rule short-name match), so the
- * registry/vault can detect a Cloudflare connection the same way.
- */
-function isCloudflareProvider(provider: string): boolean {
-  return providerEnvRule(provider)?.shortName === "cloudflare";
-}
-
-/**
  * Self-contained Cloudflare credential driver. Stateless: every entry point
  * takes an injected `fetch` (+ `now` for the mint) so it stays unit-testable
- * and never depends on the vault's internals. The vault delegates to this once
+ * and never depends on the Vault's internals. The Vault delegates to this once
  * it has opened the connection's sealed values.
  */
 export const cloudflareCredentialDriver = {
   /** Provider id this driver implements. */
   id: "cloudflare" as const,
 
-  /** Whether a provider short-name / registry path is Cloudflare. */
-  isProvider(provider: string): boolean {
-    return isCloudflareProvider(provider);
-  },
-
   /**
    * Whether this connection should mint through the token-vending path (it has
-   * `scopeHints.cloudflareTokenVending`). When false, the vault returns the
+ * `scopeHints.cloudflareTokenVending`). When false, the Vault returns the
    * static values as-is (no Cloudflare API call).
    */
-  isTokenVending(connection: Connection): boolean {
+  isTokenVending(connection: ProviderConnection): boolean {
     return isCloudflareTokenVending(connection);
   },
 
@@ -62,9 +44,8 @@ export const cloudflareCredentialDriver = {
    * short-lived `CLOUDFLARE_API_TOKEN` plus mint evidence.
    */
   mint(input: {
-    readonly connection: Connection;
+    readonly connection: ProviderConnection;
     readonly values: Readonly<Record<string, string>>;
-    readonly delivery: ProviderCredentialMintEvidence["delivery"];
     readonly fetch: CloudflareFetch;
     readonly now: () => Date;
   }): Promise<CloudflareMintedProviderValues> {

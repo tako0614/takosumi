@@ -32,7 +32,7 @@ test("operator release activator builds remote R2 object fetch args", () => {
   expect(
     buildWranglerR2GetArgs({
       bucket: "takosumi-sources",
-      key: "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      key: "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
       file: "/tmp/source.tar.zst",
       config: "../takosumi-private/platform/wrangler.staging.toml",
       env: "staging",
@@ -43,7 +43,7 @@ test("operator release activator builds remote R2 object fetch args", () => {
     "r2",
     "object",
     "get",
-    "takosumi-sources/spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+    "takosumi-sources/workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
     "--file",
     "/tmp/source.tar.zst",
     "--remote",
@@ -63,7 +63,9 @@ test("operator release activator rejects credential and reserved command env", (
         env: { CLOUDFLARE_API_TOKEN: "secret" },
       }),
     ),
-  ).toThrow("release command env must not include CLOUDFLARE_API_TOKEN");
+  ).toThrow(
+    "release command env must not include secret-like CLOUDFLARE_API_TOKEN",
+  );
 
   expect(() =>
     parsePayload(
@@ -100,6 +102,21 @@ test("operator release activator rejects credential and reserved command env", (
   ).toThrow("release command env value for RELEASE_TARGET looks secret-like");
 });
 
+test("operator release activator rejects Provider Connection credentials", () => {
+  expect(() =>
+    parsePayload({
+      ...validPayload(),
+      credentials: {
+        env: {
+          ACME_CLIENT_CREDENTIAL: "must-not-cross-operator-boundary",
+        },
+      },
+    }),
+  ).toThrow(
+    "operator release activation payload must not include Provider Connection credentials",
+  );
+});
+
 test("operator release activator rejects non-operator commands", () => {
   expect(() =>
     parsePayload(
@@ -116,6 +133,28 @@ test("operator release activator rejects non-operator commands", () => {
   delete command.executor;
   expect(() => parsePayload(payload)).toThrow(
     "commands[0].executor must be operator for operator release activation",
+  );
+});
+
+test("operator release activator accepts only the canonical v2 identity model", () => {
+  expect(() =>
+    parsePayload({
+      ...validPayload(),
+      kind: "takosumi.operator.release-activation@v1",
+    }),
+  ).toThrow("release activation payload kind is invalid");
+
+  const legacyPayload = validPayload();
+  delete legacyPayload.workspaceId;
+  delete legacyPayload.capsule;
+  delete legacyPayload.stateVersion;
+  delete legacyPayload.output;
+  legacyPayload.spaceId = "space_1";
+  legacyPayload.installation = { id: "inst_1" };
+  legacyPayload.deployment = { id: "dep_1" };
+
+  expect(() => parsePayload(legacyPayload)).toThrow(
+    "workspaceId must be a non-empty string",
   );
 });
 
@@ -144,14 +183,14 @@ test("operator release activator restores source archive and runs opaque argv on
               `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
               `const leakedProvider = Bun.env.CLOUDFLARE_API_TOKEN ?? "missing"`,
               `const leakedToken = Bun.env.TAKOSUMI_RELEASE_ACTIVATOR_TOKEN ?? "missing"`,
-              `await Bun.write(Bun.env.ACTIVATION_RESULT_FILE, [Bun.env.TAKOSUMI_APPLY_RUN_ID, outputs.public_url, context.outputs.public_url, context.applyRunId, context.workspaceId, Bun.env.TAKOSUMI_WORKSPACE_ID, Bun.env.TAKOSUMI_CLOUD_BILLING_WORKSPACE_ID, context.deployment.id, Bun.env.TAKOSUMI_STATE_VERSION_ID, Bun.env.TAKOSUMI_CAPSULE_ID, Bun.env.TAKOSUMI_CLOUD_BILLING_CAPSULE_ID, leakedProvider, leakedToken, process.cwd().split("/").pop()].join(":"))`,
+              `await Bun.write(Bun.env.ACTIVATION_RESULT_FILE, [Bun.env.TAKOSUMI_APPLY_RUN_ID, outputs.public_url, context.outputs.public_url, context.applyRunId, context.workspaceId, Bun.env.TAKOSUMI_WORKSPACE_ID, context.capsuleId, Bun.env.TAKOSUMI_CAPSULE_ID, context.stateVersionId, Bun.env.TAKOSUMI_STATE_VERSION_ID, context.outputId, leakedProvider, leakedToken, process.cwd().split("/").pop()].join(":"))`,
             ].join(";"),
           ],
           env: { ACTIVATION_RESULT_FILE: resultPath },
         }),
         sourceSnapshot: {
-          archiveObjectKey:
-            "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+          archiveRef:
+            "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
           archiveDigest: digest,
         },
       },
@@ -179,7 +218,7 @@ test("operator release activator restores source archive and runs opaque argv on
       },
     });
     await expect(readFile(resultPath, "utf8")).resolves.toBe(
-      "run_apply_1:https://app.example.test:https://app.example.test:run_apply_1:space_1:space_1:space_1:dep_1:dep_1:inst_1:inst_1:missing:missing:source",
+      "run_apply_1:https://app.example.test:https://app.example.test:run_apply_1:space_1:space_1:inst_1:inst_1:state_1:state_1:out_1:missing:missing:source",
     );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -212,8 +251,8 @@ test("operator release activator forwards only explicitly allowlisted operator e
           env: { ACTIVATION_RESULT_FILE: resultPath },
         }),
         sourceSnapshot: {
-          archiveObjectKey:
-            "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+          archiveRef:
+            "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
           archiveDigest: digest,
         },
       },
@@ -249,112 +288,7 @@ test("operator release activator forwards only explicitly allowlisted operator e
   }
 });
 
-test("operator release activator forwards payload provider credentials", async () => {
-  const tempDir = await mkdtemp(
-    join(tmpdir(), "takosumi-operator-release-prov-"),
-  );
-  try {
-    const sourceDir = join(tempDir, "src");
-    const archivePath = join(tempDir, "source.tar.zst");
-    const resultPath = join(tempDir, "activation-result.txt");
-    await mkdir(sourceDir, { recursive: true });
-    await writeFile(join(sourceDir, "app.txt"), "plain source\n");
-    createArchive(sourceDir, archivePath);
-    const digest = await sha256File(archivePath);
-
-    const result = await runReleaseActivation(
-      {
-        ...validPayload({
-          command: [
-            process.execPath,
-            "-e",
-            [
-              `await Bun.write(Bun.env.ACTIVATION_RESULT_FILE, [Bun.env.CLOUDFLARE_API_TOKEN ?? "missing", Bun.env.CLOUDFLARE_ACCOUNT_ID ?? "missing", Bun.env.TAKOSUMI_APPLY_RUN_ID].join(":"))`,
-            ].join(";"),
-          ],
-          env: { ACTIVATION_RESULT_FILE: resultPath },
-        }),
-        credentials: {
-          env: {
-            CLOUDFLARE_API_TOKEN: "payload-token",
-            CLOUDFLARE_ACCOUNT_ID: "ts_acc_takosumi_cloud",
-          },
-        },
-        sourceSnapshot: {
-          archiveObjectKey:
-            "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
-          archiveDigest: digest,
-        },
-      },
-      {
-        commandEnv: {
-          PATH: process.env.PATH,
-          CLOUDFLARE_API_TOKEN: "operator-token-must-not-win",
-        },
-        downloadArchive: async (_payload, targetPath) => {
-          await writeFile(targetPath, await readFile(archivePath));
-        },
-        workRoot: join(tempDir, "work"),
-      },
-    );
-
-    expect(result.status).toBe("succeeded");
-    await expect(readFile(resultPath, "utf8")).resolves.toBe(
-      "payload-token:ts_acc_takosumi_cloud:run_apply_1",
-    );
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("operator release activator rejects command env that overrides payload credentials", async () => {
-  const tempDir = await mkdtemp(
-    join(tmpdir(), "takosumi-operator-release-env-overlap-"),
-  );
-  try {
-    const sourceDir = join(tempDir, "src");
-    const archivePath = join(tempDir, "source.tar.zst");
-    await mkdir(sourceDir, { recursive: true });
-    await writeFile(join(sourceDir, "app.txt"), "plain source\n");
-    createArchive(sourceDir, archivePath);
-    const digest = await sha256File(archivePath);
-
-    await expect(
-      runReleaseActivation(
-        {
-          ...validPayload({
-            env: {
-              CUSTOM_ENDPOINT: "https://from-command.example.test",
-            },
-          }),
-          credentials: {
-            env: {
-              CUSTOM_ENDPOINT: "https://from-credential.example.test",
-            },
-          },
-          sourceSnapshot: {
-            archiveObjectKey:
-              "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
-            archiveDigest: digest,
-          },
-        },
-        {
-          commandEnv: { PATH: process.env.PATH },
-          downloadArchive: async (_payload, targetPath) => {
-            await writeFile(targetPath, await readFile(archivePath));
-          },
-          workRoot: join(tempDir, "work"),
-        },
-      ),
-    ).rejects.toThrow(
-      "release command env must not override credential CUSTOM_ENDPOINT",
-    );
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("operator release activator redacts payload provider credentials on failure", async () => {
+test("operator release activator redacts explicitly allowlisted operator secrets on failure", async () => {
   const tempDir = await mkdtemp(
     join(tmpdir(), "takosumi-operator-release-redaction-"),
   );
@@ -365,7 +299,7 @@ test("operator release activator redacts payload provider credentials on failure
     await writeFile(join(sourceDir, "app.txt"), "plain source\n");
     createArchive(sourceDir, archivePath);
     const digest = await sha256File(archivePath);
-    const payloadToken = "payload-token-to-redact";
+    const operatorToken = "operator-token-to-redact";
 
     await expect(
       runReleaseActivation(
@@ -381,19 +315,18 @@ test("operator release activator redacts payload provider credentials on failure
               ].join(";"),
             ],
           }),
-          credentials: {
-            env: {
-              CLOUDFLARE_API_TOKEN: payloadToken,
-            },
-          },
           sourceSnapshot: {
-            archiveObjectKey:
-              "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+            archiveRef:
+              "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
             archiveDigest: digest,
           },
         },
         {
-          commandEnv: { PATH: process.env.PATH },
+          commandEnv: {
+            PATH: process.env.PATH,
+            CLOUDFLARE_API_TOKEN: operatorToken,
+          },
+          commandEnvAllowlist: ["CLOUDFLARE_API_TOKEN"],
           downloadArchive: async (_payload, targetPath) => {
             await writeFile(targetPath, await readFile(archivePath));
           },
@@ -434,8 +367,8 @@ test("operator release activator pins temporary and Bun cache dirs to the job wo
           env: { ACTIVATION_RESULT_FILE: resultPath },
         }),
         sourceSnapshot: {
-          archiveObjectKey:
-            "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+          archiveRef:
+            "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
           archiveDigest: digest,
         },
       },
@@ -547,8 +480,8 @@ test("operator release activator rejects reserved operator env allowlist entries
     const payload = {
       ...validPayload(),
       sourceSnapshot: {
-        archiveObjectKey:
-          "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+        archiveRef:
+          "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
         archiveDigest: digest,
       },
     };
@@ -643,14 +576,31 @@ function validPayload(
   } = {},
 ): Record<string, unknown> {
   return {
-    kind: "takosumi.operator.release-activation@v1",
+    kind: "takosumi.operator.release-activation@v2",
+    planRunId: "run_plan_1",
     applyRunId: "run_apply_1",
     workspaceId: "space_1",
-    installation: { id: "inst_1", name: "site" },
-    deployment: { id: "dep_1" },
+    capsule: {
+      id: "inst_1",
+      name: "site",
+      environment: "production",
+      sourceId: "src_1",
+      installConfigId: "cfg_1",
+    },
+    stateVersion: {
+      id: "state_1",
+      generation: 3,
+      digest: "sha256:state",
+      createdByRunId: "run_apply_1",
+    },
+    output: {
+      id: "out_1",
+      stateGeneration: 3,
+      outputDigest: "sha256:outputs",
+    },
     sourceSnapshot: {
-      archiveObjectKey:
-        "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      archiveRef:
+        "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
       archiveDigest:
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     },

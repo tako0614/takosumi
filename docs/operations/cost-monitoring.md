@@ -1,183 +1,130 @@
-# Operations: Workspace Cost Showback and Quota Monitoring
+# Operations: OSS Showback Ledger
 
-> このページでわかること: Takosumi operated environments の cloud spend、
-> owner account showback、quota usage、Workspace / Capsule attribution、
-> reconciliation cadence。commercial payer は owner account で、Workspace は usage
-> attribution / permission scope、Capsule は Run attribution dimension です。
-> OSS/operator cost mode は `disabled` / `showback` のいずれかです。
+> このページでわかること: Takosumi OSS の `disabled` / `showback` を、実在する
+> `RunCost` と `UsageEvent` だけで確認する方法。payment、credit、invoice、公式単価、
+> provider bill attribution はこの runbook の対象外です。
 
-この runbook は Takosumi for Operator の cost monitoring / showback readiness の正本です。
-Takosumi control plane / runner から発生する run traffic は、最終的に
-owner-account usage として集計し、発生元 Workspace と Capsule id を cost drill-down 用の
-label として残します。Workspace は payment / official billing の正本ではありません。
+Takosumi OSS は commercial cost-attribution system を提供しません。OSS が所有するのは、
+OpenTofu Run の非 secret な見積もりと、Workspace に記録された provider-neutral な
+showback ledger です。架空の cloud spend metric や固定 Grafana dashboard を GA 条件にせず、
+control-plane API と永続化された ledger を運用上の正本にします。
 
-Dashboard artifact target:
+## Boundary
 
-- `takosumi/deploy/observability/grafana/takosumi-cost-attribution.json`
+| Surface                                    | OSS Takosumi                 | Host extension / Takosumi Cloud                      |
+| ------------------------------------------ | ---------------------------- | ---------------------------------------------------- |
+| Workspace setting                          | `disabled` / `showback`      | OSS settingを入力として利用可能                      |
+| Plan estimate                              | `RunCost.estimatedUsdMicros` | injected `ShowbackRater` が価格を決定                |
+| Successful apply usage                     | `UsageEvent`                 | 独自meterの `UsageEvent` を追加可能                  |
+| Rating evidence                            | `ratingStatus`               | `rated` の根拠を non-secret audit に追加可能         |
+| Apply blocking                             | しない                       | injected `BillingEnforcement` / `QuotaPolicy` が所有 |
+| Plan、balance、credit、payment、invoice    | 所有しない                   | commercial host が所有                               |
+| Provider invoice / cloud spend attribution | 所有しない                   | operator-private finance pipeline が所有             |
 
-この artifact は operator showback / quota readiness evidence として Takosumi 側で provision
-されている必要があります。Takos product 側の observability artifact を
-Takosumi operated cost dashboard の正本として参照してはいけません。
+Cloud の official billing evidence を OSS production-hardening evidence に混ぜません。
+Cloud は公開 contract の composition port を実装できますが、OSS は Cloud の commercial
+ledger、metric名、dashboard、payment providerを知りません。
 
-Takosumi Cloud official billing, enforced payment gates, usage metering sold as a service, support, and abuse workflows
-are Cloud-only closed features. Public OSS/operator docs may describe disabled/showback cost evidence and basic quota,
-but must not present official billing as part of Takosumi OSS or Takosumi for Operator.
+## Canonical data
 
-## Scope
+### Billing setting
 
-**Cost attribution hierarchy** (canonical):
+- `disabled` は self-host default です。Core は Run を止めず、自動の showback estimate / apply
+  usage event を作りません。
+- `showback` は plan measurement と successful apply usage を記録します。host rater
+  未注入の OSS default は金額を推測せず `usdMicros: 0` / `ratingStatus: "unrated"`
+  とします。enforcement / quota port は常に許可し、残高や支払状態で Run を止めません。
 
-- **Owner account**: payer / credit balance / commercial usage rollup の正本。
-- **Workspace**: quota/showback policy、source attribution、audit scope の正本。
-- **Project**: product/service grouping for cost slicing.
-- **Capsule**: Workspace / Project 配下の OpenTofu Capsule 実行単位。Run usage の
-  attribution dimension。
-- **Cloud-only billing account / payer**: Takosumi Cloud private commercial records. They are not part of the OSS
-  control-plane contract or the Run gate.
+API:
 
-showback line item は Workspace 単位で集計します。Capsule id は runner minutes、
-Provider Connection attributed run usage、artifact / backup storage、egress などの内訳分析に使います。
+- `GET /internal/v1/workspaces/:workspaceId/billing`
+- `PATCH /internal/v1/workspaces/:workspaceId/billing`
 
-Cost mode:
+### RunCost
 
-| Mode       | Behavior                                                                                        |
-| ---------- | ----------------------------------------------------------------------------------------------- |
-| `disabled` | self-host default。usage は operator showback 目的で任意に記録できるが、plan/apply を止めない。 |
-| `showback` | estimate / usage / quota evidence を記録するが、payment / quota 不足で apply を止めない。       |
+`GET /internal/v1/runs/:runId/cost` は plan Run の次の public projection を返します。
 
-対象は Takosumi operated production / staging environments の Workspace showback と
-Capsule-attributed usage です。
+- `runId`
+- `billingMode`: `disabled` または `showback`
+- `estimatedUsdMicros`
+- `ratingStatus`: `not_applicable` / `rated` / `unrated`
+- `blocked`
+- `reasons`
+- optional non-secret `extension`
 
-| Surface                          | Owner                    | Cost source                                                                                   |
-| -------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------- |
-| Takosumi runner usage            | Takosumi platform worker | Run ledger + queue / container execution meters                                               |
-| Platform resource usage          | Takosumi platform worker | platform control/state/artifact meters joined to Workspace / Capsule attribution              |
-| Workspace provider usage         | User cloud account       | user cloud bill; OSS Takosumi records showback/control/state/artifact evidence only           |
-| Custom provider usage            | User provider account    | cost estimate may be unavailable; OSS Takosumi records showback/control/state evidence        |
-| Artifact / backup storage usage  | Takosumi platform worker | object inventory joined to Workspace / Capsule attribution                                    |
-| Showback ingest / reconciliation | Takosumi platform worker | resource meters idempotently joined to Workspace use                                          |
-| Cloud-only compat managed usage  | Takosumi Cloud closed    | Cloud extension usage reports joined to owner account usage ledger with Workspace attribution |
-| Cloud provider infrastructure    | operator                 | Cloudflare / provider invoice/export                                                          |
+OSS-only composition では commercial balance / reservation / plan / payment semantics を
+`extension` から推測しません。operator UI や exporter も同じ原則を守ります。
 
-invoice、payment processor reconciliation、secret を含む official billing credential は
-repo 外の operator vault に残します。本 public doc は observable metric contract と
-dashboard artifact のみを定義します。
-Cloudflare-compatible import endpoints / Takosumi Cloud resources の請求可能性は
-Cloud-only extension smoke で usage ledger event を確認する必要があります。
-Cloudflare の上流請求書だけでは Workspace への請求・showback が成立した証拠にはなりません。
+### UsageEvent
 
-## Metric Contract
+`GET /internal/v1/workspaces/:workspaceId/usage` は cursor pagination された `UsageEvent` を返します。
+canonical attribution field は次です。
 
-dashboard は operator showback / cloud-cost ETL が生成する Prometheus 互換の counter
-を前提とします。counter は累積値で、cost metric は cent 単位、usage metric は
-native unit を保ちます。
+- required: `id`, `workspaceId`, `kind`, `quantity`, `usdMicros`,
+  `ratingStatus`, `source`, `idempotencyKey`, `createdAt`
+- optional: `capsuleId`, `runId`, `meterId`, `resourceFamily`, `resourceId`,
+  `operation`, `resourceMetadata`
 
-| Metric                                | Required labels                                               | Source                                               |
-| ------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------- |
-| `takosumi_provider_spend_cents_total` | `workspace_id`, `project_id`, `provider`, `service`, `region` | provider bill/export joined to Workspace attribution |
-| `takosumi_showback_units_total`       | `workspace_id`, `project_id`, `kind`, `mode`                  | Takosumi Run / quota / showback rollup               |
-| `takosumi_capsule_usage_units_total`  | `workspace_id`, `project_id`, `capsule_id`, `kind`            | Capsule-attributed Run usage rollup                  |
+Core は `showback` の successful apply に `source: "runner"` / `kind: "opentofu.apply"`
+を記録します。host や installed meter は open token の `source` / `kind` / `meterId` を使えます。
+新しい provider や runtime の追加に Takosumi contract release を要求しません。
+`ratingStatus: "unrated"` は必ず `usdMicros: 0` です。明示的な price policy が
+0 と評価した event は `ratingStatus: "rated"` なので区別できます。
+Capsule 単位の usage summary も `ratedEventCount` / `unratedEventCount` を返します。
+dashboard や exporter は `unratedEventCount` を金額 0 や無料利用として表示・集計してはいけません。
 
-optional な attribution label:
+`idempotencyKey` は producer の再送で二重計上しないための authority です。集計側は event id
+や時刻だけで重複排除してはいけません。
 
-- `cost_center`
-- `project_code`
-- `customer_segment`
-- `plan_id`
+## Operational checks
 
-attributed spend には `workspace_id` が必須です。Workspace に join できない cloud bill 行は、
-unattributed spend を dashboard で明示できるよう `workspace_id=""` で export します。
+1. Workspace の mode が意図した `disabled` / `showback` か確認する。
+2. plan review で対象 Run の `RunCost` を取得し、mode、estimate、rating evidence を記録する。
+3. `showback` の apply 成功後、Workspace usage ledger に同じ Run / Capsule の event が一度だけ
+   追加されたことを確認する。
+4. pagination cursor を最後まで読み、期間集計は `createdAt`、`usdMicros`、
+   `ratingStatus` を用いる。`unrated` を無料利用額として集計しない。
+5. source別集計では未知の token を拒否せず、opaque dimension として保持する。
 
-## Attribution Join
+例 (operator bearer の取得方法は platform deploy runbook に従う):
 
-cost attribution は以下の順で適用します:
+```bash
+curl -fsS \
+  -H "Authorization: Bearer ${TAKOSUMI_DEPLOY_CONTROL_TOKEN}" \
+  "${TAKOSUMI_ORIGIN}/internal/v1/runs/${RUN_ID}/cost"
 
-1. direct resource tag: cloud resource の `workspace_id` / `takosumi_workspace_id`、または
-   provider 固有の同等 tag。
-2. Takosumi Workspace attribution label: `takosumi_cost_center` /
-   `takosumi_project_code` / `takosumi_customer_segment`。
-3. Run / AuditEvent の idempotency key と Workspace / Project / Capsule mapping。
-4. fallback として `workspace_id=""` を使い、provider / service / region / invoice
-   line metadata は operator-private cost pipeline 側で保持する。
+curl -fsS \
+  -H "Authorization: Bearer ${TAKOSUMI_DEPLOY_CONTROL_TOKEN}" \
+  "${TAKOSUMI_ORIGIN}/internal/v1/workspaces/${WORKSPACE_ID}/usage?limit=100"
+```
 
-Takosumi control ledger の正本は Workspace quota/showback ledger、Run、AuditEvent
-です。operator dashboard は join 済み metric output を consume するだけで、ledger
-state は変更しません。
+## Export and alerts
 
-## Dashboard Panels
+Prometheus / OTLP / warehouse export は operator-owned adapter です。exporter を作る場合も、
+実在する `UsageEvent` / `RunCost` から生成し、OSS が提供していない cloud bill、credit、margin を
+合成しません。metric 名や dashboard は public Takosumi contract ではありません。
 
-`takosumi-cost-attribution.json` のパネル:
+最低限の運用 alert は ledger truth から導出できます。
 
-- 過去 30 日間の cloud spend
-- 過去 30 日間の showback usage
-- attributed usage の gross margin
-- 過去 24 時間の attribution coverage
-- cloud spend 上位 Capsule
-- provider / service 別の cloud spend
-- usage 上位 Capsule
-- meter 別の showback usage
-- cost center / project code 別の cloud spend
-- 過去 24 時間の unattributed cloud spend
+- `showback` で apply が成功したのに対応する runner UsageEvent がない
+- 同じ `idempotencyKey` に異なる payload が観測された
+- UsageEvent が存在しない Run / Capsule / Workspace を参照する
+- `quantity` / `usdMicros` が不正、または集計値が ledger 再計算と一致しない
 
-dashboard は `DS_PROMETHEUS` / `workspace_id` / `project_id` / `provider` の variable を使います。
-incident 中に on-call が SLO impact から cost impact に pivot できるよう、deploy
-overview dashboard と同じフォルダに provision します。
-
-## Reconciliation
-
-日次:
-
-- attribution coverage を確認する。unattributed spend は日次 cloud spend の 2 %
-  未満に保つこと。
-- cloud spend / usage の上位 20 Capsule を review する。
-- cloud spend と usage の両方に fresh sample が存在することを確認する。
-
-月次クローズ:
-
-- operator vault に保管した provider invoice 合計と
-  `sum(increase(takosumi_cloud_spend_cents_total[30d]))` を比較する。
-- 同じ期間の Takosumi Run / quota/showback rollup と
-  `sum(increase(takosumi_showback_units_total[30d]))` を比較し、operator account-plane の
-  entitlement/quota records と照合する。
-- reconciliation 結果を private finance / operations log に記録する。
-- provider invoice delta が 1 % を超える、または showback usage delta が 0.5 %
-  を超える場合はフォローアップを起票する。
-
-## Alerts
-
-| Alert                   | Condition                                                | Action                                          |
-| ----------------------- | -------------------------------------------------------- | ----------------------------------------------- |
-| Cost exporter missing   | no samples for 30 minutes                                | page primary during business hours, SEV-3       |
-| Unattributed spend high | `workspace_id=""` spend > 2% for 24h                     | block GA promotion until attribution is fixed   |
-| Capsule spend spike     | Capsule-attributed spend > 3x its 30-day p95 daily spend | inspect abuse, quota, or noisy service          |
-| Negative margin         | gross margin < 0 for 24h on paid plans                   | inspect pricing / provider cost / meter mapping |
-| Provider bill drift     | monthly cloud invoice delta > 1%                         | finance + operator reconciliation review        |
-
-## Privacy and Access
-
-dashboard では opaque な `workspace_id` / `project_id` / `capsule_id` / account-plane reference
-のみを使います。customer email、company name、payment processor customer id、
-invoice id、support ticket id を metric label として export してはいけません。
-operator-private cost system は ID から customer record に解決しても構いませんが、
-Grafana dashboard は operator-facing かつ identifier のみとします。
+provider invoice reconciliation、gross margin、unattributed cloud spend、paid-plan enforcement は
+commercial host の private runbook / dashboard で扱います。それらを OSS readiness や
+`takosumi/deploy/observability` の必須 artifact に戻してはいけません。
 
 ## Validation
 
-実行:
-
 ```bash
 cd takosumi
-bun run docs:build
+bun test \
+  ./tests/core/api/billing_routes_test.ts \
+  ./tests/core/domains/deploy-control/store_billing_security_d1_test.ts
+bun run check
 ```
 
-Operator showback / basic quota validation は `showback` audit evidence を記録して続行することを前提にします。
-Payment/credit enforcement is Takosumi Cloud-only and must not be presented as an OSS/operator feature. Takosumi cost
-attribution dashboard artifact と validator が本 runbook の metric contract / dashboard reference を検証する状態が必要です。
-Cloud-only compat managed-resource usage は
-Takosumi Cloud private `smoke:cloud-extensions --require-provider-compat-cloudflare-workers-usage-ledger` で
-`resource_meter` / `gateway_compute` または `gateway_storage_gb_hour` が
-対象 Workspace ledger に増えたことを private evidence として残します。
-Platform opening evidence では
-`costAttribution.dashboardJsonPath` を
-`takosumi/deploy/observability/grafana/takosumi-cost-attribution.json` に固定し、fresh sample、required metrics /
-labels、unattributed spend 2% 以下の証跡を private operator evidence に記録します。
+production hardening gate は runner、control-plane、egress、restore、CredentialRecipe、secret boundary
+を検証します。showback は通常の API / ledger test と operator drill で検証し、Workspace access を
+架空の cost-attribution metric sample に依存させません。

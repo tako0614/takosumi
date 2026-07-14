@@ -45,10 +45,13 @@ Queue、AI、Container は並列の managed resource で、使用量はプラン
 
 ## Runtime
 
-Edge JS app は `EdgeWorker` resource として動きます。Takosumi Cloud ではこれを
-Cloudflare Workers for Platforms を基盤にした runtime で実装しています。これは
-Cloud が提供する resource のひとつで、Container、Object Storage、KV、Database、
-Queue、AI とは別の service form です。
+Edge JS app は `EdgeWorker` resource として動きます。Takosumi Cloud はこれを
+Cloudflare Workers for Platforms と Takosumi が管理する dispatch layer で
+実装できます。これは Cloud が提供する resource のひとつで、ContainerService、
+Object Storage、KV、Database、Queue、AI とは別の service form です。
+AI Gateway、Cloudflare Workers 互換 profile、S3-compatible endpoint、Cloud
+usage endpoint は、同じ hosted Cloud origin 上の Cloud extension boundary を
+通して提供されます。
 
 どの入口から入っても — Dashboard、`takosumi/takosumi` provider、互換 endpoint の
 いずれでも — リクエストは同じ確認の流れを通ります。認証、発生元 Workspace の確認、

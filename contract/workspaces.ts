@@ -2,19 +2,41 @@
  * Workspace owner-namespace contract.
  *
  * A Workspace is the owner namespace directly under which Projects and Capsules
- * live — close to a GitHub user/org (`@acme`, `@company`). It holds members,
+ * live — close to a source-forge or organization namespace (`@acme`,
+ * `@company`). It holds members,
  * sources, connections, projects, capsules, the dependency graph, policy,
  * activity, and optional billing. A personal Workspace is auto-created on first
  * login.
  *
- * (Formerly `Space`. The transient `Space` alias lives in `./spaces.ts` until
- * the rename converges.)
  */
 
 import type { PolicyConfig } from "./install-configs.ts";
 import type { BillingSettings } from "./billing.ts";
 
 export type WorkspaceType = "personal" | "organization";
+
+/** Roles granted by the canonical Workspace membership ledger. */
+export type WorkspaceRole = "owner" | "admin" | "member" | "viewer";
+
+/** Lifecycle of a canonical Workspace membership row. */
+export type WorkspaceMemberStatus = "active" | "invited" | "suspended";
+
+/**
+ * One account's membership in a Workspace.
+ *
+ * This is part of the same control-plane ledger as {@link Workspace}; it is
+ * not a second membership-domain projection. A soft removal sets `status` to
+ * `suspended` so authorization history remains auditable.
+ */
+export interface WorkspaceMember {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly accountId: string;
+  readonly roles: readonly WorkspaceRole[];
+  readonly status: WorkspaceMemberStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
 
 /**
  * Allowed shape of a Workspace `handle` (the user-chosen, globally unique
@@ -59,8 +81,7 @@ export interface Workspace {
   readonly displayName: string;
   readonly type: WorkspaceType;
   readonly ownerUserId: string;
-  /** Optional billing attachment. Billing can be disabled, showback, or enforced. */
-  readonly billingAccountId?: string;
+  /** Provider-neutral OSS accounting mode; commercial attachment is host-owned. */
   readonly billingSettings?: BillingSettings;
   /**
    * Soft-archive marker. Archived Workspaces remain addressable by id for audit,

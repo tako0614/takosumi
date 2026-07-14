@@ -1,42 +1,43 @@
 /**
- * Shared test fixture for the Space-direct Installation model (core-spec §4 /
- * §5 / §11). Seeds the minimal ledger rows an installation-driven run needs:
- * Space -> StoredSource -> SourceSnapshot -> InstallConfig -> Installation.
+ * Shared test fixture for the Workspace / Project / Capsule model (core-spec
+ * §4 / §5 / §11). Seeds the minimal ledger rows a Capsule Run needs:
+ * Workspace -> Project -> Source -> SourceSnapshot -> InstallConfig -> Capsule.
  *
  * Tests that previously planned directly from a source module now create the
- * Installation first (the create-on-apply legacy path is removed) and call
- * `controller.createInstallationPlan(installationId)`.
+ * Capsule first and call `controller.createCapsulePlan(capsuleId)`.
  */
 import type {
-  Connection,
+  Capsule,
   InstallConfig,
-  Installation,
+  ProviderConnection,
 } from "@takosumi/internal/deploy-control-api";
+import type { Project } from "takosumi-contract/projects";
 import type { SourceSnapshot } from "takosumi-contract/sources";
-import type { Workspace as Space } from "takosumi-contract/workspaces";
+import type { Workspace } from "takosumi-contract/workspaces";
 import {
   CredentialBundle,
   PhaseMintBundle,
 } from "../../../core/adapters/vault/mod.ts";
 import type {
-  OpenTofuDeploymentStore,
+  OpenTofuControlStore,
   StoredSource,
 } from "../../../core/domains/deploy-control/store.ts";
 
-export interface SeededModel {
-  readonly space: Space;
+export interface SeededCapsuleModel {
+  readonly workspace: Workspace;
+  readonly project: Project;
   readonly source: StoredSource;
   readonly snapshot: SourceSnapshot;
   readonly installConfig: InstallConfig;
-  readonly installation: Installation;
+  readonly capsule: Capsule;
 }
 
-export interface SeedModelOptions {
-  readonly spaceId?: string;
+export interface SeedCapsuleModelOptions {
+  readonly workspaceId?: string;
   readonly sourceId?: string;
   readonly snapshotId?: string;
   readonly installConfigId?: string;
-  readonly installationId?: string;
+  readonly capsuleId?: string;
   readonly environment?: string;
   readonly name?: string;
   readonly sourceUrl?: string;
@@ -88,20 +89,7 @@ export function fakeProviderVault(
   const token = options.token ?? "fixture-provider-token";
   const sharedEvidence = {
     provider,
-    providerEnvId: connectionId,
     connectionId,
-    delivery: "provider_env" as const,
-    rootOnly: false,
-    temporary: true,
-    ttlEnforced: true,
-    phase: "plan" as const,
-  };
-  const rootEvidence = {
-    provider,
-    providerEnvId: connectionId,
-    connectionId,
-    delivery: "generated_root_variable" as const,
-    rootOnly: true,
     temporary: true,
     ttlEnforced: true,
     phase: "plan" as const,
@@ -126,40 +114,49 @@ export function fakeProviderVault(
           [sharedEvidence],
         ),
       ),
-    mintForInstallationProviderEnvBindings: () =>
+    mintForCapsuleProviderBindings: () =>
       Promise.resolve(
         new PhaseMintBundle(
-          { env: { TF_VAR_cloudflare_main_api_token: token } },
+          { env: { CLOUDFLARE_API_TOKEN: token } },
           [],
-          [rootEvidence],
+          [sharedEvidence],
         ),
       ),
   };
 }
 
-/** Seeds Space + Source + Snapshot + InstallConfig + Installation. */
-export async function seedInstallationModel(
-  store: OpenTofuDeploymentStore,
-  options: SeedModelOptions = {},
-): Promise<SeededModel> {
+/** Seeds Workspace + Project + Source + Snapshot + InstallConfig + Capsule. */
+export async function seedCapsuleModel(
+  store: OpenTofuControlStore,
+  options: SeedCapsuleModelOptions = {},
+): Promise<SeededCapsuleModel> {
   const now = "2026-06-06T00:00:00.000Z";
-  const spaceId = options.spaceId ?? "space_test";
+  const workspaceId = options.workspaceId ?? "workspace_test";
   const sourceId = options.sourceId ?? "src_fixture";
   const environment = options.environment ?? "production";
   const name = options.name ?? "app";
-  const space: Space = {
-    id: spaceId,
-    handle: spaceId.replace(/_/g, "-"),
-    displayName: "Test Space",
+  const workspace: Workspace = {
+    id: workspaceId,
+    handle: workspaceId.replace(/_/g, "-"),
+    displayName: "Test Workspace",
     type: "personal",
     ownerUserId: "user_test",
     createdAt: now,
     updatedAt: now,
   };
-  await store.putSpace(space);
+  await store.putWorkspace(workspace);
+  const project: Project = {
+    id: `prj_default_${workspaceId}`,
+    workspaceId,
+    name: "Default",
+    slug: "default",
+    createdAt: now,
+    updatedAt: now,
+  };
+  await store.putProject(project);
   const source: StoredSource = {
     id: sourceId,
-    spaceId,
+    workspaceId,
     name: `${name}-source`,
     url: options.sourceUrl ?? "https://git.example.com/example/app.git",
     defaultRef: options.ref ?? "main",
@@ -174,13 +171,13 @@ export async function seedInstallationModel(
   const snapshot: SourceSnapshot = {
     id: options.snapshotId ?? "snap_fixture",
     origin: "git",
-    spaceId,
+    workspaceId,
     sourceId,
     url: source.url,
     ref: source.defaultRef,
     resolvedCommit: "abcdef0123456789abcdef0123456789abcdef01",
     path: ".",
-    archiveObjectKey: `spaces/${spaceId}/sources/${sourceId}/snapshots/snap_fixture/source.tar.zst`,
+    archiveRef: `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_fixture/source.tar.zst`,
     archiveDigest: FIXTURE_ARCHIVE_DIGEST,
     archiveSizeBytes: 1024,
     fetchedByRunId: "run_fixture_sync",
@@ -192,8 +189,6 @@ export async function seedInstallationModel(
   const installConfig: InstallConfig = {
     id: options.installConfigId ?? "cfg_fixture",
     name: `${name}-config`,
-    installType: "opentofu_module",
-    trustLevel: "official",
     variableMapping: {},
     outputAllowlist: {
       launch_url: { from: "launch_url", type: "url" },
@@ -204,14 +199,13 @@ export async function seedInstallationModel(
     ...options.installConfig,
   };
   await store.putInstallConfig(installConfig);
-  const installation: Installation = {
-    id: options.installationId ?? "inst_fixture",
-    workspaceId: spaceId,
-    spaceId,
+  const capsule: Capsule = {
+    id: options.capsuleId ?? "cap_fixture",
+    workspaceId,
+    projectId: project.id,
     name,
     slug: name,
     sourceId,
-    installType: installConfig.installType,
     installConfigId: installConfig.id,
     environment,
     currentStateGeneration: 0,
@@ -219,13 +213,13 @@ export async function seedInstallationModel(
     createdAt: now,
     updatedAt: now,
   };
-  await store.putInstallation(installation);
-  return { space, source, snapshot, installConfig, installation };
+  await store.putCapsule(capsule);
+  return { workspace, project, source, snapshot, installConfig, capsule };
 }
 
 export async function seedProviderConnections(
-  store: OpenTofuDeploymentStore,
-  installation: Installation,
+  store: OpenTofuControlStore,
+  capsule: Capsule,
   options: SeedProviderConnectionOptions = {},
 ): Promise<void> {
   const requiredProviders = options.requiredProviders ?? [
@@ -237,20 +231,27 @@ export async function seedProviderConnections(
   const bindings = requiredProviders.map((provider) => {
     const shortName = providerShortName(provider);
     return {
-      provider: shortName,
+      provider,
       alias: "main",
-      connectionId: `conn_fixture_${sanitizeId(installation.spaceId)}_${shortName}`,
+      connectionId: `conn_fixture_${sanitizeId(capsule.workspaceId)}_${shortName}`,
     } as const;
   });
   for (const provider of requiredProviders) {
     const shortName = providerShortName(provider);
-    const connectionId = `conn_fixture_${sanitizeId(installation.spaceId)}_${shortName}`;
-    const connection: Connection = {
+    const connectionId = `conn_fixture_${sanitizeId(capsule.workspaceId)}_${shortName}`;
+    const connection: ProviderConnection = {
       id: connectionId,
-      spaceId: installation.spaceId,
-      scope: "space",
-      provider: shortName,
+      workspaceId: capsule.workspaceId,
+      scope: "workspace",
+      provider,
       providerSource: provider,
+      credentialRecipe: {
+        id: "generic-env",
+        authMode: "env",
+        secretPartition: "provider-credentials",
+        declaredEnv: true,
+      },
+      secretPartition: "provider-credentials",
       kind: providerConnectionKind(shortName),
       status: "verified",
       materialization,
@@ -261,13 +262,13 @@ export async function seedProviderConnections(
     };
     await store.putConnection(connection);
   }
-  await store.putInstallationProviderEnvBindingSet({
-    id: `ipcset_fixture_${sanitizeId(installation.id)}_${sanitizeId(
-      installation.environment,
+  await store.putProviderBindingSet({
+    id: `ipcset_fixture_${sanitizeId(capsule.id)}_${sanitizeId(
+      capsule.environment,
     )}`,
-    spaceId: installation.spaceId,
-    installationId: installation.id,
-    environment: installation.environment,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
     bindings,
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
@@ -298,7 +299,7 @@ function providerEnvNames(provider: string): readonly string[] {
   return [`${providerShortName(provider).toUpperCase()}_TOKEN`];
 }
 
-function providerConnectionKind(shortName: string): Connection["kind"] {
+function providerConnectionKind(shortName: string): ProviderConnection["kind"] {
   if (shortName === "cloudflare") return "cloudflare_api_token";
   if (shortName === "aws") return "aws_assume_role";
   if (shortName === "google" || shortName === "gcp") {

@@ -3,8 +3,10 @@
  *
  * This route is deliberately a read-only dashboard projection, not a new
  * control-plane mutation surface. It batches the data needed by the everyday
- * launcher/service-list views so the SPA does not open a waterfall of
- * authenticated `/api/v1/*` requests on first paint.
+ * installed-Capsule/service-list views so the SPA does not open a waterfall of
+ * authenticated `/api/v1/*` requests on first paint. Runtime launcher surfaces
+ * remain authoritative Interface/InterfaceBinding reads and are deliberately
+ * not synthesized into this projection.
  */
 import type { Workspace } from "takosumi-contract/workspaces";
 import type {
@@ -14,8 +16,7 @@ import type {
   PublicInstallConfig,
 } from "takosumi-contract/install-configs";
 import type { ActivityEvent } from "takosumi-contract/activity";
-import type { PublicDeployment } from "takosumi-contract/deployments";
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import type { PublicStateVersion } from "takosumi-contract/state-versions";
 import type { AccountsStore } from "../store.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import {
@@ -27,7 +28,7 @@ import {
 import {
   type ControlDispatchContext,
   publicCapsule,
-  publicDeployment,
+  publicStateVersion,
   requireWorkspaceAccess,
 } from "./shared.ts";
 import {
@@ -188,7 +189,7 @@ async function dashboardOverview(
 
   let selectedWorkspace =
     workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ??
-    (await operations.spaces.getWorkspace(selectedWorkspaceId));
+    (await operations.workspaces.getWorkspace(selectedWorkspaceId));
   if (isArchivedWorkspace(selectedWorkspace)) {
     const fallbackWorkspaces =
       workspaces.length > 0
@@ -224,7 +225,7 @@ async function dashboardOverview(
     store,
     subject: sessionSubject,
     workspaceId: selectedWorkspace.id,
-    space: selectedWorkspace,
+    workspace: selectedWorkspace,
   });
   if (!auth.ok) return auth.response;
 
@@ -253,7 +254,7 @@ async function dashboardOverview(
   }
 
   const [capsulePage, activity, installConfigs] = await Promise.all([
-    operations.installations.listCapsulesPage(selectedWorkspace.id, {
+    operations.capsules.listCapsulesPage(selectedWorkspace.id, {
       limit: capsuleLimit,
       includeDestroyed: false,
     }),
@@ -262,7 +263,7 @@ async function dashboardOverview(
       [],
     ),
     optionalDashboardProjection(
-      operations.installations.listInstallConfigs(selectedWorkspace.id),
+      operations.capsules.listInstallConfigs(selectedWorkspace.id),
       [],
     ),
   ]);
@@ -325,7 +326,7 @@ interface DashboardOverviewResponse {
   readonly workspaceList: DashboardWorkspaceListMeta;
   readonly workspace: Workspace | null;
   readonly capsules: readonly PublicCapsule[];
-  readonly currentStateVersions: readonly PublicDeployment[];
+  readonly currentStateVersions: readonly PublicStateVersion[];
   readonly activity: readonly ActivityEvent[];
   readonly installConfigs: readonly PublicInstallConfig[];
   readonly nextCapsuleCursor?: string;
@@ -357,14 +358,13 @@ function compactDashboardActivityMetadata(
 
 const DASHBOARD_ACTIVITY_METADATA_KEYS = [
   "capsuleId",
-  "installationId",
-  "deploymentId",
+  "stateVersionId",
   "applyRunId",
   "operation",
   "phase",
   "policyStatus",
   "errorCode",
-  "producerInstallationName",
+  "producerCapsuleName",
   "changedOutputs",
   "reasons",
 ] as const;
@@ -378,39 +378,12 @@ interface DashboardWorkspaceListMeta {
 
 async function listWorkspacesForSession(
   operations: ControlPlaneOperations,
-  store: AccountsStore,
+  _store: AccountsStore,
   sessionSubject: string,
 ): Promise<readonly Workspace[]> {
-  const byId = new Map<string, Workspace>();
-  for (const workspace of await operations.spaces.listWorkspacesByOwner(
-    sessionSubject,
-  )) {
-    byId.set(workspace.id, workspace);
-  }
-  const ledgerWorkspaces = await store.listWorkspacesForOwner(
-    sessionSubject as TakosumiSubject,
-  );
-  const missingIds = uniqueMissingWorkspaceIds(
-    ledgerWorkspaces.map((workspace) => workspace.workspaceId),
-    byId,
-  );
-  if (missingIds.length > 0 && operations.spaces.listWorkspacesByIds) {
-    for (const workspace of await operations.spaces.listWorkspacesByIds(
-      missingIds,
-    )) {
-      byId.set(workspace.id, workspace);
-    }
-  }
-  for (const workspaceId of missingIds) {
-    if (byId.has(workspaceId)) continue;
-    try {
-      byId.set(workspaceId, await operations.spaces.getWorkspace(workspaceId));
-    } catch {
-      // The account ledger can briefly reference a Workspace before control
-      // state catches up. Do not make the whole dashboard fail for that row.
-    }
-  }
-  return [...byId.values()].sort(
+  return [
+    ...(await operations.workspaces.listWorkspacesForAccount(sessionSubject)),
+  ].sort(
     (a, b) =>
       a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
   );
@@ -496,21 +469,6 @@ function compareWorkspaceMostRecentFirst(a: Workspace, b: Workspace): number {
   return bTime.localeCompare(aTime) || a.id.localeCompare(b.id);
 }
 
-function uniqueMissingWorkspaceIds(
-  ids: readonly string[],
-  existing: ReadonlyMap<string, Workspace>,
-): readonly string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const id of ids) {
-    if (typeof id !== "string" || id.trim().length === 0) continue;
-    if (seen.has(id) || existing.has(id)) continue;
-    seen.add(id);
-    result.push(id);
-  }
-  return result;
-}
-
 function isArchivedWorkspace(workspace: Workspace): boolean {
   return (
     typeof workspace.archivedAt === "string" && workspace.archivedAt.length > 0
@@ -521,29 +479,33 @@ async function listCurrentStateVersions(
   operations: ControlPlaneOperations,
   workspaceId: string,
   capsules: readonly Capsule[],
-): Promise<readonly PublicDeployment[]> {
+): Promise<readonly PublicStateVersion[]> {
   const ids = capsules
     .map(capsuleCurrentStateVersionId)
     .filter((id): id is string => typeof id === "string" && id.length > 0);
   if (ids.length === 0) return [];
-  const rows = operations.listDeploymentsByIds
-    ? await operations.listDeploymentsByIds(ids)
-    : operations.listDeploymentsBySpace
-      ? (await operations.listDeploymentsBySpace(workspaceId)).filter((row) =>
-          ids.includes(row.id),
+  const rows = operations.listStateVersionsByIds
+    ? await operations.listStateVersionsByIds(ids)
+    : operations.listStateVersionsByWorkspace
+      ? (await operations.listStateVersionsByWorkspace(workspaceId)).filter(
+          (row) => ids.includes(row.id),
         )
-      : await Promise.all(ids.map((id) => operations.getDeployment(id)));
-  const byId = new Map(rows.map((row) => [row.id, publicDeployment(row)]));
+      : await Promise.all(
+          ids.map(
+            async (id) => (await operations.getStateVersion(id)).stateVersion,
+          ),
+        );
+  const byId = new Map(rows.map((row) => [row.id, publicStateVersion(row)]));
   return capsules
     .map((capsule) => {
       const id = capsuleCurrentStateVersionId(capsule);
       return id ? byId.get(id) : undefined;
     })
-    .filter((row): row is PublicDeployment => row !== undefined);
+    .filter((row): row is PublicStateVersion => row !== undefined);
 }
 
 function capsuleCurrentStateVersionId(capsule: Capsule): string | undefined {
-  return capsule.currentStateVersionId ?? capsule.currentDeploymentId;
+  return capsule.currentStateVersionId;
 }
 
 async function listDashboardInstallConfigs(
@@ -582,13 +544,14 @@ async function listDashboardInstallConfigs(
   for (const id of referencedIds) {
     if (byId.has(id)) continue;
     try {
-      append(await operations.installations.getInstallConfig(id), {
+      append(await operations.capsules.getInstallConfig(id), {
         referenced: true,
       });
     } catch {
       // A stale Capsule row can point at a retired or deleted config. The
-      // launcher can still show the Capsule from its own record; do not fail
-      // the whole overview projection for missing presentation metadata.
+      // The installed-service list can still show the Capsule from its own
+      // record; do not fail the whole overview projection for missing Store
+      // presentation metadata. This never creates a runtime launcher surface.
     }
   }
 

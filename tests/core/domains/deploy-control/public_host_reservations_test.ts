@@ -1,24 +1,24 @@
 import { expect, test } from "bun:test";
 import {
-  InMemoryOpenTofuDeploymentStore,
-  type OpenTofuDeploymentStore,
+  InMemoryOpenTofuControlStore,
+  type OpenTofuControlStore,
 } from "../../../../core/domains/deploy-control/store.ts";
-import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
-function stores(): readonly [string, OpenTofuDeploymentStore][] {
+function stores(): readonly [string, OpenTofuControlStore][] {
   return [
-    ["memory", new InMemoryOpenTofuDeploymentStore()],
-    ["d1", new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1())],
+    ["memory", new InMemoryOpenTofuControlStore()],
+    ["d1", new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
   ];
 }
 
 async function seedWorkspace(
-  store: OpenTofuDeploymentStore,
+  store: OpenTofuControlStore,
   id: string,
   ownerUserId: string,
 ): Promise<void> {
-  await store.putSpace({
+  await store.putWorkspace({
     id,
     handle: id.replaceAll("_", "-"),
     displayName: id,
@@ -37,8 +37,8 @@ test("managed hostname vanity slots are owner-scoped while scoped names remain a
     const firstVanity = await store.reservePublicHost({
       hostname: "short-one.app.takos.jp",
       workspaceId: "workspace_one",
-      installationId: "capsule_one",
-      installationName: "one",
+      capsuleId: "capsule_one",
+      capsuleName: "one",
       allocationKind: "vanity",
       vanitySlotLimit: 1,
       now: "2026-07-11T00:00:00.000Z",
@@ -48,8 +48,8 @@ test("managed hostname vanity slots are owner-scoped while scoped names remain a
     const sameCapsuleSecondHostname = await store.reservePublicHost({
       hostname: "short-one-alt.app.takos.jp",
       workspaceId: "workspace_one",
-      installationId: "capsule_one",
-      installationName: "one",
+      capsuleId: "capsule_one",
+      capsuleName: "one",
       allocationKind: "vanity",
       vanitySlotLimit: 1,
       now: "2026-07-11T00:00:00.500Z",
@@ -63,8 +63,8 @@ test("managed hostname vanity slots are owner-scoped while scoped names remain a
     const scoped = await store.reservePublicHost({
       hostname: "workspace-two-app.app.takos.jp",
       workspaceId: "workspace_two",
-      installationId: "capsule_two",
-      installationName: "two",
+      capsuleId: "capsule_two",
+      capsuleName: "two",
       allocationKind: "scoped",
       vanitySlotLimit: 1,
       now: "2026-07-11T00:00:01.000Z",
@@ -74,8 +74,8 @@ test("managed hostname vanity slots are owner-scoped while scoped names remain a
     const secondVanity = await store.reservePublicHost({
       hostname: "short-two.app.takos.jp",
       workspaceId: "workspace_two",
-      installationId: "capsule_two",
-      installationName: "two",
+      capsuleId: "capsule_two",
+      capsuleName: "two",
       allocationKind: "vanity",
       vanitySlotLimit: 1,
       now: "2026-07-11T00:00:02.000Z",
@@ -89,23 +89,23 @@ test("managed hostname vanity slots are owner-scoped while scoped names remain a
     const otherOwner = await store.reservePublicHost({
       hostname: "short-three.app.takos.jp",
       workspaceId: "workspace_three",
-      installationId: "capsule_three",
-      installationName: "three",
+      capsuleId: "capsule_three",
+      capsuleName: "three",
       allocationKind: "vanity",
       vanitySlotLimit: 1,
       now: "2026-07-11T00:00:03.000Z",
     });
     expect(otherOwner.reserved, label).toBe(true);
 
-    await store.releasePublicHostsForInstallation(
+    await store.releasePublicHostsForCapsule(
       "capsule_one",
       "2026-07-11T00:00:04.000Z",
     );
     const afterRelease = await store.reservePublicHost({
       hostname: "short-two.app.takos.jp",
       workspaceId: "workspace_two",
-      installationId: "capsule_two",
-      installationName: "two",
+      capsuleId: "capsule_two",
+      capsuleName: "two",
       allocationKind: "vanity",
       vanitySlotLimit: 1,
       now: "2026-07-11T00:00:05.000Z",
@@ -123,8 +123,8 @@ test("concurrent vanity claims cannot exceed the owner slot limit", async () => 
         store.reservePublicHost({
           hostname: `race-${suffix}.app.takos.jp`,
           workspaceId: `workspace_${suffix}`,
-          installationId: `capsule_${suffix}`,
-          installationName: suffix,
+          capsuleId: `capsule_${suffix}`,
+          capsuleName: suffix,
           allocationKind: "vanity",
           vanitySlotLimit: 1,
           now: "2026-07-11T00:00:00.000Z",

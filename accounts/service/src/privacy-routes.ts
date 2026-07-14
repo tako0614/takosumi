@@ -58,8 +58,18 @@ export async function handleCreatePrivacyRequest(input: {
   request: Request;
   store: AccountsStore;
   subject: TakosumiSubject;
+  /** Host-owned retention policy reference; Accounts never invents one. */
+  policyRef?: string;
   now?: number;
 }): Promise<Response> {
+  if (!input.policyRef) {
+    return errorJson(
+      "privacy_policy_unavailable",
+      "privacy retention policy is not configured",
+      503,
+      input.request,
+    );
+  }
   const body = (await readJsonObject(
     input.request,
   )) as TakosumiAccountsCreatePrivacyRequestRequest | null;
@@ -96,7 +106,7 @@ export async function handleCreatePrivacyRequest(input: {
     kind,
     status: "received",
     retentionRecordId: `ret_${input.subject}_${now}`,
-    policyRef: "takosumi-cloud-privacy-retention@v1",
+    policyRef: input.policyRef,
     ...(requestSummary ? { requestSummary } : {}),
     createdAt: now,
     updatedAt: now,
@@ -105,6 +115,20 @@ export async function handleCreatePrivacyRequest(input: {
   return json(privacyRequestResponse(record), 201, {
     "cache-control": "no-store",
   });
+}
+
+export function normalizePrivacyRetentionPolicyRef(value: string): string {
+  const normalized = value.trim();
+  if (
+    normalized.length === 0 ||
+    normalized.length > 512 ||
+    !/^[^\s\x00-\x1f\x7f]+$/u.test(normalized)
+  ) {
+    throw new TypeError(
+      "privacyRetentionPolicyRef must be a non-blank opaque reference without whitespace",
+    );
+  }
+  return normalized;
 }
 
 export async function handleListPrivacyRequests(input: {

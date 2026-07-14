@@ -6,38 +6,12 @@
 // and biases which Target the Resolver may pick.
 
 import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
-import type { JsonObject } from "./types.ts";
+import type { JsonObject, JsonValue } from "./types.ts";
+import type { OutputValueType } from "./install-configs.ts";
+import type { ResourceShapeKind } from "./resource-shape.ts";
 
-/** Well-known Target backend types. Operators may add plugin-defined tokens. */
-export type KnownTargetType =
-  | "aws"
-  | "cloudflare"
-  | "gcp"
-  | "azure"
-  | "kubernetes"
-  | "vm"
-  | "proxmox"
-  | "libvirt"
-  | "ssh"
-  | "takosumi_native"
-  | "opentofu";
-
-/** Target backend type token. Not a closed enum; plugin-defined tokens are allowed. */
-export type TargetType = KnownTargetType | (string & {});
-
-export const TARGET_TYPES: readonly KnownTargetType[] = [
-  "aws",
-  "cloudflare",
-  "gcp",
-  "azure",
-  "kubernetes",
-  "vm",
-  "proxmox",
-  "libvirt",
-  "ssh",
-  "takosumi_native",
-  "opentofu",
-] as const;
+/** Opaque operator-owned Target type token. Core has no vendor type enum. */
+export type TargetType = string;
 
 /**
  * Who owns the Target's credential lifecycle. `user_managed` reuses a
@@ -71,11 +45,7 @@ export interface TargetMetadata {
 
 // --- TargetPool (`docs/internal/final-plan.md` §7.2) -----------------------------------
 
-/**
- * One ranked Target entry. `ref` carries the type-specific reference
- * (cloudflare/aws -> accountRef, kubernetes -> clusterRef); `takosumi_native`
- * has no ref and uses `region`. Higher `priority` wins.
- */
+/** One ranked Target entry. `ref` is an opaque operator target reference. */
 export interface TargetPoolEntry {
   readonly name: string;
   readonly type: TargetType;
@@ -89,25 +59,70 @@ export interface TargetPoolEntry {
   readonly region?: string;
   readonly priority: number;
   /**
-   * Optional operator/admin implementation declarations for this Target. When
-   * omitted, the resolver uses the built-in seed mapping for the Target type.
-   * When present, these entries are the capability evidence the resolver uses
-   * for the named shape. This keeps provider/vendor breadth in operator config
-   * instead of hard-coding every backend into the `takosumi` OpenTofu provider.
+   * Operator/admin implementation descriptors for this Target. Omission means
+   * the Target advertises no Resource Shape implementation; Core never derives
+   * one from `type`, `ref`, `region`, or a vendor name.
    */
-  readonly implementations?: readonly TargetPoolImplementation[];
+  readonly implementations?: readonly TargetImplementationDescriptor[];
 }
 
 export type TargetCapabilityLevel =
   "native" | "shim" | "emulated" | "unsupported";
 
-export interface TargetPoolImplementation {
-  readonly shape: string;
+export type TargetModuleInputSource = "spec" | "target" | "literal";
+
+/**
+ * Declarative projection from a Resource spec/Target snapshot into one child
+ * module variable. `path` is an RFC 6901 JSON Pointer for `spec`/`target`;
+ * `value` is used only by `literal`. Missing optional values are omitted.
+ */
+export interface TargetModuleInputMapping {
+  readonly source: TargetModuleInputSource;
+  readonly path?: string;
+  readonly value?: JsonValue;
+  readonly required?: boolean;
+  readonly default?: JsonValue;
+}
+
+export interface TargetModuleOutput {
+  readonly name: string;
+  readonly type: OutputValueType;
+}
+
+/**
+ * Complete, non-secret implementation descriptor owned by operator config.
+ *
+ * Exactly one execution path is selected: `plugin`, or an explicit
+ * `providerSource` + `moduleTemplate`. Provider arguments and module-variable
+ * projections are data; Resolver/Planner never infer them from target/shape or
+ * implementation names.
+ */
+export interface TargetImplementationDescriptor {
+  readonly shape: ResourceShapeKind;
   readonly implementation: string;
   readonly interfaces: Readonly<Record<string, TargetCapabilityLevel>>;
   readonly nativeResourceType?: string;
   /** Optional Vite-style plugin id that handles this implementation. */
   readonly plugin?: string;
+  /** Explicit OpenTofu provider source for module-backed implementations. */
+  readonly providerSource?: string;
+  readonly providerAlias?: string;
+  /** Explicit non-secret provider block configuration. */
+  readonly providerConfig?: Readonly<Record<string, JsonValue>>;
+  /** Bundled module id selected by the operator, never by implementation name. */
+  readonly moduleTemplate?: string;
+  /**
+   * Child-module resource address used by reviewed config-driven import, for
+   * example `cloudflare_r2_bucket.this`. Core prefixes `module.child.` and
+   * never derives this address from a provider or implementation token.
+   */
+  readonly moduleImportAddress?: string;
+  /** Explicit child-module variable projection. */
+  readonly moduleInputMappings?: Readonly<
+    Record<string, TargetModuleInputMapping>
+  >;
+  /** Public child outputs captured for the Resource. */
+  readonly moduleOutputs?: readonly TargetModuleOutput[];
   /** Plugin-local configuration. Secrets must stay in Credential/ProviderConnection. */
   readonly options?: JsonObject;
 }
@@ -142,12 +157,6 @@ export interface SpacePolicyPreferences {
   readonly portability?: PortabilityPreference;
 }
 
-/** Resolution toggles. These gate ResolutionLock behavior in Phase 2. */
-export interface SpacePolicyResolution {
-  readonly lockAfterCreate: boolean;
-  readonly allowAutoMigration: boolean;
-}
-
 export interface SpacePolicyApprovals {
   readonly requireForApply: boolean;
   readonly requireForDestroy: boolean;
@@ -156,14 +165,12 @@ export interface SpacePolicyApprovals {
 export interface SpacePolicySpec {
   /**
    * Allowed/denied Targets. An entry is matched against both the Target `type`
-   * and the TargetPool entry `name`, so the §7.3 example mixing `aws` (type)
-   * and `kubernetes_prod` (name) both work.
+   * and the TargetPool entry `name`.
    */
   readonly allowedTargets?: readonly string[];
   readonly deniedTargets?: readonly string[];
   readonly constraints?: SpacePolicyConstraints;
   readonly preferences?: SpacePolicyPreferences;
-  readonly resolution: SpacePolicyResolution;
   readonly approvals?: SpacePolicyApprovals;
 }
 

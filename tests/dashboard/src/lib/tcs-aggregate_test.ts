@@ -1,5 +1,5 @@
 /**
- * Client-side TCS aggregation: merge across servers, de-dup by (git,path)
+ * Client-side TCS aggregation: merge across servers, de-dup by (url,path)
  * with seenOn, isolate failures, skip search-unsupported nodes, paginate per
  * server. fetch is stubbed so these run without network.
  */
@@ -23,8 +23,8 @@ function L(
   return {
     id,
     source: {
-      git: `https://github.com/o/${id}.git`,
-      path: "",
+      url: `https://github.com/o/${id}.git`,
+      path: ".",
       ...source,
     },
     kind: "worker",
@@ -62,7 +62,7 @@ function json(body: unknown, status = 200): Response {
     headers: { "content-type": "application/json" },
   });
 }
-const SHARED = { git: "https://github.com/o/shared.git" };
+const SHARED = { url: "https://github.com/o/shared.git" };
 
 describe("tcs aggregate", () => {
   test("merges + de-dups shared Capsules with seenOn", async () => {
@@ -91,7 +91,7 @@ describe("tcs aggregate", () => {
           isDefault: true,
           items: [
             L("x", {
-              git: "https://github.com/o/x.git",
+              url: "https://github.com/o/x.git",
               path: ".",
             }),
           ],
@@ -106,7 +106,7 @@ describe("tcs aggregate", () => {
 
   test("prefers the default store when the same Git source appears on multiple stores", () => {
     const sharedSource = {
-      git: "https://github.com/o/shared.git",
+      url: "https://github.com/o/shared.git",
       path: "deploy/opentofu",
     };
     const merged = mergeTcsListingBatches(
@@ -134,7 +134,7 @@ describe("tcs aggregate", () => {
     ]);
   });
 
-  test("treats root module path spellings as the same Store source", () => {
+  test("treats canonical root module path spellings as the same Store source", () => {
     const merged = mergeTcsListingBatches(
       [],
       [
@@ -143,8 +143,8 @@ describe("tcs aggregate", () => {
           isDefault: true,
           items: [
             L("root-empty", {
-              git: "https://github.com/o/root.git",
-              path: "",
+              url: "https://github.com/o/root.git",
+              path: ".",
             }),
           ],
         },
@@ -153,8 +153,8 @@ describe("tcs aggregate", () => {
           isDefault: false,
           items: [
             L("root-dot", {
-              git: "https://github.com/o/root.git",
-              path: ".",
+              url: "https://github.com/o/root.git",
+              path: "./",
             }),
           ],
         },
@@ -169,9 +169,9 @@ describe("tcs aggregate", () => {
     ]);
   });
 
-  test("does not prefer a store listing just because it carries a stale ref property", () => {
+  test("does not prefer a store listing just because it carries a ref hint", () => {
     const sharedSource = {
-      git: "https://github.com/o/shared.git",
+      url: "https://github.com/o/shared.git",
       path: "deploy/opentofu",
     };
     const merged = mergeTcsListingBatches(

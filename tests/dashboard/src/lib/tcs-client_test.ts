@@ -2,10 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   fetchTcsListing,
   fetchTcsListingsPage,
-  hydrateRequiredTcsListingWithRepoMetadata,
-  hydrateTcsListingWithRepoMetadata,
+  mergeTcsListingRepoMetadata,
   parseTcsRepoMetadata,
-  tcsListingFromRepoMetadata,
   type TcsListing,
 } from "../../../../dashboard/src/lib/tcs-client.ts";
 
@@ -16,9 +14,8 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
   return {
     id: "tako/example",
     source: {
-      git: "https://github.com/tako0614/example.git",
+      url: "https://github.com/tako0614/example.git",
       ref: "main",
-      resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
       path: ".",
     },
     kind: "worker",
@@ -40,7 +37,7 @@ afterEach(() => {
 });
 
 describe("TCS repo metadata", () => {
-  test("builds direct-Git setup metadata without a Store listing", () => {
+  test("accepts display metadata but ignores repo-owned setup authority", () => {
     const metadata = parseTcsRepoMetadata({
       schemaVersion: "tcs.repo/v1",
       id: "tako/example",
@@ -57,19 +54,10 @@ describe("TCS repo metadata", () => {
     });
     expect(metadata).toBeDefined();
 
-    const direct = tcsListingFromRepoMetadata(
-      {
-        git: "https://github.com/tako0614/example.git",
-        ref: "v1.0.0",
-        path: ".",
-      },
-      metadata!,
-    );
-
-    expect(direct.id).toBe("tako/example");
-    expect(direct.source.path).toBe("deploy/opentofu");
-    expect(direct.suggestedName).toBe("example");
-    expect(direct.inputs?.[0]?.name).toBe("public_subdomain");
+    expect(metadata).not.toHaveProperty("modulePath");
+    expect(metadata).not.toHaveProperty("id");
+    expect(metadata).not.toHaveProperty("suggestedName");
+    expect(metadata).not.toHaveProperty("inputs");
   });
 
   test("strips deprecated setup fields from listing reads", async () => {
@@ -92,7 +80,7 @@ describe("TCS repo metadata", () => {
         ],
       },
       outputAllowlist: [{ key: "url", from: "url", type: "url" }],
-    });
+    } as unknown as Partial<TcsListing>);
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/tcs/v1/listings/tako%2Fexample")) {
@@ -114,114 +102,233 @@ describe("TCS repo metadata", () => {
       "tako/example",
     );
 
-    expect(page.items[0]?.inputs).toBeUndefined();
-    expect(page.items[0]?.installExperience).toBeUndefined();
-    expect(page.items[0]?.outputAllowlist).toBeUndefined();
-    expect(single?.inputs).toBeUndefined();
-    expect(single?.installExperience).toBeUndefined();
-    expect(single?.outputAllowlist).toBeUndefined();
+    expect(page.items[0]).not.toHaveProperty("inputs");
+    expect(page.items[0]).not.toHaveProperty("installExperience");
+    expect(page.items[0]).not.toHaveProperty("outputAllowlist");
+    expect(single).not.toHaveProperty("inputs");
+    expect(single).not.toHaveProperty("installExperience");
+    expect(single).not.toHaveProperty("outputAllowlist");
   });
 
-  test("hydrates optional install UX metadata from the repository", async () => {
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      expect(String(input)).toBe(
-        "https://api.github.com/repos/tako0614/example/contents/.well-known%2Ftcs.json?ref=0123456789abcdef0123456789abcdef01234567",
-      );
-      return new Response(
+  test("rejects retired or execution-authoritative Store source fields", async () => {
+    globalThis.fetch = (async () =>
+      new Response(
         JSON.stringify({
-          content: btoa(
-            JSON.stringify({
-              schemaVersion: "tcs.repo/v1",
-              modulePath: "deploy/opentofu",
-              suggestedName: "repo-example",
-              iconUrl: "public/icon.svg",
-              name: text("Repo Example"),
-              inputs: [
-                {
-                  name: "public_subdomain",
-                  format: "subdomain",
-                  required: true,
-                  label: text("Public slug"),
-                },
-              ],
-              installExperience: {
-                projections: [
-                  {
-                    kind: "public_endpoint",
-                    variables: { subdomain: "public_subdomain" },
-                    baseDomain: "app.takos.jp",
-                  },
-                ],
+          items: [
+            listing({
+              source: {
+                git: "https://github.com/tako0614/example.git",
+                resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
+                path: ".",
               },
-            }),
-          ),
+            } as unknown as Partial<TcsListing>),
+          ],
         }),
         { headers: { "content-type": "application/json" } },
-      );
-    }) as typeof fetch;
-
-    const hydrated = await hydrateTcsListingWithRepoMetadata(listing());
-
-    expect(hydrated.source.path).toBe("deploy/opentofu");
-    expect(hydrated.suggestedName).toBe("repo-example");
-    expect(hydrated.name.en).toBe("Repo Example");
-    expect(hydrated.inputs?.[0]?.name).toBe("public_subdomain");
-    expect(hydrated.installExperience?.projections?.[0]).toEqual({
-      kind: "public_endpoint",
-      variables: { subdomain: "public_subdomain" },
-      baseDomain: "app.takos.jp",
-    });
-    expect(hydrated.outputAllowlist).toBeUndefined();
-    expect(hydrated.iconUrl).toBe(
-      "https://raw.githubusercontent.com/tako0614/example/0123456789abcdef0123456789abcdef01234567/public/icon.svg",
-    );
-  });
-
-  test("keeps the store listing usable when a repository has no optional metadata", async () => {
-    globalThis.fetch = (async () =>
-      new Response(null, { status: 404 })) as typeof fetch;
-
-    const base = listing();
-    await expect(hydrateTcsListingWithRepoMetadata(base)).resolves.toBe(base);
-  });
-
-  test("fails closed when a Store install cannot load repo metadata", async () => {
-    globalThis.fetch = (async () =>
-      new Response(null, { status: 404 })) as typeof fetch;
+      )) as typeof fetch;
 
     await expect(
-      hydrateRequiredTcsListingWithRepoMetadata(listing()),
-    ).rejects.toThrow("repository install metadata is unavailable");
+      fetchTcsListingsPage("https://store.example.test"),
+    ).rejects.toThrow("unsupported fields");
   });
 
-  test("falls back to raw metadata when the GitHub Contents API is rate limited", async () => {
-    const calls: string[] = [];
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      calls.push(String(input));
-      if (calls.length === 1) {
-        return new Response("rate limited", { status: 429 });
-      }
-      expect(String(input)).toBe(
-        "https://raw.githubusercontent.com/tako0614/example/0123456789abcdef0123456789abcdef01234567/.well-known/tcs.json",
-      );
-      return new Response(
+  test("accepts a canonical source without an optional ref hint", async () => {
+    const unpinned = listing({
+      source: {
+        url: "https://github.com/tako0614/example.git",
+        path: ".",
+      },
+    });
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ items: [unpinned] }), {
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+
+    const page = await fetchTcsListingsPage("https://store.example.test");
+    expect(page.items[0]?.source).toEqual(unpinned.source);
+  });
+
+  test("keeps only credential-free HTTPS icons and drops wire aggregation hints", async () => {
+    const unsafePresentation = listing({
+      iconUrl: "https://user:secret@assets.example.test/icon.svg?token=x",
+      primaryServer: "https://attacker.example.test",
+      primaryDefault: true,
+      seenOn: ["https://attacker.example.test"],
+    } as unknown as Partial<TcsListing>);
+    const safePresentation = listing({
+      id: "tako/safe-icon",
+      iconUrl: "https://assets.example.test/icon.svg",
+    });
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ items: [unsafePresentation, safePresentation] }),
+        { headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+
+    const page = await fetchTcsListingsPage("https://store.example.test");
+    expect(page.items[0]).not.toHaveProperty("iconUrl");
+    expect(page.items[0]).not.toHaveProperty("primaryServer");
+    expect(page.items[0]).not.toHaveProperty("primaryDefault");
+    expect(page.items[0]).not.toHaveProperty("seenOn");
+    expect(page.items[1]?.iconUrl).toBe("https://assets.example.test/icon.svg");
+  });
+
+  test("input-normalizes a legacy git-only source without re-emitting git", async () => {
+    const legacy = listing({
+      source: {
+        git: "https://github.com/tako0614/example.git",
+        path: "./deploy/opentofu",
+      },
+    } as unknown as Partial<TcsListing>);
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ items: [legacy] }), {
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+
+    const page = await fetchTcsListingsPage("https://store.example.test");
+    expect(page.items[0]?.source).toEqual({
+      url: "https://github.com/tako0614/example.git",
+      path: "deploy/opentofu",
+    });
+    expect(page.items[0]?.source).not.toHaveProperty("git");
+  });
+
+  test("rejects a source that declares canonical url and legacy git together", async () => {
+    globalThis.fetch = (async () =>
+      new Response(
         JSON.stringify({
-          schemaVersion: "tcs.repo/v1",
-          modulePath: "infra",
-          description: text("Repo description"),
+          items: [
+            listing({
+              source: {
+                url: "https://github.com/tako0614/example.git",
+                git: "https://github.com/tako0614/example.git",
+                path: ".",
+              },
+            } as unknown as Partial<TcsListing>),
+          ],
         }),
         { headers: { "content-type": "application/json" } },
-      );
+      )) as typeof fetch;
+
+    await expect(
+      fetchTcsListingsPage("https://store.example.test"),
+    ).rejects.toThrow("both url and legacy git");
+
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          items: [
+            listing({
+              source: {
+                url: "",
+                git: "https://github.com/tako0614/example.git",
+                path: ".",
+              },
+            } as unknown as Partial<TcsListing>),
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+    await expect(
+      fetchTcsListingsPage("https://store.example.test"),
+    ).rejects.toThrow("both url and legacy git");
+  });
+
+  test("rejects unsafe Store source URLs, paths, and ref hints", async () => {
+    const unsafeSources = [
+      { url: "http://example.test/app.git", path: "." },
+      { url: "https://user:secret@example.test/app.git", path: "." },
+      { url: "https://example.test/app.git?token=secret", path: "." },
+      { url: "https://example.test/app.git", path: "/deploy/opentofu" },
+      { url: "https://example.test/app.git", path: "../opentofu" },
+      {
+        url: "https://example.test/app.git",
+        ref: "--upload-pack=bad",
+        path: ".",
+      },
+      { url: "https://example.test/app.git", ref: "main\nnext", path: "." },
+    ];
+
+    for (const source of unsafeSources) {
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            items: [listing({ source } as unknown as Partial<TcsListing>)],
+          }),
+          { headers: { "content-type": "application/json" } },
+        )) as typeof fetch;
+      await expect(
+        fetchTcsListingsPage("https://store.example.test"),
+      ).rejects.toThrow(/listing source/u);
+    }
+  });
+
+  test("merges only display presentation observed by Source sync", () => {
+    globalThis.fetch = (() => {
+      throw new Error("metadata merge must not call a forge API");
     }) as typeof fetch;
+    const metadata = parseTcsRepoMetadata({
+      schemaVersion: "tcs.repo/v1",
+      modulePath: "deploy/opentofu",
+      suggestedName: "repo-example",
+      iconUrl: "https://assets.example.test/icon.svg",
+      name: text("Repo Example"),
+      inputs: [
+        {
+          name: "public_subdomain",
+          format: "subdomain",
+          required: true,
+          label: text("Public slug"),
+        },
+      ],
+      installExperience: {
+        projections: [
+          {
+            kind: "public_endpoint",
+            variables: { subdomain: "public_subdomain" },
+            baseDomain: "apps.operator.example",
+          },
+        ],
+      },
+    });
+    const hydrated = mergeTcsListingRepoMetadata(listing(), metadata ?? null);
 
-    const hydrated = await hydrateTcsListingWithRepoMetadata(listing());
+    expect(hydrated.source.path).toBe(".");
+    expect(hydrated.suggestedName).toBe("example");
+    expect(hydrated.name.en).toBe("Repo Example");
+    expect(hydrated).not.toHaveProperty("inputs");
+    expect(hydrated).not.toHaveProperty("installExperience");
+    expect(hydrated).not.toHaveProperty("outputAllowlist");
+    expect(hydrated.iconUrl).toBe("https://assets.example.test/icon.svg");
+  });
 
-    expect(calls[0]).toBe(
-      "https://api.github.com/repos/tako0614/example/contents/.well-known%2Ftcs.json?ref=0123456789abcdef0123456789abcdef01234567",
-    );
-    expect(hydrated.source.path).toBe("infra");
-    expect(hydrated.description.en).toBe("Repo description");
-    expect(hydrated.inputs).toBeUndefined();
-    expect(hydrated.outputAllowlist).toBeUndefined();
+  test("keeps the store listing usable when a snapshot has no optional metadata", () => {
+    const base = listing();
+    expect(mergeTcsListingRepoMetadata(base, null)).toBe(base);
+  });
+
+  test("does not synthesize forge-specific URLs for relative metadata assets", () => {
+    const metadata = parseTcsRepoMetadata({
+      schemaVersion: "tcs.repo/v1",
+      iconUrl: "public/icon.svg",
+    });
+    const hydrated = mergeTcsListingRepoMetadata(listing(), metadata ?? null);
+    expect(hydrated.iconUrl).toBeUndefined();
+  });
+
+  test("drops repo presentation icons with credentials, query, or fragment", () => {
+    for (const iconUrl of [
+      "https://user:secret@assets.example.test/icon.svg",
+      "https://assets.example.test/icon.svg?token=secret",
+      "https://assets.example.test/icon.svg#private",
+    ]) {
+      const metadata = parseTcsRepoMetadata({
+        schemaVersion: "tcs.repo/v1",
+        iconUrl,
+      });
+      expect(metadata).not.toHaveProperty("iconUrl");
+      const hydrated = mergeTcsListingRepoMetadata(listing(), metadata ?? null);
+      expect(hydrated).not.toHaveProperty("iconUrl");
+    }
   });
 });

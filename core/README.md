@@ -11,12 +11,9 @@ provider credential values. OpenTofu execution runs through the internal
 runner/profile machinery selected by the operator and resolved from
 ProviderConnection + CredentialRecipe + ProviderBinding + policy.
 
-Current implementation routes and stores still contain legacy Space,
-Installation, Dependency, RunGroup, StateSnapshot, OutputSnapshot, Deployment,
-OutputShare, and Activity names. Treat those as migration debt or internal
-compatibility vocabulary. They should be mapped back to Workspace, Project,
-Capsule, Run, StateVersion, Output, output-to-input wiring, and AuditEvent when
-describing the public product.
+Current implementation routes and stores use the same Workspace, Project,
+Capsule, Run, StateVersion, Output, Dependency, OutputShare, and AuditEvent
+vocabulary as the public product.
 
 ## Run From Source
 
@@ -51,18 +48,12 @@ Output / Runner / AuditEvent / Operator unless they are explicitly documenting
 this migration seam.
 
 The `/internal/v1/plan-runs`, `/internal/v1/apply-runs`, `/internal/v1/runner-profiles`, and
-`/internal/v1/capsules/*` ledger routes are part of the same internal seam dialed by the accounts plane / CLI. They
-are not surfaced through `/capabilities` or `/openapi.json`. (The account-plane product surface `/v1/capsule-projections` and
-the session-authed control surface `/api/v1/connections` are a distinct edge API, owned by the accounts plane, not this
-seam. Connections are served only under `/api/v1/connections`; there is no `/v1/connections` edge.)
+`/internal/v1/capsules/*` ledger routes are part of the same internal seam dialed by the Accounts facade / CLI. They
+are not surfaced through `/capabilities` or `/openapi.json`. The session-authenticated `/api/v1/*` surface delegates
+to this canonical ledger in process; Accounts does not maintain a Capsule projection registry. Connections are served
+only under `/api/v1/connections`; there is no `/v1/connections` edge.
 
-## Operator / internal extensions
-
-- Optional `/internal/v1/artifacts*` routes — operator-internal object extension, not part of public Deploy Control v1
-- `/internal/v1/runtime/agents/*` — compatibility fleet ledger for private operator distributions
-- `TakosumiDeploymentRecordStore` — internal apply evidence and status for reference implementation workflows
-
-These extensions must not introduce full AWS/GCP/Cloudflare clone APIs,
+The internal seam must not introduce full AWS/GCP/Cloudflare clone APIs,
 Resource Driver systems, Compat Pack systems, managed resources, official
 resource backends, or hard-coded Cloud behavior. OSS Takosumi may expose scoped
 compatibility profile framework/capabilities, but official hosted profile
@@ -71,12 +62,14 @@ control-plane contract.
 
 ## Required env (production)
 
-| Env var                            | Description                                 |
-| ---------------------------------- | ------------------------------------------- |
-| `TAKOSUMI_DATABASE_URL`            | Postgres URL for state / record store       |
-| `TAKOSUMI_SECRET_STORE_PASSPHRASE` | Symmetric key for at-rest secret encryption |
-| `TAKOSUMI_DEPLOY_CONTROL_TOKEN`    | Bearer for Deploy Control API routes        |
-| `TAKOSUMI_ENVIRONMENT=production`  | strict-runtime checks                       |
+| Env var                                 | Description                                                                                        |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `TAKOSUMI_DATABASE_URL`                 | Postgres URL for state / record store                                                              |
+| `TAKOSUMI_DATABASE_ENCRYPTION_AT_REST`  | Set to `verified` only after the storage adapter/operator has verified database encryption at rest |
+| `TAKOSUMI_DATABASE_ENCRYPTION_EVIDENCE` | Optional non-secret opaque evidence identifier recorded at boot                                    |
+| `TAKOSUMI_SECRET_STORE_PASSPHRASE`      | Symmetric key for at-rest secret encryption                                                        |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN`         | Bearer for Deploy Control API routes                                                               |
+| `TAKOSUMI_ENVIRONMENT=production`       | strict-runtime checks                                                                              |
 
 For dev:
 
@@ -98,6 +91,13 @@ const server = Bun.serve({ port: 8788, fetch: app.fetch });
 
 `createTakosumiService` builds the Hono app, wires adapter ports, mounts route modules for the configured process role,
 and passes internal runner/profile and store configuration to the deploy control pipeline.
+It does not install a Credential Recipe catalog, runtime driver registry,
+guided provider setup helpers, or OAuth helper registry by default. A host must
+pass those contributions explicitly; the shipped Worker and Bun/Postgres
+composition roots select the reference provider contribution.
+Static recipes without a runtime driver use Core's structural material check
+and pass-through mint. Pre-run recipes require an explicit mint driver and must
+be filtered out of the host's installed catalog when that driver is absent.
 
 ## Storage implementation note
 

@@ -71,9 +71,6 @@ bindings.TAKOSUMI_ACCOUNTS_SUBJECT ??= "tsub_takosumi_accounts_local";
 bindings.TAKOSUMI_ACCOUNTS_CLIENT_ID ??= "takosumi-local";
 bindings.TAKOSUMI_ACCOUNTS_REDIRECT_URIS ??=
   "https://app.takosumi.test/sign-in/callback";
-bindings.TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS ??= "closed";
-bindings.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET ??=
-  "local-substrate-export-download-secret-v1";
 
 const mf = new Miniflare({
   modules: [
@@ -94,7 +91,6 @@ const mf = new Miniflare({
   },
   d1Persist: "/data/d1",
   r2Buckets: [
-    "TAKOSUMI_ACCOUNTS_EXPORTS",
     "R2_ARTIFACTS",
     "R2_SOURCE",
     "R2_STATE",

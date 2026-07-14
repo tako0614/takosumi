@@ -2,39 +2,24 @@ import {
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
-import { Encrypter } from "age-encryption";
 import {
   type AccountsHandler,
   type AccountsJsonWebKey,
-  type AppCapsuleExportWorker,
   createAccountsHandler,
   createEphemeralAccountsHandler,
   type ControlPlaneOperations,
-  createOpenPlatformAccessPolicy,
-  customOidcOAuthProvider,
   D1AccountsStore,
   type D1Database,
-  type DeployControlOperations,
-  exportDownloadUrl,
-  googleOAuthProvider,
   handleAuthProvidersRequest,
-  isRetiredUpstreamOAuthProviderId,
   type JsonWebKeySet,
-  type PlatformAccessPolicy,
   type OidcClientAuthMethod,
   type OidcClientRegistration,
   registerSessionHashSaltConfig,
   type PasskeyHttpOptions,
   signEs256Jwt,
-  type UpstreamOAuthClientRegistration,
   type UpstreamOAuthOptions,
-  type RuntimeProjectionMaterialResolverHttpOptions,
+  upstreamOAuthOptionsFromEnvironment,
   type LoginEmailAllowlist,
-  type RuntimeServiceTokenOptions,
-  sharedCellRuntimeBinding,
-  type SharedCellRuntimeAllocator,
-  type StripeBillingCheckoutOptions,
-  type StripeBillingWebhookOptions,
 } from "@takosjp/takosumi-accounts-service";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 import { checkPlatformBindings } from "./bindings-check.ts";
@@ -46,10 +31,6 @@ export interface CloudflareWorkerEnv {
   // (dashboard → dist). Present when the wrangler `[assets]` block is
   // configured; absent in API-only deploys/tests.
   readonly ASSETS?: { fetch(request: Request): Promise<Response> };
-  readonly TAKOSUMI_ACCOUNTS_EXPORTS?: R2Bucket;
-  readonly TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET?: string;
-  readonly TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL?: string;
-  readonly TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS?: string;
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
   readonly TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN?: string;
   readonly TAKOSUMI_ACCOUNTS_SUBJECT?: string;
@@ -58,24 +39,19 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_REDIRECT_URIS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD?: string;
-  readonly TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION?: string;
-  readonly TAKOSUMI_ACCOUNTS_RUNTIME_SERVICE_TOKEN_CLIENT_ID?: string;
+  readonly TAKOSUMI_ACCOUNTS_ALLOWED_SCOPES?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_KEY_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS?: string;
   readonly TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNT_SESSION_HASH_SALT?: string;
-  readonly TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET?: string;
-  /**
-   * Cloud-only managed resource price book. The platform worker applies this to
-   * Cloud extension usage before it records and spends owner account USD balance.
-   */
-  readonly TAKOSUMI_CLOUD_USAGE_PRICE_BOOK?: string;
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_RP_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_RP_NAME?: string;
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_ORIGIN?: string;
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_SESSION_TTL_MS?: string;
   readonly TAKOSUMI_ACCOUNTS_SUBJECT_SECRET?: string;
+  /** Non-secret JSON array of explicit upstream provider descriptors. */
+  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS?: string;
   readonly TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST?: string;
   readonly TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED?: string;
@@ -85,92 +61,24 @@ export interface CloudflareWorkerEnv {
    * binding set.
    */
   readonly TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_REDIRECT_URI?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_SCOPES?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_ISSUER?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_AUTHORIZATION_ENDPOINT?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_TOKEN_ENDPOINT?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_USERINFO_ENDPOINT?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_PROVIDER_ID?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_ISSUER?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_AUTHORIZATION_ENDPOINT?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_TOKEN_ENDPOINT?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_USERINFO_ENDPOINT?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_SUBJECT_CLAIM?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_ID?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_SECRET?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_REDIRECT_URI?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_SCOPES?: string;
-  readonly TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS?: string;
-  readonly TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST?: string;
-  readonly TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF?: string;
-  readonly TAKOSUMI_ACCOUNTS_PLATFORM_PUBLIC_SUMMARY?: string;
-  readonly TAKOSUMI_PRODUCTION_HARDENING_GATE?: string;
-  readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_RELEASE_ACTIVATOR_URL?: string;
-  readonly TAKOSUMI_RELEASE_ACTIVATOR_TOKEN?: string;
-  readonly TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_DIGEST?: string;
-  // Shared deploy-control bearer for the in-process transport; must match the
-  // embedded deploy-control service's `TAKOSUMI_DEPLOY_CONTROL_TOKEN` gate.
-  readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
-  readonly TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY?: string;
-  readonly TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET?: string;
-  readonly TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN?: string;
-  readonly TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST?: string;
-  readonly TAKOSUMI_ACCOUNTS_MATERIALIZE_DRILL_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN?: string;
-  readonly TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN?: string;
-  readonly TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIALS_INTERNAL_URL?: string;
-  readonly TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL?: string;
+  readonly TAKOSUMI_ACCOUNTS_PRIVACY_RETENTION_POLICY_REF?: string;
   readonly TAKOSUMI_AI_GATEWAY_DEFAULT_MODEL?: string;
   readonly TAKOSUMI_AI_GATEWAY_PROFILES?: string;
-  readonly TAKOSUMI_RUNTIME_CELL_ID?: string;
   readonly LOCAL_SUBSTRATE_TEST_BED?: string;
   readonly TAKOSUMI_ACCOUNTS_LOCAL_DEV_SUBJECT?: string;
   readonly TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID?: string;
-  readonly TAKOSUMI_ACCOUNTS_LOCAL_DEV_ACCOUNT_ID?: string;
-  readonly TAKOSUMI_ACCOUNTS_LOCAL_DEV_SPACE_ID?: string;
 }
 
-export interface CloudflareWorkerHandler {
-  fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response>;
+export interface CloudflareWorkerHandler<
+  TEnv extends CloudflareWorkerEnv = CloudflareWorkerEnv,
+> {
+  fetch(request: Request, env: TEnv): Promise<Response>;
 }
 
-export interface CreateCloudflareWorkerOptions {
-  /**
-   * In-process deploy-control typed operations. The facade calls these contract-DTO
-   * operations directly instead of building a synthetic Request and dialing it
-   * back through the embedded router in the same worker: no self-issued Bearer
-   * handshake, no JSON serialize/parse round-trip. The unified Takos worker passes
-   * the embedded service's typed `operations` facade here. This is the only
-   * deploy-control transport (in-process composition, per AGENTS.md).
-   */
-  readonly deployControlOperations?: (
-    env: CloudflareWorkerEnv,
-  ) => Promise<DeployControlOperations | undefined>;
+export interface CreateCloudflareWorkerOptions<
+  TEnv extends CloudflareWorkerEnv = CloudflareWorkerEnv,
+> {
   /**
    * In-process control-plane operations facade backing the session-authed
    * `/api/v1/*` account-plane routes the dashboard SPA calls (M10). The
@@ -180,36 +88,8 @@ export interface CreateCloudflareWorkerOptions {
    * session gate.
    */
   readonly controlPlaneOperations?: (
-    env: CloudflareWorkerEnv,
+    env: TEnv,
   ) => Promise<ControlPlaneOperations | undefined>;
-  readonly stripeFetch?: typeof fetch;
-}
-
-export interface R2Bucket {
-  put(
-    key: string,
-    value: string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream,
-    options?: R2PutOptions,
-  ): Promise<unknown>;
-  get(key: string): Promise<R2ObjectBody | null>;
-}
-
-export interface R2PutOptions {
-  readonly httpMetadata?: {
-    readonly contentType?: string;
-    readonly contentEncoding?: string;
-  };
-  readonly customMetadata?: Record<string, string>;
-}
-
-export interface R2ObjectBody {
-  readonly body: ReadableStream<Uint8Array>;
-  readonly httpMetadata?: {
-    readonly contentType?: string;
-    readonly contentEncoding?: string;
-  };
-  readonly customMetadata?: Record<string, string>;
-  writeHttpMetadata?(headers: Headers): void;
 }
 
 const handlers = new WeakMap<CloudflareWorkerEnv, Promise<AccountsHandler>>();
@@ -217,8 +97,6 @@ const identityHandlers = new WeakMap<
   CloudflareWorkerEnv,
   Promise<AccountsHandler>
 >();
-const r2ExportDownloadPrefix = "/__takosumi/exports/";
-const defaultExportDownloadTtlMs = 24 * 60 * 60 * 1000;
 
 type Es256PrivateJwk = JsonWebKey & {
   readonly kid?: string;
@@ -226,11 +104,13 @@ type Es256PrivateJwk = JsonWebKey & {
   readonly y?: string;
 };
 
-export function createCloudflareWorker(
-  options: CreateCloudflareWorkerOptions = {},
-): CloudflareWorkerHandler {
+export function createCloudflareWorker<
+  TEnv extends CloudflareWorkerEnv = CloudflareWorkerEnv,
+>(
+  options: CreateCloudflareWorkerOptions<TEnv> = {},
+): CloudflareWorkerHandler<TEnv> {
   return {
-    async fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response> {
+    async fetch(request: Request, env: TEnv): Promise<Response> {
       const url = new URL(request.url);
       if (isWorkerLocalPath(url.pathname)) {
         return Response.json({
@@ -260,8 +140,6 @@ export function createCloudflareWorker(
         }
         return Response.json({ ok: true });
       }
-      const exportDownload = await maybeHandleR2ExportDownload(request, env);
-      if (exportDownload) return exportDownload;
       // Non-API paths = the dashboard SPA, served from this Worker's static
       // assets (deep links fall back to index.html via not_found_handling).
       // API namespaces, and any deploy without the ASSETS binding, fall
@@ -350,18 +228,10 @@ function parsePasskeysFailClosed(
   }
 }
 
-const TAKOSUMI_CLOUD_PRE_GA_LOGIN_EMAIL = "shoutatomiyama0614@gmail.com";
-
 export function parseLoginEmailAllowlist(
   env: CloudflareWorkerEnv,
-  issuer: string,
+  _issuer: string,
 ): LoginEmailAllowlist | undefined {
-  if (isOfficialTakosumiCloudIssuer(issuer)) {
-    return {
-      emails: [TAKOSUMI_CLOUD_PRE_GA_LOGIN_EMAIL],
-      requireVerifiedEmail: true,
-    };
-  }
   const configured = optionalString(
     env.TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST,
   );
@@ -377,22 +247,20 @@ export function parseLoginEmailAllowlist(
   };
 }
 
-function isOfficialTakosumiCloudIssuer(issuer: string): boolean {
+/** Whether at least one usable upstream OAuth/OIDC registration is mounted. */
+export function accountsExternalLoginConfigured(
+  env: CloudflareWorkerEnv,
+): boolean {
   try {
-    const url = new URL(issuer);
-    return (
-      url.protocol === "https:" &&
-      (url.hostname === "app.takosumi.com" ||
-        url.hostname === "app-staging.takosumi.com")
-    );
+    return (parseUpstreamOAuth(env)?.providers.length ?? 0) > 0;
   } catch {
     return false;
   }
 }
 
-async function cachedAccountsHandler(
-  env: CloudflareWorkerEnv,
-  options: CreateCloudflareWorkerOptions,
+async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
+  env: TEnv,
+  options: CreateCloudflareWorkerOptions<TEnv>,
   identityOnly = false,
 ): Promise<AccountsHandler> {
   const cache = identityOnly ? identityHandlers : handlers;
@@ -436,9 +304,7 @@ function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
   ) {
     return true;
   }
-  return /^\/v1\/capsule-projections\/[^/]+\/services\/[^/]+\/rotate-token\/?$/u.test(
-    pathname,
-  );
+  return false;
 }
 
 // D1 schema version expected by the deployed code. The baseline
@@ -450,11 +316,11 @@ function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
 // is behind the schema) or an older version (database is behind the Worker)
 // so operators don't silently run a schema that does not match the service.
 // See `README.md` → "D1 schema migration" for the runner workflow.
-const EXPECTED_D1_SCHEMA_VERSION = 0;
+const EXPECTED_D1_SCHEMA_VERSION = 2;
 
-async function buildAccountsHandler(
-  env: CloudflareWorkerEnv,
-  options: CreateCloudflareWorkerOptions,
+async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
+  env: TEnv,
+  options: CreateCloudflareWorkerOptions<TEnv>,
   identityOnly = false,
 ): Promise<AccountsHandler> {
   if (!env.TAKOSUMI_ACCOUNTS_DB) {
@@ -478,10 +344,7 @@ async function buildAccountsHandler(
     );
   }
   const issuer = issuerEnv;
-  const clients = parseClients(env);
-  const deployControlOperations = identityOnly
-    ? undefined
-    : await options.deployControlOperations?.(env);
+  const clients = parseConfiguredOidcClients(env);
   const controlPlaneOperations = identityOnly
     ? undefined
     : await options.controlPlaneOperations?.(env);
@@ -495,23 +358,13 @@ async function buildAccountsHandler(
     upstreamOAuth: parseUpstreamOAuthFailClosed(env),
     passkeys: parsePasskeysFailClosed(env),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
-    platformAccess: parsePlatformAccess(env),
-    deployControl: parseDeployControl(env, deployControlOperations),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
-    publicBillingPlans: parsePublicBillingPlans(env),
-    billingCheckout: parseStripeBillingCheckout(env, options.stripeFetch),
-    billingWebhook: parseStripeBillingWebhook(env),
-    runtimeServiceTokens: parseRuntimeServiceTokens(env, clients),
-    runtimeProjectionMaterialResolver: parseRuntimeProjectionMaterials(env),
-    exportWorker: parseR2ExportWorker(env, issuer),
-    exportDownloadSigningSecret: optionalString(
-      env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET,
-    ),
-    materializeDrillToken: materializeDrillTokenFromEnv(env),
-    sharedCellRuntime: parseSharedCellRuntime(env),
     privacyOperationsToken: optionalString(
       env.TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN,
+    ),
+    privacyRetentionPolicyRef: optionalString(
+      env.TAKOSUMI_ACCOUNTS_PRIVACY_RETENTION_POLICY_REF,
     ),
   };
   const stableOidc = await parseStableOidcFlow(env);
@@ -520,7 +373,6 @@ async function buildAccountsHandler(
       ...commonOptions,
       jwks: stableOidc.jwks,
       oidcFlow: stableOidc.oidcFlow,
-      launchTokens: stableOidc.launchTokens,
     });
   }
   return await createEphemeralAccountsHandler({
@@ -542,19 +394,6 @@ function configureSessionHashSalt(env: CloudflareWorkerEnv): void {
   throw new TypeError(
     "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT must be set for the Cloudflare Worker account session store",
   );
-}
-
-function parseSharedCellRuntime(
-  env: CloudflareWorkerEnv,
-): SharedCellRuntimeAllocator | undefined {
-  const cellId = optionalString(env.TAKOSUMI_RUNTIME_CELL_ID);
-  if (!cellId) return undefined;
-  return (input) =>
-    sharedCellRuntimeBinding({
-      capsuleId: input.capsuleId,
-      cellId,
-      now: input.now,
-    });
 }
 
 interface SchemaMigrationRow {
@@ -625,10 +464,6 @@ async function seedLocalSubstrateAccount(
   const sessionId =
     optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID) ??
     "sess_local_substrate";
-  const accountId =
-    optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_ACCOUNT_ID) ?? "acct_local";
-  const workspaceId =
-    optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SPACE_ID) ?? "space_local";
   await store.saveAccount({
     subject,
     displayName: "Local Substrate",
@@ -641,20 +476,6 @@ async function seedLocalSubstrateAccount(
     subject,
     createdAt: now,
     expiresAt: now + 1000 * 60 * 60 * 24 * 30,
-  });
-  await store.saveLedgerAccount({
-    accountId,
-    legalOwnerSubject: subject,
-    createdAt: now,
-    updatedAt: now,
-  });
-  await store.saveWorkspace({
-    workspaceId,
-    accountId,
-    kind: "personal",
-    displayName: "Local substrate",
-    createdAt: now,
-    updatedAt: now,
   });
 }
 
@@ -675,9 +496,6 @@ async function parseStableOidcFlow(env: CloudflareWorkerEnv): Promise<
           claims: Record<string, unknown>,
         ) => Promise<string>;
       };
-      readonly launchTokens: {
-        readonly pairwiseSubjectSecret: string;
-      };
     }
   | undefined
 > {
@@ -691,12 +509,9 @@ async function parseStableOidcFlow(env: CloudflareWorkerEnv): Promise<
   const pairwiseSubjectSecret = optionalString(
     env.TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET,
   );
-  const launchPairwiseSubjectSecret = optionalString(
-    env.TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET,
-  );
-  if (!pairwiseSubjectSecret || !launchPairwiseSubjectSecret) {
+  if (!pairwiseSubjectSecret) {
     throw new TypeError(
-      "Stable OIDC signing requires TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET and TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET",
+      "Stable OIDC signing requires TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET",
     );
   }
   const privateKey = await crypto.subtle.importKey(
@@ -724,9 +539,6 @@ async function parseStableOidcFlow(env: CloudflareWorkerEnv): Promise<
           claims,
           privateKey,
         }),
-    },
-    launchTokens: {
-      pairwiseSubjectSecret: launchPairwiseSubjectSecret,
     },
   };
 }
@@ -805,7 +617,7 @@ function publicJwkFromPrivate(
   };
 }
 
-function parseClients(
+export function parseConfiguredOidcClients(
   env: CloudflareWorkerEnv,
 ): readonly OidcClientRegistration[] | undefined {
   const rawClients = optionalString(env.TAKOSUMI_ACCOUNTS_CLIENTS);
@@ -829,48 +641,16 @@ function parseClients(
   const tokenEndpointAuthMethod = parseClientAuthMethod(
     env.TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD,
   );
+  const allowedScopes = splitList(env.TAKOSUMI_ACCOUNTS_ALLOWED_SCOPES);
   return [
     {
       clientId,
       redirectUris,
+      ...(allowedScopes.length > 0 ? { allowedScopes } : {}),
       clientSecret,
       tokenEndpointAuthMethod,
     },
   ];
-}
-
-function parseRuntimeServiceTokens(
-  env: CloudflareWorkerEnv,
-  clients: readonly OidcClientRegistration[] | undefined,
-): RuntimeServiceTokenOptions | undefined {
-  const enabled = enabledEnvFlag(
-    env.TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION,
-  );
-  if (!enabled) return undefined;
-  const clientId =
-    optionalString(env.TAKOSUMI_ACCOUNTS_RUNTIME_SERVICE_TOKEN_CLIENT_ID) ??
-    optionalString(env.TAKOSUMI_ACCOUNTS_CLIENT_ID);
-  if (!clientId) {
-    throw new TypeError(
-      "TAKOSUMI_ACCOUNTS_RUNTIME_SERVICE_TOKEN_CLIENT_ID or TAKOSUMI_ACCOUNTS_CLIENT_ID must be set when runtime service token introspection is enabled",
-    );
-  }
-  const client = clients?.find((candidate) => candidate.clientId === clientId);
-  if (!client) {
-    throw new TypeError(
-      "runtime service token introspection client must be registered in TAKOSUMI_ACCOUNTS_CLIENTS or TAKOSUMI_ACCOUNTS_CLIENT_ID",
-    );
-  }
-  if (!client.clientSecret || client.tokenEndpointAuthMethod === "none") {
-    throw new TypeError(
-      "runtime service token introspection requires a confidential Accounts client",
-    );
-  }
-  return { introspectionClientId: clientId };
-}
-
-function enabledEnvFlag(value: string | undefined): boolean {
-  return optionalString(value)?.toLowerCase() === "enabled";
 }
 
 function parseClientRecord(value: unknown): OidcClientRegistration {
@@ -890,12 +670,32 @@ function parseClientRecord(value: unknown): OidcClientRegistration {
   const tokenEndpointAuthMethod = parseClientAuthMethod(
     optionalString(value.tokenEndpointAuthMethod),
   );
+  const allowedScopes = parseClientAllowedScopes(value.allowedScopes);
   return {
     clientId,
     redirectUris,
+    ...(allowedScopes ? { allowedScopes } : {}),
     clientSecret,
     tokenEndpointAuthMethod,
   };
+}
+
+function parseClientAllowedScopes(
+  value: unknown,
+): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(
+      "TAKOSUMI_ACCOUNTS_CLIENTS allowedScopes must be a non-empty string array",
+    );
+  }
+  const scopes = value.map((scope) => optionalString(scope));
+  if (scopes.some((scope) => !scope || /\s/u.test(scope))) {
+    throw new TypeError(
+      "TAKOSUMI_ACCOUNTS_CLIENTS allowedScopes entries must be individual scope tokens",
+    );
+  }
+  return [...new Set(scopes as string[])];
 }
 
 function parseClientAuthMethod(
@@ -936,826 +736,7 @@ function parsePasskeys(
 function parseUpstreamOAuth(
   env: CloudflareWorkerEnv,
 ): UpstreamOAuthOptions | undefined {
-  const providers: UpstreamOAuthClientRegistration[] = [];
-  const google = parseBuiltinUpstreamProvider(env, "GOOGLE");
-  if (google) {
-    providers.push({
-      ...google,
-      provider: googleOAuthProvider(
-        parseBuiltinProviderOverrides(env, "GOOGLE"),
-      ),
-    });
-  }
-  const oidc = parseCustomOidcUpstreamProvider(env);
-  if (oidc) providers.push(oidc);
-
-  const subjectSecret = optionalString(env.TAKOSUMI_ACCOUNTS_SUBJECT_SECRET);
-  const sessionTtlMs = optionalInteger(
-    env.TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS,
-  );
-  if (providers.length === 0 && sessionTtlMs === undefined) {
-    return undefined;
-  }
-  if (!subjectSecret || providers.length === 0) {
-    throw new TypeError(
-      "Upstream OAuth requires TAKOSUMI_ACCOUNTS_SUBJECT_SECRET and at least one upstream provider client",
-    );
-  }
-  return { subjectSecret, providers, sessionTtlMs };
-}
-
-function parseBuiltinProviderOverrides(
-  env: CloudflareWorkerEnv,
-  provider: "GOOGLE",
-): {
-  issuer?: string;
-  authorizationEndpoint?: string;
-  tokenEndpoint?: string;
-  userInfoEndpoint?: string;
-} {
-  const prefix = `TAKOSUMI_ACCOUNTS_UPSTREAM_${provider}_`;
-  return {
-    issuer: optionalString(env[`${prefix}ISSUER`]),
-    authorizationEndpoint: optionalString(
-      env[`${prefix}AUTHORIZATION_ENDPOINT`],
-    ),
-    tokenEndpoint: optionalString(env[`${prefix}TOKEN_ENDPOINT`]),
-    userInfoEndpoint: optionalString(env[`${prefix}USERINFO_ENDPOINT`]),
-  };
-}
-
-function parseBuiltinUpstreamProvider(
-  env: CloudflareWorkerEnv,
-  provider: "GOOGLE",
-): Omit<UpstreamOAuthClientRegistration, "provider"> | undefined {
-  const prefix = `TAKOSUMI_ACCOUNTS_UPSTREAM_${provider}_`;
-  const clientId = optionalString(env[`${prefix}CLIENT_ID`]);
-  const clientSecret = optionalString(env[`${prefix}CLIENT_SECRET`]);
-  const redirectUri = optionalString(env[`${prefix}REDIRECT_URI`]);
-  const scopes = splitList(env[`${prefix}SCOPES`]);
-  if (!clientId && !clientSecret && !redirectUri && scopes.length === 0) {
-    return undefined;
-  }
-  if (!clientId || !clientSecret || !redirectUri) {
-    throw new TypeError(
-      `${prefix}CLIENT_ID, ${prefix}CLIENT_SECRET, and ${prefix}REDIRECT_URI are required when configuring ${provider.toLowerCase()} upstream OAuth`,
-    );
-  }
-  return {
-    providerId: provider.toLowerCase(),
-    clientId,
-    clientSecret,
-    redirectUri,
-    scopes: scopes.length > 0 ? scopes : undefined,
-  };
-}
-
-function parseCustomOidcUpstreamProvider(
-  env: CloudflareWorkerEnv,
-): UpstreamOAuthClientRegistration | undefined {
-  const providerId = optionalString(
-    env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_PROVIDER_ID,
-  );
-  const issuer = optionalString(env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_ISSUER);
-  const authorizationEndpoint = optionalString(
-    env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_AUTHORIZATION_ENDPOINT,
-  );
-  const tokenEndpoint = optionalString(
-    env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_TOKEN_ENDPOINT,
-  );
-  const userInfoEndpoint = optionalString(
-    env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_USERINFO_ENDPOINT,
-  );
-  const clientId = optionalString(
-    env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_ID,
-  );
-  const clientSecret = optionalString(
-    env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_SECRET,
-  );
-  const redirectUri = optionalString(
-    env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_REDIRECT_URI,
-  );
-  const scopes = splitList(env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_SCOPES);
-  const configured = Boolean(
-    providerId ||
-    issuer ||
-    authorizationEndpoint ||
-    tokenEndpoint ||
-    userInfoEndpoint ||
-    clientId ||
-    clientSecret ||
-    redirectUri ||
-    scopes.length > 0,
-  );
-  if (!configured) return undefined;
-  if (
-    !providerId ||
-    !issuer ||
-    !authorizationEndpoint ||
-    !tokenEndpoint ||
-    !userInfoEndpoint ||
-    !clientId ||
-    !redirectUri
-  ) {
-    throw new TypeError(
-      "Custom upstream OIDC requires provider id, issuer, endpoints, client id, and redirect uri",
-    );
-  }
-  if (isRetiredUpstreamOAuthProviderId(providerId)) {
-    throw new TypeError(
-      `Custom upstream OIDC provider id ${providerId} is reserved or retired`,
-    );
-  }
-  return {
-    providerId,
-    clientId,
-    clientSecret,
-    redirectUri,
-    scopes: scopes.length > 0 ? scopes : undefined,
-    provider: customOidcOAuthProvider({
-      id: providerId,
-      issuer,
-      authorizationEndpoint,
-      tokenEndpoint,
-      userInfoEndpoint,
-      defaultScopes: scopes.length > 0 ? scopes : undefined,
-      subjectClaim: optionalString(
-        env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_SUBJECT_CLAIM,
-      ),
-    }),
-  };
-}
-
-// Synthetic absolute base for the in-process deploy-control transport. The
-// in-process facade only uses this to build `new URL(path, url)`; the actual
-// transport is the injected `fetch`, so the host part is never dialed.
-function parseDeployControl(
-  _env: CloudflareWorkerEnv,
-  deployControlOperations?: DeployControlOperations,
-): { operations: DeployControlOperations } | undefined {
-  // In-process transport (unified single-worker deployment): the deploy-control
-  // plane runs in this same worker, so the host injects the typed `operations`
-  // facade and calls the controller directly (no Bearer handshake, no
-  // JSON round-trip through an embedded router). Per AGENTS.md there is no remote
-  // deploy-control origin / standalone-worker split; this seam is in-process only.
-  if (!deployControlOperations) return undefined;
-  return { operations: deployControlOperations };
-}
-
-function parseRuntimeProjectionMaterials(
-  env: CloudflareWorkerEnv,
-): RuntimeProjectionMaterialResolverHttpOptions | undefined {
-  const token = optionalString(
-    env.TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN,
-  );
-  if (!token) return undefined;
-  const billingPortalUrl = optionalString(
-    env.TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL,
-  );
-  const internalUrl = optionalString(
-    env.TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIALS_INTERNAL_URL,
-  );
-  return {
-    token,
-    ...(billingPortalUrl ? { billingPortalUrl } : {}),
-    ...(internalUrl ? { internalUrl } : {}),
-  };
-}
-
-function parsePublicBillingPlans(
-  env: CloudflareWorkerEnv,
-): readonly Record<string, unknown>[] | undefined {
-  const raw = optionalString(env.TAKOSUMI_BILLING_PLANS);
-  if (!raw) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new TypeError("TAKOSUMI_BILLING_PLANS must be valid JSON");
-  }
-  if (!Array.isArray(parsed)) {
-    throw new TypeError("TAKOSUMI_BILLING_PLANS must be a JSON array");
-  }
-  return parsed.map((entry, index) => {
-    if (!isRecord(entry)) {
-      throw new TypeError(`TAKOSUMI_BILLING_PLANS[${index}] must be an object`);
-    }
-    return {
-      id: entry.id,
-      kind: entry.kind,
-      usdMicros: entry.usdMicros,
-      name: entry.name,
-      priceDisplay: entry.priceDisplay,
-    };
-  });
-}
-
-function parseStripeBillingCheckout(
-  env: CloudflareWorkerEnv,
-  stripeFetch?: typeof fetch,
-): StripeBillingCheckoutOptions | undefined {
-  const stripeSecretKey = optionalString(
-    env.TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY,
-  );
-  const rawPlans = optionalString(env.TAKOSUMI_BILLING_PLANS);
-  const rawRedirectAllowlist = optionalString(
-    env.TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST,
-  );
-  const smokeToken =
-    optionalString(env.TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN) ??
-    optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN);
-  const configured = Boolean(
-    stripeSecretKey || rawRedirectAllowlist || smokeToken,
-  );
-  if (!configured) return undefined;
-  if (!stripeSecretKey) {
-    throw new TypeError(
-      "Stripe billing checkout requires TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY",
-    );
-  }
-  if (!rawPlans) {
-    throw new TypeError(
-      "Stripe billing checkout requires TAKOSUMI_BILLING_PLANS",
-    );
-  }
-  if (!rawRedirectAllowlist) {
-    throw new TypeError(
-      "Stripe billing checkout requires TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST",
-    );
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawPlans);
-  } catch {
-    throw new TypeError("TAKOSUMI_BILLING_PLANS must be valid JSON");
-  }
-  if (!Array.isArray(parsed)) {
-    throw new TypeError("TAKOSUMI_BILLING_PLANS must be a JSON array");
-  }
-  return {
-    stripeSecretKey,
-    plans: parsed.map((entry, index) => {
-      if (!isRecord(entry)) {
-        throw new TypeError(
-          `TAKOSUMI_BILLING_PLANS[${index}] must be an object`,
-        );
-      }
-      const id = optionalString(entry.id);
-      const kind = optionalString(entry.kind);
-      const stripePriceId = optionalString(entry.stripePriceId);
-      const usdMicros = optionalPositiveSafeInteger(entry.usdMicros);
-      if (!id || !kind || !stripePriceId) {
-        throw new TypeError(
-          `TAKOSUMI_BILLING_PLANS[${index}] must include id, kind, and stripePriceId for checkout`,
-        );
-      }
-      return {
-        id,
-        kind,
-        stripePriceId,
-        ...(usdMicros ? { usdMicros } : {}),
-      };
-    }),
-    redirectAllowlist: splitList(rawRedirectAllowlist),
-    smokeToken,
-    ...(stripeFetch ? { fetch: stripeFetch } : {}),
-  };
-}
-
-function parseStripeBillingWebhook(
-  env: CloudflareWorkerEnv,
-): StripeBillingWebhookOptions | undefined {
-  const webhookSecret = optionalString(
-    env.TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET,
-  );
-  const rawPlans = optionalString(env.TAKOSUMI_BILLING_PLANS);
-  if (!webhookSecret && !rawPlans) return undefined;
-  if (!webhookSecret) {
-    console.warn(
-      JSON.stringify({
-        event: "stripe_billing_webhook_disabled",
-        reason: "missing_webhook_secret",
-      }),
-    );
-    return undefined;
-  }
-  if (!rawPlans) {
-    throw new TypeError(
-      "Stripe billing webhook requires TAKOSUMI_BILLING_PLANS",
-    );
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawPlans);
-  } catch {
-    throw new TypeError("TAKOSUMI_BILLING_PLANS must be valid JSON");
-  }
-  if (!Array.isArray(parsed)) {
-    throw new TypeError("TAKOSUMI_BILLING_PLANS must be a JSON array");
-  }
-  return {
-    webhookSecret,
-    plans: parsed.map((entry, index) => {
-      if (!isRecord(entry)) {
-        throw new TypeError(
-          `TAKOSUMI_BILLING_PLANS[${index}] must be an object`,
-        );
-      }
-      const id = optionalString(entry.id);
-      const kind = optionalString(entry.kind);
-      const stripePriceId = optionalString(entry.stripePriceId);
-      const usdMicros = optionalPositiveSafeInteger(entry.usdMicros);
-      if (!id || !kind || !stripePriceId) {
-        throw new TypeError(
-          `TAKOSUMI_BILLING_PLANS[${index}] must include id, kind, and stripePriceId for webhook reconciliation`,
-        );
-      }
-      return {
-        id,
-        kind,
-        stripePriceId,
-        ...(usdMicros ? { usdMicros } : {}),
-      };
-    }),
-  };
-}
-
-function parseR2ExportWorker(
-  env: CloudflareWorkerEnv,
-  issuer: string,
-): AppCapsuleExportWorker | undefined {
-  const bucket = env.TAKOSUMI_ACCOUNTS_EXPORTS;
-  const secret = optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET);
-  const baseUrl =
-    optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL) ?? issuer;
-  const ttlMs =
-    optionalInteger(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS) ??
-    defaultExportDownloadTtlMs;
-  const configured = Boolean(
-    bucket ||
-    secret ||
-    optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL) ||
-    optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS),
-  );
-  if (!configured) return undefined;
-  if (!bucket) {
-    throw new TypeError(
-      "R2 export worker requires TAKOSUMI_ACCOUNTS_EXPORTS binding",
-    );
-  }
-  if (!secret) {
-    throw new TypeError(
-      "R2 export worker requires TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
-    );
-  }
-  if (ttlMs <= 0) {
-    throw new TypeError(
-      "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS must be greater than zero",
-    );
-  }
-  return createR2CapsuleExportWorker({
-    bucket,
-    downloadBaseUrl: validateExportDownloadBaseUrl(
-      baseUrl,
-      "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL",
-    ),
-    downloadSecret: secret,
-    ttlMs,
-  });
-}
-
-export function createR2CapsuleExportWorker(options: {
-  readonly bucket: R2Bucket;
-  readonly downloadBaseUrl: string;
-  readonly downloadSecret: string;
-  readonly ttlMs?: number;
-  readonly now?: () => Date;
-}): AppCapsuleExportWorker {
-  const ttlMs = options.ttlMs ?? defaultExportDownloadTtlMs;
-  const downloadBaseUrl = exportDownloadUrl(
-    options.downloadBaseUrl,
-    "downloadBaseUrl",
-  ).toString();
-  return async (input) => {
-    if (input.request.includeData) {
-      throw new Error(
-        "Cloudflare R2 metadata export does not include tenant data; use a substrate export worker for data-bearing export",
-      );
-    }
-    const encrypted = input.request.encryption.method === "age";
-    if (encrypted && input.request.encryption.recipients.length === 0) {
-      throw new Error("Cloudflare R2 metadata export requires age recipients");
-    }
-
-    const now = options.now?.() ?? new Date();
-    const downloadExpiresAt = new Date(now.getTime() + ttlMs).toISOString();
-    const objectKey = r2ExportObjectKey(
-      input.installation.capsuleId,
-      input.operationId,
-      encrypted,
-    );
-    const document = {
-      kind: "takosumi.accounts.cloudflare-r2-capsule-export@v1",
-      version: "v1",
-      exportedAt: now.toISOString(),
-      operationId: input.operationId,
-      request: input.request,
-      bundle: input.bundle,
-    };
-    const clearBody = new TextEncoder().encode(
-      `${JSON.stringify(document, null, 2)}\n`,
-    );
-    const body = encrypted
-      ? await encryptR2ExportBody(
-          clearBody,
-          input.request.encryption.recipients,
-        )
-      : clearBody;
-    const archiveDigest = await sha256HexBytes(body);
-    await options.bucket.put(objectKey, body, {
-      httpMetadata: {
-        contentType: encrypted
-          ? "application/vnd.age"
-          : "application/json; charset=utf-8",
-      },
-      customMetadata: {
-        capsuleId: input.installation.capsuleId,
-        accountId: input.installation.accountId,
-        workspaceId: input.installation.workspaceId,
-        operationId: input.operationId,
-        format: input.request.format,
-        encryption: input.request.encryption.method,
-        dataIncluded: "false",
-        archiveDigest,
-      },
-    });
-    return {
-      downloadUrl: await signedR2ExportDownloadUrl({
-        baseUrl: downloadBaseUrl,
-        objectKey,
-        expiresAtMs: new Date(downloadExpiresAt).getTime(),
-        secret: options.downloadSecret,
-      }),
-      downloadExpiresAt,
-      archiveDigest,
-    };
-  };
-}
-
-async function maybeHandleR2ExportDownload(
-  request: Request,
-  env: CloudflareWorkerEnv,
-): Promise<Response | undefined> {
-  const url = new URL(request.url);
-  if (!url.pathname.startsWith(r2ExportDownloadPrefix)) return undefined;
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    return new Response("method not allowed", {
-      status: 405,
-      headers: { allow: "GET, HEAD" },
-    });
-  }
-  const bucket = env.TAKOSUMI_ACCOUNTS_EXPORTS;
-  const secret = optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET);
-  if (!bucket || !secret) {
-    return Response.json(
-      {
-        error: "worker_configuration_error",
-        error_description:
-          "R2 export downloads require TAKOSUMI_ACCOUNTS_EXPORTS and TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
-      },
-      { status: 500 },
-    );
-  }
-  const encodedKey = url.pathname.slice(r2ExportDownloadPrefix.length);
-  const decodedKey = safeDecodeURIComponent(encodedKey);
-  if (!decodedKey.ok) {
-    return Response.json(
-      { error: "invalid_export_download_url" },
-      {
-        status: 400,
-      },
-    );
-  }
-  const objectKey = decodedKey.value;
-  const expiresRaw = url.searchParams.get("expires") ?? "";
-  const signature = url.searchParams.get("sig") ?? "";
-  const expiresAtMs = Number(expiresRaw);
-  if (
-    !objectKey ||
-    !Number.isSafeInteger(expiresAtMs) ||
-    expiresAtMs <= 0 ||
-    !signature
-  ) {
-    return Response.json(
-      { error: "invalid_export_download_url" },
-      {
-        status: 400,
-      },
-    );
-  }
-  if (Date.now() > expiresAtMs) {
-    return Response.json(
-      { error: "export_download_expired" },
-      {
-        status: 410,
-      },
-    );
-  }
-  const expectedSignature = await r2ExportDownloadSignature({
-    objectKey,
-    expiresAtMs,
-    secret,
-  });
-  if (!constantTimeEqual(signature, expectedSignature)) {
-    return Response.json(
-      { error: "invalid_export_download_signature" },
-      {
-        status: 403,
-      },
-    );
-  }
-  const object = await bucket.get(objectKey);
-  if (!object) {
-    return Response.json(
-      { error: "export_artifact_not_found" },
-      {
-        status: 404,
-      },
-    );
-  }
-  const headers = new Headers({
-    "cache-control": "private, max-age=0, no-store",
-    "x-content-type-options": "nosniff",
-  });
-  object.writeHttpMetadata?.(headers);
-  if (!headers.has("content-type")) {
-    headers.set(
-      "content-type",
-      object.httpMetadata?.contentType ?? "application/octet-stream",
-    );
-  }
-  return new Response(request.method === "HEAD" ? null : object.body, {
-    headers,
-  });
-}
-
-function safeDecodeURIComponent(
-  value: string,
-): { readonly ok: true; readonly value: string } | { readonly ok: false } {
-  try {
-    return { ok: true, value: decodeURIComponent(value) };
-  } catch {
-    return { ok: false };
-  }
-}
-
-function r2ExportObjectKey(
-  capsuleId: string,
-  operationId: string,
-  encrypted = false,
-): string {
-  return [
-    "installation-exports",
-    objectKeySegment(capsuleId),
-    objectKeySegment(operationId),
-    encrypted ? "takos-export.json.age" : "takos-export.json",
-  ].join("/");
-}
-
-function objectKeySegment(value: string): string {
-  const segment = value.replace(/[^A-Za-z0-9._=-]/g, "_");
-  return segment.length > 0 ? segment : "unknown";
-}
-
-async function signedR2ExportDownloadUrl(input: {
-  readonly baseUrl: string;
-  readonly objectKey: string;
-  readonly expiresAtMs: number;
-  readonly secret: string;
-}): Promise<string> {
-  const url = new URL(
-    `${r2ExportDownloadPrefix}${encodeURIComponent(input.objectKey)}`,
-    input.baseUrl,
-  );
-  url.searchParams.set("expires", String(input.expiresAtMs));
-  url.searchParams.set("sig", await r2ExportDownloadSignature(input));
-  return url.toString();
-}
-
-async function r2ExportDownloadSignature(input: {
-  readonly objectKey: string;
-  readonly expiresAtMs: number;
-  readonly secret: string;
-}): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(input.secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    encoder.encode(`${input.objectKey}\n${input.expiresAtMs}`),
-  );
-  return base64UrlEncode(new Uint8Array(signature));
-}
-
-async function encryptR2ExportBody(
-  bytes: Uint8Array,
-  recipients: readonly string[],
-): Promise<Uint8Array> {
-  const encrypter = new Encrypter();
-  for (const recipient of recipients) {
-    encrypter.addRecipient(recipient);
-  }
-  return await encrypter.encrypt(bytes);
-}
-
-async function sha256HexBytes(value: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(value));
-  return `sha256:${[...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("")}`;
-}
-
-function base64UrlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-function constantTimeEqual(left: string, right: string): boolean {
-  const length = Math.max(left.length, right.length);
-  let diff = left.length ^ right.length;
-  for (let i = 0; i < length; i += 1) {
-    diff |= (left.charCodeAt(i) || 0) ^ (right.charCodeAt(i) || 0);
-  }
-  return diff === 0;
-}
-
-function validateHttpUrl(value: string, label: string): string {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new TypeError(`${label} must be an absolute HTTP URL`);
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new TypeError(`${label} must be an HTTP(S) URL`);
-  }
-  return url.toString();
-}
-
-function validateExportDownloadBaseUrl(value: string, label: string): string {
-  return exportDownloadUrl(value, label).toString();
-}
-
-function parsePlatformAccess(env: CloudflareWorkerEnv): PlatformAccessPolicy {
-  const status =
-    optionalString(env.TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS) ?? "closed";
-  if (status === "closed") return { status: "closed" };
-  if (status !== "open") {
-    throw new TypeError(
-      "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS must be one of: closed, open",
-    );
-  }
-  const issuerRaw = optionalString(env.TAKOSUMI_ACCOUNTS_ISSUER);
-  if (!issuerRaw) {
-    throw new TypeError(
-      "Open platform readiness access requires TAKOSUMI_ACCOUNTS_ISSUER",
-    );
-  }
-  validateHttpUrl(issuerRaw, "TAKOSUMI_ACCOUNTS_ISSUER");
-  const evidenceDigest = optionalString(
-    env.TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST,
-  );
-  if (!evidenceDigest) {
-    throw new TypeError(
-      "Open platform readiness access requires TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST",
-    );
-  }
-  requireProductionHardeningEvidence(env);
-  requireReleaseActivationEvidenceIfEnabled(env);
-  return createOpenPlatformAccessPolicy(
-    {
-      evidenceRef: optionalString(env.TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF),
-      approvalRef: optionalString(env.TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF),
-      publicSummary: optionalString(
-        env.TAKOSUMI_ACCOUNTS_PLATFORM_PUBLIC_SUMMARY,
-      ),
-    },
-    {
-      ready: true,
-      evidenceDigest,
-    },
-  );
-}
-
-function materializeDrillTokenFromEnv(
-  env: CloudflareWorkerEnv,
-): string | undefined {
-  return (
-    optionalString(env.TAKOSUMI_ACCOUNTS_MATERIALIZE_DRILL_TOKEN) ??
-    optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)
-  );
-}
-
-function requireReleaseActivationEvidenceIfEnabled(
-  env: CloudflareWorkerEnv,
-): void {
-  if (!optionalString(env.TAKOSUMI_RELEASE_ACTIVATOR_URL)) return;
-  if (!optionalString(env.TAKOSUMI_RELEASE_ACTIVATOR_TOKEN)) {
-    throw new TypeError(
-      "Open platform readiness access requires TAKOSUMI_RELEASE_ACTIVATOR_TOKEN when TAKOSUMI_RELEASE_ACTIVATOR_URL is set",
-    );
-  }
-  requireCommitPinnedEvidencePairs(env, [
-    [
-      "TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_REF",
-      "TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF",
-      "TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF",
-      "TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF",
-      "TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_DIGEST",
-    ],
-  ]);
-}
-
-function requireProductionHardeningEvidence(env: CloudflareWorkerEnv): void {
-  if (optionalString(env.TAKOSUMI_PRODUCTION_HARDENING_GATE) !== "enforce") {
-    throw new TypeError(
-      "Open platform readiness access requires TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce",
-    );
-  }
-  requireCommitPinnedEvidencePairs(env, [
-    [
-      "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF",
-      "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF",
-      "TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF",
-      "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF",
-      "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF",
-      "TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF",
-      "TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF",
-      "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST",
-    ],
-  ]);
-}
-
-function requireCommitPinnedEvidencePairs(
-  env: CloudflareWorkerEnv,
-  pairs: readonly (readonly [string, string])[],
-): void {
-  const commitPinnedGitRefPattern = /^git\+.+@[0-9a-f]{40,64}#.+/i;
-  for (const [refName, digestName] of pairs) {
-    const ref = optionalString(env[refName]);
-    if (!ref) {
-      throw new TypeError(`Open platform readiness access requires ${refName}`);
-    }
-    if (!commitPinnedGitRefPattern.test(ref)) {
-      throw new TypeError(`${refName} must be commit-pinned git+ ref`);
-    }
-    const digest = optionalString(env[digestName]);
-    if (!digest) {
-      throw new TypeError(
-        `Open platform readiness access requires ${digestName}`,
-      );
-    }
-    if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {
-      throw new TypeError(`${digestName} must be sha256:<64hex>`);
-    }
-  }
+  return upstreamOAuthOptionsFromEnvironment(env);
 }
 
 function isDashboardAssetPath(pathname: string): boolean {
@@ -1821,16 +802,6 @@ function optionalInteger(value: unknown): number | undefined {
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed < 0) {
     throw new TypeError(`expected a non-negative integer, received ${raw}`);
-  }
-  return parsed;
-}
-
-function optionalPositiveSafeInteger(value: unknown): number | undefined {
-  const raw = typeof value === "number" ? String(value) : optionalString(value);
-  if (!raw) return undefined;
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new TypeError(`expected a positive safe integer, received ${raw}`);
   }
   return parsed;
 }

@@ -6,13 +6,10 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import {
-  isProviderEnvName,
-  isReservedProviderEnvName,
-  PROVIDER_CREDENTIAL_ENV_RULES,
-} from "../contract/provider-env-rules.ts";
+import { isReservedProviderEnvName } from "../contract/provider-env-rules.ts";
+import { isSecretKey } from "../contract/redaction.ts";
 
-const RELEASE_ACTIVATION_KIND = "takosumi.operator.release-activation@v1";
+const RELEASE_ACTIVATION_KIND = "takosumi.operator.release-activation@v2";
 const DEFAULT_WORK_ROOT = defaultReleaseWorkRoot();
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8797;
@@ -20,25 +17,31 @@ const USAGE = "usage: operator-release-activator.ts <serve|run> ...";
 
 interface ReleaseActivationPayload {
   readonly kind: typeof RELEASE_ACTIVATION_KIND;
-  readonly planRunId?: string;
+  readonly planRunId: string;
   readonly applyRunId: string;
-  readonly workspaceId?: string;
-  readonly spaceId?: string;
-  readonly installation?: {
-    readonly id?: string;
-    readonly name?: string;
-    readonly environment?: string;
+  readonly workspaceId: string;
+  readonly capsule: {
+    readonly id: string;
+    readonly name: string;
+    readonly environment: string;
+    readonly sourceId: string;
+    readonly installConfigId: string;
   };
-  readonly deployment?: {
-    readonly id?: string;
+  readonly stateVersion: {
+    readonly id: string;
+    readonly generation: number;
+    readonly digest: string;
+    readonly createdByRunId: string;
+  };
+  readonly output: {
+    readonly id: string;
+    readonly stateGeneration: number;
+    readonly outputDigest: string;
   };
   readonly sourceSnapshot: {
     readonly archiveBucket?: string;
-    readonly archiveObjectKey: string;
+    readonly archiveRef: string;
     readonly archiveDigest: string;
-  };
-  readonly credentials?: {
-    readonly env: Readonly<Record<string, string>>;
   };
   readonly nonSensitiveOutputs?: Readonly<Record<string, unknown>>;
   readonly commands: readonly ReleaseActivationCommand[];
@@ -108,9 +111,6 @@ interface ReleaseActivationJob {
   result?: ReleaseActivationResponse;
 }
 
-const PROVIDER_CREDENTIAL_ENV_NAMES = new Set(
-  PROVIDER_CREDENTIAL_ENV_RULES.flatMap((rule) => rule.envNames),
-);
 const BASE_ENV_NAMES = [
   "PATH",
   "HOME",
@@ -213,11 +213,21 @@ export function parsePayload(raw: unknown): ReleaseActivationPayload {
   if (value.kind !== RELEASE_ACTIVATION_KIND) {
     throw new Error("release activation payload kind is invalid");
   }
+  const planRunId = nonEmptyString(value.planRunId, "planRunId");
   const applyRunId = nonEmptyString(value.applyRunId, "applyRunId");
+  const workspaceId = nonEmptyString(value.workspaceId, "workspaceId");
+  const capsule = parseCapsule(value.capsule);
+  const stateVersion = parseStateVersion(value.stateVersion);
+  const output = parseOutput(value.output);
+  if (Object.prototype.hasOwnProperty.call(value, "credentials")) {
+    throw new Error(
+      "operator release activation payload must not include Provider Connection credentials",
+    );
+  }
   const sourceSnapshot = asRecord(value.sourceSnapshot, "sourceSnapshot");
-  const archiveObjectKey = nonEmptyString(
-    sourceSnapshot.archiveObjectKey,
-    "sourceSnapshot.archiveObjectKey",
+  const archiveRef = nonEmptyString(
+    sourceSnapshot.archiveRef,
+    "sourceSnapshot.archiveRef",
   );
   const archiveDigest = nonEmptyString(
     sourceSnapshot.archiveDigest,
@@ -228,65 +238,27 @@ export function parsePayload(raw: unknown): ReleaseActivationPayload {
       ? sourceSnapshot.archiveBucket.trim()
       : "";
   if (archiveBucket) assertSafeSourceBucketName(archiveBucket);
-  assertSafeArchiveObjectKey(archiveObjectKey);
+  assertSafeArchiveRef(archiveRef);
   assertSha256Digest(archiveDigest, "sourceSnapshot.archiveDigest");
   const commands = parseCommands(value.commands);
-  const payloadCredentials = parsePayloadCredentials(value.credentials);
   return {
     kind: RELEASE_ACTIVATION_KIND,
-    ...(typeof value.planRunId === "string"
-      ? { planRunId: value.planRunId }
-      : {}),
+    planRunId,
     applyRunId,
-    ...(typeof value.workspaceId === "string"
-      ? { workspaceId: value.workspaceId }
-      : {}),
-    ...(typeof value.spaceId === "string" ? { spaceId: value.spaceId } : {}),
-    ...(isRecord(value.installation)
-      ? { installation: pickInstallation(value.installation) }
-      : {}),
-    ...(isRecord(value.deployment)
-      ? { deployment: pickDeployment(value.deployment) }
-      : {}),
+    workspaceId,
+    capsule,
+    stateVersion,
+    output,
     sourceSnapshot: {
       ...(archiveBucket ? { archiveBucket } : {}),
-      archiveObjectKey,
+      archiveRef,
       archiveDigest,
     },
     ...(isRecord(value.nonSensitiveOutputs)
       ? { nonSensitiveOutputs: value.nonSensitiveOutputs }
       : {}),
-    ...(payloadCredentials ? { credentials: payloadCredentials } : {}),
     commands,
   };
-}
-
-function parsePayloadCredentials(
-  raw: unknown,
-): ReleaseActivationPayload["credentials"] | undefined {
-  if (!isRecord(raw)) return undefined;
-  const rawEnv = isRecord(raw.env) ? raw.env : undefined;
-  if (!rawEnv) return undefined;
-  const env: Record<string, string> = {};
-  for (const [name, value] of Object.entries(rawEnv)) {
-    if (!isAllowedPayloadCredentialEnvName(name)) {
-      throw new Error(
-        `release activation credential env is not allowed: ${name}`,
-      );
-    }
-    if (typeof value !== "string" || !value || /[\0\r\n]/u.test(value)) {
-      throw new Error(`release activation credential env is invalid: ${name}`);
-    }
-    env[name] = value;
-  }
-  return Object.keys(env).length > 0 ? { env } : undefined;
-}
-
-function isAllowedPayloadCredentialEnvName(name: string): boolean {
-  return (
-    PROVIDER_CREDENTIAL_ENV_NAMES.has(name) ||
-    (isProviderEnvName(name) && !isReservedProviderEnvName(name))
-  );
 }
 
 function parseCommands(raw: unknown): readonly ReleaseActivationCommand[] {
@@ -354,9 +326,6 @@ function parseCommandEnv(
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(raw)) {
     if (!/^[A-Z_][A-Z0-9_]*$/u.test(name)) continue;
-    if (PROVIDER_CREDENTIAL_ENV_NAMES.has(name)) {
-      throw new Error(`release command env must not include ${name}`);
-    }
     if (name === "TAKOSUMI_RELEASE_ACTIVATOR_TOKEN") {
       throw new Error("release command env must not include activator token");
     }
@@ -398,7 +367,7 @@ async function downloadArchiveWithWrangler(
   await prepareRuntimeRoot(runtimeRoot);
   const args = buildWranglerR2GetArgs({
     bucket,
-    key: payload.sourceSnapshot.archiveObjectKey,
+    key: payload.sourceSnapshot.archiveRef,
     file: archivePath,
     ...(options.wranglerConfig ? { config: options.wranglerConfig } : {}),
     ...(options.wranglerEnv ? { env: options.wranglerEnv } : {}),
@@ -491,54 +460,32 @@ function runReleaseCommand(
     parentEnv,
     commandEnvAllowlist,
   );
-  const credentialEnv = payload.credentials?.env ?? {};
-  assertNoCommandCredentialEnvOverlap(command.env ?? {}, credentialEnv);
-  const workspaceId = payload.workspaceId ?? payload.spaceId;
+  const sensitiveOperatorEnv = Object.fromEntries(
+    Object.entries(explicitOperatorEnv).filter(([name]) => isSecretKey(name)),
+  );
   const env = {
     ...materializerBaseEnv(parentEnv),
     ...explicitOperatorEnv,
     ...(command.env ?? {}),
-    ...credentialEnv,
     TAKOSUMI_RELEASE_RUN_ID: releaseRunId,
     TAKOSUMI_APPLY_RUN_ID: payload.applyRunId,
-    ...(workspaceId
-      ? {
-          TAKOSUMI_WORKSPACE_ID: workspaceId,
-          TAKOSUMI_SPACE_ID: workspaceId,
-          TAKOSUMI_CLOUD_BILLING_WORKSPACE_ID: workspaceId,
-        }
-      : {}),
-    ...(payload.installation?.id
-      ? {
-          TAKOSUMI_CAPSULE_ID: payload.installation.id,
-          TAKOSUMI_CLOUD_BILLING_CAPSULE_ID: payload.installation.id,
-        }
-      : {}),
-    ...(payload.deployment?.id
-      ? {
-          TAKOSUMI_STATE_VERSION_ID: payload.deployment.id,
-        }
-      : {}),
+    TAKOSUMI_WORKSPACE_ID: payload.workspaceId,
+    TAKOSUMI_CAPSULE_ID: payload.capsule.id,
+    TAKOSUMI_STATE_VERSION_ID: payload.stateVersion.id,
     TAKOSUMI_OUTPUTS_JSON: JSON.stringify(outputs),
     TAKOSUMI_RELEASE_CONTEXT_JSON: JSON.stringify({
       kind: "takosumi.release-context@v1",
       releaseRunId,
-      ...(payload.planRunId ? { planRunId: payload.planRunId } : {}),
+      planRunId: payload.planRunId,
       applyRunId: payload.applyRunId,
-      ...(workspaceId ? { workspaceId, spaceId: workspaceId } : {}),
-      ...(payload.installation ? { installation: payload.installation } : {}),
-      ...(payload.deployment ? { deployment: payload.deployment } : {}),
+      workspaceId: payload.workspaceId,
+      capsuleId: payload.capsule.id,
+      stateVersionId: payload.stateVersion.id,
+      outputId: payload.output.id,
       outputs,
     }),
     ...materializerRuntimeEnv(runtimeRoot),
   };
-  assertNoUnexpectedCredentialEnv(
-    env,
-    new Set([
-      ...Object.keys(explicitOperatorEnv),
-      ...Object.keys(credentialEnv),
-    ]),
-  );
   const [cmd, ...args] = command.command;
   const result = spawnSync(cmd!, args, {
     cwd,
@@ -548,10 +495,10 @@ function runReleaseCommand(
   });
   if (result.error || result.status !== 0) {
     const stdoutTail = tailText(
-      redactReleaseCommandOutput(result.stdout, credentialEnv),
+      redactReleaseCommandOutput(result.stdout, sensitiveOperatorEnv),
     );
     const stderrTail = tailText(
-      redactReleaseCommandOutput(result.stderr, credentialEnv),
+      redactReleaseCommandOutput(result.stderr, sensitiveOperatorEnv),
     );
     throw new Error(
       [
@@ -563,19 +510,6 @@ function runReleaseCommand(
         .filter(Boolean)
         .join("\n"),
     );
-  }
-}
-
-function assertNoCommandCredentialEnvOverlap(
-  commandEnv: Readonly<Record<string, string>>,
-  credentialEnv: Readonly<Record<string, string>>,
-): void {
-  for (const name of Object.keys(commandEnv)) {
-    if (Object.prototype.hasOwnProperty.call(credentialEnv, name)) {
-      throw new Error(
-        `release command env must not override credential ${name}`,
-      );
-    }
   }
 }
 
@@ -696,42 +630,56 @@ function materializerToolEnv(
   return next;
 }
 
-function assertNoUnexpectedCredentialEnv(
-  env: Readonly<Record<string, string>>,
-  explicitNames: ReadonlySet<string>,
-): void {
-  for (const name of Object.keys(env)) {
-    if (PROVIDER_CREDENTIAL_ENV_NAMES.has(name) && !explicitNames.has(name)) {
-      throw new Error(`release command env unexpectedly carries ${name}`);
-    }
-  }
-}
-
-function pickInstallation(
-  value: Record<string, unknown>,
-): ReleaseActivationPayload["installation"] {
+function parseCapsule(raw: unknown): ReleaseActivationPayload["capsule"] {
+  const value = asRecord(raw, "capsule");
   return {
-    ...(typeof value.id === "string" ? { id: value.id } : {}),
-    ...(typeof value.name === "string" ? { name: value.name } : {}),
-    ...(typeof value.environment === "string"
-      ? { environment: value.environment }
-      : {}),
+    id: nonEmptyString(value.id, "capsule.id"),
+    name: nonEmptyString(value.name, "capsule.name"),
+    environment: nonEmptyString(value.environment, "capsule.environment"),
+    sourceId: nonEmptyString(value.sourceId, "capsule.sourceId"),
+    installConfigId: nonEmptyString(
+      value.installConfigId,
+      "capsule.installConfigId",
+    ),
   };
 }
 
-function pickDeployment(
-  value: Record<string, unknown>,
-): ReleaseActivationPayload["deployment"] {
+function parseStateVersion(
+  raw: unknown,
+): ReleaseActivationPayload["stateVersion"] {
+  const value = asRecord(raw, "stateVersion");
   return {
-    ...(typeof value.id === "string" ? { id: value.id } : {}),
+    id: nonEmptyString(value.id, "stateVersion.id"),
+    generation: positiveInteger(value.generation, "stateVersion.generation"),
+    digest: nonEmptyString(value.digest, "stateVersion.digest"),
+    createdByRunId: nonEmptyString(
+      value.createdByRunId,
+      "stateVersion.createdByRunId",
+    ),
   };
 }
 
-function assertSafeArchiveObjectKey(key: string): void {
-  if (!key.startsWith("spaces/") || key.includes("..") || key.includes("\\")) {
-    throw new Error("source archive object key is invalid");
+function parseOutput(raw: unknown): ReleaseActivationPayload["output"] {
+  const value = asRecord(raw, "output");
+  return {
+    id: nonEmptyString(value.id, "output.id"),
+    stateGeneration: positiveInteger(
+      value.stateGeneration,
+      "output.stateGeneration",
+    ),
+    outputDigest: nonEmptyString(value.outputDigest, "output.outputDigest"),
+  };
+}
+
+function assertSafeArchiveRef(ref: string): void {
+  if (
+    !ref.startsWith("workspaces/") ||
+    ref.includes("..") ||
+    ref.includes("\\")
+  ) {
+    throw new Error("sourceSnapshot.archiveRef is invalid");
   }
-  assertSafeRelativePath(key);
+  assertSafeRelativePath(ref);
 }
 
 function assertSafeSourceBucketName(bucket: string): void {
@@ -785,6 +733,13 @@ function nonEmptyString(value: unknown, label: string): string {
     throw new Error(`${label} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function positiveInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value as number;
 }
 
 function parseCliArgs(argv: readonly string[]) {
@@ -1060,7 +1015,10 @@ async function runReleaseActivationChild(
 function runModeArgs(options: RunReleaseOptions): string[] {
   const args: string[] = [];
   if (options.sourceBucket) args.push("--source-bucket", options.sourceBucket);
-  if (options.sourceBucketAllowlist && options.sourceBucketAllowlist.length > 0) {
+  if (
+    options.sourceBucketAllowlist &&
+    options.sourceBucketAllowlist.length > 0
+  ) {
     args.push(
       "--source-bucket-allowlist",
       options.sourceBucketAllowlist.join(","),
@@ -1084,7 +1042,7 @@ function releaseActivationJobId(payload: ReleaseActivationPayload): string {
     .update(
       JSON.stringify({
         applyRunId: payload.applyRunId,
-        deploymentId: payload.deployment?.id ?? "",
+        stateVersionId: payload.stateVersion.id,
         archiveDigest: payload.sourceSnapshot.archiveDigest,
         commands: payload.commands,
       }),

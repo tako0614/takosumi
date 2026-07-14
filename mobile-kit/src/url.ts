@@ -8,8 +8,6 @@ import type {
 import { createTakosumiAppHandoffUrl } from "../../contract/app-handoff.ts";
 import { requireMobileProductKey } from "./product-key.ts";
 
-const hostCenterUrl = "https://app.takosumi.com/install";
-
 export function normalizeHostUrl(input: string): string {
   const raw = input.trim();
   if (!raw) throw new Error("Host URL is required.");
@@ -17,16 +15,42 @@ export function normalizeHostUrl(input: string): string {
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)
     ? raw
     : `https://${raw}`;
-  const url = new URL(withScheme);
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error("Host URL must use http or https.");
-  }
-  url.username = "";
-  url.password = "";
+  const url = requireSecureWebUrl(withScheme, "Host URL");
   url.pathname = "/";
   url.search = "";
   url.hash = "";
   return url.origin;
+}
+
+export function requireSecureWebUrl(input: string, label: string): URL {
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    throw new Error(`${label} must be a valid URL.`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error(`${label} must use http or https.`);
+  }
+  if (url.username || url.password) {
+    throw new Error(`${label} must not include credentials.`);
+  }
+  if (url.protocol === "http:" && !isLoopbackHostname(url.hostname)) {
+    throw new Error(
+      `${label} must use https except for loopback development hosts.`,
+    );
+  }
+  return url;
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/.test(normalized)
+  );
 }
 
 export function hostEndpoint(hostUrl: string, path: string): string {
@@ -64,12 +88,13 @@ export async function openMobileHostRoute(
 }
 
 export function createTakosumiHostCenterUrl(input: {
+  readonly hostCenterUrl: string;
   readonly product: MobileHostableProductKind;
   readonly source: MobileHostCenterSource;
   readonly returnUri: string;
 }): string {
   return createTakosumiAppHandoffUrl({
-    baseUrl: hostCenterUrl,
+    baseUrl: input.hostCenterUrl,
     ...input.source,
     product: requireMobileProductKey(input.product, "Host Center product"),
     returnUri: input.returnUri,

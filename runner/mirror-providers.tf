@@ -1,22 +1,20 @@
 # Minimal config used ONLY at image-build time to drive `tofu providers mirror`.
-# It pins the provider set baked into the offline filesystem mirror
-# (/opt/opentofu/provider-mirror). Keep this list in lockstep with the
-# filesystem_mirror/direct include+exclude lists in runner/tofu.rc.
+# It pins one reference-image cache baked into the filesystem mirror
+# (/opt/opentofu/provider-mirror). This file controls image contents only; it is
+# not a Takosumi provider catalog or an execution allowlist.
 #
-# Pin exact provider versions here. The runner's tofu.rc excludes these providers
-# from direct registry installs, so a source lockfile that selects a version not
-# baked into the mirror fail-closes during credential-free `tofu init`.
+# Pin exact provider versions here so a matching source lockfile can reuse the
+# cache. Mirror-only execution is an explicit per-run policy and fail-closes via
+# the generated strict CLI config, independently of this reference cache list.
 #
-# Cloudflare is pinned to 5.19.1 because the GA Takos install Capsule lockfile
-# currently selects that version. Do not loosen this to `~> 5.0`: `tofu providers
-# mirror` would bake only the latest 5.x provider and older reviewed lockfiles
-# would stop installing in the runner image. hashicorp/http is pinned to the
-# Yurucommu OpenTofu lockfile version so prebuilt bundle URL fetches do not pay a
-# registry install on first deploy.
+# Versions in this reference cache are exact so reviewed lockfiles can reuse
+# them deterministically. Do not loosen them to ranges: `tofu providers mirror`
+# would bake only the latest matching provider and older reviewed lockfiles
+# would stop installing in the runner image. Operators can replace or extend
+# this image cache without changing provider admission or Capsule semantics.
 #
-# Generic AWS/S3/GCS stacks install through the ordinary provider install/cache
-# path. google is still omitted for size; it falls through to `direct`
-# (registry) install until a later phase mirrors it too.
+# Any provider not present in this image cache uses the ordinary provider
+# install/cache path unless an operator selects mirror-only execution.
 terraform {
   required_providers {
     cloudflare = {

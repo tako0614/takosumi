@@ -11,14 +11,8 @@
  */
 import type { Run } from "./control-api.ts";
 
-/** The wire Run keeps the legacy `installationId` alias next to `capsuleId`
- * (backup runs record only the alias) — read both so those runs still resolve
- * their Capsule. */
 export function runCapsuleId(run: Run): string | undefined {
-  return (
-    run.capsuleId ??
-    (run as Run & { readonly installationId?: string }).installationId
-  );
+  return run.capsuleId;
 }
 
 /** True when `run` is a review run (plan / destroy_plan). */

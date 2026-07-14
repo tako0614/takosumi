@@ -35,7 +35,10 @@ describe("i18n dictionaries", () => {
   });
 
   test("public dashboard copy does not expose implementation-only terms", () => {
-    const blockedTerms = ["OutputSnapshot", "InstallConfig", "fail-closed"];
+    // OpenTofu Output is a normal user-facing OpenTofu concept. Keep internal
+    // service configuration and policy jargon out of the consumer copy, but
+    // do not hide the boundary between ordinary Outputs and Interfaces.
+    const blockedTerms = ["InstallConfig", "fail-closed"];
 
     for (const [locale, messages] of [
       ["ja", ja],
@@ -62,7 +65,9 @@ describe("i18n dictionaries", () => {
           expect.objectContaining({ value: expect.stringContaining("Takos ") }),
         );
         expect({ locale, key, value }).not.toEqual(
-          expect.objectContaining({ value: expect.stringContaining("Takos に") }),
+          expect.objectContaining({
+            value: expect.stringContaining("Takos に"),
+          }),
         );
       }
     }

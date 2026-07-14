@@ -8,7 +8,6 @@
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
-  Connection,
   ConnectionOAuthStartResponse,
   ConnectionResponse,
   ConnectionScopeHints,
@@ -16,10 +15,7 @@ import type {
   CreateConnectionFile,
   CreateConnectionRequest,
   DeployControlErrorCode,
-  Deployment,
-  InternalDeployRequest,
   ListConnectionsResponse,
-  ListDeploymentsResponse,
   ListRunnerProfilesResponse,
   OpenTofuModuleSource,
   PlanRunResponse,
@@ -27,7 +23,6 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
-  ArtifactSnapshotRequest,
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
@@ -38,10 +33,6 @@ import type {
   SourceSnapshot,
 } from "takosumi-contract/sources";
 import type {
-  DeployResponse,
-  PublicDeployResponse,
-} from "takosumi-contract/deploy";
-import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
@@ -50,7 +41,6 @@ import type { ListCredentialRecipesResponse } from "takosumi-contract/credential
 import { consoleErrorRedacted } from "../redacted-log.ts";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  CapsuleProviderEnvBindingSet,
   InstallConfig,
   Capsule,
   OutputAllowlistEntry,
@@ -66,32 +56,28 @@ import type {
 } from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
-import type {
-  CapsuleProviderConnectionBinding,
-  CapsuleProviderConnectionBindings,
-  CapsuleProviderEnvBinding,
-  CapsuleProviderEnvBindings,
-  CapsuleProviderConnectionSet,
-  ProviderConnection,
+import {
+  isPublicManagedProviderConnection,
+  type ProviderBinding,
+  type ProviderBindings,
+  type ProviderBindingSet,
+  type ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
 import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
-import type { PublicDeployment } from "takosumi-contract/deployments";
+import type {
+  PublicStateVersion,
+  StateVersion,
+} from "takosumi-contract/state-versions";
 import type {
   BackupRecord,
   CreateBackupResponse,
   CreateRestoreRequest,
   ListBackupsResponse,
 } from "takosumi-contract/backups";
-import type {
-  BillingSettings,
-  CreditBalance,
-  CreditReservation,
-  UsageEvent,
-} from "takosumi-contract/billing";
 import type {
   ListRunsResponse,
   Run,
@@ -101,14 +87,6 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import type {
-  AppCapsuleMode,
-  AppCapsuleStatus,
-  CapsuleRecord,
-  WorkspaceKind,
-} from "../ledger.ts";
-import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -141,8 +119,6 @@ export interface ControlDispatchContext {
   readonly issuer?: string;
   readonly managedPublicBaseDomain?: string;
   readonly session: { readonly subject: string };
-  readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
-  readonly publicBillingPlans?: readonly Record<string, unknown>[];
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -151,37 +127,80 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 type PublicCapsuleInput = PublicCapsule &
   Partial<
-    Pick<
-      Capsule,
-      "installType" | "currentOutputId" | "autoUpdateAttemptSourceSnapshotId"
-    >
+    Pick<Capsule, "currentOutputId" | "autoUpdateAttemptSourceSnapshotId">
   >;
 
-export function publicCapsule(installation: PublicCapsuleInput): PublicCapsule {
+export function publicCapsule(capsule: PublicCapsuleInput): PublicCapsule {
   const {
-    installType: _installType,
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttempt,
     ...publicRecord
-  } = installation;
-  const currentStateVersionId =
-    publicRecord.currentStateVersionId ?? publicRecord.currentDeploymentId;
+  } = capsule;
+  const currentStateVersionId = publicRecord.currentStateVersionId;
   return currentStateVersionId
     ? { ...publicRecord, currentStateVersionId }
     : publicRecord;
 }
 
 /**
- * Public projection of a Deployment for the account-plane session surface. It
- * keeps the allowlist-projected `outputsPublic` map (sensitive outputs never
- * enter the ledger row) and drops the `outputId` pointer to the raw
- * encrypted Output, so the dashboard read never exposes a handle to the
- * un-projected output envelope. The raw envelope is reachable only through the
- * explicit OutputShare flow, not this read.
+ * Public projection of a StateVersion for the account-plane session surface.
+ * Runner storage coordinates and state digests stay on the internal control
+ * seam and never become browser-visible handles.
  */
-export function publicDeployment(deployment: Deployment): PublicDeployment {
-  const { outputSnapshotId: _outputSnapshotId, ...rest } = deployment;
-  return rest;
+export function publicStateVersion(
+  stateVersion: StateVersion,
+): PublicStateVersion {
+  return {
+    id: stateVersion.id,
+    workspaceId: stateVersion.workspaceId,
+    capsuleId: stateVersion.capsuleId,
+    environment: stateVersion.environment,
+    generation: stateVersion.generation,
+    createdByRunId: stateVersion.createdByRunId,
+    createdAt: stateVersion.createdAt,
+  };
+}
+
+export type PublicDependency = Dependency;
+
+/** Canonical account-plane Dependency view without pre-v1 id aliases. */
+export function publicDependency(dependency: Dependency): PublicDependency {
+  return {
+    id: dependency.id,
+    workspaceId: dependency.workspaceId,
+    producerCapsuleId: dependency.producerCapsuleId,
+    consumerCapsuleId: dependency.consumerCapsuleId,
+    mode: dependency.mode,
+    outputs: dependency.outputs,
+    visibility: dependency.visibility,
+    createdAt: dependency.createdAt,
+  };
+}
+
+export type PublicOutputShare = OutputShare;
+
+/** Canonical account-plane OutputShare view without pre-v1 id aliases. */
+export function publicOutputShare(share: OutputShare): PublicOutputShare {
+  return {
+    id: share.id,
+    fromWorkspaceId: share.fromWorkspaceId,
+    toWorkspaceId: share.toWorkspaceId,
+    producerCapsuleId: share.producerCapsuleId,
+    outputs: share.outputs,
+    status: share.status,
+    createdAt: share.createdAt,
+    ...(share.acceptedAt ? { acceptedAt: share.acceptedAt } : {}),
+    ...(share.revokedAt ? { revokedAt: share.revokedAt } : {}),
+  };
+}
+
+export type PublicProviderConnection = ProviderConnection;
+
+/** Canonical account-plane Provider Connection view. */
+export function publicProviderConnection(
+  connection: ProviderConnection,
+): PublicProviderConnection {
+  return connection;
 }
 
 export async function publicRun(
@@ -206,7 +225,7 @@ async function publicProviderResolution(
   operations: ControlPlaneOperations,
   resolution: ProviderResolution,
 ): Promise<PublicProviderResolution> {
-  const connectionId = resolution.envId ?? undefined;
+  const connectionId = resolution.connectionId;
   return {
     requirement: resolution.requirement,
     status: publicProviderResolutionStatus(resolution),
@@ -221,12 +240,6 @@ async function publicProviderResolution(
 function publicProviderResolutionStatus(
   resolution: ProviderResolution,
 ): PublicProviderResolution["status"] {
-  if (resolution.status === "resolved_provider_env") {
-    return "resolved_provider_connection";
-  }
-  if (resolution.status === "blocked_missing_env") {
-    return "blocked_missing_connection";
-  }
   return resolution.status;
 }
 
@@ -236,11 +249,11 @@ async function publicProviderResolutionEvidence(
 ): Promise<PublicProviderResolution["evidence"]> {
   const evidence = resolution.evidence;
   void operations;
-  if (evidence.kind === "provider_env") {
+  if (evidence.kind === "provider_connection") {
     return {
       kind: "provider_connection",
       provider: evidence.provider,
-      connectionId: evidence.envId,
+      connectionId: evidence.connectionId,
       requiredEnvNames: evidence.requiredEnvNames,
     };
   }
@@ -252,7 +265,7 @@ async function publicProviderResolutionEvidence(
 }
 
 function publicProviderBlockedReason(reason: string): string {
-  return reason.replace(/\bProvider Env\b/g, "Provider Connection");
+  return reason;
 }
 
 export async function publicCompatibilityReportResponse(
@@ -278,25 +291,6 @@ export async function publicCompatibilityReportResponse(
   };
 }
 
-export async function publicDeployResponse(
-  operations: ControlPlaneOperations,
-  response: DeployResponse,
-): Promise<PublicDeployResponse> {
-  const {
-    run,
-    planRun,
-    applyRun,
-    installation: _installation,
-    ...rest
-  } = response;
-  return {
-    ...rest,
-    run: await publicRun(operations, run),
-    ...(planRun ? { planRun: await publicRun(operations, planRun) } : {}),
-    ...(applyRun ? { applyRun: await publicRun(operations, applyRun) } : {}),
-  };
-}
-
 interface PublicPlanActionResponse {
   readonly run: PublicRun;
   readonly planSummary?: PublicPlanRun["summary"];
@@ -306,7 +300,6 @@ interface PublicPlanActionResponse {
 interface PublicApplyActionResponse {
   readonly run: PublicRun;
   readonly capsule?: PublicCapsule;
-  readonly deployment?: PublicDeployment;
 }
 
 export async function publicPlanActionResponse(
@@ -331,13 +324,10 @@ export async function publicApplyActionResponse(
   response: ApplyRunResponse,
 ): Promise<PublicApplyActionResponse> {
   const run = await operations.getRun(response.applyRun.id);
-  const capsule = response.capsule ?? response.installation;
+  const capsule = response.capsule;
   return {
     run: await publicRun(operations, run),
     ...(capsule ? { capsule: publicCapsule(capsule) } : {}),
-    ...(response.deployment
-      ? { deployment: publicDeployment(response.deployment) }
-      : {}),
   };
 }
 
@@ -370,7 +360,9 @@ function publicControllerError(error: unknown): {
   readonly details?: unknown;
 } {
   const message = error instanceof Error ? error.message : String(error);
-  if (isAppHostnameUnavailableMessage(message)) {
+  const details = isRecord(error) ? error.details : undefined;
+  const reason = isRecord(details) ? details.reason : undefined;
+  if (reason === "app_hostname_unavailable") {
     return {
       message: "app_hostname_unavailable: already exists",
       details: { reason: "app_hostname_unavailable" },
@@ -378,17 +370,8 @@ function publicControllerError(error: unknown): {
   }
   return {
     message,
-    ...(isRecord(error) && error.details !== undefined
-      ? { details: error.details }
-      : {}),
+    ...(details !== undefined ? { details } : {}),
   };
-}
-
-function isAppHostnameUnavailableMessage(message: string): boolean {
-  return (
-    /^app_hostname_unavailable\b/u.test(message) ||
-    /\balready claimed by Capsule\b.*\bWorkspace\b/iu.test(message)
-  );
 }
 
 export function controllerErrorCode(
@@ -448,12 +431,12 @@ export function parseControlPageParams(
   };
 }
 
-export async function resolveProviderConnectionBindings(
+export async function resolveProviderBindings(
   operations: ControlPlaneOperations,
   workspaceId: string,
-  bindings: CapsuleProviderConnectionBindings,
+  bindings: ProviderBindings,
 ): Promise<
-  | { readonly ok: true; readonly bindings: CapsuleProviderEnvBindings }
+  | { readonly ok: true; readonly bindings: ProviderBindings }
   | { readonly ok: false; readonly message: string }
 > {
   const visibleById = new Map<string, ProviderConnection>();
@@ -464,12 +447,12 @@ export async function resolveProviderConnectionBindings(
       visibleById.set(connection.id, connection);
     }
   }
-  const resolved: CapsuleProviderEnvBinding[] = [];
+  const resolved: ProviderBinding[] = [];
   for (const [index, binding] of bindings.entries()) {
     if (!visibleById.has(binding.connectionId)) {
       return {
         ok: false,
-        message: `connections[${index}]: unknown provider connection`,
+        message: `bindings[${index}]: unknown provider connection`,
       };
     }
     resolved.push({
@@ -486,20 +469,10 @@ function isBindableProviderConnection(
   connection: ProviderConnection,
   workspaceId: string,
 ): boolean {
-  if (
-    connection.workspaceId === workspaceId ||
-    connection.spaceId === workspaceId
-  ) {
+  if (connection.workspaceId === workspaceId) {
     return true;
   }
-  return (
-    connection.scope === "operator" &&
-    connection.workspaceId === undefined &&
-    connection.spaceId === undefined &&
-    connection.scopeHints?.managedProvider === true &&
-    typeof connection.scopeHints.providerConfig?.base_url === "string" &&
-    connection.scopeHints.providerConfig.base_url.trim().length > 0
-  );
+  return isPublicManagedProviderConnection(connection);
 }
 
 // --- Workspace authorization ---------------------------------------------------
@@ -516,7 +489,7 @@ export async function requireWorkspaceAccess(input: {
   readonly store: AccountsStore;
   readonly subject: string;
   readonly workspaceId: string;
-  readonly space?: Workspace;
+  readonly workspace?: Workspace;
 }): Promise<WorkspaceAccessResult> {
   if (
     await canAccessWorkspace({
@@ -524,7 +497,7 @@ export async function requireWorkspaceAccess(input: {
       store: input.store,
       subject: input.subject,
       workspaceId: input.workspaceId,
-      ...(input.space ? { space: input.space } : {}),
+      ...(input.workspace ? { workspace: input.workspace } : {}),
     })
   ) {
     return { ok: true };
@@ -544,19 +517,18 @@ export async function canAccessWorkspace(input: {
   readonly store: AccountsStore;
   readonly subject: string;
   readonly workspaceId: string;
-  readonly space?: Workspace;
+  readonly workspace?: Workspace;
 }): Promise<boolean> {
-  const space =
-    input.space ??
-    (await input.operations.spaces.getWorkspace(input.workspaceId));
-  if (space.ownerUserId === input.subject) return true;
+  const workspace =
+    input.workspace ??
+    (await input.operations.workspaces.getWorkspace(input.workspaceId));
+  if (workspace.ownerUserId === input.subject) return true;
 
-  const ledgerWorkspace = await input.store.findWorkspace(input.workspaceId);
-  if (!ledgerWorkspace) return false;
-  const ledgerAccount = await input.store.findLedgerAccount(
-    ledgerWorkspace.accountId,
+  const members = await input.operations.members.listMembers(input.workspaceId);
+  return members.some(
+    (member) =>
+      member.accountId === input.subject && member.status === "active",
   );
-  return ledgerAccount?.legalOwnerSubject === input.subject;
 }
 
 export function jsonStatus(body: unknown, status: number): Response {

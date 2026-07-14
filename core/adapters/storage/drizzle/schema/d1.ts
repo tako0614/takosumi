@@ -18,8 +18,8 @@ export const runnerProfiles = sqliteTable(names.runnerProfiles, {
   createdAt: text("created_at").notNull(),
 });
 
-export const spaces = sqliteTable(
-  names.spaces,
+export const workspaces = sqliteTable(
+  names.workspaces,
   {
     id: text("id").primaryKey(),
     handle: text("handle").notNull(),
@@ -30,24 +30,29 @@ export const spaces = sqliteTable(
   (table) => [uniqueIndex("workspaces_handle_unique").on(table.handle)],
 );
 
-// Takosumi-specific Output Sync extension state. OpenTofu Output records remain
-// authoritative; this row only tracks Workspace aggregation/reconciliation.
-export const workspaceOutputSync = sqliteTable(
-  names.workspaceOutputSync,
+export const workspaceMembers = sqliteTable(
+  names.workspaceMembers,
   {
-    workspaceId: text("workspace_id").primaryKey(),
-    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-    outputRevision: integer("output_revision").notNull().default(0),
-    reconciledRevision: integer("reconciled_revision").notNull().default(0),
-    activeRunGroupId: text("active_run_group_id"),
-    consecutivePasses: integer("consecutive_passes").notNull().default(0),
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    accountId: text("account_id").notNull(),
+    status: text("status").notNull(),
+    recordJson: jsonText("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    index("workspace_output_sync_pending_idx").on(
-      table.enabled,
-      table.outputRevision,
-      table.reconciledRevision,
+    uniqueIndex("workspace_members_workspace_account_unique").on(
+      table.workspaceId,
+      table.accountId,
+    ),
+    index("workspace_members_workspace_status_idx").on(
+      table.workspaceId,
+      table.status,
+    ),
+    index("workspace_members_account_status_idx").on(
+      table.accountId,
+      table.status,
     ),
   ],
 );
@@ -79,14 +84,14 @@ export const sources = sqliteTable(
   names.sources,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
+    workspaceId: text("space_id").notNull(),
     status: text("status").notNull(),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    index("sources_space_idx").on(table.spaceId),
+    index("sources_space_idx").on(table.workspaceId),
     index("sources_status_idx").on(table.status),
   ],
 );
@@ -95,7 +100,8 @@ export const sourceSnapshots = sqliteTable(
   names.sourceSnapshots,
   {
     id: text("id").primaryKey(),
-    // Nullable: legacy upload-origin snapshots have no Git Source.
+    // Physically nullable only for historical pre-Git-only rows. Current
+    // writers and row mappers require a registered Git Source.
     sourceId: text("source_id"),
     recordJson: jsonText("record_json").notNull(),
     fetchedAt: text("fetched_at").notNull(),
@@ -107,7 +113,7 @@ export const connections = sqliteTable(
   names.connections,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id"),
+    workspaceId: text("space_id"),
     provider: text("provider").notNull(),
     status: text("status").notNull(),
     connectionJson: jsonText("connection_json").notNull(),
@@ -115,7 +121,7 @@ export const connections = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    index("connections_space_idx").on(table.spaceId),
+    index("connections_space_idx").on(table.workspaceId),
     index("connections_provider_idx").on(table.provider),
     index("connections_status_idx").on(table.status),
   ],
@@ -126,7 +132,7 @@ export const secretBlobs = sqliteTable(
   {
     id: text("id").primaryKey(),
     connectionId: text("connection_id").notNull(),
-    spaceId: text("space_id"),
+    workspaceId: text("space_id"),
     kind: text("kind").notNull(),
     ciphertext: text("ciphertext").notNull(),
     encryptedDek: text("encrypted_dek").notNull(),
@@ -146,58 +152,51 @@ export const installConfigs = sqliteTable(
   names.installConfigs,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id"),
-    installType: text("install_type").notNull(),
-    trustLevel: text("trust_level").notNull(),
+    workspaceId: text("space_id"),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
-  (table) => [
-    index("install_configs_space_idx").on(table.spaceId),
-    index("install_configs_install_type_idx").on(table.installType),
-  ],
+  (table) => [index("install_configs_space_idx").on(table.workspaceId)],
 );
 
-export const installations = sqliteTable(
-  names.installations,
+export const capsules = sqliteTable(
+  names.capsules,
   {
     id: text("id").primaryKey(),
     // P4 column decision (D1 capsules): space_id, current_output_snapshot_id and
-    // the slug/install_type columns are KEPT physical (drizzle-mapped, deferred
-    // to convergence slice 7). The Drizzle property names also stay unchanged so
-    // the worker store and store.ts contract are untouched. Only the two
-    // genuinely-new/renamed columns move physically:
-    //   - current_deployment_id -> current_state_version_id (retired-Deployment
-    //     value-translation target; the property keeps the old name and maps to
-    //     the new physical column).
+    // The slug remains physical for uniqueness. The retired install_type
+    // discriminator is deliberately absent from the current schema.
+    //   - current_deployment_id -> current_state_version_id (historical
+    //     value-translation target; the current property and column use the
+    //     StateVersion name).
     //   - project_id ADDED (Workspace-owned Project pointer, backfilled).
-    spaceId: text("space_id").notNull(),
-    projectId: text("project_id"),
+    workspaceId: text("space_id").notNull(),
+    projectId: text("project_id").notNull(),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
-    // Nullable: legacy upload-origin capsules have no Git Source.
+    // Historical source-less rows may remain physically readable for operator
+    // migration, but current Capsule writes and public contracts require Git.
     sourceId: text("source_id"),
-    installType: text("install_type").notNull(),
     installConfigId: text("install_config_id").notNull(),
     environment: text("environment").notNull(),
-    currentDeploymentId: text("current_state_version_id"),
+    currentStateVersionId: text("current_state_version_id"),
     currentStateGeneration: integer("current_state_generation")
       .notNull()
       .default(0),
-    currentOutputSnapshotId: text("current_output_snapshot_id"),
+    currentOutputId: text("current_output_snapshot_id"),
     status: text("status").notNull(),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    uniqueIndex("capsules_space_name_environment_active_unique")
-      .on(table.spaceId, table.name, table.environment)
+    uniqueIndex("capsules_project_name_environment_active_unique")
+      .on(table.projectId, table.name, table.environment)
       .where(sql`${table.status} <> 'destroyed'`),
-    index("capsules_space_idx").on(table.spaceId),
+    index("capsules_space_idx").on(table.workspaceId),
     index("capsules_project_idx").on(table.projectId),
-    index("capsules_current_state_version_idx").on(table.currentDeploymentId),
+    index("capsules_current_state_version_idx").on(table.currentStateVersionId),
   ],
 );
 
@@ -206,7 +205,7 @@ export const capsuleCompatibilityReports = sqliteTable(
   {
     id: text("id").primaryKey(),
     sourceId: text("source_id"),
-    installationId: text("installation_id"),
+    capsuleId: text("installation_id"),
     sourceSnapshotId: text("source_snapshot_id").notNull(),
     level: text("level").notNull(),
     findingsJson: jsonText("findings_json").notNull(),
@@ -220,8 +219,6 @@ export const capsuleCompatibilityReports = sqliteTable(
     rootModuleOutputsJson: jsonText("root_module_outputs_json")
       .notNull()
       .default([]),
-    normalizedObjectKey: text("normalized_object_key"),
-    normalizedDigest: text("normalized_digest"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
@@ -229,19 +226,17 @@ export const capsuleCompatibilityReports = sqliteTable(
       table.sourceSnapshotId,
     ),
     index("capsule_compatibility_reports_source_idx").on(table.sourceId),
-    index("capsule_compatibility_reports_installation_idx").on(
-      table.installationId,
-    ),
+    index("capsule_compatibility_reports_installation_idx").on(table.capsuleId),
     index("capsule_compatibility_reports_level_idx").on(table.level),
   ],
 );
 
-export const providerEnvBindingSets = sqliteTable(
-  names.providerEnvBindingSets,
+export const providerBindingSets = sqliteTable(
+  names.providerBindingSets,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    installationId: text("installation_id").notNull(),
+    workspaceId: text("space_id").notNull(),
+    capsuleId: text("installation_id").notNull(),
     environment: text("environment").notNull(),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
@@ -249,33 +244,27 @@ export const providerEnvBindingSets = sqliteTable(
   },
   (table) => [
     uniqueIndex("provider_env_binding_sets_installation_environment_unique").on(
-      table.installationId,
+      table.capsuleId,
       table.environment,
     ),
-    index("provider_env_binding_sets_installation_idx").on(
-      table.installationId,
-    ),
+    index("provider_env_binding_sets_installation_idx").on(table.capsuleId),
   ],
 );
 
-export const installationDependencies = sqliteTable(
-  names.installationDependencies,
+export const dependencies = sqliteTable(
+  names.dependencies,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    producerInstallationId: text("producer_installation_id").notNull(),
-    consumerInstallationId: text("consumer_installation_id").notNull(),
+    workspaceId: text("space_id").notNull(),
+    producerCapsuleId: text("producer_installation_id").notNull(),
+    consumerCapsuleId: text("consumer_installation_id").notNull(),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    index("installation_dependencies_space_idx").on(table.spaceId),
-    index("installation_dependencies_producer_idx").on(
-      table.producerInstallationId,
-    ),
-    index("installation_dependencies_consumer_idx").on(
-      table.consumerInstallationId,
-    ),
+    index("installation_dependencies_space_idx").on(table.workspaceId),
+    index("installation_dependencies_producer_idx").on(table.producerCapsuleId),
+    index("installation_dependencies_consumer_idx").on(table.consumerCapsuleId),
   ],
 );
 
@@ -290,34 +279,34 @@ export const dependencySnapshots = sqliteTable(
   (table) => [index("dependency_snapshots_run_idx").on(table.runId)],
 );
 
-export const outputSnapshots = sqliteTable(
-  names.outputSnapshots,
+export const outputs = sqliteTable(
+  names.outputs,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    installationId: text("installation_id").notNull(),
+    workspaceId: text("space_id").notNull(),
+    capsuleId: text("installation_id").notNull(),
     stateGeneration: integer("state_generation").notNull(),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
   },
-  (table) => [index("outputs_installation_idx").on(table.installationId)],
+  (table) => [index("outputs_installation_idx").on(table.capsuleId)],
 );
 
 export const outputShares = sqliteTable(
   names.outputShares,
   {
     id: text("id").primaryKey(),
-    fromSpaceId: text("from_space_id").notNull(),
-    toSpaceId: text("to_space_id").notNull(),
-    producerInstallationId: text("producer_installation_id").notNull(),
+    fromWorkspaceId: text("from_space_id").notNull(),
+    toWorkspaceId: text("to_space_id").notNull(),
+    producerCapsuleId: text("producer_installation_id").notNull(),
     status: text("status").notNull(),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    index("output_shares_from_space_idx").on(table.fromSpaceId),
-    index("output_shares_to_space_idx").on(table.toSpaceId),
-    index("output_shares_producer_idx").on(table.producerInstallationId),
+    index("output_shares_from_space_idx").on(table.fromWorkspaceId),
+    index("output_shares_to_space_idx").on(table.toWorkspaceId),
+    index("output_shares_producer_idx").on(table.producerCapsuleId),
   ],
 );
 
@@ -325,12 +314,12 @@ export const runGroups = sqliteTable(
   names.runGroups,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
+    workspaceId: text("space_id").notNull(),
     type: text("type").notNull(),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
   },
-  (table) => [index("run_groups_space_idx").on(table.spaceId)],
+  (table) => [index("run_groups_space_idx").on(table.workspaceId)],
 );
 
 export const runs = sqliteTable(
@@ -338,9 +327,9 @@ export const runs = sqliteTable(
   {
     id: text("id").primaryKey(),
     runGroupId: text("run_group_id"),
-    spaceId: text("space_id").notNull(),
+    workspaceId: text("space_id").notNull(),
     sourceId: text("source_id"),
-    installationId: text("installation_id"),
+    capsuleId: text("installation_id"),
     environment: text("environment"),
     type: text("type").notNull(),
     status: text("status").notNull(),
@@ -350,62 +339,43 @@ export const runs = sqliteTable(
     createdAt: text("created_at").notNull().default(""),
   },
   (table) => [
-    index("runs_space_idx").on(table.spaceId),
+    index("runs_space_idx").on(table.workspaceId),
     index("runs_source_idx").on(table.sourceId),
-    index("runs_installation_idx").on(table.installationId),
+    index("runs_installation_idx").on(table.capsuleId),
+    index("runs_installation_created_at_idx").on(
+      table.capsuleId,
+      table.createdAt,
+    ),
     index("runs_type_idx").on(table.type),
     index("runs_created_at_idx").on(table.createdAt),
   ],
 );
 
-export const runsInputs = sqliteTable(names.runsInputs, {
+export const planRunInputs = sqliteTable(names.planRunInputs, {
   planRunId: text("plan_run_id").primaryKey(),
   inputsJson: jsonText("inputs_json").notNull(),
 });
 
-export const stateSnapshots = sqliteTable(
-  names.stateSnapshots,
+export const stateVersions = sqliteTable(
+  names.stateVersions,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    installationId: text("installation_id").notNull(),
+    workspaceId: text("space_id").notNull(),
+    capsuleId: text("installation_id").notNull(),
     environment: text("environment").notNull(),
     generation: integer("generation").notNull(),
-    objectKey: text("object_key").notNull(),
+    stateRef: text("object_key").notNull(),
     digest: text("digest").notNull(),
     createdByRunId: text("created_by_run_id").notNull(),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
     uniqueIndex("state_versions_installation_environment_generation_unique").on(
-      table.installationId,
+      table.capsuleId,
       table.environment,
       table.generation,
     ),
-    index("state_versions_installation_idx").on(table.installationId),
-  ],
-);
-
-export const deployments = sqliteTable(
-  names.deployments,
-  {
-    id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    installationId: text("installation_id").notNull(),
-    environment: text("environment").notNull(),
-    applyRunId: text("apply_run_id").notNull(),
-    sourceSnapshotId: text("source_snapshot_id").notNull(),
-    dependencySnapshotId: text("dependency_snapshot_id"),
-    stateGeneration: integer("state_generation").notNull(),
-    outputSnapshotId: text("output_snapshot_id").notNull(),
-    outputsPublicJson: jsonText("outputs_public_json").notNull(),
-    status: text("status").notNull(),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => [
-    index("deployments_space_idx").on(table.spaceId),
-    index("deployments_installation_idx").on(table.installationId),
-    index("deployments_apply_idx").on(table.applyRunId),
+    index("state_versions_installation_idx").on(table.capsuleId),
   ],
 );
 
@@ -415,7 +385,7 @@ export const artifacts = sqliteTable(
     id: text("id").primaryKey(),
     runId: text("run_id").notNull(),
     kind: text("kind").notNull(),
-    objectKey: text("object_key").notNull(),
+    ref: text("object_key").notNull(),
     digest: text("digest").notNull(),
     sizeBytes: integer("size_bytes").notNull(),
     createdAt: text("created_at").notNull(),
@@ -423,107 +393,12 @@ export const artifacts = sqliteTable(
   (table) => [index("artifacts_run_idx").on(table.runId)],
 );
 
-export const billingAccounts = sqliteTable(
-  names.billingAccounts,
-  {
-    id: text("id").primaryKey(),
-    ownerType: text("owner_type").notNull(),
-    ownerId: text("owner_id").notNull(),
-    provider: text("provider").notNull(),
-    status: text("status").notNull(),
-    recordJson: jsonText("record_json").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
-  },
-  (table) => [
-    index("billing_accounts_owner_idx").on(table.ownerType, table.ownerId),
-    index("billing_accounts_status_idx").on(table.status),
-  ],
-);
-
-export const billingPlans = sqliteTable(names.billingPlans, {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  monthlyBasePrice: integer("monthly_base_price").notNull(),
-  includedUsdMicros: integer("included_usd_micros"),
-  includedCredits: integer("included_credits").notNull(),
-  limitsJson: jsonText("limits_json").notNull(),
-  recordJson: jsonText("record_json").notNull(),
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
-
-export const spaceSubscriptions = sqliteTable(
-  names.spaceSubscriptions,
-  {
-    id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    billingAccountId: text("billing_account_id").notNull(),
-    planId: text("plan_id").notNull(),
-    status: text("status").notNull(),
-    recordJson: jsonText("record_json").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
-  },
-  (table) => [
-    index("space_subscriptions_space_idx").on(table.spaceId),
-    index("space_subscriptions_billing_account_idx").on(table.billingAccountId),
-  ],
-);
-
-export const creditBalances = sqliteTable(names.creditBalances, {
-  spaceId: text("space_id").primaryKey(),
-  availableUsdMicros: integer("available_usd_micros"),
-  reservedUsdMicros: integer("reserved_usd_micros"),
-  monthlyIncludedUsdMicros: integer("monthly_included_usd_micros"),
-  purchasedUsdMicros: integer("purchased_usd_micros"),
-  availableCredits: integer("available_credits").notNull(),
-  reservedCredits: integer("reserved_credits").notNull(),
-  monthlyIncludedCredits: integer("monthly_included_credits").notNull(),
-  purchasedCredits: integer("purchased_credits").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
-
-export const billingAutoRechargeAttempts = sqliteTable(
-  names.billingAutoRechargeAttempts,
-  {
-    id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    runId: text("run_id").notNull(),
-    billingAccountId: text("billing_account_id").notNull(),
-    idempotencyKey: text("idempotency_key").notNull(),
-    periodStart: text("period_start").notNull(),
-    periodEnd: text("period_end"),
-    requestedUsdMicros: integer("requested_usd_micros").notNull(),
-    monthlyLimitUsdMicros: integer("monthly_limit_usd_micros"),
-    chargedUsdMicros: integer("charged_usd_micros"),
-    status: text("status").notNull(),
-    stripePaymentIntentId: text("stripe_payment_intent_id"),
-    providerStatus: text("provider_status"),
-    failureReason: text("failure_reason"),
-    recordJson: jsonText("record_json").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
-  },
-  (table) => [
-    uniqueIndex("billing_auto_recharge_attempts_idempotency_unique").on(
-      table.idempotencyKey,
-    ),
-    index("billing_auto_recharge_attempts_space_period_status_idx").on(
-      table.spaceId,
-      table.periodStart,
-      table.status,
-    ),
-    index("billing_auto_recharge_attempts_run_idx").on(table.runId),
-  ],
-);
-
 export const usageEvents = sqliteTable(
   names.usageEvents,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    installationId: text("installation_id"),
+    workspaceId: text("workspace_id").notNull(),
+    capsuleId: text("capsule_id"),
     runId: text("run_id"),
     meterId: text("meter_id"),
     resourceFamily: text("resource_family"),
@@ -532,37 +407,16 @@ export const usageEvents = sqliteTable(
     resourceMetadataJson: jsonText("resource_metadata_json"),
     kind: text("kind").notNull(),
     quantity: real("quantity").notNull(),
-    usdMicros: integer("usd_micros"),
-    credits: integer("credits").notNull(),
+    usdMicros: integer("usd_micros").notNull(),
+    ratingStatus: text("rating_status").notNull(),
     source: text("source").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    index("usage_events_space_idx").on(table.spaceId),
+    index("usage_events_workspace_idx").on(table.workspaceId),
     index("usage_events_run_idx").on(table.runId),
     uniqueIndex("usage_events_idempotency_key_unique").on(table.idempotencyKey),
-  ],
-);
-
-export const creditReservations = sqliteTable(
-  names.creditReservations,
-  {
-    id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    runId: text("run_id").notNull(),
-    estimatedUsdMicros: integer("estimated_usd_micros"),
-    estimatedCredits: integer("estimated_credits").notNull(),
-    status: text("status").notNull(),
-    mode: text("mode").notNull(),
-    recordJson: jsonText("record_json").notNull(),
-    createdAt: text("created_at").notNull(),
-    expiresAt: text("expires_at").notNull(),
-  },
-  (table) => [
-    index("credit_reservations_space_idx").on(table.spaceId),
-    index("credit_reservations_run_idx").on(table.runId),
-    index("credit_reservations_status_idx").on(table.status),
   ],
 );
 
@@ -572,8 +426,8 @@ export const publicHostReservations = sqliteTable(
     hostname: text("hostname").primaryKey(),
     ownerUserId: text("owner_user_id").notNull(),
     workspaceId: text("workspace_id").notNull(),
-    installationId: text("installation_id").notNull(),
-    installationName: text("installation_name").notNull(),
+    capsuleId: text("installation_id").notNull(),
+    capsuleName: text("installation_name").notNull(),
     allocationKind: text("allocation_kind").notNull(),
     status: text("status").notNull(),
     reservedAt: text("reserved_at").notNull(),
@@ -587,7 +441,7 @@ export const publicHostReservations = sqliteTable(
       table.allocationKind,
       table.status,
     ),
-    index("public_host_reservations_installation_idx").on(table.installationId),
+    index("public_host_reservations_installation_idx").on(table.capsuleId),
     index("public_host_reservations_status_idx").on(table.status),
   ],
 );
@@ -597,8 +451,8 @@ export const credentialMintEvents = sqliteTable(
   {
     id: text("id").primaryKey(),
     runId: text("run_id").notNull(),
-    spaceId: text("space_id").notNull(),
-    installationId: text("installation_id"),
+    workspaceId: text("space_id").notNull(),
+    capsuleId: text("installation_id"),
     sourceId: text("source_id"),
     connectionId: text("connection_id").notNull(),
     phase: text("phase").notNull(),
@@ -607,7 +461,7 @@ export const credentialMintEvents = sqliteTable(
   },
   (table) => [
     index("credential_mint_events_run_idx").on(table.runId),
-    index("credential_mint_events_space_idx").on(table.spaceId),
+    index("credential_mint_events_space_idx").on(table.workspaceId),
     index("credential_mint_events_source_idx").on(table.sourceId),
   ],
 );
@@ -616,8 +470,8 @@ export const securityFindings = sqliteTable(
   names.securityFindings,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    installationId: text("installation_id"),
+    workspaceId: text("space_id").notNull(),
+    capsuleId: text("installation_id"),
     runId: text("run_id"),
     severity: text("severity").notNull(),
     type: text("type").notNull(),
@@ -625,7 +479,7 @@ export const securityFindings = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    index("security_findings_space_idx").on(table.spaceId),
+    index("security_findings_space_idx").on(table.workspaceId),
     index("security_findings_run_idx").on(table.runId),
     index("security_findings_severity_idx").on(table.severity),
   ],
@@ -635,7 +489,7 @@ export const auditEvents = sqliteTable(
   names.auditEvents,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
+    workspaceId: text("space_id").notNull(),
     actorId: text("actor_id"),
     action: text("action").notNull(),
     targetType: text("target_type").notNull(),
@@ -644,23 +498,32 @@ export const auditEvents = sqliteTable(
     createdAt: text("created_at").notNull(),
     recordJson: jsonText("record_json").notNull(),
   },
-  (table) => [index("audit_events_space_idx").on(table.spaceId)],
+  (table) => [
+    index("audit_events_space_idx").on(table.workspaceId),
+    index("audit_events_space_target_created_id_idx").on(
+      table.workspaceId,
+      table.targetType,
+      table.targetId,
+      table.createdAt,
+      table.id,
+    ),
+  ],
 );
 
 export const backups = sqliteTable(
   names.backups,
   {
     id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    installationId: text("installation_id"),
+    workspaceId: text("space_id").notNull(),
+    capsuleId: text("installation_id"),
     environment: text("environment"),
     createdByRunId: text("created_by_run_id"),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    index("backups_space_idx").on(table.spaceId),
-    index("backups_installation_idx").on(table.installationId),
+    index("backups_space_idx").on(table.workspaceId),
+    index("backups_installation_idx").on(table.capsuleId),
   ],
 );
 
@@ -686,10 +549,15 @@ export const resourceShapes = sqliteTable(
     generation: integer("generation").notNull(),
     observedGeneration: integer("observed_generation").notNull(),
     outputsJson: jsonText("outputs_json"),
+    executionJson: jsonText("execution_json"),
+    stateAdoptionJson: jsonText("state_adoption_json"),
     conditionsJson: jsonText("conditions_json"),
     labelsJson: jsonText("labels_json"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
+    observationLeaseId: text("observation_lease_id"),
+    observationClaimedAt: text("observation_claimed_at"),
+    lastObservationAttemptAt: text("last_observation_attempt_at"),
   },
   (table) => [
     uniqueIndex("resource_shapes_space_kind_name_unique").on(
@@ -698,13 +566,30 @@ export const resourceShapes = sqliteTable(
       table.name,
     ),
     index("resource_shapes_space_idx").on(table.spaceId),
+    index("resource_shapes_space_created_id_idx").on(
+      table.spaceId,
+      table.createdAt,
+      table.id,
+    ),
+    index("resource_shapes_observation_due_idx").on(
+      table.phase,
+      table.lastObservationAttemptAt,
+      table.observationClaimedAt,
+      table.id,
+    ),
   ],
 );
 
 export const resolutionLocks = sqliteTable(names.resolutionLocks, {
   resourceId: text("resource_id").primaryKey(),
   selectedImplementation: text("selected_implementation").notNull(),
+  targetPool: text("target_pool"),
   target: text("target").notNull(),
+  targetSnapshotJson: jsonText("target_snapshot_json"),
+  implementationSnapshotJson: jsonText("implementation_snapshot_json"),
+  implementationPlugin: text("implementation_plugin"),
+  implementationOptionsJson: jsonText("implementation_options_json"),
+  implementationFingerprint: text("implementation_fingerprint"),
   locked: integer("locked").notNull(),
   reasonJson: jsonText("reason_json").notNull(),
   portability: text("portability"),
@@ -726,6 +611,11 @@ export const targetPools = sqliteTable(
   (table) => [
     uniqueIndex("target_pools_space_name_unique").on(table.spaceId, table.name),
     index("target_pools_space_idx").on(table.spaceId),
+    index("target_pools_space_created_id_idx").on(
+      table.spaceId,
+      table.createdAt,
+      table.id,
+    ),
   ],
 );
 
@@ -745,5 +635,60 @@ export const spacePolicies = sqliteTable(
       table.name,
     ),
     index("space_policies_space_idx").on(table.spaceId),
+  ],
+);
+
+export const interfaces = sqliteTable(
+  names.interfaces,
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    ownerKind: text("owner_kind").notNull(),
+    ownerId: text("owner_id").notNull(),
+    name: text("name").notNull(),
+    interfaceType: text("interface_type").notNull(),
+    phase: text("phase").notNull(),
+    generation: integer("generation").notNull(),
+    resolvedRevision: integer("resolved_revision").notNull(),
+    recordJson: jsonText("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("interfaces_active_name_unique")
+      .on(table.workspaceId, table.ownerKind, table.ownerId, table.name)
+      .where(sql`${table.phase} <> 'Retired'`),
+    index("interfaces_workspace_type_phase_idx").on(
+      table.workspaceId,
+      table.interfaceType,
+      table.phase,
+    ),
+  ],
+);
+
+export const interfaceBindings = sqliteTable(
+  names.interfaceBindings,
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    interfaceId: text("interface_id").notNull(),
+    subjectKind: text("subject_kind").notNull(),
+    subjectId: text("subject_id").notNull(),
+    phase: text("phase").notNull(),
+    generation: integer("generation").notNull(),
+    recordJson: jsonText("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("interface_bindings_active_subject_unique")
+      .on(table.interfaceId, table.subjectKind, table.subjectId)
+      .where(sql`${table.phase} <> 'Revoked'`),
+    index("interface_bindings_interface_idx").on(table.interfaceId),
+    index("interface_bindings_workspace_subject_idx").on(
+      table.workspaceId,
+      table.subjectKind,
+      table.subjectId,
+    ),
   ],
 );

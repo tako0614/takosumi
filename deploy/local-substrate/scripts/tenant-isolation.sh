@@ -2,7 +2,7 @@
 # Multi-tenant isolation smoke: user A must not be readable by user B.
 #
 # Walks:
-#   1. Mint subject A through the Google oauth-mock dance.
+#   1. Mint subject A through the generic local OIDC mock dance.
 #   2. Use the local-substrate dev fixture session as subject B.
 #   3. Create a Workspace, Git Source, and Capsule as A with A's HttpOnly cookie.
 #   4. Read that Capsule as B with the local fixture bearer -> MUST be non-200.
@@ -27,7 +27,7 @@ cleanup_jars() {
 }
 trap cleanup_jars EXIT
 
-mint_google_cookie_session() {
+mint_oidc_cookie_session() {
 	local state="tenant_iso_$(date +%s%N)_$$_$RANDOM"
 	local jar
 	jar="$(mktemp)"
@@ -35,7 +35,7 @@ mint_google_cookie_session() {
 	local loc1
 	loc1=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{redirect_url}" \
 		-c "$jar" -b "$jar" \
-		"$BASE/v1/auth/upstream/authorize?provider=google&state=$state")
+		"$BASE/v1/auth/upstream/authorize?provider=local-oidc&state=$state")
 	local loc2
 	loc2=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{redirect_url}" \
 		-c "$jar" -b "$jar" "$loc1")
@@ -54,7 +54,7 @@ mint_google_cookie_session() {
 	local resp
 	resp=$(curl -sk "${CURL_TLS[@]}" \
 		-c "$jar" -b "$jar" \
-		"$BASE/v1/auth/upstream/callback?provider=google&code=$code&state=$callback_state")
+		"$BASE/v1/auth/upstream/callback?provider=local-oidc&code=$code&state=$callback_state")
 	local subject
 	subject=$(echo "$resp" | python3 -c "
 import json, sys
@@ -62,7 +62,7 @@ d = json.loads(sys.stdin.read())
 print(d.get('subject', ''))
 ")
 	if [[ -z "$subject" ]]; then
-		echo "FAIL: Google OAuth callback did not return subject: $resp" >&2
+		echo "FAIL: OIDC callback did not return subject: $resp" >&2
 		exit 1
 	fi
 	local me
@@ -74,13 +74,13 @@ d = json.loads(sys.stdin.read())
 print(d.get('subject', ''))
 ")
 	if [[ "$me_subject" != "$subject" ]]; then
-		echo "FAIL: Google cookie session did not resolve through session/me: $me" >&2
+		echo "FAIL: OIDC cookie session did not resolve through session/me: $me" >&2
 		exit 1
 	fi
 	printf '%s %s\n' "$subject" "$jar"
 }
 
-read -r SUB_A JAR_A <<<"$(mint_google_cookie_session)"
+read -r SUB_A JAR_A <<<"$(mint_oidc_cookie_session)"
 [[ -n "$SUB_A" && -n "$JAR_A" ]] || {
 	echo "FAIL: subject A creation" >&2
 	exit 1

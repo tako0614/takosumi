@@ -8,7 +8,7 @@ const DEFAULT_SECRET_KEY_PATTERN =
 // SECURITY: the anchored DEFAULT_SECRET_KEY_PATTERN only matches snake_case /
 // kebab-case / exact keys, so camelCase compound credential names slipped
 // through (awsSecretAccessKey, accessKeyId, connectionString, databaseUrl, dsn,
-// sessionToken, authToken, bearerToken, stripeSecretKey, …). We additionally
+// sessionToken, authToken, bearerToken, paymentProviderSecret, …). We additionally
 // match against the key with separators stripped and lowercased, so camelCase
 // keys are covered. Over-matching a non-secret key is the safe failure here.
 const SECRET_KEY_SUBSTRINGS =
@@ -28,6 +28,8 @@ const URL_CREDENTIAL_PATTERN =
 const ASSIGNMENT_SECRET_PATTERN =
   /\b((?:secret|token|password|passwd|pwd|credential|credentials|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|auth[_-]?token|bearer[_-]?token|connection[_-]?string|database[_-]?url|dsn)|(?:[A-Za-z_][A-Za-z0-9_.-]*(?:secret|token|password|passwd|pwd|credential|credentials|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|auth[_-]?token|bearer[_-]?token|connection[_-]?string|database[_-]?url|dsn)[A-Za-z0-9_.-]*))(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,&]+)/gi;
 const SECRET_VALUE_PATTERNS = [
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /\b(?:postgres(?:ql)?|mysql|mariadb|redis|mongo|mongodb|libsql):\/\//i,
   /\bsk-[A-Za-z0-9_-]{8,}\b/,
   /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{8,}\b/,
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
@@ -57,7 +59,10 @@ export function isSecretKey(
 }
 
 export function containsSecretLikeString(value: string): boolean {
-  return SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(value));
+  return (
+    SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(value)) ||
+    redactString(value) !== value
+  );
 }
 
 export function redactJsonObject(

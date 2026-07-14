@@ -2,7 +2,6 @@ import {
   capsuleNameFromUrl,
   parseInstallPrefill,
   type InstallPrefill,
-  type InstallPrefillVariableValue,
 } from "./install-link.ts";
 import { appendAppHandoff, appHandoffFromSearch } from "./app-handoff.ts";
 
@@ -11,7 +10,6 @@ export interface InstallReturnContext {
   readonly ref: string;
   readonly path: string;
   readonly name?: string;
-  readonly vars?: Readonly<Record<string, InstallPrefillVariableValue>>;
   readonly label: string;
   readonly host: string;
   readonly sourceLabel: string;
@@ -52,7 +50,7 @@ export function installReturnContext(
 
 export function installReturnPathFromPrefill(
   prefill: Pick<InstallPrefill, "git"> &
-    Partial<Pick<InstallPrefill, "ref" | "path" | "name" | "vars">>,
+    Partial<Pick<InstallPrefill, "ref" | "path" | "name">>,
 ): string | undefined {
   const params = new URLSearchParams();
   params.set("git", prefill.git.trim());
@@ -61,14 +59,6 @@ export function installReturnPathFromPrefill(
   params.set("path", prefill.path?.trim() || ".");
   const name = prefill.name?.trim();
   if (name) params.set("name", name);
-  for (const [key, value] of Object.entries(prefill.vars ?? {}).sort()) {
-    if (typeof value === "string") {
-      params.set(`var.${key}`, value);
-    } else {
-      params.set(`varjson.${key}`, JSON.stringify(value));
-    }
-  }
-
   const safe = parseInstallPrefill(`?${params.toString()}`);
   if (!safe) return undefined;
 
@@ -77,18 +67,11 @@ export function installReturnPathFromPrefill(
   if (safe.ref) canonical.set("ref", safe.ref);
   canonical.set("path", safe.path || ".");
   if (safe.name) canonical.set("name", safe.name);
-  for (const [key, value] of Object.entries(safe.vars ?? {}).sort()) {
-    if (typeof value === "string") {
-      canonical.set(`var.${key}`, value);
-    } else {
-      canonical.set(`varjson.${key}`, JSON.stringify(value));
-    }
-  }
   return `/new?${canonical.toString()}`;
 }
 
 export function installReturnPathFromContext(
-  context: Pick<InstallReturnContext, "git" | "ref" | "path" | "name" | "vars">,
+  context: Pick<InstallReturnContext, "git" | "ref" | "path" | "name">,
 ): string | undefined {
   return installReturnPathFromPrefill(context);
 }

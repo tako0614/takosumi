@@ -6,7 +6,7 @@ import {
   controlInventoryResourceKey,
 } from "../../../../accounts/service/src/control-routes.ts";
 
-// The session-authed `/api/v1` control surface dispatches by NORMALIZED first
+// The session-authed `/api/v1` control surface dispatches by its public first
 // path segment (a resource key) to a per-resource `control/<resource>.ts`
 // handler that then matches method + sub-path internally. These tests keep the
 // dispatch table (`RESOURCE_HANDLERS`, surfaced as
@@ -44,25 +44,40 @@ test("every registered dispatch handler is exercised by the inventory (no orphan
   }
 });
 
-test("inventory resource key normalization mirrors the public vocabulary", () => {
-  // Spot-check the public Workspace/Capsule/StateVersion vocabulary collapses
-  // onto the legacy dispatch keys, matching `normalizePublicControlSegments`.
-  expect(controlInventoryResourceKey("/api/v1/workspaces")).toBe("spaces");
+test("inventory resource keys use the public vocabulary directly", () => {
+  expect(controlInventoryResourceKey("/api/v1/workspaces")).toBe("workspaces");
   expect(controlInventoryResourceKey("/api/v1/workspaces/w1/capsules")).toBe(
-    "spaces",
+    "workspaces",
   );
-  expect(controlInventoryResourceKey("/api/v1/capsules/c1")).toBe(
-    "installations",
-  );
+  expect(controlInventoryResourceKey("/api/v1/capsules/c1")).toBe("capsules");
   expect(controlInventoryResourceKey("/api/v1/capsule-configs")).toBe(
-    "install-configs",
+    "capsule-configs",
   );
   expect(controlInventoryResourceKey("/api/v1/state-versions/s1")).toBe(
-    "deployments",
+    "state-versions",
   );
   expect(controlInventoryResourceKey("/api/v1/provider-connections")).toBe(
     "provider-connections",
   );
   // Non-control paths are not owned by this surface.
   expect(controlInventoryResourceKey("/v1/account/session/me")).toBeUndefined();
+});
+
+test("Capsule ProviderBindings use the canonical route without a legacy alias", () => {
+  const paths = PUBLIC_SESSION_CONTROL_ENDPOINTS.map(
+    (endpoint) => endpoint.path,
+  );
+  expect(paths).toContain("/api/v1/capsules/{capsuleId}/provider-bindings");
+  expect(paths).not.toContain(
+    "/api/v1/capsules/{capsuleId}/provider-connections",
+  );
+});
+
+test("OSS Accounts does not publish a commercial plan catalog", () => {
+  expect(
+    PUBLIC_SESSION_CONTROL_ENDPOINTS.some(
+      (endpoint) => endpoint.path === "/api/v1/billing/plans",
+    ),
+  ).toBe(false);
+  expect(CONTROL_DISPATCH_RESOURCE_KEYS).not.toContain("billing");
 });

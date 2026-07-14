@@ -21,7 +21,7 @@ import {
 } from "./control-api.ts";
 
 /** Max events fetched per Workspace and rendered in the merged feed. */
-export const NOTIF_PER_SPACE_LIMIT = 50;
+export const NOTIF_PER_WORKSPACE_LIMIT = 50;
 export const NOTIF_FEED_LIMIT = 60;
 
 /** An ActivityEvent plus the Workspace it came from (for cross-Workspace labelling). */
@@ -34,12 +34,13 @@ export interface FeedEntry {
 export function isFailureAction(action: string): boolean {
   return (
     action === "run.failed" ||
-    action === "installation.drift_detected" ||
+    action === "capsule.drift_detected" ||
+    action === "resource.drift_detected" ||
     action === "connection.revoked" ||
     // Auto-update failures carry failure-toned copy in describeEvent; keep the
     // icon/styling in step so they don't render with the neutral Bell.
-    action === "installation.auto_update_failed" ||
-    action === "installation.auto_update_apply_failed"
+    action === "capsule.auto_update_failed" ||
+    action === "capsule.auto_update_apply_failed"
   );
 }
 
@@ -51,7 +52,10 @@ export async function loadNotificationFeed(
   // blank the entire merged feed — the reachable workspaces still show.
   const perWorkspace = await Promise.allSettled(
     workspaces.map(async (workspace): Promise<readonly FeedEntry[]> => {
-      const events = await listActivity(workspace.id, NOTIF_PER_SPACE_LIMIT);
+      const events = await listActivity(
+        workspace.id,
+        NOTIF_PER_WORKSPACE_LIMIT,
+      );
       return events.map((event) => ({
         event,
         workspaceHandle: workspace.handle,

@@ -3,14 +3,14 @@
 // The Resource object mirrors the Kubernetes-style shape mandated by
 // `docs/internal/final-plan.md` §4 (Resource Object Model) and §5 (Resource Shapes):
 // a desired `spec`, an observed `status`, the `resolution` decision, and
-// `conditions`. Kinds in this file are only public when they have a planner and
-// adapter path; future shapes should be added when they can actually materialize.
+// `conditions`. Six typed schemas ship with the provider, while an operator may
+// register additional shape tokens with an explicit schema and adapter/plugin.
 
 import type { Condition, JsonObject } from "./types.ts";
 import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
 
-/** Resource shape kinds the Resource Shape API can host. */
-export type ResourceShapeKind =
+/** Resource shapes bundled with this Takosumi build and its typed provider. */
+export type BundledResourceShapeKind =
   | "EdgeWorker"
   | "ObjectBucket"
   | "KVStore"
@@ -18,7 +18,16 @@ export type ResourceShapeKind =
   | "SQLDatabase"
   | "ContainerService";
 
-export const RESOURCE_SHAPE_KINDS: readonly ResourceShapeKind[] = [
+/**
+ * Open Resource Shape token carried by the API and plugin seam. The bundled
+ * provider still exposes only {@link BundledResourceShapeKind}; another token
+ * is executable only when the host explicitly registers its schema and
+ * adapter/plugin. Merely choosing a string never grants execution authority.
+ */
+export type ResourceShapeKind = string;
+
+/** Complete typed shape set implemented by this API version. */
+export const RESOURCE_SHAPE_KINDS: readonly BundledResourceShapeKind[] = [
   "EdgeWorker",
   "ObjectBucket",
   "KVStore",
@@ -27,12 +36,39 @@ export const RESOURCE_SHAPE_KINDS: readonly ResourceShapeKind[] = [
   "ContainerService",
 ] as const;
 
+/** Runtime guard for a portable, path-safe Resource Shape token. */
+export function isResourceShapeKind(
+  value: unknown,
+): value is ResourceShapeKind {
+  return (
+    typeof value === "string" && /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u.test(value)
+  );
+}
+
+/** True only for one of the six schemas compiled into this contract version. */
+export function isBundledResourceShapeKind(
+  value: unknown,
+): value is BundledResourceShapeKind {
+  return (
+    typeof value === "string" &&
+    (RESOURCE_SHAPE_KINDS as readonly string[]).includes(value)
+  );
+}
+
+/** Parse a persisted/wire token; schema admission happens in the host registry. */
+export function parseResourceShapeKind(value: unknown): ResourceShapeKind {
+  if (!isResourceShapeKind(value)) {
+    throw new TypeError(`invalid Resource Shape kind token: ${String(value)}`);
+  }
+  return value;
+}
+
 /**
  * Entry point that produced/owns a resource. `managedBy` gates field ownership
  * across the multiple authoring surfaces (`docs/internal/final-plan.md` §15): an
  * OpenTofu-managed resource is not directly mutable from the console.
  */
-export type ResourceManagedBy = "opentofu" | "console" | "api" | "compat";
+export type ResourceManagedBy = string;
 
 /** `metadata` keys are verbatim from `docs/internal/final-plan.md` §4. */
 export interface ResourceMetadata {
@@ -85,8 +121,9 @@ export interface ResourceStatus {
 }
 
 /**
- * Generic Resource object. `TKind`/`TSpec` are narrowed by concrete shapes; the
- * untyped fallback keeps the API and store layers shape-agnostic.
+ * Base object shared by bundled and explicitly registered Resource Shape
+ * schemas. Shape-agnostic control-plane code carries an open token and JSON
+ * object; schema-specific callers should use one of the typed aliases below.
  */
 export interface ResourceObject<
   TKind extends ResourceShapeKind = ResourceShapeKind,
@@ -97,6 +134,33 @@ export interface ResourceObject<
   readonly metadata: ResourceMetadata;
   readonly spec: TSpec;
   readonly status?: ResourceStatus;
+}
+
+/**
+ * One non-secret event in a Resource's public history.
+ *
+ * This is a read-only Resource-shaped projection of the shared Activity / Run
+ * audit ledger, not a second lifecycle or state authority. `action` remains an
+ * open dotted token so adapters and future Resource operations can add evidence
+ * without changing the envelope. Metadata carries identifiers, phases, and
+ * counts only; credentials, raw errors, specs, state, and Output values are not
+ * part of this contract.
+ */
+export interface ResourceEvent {
+  readonly id: string;
+  readonly space: string;
+  readonly resourceId: string;
+  readonly action: string;
+  readonly actorId?: string;
+  readonly runId?: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly createdAt: string;
+}
+
+/** Newest-first cursor page returned by a Resource event listing. */
+export interface ListResourceEventsResponse {
+  readonly events: readonly ResourceEvent[];
+  readonly nextCursor?: string;
 }
 
 // --- Data-resource deletion policy (general, `docs/internal/final-plan.md` §7.3) -------
@@ -111,11 +175,15 @@ export interface ResourceLifecyclePolicy {
 
 // --- Connection / grant / projection vocabulary (`docs/internal/final-plan.md` §10) ---
 
-export type ResourceConnectionPermission =
-  "read" | "write" | "connect" | "publish" | "consume";
-
-export type ResourceProjectionKind =
-  "env" | "database_url" | "runtime_binding" | "volume_mount" | "sdk_client";
+/**
+ * Adapter-owned permission and projection tokens. Common built-in examples are
+ * `read`, `write`, `runtime_binding`, and `database_url`; Core deliberately
+ * does not make that starter vocabulary a global allow-list. The selected
+ * Target implementation must advertise every requested token before a plan is
+ * executable.
+ */
+export type ResourceConnectionPermission = string;
+export type ResourceProjectionKind = string;
 
 export interface ResourceConnectionSpec {
   readonly resource: string;
@@ -127,7 +195,7 @@ export interface ResourceConnectionSpec {
 
 /**
  * Endpoint-defined Worker capability/profile token. Standard examples include
- * `workers_bindings`, `node_compat`, `service_bindings`, and `static_assets`,
+ * `workers_bindings`, `node_compat`, `runtime_bindings`, and `static_assets`,
  * but operators/adapters can advertise additional tokens through TargetPool
  * capability evidence and the Resolver.
  */
@@ -201,7 +269,8 @@ export type QueueResource = ResourceObject<"Queue", QueueSpec>;
 
 export interface SQLDatabaseSpec {
   readonly name: string;
-  readonly engine?: "sqlite" | "postgres" | "mysql";
+  /** Open engine capability token; execution still requires Target evidence. */
+  readonly engine?: string;
   readonly migrationsPath?: string;
   readonly lifecyclePolicy?: ResourceLifecyclePolicy;
 }

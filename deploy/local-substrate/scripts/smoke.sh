@@ -208,15 +208,15 @@ check "prod-mirror.cloud.dashboard-signin" "app.takosumi.test" "/sign-in" "200"
 check "prod-mirror.cloud.dashboard-deeplink" "app.takosumi.test" "/apps/abc" "200"
 
 echo
-echo "==> OAuth flow — upstream mock (accounts.google.com)"
+echo "==> OAuth flow — generic upstream OIDC mock"
 # These walk the full 3-step upstream OAuth dance against oauth-mock and
 # assert a session is created. The dedicated script handles the redirect
 # chain.
-if bash "$SCRIPT_DIR/oauth-e2e.sh" google >/dev/null 2>&1; then
-	echo "    PASS [oauth.e2e.google] full authorize → callback dance set a verified HttpOnly session"
+if bash "$SCRIPT_DIR/oauth-e2e.sh" local-oidc >/dev/null 2>&1; then
+	echo "    PASS [oauth.e2e.oidc] full authorize → callback dance set a verified HttpOnly session"
 	PASS=$((PASS + 1))
 else
-	echo "    FAIL [oauth.e2e.google] see scripts/oauth-e2e.sh google for the failure"
+	echo "    FAIL [oauth.e2e.oidc] see scripts/oauth-e2e.sh local-oidc for the failure"
 	FAIL=$((FAIL + 1))
 fi
 
@@ -342,20 +342,6 @@ if run_script "mailpit" "bash $SCRIPT_DIR/mailpit-smoke.sh"; then
 	PASS=$((PASS + 1))
 else
 	echo "    FAIL [mailpit] see scripts/mailpit-smoke.sh"
-	FAIL=$((FAIL + 1))
-fi
-
-echo
-echo "==> Stripe webhook replay (signed HMAC + idempotency)"
-# Signs a checkout.session.completed event with the local fixture webhook
-# secret, asserts received=true and duplicate=false on first delivery, then
-# replays to assert duplicate=true. Also asserts a wrong-secret POST is
-# rejected with 400.
-if run_script "stripe.webhook.e2e" "python3 $SCRIPT_DIR/stripe-webhook-replay.py"; then
-	echo "    PASS [stripe.webhook.e2e] verify + replay + reject all behaved"
-	PASS=$((PASS + 1))
-else
-	echo "    FAIL [stripe.webhook.e2e] see scripts/stripe-webhook-replay.py"
 	FAIL=$((FAIL + 1))
 fi
 

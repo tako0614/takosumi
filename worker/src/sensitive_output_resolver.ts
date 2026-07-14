@@ -1,5 +1,5 @@
 import type { JsonValue } from "takosumi-contract";
-import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
+import type { Output as Output } from "takosumi-contract/outputs";
 import type {
   SensitiveOutputResolver,
   SensitiveOutputValue,
@@ -18,13 +18,13 @@ export class R2SensitiveOutputResolver implements SensitiveOutputResolver {
   }
 
   async resolve(input: {
-    readonly outputSnapshot: OutputSnapshot;
+    readonly output: Output;
     readonly outputName: string;
-    readonly fromSpaceId: string;
-    readonly toSpaceId: string;
-    readonly producerInstallationId: string;
+    readonly fromWorkspaceId: string;
+    readonly toWorkspaceId: string;
+    readonly producerCapsuleId: string;
   }): Promise<SensitiveOutputValue | undefined> {
-    const object = await this.#bucket.get(input.outputSnapshot.rawOutputArtifactKey);
+    const object = await this.#bucket.get(input.output.rawArtifactRef);
     if (!object) return undefined;
     const ciphertext = new Uint8Array(await object.arrayBuffer());
     const plaintext = await this.#crypto.open(

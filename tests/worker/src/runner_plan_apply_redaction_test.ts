@@ -7,6 +7,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -17,6 +18,32 @@ import {
   workspaceForRun,
 } from "../../../runner/lib/artifacts.ts";
 
+function genericEnvFileCredentialManifest() {
+  return {
+    bindings: [
+      {
+        providerSource: "registry.opentofu.org/example/envfile",
+        connectionId: "conn_generic_envfile",
+        recipeId: "generic-env",
+        authMode: "env",
+        envNames: ["GENERIC_API_TOKEN", "GENERIC_CREDENTIALS_FILE"],
+        fileEnvNames: ["GENERIC_CREDENTIALS_FILE"],
+        requiredEnvGroups: [
+          ["GENERIC_API_TOKEN"],
+          ["GENERIC_CREDENTIALS_FILE"],
+        ],
+      },
+    ],
+    files: [
+      {
+        path: "provider-credentials.json",
+        mode: 0o600,
+        envName: "GENERIC_CREDENTIALS_FILE",
+      },
+    ],
+  };
+}
+
 test("runner redacts plan stdout and stderr on success", async () => {
   const fixture = await createFakeTofuFixture();
   await withFakeTofu(fixture.binDir, async () => {
@@ -24,7 +51,7 @@ test("runner redacts plan stdout and stderr on success", async () => {
       runRequest("plan_redaction_success", "plan", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: fixture.sourceDir },
+          source: restoredGitSource(fixture.sourceDir),
           operation: "create",
           requiredProviders: [],
         },
@@ -53,12 +80,27 @@ test("runner redacts bare run-scoped credential values from plan output", async 
       runRequest("plan_bare_credential_redaction", "plan", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: fixture.sourceDir },
+          source: restoredGitSource(fixture.sourceDir),
           operation: "create",
           requiredProviders: [],
         },
         credentials: {
-          TF_VAR_cloudflare_main_api_token: bareRunKey,
+          env: {
+            EXAMPLE_API_TOKEN: bareRunKey,
+          },
+          manifest: {
+            bindings: [
+              {
+                providerSource: "registry.opentofu.org/example/example",
+                connectionId: "conn_bare_redaction",
+                recipeId: "generic-env",
+                authMode: "env",
+                envNames: ["EXAMPLE_API_TOKEN"],
+                fileEnvNames: [],
+                requiredEnvGroups: [["EXAMPLE_API_TOKEN"]],
+              },
+            ],
+          },
         },
       }),
     );
@@ -78,13 +120,12 @@ test("runner allows provider-free generated roots under an allowed-provider prof
       runRequest("provider_free_profile_plan", "plan", {
         generatedRoot: providerFreeGeneratedRootWithEmptyProviderBlock(),
         planRun: {
-          source: { kind: "local", path: fixture.sourceDir },
+          source: restoredGitSource(fixture.sourceDir),
           operation: "create",
           requiredProviders: [],
         },
         runnerProfile: {
           id: "opentofu-default",
-          sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["cloudflare/cloudflare"],
         },
       }),
@@ -147,13 +188,12 @@ test("runner rejects provider-using generated roots that omit requiredProviders"
       runRequest("missing_required_providers_plan", "plan", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: fixture.sourceDir },
+          source: restoredGitSource(fixture.sourceDir),
           operation: "create",
           requiredProviders: [],
         },
         runnerProfile: {
           id: "opentofu-default",
-          sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["cloudflare/cloudflare"],
         },
       }),
@@ -174,19 +214,19 @@ test("runner materializes generic provider credential files for plan and cleans 
       runRequest("plan_generic_provider_file", "plan", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: fixture.sourceDir },
+          source: restoredGitSource(fixture.sourceDir),
           operation: "create",
           requiredProviders: ["registry.opentofu.org/example/envfile"],
         },
         runnerProfile: {
           id: "opentofu-default",
-          sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["*"],
         },
         credentials: {
           env: {
             GENERIC_API_TOKEN: envSecret,
           },
+          manifest: genericEnvFileCredentialManifest(),
           files: [
             {
               path: "provider-credentials.json",
@@ -221,19 +261,19 @@ test("runner rematerializes generic provider credential files for apply and clea
       runRequest("apply_generic_provider_file", "plan", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: fixture.sourceDir },
+          source: restoredGitSource(fixture.sourceDir),
           operation: "create",
           requiredProviders: ["registry.opentofu.org/example/envfile"],
         },
         runnerProfile: {
           id: "opentofu-default",
-          sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["*"],
         },
         credentials: {
           env: {
             GENERIC_API_TOKEN: envSecret,
           },
+          manifest: genericEnvFileCredentialManifest(),
           files: [
             {
               path: "provider-credentials.json",
@@ -257,19 +297,19 @@ test("runner rematerializes generic provider credential files for apply and clea
       runRequest("apply_generic_provider_file", "apply", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: fixture.sourceDir },
+          source: restoredGitSource(fixture.sourceDir),
           operation: "create",
           requiredProviders: ["registry.opentofu.org/example/envfile"],
         },
         runnerProfile: {
           id: "opentofu-default",
-          sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["*"],
         },
         credentials: {
           env: {
             GENERIC_API_TOKEN: envSecret,
           },
+          manifest: genericEnvFileCredentialManifest(),
           files: [
             {
               path: "provider-credentials.json",
@@ -305,19 +345,19 @@ test("runner rematerializes generic provider credential files for destroy and cl
       runRequest("destroy_generic_provider_file", "plan", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: fixture.sourceDir },
+          source: restoredGitSource(fixture.sourceDir),
           operation: "destroy",
           requiredProviders: ["registry.opentofu.org/example/envfile"],
         },
         runnerProfile: {
           id: "opentofu-default",
-          sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["*"],
         },
         credentials: {
           env: {
             GENERIC_API_TOKEN: envSecret,
           },
+          manifest: genericEnvFileCredentialManifest(),
           files: [
             {
               path: "provider-credentials.json",
@@ -341,19 +381,19 @@ test("runner rematerializes generic provider credential files for destroy and cl
       runRequest("destroy_generic_provider_file", "destroy", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: fixture.sourceDir },
+          source: restoredGitSource(fixture.sourceDir),
           operation: "destroy",
           requiredProviders: ["registry.opentofu.org/example/envfile"],
         },
         runnerProfile: {
           id: "opentofu-default",
-          sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["*"],
         },
         credentials: {
           env: {
             GENERIC_API_TOKEN: envSecret,
           },
+          manifest: genericEnvFileCredentialManifest(),
           files: [
             {
               path: "provider-credentials.json",
@@ -387,7 +427,7 @@ test("runner redacts apply stdout and stderr on success", async () => {
       runRequest("apply_redaction_success", "plan", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: fixture.sourceDir },
+          source: restoredGitSource(fixture.sourceDir),
           operation: "create",
           requiredProviders: [],
         },
@@ -401,7 +441,7 @@ test("runner redacts apply stdout and stderr on success", async () => {
       runRequest("apply_redaction_success", "apply", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: fixture.sourceDir },
+          source: restoredGitSource(fixture.sourceDir),
           operation: "create",
           requiredProviders: [],
         },
@@ -451,7 +491,7 @@ writeFileSync("dist/worker.js", "export default { fetch() { return new Response(
           generatedRoot: minimalGeneratedRoot(),
           sourceBuild,
           planRun: {
-            source: { kind: "local", path: fixture.sourceDir },
+            source: restoredGitSource(fixture.sourceDir),
             operation: "create",
             requiredProviders: [],
           },
@@ -465,7 +505,7 @@ writeFileSync("dist/worker.js", "export default { fetch() { return new Response(
       expect(planPayload.stdout).toContain("source build 1/1");
       expect(
         await readFile(
-          join(workspace.templateModuleDir, "dist/worker.js"),
+          join(workspace.childModuleDir, "dist/worker.js"),
           "utf8",
         ),
       ).toContain("export default");
@@ -475,7 +515,7 @@ writeFileSync("dist/worker.js", "export default { fetch() { return new Response(
           generatedRoot: minimalGeneratedRoot(),
           sourceBuild,
           planRun: {
-            source: { kind: "local", path: fixture.sourceDir },
+            source: restoredGitSource(fixture.sourceDir),
             operation: "create",
             requiredProviders: [],
           },
@@ -483,9 +523,12 @@ writeFileSync("dist/worker.js", "export default { fetch() { return new Response(
         }),
       );
       expect(apply.status).toBe(200);
+      // Each phase starts from the same freshly restored immutable
+      // SourceSnapshot. A deterministic sourceBuild therefore runs once in the
+      // apply checkout; it must not depend on mutations left by the plan phase.
       expect(
         await readFile(join(workspace.sourceRoot, "build-count.txt"), "utf8"),
-      ).toBe("2");
+      ).toBe("1");
     });
   } finally {
     await rm(workspace.root, { recursive: true, force: true });
@@ -499,7 +542,7 @@ test("runner redacts plan/apply failure payloads", async () => {
       runRequest("plan_redaction_failure", "plan", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: planFailure.sourceDir },
+          source: restoredGitSource(planFailure.sourceDir),
           operation: "create",
           requiredProviders: [],
         },
@@ -518,7 +561,7 @@ test("runner redacts plan/apply failure payloads", async () => {
       runRequest("apply_redaction_failure", "plan", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: applyFailure.sourceDir },
+          source: restoredGitSource(applyFailure.sourceDir),
           operation: "create",
           requiredProviders: [],
         },
@@ -531,7 +574,7 @@ test("runner redacts plan/apply failure payloads", async () => {
       runRequest("apply_redaction_failure", "apply", {
         generatedRoot: minimalGeneratedRoot(),
         planRun: {
-          source: { kind: "local", path: applyFailure.sourceDir },
+          source: restoredGitSource(applyFailure.sourceDir),
           operation: "create",
           requiredProviders: [],
         },
@@ -551,6 +594,21 @@ function runRequest(
   action: "plan" | "apply" | "destroy",
   request: unknown,
 ): Request {
+  const planRun = (
+    request as {
+      planRun?: { source?: Record<string, unknown> };
+    }
+  ).planRun;
+  const source = planRun?.source;
+  const fixturePath = source?.testFixturePath;
+  if (typeof fixturePath === "string") {
+    const workspace = workspaceForRun(runId);
+    rmSync(workspace.sourceRoot, { recursive: true, force: true });
+    mkdirSync(workspace.root, { recursive: true });
+    cpSync(fixturePath, workspace.sourceRoot, { recursive: true });
+    const { testFixturePath: _, ...gitSource } = source;
+    planRun!.source = gitSource;
+  }
   return new Request(`https://runner.internal/runs/${runId}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -558,11 +616,19 @@ function runRequest(
   });
 }
 
+function restoredGitSource(testFixturePath: string): Record<string, unknown> {
+  return {
+    kind: "git",
+    url: "https://git.example.com/example/capsule.git",
+    commit: "0123456789abcdef0123456789abcdef01234567",
+    testFixturePath,
+  };
+}
+
 function minimalGeneratedRoot(): { readonly files: Record<string, string> } {
   return {
     files: {
-      "main.tf":
-        'terraform {}\nmodule "service" { source = "./template-module" }\n',
+      "main.tf": 'terraform {}\nmodule "service" { source = "./module" }\n',
     },
   };
 }
@@ -573,7 +639,7 @@ function providerFreeGeneratedRootWithEmptyProviderBlock(): {
   return {
     files: {
       "versions.tf": "terraform {\n  required_providers {}\n}\n",
-      "main.tf": 'module "service" { source = "./template-module" }\n',
+      "main.tf": 'module "service" { source = "./module" }\n',
     },
   };
 }

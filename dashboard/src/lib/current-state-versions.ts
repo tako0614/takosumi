@@ -1,17 +1,17 @@
 import {
   listWorkspaceCurrentStateVersions,
-  type PublicDeployment,
+  type PublicStateVersion,
 } from "./control-api.ts";
 
 const CACHE_TTL_MS = 5_000;
 
 type CacheEntry = {
-  readonly deployments: readonly PublicDeployment[];
+  readonly stateVersions: readonly PublicStateVersion[];
   readonly cachedAt: number;
 };
 
 const cache = new Map<string, CacheEntry>();
-const inflight = new Map<string, Promise<readonly PublicDeployment[]>>();
+const inflight = new Map<string, Promise<readonly PublicStateVersion[]>>();
 
 function cacheKey(
   workspaceId: string,
@@ -43,11 +43,11 @@ export function clearCurrentStateVersionCache(workspaceId?: string): void {
 
 export function primeCurrentStateVersionCache(
   workspaceId: string,
-  deployments: readonly PublicDeployment[],
+  stateVersions: readonly PublicStateVersion[],
   options: { readonly includeDestroyed?: boolean } = {},
 ): void {
   cache.set(cacheKey(workspaceId, options), {
-    deployments,
+    stateVersions,
     cachedAt: Date.now(),
   });
 }
@@ -58,19 +58,19 @@ export async function listCurrentStateVersionsCached(
     readonly includeDestroyed?: boolean;
     readonly force?: boolean;
   } = {},
-): Promise<readonly PublicDeployment[]> {
+): Promise<readonly PublicStateVersion[]> {
   const key = cacheKey(workspaceId, options);
   const current = cache.get(key);
-  if (!options.force && fresh(current)) return current.deployments;
+  if (!options.force && fresh(current)) return current.stateVersions;
   const currentInflight = inflight.get(key);
   if (!options.force && currentInflight) return currentInflight;
 
   const request = listWorkspaceCurrentStateVersions(workspaceId, {
     includeDestroyed: options.includeDestroyed,
   })
-    .then((deployments) => {
-      cache.set(key, { deployments, cachedAt: Date.now() });
-      return deployments;
+    .then((stateVersions) => {
+      cache.set(key, { stateVersions, cachedAt: Date.now() });
+      return stateVersions;
     })
     .finally(() => {
       if (inflight.get(key) === request) inflight.delete(key);

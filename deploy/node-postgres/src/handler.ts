@@ -5,20 +5,12 @@
  * env vars only.
  */
 import type {
-  PlatformAccessPolicy,
   LoginEmailAllowlist,
   OidcClientRegistration,
   PasskeyHttpOptions,
-  UpstreamOAuthClientRegistration,
   UpstreamOAuthOptions,
-  RuntimeProjectionMaterialResolverHttpOptions,
 } from "@takosjp/takosumi-accounts-service";
-import {
-  createOpenPlatformAccessPolicy,
-  customOidcOAuthProvider,
-  googleOAuthProvider,
-  isRetiredUpstreamOAuthProviderId,
-} from "@takosjp/takosumi-accounts-service";
+import { upstreamOAuthOptionsFromEnvironment } from "@takosjp/takosumi-accounts-service";
 
 export interface NodeAccountsStableOidcConfig {
   readonly privateJwkJson: string;
@@ -26,32 +18,6 @@ export interface NodeAccountsStableOidcConfig {
   readonly previousPublicJwksJson?: string;
   readonly subject?: string;
   readonly oidcPairwiseSubjectSecret: string;
-  readonly launchTokenPairwiseSecret: string;
-}
-
-export interface NodeAccountsExportDownloadConfig {
-  /**
-   * HMAC-signing secret for export download URLs. The export worker signs
-   * each emitted download URL with this secret (`tk_exp` + `tk_sig` query
-   * params via `signExportDownloadUrl`), and the in-process download route
-   * verifies the signature + expiry before serving the archive. Required
-   * when any export-download env var is configured, mirroring the Cloudflare
-   * profile's `TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET`.
-   */
-  readonly secret: string;
-  /**
-   * Filesystem directory on the accounts container where export archives
-   * are materialized (`takos-export-<op>.tar.zst[.age]`). Caddy / nginx
-   * (or any static file server in front of `downloadBaseUrl`) must serve
-   * this directory at the same URL prefix.
-   */
-  readonly outputDirectory: string;
-  /**
-   * Absolute HTTPS URL prefix that, combined with the archive filename,
-   * yields the public download URL embedded in the operation response.
-   */
-  readonly baseUrl: string;
-  readonly ttlMs?: number;
 }
 
 export interface NodeAccountsServerConfig {
@@ -67,15 +33,12 @@ export interface NodeAccountsServerConfig {
   readonly managedPublicBaseDomain: string | undefined;
   readonly databaseUrl: string;
   readonly clients: readonly OidcClientRegistration[] | undefined;
-  readonly platformAccess: PlatformAccessPolicy;
-  readonly runtimeProjectionMaterialResolver:
-    RuntimeProjectionMaterialResolverHttpOptions | undefined;
   readonly loginEmailAllowlist: LoginEmailAllowlist | undefined;
   readonly passkeys: PasskeyHttpOptions | undefined;
   readonly upstreamOAuth: UpstreamOAuthOptions | undefined;
   readonly stableOidc: NodeAccountsStableOidcConfig | undefined;
-  readonly exportDownload: NodeAccountsExportDownloadConfig | undefined;
   readonly privacyOperationsToken: string | undefined;
+  readonly privacyRetentionPolicyRef: string | undefined;
   readonly subject: string | undefined;
 }
 
@@ -99,16 +62,17 @@ export function parseEnv(
     ),
     databaseUrl,
     clients: parseClients(env),
-    platformAccess: parsePlatformAccess(env),
-    runtimeProjectionMaterialResolver: parseRuntimeProjectionMaterials(env),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
     passkeys: parsePasskeys(env),
     upstreamOAuth: parseUpstreamOAuth(env),
     stableOidc: parseStableOidc(env),
-    exportDownload: parseExportDownload(env),
     privacyOperationsToken: optional(
       env,
       "TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN",
+    ),
+    privacyRetentionPolicyRef: optional(
+      env,
+      "TAKOSUMI_ACCOUNTS_PRIVACY_RETENTION_POLICY_REF",
     ),
     subject: optional(env, "TAKOSUMI_ACCOUNTS_SUBJECT"),
   };
@@ -133,13 +97,18 @@ function parseClients(
       "TAKOSUMI_ACCOUNTS_CLIENT_ID and TAKOSUMI_ACCOUNTS_REDIRECT_URIS must be set together",
     );
   }
+  const allowedScopes = splitList(env.TAKOSUMI_ACCOUNTS_ALLOWED_SCOPES);
+  const clientSecret = optional(env, "TAKOSUMI_ACCOUNTS_CLIENT_SECRET");
+  const tokenEndpointAuthMethod = parseClientAuthMethod(
+    env.TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD,
+  );
   return [
     {
       clientId,
       redirectUris,
-      ...(optional(env, "TAKOSUMI_ACCOUNTS_CLIENT_SECRET")
-        ? { clientSecret: optional(env, "TAKOSUMI_ACCOUNTS_CLIENT_SECRET")! }
-        : {}),
+      ...(allowedScopes.length > 0 ? { allowedScopes } : {}),
+      ...(clientSecret ? { clientSecret } : {}),
+      ...(tokenEndpointAuthMethod ? { tokenEndpointAuthMethod } : {}),
     },
   ];
 }
@@ -160,200 +129,62 @@ function parseClientRecord(value: unknown): OidcClientRegistration {
       "TAKOSUMI_ACCOUNTS_CLIENTS entries require clientId and redirectUris",
     );
   }
+  const allowedScopes = parseClientAllowedScopes(record.allowedScopes);
+  const tokenEndpointAuthMethod = parseClientAuthMethod(
+    record.tokenEndpointAuthMethod,
+  );
   return {
     clientId,
     redirectUris,
+    ...(allowedScopes ? { allowedScopes } : {}),
     ...(typeof record.clientSecret === "string"
       ? { clientSecret: record.clientSecret }
       : {}),
+    ...(tokenEndpointAuthMethod ? { tokenEndpointAuthMethod } : {}),
   };
 }
 
-function parsePlatformAccess(
-  env: Record<string, string | undefined>,
-): PlatformAccessPolicy {
-  const status = optional(env, "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS") ?? "closed";
-  if (status === "closed") return { status: "closed" };
-  if (status !== "open") {
+function parseClientAllowedScopes(
+  value: unknown,
+): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
     throw new TypeError(
-      "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS must be one of: closed, open",
+      "TAKOSUMI_ACCOUNTS_CLIENTS allowedScopes must be a non-empty string array",
     );
   }
-  const evidenceDigest = required(
-    env,
-    "TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST",
+  const scopes = value.map((scope) =>
+    typeof scope === "string" ? scope.trim() : "",
   );
-  requireProductionHardeningEvidence(env);
-  requireReleaseActivationEvidenceIfEnabled(env);
-  return createOpenPlatformAccessPolicy(
-    {
-      ...(optional(env, "TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF")
-        ? {
-            evidenceRef: optional(
-              env,
-              "TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF",
-            )!,
-          }
-        : {}),
-      ...(optional(env, "TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF")
-        ? {
-            approvalRef: optional(
-              env,
-              "TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF",
-            )!,
-          }
-        : {}),
-      ...(optional(env, "TAKOSUMI_ACCOUNTS_PLATFORM_PUBLIC_SUMMARY")
-        ? {
-            publicSummary: optional(
-              env,
-              "TAKOSUMI_ACCOUNTS_PLATFORM_PUBLIC_SUMMARY",
-            )!,
-          }
-        : {}),
-    },
-    {
-      ready: true,
-      evidenceDigest,
-    },
-  );
-}
-
-function requireReleaseActivationEvidenceIfEnabled(
-  env: Record<string, string | undefined>,
-): void {
-  if (!optional(env, "TAKOSUMI_RELEASE_ACTIVATOR_URL")) return;
-  if (!optional(env, "TAKOSUMI_RELEASE_ACTIVATOR_TOKEN")) {
+  if (scopes.some((scope) => !scope || /\s/u.test(scope))) {
     throw new TypeError(
-      "Open platform readiness access requires TAKOSUMI_RELEASE_ACTIVATOR_TOKEN when TAKOSUMI_RELEASE_ACTIVATOR_URL is set",
+      "TAKOSUMI_ACCOUNTS_CLIENTS allowedScopes entries must be individual scope tokens",
     );
   }
-  requireCommitPinnedEvidencePairs(env, [
-    [
-      "TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_REF",
-      "TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF",
-      "TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF",
-      "TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF",
-      "TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_DIGEST",
-    ],
-  ]);
+  return [...new Set(scopes)];
 }
 
-function requireProductionHardeningEvidence(
-  env: Record<string, string | undefined>,
-): void {
-  if (optional(env, "TAKOSUMI_PRODUCTION_HARDENING_GATE") !== "enforce") {
+function parseClientAuthMethod(
+  value: unknown,
+): "client_secret_basic" | "client_secret_post" | "none" | undefined {
+  const method = typeof value === "string" ? value.trim() : "";
+  if (!method) return undefined;
+  if (
+    method !== "client_secret_basic" &&
+    method !== "client_secret_post" &&
+    method !== "none"
+  ) {
     throw new TypeError(
-      "Open platform readiness access requires TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce",
+      "TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD must be one of: client_secret_basic, client_secret_post, none",
     );
   }
-  requireCommitPinnedEvidencePairs(env, [
-    [
-      "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF",
-      "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF",
-      "TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF",
-      "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF",
-      "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF",
-      "TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF",
-      "TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST",
-    ],
-    [
-      "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF",
-      "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST",
-    ],
-  ]);
+  return method;
 }
-
-function requireCommitPinnedEvidencePairs(
-  env: Record<string, string | undefined>,
-  pairs: readonly (readonly [string, string])[],
-): void {
-  const commitPinnedGitRefPattern = /^git\+.+@[0-9a-f]{40,64}#.+/i;
-  for (const [refName, digestName] of pairs) {
-    const ref = optional(env, refName);
-    if (!ref) {
-      throw new TypeError(`Open platform readiness access requires ${refName}`);
-    }
-    if (!commitPinnedGitRefPattern.test(ref)) {
-      throw new TypeError(`${refName} must be commit-pinned git+ ref`);
-    }
-    const digest = optional(env, digestName);
-    if (!digest) {
-      throw new TypeError(
-        `Open platform readiness access requires ${digestName}`,
-      );
-    }
-    if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {
-      throw new TypeError(`${digestName} must be sha256:<64hex>`);
-    }
-  }
-}
-
-function parseRuntimeProjectionMaterials(
-  env: Record<string, string | undefined>,
-): RuntimeProjectionMaterialResolverHttpOptions | undefined {
-  const token = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN",
-  );
-  if (!token) return undefined;
-  const billingPortalUrl = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL",
-  );
-  const internalUrl = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIALS_INTERNAL_URL",
-  );
-  return {
-    token,
-    ...(billingPortalUrl ? { billingPortalUrl } : {}),
-    ...(internalUrl ? { internalUrl } : {}),
-    ...(bool(
-      env,
-      "TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIALS_ALLOW_DIRECT_DEPLOY_CONTROL",
-    )
-      ? { allowDeployControlInstallations: true }
-      : {}),
-  };
-}
-
-const TAKOSUMI_CLOUD_PRE_GA_LOGIN_EMAIL = "shoutatomiyama0614@gmail.com";
 
 function parseLoginEmailAllowlist(
   env: Record<string, string | undefined>,
-  issuer: string,
+  _issuer: string,
 ): LoginEmailAllowlist | undefined {
-  if (isOfficialTakosumiCloudIssuer(issuer)) {
-    return {
-      emails: [TAKOSUMI_CLOUD_PRE_GA_LOGIN_EMAIL],
-      requireVerifiedEmail: true,
-    };
-  }
   const configured = optional(env, "TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST");
   if (configured?.trim() === "*") return undefined;
   const emails = configured !== undefined ? splitList(configured) : [];
@@ -367,19 +198,6 @@ function parseLoginEmailAllowlist(
       )?.toLowerCase() === "false"
     ),
   };
-}
-
-function isOfficialTakosumiCloudIssuer(issuer: string): boolean {
-  try {
-    const url = new URL(issuer);
-    return (
-      url.protocol === "https:" &&
-      (url.hostname === "app.takosumi.com" ||
-        url.hostname === "app-staging.takosumi.com")
-    );
-  } catch {
-    return false;
-  }
 }
 
 function parsePasskeys(
@@ -424,177 +242,7 @@ function parsePasskeyTtlMs(
 function parseUpstreamOAuth(
   env: Record<string, string | undefined>,
 ): UpstreamOAuthOptions | undefined {
-  const providers: UpstreamOAuthClientRegistration[] = [];
-  const google = parseBuiltinUpstreamProvider(env, "GOOGLE");
-  if (google) {
-    providers.push({
-      ...google,
-      provider: googleOAuthProvider(
-        parseBuiltinProviderOverrides(env, "GOOGLE"),
-      ),
-    });
-  }
-  const oidc = parseCustomOidcUpstreamProvider(env);
-  if (oidc) providers.push(oidc);
-
-  const subjectSecret = optional(env, "TAKOSUMI_ACCOUNTS_SUBJECT_SECRET");
-  const sessionTtlMs = optionalNonNegativeInteger(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS",
-  );
-  if (providers.length === 0 && sessionTtlMs === undefined) {
-    return undefined;
-  }
-  if (!subjectSecret || providers.length === 0) {
-    throw new TypeError(
-      "Upstream OAuth requires TAKOSUMI_ACCOUNTS_SUBJECT_SECRET and at least one upstream provider client",
-    );
-  }
-  return {
-    subjectSecret,
-    providers,
-    ...(sessionTtlMs !== undefined ? { sessionTtlMs } : {}),
-  };
-}
-
-function parseBuiltinUpstreamProvider(
-  env: Record<string, string | undefined>,
-  provider: "GOOGLE",
-): Omit<UpstreamOAuthClientRegistration, "provider"> | undefined {
-  const prefix = `TAKOSUMI_ACCOUNTS_UPSTREAM_${provider}_`;
-  const clientId = optional(env, `${prefix}CLIENT_ID`);
-  const clientSecret = optional(env, `${prefix}CLIENT_SECRET`);
-  const redirectUri = optional(env, `${prefix}REDIRECT_URI`);
-  const scopes = splitList(env[`${prefix}SCOPES`]);
-  if (!clientId && !clientSecret && !redirectUri && scopes.length === 0) {
-    return undefined;
-  }
-  if (!clientId || !clientSecret || !redirectUri) {
-    throw new TypeError(
-      `${prefix}CLIENT_ID, ${prefix}CLIENT_SECRET, and ${prefix}REDIRECT_URI are required when configuring ${provider.toLowerCase()} upstream OAuth`,
-    );
-  }
-  return {
-    providerId: provider.toLowerCase(),
-    clientId,
-    clientSecret,
-    redirectUri,
-    ...(scopes.length > 0 ? { scopes } : {}),
-  };
-}
-
-function parseBuiltinProviderOverrides(
-  env: Record<string, string | undefined>,
-  provider: "GOOGLE",
-): {
-  issuer?: string;
-  authorizationEndpoint?: string;
-  tokenEndpoint?: string;
-  userInfoEndpoint?: string;
-} {
-  const prefix = `TAKOSUMI_ACCOUNTS_UPSTREAM_${provider}_`;
-  const result: {
-    issuer?: string;
-    authorizationEndpoint?: string;
-    tokenEndpoint?: string;
-    userInfoEndpoint?: string;
-  } = {};
-  const issuer = optional(env, `${prefix}ISSUER`);
-  if (issuer) result.issuer = issuer;
-  const authorizationEndpoint = optional(
-    env,
-    `${prefix}AUTHORIZATION_ENDPOINT`,
-  );
-  if (authorizationEndpoint) {
-    result.authorizationEndpoint = authorizationEndpoint;
-  }
-  const tokenEndpoint = optional(env, `${prefix}TOKEN_ENDPOINT`);
-  if (tokenEndpoint) result.tokenEndpoint = tokenEndpoint;
-  const userInfoEndpoint = optional(env, `${prefix}USERINFO_ENDPOINT`);
-  if (userInfoEndpoint) result.userInfoEndpoint = userInfoEndpoint;
-  return result;
-}
-
-function parseCustomOidcUpstreamProvider(
-  env: Record<string, string | undefined>,
-): UpstreamOAuthClientRegistration | undefined {
-  const providerId = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_PROVIDER_ID",
-  );
-  const issuer = optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_ISSUER");
-  const authorizationEndpoint = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_AUTHORIZATION_ENDPOINT",
-  );
-  const tokenEndpoint = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_TOKEN_ENDPOINT",
-  );
-  const userInfoEndpoint = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_USERINFO_ENDPOINT",
-  );
-  const clientId = optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_ID");
-  const clientSecret = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_SECRET",
-  );
-  const redirectUri = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_REDIRECT_URI",
-  );
-  const scopes = splitList(env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_SCOPES);
-  const configured = Boolean(
-    providerId ||
-    issuer ||
-    authorizationEndpoint ||
-    tokenEndpoint ||
-    userInfoEndpoint ||
-    clientId ||
-    clientSecret ||
-    redirectUri ||
-    scopes.length > 0,
-  );
-  if (!configured) return undefined;
-  if (
-    !providerId ||
-    !issuer ||
-    !authorizationEndpoint ||
-    !tokenEndpoint ||
-    !userInfoEndpoint ||
-    !clientId ||
-    !redirectUri
-  ) {
-    throw new TypeError(
-      "Custom upstream OIDC requires provider id, issuer, endpoints, client id, and redirect uri",
-    );
-  }
-  if (isRetiredUpstreamOAuthProviderId(providerId)) {
-    throw new TypeError(
-      `Custom upstream OIDC provider id ${providerId} is reserved or retired`,
-    );
-  }
-  const subjectClaim = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_SUBJECT_CLAIM",
-  );
-  return {
-    providerId,
-    clientId,
-    ...(clientSecret ? { clientSecret } : {}),
-    redirectUri,
-    ...(scopes.length > 0 ? { scopes } : {}),
-    provider: customOidcOAuthProvider({
-      id: providerId,
-      issuer,
-      authorizationEndpoint,
-      tokenEndpoint,
-      userInfoEndpoint,
-      ...(scopes.length > 0 ? { defaultScopes: scopes } : {}),
-      ...(subjectClaim ? { subjectClaim } : {}),
-    }),
-  };
+  return upstreamOAuthOptionsFromEnvironment(env);
 }
 
 function parseStableOidc(
@@ -606,13 +254,9 @@ function parseStableOidc(
     env,
     "TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET",
   );
-  const launchTokenPairwiseSecret = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET",
-  );
-  if (!oidcPairwiseSubjectSecret || !launchTokenPairwiseSecret) {
+  if (!oidcPairwiseSubjectSecret) {
     throw new TypeError(
-      "Stable OIDC signing requires TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET and TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET",
+      "Stable OIDC signing requires TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET",
     );
   }
   const keyId = optional(env, "TAKOSUMI_ACCOUNTS_ES256_KEY_ID");
@@ -627,39 +271,6 @@ function parseStableOidc(
     ...(previousPublicJwksJson ? { previousPublicJwksJson } : {}),
     ...(subject ? { subject } : {}),
     oidcPairwiseSubjectSecret,
-    launchTokenPairwiseSecret,
-  };
-}
-
-function parseExportDownload(
-  env: Record<string, string | undefined>,
-): NodeAccountsExportDownloadConfig | undefined {
-  const secret = optional(env, "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET");
-  const outputDirectory = optional(env, "TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR");
-  const baseUrl = optional(env, "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL");
-  const ttlMs = optionalNonNegativeInteger(
-    env,
-    "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS",
-  );
-  const configured = Boolean(
-    secret || outputDirectory || baseUrl || ttlMs !== undefined,
-  );
-  if (!configured) return undefined;
-  if (!secret || !outputDirectory || !baseUrl) {
-    throw new TypeError(
-      "Capsule export downloads require TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET, TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR, and TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL",
-    );
-  }
-  if (ttlMs !== undefined && ttlMs <= 0) {
-    throw new TypeError(
-      "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS must be greater than zero",
-    );
-  }
-  return {
-    secret,
-    outputDirectory,
-    baseUrl,
-    ...(ttlMs !== undefined ? { ttlMs } : {}),
   };
 }
 

@@ -1,10 +1,10 @@
 /**
  * Activity domain service (Core Specification §27 audit_events / §34 Activity).
  *
- * The Space-scoped audit trail surfaced in the dashboard Activity view (§31).
+ * The Workspace-scoped audit trail surfaced in the dashboard Activity view (§31).
  * Domain services and the deploy-control controller emit one {@link
  * ActivityEvent} per state-changing action through {@link ActivityService.record};
- * the route layer reads a Space's recent activity through {@link
+ * the route layer reads a Workspace's recent activity through {@link
  * ActivityService.list}.
  *
  * Recording is FIRE-AND-FORGET: `record` mints the event id + timestamp, persists
@@ -18,8 +18,9 @@
  */
 
 import type { ActivityEvent } from "takosumi-contract/activity";
+import type { Page, PageParams } from "takosumi-contract/pagination";
 import { clampActivityLimit } from "../deploy-control/store.ts";
-import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
+import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 import { log } from "../../shared/log.ts";
 import { redactRecord } from "../../shared/redaction.ts";
 
@@ -27,7 +28,7 @@ import { redactRecord } from "../../shared/redaction.ts";
 export type RecordActivityInput = Omit<ActivityEvent, "id" | "createdAt">;
 
 export interface ActivityServiceDependencies {
-  readonly store: OpenTofuDeploymentStore;
+  readonly store: OpenTofuControlStore;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
 }
@@ -42,13 +43,26 @@ export interface ActivityRecorder {
   record(event: RecordActivityInput): Promise<ActivityEvent | undefined>;
 }
 
+/** Read seam for one entity's filtered, newest-first Activity history. */
+export interface ActivityTargetReader {
+  listTargetPage(
+    workspaceId: string,
+    targetType: string,
+    targetId: string,
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>>;
+}
+
+/** Shared read/write ledger seam consumed by Resource Shape. */
+export type ActivityLedger = ActivityRecorder & ActivityTargetReader;
+
 /** A recorder that drops every event. Used when no Activity ledger is wired. */
 export const NOOP_ACTIVITY_RECORDER: ActivityRecorder = {
   record: () => Promise.resolve(undefined),
 };
 
-export class ActivityService implements ActivityRecorder {
-  readonly #store: OpenTofuDeploymentStore;
+export class ActivityService implements ActivityLedger {
+  readonly #store: OpenTofuControlStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
   #lastTimestampMs = 0;
@@ -77,7 +91,7 @@ export class ActivityService implements ActivityRecorder {
     } catch (error) {
       log.warn("service.activity.record_failed", {
         action: event.action,
-        spaceId: event.spaceId,
+        workspaceId: event.workspaceId,
         error,
       });
       return undefined;
@@ -86,24 +100,38 @@ export class ActivityService implements ActivityRecorder {
 
   #nextCreatedAt(): string {
     const observed = this.#now().getTime();
-    const next = observed <= this.#lastTimestampMs
-      ? this.#lastTimestampMs + 1
-      : observed;
+    const next =
+      observed <= this.#lastTimestampMs ? this.#lastTimestampMs + 1 : observed;
     this.#lastTimestampMs = next;
     return new Date(next).toISOString();
   }
 
   /**
-   * Lists a Space's recent activity, newest first. `limit` is clamped to
+   * Lists a Workspace's recent activity, newest first. `limit` is clamped to
    * `1..ACTIVITY_MAX_LIMIT` (default `ACTIVITY_DEFAULT_LIMIT`).
    */
   async list(
-    spaceId: string,
+    workspaceId: string,
     limit?: number,
   ): Promise<readonly ActivityEvent[]> {
-    return await this.#store.listActivityEvents(spaceId, {
+    return await this.#store.listActivityEvents(workspaceId, {
       limit: clampActivityLimit(limit),
     });
+  }
+
+  /** Lists one target's audit history using the shared opaque keyset cursor. */
+  async listTargetPage(
+    workspaceId: string,
+    targetType: string,
+    targetId: string,
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>> {
+    return await this.#store.listActivityEventsForTargetPage(
+      workspaceId,
+      targetType,
+      targetId,
+      params,
+    );
   }
 }
 

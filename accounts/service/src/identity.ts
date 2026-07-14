@@ -11,6 +11,7 @@ import { deriveTakosumiSubject } from "./subject.ts";
 export interface AccountProfileInput {
   email?: string;
   displayName?: string;
+  picture?: string;
   /**
    * The upstream identity provider's `email_verified` assertion, when the
    * provider returned one. `undefined` means the provider did not assert
@@ -81,6 +82,7 @@ export async function resolveUpstreamAccount(
     subject,
     email: input.profile?.email ?? existing?.email,
     displayName: input.profile?.displayName ?? existing?.displayName,
+    picture: input.profile?.picture ?? existing?.picture,
     emailVerified: input.profile?.emailVerified ?? existing?.emailVerified,
     createdAt: existing?.createdAt ?? linked?.createdAt ?? now,
     updatedAt: now,

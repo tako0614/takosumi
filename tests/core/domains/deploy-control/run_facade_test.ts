@@ -3,14 +3,15 @@ import { expect, test } from "bun:test";
 import {
   applyExpectedGuardFromPlanRun,
   OpenTofuControllerError,
-  OpenTofuDeploymentController,
+  OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
-  seedInstallationModel,
+  seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -54,29 +55,30 @@ function succeedingRunner() {
 }
 
 /**
- * Seeds the Space-direct Installation model (spec §5) and returns a plan-run
- * request for an UPDATE against the seeded Installation. The Installation is
- * seeded WITH a current deployment so the apply-expected guard is well-formed
- * (an `update` PlanRun carries `installationCurrentDeploymentId`).
+ * Seeds the Workspace-direct Capsule model (spec §5) and returns a plan-run
+ * request for an UPDATE against the seeded Capsule. The Capsule is
+ * seeded WITH a current StateVersion pointer so the apply-expected guard is well-formed
+ * (an `update` PlanRun carries `capsuleCurrentStateVersionId`).
  */
-async function seedUpdatableInstallation(
-  store: InMemoryOpenTofuDeploymentStore,
-  ids: { installationId: string },
+async function seedUpdatableCapsule(
+  store: InMemoryOpenTofuControlStore,
+  ids: { capsuleId: string },
 ) {
-  const { installation } = await seedInstallationModel(store, {
-    installationId: ids.installationId,
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: "ws_test001",
+    capsuleId: ids.capsuleId,
   });
-  await seedProviderConnections(store, installation);
-  // A current deployment so the update plan carries a defined current-deployment
-  // guard (a fresh installation has no prior deployment to guard against).
-  await store.putInstallation({
-    ...installation,
-    currentDeploymentId: `dep_seed_${ids.installationId}`,
+  await seedProviderConnections(store, capsule);
+  // A current StateVersion pointer so the update plan carries a defined guard
+  // (a fresh Capsule has no prior StateVersion to guard against).
+  await store.putCapsule({
+    ...capsule,
+    currentStateVersionId: `state_seed_${ids.capsuleId}`,
     status: "active",
   });
   return {
-    spaceId: installation.spaceId,
-    installationId: installation.id,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
     operation: "update" as const,
     source: SOURCE,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
@@ -84,14 +86,14 @@ async function seedUpdatableInstallation(
 }
 
 test("getRun projects a queued plan run as the unified Run", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const controller = new OpenTofuDeploymentController({
+  const store = new InMemoryOpenTofuControlStore();
+  const controller = new OpenTofuController({
     store,
     now: () => 1,
     newId: deterministicIds(),
   });
-  const request = await seedUpdatableInstallation(store, {
-    installationId: "inst_queued",
+  const request = await seedUpdatableCapsule(store, {
+    capsuleId: "cap_queued01",
   });
   const { planRun } = await controller.createPlanRun(request);
   const run = await controller.getRun(planRun.id);
@@ -103,16 +105,17 @@ test("getRun projects a queued plan run as the unified Run", async () => {
 });
 
 test("getRun projects a succeeded plan + its apply run", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const controller = new OpenTofuDeploymentController({
+  const store = new InMemoryOpenTofuControlStore();
+  const controller = new OpenTofuController({
     store,
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner: succeedingRunner(),
     vault: fakeProviderVault() as never,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
   });
-  const request = await seedUpdatableInstallation(store, {
-    installationId: "inst_applied",
+  const request = await seedUpdatableCapsule(store, {
+    capsuleId: "cap_applied1",
   });
   const { planRun } = await controller.createPlanRun(request);
   const planView = await controller.getRun(planRun.id);
@@ -128,16 +131,17 @@ test("getRun projects a succeeded plan + its apply run", async () => {
 });
 
 test("listRuns returns unified Workspace Runs newest first", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const controller = new OpenTofuDeploymentController({
+  const store = new InMemoryOpenTofuControlStore();
+  const controller = new OpenTofuController({
     store,
     now: sequenceNow(1000),
     newId: deterministicIds(),
     runner: succeedingRunner(),
     vault: fakeProviderVault() as never,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
   });
-  const request = await seedUpdatableInstallation(store, {
-    installationId: "inst_list",
+  const request = await seedUpdatableCapsule(store, {
+    capsuleId: "cap_list0001",
   });
   const { planRun } = await controller.createPlanRun(request);
   const { applyRun } = await controller.createApplyRun({
@@ -146,7 +150,7 @@ test("listRuns returns unified Workspace Runs newest first", async () => {
   });
   await store.putCompatibilityCheckRun({
     id: "ccr_list",
-    spaceId: request.spaceId,
+    workspaceId: request.workspaceId,
     sourceId: "src_list",
     type: "compatibility_check",
     status: "succeeded",
@@ -154,7 +158,7 @@ test("listRuns returns unified Workspace Runs newest first", async () => {
     createdAt: "2026-06-07T00:00:00.000Z",
   });
 
-  const runs = await controller.listRuns(request.spaceId);
+  const runs = await controller.listRuns(request.workspaceId);
   expect(runs.map((run) => run.id)).toEqual([
     "ccr_list",
     applyRun.id,
@@ -165,30 +169,32 @@ test("listRuns returns unified Workspace Runs newest first", async () => {
     "apply",
     "plan",
   ]);
-  expect(runs.every((run) => run.spaceId === request.spaceId)).toBe(true);
+  expect(runs.every((run) => run.workspaceId === request.workspaceId)).toBe(
+    true,
+  );
 });
 
 test("getRun returns a source-scoped compatibility_check run", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await store.putCompatibilityCheckRun({
     id: "ccr_1",
-    spaceId: "space_1",
+    workspaceId: "ws_source1",
     sourceId: "src_1",
     type: "compatibility_check",
     status: "succeeded",
     sourceSnapshotId: "snap_1",
     compatibilityReportId: "caprep_1",
-    errorCode: "OpenTofu runner rejected compatibility_check run ccr_1",
+    errorCode: "capsule_compatibility_check_failed",
     createdBy: "system",
     createdAt: "2026-06-07T00:00:00.000Z",
     startedAt: "2026-06-07T00:00:00.000Z",
     finishedAt: "2026-06-07T00:00:01.000Z",
   });
-  const controller = new OpenTofuDeploymentController({ store });
+  const controller = new OpenTofuController({ store });
 
   expect(await controller.getRun("ccr_1")).toMatchObject({
     id: "ccr_1",
-    spaceId: "space_1",
+    workspaceId: "ws_source1",
     sourceId: "src_1",
     type: "compatibility_check",
     status: "succeeded",
@@ -199,7 +205,8 @@ test("getRun returns a source-scoped compatibility_check run", async () => {
     diagnostics: [
       {
         severity: "error",
-        message: "OpenTofu runner rejected compatibility_check run ccr_1",
+        code: "capsule_compatibility_check_failed",
+        message: "capsule_compatibility_check_failed",
       },
     ],
     auditEvents: [],
@@ -207,21 +214,21 @@ test("getRun returns a source-scoped compatibility_check run", async () => {
 });
 
 test("getRun throws not_found for an unknown id", async () => {
-  const controller = new OpenTofuDeploymentController({ now: () => 1 });
+  const controller = new OpenTofuController({ now: () => 1 });
   await expect(controller.getRun("plan_missing")).rejects.toBeInstanceOf(
     OpenTofuControllerError,
   );
 });
 
 test("cancelRun cancels a queued plan run and is rejected once running/terminal", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const controller = new OpenTofuDeploymentController({
+  const store = new InMemoryOpenTofuControlStore();
+  const controller = new OpenTofuController({
     store,
     now: () => 1,
     newId: deterministicIds(),
   });
-  const request = await seedUpdatableInstallation(store, {
-    installationId: "inst_cancel",
+  const request = await seedUpdatableCapsule(store, {
+    capsuleId: "cap_cancel01",
   });
   const { planRun } = await controller.createPlanRun(request);
   const cancelled = await controller.cancelRun(planRun.id);

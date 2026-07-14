@@ -35,7 +35,7 @@ test("assertHostNotBlocked blocks private / metadata IPv4 literals", () => {
 // The classifier now delegates to the canonical
 // `contract/reference/ip-classification` superset. Before that collapse this
 // blocklist missed these special-use ranges while worker egress blocked them —
-// a live SSRF drift on the deploy-control / runtime-agent fetchers. Lock in the
+// a live SSRF drift on source fetchers. Lock in the
 // stronger classification so the drift cannot silently return.
 test("assertHostNotBlocked blocks previously-missed special-use IPv4 ranges", () => {
   for (

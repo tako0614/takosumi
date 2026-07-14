@@ -549,6 +549,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         ["space_id"],
         ["source_id"],
         ["installation_id"],
+        ["installation_id", "created_at"],
         ["created_at"],
       ],
     },
@@ -576,6 +577,25 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       uniqueConstraints: [["handle"]],
     },
     {
+      name: "takosumi_workspace_members",
+      domain: "deploy",
+      columns: [
+        "id",
+        "workspace_id",
+        "account_id",
+        "status",
+        "member_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["workspace_id", "account_id"]],
+      indexes: [
+        ["workspace_id", "status"],
+        ["account_id", "status"],
+      ],
+    },
+    {
       name: "takosumi_projects",
       domain: "deploy",
       columns: [
@@ -597,14 +617,13 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       columns: [
         "id",
         "space_id",
-        "install_type",
         "trust_level",
         "config_json",
         "created_at",
         "updated_at",
       ],
       primaryKey: ["id"],
-      indexes: [["space_id"], ["install_type"]],
+      indexes: [["space_id"]],
     },
     {
       name: "takosumi_capsules",
@@ -757,8 +776,6 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "provisioners_json",
         "root_module_variables_json",
         "root_module_outputs_json",
-        "normalized_object_key",
-        "normalized_digest",
         "created_at",
       ],
       primaryKey: ["id"],
@@ -797,7 +814,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
     {
       // Control-backup ledger pointers (§33 layer 1 / §26 R2_BACKUPS). One row
       // per sealed control-backup bundle written to R2_BACKUPS. The bundle
-      // bytes live in object storage; only the pointer (objectKey / digest /
+      // bytes live in artifact storage; only the pointer (ref / digest /
       // sizeBytes) round trips through backup_json — never secret material.
       name: "takosumi_backups",
       domain: "deploy",
@@ -814,103 +831,12 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["space_id"], ["installation_id"]],
     },
     {
-      name: "takosumi_billing_accounts",
-      domain: "deploy",
-      columns: [
-        "id",
-        "owner_type",
-        "owner_id",
-        "provider",
-        "status",
-        "account_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [["owner_type", "owner_id"], ["status"]],
-    },
-    {
-      name: "takosumi_plans",
-      domain: "deploy",
-      columns: [
-        "id",
-        "name",
-        "monthly_base_price",
-        "included_usd_micros",
-        "included_credits",
-        "limits_json",
-        "plan_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-    },
-    {
-      name: "takosumi_space_subscriptions",
-      domain: "deploy",
-      columns: [
-        "id",
-        "space_id",
-        "billing_account_id",
-        "plan_id",
-        "status",
-        "subscription_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [["space_id"], ["billing_account_id"]],
-    },
-    {
-      name: "takosumi_credit_balances",
-      domain: "deploy",
-      columns: [
-        "space_id",
-        "available_usd_micros",
-        "reserved_usd_micros",
-        "monthly_included_usd_micros",
-        "purchased_usd_micros",
-        "available_credits",
-        "reserved_credits",
-        "monthly_included_credits",
-        "purchased_credits",
-        "updated_at",
-      ],
-      primaryKey: ["space_id"],
-    },
-    {
-      name: "takosumi_billing_auto_recharge_attempts",
-      domain: "deploy",
-      columns: [
-        "id",
-        "space_id",
-        "run_id",
-        "billing_account_id",
-        "idempotency_key",
-        "period_start",
-        "period_end",
-        "requested_usd_micros",
-        "monthly_limit_usd_micros",
-        "charged_usd_micros",
-        "status",
-        "stripe_payment_intent_id",
-        "provider_status",
-        "failure_reason",
-        "attempt_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      uniqueConstraints: [["idempotency_key"]],
-      indexes: [["space_id", "period_start", "status"], ["run_id"]],
-    },
-    {
       name: "takosumi_usage_events",
       domain: "deploy",
       columns: [
         "id",
-        "space_id",
-        "installation_id",
+        "workspace_id",
+        "capsule_id",
         "run_id",
         "meter_id",
         "resource_family",
@@ -920,32 +846,14 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "kind",
         "quantity",
         "usd_micros",
-        "credits",
+        "rating_status",
         "source",
         "idempotency_key",
         "created_at",
       ],
       primaryKey: ["id"],
       uniqueConstraints: [["idempotency_key"]],
-      indexes: [["space_id"], ["run_id"]],
-    },
-    {
-      name: "takosumi_credit_reservations",
-      domain: "deploy",
-      columns: [
-        "id",
-        "space_id",
-        "run_id",
-        "estimated_usd_micros",
-        "estimated_credits",
-        "status",
-        "mode",
-        "reservation_json",
-        "created_at",
-        "expires_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [["space_id"], ["run_id"], ["status"]],
+      indexes: [["workspace_id"], ["run_id"]],
     },
     {
       name: "takosumi_credential_mint_events",
@@ -996,6 +904,8 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "generation",
         "observed_generation",
         "outputs_json",
+        "execution_json",
+        "state_adoption_json",
         "conditions_json",
         "labels_json",
         "created_at",
@@ -1011,7 +921,13 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       columns: [
         "resource_id",
         "selected_implementation",
+        "target_pool",
         "target",
+        "target_snapshot_json",
+        "implementation_snapshot_json",
+        "implementation_plugin",
+        "implementation_options_json",
+        "implementation_fingerprint",
         "locked",
         "reason_json",
         "portability",
@@ -1050,6 +966,51 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       primaryKey: ["id"],
       uniqueConstraints: [["space_id", "name"]],
       indexes: [["space_id"]],
+    },
+    {
+      name: "takosumi_interfaces",
+      domain: "runtime",
+      columns: [
+        "id",
+        "workspace_id",
+        "owner_kind",
+        "owner_id",
+        "name",
+        "interface_type",
+        "phase",
+        "generation",
+        "resolved_revision",
+        "record_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [
+        ["workspace_id", "owner_kind", "owner_id", "name"],
+        ["workspace_id", "interface_type", "phase"],
+      ],
+    },
+    {
+      name: "takosumi_interface_bindings",
+      domain: "runtime",
+      columns: [
+        "id",
+        "workspace_id",
+        "interface_id",
+        "subject_kind",
+        "subject_id",
+        "phase",
+        "generation",
+        "record_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [
+        ["interface_id", "subject_kind", "subject_id"],
+        ["interface_id"],
+        ["workspace_id", "subject_kind", "subject_id"],
+      ],
     },
   ]);
 
@@ -2066,7 +2027,7 @@ drop table if exists takosumi_output_shares;`,
       version: 39,
       domain: "deploy",
       description:
-        "Create the control-backup ledger (Core Specification §33 layer 1 / §26 R2_BACKUPS): one pointer row per sealed control-backup bundle written to the R2_BACKUPS bucket. backup_json carries the public BackupRecord pointer (objectKey / digest / sizeBytes / optional createdByRunId) — the bundle bytes (zstd-compressed, sealed JSON export of the Space's control ledger) live in object storage, never the DB, and the bundle never contains secret material. The space_id column drives the newest-first per-Space listing. No data migration: additive new table.",
+        "Create the control-backup ledger: one opaque pointer row per sealed control-backup bundle. backup_json carries the public BackupRecord pointer (ref / digest / sizeBytes / optional createdByRunId); bundle bytes live in host artifact storage, never the DB, and never contain secret material. The space_id column drives the newest-first per-Space listing. No data migration: additive new table.",
       sql: `create table if not exists takosumi_backups (
   id                text   primary key,
   space_id          text   not null,
@@ -3013,7 +2974,7 @@ alter table takosumi_plans
       version: 54,
       domain: "deploy",
       description:
-        "Create the Takosumi Cloud billing auto-recharge attempt ledger. The table enforces one attempt per idempotency key and lets the Cloud-injected enforcement port count pending, pending_unknown, and succeeded attempts against a monthly USD micros cap before its Stripe adapter creates an off-session PaymentIntent. OSS core stores object ids and status metadata only, never card data or secrets, and never calls Stripe directly.",
+        "Create the commercial billing auto-recharge attempt ledger. The table enforces one attempt per idempotency key and lets an injected enforcement port count pending, pending_unknown, and succeeded attempts against a monthly USD micros cap before its provider adapter creates an off-session charge. OSS core stores opaque transaction ids and status metadata only, never payment data or secrets, and never calls a payment provider directly.",
       sql: `create table if not exists takosumi_billing_auto_recharge_attempts (
   id                       text   primary key,
   space_id                 text   not null,
@@ -3667,5 +3628,473 @@ from takosumi_workspaces w
 on conflict (workspace_id) do nothing;`,
       down: `drop index if exists takosumi_workspace_output_sync_pending_idx;
 drop table if exists takosumi_workspace_output_sync;`,
+    },
+    {
+      id: "runtime_interfaces.create",
+      version: 72,
+      domain: "runtime",
+      description:
+        "Create Takosumi-managed Interface and InterfaceBinding declarations; ordinary OpenTofu Outputs remain deployment facts and carry no runtime declaration or credential contract.",
+      sql: `create table if not exists takosumi_interfaces (
+  id text primary key,
+  workspace_id text not null,
+  owner_kind text not null,
+  owner_id text not null,
+  name text not null,
+  interface_type text not null,
+  phase text not null,
+  generation integer not null,
+  resolved_revision integer not null,
+  record_json jsonb not null,
+  created_at text not null,
+  updated_at text not null
+);
+create unique index if not exists takosumi_interfaces_active_name_unique
+  on takosumi_interfaces (workspace_id, owner_kind, owner_id, name)
+  where phase <> 'Retired';
+create index if not exists takosumi_interfaces_workspace_type_phase_idx
+  on takosumi_interfaces (workspace_id, interface_type, phase);
+create table if not exists takosumi_interface_bindings (
+  id text primary key,
+  workspace_id text not null,
+  interface_id text not null,
+  subject_kind text not null,
+  subject_id text not null,
+  phase text not null,
+  generation integer not null,
+  record_json jsonb not null,
+  created_at text not null,
+  updated_at text not null
+);
+create unique index if not exists takosumi_interface_bindings_active_subject_unique
+  on takosumi_interface_bindings (interface_id, subject_kind, subject_id)
+  where phase <> 'Revoked';
+create index if not exists takosumi_interface_bindings_interface_idx
+  on takosumi_interface_bindings (interface_id);
+create index if not exists takosumi_interface_bindings_workspace_subject_idx
+  on takosumi_interface_bindings (workspace_id, subject_kind, subject_id);`,
+      down: `drop table if exists takosumi_interface_bindings;
+drop table if exists takosumi_interfaces;`,
+    },
+    {
+      id: "runs.runtime_safety_lookup_index.add",
+      version: 73,
+      domain: "deploy",
+      description:
+        "Index Capsule mutation Runs for fail-closed runtime Interface safety checks.",
+      sql: `create index if not exists takosumi_runs_installation_created_at_idx
+  on takosumi_runs (installation_id, created_at);`,
+      down: `drop index if exists takosumi_runs_installation_created_at_idx;`,
+    },
+    {
+      id: "deploy.workspace_output_sync.retire",
+      version: 74,
+      domain: "deploy",
+      description:
+        "Retire the removed Workspace Output Sync execution model while preserving ordinary OpenTofu Output records and migrations as immutable history.",
+      sql: `drop index if exists takosumi_workspace_output_sync_pending_idx;
+drop table if exists takosumi_workspace_output_sync;`,
+    },
+    {
+      id: "resources.resolution_lock_identity.add",
+      version: 75,
+      domain: "resources",
+      description:
+        "Pin the non-secret TargetPool, Target snapshot, complete implementation descriptor snapshot, legacy adapter dispatch fields, and canonical implementation fingerprint required for drift-free Resource re-apply and fail-closed delete.",
+      sql: `alter table takosumi_resolution_locks
+  add column if not exists target_pool text;
+alter table takosumi_resolution_locks
+  add column if not exists target_snapshot_json jsonb;
+alter table takosumi_resolution_locks
+  add column if not exists implementation_snapshot_json jsonb;
+alter table takosumi_resolution_locks
+  add column if not exists implementation_plugin text;
+alter table takosumi_resolution_locks
+  add column if not exists implementation_options_json jsonb;
+alter table takosumi_resolution_locks
+  add column if not exists implementation_fingerprint text;`,
+      down: `alter table takosumi_resolution_locks
+  drop column if exists implementation_fingerprint;
+alter table takosumi_resolution_locks
+  drop column if exists implementation_options_json;
+alter table takosumi_resolution_locks
+  drop column if exists implementation_plugin;
+alter table takosumi_resolution_locks
+  drop column if exists implementation_snapshot_json;
+alter table takosumi_resolution_locks
+  drop column if exists target_snapshot_json;
+alter table takosumi_resolution_locks
+  drop column if exists target_pool;`,
+    },
+    {
+      id: "deploy.capsule_compatibility_auto_rewrite.retire",
+      version: 76,
+      domain: "deploy",
+      description:
+        "Normalize legacy auto_capsulized reports to ready and retire normalized-module artifact pointers; current Capsule checks always preserve and run the immutable SourceSnapshot archive.",
+      sql: `update takosumi_capsule_compatibility_reports
+set level = 'ready',
+    normalized_object_key = null,
+    normalized_digest = null
+where level = 'auto_capsulized';
+update takosumi_capsules
+set installation_json = jsonb_set(
+  installation_json,
+  '{compatibilityStatus}',
+  '"ready"'::jsonb
+)
+where installation_json ->> 'compatibilityStatus' = 'auto_capsulized';
+alter table takosumi_capsule_compatibility_reports
+  drop constraint if exists takosumi_capsule_compatibility_reports_level_check;
+alter table takosumi_capsule_compatibility_reports
+  add constraint takosumi_capsule_compatibility_reports_level_check
+  check (level in ('ready','needs_patch','unsupported'));
+alter table takosumi_capsule_compatibility_reports
+  drop column if exists normalized_object_key;
+alter table takosumi_capsule_compatibility_reports
+  drop column if exists normalized_digest;`,
+      down: `alter table takosumi_capsule_compatibility_reports
+  add column if not exists normalized_object_key text;
+alter table takosumi_capsule_compatibility_reports
+  add column if not exists normalized_digest text;
+alter table takosumi_capsule_compatibility_reports
+  drop constraint if exists takosumi_capsule_compatibility_reports_level_check;
+alter table takosumi_capsule_compatibility_reports
+  add constraint takosumi_capsule_compatibility_reports_level_check
+  check (level in ('ready','auto_capsulized','needs_patch','unsupported'));`,
+    },
+    {
+      id: "deploy.workspace_members.create",
+      version: 77,
+      domain: "deploy",
+      description:
+        "Create the canonical WorkspaceMember ledger beside Workspace and backfill every namespace owner as an active owner member. This replaces the separate membership snapshot/outbox bridge.",
+      sql: `create table if not exists takosumi_workspace_members (
+  id           text   primary key,
+  workspace_id text   not null,
+  account_id   text   not null,
+  status       text   not null,
+  member_json  jsonb  not null,
+  created_at   text   not null,
+  updated_at   text   not null
+);
+create unique index if not exists takosumi_workspace_members_workspace_account_unique
+  on takosumi_workspace_members (workspace_id, account_id);
+create index if not exists takosumi_workspace_members_workspace_status_idx
+  on takosumi_workspace_members (workspace_id, status);
+create index if not exists takosumi_workspace_members_account_status_idx
+  on takosumi_workspace_members (account_id, status);
+insert into takosumi_workspace_members (
+  id, workspace_id, account_id, status, member_json, created_at, updated_at
+)
+select
+  'wsm_' || w.id || '_' || (w.space_json ->> 'ownerUserId'),
+  w.id,
+  w.space_json ->> 'ownerUserId',
+  'active',
+  jsonb_build_object(
+    'id', 'wsm_' || w.id || '_' || (w.space_json ->> 'ownerUserId'),
+    'workspaceId', w.id,
+    'accountId', w.space_json ->> 'ownerUserId',
+    'roles', jsonb_build_array('owner'),
+    'status', 'active',
+    'createdAt', w.created_at,
+    'updatedAt', w.updated_at
+  ),
+  w.created_at,
+  w.updated_at
+from takosumi_workspaces w
+where nullif(w.space_json ->> 'ownerUserId', '') is not null
+on conflict (workspace_id, account_id) do nothing;`,
+      down: `drop index if exists takosumi_workspace_members_workspace_status_idx;
+drop index if exists takosumi_workspace_members_account_status_idx;
+drop index if exists takosumi_workspace_members_workspace_account_unique;
+drop table if exists takosumi_workspace_members;`,
+    },
+    {
+      id: "deploy.billing_provider.generalize",
+      version: 78,
+      domain: "deploy",
+      description:
+        "Replace the legacy fixed billing-provider allowlist with an opaque, non-empty operator-defined provider identifier.",
+      sql: `alter table takosumi_billing_accounts
+  drop constraint if exists takosumi_billing_accounts_provider_check;
+alter table takosumi_billing_accounts
+  add constraint takosumi_billing_accounts_provider_check
+  check (length(trim(provider)) between 1 and 128);`,
+      down: `alter table takosumi_billing_accounts
+  drop constraint if exists takosumi_billing_accounts_provider_check;
+alter table takosumi_billing_accounts
+  add constraint takosumi_billing_accounts_provider_check
+  check (provider in ('stripe','manual','none'));`,
+    },
+    {
+      id: "deploy.capsule_install_discriminators.retire",
+      version: 79,
+      domain: "deploy",
+      description:
+        "Remove the retired InstallType/sourceKind/templateBinding authority from current InstallConfig and Capsule rows; Git Source plus service-side InstallConfig remain the execution contract.",
+      sql: `update takosumi_install_configs
+set config_json = config_json - 'installType' - 'sourceKind' - 'templateBinding';
+update takosumi_capsules
+set installation_json = installation_json - 'installType';
+drop index if exists takosumi_install_configs_install_type_idx;
+alter table takosumi_install_configs
+  drop column if exists install_type;
+alter table takosumi_capsules
+  drop column if exists install_type;`,
+      down: `alter table takosumi_install_configs
+  add column if not exists install_type text not null default 'opentofu_module';
+alter table takosumi_install_configs
+  alter column install_type drop default;
+create index if not exists takosumi_install_configs_install_type_idx
+  on takosumi_install_configs (install_type);
+alter table takosumi_capsules
+  add column if not exists install_type text not null default 'opentofu_module';
+alter table takosumi_capsules
+  alter column install_type drop default;`,
+    },
+    {
+      id: "deploy.capsule_project_boundary.enforce",
+      version: 80,
+      domain: "deploy",
+      description:
+        "Make Project the required Capsule ownership boundary and scope active Capsule name uniqueness to (project_id, name, environment). Existing rows are pointed at the already-created Workspace default Project before the NOT NULL constraint is enforced.",
+      sql: `update takosumi_capsules c
+set project_id = 'prj_default_' || c.space_id
+where c.project_id is null
+  and exists (
+    select 1 from takosumi_projects p
+    where p.id = 'prj_default_' || c.space_id
+  );
+do $$
+begin
+  if exists (select 1 from takosumi_capsules where project_id is null) then
+    raise exception 'cannot enforce Capsule Project boundary: a Capsule has no Project';
+  end if;
+end $$;
+alter table takosumi_capsules
+  alter column project_id set not null;
+drop index if exists takosumi_capsules_space_name_environment_unique;
+drop index if exists takosumi_capsules_space_name_environment_active_unique;
+create unique index if not exists takosumi_capsules_project_name_environment_active_unique
+  on takosumi_capsules (project_id, name, environment)
+  where status <> 'destroyed';`,
+      down: `drop index if exists takosumi_capsules_project_name_environment_active_unique;
+alter table takosumi_capsules
+  alter column project_id drop not null;
+create unique index if not exists takosumi_capsules_space_name_environment_active_unique
+  on takosumi_capsules (space_id, name, environment)
+  where status <> 'destroyed';`,
+    },
+    {
+      id: "resources.execution_state.add",
+      version: 81,
+      domain: "resources",
+      description:
+        "Persist the latest first-class Resource OpenTofu run and encrypted state pointer on the Resource record without creating a backing Capsule, Capsule StateVersion, or Capsule Output.",
+      sql: `alter table takosumi_resource_shapes
+  add column if not exists execution_json jsonb;`,
+      down: `alter table takosumi_resource_shapes
+  drop column if exists execution_json;`,
+    },
+    {
+      id: "deploy.connection_secret_partition.backfill",
+      version: 82,
+      domain: "deploy",
+      description:
+        "Persist the explicit encryption partition on historical Connection rows and normalize the inert secret-blob kind column. Provider-family inference is confined to this one-time migration; current runtime code fails closed when secretPartition is absent.",
+      sql: `update takosumi_connections c
+set connection_json = jsonb_set(
+  c.connection_json,
+  '{secretPartition}',
+  to_jsonb(
+    case
+      when c.connection_json ->> 'kind' in ('source_git_https_token', 'source_git_ssh_key')
+        then 'source:git'
+      when lower(coalesce(c.connection_json ->> 'providerSource', c.connection_json ->> 'provider', c.provider)) = 'cloudflare'
+        or lower(coalesce(c.connection_json ->> 'providerSource', c.connection_json ->> 'provider', c.provider)) like '%/cloudflare/cloudflare'
+        then 'cloudflare'
+      when lower(coalesce(c.connection_json ->> 'providerSource', c.connection_json ->> 'provider', c.provider)) = 'aws'
+        or lower(coalesce(c.connection_json ->> 'providerSource', c.connection_json ->> 'provider', c.provider)) like '%/hashicorp/aws'
+        then 'aws'
+      when lower(coalesce(c.connection_json ->> 'providerSource', c.connection_json ->> 'provider', c.provider)) in ('google', 'gcp')
+        or lower(coalesce(c.connection_json ->> 'providerSource', c.connection_json ->> 'provider', c.provider)) like '%/hashicorp/google'
+        or lower(coalesce(c.connection_json ->> 'providerSource', c.connection_json ->> 'provider', c.provider)) like '%/hashicorp/google-beta'
+        then 'gcp'
+      when lower(coalesce(c.connection_json ->> 'providerSource', c.connection_json ->> 'provider', c.provider)) in ('kubernetes', 'helm')
+        or lower(coalesce(c.connection_json ->> 'providerSource', c.connection_json ->> 'provider', c.provider)) like '%/hashicorp/kubernetes'
+        or lower(coalesce(c.connection_json ->> 'providerSource', c.connection_json ->> 'provider', c.provider)) like '%/hashicorp/helm'
+        then 'k8s'
+      else 'local-adapters'
+    end
+  ),
+  true
+)
+where nullif(c.connection_json ->> 'secretPartition', '') is null;
+update takosumi_connection_secret_blobs b
+set kind = c.connection_json ->> 'secretPartition',
+    blob_json = jsonb_set(
+      b.blob_json,
+      '{kind}',
+      to_jsonb(c.connection_json ->> 'secretPartition'),
+      true
+    )
+from takosumi_connections c
+where c.id = b.connection_id
+  and nullif(c.connection_json ->> 'secretPartition', '') is not null;`,
+    },
+    {
+      id: "resources.legacy_state_adoption.add",
+      version: 83,
+      domain: "resources",
+      description:
+        "Persist an operator-confirmed one-shot descriptor for adopting state from the retired backing-Capsule implementation. Candidate discovery remains read-only and runtime never scans for legacy state.",
+      sql: `alter table takosumi_resource_shapes
+  add column if not exists state_adoption_json jsonb;`,
+      down: `alter table takosumi_resource_shapes
+  drop column if exists state_adoption_json;`,
+    },
+    {
+      id: "deploy.install_config_trust_level.retire",
+      version: 84,
+      domain: "deploy",
+      description:
+        "Remove the retired InstallConfig trust label; Store discovery is explicit store.source metadata and execution authority remains policy/provider-bound.",
+      sql: `update takosumi_install_configs
+set config_json = config_json - 'trustLevel';
+alter table takosumi_install_configs
+  drop column if exists trust_level;`,
+      down: `alter table takosumi_install_configs
+  add column if not exists trust_level text;`,
+    },
+    {
+      id: "deploy.oss_commercial_billing_ledger.retire",
+      version: 85,
+      domain: "deploy",
+      description:
+        "Remove commercial billing persistence from OSS and leave only canonical Workspace-scoped USD showback usage events. Commercial ledgers are owned by host extensions.",
+      sql: `drop trigger if exists takosumi_usage_events_billing_usd_micros_compat on takosumi_usage_events;
+drop table if exists takosumi_billing_auto_recharge_attempts cascade;
+drop table if exists takosumi_credit_reservations cascade;
+drop table if exists takosumi_credit_balances cascade;
+drop table if exists takosumi_space_subscriptions cascade;
+drop table if exists takosumi_plans cascade;
+drop table if exists takosumi_billing_accounts cascade;
+drop function if exists takosumi_billing_usd_micros_compat();
+alter table takosumi_usage_events rename column space_id to workspace_id;
+alter table takosumi_usage_events rename column installation_id to capsule_id;
+alter table takosumi_usage_events drop column if exists credits;
+alter table takosumi_usage_events alter column usd_micros set not null;
+drop index if exists takosumi_usage_events_space_idx;
+create index if not exists takosumi_usage_events_workspace_idx
+  on takosumi_usage_events (workspace_id);`,
+    },
+    {
+      id: "deploy.install_config_variable_defaults.normalize",
+      version: 86,
+      domain: "deploy",
+      description:
+        "Normalize pre-v1 InstallConfig variablePresentation string defaults once so current reads never interpret reserved compatibility strings.",
+      sql: `update takosumi_install_configs c
+set config_json = jsonb_set(
+  c.config_json,
+  '{variablePresentation}',
+  (
+    select jsonb_agg(
+      case
+        when jsonb_typeof(item.value -> 'defaultValue') <> 'string' then item.value
+        when item.value ->> 'defaultValue' = 'service-name' then
+          jsonb_set(item.value, '{defaultValue}', '{"source":"capsule_name"}'::jsonb, true)
+        when item.value ->> 'defaultValue' in ('service-name-with-workspace', 'service-name-with-space') then
+          jsonb_set(item.value, '{defaultValue}', '{"source":"workspace_scoped_capsule_name"}'::jsonb, true)
+        else
+          jsonb_set(
+            item.value,
+            '{defaultValue}',
+            jsonb_build_object('source', 'literal', 'value', item.value -> 'defaultValue'),
+            true
+          )
+      end
+      order by item.ordinality
+    )
+    from jsonb_array_elements(c.config_json -> 'variablePresentation')
+      with ordinality as item(value, ordinality)
+  ),
+  true
+)
+where jsonb_typeof(c.config_json -> 'variablePresentation') = 'array'
+  and exists (
+    select 1
+    from jsonb_array_elements(c.config_json -> 'variablePresentation') as item(value)
+    where jsonb_typeof(item.value -> 'defaultValue') = 'string'
+  );`,
+    },
+    {
+      id: "deploy.usage_event_rating_status.add",
+      version: 87,
+      domain: "deploy",
+      description:
+        "Persist explicit rated versus unrated evidence; amounts recorded before a host rating port existed are reset to zero/unrated.",
+      sql: `alter table takosumi_usage_events
+  add column if not exists rating_status text;
+update takosumi_usage_events
+set usd_micros = 0,
+    rating_status = 'unrated';
+alter table takosumi_usage_events
+  alter column rating_status set not null;
+alter table takosumi_usage_events
+  add constraint takosumi_usage_events_rating_status_check
+  check (
+    rating_status in ('rated', 'unrated')
+    and (rating_status = 'rated' or usd_micros = 0)
+  );`,
+      down: `alter table takosumi_usage_events
+  drop constraint if exists takosumi_usage_events_rating_status_check;
+alter table takosumi_usage_events
+  drop column if exists rating_status;`,
+    },
+    {
+      id: "resources.list_keyset_indexes.add",
+      version: 88,
+      domain: "resources",
+      description:
+        "Add Space-scoped (created_at, id) keyset indexes for bounded Resource and TargetPool public list pagination.",
+      sql: `create index if not exists takosumi_resource_shapes_space_created_id_idx
+  on takosumi_resource_shapes (space_id, created_at, id);
+create index if not exists takosumi_target_pools_space_created_id_idx
+  on takosumi_target_pools (space_id, created_at, id);`,
+      down: `drop index if exists takosumi_resource_shapes_space_created_id_idx;
+drop index if exists takosumi_target_pools_space_created_id_idx;`,
+    },
+    {
+      id: "resources.event_target_keyset_index.add",
+      version: 89,
+      domain: "resources",
+      description:
+        "Add the Space/target-scoped newest-first keyset index used by the public Resource event projection over the shared Activity ledger.",
+      sql: `create index if not exists takosumi_audit_events_space_target_created_id_idx
+  on takosumi_audit_events (space_id, target_type, target_id, created_at, id);`,
+      down: "drop index if exists takosumi_audit_events_space_target_created_id_idx;",
+    },
+    {
+      id: "resources.observation_schedule_lease.add",
+      version: 90,
+      domain: "resources",
+      description:
+        "Add durable internal claim and cadence columns for bounded, fair scheduled Resource observation without creating a second Resource lifecycle ledger.",
+      sql: `alter table takosumi_resource_shapes
+  add column if not exists observation_lease_id text,
+  add column if not exists observation_claimed_at text,
+  add column if not exists last_observation_attempt_at text;
+create index if not exists takosumi_resource_shapes_observation_due_idx
+  on takosumi_resource_shapes (
+    phase, last_observation_attempt_at, observation_claimed_at, id
+  );`,
+      down: `drop index if exists takosumi_resource_shapes_observation_due_idx;
+alter table takosumi_resource_shapes
+  drop column if exists last_observation_attempt_at,
+  drop column if exists observation_claimed_at,
+  drop column if exists observation_lease_id;`,
     },
   ]);

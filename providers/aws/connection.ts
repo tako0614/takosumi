@@ -1,19 +1,15 @@
 /**
  * AWS STS AssumeRole connection primitives (provider-internal).
  *
- * This is the self-contained, extracted form of the vault's `#assumeAwsRole`
- * path plus its AWS SigV4 signing / form-encoding / STS XML helpers. The vault
- * opens the sealed source credentials; this module performs the network-facing
- * AssumeRole exchange and returns the minted temporary credentials.
+ * This provider-owned module implements AWS SigV4 signing, form encoding, STS
+ * response parsing, and the network-facing AssumeRole exchange. The Vault opens
+ * sealed source credentials and passes only the material needed by this driver.
  *
  * The crypto/secret-opening stays in core: this module only ever sees
  * already-opened string values (the access key id / secret access key / session
  * token the caller hands in). The `fetch` and `now` seams are injected so the
- * exchange is unit-testable without real network or wall-clock, mirroring the
- * vault's `VaultFetch` / `#now` seams. Behavior is byte-identical to the
- * in-vault path: same STS query parameters, same SigV4 canonicalization, same
- * XML field extraction, and the same `AwsConnectionError` (`failed_precondition`)
- * surface the caller can translate identically to `ConnectionVaultError`.
+ * exchange is unit-testable without real network or wall-clock. Typed failures
+ * map to the Vault's stable `failed_precondition` surface.
  */
 
 /** Injected fetch seam so the STS exchange is unit-testable without real network. */

@@ -44,9 +44,9 @@ export class OtlpObservabilitySink implements ObservabilitySink {
       : undefined;
     this.#tracesExporter = options.tracesEndpoint
       ? new OtlpTracesExporter({
-        ...options,
-        endpoint: options.tracesEndpoint,
-      })
+          ...options,
+          endpoint: options.tracesEndpoint,
+        })
       : undefined;
     this.#failClosed = options.failClosed === true;
   }
@@ -231,10 +231,9 @@ export function otlpOptionsFromEnv(
   return {
     ...(endpoint ? { endpoint } : {}),
     ...(tracesEndpoint ? { tracesEndpoint } : {}),
-    serviceName: firstNonEmpty(
-      env?.TAKOSUMI_OTLP_SERVICE_NAME,
-      env?.OTEL_SERVICE_NAME,
-    ) ?? "takosumi-service",
+    serviceName:
+      firstNonEmpty(env?.TAKOSUMI_OTLP_SERVICE_NAME, env?.OTEL_SERVICE_NAME) ??
+      "takosumi-service",
     headers: parseHeaders(env),
     failClosed: parseBoolean(env?.TAKOSUMI_OTLP_FAIL_CLOSED),
   };
@@ -364,8 +363,8 @@ function numberPointFor(event: MetricEvent): OtlpNumberDataPoint {
     attributes: attributesForMetric(event),
     ...(timeUnixNano(event.observedAt)
       ? {
-        timeUnixNano: timeUnixNano(event.observedAt),
-      }
+          timeUnixNano: timeUnixNano(event.observedAt),
+        }
       : {}),
     asDouble: event.value,
   };
@@ -376,8 +375,8 @@ function histogramPointFor(event: MetricEvent): OtlpHistogramDataPoint {
     attributes: attributesForMetric(event),
     ...(timeUnixNano(event.observedAt)
       ? {
-        timeUnixNano: timeUnixNano(event.observedAt),
-      }
+          timeUnixNano: timeUnixNano(event.observedAt),
+        }
       : {}),
     count: "1",
     sum: event.value,
@@ -388,8 +387,10 @@ function histogramPointFor(event: MetricEvent): OtlpHistogramDataPoint {
 
 function attributesForMetric(event: MetricEvent): readonly OtlpAttribute[] {
   const attrs: OtlpAttribute[] = [attribute("takosumi.metric.id", event.id)];
-  if (event.spaceId) attrs.push(attribute("takosumi.space_id", event.spaceId));
-  if (event.groupId) attrs.push(attribute("takosumi.group_id", event.groupId));
+  if (event.workspaceId)
+    attrs.push(attribute("takosumi.workspace_id", event.workspaceId));
+  if (event.runGroupId)
+    attrs.push(attribute("takosumi.run_group_id", event.runGroupId));
   if (event.requestId) {
     attrs.push(attribute("takosumi.request_id", event.requestId));
   }
@@ -425,8 +426,10 @@ function spanForEvent(event: TraceSpanEvent): OtlpSpan {
 
 function attributesForTrace(event: TraceSpanEvent): readonly OtlpAttribute[] {
   const attrs: OtlpAttribute[] = [attribute("takosumi.span.id", event.id)];
-  if (event.spaceId) attrs.push(attribute("takosumi.space_id", event.spaceId));
-  if (event.groupId) attrs.push(attribute("takosumi.group_id", event.groupId));
+  if (event.workspaceId)
+    attrs.push(attribute("takosumi.workspace_id", event.workspaceId));
+  if (event.runGroupId)
+    attrs.push(attribute("takosumi.run_group_id", event.runGroupId));
   if (event.requestId) {
     attrs.push(attribute("takosumi.request_id", event.requestId));
   }
@@ -495,10 +498,9 @@ function parseHeaders(
       const parsed = JSON.parse(json);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         return Object.fromEntries(
-          Object.entries(parsed)
-            .filter((entry): entry is [string, string] =>
-              typeof entry[1] === "string"
-            ),
+          Object.entries(parsed).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
         );
       }
     } catch {
@@ -546,6 +548,10 @@ function firstNonEmpty(
 function parseBoolean(value: string | undefined): boolean {
   if (!value) return false;
   const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" ||
-    normalized === "yes" || normalized === "on";
+  return (
+    normalized === "1" ||
+    normalized === "true" ||
+    normalized === "yes" ||
+    normalized === "on"
+  );
 }

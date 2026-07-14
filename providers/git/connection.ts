@@ -14,7 +14,6 @@ import {
   GIT_SSH_PRIVATE_KEY_ENV,
   type SourceGitConnectionKind,
 } from "takosumi-contract/sources";
-import type { ProviderConnectionKind } from "takosumi-contract/connections";
 
 export {
   GIT_HTTPS_TOKEN_ENV,
@@ -28,7 +27,7 @@ export {
  * phase. Mirrors the vault's `isSourceGitKind` byte-for-byte.
  */
 export function isSourceGitKind(
-  kind: ProviderConnectionKind | undefined,
+  kind: SourceGitConnectionKind | undefined,
 ): kind is SourceGitConnectionKind {
   return kind === "source_git_https_token" || kind === "source_git_ssh_key";
 }

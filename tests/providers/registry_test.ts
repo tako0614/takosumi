@@ -2,8 +2,12 @@ import { expect, test } from "bun:test";
 
 import {
   GUIDED_PROVIDER_SETUPS,
+  REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
+  REFERENCE_CREDENTIAL_RECIPE_DRIVERS,
+  buildGuidedConnectionRequest,
+  credentialRecipeDriverKey,
   guidedProviderSetupForAddress,
-  guidedProviderSetupForConnectionKind,
+  installableCredentialRecipes,
 } from "../../providers/registry.ts";
 import { createDefaultRunnerProfiles } from "../../core/domains/deploy-control/runner_profiles.ts";
 
@@ -47,22 +51,6 @@ test("guided setup lookup resolves fully-qualified, short, and local provider fo
   expect(guidedProviderSetupForAddress("nonexistent/provider")).toBeUndefined();
 });
 
-test("guided setup lookup maps each driver kind to its setup", () => {
-  expect(guidedProviderSetupForConnectionKind("cloudflare_api_token")?.id).toBe(
-    "cloudflare",
-  );
-  expect(guidedProviderSetupForConnectionKind("aws_assume_role")?.id).toBe(
-    "aws",
-  );
-  expect(
-    guidedProviderSetupForConnectionKind("gcp_service_account_json")?.id,
-  ).toBe("gcp");
-  expect(
-    guidedProviderSetupForConnectionKind("gcp_service_account_impersonation")
-      ?.id,
-  ).toBe("gcp");
-});
-
 test("guided setup metadata does not ship operator-account hosting redirects", () => {
   expect(GUIDED_PROVIDER_SETUPS.some((p) => "hosting" in p)).toBe(false);
 });
@@ -74,4 +62,85 @@ test("guided setup metadata does not select runner profiles", () => {
   }
   expect(createDefaultRunnerProfiles(1)).toHaveLength(1);
   expect(createDefaultRunnerProfiles(1)[0]?.allowedProviders).toEqual(["*"]);
+});
+
+test("reference composition advertises pre-run modes only with a mint driver", () => {
+  for (const recipe of REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes) {
+    for (const [authMode, mode] of Object.entries(recipe.authModes)) {
+      if (!mode.preRun) continue;
+      expect(
+        typeof REFERENCE_CREDENTIAL_RECIPE_DRIVERS[
+          credentialRecipeDriverKey({ id: recipe.id, authMode })
+        ]?.mint,
+        `${recipe.id}/${authMode}`,
+      ).toBe("function");
+    }
+  }
+
+  const aws = REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(
+    (recipe) => recipe.id === "aws",
+  );
+  const google = REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(
+    (recipe) => recipe.id === "google",
+  );
+  expect(aws?.authModes.assume_role).toBeDefined();
+  expect(google?.authModes.impersonation).toBeUndefined();
+  expect(google?.authModes.oauth).toBeDefined();
+  expect(google?.authModes.service_account_file).toBeDefined();
+  expect(
+    REFERENCE_CREDENTIAL_RECIPE_DRIVERS[
+      credentialRecipeDriverKey({
+        id: "google",
+        authMode: "service_account_file",
+      })
+    ],
+  ).toBeUndefined();
+});
+
+test("pre-run filtering is structural and does not encode provider ids", () => {
+  const installed = installableCredentialRecipes(
+    [
+      {
+        id: "operator-defined",
+        displayName: "Operator-defined",
+        terraformSource: "*",
+        authModes: {
+          static: { env: { TOKEN: { from: "secret" } } },
+          implemented_exchange: {
+            preRun: { type: "opaque_exchange" },
+          },
+          missing_exchange: {
+            preRun: { type: "another_opaque_exchange" },
+          },
+        },
+      },
+    ],
+    {
+      [credentialRecipeDriverKey({
+        id: "operator-defined",
+        authMode: "implemented_exchange",
+      })]: {
+        async mint(input) {
+          return {
+            env: input.values,
+            evidence: input.staticEvidence(),
+          };
+        },
+      },
+    },
+  );
+
+  expect(Object.keys(installed[0]?.authModes ?? {})).toEqual([
+    "static",
+    "implemented_exchange",
+  ]);
+});
+
+test("unimplemented pre-run guided setup is not installed", () => {
+  expect(() =>
+    buildGuidedConnectionRequest("google-impersonation", {
+      workspaceId: "workspace_1",
+      values: {},
+    }),
+  ).toThrow("guided connection setup google-impersonation is not installed");
 });

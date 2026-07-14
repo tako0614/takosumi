@@ -1,21 +1,21 @@
 /**
  * OutputShares domain service (Core Specification §18).
  *
- * An OutputShare is the explicit cross-Space sharing grant: it authorizes a
- * consumer Space (`toSpace`) to consume named outputs from a producer
- * Installation that lives in another Space (`fromSpace`). It is the ONLY way
- * outputs cross a Space boundary (invariant 13); a same-Space dependency edge
+ * An OutputShare is the explicit cross-Workspace sharing grant: it authorizes a
+ * consumer Workspace to consume named outputs from a producer Capsule that
+ * lives in another Workspace. It is the ONLY way outputs cross a Workspace
+ * boundary (invariant 13); a same-Workspace dependency edge
  * never needs one.
  *
  * This service owns OutputShare creation / acceptance / listing / revocation and enforces
  * the structural invariants of a grant:
  *
- *   - the producer Installation must exist and belong to `fromSpaceId`;
- *   - the consumer Space (`toSpaceId`) must exist;
- *   - `fromSpaceId` and `toSpaceId` must differ (a same-Space "share" is a
+ *   - the producer Capsule must exist and belong to `fromWorkspaceId`;
+ *   - the consumer Workspace (`toWorkspaceId`) must exist;
+ *   - `fromWorkspaceId` and `toWorkspaceId` must differ (a same-Workspace share is a
  *     Dependency, not an OutputShare);
  *   - the outputs list must be non-empty and every requested name must exist in
- *     the producer's LATEST OutputSnapshot.spaceOutputs (`failed_precondition`
+ *     the producer's latest Output.workspaceOutputs (`failed_precondition`
  *     otherwise — you cannot grant an output the producer has not projected);
  *   - sensitive entries require an explicit policy acknowledgement on the
  *     request plus a host-injected resolver that proves the producer's encrypted
@@ -23,12 +23,12 @@
  *     record and Activity still store names/flags only; the sensitive value is
  *     resolved only at plan-time `published_output` injection.
  *
- * Status lifecycle: a created share starts `pending`, the receiving Space calls
+ * Status lifecycle: a created share starts `pending`, the receiving Workspace calls
  * approve/accept to move it to `active`, and `revoke` moves a pending or active
  * share to `revoked`.
  *
  * The plan-time `published_output` consumption (injecting a shared output into a
- * consumer Installation's variables, pinned by a DependencySnapshot) lands in a
+ * consumer Capsule's variables, pinned by a DependencySnapshot) lands in a
  * later phase in the dependencies domain + controller; this service is the grant
  * CRUD + structural gate.
  */
@@ -36,7 +36,7 @@
 import type {
   OutputShare,
   OutputShareEntry,
-  Output as OutputSnapshot,
+  Output as Output,
 } from "takosumi-contract/outputs";
 import type { JsonValue } from "takosumi-contract";
 import {
@@ -48,7 +48,7 @@ import {
   OpenTofuControllerError,
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
-import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
+import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
@@ -56,7 +56,7 @@ import {
 
 /** One requested output entry on a create-share request. */
 export interface CreateOutputShareEntry {
-  /** Producer output name (must exist in the latest OutputSnapshot.spaceOutputs). */
+  /** Producer output name (must exist in the latest Output.workspaceOutputs). */
   readonly name: string;
   /** Optional consumer-side rename; defaults to `name` when omitted. */
   readonly alias?: string;
@@ -76,40 +76,34 @@ export interface SensitiveOutputValue {
 
 /**
  * Host-injected resolver for sensitive output values. The service core only sees
- * the latest OutputSnapshot pointer and the requested output name; the host owns
+ * the latest Output pointer and the requested output name; the host owns
  * decrypting the encrypted raw output artifact. Implementations must return a
  * value only when the raw OpenTofu output exists and is flagged sensitive.
  */
 export interface SensitiveOutputResolver {
   resolve(input: {
-    readonly outputSnapshot: OutputSnapshot;
+    readonly output: Output;
     readonly outputName: string;
-    readonly fromSpaceId: string;
-    readonly toSpaceId: string;
-    readonly producerInstallationId: string;
+    readonly fromWorkspaceId: string;
+    readonly toWorkspaceId: string;
+    readonly producerCapsuleId: string;
   }): Promise<SensitiveOutputValue | undefined>;
 }
 
 /** Create-share request: the public {@link OutputShare} minus the service-assigned fields. */
 export interface CreateOutputShareRequest {
   readonly fromWorkspaceId: string;
-  /** @deprecated Use fromWorkspaceId. */
-  readonly fromSpaceId?: string;
   readonly toWorkspaceId: string;
-  /** @deprecated Use toWorkspaceId. */
-  readonly toSpaceId?: string;
   readonly producerCapsuleId: string;
-  /** @deprecated Use producerCapsuleId. */
-  readonly producerInstallationId?: string;
   readonly outputs: readonly CreateOutputShareEntry[];
   readonly sensitivePolicy?: SensitiveOutputSharePolicy;
 }
 
 export interface OutputSharesServiceDependencies {
-  readonly store: OpenTofuDeploymentStore;
+  readonly store: OpenTofuControlStore;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => string;
-  /** Space-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
+  /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder;
   /**
    * Optional sensitive-output resolver. Required for creating sensitive shares:
@@ -120,7 +114,7 @@ export interface OutputSharesServiceDependencies {
 }
 
 export class OutputSharesService {
-  readonly #store: OpenTofuDeploymentStore;
+  readonly #store: OpenTofuControlStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
   readonly #activity: ActivityRecorder;
@@ -139,31 +133,25 @@ export class OutputSharesService {
 
   /**
    * Creates an OutputShare after enforcing every structural invariant (spec
-   * §18). The producer Installation must exist and belong to `fromSpaceId`; the
-   * consumer Space must exist; `fromSpaceId` != `toSpaceId`; the outputs list is
+   * §18). The producer Capsule must exist and belong to `fromWorkspaceId`; the
+   * consumer Workspace must exist; both Workspace ids must differ; the outputs list is
    * non-empty; every requested name exists in the producer's latest
-   * OutputSnapshot.spaceOutputs; and sensitive entries carry an explicit policy
-   * acknowledgement. The created share is PENDING until the receiving Space
+   * Output.workspaceOutputs; and sensitive entries carry an explicit policy
+   * acknowledgement. The created share is PENDING until the receiving Workspace
    * approves it.
    */
   async createShare(request: CreateOutputShareRequest): Promise<OutputShare> {
-    // Accept both the new Workspace/Capsule field names and the transient
-    // deprecated Space/Installation names until the rename converges.
-    const fromWorkspaceId =
-      request.fromWorkspaceId ?? request.fromSpaceId ?? "";
-    const toWorkspaceId = request.toWorkspaceId ?? request.toSpaceId ?? "";
-    const producerCapsuleId =
-      request.producerCapsuleId ?? request.producerInstallationId ?? "";
+    const fromWorkspaceId = request.fromWorkspaceId;
+    const toWorkspaceId = request.toWorkspaceId;
+    const producerCapsuleId = request.producerCapsuleId;
     requireNonEmptyString(fromWorkspaceId, "fromWorkspaceId");
     requireNonEmptyString(toWorkspaceId, "toWorkspaceId");
     requireNonEmptyString(producerCapsuleId, "producerCapsuleId");
-    // A "share" within one Space is a Dependency, not an OutputShare: the
-    // cross-Space boundary is the whole point of the grant.
+    // A share within one Workspace is a Dependency, not an OutputShare.
     if (fromWorkspaceId === toWorkspaceId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        "an output share must cross a Space boundary (fromSpaceId must differ " +
-          "from toSpaceId; use a Dependency for same-Space output flow)",
+        "an output share must cross a Workspace boundary; use a Dependency for same-Workspace output flow",
       );
     }
     // The grant must name at least one output; an empty grant authorizes nothing.
@@ -175,24 +163,23 @@ export class OutputSharesService {
     }
     const entries = normalizeEntries(request.outputs, request.sensitivePolicy);
 
-    const producer = await this.#store.getInstallation(producerCapsuleId);
+    const producer = await this.#store.getCapsule(producerCapsuleId);
     if (!producer) {
       throw new OpenTofuControllerError(
         "not_found",
-        `producer installation ${producerCapsuleId} not found`,
+        `producer capsule ${producerCapsuleId} not found`,
       );
     }
-    // The producer must belong to the granting Space: a Space can only share the
-    // outputs of its OWN Installations.
-    if (producer.spaceId !== fromWorkspaceId) {
+    // The producer must belong to the granting Workspace.
+    if (producer.workspaceId !== fromWorkspaceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "producer capsule is not available to the granting workspace",
       );
     }
-    // The consumer Space must exist (you cannot grant to nothing).
-    const toSpace = await this.#store.getSpace(toWorkspaceId);
-    if (!toSpace) {
+    // The consumer Workspace must exist (you cannot grant to nothing).
+    const toWorkspace = await this.#store.getWorkspace(toWorkspaceId);
+    if (!toWorkspace) {
       throw new OpenTofuControllerError(
         "not_found",
         "consumer workspace not found",
@@ -200,12 +187,14 @@ export class OutputSharesService {
     }
 
     // Every non-sensitive shared name must exist in the producer's LATEST
-    // projected spaceOutputs: you cannot grant an ordinary output the producer
-    // has not produced. Sensitive entries are not stored in spaceOutputs; they
+    // projected workspaceOutputs: you cannot grant an ordinary output the producer
+    // has not produced. Sensitive entries are not stored in workspaceOutputs; they
     // require explicit policy plus a host resolver that re-checks the encrypted
     // raw output artifact before plan-time published_output injection.
-    const latest = await this.#store.getLatestOutputSnapshot(producerCapsuleId);
-    const available = new Set(latest ? Object.keys(latest.spaceOutputs) : []);
+    const latest = await this.#store.getLatestOutput(producerCapsuleId);
+    const available = new Set(
+      latest ? Object.keys(latest.workspaceOutputs) : [],
+    );
     const missing = entries
       .filter((entry) => entry.sensitive !== true)
       .map((entry) => entry.name)
@@ -224,7 +213,7 @@ export class OutputSharesService {
       if (!latest) {
         throw new OpenTofuControllerError(
           "failed_precondition",
-          "sensitive output share requires a latest producer OutputSnapshot",
+          "sensitive output share requires a latest producer Output",
         );
       }
       if (!this.#sensitiveOutputResolver) {
@@ -235,11 +224,11 @@ export class OutputSharesService {
       }
       for (const entry of sensitiveEntries) {
         const resolved = await this.#sensitiveOutputResolver.resolve({
-          outputSnapshot: latest,
+          output: latest,
           outputName: entry.name,
-          fromSpaceId: fromWorkspaceId,
-          toSpaceId: toWorkspaceId,
-          producerInstallationId: producerCapsuleId,
+          fromWorkspaceId,
+          toWorkspaceId,
+          producerCapsuleId,
         });
         if (!resolved) {
           throw new OpenTofuControllerError(
@@ -254,28 +243,24 @@ export class OutputSharesService {
     const share: OutputShare = {
       id: this.#newId("oshare"),
       fromWorkspaceId,
-      fromSpaceId: fromWorkspaceId,
       toWorkspaceId,
-      toSpaceId: toWorkspaceId,
       producerCapsuleId,
-      producerInstallationId: producerCapsuleId,
       outputs: entries,
       status: "pending",
       createdAt: this.#now(),
     };
     const created = await this.#store.putOutputShare(share);
     // Activity (§27 / §34): an OutputShare was granted. Recorded against the
-    // GRANTING Space (fromSpaceId, the side that authorizes the share). Names +
+    // granting Workspace (the side that authorizes the share). Names +
     // aliases only — never output VALUES.
     await this.#activity.record({
-      workspaceId: created.fromSpaceId,
-      spaceId: created.fromSpaceId,
+      workspaceId: created.fromWorkspaceId,
       action: "output_share.created",
       targetType: "output_share",
       targetId: created.id,
       metadata: {
-        toSpaceId: created.toSpaceId,
-        producerInstallationId: created.producerInstallationId,
+        toWorkspaceId: created.toWorkspaceId,
+        producerCapsuleId: created.producerCapsuleId,
         outputNames: created.outputs.map((entry) => entry.name),
         sensitiveOutputNames: created.outputs
           .filter((entry) => entry.sensitive)
@@ -286,15 +271,14 @@ export class OutputSharesService {
   }
 
   /**
-   * Lists every OutputShare touching a Space — both the grants it GRANTED
-   * (`fromSpaceId === spaceId`) and the grants it RECEIVED (`toSpaceId ===
-   * spaceId`) — de-duplicated and ordered oldest-first.
+   * Lists every OutputShare touching a Workspace — both grants and receipts —
+   * de-duplicated and ordered oldest-first.
    */
   async listForWorkspace(workspaceId: string): Promise<readonly OutputShare[]> {
     requireNonEmptyString(workspaceId, "workspaceId");
     const [granted, received] = await Promise.all([
-      this.#store.listOutputSharesFromSpace(workspaceId),
-      this.#store.listOutputSharesToSpace(workspaceId),
+      this.#store.listOutputSharesFromWorkspace(workspaceId),
+      this.#store.listOutputSharesToWorkspace(workspaceId),
     ]);
     const byId = new Map<string, OutputShare>();
     for (const share of [...granted, ...received]) byId.set(share.id, share);
@@ -304,15 +288,10 @@ export class OutputSharesService {
     );
   }
 
-  /** @deprecated transient alias for {@link listForWorkspace}. */
-  async listForSpace(spaceId: string): Promise<readonly OutputShare[]> {
-    return await this.listForWorkspace(spaceId);
-  }
-
   /**
-   * Keyset-paged {@link listForSpace} (spec §30). The from-space + to-space
+   * Keyset-paged {@link listForWorkspace} (spec §30). The cross-Workspace
    * grants are a small set, so the union is materialized, de-duplicated, and
-   * sorted by `(createdAt, id)` (by {@link listForSpace}), then bounded with the
+   * sorted by `(createdAt, id)` (by {@link listForWorkspace}), then bounded with the
    * in-memory keyset pager — a keyset across the UNION query would be unsound.
    */
   async listForWorkspacePage(
@@ -322,22 +301,14 @@ export class OutputSharesService {
     return pageSorted(await this.listForWorkspace(workspaceId), params);
   }
 
-  /** @deprecated transient alias for {@link listForWorkspacePage}. */
-  async listForSpacePage(
-    spaceId: string,
-    params: PageParams,
-  ): Promise<Page<OutputShare>> {
-    return await this.listForWorkspacePage(spaceId, params);
-  }
-
-  /** Reads an OutputShare by id (used by routes for space-permission gating). */
+  /** Reads an OutputShare by id (used by routes for Workspace-permission gating). */
   async getShare(id: string): Promise<OutputShare | undefined> {
     requireNonEmptyString(id, "shareId");
     return await this.#store.getOutputShare(id);
   }
 
   /**
-   * Approves a pending OutputShare from the receiving Space side. Active shares
+   * Approves a pending OutputShare from the receiving Workspace side. Active shares
    * are idempotent; revoked shares cannot be reactivated.
    */
   async approveShare(id: string): Promise<OutputShare> {
@@ -363,14 +334,13 @@ export class OutputSharesService {
     };
     const stored = await this.#store.putOutputShare(active);
     await this.#activity.record({
-      workspaceId: stored.toSpaceId,
-      spaceId: stored.toSpaceId,
+      workspaceId: stored.toWorkspaceId,
       action: "output_share.approved",
       targetType: "output_share",
       targetId: stored.id,
       metadata: {
-        fromSpaceId: stored.fromSpaceId,
-        producerInstallationId: stored.producerInstallationId,
+        fromWorkspaceId: stored.fromWorkspaceId,
+        producerCapsuleId: stored.producerCapsuleId,
         outputNames: stored.outputs.map((entry) => entry.name),
         sensitiveOutputNames: stored.outputs
           .filter((entry) => entry.sensitive)
@@ -402,16 +372,15 @@ export class OutputSharesService {
     };
     const stored = await this.#store.putOutputShare(revoked);
     // Activity (§27 / §34): an OutputShare was revoked. Recorded against the
-    // granting Space (the side that owns the grant).
+    // granting Workspace (the side that owns the grant).
     await this.#activity.record({
-      workspaceId: stored.fromSpaceId,
-      spaceId: stored.fromSpaceId,
+      workspaceId: stored.fromWorkspaceId,
       action: "output_share.revoked",
       targetType: "output_share",
       targetId: stored.id,
       metadata: {
-        toSpaceId: stored.toSpaceId,
-        producerInstallationId: stored.producerInstallationId,
+        toWorkspaceId: stored.toWorkspaceId,
+        producerCapsuleId: stored.producerCapsuleId,
       },
     });
     return stored;

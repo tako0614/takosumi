@@ -1,35 +1,33 @@
 /**
  * Minimal OAuth 2.0 + OIDC mock server for local-substrate.
  *
- * Stands in for accounts.google.com so the cloud SPA's sign-in flow can
+ * Provides a generic local OIDC endpoint so the SPA's sign-in flow can
  * complete end-to-end without external network. Auto-approves every
  * /authorize request and returns deterministic user info from /userinfo.
  *
- * One provider is served under the Google path prefix:
- *   /google/{authorize,token,userinfo} — claim shape: {sub, email, name}
+ * One provider is served under the local fixture path prefix:
+ *   /local-oidc/{authorize,token,userinfo} — claim shape: {sub, email, name}
  *
  * Wire env (worker → mock, via Caddy TLS):
- *   TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_AUTHORIZATION_ENDPOINT=https://oauth-mock.test/google/authorize
- *   TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_TOKEN_ENDPOINT=https://oauth-mock.test/google/token
- *   TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_USERINFO_ENDPOINT=https://oauth-mock.test/google/userinfo
- *   TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_ISSUER=https://oauth-mock.test/google
+ * The Accounts worker receives this provider through the generic
+ * TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS descriptor registry.
  */
 
 const PORT = Number(process.env.PORT ?? "8789");
 
 interface Provider {
-  readonly id: "google";
+  readonly id: "local-oidc";
   readonly userInfo: () => Record<string, unknown>;
 }
 
 const PROVIDERS: Record<string, Provider> = {
-  google: {
-    id: "google",
+  "local-oidc": {
+    id: "local-oidc",
     userInfo: () => ({
-      sub: "google_mock_user_001",
-      email: "mock.google.user@example.invalid",
+      sub: "local_oidc_mock_user_001",
+      email: "mock.oidc.user@example.invalid",
       email_verified: true,
-      name: "Mock Google User",
+      name: "Mock OIDC User",
       given_name: "Mock",
       family_name: "User",
       locale: "ja",
@@ -102,8 +100,8 @@ Bun.serve({
       );
     }
 
-    // /authorize — Google only.
-    const authzMatch = url.pathname.match(/^\/(google)\/authorize$/);
+    // Generic fixture authorize endpoint.
+    const authzMatch = url.pathname.match(/^\/(local-oidc)\/authorize$/);
     if (authzMatch) {
       const providerId = authzMatch[1];
       const redirectUri = url.searchParams.get("redirect_uri");
@@ -126,8 +124,8 @@ Bun.serve({
       return Response.redirect(target.toString(), 302);
     }
 
-    // /token — Google only.
-    const tokenMatch = url.pathname.match(/^\/(google)\/token$/);
+    // Generic fixture token endpoint.
+    const tokenMatch = url.pathname.match(/^\/(local-oidc)\/token$/);
     if (tokenMatch && req.method === "POST") {
       const providerId = tokenMatch[1];
       const body = await req.text();
@@ -157,8 +155,8 @@ Bun.serve({
       });
     }
 
-    // /userinfo — Google only.
-    const userInfoMatch = url.pathname.match(/^\/(google)\/userinfo$/);
+    // Generic fixture UserInfo endpoint.
+    const userInfoMatch = url.pathname.match(/^\/(local-oidc)\/userinfo$/);
     if (userInfoMatch && req.method === "GET") {
       const providerId = userInfoMatch[1];
       const provider = PROVIDERS[providerId];

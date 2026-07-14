@@ -1,12 +1,12 @@
-output "takosumi_launch_url" {
+output "site_origin" {
   value = "https://demo.fixture.example"
 }
 
-output "takosumi_admin_url" {
+output "management_origin" {
   value = "https://demo.fixture.example/admin"
 }
 
-output "health_url" {
+output "health_probe" {
   value = "https://demo.fixture.example/health"
 }
 

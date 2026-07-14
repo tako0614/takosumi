@@ -2,7 +2,7 @@
  * ストア — the primary discovery tab. Wraps the shared StoreBrowser with the
  * decentralized Takosumi store(s). [追加] hands the listing to the one install
  * flow (`/new?…&auto=1`), which auto-starts when nothing needs the user's
- * input. Whether installation can start without user configuration is decided
+ * input. Whether a Capsule can be added without user configuration is decided
  * by the install flow against the real repository-owned metadata. This says
  * nothing about build or deploy duration: the Store feed strips the input
  * schema and makes no client-side readiness or speed claim.

@@ -1,7 +1,7 @@
 /**
  * Source-management facade (Core Specification §6).
  *
- * A thin collaborator pulled out of `OpenTofuDeploymentController`: every method
+ * A thin collaborator pulled out of `OpenTofuController`: every method
  * is pure delegation to the injected {@link SourcesService}, guarded by a single
  * `not_implemented` check when no Source domain is wired. The controller holds
  * one instance and re-exposes these on its public API unchanged, so importers
@@ -48,10 +48,10 @@ export class SourceManagement {
   }
 
   async listSources(
-    spaceId: string,
+    workspaceId: string,
     params?: PageParams,
   ): Promise<ListSourcesResponse> {
-    return await this.#require().listSources(spaceId, params);
+    return await this.#require().listSources(workspaceId, params);
   }
 
   async getSource(id: string): Promise<SourceResponse> {
@@ -84,29 +84,6 @@ export class SourceManagement {
 
   async getSourceSnapshot(id: string): Promise<SourceSnapshot> {
     return await this.#require().getSourceSnapshot(id);
-  }
-
-  async recordUploadSnapshot(input: {
-    readonly spaceId: string;
-    readonly archiveObjectKey: string;
-    readonly archiveDigest: string;
-    readonly archiveSizeBytes: number;
-    readonly path?: string;
-    readonly snapshotId?: string;
-  }): Promise<SourceSnapshot> {
-    return await this.#require().recordUploadSnapshot(input);
-  }
-
-  async recordArtifactSnapshot(input: {
-    readonly spaceId: string;
-    readonly url: string;
-    readonly archiveObjectKey: string;
-    readonly archiveDigest: string;
-    readonly archiveSizeBytes: number;
-    readonly path?: string;
-    readonly snapshotId?: string;
-  }): Promise<SourceSnapshot> {
-    return await this.#require().recordArtifactSnapshot(input);
   }
 
   async createSourceCompatibilityCheck(

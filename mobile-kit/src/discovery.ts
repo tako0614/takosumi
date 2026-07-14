@@ -56,8 +56,11 @@ export async function discoverHost(input: {
   const oidcIssuer =
     product?.issuer ??
     readIdentityIssuer(capabilities) ??
-    readTakosumiIssuer(takosumi) ??
-    hostUrl;
+    readTakosumiIssuer(takosumi);
+  if (!oidcIssuer) {
+    throw new Error("Host does not advertise an OIDC issuer.");
+  }
+  const normalizedOidcIssuer = normalizeHostUrl(oidcIssuer);
 
   return {
     hostUrl,
@@ -66,12 +69,22 @@ export async function discoverHost(input: {
     takosumi,
     capabilities,
     product,
-    oidcIssuer,
+    oidcIssuer: normalizedOidcIssuer,
+    oidcClientId: readProductOidcClientId(product),
     oidcDiscoveryUrl: hostEndpoint(
-      oidcIssuer,
+      normalizedOidcIssuer,
       "/.well-known/openid-configuration",
     ),
   };
+}
+
+function readProductOidcClientId(
+  product: ProductWellKnown | undefined,
+): string | undefined {
+  const value = product?.oidcClientId;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
 }
 
 async function fetchOptionalJson<T>(

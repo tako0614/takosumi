@@ -2,7 +2,7 @@
  * RunGroups service tests (Core Specification §19 / §24 — "RunGroup basic").
  *
  * Covers the pure status computation, the empty-stale-set precondition, and the
- * end-to-end space_update flow over a 3-installation chain
+ * end-to-end workspace_update flow over a 3-capsule chain
  * (core -> files -> talk): a producer output change cascades stale, plan-update
  * builds a group in topological layers, approve clears the gate, and the group
  * status transitions waiting_approval -> succeeded as members apply through the
@@ -17,16 +17,16 @@ import type {
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   applyExpectedGuardFromPlanRun,
-  OpenTofuDeploymentController,
+  OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { DependenciesService } from "../../../../core/domains/dependencies/mod.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
-  seedInstallationModel,
+  seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import {
@@ -34,6 +34,7 @@ import {
   RunGroupsService,
 } from "../../../../core/domains/run-groups/mod.ts";
 import type { Run } from "takosumi-contract/runs";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -52,11 +53,11 @@ function sequenceNow(start: number): () => number {
 
 /**
  * A runner whose apply emits a `base_domain` output. The value is sourced from a
- * per-installation map so a re-apply of the producer can emit a CHANGED value
+ * per-capsule map so a re-apply of the producer can emit a CHANGED value
  * (driving the stale cascade) while the others stay stable.
  */
 function recordingRunner(
-  outputByInstallation: ReadonlyMap<string, string>,
+  outputByCapsule: ReadonlyMap<string, string>,
 ): OpenTofuRunner & {
   planJobs: OpenTofuPlanJob[];
   applyJobs: OpenTofuApplyJob[];
@@ -87,7 +88,7 @@ function recordingRunner(
         // applies without an explicit approve.
         planResourceChanges: [
           {
-            address: "module.app.cloudflare_workers_script.this",
+            address: "module.child.cloudflare_workers_script.this",
             type: "cloudflare_workers_script",
             actions: ["delete", "create"],
           },
@@ -96,9 +97,8 @@ function recordingRunner(
     },
     apply: (job) => {
       applyJobs.push(job);
-      const installationId = job.planRun.installationId ?? "";
-      const value =
-        outputByInstallation.get(installationId) ?? "default.example.com";
+      const capsuleId = job.planRun.capsuleId ?? "";
+      const value = outputByCapsule.get(capsuleId) ?? "default.example.com";
       return Promise.resolve({
         outputs: {
           base_domain: { sensitive: false, value },
@@ -112,10 +112,11 @@ function recordingRunner(
 }
 
 function controllerWith(
-  store: OpenTofuDeploymentStore,
+  store: OpenTofuControlStore,
   runner: OpenTofuRunner,
-): OpenTofuDeploymentController {
-  return new OpenTofuDeploymentController({
+): OpenTofuController {
+  return new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     store,
     runner,
     vault: fakeProviderVault() as never,
@@ -125,21 +126,21 @@ function controllerWith(
 }
 
 /**
- * Seeds a 3-installation chain in one Space: core -> files -> talk, each a
+ * Seeds a 3-capsule chain in one Workspace: core -> files -> talk, each a
  * `variable_injection` consumer of the upstream's `base_domain`. Returns the
- * installation ids in topological order.
+ * capsule ids in topological order.
  */
 async function seedChain(
-  store: OpenTofuDeploymentStore,
+  store: OpenTofuControlStore,
   environment: string,
 ): Promise<{ core: string; files: string; talk: string }> {
   for (const name of ["core", "files", "talk"]) {
-    const seeded = await seedInstallationModel(store, {
+    const seeded = await seedCapsuleModel(store, {
       environment,
       sourceId: `src_${name}`,
       snapshotId: `snap_${name}`,
       installConfigId: `cfg_${name}`,
-      installationId: `inst_${name}`,
+      capsuleId: `inst_${name}`,
       name,
       ...(name === "core" || name === "files"
         ? {
@@ -155,7 +156,7 @@ async function seedChain(
           }
         : {}),
     });
-    await seedProviderConnections(store, seeded.installation);
+    await seedProviderConnections(store, seeded.capsule);
   }
   const deps = new DependenciesService({
     store,
@@ -167,21 +168,21 @@ async function seedChain(
     now: () => "2026-06-06T00:00:00.000Z",
   });
   await deps.createDependency({
-    spaceId: "space_test",
-    producerInstallationId: "inst_core",
-    consumerInstallationId: "inst_files",
+    workspaceId: "workspace_test",
+    producerCapsuleId: "inst_core",
+    consumerCapsuleId: "inst_files",
     mode: "variable_injection",
-    visibility: "space",
+    visibility: "workspace",
     outputs: {
       base_domain: { from: "base_domain", to: "base_domain", required: true },
     },
   });
   await deps.createDependency({
-    spaceId: "space_test",
-    producerInstallationId: "inst_files",
-    consumerInstallationId: "inst_talk",
+    workspaceId: "workspace_test",
+    producerCapsuleId: "inst_files",
+    consumerCapsuleId: "inst_talk",
     mode: "variable_injection",
-    visibility: "space",
+    visibility: "workspace",
     outputs: {
       base_domain: { from: "base_domain", to: "base_domain", required: true },
     },
@@ -189,12 +190,12 @@ async function seedChain(
   return { core: "inst_core", files: "inst_files", talk: "inst_talk" };
 }
 
-/** Applies a preview installation plan to completion (no approval gate). */
+/** Applies a preview capsule plan to completion (no approval gate). */
 async function applyPlan(
-  controller: OpenTofuDeploymentController,
-  installationId: string,
+  controller: OpenTofuController,
+  capsuleId: string,
 ): Promise<void> {
-  const plan = await controller.createInstallationPlan(installationId);
+  const plan = await controller.createCapsulePlan(capsuleId);
   await controller.createApplyRun({
     planRunId: plan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(plan.planRun),
@@ -204,7 +205,7 @@ async function applyPlan(
 function fakeRun(status: Run["status"]): Run {
   return {
     id: `run_${status}`,
-    spaceId: "space_test",
+    workspaceId: "workspace_test",
     type: "plan",
     status,
     createdBy: "system",
@@ -240,30 +241,30 @@ test("computeGroupStatus precedence: active dominates, then waiting, failed, can
   );
 });
 
-test("createSpaceUpdate maps a wedged (cyclic) dependency graph to failed_precondition, not an uncaught 500", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  // Seed two installations in one Space and mark BOTH stale so they enter the
-  // space_update member set.
+test("createWorkspaceUpdate maps a wedged (cyclic) dependency graph to failed_precondition, not an uncaught 500", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  // Seed two Capsules in one Workspace and mark BOTH stale so they enter the
+  // workspace_update member set.
   for (const name of ["alpha", "beta"]) {
-    const { installation } = await seedInstallationModel(store, {
+    const { capsule } = await seedCapsuleModel(store, {
       environment: "preview",
       sourceId: `src_${name}`,
       snapshotId: `snap_${name}`,
       installConfigId: `cfg_${name}`,
-      installationId: `inst_${name}`,
+      capsuleId: `inst_${name}`,
       name,
     });
-    await store.putInstallation({ ...installation, status: "stale" });
+    await store.putCapsule({ ...capsule, status: "stale" });
   }
   // Inject an inverse-edge cycle directly (the create path prevents cycles, so a
   // wedge can only pre-exist). alpha -> beta AND beta -> alpha.
   await store.putDependency({
     id: "dep_cycle_1",
-    spaceId: "space_test",
-    producerInstallationId: "inst_alpha",
-    consumerInstallationId: "inst_beta",
+    workspaceId: "workspace_test",
+    producerCapsuleId: "inst_alpha",
+    consumerCapsuleId: "inst_beta",
     mode: "variable_injection",
-    visibility: "space",
+    visibility: "workspace",
     outputs: {
       base_domain: { from: "base_domain", to: "base_domain", required: true },
     },
@@ -271,11 +272,11 @@ test("createSpaceUpdate maps a wedged (cyclic) dependency graph to failed_precon
   });
   await store.putDependency({
     id: "dep_cycle_2",
-    spaceId: "space_test",
-    producerInstallationId: "inst_beta",
-    consumerInstallationId: "inst_alpha",
+    workspaceId: "workspace_test",
+    producerCapsuleId: "inst_beta",
+    consumerCapsuleId: "inst_alpha",
     mode: "variable_injection",
-    visibility: "space",
+    visibility: "workspace",
     outputs: {
       base_domain: { from: "base_domain", to: "base_domain", required: true },
     },
@@ -292,18 +293,18 @@ test("createSpaceUpdate maps a wedged (cyclic) dependency graph to failed_precon
 
   // The wedged DAG would make `topologicalLayers` throw a GraphCycleError; the
   // service must translate it into a typed failed_precondition (not a bare 500).
-  await expect(runGroups.createSpaceUpdate("space_test")).rejects.toMatchObject(
-    {
-      code: "failed_precondition",
-    },
-  );
-  await expect(runGroups.createSpaceUpdate("space_test")).rejects.toThrow(
-    /dependency_cycle/,
-  );
+  await expect(
+    runGroups.createWorkspaceUpdate("workspace_test"),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+  });
+  await expect(
+    runGroups.createWorkspaceUpdate("workspace_test"),
+  ).rejects.toThrow(/dependency_cycle/);
 });
 
-test("createSpaceUpdate with no stale installations is failed_precondition nothing_to_update", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("createWorkspaceUpdate with no stale Capsules is failed_precondition nothing_to_update", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner(new Map());
   await seedChain(store, "preview");
   const controller = controllerWith(store, runner);
@@ -313,13 +314,13 @@ test("createSpaceUpdate with no stale installations is failed_precondition nothi
     newId: deterministicIds(),
     now: () => "2026-06-06T00:00:00.000Z",
   });
-  await expect(runGroups.createSpaceUpdate("space_test")).rejects.toThrow(
-    /nothing_to_update/,
-  );
+  await expect(
+    runGroups.createWorkspaceUpdate("workspace_test"),
+  ).rejects.toThrow(/nothing_to_update/);
 });
 
 test("producer output change cascades stale to chained consumers (core -> files -> talk)", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   // core emits a STABLE value on its first apply, a CHANGED value on re-apply.
   const runner = recordingRunner(
     new Map([
@@ -336,9 +337,7 @@ test("producer output change cascades stale to chained consumers (core -> files 
   await applyPlan(controller, "inst_files");
   await applyPlan(controller, "inst_talk");
   for (const id of ["inst_core", "inst_files", "inst_talk"]) {
-    expect((await controller.getInstallation(id)).installation.status).toEqual(
-      "active",
-    );
+    expect((await controller.getCapsule(id)).capsule.status).toEqual("active");
   }
 
   // core re-applies with a CHANGED output -> its downstream (files, talk) go stale.
@@ -351,7 +350,8 @@ test("producer output change cascades stale to chained consumers (core -> files 
       ["inst_talk", "talk.example.com"],
     ]),
   );
-  const controller2 = new OpenTofuDeploymentController({
+  const controller2 = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     store,
     runner: changed,
     vault: fakeProviderVault() as never,
@@ -363,19 +363,19 @@ test("producer output change cascades stale to chained consumers (core -> files 
   });
   await applyPlan(controller2, "inst_core");
 
-  expect(
-    (await controller2.getInstallation("inst_core")).installation.status,
-  ).toEqual("active");
-  expect(
-    (await controller2.getInstallation("inst_files")).installation.status,
-  ).toEqual("stale");
-  expect(
-    (await controller2.getInstallation("inst_talk")).installation.status,
-  ).toEqual("stale");
+  expect((await controller2.getCapsule("inst_core")).capsule.status).toEqual(
+    "active",
+  );
+  expect((await controller2.getCapsule("inst_files")).capsule.status).toEqual(
+    "stale",
+  );
+  expect((await controller2.getCapsule("inst_talk")).capsule.status).toEqual(
+    "stale",
+  );
 });
 
 test("unchanged producer output marks nothing stale", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner(
     new Map([
       ["inst_core", "stable.example.com"],
@@ -392,16 +392,16 @@ test("unchanged producer output marks nothing stale", async () => {
 
   // core re-applies emitting the SAME base_domain -> no stale cascade.
   await applyPlan(controller, "inst_core");
-  expect(
-    (await controller.getInstallation("inst_files")).installation.status,
-  ).toEqual("active");
-  expect(
-    (await controller.getInstallation("inst_talk")).installation.status,
-  ).toEqual("active");
+  expect((await controller.getCapsule("inst_files")).capsule.status).toEqual(
+    "active",
+  );
+  expect((await controller.getCapsule("inst_talk")).capsule.status).toEqual(
+    "active",
+  );
 });
 
-test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> applies -> succeeded", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("workspace_update e2e: stale -> plan-update group (topo layers) -> approve -> applies -> succeeded", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner(
     new Map([
       ["inst_core", "v1.example.com"],
@@ -418,7 +418,7 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
 
   // Initial bring-up (each plan requires approval before its apply).
   for (const id of ["inst_core", "inst_files", "inst_talk"]) {
-    const plan = await controller.createInstallationPlan(id);
+    const plan = await controller.createCapsulePlan(id);
     await controller.approveRun(plan.planRun.id);
     await controller.createApplyRun({
       planRunId: plan.planRun.id,
@@ -426,7 +426,8 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
     });
   }
   // core re-applies with a CHANGED output -> files + talk go stale.
-  const changed = new OpenTofuDeploymentController({
+  const changed = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     store,
     runner: recordingRunner(
       new Map([
@@ -442,15 +443,15 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
       return (prefix: string) => `${prefix}_chg${String(n++).padStart(6, "0")}`;
     })(),
   });
-  const corePlan = await changed.createInstallationPlan("inst_core");
+  const corePlan = await changed.createCapsulePlan("inst_core");
   await changed.approveRun(corePlan.planRun.id);
   await changed.createApplyRun({
     planRunId: corePlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(corePlan.planRun),
   });
-  expect(
-    (await changed.getInstallation("inst_files")).installation.status,
-  ).toEqual("stale");
+  expect((await changed.getCapsule("inst_files")).capsule.status).toEqual(
+    "stale",
+  );
 
   // plan-update: build the RunGroup. files + talk are stale -> members; their
   // topological order is [[files], [talk]] (files produces for talk).
@@ -463,8 +464,8 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
     })(),
     now: () => "2026-06-06T01:00:00.000Z",
   });
-  const created = await runGroups.createSpaceUpdate("space_test");
-  expect(created.runGroup.type).toEqual("space_update");
+  const created = await runGroups.createWorkspaceUpdate("workspace_test");
+  expect(created.runGroup.type).toEqual("workspace_update");
 
   const graph = JSON.parse(created.runGroup.graphJson) as {
     order: string[][];
@@ -493,9 +494,9 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
     planRunId: filesRunId,
     expected: applyExpectedGuardFromPlanRun(filesPlan.planRun),
   });
-  expect(
-    (await changed.getInstallation("inst_files")).installation.status,
-  ).toEqual("active");
+  expect((await changed.getCapsule("inst_files")).capsule.status).toEqual(
+    "active",
+  );
 
   // In production (strict mode) the consumer (talk) was pinned to files' PRIOR
   // state generation; once files advanced, talk's group plan is correctly stale.
@@ -512,19 +513,19 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
     "dependency_snapshot_stale",
   );
 
-  const talkReplan = await changed.createInstallationPlan("inst_talk");
+  const talkReplan = await changed.createCapsulePlan("inst_talk");
   await changed.approveRun(talkReplan.planRun.id);
   await changed.createApplyRun({
     planRunId: talkReplan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(talkReplan.planRun),
   });
-  expect(
-    (await changed.getInstallation("inst_talk")).installation.status,
-  ).toEqual("active");
+  expect((await changed.getCapsule("inst_talk")).capsule.status).toEqual(
+    "active",
+  );
 });
 
-test("space_drift_check groups active installations into read-only drift_check runs", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("workspace_drift_check groups active Capsules into read-only drift_check runs", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner(
     new Map([
       ["inst_core", "core.example.com"],
@@ -549,11 +550,11 @@ test("space_drift_check groups active installations into read-only drift_check r
     })(),
     now: () => "2026-06-06T02:00:00.000Z",
   });
-  const created = await runGroups.createSpaceDriftCheck("space_test", {
+  const created = await runGroups.createWorkspaceDriftCheck("workspace_test", {
     limit: 2,
   });
 
-  expect(created.runGroup.type).toEqual("space_drift_check");
+  expect(created.runGroup.type).toEqual("workspace_drift_check");
   expect(created.runs).toHaveLength(2);
   expect(created.runs.every((run) => run.type === "drift_check")).toBe(true);
   expect(
@@ -566,113 +567,4 @@ test("space_drift_check groups active installations into read-only drift_check r
     runs: Record<string, string>;
   };
   expect(Object.keys(graph.runs).sort()).toEqual(["inst_core", "inst_files"]);
-});
-
-test("workspace_output_sync plans and applies one dependency layer at a time", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const runner = recordingRunner(
-    new Map([
-      ["inst_core", "core.example.com"],
-      ["inst_files", "files.example.com"],
-      ["inst_talk", "talk.example.com"],
-    ]),
-  );
-  await seedChain(store, "production");
-  const controller = controllerWith(store, runner);
-  for (const id of ["inst_core", "inst_files", "inst_talk"]) {
-    const plan = await controller.createInstallationPlan(id);
-    await controller.approveRun(plan.planRun.id);
-    await controller.createApplyRun({
-      planRunId: plan.planRun.id,
-      expected: applyExpectedGuardFromPlanRun(plan.planRun),
-    });
-  }
-  const appliedCore = await store.getInstallation("inst_core");
-  const appliedCoreDeployment = await store.getDeployment(
-    appliedCore!.currentDeploymentId!,
-  );
-  const appliedCoreStateVersion = await store.getLatestStateSnapshot(
-    "inst_core",
-    "production",
-  );
-  await store.patchInstallation("inst_core", {
-    currentDeploymentId: appliedCoreStateVersion!.id,
-  });
-  await store.putSourceSnapshot({
-    ...(await store.getSourceSnapshot("snap_core"))!,
-    id: "snap_core_newer",
-    resolvedCommit: "ffffffffffffffffffffffffffffffffffffffff",
-    archiveObjectKey:
-      "spaces/space_test/sources/src_core/snapshots/snap_core_newer/source.tar.zst",
-    fetchedAt: "2026-06-06T02:59:00.000Z",
-  });
-
-  const groups = new RunGroupsService({
-    store,
-    controller,
-    newId: () => "rg_output_sync",
-    now: () => "2026-06-06T03:00:00.000Z",
-  });
-  const created = await groups.createWorkspaceOutputSync(
-    "space_test",
-    7,
-    1,
-    "rg_output_sync",
-  );
-  expect(created.runGroup.type).toBe("workspace_output_sync");
-  let graph = JSON.parse(created.runGroup.graphJson) as {
-    currentLayer: number;
-    order: string[][];
-    runs: Record<string, string>;
-    sourceSnapshotIds: Record<string, string>;
-  };
-  expect(graph.order).toEqual([["inst_core"], ["inst_files"], ["inst_talk"]]);
-  expect(Object.keys(graph.runs)).toEqual(["inst_core"]);
-  expect(graph.sourceSnapshotIds).toEqual({
-    inst_core: appliedCoreDeployment!.sourceSnapshotId,
-    inst_files: "snap_files",
-    inst_talk: "snap_talk",
-  });
-  const firstPlan = await store.getPlanRun(graph.runs.inst_core!);
-  expect(firstPlan?.sourceSnapshotId).toBe(
-    appliedCoreDeployment!.sourceSnapshotId,
-  );
-
-  // Crash-recovery window: the plan row exists but its id was not checkpointed
-  // into graphJson. Recovery must rediscover it by runGroupId + Capsule rather
-  // than enqueueing a duplicate plan.
-  const planCallsBeforeRecovery = runner.planJobs.length;
-  const stored = await store.getRunGroup(created.runGroup.id);
-  await store.putRunGroup({
-    ...stored!,
-    graphJson: JSON.stringify({ ...graph, runs: {} }),
-  });
-  const recovered = await groups.advanceWorkspaceOutputSync(
-    created.runGroup.id,
-  );
-  expect(runner.planJobs.length).toBe(planCallsBeforeRecovery);
-  expect(recovered?.runGroup.status).toBe("waiting_approval");
-
-  await groups.approveRunGroup(created.runGroup.id);
-  let current = await groups.getRunGroup(created.runGroup.id);
-  graph = JSON.parse(current!.runGroup.graphJson);
-  expect(graph.currentLayer).toBe(1);
-  expect(Object.keys(graph.runs).sort()).toEqual(["inst_core", "inst_files"]);
-
-  await groups.approveRunGroup(created.runGroup.id);
-  current = await groups.getRunGroup(created.runGroup.id);
-  graph = JSON.parse(current!.runGroup.graphJson);
-  expect(graph.currentLayer).toBe(2);
-  expect(Object.keys(graph.runs).sort()).toEqual([
-    "inst_core",
-    "inst_files",
-    "inst_talk",
-  ]);
-
-  await groups.approveRunGroup(created.runGroup.id);
-  current = await groups.getRunGroup(created.runGroup.id);
-  expect(current!.runGroup.status).toBe("succeeded");
-  expect(
-    (await controller.getInstallation("inst_talk")).installation.status,
-  ).toBe("active");
 });

@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { inspectMobileReleaseVersions } from "./mobile-release-versions.mjs";
+import { validateMobileReleaseEvidence } from "./mobile-release-evidence-validation.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const appDir = path.resolve(args.appDir ?? process.cwd());
@@ -16,6 +18,7 @@ const evidenceFile = path.resolve(
 const results = [];
 
 const tauriVersion = checkTauriConfig();
+checkReleaseVersionSources(tauriVersion);
 const evidence = readEvidence();
 if (evidence) checkEvidence(evidence, tauriVersion);
 
@@ -51,6 +54,22 @@ function checkTauriConfig() {
   return version;
 }
 
+function checkReleaseVersionSources(tauriVersion) {
+  const inspection = inspectMobileReleaseVersions(appDir, tauriVersion);
+  for (const issue of inspection.issues) {
+    fail(`${issue.id}: ${issue.detail}`);
+  }
+  if (tauriVersion && inspection.packageVersion === tauriVersion) {
+    ok("package.json version matches tauri.conf version");
+  }
+  if (tauriVersion && inspection.cargoVersion === tauriVersion) {
+    ok("Cargo.toml package version matches tauri.conf version");
+  }
+  if (tauriVersion && inspection.cargoLockVersion === tauriVersion) {
+    ok("Cargo.lock package version matches tauri.conf version");
+  }
+}
+
 function readEvidence() {
   if (!existsSync(evidenceFile)) {
     fail(
@@ -62,194 +81,16 @@ function readEvidence() {
 }
 
 function checkEvidence(value, tauriVersion) {
-  const evidence = record(value);
-  if (!evidence) {
-    fail("release evidence must be a JSON object");
-    return;
+  const validation = validateMobileReleaseEvidence({
+    evidence: value,
+    product,
+    productName,
+    bundleId,
+    releaseVersion: tauriVersion,
+  });
+  for (const result of validation.results) {
+    results.push({ kind: result.kind, message: result.message });
   }
-
-  expect(
-    evidence.schema === "takos.mobile-release-evidence.v1",
-    "release evidence schema is takos.mobile-release-evidence.v1",
-  );
-  expect(evidence.product === product, "release evidence product matches");
-  expect(
-    evidence.productName === productName,
-    "release evidence productName matches",
-  );
-  expect(evidence.bundleId === bundleId, "release evidence bundleId matches");
-  expectIsoTimestamp(evidence.generatedAt, "generatedAt");
-  if (tauriVersion) {
-    expect(
-      evidence.releaseVersion === tauriVersion,
-      "release evidence releaseVersion matches tauri.conf version",
-    );
-  }
-
-  const artifacts = record(evidence.artifacts);
-  checkPrivateRefDigest(
-    record(artifacts?.iosArchive),
-    "artifacts.iosArchive",
-  );
-  checkPrivateRefDigest(
-    record(artifacts?.androidAab),
-    "artifacts.androidAab",
-  );
-
-  const signing = record(evidence.signing);
-  const iosSigning = record(signing?.ios);
-  expectPrivateRef(iosSigning?.teamRef, "signing.ios.teamRef");
-  expectPrivateRef(
-    iosSigning?.provisioningProfileRef,
-    "signing.ios.provisioningProfileRef",
-  );
-  const androidSigning = record(signing?.android);
-  expectPrivateRef(androidSigning?.keystoreRef, "signing.android.keystoreRef");
-  expect(
-    androidSigning?.playAppSigning === true,
-    "signing.android.playAppSigning is true",
-  );
-
-  const store = record(evidence.store);
-  checkAppStore(record(store?.appStore));
-  checkGooglePlay(record(store?.googlePlay));
-  checkDeviceSmoke(evidence.deviceSmoke);
-}
-
-function checkAppStore(appStore) {
-  expectPrivateRef(appStore?.appRef, "store.appStore.appRef");
-  expectPrivateRef(
-    appStore?.uploadedBuildRef,
-    "store.appStore.uploadedBuildRef",
-  );
-  expect(
-    appStore?.listingReviewed === true,
-    "store.appStore.listingReviewed is true",
-  );
-  expect(
-    appStore?.privacyNutritionReviewed === true,
-    "store.appStore.privacyNutritionReviewed is true",
-  );
-  checkScreenshots(appStore?.screenshots, "store.appStore.screenshots");
-}
-
-function checkGooglePlay(googlePlay) {
-  expect(
-    googlePlay?.packageName === bundleId,
-    "store.googlePlay.packageName matches bundle id",
-  );
-  expectPrivateRef(
-    googlePlay?.uploadedArtifactRef,
-    "store.googlePlay.uploadedArtifactRef",
-  );
-  expect(
-    googlePlay?.listingReviewed === true,
-    "store.googlePlay.listingReviewed is true",
-  );
-  expect(
-    googlePlay?.dataSafetyReviewed === true,
-    "store.googlePlay.dataSafetyReviewed is true",
-  );
-  checkScreenshots(googlePlay?.screenshots, "store.googlePlay.screenshots");
-}
-
-function checkScreenshots(value, label) {
-  if (!Array.isArray(value) || value.length === 0) {
-    fail(`${label} must include at least one screenshot evidence entry`);
-    return;
-  }
-  ok(`${label} includes ${value.length} screenshot evidence entry`);
-  for (const [index, screenshot] of value.entries()) {
-    const item = record(screenshot);
-    const prefix = `${label}[${index}]`;
-    expectText(item?.locale, `${prefix}.locale`);
-    expectText(item?.device, `${prefix}.device`);
-    checkPrivateRefDigest(item, prefix);
-  }
-}
-
-function checkDeviceSmoke(value) {
-  if (!Array.isArray(value) || value.length === 0) {
-    fail("deviceSmoke must include iOS and Android passed smoke evidence");
-    return;
-  }
-  const platforms = new Set();
-  for (const [index, entry] of value.entries()) {
-    const item = record(entry);
-    const prefix = `deviceSmoke[${index}]`;
-    const platform = optionalText(item?.platform);
-    if (platform === "ios" || platform === "android") platforms.add(platform);
-    else fail(`${prefix}.platform must be ios or android`);
-    expect(item?.result === "passed", `${prefix}.result is passed`);
-    expectText(item?.device, `${prefix}.device`);
-    expectText(item?.osVersion, `${prefix}.osVersion`);
-    expectIsoTimestamp(item?.capturedAt, `${prefix}.capturedAt`);
-    expectPrivateRef(item?.evidenceRef, `${prefix}.evidenceRef`);
-  }
-  expect(platforms.has("ios"), "deviceSmoke includes iOS passed smoke evidence");
-  expect(
-    platforms.has("android"),
-    "deviceSmoke includes Android passed smoke evidence",
-  );
-}
-
-function checkPrivateRefDigest(value, label) {
-  expectPrivateRef(value?.evidenceRef, `${label}.evidenceRef`);
-  expectSha256(value?.sha256, `${label}.sha256`);
-}
-
-function expectPrivateRef(value, label) {
-  const text = optionalText(value);
-  if (!text) {
-    fail(`${label} is required`);
-    return;
-  }
-  if (!text.startsWith("private:")) {
-    fail(`${label} must be a public-safe private: evidence reference`);
-    return;
-  }
-  ok(`${label} is a private evidence reference`);
-}
-
-function expectSha256(value, label) {
-  const text = optionalText(value);
-  if (!text) {
-    fail(`${label} is required`);
-    return;
-  }
-  if (!/^sha256:[a-f0-9]{64}$/i.test(text)) {
-    fail(`${label} must be sha256:<64 hex chars>`);
-    return;
-  }
-  if (/^sha256:0{64}$/i.test(text)) {
-    fail(`${label} must not use the example zero digest`);
-    return;
-  }
-  ok(`${label} is a sha256 digest`);
-}
-
-function expectIsoTimestamp(value, label) {
-  const text = optionalText(value);
-  if (!text) {
-    fail(`${label} is required`);
-    return;
-  }
-  const timestamp = Date.parse(text);
-  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== text) {
-    fail(`${label} must be an ISO timestamp`);
-    return;
-  }
-  ok(`${label} is an ISO timestamp`);
-}
-
-function expectText(value, label) {
-  if (optionalText(value)) ok(`${label} is present`);
-  else fail(`${label} is required`);
-}
-
-function expect(condition, message) {
-  if (condition) ok(message);
-  else fail(message);
 }
 
 function readJson(filePath) {
@@ -265,13 +106,6 @@ function readJson(filePath) {
   }
 }
 
-function record(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value;
-}
-
 function optionalText(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -282,6 +116,11 @@ function ok(message) {
 
 function fail(message) {
   results.push({ kind: "fail", message });
+}
+
+function expect(condition, message) {
+  if (condition) ok(message);
+  else fail(message);
 }
 
 function printResults() {

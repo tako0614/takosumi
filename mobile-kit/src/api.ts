@@ -1,29 +1,47 @@
-import type {
-  FetchLike,
-  MobilePushRegistration,
-  MobileSession,
-} from "./types.ts";
+import type { FetchLike, MobileSession } from "./types.ts";
 import {
-  createMobilePushHostRegistrationRequest,
-  MOBILE_PUSH_REGISTRATION_PATH,
-} from "../../contract/mobile.ts";
+  NOTIFICATION_PUSHER_REGISTRATION_PATH,
+  parseNotificationPusherDeleteRequest,
+  parseNotificationPusherSetRequest,
+  type NotificationPusher,
+} from "../../contract/notification-pushers.ts";
 import { hostEndpoint } from "./url.ts";
 
-export { MOBILE_PUSH_REGISTRATION_PATH };
+export { NOTIFICATION_PUSHER_REGISTRATION_PATH };
 
 export interface MobileApiClient {
   readonly session: MobileSession;
   readonly json: <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
 }
 
-export interface MobileHostPushRegistrationInput {
+export class MobileApiError extends Error {
+  readonly status: number;
+  readonly path: string;
+
+  constructor(status: number, path: string) {
+    super(`Mobile API request failed: ${status} ${path}`);
+    this.name = "MobileApiError";
+    this.status = status;
+    this.path = path;
+  }
+}
+
+export interface MobileHostNotificationPusherRegistrationInput {
   readonly session: MobileSession;
-  readonly registration: MobilePushRegistration;
+  readonly pusher: NotificationPusher;
+  readonly scope?: string;
   readonly path?: string;
   readonly fetch?: FetchLike;
 }
 
-export type MobileHostPushUnregistrationInput = MobileHostPushRegistrationInput;
+export interface MobileHostNotificationPusherUnregistrationInput {
+  readonly session: MobileSession;
+  readonly appId: string;
+  readonly pushkey: string;
+  readonly scope?: string;
+  readonly path?: string;
+  readonly fetch?: FetchLike;
+}
 
 export function createMobileApiClient(input: {
   readonly session: MobileSession;
@@ -45,55 +63,88 @@ export function createMobileApiClient(input: {
         },
       );
       if (!response.ok) {
-        throw new Error(
-          `Mobile API request failed: ${response.status} ${path}`,
-        );
+        throw new MobileApiError(response.status, path);
       }
       return (await response.json()) as T;
     },
   };
 }
 
-export async function registerMobilePushWithHost(
-  input: MobileHostPushRegistrationInput,
+export async function registerNotificationPusherWithHost(
+  input: MobileHostNotificationPusherRegistrationInput,
 ): Promise<void> {
-  await sendMobilePushRegistrationToHost(input, "POST");
-}
+  const parsed = parseNotificationPusherSetRequest(
+    {
+      product: input.session.product,
+      scope: input.scope,
+      pusher: input.pusher,
+    },
+    { product: input.session.product },
+  );
+  if (!parsed.ok) throw invalidPusherError(parsed.error);
 
-export async function unregisterMobilePushWithHost(
-  input: MobileHostPushUnregistrationInput,
-): Promise<void> {
-  await sendMobilePushRegistrationToHost(input, "DELETE");
-}
-
-async function sendMobilePushRegistrationToHost(
-  input: MobileHostPushRegistrationInput,
-  method: "DELETE" | "POST",
-): Promise<void> {
-  const path =
-    input.path ?? resolveMobilePushRegistrationEndpoint(input.session);
   const client = createMobileApiClient({
     session: input.session,
     fetch: input.fetch,
   });
-  await client.json(path, {
-    method,
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(
-      createMobilePushHostRegistrationRequest({
-        hostUrl: input.session.hostUrl,
+  await client.json(
+    input.path ?? resolveNotificationPusherEndpoint(input.session),
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
         product: input.session.product,
-        registration: input.registration,
+        ...(parsed.value.scope ? { scope: parsed.value.scope } : {}),
+        pusher: parsed.value.pusher,
       }),
-    ),
-  });
+    },
+  );
 }
 
-export function resolveMobilePushRegistrationEndpoint(
+export async function unregisterNotificationPusherWithHost(
+  input: MobileHostNotificationPusherUnregistrationInput,
+): Promise<void> {
+  const parsed = parseNotificationPusherDeleteRequest(
+    {
+      product: input.session.product,
+      scope: input.scope,
+      app_id: input.appId,
+      pushkey: input.pushkey,
+    },
+    { product: input.session.product },
+  );
+  if (!parsed.ok) throw invalidPusherError(parsed.error);
+
+  const client = createMobileApiClient({
+    session: input.session,
+    fetch: input.fetch,
+  });
+  await client.json(
+    input.path ?? resolveNotificationPusherEndpoint(input.session),
+    {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        product: input.session.product,
+        ...(parsed.value.scope ? { scope: parsed.value.scope } : {}),
+        app_id: parsed.value.appId,
+        pushkey: parsed.value.pushkey,
+      }),
+    },
+  );
+}
+
+export function resolveNotificationPusherEndpoint(
   session: Pick<MobileSession, "productEndpoints">,
 ): string {
-  const endpoint = session.productEndpoints?.mobilePushRegistrations?.trim();
-  return endpoint || MOBILE_PUSH_REGISTRATION_PATH;
+  const endpoint = session.productEndpoints?.notificationPushers?.trim();
+  return endpoint || NOTIFICATION_PUSHER_REGISTRATION_PATH;
+}
+
+function invalidPusherError(input: {
+  readonly error: string;
+  readonly field?: string;
+}): Error {
+  const field = input.field ? ` (${input.field})` : "";
+  return new Error(`Notification pusher is invalid${field}: ${input.error}`);
 }

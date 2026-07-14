@@ -1,5 +1,4 @@
 import {
-  platformReadinessDomainIds,
   type PlatformReadinessEvidenceEntry,
   type PlatformReadinessEvidenceReferenceGap,
   type PlatformReadinessGapDetail,
@@ -16,14 +15,21 @@ import {
   platformReadinessReportKind,
   platformReadinessRehearsalEnvironments,
   type PlatformReadinessRehearsalRun,
-  platformReadinessRehearsalStepIds,
-  platformReadinessRequiredEvidenceTypes,
-  platformReadinessStructuredEvidenceRequirements,
   productionTopologyDeployableRoles,
   type ProductionTopologyMergeReport,
   type ProductionTopologyPreflightReport,
   productionTopologyRequiredRoles,
 } from "./cli-platform-readiness-constants.ts";
+import {
+  platformReadinessEvidenceSchemaErrors,
+  type PlatformReadinessContribution,
+} from "takosumi-contract";
+import {
+  composePlatformReadinessDefinition,
+  OSS_PLATFORM_READINESS_DEFINITION,
+  platformReadinessDefinitionFromDocument,
+  type PlatformReadinessDefinition,
+} from "./cli-platform-readiness-definition.ts";
 import {
   actorIdentityValue,
   canonicalJson,
@@ -46,9 +52,13 @@ export function validatePlatformReadinessDocument(
     return {
       kind: platformReadinessReportKind,
       ready: false,
-      missingDomains: [...platformReadinessDomainIds],
+      contributions: [],
+      collectionClassHints: {},
+      missingDomains: [...OSS_PLATFORM_READINESS_DEFINITION.domainIds],
       incompleteDomains: [],
-      missingRehearsalSteps: [...platformReadinessRehearsalStepIds],
+      missingRehearsalSteps: [
+        ...OSS_PLATFORM_READINESS_DEFINITION.rehearsalStepIds,
+      ],
       incompleteRehearsalSteps: [],
       errors: ["document must be a JSON object"],
     };
@@ -58,31 +68,40 @@ export function validatePlatformReadinessDocument(
     errors.push(`kind must be ${platformReadinessKind}`);
   }
 
+  const definitionResult = platformReadinessDefinitionFromDocument(document);
+  errors.push(...definitionResult.errors);
+  const definition = definitionResult.definition;
+
   const domainResult = validateEvidenceEntries(
     document.domains,
-    platformReadinessDomainIds,
+    definition.domainIds,
     "domains",
+    undefined,
+    definition,
   );
   const rehearsalRunResult = validatePlatformReadinessRehearsalRun(
     document.rehearsalRun,
   );
   const rehearsalResult = validateEvidenceEntries(
     document.rehearsal,
-    platformReadinessRehearsalStepIds,
+    definition.rehearsalStepIds,
     "rehearsal",
     rehearsalRunResult,
+    definition,
   );
   const gapDetails = [
     ...buildPlatformReadinessGapDetails({
       entries: document.domains,
-      requiredIds: platformReadinessDomainIds,
+      requiredIds: definition.domainIds,
       scope: "domains",
+      definition,
     }),
     ...buildPlatformReadinessGapDetails({
       entries: document.rehearsal,
-      requiredIds: platformReadinessRehearsalStepIds,
+      requiredIds: definition.rehearsalStepIds,
       scope: "rehearsal",
       rehearsalRun: rehearsalRunResult,
+      definition,
     }),
   ];
 
@@ -97,6 +116,19 @@ export function validatePlatformReadinessDocument(
       rehearsalResult.missing.length === 0 &&
       rehearsalResult.incomplete.length === 0 &&
       rehearsalResult.errors.length === 0,
+    contributions: definition.contributions.map(
+      ({ id, version, capability }) => ({
+        id,
+        version,
+        capability,
+      }),
+    ),
+    collectionClassHints: Object.fromEntries(
+      Object.entries(definition.collectionClassHints).map(([id, types]) => [
+        id,
+        [...types],
+      ]),
+    ),
     missingDomains: domainResult.missing,
     incompleteDomains: domainResult.incomplete,
     missingRehearsalSteps: rehearsalResult.missing,
@@ -112,7 +144,10 @@ export function validatePlatformReadinessDocument(
   return report;
 }
 
-export function buildPlatformReadinessTemplate(): Record<string, unknown> {
+export function buildPlatformReadinessTemplate(
+  contributions: readonly PlatformReadinessContribution[] = [],
+): Record<string, unknown> {
+  const definition = composePlatformReadinessDefinition(contributions);
   const templateEntry = (scope: "domains" | "rehearsal", id: string) => ({
     id,
     status: "blocked" satisfies PlatformReadinessEvidenceStatus,
@@ -120,12 +155,18 @@ export function buildPlatformReadinessTemplate(): Record<string, unknown> {
     environment: "",
     reviewer: "",
     completedAt: "",
-    evidence: requiredEvidenceTypesFor(scope, id).map((type) =>
-      buildPlatformReadinessEvidenceTemplateReference(scope, id, type),
+    evidence: requiredEvidenceTypesFor(scope, id, definition).map((type) =>
+      buildPlatformReadinessEvidenceTemplateReference(
+        scope,
+        id,
+        type,
+        definition,
+      ),
     ),
   });
   return {
     kind: platformReadinessKind,
+    contributions: definition.contributions,
     rehearsalRun: {
       id: "",
       environment: "",
@@ -134,39 +175,81 @@ export function buildPlatformReadinessTemplate(): Record<string, unknown> {
       startedAt: "",
       completedAt: "",
     },
-    domains: platformReadinessDomainIds.map((id) => ({
+    domains: definition.domainIds.map((id) => ({
       ...templateEntry("domains", id),
-      requiredEvidenceTypes: requiredEvidenceTypesFor("domains", id),
+      requiredEvidenceTypes: requiredEvidenceTypesFor(
+        "domains",
+        id,
+        definition,
+      ),
     })),
-    rehearsal: platformReadinessRehearsalStepIds.map((id) => ({
+    rehearsal: definition.rehearsalStepIds.map((id) => ({
       ...templateEntry("rehearsal", id),
       runId: "",
-      requiredEvidenceTypes: requiredEvidenceTypesFor("rehearsal", id),
+      requiredEvidenceTypes: requiredEvidenceTypesFor(
+        "rehearsal",
+        id,
+        definition,
+      ),
     })),
   };
 }
 
+// Immutable pre-v1 evidence-document migration begins. Retired field names are
+// read only so an operator can rewrite an old offline document once.
 const legacyFinalModelEvidenceTypeMap = new Map([
   ["installation-created", "capsule-created"],
   ["installation-session", "capsule-session"],
   ["installation-plan-run", "capsule-plan-run"],
   ["install-apply", "capsule-apply"],
   ["per-installation-metrics", "per-capsule-metrics"],
+  ["materialize-drill", "runner-profile-migration-drill"],
+  ["materialize-cutover", "runner-profile-cutover"],
+  ["self-host-import", "self-host-migration"],
+  ["clean-import", "clean-migration"],
+  ["post-import-login", "post-migration-login"],
   ["deploy-kill-switch", "run-kill-switch"],
+  ["support-note", "release-note"],
+  ["vulnerability-sla", "vulnerability-response-policy"],
 ]);
+
+const legacyFinalModelEntryIdMap = new Map([
+  ["quota-abuse-spend-control", "quota-abuse-control"],
+  ["shared-cell-production-runtime", "runner-pool-production-runtime"],
+  ["shared-cell-load", "runner-pool-load"],
+  ["dedicated-materialize", "runner-profile-migration"],
+  ["export-self-host-import", "export-self-host-migration"],
+  ["legal-privacy-support", "legal-privacy"],
+]);
+
+const retiredFinalModelEvidenceTypes = new Set(["launch-token-consume"]);
 
 const legacyFinalModelFieldMap = new Map([
   ["spaceId", "workspaceId"],
   ["installationId", "capsuleId"],
   ["tenantAInstallationId", "tenantACapsuleId"],
   ["tenantBInstallationId", "tenantBCapsuleId"],
+  ["runtimeCellId", "runnerPoolId"],
+  ["materializeOperationId", "migrationOperationId"],
+  ["targetRuntimeTargetId", "targetRunnerProfileId"],
+  ["sourceRuntimeTargetId", "sourceRunnerProfileId"],
+  ["importId", "migrationId"],
+  ["serviceGrantDigest", "interfaceBindingDigest"],
+  ["supportNoteRef", "releaseNoteRef"],
 ]);
 
 export interface PlatformReadinessFinalModelMigrationReport {
   kind: "takosumi.platform-readiness-final-model-migration-report@v1";
   changed: boolean;
   changes: Array<{
-    kind: "evidenceType" | "field" | "labelSet" | "dataClasses";
+    kind:
+      | "evidenceType"
+      | "entryId"
+      | "field"
+      | "labelSet"
+      | "dataClasses"
+      | "documentKind"
+      | "contributionProfile";
     from: string;
     to: string;
     count: number;
@@ -175,11 +258,19 @@ export interface PlatformReadinessFinalModelMigrationReport {
 
 export function migratePlatformReadinessDocumentToFinalModel(
   document: unknown,
+  contributions: readonly PlatformReadinessContribution[] = [],
 ): {
   document: unknown;
   report: PlatformReadinessFinalModelMigrationReport;
 } {
   const migrated = JSON.parse(JSON.stringify(document)) as unknown;
+  const operationDrillEnvelope =
+    isRecord(migrated) &&
+    migrated.kind === "takosumi.operation-drill-evidence@v1" &&
+    isRecord(migrated.readinessPatch);
+  const migrationRoot = operationDrillEnvelope
+    ? migrated.readinessPatch
+    : migrated;
   const changes = new Map<
     string,
     PlatformReadinessFinalModelMigrationReport["changes"][number]
@@ -249,13 +340,38 @@ export function migratePlatformReadinessDocumentToFinalModel(
   };
 
   const migrateRecord = (record: Record<string, unknown>) => {
+    if (typeof record.id === "string") {
+      const mappedId = legacyFinalModelEntryIdMap.get(record.id);
+      if (mappedId) {
+        recordChange("entryId", record.id, mappedId);
+        record.id = mappedId;
+      }
+    }
     const originalType = typeof record.type === "string" ? record.type : "";
     if (typeof record.type === "string") {
       record.type = mapEvidenceType(record.type);
     }
     if (Array.isArray(record.requiredEvidenceTypes)) {
-      record.requiredEvidenceTypes =
-        record.requiredEvidenceTypes.map(mapEvidenceType);
+      record.requiredEvidenceTypes = record.requiredEvidenceTypes.flatMap(
+        (type) => {
+          if (
+            typeof type === "string" &&
+            retiredFinalModelEvidenceTypes.has(type)
+          ) {
+            recordChange("evidenceType", type, "(removed)");
+            return [];
+          }
+          return [mapEvidenceType(type)];
+        },
+      );
+    }
+    if (Array.isArray(record.evidence)) {
+      record.evidence = record.evidence.filter((item) => {
+        if (!isRecord(item) || typeof item.type !== "string") return true;
+        if (!retiredFinalModelEvidenceTypes.has(item.type)) return true;
+        recordChange("evidenceType", item.type, "(removed)");
+        return false;
+      });
     }
     for (const [from, to] of legacyFinalModelFieldMap) {
       renameField(record, from, to);
@@ -295,7 +411,49 @@ export function migratePlatformReadinessDocumentToFinalModel(
     migrateRecord(value as Record<string, unknown>);
     for (const item of Object.values(value)) visit(item);
   };
-  visit(migrated);
+  visit(migrationRoot);
+
+  if (!operationDrillEnvelope && isRecord(migrated)) {
+    if (migrated.kind !== platformReadinessKind) {
+      recordChange(
+        "documentKind",
+        typeof migrated.kind === "string" ? migrated.kind : "(missing)",
+        platformReadinessKind,
+      );
+      migrated.kind = platformReadinessKind;
+    }
+    const selectedContributions =
+      contributions.length > 0
+        ? [...contributions]
+        : Array.isArray(migrated.contributions)
+          ? migrated.contributions
+          : [];
+    composePlatformReadinessDefinition(
+      selectedContributions as PlatformReadinessContribution[],
+    );
+    const previousProfile = Array.isArray(migrated.contributions)
+      ? migrated.contributions
+          .filter(isRecord)
+          .map((entry) => stringValue(entry.id) ?? "(invalid)")
+          .join(",")
+      : "(missing)";
+    const nextProfile = selectedContributions
+      .filter(isRecord)
+      .map((entry) => stringValue(entry.id) ?? "(invalid)")
+      .join(",");
+    if (
+      !Array.isArray(migrated.contributions) ||
+      canonicalJson(migrated.contributions) !==
+        canonicalJson(selectedContributions)
+    ) {
+      recordChange(
+        "contributionProfile",
+        previousProfile || "(none)",
+        nextProfile || "(none)",
+      );
+      migrated.contributions = selectedContributions;
+    }
+  }
 
   const orderedChanges = [...changes.values()].sort((a, b) =>
     `${a.kind}:${a.from}:${a.to}`.localeCompare(`${b.kind}:${b.from}:${b.to}`),
@@ -309,13 +467,15 @@ export function migratePlatformReadinessDocumentToFinalModel(
     },
   };
 }
+// Immutable pre-v1 evidence-document migration ends.
 
 function buildPlatformReadinessEvidenceTemplateReference(
   scope: "domains" | "rehearsal",
   id: string,
   type: string,
+  definition: PlatformReadinessDefinition,
 ): Record<string, unknown> {
-  const requirement = platformReadinessStructuredEvidenceRequirements[type];
+  const requirement = definition.evidenceSchemas[type];
   const reference: Record<string, unknown> = {
     type,
     ref: `vault://platform-readiness/<rehearsal-run-id>/${scope}/${id}/${type}`,
@@ -336,57 +496,48 @@ function buildPlatformReadinessEvidenceTemplateReference(
   }
   for (const field of requirement?.fields ?? []) {
     if (reference[field] === undefined) {
-      reference[field] = platformReadinessTemplateFieldValue(field);
+      reference[field] = platformReadinessTemplateFieldValue(
+        field,
+        requirement,
+      );
     }
   }
   for (const alternatives of requirement?.anyOf ?? []) {
     for (const field of alternatives) {
       if (reference[field] === undefined) {
-        reference[field] = platformReadinessTemplateFieldValue(field);
+        reference[field] = platformReadinessTemplateFieldValue(
+          field,
+          requirement,
+        );
       }
     }
   }
   return reference;
 }
 
-function platformReadinessTemplateFieldValue(field: string): unknown {
-  if (field.endsWith("Digest") || field.endsWith("Hash")) {
-    return "sha256:<64-hex>";
+function platformReadinessTemplateFieldValue(
+  field: string,
+  schema: PlatformReadinessDefinition["evidenceSchemas"][string] | undefined,
+): unknown {
+  const format = schema?.formats?.[field];
+  if (format === "sha256") return "sha256:<64-hex>";
+  if (format === "git-commit-sha1") return "<40-hex-commit-sha>";
+  if (format === "git-object-id") return "<40-or-64-hex-git-object-id>";
+  if (format === "https-url") {
+    return "https://accounts.example.invalid/<path>";
   }
-  if (field === "commitSha") {
-    return "<40-hex-commit-sha>";
+  if (format === "evidence-ref") {
+    return `vault://platform-readiness/<${field}>`;
   }
-  if (field === "sourceCommit") {
-    return "<40-hex-commit-sha-or-64-hex-source-digest>";
-  }
-  if (field.endsWith("Url")) return "https://accounts.example.invalid/<path>";
-  if (field.endsWith("Ref")) return `vault://platform-readiness/<${field}>`;
-  if (
-    [
-      "completedAt",
-      "reviewedAt",
-      "verifiedAt",
-      "windowStart",
-      "windowEnd",
-    ].includes(field)
-  ) {
+  if (format === "timestamp" || schema?.after?.[field]) {
     return "YYYY-MM-DDTHH:mm:ssZ";
   }
-  if (
-    [
-      "quantity",
-      "rpoSeconds",
-      "rtoSeconds",
-      "cap",
-      "overlapWindowSeconds",
-      "tenantCount",
-      "componentCount",
-      "deployableComponentCount",
-      "healthProbeCount",
-    ].includes(field)
-  ) {
-    return 0;
+  const bound = schema?.numericBounds?.[field];
+  if (bound) {
+    return bound.exclusiveMinimum === true ? bound.minimum + 1 : bound.minimum;
   }
+  const requiredItems = schema?.requiredItems?.[field];
+  if (requiredItems) return [...requiredItems];
   return `<${field}>`;
 }
 
@@ -468,6 +619,7 @@ function validateEvidenceEntries(
     startedAt: Date | null;
     completedAt: Date | null;
   },
+  definition: PlatformReadinessDefinition = OSS_PLATFORM_READINESS_DEFINITION,
 ): { missing: string[]; incomplete: string[]; errors: string[] } {
   const errors: string[] = [];
   if (!Array.isArray(value)) {
@@ -533,7 +685,7 @@ function validateEvidenceEntries(
       }
       if (required.has(entry.id)) {
         const allowedEvidenceTypes = new Set(
-          requiredEvidenceTypesFor(fieldName, entry.id),
+          requiredEvidenceTypesFor(fieldName, entry.id, definition),
         );
         for (const type of unexpectedEvidenceTypes(
           entry.evidence,
@@ -568,7 +720,8 @@ function validateEvidenceEntries(
       ? !isCompleteEvidenceEntry(
           entry,
           fieldName === "rehearsal" ? rehearsalRun : undefined,
-          requiredEvidenceTypesFor(fieldName, id),
+          requiredEvidenceTypesFor(fieldName, id, definition),
+          definition,
         )
       : false;
   });
@@ -598,10 +751,11 @@ function validatePlatformReadinessRehearsalOrder(
 function requiredEvidenceTypesFor(
   fieldName: "domains" | "rehearsal",
   id: string,
+  definition: PlatformReadinessDefinition = OSS_PLATFORM_READINESS_DEFINITION,
 ): readonly string[] {
   return (
     (
-      platformReadinessRequiredEvidenceTypes[fieldName] as Record<
+      definition.requiredEvidenceTypes[fieldName] as Record<
         string,
         readonly string[]
       >
@@ -619,6 +773,7 @@ function buildPlatformReadinessGapDetails(input: {
     startedAt: Date | null;
     completedAt: Date | null;
   };
+  definition: PlatformReadinessDefinition;
 }): PlatformReadinessGapDetail[] {
   const entries = new Map<string, PlatformReadinessEvidenceEntry>();
   if (Array.isArray(input.entries)) {
@@ -632,7 +787,7 @@ function buildPlatformReadinessGapDetails(input: {
 
   return input.requiredIds.flatMap((id): PlatformReadinessGapDetail[] => {
     const requiredEvidenceTypes = [
-      ...requiredEvidenceTypesFor(input.scope, id),
+      ...requiredEvidenceTypesFor(input.scope, id, input.definition),
     ];
     const entry = entries.get(id);
     if (!entry) {
@@ -661,6 +816,7 @@ function buildPlatformReadinessGapDetails(input: {
         entry,
         input.scope === "rehearsal" ? input.rehearsalRun : undefined,
         requiredEvidenceTypes,
+        input.definition,
       )
     ) {
       return [];
@@ -669,7 +825,9 @@ function buildPlatformReadinessGapDetails(input: {
     const evidence = Array.isArray(entry.evidence) ? entry.evidence : [];
     const presentEvidenceTypes = orderedEvidenceTypes(evidence);
     const completeEvidenceTypes = orderedEvidenceTypes(
-      evidence.filter(isCompleteEvidenceReference),
+      evidence.filter((item) =>
+        isCompleteEvidenceReference(item, input.definition),
+      ),
     );
     const presentSet = new Set(presentEvidenceTypes);
     const completeSet = new Set(completeEvidenceTypes);
@@ -680,7 +838,9 @@ function buildPlatformReadinessGapDetails(input: {
       (type) => presentSet.has(type) && !completeSet.has(type),
     );
     const evidenceReferenceGaps = requiredEvidenceTypes
-      .map((type) => evidenceReferenceGapForType(type, evidence))
+      .map((type) =>
+        evidenceReferenceGapForType(type, evidence, input.definition),
+      )
       .filter(
         (gap): gap is PlatformReadinessEvidenceReferenceGap => gap !== null,
       );
@@ -700,6 +860,7 @@ function buildPlatformReadinessGapDetails(input: {
           entry,
           input.scope,
           input.scope === "rehearsal" ? input.rehearsalRun : undefined,
+          input.definition,
         ),
       },
     ];
@@ -722,6 +883,7 @@ function orderedEvidenceTypes(evidence: unknown[]): string[] {
 function evidenceReferenceGapForType(
   type: string,
   evidence: unknown[],
+  definition: PlatformReadinessDefinition,
 ): PlatformReadinessEvidenceReferenceGap | null {
   const reference = evidence.find(
     (item) => isRecord(item) && stringValue(item.type)?.trim() === type,
@@ -733,36 +895,50 @@ function evidenceReferenceGapForType(
       blockingFields: ["evidence"],
     };
   }
-  if (isCompleteEvidenceReference(reference)) return null;
+  if (isCompleteEvidenceReference(reference, definition)) return null;
   return {
     type,
     status: "incomplete",
-    blockingFields: evidenceReferenceBlockingFields(reference, type),
+    blockingFields: evidenceReferenceBlockingFields(
+      reference,
+      type,
+      definition,
+    ),
   };
 }
 
 function evidenceReferenceBlockingFields(
   reference: Record<string, unknown>,
   type: string,
+  definition: PlatformReadinessDefinition,
 ): string[] {
   const fields = new Set<string>();
   if (stringValue(reference.type)?.trim() !== type) fields.add("type");
   const ref = stringValue(reference.ref);
   if (!ref || isPlaceholderEvidenceRef(ref)) fields.add("ref");
   const summary = stringValue(reference.summary);
-  if (!summary || platformReadinessEvidenceSummaryErrors(summary).length > 0) {
+  if (
+    !summary ||
+    platformReadinessEvidenceSummaryErrors(summary, definition).length > 0
+  ) {
     fields.add("summary");
   }
-  for (const field of structuredEvidenceBlockingFields(reference, type)) {
+  for (const field of structuredEvidenceBlockingFields(
+    reference,
+    type,
+    definition,
+  )) {
     fields.add(field);
   }
   if (reference.private !== true) fields.add("private");
   const publicSummary = stringValue(reference.publicSummary);
   if (
     publicSummary === undefined ||
-    platformReadinessPublicSummaryErrors(publicSummary, {
-      requireLaunchScope: false,
-    }).length > 0
+    platformReadinessPublicSummaryErrors(
+      publicSummary,
+      { requireLaunchScope: false },
+      definition,
+    ).length > 0
   ) {
     fields.add("publicSummary");
   }
@@ -772,42 +948,33 @@ function evidenceReferenceBlockingFields(
 function structuredEvidenceBlockingFields(
   reference: Record<string, unknown>,
   type: string,
+  definition: PlatformReadinessDefinition,
 ): string[] {
   const fields = new Set<string>();
-  const requirement = platformReadinessStructuredEvidenceRequirements[type];
+  const requirement = definition.evidenceSchemas[type];
   if (!requirement) return [];
-  for (const [field, expectedValue] of Object.entries(
-    requirement.values ?? {},
-  )) {
-    if (stringValue(reference[field]) !== expectedValue) fields.add(field);
-  }
-  for (const [field, allowedValues] of Object.entries(
-    requirement.allowedValues ?? {},
-  )) {
-    const value = stringValue(reference[field]);
-    if (!value || !allowedValues.includes(value)) fields.add(field);
-  }
   for (const field of requirement.fields ?? []) {
-    if (
-      !hasNonEmptyEvidenceField(reference, field) ||
-      !hasValidStructuredEvidenceFieldShape(reference, field, type)
-    ) {
-      fields.add(field);
-    }
+    if (!hasNonEmptyEvidenceField(reference, field)) fields.add(field);
   }
   for (const alternatives of requirement.anyOf ?? []) {
     if (
-      !alternatives.some(
-        (field) =>
-          hasNonEmptyEvidenceField(reference, field) &&
-          hasValidStructuredEvidenceFieldShape(reference, field, type),
-      )
+      !alternatives.some((field) => hasNonEmptyEvidenceField(reference, field))
     ) {
       fields.add(`anyOf:${alternatives.join("|")}`);
     }
   }
-  if (!hasValidStructuredEvidenceCrossFieldShape(reference, type)) {
-    fields.add("crossField");
+  for (const error of platformReadinessEvidenceSchemaErrors(
+    requirement,
+    reference,
+    type,
+  )) {
+    const fieldPrefix = `${type}.`;
+    if (error.startsWith(fieldPrefix)) {
+      const token = error.slice(fieldPrefix.length).split(/\s/u, 1)[0];
+      if (token) fields.add(token);
+      continue;
+    }
+    if (!error.includes(" requires one of ")) fields.add("crossField");
   }
   return [...fields].sort();
 }
@@ -821,6 +988,7 @@ function incompleteEvidenceBlockingFields(
     startedAt: Date | null;
     completedAt: Date | null;
   },
+  definition: PlatformReadinessDefinition = OSS_PLATFORM_READINESS_DEFINITION,
 ): string[] {
   const fields = new Set<string>();
   if (entry.status !== "passed") fields.add("status");
@@ -889,7 +1057,10 @@ function incompleteEvidenceBlockingFields(
       fields.add("evidence.runId");
     }
   }
-  if (scope === "rehearsal" && !hasConsistentRehearsalStepEvidence(entry)) {
+  if (
+    scope === "rehearsal" &&
+    !hasConsistentRehearsalStepEvidence(entry, definition)
+  ) {
     fields.add("evidence.consistency");
   }
   return [...fields].sort();
@@ -904,6 +1075,7 @@ function isCompleteEvidenceEntry(
     completedAt: Date | null;
   },
   requiredEvidenceTypes: readonly string[] = [],
+  definition: PlatformReadinessDefinition = OSS_PLATFORM_READINESS_DEFINITION,
 ): boolean {
   const entryRunId =
     typeof entry.runId === "string" && entry.runId.trim().length > 0
@@ -956,11 +1128,17 @@ function isCompleteEvidenceEntry(
     reviewerIdentity !== undefined &&
     reviewerIdentity !== ownerIdentity &&
     Array.isArray(entry.evidence) &&
-    entry.evidence.some(isCompleteEvidenceReference) &&
-    hasRequiredEvidenceTypes(entry.evidence, requiredEvidenceTypes) &&
+    entry.evidence.some((item) =>
+      isCompleteEvidenceReference(item, definition),
+    ) &&
+    hasRequiredEvidenceTypes(
+      entry.evidence,
+      requiredEvidenceTypes,
+      definition,
+    ) &&
     (!rehearsalRun ||
       (entryRunId !== null && hasConsistentEvidenceRunId(entry, entryRunId))) &&
-    (!rehearsalRun || hasConsistentRehearsalStepEvidence(entry))
+    (!rehearsalRun || hasConsistentRehearsalStepEvidence(entry, definition))
   );
 }
 
@@ -983,7 +1161,10 @@ function isFutureEvidenceDate(value: Date): boolean {
   return value.getTime() > Date.now() + 5 * 60_000;
 }
 
-function isCompleteEvidenceReference(value: unknown): boolean {
+function isCompleteEvidenceReference(
+  value: unknown,
+  definition: PlatformReadinessDefinition = OSS_PLATFORM_READINESS_DEFINITION,
+): boolean {
   if (!isRecord(value)) return false;
   // `PlatformReadinessEvidenceReference` declares every field as `unknown`, so
   // viewing the record through that interface is purely cosmetic — the per-
@@ -1008,10 +1189,19 @@ function isCompleteEvidenceReference(value: unknown): boolean {
   ) {
     return false;
   }
-  if (platformReadinessEvidenceSummaryErrors(reference.summary).length > 0) {
+  if (
+    platformReadinessEvidenceSummaryErrors(reference.summary, definition)
+      .length > 0
+  ) {
     return false;
   }
-  if (!satisfiesStructuredEvidenceRequirement(value, reference.type.trim())) {
+  if (
+    !satisfiesStructuredEvidenceRequirement(
+      value,
+      reference.type.trim(),
+      definition,
+    )
+  ) {
     return false;
   }
   if (reference.private !== true) {
@@ -1019,50 +1209,25 @@ function isCompleteEvidenceReference(value: unknown): boolean {
   }
   return (
     typeof reference.publicSummary === "string" &&
-    platformReadinessPublicSummaryErrors(reference.publicSummary, {
-      requireLaunchScope: false,
-    }).length === 0
+    platformReadinessPublicSummaryErrors(
+      reference.publicSummary,
+      { requireLaunchScope: false },
+      definition,
+    ).length === 0
   );
 }
 
 function satisfiesStructuredEvidenceRequirement(
   reference: Record<string, unknown>,
   type: string,
+  definition: PlatformReadinessDefinition,
 ): boolean {
-  const requirement = platformReadinessStructuredEvidenceRequirements[type];
+  const requirement = definition.evidenceSchemas[type];
   if (!requirement) return true;
-  for (const [field, expectedValue] of Object.entries(
-    requirement.values ?? {},
-  )) {
-    if (stringValue(reference[field]) !== expectedValue) return false;
-  }
-  for (const [field, allowedValues] of Object.entries(
-    requirement.allowedValues ?? {},
-  )) {
-    const value = stringValue(reference[field]);
-    if (!value || !allowedValues.includes(value)) return false;
-  }
-  for (const field of requirement.fields ?? []) {
-    if (!hasNonEmptyEvidenceField(reference, field)) return false;
-    if (!hasValidStructuredEvidenceFieldShape(reference, field, type)) {
-      return false;
-    }
-  }
-  for (const alternatives of requirement.anyOf ?? []) {
-    if (
-      !alternatives.some(
-        (field) =>
-          hasNonEmptyEvidenceField(reference, field) &&
-          hasValidStructuredEvidenceFieldShape(reference, field, type),
-      )
-    ) {
-      return false;
-    }
-  }
-  if (!hasValidStructuredEvidenceCrossFieldShape(reference, type)) {
-    return false;
-  }
-  return true;
+  return (
+    platformReadinessEvidenceSchemaErrors(requirement, reference, type)
+      .length === 0
+  );
 }
 
 function hasNonEmptyEvidenceField(
@@ -1072,189 +1237,11 @@ function hasNonEmptyEvidenceField(
   const value = reference[field];
   if (typeof value === "number") return Number.isFinite(value);
   if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "boolean") return true;
+  if (value && typeof value === "object") {
+    return Object.keys(value).length > 0;
+  }
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function hasValidStructuredEvidenceFieldShape(
-  reference: Record<string, unknown>,
-  field: string,
-  type: string,
-): boolean {
-  const value = reference[field];
-  if (field.endsWith("Digest") || field.endsWith("Hash")) {
-    return isSha256Digest(value);
-  }
-  if (field.endsWith("Ref")) {
-    return (
-      typeof value === "string" &&
-      value.trim().length > 0 &&
-      !isPlaceholderEvidenceRef(value)
-    );
-  }
-  if (field === "commitSha") {
-    return typeof value === "string" && /^[a-fA-F0-9]{40}$/.test(value);
-  }
-  if (field === "sourceCommit") {
-    return isSourceIdentityEvidenceValue(value);
-  }
-  if (field.endsWith("Url")) {
-    return (
-      isHttpsUrl(value) &&
-      typeof value === "string" &&
-      !isPlaceholderEvidenceRef(value)
-    );
-  }
-  if (
-    [
-      "quantity",
-      "rpoSeconds",
-      "rtoSeconds",
-      "cap",
-      "overlapWindowSeconds",
-      "tenantCount",
-      "componentCount",
-      "deployableComponentCount",
-      "healthProbeCount",
-    ].includes(field)
-  ) {
-    if (
-      field === "cap" &&
-      (type === "quota-spike-drill" || type === "quota-exceeded")
-    ) {
-      return typeof value === "number" && Number.isFinite(value) && value >= 0;
-    }
-    return typeof value === "number" && Number.isFinite(value) && value > 0;
-  }
-  if (field === "coveredEndpoints") {
-    return hasRequiredDataClasses(value, [
-      "signup",
-      "login",
-      "install",
-      "launch",
-      "export",
-    ]);
-  }
-  if (
-    [
-      "completedAt",
-      "reviewedAt",
-      "verifiedAt",
-      "windowStart",
-      "windowEnd",
-    ].includes(field)
-  ) {
-    const parsed = parseEvidenceDate(value);
-    return Boolean(parsed && !isFutureEvidenceDate(parsed));
-  }
-  if (typeof value === "string" && isPlaceholderEvidenceRef(value)) {
-    return false;
-  }
-  return true;
-}
-
-function isSourceIdentityEvidenceValue(value: unknown): boolean {
-  return (
-    typeof value === "string" &&
-    (/^[a-fA-F0-9]{40}$/.test(value) ||
-      /^[a-fA-F0-9]{64}$/.test(value) ||
-      /^sha256:[a-fA-F0-9]{64}$/.test(value))
-  );
-}
-
-function hasValidStructuredEvidenceCrossFieldShape(
-  reference: Record<string, unknown>,
-  type: string,
-): boolean {
-  switch (type) {
-    case "stripe-sandbox":
-      return (
-        hasStripeId(reference.checkoutSessionId, "cs_test_") &&
-        hasStripeId(reference.webhookEventId, "evt_")
-      );
-    case "stripe-live":
-      return (
-        hasStripeId(reference.checkoutSessionId, "cs_live_") &&
-        hasStripeId(reference.webhookEventId, "evt_")
-      );
-    case "invoice":
-      return hasStripeId(reference.invoiceId, "in_");
-    case "failed-payment":
-    case "invoice-paid":
-      return (
-        hasStripeId(reference.invoiceId, "in_") &&
-        hasStripeId(reference.webhookEventId, "evt_")
-      );
-    case "dunning-suspension":
-      return hasStripeId(reference.invoiceId, "in_");
-    case "plan-transition":
-      return hasStripeId(reference.subscriptionId, "sub_");
-    case "load-test":
-      return (
-        typeof reference.tenantCount === "number" &&
-        reference.tenantCount >= 2 &&
-        stringValue(reference.tenantACapsuleId) !==
-          stringValue(reference.tenantBCapsuleId)
-      );
-    case "continuity-evidence":
-      return stringValue(reference.noDataLossCheckId) !== undefined;
-    case "sample-data-verification":
-      return hasRequiredDataClasses(reference.dataClasses, [
-        "account",
-        "workspace",
-        "capsule",
-        "run",
-        "output",
-      ]);
-    case "refund-credit":
-    case "recovery-refund-credit":
-      return (
-        (reference.refundId === undefined ||
-          hasStripeId(reference.refundId, "re_")) &&
-        (reference.creditNoteId === undefined ||
-          hasStripeId(reference.creditNoteId, "cn_"))
-      );
-    case "usage-aggregation-policy": {
-      const windowStart = parseEvidenceDate(reference.windowStart);
-      const windowEnd = parseEvidenceDate(reference.windowEnd);
-      return Boolean(
-        windowStart && windowEnd && windowEnd.getTime() > windowStart.getTime(),
-      );
-    }
-    default:
-      return true;
-  }
-}
-
-function hasRequiredDataClasses(
-  value: unknown,
-  required: readonly string[],
-): boolean {
-  const classes = Array.isArray(value)
-    ? value
-        .map((item) => stringValue(item))
-        .filter((item): item is string => item !== undefined)
-    : typeof value === "string"
-      ? value.split(/[,\s/]+/u).map((item) => item.trim())
-      : [];
-  const present = new Set(classes.filter(Boolean));
-  return required.every((item) => present.has(item));
-}
-
-function hasStripeId(value: unknown, prefix: string): boolean {
-  return (
-    typeof value === "string" &&
-    value.trim().startsWith(prefix) &&
-    /^[a-z]+_(?:test_|live_)?[A-Za-z0-9_]{6,}$/.test(value.trim())
-  );
-}
-
-function isHttpsUrl(value: unknown): boolean {
-  if (typeof value !== "string" || value.trim().length === 0) return false;
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 function isPlaceholderEvidenceRef(ref: string): boolean {
@@ -1279,10 +1266,11 @@ function isPlaceholderEvidenceRef(ref: string): boolean {
 function hasRequiredEvidenceTypes(
   evidence: unknown[],
   requiredTypes: readonly string[],
+  definition: PlatformReadinessDefinition = OSS_PLATFORM_READINESS_DEFINITION,
 ): boolean {
   const completeTypes = new Set(
     evidence
-      .filter(isCompleteEvidenceReference)
+      .filter((item) => isCompleteEvidenceReference(item, definition))
       .map((item) => (item as PlatformReadinessEvidenceReference).type)
       .filter((type): type is string => typeof type === "string")
       .map((type) => type.trim()),
@@ -1318,170 +1306,18 @@ function unexpectedEvidenceTypes(
 
 function hasConsistentRehearsalStepEvidence(
   entry: PlatformReadinessEvidenceEntry,
+  definition: PlatformReadinessDefinition = OSS_PLATFORM_READINESS_DEFINITION,
 ): boolean {
   if (typeof entry.id !== "string" || !Array.isArray(entry.evidence)) {
     return true;
   }
   const evidenceByType = evidenceReferencesByType(entry.evidence);
-  switch (entry.id) {
-    case "fresh-signup":
-      return (
-        sameEvidenceField(
-          evidenceByType,
-          [
-            "signup-event",
-            "email-assurance",
-            "team-membership",
-            "terms-acceptance",
-            "entitlement-event",
-          ],
-          "accountId",
-        ) &&
-        sameEvidenceField(
-          evidenceByType,
-          ["signup-event", "team-membership"],
-          "workspaceId",
-        )
-      );
-    case "capsule-launch":
-      return sameEvidenceField(
-        evidenceByType,
-        ["launch-token-consume", "capsule-created", "capsule-session"],
-        "capsuleId",
-      );
-    case "git-url-install":
-      return (
-        sameEvidenceField(
-          evidenceByType,
-          ["capsule-plan-run", "cost-review", "capsule-apply"],
-          "planDigest",
-        ) &&
-        sameEvidenceField(
-          evidenceByType,
-          [
-            "capsule-plan-run",
-            "capsule-apply",
-            "oidc-login",
-            "event-hash-chain",
-          ],
-          "capsuleId",
-        )
-      );
-    case "quota-abuse-drill":
-      return sameEvidenceField(
-        evidenceByType,
-        ["quota-exceeded", "guard-action", "override-audit"],
-        "accountId",
-      );
-    case "shared-cell-load":
-      return (
-        sameEvidenceField(
-          evidenceByType,
-          ["two-tenant-load", "isolation-proof"],
-          "loadRunId",
-        ) &&
-        sameEvidenceField(
-          evidenceByType,
-          ["two-tenant-load", "per-capsule-metrics", "scale-or-drain"],
-          "runtimeCellId",
-        ) &&
-        sameEvidenceField(
-          evidenceByType,
-          ["two-tenant-load", "per-capsule-metrics"],
-          "tenantACapsuleId",
-        ) &&
-        sameEvidenceField(
-          evidenceByType,
-          ["two-tenant-load", "per-capsule-metrics"],
-          "tenantBCapsuleId",
-        ) &&
-        differentEvidenceFields(
-          evidenceByType,
-          "two-tenant-load",
-          "tenantACapsuleId",
-          "tenantBCapsuleId",
-        )
-      );
-    case "dedicated-materialize":
-      return (
-        sameEvidenceField(
-          evidenceByType,
-          [
-            "readiness-before-cutover",
-            "materialize-cutover",
-            "rollback-before-final",
-            "domain-preservation",
-            "preserve-evidence",
-          ],
-          "capsuleId",
-        ) &&
-        sameEvidenceField(
-          evidenceByType,
-          ["readiness-before-cutover", "materialize-cutover"],
-          "targetRuntimeTargetId",
-        ) &&
-        sameEvidenceField(
-          evidenceByType,
-          ["domain-preservation", "preserve-evidence"],
-          "oidcClientId",
-        ) &&
-        sameEvidenceField(
-          evidenceByType,
-          ["domain-preservation", "preserve-evidence"],
-          "domainName",
-        )
-      );
-    case "export-self-host-import":
-      return (
-        sameEvidenceField(
-          evidenceByType,
-          ["clean-import", "post-import-login"],
-          "importId",
-        ) &&
-        sameEvidenceField(
-          evidenceByType,
-          ["post-import-login", "source-retention-state"],
-          "accountId",
-        )
-      );
-    case "sev-simulation":
-      return sameEvidenceField(
-        evidenceByType,
-        ["alert", "ack", "status-update", "postmortem"],
-        "incidentId",
-      );
-    case "release-rollback":
-      return sameEvidenceField(
-        evidenceByType,
-        ["release-promotion", "rollback", "support-note"],
-        "releaseCandidate",
-      );
-    case "privacy-operation":
-      return (
-        sameEvidenceField(
-          evidenceByType,
-          [
-            "export-or-delete-request",
-            "login-disabled-or-exported",
-            "retention-record",
-          ],
-          "requestId",
-        ) &&
-        sameEvidenceField(
-          evidenceByType,
-          ["export-or-delete-request", "login-disabled-or-exported"],
-          "accountId",
-        )
-      );
-    case "billing-operation":
-      return sameEvidenceField(
-        evidenceByType,
-        ["failed-payment", "dunning-suspension"],
-        "invoiceId",
-      );
-    default:
-      return true;
+  for (const rule of definition.consistencyRules.rehearsal[entry.id] ?? []) {
+    if (!sameEvidenceField(evidenceByType, rule.evidenceTypes, rule.field)) {
+      return false;
+    }
   }
+  return true;
 }
 
 function hasConsistentEvidenceRunId(
@@ -1519,18 +1355,6 @@ function sameEvidenceField(
     values.every((value): value is string => Boolean(value)) &&
     values.every((value) => value === values[0])
   );
-}
-
-function differentEvidenceFields(
-  evidenceByType: Map<string, Record<string, unknown>>,
-  type: string,
-  leftField: string,
-  rightField: string,
-): boolean {
-  const reference = evidenceByType.get(type);
-  const left = stringValue(reference?.[leftField]);
-  const right = stringValue(reference?.[rightField]);
-  return Boolean(left && right && left !== right);
 }
 
 function isAllowedPlatformReadinessEnvironment(
@@ -1601,7 +1425,7 @@ export function formatPlatformReadinessReport(
 export function defaultPlatformReadinessPublicSummary(ready: boolean): string {
   return ready
     ? "P0 evidence and one staged launch rehearsal passed validator checks; operator approval is still required."
-    : "Platform readiness launch readiness remains blocked because validator checks have not passed.";
+    : "Platform readiness remains blocked because P0 evidence and staged rehearsal checks have not passed.";
 }
 
 export function buildPlatformReadinessPublicSummary(input: {
@@ -1622,6 +1446,9 @@ export function buildPlatformReadinessPublicSummary(input: {
     date: completedAt ? completedAt.slice(0, 10) : null,
     environment: stringValue(rehearsalRun.environment) ?? null,
     rehearsalRun: stringValue(rehearsalRun.id) ?? null,
+    profile: {
+      contributions: input.report.contributions,
+    },
     validator: {
       ready: input.report.ready,
       evidenceDigest: input.report.evidenceDigest,
@@ -1633,8 +1460,8 @@ export function buildPlatformReadinessPublicSummary(input: {
     privateEvidenceRefClass: input.evidenceRefClass,
     publicResult: input.publicSummary.trim(),
     notes: input.report.ready
-      ? "Public signup and paid access still require separate operator approval."
-      : "Keep public launch blocked until every P0 domain and one staged rehearsal pass validation.",
+      ? "Platform activation still requires separate operator approval."
+      : "Keep platform activation blocked until every P0 domain and one staged rehearsal pass validation.",
   };
 }
 
@@ -1676,6 +1503,10 @@ export function validatePlatformReadinessPublicSummaryArtifact(
   readinessReport: PlatformReadinessReport & { evidenceDigest: string },
 ): Record<string, unknown> & { valid: boolean; errors: string[] } {
   const errors: string[] = [];
+  const definitionResult =
+    platformReadinessDefinitionFromDocument(readinessDocument);
+  const definition = definitionResult.definition;
+  errors.push(...definitionResult.errors);
   if (!isRecord(summary)) {
     return {
       kind: platformReadinessPublicSummaryReportKind,
@@ -1700,6 +1531,16 @@ export function validatePlatformReadinessPublicSummaryArtifact(
   }
   if (ready !== readinessReport.ready) {
     errors.push("ready must match readiness validation result");
+  }
+
+  const profile = isRecord(summary.profile) ? summary.profile : null;
+  if (!profile) {
+    errors.push("profile must be an object");
+  } else if (
+    JSON.stringify(profile.contributions) !==
+    JSON.stringify(readinessReport.contributions)
+  ) {
+    errors.push("profile.contributions must match readiness validation result");
   }
 
   const validator = isRecord(summary.validator) ? summary.validator : null;
@@ -1731,15 +1572,24 @@ export function validatePlatformReadinessPublicSummaryArtifact(
     errors.push("publicResult is required");
   } else {
     errors.push(
-      ...platformReadinessPublicSummaryErrors(publicResult, {
-        requireLaunchScope: ready,
-      }),
+      ...platformReadinessPublicSummaryErrors(
+        publicResult,
+        { requireLaunchScope: ready },
+        definition,
+      ),
     );
   }
   errors.push(
     ...platformReadinessSummaryRedactionErrors(
       JSON.stringify(summary),
       "platform readiness public summary artifact",
+    ),
+  );
+  errors.push(
+    ...platformReadinessContributionRedactionErrors(
+      JSON.stringify(summary),
+      "platform readiness public summary artifact",
+      definition,
     ),
   );
 
@@ -1949,11 +1799,11 @@ export function validateProductionTopologyDocument(
       }
     }
   }
-  const accountsComponent = components.find(
-    (component) => stringValue(component.role) === "accounts",
-  );
-  if (accountsComponent) {
-    errors.push(...accountsWorkerSubstrateErrors(accountsComponent));
+  for (const component of components) {
+    const role = stringValue(component.role);
+    if (role && productionTopologyDeployableRoles.has(role)) {
+      errors.push(...componentRuntimeEvidenceErrors(component, role));
+    }
   }
 
   const ready = errors.length === 0;
@@ -1980,93 +1830,61 @@ export function validateProductionTopologyDocument(
   };
 }
 
-function accountsWorkerSubstrateErrors(
+function componentRuntimeEvidenceErrors(
   component: Record<string, unknown>,
+  role: string,
 ): string[] {
   const errors: string[] = [];
-  if (component.runtime !== "cloudflare-worker") {
-    errors.push("accounts component runtime must be cloudflare-worker");
+  const label = `${role} component`;
+  if (!stringValue(component.runtime)) {
+    errors.push(`${label} runtime must be a non-empty implementation token`);
   }
-  if (component.containerRuntime !== true) {
-    errors.push("accounts component containerRuntime must be true");
-  }
-  const wranglerConfigRef = checkedEvidenceRef(
-    component.wranglerConfigRef,
-    "accounts component wranglerConfigRef",
+  const runtimeEvidenceRef = checkedEvidenceRef(
+    component.runtimeEvidenceRef,
+    `${label} runtimeEvidenceRef`,
   );
-  errors.push(...wranglerConfigRef.errors);
+  errors.push(...runtimeEvidenceRef.errors);
   errors.push(
-    ...accountsWorkerConfigValidationErrors(component.wranglerConfigValidation),
+    ...componentRuntimeValidationErrors(component.runtimeValidation, label),
   );
-  const bindings = Array.isArray(component.bindings)
-    ? component.bindings.filter(
-        (item): item is string => typeof item === "string",
-      )
-    : [];
-  if (!Array.isArray(component.bindings)) {
-    errors.push("accounts component bindings must be an array");
-  }
-  for (const requiredBinding of [
-    "D1:TAKOSUMI_ACCOUNTS_DB",
-    "R2:TAKOSUMI_ACCOUNTS_EXPORTS",
-  ]) {
-    if (!bindings.includes(requiredBinding)) {
-      errors.push(
-        `accounts component bindings must include ${requiredBinding}`,
-      );
+  if (component.bindings !== undefined) {
+    if (
+      !Array.isArray(component.bindings) ||
+      component.bindings.some((binding) => !stringValue(binding))
+    ) {
+      errors.push(`${label} bindings must be an array of non-empty tokens`);
     }
   }
   return errors;
 }
 
-function accountsWorkerConfigValidationErrors(value: unknown): string[] {
+function componentRuntimeValidationErrors(
+  value: unknown,
+  label: string,
+): string[] {
   const errors: string[] = [];
   const report = isRecord(value) ? value : null;
   if (!report) {
-    return ["accounts component wranglerConfigValidation must be an object"];
+    return [`${label} runtimeValidation must be an object`];
   }
-  if (report.kind !== "takosumi.cloudflare-rendered-config-validation@v1") {
-    errors.push(
-      "accounts component wranglerConfigValidation.kind must be takosumi.cloudflare-rendered-config-validation@v1",
-    );
+  if (!stringValue(report.kind)) {
+    errors.push(`${label} runtimeValidation.kind must be a non-empty token`);
   }
   if (report.ok !== true) {
-    errors.push("accounts component wranglerConfigValidation.ok must be true");
+    errors.push(`${label} runtimeValidation.ok must be true`);
   }
-  if (!isSha256Digest(report.configDigest)) {
+  if (!isSha256Digest(report.evidenceDigest)) {
     errors.push(
-      "accounts component wranglerConfigValidation.configDigest must be a sha256: digest",
+      `${label} runtimeValidation.evidenceDigest must be a sha256: digest`,
     );
   }
-  const expectedTrueFields = [
-    "mainPointsAtWorkerBundle",
-    "bareOriginIssuerConfigured",
-    "platformAccessClosed",
-    "d1BindingPresent",
-    "d1DatabaseBlockPresent",
-    "d1DatabaseIdPresent",
-    "d1DatabaseIdValid",
-    "controlD1BindingPresent",
-    "r2BindingPresent",
-    "r2BucketBlockPresent",
-    "containerConfigured",
-    "durableObjectPersistenceConfigured",
-    "runnerDurableObjectBindingPresent",
-    "runQueueConfigured",
-  ];
-  for (const field of expectedTrueFields) {
-    if (report[field] !== true) {
-      errors.push(
-        `accounts component wranglerConfigValidation.${field} must be true`,
-      );
-    }
-  }
-  const expectedFalseFields = ["d1DatabaseIdPlaceholder"];
-  for (const field of expectedFalseFields) {
-    if (report[field] !== false) {
-      errors.push(
-        `accounts component wranglerConfigValidation.${field} must be false`,
-      );
+  if (!isRecord(report.checks) || Object.keys(report.checks).length === 0) {
+    errors.push(`${label} runtimeValidation.checks must be a non-empty object`);
+  } else {
+    for (const [check, passed] of Object.entries(report.checks)) {
+      if (!/^[A-Za-z0-9_.:-]+$/u.test(check) || passed !== true) {
+        errors.push(`${label} runtimeValidation.checks.${check} must be true`);
+      }
     }
   }
   return errors;
@@ -2206,35 +2024,17 @@ export function buildProductionTopologyTemplate(
       id: `<${role}-component-id>`,
       role,
       healthProbeRef: `vault://platform-readiness/<rehearsal-run-id>/production-topology/${environment}/${role}/health-probe`,
-      ...(role === "accounts"
+      ...(productionTopologyDeployableRoles.has(role)
         ? {
-            runtime: "cloudflare-worker",
-            containerRuntime: true,
-            wranglerConfigRef: `vault://platform-readiness/<rehearsal-run-id>/production-topology/${environment}/accounts/wrangler-config`,
-            wranglerConfigValidation: {
-              kind: "takosumi.cloudflare-rendered-config-validation@v1",
+            runtime: "<operator-runtime-token>",
+            runtimeEvidenceRef: `vault://platform-readiness/<rehearsal-run-id>/production-topology/${environment}/${role}/runtime`,
+            runtimeValidation: {
+              kind: "operator.runtime-validation@v1",
               ok: true,
-              configDigest: "sha256:<64-hex>",
-              mainPointsAtWorkerBundle: true,
-              bareOriginIssuerConfigured: true,
-              platformAccessClosed: true,
-              d1BindingPresent: true,
-              d1DatabaseBlockPresent: true,
-              d1DatabaseIdPresent: true,
-              d1DatabaseIdValid: true,
-              d1DatabaseIdPlaceholder: false,
-              controlD1BindingPresent: true,
-              r2BindingPresent: true,
-              r2BucketBlockPresent: true,
-              containerConfigured: true,
-              durableObjectPersistenceConfigured: true,
-              runnerDurableObjectBindingPresent: true,
-              runQueueConfigured: true,
+              evidenceDigest: "sha256:<64-hex>",
+              checks: { operatorReviewed: true },
             },
-            bindings: [
-              "D1:TAKOSUMI_ACCOUNTS_DB",
-              "R2:TAKOSUMI_ACCOUNTS_EXPORTS",
-            ],
+            bindings: [],
           }
         : {}),
       ...(productionTopologyDeployableRoles.has(role)
@@ -2432,6 +2232,7 @@ export async function platformReadinessDigest(
 
 export function platformReadinessEvidenceSummaryErrors(
   value: string,
+  definition: PlatformReadinessDefinition = OSS_PLATFORM_READINESS_DEFINITION,
 ): string[] {
   const summary = value.trim();
   const errors: string[] = [];
@@ -2451,12 +2252,20 @@ export function platformReadinessEvidenceSummaryErrors(
       "platform readiness evidence summary",
     ),
   );
+  errors.push(
+    ...platformReadinessContributionRedactionErrors(
+      summary,
+      "platform readiness evidence summary",
+      definition,
+    ),
+  );
   return errors;
 }
 
 export function platformReadinessPublicSummaryErrors(
   value: string,
   options: { requireLaunchScope?: boolean } = {},
+  definition: PlatformReadinessDefinition = OSS_PLATFORM_READINESS_DEFINITION,
 ): string[] {
   const summary = value.trim();
   const errors: string[] = [];
@@ -2472,6 +2281,13 @@ export function platformReadinessPublicSummaryErrors(
       "--platform-public-summary",
     ),
   );
+  errors.push(
+    ...platformReadinessContributionRedactionErrors(
+      summary,
+      "--platform-public-summary",
+      definition,
+    ),
+  );
   if (options.requireLaunchScope) {
     if (!/\bp0\b/i.test(summary) || !/(evidence|証跡)/iu.test(summary)) {
       errors.push("--platform-public-summary must mention P0 evidence");
@@ -2485,6 +2301,18 @@ export function platformReadinessPublicSummaryErrors(
   return errors;
 }
 
+function platformReadinessContributionRedactionErrors(
+  summary: string,
+  label: string,
+  definition: PlatformReadinessDefinition,
+): string[] {
+  return definition.forbiddenSummaryPatterns.flatMap((pattern) =>
+    new RegExp(pattern, "u").test(summary)
+      ? [`${label} contains an extension-protected identifier`]
+      : [],
+  );
+}
+
 export function platformReadinessSummaryRedactionErrors(
   summary: string,
   label: string,
@@ -2494,14 +2322,6 @@ export function platformReadinessSummaryRedactionErrors(
     errors.push(`${label} must not contain email addresses`);
   }
   if (
-    /\b(?:cus|sub|in|pi|pm|price|prod|cs|evt|re|cn)_[A-Za-z0-9_]{6,}\b/u.test(
-      summary,
-    )
-  ) {
-    errors.push(`${label} must not contain Stripe object IDs`);
-  }
-  if (
-    /\bsk_(?:test|live)_[A-Za-z0-9]{6,}\b/u.test(summary) ||
     /\b(?:authorization:\s*)?bearer\s+[A-Za-z0-9._-]{10,}\b/iu.test(summary)
   ) {
     errors.push(`${label} must not contain secrets or bearer tokens`);

@@ -2,27 +2,27 @@
  * Workspaces domain service (Core Specification §4).
  *
  * A Workspace is the owner namespace (`@handle`) directly under which Projects
- * and Capsules live — close to a GitHub user/org. This service owns Workspace
+ * and Capsules live — close to a source-forge or organization namespace. This service owns Workspace
  * creation and lookup over the shared control-plane ledger. Members, billing,
  * and policy are layered on later milestones; this milestone covers the
  * identity + handle uniqueness invariants the rest of the model keys on.
  *
  * No secret material flows through this service.
- *
- * (Formerly `SpacesService` / `Space`. The transient `Space` contract alias and
- * the spine store's `*Space*` method names stay until the rename converges.)
  */
 
 import {
   WORKSPACE_HANDLE_PATTERN,
   type Workspace,
+  type WorkspaceMember,
+  type WorkspaceMemberStatus,
+  type WorkspaceRole,
   type WorkspaceType,
 } from "takosumi-contract/workspaces";
 import {
   OpenTofuControllerError,
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
-import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
+import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 
 // The handle grammar (spec §4: lowercase alnum start, then 1-38 of `[a-z0-9-]`,
 // 2-39 total) is defined once in the contract so the dashboard create form and
@@ -33,22 +33,37 @@ export interface CreateWorkspaceRequest {
   readonly displayName: string;
   readonly type: WorkspaceType;
   readonly ownerUserId: string;
-  readonly billingAccountId?: string;
 }
 
 export interface WorkspacesServiceDependencies {
-  readonly store: OpenTofuDeploymentStore;
+  readonly store: OpenTofuControlStore;
+  /**
+   * Composition-owned hook that establishes the canonical per-Workspace
+   * default Project. It is idempotent and keeps Workspace creation from
+   * producing a Project-less namespace.
+   */
+  readonly ensureDefaultProject?: (workspaceId: string) => Promise<unknown>;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
 }
 
+export interface UpsertWorkspaceMemberRequest {
+  readonly workspaceId: string;
+  readonly accountId: string;
+  readonly roles?: readonly WorkspaceRole[];
+  readonly status?: WorkspaceMemberStatus;
+  readonly actorAccountId: string;
+}
+
 export class WorkspacesService {
-  readonly #store: OpenTofuDeploymentStore;
+  readonly #store: OpenTofuControlStore;
+  readonly #ensureDefaultProject?: (workspaceId: string) => Promise<unknown>;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
 
   constructor(deps: WorkspacesServiceDependencies) {
     this.#store = deps.store;
+    this.#ensureDefaultProject = deps.ensureDefaultProject;
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
   }
@@ -69,7 +84,7 @@ export class WorkspacesService {
         `handle ${request.handle} must match ${WORKSPACE_HANDLE_PATTERN.source}`,
       );
     }
-    const existing = await this.#store.getSpaceByHandle(request.handle);
+    const existing = await this.#store.getWorkspaceByHandle(request.handle);
     if (existing) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -78,26 +93,23 @@ export class WorkspacesService {
     }
     const nowIso = this.#now().toISOString();
     const workspace: Workspace = {
-      // The `space_` id prefix is a persistent identifier kept stable across the
-      // Space -> Workspace rename (the rename targets type/field/table names, not
-      // existing id strings).
-      id: this.#newId("space"),
+      id: this.#newId("ws"),
       handle: request.handle,
       displayName: request.displayName,
       type: request.type,
       ownerUserId: request.ownerUserId,
-      ...(request.billingAccountId
-        ? { billingAccountId: request.billingAccountId }
-        : {}),
       createdAt: nowIso,
       updatedAt: nowIso,
     };
-    return await this.#store.putSpace(workspace);
+    const created = await this.#store.putWorkspace(workspace);
+    await this.#ensureOwnerMember(created);
+    await this.#ensureDefaultProject?.(created.id);
+    return created;
   }
 
   async getWorkspace(id: string): Promise<Workspace> {
     requireNonEmptyString(id, "id");
-    const workspace = await this.#store.getSpace(id);
+    const workspace = await this.#store.getWorkspace(id);
     if (!workspace) {
       throw new OpenTofuControllerError("not_found", "workspace not found");
     }
@@ -111,7 +123,7 @@ export class WorkspacesService {
       requireNonEmptyString(id, "id");
       return true;
     });
-    return await this.#store.listSpacesByIds(normalizedIds);
+    return await this.#store.listWorkspacesByIds(normalizedIds);
   }
 
   /**
@@ -168,16 +180,16 @@ export class WorkspacesService {
     if (patch.archived === false) {
       delete (updated as { archivedAt?: string }).archivedAt;
     }
-    return await this.#store.putSpace(updated);
+    return await this.#store.putWorkspace(updated);
   }
 
   async getWorkspaceByHandle(handle: string): Promise<Workspace | undefined> {
     requireNonEmptyString(handle, "handle");
-    return await this.#store.getSpaceByHandle(handle);
+    return await this.#store.getWorkspaceByHandle(handle);
   }
 
   async listWorkspaces(): Promise<readonly Workspace[]> {
-    return await this.#store.listSpaces();
+    return await this.#store.listWorkspaces();
   }
 
   /**
@@ -190,7 +202,127 @@ export class WorkspacesService {
     ownerUserId: string,
   ): Promise<readonly Workspace[]> {
     requireNonEmptyString(ownerUserId, "ownerUserId");
-    return await this.#store.listSpacesByOwner(ownerUserId);
+    return await this.#store.listWorkspacesByOwner(ownerUserId);
+  }
+
+  /** Lists Workspaces where the account has an active canonical membership. */
+  async listWorkspacesForAccount(
+    accountId: string,
+  ): Promise<readonly Workspace[]> {
+    requireNonEmptyString(accountId, "accountId");
+    const owned = await this.#store.listWorkspacesByOwner(accountId);
+    await Promise.all(owned.map((workspace) => this.#ensureOwnerMember(workspace)));
+    const memberships = await this.#store.listWorkspaceMembersByAccount(
+      accountId,
+    );
+    const ids = new Set(owned.map((workspace) => workspace.id));
+    for (const member of memberships) {
+      if (member.status === "active") ids.add(member.workspaceId);
+    }
+    const workspaces = await this.#store.listWorkspacesByIds([...ids]);
+    return [...workspaces].sort(
+      (a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    );
+  }
+
+  /** Returns the single canonical WorkspaceMember roster. */
+  async listWorkspaceMembers(
+    workspaceId: string,
+  ): Promise<readonly WorkspaceMember[]> {
+    const workspace = await this.getWorkspace(workspaceId);
+    await this.#ensureOwnerMember(workspace);
+    return await this.#store.listWorkspaceMembers(workspaceId);
+  }
+
+  /**
+   * Adds or updates a member after checking the actor against the same durable
+   * roster. Removal is represented by `status: "suspended"`.
+   */
+  async upsertWorkspaceMember(
+    request: UpsertWorkspaceMemberRequest,
+  ): Promise<WorkspaceMember> {
+    requireNonEmptyString(request.workspaceId, "workspaceId");
+    requireNonEmptyString(request.accountId, "accountId");
+    requireNonEmptyString(request.actorAccountId, "actorAccountId");
+    const workspace = await this.getWorkspace(request.workspaceId);
+    await this.#ensureOwnerMember(workspace);
+    const members = await this.#store.listWorkspaceMembers(workspace.id);
+    const actor = members.find(
+      (member) => member.accountId === request.actorAccountId,
+    );
+    if (
+      !actor ||
+      actor.status !== "active" ||
+      (!actor.roles.includes("owner") && !actor.roles.includes("admin"))
+    ) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        "actor cannot manage Workspace members",
+      );
+    }
+    const existing = members.find(
+      (member) => member.accountId === request.accountId,
+    );
+    const roles = normalizeRoles(
+      request.roles ?? existing?.roles ?? ["member"],
+    );
+    const status = request.status ?? existing?.status ?? "active";
+    if (!isWorkspaceMemberStatus(status)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "status must be one of active, invited, suspended",
+      );
+    }
+    if (roles.includes("owner") && !actor.roles.includes("owner")) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        "only an owner can grant the owner role",
+      );
+    }
+    if (
+      existing?.roles.includes("owner") &&
+      !actor.roles.includes("owner")
+    ) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        "only an owner can update an owner membership",
+      );
+    }
+    if (request.accountId === workspace.ownerUserId) {
+      if (status !== "active" || !roles.includes("owner")) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "the Workspace namespace owner must remain an active owner",
+        );
+      }
+    }
+    const dropsActiveOwner =
+      existing?.status === "active" &&
+      existing.roles.includes("owner") &&
+      (status !== "active" || !roles.includes("owner"));
+    if (
+      dropsActiveOwner &&
+      members.filter(
+          (member) =>
+            member.status === "active" && member.roles.includes("owner"),
+        ).length <= 1
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "cannot remove or demote the last active owner",
+      );
+    }
+    const nowIso = this.#now().toISOString();
+    return await this.#store.putWorkspaceMember({
+      id: existing?.id ?? this.#newId("wsm"),
+      workspaceId: workspace.id,
+      accountId: request.accountId,
+      roles,
+      status,
+      createdAt: existing?.createdAt ?? nowIso,
+      updatedAt: nowIso,
+    });
   }
 
   /**
@@ -206,8 +338,11 @@ export class WorkspacesService {
   ): Promise<Workspace> {
     requireNonEmptyString(ownerUserId, "ownerUserId");
     requireNonEmptyString(handle, "handle");
-    const existing = await this.#store.getSpaceByHandle(handle);
-    if (existing) return existing;
+    const existing = await this.#store.getWorkspaceByHandle(handle);
+    if (existing) {
+      await this.#ensureDefaultProject?.(existing.id);
+      return existing;
+    }
     return await this.createWorkspace({
       handle,
       displayName: handle,
@@ -216,57 +351,54 @@ export class WorkspacesService {
     });
   }
 
-  // --- Transient deprecated aliases (removed at rename convergence) ----------
-
-  /** @deprecated transient alias for {@link createWorkspace}. */
-  async createSpace(request: CreateWorkspaceRequest): Promise<Workspace> {
-    return await this.createWorkspace(request);
+  async #ensureOwnerMember(workspace: Workspace): Promise<WorkspaceMember> {
+    const existing = await this.#store.getWorkspaceMember(
+      workspace.id,
+      workspace.ownerUserId,
+    );
+    if (
+      existing?.status === "active" &&
+      existing.roles.includes("owner")
+    ) {
+      return existing;
+    }
+    const nowIso = this.#now().toISOString();
+    return await this.#store.putWorkspaceMember({
+      id: existing?.id ?? this.#newId("wsm"),
+      workspaceId: workspace.id,
+      accountId: workspace.ownerUserId,
+      roles: ["owner"],
+      status: "active",
+      createdAt: existing?.createdAt ?? workspace.createdAt ?? nowIso,
+      updatedAt: nowIso,
+    });
   }
 
-  /** @deprecated transient alias for {@link getWorkspace}. */
-  async getSpace(id: string): Promise<Workspace> {
-    return await this.getWorkspace(id);
-  }
-
-  /** @deprecated transient alias for {@link updateWorkspace}. */
-  async updateSpace(
-    id: string,
-    patch: {
-      readonly displayName?: string;
-      readonly policy?: Workspace["policy"];
-      readonly archived?: boolean;
-    },
-  ): Promise<Workspace> {
-    return await this.updateWorkspace(id, patch);
-  }
-
-  /** @deprecated transient alias for {@link getWorkspaceByHandle}. */
-  async getSpaceByHandle(handle: string): Promise<Workspace | undefined> {
-    return await this.getWorkspaceByHandle(handle);
-  }
-
-  /** @deprecated transient alias for {@link listWorkspaces}. */
-  async listSpaces(): Promise<readonly Workspace[]> {
-    return await this.listWorkspaces();
-  }
-
-  /** @deprecated transient alias for {@link listWorkspacesByOwner}. */
-  async listSpacesByOwner(ownerUserId: string): Promise<readonly Workspace[]> {
-    return await this.listWorkspacesByOwner(ownerUserId);
-  }
-
-  /** @deprecated transient alias for {@link ensurePersonalWorkspace}. */
-  async ensurePersonalSpace(
-    ownerUserId: string,
-    handle: string,
-  ): Promise<Workspace> {
-    return await this.ensurePersonalWorkspace(ownerUserId, handle);
-  }
 }
-
-/** @deprecated transient alias for {@link CreateWorkspaceRequest}. */
-export type CreateSpaceRequest = CreateWorkspaceRequest;
 
 function defaultId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+}
+
+const WORKSPACE_ROLES: readonly WorkspaceRole[] = [
+  "owner",
+  "admin",
+  "member",
+  "viewer",
+];
+
+function normalizeRoles(roles: readonly WorkspaceRole[]): readonly WorkspaceRole[] {
+  if (roles.length === 0 || roles.some((role) => !WORKSPACE_ROLES.includes(role))) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "roles must contain one or more of owner, admin, member, viewer",
+    );
+  }
+  return [...new Set(roles)];
+}
+
+function isWorkspaceMemberStatus(
+  value: string,
+): value is WorkspaceMemberStatus {
+  return value === "active" || value === "invited" || value === "suspended";
 }

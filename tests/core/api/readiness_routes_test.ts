@@ -80,7 +80,7 @@ test("readiness route returns service unavailable for booting probes", async () 
     ready: () => ({
       ok: false,
       state: "booting",
-      reason: "worker daemon has not completed an initial tick",
+      reason: "database migration has not completed",
     }),
     live: () => ({ ok: true }),
   });
@@ -96,11 +96,11 @@ test("readiness route returns service unavailable for booting probes", async () 
   assert.deepEqual({ error: bootingError }, {
     error: {
       code: "readiness_probe_failed",
-      message: "worker daemon has not completed an initial tick",
+      message: "database migration has not completed",
       details: {
         ok: false,
         state: "booting",
-        reason: "worker daemon has not completed an initial tick",
+        reason: "database migration has not completed",
       },
     },
   });

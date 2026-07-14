@@ -1,11 +1,8 @@
 /**
  * Shared Capsule-presentation helpers (list + detail).
  */
-import { type MessageKey, t } from "../i18n/index.ts";
-import {
-  installExperiencePublicEndpoint,
-  type JsonValue,
-} from "takosumi-contract";
+import { t } from "../i18n/index.ts";
+import { type JsonValue } from "takosumi-contract";
 import type { ActivityEvent, InstallConfig } from "./control-api.ts";
 
 export const PENDING_NEEDS_ATTENTION_AFTER_MS = 30 * 60 * 1000;
@@ -72,7 +69,7 @@ export function pendingNeedsAttention(
   return Math.max(0, now - updatedAt) >= threshold;
 }
 
-/** True when the Capsule belongs in the primary service launcher. */
+/** True when the Capsule belongs in installed-service views and Interface joins. */
 export function isVisibleServiceCapsule(inst: {
   readonly status: string;
 }): boolean {
@@ -84,36 +81,16 @@ export function isUrlString(value: unknown): value is string {
   return typeof value === "string" && /^https?:\/\//i.test(value.trim());
 }
 
-/**
- * Pick a launch URL from a Deployment's public outputs. Prefers the well-known
- * `launch_url` / `url` / `app_url` keys; otherwise falls back to the first
- * http(s)-shaped value.
- */
-export function launchUrlFromOutputs(
-  outputs: Readonly<Record<string, unknown>>,
-): string | undefined {
-  for (const key of ["launch_url", "url", "app_url", "public_url"]) {
-    const value = outputs[key];
-    if (isUrlString(value)) return value;
-  }
-  for (const value of Object.values(outputs)) {
-    if (isUrlString(value)) return value;
-  }
-  return undefined;
-}
-
 export type ReleaseActivationStatus =
   "not_required" | "pending" | "succeeded" | "failed";
 
-export type DeploymentReadiness =
+export type StateVersionReadiness =
   "settling" | "activation_pending" | "ready" | "activation_failed";
 
-interface LaunchableDeployment {
+interface LaunchableStateVersion {
   readonly id: string;
-  readonly installationId?: string;
-  readonly applyRunId: string;
-  readonly outputsPublic: Readonly<Record<string, unknown>>;
-  readonly status: string;
+  readonly capsuleId: string;
+  readonly createdByRunId: string;
 }
 
 function releaseActivationActionStatus(
@@ -135,81 +112,71 @@ function activityString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function releaseActivationEventMatchesDeployment(
+function releaseActivationEventMatchesStateVersion(
   event: ActivityEvent,
-  deployment: LaunchableDeployment,
+  stateVersion: LaunchableStateVersion,
   capsuleId?: string,
 ): boolean {
   if (!releaseActivationActionStatus(event.action)) return false;
   const metadata = event.metadata;
   const applyRunId = activityString(metadata.applyRunId);
-  const deploymentId = activityString(metadata.deploymentId);
-  const eventCapsuleId =
-    activityString(metadata.capsuleId) ??
-    activityString(metadata.installationId);
-  const matchesDeploymentIdentity =
-    event.runId === deployment.applyRunId ||
-    applyRunId === deployment.applyRunId ||
-    deploymentId === deployment.id;
-  if (event.runId || applyRunId || deploymentId) {
-    return matchesDeploymentIdentity;
+  const stateVersionId = activityString(metadata.stateVersionId);
+  const eventCapsuleId = activityString(metadata.capsuleId);
+  const matchesStateVersionIdentity =
+    event.runId === stateVersion.createdByRunId ||
+    applyRunId === stateVersion.createdByRunId ||
+    stateVersionId === stateVersion.id;
+  if (event.runId || applyRunId || stateVersionId) {
+    return matchesStateVersionIdentity;
   }
   return (
     (capsuleId !== undefined && eventCapsuleId === capsuleId) ||
-    (deployment.installationId !== undefined &&
-      eventCapsuleId === deployment.installationId)
+    eventCapsuleId === stateVersion.capsuleId
   );
 }
 
 function latestReleaseActivationEvent(
-  deployment: LaunchableDeployment,
+  stateVersion: LaunchableStateVersion,
   events: readonly ActivityEvent[],
   capsuleId?: string,
 ): ActivityEvent | undefined {
   return events
     .filter((event) =>
-      releaseActivationEventMatchesDeployment(event, deployment, capsuleId),
+      releaseActivationEventMatchesStateVersion(event, stateVersion, capsuleId),
     )
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
 }
 
-export function releaseActivationStatusForDeployment(
-  deployment: LaunchableDeployment | undefined,
+export function releaseActivationStatusForStateVersion(
+  stateVersion: LaunchableStateVersion | undefined,
   events: readonly ActivityEvent[] = [],
   capsuleId?: string,
 ): ReleaseActivationStatus {
-  if (!deployment) return "not_required";
-  const event = latestReleaseActivationEvent(deployment, events, capsuleId);
+  if (!stateVersion) return "not_required";
+  const event = latestReleaseActivationEvent(stateVersion, events, capsuleId);
   const eventStatus = event
     ? releaseActivationActionStatus(event.action)
     : undefined;
   if (eventStatus) return eventStatus;
-  if (
-    !Object.prototype.hasOwnProperty.call(
-      deployment.outputsPublic,
-      "takosumi_release",
-    )
-  ) {
-    return "not_required";
-  }
-  // A `takosumi_release` deployment stays non-openable (pending) until its
-  // matching activation reaches release_activation.succeeded — a release URL is
-  // never exposed on unconfirmed activation.
-  return "pending";
+  // Lifecycle requirements are service-side configuration. OpenTofu Outputs
+  // are ordinary data and must never be used to infer control-plane behavior.
+  return "not_required";
 }
 
 /**
- * User-facing readiness after OpenTofu apply. A missing Deployment is still
+ * User-facing readiness after OpenTofu apply. A missing StateVersion is still
  * settling, while Capsules with release activation stay non-ready until the
  * matching activity reaches `release_activation.succeeded`.
  */
-export function deploymentReadinessAfterApply(
-  deployment: LaunchableDeployment | undefined,
+export function stateVersionReadinessAfterApply(
+  stateVersion: LaunchableStateVersion | undefined,
   events: readonly ActivityEvent[] = [],
   capsuleId?: string,
-): DeploymentReadiness {
-  if (!deployment) return "settling";
-  switch (releaseActivationStatusForDeployment(deployment, events, capsuleId)) {
+): StateVersionReadiness {
+  if (!stateVersion) return "settling";
+  switch (
+    releaseActivationStatusForStateVersion(stateVersion, events, capsuleId)
+  ) {
     case "pending":
       return "activation_pending";
     case "failed":
@@ -221,59 +188,49 @@ export function deploymentReadinessAfterApply(
 }
 
 /**
- * Canonical "is this deployment's app surface openable right now" gate, shared
- * by the launcher tile, the service detail, and RunView. A `takosumi_release`
- * deployment is openable only once its activation reaches
- * release_activation.succeeded; everything else opens when activation is
- * not required.
+ * Canonical post-apply readiness gate. A StateVersion with matching lifecycle
+ * activity is ready only once activation reaches
+ * release_activation.succeeded; it never supplies or selects a runtime URL.
  */
-export function isDeploymentOpenable(
-  deployment: LaunchableDeployment | undefined,
+export function isStateVersionRuntimeReady(
+  stateVersion: LaunchableStateVersion | undefined,
   events: readonly ActivityEvent[] = [],
   capsuleId?: string,
 ): boolean {
-  if (!deployment || deployment.status === "destroyed") return false;
-  const activation = releaseActivationStatusForDeployment(
-    deployment,
+  if (!stateVersion) return false;
+  const activation = releaseActivationStatusForStateVersion(
+    stateVersion,
     events,
     capsuleId,
   );
   return activation === "not_required" || activation === "succeeded";
 }
 
-export function launchUrlFromDeployment(
-  deployment: LaunchableDeployment | undefined,
-  events: readonly ActivityEvent[] = [],
-  capsuleId?: string,
-): string | undefined {
-  if (!deployment) return undefined;
-  if (!isDeploymentOpenable(deployment, events, capsuleId)) {
-    return undefined;
-  }
-  return launchUrlFromOutputs(deployment.outputsPublic);
-}
-
 /**
- * A declared app surface (a launchable screen) from a Capsule's public outputs.
- * One service may declare several — e.g. a blog's public site plus its admin
- * screen — and each becomes its own launcher tile.
+ * A launcher surface validated from an authorized
+ * `interface.ui.surface` Interface. Capsule state says the app is installed;
+ * this object supplies the runtime surface; lifecycle readiness may still gate
+ * opening it while activation settles.
  */
 export interface AppSurface {
+  /** Stable Interface id; one launcher tile corresponds to one Interface. */
+  readonly interfaceId: string;
   /** Display name; the launcher falls back to the service name when absent. */
   readonly name?: string;
   /** Emoji / short glyph, or an icon image URL. */
   readonly icon?: string;
-  /** Image URL used as the tile face when present. */
-  readonly image?: string;
   /** Launch URL; tapping the tile opens it. */
-  readonly url?: string;
+  readonly url: string;
+  readonly category?: string;
+  readonly sortOrder?: number;
 }
 
 /**
  * User-facing display name from the install config's store metadata (the name
  * the store listing advertised, e.g. "Takos Storage"), as opposed to the
- * instance name the user typed (e.g. "storage4"). The launcher tile and the
- * detail header derive the same value from here.
+ * instance name the user typed (e.g. "storage4"). This is Store/admin
+ * presentation for the service detail; launcher presentation comes from the
+ * authorized UI-surface Interface.
  */
 export function capsuleDisplayName(
   config: InstallConfig | undefined,
@@ -284,334 +241,21 @@ export function capsuleDisplayName(
   return store.name[language] ?? store.suggestedName;
 }
 
-export function appSurfaceFromInstallConfigStore(
-  config: InstallConfig | undefined,
-  language: "ja" | "en",
-  workspaceHandle?: string,
-): AppSurface | undefined {
-  const store = config?.store;
-  if (!store || store.surface !== "service") return undefined;
-  return {
-    name: capsuleDisplayName(config, language) ?? config.name,
-    image: urlValue(store.iconUrl),
-    // Even when the OpenTofu module declares no URL output, the public host
-    // is knowable: the store install experience's public_endpoint projection
-    // named the variable(s), and we set that value at install (it survives in
-    // the install config's variableMapping). Derive it so an app whose module
-    // just forgot to output its URL is still openable from the tile.
-    ...(publicUrlFromInstallConfig(config, workspaceHandle)
-      ? { url: publicUrlFromInstallConfig(config, workspaceHandle) }
-      : {}),
-  };
-}
-
-/**
- * Reconstruct the intended public URL of a store-installed Capsule from its
- * install inputs, for the case where the deployed module declares no URL
- * output. Reads the `public_endpoint` install-experience projection to learn
- * which variables carry the URL / subdomain, then reads the value we set at
- * install from the config's `variableMapping`. Returns undefined for services
- * that declared no public endpoint (a storage / building-block Capsule).
- */
-export function publicUrlFromInstallConfig(
-  config: InstallConfig | undefined,
-  workspaceHandle?: string,
-): string | undefined {
-  const vars = config?.variableMapping ?? {};
-  const readVar = (name: string | undefined): string | undefined => {
-    if (!name) return undefined;
-    const value = vars[name];
-    return typeof value === "string" && value.trim() ? value.trim() : undefined;
-  };
-  // Best: the store app declared a public_endpoint — use its named url
-  // variable, or subdomain + its declared base domain (unambiguous).
-  const endpoint = installExperiencePublicEndpoint(
-    config?.store?.installExperience,
-  );
-  if (endpoint) {
-    const explicitUrl = readVar(endpoint.urlVariable);
-    const subdomain = readVar(endpoint.subdomainVariable);
-    const baseDomain = endpoint.baseDomain?.trim().replace(/^\*\.|\.$/gu, "");
-    if (explicitUrl && isUrlString(explicitUrl)) {
-      const explicitUsesManagedBase = (() => {
-        if (!baseDomain) return false;
-        try {
-          return new URL(explicitUrl).hostname.endsWith(`.${baseDomain}`);
-        } catch {
-          return false;
-        }
-      })();
-      // The create form may have persisted its scoped preview before the plan
-      // canonicalized a selected vanity name. In that one case the subdomain
-      // variable is the authority; otherwise a complete URL is already the
-      // best fallback we have.
-      if (
-        config?.managedPublicHostname?.mode !== "vanity" ||
-        !explicitUsesManagedBase
-      ) {
-        return explicitUrl;
-      }
-    }
-    if (
-      subdomain &&
-      baseDomain
-    ) {
-      if (config?.managedPublicHostname?.mode === "vanity") {
-        return `https://${subdomain}.${baseDomain}`;
-      }
-      const workspace = managedHostnameLabel(workspaceHandle);
-      const requested = managedHostnameLabel(subdomain);
-      if (workspace && requested) {
-        const label = requested.startsWith(`${workspace}-`)
-          ? requested
-          : `${workspace}-${requested}`;
-        if (label.length <= 63) return `https://${label}.${baseDomain}`;
-      }
-    }
-  }
-  // Fallback: a full https URL was set under a standard variable name, even
-  // without a projection. Only a complete URL — never guess a base domain.
-  for (const key of ["public_url", "app_url"]) {
-    const value = readVar(key);
-    if (value && isUrlString(value)) return value;
-  }
-  return undefined;
-}
-
-function managedHostnameLabel(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const normalized = value.trim().toLowerCase();
-  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(normalized)
-    ? normalized
-    : undefined;
-}
-
-function nonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-function urlValue(value: unknown): string | undefined {
-  return isUrlString(value) ? value.trim() : undefined;
-}
-
-function publicAssetUrlValue(
-  value: unknown,
-  outputs: Readonly<Record<string, unknown>>,
-): string | undefined {
-  const raw = nonEmptyString(value);
-  if (!raw) return undefined;
-  if (/^https?:\/\//i.test(raw)) return raw.trim();
-  if (!raw.startsWith("/")) return undefined;
-  const base = launchUrlFromOutputs(outputs);
-  if (!base) return undefined;
-  try {
-    return new URL(raw, base).toString();
-  } catch {
-    return undefined;
-  }
-}
-
-function publicIconValue(
-  value: unknown,
-  outputs: Readonly<Record<string, unknown>>,
-): string | undefined {
-  const raw = nonEmptyString(value);
-  if (!raw) return undefined;
-  return publicAssetUrlValue(raw, outputs) ?? raw;
-}
-
-function recordValue(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
-/** Normalize one declared-surface object; null unless it carries a name. */
-function surfaceFromObject(
-  value: unknown,
-  outputs: Readonly<Record<string, unknown>>,
-): AppSurface | null {
-  const rec = recordValue(value);
-  if (!rec) return null;
-  const name = nonEmptyString(rec.name);
-  if (!name) return null;
-  return {
-    name,
-    icon: publicIconValue(rec.icon, outputs),
-    image: publicAssetUrlValue(rec.image, outputs),
-    url: urlValue(rec.url),
-  };
-}
-
-function appDeploymentPublishDeclaresLauncher(
-  entry: Record<string, unknown>,
-): boolean {
-  const type = nonEmptyString(entry.type);
-  if (
-    type === "interface.ui.surface" ||
-    type === "UiSurface" ||
-    type === "ui.surface" ||
-    type === "launcher"
-  ) {
-    return true;
-  }
-  const spec = recordValue(entry.spec);
-  return spec?.launcher === true;
-}
-
-function surfaceFromAppDeploymentPublish(
-  entry: unknown,
-  outputs: Readonly<Record<string, unknown>>,
-  fallbackName?: string,
-): AppSurface | null {
-  const rec = recordValue(entry);
-  if (!rec || !appDeploymentPublishDeclaresLauncher(rec)) return null;
-  const display = recordValue(rec.display) ?? {};
-  const name =
-    nonEmptyString(display.title) ?? nonEmptyString(rec.name) ?? fallbackName;
-  if (!name) return null;
-  const declaredOutputs = recordValue(rec.outputs);
-  const urlOutput = recordValue(declaredOutputs?.url);
-  return {
-    name,
-    icon: publicIconValue(display.icon, outputs),
-    image: publicAssetUrlValue(display.image, outputs),
-    url:
-      urlValue(urlOutput?.url) ??
-      urlValue(urlOutput?.value) ??
-      launchUrlFromOutputs(outputs),
-  };
-}
-
-function surfacesFromAppDeployment(
-  outputs: Readonly<Record<string, unknown>>,
-): AppSurface[] {
-  const value = recordValue(outputs.app_deployment);
-  if (!value) return [];
-  const publish = value.publish;
-  if (!Array.isArray(publish)) return [];
-  const fallbackName = nonEmptyString(value.name);
-  const surfaces: AppSurface[] = [];
-  for (const entry of publish) {
-    const surface = surfaceFromAppDeploymentPublish(
-      entry,
-      outputs,
-      fallbackName,
-    );
-    if (surface) surfaces.push(surface);
-  }
-  return surfaces;
-}
-
-/**
- * The app surfaces a Capsule declares via well-known public outputs. This is
- * the dashboard's opt-in "this is an app" signal — a service with no app
- * metadata returns []. Supported declaration forms:
- *   - `app_deployment.publish`: the current OpenTofu app declaration shape
- *     emitted by installable Capsules such as Takos and yurucommu.
- *   - `apps`: an array of `{ name, icon?, image?, url? }` (multi-surface)
- *   - `app`: a single object, or an array of objects
- *   - flat `app_name` / `app_icon` / `app_image` / `app_url` (single surface;
- *     url falls back to the generic launch URL)
- *   - a bare `launch_url` / `url` / `app_url` / `public_url` fallback for
- *     plain OpenTofu apps that expose only a launchable URL
- * Object/array entries require a `name` (nameless entries are dropped); the
- * flat form allows an absent name (the launcher fills in the service name).
- */
-export function appSurfacesFromOutputs(
-  outputs: Readonly<Record<string, unknown>>,
-): AppSurface[] {
-  const surfaces: AppSurface[] = [];
-
-  surfaces.push(...surfacesFromAppDeployment(outputs));
-
-  if (Array.isArray(outputs.apps)) {
-    for (const entry of outputs.apps) {
-      const surface = surfaceFromObject(entry, outputs);
-      if (surface) surfaces.push(surface);
-    }
-  }
-  if (Array.isArray(outputs.app)) {
-    for (const entry of outputs.app) {
-      const surface = surfaceFromObject(entry, outputs);
-      if (surface) surfaces.push(surface);
-    }
-  } else {
-    const single = surfaceFromObject(outputs.app, outputs);
-    if (single) surfaces.push(single);
-  }
-
-  if (surfaces.length === 0) {
-    const name = nonEmptyString(outputs.app_name);
-    const icon = publicIconValue(outputs.app_icon, outputs);
-    const image = publicAssetUrlValue(outputs.app_image, outputs);
-    if (name || icon || image) {
-      surfaces.push({
-        name,
-        icon,
-        image,
-        url: urlValue(outputs.app_url) ?? launchUrlFromOutputs(outputs),
-      });
-    }
-  }
-
-  if (surfaces.length === 0) {
-    const url = launchUrlFromOutputs(outputs);
-    if (url) surfaces.push({ url });
-  }
-
-  return surfaces;
-}
-
-export function appSurfacesFromDeployment(
-  deployment: LaunchableDeployment,
-  events: readonly ActivityEvent[] = [],
-  capsuleId?: string,
-): AppSurface[] {
-  const surfaces = appSurfacesFromOutputs(deployment.outputsPublic);
-  if (isDeploymentOpenable(deployment, events, capsuleId)) {
-    return surfaces;
-  }
-  // Not openable yet (activation pending / failed): keep the tile but strip the
-  // live URL so it falls back to the service screen instead of a link that
-  // 404s — matching the detail + run gating.
-  return surfaces.map((surface) => ({ ...surface, url: undefined }));
-}
-
-/** Friendly label for a well-known public output key; humanized key otherwise. */
-const OUTPUT_LABEL_KEYS: Record<string, MessageKey> = {
-  launch_url: "app.output.launchUrl",
-  url: "app.output.url",
-  app_url: "app.output.launchUrl",
-  public_url: "app.output.publicUrl",
-  endpoint: "app.output.endpoint",
-  hostname: "app.output.hostname",
-};
+/** Friendly label for an ordinary OpenTofu Output key. */
 export function outputLabel(name: string): string {
-  const key = OUTPUT_LABEL_KEYS[name];
-  return key ? t(key) : humanizeOutputKey(name);
+  return humanizeOutputKey(name);
 }
 
 /**
- * Distinguishing labels for the 公開リンク rows. Several well-known output
- * keys share one friendly label (`launch_url` / `app_url` / `public_url` all
- * read 公開アドレス), so a service exposing more than one of them rendered
- * near-identical rows. Colliding labels fall back to the humanized raw key
- * (unique per key); should two keys ALSO humanize identically, the URL's
- * host+path disambiguates.
+ * Distinguishing labels for the 公開リンク rows. Several recognized Output
+ * keys can humanize to the same label, so colliding rows append their URL's
+ * host+path. Output names remain ordinary data; no name selects runtime or
+ * presentation behavior.
  */
 export function publicLinkRowLabels(
   entries: readonly (readonly [string, unknown])[],
 ): readonly string[] {
-  const friendly = entries.map(([name]) => outputLabel(name));
-  const friendlyCounts = countBy(friendly);
-  const resolved = entries.map(([name], index) =>
-    (friendlyCounts.get(friendly[index]!) ?? 0) > 1
-      ? humanizeOutputKey(name)
-      : friendly[index]!,
-  );
+  const resolved = entries.map(([name]) => outputLabel(name));
   const resolvedCounts = countBy(resolved);
   return entries.map(([, value], index) => {
     const label = resolved[index]!;
@@ -685,13 +329,6 @@ export interface ConfigVariableRow {
   deleted?: boolean;
 }
 
-export const SYSTEM_CONFIG_VARIABLES = new Set([
-  "takosumi_accounts_url",
-  "takosumi_accounts_issuer_url",
-  "takosumi_accounts_client_id",
-  "takosumi_accounts_redirect_uri",
-]);
-
 export function configRowsFromInstallConfig(
   config: InstallConfig | undefined,
   language: "ja" | "en",
@@ -700,8 +337,7 @@ export function configRowsFromInstallConfig(
   const variables = config.variableMapping ?? {};
   const rows: ConfigVariableRow[] = [];
   const seen = new Set<string>();
-  for (const input of config.store?.inputs ?? []) {
-    if (SYSTEM_CONFIG_VARIABLES.has(input.name)) continue;
+  for (const input of config.variablePresentation ?? []) {
     const type = input.type ?? "string";
     const hasExistingValue = Object.prototype.hasOwnProperty.call(
       variables,
@@ -709,7 +345,9 @@ export function configRowsFromInstallConfig(
     );
     const defaultText = input.secret
       ? ""
-      : configValueToText(input.defaultValue ?? "", type);
+      : input.defaultValue?.source === "literal"
+        ? configValueToText(input.defaultValue.value, type)
+        : "";
     const savedValue = input.secret
       ? ""
       : hasExistingValue
@@ -725,7 +363,7 @@ export function configRowsFromInstallConfig(
       value: savedValue,
       type,
       required: input.required === true,
-      secret: input.secret === true || variableNameLooksSecret(input.name),
+      secret: input.secret === true,
       advanced: input.advanced === true,
       storeField: true,
       hasExistingValue,
@@ -737,10 +375,9 @@ export function configRowsFromInstallConfig(
     seen.add(input.name);
   }
   for (const [name, value] of Object.entries(variables)) {
-    if (SYSTEM_CONFIG_VARIABLES.has(name) || seen.has(name)) continue;
+    if (seen.has(name)) continue;
     const type = inferConfigVariableType(value);
-    const secret = variableNameLooksSecret(name);
-    const savedValue = secret ? "" : configValueToText(value, type);
+    const savedValue = configValueToText(value, type);
     rows.push({
       id: `custom:${name}`,
       originalName: name,
@@ -749,8 +386,8 @@ export function configRowsFromInstallConfig(
       value: savedValue,
       type,
       required: false,
-      secret,
-      advanced: true,
+      secret: false,
+      advanced: false,
       storeField: false,
       hasExistingValue: true,
       defaultText: "",
@@ -768,12 +405,6 @@ function localizedText(
 ): string | undefined {
   if (!text) return undefined;
   return language === "ja" ? text.ja : text.en;
-}
-
-export function variableNameLooksSecret(name: string): boolean {
-  return /(^|[_-])(password|passwd|token|secret|api[_-]?key|private[_-]?key)([_-]|$)/iu.test(
-    name,
-  );
 }
 
 function inferConfigVariableType(value: unknown): ConfigVariableType {
@@ -883,7 +514,7 @@ export function staleReasonFromActivity(
     if (text) return text;
   }
   const changed = event.metadata.changedOutputs;
-  const producer = event.metadata.producerInstallationName;
+  const producer = event.metadata.producerCapsuleName;
   if (Array.isArray(changed) && typeof producer === "string") {
     const text = changed
       .filter((entry): entry is string => typeof entry === "string")

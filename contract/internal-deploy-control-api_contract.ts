@@ -3,25 +3,27 @@ import type {
   ApplyRunResponse,
   CreateApplyRunRequest,
   CreatePlanRunRequest,
-  Deployment,
-  DeploymentOutput,
   DispatchStateScope,
   GetCapsuleResponse,
   Capsule,
   DeployControlErrorEnvelope,
-  ListDeploymentOutputsResponse,
-  ListDeploymentsResponse,
+  ListStateVersionsResponse,
   ListRunnerProfilesResponse,
+  OutputResponse,
   PlanRun,
   PlanRunResponse,
   RunnerProfile,
   StateVersion,
 } from "./internal-deploy-control-api.ts";
+import type { PublicOutput } from "./outputs.ts";
 
 const runnerProfile = {
   id: "opentofu-default",
-  name: "Cloudflare default",
-  substrate: "cloudflare-containers",
+  name: "OpenTofu default",
+  substrate: "operator-managed",
+  executorId: "opentofu.default",
+  lifecycle: { state: "active" },
+  availability: { state: "available" },
   tofuVersion: "1.10.0",
   stateBackend: {
     kind: "operator-managed",
@@ -31,14 +33,7 @@ const runnerProfile = {
       ref: "lock://takosumi/opentofu-default",
     },
   },
-  allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  credentialRefs: [
-    {
-      provider: "registry.opentofu.org/cloudflare/cloudflare",
-      ref: "secret://takosumi/opentofu-default",
-      required: true,
-    },
-  ],
+  allowedProviders: ["*"],
   resourceLimits: {
     maxRunSeconds: 900,
     maxSourceArchiveBytes: 104857600,
@@ -46,16 +41,7 @@ const runnerProfile = {
     cpu: "1",
     memoryMb: 1024,
   },
-  networkPolicy: {
-    mode: "egress-allowlist",
-    allowedHosts: ["registry.opentofu.org", "api.cloudflare.com"],
-  },
-  cloudflareContainer: {
-    image: "ghcr.io/takosjp/takosumi-opentofu-runner:1",
-    queueName: "takosumi-runs",
-    durableObjectBinding: "RUNNER",
-    workDir: "/workspace",
-  },
+  networkPolicy: { mode: "operator-managed" },
   secretExposurePolicy: {
     providerCredentials: "runner-only",
     tenantWorkerOperatorSecrets: "forbidden",
@@ -73,25 +59,14 @@ const projectId = "prj_default";
 const capsuleId = "cap_0123456789abcdef";
 const environment = "production";
 const stateVersionId = "sst_0123456789abcdef";
-// Retired Deployment ledger keeps its frozen legacy field names.
-const outputSnapshotId = "snap_0123456789abcdef";
 
 const source = {
   kind: "git",
-  url: "https://github.com/example/notes",
-  ref: "main",
+  url: "https://git.example.test/example/notes.git",
+  ref: "release",
   commit: "abc123",
   modulePath: "infra",
 } as const;
-
-// One projected, non-sensitive OpenTofu output. The runner envelope narrows
-// `sensitive` to the literal `false`; sensitive outputs never enter the ledger.
-const deploymentOutput = {
-  name: "launch_url",
-  kind: "launch_url",
-  value: "https://notes.example.test",
-  sensitive: false,
-} satisfies DeploymentOutput;
 
 const planRun = {
   id: "plan_0123456789abcdef",
@@ -104,7 +79,7 @@ const planRun = {
   runnerProfileId: runnerProfile.id,
   variablesDigest:
     "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-  requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+  requiredProviders: ["registry.example.com/acme/example"],
   status: "succeeded",
   policy: {
     status: "passed",
@@ -117,7 +92,7 @@ const planRun = {
     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   planArtifact: {
     kind: "object-storage",
-    ref: "r2://takos-artifacts/workspaces/ws_0123456789abcdef/capsules/cap_0123456789abcdef/runs/plan_0123456789abcdef/plan.bin.enc",
+    ref: "artifact:plan_0123456789abcdef",
     digest:
       "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     contentType: "application/vnd.opentofu.plan",
@@ -154,9 +129,10 @@ const planRun = {
 // An apply carries `base + 1` as the persist generation.
 const dispatchStateScope = {
   workspaceId,
-  capsuleId,
+  subject: { kind: "capsule", id: capsuleId },
   environment,
   generation: 1,
+  stateRef: "artifact:state_0123456789abcdef",
 } satisfies DispatchStateScope;
 
 // Capsule ledger record: Workspace/Project-direct, ISO timestamps,
@@ -168,7 +144,6 @@ const capsule = {
   name: "notes",
   slug: "notes",
   sourceId: "src_0123456789abcdef",
-  installType: "opentofu_module",
   installConfigId: "cfg_0123456789abcdef",
   environment,
   currentStateVersionId: stateVersionId,
@@ -178,37 +153,31 @@ const capsule = {
   updatedAt: "2024-05-18T03:00:05.000Z",
 } satisfies Capsule;
 
-// One tfstate generation. Metadata-only; the encrypted bytes live in R2_STATE.
+// One tfstate generation. Metadata-only; storage owns the encrypted bytes.
 const stateVersion = {
   id: stateVersionId,
   workspaceId,
   capsuleId,
   environment,
   generation: 1,
-  objectKey:
-    "workspaces/ws_personal/capsules/cap_0123456789abcdef/envs/production/states/00000001.tfstate.enc",
+  stateRef: "artifact:state_0123456789abcdef",
   digest:
     "sha256:4444444444444444444444444444444444444444444444444444444444444444",
   createdByRunId: "apply_0123456789abcdef",
   createdAt: "2024-05-18T03:00:05.000Z",
 } satisfies StateVersion;
 
-// Retired successful-apply record: kept read-only for audit, so it deliberately
-// still uses the frozen legacy `spaceId` / `installationId` / `outputSnapshotId`
-// field names. New applies record a StateVersion + Output instead.
-const deployment = {
-  id: "dep_0123456789abcdef",
-  spaceId: workspaceId,
-  installationId: capsuleId,
-  environment,
-  applyRunId: "apply_0123456789abcdef",
-  sourceSnapshotId: "ssn_0123456789abcdef",
-  stateGeneration: stateVersion.generation,
-  outputSnapshotId,
-  outputsPublic: { launch_url: deploymentOutput.value },
-  status: "active",
+const output = {
+  id: "out_0123456789abcdef",
+  workspaceId,
+  capsuleId,
+  stateGeneration: 1,
+  publicOutputs: { endpoint: "https://notes.example.test" },
+  workspaceOutputs: { endpoint: "https://notes.example.test" },
+  outputDigest:
+    "sha256:5555555555555555555555555555555555555555555555555555555555555555",
   createdAt: "2024-05-18T03:00:05.000Z",
-} satisfies Deployment;
+} satisfies PublicOutput;
 
 const applyRun = {
   id: "apply_0123456789abcdef",
@@ -238,7 +207,7 @@ const applyRun = {
     acquiredAt: 1716000000003,
     releasedAt: 1716000000005,
   },
-  outputs: [deploymentOutput],
+  outputId: "out_0123456789abcdef",
   auditEvents: [
     {
       id: "apply_0123456789abcdef:apply.completed:1716000000005",
@@ -262,14 +231,14 @@ export const DEPLOY_CONTROL_API_CONTRACT_FIXTURES = {
     source,
     runnerProfileId: runnerProfile.id,
     variables: { account_id: "acct_123" },
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    requiredProviders: ["registry.example.com/acme/example"],
   } satisfies CreatePlanRunRequest,
 
   planRunResponse: {
     planRun,
   } satisfies PlanRunResponse,
 
-  // Run-dispatch state scope pinned for the R2_STATE key derivation.
+  // Run-dispatch state scope carrying a host-allocated opaque state reference.
   dispatchStateScope,
 
   createApplyRunRequest: {
@@ -290,7 +259,6 @@ export const DEPLOY_CONTROL_API_CONTRACT_FIXTURES = {
   applyRunResponse: {
     applyRun,
     capsule,
-    deployment,
   } satisfies ApplyRunResponse,
 
   getCapsuleResponse: {
@@ -300,13 +268,13 @@ export const DEPLOY_CONTROL_API_CONTRACT_FIXTURES = {
   // StateVersion metadata recorded after a successful apply.
   stateVersion,
 
-  listDeploymentsResponse: {
-    deployments: [deployment],
-  } satisfies ListDeploymentsResponse,
+  listStateVersionsResponse: {
+    stateVersions: [stateVersion],
+  } satisfies ListStateVersionsResponse,
 
-  listDeploymentOutputsResponse: {
-    outputs: [deploymentOutput],
-  } satisfies ListDeploymentOutputsResponse,
+  outputResponse: {
+    output,
+  } satisfies OutputResponse,
 
   errorEnvelope: {
     error: {

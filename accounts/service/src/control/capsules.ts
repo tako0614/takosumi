@@ -7,7 +7,6 @@
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
-  Connection,
   ConnectionOAuthStartResponse,
   ConnectionResponse,
   ConnectionScopeHints,
@@ -15,10 +14,7 @@ import type {
   CreateConnectionFile,
   CreateConnectionRequest,
   DeployControlErrorCode,
-  Deployment,
-  InternalDeployRequest,
   ListConnectionsResponse,
-  ListDeploymentsResponse,
   ListRunnerProfilesResponse,
   OpenTofuModuleSource,
   PlanRunResponse,
@@ -26,7 +22,6 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
-  ArtifactSnapshotRequest,
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
@@ -37,10 +32,6 @@ import type {
   SourceSnapshot,
 } from "takosumi-contract/sources";
 import type {
-  DeployResponse,
-  PublicDeployResponse,
-} from "takosumi-contract/deploy";
-import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
@@ -48,7 +39,6 @@ import type {
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  CapsuleProviderEnvBindingSet,
   InstallConfig,
   Capsule,
   OutputAllowlistEntry,
@@ -65,31 +55,29 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  CapsuleProviderConnectionBinding,
-  CapsuleProviderConnectionBindings,
-  CapsuleProviderEnvBinding,
-  CapsuleProviderEnvBindings,
-  CapsuleProviderConnectionSet,
+  ProviderBinding,
+  ProviderBindings,
+  ProviderBindingSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
-import type { PublicDeployment } from "takosumi-contract/deployments";
+import {
+  CURRENT_OUTPUT_INCONSISTENT_REASON,
+  type Output,
+  type OutputResponse,
+  type OutputShare,
+  type OutputShareEntry,
+  type PublicOutput,
+} from "takosumi-contract/outputs";
 import type {
   BackupRecord,
   CreateBackupResponse,
   CreateRestoreRequest,
   ListBackupsResponse,
 } from "takosumi-contract/backups";
-import type {
-  BillingSettings,
-  CreditBalance,
-  CreditReservation,
-  UsageEvent,
-} from "takosumi-contract/billing";
 import type {
   ListRunsResponse,
   Run,
@@ -99,14 +87,6 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import type {
-  AppCapsuleMode,
-  AppCapsuleStatus,
-  CapsuleRecord,
-  WorkspaceKind,
-} from "../ledger.ts";
-import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -128,29 +108,26 @@ import {
   type ControlDispatchContext,
   canAccessWorkspace,
   controlPlaneUnavailable,
-  controllerErrorCode,
   controllerErrorResponse,
   isRecord,
   jsonStatus,
   parseControlPageParams,
   publicApplyActionResponse,
   publicCompatibilityReportResponse,
-  publicDeployResponse,
-  publicDeployment,
+  publicDependency,
+  publicStateVersion,
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
   requireWorkspaceAccess,
-  resolveProviderConnectionBindings,
+  resolveProviderBindings,
 } from "./shared.ts";
 import {
   booleanValue,
   connectionCredentialFiles,
   connectionScopeHints,
-  connectionScopeHintsFromValues,
   dependencyModeValue,
   dependencyVisibilityValue,
-  isGoogleCloudProvider,
   isJsonValue,
   isOutputsMapping,
   isPlainJsonObject,
@@ -159,29 +136,20 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseCapsuleProviderConnectionBinding,
-  parseCapsuleProviderConnectionBindings,
+  parseProviderBinding,
+  parseProviderBindings,
   parseLimit,
-  spaceTypeValue,
+  workspaceTypeValue,
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
 import {
-  deployProjectionModeValue,
-  saveProjectionStatusChange,
-  syncDeployControlProjectionFromApply,
-  syncDeployControlProjectionFromDeploy,
-  syncDeployControlProjectionStatusFromRun,
-} from "./projection.ts";
-import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/capsules/install_config_bootstrap.ts";
+} from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
-import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 import { ensureTakosumiAccountsOidcForExistingCapsule } from "./capsule-oidc.ts";
 
 export async function handleCapsules(
@@ -190,27 +158,26 @@ export async function handleCapsules(
   method: string,
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
-  // /api/v1/capsules/:id ; .../plan ; .../destroy-plan ; .../dependencies,
-  // normalized to the historical handler key.
-  if (segments[0] === "installations" && segments.length >= 2) {
+  // /api/v1/capsules/:id ; .../plan ; .../destroy-plan ; .../dependencies.
+  if (segments[0] === "capsules" && segments.length >= 2) {
     const capsuleId = decodeURIComponent(segments[1] ?? "");
-    const installation = await operations.installations.getCapsule(capsuleId);
+    const capsule = await operations.capsules.getCapsule(capsuleId);
     const auth = await requireWorkspaceAccess({
       operations,
       store,
-      workspaceId: installation.workspaceId,
+      workspaceId: capsule.workspaceId,
       subject: ctx.session.subject,
     });
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method === "GET") {
-        return json({ capsule: publicCapsule(installation) });
+        return json({ capsule: publicCapsule(capsule) });
       }
       if (method === "PATCH") {
         return await patchCapsule(request, operations, capsuleId);
       }
       if (method === "DELETE") {
-        return await deleteCapsule(operations, store, installation, capsuleId);
+        return await deleteCapsule(operations, capsule, capsuleId);
       }
       return methodNotAllowed("GET, PATCH, DELETE");
     }
@@ -234,7 +201,7 @@ export async function handleCapsules(
         operations,
         store,
         issuer: ctx.issuer,
-        capsule: installation,
+        capsule,
         ...(ctx.managedPublicBaseDomain
           ? { managedPublicBaseDomain: ctx.managedPublicBaseDomain }
           : {}),
@@ -283,9 +250,9 @@ export async function handleCapsules(
     if (leaf === "backups" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       const backup = await operations.backups.createBackup({
-        workspaceId: installation.workspaceId,
-        capsuleId: installation.id,
-        environment: installation.environment,
+        workspaceId: capsule.workspaceId,
+        capsuleId: capsule.id,
+        environment: capsule.environment,
       });
       return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
     }
@@ -295,13 +262,22 @@ export async function handleCapsules(
         summary: await operations.getCapsuleUsageSummary(capsuleId),
       });
     }
-    if (leaf === "deployments" && segments.length === 3) {
+    if (leaf === "state-versions" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await listCapsuleDeployments(operations, capsuleId, url);
+      return await listCapsuleStateVersions(operations, capsuleId, url);
+    }
+    if (leaf === "outputs" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return await getCapsuleOutput(operations, capsule);
     }
     if (leaf === "dependencies" && segments.length === 3) {
       if (method === "GET") {
-        return json(await operations.dependencies.listForCapsule(capsuleId));
+        const dependencies =
+          await operations.dependencies.listForCapsule(capsuleId);
+        return json({
+          asProducer: dependencies.asProducer.map(publicDependency),
+          asConsumer: dependencies.asConsumer.map(publicDependency),
+        });
       }
       if (method !== "POST") return methodNotAllowed("GET, POST");
       return await createDependency(
@@ -312,16 +288,12 @@ export async function handleCapsules(
         capsuleId,
       );
     }
-    if (leaf === "provider-connections" && segments.length === 3) {
+    if (leaf === "provider-bindings" && segments.length === 3) {
       if (method === "GET") {
-        return await getCapsuleProviderConnectionSet(operations, installation);
+        return await getCapsuleProviderBindingSet(operations, capsule);
       }
       if (method === "PUT") {
-        return await putCapsuleProviderConnectionSet(
-          request,
-          operations,
-          installation,
-        );
+        return await putCapsuleProviderBindingSet(request, operations, capsule);
       }
       return methodNotAllowed("GET, PUT");
     }
@@ -329,39 +301,88 @@ export async function handleCapsules(
   return undefined;
 }
 
-const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<Capsule["status"]> =
-  new Set(["active", "stale", "error"]);
+const API_PATCHABLE_CAPSULE_STATUSES: ReadonlySet<Capsule["status"]> = new Set([
+  "active",
+  "stale",
+  "error",
+]);
 
 /**
- * Lists an Capsule's Deployment ledger for the dashboard session. The
- * caller has already resolved the Capsule and space-permission gated on its
- * Workspace (see dispatch); each row is projected to drop the raw Output
- * pointer and carries only the allowlist-projected `outputsPublic`.
+ * Lists a Capsule's StateVersion ledger for the dashboard session. The caller
+ * has already resolved the Capsule and Workspace-permission gated it; storage
+ * coordinates and digests stay on the internal seam.
  */
-async function listCapsuleDeployments(
+async function listCapsuleStateVersions(
   operations: ControlPlaneOperations,
   capsuleId: string,
   url: URL,
 ): Promise<Response> {
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
-  const { deployments, nextCursor } = await operations.listDeployments(
+  const { stateVersions, nextCursor } = await operations.listStateVersions(
     capsuleId,
     page.params,
   );
   return json({
-    deployments: deployments.map(publicDeployment),
+    stateVersions: stateVersions.map(publicStateVersion),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   });
+}
+
+/**
+ * Follows the already-authorized Capsule's internal current Output cursor.
+ * A missing cursor is the normal pre-apply state. A dangling or mismatched
+ * cursor is ledger corruption and fails closed instead of returning unrelated
+ * Workspace data.
+ */
+async function getCapsuleOutput(
+  operations: ControlPlaneOperations,
+  capsule: Capsule,
+): Promise<Response> {
+  const outputId = capsule.currentOutputId;
+  if (!outputId) {
+    return json({ output: null } satisfies OutputResponse);
+  }
+  const output = await operations.getOutput(outputId);
+  if (!isCurrentOutputForCapsule(output, capsule, outputId)) {
+    return errorJson(
+      "failed_precondition",
+      "Capsule current Output is inconsistent.",
+      409,
+      undefined,
+      {},
+      { reason: CURRENT_OUTPUT_INCONSISTENT_REASON },
+    );
+  }
+  return json({ output: publicOutput(output) } satisfies OutputResponse);
+}
+
+function isCurrentOutputForCapsule(
+  output: Output | undefined,
+  capsule: Capsule,
+  outputId: string,
+): output is Output {
+  return Boolean(
+    output &&
+    output.id === outputId &&
+    output.workspaceId === capsule.workspaceId &&
+    output.capsuleId === capsule.id &&
+    output.stateGeneration === capsule.currentStateGeneration,
+  );
+}
+
+function publicOutput(output: Output): PublicOutput {
+  const { rawArtifactRef: _rawArtifactRef, ...publicRecord } = output;
+  return publicRecord;
 }
 
 async function getCapsule(
   operations: ControlPlaneOperations,
   capsuleId: string,
 ): Promise<Response> {
-  const installation = await operations.installations.getCapsule(capsuleId);
+  const capsule = await operations.capsules.getCapsule(capsuleId);
   return json({
-    capsule: publicCapsule(installation),
+    capsule: publicCapsule(capsule),
   });
 }
 
@@ -382,217 +403,105 @@ async function patchCapsule(
       400,
     );
   }
-  if (status && !API_PATCHABLE_INSTALLATION_STATUSES.has(status)) {
+  if (status && !API_PATCHABLE_CAPSULE_STATUSES.has(status)) {
     return errorJson(
       "invalid_request",
       "status may only be patched to active, stale, or error; destroy states must use the destroy flow",
       400,
     );
   }
-  let installation: Capsule | undefined;
+  let capsule: Capsule | undefined;
   if (autoUpdate !== undefined) {
-    installation = await operations.installations.setCapsuleAutoUpdate(
+    capsule = await operations.capsules.setCapsuleAutoUpdate(
       capsuleId,
       autoUpdate,
     );
   }
   if (status) {
-    installation = await operations.installations.patchCapsuleStatus(
-      capsuleId,
-      status,
-    );
+    capsule = await operations.capsules.patchCapsuleStatus(capsuleId, status);
   }
-  return json({ capsule: publicCapsule(installation!) });
+  return json({ capsule: publicCapsule(capsule!) });
 }
 
 async function deleteCapsule(
   operations: ControlPlaneOperations,
-  store: AccountsStore,
-  installation: Capsule,
+  capsule: Capsule,
   capsuleId: string,
 ): Promise<Response> {
-  if (installation.status === "destroyed") {
-    let projectionStatus: AppCapsuleStatus | undefined;
-    const projection = await store.findAppCapsule(capsuleId);
-    if (projection) {
-      await saveProjectionStatusChange({
-        store,
-        installation: projection,
-        requestedStatus: "exported",
-        reason: "delete requested for an already deleted Capsule",
-      });
-      projectionStatus =
-        (await store.findAppCapsule(capsuleId))?.status ?? "exported";
-    }
+  if (capsule.status === "destroyed") {
     return jsonStatus(
       {
-        capsule: publicCapsule(installation),
+        capsule: publicCapsule(capsule),
         alreadyDeleted: true,
-        ...(projectionStatus ? { projectionStatus } : {}),
       },
       200,
     );
   }
-  if (!capsuleHasAppliedState(installation)) {
+  if (!capsuleHasAppliedState(capsule)) {
     return await abandonUnappliedCapsule({
       operations,
-      store,
-      installation,
+      capsule,
       reason: "delete requested before first successful apply",
     });
   }
-  try {
-    const response = await operations.createCapsuleDestroyPlan(capsuleId);
-    return jsonStatus(
-      await publicPlanActionResponse(operations, response),
-      202,
-    );
-  } catch (error) {
-    const abandoned = await maybeAbandonUnappliedCapsule({
-      error,
-      operations,
-      store,
-      installation,
-    });
-    if (abandoned) return abandoned;
-    throw error;
-  }
-}
-
-async function maybeAbandonUnappliedCapsule(input: {
-  readonly error: unknown;
-  readonly operations: ControlPlaneOperations;
-  readonly store: AccountsStore;
-  readonly installation: Capsule;
-}): Promise<Response | undefined> {
-  if (
-    input.installation.currentDeploymentId ||
-    input.installation.currentStateGeneration > 0
-  ) {
-    return undefined;
-  }
-  const reason = unappliedCapsuleAbandonReason(input.error);
-  if (!reason) return undefined;
-  return await abandonUnappliedCapsule({
-    operations: input.operations,
-    store: input.store,
-    installation: input.installation,
-    reason,
-  });
+  const response = await operations.createCapsuleDestroyPlan(capsuleId);
+  return jsonStatus(await publicPlanActionResponse(operations, response), 202);
 }
 
 function capsuleHasAppliedState(capsule: Capsule): boolean {
   return Boolean(
-    capsule.currentDeploymentId ||
-      capsule.currentStateVersionId ||
-      capsule.currentStateGeneration > 0,
+    capsule.currentStateVersionId || capsule.currentStateGeneration > 0,
   );
 }
 
 async function abandonUnappliedCapsule(input: {
   readonly operations: ControlPlaneOperations;
-  readonly store: AccountsStore;
-  readonly installation: Capsule;
+  readonly capsule: Capsule;
   readonly reason: string;
 }): Promise<Response> {
-  const projection = await input.store.findAppCapsule(input.installation.id);
-  const installation =
-    input.operations.installations.abandonUnappliedCapsule !== undefined
-      ? await input.operations.installations.abandonUnappliedCapsule(
-          input.installation.id,
+  const capsule =
+    input.operations.capsules.abandonUnappliedCapsule !== undefined
+      ? await input.operations.capsules.abandonUnappliedCapsule(
+          input.capsule.id,
           input.reason,
         )
-      : await input.operations.installations.patchCapsuleStatus(
-          input.installation.id,
+      : await input.operations.capsules.patchCapsuleStatus(
+          input.capsule.id,
           "destroyed",
         );
-  let projectionStatus: AppCapsuleStatus | undefined;
-  if (projection) {
-    await saveProjectionStatusChange({
-      store: input.store,
-      installation: projection,
-      requestedStatus: "exported",
-      reason: input.reason,
-    });
-    projectionStatus =
-      (await input.store.findAppCapsule(input.installation.id))?.status ??
-      "exported";
-  }
   return jsonStatus(
     {
-      capsule: publicCapsule(installation),
+      capsule: publicCapsule(capsule),
       abandoned: true,
-      ...(projectionStatus ? { projectionStatus } : {}),
     },
     202,
   );
 }
 
-function unappliedCapsuleAbandonReason(error: unknown): string | undefined {
-  if (isUploadOriginSnapshotMissingError(error)) {
-    return "delete requested before first upload-origin apply";
-  }
-  if (isProviderConnectionNotReadyForDestroyError(error)) {
-    return "delete requested before first apply while provider connection is not ready";
-  }
-  return undefined;
-}
-
-function isUploadOriginSnapshotMissingError(error: unknown): boolean {
-  if (controllerErrorCode(error) !== "failed_precondition") return false;
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    (message.includes("is upload-origin") ||
-      message.includes("has no git Source")) &&
-    (message.includes("pinned upload SourceSnapshot") ||
-      message.includes("pinned upload/artifact SourceSnapshot"))
-  );
-}
-
-function isProviderConnectionNotReadyForDestroyError(error: unknown): boolean {
-  const code = controllerErrorCode(error);
-  if (code !== "failed_precondition" && code !== "not_found") return false;
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    (/\bProvider Env\b/.test(message) &&
-      /\bstatus\b/.test(message) &&
-      /\bis not ready\b/.test(message)) ||
-    (/\bProvider Connection\b/u.test(message) &&
-      /\bnot found\b/u.test(message)) ||
-    (/credential_mint_failed:/u.test(message) &&
-      /\bconnection\b/u.test(message) &&
-      /\bpending\b/u.test(message)) ||
-    (/\bconnection\b/u.test(message) &&
-      /\bis pending\b/u.test(message) &&
-      /\bnot verified\b/u.test(message))
-  );
-}
-
-async function getCapsuleProviderConnectionSet(
+async function getCapsuleProviderBindingSet(
   operations: ControlPlaneOperations,
-  installation: Capsule,
+  capsule: Capsule,
 ): Promise<Response> {
-  if (installation.status === "destroyed") {
-    return json({ providerConnectionSet: null });
+  if (capsule.status === "destroyed") {
+    return json({ providerBindingSet: null });
   }
-  const profile =
-    await operations.installations.getCapsuleProviderEnvBindingSetByCapsule(
-      installation.id,
-      installation.environment,
-    );
+  const profile = await operations.capsules.getProviderBindingSetByCapsule(
+    capsule.id,
+    capsule.environment,
+  );
   return json({
-    providerConnectionSet: profile
-      ? await publicCapsuleProviderConnectionSet(profile)
+    providerBindingSet: profile
+      ? await publicProviderBindingSet(profile)
       : null,
   });
 }
 
-async function putCapsuleProviderConnectionSet(
+async function putCapsuleProviderBindingSet(
   request: Request,
   operations: ControlPlaneOperations,
-  installation: Capsule,
+  capsule: Capsule,
 ): Promise<Response> {
-  if (installation.status === "destroyed") {
+  if (capsule.status === "destroyed") {
     return errorJson(
       "invalid_request",
       "deleted Capsules cannot update provider connections",
@@ -601,52 +510,46 @@ async function putCapsuleProviderConnectionSet(
   }
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const parsed = parseCapsuleProviderConnectionBindings(body.connections);
+  const parsed = parseProviderBindings(body.bindings);
   if (!parsed.ok) {
     return errorJson("invalid_request", parsed.message, 400);
   }
-  const resolved = await resolveProviderConnectionBindings(
+  const resolved = await resolveProviderBindings(
     operations,
-    installation.workspaceId,
+    capsule.workspaceId,
     parsed.bindings,
   );
   if (!resolved.ok) {
     return errorJson("invalid_request", resolved.message, 400);
   }
-  const existing =
-    await operations.installations.getCapsuleProviderEnvBindingSetByCapsule(
-      installation.id,
-      installation.environment,
-    );
+  const existing = await operations.capsules.getProviderBindingSetByCapsule(
+    capsule.id,
+    capsule.environment,
+  );
   const now = new Date().toISOString();
-  const profile =
-    await operations.installations.putCapsuleProviderEnvBindingSet({
-      id:
-        existing?.id ??
-        `dpf_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
-      workspaceId: installation.workspaceId,
-      spaceId: installation.workspaceId,
-      capsuleId: installation.id,
-      installationId: installation.id,
-      environment: installation.environment,
-      bindings: resolved.bindings,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    });
+  const profile = await operations.capsules.putProviderBindingSet({
+    id:
+      existing?.id ??
+      `dpf_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
+    bindings: resolved.bindings,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  });
   return json({
-    providerConnectionSet: await publicCapsuleProviderConnectionSet(profile),
+    providerBindingSet: await publicProviderBindingSet(profile),
   });
 }
 
-function publicCapsuleProviderConnectionSet(
-  profile: CapsuleProviderEnvBindingSet,
-): CapsuleProviderConnectionSet {
+function publicProviderBindingSet(
+  profile: ProviderBindingSet,
+): ProviderBindingSet {
   return {
     id: profile.id,
     workspaceId: profile.workspaceId,
-    spaceId: profile.workspaceId,
     capsuleId: profile.capsuleId,
-    installationId: profile.capsuleId,
     environment: profile.environment,
     bindings: profile.bindings.map((binding) => ({
       provider: binding.provider,
@@ -676,7 +579,7 @@ async function createDependency(
   }
   // The consumer is the path Capsule; resolve its Workspace so the edge is
   // created in the right Workspace (mirrors the §30 dependency-create handler).
-  const consumer = await operations.installations.getCapsule(consumerCapsuleId);
+  const consumer = await operations.capsules.getCapsule(consumerCapsuleId);
   const consumerAuth = await requireWorkspaceAccess({
     operations,
     store,
@@ -684,7 +587,7 @@ async function createDependency(
     subject: sessionSubject,
   });
   if (!consumerAuth.ok) return consumerAuth.response;
-  const producer = await operations.installations.getCapsule(producerCapsuleId);
+  const producer = await operations.capsules.getCapsule(producerCapsuleId);
   const producerAuth = await requireWorkspaceAccess({
     operations,
     store,
@@ -698,7 +601,7 @@ async function createDependency(
     consumerCapsuleId,
     mode: dependencyModeValue(body.mode) ?? "variable_injection",
     outputs: isOutputsMapping(body.outputs) ? body.outputs : {},
-    visibility: dependencyVisibilityValue(body.visibility) ?? "space",
+    visibility: dependencyVisibilityValue(body.visibility) ?? "workspace",
   });
-  return jsonStatus({ dependency }, 201);
+  return jsonStatus({ dependency: publicDependency(dependency) }, 201);
 }

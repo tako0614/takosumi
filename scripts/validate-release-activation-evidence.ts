@@ -6,7 +6,7 @@ export const RELEASE_ACTIVATION_EVIDENCE_KIND =
   "takosumi.release-activation-evidence@v1" as const;
 
 const RELEASE_ACTIVATION_WEBHOOK_KIND =
-  "takosumi.operator.release-activation@v1" as const;
+  "takosumi.operator.release-activation@v2" as const;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const GIT_REF_PATTERN = /^git\+[^#]+#[^#]+$/;
 const GIT_COMMIT_PIN_PATTERN = /@[0-9a-f]{40,64}$/i;
@@ -57,7 +57,12 @@ export interface SuccessfulActivationEvidence extends BaseEvidence {
   readonly stateGeneration: number;
   readonly materializedResourceKind: string;
   readonly activationStatus: "succeeded";
+  /** Live browser observation only; never a deploy/runtime authority. */
   readonly launchUrl: string;
+  readonly launchUrlSource: "resolved_interface";
+  readonly launchInterfaceId: string;
+  readonly launchInterfaceBindingId: string;
+  readonly launchInterfaceResolvedRevision: number;
   readonly healthUrl: string;
   readonly healthStatus: 200;
   readonly nonSensitiveOutputKeys: readonly string[];
@@ -121,7 +126,7 @@ export function releaseActivationEvidenceTemplate(): ReleaseActivationEvidenceMa
         evidenceDigest: "sha256:<64-lowercase-hex>",
         live: true,
         summary:
-          "A post-apply release activator materialized the app and passed launch and health checks without receiving provider credentials.",
+          "A post-apply release activator materialized the app, then an authorized resolved Interface supplied the browser launch observation and the health check passed without exposing provider credentials.",
         platformUrl: "https://app.takosumi.com",
         webhookPayloadKind: RELEASE_ACTIVATION_WEBHOOK_KIND,
         planRunId: "<plan-run-id>",
@@ -140,9 +145,13 @@ export function releaseActivationEvidenceTemplate(): ReleaseActivationEvidenceMa
         materializedResourceKind: "<materialized-resource-kind>",
         activationStatus: "succeeded",
         launchUrl: "https://<app-host>/",
+        launchUrlSource: "resolved_interface",
+        launchInterfaceId: "<interface-id>",
+        launchInterfaceBindingId: "<interface-binding-id>",
+        launchInterfaceResolvedRevision: 1,
         healthUrl: "https://<app-host>/healthz",
         healthStatus: 200,
-        nonSensitiveOutputKeys: ["public_url"],
+        nonSensitiveOutputKeys: ["<explicit-output-name>"],
       },
       failureSurfacing: {
         evidenceRef: `${evidenceRefBase}#evidence/release-activation-failure-surfacing.md`,
@@ -394,12 +403,20 @@ function readSuccessfulActivation(
     throw new Error("successfulActivation.stateGeneration must be positive");
   }
   if (row.activationStatus !== "succeeded") {
-    throw new Error(
-      "successfulActivation.activationStatus must be succeeded",
-    );
+    throw new Error("successfulActivation.activationStatus must be succeeded");
   }
   if (!httpsUrl(row.launchUrl)) {
     throw new Error("successfulActivation.launchUrl must be https");
+  }
+  if (row.launchUrlSource !== "resolved_interface") {
+    throw new Error(
+      "successfulActivation.launchUrlSource must be resolved_interface",
+    );
+  }
+  if (!positiveInteger(row.launchInterfaceResolvedRevision)) {
+    throw new Error(
+      "successfulActivation.launchInterfaceResolvedRevision must be positive",
+    );
   }
   if (!httpsUrl(row.healthUrl)) {
     throw new Error("successfulActivation.healthUrl must be https");
@@ -440,6 +457,16 @@ function readSuccessfulActivation(
     ),
     activationStatus: "succeeded",
     launchUrl: row.launchUrl,
+    launchUrlSource: "resolved_interface",
+    launchInterfaceId: nonEmpty(
+      row.launchInterfaceId,
+      "successfulActivation.launchInterfaceId",
+    ),
+    launchInterfaceBindingId: nonEmpty(
+      row.launchInterfaceBindingId,
+      "successfulActivation.launchInterfaceBindingId",
+    ),
+    launchInterfaceResolvedRevision: row.launchInterfaceResolvedRevision,
     healthUrl: row.healthUrl,
     healthStatus: 200,
     nonSensitiveOutputKeys,
@@ -509,10 +536,7 @@ function readLedgerIndependence(value: unknown): LedgerIndependenceEvidence {
       row.stateVersionId,
       "ledgerIndependence.stateVersionId",
     ),
-    outputId: nonEmpty(
-      row.outputId,
-      "ledgerIndependence.outputId",
-    ),
+    outputId: nonEmpty(row.outputId, "ledgerIndependence.outputId"),
     activationRecordId: nonEmpty(
       row.activationRecordId,
       "ledgerIndependence.activationRecordId",
@@ -660,11 +684,7 @@ function nonEmptyString(value: unknown): value is string {
 }
 
 function positiveInteger(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value > 0
-  );
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 function validIsoDate(value: unknown): value is string {

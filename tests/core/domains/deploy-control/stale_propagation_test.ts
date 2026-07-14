@@ -1,9 +1,9 @@
 /**
  * §24 stale-propagation integration tests.
  *
- * After a producer apply records an OutputSnapshot whose projected outputs
+ * After a producer apply records an Output whose projected outputs
  * CHANGED versus the producer's previous snapshot, every transitive downstream
- * consumer in the Space that is currently `active` is marked `stale`. An
+ * consumer in the Workspace that is currently `active` is marked `stale`. An
  * unchanged output marks nothing; a not-yet-applied (`pending`) consumer is
  * left untouched (stale is only meaningful for an already-deployed consumer).
  */
@@ -12,19 +12,23 @@ import { expect, test } from "bun:test";
 import type { OpenTofuRunner } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   applyExpectedGuardFromPlanRun,
-  OpenTofuDeploymentController,
+  OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { DependenciesService } from "../../../../core/domains/dependencies/mod.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
-  seedInstallationModel,
+  seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
-import type { ActivityRecorder, RecordActivityInput } from "../../../../core/domains/activity/mod.ts";
+import type {
+  ActivityRecorder,
+  RecordActivityInput,
+} from "../../../../core/domains/activity/mod.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -42,7 +46,7 @@ function nowSeq(start: number): () => number {
 }
 
 function runnerEmitting(
-  valueByInstallation: ReadonlyMap<string, string>,
+  valueByCapsule: ReadonlyMap<string, string>,
 ): OpenTofuRunner {
   return {
     plan: () =>
@@ -64,7 +68,7 @@ function runnerEmitting(
           base_domain: {
             sensitive: false,
             value:
-              valueByInstallation.get(job.planRun.installationId ?? "") ??
+              valueByCapsule.get(job.planRun.capsuleId ?? "") ??
               "x.example.com",
           },
         } as never,
@@ -92,7 +96,7 @@ function recordingActivity(): {
 }
 
 async function edge(
-  store: OpenTofuDeploymentStore,
+  store: OpenTofuControlStore,
   producer: string,
   consumer: string,
 ): Promise<void> {
@@ -105,11 +109,11 @@ async function edge(
     now: () => "2026-06-06T00:00:00.000Z",
   });
   await deps.createDependency({
-    spaceId: "space_test",
-    producerInstallationId: producer,
-    consumerInstallationId: consumer,
+    workspaceId: "ws_test001",
+    producerCapsuleId: producer,
+    consumerCapsuleId: consumer,
     mode: "variable_injection",
-    visibility: "space",
+    visibility: "workspace",
     outputs: {
       base_domain: { from: "base_domain", to: "base_domain", required: true },
     },
@@ -117,13 +121,14 @@ async function edge(
 }
 
 test("a changed producer output marks an active consumer stale", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const producer = await seedInstallationModel(store, {
+  const store = new InMemoryOpenTofuControlStore();
+  const producer = await seedCapsuleModel(store, {
     environment: "preview",
+    workspaceId: "ws_test001",
     sourceId: "src_p",
     snapshotId: "snap_p",
     installConfigId: "cfg_p",
-    installationId: "inst_p",
+    capsuleId: "cap_producer1",
     name: "p",
     installConfig: {
       outputAllowlist: {
@@ -131,98 +136,102 @@ test("a changed producer output marks an active consumer stale", async () => {
       },
     },
   });
-  await seedProviderConnections(store, producer.installation);
-  const consumer = await seedInstallationModel(store, {
+  await seedProviderConnections(store, producer.capsule);
+  const consumer = await seedCapsuleModel(store, {
     environment: "preview",
+    workspaceId: "ws_test001",
     sourceId: "src_c",
     snapshotId: "snap_c",
     installConfigId: "cfg_c",
-    installationId: "inst_c",
+    capsuleId: "cap_consumer1",
     name: "c",
   });
-  await seedProviderConnections(store, consumer.installation);
-  await edge(store, "inst_p", "inst_c");
+  await seedProviderConnections(store, consumer.capsule);
+  await edge(store, "cap_producer1", "cap_consumer1");
   const { recorder, events } = recordingActivity();
 
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
     store,
     runner: runnerEmitting(
       new Map([
-        ["inst_p", "v1"],
-        ["inst_c", "c1"],
+        ["cap_producer1", "v1"],
+        ["cap_consumer1", "c1"],
       ]),
     ),
     vault: fakeProviderVault() as never,
     activity: recorder,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: nowSeq(1),
     newId: ids(),
   });
 
   // Producer + consumer both apply -> both active.
   const applyOf = async (id: string) => {
-    const plan = await controller.createInstallationPlan(id);
+    const plan = await controller.createCapsulePlan(id);
     await controller.createApplyRun({
       planRunId: plan.planRun.id,
       expected: applyExpectedGuardFromPlanRun(plan.planRun),
     });
   };
-  await applyOf("inst_p");
-  await applyOf("inst_c");
-  expect(
-    (await controller.getInstallation("inst_c")).installation.status,
-  ).toEqual("active");
+  await applyOf("cap_producer1");
+  await applyOf("cap_consumer1");
+  expect((await controller.getCapsule("cap_consumer1")).capsule.status).toEqual(
+    "active",
+  );
 
   // Producer re-applies with a CHANGED output -> consumer goes stale.
-  const changed = new OpenTofuDeploymentController({
+  const changed = new OpenTofuController({
     store,
     runner: runnerEmitting(
       new Map([
-        ["inst_p", "v2"],
-        ["inst_c", "c1"],
+        ["cap_producer1", "v2"],
+        ["cap_consumer1", "c1"],
       ]),
     ),
     vault: fakeProviderVault() as never,
     activity: recorder,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: nowSeq(1000),
     newId: (() => {
       let n = 1;
       return (p: string) => `${p}_r${String(n++).padStart(6, "0")}`;
     })(),
   });
-  const replan = await changed.createInstallationPlan("inst_p");
+  const replan = await changed.createCapsulePlan("cap_producer1");
   await changed.createApplyRun({
     planRunId: replan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(replan.planRun),
   });
-  expect((await changed.getInstallation("inst_c")).installation.status).toEqual(
+  expect((await changed.getCapsule("cap_consumer1")).capsule.status).toEqual(
     "stale",
   );
   const staleEvent = events.find(
     (event) =>
-      event.action === "installation.stale" && event.targetId === "inst_c",
+      event.action === "capsule.stale" && event.targetId === "cap_consumer1",
   );
   expect(staleEvent?.metadata).toMatchObject({
-    producerInstallationId: "inst_p",
-    producerInstallationName: "p",
+    producerCapsuleId: "cap_producer1",
+    producerCapsuleName: "p",
     changedOutputs: ["base_domain"],
     directChangedOutputs: ["base_domain"],
     reasons: ["p.base_domain changed"],
   });
   expect(JSON.stringify(staleEvent?.metadata)).not.toContain("v2");
   // The producer itself stays active.
-  expect((await changed.getInstallation("inst_p")).installation.status).toEqual(
+  expect((await changed.getCapsule("cap_producer1")).capsule.status).toEqual(
     "active",
   );
 });
 
 test("a not-yet-applied (pending) consumer is left untouched by a producer change", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const producer = await seedInstallationModel(store, {
+  const store = new InMemoryOpenTofuControlStore();
+  const producer = await seedCapsuleModel(store, {
     environment: "preview",
+    workspaceId: "ws_test001",
     sourceId: "src_p",
     snapshotId: "snap_p",
     installConfigId: "cfg_p",
-    installationId: "inst_p",
+    capsuleId: "cap_producer1",
     name: "p",
     installConfig: {
       outputAllowlist: {
@@ -230,52 +239,55 @@ test("a not-yet-applied (pending) consumer is left untouched by a producer chang
       },
     },
   });
-  await seedProviderConnections(store, producer.installation);
+  await seedProviderConnections(store, producer.capsule);
   // The consumer is seeded `pending` (fixture default) and never applied.
-  const consumer = await seedInstallationModel(store, {
+  const consumer = await seedCapsuleModel(store, {
     environment: "preview",
+    workspaceId: "ws_test001",
     sourceId: "src_c",
     snapshotId: "snap_c",
     installConfigId: "cfg_c",
-    installationId: "inst_c",
+    capsuleId: "cap_consumer1",
     name: "c",
   });
-  await seedProviderConnections(store, consumer.installation);
-  await edge(store, "inst_p", "inst_c");
+  await seedProviderConnections(store, consumer.capsule);
+  await edge(store, "cap_producer1", "cap_consumer1");
 
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
     store,
-    runner: runnerEmitting(new Map([["inst_p", "v1"]])),
+    runner: runnerEmitting(new Map([["cap_producer1", "v1"]])),
     vault: fakeProviderVault() as never,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: nowSeq(1),
     newId: ids(),
   });
   const applyOf = async (id: string) => {
-    const plan = await controller.createInstallationPlan(id);
+    const plan = await controller.createCapsulePlan(id);
     await controller.createApplyRun({
       planRunId: plan.planRun.id,
       expected: applyExpectedGuardFromPlanRun(plan.planRun),
     });
   };
-  await applyOf("inst_p"); // gen 1, snapshot v1
+  await applyOf("cap_producer1"); // gen 1, snapshot v1
 
-  const changed = new OpenTofuDeploymentController({
+  const changed = new OpenTofuController({
     store,
-    runner: runnerEmitting(new Map([["inst_p", "v2"]])),
+    runner: runnerEmitting(new Map([["cap_producer1", "v2"]])),
     vault: fakeProviderVault() as never,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: nowSeq(1000),
     newId: (() => {
       let n = 1;
       return (p: string) => `${p}_r${String(n++).padStart(6, "0")}`;
     })(),
   });
-  const replan = await changed.createInstallationPlan("inst_p");
+  const replan = await changed.createCapsulePlan("cap_producer1");
   await changed.createApplyRun({
     planRunId: replan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(replan.planRun),
   });
   // The consumer never reached `active`, so it is not flagged stale.
-  expect((await changed.getInstallation("inst_c")).installation.status).toEqual(
+  expect((await changed.getCapsule("cap_consumer1")).capsule.status).toEqual(
     "pending",
   );
 });

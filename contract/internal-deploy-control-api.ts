@@ -1,21 +1,18 @@
 /**
  * Internal deploy-control compatibility seam.
  *
- * The public Takosumi v1 product vocabulary is Run / StateVersion / Output (the
- * `Deployment` ledger is retired and kept read-only for audit). This file keeps
+ * The public Takosumi v1 product vocabulary is Run / StateVersion / Output. This file keeps
  * the in-process accounts-plane and operator CLI compatibility DTOs for internal
- * execution profiles, internal plan/apply records, Capsule reads, retired
- * Deployment reads, policy decisions, and selected non-sensitive OpenTofu output
- * projections.
+ * execution profiles, internal plan/apply records, Capsule reads,
+ * StateVersion/Output reads, policy decisions, and selected non-sensitive
+ * OpenTofu output projections.
  */
 
 import type { JsonValue } from "./types.ts";
 import type { PublicCapsule } from "./install-configs.ts";
-import type { Deployment } from "./deployments.ts";
+import type { StateVersion } from "./state-versions.ts";
 import type { ProviderResolution } from "./provider-resolution.ts";
-import type { DeployRequest } from "./deploy.ts";
-import type { CapsuleProviderEnvBindings } from "./connections.ts";
-import type { ProviderCredentialMintEvidence } from "./security.ts";
+import type { PlanResourceScope } from "./plan-scope.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 export type {
   CredentialRecipe,
@@ -45,22 +42,7 @@ export const CAPSULE_STATE_VERSIONS_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/capsules/${encodeURIComponent(id)}/state-versions`;
 export const CAPSULE_OUTPUTS_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/capsules/${encodeURIComponent(id)}/outputs`;
-export const INTERNAL_DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
-
-/**
- * Internal in-process upload-source deploy request. Internal callers provide
- * operator-policy runner profile and Provider Binding resolution after
- * authorization. Public callers must not send it.
- */
-export interface InternalDeployRequest extends Omit<
-  DeployRequest,
-  "providerConnections" | "runnerId"
-> {
-  readonly runnerProfileId?: string;
-  readonly providerEnvBindings?: CapsuleProviderEnvBindings;
-}
-
-export type OpenTofuModuleSourceKind = "git" | "local" | "prepared";
+export type OpenTofuModuleSourceKind = "git";
 
 export interface GitOpenTofuModuleSource {
   readonly kind: "git";
@@ -68,34 +50,37 @@ export interface GitOpenTofuModuleSource {
   readonly url: string;
   readonly ref?: string;
   readonly commit?: string;
-  /** Compatibility alias for the Capsule path inside the repository. */
+  /** Relative child-module path inside the checked-out Git repository. */
   readonly modulePath?: string;
 }
 
-export interface LocalOpenTofuModuleSource {
-  readonly kind: "local";
-  /** Service-local path for dev/operator-local profiles. */
-  readonly path: string;
-  readonly modulePath?: string;
-}
+/** Stack-flow execution identity. Capsule Sources are Git-only. */
+export type OpenTofuModuleSource = GitOpenTofuModuleSource;
 
-export interface PreparedOpenTofuModuleSource {
-  readonly kind: "prepared";
-  /** HTTPS URL for an operator-prepared source archive. */
-  readonly url: string;
-  /** Digest of the prepared source archive payload bytes. */
+/**
+ * Internal execution identity for an operator-supplied module. This is not a
+ * Capsule Source and is accepted only on the Resource Shape run seam.
+ */
+export interface OperatorOpenTofuModuleSource {
+  readonly kind: "operator_module";
   readonly digest: string;
-  readonly modulePath?: string;
 }
 
-export type OpenTofuModuleSource =
-  | GitOpenTofuModuleSource
-  | LocalOpenTofuModuleSource
-  | PreparedOpenTofuModuleSource;
+export type OpenTofuExecutionSource =
+  OpenTofuModuleSource | OperatorOpenTofuModuleSource;
 
 export type OpenTofuOperation = "create" | "update" | "destroy";
 
-export type RunnerSubstrate = "cloudflare-containers" | "local" | "external";
+/**
+ * Operator-selected runner substrate token.
+ *
+ * Core deliberately does not publish a closed list: a deployment may use a
+ * container service, a VM pool, Kubernetes Jobs, a local process, or an
+ * operator plugin unknown to this build. Discovery/capability evidence, not a
+ * brand-specific enum in the control-plane contract, decides whether the
+ * selected runner can execute a Run.
+ */
+export type RunnerSubstrate = string;
 
 export interface RunnerStateLockPolicy {
   readonly kind: "native" | "operator" | "none" | string;
@@ -108,17 +93,11 @@ export interface RunnerStateBackend {
   readonly lock?: RunnerStateLockPolicy;
 }
 
-export interface RunnerCredentialReference {
-  readonly provider: string;
-  readonly ref: string;
-  readonly required?: boolean;
-}
-
 export interface RunnerResourceLimits {
   readonly maxRunSeconds?: number;
-  /** Maximum prepared-source archive bytes fetched by the runner. */
+  /** Maximum immutable SourceSnapshot archive bytes accepted by the runner. */
   readonly maxSourceArchiveBytes?: number;
-  /** Maximum declared decompressed prepared-source bytes before extraction. */
+  /** Maximum decompressed SourceSnapshot bytes before extraction. */
   readonly maxSourceDecompressedBytes?: number;
   readonly cpu?: string;
   readonly memoryMb?: number;
@@ -136,17 +115,6 @@ export interface RunnerNetworkPolicy {
   readonly allowedHostPatterns?: readonly string[];
 }
 
-export interface RunnerSourcePolicy {
-  readonly allowLocalSource?: boolean;
-}
-
-export interface CloudflareContainerExecution {
-  readonly image: string;
-  readonly queueName?: string;
-  readonly durableObjectBinding?: string;
-  readonly workDir?: string;
-}
-
 export interface RunnerSecretExposurePolicy {
   readonly providerCredentials: "runner-only" | "operator-managed" | string;
   readonly tenantWorkerOperatorSecrets:
@@ -155,24 +123,59 @@ export interface RunnerSecretExposurePolicy {
   readonly blockSensitiveOutputs?: boolean;
 }
 
-/** Legacy DTO name for an internal execution profile on the `/internal/v1/runner-profiles` seam. */
+/**
+ * Open operator-defined executor token.
+ *
+ * The token is resolved only through the host-injected runner registry. Core
+ * attaches no substrate, provider, vendor, or edition semantics to its value.
+ */
+export type RunnerExecutorId = string;
+
+export type RunnerProfileLifecycleState = "candidate" | "active" | "reserved";
+
+export interface RunnerProfileLifecycle {
+  readonly state: RunnerProfileLifecycleState;
+  /** Human-readable operator reason; never interpreted as control data. */
+  readonly reason?: string;
+}
+
+export type RunnerProfileAvailabilityState = "available" | "unavailable";
+
+export interface RunnerProfileAvailability {
+  readonly state: RunnerProfileAvailabilityState;
+  /** Human-readable operator reason; never interpreted as control data. */
+  readonly reason?: string;
+}
+
+/** Operator execution profile on the internal `/internal/v1/runner-profiles` seam. */
 export interface RunnerProfile {
   readonly id: string;
   readonly name: string;
-  readonly substrate: RunnerSubstrate | string;
+  readonly substrate: RunnerSubstrate;
+  /** Exact key in the host-injected OpenTofu runner executor registry. */
+  readonly executorId: RunnerExecutorId;
+  /** Explicit operator lifecycle; labels never enable or reserve a profile. */
+  readonly lifecycle: RunnerProfileLifecycle;
+  /** Explicit execution availability; labels never report runtime readiness. */
+  readonly availability: RunnerProfileAvailability;
   readonly description?: string;
   readonly tofuVersion?: string;
   readonly stateBackend: RunnerStateBackend;
+  /** Generic execution capabilities implemented by this runner profile. */
+  readonly capabilities?: readonly string[];
   readonly allowedProviders: readonly string[];
   readonly deniedProviders?: readonly string[];
-  readonly credentialRefs?: readonly RunnerCredentialReference[];
-  readonly requireCredentialRefs?: boolean;
-  readonly sourcePolicy?: RunnerSourcePolicy;
+  /**
+   * Require every declared provider to resolve through an explicit
+   * ProviderBinding. The binding's CredentialRecipe manifest is the sole
+   * env/file authority; RunnerProfile carries no parallel credential refs.
+   */
+  readonly requireProviderBindings?: boolean;
   readonly resourceLimits?: RunnerResourceLimits;
   readonly networkPolicy?: RunnerNetworkPolicy;
-  readonly cloudflareContainer?: CloudflareContainerExecution;
   readonly secretExposurePolicy?: RunnerSecretExposurePolicy;
   readonly concurrency?: number;
+  /** Descriptive/search metadata only. It MUST NOT affect policy or execution. */
   readonly labels?: Readonly<Record<string, string>>;
   readonly createdAt: number;
 }
@@ -214,15 +217,9 @@ export interface DeployControlAuditEvent {
 export interface PlanRun {
   readonly id: string;
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
-  /** @deprecated Retired Deployment ledger pointer. */
-  readonly installationCurrentDeploymentId?: string;
   readonly capsuleCurrentStateVersionId?: string | null;
-  readonly source: OpenTofuModuleSource;
+  readonly source: OpenTofuExecutionSource;
   readonly sourceDigest: string;
   readonly operation: OpenTofuOperation;
   readonly runnerProfileId: string;
@@ -254,6 +251,18 @@ export interface PlanRun {
    */
   readonly autoApplyRequested?: boolean;
   /**
+   * Internal refresh-only execution evidence. The Run remains an ordinary
+   * plan/apply pair; the runner adds `tofu plan -refresh-only`, so applying the
+   * saved plan updates state and outputs without changing provider resources.
+   * Mutually exclusive with `driftCheck` and `operation: "destroy"`.
+   */
+  readonly refreshOnly?: true;
+  /**
+   * A reviewed config-driven Resource import. The saved plan may only contain
+   * one import and no native mutation actions; it still projects as plan/apply.
+   */
+  readonly resourceImport?: true;
+  /**
    * Value-free resource/action projection from the runner's plan JSON. This is
    * persisted for policy, billing, audit, and public review; raw resource
    * values stay only in the encrypted plan JSON artifact.
@@ -282,25 +291,15 @@ export interface PlanRun {
   /**
    * Set to the ApplyRun id once this PlanRun has been successfully applied.
    * Enforces apply-once: a succeeded PlanRun (especially a `create` plan, which
-   * otherwise allocates a fresh Capsule/Deployment on every apply) may be
+   * otherwise allocates duplicate resources on every apply) may be
    * applied only once. Cleared/unset means the plan has not yet been applied.
    */
   readonly appliedApplyRunId?: string;
   /**
-   * Resolved service-side module binding for a template-backed PlanRun. Records
-   * the built-in module id/version this plan targets and the plan-JSON policy
-   * outcome (allowlist verdict + destructive-confirmation requirement). Absent
-   * for template-less Capsule plans. Never carries input values (those live in
-   * the plan-run-inputs sidecar) — only the binding + policy verdict.
-   */
-  readonly templateBinding?: PlanRunTemplateBinding;
-  /**
    * Set once the plan completes and action policy evaluated the
    * runner's `planResourceChanges`: `true` when any change is a delete or a
    * replace (`actions` containing `"delete"`), which requires an explicit
-   * approval before apply. Independent of `templateBinding.requiresConfirmation`
-   * (the template destructive-confirmation gate, which additionally requires
-   * `confirmDestructive` at apply). Absent before the plan completes / for runs
+   * approval before apply. Absent before the plan completes / for runs
    * with no observed resource changes.
    */
   readonly requiresApproval?: boolean;
@@ -316,23 +315,12 @@ export interface PlanRun {
    * Digest of the resolved Provider Env bindings this plan was reviewed against
    * (plan→apply TOCTOU pin). Hashes each provider, optional alias, selected
    * Env id, materialization, and required env names. Pinned at plan completion
-   * for installation-context runs; the apply mint re-resolves the live bindings
+   * for Capsule-context runs; the apply mint re-resolves the live bindings
    * and asserts this digest still matches, failing closed when an Env binding
    * changed between plan and apply.
-   * Absent for runs with no installation context.
+   * Absent for runs with no Capsule context.
    */
-  readonly resolvedProviderEnvBindingsDigest?: string;
-  /**
-   * Internal generated-root credential delivery selected at plan creation.
-   *
-   * Normal OpenTofu Stack flow uses `generated_root_variable`, keeping provider
-   * credentials as root-only sensitive variables. Resource Shape managed
-   * compatibility targets may use `provider_env` when the generated root renders
-   * only a provider `base_url` and the selected ProviderConnection should expose
-   * the provider's normal env names to the runner. This is non-secret metadata;
-   * secret values still come only from the vault.
-   */
-  readonly providerCredentialDelivery?: ProviderCredentialMintEvidence["delivery"];
+  readonly resolvedProviderBindingsDigest?: string;
   /**
    * Resolved SourceSnapshot this plan was created against. Set for runs created
    * through the Capsule plan/destroy-plan path. The apply consumer
@@ -349,14 +337,14 @@ export interface PlanRun {
    * material.
    */
   readonly capsuleContext?: PlanRunCapsuleContext;
-  /** @deprecated Use capsuleContext. */
-  readonly installationContext?: PlanRunCapsuleContext;
+  /** First-class Resource Shape subject; mutually exclusive with Capsule context. */
+  readonly resourceContext?: PlanRunResourceContext;
   /**
-   * Pinned DependencySnapshot id for an installation-driven plan whose
+   * Pinned DependencySnapshot id for a Capsule plan whose
    * consumer Capsule declares Dependencies. Set at plan creation by the
-   * installation plan path; the apply consumer re-reads the snapshot to verify
+   * Capsule plan path; the apply consumer re-reads the snapshot to verify
    * the producer state generations / pinned values before applying (invariant 9)
-   * and the successful Deployment carries it forward. Absent for plans whose
+   * and the successful Run carries it forward. Absent for plans whose
    * consumer has no dependencies (or for the raw `/internal/v1/plan-runs`
    * path). Projected
    * onto the public Run `dependencySnapshotId`.
@@ -376,10 +364,10 @@ export interface PlanRun {
    * detects whether the live state has drifted from the recorded configuration.
    * A drift-check plan NEVER parks `waiting_approval` and can NEVER be applied
    * (`createApplyRun` rejects it with `failed_precondition`); on completion with
-   * a non-empty change summary the controller emits an
-   * `installation.drift_detected` Activity event with counts plus provider /
-   * resource type / action aggregates and public-safe remediation hints only (no
-   * resource addresses, values, or scope ids; no installation status change; the
+   * a non-empty change summary the controller emits a subject-specific drift
+   * Activity event with counts plus provider / resource
+   * type / action aggregates and public-safe remediation hints only (no
+   * resource addresses, values, or scope ids; no subject status mutation; the
    * public model has no `drifted` status). The Run projection maps a drift-check
    * PlanRun to `type: "drift_check"`. Absent for every other plan.
    */
@@ -390,39 +378,29 @@ export interface PlanRun {
  * Capsule context recorded on a PlanRun. Locates the run's Capsule +
  * environment within its Workspace so the queue consumer can build the
  * `stateScope` dispatch field (`{ workspaceId, capsuleId, environment,
- * generation }`) the DO consumes to persist encrypted state at the R2_STATE
- * keys.
+ * generation }`) the runner consumes to persist encrypted state at canonical
+ * state-store keys.
  */
 export interface PlanRunCapsuleContext {
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
   readonly capsuleId: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
   readonly environment: string;
 }
 
-export interface PlanRunTemplateBinding {
-  readonly templateId: string;
-  readonly templateVersion: string;
-  /**
-   * Set once the runner returns `planResourceChanges` and the template plan-JSON
-   * policy has been evaluated: `true` when a delete/replace change requires an
-   * explicit apply-time confirmation (`requireExplicitConfirmation`). Absent
-   * before the plan completes.
-   */
-  readonly requiresConfirmation?: boolean;
+export interface PlanRunResourceContext {
+  readonly workspaceId: string;
+  readonly resourceId: string;
+  readonly environment: string;
+  /** Explicit Target-selected Provider Connection mapping. */
+  readonly providerBinding: {
+    readonly provider: string;
+    readonly providerSource: string;
+    readonly alias?: string;
+    readonly connectionId?: string;
+  };
 }
 
-/**
- * Internal compatibility projection returned by the private `/internal/v1`
- * plan-run seam. Ledger-only authoring conveniences such as `templateBinding`
- * stay
- * inside the service; the public contract exposes unified `Run` records
- * instead.
- */
-export type PublicPlanRun = Omit<PlanRun, "templateBinding">;
+export type PublicPlanRun = PlanRun;
 
 export interface PlanRunSummary {
   readonly add?: number;
@@ -441,6 +419,8 @@ export interface OpenTofuPlanArtifact {
 
 export interface RunDiagnostic {
   readonly severity: "info" | "warning" | "error";
+  /** Stable machine-readable classification; clients never parse prose. */
+  readonly code?: string;
   readonly message: string;
   readonly detail?: string;
 }
@@ -449,15 +429,7 @@ export interface ApplyRun {
   readonly id: string;
   readonly planRunId: string;
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
-  /** @deprecated Retired Deployment ledger pointer. */
-  readonly deploymentId?: string;
-  /** @deprecated Retired Deployment ledger pointer. */
-  readonly installationCurrentDeploymentId?: string;
   readonly stateVersionId?: string;
   readonly operation: OpenTofuOperation;
   readonly runnerProfileId: string;
@@ -466,7 +438,13 @@ export interface ApplyRun {
   readonly expected: ApplyExpectedGuard;
   readonly stateBackend: RunnerStateBackend;
   readonly stateLock: RunnerStateLockEvidence;
-  readonly outputs?: readonly DeploymentOutput[];
+  /** Canonical Output ledger row committed by this successful apply. */
+  readonly outputId?: string;
+  /**
+   * Resource-owned result. Public outputs and encrypted-state pointers are
+   * folded into the Resource record; no Capsule Output/StateVersion is created.
+   */
+  readonly resourceResult?: ResourceApplyRunResult;
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest?: string;
   readonly redactionProfileId?: string;
@@ -482,6 +460,15 @@ export interface ApplyRun {
    */
   readonly heartbeatAt?: number;
   readonly finishedAt?: number;
+}
+
+export interface ResourceApplyRunResult {
+  readonly resourceId: string;
+  readonly stateGeneration: number;
+  readonly stateRef: string;
+  readonly stateDigest?: string;
+  readonly rawOutputRef?: string;
+  readonly outputs: Readonly<Record<string, JsonValue>>;
 }
 
 export interface RunnerStateLockEvidence {
@@ -501,8 +488,6 @@ export interface RunApproval {
 export interface ApplyExpectedGuard {
   readonly planRunId: string;
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
   readonly currentStateVersionId?: string | null;
   readonly runnerProfileId: string;
   readonly sourceDigest: string;
@@ -514,61 +499,37 @@ export interface ApplyExpectedGuard {
   readonly providerLockDigest?: string;
   /**
    * Digest of the resolved Provider Env bindings the plan was reviewed against
-   * (plan→apply TOCTOU pin; see {@link PlanRun.resolvedProviderEnvBindingsDigest}).
+   * (plan→apply TOCTOU pin; see {@link PlanRun.resolvedProviderBindingsDigest}).
    * Carried on the guard so the structural plan/apply guard compare also covers
-   * an Env binding swap. Absent for runs with no installation context.
+   * a binding swap. Absent for runs with no Capsule context.
    */
-  readonly resolvedProviderEnvBindingsDigest?: string;
-  readonly providerCredentialDelivery?: ProviderCredentialMintEvidence["delivery"];
+  readonly resolvedProviderBindingsDigest?: string;
 }
 
-// Capsule / InstallConfig live in ./install-configs.ts and
-// Deployment / StateVersion in ./deployments.ts; this internal seam exports the
+// Capsule / InstallConfig live in ./install-configs.ts and StateVersion in
+// ./state-versions.ts; this internal seam exports the
 // DTO set consumed by accounts-plane and operator helper paths.
 export type {
-  CapsuleProviderEnvBindingSet,
+  ProviderBindingSet,
   InstallConfig,
+  InstallConfigLifecycleAction,
+  InstallConfigLifecycleCommandAction,
+  InstallConfigLifecycleExecutor,
+  InstallConfigLifecyclePhase,
   Capsule,
   CapsuleStatus,
-  InstallType,
   OutputAllowlistEntry,
   OutputValueType,
   PolicyConfig,
   SourceBuildCommand,
   SourceBuildConfig,
-  TrustLevel,
 } from "./install-configs.ts";
-export type {
-  Deployment,
-  DeploymentStatus,
-  StateVersion,
-} from "./deployments.ts";
-
-// Transient deprecated pre-rename names, still importable from this seam.
-/** @deprecated use `Capsule` / `CapsuleStatus` / `CapsuleProviderEnvBindingSet`. */
-export type {
-  Capsule as Installation,
-  CapsuleStatus as InstallationStatus,
-  CapsuleProviderEnvBindingSet as InstallationProviderEnvBindingSet,
+export {
+  CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
+  CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
 } from "./install-configs.ts";
-/** @deprecated use `StateVersion`. */
-export type { StateVersion as StateSnapshot } from "./deployments.ts";
-
-export type DeploymentOutputKind =
-  | "launch_url"
-  | "admin_url"
-  | "health_url"
-  | "docs_url"
-  | "service_url"
-  | string;
-
-export interface DeploymentOutput {
-  readonly name: string;
-  readonly kind: DeploymentOutputKind;
-  readonly value: JsonValue;
-  readonly sensitive: false;
-  readonly labels?: Readonly<Record<string, string>>;
-}
+export type { StateVersion } from "./state-versions.ts";
+export type { OutputResponse } from "./outputs.ts";
 
 export interface OpenTofuOutputValue {
   readonly sensitive?: boolean;
@@ -586,162 +547,73 @@ export interface ListRunnerProfilesResponse {
 
 export interface CreatePlanRunRequest {
   readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
-  readonly source: OpenTofuModuleSource;
+  readonly source: OpenTofuExecutionSource;
   readonly runnerProfileId?: string;
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
   readonly operation?: OpenTofuOperation;
   readonly variables?: Readonly<Record<string, JsonValue>>;
   readonly requiredProviders?: readonly string[];
-  /**
-   * Built-in first-party module binding path. When `templateId` is present the
-   * plan resolves to the same generated-root dispatch shape as any OpenTofu
-   * Capsule: bundled module files are carried as `generatedRoot.moduleFiles`
-   * and wired with the supplied `inputs`. Takosumi no longer treats the user
-   * source as an app build input; app release/build values must be ordinary
-   * OpenTofu variables. `requiredProviders` is derived from policy and must not
-   * be supplied explicitly alongside a template binding.
-   */
-  readonly templateId?: string;
-  readonly templateVersion?: string;
-  /**
-   * Typed input values for the template, validated against `template.inputs`.
-   * Literal scalars only (string / number / boolean); rendered into HCL by the
-   * Takosumi rootgen.
-   */
-  readonly inputs?: Readonly<Record<string, JsonValue>>;
-  /**
-   * Apply-time confirmation that the operator accepts the destructive plan
-   * (delete / replace) a template policy flagged with
-   * `destructiveChanges.requireExplicitConfirmation`. Carried on the ApplyRun
-   * request, not here; see {@link CreateApplyRunRequest.confirmDestructive}.
-   */
-}
-
-// ---------------------------------------------------------------------------
-// Built-in first-party module bindings. The public surface stays
-// Capsule / Deployment / PlanRun / ApplyRun / RunnerProfile /
-// DeploymentOutput; templateBinding is a service-side InstallConfig convenience
-// that produces a Takosumi-generated OpenTofu root module. These DTOs describe
-// the binding reference + rootgen output threaded onto the runner dispatch only;
-// they are never projected into the public ledger.
-// ---------------------------------------------------------------------------
-
-export type TemplateInputType = "string" | "number" | "boolean";
-
-export interface TemplateInputSpec {
-  readonly type: TemplateInputType;
-  readonly title: string;
-  readonly required: boolean;
-  readonly description?: string;
-  /** Optional default applied when the input is omitted and not required. */
-  readonly default?: string | number | boolean;
-}
-
-export interface TemplatePublicOutputSpec {
-  /** OpenTofu output type hint for display (e.g. "string"). */
-  readonly type: string;
-  /** Name of the template-module output this public output reads from. */
-  readonly from: string;
-}
-
-export interface TemplateBuildSpec {
-  readonly runtime: "bun";
-  /** Retired metadata for the old app build phase; not dispatched by new runs. */
-  readonly commands: readonly string[];
-  /** Historical file/dir relative to the old source root. */
-  readonly artifactPath: string;
-}
-
-export interface TemplateDestructivePolicy {
-  readonly requireExplicitConfirmation: boolean;
-}
-
-export interface TemplatePolicySpec {
-  readonly allowedProviders: readonly string[];
-  readonly allowedResourceTypes: readonly string[];
-  readonly destructiveChanges: TemplateDestructivePolicy;
-}
-
-export interface TemplateSourceSpec {
-  /**
-   * Path INSIDE the runner image to a bundled first-party Capsule module, e.g.
-   * `/app/templates/cloudflare-hello-worker/module`. The runner copies it to
-   * `/work/generated-root/template-module`.
-   */
-  readonly localModulePath: string;
-}
-
-export interface TemplateDefinition {
-  readonly id: string;
-  readonly name: string;
-  readonly version: string;
-  readonly description?: string;
-  readonly source: TemplateSourceSpec;
-  readonly build?: TemplateBuildSpec;
-  readonly inputs: Readonly<Record<string, TemplateInputSpec>>;
-  readonly outputs: {
-    readonly public: Readonly<Record<string, TemplatePublicOutputSpec>>;
-  };
-  readonly policy: TemplatePolicySpec;
 }
 
 /**
- * Takosumi-generated OpenTofu root module threaded onto the dispatch payload.
+ * Optional Takosumi-generated child-module wrapper threaded onto dispatch.
  * `files` maps a filename to HCL content; the runner writes these into
  * `/work/generated-root` and materializes the child module at
- * `/work/generated-root/template-module`.
+ * `/work/generated-root/module`.
  */
 export interface DispatchGeneratedRoot {
   readonly files: Readonly<Record<string, string>>;
-  /**
-   * Optional child module files for bundled first-party modules or normalized
-   * Capsules.
-   * When present, the runner materializes these files as
-   * `/work/generated-root/template-module` instead of copying a restored
-   * SourceSnapshot module. This keeps every generated-root run on the same
-   * Capsule dispatch shape.
-   */
-  readonly moduleFiles?: readonly {
-    readonly path: string;
-    readonly text: string;
-  }[];
 }
 
 /**
- * Capsule-scoped state location threaded onto the run dispatch payload.
- * The OpenTofu runner DO consumes `request.stateScope` to persist OpenTofu state
- * encrypted to the canonical R2_STATE keys
- * (`spaces/{workspaceId}/installations/{capsuleId}/envs/{environment}/states/
- * {NNNNNNNN}.tfstate.enc` + `current.json`). The controller owns the generation
- * arithmetic: a plan dispatch carries the CURRENT generation (restore base); an
- * apply / destroy_apply carries `base + 1` (persist generation). Absent for runs
- * without installation context, in which case the DO falls back to its legacy
- * R2_ARTIFACTS state path.
+ * Subject-scoped state location threaded onto the run dispatch payload.
+ * The OpenTofu runner DO consumes `request.stateScope` to persist encrypted
+ * OpenTofu state under the canonical Capsule or Resource state-store prefix. The
+ * controller owns generation arithmetic: plan carries the current generation
+ * (restore base), while apply / destroy_apply carries `base + 1` (persist
+ * generation). Current dispatch identifies the state owner with `subject`.
  */
 export interface DispatchStateScope {
-  readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
-  readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
+  readonly workspaceId: string;
+  /** Canonical state owner for first-class Resource runs. */
+  readonly subject?:
+    | { readonly kind: "capsule"; readonly id: string }
+    | { readonly kind: "resource"; readonly id: string };
   readonly environment: string;
   readonly generation: number;
+  /** Host-allocated opaque reference used for restore or persistence. */
+  readonly stateRef: string;
+}
+
+/**
+ * Exact, operator-confirmed pointer used once to seed a first-class Resource
+ * from state written by the retired backing-Capsule implementation. Dispatch
+ * never discovers this descriptor and the runner must reject it when canonical
+ * Resource state already exists.
+ */
+export interface DispatchStateAdoption {
+  readonly kind: "legacy_backing_capsule_state";
+  readonly sourceWorkspaceId: string;
+  readonly sourceCapsuleId: string;
+  readonly sourceEnvironment: string;
+  readonly sourceStateVersionId: string;
+  readonly stateGeneration: number;
+  readonly stateRef: string;
+  readonly stateDigest: string;
+  readonly confirmedBy: string;
+  readonly confirmedAt: string;
 }
 
 /**
  * Source-archive restore descriptor threaded onto the run dispatch payload (M2).
- * The OpenTofu runner DO fetches `request.sourceArchive` from R2_SOURCE, verifies
+ * The OpenTofu runner fetches `request.sourceArchive` from the configured source
+ * artifact store, verifies
  * the digest, and streams the bytes to the container which extracts them into
- * `/work/source`. The object key + digest come verbatim from the resolved
+ * `/work/source`. The opaque reference + digest come verbatim from the resolved
  * SourceSnapshot. Absent for runs without environment context.
  */
 export interface DispatchSourceArchive {
-  readonly objectKey: string;
+  readonly ref: string;
   readonly digest: string;
 }
 
@@ -755,7 +627,7 @@ export interface DispatchSourceArchive {
  * read-only to `/work/deps/<name>.tfstate` BEFORE init/plan/apply. `name` is the
  * producer Capsule name the consumer references via `terraform_remote_state`
  * (file backend over `/work/deps/<name>.tfstate`). The encrypted state bytes live
- * in R2_STATE at `objectKey`; the DO never exposes the passphrase or the
+ * behind the configured state adapter; the runner never exposes the passphrase or the
  * ciphertext to the container. Absent for runs with no `remote_state` edges.
  */
 export interface DispatchDepState {
@@ -763,19 +635,15 @@ export interface DispatchDepState {
   readonly name: string;
   /** Producer Capsule id (audit / cross-reference only). */
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
-  /** Producer environment (locates the R2_STATE prefix). */
+  /** Producer environment (locates the state-store prefix). */
   readonly environment: string;
   /** Producer pinned StateVersion generation (the restored state generation). */
   readonly generation: number;
-  /** R2_STATE object key of the encrypted producer state at `generation`. */
-  readonly objectKey: string;
+  /** Opaque reference for the encrypted producer state at `generation`. */
+  readonly stateRef: string;
   /** Recorded plaintext digest of the producer state (DO verifies on decrypt). */
   readonly digest: string;
 }
-
-// StateVersion lives in ./deployments.ts and is re-exported below.
 
 /**
  * One resource change line projected from `tofu show -json tfplan`
@@ -785,17 +653,16 @@ export interface DispatchDepState {
 export interface PlanResourceChange {
   readonly address: string;
   readonly type: string;
+  /** Explicit provider source reported by OpenTofu; never inferred from type. */
+  readonly providerSource?: string;
   readonly actions: readonly string[];
+  /** Value-free evidence that OpenTofu planned config-driven import. */
+  readonly importing?: true;
   /**
    * Sanitized non-secret provider scope metadata extracted from plan JSON when
    * available. Raw resource values are never persisted on the run.
    */
-  readonly scope?: {
-    readonly cloudflareAccountId?: string;
-    readonly cloudflareZoneId?: string;
-    readonly awsAccountId?: string;
-    readonly awsRegion?: string;
-  };
+  readonly scope?: PlanResourceScope;
 }
 
 export interface PlanRunResponse {
@@ -806,48 +673,24 @@ export interface CreateApplyRunRequest {
   readonly planRunId: string;
   readonly approval?: RunApproval;
   readonly expected: ApplyExpectedGuard;
-  /**
-   * Required to be `true` to apply a PlanRun whose template policy flagged the
-   * plan as destructive (delete / replace under
-   * `destructiveChanges.requireExplicitConfirmation`). Absent / false on a
-   * destructive plan rejects the apply with `failed_precondition`. Ignored for
-   * non-destructive and non-template plans.
-   */
-  readonly confirmDestructive?: boolean;
 }
 
 export interface ApplyRunResponse {
   readonly applyRun: ApplyRun;
   readonly capsule?: PublicCapsule;
-  /** @deprecated Use capsule. */
-  readonly installation?: PublicCapsule;
-  /** @deprecated retired Deployment ledger read; kept for audit compatibility. */
-  readonly deployment?: Deployment;
 }
 
 export interface GetCapsuleResponse {
   readonly capsule: PublicCapsule;
-  /** @deprecated Use capsule. */
-  readonly installation?: PublicCapsule;
 }
 
-/** @deprecated use {@link GetCapsuleResponse}. */
-export type GetInstallationResponse = GetCapsuleResponse;
-/** @deprecated use {@link PlanRunCapsuleContext}. */
-export type PlanRunInstallationContext = PlanRunCapsuleContext;
-
-export interface ListDeploymentsResponse {
-  readonly deployments: readonly Deployment[];
-  /**
-   * Opaque keyset cursor for the next page when the listing was capped (spec §30
-   * pagination). Absent on the last page. Additive: readers that ignore it are
-   * unaffected.
-   */
+export interface ListStateVersionsResponse {
+  readonly stateVersions: readonly StateVersion[];
   readonly nextCursor?: string;
 }
 
-export interface ListDeploymentOutputsResponse {
-  readonly outputs: readonly DeploymentOutput[];
+export interface GetStateVersionResponse {
+  readonly stateVersion: StateVersion;
 }
 
 // ---------------------------------------------------------------------------
