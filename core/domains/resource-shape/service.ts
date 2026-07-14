@@ -1072,7 +1072,38 @@ export class ResourceShapeService {
     }
 
     const id = formatResourceShapeId(req.space, req.kind, req.name);
-    const prepared = await this.#resolveAndPlan(req, undefined);
+    const importRequestDigest = await resourceImportRequestDigest(req);
+    const [existing, existingLock] = await Promise.all([
+      this.#stores.resources.get(id),
+      this.#stores.locks.get(id),
+    ]);
+    const recoveringImport =
+      existing !== undefined &&
+      existingLock !== undefined &&
+      importRequestMatchesApplying(req, existing, importRequestDigest);
+    if (existing && !recoveringImport) {
+      return {
+        ok: false,
+        error: {
+          code: "import_conflict",
+          message: `resource ${id} already exists`,
+        },
+      };
+    }
+    if (!existing && existingLock) {
+      return {
+        ok: false,
+        error: {
+          code: "import_conflict",
+          message: `resource ${id} has an orphaned ResolutionLock and requires operator recovery`,
+        },
+      };
+    }
+
+    const prepared = await this.#resolveAndPlan(
+      req,
+      recoveringImport ? existingLock : undefined,
+    );
     if (!prepared.ok) return prepared;
     const { output, plan, entry, parsed } = prepared.value;
     if (
@@ -1094,7 +1125,7 @@ export class ResourceShapeService {
     );
     if (!resolvedConnections.ok) return resolvedConnections;
 
-    const now = this.#now();
+    const now = nextApplyClaimTimestamp(this.#now(), existing?.updatedAt);
     const applyingRecord: ResourceShapeRecord = {
       id,
       spaceId: req.space,
@@ -1107,22 +1138,11 @@ export class ResourceShapeService {
       phase: "Applying",
       generation: 1,
       observedGeneration: 0,
-      conditions: [importingCondition(1, now)],
+      conditions: [importingCondition(1, now, importRequestDigest)],
       labels: req.labels,
-      createdAt: now,
+      createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
-    const created = await this.#stores.resources.create(applyingRecord);
-    if (created.status === "conflict") {
-      return {
-        ok: false,
-        error: {
-          code: "import_conflict",
-          message: `resource ${id} already exists`,
-        },
-      };
-    }
-
     const lockRecord: ResolutionLockRecord = {
       resourceId: id,
       selectedImplementation: output.resolutionLock.selectedImplementation,
@@ -1136,13 +1156,37 @@ export class ResourceShapeService {
       reason: output.resolutionLock.reason,
       portability: output.resolutionLock.portability,
       nativeResources: output.resolutionLock.nativeResources,
-      lockedAt: now,
+      lockedAt: existingLock?.lockedAt ?? now,
       updatedAt: now,
     };
 
+    let claim: Awaited<ReturnType<ResourceShapeStores["beginApply"]>>;
+    try {
+      claim = await this.#stores.beginApply({
+        applyingRecord,
+        plannedLock: lockRecord,
+        ...(recoveringImport && existing
+          ? { expected: versionOf(existing) }
+          : {}),
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        error: { code: "import_failed", message: errorMessage(error) },
+      };
+    }
+    if (claim.status !== "begun") {
+      return {
+        ok: false,
+        error: {
+          code: "import_conflict",
+          message: `resource ${id} changed before import could be claimed`,
+        },
+      };
+    }
+
     let result: AdapterImportResult;
     try {
-      await this.#stores.locks.put(lockRecord);
       await this.#recordResourceEvent({
         action: "resource.import.started",
         space: req.space,
@@ -1175,15 +1219,31 @@ export class ResourceShapeService {
       }
     } catch (error) {
       const failedAt = this.#now();
-      await this.#stores.resources.compareAndSet(
-        {
-          ...applyingRecord,
-          phase: "Failed",
-          conditions: [importFailedCondition(1, failedAt, error)],
-          updatedAt: failedAt,
-        },
-        versionOf(applyingRecord),
-      );
+      const failedRecord: ResourceShapeRecord = {
+        ...applyingRecord,
+        phase: "Failed",
+        conditions: [importFailedCondition(1, failedAt, error, req.nativeId)],
+        updatedAt: failedAt,
+      };
+      let failurePersisted = false;
+      try {
+        const failed = await this.#stores.abortApply({
+          resourceId: id,
+          expectedApplying: {
+            generation: applyingRecord.generation,
+            phase: "Applying",
+            updatedAt: applyingRecord.updatedAt,
+          },
+          expectedPlannedLock: lockRecord,
+          replacement: { record: failedRecord, lock: lockRecord },
+        });
+        failurePersisted = failed.status === "rolled_back";
+      } catch (persistenceError) {
+        log.warn("service.resource_shape.import_failure_record_failed", {
+          resourceId: id,
+          error: persistenceError,
+        });
+      }
       await this.#notifyLifecycle({
         type: "unknown",
         spaceId: req.space,
@@ -1195,11 +1255,20 @@ export class ResourceShapeService {
         space: req.space,
         resourceId: id,
         actor: req.actor,
-        metadata: { generation: 1, phase: "Failed" },
+        metadata: {
+          generation: 1,
+          phase: failurePersisted ? "Failed" : "Applying",
+          ...(failurePersisted ? {} : { reason: "finalize_pending" }),
+        },
       });
       return {
         ok: false,
-        error: { code: "import_failed", message: errorMessage(error) },
+        error: {
+          code: "import_failed",
+          message: failurePersisted
+            ? errorMessage(error)
+            : `resource ${id} import failed but its atomic failure record could not be finalized; retry recovery is required`,
+        },
       };
     }
 
@@ -1214,11 +1283,46 @@ export class ResourceShapeService {
       conditions: [importedCondition(1, importedAt)],
       updatedAt: importedAt,
     };
-    const persisted = await this.#stores.resources.compareAndSet(
-      readyRecord,
-      versionOf(applyingRecord),
-    );
-    if (persisted.status !== "updated") {
+    const importedLock: ResolutionLockRecord = {
+      ...lockRecord,
+      nativeResources: result.nativeResources,
+      updatedAt: importedAt,
+    };
+    let persisted;
+    try {
+      persisted = await this.#stores.commitApply({
+        readyRecord,
+        finalLock: importedLock,
+        expectedApplying: {
+          generation: applyingRecord.generation,
+          phase: "Applying",
+          updatedAt: applyingRecord.updatedAt,
+        },
+      });
+    } catch (error) {
+      await this.#notifyLifecycle({
+        type: "unknown",
+        spaceId: req.space,
+        resourceId: id,
+        operation: "import",
+      });
+      await this.#recordResourceEvent({
+        action: "resource.import.finalize_pending",
+        space: req.space,
+        resourceId: id,
+        actor: req.actor,
+        ...(result.runId ? { runId: result.runId } : {}),
+        metadata: { generation: 1, phase: "Applying" },
+      });
+      return {
+        ok: false,
+        error: {
+          code: "import_failed",
+          message: `resource ${id} backend import succeeded but atomic finalization is pending; retry the same import request: ${errorMessage(error)}`,
+        },
+      };
+    }
+    if (persisted.status !== "committed") {
       return {
         ok: false,
         error: {
@@ -1227,12 +1331,6 @@ export class ResourceShapeService {
         },
       };
     }
-    const importedLock: ResolutionLockRecord = {
-      ...lockRecord,
-      nativeResources: result.nativeResources,
-      updatedAt: importedAt,
-    };
-    await this.#stores.locks.put(importedLock);
     await this.#notifyLifecycle({
       type: "ready",
       spaceId: req.space,
@@ -1254,7 +1352,7 @@ export class ResourceShapeService {
     return {
       ok: true,
       value: {
-        resource: this.#assemble(persisted.record, importedLock),
+        resource: this.#assemble(persisted.record, persisted.lock),
         import: {
           summary: result.summary,
           ...(result.runId ? { runId: result.runId } : {}),
@@ -2029,6 +2127,7 @@ export class ResourceShapeService {
       };
     }
     if (options.force) {
+      const lock = await this.#stores.locks.get(id);
       await this.#recordResourceEvent({
         action: "resource.delete.started",
         space,
@@ -2041,8 +2140,31 @@ export class ResourceShapeService {
         spaceId: space,
         resourceId: id,
       });
-      await this.#stores.locks.delete(id);
-      await this.#stores.resources.delete(id);
+      let removed;
+      try {
+        removed = await this.#stores.removeResource({
+          resourceId: id,
+          expected: versionOf(record),
+          expectedLock: lock ?? null,
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: "delete_failed",
+            message: `resource ${id} force tombstone could not be finalized atomically: ${errorMessage(error)}`,
+          },
+        };
+      }
+      if (removed.status === "conflict") {
+        return {
+          ok: false,
+          error: {
+            code: "reconcile_conflict",
+            message: `resource ${id} changed while force tombstone was being finalized`,
+          },
+        };
+      }
       await this.#notifyLifecycle({
         type: "retired",
         spaceId: space,
@@ -2054,14 +2176,6 @@ export class ResourceShapeService {
         resourceId: id,
         actor,
         metadata: { generation: record.generation, forced: true },
-      });
-      return { ok: true, value: undefined };
-    }
-    if (record.phase === "Deleting") {
-      await this.#notifyLifecycle({
-        type: "terminating",
-        spaceId: space,
-        resourceId: id,
       });
       return { ok: true, value: undefined };
     }
@@ -2079,6 +2193,7 @@ export class ResourceShapeService {
       record.managedBy === "import-pending" &&
       record.observedGeneration === 0
     ) {
+      const lock = await this.#stores.locks.get(id);
       await this.#recordResourceEvent({
         action: "resource.delete.started",
         space,
@@ -2095,8 +2210,31 @@ export class ResourceShapeService {
         spaceId: space,
         resourceId: id,
       });
-      await this.#stores.locks.delete(id);
-      await this.#stores.resources.delete(id);
+      let removed;
+      try {
+        removed = await this.#stores.removeResource({
+          resourceId: id,
+          expected: versionOf(record),
+          expectedLock: lock ?? null,
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: "delete_failed",
+            message: `resource ${id} failed-import cleanup could not be finalized atomically: ${errorMessage(error)}`,
+          },
+        };
+      }
+      if (removed.status === "conflict") {
+        return {
+          ok: false,
+          error: {
+            code: "reconcile_conflict",
+            message: `resource ${id} changed while failed-import cleanup was being finalized`,
+          },
+        };
+      }
       await this.#notifyLifecycle({
         type: "retired",
         spaceId: space,
@@ -2127,6 +2265,9 @@ export class ResourceShapeService {
     }
     const lock = await this.#stores.locks.get(id);
     if (!lock) {
+      if (!(await this.#stores.resources.get(id))) {
+        return { ok: true, value: undefined };
+      }
       return {
         ok: false,
         error: {
@@ -2137,6 +2278,9 @@ export class ResourceShapeService {
     }
     const entry = await this.#targetPoolEntryForLock(space, lock);
     if (!entry) {
+      if (!(await this.#stores.resources.get(id))) {
+        return { ok: true, value: undefined };
+      }
       return {
         ok: false,
         error: {
@@ -2145,74 +2289,75 @@ export class ResourceShapeService {
         },
       };
     }
-    let notifiedTerminating = false;
-    if (entry) {
-      const specResult = parseResourceSpec(
-        record.kind,
-        record.spec,
-        this.#schemaRegistry,
-      );
-      const deletePolicy = specResult.ok
-        ? specResult.parsed.lifecyclePolicy?.delete
-        : undefined;
-      if (!specResult.ok) {
-        return {
-          ok: false,
-          error: {
-            code: specResult.error.code as ResourceServiceErrorCode,
-            message: specResult.error.message,
-          },
-        };
-      }
-      if (deletePolicy === "block") {
-        return {
-          ok: false,
-          error: {
-            code: "delete_blocked",
-            message: `resource ${id} has lifecyclePolicy.delete=block and requires an explicit policy change before deletion`,
-          },
-        };
-      }
-      const implementation = this.#implementationDescriptorForLock(
-        lock,
+    const specResult = parseResourceSpec(
+      record.kind,
+      record.spec,
+      this.#schemaRegistry,
+    );
+    const deletePolicy = specResult.ok
+      ? specResult.parsed.lifecyclePolicy?.delete
+      : undefined;
+    if (!specResult.ok) {
+      return {
+        ok: false,
+        error: {
+          code: specResult.error.code as ResourceServiceErrorCode,
+          message: specResult.error.message,
+        },
+      };
+    }
+    if (deletePolicy === "block") {
+      return {
+        ok: false,
+        error: {
+          code: "delete_blocked",
+          message: `resource ${id} has lifecyclePolicy.delete=block and requires an explicit policy change before deletion`,
+        },
+      };
+    }
+    const implementation = this.#implementationDescriptorForLock(
+      lock,
+      entry,
+      record.kind,
+    );
+    if (!implementation) {
+      return {
+        ok: false,
+        error: {
+          code: "delete_blocked",
+          message: `resource ${id} has no recoverable implementation descriptor snapshot; restore the historical Target descriptor or use an explicitly authorized force tombstone`,
+        },
+      };
+    }
+    let deletePlan: ResourceShapePlan;
+    try {
+      deletePlan = planResourceShape(
+        implementation,
+        specResult.parsed,
         entry,
-        record.kind,
+        this.#moduleRegistry,
       );
-      if (!implementation) {
-        return {
-          ok: false,
-          error: {
-            code: "delete_blocked",
-            message: `resource ${id} has no recoverable implementation descriptor snapshot; restore the historical Target descriptor or use an explicitly authorized force tombstone`,
-          },
-        };
-      }
-      let deletePlan: ResourceShapePlan;
-      try {
-        deletePlan = planResourceShape(
-          implementation,
-          specResult.parsed,
-          entry,
-          this.#moduleRegistry,
-        );
-      } catch (error) {
-        return {
-          ok: false,
-          error: {
-            code: "delete_blocked",
-            message: `resource ${id} cannot reconstruct its pinned delete plan: ${errorMessage(error)}`,
-          },
-        };
-      }
-      if (deletePlan.requiresAdapterPlugin && !implementation.plugin) {
-        return {
-          ok: false,
-          error: {
-            code: "delete_blocked",
-            message: `resource ${id} requires its pinned adapter plugin before backend deletion; restore the plugin or use an explicitly authorized force tombstone`,
-          },
-        };
-      }
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: "delete_blocked",
+          message: `resource ${id} cannot reconstruct its pinned delete plan: ${errorMessage(error)}`,
+        },
+      };
+    }
+    if (deletePlan.requiresAdapterPlugin && !implementation.plugin) {
+      return {
+        ok: false,
+        error: {
+          code: "delete_blocked",
+          message: `resource ${id} requires its pinned adapter plugin before backend deletion; restore the plugin or use an explicitly authorized force tombstone`,
+        },
+      };
+    }
+
+    let claimedRecord = record;
+    if (record.phase !== "Deleting") {
       const deleteClaim = await this.#stores.resources.claimDelete(
         {
           ...record,
@@ -2223,7 +2368,7 @@ export class ResourceShapeService {
         record.generation,
       );
       if (deleteClaim.status === "already_deleting") {
-        return { ok: true, value: undefined };
+        claimedRecord = deleteClaim.record;
       }
       if (deleteClaim.status === "not_found") {
         return {
@@ -2240,88 +2385,159 @@ export class ResourceShapeService {
           },
         };
       }
-      const claimedRecord = deleteClaim.record;
-      await this.#recordResourceEvent({
-        action: "resource.delete.started",
-        space,
-        resourceId: id,
-        actor,
-        metadata: {
-          generation: record.generation,
-          phase: "Deleting",
-          forced: false,
-        },
-      });
-      await this.#notifyLifecycle({
-        type: "terminating",
-        spaceId: space,
-        resourceId: id,
-      });
-      notifiedTerminating = true;
-      try {
-        await withTimeout(
-          this.#adapter.delete({
-            resourceId: id,
-            environment: record.environment ?? "default",
-            stateGeneration:
-              record.execution?.stateGeneration ??
-              record.stateAdoption?.stateGeneration ??
-              0,
-            ...(record.stateAdoption
-              ? { stateAdoption: record.stateAdoption }
-              : {}),
-            plan: deletePlan,
-            nativeResources: lock.nativeResources ?? [],
-            target: entry,
-            implementation,
-            credentialRef: entry.credentialRef,
-            deletePolicy,
-            actor,
-          }),
-          this.#deleteTimeoutMs,
-          `delete ${id}`,
-        );
-      } catch (error) {
-        await this.#stores.resources.upsert({
+      if (deleteClaim.status === "claimed") {
+        claimedRecord = deleteClaim.record;
+      }
+    }
+
+    await this.#recordResourceEvent({
+      action: "resource.delete.started",
+      space,
+      resourceId: id,
+      actor,
+      metadata: {
+        generation: claimedRecord.generation,
+        phase: "Deleting",
+        forced: false,
+      },
+    });
+    await this.#notifyLifecycle({
+      type: "terminating",
+      spaceId: space,
+      resourceId: id,
+    });
+    try {
+      await withTimeout(
+        this.#adapter.delete({
+          resourceId: id,
+          environment: claimedRecord.environment ?? "default",
+          stateGeneration:
+            claimedRecord.execution?.stateGeneration ??
+            claimedRecord.stateAdoption?.stateGeneration ??
+            0,
+          ...(claimedRecord.stateAdoption
+            ? { stateAdoption: claimedRecord.stateAdoption }
+            : {}),
+          plan: deletePlan,
+          nativeResources: lock.nativeResources ?? [],
+          target: entry,
+          implementation,
+          credentialRef: entry.credentialRef,
+          deletePolicy,
+          actor,
+        }),
+        this.#deleteTimeoutMs,
+        `delete ${id}`,
+      );
+    } catch (error) {
+      const failedAt = this.#now();
+      const failed = await this.#stores.resources.compareAndSet(
+        {
           ...claimedRecord,
           phase: "Failed",
           conditions: [
-            deleteFailedCondition(record.generation, this.#now(), error),
+            deleteFailedCondition(claimedRecord.generation, failedAt, error),
           ],
-          updatedAt: this.#now(),
-        });
-        await this.#notifyLifecycle({
-          type: "unknown",
-          spaceId: space,
-          resourceId: id,
-          operation: "delete",
-        });
+          updatedAt: failedAt,
+        },
+        versionOf(claimedRecord),
+      );
+      if (failed.status === "not_found") {
+        // A concurrent idempotent delete finalized the same canonical Resource.
+        return { ok: true, value: undefined };
+      }
+      if (failed.status === "conflict") {
         await this.#recordResourceEvent({
           action: "resource.delete.failed",
           space,
           resourceId: id,
           actor,
           metadata: {
-            generation: record.generation,
-            phase: "Failed",
+            generation: claimedRecord.generation,
+            reason: "reconcile_conflict",
             forced: false,
           },
         });
         return {
           ok: false,
-          error: { code: "delete_failed", message: errorMessage(error) },
+          error: {
+            code: "reconcile_conflict",
+            message: `resource ${id} changed while backend deletion was running`,
+          },
         };
       }
-    }
-    if (!notifiedTerminating) {
       await this.#notifyLifecycle({
-        type: "terminating",
+        type: "unknown",
         spaceId: space,
         resourceId: id,
+        operation: "delete",
       });
+      await this.#recordResourceEvent({
+        action: "resource.delete.failed",
+        space,
+        resourceId: id,
+        actor,
+        metadata: {
+          generation: claimedRecord.generation,
+          phase: "Failed",
+          forced: false,
+        },
+      });
+      return {
+        ok: false,
+        error: { code: "delete_failed", message: errorMessage(error) },
+      };
     }
-    await this.#stores.locks.delete(id);
-    await this.#stores.resources.delete(id);
+
+    let removed;
+    try {
+      removed = await this.#stores.removeResource({
+        resourceId: id,
+        expected: versionOf(claimedRecord),
+        expectedLock: lock,
+      });
+    } catch (error) {
+      await this.#notifyLifecycle({
+        type: "unknown",
+        spaceId: space,
+        resourceId: id,
+        operation: "delete",
+      });
+      await this.#recordResourceEvent({
+        action: "resource.delete.failed",
+        space,
+        resourceId: id,
+        actor,
+        metadata: {
+          generation: claimedRecord.generation,
+          phase: "Deleting",
+          reason: "finalize_pending",
+          forced: false,
+        },
+      });
+      return {
+        ok: false,
+        error: {
+          code: "delete_failed",
+          message: `resource ${id} backend deletion succeeded but atomic finalization is pending; retry delete: ${errorMessage(error)}`,
+        },
+      };
+    }
+    if (removed.status === "conflict") {
+      await this.#notifyLifecycle({
+        type: "unknown",
+        spaceId: space,
+        resourceId: id,
+        operation: "delete",
+      });
+      return {
+        ok: false,
+        error: {
+          code: "reconcile_conflict",
+          message: `resource ${id} changed while backend deletion was being finalized`,
+        },
+      };
+    }
     await this.#notifyLifecycle({
       type: "retired",
       spaceId: space,
@@ -2333,7 +2549,7 @@ export class ResourceShapeService {
       resourceId: id,
       actor,
       metadata: {
-        generation: record.generation,
+        generation: claimedRecord.generation,
         backendCleanup: true,
         forced: false,
       },
@@ -2871,6 +3087,55 @@ function applyingRequestMatchesRecord(
     canonicalJson(request.spec) === canonicalJson(record.spec) &&
     canonicalJson(request.labels ?? record.labels ?? null) ===
       canonicalJson(record.labels ?? null)
+  );
+}
+
+async function resourceImportRequestDigest(
+  request: ImportResourceRequest,
+): Promise<string> {
+  return await canonicalSha256({
+    apiVersion: "takosumi.resource-import-request/v1",
+    desired: {
+      space: request.space,
+      project: request.project ?? null,
+      environment: request.environment ?? null,
+      kind: request.kind,
+      name: request.name,
+      spec: request.spec,
+      managedBy: request.managedBy ?? "import",
+      labels: request.labels ?? null,
+      targetPoolName: request.targetPoolName ?? null,
+      spacePolicyName: request.spacePolicyName ?? null,
+    },
+    // The digest is the only recovery marker stored in the Resource condition;
+    // the provider-native identity itself never enters status or audit events.
+    nativeId: request.nativeId,
+  });
+}
+
+function importRequestMatchesApplying(
+  request: ImportResourceRequest,
+  record: ResourceShapeRecord,
+  requestDigest: string,
+): boolean {
+  const marker = record.conditions?.find(
+    (condition) =>
+      condition.type === "Ready" && condition.reason === "Importing",
+  );
+  return (
+    record.phase === "Applying" &&
+    record.managedBy === "import-pending" &&
+    record.generation === 1 &&
+    record.observedGeneration === 0 &&
+    request.space === record.spaceId &&
+    request.kind === record.kind &&
+    request.name === record.name &&
+    (request.project ?? null) === (record.project ?? null) &&
+    (request.environment ?? null) === (record.environment ?? null) &&
+    canonicalJson(request.spec) === canonicalJson(record.spec) &&
+    canonicalJson(request.labels ?? null) ===
+      canonicalJson(record.labels ?? null) &&
+    marker?.message === `import-request:${requestDigest}`
   );
 }
 
@@ -3621,11 +3886,16 @@ function readyCondition(generation: number, at: IsoTimestamp): Condition {
   };
 }
 
-function importingCondition(generation: number, at: IsoTimestamp): Condition {
+function importingCondition(
+  generation: number,
+  at: IsoTimestamp,
+  requestDigest: string,
+): Condition {
   return {
     type: "Ready",
     status: "unknown",
     reason: "Importing",
+    message: `import-request:${requestDigest}`,
     observedGeneration: generation,
     lastTransitionAt: at,
   };
@@ -3645,15 +3915,22 @@ function importFailedCondition(
   generation: number,
   at: IsoTimestamp,
   error: unknown,
+  nativeId: string,
 ): Condition {
   return {
     type: "Ready",
     status: "false",
     reason: "ImportFailed",
-    message: errorMessage(error),
+    message: redactImportNativeId(errorMessage(error), nativeId),
     observedGeneration: generation,
     lastTransitionAt: at,
   };
+}
+
+function redactImportNativeId(message: string, nativeId: string): string {
+  return nativeId
+    ? message.split(nativeId).join("[provider-native-id]")
+    : message;
 }
 
 function deletingCondition(generation: number, at: IsoTimestamp): Condition {
