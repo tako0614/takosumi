@@ -31,6 +31,9 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   const capabilities = createTakosumiProductCapabilities({
     resources: { EdgeWorker: true, ObjectBucket: true },
     compat: { "compat.s3.v1": true },
+    compatibilityProfiles: {
+      "compat.s3.v1": { planes: ["control", "data"] },
+    },
     interfacesEnabled: true,
   });
 
@@ -42,10 +45,25 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.adapters.opentofu, true);
   assert.equal(capabilities.compat.framework, true);
   assert.equal(capabilities.compat["compat.s3.v1"], true);
+  assert.deepEqual(capabilities.compatibilityProfiles["compat.s3.v1"], {
+    planes: ["control", "data"],
+  });
   assert.equal(capabilities.operator.runner_pools, false);
   assert.equal(capabilities.operator.managed_target_catalog, false);
   assert.equal(capabilities.identity.external_oidc_login, false);
   assert.deepEqual(capabilities.extensions, [TAKOSUMI_INTERFACES_CAPABILITY]);
+});
+
+test("compatibility profile authority rejects unversioned tokens", () => {
+  assert.throws(
+    () =>
+      createTakosumiProductCapabilities({
+        compatibilityProfiles: {
+          "compat.example.storage": { planes: ["data"] },
+        },
+      }),
+    /scoped compat\.\* version token/u,
+  );
 });
 
 test("Takosumi adapter capabilities can carry operator-defined extension tokens", () => {
@@ -113,6 +131,9 @@ test("Takosumi discovery publishes arbitrary compatibility endpoints by token", 
   const document = createTakosumiWellKnownDocument({
     origin: "https://takosumi.example.com/",
     compat: { "compat.example.storage.v2": true },
+    compatibilityProfiles: {
+      "compat.example.storage.v2": { planes: ["data"] },
+    },
     endpoints: {
       "compat.example.storage.v2":
         "https://takosumi.example.com/compat/storage/v2",
@@ -126,6 +147,15 @@ test("Takosumi discovery publishes arbitrary compatibility endpoints by token", 
     document.endpoints.extensions?.["compat.example.storage.v2"],
     "https://takosumi.example.com/compat/storage/v2",
   );
+});
+
+test("Takosumi discovery does not treat an untyped compat token as an installed profile", () => {
+  const document = createTakosumiWellKnownDocument({
+    origin: "https://takosumi.example.com/",
+    compat: { "compat.legacy.v1": true },
+  });
+
+  assert.deepEqual(document.features.compatibility_profiles, []);
 });
 
 test("Takosumi product capabilities expose Operator operations without requiring an admin UI", () => {
@@ -170,6 +200,56 @@ test("compatibility profiles are separate from typed Resource Shapes", () => {
   assert.equal(capabilities.resources.EdgeWorker, false);
   assert.equal(capabilities.resources.ObjectBucket, true);
   assert.deepEqual(capabilities.compat, { framework: true });
+  assert.deepEqual(capabilities.compatibilityProfiles, {});
+});
+
+test("compatibility profile authority planes are explicit and deduplicated", () => {
+  const capabilities = createTakosumiProductCapabilities({
+    compat: { "compat.example.v1": true },
+    compatibilityProfiles: {
+      "compat.example.v1": {
+        planes: ["data", "control", "data"],
+      },
+    },
+  });
+
+  assert.deepEqual(capabilities.compatibilityProfiles, {
+    "compat.example.v1": { planes: ["control", "data"] },
+  });
+});
+
+test("compatibility profile discovery owns no lifecycle state", () => {
+  const capabilities = createTakosumiProductCapabilities({
+    compatibilityProfiles: {
+      "compat.example.v1": { planes: ["control"] },
+    },
+  });
+  const profile = capabilities.compatibilityProfiles["compat.example.v1"];
+
+  assert.equal(capabilities.compat["compat.example.v1"], true);
+  assert.deepEqual(Object.keys(profile ?? {}), ["planes"]);
+  for (const forbidden of [
+    "phase",
+    "status",
+    "state",
+    "generation",
+    "resource",
+    "nativeResources",
+  ]) {
+    assert.equal(Object.hasOwn(profile ?? {}, forbidden), false);
+  }
+});
+
+test("v1alpha1 bundled Resource Shapes exclude future Secret", () => {
+  assert.deepEqual(RESOURCE_SHAPE_KINDS, [
+    "EdgeWorker",
+    "ObjectBucket",
+    "KVStore",
+    "Queue",
+    "SQLDatabase",
+    "ContainerService",
+  ]);
+  assert.equal(RESOURCE_SHAPE_KINDS.includes("Secret" as never), false);
 });
 
 test("resource capability discovery accepts operator-defined tokens without changing typed shapes", () => {

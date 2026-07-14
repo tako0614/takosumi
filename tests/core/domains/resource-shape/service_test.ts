@@ -30,6 +30,8 @@ import {
 } from "../../../../core/domains/resource-shape/mod.ts";
 import type { SpacePolicySpec, TargetPoolSpec } from "takosumi-contract";
 import { TEST_RESOURCE_SHAPE_MODULE_REGISTRY } from "../../../helpers/resource-shape/operator-module-registry.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 
 const CLOUDFLARE_PROVIDER = "registry.opentofu.org/cloudflare/cloudflare";
 
@@ -169,11 +171,23 @@ const ACTOR: ActorContext = {
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
+function directOperationLedger() {
+  const store = new InMemoryOpenTofuControlStore();
+  return {
+    operationRuns: store,
+    activity: new ActivityService({
+      store,
+      now: () => new Date(NOW),
+    }),
+  };
+}
+
 function makeService() {
   const stores = createInMemoryResourceShapeStores();
   const service = new ResourceShapeService({
     stores,
     adapter: new StubResourceShapeAdapter(),
+    ...directOperationLedger(),
     now: () => NOW,
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
   });
@@ -269,6 +283,89 @@ class RefreshingAdapter extends DriftedObserveAdapter {
         stateDigest: `sha256:${"d".repeat(64)}`,
         updatedAt: NOW,
       },
+    };
+  }
+}
+
+class DirectReadOnlyRecoveryAdapter extends PluginSpyAdapter {
+  override async refresh(
+    input: AdapterApplyInput,
+  ): Promise<AdapterRefreshResult> {
+    this.refreshInputs.push(input);
+    return {
+      summary: "read-only backend recovery",
+      nativeResources: input.nativeResources ?? [],
+      outputs: {
+        service_name: input.resourceId,
+        url: "https://recovered.example.test",
+        connections: {},
+      },
+    };
+  }
+}
+
+interface StableApplyBackend {
+  exists: boolean;
+  creations: number;
+  operationKeys: string[];
+}
+
+class LostApplyResponseAdapter extends PluginSpyAdapter {
+  constructor(
+    private readonly backend: StableApplyBackend,
+    private readonly mutationReachedProvider: boolean,
+  ) {
+    super();
+  }
+
+  override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    this.applyInputs.push(input);
+    if (!input.operationKey) throw new Error("missing stable operation key");
+    this.backend.operationKeys.push(input.operationKey);
+    if (this.mutationReachedProvider && !this.backend.exists) {
+      this.backend.exists = true;
+      this.backend.creations += 1;
+    }
+    throw new Error("simulated lost apply response");
+  }
+}
+
+class StableNameApplyRecoveryAdapter extends PluginSpyAdapter {
+  constructor(private readonly backend: StableApplyBackend) {
+    super();
+  }
+
+  override async observe(
+    input: AdapterApplyInput,
+  ): Promise<AdapterObserveResult> {
+    this.observeInputs.push(input);
+    return {
+      status: this.backend.exists ? "current" : "missing",
+      summary: this.backend.exists
+        ? "stable backend object exists"
+        : "stable backend object is missing",
+    };
+  }
+
+  override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    this.applyInputs.push(input);
+    if (!input.operationKey) throw new Error("missing stable operation key");
+    this.backend.operationKeys.push(input.operationKey);
+    if (!this.backend.exists) {
+      this.backend.exists = true;
+      this.backend.creations += 1;
+    }
+    return await new StubResourceShapeAdapter().apply(input);
+  }
+
+  override async refresh(
+    input: AdapterApplyInput,
+  ): Promise<AdapterRefreshResult> {
+    this.refreshInputs.push(input);
+    if (!this.backend.exists) throw new Error("backend object is missing");
+    return {
+      ...(await new StubResourceShapeAdapter().apply(input)),
+      summary: "read-only stable backend recovery",
     };
   }
 }
@@ -495,6 +592,53 @@ class SlowDeleteAdapter extends PluginSpyAdapter {
     this.deleteInputs.push(input);
     this.#startDelete();
     await this.#finishDeletePromise;
+  }
+}
+
+interface StableDeleteBackend {
+  exists: boolean;
+  observedStatus: "current" | "drifted";
+  deleteMutations: number;
+  operationKeys: string[];
+  loseBeforeMutation: boolean;
+  loseAfterMutation: boolean;
+}
+
+class StableNameDeleteAdapter extends PluginSpyAdapter {
+  constructor(private readonly backend: StableDeleteBackend) {
+    super();
+  }
+
+  override async observe(
+    input: AdapterApplyInput,
+  ): Promise<AdapterObserveResult> {
+    this.observeInputs.push(input);
+    return {
+      status: this.backend.exists ? this.backend.observedStatus : "missing",
+      summary: this.backend.exists
+        ? "stable backend object exists"
+        : "stable backend object is missing",
+    };
+  }
+
+  override async delete(input: AdapterDeleteInput): Promise<void> {
+    this.deleteInputs.push(input);
+    if (!input.operationKey) throw new Error("missing stable operation key");
+    this.backend.operationKeys.push(input.operationKey);
+    if (this.backend.loseBeforeMutation) {
+      this.backend.loseBeforeMutation = false;
+      throw new Error(
+        "simulated delete response loss before provider mutation",
+      );
+    }
+    if (this.backend.exists) {
+      this.backend.exists = false;
+      this.backend.deleteMutations += 1;
+    }
+    if (this.backend.loseAfterMutation) {
+      this.backend.loseAfterMutation = false;
+      throw new Error("simulated delete response loss after provider mutation");
+    }
   }
 }
 
@@ -1992,6 +2136,7 @@ test("an explicit plugin descriptor is dispatched to an injected test adapter", 
   const service = new ResourceShapeService({
     stores,
     adapter,
+    ...directOperationLedger(),
     now: () => NOW,
   });
   await seed(service);
@@ -2010,12 +2155,542 @@ test("an explicit plugin descriptor is dispatched to an injected test adapter", 
   );
 });
 
+test("scheduled repair terminalizes a direct-plugin Run after Resource commit wins", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const ledger = new InMemoryOpenTofuControlStore();
+  let loseFirstApplyTerminalTransition = true;
+  const operationRuns = {
+    beginResourceOperationRun: ledger.beginResourceOperationRun.bind(ledger),
+    getResourceOperationRun: ledger.getResourceOperationRun.bind(ledger),
+    listRecoverableResourceOperationRuns:
+      ledger.listRecoverableResourceOperationRuns.bind(ledger),
+    transitionResourceOperationRun: async (
+      input: Parameters<
+        InMemoryOpenTofuControlStore["transitionResourceOperationRun"]
+      >[0],
+    ) => {
+      if (
+        loseFirstApplyTerminalTransition &&
+        input.run.resourceOperation === "apply" &&
+        input.run.status === "succeeded"
+      ) {
+        loseFirstApplyTerminalTransition = false;
+        throw new Error("simulated process loss after Resource commit");
+      }
+      return await ledger.transitionResourceOperationRun(input);
+    },
+  };
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new PluginSpyAdapter(),
+    operationRuns,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  await seed(service);
+
+  const applied = await reviewedApply(service, {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService",
+    name: "agent",
+    spec: { name: "agent", image: "ghcr.io/example/agent:1.0.0" },
+  });
+  expect(applied.ok).toBe(false);
+  if (!applied.ok) {
+    expect(applied.error.code).toBe("deployment_finalize_pending");
+  }
+
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: new PluginSpyAdapter(),
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  const repaired = await restarted.repairResourceOperationRuns({ limit: 10 });
+  expect(repaired).toEqual({
+    scanned: 1,
+    completed: 1,
+    auditsRepaired: 1,
+    pending: 0,
+  });
+  const resource = await restarted.get("space_1", "ContainerService", "agent");
+  expect(resource.ok).toBe(true);
+  const internal = await stores.resources.get(
+    "tkrn:space_1:ContainerService:agent",
+  );
+  expect(internal?.lastOperationRunId).toStartWith("run_resource_");
+  const run = await ledger.getResourceOperationRun(
+    internal?.lastOperationRunId ?? "missing",
+  );
+  expect(run?.resourceOperation).toBe("apply");
+  expect(run?.status).toBe("succeeded");
+  expect(run?.resourceOperationAudit?.status).toBe("completed");
+  const successEvents = (await ledger.listActivityEvents("space_1")).filter(
+    (event) => event.action === "resource.apply.succeeded",
+  );
+  expect(successEvents).toHaveLength(1);
+  expect(successEvents[0]?.id).toBe(`act_${run?.id}`);
+  expect(successEvents[0]?.runId).toBe(run?.id);
+  expect(await restarted.repairResourceOperationRuns({ limit: 10 })).toEqual({
+    scanned: 0,
+    completed: 0,
+    auditsRepaired: 0,
+    pending: 0,
+  });
+  expect(
+    (await ledger.listActivityEvents("space_1")).filter(
+      (event) => event.action === "resource.apply.succeeded",
+    ),
+  ).toHaveLength(1);
+});
+
+test("direct-plugin apply recovers a persisted backend result after restart without redispatch", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let failReadyCommit = true;
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async commitApply(input) {
+      if (failReadyCommit) {
+        throw new Error("simulated direct Resource finalization outage");
+      }
+      return await baseStores.commitApply(input);
+    },
+  };
+  const ledger = new InMemoryOpenTofuControlStore();
+  const firstAdapter = new PluginSpyAdapter();
+  const first = new ResourceShapeService({
+    stores,
+    adapter: firstAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  await seed(first);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-recovery",
+    spec: {
+      name: "agent-recovery",
+      image: "ghcr.io/example/agent:1.0.0",
+      publicHttp: true,
+    },
+  };
+
+  const pending = await reviewedApply(first, request);
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("deployment_finalize_pending");
+  }
+  expect(firstAdapter.applyInputs).toHaveLength(1);
+  const applying = await stores.resources.get(
+    "tkrn:space_1:ContainerService:agent-recovery",
+  );
+  expect(applying?.phase).toBe("Applying");
+  const pendingRun = await ledger.getResourceOperationRun(
+    applying?.pendingOperation?.runId ?? "missing",
+  );
+  expect(pendingRun?.resourceOperationResult?.outputs).toBeDefined();
+  expect(pendingRun?.resourceOperationAudit?.status).toBe("pending");
+
+  failReadyCommit = false;
+  const recoveryAdapter = new DirectReadOnlyRecoveryAdapter();
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: recoveryAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  const preview = await restarted.preview(request);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+  const recovered = await restarted.recoverApply(request, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(recovered.ok).toBe(true);
+  expect(recoveryAdapter.applyInputs).toHaveLength(0);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(0);
+  const ready = await stores.resources.get(
+    "tkrn:space_1:ContainerService:agent-recovery",
+  );
+  expect(ready?.phase).toBe("Ready");
+  const completedRun = await ledger.getResourceOperationRun(
+    ready?.lastOperationRunId ?? "missing",
+  );
+  expect(completedRun?.status).toBe("succeeded");
+  expect(completedRun?.resourceOperationAudit?.status).toBe("completed");
+});
+
+test("direct-plugin apply response loss observes current and never creates a duplicate after restart", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const ledger = new InMemoryOpenTofuControlStore();
+  const backend: StableApplyBackend = {
+    exists: false,
+    creations: 0,
+    operationKeys: [],
+  };
+  const firstAdapter = new LostApplyResponseAdapter(backend, true);
+  const first = new ResourceShapeService({
+    stores,
+    adapter: firstAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  await seed(first);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-response-loss",
+    spec: {
+      name: "agent-response-loss",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+
+  const pending = await reviewedApply(first, request);
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("deployment_finalize_pending");
+  }
+  expect(firstAdapter.applyInputs).toHaveLength(1);
+  expect(backend.exists).toBe(true);
+  expect(backend.creations).toBe(1);
+  const applying = await stores.resources.get(
+    "tkrn:space_1:ContainerService:agent-response-loss",
+  );
+  expect(applying?.phase).toBe("Applying");
+  const pendingRun = await ledger.getResourceOperationRun(
+    applying?.pendingOperation?.runId ?? "missing",
+  );
+  expect(pendingRun?.status).toBe("running");
+  expect(pendingRun?.resourceOperationResult).toBeUndefined();
+
+  const recoveryAdapter = new StableNameApplyRecoveryAdapter(backend);
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: recoveryAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  const preview = await restarted.preview(request);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+  const recovered = await restarted.recoverApply(request, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(recovered.ok).toBe(true);
+  expect(recoveryAdapter.applyInputs).toHaveLength(0);
+  expect(recoveryAdapter.observeInputs).toHaveLength(1);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(1);
+  expect(backend.creations).toBe(1);
+  expect(recoveryAdapter.refreshInputs[0]?.operationKey).toBe(
+    firstAdapter.applyInputs[0]?.operationKey,
+  );
+  const ready = await stores.resources.get(
+    "tkrn:space_1:ContainerService:agent-response-loss",
+  );
+  expect(ready?.phase).toBe("Ready");
+  const run = await ledger.getResourceOperationRun(
+    ready?.lastOperationRunId ?? "missing",
+  );
+  expect(run?.status).toBe("succeeded");
+});
+
+test("direct-plugin apply response loss observes missing and replays one stable-name create after restart", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const ledger = new InMemoryOpenTofuControlStore();
+  const backend: StableApplyBackend = {
+    exists: false,
+    creations: 0,
+    operationKeys: [],
+  };
+  const firstAdapter = new LostApplyResponseAdapter(backend, false);
+  const first = new ResourceShapeService({
+    stores,
+    adapter: firstAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  await seed(first);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-missing-after-loss",
+    spec: {
+      name: "agent-missing-after-loss",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+
+  const pending = await reviewedApply(first, request);
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("deployment_finalize_pending");
+  }
+  expect(firstAdapter.applyInputs).toHaveLength(1);
+  expect(backend.exists).toBe(false);
+  expect(backend.creations).toBe(0);
+
+  const recoveryAdapter = new StableNameApplyRecoveryAdapter(backend);
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: recoveryAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  const preview = await restarted.preview(request);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+  const recovered = await restarted.recoverApply(request, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(recovered.ok).toBe(true);
+  expect(recoveryAdapter.observeInputs).toHaveLength(1);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(0);
+  expect(recoveryAdapter.applyInputs).toHaveLength(1);
+  expect(recoveryAdapter.applyInputs[0]?.operationKey).toBe(
+    firstAdapter.applyInputs[0]?.operationKey,
+  );
+  expect(backend.operationKeys).toEqual([
+    firstAdapter.applyInputs[0]?.operationKey,
+    firstAdapter.applyInputs[0]?.operationKey,
+  ]);
+  expect(backend.exists).toBe(true);
+  expect(backend.creations).toBe(1);
+});
+
+test("direct-plugin delete response loss converges from drifted or missing after restart", async () => {
+  for (const scenario of ["before_mutation", "after_mutation"] as const) {
+    const stores = createInMemoryResourceShapeStores();
+    const ledger = new InMemoryOpenTofuControlStore();
+    const backend: StableDeleteBackend = {
+      exists: true,
+      observedStatus: "drifted",
+      deleteMutations: 0,
+      operationKeys: [],
+      loseBeforeMutation: scenario === "before_mutation",
+      loseAfterMutation: scenario === "after_mutation",
+    };
+    const firstAdapter = new StableNameDeleteAdapter(backend);
+    const first = new ResourceShapeService({
+      stores,
+      adapter: firstAdapter,
+      operationRuns: ledger,
+      activity: new ActivityService({
+        store: ledger,
+        now: () => new Date(NOW),
+      }),
+      now: () => NOW,
+    });
+    await seed(first);
+    const name = `delete-loss-${scenario}`;
+    const request = {
+      actor: ACTOR,
+      space: "space_1",
+      kind: "ContainerService" as const,
+      name,
+      spec: {
+        name,
+        image: "ghcr.io/example/agent:1.0.0",
+      },
+    };
+    expect((await reviewedApply(first, request)).ok).toBe(true);
+
+    const pending = await first.delete(
+      "space_1",
+      "ContainerService",
+      name,
+      ACTOR,
+    );
+    expect(pending.ok).toBe(false);
+    if (!pending.ok) {
+      expect(pending.error.code).toBe("deployment_finalize_pending");
+    }
+    expect(firstAdapter.deleteInputs).toHaveLength(1);
+    const resourceId = `tkrn:space_1:ContainerService:${name}`;
+    const deleting = await stores.resources.get(resourceId);
+    expect(deleting?.phase).toBe("Deleting");
+    const runId = deleting?.pendingOperation?.runId;
+    expect(runId).toBeDefined();
+
+    const recoveryAdapter = new StableNameDeleteAdapter(backend);
+    const restarted = new ResourceShapeService({
+      stores,
+      adapter: recoveryAdapter,
+      operationRuns: ledger,
+      activity: new ActivityService({
+        store: ledger,
+        now: () => new Date(NOW),
+      }),
+      now: () => NOW,
+    });
+    const recovered = await restarted.delete(
+      "space_1",
+      "ContainerService",
+      name,
+      ACTOR,
+    );
+    expect(recovered.ok).toBe(true);
+    expect(recoveryAdapter.observeInputs).toHaveLength(1);
+    expect(recoveryAdapter.deleteInputs).toHaveLength(
+      scenario === "before_mutation" ? 1 : 0,
+    );
+    if (scenario === "before_mutation") {
+      expect(recoveryAdapter.deleteInputs[0]?.operationKey).toBe(
+        firstAdapter.deleteInputs[0]?.operationKey,
+      );
+      expect(backend.operationKeys).toEqual([
+        firstAdapter.deleteInputs[0]?.operationKey,
+        firstAdapter.deleteInputs[0]?.operationKey,
+      ]);
+    } else {
+      expect(backend.operationKeys).toEqual([
+        firstAdapter.deleteInputs[0]?.operationKey,
+      ]);
+    }
+    expect(backend.exists).toBe(false);
+    expect(backend.deleteMutations).toBe(1);
+    expect(await stores.resources.get(resourceId)).toBeUndefined();
+    expect(await stores.locks.get(resourceId)).toBeUndefined();
+    expect(
+      (await ledger.getResourceOperationRun(runId ?? "missing"))?.status,
+    ).toBe("succeeded");
+  }
+});
+
+test("direct-plugin refresh atomically recovers Resource and ResolutionLock after restart", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let failRefreshCommit = false;
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async commitApply(input) {
+      if (
+        failRefreshCommit &&
+        input.readyRecord.pendingOperation === undefined &&
+        input.expectedApplying.phase === "Applying"
+      ) {
+        throw new Error("simulated refresh Resource/lock commit outage");
+      }
+      return await baseStores.commitApply(input);
+    },
+  };
+  const ledger = new InMemoryOpenTofuControlStore();
+  const firstAdapter = new PluginSpyAdapter();
+  const first = new ResourceShapeService({
+    stores,
+    adapter: firstAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  await seed(first);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-refresh-recovery",
+    spec: {
+      name: "agent-refresh-recovery",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+  expect((await reviewedApply(first, request)).ok).toBe(true);
+  const id = "tkrn:space_1:ContainerService:agent-refresh-recovery";
+  const stableLock = await stores.locks.get(id);
+  expect(stableLock).toBeDefined();
+
+  failRefreshCommit = true;
+  const pending = await first.refresh(
+    "space_1",
+    "ContainerService",
+    "agent-refresh-recovery",
+    ACTOR,
+  );
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("deployment_finalize_pending");
+  }
+  expect((await stores.resources.get(id))?.phase).toBe("Applying");
+  expect((await stores.locks.get(id))?.nativeResources).toEqual(
+    stableLock?.nativeResources,
+  );
+  expect(firstAdapter.refreshInputs).toHaveLength(1);
+
+  failRefreshCommit = false;
+  const recoveryAdapter = new PluginSpyAdapter();
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: recoveryAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  const recovered = await restarted.refresh(
+    "space_1",
+    "ContainerService",
+    "agent-refresh-recovery",
+    ACTOR,
+  );
+  expect(recovered.ok).toBe(true);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(0);
+  const ready = await stores.resources.get(id);
+  const finalLock = await stores.locks.get(id);
+  expect(ready?.phase).toBe("Ready");
+  expect(finalLock?.nativeResources).toEqual(stableLock?.nativeResources);
+  const run = await ledger.getResourceOperationRun(
+    ready?.lastOperationRunId ?? "missing",
+  );
+  expect(run?.resourceOperation).toBe("refresh");
+  expect(run?.status).toBe("succeeded");
+});
+
 test("apply passes selected implementation plugin metadata to the adapter", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new PluginSpyAdapter();
   const service = new ResourceShapeService({
     stores,
     adapter,
+    ...directOperationLedger(),
     now: () => NOW,
     allowedProviderBaseUrls: [PROVIDER_COMPAT_BASE_URL],
   });
@@ -2071,6 +2746,7 @@ test("plugin-backed EdgeWorker dispatches before first-party lookup with the ful
   const service = new ResourceShapeService({
     stores,
     adapter,
+    ...directOperationLedger(),
     now: () => NOW,
   });
   await service.putTargetPool("space_1", "default", {
@@ -2423,6 +3099,7 @@ test("delete resolves native target from the non-default TargetPool that created
   const service = new ResourceShapeService({
     stores,
     adapter,
+    ...directOperationLedger(),
     now: () => NOW,
   });
   await service.putTargetPool("space_1", "storage", {
@@ -2478,7 +3155,11 @@ test("delete resolves native target from the non-default TargetPool that created
   );
   expect(adapter.deleteInputs[0]?.plan?.inputs).toEqual({});
   expect(adapter.deleteInputs[0]?.nativeResources).toEqual([
-    { type: "takosumi_object_bucket", id: "assets" },
+    {
+      type: "takosumi_object_bucket",
+      id: "assets",
+      ownership: "planned",
+    },
   ]);
 });
 
@@ -2520,6 +3201,7 @@ test("re-apply dispatches the pinned Target snapshot, plugin, and options even i
   const service = new ResourceShapeService({
     stores,
     adapter,
+    ...directOperationLedger(),
     now: () => NOW,
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
   });

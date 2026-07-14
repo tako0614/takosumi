@@ -1,6 +1,6 @@
 # Deploy-Control API
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
 
 This API controls OpenTofu/Terraform execution in Takosumi OSS. It runs existing
 providers as-is. Public compatibility profiles are separate capability-versioned
@@ -67,9 +67,15 @@ GET    /v1/interfaces/:id/bindings
 GET    /v1/interfaces/:id/bindings/:bindingId
 DELETE /v1/interfaces/:id/bindings/:bindingId
 
-POST   /secrets
 GET    /audit
 ```
+
+`Secret` is the encrypted boundary of the OpenTofu Stack flow. In the current
+v1alpha1 surface, provider secret material is write-only during
+ProviderConnection registration and is materialized only for a Run. Takosumi
+does not yet publish a standalone `POST /secrets` API or a `Secret` Resource
+Shape. The latter is a future shape that requires its own schema, planner,
+adapter, import, and drift contract; it is not one of the six bundled shapes.
 
 ## Outputs and Runtime Interfaces
 
@@ -133,6 +139,17 @@ new revision. This does not plan or apply the whole Workspace, nor does it
 reapply consumer Capsules. Use an explicit Capsule Dependency or
 `terraform_remote_state` when the desired relationship is ordinary
 OpenTofu-to-OpenTofu input wiring.
+
+Migration from the pre-v1 `service_exports`, `service_bindings`, and
+`app_deployment` conventions is a one-time operator operation at
+`GET|POST /internal/v1/workspaces/:workspaceId/migrations/output-interfaces`.
+The report returns no values: it exposes only the exact Capsule, InstallConfig,
+and current Output fences plus available non-secret Output names. Known
+first-party Capsules use service-side Interface blueprints; unknown third-party
+Capsules use only the Output name and Interface type/version explicitly selected
+by the owner. Completion requires a Resolved Interface and durable Activity
+evidence, and legacy Output discovery is never fallback authority. See the
+[operation runbook](../../operations/output-interface-migration.md).
 
 ## Provider Connections
 

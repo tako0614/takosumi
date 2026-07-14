@@ -234,7 +234,9 @@ function validatePreviewResult(
       pluginId,
       "preview",
     ),
-    ...(typeof body.runId === "string" ? { runId: body.runId } : {}),
+    ...(typeof body.backendOperationId === "string"
+      ? { backendOperationId: body.backendOperationId }
+      : {}),
   };
 }
 
@@ -247,6 +249,7 @@ function validateApplyResult(
       `Resource Shape adapter plugin "${pluginId}" apply returned an empty response`,
     );
   }
+  rejectPluginExecutionPointer(body, pluginId, "apply");
   if (!isRecord(body.outputs)) {
     throw new Error(
       `Resource Shape adapter plugin "${pluginId}" apply response must include outputs`,
@@ -259,7 +262,9 @@ function validateApplyResult(
       "apply",
     ),
     outputs: body.outputs as JsonObject,
-    ...(typeof body.runId === "string" ? { runId: body.runId } : {}),
+    ...(typeof body.backendOperationId === "string"
+      ? { backendOperationId: body.backendOperationId }
+      : {}),
   };
 }
 
@@ -272,6 +277,7 @@ function validateImportResult(
       `Resource Shape adapter plugin "${pluginId}" import returned an empty response`,
     );
   }
+  rejectPluginExecutionPointer(body, pluginId, "import");
   const summary = body.summary;
   if (typeof summary !== "string" || summary.trim() === "") {
     throw new Error(
@@ -291,7 +297,9 @@ function validateImportResult(
       "import",
     ),
     outputs: body.outputs as JsonObject,
-    ...(typeof body.runId === "string" ? { runId: body.runId } : {}),
+    ...(typeof body.backendOperationId === "string"
+      ? { backendOperationId: body.backendOperationId }
+      : {}),
   };
 }
 
@@ -304,6 +312,7 @@ function validateRefreshResult(
       `Resource Shape adapter plugin "${pluginId}" refresh returned an empty response`,
     );
   }
+  rejectPluginExecutionPointer(body, pluginId, "refresh");
   const summary = body.summary;
   if (typeof summary !== "string" || summary.trim() === "") {
     throw new Error(
@@ -323,7 +332,9 @@ function validateRefreshResult(
       "refresh",
     ),
     outputs: body.outputs as JsonObject,
-    ...(typeof body.runId === "string" ? { runId: body.runId } : {}),
+    ...(typeof body.backendOperationId === "string"
+      ? { backendOperationId: body.backendOperationId }
+      : {}),
   };
 }
 
@@ -351,7 +362,9 @@ function validateObserveResult(
   return {
     status,
     summary,
-    ...(typeof body.runId === "string" ? { runId: body.runId } : {}),
+    ...(typeof body.backendOperationId === "string"
+      ? { backendOperationId: body.backendOperationId }
+      : {}),
   };
 }
 
@@ -377,8 +390,40 @@ function nativeResourcesFromPluginResponse(
         `Resource Shape adapter plugin "${pluginId}" ${action} response nativeResources[${index}] must include type and id`,
       );
     }
-    return { type: item.type, id: item.id };
+    const ownership = item.ownership;
+    if (
+      ownership !== undefined &&
+      ownership !== "planned" &&
+      ownership !== "resource" &&
+      ownership !== "operator"
+    ) {
+      throw new Error(
+        `Resource Shape adapter plugin "${pluginId}" ${action} response nativeResources[${index}].ownership is invalid`,
+      );
+    }
+    if (action !== "preview" && ownership === "planned") {
+      throw new Error(
+        `Resource Shape adapter plugin "${pluginId}" ${action} response nativeResources[${index}] cannot remain planned`,
+      );
+    }
+    return {
+      type: item.type,
+      id: item.id,
+      ...(ownership ? { ownership } : {}),
+    };
   });
+}
+
+function rejectPluginExecutionPointer(
+  body: Readonly<Record<string, unknown>>,
+  pluginId: string,
+  action: "apply" | "import" | "refresh",
+): void {
+  if (body.execution !== undefined) {
+    throw new Error(
+      `Resource Shape adapter plugin "${pluginId}" ${action} response cannot claim an OpenTofu execution/state pointer`,
+    );
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

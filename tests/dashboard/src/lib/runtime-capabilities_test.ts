@@ -6,6 +6,7 @@ const capabilities = {
   resources: { Stack: true },
   adapters: { opentofu: true },
   compat: { framework: true },
+  compatibilityProfiles: {},
   identity: {
     oidc_issuer: true,
     external_oidc_login: true,
@@ -71,4 +72,30 @@ test("dashboard rejects cross-origin capability endpoints", async () => {
   await expect(
     loadTakosumiRuntimeCapabilities(fetchImpl, "https://operator.example"),
   ).rejects.toThrow("same-origin");
+});
+
+test("dashboard rejects capability documents without typed compatibility authority", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    if (String(input).endsWith("/.well-known/takosumi")) {
+      return Response.json({
+        api_versions: ["takosumi.dev/v1alpha1"],
+        features: {},
+        endpoints: {
+          api: "https://operator.example/api",
+          capabilities: "https://operator.example/v1/capabilities",
+          oidc_issuer: "https://operator.example",
+        },
+      });
+    }
+    const untyped = Object.fromEntries(
+      Object.entries(capabilities).filter(
+        ([key]) => key !== "compatibilityProfiles",
+      ),
+    );
+    return Response.json(untyped);
+  };
+
+  await expect(
+    loadTakosumiRuntimeCapabilities(fetchImpl, "https://operator.example"),
+  ).rejects.toThrow("response is invalid");
 });

@@ -86,6 +86,10 @@ import {
   DEPLOY_CONTROL_RESOURCE_STATE_ADOPTION_ENDPOINTS,
   mountDeployControlResourceStateAdoptionRoutes,
 } from "./deploy_control_resource_state_adoption_routes.ts";
+import {
+  DEPLOY_CONTROL_OUTPUT_INTERFACE_MIGRATION_ENDPOINTS,
+  mountDeployControlOutputInterfaceMigrationRoutes,
+} from "./deploy_control_output_interface_migration_routes.ts";
 
 // Internal route-family entrypoint for shared dependency / principal types plus
 // the body-limit constant used by app composition and route inventory.
@@ -126,6 +130,7 @@ const DEPLOY_CONTROL_INTERNAL_ENDPOINTS_RICH: readonly DeployControlEndpoint[] =
     ...DEPLOY_CONTROL_ACTIVITY_ENDPOINTS,
     ...DEPLOY_CONTROL_BILLING_ENDPOINTS,
     ...DEPLOY_CONTROL_RESOURCE_STATE_ADOPTION_ENDPOINTS,
+    ...DEPLOY_CONTROL_OUTPUT_INTERFACE_MIGRATION_ENDPOINTS,
   ];
 
 export const DEPLOY_CONTROL_INTERNAL_ENDPOINTS: readonly ApiEndpoint[] =
@@ -167,6 +172,7 @@ export function mountDeployControlInternalRoutes(
   mountDeployControlActivityRoutes(ctx);
   mountDeployControlBillingRoutes(ctx);
   mountDeployControlResourceStateAdoptionRoutes(ctx);
+  mountDeployControlOutputInterfaceMigrationRoutes(ctx);
 }
 
 /**

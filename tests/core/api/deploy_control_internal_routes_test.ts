@@ -148,6 +148,16 @@ test("deploy_control_internal_routes — internal seam endpoints respond with 50
       "/internal/v1/workspaces/ws_abcdef12/migrations/resource-state-adoption",
       {},
     ],
+    [
+      "GET",
+      "/internal/v1/workspaces/ws_abcdef12/migrations/output-interfaces",
+      undefined,
+    ],
+    [
+      "POST",
+      "/internal/v1/workspaces/ws_abcdef12/migrations/output-interfaces",
+      {},
+    ],
   ] as const;
 
   for (const [method, path, body] of endpoints) {

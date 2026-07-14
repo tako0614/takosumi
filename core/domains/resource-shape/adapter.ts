@@ -42,6 +42,14 @@ export interface ResolvedResourceConnection {
 export interface AdapterApplyInput {
   /** Canonical resource id (`tkrn:{space}:{kind}:{name}`). */
   readonly resourceId: string;
+  /**
+   * Core-minted stable operation identity for direct adapter plugins. When it
+   * is present, `apply` MUST be safe to replay with the same key and
+   * `resourceId`: native create/update uses stable names and must reconcile the
+   * same provider object instead of allocating a duplicate. Observe/refresh
+   * remain read-only and may use the key only for correlation.
+   */
+  readonly operationKey?: string;
   readonly environment: string;
   readonly stateGeneration: number;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
@@ -75,12 +83,16 @@ export interface AdapterPreviewResult {
   readonly nativeResources: readonly NativeResourceRef[];
   /** Underlying Run id when the adapter previews through the runner. */
   readonly runId?: string;
+  /** Opaque provider correlation id; never accepted as Run authority. */
+  readonly backendOperationId?: string;
 }
 
 export interface AdapterApplyResult {
   readonly nativeResources: readonly NativeResourceRef[];
   readonly outputs: JsonObject;
   readonly runId?: string;
+  /** Opaque provider correlation id; never accepted as Run authority. */
+  readonly backendOperationId?: string;
   readonly execution?: ResourceShapeExecutionRecord;
 }
 
@@ -143,10 +155,17 @@ export interface AdapterObserveResult {
   readonly summary: string;
   /** Underlying drift-check Run id when observation uses the shared runner. */
   readonly runId?: string;
+  /** Opaque provider correlation id; never accepted as Run authority. */
+  readonly backendOperationId?: string;
 }
 
 export interface AdapterDeleteInput {
   readonly resourceId: string;
+  /**
+   * Core-minted stable operation identity. `delete` MUST be idempotent for the
+   * same key and `resourceId`, including replay after a lost provider response.
+   */
+  readonly operationKey?: string;
   readonly environment: string;
   readonly stateGeneration: number;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
@@ -169,10 +188,12 @@ export interface ResourceAdapter {
   /** Stable adapter id, e.g. `opentofu` or `stub`. */
   readonly id: string;
   preview(input: AdapterApplyInput): Promise<AdapterPreviewResult>;
+  /** Stable-name idempotent create/update when `operationKey` is present. */
   apply(input: AdapterApplyInput): Promise<AdapterApplyResult>;
   importResource(input: AdapterImportInput): Promise<AdapterImportResult>;
   observe(input: AdapterApplyInput): Promise<AdapterObserveResult>;
   refresh(input: AdapterApplyInput): Promise<AdapterRefreshResult>;
+  /** Idempotent teardown when `operationKey` is present. */
   delete(input: AdapterDeleteInput): Promise<void>;
 }
 

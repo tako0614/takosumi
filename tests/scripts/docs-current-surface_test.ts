@@ -120,7 +120,6 @@ const MINIMAL_API_ROUTES = [
   "GET    /runs/:id",
   "GET    /runs/:id/logs",
   "POST   /runs/:id/approve",
-  "POST   /secrets",
   "GET    /audit",
 ] as const;
 
@@ -229,6 +228,11 @@ test("deploy-control API docs enumerate the public session route inventory and c
     assert.match(doc, /blocked_missing_connection/);
     assert.match(doc, /blocked_policy/);
     assert.doesNotMatch(doc, /gateway-coverages/);
+    assert.doesNotMatch(doc, /^POST\s+\/secrets$/m);
+    assert.match(
+      doc,
+      /独立した `POST \/secrets` API|standalone `POST \/secrets` API/,
+    );
   }
 });
 

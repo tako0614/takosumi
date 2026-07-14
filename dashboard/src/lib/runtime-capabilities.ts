@@ -3,6 +3,7 @@ import type {
   TakosumiProductCapabilities,
   TakosumiWellKnownDocument,
 } from "takosumi-contract";
+import { isTakosumiCompatibilityProfileToken } from "takosumi-contract";
 
 const [runtimeCapabilities, setRuntimeCapabilities] =
   createSignal<TakosumiProductCapabilities>();
@@ -95,9 +96,26 @@ function isTakosumiProductCapabilities(
     isRecord(record.resources) &&
     isRecord(record.adapters) &&
     isRecord(record.compat) &&
+    isCompatibilityProfiles(record.compatibilityProfiles) &&
     isRecord(record.identity) &&
     isRecord(record.operator) &&
     Array.isArray(record.extensions)
+  );
+}
+
+function isCompatibilityProfiles(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(
+    ([profile, capability]) =>
+      isTakosumiCompatibilityProfileToken(profile) &&
+      isRecord(capability) &&
+      Object.keys(capability).length === 1 &&
+      Array.isArray(capability.planes) &&
+      capability.planes.length > 0 &&
+      new Set(capability.planes).size === capability.planes.length &&
+      capability.planes.every(
+        (plane) => plane === "control" || plane === "data",
+      ),
   );
 }
 
