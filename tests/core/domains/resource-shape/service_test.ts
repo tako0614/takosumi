@@ -24,6 +24,7 @@ import {
   type ResourceShapeLifecycleEvent,
   type ResourceShapeLifecycleObserver,
   ResourceAdapterApplyError,
+  type ResourceShapeStores,
   ResourceShapeService,
   StubResourceShapeAdapter,
 } from "../../../../core/domains/resource-shape/mod.ts";
@@ -314,6 +315,15 @@ class FailingImportAdapter extends PluginSpyAdapter {
   }
 }
 
+class NativeIdEchoFailingImportAdapter extends PluginSpyAdapter {
+  override async importResource(
+    input: AdapterImportInput,
+  ): Promise<AdapterImportResult> {
+    this.importInputs.push(input);
+    throw new Error(`provider resource ${input.nativeId} was rejected`);
+  }
+}
+
 class SlowRefreshAdapter extends RefreshingAdapter {
   readonly started: Promise<void>;
   #startRefresh!: () => void;
@@ -439,6 +449,25 @@ class FailingDeleteAdapter extends PluginSpyAdapter {
   override async delete(input: AdapterDeleteInput): Promise<void> {
     this.deleteInputs.push(input);
     throw new Error("simulated delete failure");
+  }
+}
+
+class ConcurrentlyChangedFailingDeleteAdapter extends PluginSpyAdapter {
+  constructor(private readonly stores: ResourceShapeStores) {
+    super();
+  }
+
+  override async delete(input: AdapterDeleteInput): Promise<void> {
+    this.deleteInputs.push(input);
+    const current = await this.stores.resources.get(input.resourceId);
+    if (!current) throw new Error("expected claimed Resource");
+    await this.stores.resources.upsert({
+      ...current,
+      phase: "Ready",
+      conditions: [],
+      updatedAt: "2026-01-01T00:00:00.001Z",
+    });
+    throw new Error("simulated delete failure after concurrent change");
   }
 }
 
@@ -1092,6 +1121,68 @@ test("import adopts existing backend identity into Resource-owned state and outp
   expect(adapter.importInputs).toHaveLength(1);
 });
 
+test("import finalization retries only the exact request without exposing nativeId in conditions", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let failCommit = true;
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async commitApply(input) {
+      if (failCommit) {
+        throw new Error("simulated atomic import finalization outage");
+      }
+      return await baseStores.commitApply(input);
+    },
+  };
+  const adapter = new ImportingAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  const request = {
+    ...APPLY,
+    nativeId: "sensitive-provider-id-123",
+  } as const;
+
+  const pending = await service.importResource(request);
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("import_failed");
+    expect(pending.error.message).toContain("finalization is pending");
+  }
+  const applying = await stores.resources.get(APPLY_ID);
+  expect(applying?.phase).toBe("Applying");
+  expect(JSON.stringify(applying?.conditions)).not.toContain(request.nativeId);
+  expect(JSON.stringify(applying?.conditions)).toMatch(
+    /import-request:sha256:[0-9a-f]{64}/u,
+  );
+  expect(await stores.locks.get(APPLY_ID)).toBeDefined();
+
+  const differentNativeId = await service.importResource({
+    ...request,
+    nativeId: "different-provider-id-456",
+  });
+  expect(differentNativeId).toEqual({
+    ok: false,
+    error: {
+      code: "import_conflict",
+      message: `resource ${APPLY_ID} already exists`,
+    },
+  });
+  expect(adapter.importInputs).toHaveLength(1);
+
+  failCommit = false;
+  const recovered = await service.importResource(request);
+  expect(recovered.ok).toBe(true);
+  expect(adapter.importInputs).toHaveLength(2);
+  expect((await stores.resources.get(APPLY_ID))?.phase).toBe("Ready");
+  expect((await stores.locks.get(APPLY_ID))?.nativeResources).toEqual([
+    { type: "cloudflare_r2_bucket", id: request.nativeId },
+  ]);
+});
+
 test("failed import remains a ledger-only removable record", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new FailingImportAdapter();
@@ -1125,6 +1216,32 @@ test("failed import remains a ledger-only removable record", async () => {
   ).toBe(true);
   expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
   expect(adapter.deleteInputs).toHaveLength(0);
+});
+
+test("failed import conditions redact the provider-native identity", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new NativeIdEchoFailingImportAdapter(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  const nativeId = "sensitive-provider-id-789";
+
+  expect(
+    (
+      await service.importResource({
+        ...APPLY,
+        nativeId,
+      })
+    ).ok,
+  ).toBe(false);
+  const failed = await stores.resources.get(APPLY_ID);
+  expect(JSON.stringify(failed?.conditions)).not.toContain(nativeId);
+  expect(failed?.conditions?.[0]?.message).toBe(
+    "provider resource [provider-native-id] was rejected",
+  );
 });
 
 test("observe uses the pinned backend and records a Drifted condition without changing the revision", async () => {
@@ -2510,7 +2627,7 @@ test("delete does not call the backend or erase the ledger when a legacy lock Ta
   expect(await stores.locks.get(resourceId)).toBeDefined();
 });
 
-test("delete is idempotent while adapter-backed destroy is in progress", async () => {
+test("concurrent delete retries replay the idempotent backend and finalize once", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new SlowDeleteAdapter();
   const service = new ResourceShapeService({
@@ -2536,14 +2653,12 @@ test("delete is idempotent while adapter-backed destroy is in progress", async (
   expect(deleting.ok).toBe(true);
   if (deleting.ok) expect(deleting.value.status?.phase).toBe("Deleting");
 
-  const secondDelete = await service.delete(
+  const secondDelete = service.delete(
     "space_1",
     "ObjectBucket",
     "assets",
     ACTOR,
   );
-  expect(secondDelete.ok).toBe(true);
-  expect(adapter.deleteInputs).toHaveLength(1);
 
   const updateWhileDeleting = await reviewedApply(service, APPLY);
   expect(updateWhileDeleting.ok).toBe(false);
@@ -2552,12 +2667,92 @@ test("delete is idempotent while adapter-backed destroy is in progress", async (
   }
 
   adapter.finishDelete();
-  const completed = await firstDelete;
-  expect(completed.ok).toBe(true);
-  expect(adapter.deleteInputs).toHaveLength(1);
+  const [firstCompleted, secondCompleted] = await Promise.all([
+    firstDelete,
+    secondDelete,
+  ]);
+  expect(firstCompleted.ok).toBe(true);
+  expect(secondCompleted.ok).toBe(true);
+  expect(adapter.deleteInputs).toHaveLength(2);
 
   const remaining = await service.get("space_1", "ObjectBucket", "assets");
   expect(remaining.ok).toBe(false);
+});
+
+test("a Deleting Resource retries backend cleanup after atomic finalization recovers", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let failRemove = true;
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async removeResource(input) {
+      if (failRemove) {
+        throw new Error("simulated atomic delete finalization outage");
+      }
+      return await baseStores.removeResource(input);
+    },
+  };
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+
+  const pending = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("delete_failed");
+    expect(pending.error.message).toContain("atomic finalization is pending");
+  }
+  expect((await stores.resources.get(APPLY_ID))?.phase).toBe("Deleting");
+  expect(await stores.locks.get(APPLY_ID)).toBeDefined();
+  expect(adapter.deleteInputs).toHaveLength(1);
+
+  failRemove = false;
+  const recovered = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(recovered.ok).toBe(true);
+  expect(adapter.deleteInputs).toHaveLength(2);
+  expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
+  expect(await stores.locks.get(APPLY_ID)).toBeUndefined();
+});
+
+test("delete failure CAS cannot overwrite a concurrently changed Resource", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new ConcurrentlyChangedFailingDeleteAdapter(stores);
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+
+  const deleted = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(deleted.ok).toBe(false);
+  if (!deleted.ok) expect(deleted.error.code).toBe("reconcile_conflict");
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Ready",
+    updatedAt: "2026-01-01T00:00:00.001Z",
+  });
 });
 
 test("delete timeout marks the resource failed instead of leaving it deleting forever", async () => {
