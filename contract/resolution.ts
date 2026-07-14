@@ -19,11 +19,23 @@ import type {
 export type CapabilityLevel =
   TargetImplementationDescriptor["interfaces"][string];
 
-/** A native resource the implementation will create on the Target. */
+/**
+ * Lifecycle ownership carried with native identity evidence.
+ *
+ * `planned` is resolver output and is not proof that the provider object
+ * exists. `resource` means the Resource lifecycle owns provider deletion.
+ * `operator` identifies shared operator backing which the Resource may use but
+ * must never delete. Missing ownership is accepted only for pre-migration
+ * evidence; adapters must infer it without mutation or fail closed.
+ */
+export type NativeResourceOwnership = "planned" | "resource" | "operator";
+
+/** A native resource the implementation will create or already owns on a Target. */
 export interface NativeResourceRef {
   /** Opaque adapter-owned native resource type token. */
   readonly type: string;
   readonly id: string;
+  readonly ownership?: NativeResourceOwnership;
 }
 
 /** Per-interface capability score for the selected implementation. */

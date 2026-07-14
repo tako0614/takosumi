@@ -131,6 +131,7 @@ export type {
   RunGroupType,
   RunLogsResponse,
   RunPolicyStatus,
+  ResourceOperation,
   RunType,
 } from "./runs.ts";
 export type {

@@ -75,6 +75,7 @@ import type {
   CommitResourceRunResult,
   CommitRestoredStateInput,
   CommitRestoredStateResult,
+  BeginResourceOperationRunResult,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -82,6 +83,8 @@ import type {
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
+  RecoverableResourceOperationRunListOptions,
+  ResourceOperationRun,
   ReservePublicHostInput,
   ReservePublicHostResult,
   StoredRunRecord,
@@ -90,16 +93,26 @@ import type {
   CapsuleListPageParams,
   TransitionRunInput,
   TransitionRunResult,
+  TransitionResourceOperationRunInput,
+  TransitionResourceOperationRunResult,
 } from "./store.ts";
 import {
+  assertResourceOperationRun,
+  assertResourceOperationRunStart,
   clampActivityLimit,
   clampRecoverableOpenTofuRunListLimit,
+  clampRecoverableResourceOperationRunListLimit,
   clampRunListLimit,
   capsuleRuntimeSafetyFromRun,
   compareStoredRunRecordsAsc,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
+  isApplyRunRecord,
+  isPlanRunRecord,
   isRecoverableOpenTofuRunRecord,
+  resourceOperationRunTransitionAllowed,
+  resourceOperationRunNeedsRecovery,
+  sameResourceOperationIdentity,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
 } from "./store.ts";
@@ -124,6 +137,7 @@ const RUN_KINDS_PLAN = ["plan", "destroy_plan"] as const;
 const RUN_KINDS_APPLY = ["apply", "destroy_apply"] as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync";
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check";
+const RUN_KIND_RESOURCE_OPERATION = "resource_operation";
 
 function compatibilityReportSourceId(value: string | null | undefined): string {
   if (!value?.trim()) {
@@ -352,9 +366,11 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getPlanRun(id: string): Promise<PlanRun | undefined> {
-    return coerceRunRowStatus(
-      await this.#getRun<PlanRun>(id, [...RUN_KINDS_PLAN, "drift_check"]),
-    );
+    const run = await this.#getRun<StoredRunRecord>(id, [
+      ...RUN_KINDS_PLAN,
+      "drift_check",
+    ]);
+    return coerceRunRowStatus(run && isPlanRunRecord(run) ? run : undefined);
   }
 
   async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
@@ -372,9 +388,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getApplyRun(id: string): Promise<ApplyRun | undefined> {
-    return coerceRunRowStatus(
-      await this.#getRun<ApplyRun>(id, RUN_KINDS_APPLY),
-    );
+    const run = await this.#getRun<StoredRunRecord>(id, RUN_KINDS_APPLY);
+    return coerceRunRowStatus(run && isApplyRunRecord(run) ? run : undefined);
   }
 
   /**
@@ -494,6 +509,105 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
 
   async getCompatibilityCheckRun(id: string): Promise<Run | undefined> {
     return await this.#getRun<Run>(id, RUN_KIND_COMPATIBILITY_CHECK);
+  }
+
+  async beginResourceOperationRun(
+    run: ResourceOperationRun,
+  ): Promise<BeginResourceOperationRunResult> {
+    assertResourceOperationRunStart(run);
+    const inserted = await this.#db
+      .insert(pgSchema.runs)
+      .values({
+        id: run.id,
+        kind: RUN_KIND_RESOURCE_OPERATION,
+        workspaceId: run.workspaceId,
+        sourceId: null,
+        capsuleId: null,
+        status: run.status,
+        leaseToken: null,
+        heartbeatAt: null,
+        createdAt: String(run.createdAt),
+        runJson: run,
+      })
+      .onConflictDoNothing({ target: pgSchema.runs.id })
+      .returning({ json: pgSchema.runs.runJson });
+    if (inserted[0]) return { status: "created", run };
+    const current = await this.getResourceOperationRun(run.id);
+    if (!current) return { status: "conflict" };
+    return sameResourceOperationIdentity(current, run)
+      ? { status: "existing", run: current }
+      : { status: "conflict", run: current };
+  }
+
+  async getResourceOperationRun(
+    id: string,
+  ): Promise<ResourceOperationRun | undefined> {
+    return await this.#getRun<ResourceOperationRun>(
+      id,
+      RUN_KIND_RESOURCE_OPERATION,
+    );
+  }
+
+  async transitionResourceOperationRun(
+    input: TransitionResourceOperationRunInput,
+  ): Promise<TransitionResourceOperationRunResult> {
+    assertResourceOperationRun(input.run);
+    if (
+      input.run.resourceOperationKey !== input.operationKey ||
+      input.run.resourceOperationVersion !== input.expectedVersion + 1
+    ) {
+      throw new TypeError("invalid Resource operation Run transition identity");
+    }
+    const expected = await this.getResourceOperationRun(input.id);
+    if (
+      !expected ||
+      expected.resourceOperationVersion !== input.expectedVersion ||
+      !input.expectFrom.includes(expected.status) ||
+      !resourceOperationRunTransitionAllowed(expected, input.run)
+    ) {
+      return { won: false, ...(expected ? { run: expected } : {}) };
+    }
+    const rows = await this.#db
+      .update(pgSchema.runs)
+      .set({ status: input.run.status, runJson: input.run })
+      .where(
+        and(
+          eq(pgSchema.runs.id, input.id),
+          eq(pgSchema.runs.kind, RUN_KIND_RESOURCE_OPERATION),
+          inArray(pgSchema.runs.status, [...input.expectFrom]),
+          sql`${pgSchema.runs.runJson} ->> 'resourceOperationKey' = ${input.operationKey}`,
+          sql`${pgSchema.runs.runJson} ->> 'resourceOperationVersion' = ${String(input.expectedVersion)}`,
+        ),
+      )
+      .returning({ json: pgSchema.runs.runJson });
+    const won = parseRow(rows[0]) as ResourceOperationRun | undefined;
+    if (won) return { won: true, run: won };
+    const current = await this.getResourceOperationRun(input.id);
+    return { won: false, ...(current ? { run: current } : {}) };
+  }
+
+  async listRecoverableResourceOperationRuns(
+    options: RecoverableResourceOperationRunListOptions = {},
+  ): Promise<readonly ResourceOperationRun[]> {
+    const rows = await this.#pgManyJson<ResourceOperationRun>(
+      pgSchema.runs,
+      pgSchema.runs.runJson,
+      {
+        where: and(
+          eq(pgSchema.runs.kind, RUN_KIND_RESOURCE_OPERATION),
+          options.workspaceId === undefined
+            ? sql`true`
+            : eq(pgSchema.runs.workspaceId, options.workspaceId),
+          or(
+            eq(pgSchema.runs.status, "running"),
+            sql`${pgSchema.runs.runJson} -> 'resourceOperationAudit' ->> 'status' = 'pending'`,
+          ),
+        ),
+        orderBy: [asc(pgRunCreatedAtMillisOrder()), asc(pgSchema.runs.id)],
+        limit: clampRecoverableResourceOperationRunListLimit(options.limit),
+      },
+    );
+    return rows.filter(resourceOperationRunNeedsRecovery);
   }
 
   async putBackupRun(run: Run): Promise<Run> {

@@ -213,6 +213,13 @@ export interface EdgeWorkerSource {
    * provider and verifies `artifactSha256` before uploading it.
    */
   readonly artifactUrl?: string;
+  /**
+   * Host-allocated opaque reference to an immutable Worker artifact. This is
+   * used by in-process compatibility/import paths that already received the
+   * bytes and must not publish a temporary URL or credential in Resource
+   * desired state. Only the selected host adapter interprets the reference.
+   */
+  readonly artifactRef?: string;
   /** Expected artifact digest as a hex SHA-256 string, optionally prefixed with `sha256:`. */
   readonly artifactSha256?: string;
 }

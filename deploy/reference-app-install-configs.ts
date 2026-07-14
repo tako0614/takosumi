@@ -19,6 +19,7 @@ import type {
   InstallConfigVariablePresentation,
   OutputAllowlistEntry,
 } from "takosumi-contract/install-configs";
+import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-configs";
 
 const REFERENCE_CONFIG_TIMESTAMP = "2026-07-14T00:00:00.000Z";
 const MANAGED_APP_BASE_DOMAIN = "app.takos.jp";
@@ -341,6 +342,10 @@ const officeConfig = {
     enable_cloudflare_worker_script: true,
     enable_workers_dev_subdomain: false,
   },
+  installContextVariableMapping: {
+    object_storage_workspace_id: "workspace_id",
+    app_capsule_id: "capsule_id",
+  },
   variablePresentation: [
     ...commonCloudflareVariables({ publicUrlVariable: "app_url" }),
     {
@@ -566,8 +571,31 @@ const storageConfig = {
     launch_url: urlOutput("launch_url"),
     api_url: urlOutput("api_url"),
     mcp_url: urlOutput("mcp_url"),
+    // pre_destroy receives only public-safe allowlisted outputs.
+    object_bucket_name: output("string")("object_bucket_name"),
+    actions_logs_bucket_name: output("string")("actions_logs_bucket_name"),
   },
-  policy: {},
+  lifecycleActions: [
+    {
+      apiVersion: "takosumi.dev/v1alpha1",
+      kind: "command",
+      id: "empty-r2-before-destroy-v1",
+      phase: "pre_destroy",
+      executor: "runner",
+      command: ["bun", "run", "storage:pre-destroy"],
+      workingDirectory: ".",
+      timeoutSeconds: 3600,
+      runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
+      useProviderCredentials: true,
+    },
+  ],
+  policy: {
+    lifecycleActions: {
+      allowedExecutors: ["runner"],
+      allowedRunnerCapabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
+      allowProviderCredentials: true,
+    },
+  },
   store: store({
     source: source("takos-storage"),
     order: 60,
@@ -654,8 +682,30 @@ const gitConfig = {
     api_url: urlOutput("api_url"),
     hosting_api_url: urlOutput("hosting_api_url"),
     mcp_url: urlOutput("mcp_url"),
+    // pre_destroy receives only public-safe allowlisted outputs.
+    object_bucket_name: output("string")("object_bucket_name"),
   },
-  policy: {},
+  lifecycleActions: [
+    {
+      apiVersion: "takosumi.dev/v1alpha1",
+      kind: "command",
+      id: "empty-r2-before-destroy-v1",
+      phase: "pre_destroy",
+      executor: "runner",
+      command: ["bun", "run", "git:pre-destroy"],
+      workingDirectory: ".",
+      timeoutSeconds: 3600,
+      runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
+      useProviderCredentials: true,
+    },
+  ],
+  policy: {
+    lifecycleActions: {
+      allowedExecutors: ["runner"],
+      allowedRunnerCapabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
+      allowProviderCredentials: true,
+    },
+  },
   store: store({
     source: source("takos-git"),
     order: 70,

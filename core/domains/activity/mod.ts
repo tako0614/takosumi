@@ -53,8 +53,19 @@ export interface ActivityTargetReader {
   ): Promise<Page<ActivityEvent>>;
 }
 
+/** Restart-safe Activity write used by durable Run outboxes. */
+export interface IdempotentActivityRecorder {
+  recordIdempotent(
+    id: string,
+    createdAt: string,
+    event: RecordActivityInput,
+  ): Promise<ActivityEvent | undefined>;
+}
+
 /** Shared read/write ledger seam consumed by Resource Shape. */
-export type ActivityLedger = ActivityRecorder & ActivityTargetReader;
+export type ActivityLedger = ActivityRecorder &
+  ActivityTargetReader &
+  IdempotentActivityRecorder;
 
 /** A recorder that drops every event. Used when no Activity ledger is wired. */
 export const NOOP_ACTIVITY_RECORDER: ActivityRecorder = {
@@ -90,6 +101,39 @@ export class ActivityService implements ActivityLedger {
       return await this.#store.putActivityEvent(full);
     } catch (error) {
       log.warn("service.activity.record_failed", {
+        action: event.action,
+        workspaceId: event.workspaceId,
+        error,
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * Persists a caller-minted deterministic event. Store backends upsert by id,
+   * so replay after a lost Run acknowledgement cannot duplicate Activity.
+   */
+  async recordIdempotent(
+    id: string,
+    createdAt: string,
+    event: RecordActivityInput,
+  ): Promise<ActivityEvent | undefined> {
+    if (id.trim() === "" || !Number.isFinite(Date.parse(createdAt))) {
+      throw new TypeError(
+        "idempotent Activity id and ISO createdAt are required",
+      );
+    }
+    const full: ActivityEvent = {
+      ...event,
+      metadata: redactRecord(event.metadata),
+      id,
+      createdAt,
+    };
+    try {
+      return await this.#store.putActivityEvent(full);
+    } catch (error) {
+      log.warn("service.activity.record_idempotent_failed", {
+        id,
         action: event.action,
         workspaceId: event.workspaceId,
         error,

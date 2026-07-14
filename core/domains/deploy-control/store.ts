@@ -64,6 +64,7 @@ import {
   RUN_LIST_DEFAULT_LIMIT,
   RUN_LIST_MAX_LIMIT,
   type ArtifactRecord,
+  type ResourceOperation,
   type Run,
   type RunGroup,
 } from "takosumi-contract/runs";
@@ -74,7 +75,11 @@ import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "takosumi-contract/security";
-import type { JsonValue } from "takosumi-contract";
+import type {
+  JsonObject,
+  JsonValue,
+  NativeResourceRef,
+} from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 import { log } from "../../shared/log.ts";
 
@@ -454,6 +459,62 @@ export interface TransitionRunResult {
 
 export type StoredRunRecord = PlanRun | ApplyRun | SourceSyncRun | Run;
 
+/**
+ * Canonical single-ledger Run used only for direct Resource adapter plugins.
+ * Module-backed OpenTofu adapters continue to own their existing plan/apply
+ * Resource Runs and must never create this second row.
+ */
+export type ResourceOperationRun = Run & {
+  readonly subject: { readonly kind: "resource"; readonly id: string };
+  readonly resourceOperation: ResourceOperation;
+  readonly resourceOperationKey: string;
+  readonly resourceOperationVersion: number;
+  readonly resourceOperationResult?: ResourceOperationResultEvidence;
+  readonly resourceOperationAudit?: ResourceOperationAuditEvidence;
+};
+
+/** Internal restart-safe direct-adapter result; never projected publicly. */
+export interface ResourceOperationResultEvidence {
+  readonly summary: string;
+  readonly nativeResources?: readonly NativeResourceRef[];
+  readonly outputs?: JsonObject;
+  readonly observationStatus?: "current" | "drifted" | "missing";
+  /** Opaque backend correlation evidence only; never a canonical Run id. */
+  readonly backendOperationId?: string;
+}
+
+/** Internal durable Activity outbox carried by the single Run row. */
+export interface ResourceOperationAuditEvidence {
+  readonly status: "pending" | "completed";
+  readonly eventId: string;
+  readonly action: string;
+  readonly metadata: Readonly<Record<string, JsonValue>>;
+  readonly createdAt: string;
+}
+
+export type BeginResourceOperationRunResult =
+  | { readonly status: "created"; readonly run: ResourceOperationRun }
+  | { readonly status: "existing"; readonly run: ResourceOperationRun }
+  | { readonly status: "conflict"; readonly run?: ResourceOperationRun };
+
+export interface TransitionResourceOperationRunInput {
+  readonly id: string;
+  readonly operationKey: string;
+  readonly expectedVersion: number;
+  readonly expectFrom: readonly RunStatus[];
+  readonly run: ResourceOperationRun;
+}
+
+export interface TransitionResourceOperationRunResult {
+  readonly won: boolean;
+  readonly run?: ResourceOperationRun;
+}
+
+export interface RecoverableResourceOperationRunListOptions {
+  readonly workspaceId?: string;
+  readonly limit?: number;
+}
+
 export interface RecoverableOpenTofuRunListOptions {
   readonly staleQueuedBeforeMs: number;
   readonly staleRunningBeforeMs: number;
@@ -545,6 +606,21 @@ export interface OpenTofuControlStore {
   listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]>;
   putCompatibilityCheckRun(run: Run): Promise<Run>;
   getCompatibilityCheckRun(id: string): Promise<Run | undefined>;
+  /** Insert-only start for a deterministic direct Resource adapter Run. */
+  beginResourceOperationRun(
+    run: ResourceOperationRun,
+  ): Promise<BeginResourceOperationRunResult>;
+  getResourceOperationRun(
+    id: string,
+  ): Promise<ResourceOperationRun | undefined>;
+  /** Version- and status-fenced transition; terminal outcomes are never upserted. */
+  transitionResourceOperationRun(
+    input: TransitionResourceOperationRunInput,
+  ): Promise<TransitionResourceOperationRunResult>;
+  /** Running sagas and terminal Runs with a pending audit outbox. */
+  listRecoverableResourceOperationRuns(
+    options?: RecoverableResourceOperationRunListOptions,
+  ): Promise<readonly ResourceOperationRun[]>;
   putBackupRun(run: Run): Promise<Run>;
   getBackupRun(id: string): Promise<Run | undefined>;
   listRunsByWorkspace(
@@ -1099,6 +1175,72 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       run && isPublicRunRecord(run) && run.type === "compatibility_check"
         ? run
         : undefined,
+    );
+  }
+
+  beginResourceOperationRun(
+    run: ResourceOperationRun,
+  ): Promise<BeginResourceOperationRunResult> {
+    assertResourceOperationRunStart(run);
+    const current = this.#runs.get(run.id);
+    if (!current) {
+      this.#runs.set(run.id, run);
+      return Promise.resolve({ status: "created", run });
+    }
+    if (!isResourceOperationRun(current)) {
+      return Promise.resolve({ status: "conflict" });
+    }
+    return Promise.resolve(
+      sameResourceOperationIdentity(current, run)
+        ? { status: "existing", run: current }
+        : { status: "conflict", run: current },
+    );
+  }
+
+  getResourceOperationRun(
+    id: string,
+  ): Promise<ResourceOperationRun | undefined> {
+    const run = this.#runs.get(id);
+    return Promise.resolve(
+      run && isResourceOperationRun(run) ? run : undefined,
+    );
+  }
+
+  transitionResourceOperationRun(
+    input: TransitionResourceOperationRunInput,
+  ): Promise<TransitionResourceOperationRunResult> {
+    assertResourceOperationRun(input.run);
+    const current = this.#runs.get(input.id);
+    if (!current || !isResourceOperationRun(current)) {
+      return Promise.resolve({ won: false });
+    }
+    if (
+      current.resourceOperationKey !== input.operationKey ||
+      current.resourceOperationVersion !== input.expectedVersion ||
+      !input.expectFrom.includes(current.status) ||
+      !resourceOperationRunTransitionAllowed(current, input.run)
+    ) {
+      return Promise.resolve({ won: false, run: current });
+    }
+    this.#runs.set(input.id, input.run);
+    return Promise.resolve({ won: true, run: input.run });
+  }
+
+  listRecoverableResourceOperationRuns(
+    options: RecoverableResourceOperationRunListOptions = {},
+  ): Promise<readonly ResourceOperationRun[]> {
+    const limit = clampRecoverableResourceOperationRunListLimit(options.limit);
+    return Promise.resolve(
+      Array.from(this.#runs.values())
+        .filter(isResourceOperationRun)
+        .filter(
+          (run) =>
+            (options.workspaceId === undefined ||
+              run.workspaceId === options.workspaceId) &&
+            resourceOperationRunNeedsRecovery(run),
+        )
+        .sort(compareStoredRunRecordsAsc)
+        .slice(0, limit),
     );
   }
 
@@ -2259,6 +2401,189 @@ export function clampRecoverableOpenTofuRunListLimit(
   return floored;
 }
 
+export function clampRecoverableResourceOperationRunListLimit(
+  limit: number | undefined,
+): number {
+  return clampRecoverableOpenTofuRunListLimit(limit);
+}
+
+export function isResourceOperationRun(
+  row: StoredRunRecord,
+): row is ResourceOperationRun {
+  const candidate = row as Partial<ResourceOperationRun>;
+  return (
+    isPublicRunRecord(row) &&
+    candidate.subject?.kind === "resource" &&
+    isResourceOperationToken(candidate.resourceOperation) &&
+    resourceOperationRunType(candidate.resourceOperation) === candidate.type &&
+    typeof candidate.resourceOperationKey === "string" &&
+    candidate.resourceOperationKey.length > 0 &&
+    Number.isSafeInteger(candidate.resourceOperationVersion) &&
+    (candidate.resourceOperationVersion ?? 0) > 0
+  );
+}
+
+export function resourceOperationRunNeedsRecovery(
+  run: ResourceOperationRun,
+): boolean {
+  return (
+    run.status === "running" || run.resourceOperationAudit?.status === "pending"
+  );
+}
+
+export function assertResourceOperationRun(run: ResourceOperationRun): void {
+  if (!isResourceOperationRun(run)) {
+    throw new TypeError("invalid canonical Resource operation Run");
+  }
+  if (run.id.trim() === "" || run.workspaceId.trim() === "") {
+    throw new TypeError("Resource operation Run id/workspaceId are required");
+  }
+}
+
+export function assertResourceOperationRunStart(
+  run: ResourceOperationRun,
+): void {
+  assertResourceOperationRun(run);
+  if (
+    run.status !== "running" ||
+    run.resourceOperationVersion !== 1 ||
+    run.resourceOperationResult !== undefined ||
+    run.resourceOperationAudit !== undefined ||
+    run.finishedAt !== undefined ||
+    run.errorCode !== undefined
+  ) {
+    throw new TypeError(
+      "a canonical Resource operation Run must start at running version 1 without terminal/result evidence",
+    );
+  }
+}
+
+function isResourceOperationToken(value: unknown): value is ResourceOperation {
+  return (
+    value === "preview" ||
+    value === "apply" ||
+    value === "import" ||
+    value === "observe" ||
+    value === "refresh" ||
+    value === "delete"
+  );
+}
+
+function resourceOperationRunType(
+  operation: ResourceOperation,
+): ResourceOperationRun["type"] {
+  if (operation === "preview") return "plan";
+  if (operation === "observe") return "drift_check";
+  if (operation === "delete") return "destroy_apply";
+  return "apply";
+}
+
+export function sameResourceOperationIdentity(
+  left: ResourceOperationRun,
+  right: ResourceOperationRun,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.workspaceId === right.workspaceId &&
+    left.subject.id === right.subject.id &&
+    left.resourceOperation === right.resourceOperation &&
+    left.resourceOperationKey === right.resourceOperationKey &&
+    left.type === right.type
+  );
+}
+
+/**
+ * Direct Resource Runs are monotonic sagas. A running row may accumulate one
+ * immutable backend result and one pending success-Activity intent before its
+ * terminal transition. A succeeded row may only acknowledge that exact
+ * pending Activity; no terminal outcome or evidence can be rewritten.
+ */
+export function resourceOperationRunTransitionAllowed(
+  current: ResourceOperationRun,
+  next: ResourceOperationRun,
+): boolean {
+  if (
+    !sameResourceOperationIdentity(current, next) ||
+    next.resourceOperationVersion !== current.resourceOperationVersion + 1 ||
+    resourceOperationRunImmutableJson(current) !==
+      resourceOperationRunImmutableJson(next)
+  ) {
+    return false;
+  }
+  if (current.status === "running") {
+    if (
+      next.status !== "running" &&
+      next.status !== "succeeded" &&
+      next.status !== "failed"
+    ) {
+      return false;
+    }
+    if (
+      current.resourceOperationResult &&
+      canonicalStoreJson(current.resourceOperationResult) !==
+        canonicalStoreJson(next.resourceOperationResult)
+    ) {
+      return false;
+    }
+    if (current.resourceOperationAudit) {
+      if (next.status === "failed") {
+        return next.resourceOperationAudit === undefined;
+      }
+      return (
+        canonicalStoreJson(current.resourceOperationAudit) ===
+        canonicalStoreJson(next.resourceOperationAudit)
+      );
+    }
+    return next.resourceOperationAudit?.status !== "completed";
+  }
+  if (current.status !== "succeeded" || next.status !== "succeeded") {
+    return false;
+  }
+  const currentAudit = current.resourceOperationAudit;
+  const nextAudit = next.resourceOperationAudit;
+  return (
+    current.finishedAt === next.finishedAt &&
+    current.errorCode === next.errorCode &&
+    canonicalStoreJson(current.resourceOperationResult) ===
+      canonicalStoreJson(next.resourceOperationResult) &&
+    currentAudit?.status === "pending" &&
+    nextAudit?.status === "completed" &&
+    currentAudit.eventId === nextAudit.eventId &&
+    currentAudit.action === nextAudit.action &&
+    currentAudit.createdAt === nextAudit.createdAt &&
+    canonicalStoreJson(currentAudit.metadata) ===
+      canonicalStoreJson(nextAudit.metadata)
+  );
+}
+
+function resourceOperationRunImmutableJson(run: ResourceOperationRun): string {
+  const {
+    status: _status,
+    resourceOperationVersion: _version,
+    resourceOperationResult: _result,
+    resourceOperationAudit: _audit,
+    finishedAt: _finishedAt,
+    errorCode: _errorCode,
+    ...immutable
+  } = run;
+  return canonicalStoreJson(immutable);
+}
+
+function canonicalStoreJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    const encoded = JSON.stringify(value);
+    return encoded === undefined ? "undefined" : encoded;
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalStoreJson).join(",")}]`;
+  }
+  const object = value as Readonly<Record<string, unknown>>;
+  return `{${Object.keys(object)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalStoreJson(object[key])}`)
+    .join(",")}}`;
+}
+
 /** True only for rows that can change whether a Capsule runtime is safe. */
 export function runtimeSafetyCandidate(
   row: ApplyRun | Run,
@@ -2481,11 +2806,11 @@ function isDispatchableOpenTofuRunRecord(row: StoredRunRecord): boolean {
   return isRestoreRunRecord(row);
 }
 
-function isPlanRunRecord(row: StoredRunRecord): row is PlanRun {
+export function isPlanRunRecord(row: StoredRunRecord): row is PlanRun {
   return "sourceDigest" in row && "variablesDigest" in row;
 }
 
-function isApplyRunRecord(row: StoredRunRecord): row is ApplyRun {
+export function isApplyRunRecord(row: StoredRunRecord): row is ApplyRun {
   return "planRunId" in row && "expected" in row;
 }
 

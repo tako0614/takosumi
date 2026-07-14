@@ -23,11 +23,20 @@ export interface ResourceDeploymentQuoteLineItem {
   readonly sku: string;
   readonly skuVersion: string;
   readonly description?: string;
+  /** Cloud-rated lines pin tax policy; OSS unrated lines may omit it. */
+  readonly taxTreatment?: string;
+  /** Cloud-rated lines pin invoice text independently of mutable runtime env. */
+  readonly invoiceDescription?: string;
   readonly chargeKind: ResourceDeploymentChargeKind;
   readonly meterId?: string;
+  /** Original versioned catalog selector when this line prices a meter family. */
+  readonly meterIdPrefix?: string;
+  readonly meterKind?: string;
   readonly unit: string;
+  readonly billingUnit?: number;
   readonly quantity: number;
   readonly unitPriceUsdMicros: number;
+  readonly minimumChargeUsdMicros?: number;
   readonly amountUsdMicros: number;
 }
 
@@ -72,6 +81,8 @@ export interface ResourceDeploymentQuoteContext {
   readonly spec: JsonObject;
   readonly selectedImplementation: string;
   readonly selectedTarget: string;
+  /** Immutable selected Target region; Cloud admission rejects an absent value. */
+  readonly selectedTargetRegion?: string;
   readonly resolutionFingerprint: string;
   readonly nativeResourcePlan: readonly NativeResourceRef[];
   readonly planDigest: string;

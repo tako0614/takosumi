@@ -56,6 +56,16 @@ export type RunSubject =
   | { readonly kind: "resource"; readonly id: string }
   | { readonly kind: "source"; readonly id: string };
 
+/**
+ * Exact Resource Deploy API operation represented by a canonical Run.
+ *
+ * OpenTofu-backed Resources keep their existing plan/apply Run pairs. Direct
+ * adapter plugins use one Core-minted Run carrying this token so an opaque
+ * backend request id can never become lifecycle authority.
+ */
+export type ResourceOperation =
+  "preview" | "apply" | "import" | "observe" | "refresh" | "delete";
+
 /** Default page size for a Workspace Run listing when no limit is given. */
 export const RUN_LIST_DEFAULT_LIMIT = 100;
 /** Maximum page size accepted on the Workspace Run listing route. */
@@ -114,6 +124,8 @@ export interface Run {
   readonly sourceId?: string;
   /** Explicit execution subject for non-Capsule and new generic run flows. */
   readonly subject?: RunSubject;
+  /** Exact Deploy API operation for a Resource-owned Run. */
+  readonly resourceOperation?: ResourceOperation;
   /** Required for Capsule-bound rows; absent for Source-scoped rows. */
   readonly capsuleId?: string;
   readonly environment?: string;

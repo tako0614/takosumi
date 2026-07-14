@@ -524,6 +524,7 @@ export function registerResourceShapeRoutes(
         kind: kind.value,
         name,
         spec,
+        managedBy: stringValue(metadata.managedBy),
         labels: metadata.labels as Record<string, string> | undefined,
         targetPoolName: stringField(body, "targetPoolName"),
         spacePolicyName: stringField(body, "spacePolicyName"),

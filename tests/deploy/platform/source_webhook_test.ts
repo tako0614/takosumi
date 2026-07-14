@@ -42,6 +42,7 @@ import {
   autoPlanStaleCapsulesEnabled,
   pollAutoSyncSources,
   planStaleCapsuleUpdates,
+  repairDirectResourceRuns,
   repairStaleOpenTofuRuns,
   resourceObservationEnabled,
   scheduledResourceObservationOptions,
@@ -477,6 +478,44 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
     workspacesScanned: 1,
     runsScanned: 9,
     rescheduled: 4,
+  });
+});
+
+test("scheduled direct Resource Run repair is bounded and failure-isolated", async () => {
+  const calls: unknown[] = [];
+  const repaired = await repairDirectResourceRuns(
+    {
+      repair: (options) => {
+        calls.push(options);
+        return Promise.resolve({
+          scanned: 4,
+          completed: 2,
+          auditsRepaired: 3,
+          pending: 1,
+        });
+      },
+    },
+    { limit: 17 },
+  );
+  expect(calls).toEqual([{ limit: 17 }]);
+  expect(repaired).toEqual({
+    scanned: 4,
+    completed: 2,
+    auditsRepaired: 3,
+    pending: 1,
+    failures: 0,
+  });
+
+  expect(
+    await repairDirectResourceRuns({
+      repair: () => Promise.reject(new Error("ledger unavailable")),
+    }),
+  ).toEqual({
+    scanned: 0,
+    completed: 0,
+    auditsRepaired: 0,
+    pending: 0,
+    failures: 1,
   });
 });
 
@@ -1049,7 +1088,7 @@ test("platformExtensionRoutes parses opaque descriptors", () => {
           authMode: "platform",
           requiredScopes: ["ai.chat"],
         },
-        { basePath: "/compat/x", handlerKey: "TEST_X_EXTENSION" },
+        { basePath: "/extensions/x", handlerKey: "TEST_X_EXTENSION" },
       ]),
     }),
   ).toEqual([
@@ -1061,7 +1100,7 @@ test("platformExtensionRoutes parses opaque descriptors", () => {
       authMode: "platform",
       requiredScopes: ["ai.chat"],
     },
-    { basePath: "/compat/x", handlerKey: "TEST_X_EXTENSION" },
+    { basePath: "/extensions/x", handlerKey: "TEST_X_EXTENSION" },
   ]);
 });
 
@@ -1116,12 +1155,16 @@ test("platformExtensionRoutes merges duplicate capability descriptors", () => {
         {
           basePath: "/compat/cloudflare/client/v4",
           handlerKey: "TEST_COMPAT_EXTENSION",
-          capabilities: ["compat.object-store.v1"],
+          compatibilityProfiles: [
+            { profile: "compat.object-store.v1", planes: ["data"] },
+          ],
         },
         {
           basePath: "/compat/cloudflare/client/v4",
           handlerKey: "TEST_COMPAT_EXTENSION",
-          capabilities: ["compat.kv.v1"],
+          compatibilityProfiles: [
+            { profile: "compat.kv.v1", planes: ["data"] },
+          ],
         },
       ]),
     }),
@@ -1130,6 +1173,10 @@ test("platformExtensionRoutes merges duplicate capability descriptors", () => {
       basePath: "/compat/cloudflare/client/v4",
       handlerKey: "TEST_COMPAT_EXTENSION",
       capabilities: ["compat.object-store.v1", "compat.kv.v1"],
+      compatibilityProfiles: [
+        { profile: "compat.object-store.v1", planes: ["data"] },
+        { profile: "compat.kv.v1", planes: ["data"] },
+      ],
     },
   ]);
 });
@@ -1264,12 +1311,19 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
         {
           basePath: "/compat/cloudflare/client/v4",
           handlerKey: "TEST_PROVIDER_EXTENSION",
-          capabilities: ["compat.cloudflare.workers.v1"],
+          compatibilityProfiles: [
+            {
+              profile: "compat.cloudflare.workers.v1",
+              planes: ["control"],
+            },
+          ],
         },
         {
           basePath: "/compat/s3/v1",
           handlerKey: "TEST_STORAGE_EXTENSION",
-          capabilities: ["compat.s3.v1"],
+          compatibilityProfiles: [
+            { profile: "compat.s3.v1", planes: ["data"] },
+          ],
         },
         {
           basePath: "/cloud/usage",
@@ -1278,8 +1332,12 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
         },
       ]),
       TEST_AI_EXTENSION: { fetch: async () => Response.json({}) },
-      TEST_PROVIDER_EXTENSION: { fetch: async () => Response.json({}) },
-      TEST_STORAGE_EXTENSION: { fetch: async () => Response.json({}) },
+      TEST_PROVIDER_EXTENSION: {
+        fetchCompatibility: async () => Response.json({}),
+      },
+      TEST_STORAGE_EXTENSION: {
+        fetchCompatibility: async () => Response.json({}),
+      },
       TEST_USAGE_EXTENSION: { fetch: async () => Response.json({}) },
     } as never,
   );
@@ -1312,10 +1370,14 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
         {
           basePath: "/compat/s3/v1",
           handlerKey: "TEST_STORAGE_EXTENSION",
-          capabilities: ["compat.s3.v1"],
+          compatibilityProfiles: [
+            { profile: "compat.s3.v1", planes: ["data"] },
+          ],
         },
       ]),
-      TEST_STORAGE_EXTENSION: { fetch: async () => Response.json({}) },
+      TEST_STORAGE_EXTENSION: {
+        fetchCompatibility: async () => Response.json({}),
+      },
     } as never,
   );
   expect(discovery.status).toBe(200);
@@ -1673,7 +1735,7 @@ test("handler-auth platform extensions preserve signed protocol auth and strip s
     }),
     {
       TEST_STORAGE_EXTENSION: {
-        fetch: async (request: Request) => {
+        fetchCompatibility: async (request: Request) => {
           forwarded.push({
             authorization: request.headers.get("authorization"),
             cookie: request.headers.get("cookie"),
@@ -1693,6 +1755,7 @@ test("handler-auth platform extensions preserve signed protocol auth and strip s
       basePath: "/compat/s3/v1",
       handlerKey: "TEST_STORAGE_EXTENSION",
       authMode: "handler",
+      compatibilityProfiles: [{ profile: "compat.s3.v1", planes: ["data"] }],
     },
     async () => {
       throw new Error("handler-auth routes must not use platform session auth");
@@ -1897,6 +1960,12 @@ test("platform extension authenticates managed provider run tokens with Workspac
       handlerKey: "TEST_PROVIDER_COMPAT_EXTENSION",
       requiredScopes: ["write"],
       managedProviderProfile: "compat.cloudflare.workers.v1",
+      compatibilityProfiles: [
+        {
+          profile: "compat.cloudflare.workers.v1",
+          planes: ["control"],
+        },
+      ],
     },
   );
 
@@ -2561,7 +2630,7 @@ test("platform extension catalog reports configured extensions without binding n
         capabilities: ["openai.chat_completions"],
         requiredScopes: ["ai.chat"],
       },
-      { basePath: "/compat/x", handlerKey: "TEST_X_EXTENSION" },
+      { basePath: "/extensions/x", handlerKey: "TEST_X_EXTENSION" },
     ]),
     TEST_AI_EXTENSION: { fetch: async () => new Response("") },
   } as never;
@@ -2576,7 +2645,7 @@ test("platform extension catalog reports configured extensions without binding n
       capabilities: ["openai.chat_completions"],
       requiredScopes: ["ai.chat"],
     },
-    { basePath: "/compat/x", configured: false },
+    { basePath: "/extensions/x", configured: false },
   ]);
   // The catalog never leaks the underlying handler keys.
   expect(JSON.stringify(catalog)).not.toContain("TEST_AI_EXTENSION");
