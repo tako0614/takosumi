@@ -1172,10 +1172,19 @@ preview:
 
 apply:
   require quote id + quote digest
+  bind immutable create/update intent to the reviewed quote
   verify offering/price/currency/expiry/digests
   reserve before adapter/backend work
   capture only after canonical Resource success
   release after failure or cancellation
+
+import:
+  ask the host admission port before adapter/backend lookup or lifecycle write
+
+normal delete:
+  notify the host only after the canonical Resource is gone
+  retry host retirement through an idempotent delete of the absent Resource
+  do not retire host capacity from a force tombstone
 
 period close:
   reconcile captured reservations + rated UsageEvents - releases/refunds
