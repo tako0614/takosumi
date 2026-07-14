@@ -191,16 +191,15 @@ reservation preflight runs before usage precharge.
 
 ## S3-compatible Object Storage endpoint
 
-The S3-compatible endpoint is the data-plane for Object Storage provided by
-Takosumi Cloud. It lets existing S3 SDKs and S3-compatible OpenTofu providers
-consume Takosumi Cloud storage. It is not full AWS API compatibility; the public
-scope is the `compat.s3.v1` capability.
+When `/v1/capabilities` advertises the `compat.s3.v1` data plane, the
+S3-compatible endpoint lets existing S3 SDKs and S3-compatible OpenTofu
+providers consume a Takosumi Cloud `ObjectBucket`. It is not full AWS API
+compatibility and it is not a second bucket lifecycle API.
 
 ```http
 GET  /compat/s3/v1/__takosumi/status
 GET  /compat/s3/v1
 HEAD /compat/s3/v1/{bucket}
-PUT  /compat/s3/v1/{bucket}
 GET  /compat/s3/v1/{bucket}?list-type=2
 GET  /compat/s3/v1/{bucket}/{key}
 HEAD /compat/s3/v1/{bucket}/{key}
@@ -210,20 +209,27 @@ DELETE /compat/s3/v1/{bucket}/{key}
 
 Normal Cloud API keys (Takosumi Accounts personal access tokens) are not S3 SDK
 credentials. The S3-compatible endpoint verifies AWS SigV4 access key / secret
-access key credentials. Each access key is scoped to a source Workspace and optional
-bucket allowlist, while bucket descriptors come from the Takosumi Cloud
-managed-resource inventory.
+access key credentials. Each access key maps to an explicit Workspace Principal
+and optional bucket allowlist. A bucket descriptor points to one canonical
+`ObjectBucket`, resolved `Interface`, and matching `NativeResource`. Every data
+request fails closed unless the Resource is `Ready` and the Principal has the
+required Interface permission.
+
+Create, update, import, and delete the bucket through the normal
+`/v1/resources` preview/review/apply lifecycle. Bucket-level S3 mutation methods
+return `405 MethodNotAllowed`; they never create a backend bucket or a second
+lifecycle record.
 
 `GET /compat/s3/v1/__takosumi/status` is readable without SigV4 and reports
 operational configuration health. The dashboard uses it to show configured
 bucket counts.
 
-Read/write/list operations precharge through the Cloud usage ledger. If the
-owning user's USD balance is exhausted, `PUT` fails with `402 PaymentRequired`
-before backend storage is mutated. Source Workspace attribution is preserved on
-the usage event, but credits are held at the owner account level. `DELETE` cleanup intentionally has no
-operation precharge so users can remove already-created managed resources even
-when their balance is exhausted.
+Supported data operations are rated through the central Cloud usage ledger from
+the immutable price evidence captured for that exact `ObjectBucket`. If price,
+capture, invoice, or payment authority is missing, the request fails closed
+before storage is touched. The usage event preserves source Workspace and
+canonical Resource attribution; the compatibility handler neither owns prices
+nor keeps a parallel billing ledger.
 
 ## API keys
 
