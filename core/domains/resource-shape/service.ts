@@ -14,6 +14,9 @@ import type {
   NativeResourceRef,
   ResourceConnectionSpec,
   ResourceDeploymentAdmission,
+  ResourceDeploymentAdmissionDecision,
+  ResourceDeploymentImportContext,
+  ResourceDeploymentOperation,
   ResourceDeploymentQuote,
   ResourceDeploymentQuoteContext,
   ResourceDeploymentReview,
@@ -616,6 +619,7 @@ export class ResourceShapeService {
       req,
       output,
       evidence,
+      resourceDeploymentOperation(existing),
       this.#now(),
     );
     let quote: ResourceDeploymentQuote | undefined;
@@ -754,6 +758,7 @@ export class ResourceShapeService {
       req,
       output,
       evidence,
+      resourceDeploymentOperation(existing),
       this.#now(),
     );
     const now = nextApplyClaimTimestamp(this.#now(), existing?.updatedAt);
@@ -1427,6 +1432,39 @@ export class ResourceShapeService {
       parsed,
     );
     if (!resolvedConnections.ok) return resolvedConnections;
+
+    const importContext: ResourceDeploymentImportContext = {
+      space: req.space,
+      resourceId: id,
+      kind: req.kind,
+      name: req.name,
+      spec: req.spec,
+      nativeId: req.nativeId,
+      actor: req.actor,
+      now: this.#now(),
+    };
+    let importDecision: ResourceDeploymentAdmissionDecision;
+    try {
+      importDecision =
+        await this.#deploymentAdmission.admitImport(importContext);
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: "deployment_admission_denied",
+          message: errorMessage(error),
+        },
+      };
+    }
+    if (importDecision.reasons.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "deployment_admission_denied",
+          message: importDecision.reasons.join("; "),
+        },
+      };
+    }
 
     let operationRun: ResourceOperationRun | undefined;
     if (output.selectedImplementationDescriptor.plugin) {
@@ -2830,6 +2868,9 @@ export class ResourceShapeService {
     const id = formatResourceShapeId(space, kind, name);
     const record = await this.#stores.resources.get(id);
     if (!record) {
+      if (!options.force) {
+        return await this.#retireResourceDeployment(space, kind, name);
+      }
       return {
         ok: false,
         error: { code: "not_found", message: `resource ${id} not found` },
@@ -2960,7 +3001,7 @@ export class ResourceShapeService {
           importPending: true,
         },
       });
-      return { ok: true, value: undefined };
+      return await this.#retireResourceDeployment(space, kind, name);
     }
     const consumer = await this.#firstConnectionConsumer(space, id);
     if (consumer) {
@@ -2975,7 +3016,7 @@ export class ResourceShapeService {
     const lock = await this.#stores.locks.get(id);
     if (!lock) {
       if (!(await this.#stores.resources.get(id))) {
-        return { ok: true, value: undefined };
+        return await this.#retireResourceDeployment(space, kind, name);
       }
       return {
         ok: false,
@@ -2988,7 +3029,7 @@ export class ResourceShapeService {
     const entry = await this.#targetPoolEntryForLock(space, lock);
     if (!entry) {
       if (!(await this.#stores.resources.get(id))) {
-        return { ok: true, value: undefined };
+        return await this.#retireResourceDeployment(space, kind, name);
       }
       return {
         ok: false,
@@ -3140,10 +3181,7 @@ export class ResourceShapeService {
         claimedRecord = deleteClaim.record;
       }
       if (deleteClaim.status === "not_found") {
-        return {
-          ok: false,
-          error: { code: "not_found", message: `resource ${id} not found` },
-        };
+        return await this.#retireResourceDeployment(space, kind, name);
       }
       if (deleteClaim.status === "conflict") {
         return {
@@ -3343,7 +3381,7 @@ export class ResourceShapeService {
       );
       if (failed.status === "not_found") {
         // A concurrent idempotent delete finalized the same canonical Resource.
-        return { ok: true, value: undefined };
+        return await this.#retireResourceDeployment(space, kind, name);
       }
       if (failed.status === "conflict") {
         await this.#recordResourceEvent({
@@ -3447,6 +3485,7 @@ export class ResourceShapeService {
       backendCleanup: true,
       forced: false,
     };
+    let operationAuditPending = false;
     if (operationRun) {
       const completed = await this.#completePluginOperationRun({
         run: operationRun,
@@ -3455,13 +3494,7 @@ export class ResourceShapeService {
       });
       operationRun = completed.run;
       if (!completed.audit) {
-        return {
-          ok: false,
-          error: {
-            code: "deployment_finalize_pending",
-            message: `resource ${id} is deleted but canonical Run audit finalization is pending`,
-          },
-        };
+        operationAuditPending = true;
       }
     } else {
       await this.#recordResourceEvent({
@@ -3472,10 +3505,49 @@ export class ResourceShapeService {
         metadata: successMetadata,
       });
     }
-    return { ok: true, value: undefined };
+    const retired = await this.#retireResourceDeployment(space, kind, name);
+    if (!retired.ok) return retired;
+    if (operationAuditPending) {
+      return {
+        ok: false,
+        error: {
+          code: "deployment_finalize_pending",
+          message: `resource ${id} is deleted but canonical Run audit finalization is pending`,
+        },
+      };
+    }
+    return retired;
   }
 
   // --- internals --------------------------------------------------------------
+
+  async #retireResourceDeployment(
+    space: SpaceId,
+    kind: ResourceShapeKind,
+    name: string,
+  ): Promise<ServiceResult<void>> {
+    const resourceId = formatResourceShapeId(space, kind, name);
+    try {
+      await this.#deploymentAdmission.retire({
+        space,
+        resourceId,
+        kind,
+        name,
+        now: this.#now(),
+      });
+      return { ok: true, value: undefined };
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: "deployment_finalize_pending",
+          message:
+            `resource ${resourceId} is deleted but host lifecycle retirement is pending: ` +
+            errorMessage(error),
+        },
+      };
+    }
+  }
 
   async #beginPluginOperationRun(input: {
     readonly operation: ResourceOperation;
@@ -4448,6 +4520,7 @@ function resourceDeploymentQuoteContext(
   request: ApplyResourceRequest,
   output: ResolverOutput,
   evidence: ResourceDeploymentEvidence,
+  operation: ResourceDeploymentOperation,
   now: string,
 ): ResourceDeploymentQuoteContext {
   return {
@@ -4459,6 +4532,7 @@ function resourceDeploymentQuoteContext(
     ),
     kind: request.kind,
     name: request.name,
+    operation,
     spec: request.spec,
     selectedImplementation: output.selectedImplementation,
     selectedTarget: output.selectedTarget,
@@ -4472,6 +4546,15 @@ function resourceDeploymentQuoteContext(
     actor: request.actor,
     now,
   };
+}
+
+function resourceDeploymentOperation(
+  existing: ResourceShapeRecord | undefined,
+): ResourceDeploymentOperation {
+  // observedGeneration is durable backend-success evidence. A first create
+  // remains a create through Failed/Applying retries until generation 1 is
+  // observed; every later desired generation is an update.
+  return existing && existing.observedGeneration > 0 ? "update" : "create";
 }
 
 function deploymentReviewError(
