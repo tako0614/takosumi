@@ -20,7 +20,7 @@ name: runner proof
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
     paths:
       - "runner/**"
       - "opentofu-modules/**"
@@ -29,8 +29,9 @@ on:
       - "contract/reference/host-blocklist.ts"
       - "scripts/prove-runner-docker.sh"
       - "scripts/prove-runner-docker-payload.ts"
-      - ".github/workflows/runner-proof.yml"
+      - ".github/workflows/runner-image-proof.yml"
   pull_request:
+    branches: [main]
     paths:
       - "runner/**"
       - "opentofu-modules/**"
@@ -39,7 +40,7 @@ on:
       - "contract/reference/host-blocklist.ts"
       - "scripts/prove-runner-docker.sh"
       - "scripts/prove-runner-docker-payload.ts"
-      - ".github/workflows/runner-proof.yml"
+      - ".github/workflows/runner-image-proof.yml"
   schedule:
     # Weekly (Monday 06:00 UTC) to catch base-image / OpenTofu / provider drift.
     - cron: "0 6 * * 1"
