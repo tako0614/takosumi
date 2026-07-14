@@ -38,7 +38,7 @@ subscription:
 利用できる枠が足りない場合、下流の Cloud endpoint / AI upstream / runtime dispatch /
 provider 互換 write へ進む前に安全側に停止します (fail closed)。
 
-## Service Prices
+## Usage Prices
 
 Takosumi Cloud の価格単位は provider API family ではなく、versioned
 `ServiceOffering` / SKU です。`EdgeWorker` が内部で Workers for Platforms を使うか、
