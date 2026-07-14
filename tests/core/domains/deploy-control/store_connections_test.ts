@@ -1,29 +1,38 @@
 /**
- * Connection + secret-blob store symmetry: the in-memory twin and the D1-shaped
+ * ProviderConnection + secret-blob store symmetry: the in-memory twin and the D1-shaped
  * store must behave identically for the credential-core methods.
  */
 import { expect, test } from "bun:test";
 
 import {
-  InMemoryOpenTofuDeploymentStore,
-  type OpenTofuDeploymentStore,
+  InMemoryOpenTofuControlStore,
+  type OpenTofuControlStore,
   type StoredSecretBlob,
 } from "../../../../core/domains/deploy-control/store.ts";
-import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
-import type { Connection } from "@takosumi/internal/deploy-control-api";
+import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import type { ActivityEvent } from "takosumi-contract/activity";
 
 // -- Fixtures ------------------------------------------------------------------
 
-function connection(overrides: Partial<Connection> = {}): Connection {
+function connection(overrides: Partial<ProviderConnection> = {}): ProviderConnection {
   return {
     id: "conn_abcdef0123456789",
-    spaceId: "space_1",
-    provider: "cloudflare",
-    owner: "customer",
-    authMethod: "static_secret",
+    workspaceId: "workspace_1",
+    scope: "workspace",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+    credentialRecipe: {
+      id: "generic-env",
+      authMode: "env",
+      secretPartition: "provider-credentials",
+      declaredEnv: true,
+    },
+    secretPartition: "provider-credentials",
+    kind: "generic_env_provider",
     status: "pending",
+    materialization: "secret",
     envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: "2026-06-04T00:00:00.000Z",
     updatedAt: "2026-06-04T00:00:00.000Z",
@@ -35,24 +44,24 @@ function secretBlob(connectionId: string): StoredSecretBlob {
   return {
     id: `secret_${connectionId}`,
     connectionId,
-    spaceId: "space_1",
-    kind: "cloudflare_api_token",
+    workspaceId: "workspace_1",
+    kind: "provider-credentials",
     ciphertext: "Y2lwaGVydGV4dA==",
     encryptedDek: "secret-boundary-aes-gcm/v1/cloudflare",
     nonce: "aXZpdml2aXZpdg==",
     keyVersion: 1,
     aad: JSON.stringify({
-      cloudPartition: "cloudflare",
-      spaceId: "space_1",
-      provider: "cloudflare",
+      secretPartition: "provider-credentials",
+      workspaceId: "workspace_1",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
     }),
     createdAt: "2026-06-04T00:00:00.000Z",
   };
 }
 
-const STORES: ReadonlyArray<[string, () => OpenTofuDeploymentStore]> = [
-  ["in-memory", () => new InMemoryOpenTofuDeploymentStore()],
-  ["d1", () => new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1())],
+const STORES: ReadonlyArray<[string, () => OpenTofuControlStore]> = [
+  ["in-memory", () => new InMemoryOpenTofuControlStore()],
+  ["d1", () => new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
 ];
 
 for (const [name, make] of STORES) {
@@ -63,13 +72,16 @@ for (const [name, make] of STORES) {
 
     expect(await store.getConnection(conn.id)).toEqual(conn);
 
-    const other = connection({ id: "conn_zzzzzzzz11111111", spaceId: "space_2" });
+    const other = connection({
+      id: "conn_zzzzzzzz11111111",
+      workspaceId: "workspace_2",
+    });
     await store.putConnection(other);
 
-    const inSpace1 = await store.listConnections("space_1");
-    expect(inSpace1.map((c) => c.id)).toEqual([conn.id]);
-    const inSpace2 = await store.listConnections("space_2");
-    expect(inSpace2.map((c) => c.id)).toEqual([other.id]);
+    const inWorkspace1 = await store.listConnections("workspace_1");
+    expect(inWorkspace1.map((c) => c.id)).toEqual([conn.id]);
+    const inWorkspace2 = await store.listConnections("workspace_2");
+    expect(inWorkspace2.map((c) => c.id)).toEqual([other.id]);
 
     expect(await store.deleteConnection(conn.id)).toBe(true);
     expect(await store.getConnection(conn.id)).toBeUndefined();
@@ -93,13 +105,13 @@ for (const [name, make] of STORES) {
     await store.putConnection(conn);
     await store.putSecretBlob(secretBlob(conn.id));
 
-    const listed = await store.listConnections("space_1");
+    const listed = await store.listConnections("workspace_1");
     const serialized = JSON.stringify(listed);
     expect(serialized).not.toContain("ciphertext");
     expect(serialized).not.toContain("Y2lwaGVydGV4dA==");
   });
 
-  test(`${name}: activity event put/list newest-first + space-scoped + limit`, async () => {
+  test(`${name}: activity event put/list newest-first + Workspace-scoped + limit`, async () => {
     const store = make();
     await store.putActivityEvent(activityEvent({
       id: "act_a",
@@ -111,36 +123,38 @@ for (const [name, make] of STORES) {
       targetType: "run",
       targetId: "apply_1",
       runId: "apply_1",
-      metadata: { deploymentId: "dep_1" },
+      metadata: { stateVersionId: "state_1" },
       createdAt: "2026-06-06T00:00:02.000Z",
     }));
     await store.putActivityEvent(activityEvent({
       id: "act_other",
-      spaceId: "space_2",
+      workspaceId: "workspace_2",
       createdAt: "2026-06-06T00:00:03.000Z",
     }));
 
-    const listed = await store.listActivityEvents("space_1");
+    const listed = await store.listActivityEvents("workspace_1");
     expect(listed.map((e) => e.id)).toEqual(["act_b", "act_a"]);
     expect(listed[0]!.runId).toBe("apply_1");
-    expect(listed[0]!.metadata.deploymentId).toBe("dep_1");
+    expect(listed[0]!.metadata.stateVersionId).toBe("state_1");
 
-    expect((await store.listActivityEvents("space_2")).map((e) => e.id))
+    expect((await store.listActivityEvents("workspace_2")).map((e) => e.id))
       .toEqual(["act_other"]);
-    expect((await store.listActivityEvents("space_1", { limit: 1 })).map((e) =>
-      e.id
-    )).toEqual(["act_b"]);
+    expect(
+      (await store.listActivityEvents("workspace_1", { limit: 1 })).map(
+        (e) => e.id,
+      ),
+    ).toEqual(["act_b"]);
   });
 }
 
 function activityEvent(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
   return {
     id: "act_default",
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     actorId: "user_1",
-    action: "installation.created",
-    targetType: "installation",
-    targetId: "inst_1",
+    action: "capsule.created",
+    targetType: "capsule",
+    targetId: "capsule_1",
     metadata: { name: "shop" },
     createdAt: "2026-06-06T00:00:00.000Z",
     ...overrides,

@@ -21,10 +21,10 @@ staging の secret 値を置きません。ownership boundary は以下に固定
 - Takosumi control plane は OpenTofu Capsule Run、ProviderConnection、CredentialRecipe、ProviderBinding、
   Secret、credential mint audit、AuditEvent を所有する。
 
-本 policy はすべての Takosumi operated 環境に適用します。既存実装の OIDC projection compatibility path は
-migration debt です。final public model は Capsule/account-plane projection metadata であり、public PKCE client
-metadata だけを扱い、client secret rotation track は持ちません。これは Capsule-projected service 向け identity projection であり、
-任意 third-party client の login / consent platform としての secret lifecycle ではありません。
+本 policy はすべての Takosumi operated 環境に適用します。account-plane OIDC metadataはpublic PKCE client metadataだけを
+扱い、client secret rotation trackを持ちません。runtime consumerの認可とcredential deliveryはInterfaceBindingが所有し、
+OpenTofu Outputやaccount projectionをtoken deliveryに使いません。これは任意third-party client向けlogin / consent
+platformのsecret lifecycleではありません。
 
 ## Rotation Cadence
 
@@ -36,7 +36,7 @@ metadata だけを扱い、client secret rotation track は持ちません。こ
 | Upstream OAuth provider secrets                                                                 | 6 months        | 12 months        | No if client id unchanged                     |
 | Takosumi Cloud payment processor secrets                                                        | 6 months        | 12 months        | Takosumi Cloud only                           |
 | Operator default connection bootstrap credentials                                               | 6 months        | 12 months        | Production if plan/apply may mint credentials |
-| Git / Cloudflare / AWS / GCP / GitHub / Kubernetes / generic ProviderConnection secrets         | 6 months        | 12 months        | Per ProviderConnection status                 |
+| Source Git and operator-installed CredentialRecipe ProviderConnection secrets                   | 6 months        | 12 months        | Per ProviderConnection status                 |
 | Emergency rotation (suspected exposure, leaked credential, departed operator with prior access) | Immediate       | n/a              | Per-secret class                              |
 
 ## Who Can Initiate
@@ -50,8 +50,8 @@ metadata だけを扱い、client secret rotation track は持ちません。こ
 
 ## Connection Token and OIDC Ownership
 
-per-Capsule/account-plane OIDC projection は public PKCE client metadata です。Capsule-projected service へ
-渡す material は issuer、client id、redirect URI、scope などの public metadata
+per-Capsule/account-plane OIDC projection は public PKCE client metadata です。Interface-bound runtimeへ
+渡すOIDC metadataは issuer、client id、redirect URI、scope などの public metadata
 に限り、client secret は発行・materialize しません。OAuth client registry /
 consent / token endpoint は Takosumi accounts plane が所有しますが、generic
 third-party login / consent product として前面に出すのは、client registry、
@@ -70,7 +70,7 @@ ProviderConnection / Capsule integration secret の rotation contract:
   のいずれかとして scope を固定する。
 - raw token は rotation 時に一度だけ返し、通常の projection / GET response には
   expiry と non-secret metadata だけを出す。`secret_ref` / vault handle は public projection に出さない。
-- rotation 時は new token を projection metadata に反映し、grace window (>=10 min)
+- rotation 時は new token を対応するInterfaceBinding delivery backendに反映し、grace window (>=10 min)
   の間 old token を併用可能にする。
 - rotation 完了後、AuditEvent に Workspace id、Project id / Capsule id (該当する場合)、
   ProviderConnection id / Secret ref、scope、旧 secret ref、新 secret ref、rotation timestamp を残す。
@@ -127,6 +127,7 @@ SEV-1 path に従い、[`./incident-response.md`](./incident-response.md)
 
 ## Cross-References
 
+- 実行手順 (rotation の実施): [`./secret-rotation.md`](./secret-rotation.md)
 - SEV 分類 (emergency rotation 用): [`./oncall.md`](./oncall.md)
 - incident response (漏洩疑い時):
   [`./incident-response.md`](./incident-response.md)

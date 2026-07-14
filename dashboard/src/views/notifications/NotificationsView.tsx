@@ -21,7 +21,7 @@ import {
   notificationFeed,
   refreshNotificationFeed,
 } from "../../lib/notifications.ts";
-import { providerDescriptor } from "../account/lib/connections.ts";
+import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { listCapsulesCached } from "../../lib/capsule-list.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
@@ -51,14 +51,12 @@ function metaNumber(
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
-/** Human provider name for a recorded provider id — the same descriptor label
- * the Connections tab shows, so a connection line reads "Cloudflare", never the
- * raw `cloudflare` token. Falls back to the raw id for unknown providers. */
+/** Generic human-readable label for a recorded provider source. */
 function connectionProviderLabel(
   provider: string | undefined,
 ): string | undefined {
   if (!provider) return undefined;
-  return providerDescriptor(provider)?.label ?? provider;
+  return readableProviderSourceLabel(provider);
 }
 
 /**
@@ -78,7 +76,6 @@ function describeEvent(
   const m = event.metadata ?? {};
   const name = serviceName;
   switch (event.action) {
-    case "installation.created":
     case "capsule.created": {
       const name = metaString(m, "name") ?? "—";
       const env = metaString(m, "environment");
@@ -93,8 +90,8 @@ function describeEvent(
     case "capsule.auto_update_disabled": {
       return { title: t("notif.event.autoUpdateOff") };
     }
-    case "installation.auto_update_failed":
-    case "installation.auto_update_apply_failed": {
+    case "capsule.auto_update_failed":
+    case "capsule.auto_update_apply_failed": {
       return {
         title: name
           ? t("notif.event.autoUpdateFailedNamed", { name })
@@ -152,7 +149,8 @@ function describeEvent(
         detail: runFailureHint(metaString(m, "errorCode")),
       };
     }
-    case "installation.drift_detected": {
+    case "capsule.drift_detected":
+    case "resource.drift_detected": {
       return {
         title: name
           ? t("notif.event.driftNamed", { name })
@@ -160,8 +158,8 @@ function describeEvent(
         detail: t("notif.event.driftDetail"),
       };
     }
-    case "installation.stale": {
-      const producer = metaString(m, "producerInstallationName");
+    case "capsule.stale": {
+      const producer = metaString(m, "producerCapsuleName");
       return {
         title: name
           ? t("notif.event.staleNamed", { name })
@@ -226,7 +224,7 @@ function eventHref(event: ActivityEvent): string | undefined {
   if (event.targetType === "run_group") {
     return `/run-groups/${encodeURIComponent(event.targetId)}`;
   }
-  if (event.targetType === "installation" || event.targetType === "capsule") {
+  if (event.targetType === "capsule") {
     return `/services/${encodeURIComponent(event.targetId)}`;
   }
   if (event.targetType === "connection") {
@@ -238,14 +236,13 @@ function eventHref(event: ActivityEvent): string | undefined {
   return undefined;
 }
 
-/** Capsule id an event is about: run events record it as metadata
- * (installationId / capsuleId); service events carry it as the target. */
+/** Capsule id an event is about: run events record it as metadata; service
+ * events carry it as the target. */
 function eventCapsuleId(event: ActivityEvent): string | undefined {
   const m = event.metadata ?? {};
-  const fromMeta =
-    metaString(m, "installationId") ?? metaString(m, "capsuleId");
+  const fromMeta = metaString(m, "capsuleId");
   if (fromMeta) return fromMeta;
-  if (event.targetType === "installation" || event.targetType === "capsule") {
+  if (event.targetType === "capsule") {
     return event.targetId;
   }
   return undefined;

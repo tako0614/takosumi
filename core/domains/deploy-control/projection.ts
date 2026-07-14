@@ -1,126 +1,65 @@
 /**
  * Output / diagnostic projection and redaction for the deploy-control domain.
  *
- * These pure functions derive the public, non-secret ledger projection from
- * runner results: well-known DeploymentOutput selection + secret filtering,
- * plan artifact/summary normalization, state-lock evidence, and diagnostic
- * redaction. Secret outputs and references never reach the public ledger.
+ * These pure functions derive two deliberately separate views from runner
+ * results: bounded Workspace-local Output capture, which treats ordinary
+ * non-sensitive values as opaque data, and an explicit public projection,
+ * which additionally applies publishability filtering. They also normalize
+ * plan artifacts/summaries, state-lock evidence, and diagnostics.
  */
 
 import type { JsonValue } from "takosumi-contract";
 import type {
-  DeploymentOutput,
   OpenTofuOutputEnvelope,
   OpenTofuPlanArtifact,
   PlanRunSummary,
   RunDiagnostic,
   RunnerStateBackend,
   RunnerStateLockEvidence,
-  TemplateDefinition,
 } from "@takosumi/internal/deploy-control-api";
 import type {
   OutputAllowlistEntry,
   OutputValueType,
 } from "takosumi-contract/install-configs";
-import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
+import {
+  OpenTofuControllerError,
+  requireNonEmptyString,
+  structuredErrorReason,
+} from "./errors.ts";
 import {
   containsSecretLikeString,
   redactString,
 } from "takosumi-contract/redaction";
 
-export function deploymentOutputsFromOpenTofu(
-  outputs: OpenTofuOutputEnvelope,
-): readonly DeploymentOutput[] {
-  const result: DeploymentOutput[] = [];
-  for (const [name, output] of Object.entries(outputs)) {
-    if (output.sensitive === true) continue;
-    const kind = outputKindFromName(name);
-    if (!kind) continue;
-    if (!isPublishableDeploymentOutputValue(name, kind, output.value)) continue;
-    result.push({
-      name,
-      kind,
-      value: output.value,
-      sensitive: false,
-    });
-  }
-  return result;
-}
-
 /**
- * Template output allowlist projection (Phase 1C).
- *
- * For a template-backed run, project ONLY the template's declared public
- * outputs. The Takosumi-generated root re-exports each public output under its
- * public name (`output "<public>" { value = module.app.<from> }`), so the runner
- * output envelope is keyed by the public names. We keep only those names, drop
- * sensitive/non-publishable values via the same filter as the well-known
- * projection, and stamp the template-declared display kind.
+ * Keeps the cleartext Workspace-local Output row bounded. The raw encrypted
+ * runner artifact remains the complete source of record; values outside these
+ * limits are simply unavailable to Dependency/Interface resolution unless the
+ * module exposes a smaller ordinary Output.
  */
-export function projectTemplatePublicOutputs(
-  template: TemplateDefinition,
-  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
-): readonly DeploymentOutput[] {
-  if (!outputs) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `template ${template.id}@${template.version} produced no OpenTofu outputs`,
-    );
-  }
-  const byName = outputValuesByName(outputs);
-  const result: DeploymentOutput[] = [];
-  for (const [publicName, spec] of Object.entries(template.outputs.public)) {
-    const entry = byName.get(publicName);
-    if (!entry) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `template ${template.id}@${template.version} output ${publicName} is missing`,
-      );
-    }
-    if (entry.sensitive) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `template ${template.id}@${template.version} output ${publicName} is sensitive and cannot be published`,
-      );
-    }
-    const kind = templateOutputKind(spec.type);
-    if (!templateOutputValueMatchesType(entry.value, spec.type)) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `template ${template.id}@${template.version} output ${publicName} does not match declared type ${spec.type}`,
-      );
-    }
-    if (!isPublishableDeploymentOutputValue(publicName, kind, entry.value)) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `template ${template.id}@${template.version} output ${publicName} cannot be published`,
-      );
-    }
-    result.push({
-      name: publicName,
-      kind,
-      value: entry.value,
-      sensitive: false,
-    });
-  }
-  return result;
-}
+export const WORKSPACE_OUTPUT_PROJECTION_LIMITS = {
+  maxEntries: 128,
+  maxValueBytes: 64 * 1024,
+  maxTotalBytes: 256 * 1024,
+} as const;
 
 export function projectOutputAllowlistPublicOutputs(
   outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>,
-  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
-): readonly DeploymentOutput[] {
+  outputs: OpenTofuOutputEnvelope | undefined,
+): Readonly<Record<string, JsonValue>> {
   const projected = projectOutputAllowlistSpaceOutputs(
     outputAllowlist,
     outputs,
   );
-  const result: DeploymentOutput[] = [];
+  const result: Record<string, JsonValue> = {};
   for (const [publicName, spec] of Object.entries(outputAllowlist)) {
-    if (publicName === "takosumi_release") continue;
     if (!(publicName in projected)) continue;
-    const kind = templateOutputKind(spec.type);
+    const kind = projectionOutputKind(spec.type);
     const value = projected[publicName]!;
-    if (!isPublishableDeploymentOutputValue(publicName, kind, value)) {
+    if (
+      !isPublishableOutputValue(publicName, kind, value) ||
+      !isPublishableOutputValue(spec.from, kind, value)
+    ) {
       if (spec.required) {
         throw new OpenTofuControllerError(
           "failed_precondition",
@@ -129,18 +68,25 @@ export function projectOutputAllowlistPublicOutputs(
       }
       continue;
     }
-    result.push({ name: publicName, kind, value, sensitive: false });
+    result[publicName] = value;
   }
   return result;
 }
 
 export function projectOutputAllowlistSpaceOutputs(
   outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>,
-  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
+  outputs: OpenTofuOutputEnvelope | undefined,
 ): Readonly<Record<string, JsonValue>> {
   const byName = outputs ? outputValuesByName(outputs) : new Map();
   const result: Record<string, JsonValue> = {};
-  for (const [projectedName, spec] of Object.entries(outputAllowlist)) {
+  let projectedCount = 0;
+  let projectedBytes = 0;
+  const entries = Object.entries(outputAllowlist).sort(
+    ([leftName, left], [rightName, right]) =>
+      Number(right.required === true) - Number(left.required === true) ||
+      leftName.localeCompare(rightName),
+  );
+  for (const [projectedName, spec] of entries) {
     if (spec.sensitive === true) {
       continue;
     }
@@ -172,41 +118,76 @@ export function projectOutputAllowlistSpaceOutputs(
         `output ${spec.from} does not match declared projection type ${spec.type} (actual ${describeJsonValueType(entry.value)})`,
       );
     }
+    const valueBytes = jsonValueUtf8Bytes(entry.value);
+    const projectedEntryBytes =
+      jsonValueUtf8Bytes(projectedName) + valueBytes + 2;
     if (
-      !isPublishableDeploymentOutputValue(projectedName, spec.type, entry.value)
+      valueBytes > WORKSPACE_OUTPUT_PROJECTION_LIMITS.maxValueBytes ||
+      projectedCount >= WORKSPACE_OUTPUT_PROJECTION_LIMITS.maxEntries ||
+      projectedBytes + projectedEntryBytes >
+        WORKSPACE_OUTPUT_PROJECTION_LIMITS.maxTotalBytes
     ) {
       if (spec.required) {
         throw new OpenTofuControllerError(
           "failed_precondition",
-          `required output ${spec.from} cannot be projected as ${projectedName}`,
+          `required output ${spec.from} exceeds the Workspace Output projection limits`,
         );
       }
       continue;
     }
     result[projectedName] = entry.value;
+    projectedCount += 1;
+    projectedBytes += projectedEntryBytes;
   }
   return result;
 }
 
+/**
+ * Default Workspace capture for an ordinary root module. This is intentionally
+ * not a public allowlist: every bounded, non-sensitive root Output is retained
+ * as an OpenTofu return value. Public projection remains DB-explicit.
+ */
+export function projectAllWorkspaceOutputs(
+  outputs: OpenTofuOutputEnvelope | undefined,
+): Readonly<Record<string, JsonValue>> {
+  const result: Record<string, JsonValue> = {};
+  if (!outputs) return result;
+  let projectedCount = 0;
+  let projectedBytes = 0;
+  const entries = [...outputValuesByName(outputs).entries()].sort(
+    ([left], [right]) => left.localeCompare(right),
+  );
+  for (const [name, entry] of entries) {
+    if (entry.sensitive) continue;
+    const valueBytes = jsonValueUtf8Bytes(entry.value);
+    const projectedEntryBytes = jsonValueUtf8Bytes(name) + valueBytes + 2;
+    if (
+      valueBytes > WORKSPACE_OUTPUT_PROJECTION_LIMITS.maxValueBytes ||
+      projectedCount >= WORKSPACE_OUTPUT_PROJECTION_LIMITS.maxEntries ||
+      projectedBytes + projectedEntryBytes >
+        WORKSPACE_OUTPUT_PROJECTION_LIMITS.maxTotalBytes
+    ) {
+      continue;
+    }
+    result[name] = entry.value;
+    projectedCount += 1;
+    projectedBytes += projectedEntryBytes;
+  }
+  return result;
+}
+
+function jsonValueUtf8Bytes(value: JsonValue): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
 function outputValuesByName(
-  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[],
+  outputs: OpenTofuOutputEnvelope,
 ): ReadonlyMap<
   string,
   { readonly value: JsonValue; readonly sensitive: boolean }
 > {
   const map = new Map<string, { value: JsonValue; sensitive: boolean }>();
-  if (Array.isArray(outputs as unknown)) {
-    for (const output of outputs as readonly DeploymentOutput[]) {
-      map.set(output.name, {
-        value: output.value,
-        sensitive: output.sensitive,
-      });
-    }
-    return map;
-  }
-  for (const [name, output] of Object.entries(
-    outputs as OpenTofuOutputEnvelope,
-  )) {
+  for (const [name, output] of Object.entries(outputs)) {
     map.set(name, {
       value: output.value,
       sensitive: output.sensitive === true,
@@ -216,12 +197,10 @@ function outputValuesByName(
 }
 
 /**
- * Maps a template public-output type hint to a DeploymentOutput display kind.
- * A `*_url`-shaped public name keeps URL semantics so the sensitive-URL guard in
- * `isPublishableDeploymentOutputValue` applies; everything else is a generic
- * non-URL value passed through under its declared type.
+ * Maps an explicit service-side public-output type to a display kind.
+ * The declared type, rather than the Output name, determines URL semantics.
  */
-function templateOutputKind(type: string): DeploymentOutput["kind"] {
+function projectionOutputKind(type: string): string {
   return typeof type === "string" && type.length > 0 ? type : "string";
 }
 
@@ -259,42 +238,6 @@ function describeJsonValueType(value: JsonValue): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
   return typeof value;
-}
-
-function templateOutputValueMatchesType(
-  value: JsonValue,
-  type: string,
-): boolean {
-  return isOutputValueType(type) ? outputValueMatchesType(value, type) : true;
-}
-
-function isOutputValueType(type: string): type is OutputValueType {
-  return (
-    type === "string" ||
-    type === "url" ||
-    type === "hostname" ||
-    type === "number" ||
-    type === "boolean" ||
-    type === "json"
-  );
-}
-
-export function normalizeDeploymentOutputs(
-  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
-): readonly DeploymentOutput[] {
-  if (!outputs) return [];
-  if (Array.isArray(outputs as unknown)) {
-    return (outputs as readonly DeploymentOutput[]).filter(
-      (output) =>
-        output.sensitive === false &&
-        isPublishableDeploymentOutputValue(
-          output.name,
-          output.kind,
-          output.value,
-        ),
-    );
-  }
-  return deploymentOutputsFromOpenTofu(outputs as OpenTofuOutputEnvelope);
 }
 
 export function normalizePlanArtifact(input: {
@@ -338,46 +281,24 @@ export function normalizePlanSummary(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function outputKindFromName(
-  name: string,
-): DeploymentOutput["kind"] | undefined {
-  const normalized = name.replace(/^takosumi_/, "");
-  switch (normalized) {
-    case "launch_url":
-    case "admin_url":
-    case "health_url":
-    case "docs_url":
-    case "service_url":
-      return normalized;
-    default:
-      return undefined;
-  }
-}
-
 const SECRET_OUTPUT_NAME_RE =
   /(?:^|[_-])(token|secret|password|passwd|credential|auth|bearer|session|cookie|key)(?:$|[_-])/i;
 const SECRET_QUERY_RE =
   /(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key)/i;
 
-function isPublishableDeploymentOutputValue(
+function isPublishableOutputValue(
   name: string,
-  kind: DeploymentOutput["kind"],
+  kind: string,
   value: JsonValue,
 ): boolean {
   if (SECRET_OUTPUT_NAME_RE.test(name)) return false;
   if (typeof value !== "string") {
-    if (name === "app_deployment" && kind === "json") {
-      return !containsUnsafeAppDeploymentDescriptorValue(value);
-    }
-    if (name === "service_exports" && kind === "json") {
-      return !containsUnsafeServiceExportsDescriptorValue(value);
-    }
     return !containsSecretLikeJsonValue(value);
   }
   if (containsSecretLikeString(value) || redactString(value) !== value) {
     return false;
   }
-  if (!kind.endsWith("_url")) return true;
+  if (kind !== "url") return true;
   let parsed: URL;
   try {
     parsed = new URL(value);
@@ -390,253 +311,6 @@ function isPublishableDeploymentOutputValue(
     if (SECRET_QUERY_RE.test(key)) return false;
   }
   return true;
-}
-
-function containsUnsafeAppDeploymentDescriptorValue(value: JsonValue): boolean {
-  return containsSecretLikeAppDeploymentDescriptorValue(value);
-}
-
-function containsSecretLikeAppDeploymentDescriptorValue(
-  value: JsonValue,
-): boolean {
-  const stack: Array<{ value: JsonValue; path: readonly string[] }> = [
-    { value, path: [] },
-  ];
-  let inspected = 0;
-  while (stack.length > 0) {
-    const { value: current, path } = stack.pop()!;
-    inspected += 1;
-    if (inspected > 1_000) return true;
-    if (typeof current === "string") {
-      if (isSafeAppDeploymentAuthDescriptorString(path, current)) {
-        continue;
-      }
-      if (
-        containsSecretLikeString(current) ||
-        redactString(current) !== current
-      ) {
-        return true;
-      }
-      continue;
-    }
-    if (current === null || typeof current !== "object") continue;
-    if (Array.isArray(current)) {
-      for (const [index, item] of current.entries()) {
-        stack.push({ value: item, path: [...path, String(index)] });
-      }
-      continue;
-    }
-    if (path.length === 1 && path[0] === "resources") {
-      for (const [name, descriptor] of Object.entries(current)) {
-        if (!/^[a-z][a-z0-9_]{0,127}$/u.test(name)) return true;
-        if (!isJsonObjectValue(descriptor)) return true;
-        if (descriptor.type === "secret") {
-          if (!isSafeAppDeploymentSecretResourceDescriptor(descriptor)) {
-            return true;
-          }
-          continue;
-        }
-        stack.push({ value: descriptor, path: [...path, name] });
-      }
-      continue;
-    }
-    for (const [key, nested] of Object.entries(current)) {
-      if (isDeclarativeConsumeEnvProjection(path, key, nested)) continue;
-      if (isSafeAppDeploymentAuthDescriptorKey(path, key, nested)) {
-        stack.push({ value: nested, path: [...path, key] });
-        continue;
-      }
-      if (SECRET_QUERY_RE.test(key) || SECRET_OUTPUT_NAME_RE.test(key)) {
-        return true;
-      }
-      stack.push({ value: nested, path: [...path, key] });
-    }
-  }
-  return false;
-}
-
-function isSafeAppDeploymentSecretResourceDescriptor(
-  value: Readonly<Record<string, JsonValue>>,
-): boolean {
-  const allowedKeys = new Set(["type", "bind", "to", "generate"]);
-  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
-  if (value.type !== "secret") return false;
-  if (typeof value.bind !== "string" || !isSafeSecretReference(value.bind)) {
-    return false;
-  }
-  if (
-    !Array.isArray(value.to) ||
-    value.to.length === 0 ||
-    value.to.some(
-      (target) =>
-        typeof target !== "string" ||
-        !/^[a-z][a-z0-9_-]{0,127}$/u.test(target),
-    )
-  ) {
-    return false;
-  }
-  return value.generate === undefined || typeof value.generate === "boolean";
-}
-
-function isSafeAppDeploymentAuthDescriptorKey(
-  path: readonly string[],
-  key: string,
-  value: JsonValue,
-): boolean {
-  if (
-    path.length === 2 &&
-    path[0] === "publish" &&
-    /^\d+$/u.test(path[1] ?? "") &&
-    key === "auth"
-  ) {
-    return value !== null && typeof value === "object" && !Array.isArray(value);
-  }
-  if (
-    path.length === 3 &&
-    path[0] === "publish" &&
-    /^\d+$/u.test(path[1] ?? "") &&
-    path[2] === "auth" &&
-    key === "bearer"
-  ) {
-    return value !== null && typeof value === "object" && !Array.isArray(value);
-  }
-  if (
-    path.length === 4 &&
-    path[0] === "publish" &&
-    /^\d+$/u.test(path[1] ?? "") &&
-    path[2] === "auth" &&
-    path[3] === "bearer" &&
-    key === "secretRef"
-  ) {
-    return typeof value === "string" && isSafeSecretReference(value);
-  }
-  return false;
-}
-
-function isSafeAppDeploymentAuthDescriptorString(
-  path: readonly string[],
-  value: string,
-): boolean {
-  return (
-    path.length === 5 &&
-    path[0] === "publish" &&
-    /^\d+$/u.test(path[1] ?? "") &&
-    path[2] === "auth" &&
-    path[3] === "bearer" &&
-    path[4] === "secretRef" &&
-    isSafeSecretReference(value)
-  );
-}
-
-function isSafeSecretReference(value: string): boolean {
-  return /^[A-Z_][A-Z0-9_]{0,127}$/u.test(value);
-}
-
-function containsUnsafeServiceExportsDescriptorValue(value: JsonValue): boolean {
-  if (!Array.isArray(value)) return true;
-  const allowedExportKeys = new Set([
-    "name",
-    "capabilities",
-    "visibility",
-    "endpoints",
-    "auth",
-    "labels",
-    "metadata",
-  ]);
-  const allowedAuthKeys = new Set(["scheme", "audience", "scopes", "metadata"]);
-  const allowedSchemes = new Set(["none", "bearer", "oidc", "signed_webhook"]);
-  for (const entry of value) {
-    if (!isJsonObjectValue(entry)) return true;
-    if (Object.keys(entry).some((key) => !allowedExportKeys.has(key))) return true;
-    if (typeof entry.name !== "string" || entry.name.length === 0) return true;
-    if (
-      !Array.isArray(entry.capabilities) ||
-      entry.capabilities.some(
-        (capability) =>
-          typeof capability !== "string" ||
-          !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(capability),
-      )
-    ) {
-      return true;
-    }
-    if (
-      entry.visibility !== undefined &&
-      !["private", "space", "public", "shared"].includes(
-        String(entry.visibility),
-      )
-    ) {
-      return true;
-    }
-    if (entry.endpoints !== undefined) {
-      if (!Array.isArray(entry.endpoints)) return true;
-      if (entry.endpoints.some((endpoint) => containsSecretLikeJsonValue(endpoint))) {
-        return true;
-      }
-    }
-    if (entry.auth !== undefined) {
-      if (!Array.isArray(entry.auth)) return true;
-      for (const auth of entry.auth) {
-        if (!isJsonObjectValue(auth)) return true;
-        if (Object.keys(auth).some((key) => !allowedAuthKeys.has(key))) return true;
-        if (typeof auth.scheme !== "string" || !allowedSchemes.has(auth.scheme)) {
-          return true;
-        }
-        for (const field of ["audience", "scopes"] as const) {
-          const values = auth[field];
-          if (
-            values !== undefined &&
-            (!Array.isArray(values) ||
-              values.some(
-                (item) =>
-                  typeof item !== "string" ||
-                  !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u.test(item),
-              ))
-          ) {
-            return true;
-          }
-        }
-        if (
-          auth.metadata !== undefined &&
-          containsSecretLikeJsonValue(auth.metadata)
-        ) {
-          return true;
-        }
-      }
-    }
-    if (entry.labels !== undefined && containsSecretLikeJsonValue(entry.labels)) {
-      return true;
-    }
-    if (
-      entry.metadata !== undefined &&
-      containsSecretLikeJsonValue(entry.metadata)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isJsonObjectValue(
-  value: JsonValue,
-): value is Readonly<Record<string, JsonValue>> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isDeclarativeConsumeEnvProjection(
-  path: readonly string[],
-  key: string,
-  value: JsonValue,
-): boolean {
-  if (typeof value !== "string") return false;
-  if (!/^[a-z][a-z0-9_]{0,63}$/u.test(key)) return false;
-  if (!/^[A-Z_][A-Z0-9_]{0,127}$/u.test(value)) return false;
-  const tail = path.slice(-3);
-  return (
-    tail.length === 3 &&
-    /^\d+$/u.test(tail[0] ?? "") &&
-    tail[1] === "inject" &&
-    tail[2] === "env"
-  );
 }
 
 function containsSecretLikeJsonValue(value: JsonValue): boolean {
@@ -697,122 +371,16 @@ export function stateLockEvidence(
 
 export function errorDiagnostic(error: unknown): RunDiagnostic {
   const message = errorMessage(error);
-  const classified = classifiedErrorDiagnostic(message);
-  if (classified) return classified;
+  const code = structuredErrorReason(error);
   return {
     severity: "error",
+    ...(code ? { code } : {}),
     message,
   };
 }
 
 export function errorMessage(error: unknown): string {
   return redactString(error instanceof Error ? error.message : String(error));
-}
-
-function classifiedErrorDiagnostic(message: string): RunDiagnostic | undefined {
-  if (isCreditRequiredErrorMessage(message)) {
-    return {
-      severity: "error",
-      message:
-        "credits_required: insufficient credits for this Takosumi Cloud operation",
-      detail: message,
-    };
-  }
-  if (isProviderConnectionNotReadyErrorMessage(message)) {
-    return {
-      severity: "error",
-      message:
-        "provider_connection_not_ready: connected account verification is required",
-      detail: message,
-    };
-  }
-  if (isProviderConnectionChangedErrorMessage(message)) {
-    return {
-      severity: "error",
-      message:
-        "provider_connection_changed: connected account evidence changed after planning",
-      detail: message,
-    };
-  }
-  if (isProviderConnectionSetupErrorMessage(message)) {
-    return {
-      severity: "error",
-      message:
-        "provider_connection_setup_required: connected account setup is required",
-      detail: message,
-    };
-  }
-  if (isCredentialServiceUnavailableErrorMessage(message)) {
-    return {
-      severity: "error",
-      message:
-        "credential_service_unavailable: provider credential preparation is unavailable",
-      detail: message,
-    };
-  }
-  return undefined;
-}
-
-function isCreditRequiredErrorMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("cloud_extension_insufficient_credits") ||
-    normalized.includes('"reason":"insufficient_credits"') ||
-    normalized.includes('"reason": "insufficient_credits"') ||
-    (normalized.includes("reservationstatus") &&
-      normalized.includes("insufficient_credits")) ||
-    normalized.includes("usd balance reservation failed") ||
-    normalized.includes("insufficient credits")
-  );
-}
-
-function isProviderConnectionChangedErrorMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("resolved_bindings_changed") ||
-    normalized.includes("re-plan before apply")
-  );
-}
-
-function isProviderConnectionNotReadyErrorMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    (normalized.includes("credential_mint_failed") &&
-      normalized.includes("not verified")) ||
-    normalized.includes("pending (not verified)") ||
-    (normalized.includes("provider connection") &&
-      normalized.includes("status pending is not verified"))
-  );
-}
-
-function isProviderConnectionSetupErrorMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("credential_mint_failed") &&
-    (normalized.includes("provider connection evidence is required") ||
-      normalized.includes("provider connection resolution is required") ||
-      normalized.includes("root-only provider connection is required") ||
-      (normalized.includes("connection ") &&
-        normalized.includes(" not found")) ||
-      normalized.includes("provider connection is required") ||
-      normalized.includes("belongs to another space") ||
-      normalized.includes("git source connection") ||
-      normalized.includes("cannot back a provider env binding") ||
-      (normalized.includes("provider ") &&
-        normalized.includes(" does not match")))
-  );
-}
-
-function isCredentialServiceUnavailableErrorMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("credential_mint_failed") &&
-    (normalized.includes("connection vault is not configured") ||
-      normalized.includes("requires a managed provider credential issuer") ||
-      normalized.includes("could not mint a run-scoped provider token") ||
-      normalized.includes("gateway materialization is takosumi cloud-only") ||
-      normalized.includes("mint driver"))
-  );
 }
 
 export function redactRunDiagnostics(

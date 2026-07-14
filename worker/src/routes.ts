@@ -27,6 +27,12 @@ export function isInternalControlPlanePath(pathname: string): boolean {
   return isInternalV1Path(normalizePathname(pathname));
 }
 
+export function isInterfaceApiPath(pathname: string): boolean {
+  const normalized = normalizePathname(pathname);
+  return normalized === "/v1/interfaces" ||
+    normalized.startsWith("/v1/interfaces/");
+}
+
 export function createServiceWorkerRequest(request: Request): Request {
   const headers = new Headers(request.headers);
   headers.set(TAKOSUMI_CLOUDFLARE_FRONT_HEADER, "worker");

@@ -21,24 +21,42 @@ const R2_PUT_RETRY_MAX_MS = 10_000;
 
 /**
  * Optional dispatch payload field locating the R2_STATE object for this run.
- * Present when the controller (other lane) carries installation context in the
+ * Present when the controller carries Capsule context in the
  * job. When ABSENT the DO falls back to the legacy R2_ARTIFACTS
  * `opentofu-state/...` path so existing jobs/tests keep working (additive, no
  * flag-day). The `generation` is the 8-digit state generation the controller
  * owns; the DO only writes the object at the derived key and returns its digest.
- * Mirrors the contract `DispatchStateScope` ({ workspaceId, capsuleId,
- * environment, generation }); kept as a local interface so the DO does not pull
- * a contract import into the worker bundle. The dispatch wire is parsed
- * canonical-first with a deprecated `spaceId`/`installationId` fallback during
- * the noun rename; the PHYSICAL R2 key prefix (`spaces/.../installations/...`)
- * stays frozen in lockstep with the controller key formatters so existing state
- * objects are never orphaned.
+ * Mirrors the contract `DispatchStateScope` ({ workspaceId, subject,
+ * environment, generation, stateRef }); kept as a local interface so the DO
+ * does not pull a contract import into the worker bundle. Current R2 keys use
+ * canonical Workspace/Capsule/Resource vocabulary. Historical state refs used
+ * by an explicit adoption request remain opaque read-only coordinates.
  */
 interface StateScope {
   readonly workspaceId: string;
-  readonly capsuleId: string;
+  readonly subjectKind: "capsule" | "resource";
+  readonly subjectId: string;
   readonly environment: string;
   readonly generation: number;
+  /** Opaque to Core; this R2 adapter interprets it as the physical object key. */
+  readonly stateRef: string;
+}
+
+/**
+ * One-shot state seed copied verbatim from an operator-confirmed migration
+ * candidate. The DO never discovers a Capsule or StateVersion by itself.
+ */
+interface StateAdoption {
+  readonly kind: "legacy_backing_capsule_state";
+  readonly sourceWorkspaceId: string;
+  readonly sourceCapsuleId: string;
+  readonly sourceEnvironment: string;
+  readonly sourceStateVersionId: string;
+  readonly stateGeneration: number;
+  readonly stateRef: string;
+  readonly stateDigest: string;
+  readonly confirmedBy: string;
+  readonly confirmedAt: string;
 }
 
 /**
@@ -47,14 +65,14 @@ interface StateScope {
  * R2_SOURCE, verifies the digest, and streams it to the container restore route.
  */
 interface SourceArchiveRestore {
-  readonly objectKey: string;
+  readonly ref: string;
   readonly digest: string;
 }
 
 /**
- * Optional dispatch payload field locating a producer Installation's encrypted
+ * Optional dispatch payload field locating a producer Capsule's encrypted
  * state in R2_STATE for a `remote_state` dependency (spec §15). The DO fetches
- * the ciphertext at `objectKey`, decrypts + verifies the recorded plaintext
+ * the ciphertext at the opaque `stateRef`, decrypts + verifies the recorded plaintext
  * `digest` (same StateArtifactCrypto path as its own state restore), and streams
  * the plaintext to the container which writes it READ-ONLY to
  * `/work/deps/<name>.tfstate` before init/plan/apply. The container never sees
@@ -66,12 +84,12 @@ interface DepState {
   readonly capsuleId: string;
   readonly environment: string;
   readonly generation: number;
-  readonly objectKey: string;
+  readonly stateRef: string;
   readonly digest: string;
 }
 
 interface RestoreState {
-  readonly objectKey: string;
+  readonly stateRef: string;
   readonly digest: string;
 }
 
@@ -417,15 +435,25 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     // state through R2_STATE (encrypted at rest, spec keys); otherwise fall back
     // to the legacy R2_ARTIFACTS state path so older jobs/tests keep working.
     const stateScope = parseStateScope(envelope.request);
+    const rawOutputRef = parseRawOutputRef(envelope.request);
+    const stateAdoption = parseStateAdoption(envelope.request);
+    if (stateAdoption && !stateScope) {
+      throw new Error("stateAdoption requires a Resource stateScope");
+    }
     const sourceArchive = parseSourceArchiveRestore(envelope.request);
     const depStates = parseDepStates(envelope.request);
     const stateKeys = stateScope
       ? []
       : await stateArtifactKeys(envelope.request);
     if (envelope.action === "apply" && stateScope) {
+      if (!rawOutputRef) {
+        throw new Error("apply with stateScope requires rawOutputRef");
+      }
+      assertRawOutputRefForScope(stateScope, runId, rawOutputRef);
       const adopted = await this.#adoptCompletedApplyFromR2State(
         runId,
         stateScope,
+        rawOutputRef,
       );
       if (adopted) return adopted;
     }
@@ -449,6 +477,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         stateScope,
         url,
         envelope.action,
+        stateAdoption,
       );
     } else if (stateKeys.length > 0) {
       await this.#restoreStateArtifact(runId, stateKeys, url);
@@ -474,6 +503,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           url,
           runnerResponse,
           envelope.action,
+          rawOutputRef,
         );
       }
       if (stateKeys.length > 0) {
@@ -508,7 +538,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   // Source-sync relay: dispatch the run to the container, then on success pull
   // the deterministic source archive and persist it to R2_SOURCE under the
-  // archiveObjectKey the runner echoes back. Mirrors the tfplan pull-then-persist
+  // host-allocated archiveRef the runner echoes back. Mirrors the tfplan pull-then-persist
   // protocol but writes to the dedicated source bucket and never touches state.
   async #fetchWithSourceArchive(
     runId: string,
@@ -517,9 +547,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   ): Promise<Response> {
     const url = new URL(request.url);
     const envelope = parseRunEnvelope(bodyText);
-    const requestedArchiveObjectKey = sourceSyncArchiveObjectKey(
-      envelope.request,
-    );
+    const requestedArchiveRef = sourceSyncArchiveRef(envelope.request);
     const reuseSnapshot = parseReusableSourceSnapshot(envelope.request);
     const runnerResponse = await this.#containerFetchAfterReady(
       () =>
@@ -540,10 +568,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!archive || stringField(archive, "kind") !== "runner-local") {
       return jsonResponse(payload, runnerResponse.status);
     }
-    const archiveObjectKey = requiredStringField(archive, "archiveObjectKey");
-    assertSafeSourceArchiveKey(archiveObjectKey);
-    if (archiveObjectKey !== requestedArchiveObjectKey) {
-      throw new Error("source archive object key does not match request");
+    const archiveRef = requiredStringField(archive, "ref");
+    assertSafeSourceArchiveKey(archiveRef);
+    if (archiveRef !== requestedArchiveRef) {
+      throw new Error("source archive ref does not match request");
     }
     const bucket = this.env.R2_SOURCE;
     if (!bucket) {
@@ -567,7 +595,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
     const stored = await putR2ObjectWithRetry(
       bucket,
-      archiveObjectKey,
+      archiveRef,
       bytes,
       {
         httpMetadata: { contentType: SOURCE_ARCHIVE_CONTENT_TYPE },
@@ -583,7 +611,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         ...payload,
         sourceArchive: {
           kind: "object-storage",
-          archiveObjectKey,
+          ref: archiveRef,
           digest,
           contentType: SOURCE_ARCHIVE_CONTENT_TYPE,
           sizeBytes: stored.size,
@@ -602,8 +630,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!reuseSnapshot) {
       throw new Error("source archive reuse requires reuseSnapshot");
     }
-    const archiveObjectKey = requiredStringField(archive, "archiveObjectKey");
-    assertSafeSourceArchiveKey(archiveObjectKey);
+    const archiveRef = requiredStringField(archive, "ref");
+    assertSafeSourceArchiveKey(archiveRef);
     const digest = requiredStringField(archive, "digest");
     const sizeBytes = positiveIntegerField(archive, "sizeBytes");
     const reusedFromSnapshotId = requiredStringField(
@@ -612,7 +640,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
     if (
       reusedFromSnapshotId !== reuseSnapshot.id ||
-      archiveObjectKey !== reuseSnapshot.archiveObjectKey ||
+      archiveRef !== reuseSnapshot.archiveRef ||
       digest !== reuseSnapshot.archiveDigest ||
       sizeBytes !== reuseSnapshot.archiveSizeBytes ||
       stringField(payload, "archiveDigest") !== reuseSnapshot.archiveDigest ||
@@ -627,9 +655,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         "R2_SOURCE binding is not configured for source archives",
       );
     }
-    const object = await bucket.get(archiveObjectKey);
+    const object = await bucket.get(archiveRef);
     if (!object) {
-      throw new Error(`source archive object not found: ${archiveObjectKey}`);
+      throw new Error(`source archive object not found: ${archiveRef}`);
     }
     if (object.size !== reuseSnapshot.archiveSizeBytes) {
       throw new Error("source archive reuse size mismatch");
@@ -650,18 +678,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     sourceArchive: SourceArchiveRestore,
     baseUrl: URL,
   ): Promise<void> {
-    assertSafeSourceArchiveKey(sourceArchive.objectKey);
+    assertSafeSourceArchiveKey(sourceArchive.ref);
     const bucket = this.env.R2_SOURCE;
     if (!bucket) {
       throw new Error(
         "R2_SOURCE binding is not configured for source archives",
       );
     }
-    const object = await bucket.get(sourceArchive.objectKey);
+    const object = await bucket.get(sourceArchive.ref);
     if (!object) {
-      throw new Error(
-        `source archive object not found: ${sourceArchive.objectKey}`,
-      );
+      throw new Error(`source archive object not found: ${sourceArchive.ref}`);
     }
     const bytes = new Uint8Array(await object.arrayBuffer());
     const digest = await digestBytes(bytes);
@@ -688,7 +714,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   // fetch the encrypted object from R2_STATE, decrypt + verify its recorded
   // plaintext digest (tamper check, same path as #restoreStateFromR2State), and
   // stream the plaintext to the container's dep-state restore route. The DO
-  // path-jails the objectKey to the producer env's state prefix (defense against
+  // path-jails the stateRef to the producer env's state prefix (defense against
   // a crafted descriptor pointing at another tenant's object) and the container
   // writes each as /work/deps/<name>.tfstate read-only. The container never sees
   // the passphrase or the ciphertext.
@@ -701,11 +727,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     for (const depState of depStates) {
       // The object key MUST stay inside the producer env's state prefix. A
       // descriptor pointing elsewhere is a crafted cross-tenant read.
-      assertDepStateObjectKey(depState);
-      const object = await bucket.get(depState.objectKey);
+      assertDepStateRef(depState);
+      const object = await bucket.get(depState.stateRef);
       if (!object) {
         throw new Error(
-          `dependency state object not found: ${depState.objectKey}`,
+          `dependency state object not found: ${depState.stateRef}`,
         );
       }
       const ciphertext = new Uint8Array(await object.arrayBuffer());
@@ -740,6 +766,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     scope: StateScope,
     baseUrl: URL,
     action: string | undefined,
+    adoption: StateAdoption | undefined,
   ): Promise<void> {
     const bucket = this.#r2State();
     const current = await readCurrentState(
@@ -747,12 +774,28 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       scope,
       restoreMaxGeneration(scope, action),
     );
-    if (!current) return;
-    const object = await readCurrentStateObject(bucket, scope, current);
+    if (current && adoption) {
+      throw new Error(
+        "state adoption refused: canonical Resource state already exists",
+      );
+    }
+    const adopted =
+      !current && adoption
+        ? await readConfirmedStateAdoption(
+            bucket,
+            scope,
+            adoption,
+            restoreMaxGeneration(scope, action),
+          )
+        : undefined;
+    const pointer = current ?? adopted?.pointer;
+    if (!pointer) return;
+    const object =
+      adopted?.object ?? (await readCurrentStateObject(bucket, scope, pointer));
     const ciphertext = new Uint8Array(await object.arrayBuffer());
     const plaintext = await this.#stateCrypto().open(
       ciphertext,
-      current.digest,
+      pointer.digest,
     );
     await this.#ensureContainerReady(baseUrl);
     const response = await this.#containerFetch(
@@ -780,6 +823,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     baseUrl: URL,
     runnerResponse: Response,
     action: string | undefined,
+    rawOutputRef: string | undefined,
   ): Promise<Response> {
     const stateResponse = await this.#containerFetch(
       new Request(stateArtifactUrl(baseUrl, runId), { method: "GET" }),
@@ -793,7 +837,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const plaintext = new Uint8Array(await stateResponse.arrayBuffer());
     const sealed = await this.#stateCrypto().seal(plaintext);
     const bucket = this.#r2State();
-    const objectKey = stateObjectKey(scope);
+    assertStateRefForScope(scope);
+    const objectKey = scope.stateRef;
     await putR2ObjectWithRetry(
       bucket,
       objectKey,
@@ -832,22 +877,24 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
     const payload = await readJsonObject(runnerResponse);
     // M7: an apply persists the raw `tofu output -json` envelope encrypted at
-    // rest to R2_ARTIFACTS (spec §26) and echoes `rawOutputsKey` so the
-    // controller records it on the OutputSnapshot. A destroy has no outputs.
-    const rawOutputsKey =
+    // rest to R2_ARTIFACTS and echoes `rawOutputRef` so the
+    // controller records it on the Output. A destroy has no outputs.
+    const persistedRawOutputRef =
       action === "apply"
-        ? await this.#persistRawOutputs(runId, scope, payload)
+        ? await this.#persistRawOutputs(runId, rawOutputRef!, payload)
         : undefined;
     return jsonResponse(
       {
         ...payload,
         state: {
           generation: scope.generation,
-          objectKey,
+          stateRef: objectKey,
           digest: sealed.contentDigest,
           ciphertextLength: sealed.ciphertextLength,
         },
-        ...(rawOutputsKey ? { rawOutputsKey } : {}),
+        ...(persistedRawOutputRef
+          ? { rawOutputRef: persistedRawOutputRef }
+          : {}),
       },
       runnerResponse.status,
     );
@@ -855,16 +902,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   // M7: seal the raw `tofu output -json` envelope (the runner's `outputs` field,
   // which carries the per-output sensitive flags) and write it encrypted at rest
-  // to R2_ARTIFACTS under the spec §26 key. Returns the key for the controller
-  // to record on the OutputSnapshot. No-op when the apply produced no outputs.
+  // to R2_ARTIFACTS at the host-allocated ref. Returns the ref for the controller
+  // to record on the Output. No-op when the apply produced no outputs.
   async #persistRawOutputs(
     runId: string,
-    scope: StateScope,
+    rawOutputRef: string,
     payload: Record<string, unknown>,
   ): Promise<string | undefined> {
     const outputs = payload.outputs;
     if (outputs === undefined || outputs === null) return undefined;
-    const key = rawOutputsKey(scope, runId);
+    assertSafeArtifactObjectKey(rawOutputRef, "raw output");
+    const key = rawOutputRef;
     const plaintext = new TextEncoder().encode(JSON.stringify(outputs));
     const sealed = await this.#stateCrypto().seal(plaintext);
     await putR2ObjectWithRetry(
@@ -887,6 +935,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   async #adoptCompletedApplyFromR2State(
     runId: string,
     scope: StateScope,
+    rawOutputRef: string,
   ): Promise<Response | undefined> {
     const bucket = this.#r2State();
     const current = await readCurrentStatePointer(bucket, scope);
@@ -908,7 +957,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       new Uint8Array(await object.arrayBuffer()),
       current.digest,
     );
-    const rawOutputs = await this.#readPersistedRawOutputs(runId, scope);
+    const rawOutputs = await this.#readPersistedRawOutputs(runId, rawOutputRef);
     const ciphertextLength =
       current.ciphertextLength ??
       Number(object.customMetadata?.["takosumi-ciphertext-length"]);
@@ -918,12 +967,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         exitCode: 0,
         state: {
           generation: current.generation,
-          objectKey: current.objectKey,
+          stateRef: current.objectKey,
           digest: current.digest,
           ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
         },
         ...(rawOutputs
-          ? { outputs: rawOutputs.outputs, rawOutputsKey: rawOutputs.key }
+          ? { outputs: rawOutputs.outputs, rawOutputRef: rawOutputs.ref }
           : {}),
       },
       200,
@@ -932,12 +981,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   async #readPersistedRawOutputs(
     runId: string,
-    scope: StateScope,
+    rawOutputRef: string,
   ): Promise<
-    | { readonly key: string; readonly outputs: Record<string, unknown> }
+    | { readonly ref: string; readonly outputs: Record<string, unknown> }
     | undefined
   > {
-    const key = rawOutputsKey(scope, runId);
+    assertSafeArtifactObjectKey(rawOutputRef, "raw output");
+    const key = rawOutputRef;
     const object = await this.env.R2_ARTIFACTS.get(key);
     if (!object) return undefined;
     const plaintext = await this.#stateCrypto().open(
@@ -948,7 +998,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!isRecord(parsed)) {
       throw new Error("raw output artifact must be a JSON object");
     }
-    return { key, outputs: parsed };
+    return { ref: key, outputs: parsed };
   }
 
   async #restoreStateGeneration(
@@ -956,12 +1006,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     scope: StateScope,
     restoreState: RestoreState,
   ): Promise<Response> {
-    assertRestoreStateObjectKey(scope, restoreState.objectKey);
+    assertRestoreStateRef(scope, restoreState.stateRef);
     const bucket = this.#r2State();
-    const object = await bucket.get(restoreState.objectKey);
+    const object = await bucket.get(restoreState.stateRef);
     if (!object) {
       throw new Error(
-        `restore state object not found: ${restoreState.objectKey}`,
+        `restore state object not found: ${restoreState.stateRef}`,
       );
     }
     const plaintext = await this.#stateCrypto().open(
@@ -969,7 +1019,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       restoreState.digest,
     );
     const sealed = await this.#stateCrypto().seal(plaintext);
-    const objectKey = stateObjectKey(scope);
+    assertStateRefForScope(scope);
+    const objectKey = scope.stateRef;
     await putR2ObjectWithRetry(
       bucket,
       objectKey,
@@ -981,7 +1032,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           "takosumi-content-digest": sealed.contentDigest,
           "takosumi-ciphertext-length": String(sealed.ciphertextLength),
           "takosumi-generation": String(scope.generation),
-          "takosumi-restored-from-object": restoreState.objectKey,
+          "takosumi-restored-from-object": restoreState.stateRef,
         },
       },
       "restored state object",
@@ -1003,7 +1054,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       },
       "restored state pointer",
     );
-    return jsonResponse({ state: current }, 200);
+    return jsonResponse(
+      {
+        state: {
+          generation: current.generation,
+          stateRef: current.objectKey,
+          digest: current.digest,
+          runId: current.runId,
+          ciphertextLength: current.ciphertextLength,
+        },
+      },
+      200,
+    );
   }
 
   async #persistPlanArtifact(
@@ -1390,39 +1452,49 @@ function planJsonArtifactMaxBytes(env: CloudflareWorkerEnv): number {
 }
 
 // ===========================================================================
-// R2_STATE keys (spec §20 / §26). The PHYSICAL prefix is frozen at
-// `spaces/.../installations/...` (logical Workspace/Capsule vocabulary, but the
-// on-disk segments stay byte-identical with the controller key formatters so the
-// rename never orphans existing state objects):
-//   spaces/{workspaceId}/installations/{capsuleId}/envs/{environment}/states/{NNNNNNNN}.tfstate.enc
-//   spaces/{workspaceId}/installations/{capsuleId}/envs/{environment}/states/current.json
+// R2_STATE keys (spec §20 / §26):
+//   workspaces/{workspaceId}/capsules/{capsuleId}/environments/{environment}/state-versions/{NNNNNNNN}.tfstate.enc
+//   workspaces/{workspaceId}/capsules/{capsuleId}/environments/{environment}/state-versions/current.json
 // The generation is owned by the controller (other lane); the DO formats it as
 // an 8-digit, zero-padded segment for the object key.
 // ===========================================================================
 
 function stateScopePrefix(scope: StateScope): string {
-  return `spaces/${safeKeySegment(scope.workspaceId)}/installations/${safeKeySegment(
-    scope.capsuleId,
-  )}/envs/${safeKeySegment(scope.environment)}/states`;
-}
-
-function stateObjectKey(scope: StateScope): string {
-  return `${stateScopePrefix(scope)}/${formatGeneration(scope.generation)}.tfstate.enc`;
+  const collection =
+    scope.subjectKind === "resource" ? "resources" : "capsules";
+  return `workspaces/${safeKeySegment(scope.workspaceId)}/${collection}/${safeKeySegment(
+    scope.subjectId,
+  )}/environments/${safeKeySegment(scope.environment)}/state-versions`;
 }
 
 function currentStateKey(scope: StateScope): string {
   return `${stateScopePrefix(scope)}/current.json`;
 }
 
-// R2_ARTIFACTS key for the encrypted raw `tofu output -json` envelope (spec §26).
-// Physical prefix frozen at `spaces/.../installations/...`:
-//   spaces/{workspaceId}/installations/{capsuleId}/runs/{runId}/outputs.raw.json.enc
-// Kept in lockstep with the controller's `rawOutputArtifactKey` formatter so the
-// recorded Output pointer matches the object the DO wrote.
-function rawOutputsKey(scope: StateScope, runId: string): string {
-  return `spaces/${safeKeySegment(scope.workspaceId)}/installations/${safeKeySegment(
-    scope.capsuleId,
+function assertStateRefForScope(scope: StateScope): void {
+  const expected = `${stateScopePrefix(scope)}/${formatGeneration(
+    scope.generation,
+  )}.tfstate.enc`;
+  if (scope.stateRef !== expected) {
+    throw new Error("allocated stateRef does not match this R2 state adapter");
+  }
+}
+
+function assertRawOutputRefForScope(
+  scope: StateScope,
+  runId: string,
+  ref: string,
+): void {
+  const collection =
+    scope.subjectKind === "resource" ? "resources" : "capsules";
+  const expected = `workspaces/${safeKeySegment(scope.workspaceId)}/${collection}/${safeKeySegment(
+    scope.subjectId,
   )}/runs/${safeKeySegment(runId)}/outputs.raw.json.enc`;
+  if (ref !== expected) {
+    throw new Error(
+      "allocated rawOutputRef does not match this R2 artifact storage binding",
+    );
+  }
 }
 
 function formatGeneration(generation: number): string {
@@ -1505,6 +1577,54 @@ async function readCurrentStatePointer(
     Number.isFinite(ciphertextLength)
       ? { ciphertextLength }
       : {}),
+  };
+}
+
+async function readConfirmedStateAdoption(
+  bucket: NonNullable<CloudflareWorkerEnv["R2_STATE"]>,
+  scope: StateScope,
+  adoption: StateAdoption,
+  expectedGeneration: number,
+): Promise<{
+  readonly pointer: CurrentStatePointer;
+  readonly object: NonNullable<Awaited<ReturnType<typeof bucket.get>>>;
+}> {
+  if (scope.subjectKind !== "resource") {
+    throw new Error("state adoption is valid only for a Resource state scope");
+  }
+  if (
+    adoption.sourceWorkspaceId !== scope.workspaceId ||
+    adoption.stateGeneration !== expectedGeneration
+  ) {
+    throw new Error(
+      "state adoption ownership or generation does not match the Resource run",
+    );
+  }
+  // The source ref was confirmed by the control plane and can point at an
+  // immutable pre-v1 object. Treat it as an opaque read-only coordinate: the
+  // current adapter must not reconstruct or extend a retired physical layout.
+  assertSafeArtifactObjectKey(adoption.stateRef, "state adoption");
+  if (!adoption.stateRef.endsWith(".tfstate.enc")) {
+    throw new Error("state adoption ref must name an encrypted state object");
+  }
+  const object = await bucket.get(adoption.stateRef);
+  if (!object) {
+    throw new Error(`state adoption object is missing: ${adoption.stateRef}`);
+  }
+  const metadataDigest = object.customMetadata?.["takosumi-content-digest"];
+  if (metadataDigest && metadataDigest !== adoption.stateDigest) {
+    throw new Error("state adoption digest disagrees with object metadata");
+  }
+  return {
+    pointer: {
+      generation: adoption.stateGeneration,
+      objectKey: adoption.stateRef,
+      digest: adoption.stateDigest,
+      ...(object.customMetadata?.["takosumi-run-id"]
+        ? { runId: object.customMetadata["takosumi-run-id"] }
+        : {}),
+    },
+    object,
   };
 }
 
@@ -1608,25 +1728,85 @@ function encryptedKey(key: string): string {
 function parseStateScope(requestPayload: unknown): StateScope | undefined {
   const scope = recordField(requestPayload, "stateScope");
   if (!scope) return undefined;
-  // Canonical-first, deprecated fallback during the noun rename (the controller
-  // emit side still populates spaceId/installationId on some dispatch paths).
-  const workspaceId =
-    stringField(scope, "workspaceId") ?? stringField(scope, "spaceId");
-  const capsuleId =
-    stringField(scope, "capsuleId") ?? stringField(scope, "installationId");
+  const workspaceId = stringField(scope, "workspaceId");
+  const subject = recordField(scope, "subject");
+  const subjectKind = subject ? stringField(subject, "kind") : undefined;
+  const subjectId = subject ? stringField(subject, "id") : undefined;
   const environment = stringField(scope, "environment");
+  const stateRef = stringField(scope, "stateRef");
   const generation = scope.generation;
   if (
     !workspaceId ||
-    !capsuleId ||
+    !(subjectKind === "resource" || subjectKind === "capsule") ||
+    !subjectId ||
     !environment ||
+    !stateRef ||
     typeof generation !== "number"
   ) {
     throw new Error(
-      "stateScope requires workspaceId, capsuleId, environment, and a numeric generation",
+      "stateScope requires workspaceId, a Capsule/Resource subject, environment, stateRef, and a numeric generation",
     );
   }
-  return { workspaceId, capsuleId, environment, generation };
+  return {
+    workspaceId,
+    subjectKind,
+    subjectId,
+    environment,
+    generation,
+    stateRef,
+  };
+}
+
+function parseRawOutputRef(requestPayload: unknown): string | undefined {
+  if (!isRecord(requestPayload)) return undefined;
+  const ref = stringField(requestPayload, "rawOutputRef");
+  if (!ref) return undefined;
+  assertSafeArtifactObjectKey(ref, "raw output");
+  return ref;
+}
+
+function parseStateAdoption(
+  requestPayload: unknown,
+): StateAdoption | undefined {
+  const adoption = recordField(requestPayload, "stateAdoption");
+  if (!adoption) return undefined;
+  const kind = stringField(adoption, "kind");
+  const sourceWorkspaceId = stringField(adoption, "sourceWorkspaceId");
+  const sourceCapsuleId = stringField(adoption, "sourceCapsuleId");
+  const sourceEnvironment = stringField(adoption, "sourceEnvironment");
+  const sourceStateVersionId = stringField(adoption, "sourceStateVersionId");
+  const stateRef = stringField(adoption, "stateRef");
+  const stateDigest = stringField(adoption, "stateDigest");
+  const confirmedBy = stringField(adoption, "confirmedBy");
+  const confirmedAt = stringField(adoption, "confirmedAt");
+  const stateGeneration = adoption.stateGeneration;
+  if (
+    kind !== "legacy_backing_capsule_state" ||
+    !sourceWorkspaceId ||
+    !sourceCapsuleId ||
+    !sourceEnvironment ||
+    !sourceStateVersionId ||
+    !stateRef ||
+    !stateDigest ||
+    !confirmedBy ||
+    !confirmedAt ||
+    !Number.isInteger(stateGeneration) ||
+    (stateGeneration as number) < 0
+  ) {
+    throw new Error("stateAdoption is incomplete or invalid");
+  }
+  return {
+    kind,
+    sourceWorkspaceId,
+    sourceCapsuleId,
+    sourceEnvironment,
+    sourceStateVersionId,
+    stateGeneration: stateGeneration as number,
+    stateRef,
+    stateDigest,
+    confirmedBy,
+    confirmedAt,
+  };
 }
 
 function parseSourceArchiveRestore(
@@ -1634,22 +1814,16 @@ function parseSourceArchiveRestore(
 ): SourceArchiveRestore | undefined {
   const archive = recordField(requestPayload, "sourceArchive");
   if (!archive) return undefined;
-  // The run dispatch may carry either a restore descriptor { objectKey, digest }
-  // or, on a source_sync response, an { archiveObjectKey, digest } persisted
-  // descriptor. Accept objectKey or archiveObjectKey so plan/apply dispatch can
-  // reuse the snapshot record verbatim.
-  const objectKey =
-    stringField(archive, "objectKey") ??
-    stringField(archive, "archiveObjectKey");
+  const ref = stringField(archive, "ref");
   const digest = stringField(archive, "digest");
-  if (!objectKey || !digest) return undefined;
-  return { objectKey, digest };
+  if (!ref || !digest) return undefined;
+  return { ref, digest };
 }
 
 // Parse the optional remote_state dependency descriptors off the dispatch
-// request. Each entry must carry a name, objectKey, digest, environment,
-// capsuleId (deprecated installationId accepted during the rename), and a
-// numeric generation; a malformed entry fails the run closed (a remote_state
+// request. Each entry must carry a name, stateRef, digest, environment,
+// capsuleId, and a numeric generation; a malformed entry fails the run closed
+// (a remote_state
 // edge cannot be silently dropped). Returns [] when the dispatch carries no
 // depStates.
 function parseDepStates(requestPayload: unknown): readonly DepState[] {
@@ -1662,46 +1836,45 @@ function parseDepStates(requestPayload: unknown): readonly DepState[] {
   return raw.map((entry) => {
     if (!isRecord(entry)) throw new Error("depStates entry must be an object");
     const name = stringField(entry, "name");
-    const capsuleId =
-      stringField(entry, "capsuleId") ?? stringField(entry, "installationId");
+    const capsuleId = stringField(entry, "capsuleId");
     const environment = stringField(entry, "environment");
-    const objectKey = stringField(entry, "objectKey");
+    const stateRef = stringField(entry, "stateRef");
     const digest = stringField(entry, "digest");
     const generation = entry.generation;
     if (
       !name ||
       !capsuleId ||
       !environment ||
-      !objectKey ||
+      !stateRef ||
       !digest ||
       typeof generation !== "number"
     ) {
       throw new Error(
         "depStates entry requires name, capsuleId, environment, " +
-          "objectKey, digest, and a numeric generation",
+          "stateRef, digest, and a numeric generation",
       );
     }
-    return { name, capsuleId, environment, generation, objectKey, digest };
+    return { name, capsuleId, environment, generation, stateRef, digest };
   });
 }
 
 function parseRestoreState(requestPayload: unknown): RestoreState | undefined {
   const restoreState = recordField(requestPayload, "restoreState");
   if (!restoreState) return undefined;
-  const objectKey = stringField(restoreState, "objectKey");
+  const stateRef = stringField(restoreState, "stateRef");
   const digest = stringField(restoreState, "digest");
-  if (!objectKey || !digest) return undefined;
-  return { objectKey, digest };
+  if (!stateRef || !digest) return undefined;
+  return { stateRef, digest };
 }
 
-function assertRestoreStateObjectKey(scope: StateScope, key: string): void {
+function assertRestoreStateRef(scope: StateScope, key: string): void {
   if (
     key.length === 0 ||
     key.startsWith("/") ||
     key.includes("..") ||
     key.includes("\0") ||
     key.includes("\\") ||
-    !key.startsWith("spaces/") ||
+    !key.startsWith("workspaces/") ||
     !key.endsWith(".tfstate.enc")
   ) {
     throw new Error(`unsafe restore state object key: ${key}`);
@@ -1711,27 +1884,26 @@ function assertRestoreStateObjectKey(scope: StateScope, key: string): void {
   }
 }
 
-// Re-assert a dependency state objectKey is a traversal-free R2_STATE key inside
-// the producer env's state prefix (defense in depth against a crafted descriptor
-// pointing at another tenant's object). It must match the spec §20 state key
-// layout AND name the descriptor's own capsuleId + environment. The physical
-// key prefix stays frozen at `spaces/.../installations/...`.
-function assertDepStateObjectKey(depState: DepState): void {
-  const key = depState.objectKey;
+// Re-assert a dependency stateRef is a traversal-free R2_STATE key inside
+// the producer environment's state prefix (defense in depth against a crafted
+// descriptor pointing at another tenant's object). It must name the
+// descriptor's own Capsule and environment.
+function assertDepStateRef(depState: DepState): void {
+  const key = depState.stateRef;
   if (
     key.length === 0 ||
     key.startsWith("/") ||
     key.includes("..") ||
     key.includes("\0") ||
     key.includes("\\") ||
-    !key.startsWith("spaces/") ||
+    !key.startsWith("workspaces/") ||
     !key.endsWith(".tfstate.enc")
   ) {
     throw new Error(`unsafe dependency state object key: ${key}`);
   }
-  const expectedSuffix = `/installations/${safeKeySegment(
+  const expectedSuffix = `/capsules/${safeKeySegment(
     depState.capsuleId,
-  )}/envs/${safeKeySegment(depState.environment)}/states/`;
+  )}/environments/${safeKeySegment(depState.environment)}/state-versions/`;
   if (!key.includes(expectedSuffix)) {
     throw new Error(
       `dependency state object key escapes producer prefix: ${key}`,
@@ -1750,7 +1922,7 @@ function isSourceSyncEnvelope(envelope: {
 
 interface ReusableSourceSnapshot {
   readonly id: string;
-  readonly archiveObjectKey: string;
+  readonly archiveRef: string;
   readonly archiveDigest: string;
   readonly archiveSizeBytes: number;
 }
@@ -1760,33 +1932,30 @@ function parseReusableSourceSnapshot(
 ): ReusableSourceSnapshot | undefined {
   const snapshot = recordField(requestPayload, "reuseSnapshot");
   if (!snapshot) return undefined;
-  const archiveObjectKey = requiredStringField(snapshot, "archiveObjectKey");
-  assertSafeSourceArchiveKey(archiveObjectKey);
+  const archiveRef = requiredStringField(snapshot, "archiveRef");
+  assertSafeSourceArchiveKey(archiveRef);
   return {
     id: requiredStringField(snapshot, "id"),
-    archiveObjectKey,
+    archiveRef,
     archiveDigest: requiredSha256DigestField(snapshot, "archiveDigest"),
     archiveSizeBytes: positiveIntegerField(snapshot, "archiveSizeBytes"),
   };
 }
 
-function sourceSyncArchiveObjectKey(requestPayload: unknown): string {
+function sourceSyncArchiveRef(requestPayload: unknown): string {
   if (!isRecord(requestPayload)) {
     throw new Error("source_sync request is required");
   }
-  const source = recordField(requestPayload, "source");
-  const archiveObjectKey =
-    stringField(requestPayload, "archiveObjectKey") ??
-    (source ? stringField(source, "archiveObjectKey") : undefined);
-  if (!archiveObjectKey) {
-    throw new Error("source_sync archiveObjectKey is required");
+  const archiveRef = stringField(requestPayload, "archiveRef");
+  if (!archiveRef) {
+    throw new Error("source_sync archiveRef is required");
   }
-  assertSafeSourceArchiveKey(archiveObjectKey);
-  return archiveObjectKey;
+  assertSafeSourceArchiveKey(archiveRef);
+  return archiveRef;
 }
 
 // Re-assert the R2_SOURCE archive key (agreed layout
-// spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst) is
+// workspaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst) is
 // a safe, traversal-free relative key before writing to the bucket.
 function assertSafeSourceArchiveKey(key: string): void {
   if (
@@ -1795,9 +1964,22 @@ function assertSafeSourceArchiveKey(key: string): void {
     key.includes("..") ||
     key.includes("\0") ||
     key.includes("\\") ||
-    !key.startsWith("spaces/")
+    !key.startsWith("workspaces/")
   ) {
     throw new Error(`unsafe source archive object key: ${key}`);
+  }
+}
+
+function assertSafeArtifactObjectKey(key: string, label: string): void {
+  if (
+    key.length === 0 ||
+    key.startsWith("/") ||
+    key.includes("..") ||
+    key.includes("\0") ||
+    key.includes("\\") ||
+    /\s/u.test(key)
+  ) {
+    throw new Error(`unsafe ${label} artifact ref`);
   }
 }
 
@@ -1825,8 +2007,10 @@ function positiveIntegerField(
 
 function planArtifactKey(runId: string, scope?: StateScope): string {
   if (scope) {
-    return `spaces/${safeKeySegment(scope.workspaceId)}/installations/${safeKeySegment(
-      scope.capsuleId,
+    const collection =
+      scope.subjectKind === "resource" ? "resources" : "capsules";
+    return `workspaces/${safeKeySegment(scope.workspaceId)}/${collection}/${safeKeySegment(
+      scope.subjectId,
     )}/runs/${safeKeySegment(runId)}/plan.bin`;
   }
   return `opentofu-plan-runs/${runId.replace(/[^a-zA-Z0-9._-]+/g, "_")}/tfplan`;
@@ -1834,8 +2018,10 @@ function planArtifactKey(runId: string, scope?: StateScope): string {
 
 function planJsonArtifactKey(runId: string, scope?: StateScope): string {
   if (scope) {
-    return `spaces/${safeKeySegment(scope.workspaceId)}/installations/${safeKeySegment(
-      scope.capsuleId,
+    const collection =
+      scope.subjectKind === "resource" ? "resources" : "capsules";
+    return `workspaces/${safeKeySegment(scope.workspaceId)}/${collection}/${safeKeySegment(
+      scope.subjectId,
     )}/runs/${safeKeySegment(runId)}/plan.json.zst`;
   }
   return `opentofu-plan-runs/${runId.replace(
@@ -1855,7 +2041,9 @@ function planArtifactKeyFromRef(ref: string, bucket: string): string {
   }
   const key = ref.slice(prefix.length);
   const canonical =
-    /^spaces\/[^/]+\/installations\/[^/]+\/runs\/[^/]+\/plan\.bin$/.test(key);
+    /^workspaces\/[^/]+\/(?:capsules|resources)\/[^/]+\/runs\/[^/]+\/plan\.bin$/.test(
+      key,
+    );
   if (
     (!canonical && !key.startsWith("opentofu-plan-runs/")) ||
     key.includes("..")
@@ -1925,20 +2113,17 @@ async function stateArtifactKeys(
   if (!planRun) return [];
   const backendKey = await stateBackendKey(requestPayload);
   const keys: string[] = [];
-  const capsuleId =
-    stringField(planRun, "capsuleId") ?? stringField(planRun, "installationId");
+  const capsuleId = stringField(planRun, "capsuleId");
   if (capsuleId) {
     keys.push(
-      `${backendKey}/installations/${safeKeySegment(capsuleId)}/terraform.tfstate`,
+      `${backendKey}/capsules/${safeKeySegment(capsuleId)}/terraform.tfstate`,
     );
   }
   const source = recordField(planRun, "source");
   const sourceKey = await sourceStateKey({
     backendKey,
-    // `spaceId` here is the frozen `sourceIdentity` digest field; only the read
-    // value is canonical-first (the value is the same workspace id either way).
-    spaceId:
-      stringField(planRun, "workspaceId") ?? stringField(planRun, "spaceId"),
+    // `workspaceId` here is the frozen `sourceIdentity` digest field.
+    workspaceId: stringField(planRun, "workspaceId"),
     runnerProfileId: stringField(planRun, "runnerProfileId"),
     source,
   });
@@ -1948,14 +2133,14 @@ async function stateArtifactKeys(
 
 async function sourceStateKey(input: {
   readonly backendKey: string;
-  readonly spaceId: string | undefined;
+  readonly workspaceId: string | undefined;
   readonly runnerProfileId: string | undefined;
   readonly source: Record<string, unknown> | undefined;
 }): Promise<string | undefined> {
-  if (!input.spaceId || !input.runnerProfileId || !input.source)
+  if (!input.workspaceId || !input.runnerProfileId || !input.source)
     return undefined;
   const sourceIdentity = {
-    spaceId: input.spaceId,
+    workspaceId: input.workspaceId,
     runnerProfileId: input.runnerProfileId,
     kind: stringField(input.source, "kind"),
     url: stringField(input.source, "url"),

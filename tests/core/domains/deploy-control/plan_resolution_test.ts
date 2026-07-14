@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 
-import { providerEnvBindingsFromResolved } from "../../../../core/domains/deploy-control/plan_resolution.ts";
-import type { ResolvedInstallationProviderEnvBinding } from "../../../../core/domains/connections/mod.ts";
+import { providerBindingsFromResolved } from "../../../../core/domains/deploy-control/plan_resolution.ts";
+import type { ResolvedCapsuleProviderBinding } from "../../../../core/domains/connections/mod.ts";
 
 test("managed Provider Connection threads generic provider configuration into root binding", () => {
-  const resolved: readonly ResolvedInstallationProviderEnvBinding[] = [
+  const resolved: readonly ResolvedCapsuleProviderBinding[] = [
     {
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       connection: {
@@ -31,10 +31,9 @@ test("managed Provider Connection threads generic provider configuration into ro
     },
   ];
 
-  expect(providerEnvBindingsFromResolved(resolved)).toEqual([
+  expect(providerBindingsFromResolved(resolved)).toEqual([
     {
       provider: "registry.opentofu.org/cloudflare/cloudflare",
-      credentialDelivery: "generated_root_variable",
       configuration: {
         base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
       },

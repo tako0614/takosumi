@@ -2,7 +2,7 @@
  * Services (`/services`) — the full list of every Capsule in the Workspace
  * (apps and infra alike): the technical / OpenTofu surface. Each row opens the
  * service detail (deploys / state / outputs / settings). The consumer-facing
- * app launcher (declared apps only) lives on the separate `/` Apps page.
+ * app launcher lives on the separate `/` Apps page.
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";

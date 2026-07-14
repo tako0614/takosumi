@@ -7,7 +7,6 @@
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
-  Connection,
   ConnectionOAuthStartResponse,
   ConnectionResponse,
   ConnectionScopeHints,
@@ -15,10 +14,7 @@ import type {
   CreateConnectionFile,
   CreateConnectionRequest,
   DeployControlErrorCode,
-  Deployment,
-  InternalDeployRequest,
   ListConnectionsResponse,
-  ListDeploymentsResponse,
   ListRunnerProfilesResponse,
   OpenTofuModuleSource,
   PlanRunResponse,
@@ -26,7 +22,6 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
-  ArtifactSnapshotRequest,
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
@@ -37,10 +32,6 @@ import type {
   SourceSnapshot,
 } from "takosumi-contract/sources";
 import type {
-  DeployResponse,
-  PublicDeployResponse,
-} from "takosumi-contract/deploy";
-import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
@@ -48,9 +39,9 @@ import type {
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  InstallConfigStoreInput,
+  InstallConfigVariableDefault,
+  InstallConfigVariablePresentation,
   InstallConfigInstallExperience,
   InstallConfigInstallProjection,
   InstallConfigStoreKind,
@@ -73,11 +64,9 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  CapsuleProviderConnectionBinding,
-  CapsuleProviderConnectionBindings,
-  CapsuleProviderEnvBinding,
-  CapsuleProviderEnvBindings,
-  CapsuleProviderConnectionSet,
+  ProviderBinding,
+  ProviderBindings,
+  ProviderBindingSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -85,19 +74,12 @@ import type {
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
 import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
-import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
   CreateBackupResponse,
   CreateRestoreRequest,
   ListBackupsResponse,
 } from "takosumi-contract/backups";
-import type {
-  BillingSettings,
-  CreditBalance,
-  CreditReservation,
-  UsageEvent,
-} from "takosumi-contract/billing";
 import type {
   ListRunsResponse,
   Run,
@@ -199,15 +181,10 @@ export function installConfigStoreValue(
   const badge = storeTextValue(record.badge);
   const name = storeTextValue(record.name);
   const description = storeTextValue(record.description);
-  const inputs = storeInputsValue(record.inputs);
   const iconUrl =
     record.iconUrl === undefined
       ? undefined
       : boundedStringValue(record.iconUrl, 2048);
-  const installExperience =
-    record.installExperience === undefined
-      ? undefined
-      : installExperienceValue(record.installExperience);
   if (
     order === undefined ||
     !surface ||
@@ -217,19 +194,18 @@ export function installConfigStoreValue(
     !badge ||
     !name ||
     !description ||
-    !inputs ||
     (record.iconUrl !== undefined && iconUrl === undefined) ||
-    (record.installExperience !== undefined && installExperience === undefined)
+    record.inputs !== undefined ||
+    record.installExperience !== undefined ||
+    record.outputAllowlist !== undefined ||
+    record.sourceBuild !== undefined ||
+    record.lifecycleActions !== undefined
   ) {
     return undefined;
   }
-  const templateId = boundedTokenValue(record.templateId, 128);
-  const templateVersion = boundedTokenValue(record.templateVersion, 128);
   const source = storeSourceValue(record.source);
   if (record.source !== undefined && !source) return undefined;
   return {
-    ...(templateId ? { templateId } : {}),
-    ...(templateVersion ? { templateVersion } : {}),
     ...(source ? { source } : {}),
     order,
     surface,
@@ -240,8 +216,6 @@ export function installConfigStoreValue(
     name,
     description,
     ...(iconUrl ? { iconUrl } : {}),
-    inputs,
-    ...(installExperience ? { installExperience } : {}),
   };
 }
 
@@ -288,36 +262,38 @@ function storeSourceValue(
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  const git = boundedStringValue(record.git, 2048);
+  const url = boundedStringValue(record.url, 2048);
+  const ref =
+    record.ref === undefined ? undefined : boundedStringValue(record.ref, 512);
   const parsedPath = modulePathValue(record.path);
   if (record.path !== undefined && parsedPath === undefined) return undefined;
   const path = parsedPath === "" ? "." : (parsedPath ?? ".");
-  if (!git || !/^https?:\/\/|^git@/u.test(git)) return undefined;
-  return { git, path };
+  if (
+    !url ||
+    !/^https?:\/\/|^git@/u.test(url) ||
+    (record.ref !== undefined && ref === undefined)
+  ) {
+    return undefined;
+  }
+  return { url, ...(ref ? { ref } : {}), path };
 }
 
 function storeSurfaceValue(
   value: unknown,
 ): InstallConfigStoreSurface | undefined {
-  return value === "service" ||
-    value === "building_block" ||
-    value === "example"
-    ? value
-    : undefined;
+  return boundedTokenValue(value, 64);
 }
 
 function storeKindValue(value: unknown): InstallConfigStoreKind | undefined {
-  return value === "worker" || value === "storage" || value === "site"
-    ? value
-    : undefined;
+  return boundedTokenValue(value, 64);
 }
 
-function storeInputsValue(
+export function variablePresentationValue(
   value: unknown,
-): readonly InstallConfigStoreInput[] | undefined {
+): readonly InstallConfigVariablePresentation[] | undefined {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 50) return undefined;
-  const inputs: InstallConfigStoreInput[] = [];
+  const inputs: InstallConfigVariablePresentation[] = [];
   for (const item of value) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       return undefined;
@@ -336,12 +312,12 @@ function storeInputsValue(
     const format =
       record.format === undefined
         ? undefined
-        : storeInputFormatValue(record.format);
+        : variableInputFormatValue(record.format);
     const required = booleanValue(record.required);
     const defaultValue =
       record.defaultValue === undefined
         ? undefined
-        : boundedStringValue(record.defaultValue, 16_384);
+        : installConfigVariableDefaultValue(record.defaultValue);
     const label = storeTextValue(record.label);
     const helper =
       record.helper === undefined ? undefined : storeTextValue(record.helper);
@@ -376,19 +352,36 @@ function storeInputsValue(
   return inputs;
 }
 
-function storeInputFormatValue(
+export function installConfigVariableDefaultValue(
   value: unknown,
-): InstallConfigStoreInput["format"] | undefined {
-  return value === "text" ||
-    value === "url" ||
-    value === "hostname" ||
-    value === "subdomain" ||
-    value === "password" ||
-    value === "token" ||
-    value === "email" ||
-    value === "sha256"
-    ? value
-    : undefined;
+): InstallConfigVariableDefault | undefined {
+  if (!isPlainJsonObject(value) || typeof value.source !== "string") {
+    return undefined;
+  }
+  if (value.source === "literal") {
+    if (
+      !Object.prototype.hasOwnProperty.call(value, "value") ||
+      !isJsonValue(value.value) ||
+      Object.keys(value).some((key) => key !== "source" && key !== "value")
+    ) {
+      return undefined;
+    }
+    return { source: "literal", value: value.value };
+  }
+  if (
+    (value.source === "capsule_name" ||
+      value.source === "workspace_scoped_capsule_name") &&
+    Object.keys(value).length === 1
+  ) {
+    return { source: value.source };
+  }
+  return undefined;
+}
+
+function variableInputFormatValue(
+  value: unknown,
+): InstallConfigVariablePresentation["format"] | undefined {
+  return boundedTokenValue(value, 64);
 }
 
 function storeVariableNameValue(value: unknown): string | undefined {
@@ -406,7 +399,7 @@ function optionalStoreVariable(value: unknown): string | undefined | false {
   return storeVariableNameValue(value) ?? false;
 }
 
-function installExperienceValue(
+export function installExperienceValue(
   value: unknown,
 ): InstallConfigInstallExperience | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -520,17 +513,14 @@ function installExperienceProjectionsValue(
       const accountsUrl = optionalStoreVariable(variables.accountsUrl);
       const clientId = optionalStoreVariable(variables.clientId);
       const redirectUri = optionalStoreVariable(variables.redirectUri);
-      const callbackPath =
-        record.callbackPath === undefined
-          ? undefined
-          : storePathValue(record.callbackPath);
+      const callbackPath = storePathValue(record.callbackPath);
       const scopes = oidcProjectionScopes(record.scopes);
       if (
         issuerUrl === false ||
         accountsUrl === false ||
         clientId === false ||
         redirectUri === false ||
-        (record.callbackPath !== undefined && callbackPath === undefined) ||
+        callbackPath === undefined ||
         (record.scopes !== undefined && scopes === undefined)
       ) {
         return undefined;
@@ -543,7 +533,7 @@ function installExperienceProjectionsValue(
           ...(clientId ? { clientId } : {}),
           ...(redirectUri ? { redirectUri } : {}),
         },
-        ...(callbackPath ? { callbackPath } : {}),
+        callbackPath,
         ...(scopes ? { scopes } : {}),
       });
       continue;
@@ -681,43 +671,43 @@ export function isJsonValue(value: unknown): value is JsonValue {
   return Object.values(value).every(isJsonValue);
 }
 
-export function parseCapsuleProviderConnectionBindings(value: unknown):
+export function parseProviderBindings(value: unknown):
   | {
       readonly ok: true;
-      readonly bindings: CapsuleProviderConnectionBindings;
+      readonly bindings: ProviderBindings;
     }
   | {
       readonly ok: false;
       readonly message: string;
     } {
   if (!Array.isArray(value)) {
-    return { ok: false, message: "connections must be an array" };
+    return { ok: false, message: "bindings must be an array" };
   }
-  const connections: CapsuleProviderConnectionBinding[] = [];
+  const bindings: ProviderBinding[] = [];
   for (const [index, item] of value.entries()) {
-    const parsed = parseCapsuleProviderConnectionBinding(item);
+    const parsed = parseProviderBinding(item);
     if (!parsed.ok) {
       return {
         ok: false,
-        message: `connections[${index}]: ${parsed.message}`,
+        message: `bindings[${index}]: ${parsed.message}`,
       };
     }
-    connections.push(parsed.binding);
+    bindings.push(parsed.binding);
   }
-  return { ok: true, bindings: connections };
+  return { ok: true, bindings };
 }
 
-export function parseCapsuleProviderConnectionBinding(value: unknown):
+export function parseProviderBinding(value: unknown):
   | {
       readonly ok: true;
-      readonly binding: CapsuleProviderConnectionBinding;
+      readonly binding: ProviderBinding;
     }
   | {
       readonly ok: false;
       readonly message: string;
     } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return { ok: false, message: "connection must be an object" };
+    return { ok: false, message: "binding must be an object" };
   }
   const input = value as Record<string, unknown>;
   const provider = stringValue(input.provider);
@@ -811,61 +801,18 @@ export function connectionScopeHints(
 ): ConnectionScopeHints | undefined {
   if (!isPlainJsonObject(value)) return undefined;
   const hints: Record<string, unknown> = {};
-  for (const key of [
-    "accountId",
-    "zoneId",
-    "workersSubdomain",
-    "repoUrl",
-    "username",
-    "knownHostsEntry",
-    "awsRegion",
-    "gcpProjectId",
-    "gcpServiceAccountEmail",
-    "templateId",
-  ] as const) {
-    const v = stringValue(value[key]);
-    if (v) hints[key] = v;
-  }
   const providerConfig = jsonRecordValue(value.providerConfig);
   if (providerConfig) hints.providerConfig = providerConfig;
   const moduleInputDefaults = jsonRecordValue(value.moduleInputDefaults);
   if (moduleInputDefaults) hints.moduleInputDefaults = moduleInputDefaults;
+  const providerSettings = jsonRecordValue(value.providerSettings);
+  if (providerSettings) hints.providerSettings = providerSettings;
   return Object.keys(hints).length > 0
     ? (hints as ConnectionScopeHints)
     : undefined;
 }
 
-export function connectionScopeHintsFromValues(
-  provider: string,
-  values: Readonly<Record<string, string>>,
-  explicit: unknown,
-): ConnectionScopeHints | undefined {
-  const derived: Record<string, string> = {};
-  if (provider === "cloudflare") {
-    const accountId = stringValue(values.CLOUDFLARE_ACCOUNT_ID);
-    if (accountId) derived.accountId = accountId;
-  }
-  if (isGoogleCloudProvider(provider)) {
-    const projectId =
-      stringValue(values.GOOGLE_CLOUD_PROJECT) ??
-      stringValue(values.GOOGLE_PROJECT);
-    if (projectId) derived.gcpProjectId = projectId;
-  }
-  const hints = {
-    ...derived,
-    ...(connectionScopeHints(explicit) ?? {}),
-  };
-  return Object.keys(hints).length > 0
-    ? (hints as ConnectionScopeHints)
-    : undefined;
-}
-
-export function isGoogleCloudProvider(provider: string): boolean {
-  const normalized = provider.trim().toLowerCase();
-  return normalized === "gcp" || normalized === "google";
-}
-
-export function spaceTypeValue(value: unknown): WorkspaceType | undefined {
+export function workspaceTypeValue(value: unknown): WorkspaceType | undefined {
   return value === "personal" || value === "organization" ? value : undefined;
 }
 
@@ -882,7 +829,9 @@ export function dependencyModeValue(
 export function dependencyVisibilityValue(
   value: unknown,
 ): DependencyVisibility | undefined {
-  return value === "space" || value === "cross_space" ? value : undefined;
+  return value === "workspace" || value === "cross_workspace"
+    ? value
+    : undefined;
 }
 
 export function isOutputsMapping(

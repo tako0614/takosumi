@@ -1,16 +1,16 @@
 /**
  * RunGroups domain service (Core Specification §19 / §24 — "RunGroup basic").
  *
- * A RunGroup orders multiple Runs across the Space's dependency DAG. The
+ * A RunGroup orders multiple Runs across the Workspace's dependency DAG. The
  * implemented group types are:
- *   - `space_update`: after stale propagation marks downstream consumers
- *     `stale` (§24), re-plan every stale Installation plus its downstream in
+ *   - `workspace_update`: after stale propagation marks downstream consumers
+ *     `stale` (§24), re-plan every stale Capsule plus its downstream in
  *     producer-before-consumer topological order.
- *   - `space_drift_check`: create one read-only `drift_check` Run per active
- *     Installation in a Space, grouped under one ledger row for scheduled and
+ *   - `workspace_drift_check`: create one read-only `drift_check` Run per active
+ *     Capsule in a Workspace, grouped under one ledger row for scheduled and
  *     operator-initiated sweep observability.
  *
- * There is NO orchestration daemon. The per-installation write lease already
+ * There is NO orchestration daemon. The per-capsule write lease already
  * serializes applies, so this service only:
  *   - builds the member set + topological layers (graphJson),
  *   - creates ONE plan Run per member through the controller (carrying the
@@ -35,56 +35,43 @@ import {
   OpenTofuControllerError,
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
-import type { OpenTofuDeploymentController } from "../deploy-control/mod.ts";
-import { applyExpectedGuardFromPlanRun } from "../deploy-control/mod.ts";
-import type {
-  OpenTofuDeploymentStore,
-  StoredRunRecord,
-} from "../deploy-control/store.ts";
+import type { OpenTofuController } from "../deploy-control/mod.ts";
+import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
 } from "../activity/mod.ts";
 
 /**
- * The graphJson recorded on a `space_update` RunGroup row: the topological
+ * The graphJson recorded on a `workspace_update` RunGroup row: the topological
  * layers (producer-before-consumer) over the member set and the per-member plan
  * Run id. Parsed at read time to drive the dashboard graph view.
  */
-export interface SpaceUpdateGraph {
-  /** Topological layers of member installation ids (layer 0 has no producers). */
+export interface WorkspaceUpdateGraph {
+  /** Topological layers of member capsule ids (layer 0 has no producers). */
   readonly order: readonly (readonly string[])[];
-  /** Member installation id -> the plan Run id created for it. */
+  /** Member capsule id -> the plan Run id created for it. */
   readonly runs: Readonly<Record<string, string>>;
 }
 
-export interface WorkspaceOutputSyncGraph extends SpaceUpdateGraph {
-  readonly mode: "workspace_output_sync";
-  readonly targetRevision: number;
-  readonly pass: number;
-  readonly currentLayer: number;
-  /** Capsule id -> SourceSnapshot used by its currently applied state. */
-  readonly sourceSnapshotIds: Readonly<Record<string, string>>;
-}
-
 export interface RunGroupsServiceDependencies {
-  readonly store: OpenTofuDeploymentStore;
-  /** Drives `createInstallationPlan` per member + unified `getRun` at read time. */
-  readonly controller: OpenTofuDeploymentController;
+  readonly store: OpenTofuControlStore;
+  /** Drives `createCapsulePlan` per member + unified `getRun` at read time. */
+  readonly controller: OpenTofuController;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => string;
   readonly actor?: string;
-  /** Space-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
+  /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder;
 }
 
-export interface CreateSpaceDriftCheckOptions {
+export interface CreateWorkspaceDriftCheckOptions {
   readonly limit?: number;
 }
 
 export class RunGroupsService {
-  readonly #store: OpenTofuDeploymentStore;
-  readonly #controller: OpenTofuDeploymentController;
+  readonly #store: OpenTofuControlStore;
+  readonly #controller: OpenTofuController;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
   readonly #actor?: string;
@@ -103,36 +90,36 @@ export class RunGroupsService {
   }
 
   /**
-   * Creates a `space_update` RunGroup for a Space (spec §19 / §24). The member
-   * set is every `stale` Installation in the Space plus the transitive
+   * Creates a `workspace_update` RunGroup for a Workspace (spec §19 / §24). The member
+   * set is every `stale` Capsule in the Workspace plus the transitive
    * downstream of any member (so a chained re-plan is captured even when the far
    * consumer has not been flagged yet). Members are ordered into topological
-   * layers (producers before consumers) over the Space's dependency edges, and
+   * layers (producers before consumers) over the Workspace's dependency edges, and
    * ONE plan Run is created per member through the controller — each carrying
    * the RunGroup id so the §19 Run projects `runGroupId`. The run_groups row
    * records the order + the per-member run id. An empty member set is a typed
    * `failed_precondition` (`nothing_to_update`).
    */
-  async createWorkspaceUpdate(spaceId: string): Promise<RunGroupWithRuns> {
-    requireNonEmptyString(spaceId, "spaceId");
-    const installations = await this.#store.listInstallations(spaceId);
-    const edges = (await this.#store.listDependenciesBySpace(spaceId)).map(
+  async createWorkspaceUpdate(workspaceId: string): Promise<RunGroupWithRuns> {
+    requireNonEmptyString(workspaceId, "workspaceId");
+    const capsules = await this.#store.listCapsules(workspaceId);
+    const edges = (await this.#store.listDependenciesByWorkspace(workspaceId)).map(
       (edge) => ({
-        from: edge.producerInstallationId,
-        to: edge.consumerInstallationId,
+        from: edge.producerCapsuleId,
+        to: edge.consumerCapsuleId,
       }),
     );
-    // The member set: every stale Installation, plus the transitive downstream
+    // The member set: every stale Capsule, plus the transitive downstream
     // of each stale member (a stale producer's consumers must re-plan too even
     // if they have not yet been flagged). Computed by closing the stale set over
     // the dependency edges.
-    const installationById = new Map(
-      installations.map((installation) => [installation.id, installation]),
+    const capsuleById = new Map(
+      capsules.map((capsule) => [capsule.id, capsule]),
     );
     const stale = new Set(
-      installations
-        .filter((installation) => installation.status === "stale")
-        .map((installation) => installation.id),
+      capsules
+        .filter((capsule) => capsule.status === "stale")
+        .map((capsule) => capsule.id),
     );
     const members = closeDownstream(stale, edges);
     if (members.size === 0) {
@@ -149,7 +136,7 @@ export class RunGroupsService {
     const layers = topologicalLayersOrPrecondition(
       [...members],
       memberEdges,
-      spaceId,
+      workspaceId,
     );
     // Create one plan Run per member, layer by layer (producers first). The
     // member must still exist; a member missing from the ledger is a precondition
@@ -158,27 +145,27 @@ export class RunGroupsService {
     const memberRuns: Run[] = [];
     const runGroupId = this.#newId("rg");
     for (const layer of layers) {
-      for (const installationId of layer) {
-        if (!installationById.has(installationId)) {
+      for (const capsuleId of layer) {
+        if (!capsuleById.has(capsuleId)) {
           throw new OpenTofuControllerError(
             "failed_precondition",
             "nothing_to_update: capsule is not available to this workspace",
           );
         }
-        const response = await this.#controller.createInstallationPlan(
-          installationId,
+        const response = await this.#controller.createCapsulePlan(
+          capsuleId,
           this.#actor ? { actor: this.#actor } : {},
           { runGroupId },
         );
-        runs[installationId] = response.planRun.id;
+        runs[capsuleId] = response.planRun.id;
         memberRuns.push(await this.#controller.getRun(response.planRun.id));
       }
     }
-    const graph: SpaceUpdateGraph = { order: layers, runs };
+    const graph: WorkspaceUpdateGraph = { order: layers, runs };
     const runGroup: RunGroup = {
       id: runGroupId,
-      spaceId,
-      type: "space_update",
+      workspaceId,
+      type: "workspace_update",
       // The persisted status is the creation-time snapshot; reads recompute it
       // from member runs. A fresh group with queued/running members is `running`.
       status: computeGroupStatus(memberRuns),
@@ -186,18 +173,17 @@ export class RunGroupsService {
       createdAt: this.#now(),
     };
     await this.#store.putRunGroup(runGroup);
-    // Activity (§27 / §34): a space_update RunGroup was created. Member ids +
+    // Activity (§27 / §34): a workspace_update RunGroup was created. Member ids +
     // run ids only.
     await this.#activity.record({
-      workspaceId: spaceId,
-      spaceId,
+      workspaceId,
       ...(this.#actor ? { actorId: this.#actor } : {}),
       action: "run_group.created",
       targetType: "run_group",
       targetId: runGroup.id,
       metadata: {
         type: runGroup.type,
-        memberInstallationIds: [...members],
+        memberCapsuleIds: [...members],
         runIds: Object.values(runs),
       },
     });
@@ -205,381 +191,82 @@ export class RunGroupsService {
   }
 
   /**
-   * Starts a Takosumi Output Sync pass. Unlike the older space_update helper,
-   * only the first topological layer is planned now; later layers are created
-   * after the prior layer has either no changes or a successful apply.
-   */
-  async createWorkspaceOutputSync(
-    workspaceId: string,
-    targetRevision: number,
-    pass = 1,
-    requestedRunGroupId?: string,
-  ): Promise<RunGroupWithRuns> {
-    requireNonEmptyString(workspaceId, "workspaceId");
-    const capsules = (await this.#store.listInstallations(workspaceId)).filter(
-      (capsule) => capsule.status === "active" || capsule.status === "stale",
-    );
-    if (capsules.length === 0) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "nothing_to_reconcile: no runnable capsules in this workspace",
-      );
-    }
-    const memberIds = capsules.map((capsule) => capsule.id);
-    const sourceSnapshotIds: Record<string, string> = {};
-    for (const capsule of capsules) {
-      const sourceSnapshotId = await this.#appliedSourceSnapshotId(capsule);
-      if (!sourceSnapshotId) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `output_sync_source_snapshot_missing: capsule ${capsule.id} has no applied SourceSnapshot`,
-        );
-      }
-      sourceSnapshotIds[capsule.id] = sourceSnapshotId;
-    }
-    const memberSet = new Set(memberIds);
-    const edges = (await this.#store.listDependenciesBySpace(workspaceId))
-      .map((edge) => ({
-        from: edge.producerInstallationId,
-        to: edge.consumerInstallationId,
-      }))
-      .filter((edge) => memberSet.has(edge.from) && memberSet.has(edge.to));
-    const order = topologicalLayersOrPrecondition(
-      memberIds,
-      edges,
-      workspaceId,
-    );
-    const runGroupId = requestedRunGroupId ?? this.#newId("rg");
-    let graph: WorkspaceOutputSyncGraph = {
-      mode: "workspace_output_sync",
-      targetRevision,
-      pass,
-      currentLayer: 0,
-      order,
-      runs: {},
-      sourceSnapshotIds,
-    };
-    let group: RunGroup = {
-      id: runGroupId,
-      workspaceId,
-      spaceId: workspaceId,
-      type: "workspace_output_sync",
-      status: "queued",
-      graphJson: JSON.stringify(graph),
-      createdAt: this.#now(),
-    };
-    // Persist the checkpoint before dispatching any member. A lost worker can
-    // recover this row and create the still-missing layer runs idempotently.
-    await this.#store.putRunGroup(group);
-    graph = await this.#startOutputSyncLayer(group, graph);
-    group = {
-      ...group,
-      status: "running",
-      graphJson: JSON.stringify(graph),
-    };
-    await this.#store.putRunGroup(group);
-    await this.#activity.record({
-      workspaceId,
-      spaceId: workspaceId,
-      ...(this.#actor ? { actorId: this.#actor } : {}),
-      action: "output_sync.started",
-      targetType: "run_group",
-      targetId: group.id,
-      metadata: { targetRevision, pass, capsuleCount: memberIds.length },
-    });
-    return (await this.getRunGroup(group.id)) ?? { runGroup: group, runs: [] };
-  }
-
-  async #appliedSourceSnapshotId(
-    capsule: Awaited<
-      ReturnType<OpenTofuDeploymentStore["getInstallation"]>
-    >,
-  ): Promise<string | undefined> {
-    if (!capsule) return undefined;
-    const currentStateVersionId =
-      capsule.currentStateVersionId ?? capsule.currentDeploymentId;
-    if (!currentStateVersionId) return undefined;
-
-    const stateVersion = (await this.#store.listStateSnapshots(
-      capsule.id,
-      capsule.environment,
-    )).find((candidate) => candidate.id === currentStateVersionId);
-    if (stateVersion) {
-      const applyRun = await this.#store.getApplyRun(
-        stateVersion.createdByRunId,
-      );
-      const planRun = applyRun
-        ? await this.#store.getPlanRun(applyRun.planRunId)
-        : undefined;
-      if (
-        planRun?.sourceSnapshotId &&
-        (planRun.capsuleId ?? planRun.installationId) === capsule.id
-      ) {
-        return planRun.sourceSnapshotId;
-      }
-    }
-
-    // Pre-retirement rows may still carry the successful apply audit record.
-    const deployment = await this.#store.getDeployment(currentStateVersionId);
-    return deployment?.installationId === capsule.id
-      ? deployment.sourceSnapshotId
-      : undefined;
-  }
-
-  /** Advances one staged Output Sync group, and is safe to call repeatedly. */
-  async advanceWorkspaceOutputSync(
-    id: string,
-  ): Promise<RunGroupWithRuns | undefined> {
-    const stored = await this.#store.getRunGroup(id);
-    if (!stored || stored.type !== "workspace_output_sync") return undefined;
-    if (stored.status === "failed" || stored.status === "cancelled") {
-      return await this.getRunGroup(id);
-    }
-    let graph = parseWorkspaceOutputSyncGraph(stored.graphJson);
-    const layer = graph.order[graph.currentLayer] ?? [];
-    if (layer.length === 0) {
-      const completed = {
-        ...stored,
-        status: "succeeded" as const,
-        finishedAt: this.#now(),
-      };
-      await this.#store.putRunGroup(completed);
-      return await this.getRunGroup(id);
-    }
-
-    const workspaceRuns = await this.#store.listRunsBySpace(
-      stored.workspaceId ?? stored.spaceId ?? "",
-      { limit: 500 },
-    );
-    if (layer.some((capsuleId) => !graph.runs[capsuleId])) {
-      graph = await this.#startOutputSyncLayer(stored, graph, workspaceRuns);
-      await this.#store.putRunGroup({
-        ...stored,
-        status: "running",
-        graphJson: JSON.stringify(graph),
-      });
-    }
-    for (const capsuleId of layer) {
-      const planId = graph.runs[capsuleId];
-      if (!planId) return await this.getRunGroup(id);
-      const plan = await this.#store.getPlanRun(planId);
-      if (!plan) return await this.getRunGroup(id);
-      if (plan.status === "failed" || plan.status === "cancelled") {
-        const failed = {
-          ...stored,
-          status:
-            plan.status === "failed"
-              ? ("failed" as const)
-              : ("cancelled" as const),
-          finishedAt: this.#now(),
-        };
-        await this.#store.putRunGroup(failed);
-        return await this.getRunGroup(id);
-      }
-      const awaitsApproval =
-        plan.status === "waiting_approval" ||
-        (plan.status === "succeeded" &&
-          plan.requiresApproval === true &&
-          !plan.approval);
-      if (awaitsApproval) {
-        if (stored.status !== "waiting_approval") {
-          await this.#store.putRunGroup({
-            ...stored,
-            status: "waiting_approval",
-            graphJson: JSON.stringify(graph),
-          });
-        }
-        return await this.getRunGroup(id);
-      }
-      if (plan.status === "queued" || plan.status === "running") {
-        if (stored.status !== "running") {
-          await this.#store.putRunGroup({
-            ...stored,
-            status: "running",
-            graphJson: JSON.stringify(graph),
-          });
-        }
-        return await this.getRunGroup(id);
-      }
-      if (
-        plan.planResourceChanges !== undefined &&
-        plan.planResourceChanges.length === 0
-      )
-        continue;
-      const apply = workspaceRuns.find(
-        (run) => "planRunId" in run && run.planRunId === plan.id,
-      );
-      if (!apply || apply.status === "queued" || apply.status === "running") {
-        if (stored.status !== "running") {
-          await this.#store.putRunGroup({
-            ...stored,
-            status: "running",
-            graphJson: JSON.stringify(graph),
-          });
-        }
-        return await this.getRunGroup(id);
-      }
-      if (apply.status !== "succeeded") {
-        const failed = {
-          ...stored,
-          status:
-            apply.status === "cancelled"
-              ? ("cancelled" as const)
-              : ("failed" as const),
-          finishedAt: this.#now(),
-        };
-        await this.#store.putRunGroup(failed);
-        return await this.getRunGroup(id);
-      }
-    }
-
-    const nextLayer = graph.currentLayer + 1;
-    if (nextLayer >= graph.order.length) {
-      const completed = {
-        ...stored,
-        status: "succeeded" as const,
-        finishedAt: this.#now(),
-      };
-      await this.#store.putRunGroup(completed);
-      return await this.getRunGroup(id);
-    }
-    graph = { ...graph, currentLayer: nextLayer };
-    graph = await this.#startOutputSyncLayer(stored, graph);
-    await this.#store.putRunGroup({
-      ...stored,
-      status: "running",
-      graphJson: JSON.stringify(graph),
-    });
-    // Inline/local runners may have completed the newly-created layer before
-    // createInstallationPlan returned. Re-enter once so that terminal layer is
-    // not stranded waiting for the scheduled recovery scan.
-    return await this.advanceWorkspaceOutputSync(id);
-  }
-
-  async #startOutputSyncLayer(
-    group: RunGroup,
-    graph: WorkspaceOutputSyncGraph,
-    knownWorkspaceRuns?: readonly StoredRunRecord[],
-  ): Promise<WorkspaceOutputSyncGraph> {
-    const runs = { ...graph.runs };
-    const workspaceId = group.workspaceId ?? group.spaceId ?? "";
-    const existingRuns =
-      knownWorkspaceRuns ??
-      (await this.#store.listRunsBySpace(workspaceId, { limit: 500 }));
-    for (const capsuleId of graph.order[graph.currentLayer] ?? []) {
-      if (runs[capsuleId]) continue;
-      const sourceSnapshotId = graph.sourceSnapshotIds[capsuleId];
-      if (!sourceSnapshotId) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `output_sync_source_snapshot_missing: capsule ${capsuleId} has no pinned SourceSnapshot`,
-        );
-      }
-      const existing = existingRuns.find(
-        (run) =>
-          "runGroupId" in run &&
-          run.runGroupId === group.id &&
-          "requiredProviders" in run &&
-          (run.capsuleId ?? run.installationId) === capsuleId &&
-          run.sourceSnapshotId === sourceSnapshotId &&
-          run.operation !== "destroy",
-      );
-      if (existing) {
-        runs[capsuleId] = existing.id;
-        continue;
-      }
-      const response = await this.#controller.createInstallationPlan(
-        capsuleId,
-        { actor: this.#actor ?? "system:output-sync" },
-        {
-          runGroupId: group.id,
-          autoApplyRequested: true,
-          sourceSnapshotId,
-        },
-      );
-      runs[capsuleId] = response.planRun.id;
-    }
-    return { ...graph, runs };
-  }
-
-  /**
-   * Creates a `space_drift_check` RunGroup for one Space. Unlike
-   * `space_update`, drift checks are read-only and independent, but recording
-   * them as a RunGroup gives scheduled sweeps a single Space-scoped ledger row
+   * Creates a `workspace_drift_check` RunGroup for one Workspace. Unlike
+   * `workspace_update`, drift checks are read-only and independent, but recording
+   * them as a RunGroup gives scheduled sweeps a single Workspace-scoped ledger row
    * and lets the dashboard read the member `drift_check` Runs through the same
-   * §19 Run projection. Only `active` Installations are checked; an empty active
+   * §19 Run projection. Only `active` Capsules are checked; an empty active
    * set is a typed `failed_precondition` (`nothing_to_drift_check`).
    */
   async createWorkspaceDriftCheck(
-    spaceId: string,
-    options: CreateSpaceDriftCheckOptions = {},
+    workspaceId: string,
+    options: CreateWorkspaceDriftCheckOptions = {},
   ): Promise<RunGroupWithRuns> {
-    requireNonEmptyString(spaceId, "spaceId");
+    requireNonEmptyString(workspaceId, "workspaceId");
     const limit = normalizePositiveLimit(options.limit);
-    const installations = (await this.#store.listInstallations(spaceId))
-      .filter((installation) => installation.status === "active")
+    const capsules = (await this.#store.listCapsules(workspaceId))
+      .filter((capsule) => capsule.status === "active")
       .slice(0, limit);
-    if (installations.length === 0) {
+    if (capsules.length === 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "nothing_to_drift_check: no active capsules to drift-check",
       );
     }
 
-    const installationIds = installations.map(
-      (installation) => installation.id,
+    const capsuleIds = capsules.map(
+      (capsule) => capsule.id,
     );
-    const dependencyEdges = (await this.#store.listDependenciesBySpace(spaceId))
+    const dependencyEdges = (await this.#store.listDependenciesByWorkspace(workspaceId))
       .map((edge) => ({
-        from: edge.producerInstallationId,
-        to: edge.consumerInstallationId,
+        from: edge.producerCapsuleId,
+        to: edge.consumerCapsuleId,
       }))
       .filter(
         (edge) =>
-          installationIds.includes(edge.from) &&
-          installationIds.includes(edge.to),
+          capsuleIds.includes(edge.from) &&
+          capsuleIds.includes(edge.to),
       );
     const layers = topologicalLayersOrPrecondition(
-      installationIds,
+      capsuleIds,
       dependencyEdges,
-      spaceId,
+      workspaceId,
     );
     const runs: Record<string, string> = {};
     const memberRuns: Run[] = [];
     const runGroupId = this.#newId("rg");
 
     for (const layer of layers) {
-      for (const installationId of layer) {
-        const response = await this.#controller.createInstallationDriftCheck(
-          installationId,
+      for (const capsuleId of layer) {
+        const response = await this.#controller.createCapsuleDriftCheck(
+          capsuleId,
           this.#actor ? { actor: this.#actor } : {},
           { runGroupId },
         );
-        runs[installationId] = response.planRun.id;
+        runs[capsuleId] = response.planRun.id;
         memberRuns.push(await this.#controller.getRun(response.planRun.id));
       }
     }
 
-    const graph: SpaceUpdateGraph = { order: layers, runs };
+    const graph: WorkspaceUpdateGraph = { order: layers, runs };
     const runGroup: RunGroup = {
       id: runGroupId,
-      spaceId,
-      type: "space_drift_check",
+      workspaceId,
+      type: "workspace_drift_check",
       status: computeGroupStatus(memberRuns),
       graphJson: JSON.stringify(graph),
       createdAt: this.#now(),
     };
     await this.#store.putRunGroup(runGroup);
     await this.#activity.record({
-      workspaceId: spaceId,
-      spaceId,
+      workspaceId,
       ...(this.#actor ? { actorId: this.#actor } : {}),
       action: "run_group.created",
       targetType: "run_group",
       targetId: runGroup.id,
       metadata: {
         type: runGroup.type,
-        memberInstallationIds: installationIds,
+        memberCapsuleIds: capsuleIds,
         runIds: Object.values(runs),
       },
     });
@@ -593,32 +280,16 @@ export class RunGroupsService {
    * states. The returned `runGroup.status` is recomputed (it does not trust the
    * persisted snapshot).
    */
-  /** @deprecated transient alias for {@link createWorkspaceUpdate}. */
-  async createSpaceUpdate(spaceId: string): Promise<RunGroupWithRuns> {
-    return await this.createWorkspaceUpdate(spaceId);
-  }
-
-  /** @deprecated transient alias for {@link createWorkspaceDriftCheck}. */
-  async createSpaceDriftCheck(
-    spaceId: string,
-    options: CreateSpaceDriftCheckOptions = {},
-  ): Promise<RunGroupWithRuns> {
-    return await this.createWorkspaceDriftCheck(spaceId, options);
-  }
-
   async getRunGroup(id: string): Promise<RunGroupWithRuns | undefined> {
     requireNonEmptyString(id, "runGroupId");
     const stored = await this.#store.getRunGroup(id);
     if (!stored) return undefined;
-    const graph = parseSpaceUpdateGraph(stored.graphJson);
+    const graph = parseWorkspaceUpdateGraph(stored.graphJson);
     const memberRuns = await this.#memberRuns(graph);
     return {
       runGroup: {
         ...stored,
-        status:
-          stored.type === "workspace_output_sync"
-            ? stored.status
-            : computeGroupStatus(memberRuns),
+        status: computeGroupStatus(memberRuns),
       },
       runs: memberRuns,
     };
@@ -634,40 +305,24 @@ export class RunGroupsService {
     requireNonEmptyString(id, "runGroupId");
     const stored = await this.#store.getRunGroup(id);
     if (!stored) return undefined;
-    const graph = parseSpaceUpdateGraph(stored.graphJson);
+    const graph = parseWorkspaceUpdateGraph(stored.graphJson);
     for (const run of await this.#memberRuns(graph)) {
       if (run.status !== "waiting_approval") continue;
       await this.#controller.approveRun(
         run.id,
         this.#actor ? { approvedBy: this.#actor } : {},
       );
-      if (stored.type === "workspace_output_sync") {
-        const plan = await this.#store.getPlanRun(run.id);
-        if (plan && (plan.planResourceChanges?.length ?? 0) > 0) {
-          await this.#controller.createApplyRun(
-            {
-              planRunId: plan.id,
-              expected: applyExpectedGuardFromPlanRun(plan),
-              confirmDestructive: true,
-            },
-            { actor: this.#actor ?? "system:output-sync" },
-          );
-        }
-      }
-    }
-    if (stored.type === "workspace_output_sync") {
-      await this.advanceWorkspaceOutputSync(id);
     }
     return await this.getRunGroup(id);
   }
 
   /** Reads the member Runs of a parsed graph through the controller's getRun. */
-  async #memberRuns(graph: SpaceUpdateGraph): Promise<Run[]> {
+  async #memberRuns(graph: WorkspaceUpdateGraph): Promise<Run[]> {
     const runs: Run[] = [];
     // Iterate in the recorded topological order so the member list is stable.
     for (const layer of graph.order) {
-      for (const installationId of layer) {
-        const runId = graph.runs[installationId];
+      for (const capsuleId of layer) {
+        const runId = graph.runs[capsuleId];
         if (!runId) continue;
         try {
           runs.push(await this.#controller.getRun(runId));
@@ -693,17 +348,17 @@ function normalizePositiveLimit(limit: number | undefined): number {
 
 /**
  * Builds the topological layers for a RunGroup member set, translating a
- * {@link GraphCycleError} (the member edges contain a cycle — the Space's
+ * {@link GraphCycleError} (the member edges contain a cycle — the Workspace's
  * dependency DAG is wedged) into a typed `failed_precondition` instead of
  * letting it escape as an uncaught 500. The cycle is normally prevented at
  * Dependency creation, so a cycle here means a pre-existing wedge that the
  * operator must repair (delete one of the offending edges) before a RunGroup
- * can order the affected Installations.
+ * can order the affected Capsules.
  */
 function topologicalLayersOrPrecondition(
   nodes: readonly string[],
   edges: readonly { readonly from: string; readonly to: string }[],
-  spaceId: string,
+  workspaceId: string,
 ): string[][] {
   try {
     return topologicalLayers(nodes, edges);
@@ -719,7 +374,7 @@ function topologicalLayersOrPrecondition(
 }
 
 /**
- * Closes a seed set over the producer -> consumer edges: the seed installations
+ * Closes a seed set over the producer -> consumer edges: the seed capsules
  * plus every transitive downstream consumer. The seed is always included even
  * when it has no downstream edge.
  */
@@ -792,7 +447,7 @@ export function computeGroupStatus(runs: readonly Run[]): RunGroupStatus {
   return "succeeded";
 }
 
-function parseSpaceUpdateGraph(graphJson: string): SpaceUpdateGraph {
+function parseWorkspaceUpdateGraph(graphJson: string): WorkspaceUpdateGraph {
   let parsed: unknown;
   try {
     parsed = JSON.parse(graphJson);
@@ -817,39 +472,4 @@ function parseSpaceUpdateGraph(graphJson: string): SpaceUpdateGraph {
     }
   }
   return { order, runs };
-}
-
-function parseWorkspaceOutputSyncGraph(
-  graphJson: string,
-): WorkspaceOutputSyncGraph {
-  const base = parseSpaceUpdateGraph(graphJson);
-  let record: Record<string, unknown> = {};
-  try {
-    const parsed = JSON.parse(graphJson) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      record = parsed as Record<string, unknown>;
-    }
-  } catch {
-    // The base parser already normalizes malformed JSON to an empty graph.
-  }
-  const sourceSnapshotIds: Record<string, string> = {};
-  if (record.sourceSnapshotIds && typeof record.sourceSnapshotIds === "object") {
-    for (const [capsuleId, sourceSnapshotId] of Object.entries(
-      record.sourceSnapshotIds,
-    )) {
-      if (typeof sourceSnapshotId === "string" && sourceSnapshotId) {
-        sourceSnapshotIds[capsuleId] = sourceSnapshotId;
-      }
-    }
-  }
-  return {
-    ...base,
-    mode: "workspace_output_sync",
-    targetRevision:
-      typeof record.targetRevision === "number" ? record.targetRevision : 0,
-    pass: typeof record.pass === "number" ? record.pass : 1,
-    currentLayer:
-      typeof record.currentLayer === "number" ? record.currentLayer : 0,
-    sourceSnapshotIds,
-  };
 }

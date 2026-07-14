@@ -8,12 +8,11 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
   return {
     id: "installable-worker",
     source: {
-      git: "https://github.com/tako0614/takosumi-template.git",
-      // Runtime compatibility: older external store nodes may still include a
-      // ref-like property, but Store handoff must not make it authoritative.
+      url: "https://github.com/tako0614/takosumi-template.git",
+      // Optional Store presentation must not become install authority.
       ref: "0123456789abcdef0123456789abcdef01234567",
       path: "modules/worker",
-    } as unknown as TcsListing["source"],
+    },
     kind: "worker",
     surface: "service",
     provider: "cloudflare",
@@ -79,7 +78,7 @@ describe("store link handoff", () => {
             defaultValue: "2",
           },
           {
-            name: "release_container_images",
+            name: "runtime_options",
             type: "json",
             label: text("Release images"),
             defaultValue:
@@ -91,7 +90,7 @@ describe("store link handoff", () => {
     const params = new URLSearchParams(query);
     expect(params.has("varjson.enable_cloudflare_resources")).toBe(false);
     expect(params.has("varjson.replicas")).toBe(false);
-    expect(params.has("varjson.release_container_images")).toBe(false);
+    expect(params.has("varjson.runtime_options")).toBe(false);
     expect(params.has("var.enable_cloudflare_resources")).toBe(false);
   });
 });

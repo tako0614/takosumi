@@ -9,7 +9,6 @@ export interface CredentialMintEvent {
   readonly capsuleId?: string;
   readonly sourceId?: string;
   readonly connectionId?: string;
-  readonly providerEnvId?: string;
   readonly phase:
     "source" | "normalize" | "build" | "plan" | "apply" | "destroy";
   /**
@@ -18,10 +17,10 @@ export interface CredentialMintEvent {
    */
   readonly capabilities: readonly string[];
   /**
-   * Non-secret evidence captured at mint time. This records whether provider
-   * credentials were delivered only to the generated root and whether the
-   * provider-specific mint produced temporary credentials with an expiry. It
-   * must never contain credential values.
+   * Non-secret evidence captured at mint time. This records whether the
+   * recipe/issuer produced temporary credentials with an expiry. It must never
+   * contain credential values or depend on how a root module represents
+   * provider configuration.
    */
   readonly providerCredentialEvidence?: readonly ProviderCredentialMintEvidence[];
   readonly actorId?: string;
@@ -29,21 +28,14 @@ export interface CredentialMintEvent {
 }
 
 export interface ProviderCredentialMintEvidence {
-  readonly providerEnvId: string;
-  readonly connectionId?: string;
+  readonly connectionId: string;
   readonly provider: string;
-  readonly delivery: "provider_env" | "generated_root_variable";
-  readonly rootOnly: boolean;
   readonly temporary: boolean;
   readonly ttlEnforced: boolean;
   readonly expiresAt?: string;
   readonly ttlSeconds?: number;
-  readonly issuer?:
-    | "aws_sts_assume_role"
-    | "cloudflare_api_token_vending"
-    | "takosumi_managed_provider_token"
-    | "takosumi_service_scoped_credential"
-    | "static_secret";
+  /** Open recipe/issuer driver token; adding a driver needs no contract enum edit. */
+  readonly issuer?: string;
   readonly secretValueStored?: false;
 }
 

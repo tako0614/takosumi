@@ -43,11 +43,11 @@ export const ja = {
   "nav.store": "ストア",
   "nav.settings": "設定",
   "nav.graph": "依存関係",
+  "nav.resources": "リソース",
   "store.title": "ストア",
   "store.subtitle": "ストアから追加できるサービスを探します。",
   "store.manualEntry":
     "お探しのものがありませんか？ Git URL / 独自の取得元から追加",
-  "nav.cloudResources": "クラウド",
   "nav.runs": "アクティビティ",
   "nav.connections": "接続済みアカウント",
   "nav.billing": "お支払い",
@@ -72,19 +72,17 @@ export const ja = {
   // --- settings hub -----------------------------------------------------------
   "settings.title": "設定",
   "settings.subtitle":
-    "アカウント、支払い、通知、詳しい管理画面はここからです。",
+    "アカウント、使用量、通知、詳しい管理画面はここからです。",
   "settings.section.general": "全般",
   "settings.section.advanced": "詳しい管理",
   "settings.account.title": "アカウント",
   "settings.account.desc": "プロフィールとサインイン情報",
-  "settings.billing.title": "プランと支払い",
-  "settings.billing.desc": "プラン、使用量、請求の確認",
+  "settings.billing.title": "使用量",
+  "settings.billing.desc": "使用量と operator 提供のショーバック",
   "settings.notifications.title": "通知",
   "settings.notifications.desc": "お知らせと要対応の確認",
-  "settings.billingSummary.noPlan": "プラン未加入",
   "settings.billingSummary.manage": "管理する",
-  "settings.billingSummary.fix": "支払いを確認する",
-  "settings.billingSummary.error": "支払い状況を読み込めませんでした。",
+  "settings.billingSummary.error": "使用量の状態を読み込めませんでした。",
   "settings.manage.entry": "管理ツール",
   "settings.manage.entryDesc":
     "サービスの内部、接続、実行履歴などの詳しい管理画面",
@@ -93,9 +91,9 @@ export const ja = {
     "ホスティングの内部を直接あつかう画面です。ふだんの利用では開く必要はありません。",
   "settings.manage.services": "すべてのサービスと状態の一覧",
   "settings.manage.connections": "クラウドアカウントの接続とカギの管理",
-  "settings.manage.cloud": "クラウドリソースの内訳と使用量",
   "settings.manage.runs": "デプロイと変更の実行記録",
   "settings.manage.graph": "サービス間の依存関係の表示",
+  "settings.manage.resources": "Resource Shape、TargetPool、SpacePolicy の管理",
   "settings.manage.activity": "だれが何を変更したかの操作履歴",
   "settings.manage.workspace": "メンバー、キー、バックアップ、共有、ポリシー",
   "settings.manage.backups": "復元ポイントの作成と復元",
@@ -134,12 +132,9 @@ export const ja = {
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
   "legal.langLabel": "言語",
-  "legal.policiesNav": "Takosumi Cloud のポリシー",
-  "auth.signInSub": "Google アカウントで続けます。",
-  "auth.signInCloud": "Takosumi Cloud",
-  "auth.signInSubCloud": "Google アカウントでサインインします。",
-  "auth.signInCloudPreview":
-    "現在は招待されたGoogleアカウントのみ利用できます。",
+  "legal.policiesNav": "operator のポリシー",
+  "auth.signInSub": "設定済みの ID プロバイダーでサインインします。",
+  "auth.singleSignOn": "シングルサインオン",
   "auth.continueWith": "{provider} で続ける",
   "auth.providerChecking": "利用可否を確認中です",
   "auth.providerUnavailable": "現在利用できません",
@@ -207,10 +202,7 @@ export const ja = {
   "status.policy.pass": "問題なし",
   "status.policy.warn": "警告あり",
   "status.policy.deny": "拒否",
-  "status.deployment.active": "現在",
-  "status.deployment.superseded": "置き換え済み",
-  "status.deployment.rolled_back": "巻き戻し済み",
-  "status.deployment.destroyed": "削除済み",
+  "status.stateVersion.current": "現在",
   "status.connection.pending": "未確認",
   "status.connection.verified": "確認済み",
   "status.connection.revoked": "無効化済み",
@@ -300,25 +292,21 @@ export const ja = {
   "app.refreshFailed":
     "最新の状態を取得できませんでした。表示は最後に取得した内容です。",
   "app.notFoundMessage": "削除されたか、リンクが違う可能性があります。",
-  "app.outputs.title": "公開リンク",
-  "app.outputs.subtitle": "開ける画面やアドレスがある場合に表示します。",
-  "app.outputs.deletedSubtitle":
-    "このサービスは削除済みです。以前のアドレスは記録としてだけ表示します。",
-  "app.outputs.activationPending":
+  "app.surfaces.title": "公開リンク",
+  "app.surfaces.subtitle":
+    "このサービスが宣言し、あなたに利用が許可された画面を表示します。",
+  "app.surfaces.deletedSubtitle":
+    "このサービスは削除済みです。実行画面のリンクは利用できません。",
+  "app.surfaces.activationPending":
     "公開処理が完了すると、このアドレスを開けます。",
-  "app.outputs.activationFailed":
+  "app.surfaces.activationFailed":
     "公開処理に失敗しました。最近の更新から詳細を確認できます。",
-  "app.outputs.empty": "デプロイ後に表示されます。",
-  "app.outputs.loadError":
+  "app.surfaces.empty": "デプロイと利用許可の設定が完了すると表示されます。",
+  "app.surfaces.loadError":
     "公開リンクを読み込めませんでした。時間をおいて開き直してください。",
-  "app.outputs.none": "このサービスには公開リンクがありません。",
-  "app.outputs.valuesTitle": "その他の値",
-  "app.output.launchUrl": "公開アドレス",
-  "app.output.openPublicLink": "公開リンクを開く",
-  "app.output.url": "アドレス",
-  "app.output.publicUrl": "公開アドレス",
-  "app.output.endpoint": "エンドポイント",
-  "app.output.hostname": "ホスト名",
+  "app.surfaces.none": "このサービスには利用可能な公開リンクがありません。",
+  "app.surfaces.defaultName": "画面 {n}",
+  "app.surfaces.open": "公開リンクを開く",
   "app.deps.title": "連携しているサービス",
   "app.deps.dependsOn": "このサービスが使うサービス",
   "app.deps.usedBy": "このサービスを使っているサービス",
@@ -393,6 +381,16 @@ export const ja = {
   "app.config.errorNameDuplicate": "{name} が重複しています。",
   "app.config.errorNumber": "{name} は数値で入力してください。",
   "app.config.errorJson": "{name} は JSON として入力してください。",
+  "app.interfaces.title": "ランタイム Interface（高度な設定）",
+  "app.interfaces.subtitle":
+    "通常の OpenTofu Output とは分けて、ランタイムの公開面を宣言します。変更は次のデプロイ確認に反映されます。",
+  "app.interfaces.editorLabel": "Interface blueprint（JSON）",
+  "app.interfaces.editorHint":
+    "配列として入力します。各宣言には key、name、spec を明示し、動的な値は spec.inputs で literal、capsule_output、resource_output のいずれかに割り当てます。シークレットは記載しません。",
+  "app.interfaces.notReady": "Interface 宣言を読み込めませんでした。",
+  "app.interfaces.errorJson": "正しい JSON を入力してください。",
+  "app.interfaces.errorArray":
+    "Interface blueprint の JSON は配列で入力してください。すべて削除する場合は [] を使います。",
   "app.settings.openCta": "設定を開く",
   "app.settings.supportDetails": "参照情報",
   "app.settings.leaveConfirm.title": "編集内容を破棄しますか？",
@@ -400,8 +398,11 @@ export const ja = {
     "保存していない設定の変更があります。移動すると失われます。",
   "app.settings.leaveConfirm.confirm": "破棄して移動",
   "app.usage.title": "見積費用（累計）",
-  "app.usage.body": "このサービスの記録済み使用量の合計です。",
+  "app.usage.body":
+    "このサービスの評価済み費用です。未評価の使用量は別に表示します。",
   "app.usage.subCent": "$0.01 未満",
+  "app.usage.unrated": "未評価",
+  "app.usage.unratedCount": "未評価の使用量記録: {n} 件",
   "app.config.savedNeedsDeploy":
     "保存しました。変更を反映するにはデプロイしてください。",
   "app.config.deployChanges": "変更をデプロイ",
@@ -470,9 +471,6 @@ export const ja = {
   "runError.runFailed": "実行に失敗しました。もう一度お試しください。",
   "runError.backupFailed":
     "復元ポイントの作成に失敗しました。もう一度お試しください。",
-  "run.summary.creditsRequired": "クレジットが必要です。",
-  "run.summary.creditsRequiredHint":
-    "アカウントにクレジットを追加してから、もう一度デプロイしてください。",
   "run.summary.hostnameSlotLimit": "短いURLの空き枠がありません。",
   "run.summary.hostnameSlotLimitHint":
     "通常URLを使うか、既存の短いURLを解放してからもう一度実行してください。",
@@ -520,11 +518,7 @@ export const ja = {
   "run.cancelConfirm.cta": "実行をキャンセル",
   "run.cancelConfirm.keep": "実行を続ける",
   "run.cost.required": "見積費用: 約 {n}",
-  "run.cost.balance": "利用可能枠: {n}",
-  "run.cost.shortfall":
-    "利用上限または支払い状態により、このまま実行できません。",
-  "run.cost.blocked":
-    "支払い状態または上限の都合により、このまま実行できません。",
+  "run.cost.unrated": "使用量は計測済みですが、価格ポリシーが未設定です。",
   "run.cost.capacityBlocked":
     "このワークスペースではこの操作を実行できません。",
   "run.cost.billingCta": "お支払いを開く",
@@ -549,10 +543,6 @@ export const ja = {
   "run.resources.address": "アドレス",
   "run.resources.type": "種別",
   "run.resources.scope": "対象範囲",
-  "run.scope.cloudflareAccount": "Cloudflare アカウント {id}",
-  "run.scope.cloudflareZone": "Cloudflare ゾーン {id}",
-  "run.scope.awsAccount": "AWS アカウント {id}",
-  "run.scope.awsRegion": "AWS リージョン {region}",
   "run.details.title": "参照情報",
   "run.details.runId": "実行 ID",
   "run.details.type": "種別",
@@ -587,13 +577,7 @@ export const ja = {
   "run.diag.severity.info": "情報",
   "run.diagnostics.failed":
     "完了できませんでした。原因を確認する場合だけ詳細を開いてください。",
-  "run.diagnostics.creditsRequired":
-    "所有者アカウントのクレジット残高が足りないため停止しました。クレジットを追加すると、同じ変更をもう一度実行できます。",
-  "run.diagnostics.creditsRequiredShort": "クレジット残高が不足しています。",
-  "run.diagnostics.creditsRequiredDetail":
-    "お支払い画面でクレジットを追加してから、もう一度デプロイしてください。",
-  "run.diagnostics.hostnameSlotLimitShort":
-    "短いURLの空き枠がありません。",
+  "run.diagnostics.hostnameSlotLimitShort": "短いURLの空き枠がありません。",
   "run.diagnostics.hostnameSlotLimitDetail":
     "通常URLを使うか、既存の短いURLを解放してからもう一度実行してください。",
   "run.diagnostics.connectionVerificationRequired":
@@ -735,7 +719,7 @@ export const ja = {
   "new.env.errorNameRequired":
     "環境変数名を入力するか、空の行を削除してください。",
   "new.env.errorUnsafeName":
-    "「{name}」は平文の環境変数として渡せません。秘密の値は接続済みアカウントから渡してください。",
+    "「{name}」には大文字の英字、数字、アンダースコアだけを使ってください。",
   "new.env.errorUnsafeValue":
     "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
   "new.env.errorDuplicate": "環境変数「{name}」が重複しています。",
@@ -781,7 +765,6 @@ export const ja = {
   "new.compat.details": "詳しい確認結果",
   "new.compat.readyBrief": "確認できました。",
   "new.compat.ready": "このまま追加できます",
-  "new.compat.auto": "自動調整して追加できます",
   "new.compat.patch": "手直しが必要です",
   "new.compat.unsupported": "今は追加できません",
   "new.compat.diagnostic.technicalNote":
@@ -796,8 +779,10 @@ export const ja = {
     "{provider} の非公開値が取得元の中に書かれています。",
   "new.compat.issue.providerCredentials.detail":
     "API トークンやアカウント ID はコードに置かず、{provider} の接続済みアカウントからデプロイ時だけ渡してください。値を外して接続すると続行できます。",
-  "new.compat.issue.providerLift.message":
-    "{provider} の接続設定は、非公開値を外せば安全な実行用設定として扱えます。",
+  "new.compat.issue.providerPreserved.message":
+    "取得元にある {provider} の非秘密設定はそのまま維持されます。",
+  "new.compat.issue.backendIsolated.message":
+    "取得元の backend 設定を維持したまま、Takosumi が Run の state 境界を分離します。",
   "new.compat.issue.lockfile.message":
     "利用する接続先の固定情報が含まれています。非公開値を外したあと、追加時に固定内容を確認します。",
   "new.compat.issue.reviewRequired.message":
@@ -876,7 +861,6 @@ export const ja = {
   "workspaceSettings.tab.connections": "接続",
   "workspaceSettings.tab.billing": "お支払い",
   "workspaceSettings.tab.usageQuota": "使用量 / 上限",
-  "workspaceSettings.tab.cloud": "クラウドリソース",
   "workspaceSettings.tab.keys": "APIキー",
   "workspaceSettings.tab.backups": "バックアップ",
   "workspaceSettings.tab.shares": "共有値",
@@ -942,7 +926,7 @@ export const ja = {
     "自分のカギ（クラウドのトークンやアクセスキー）を保存します。カギを入れれば、制限や承認なしで任意のプロバイダーを動かせます。",
   "conn.providerConnections.title": "接続済みアカウント",
   "conn.expiresAt": "期限: {date}",
-  "conn.oauth.connected": "Cloudflare に接続しました。",
+  "conn.oauth.connected": "プロバイダー接続を保存しました。",
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
   "conn.oauth.error.missingCode":
     "認証の応答が不完全でした。もう一度お試しください。",
@@ -968,80 +952,20 @@ export const ja = {
   "conn.add.optionalSettings": "この接続に名前をつける",
   "conn.add.displayName": "接続名",
   "conn.add.displayNamePlaceholder": "任意の名前",
-  "conn.provider.cloudflare.label": "Cloudflare",
-  "conn.provider.cloudflare.helper.stepOpen":
-    "自動連携を使えない場合だけ、下のボタンから Cloudflare のトークン画面を開きます。",
-  "conn.provider.cloudflare.helper.stepCreate":
-    "Cloudflare の画面で「概要に進む」→「トークンを作成」を押します（権限はあらかじめ選ばれています）。",
-  "conn.provider.cloudflare.helper.stepPaste":
-    "表示されたトークンをコピーして、ここに貼り付けます。",
-  "conn.provider.cloudflare.apiToken.label": "アクセストークン",
-  "conn.provider.cloudflare.apiToken.placeholder": "アクセストークンを貼り付け",
-  "conn.provider.cloudflare.accountId.label": "アカウント ID",
-  "conn.provider.cloudflare.accountId.placeholder": "0123abcd...",
-  "conn.provider.cloudflare.workersSubdomain.label":
-    "workers.dev サブドメイン（任意）",
-  "conn.provider.cloudflare.workersSubdomain.placeholder": "your-team",
-  "conn.provider.aws.label": "AWS",
-  "conn.provider.aws.accessKeyId.label": "アクセスキー ID",
-  "conn.provider.aws.secretAccessKey.label": "シークレットアクセスキー",
-  "conn.provider.aws.secretAccessKey.placeholder":
-    "シークレットアクセスキーを貼り付け",
-  "conn.provider.aws.region.label": "リージョン",
-  "conn.provider.aws.sessionToken.label": "セッショントークン（任意）",
-  "conn.provider.aws.sessionToken.placeholder":
-    "STS セッショントークンを使う場合だけ貼り付け",
-  "conn.provider.gcp.label": "Google Cloud",
-  "conn.provider.gcp.credentials.label": "サービスアカウント JSON",
-  "conn.provider.gcp.credentials.placeholder":
-    "サービスアカウント JSON を貼り付け",
-  "conn.provider.gcp.project.label": "プロジェクト ID",
-  "conn.provider.hcloud.label": "Hetzner Cloud",
-  "conn.provider.hcloud.token.label": "API トークン",
-  "conn.provider.hcloud.token.placeholder": "Hetzner API トークンを貼り付け",
-  "conn.provider.s3.label": "Cloudflare R2 / S3 互換ストレージ",
-  "conn.provider.s3.endpoint.label": "S3 エンドポイント URL",
-  "conn.provider.aws.guide.step1": "IAM のユーザー画面を開きます。",
-  "conn.provider.aws.guide.step2":
-    "デプロイ専用ユーザーを作成または選択し、最小権限のアクセスキーを作成します。",
-  "conn.provider.aws.guide.step3":
-    "取得した値とリージョンを下の欄に貼り付けます。",
-  "conn.provider.gcp.guide.step1":
-    "Google Cloud のサービスアカウント画面を開きます。",
-  "conn.provider.gcp.guide.step2":
-    "サービスアカウントを作成し、JSON 鍵を作成・ダウンロードします。",
-  "conn.provider.gcp.guide.step3":
-    "JSON とプロジェクト ID を下の欄に貼り付けます。",
-  "conn.provider.hcloud.guide.step1": "Hetzner Cloud Console を開きます。",
-  "conn.provider.hcloud.guide.step2":
-    "プロジェクト → Security → API Tokens で Read & Write のトークンを作成します。",
-  "conn.provider.hcloud.guide.step3":
-    "発行されたトークンを下の欄に貼り付けます。",
-  "conn.provider.s3.guide.step1": "R2 の API トークン画面を開きます。",
-  "conn.provider.s3.guide.step2":
-    "S3 互換のアクセスキー ID とシークレットアクセスキーを作成します。",
-  "conn.provider.s3.guide.step3":
-    "アクセスキーとエンドポイント URL を下の欄に貼り付けます。",
   "conn.guided.openProvider": "{provider} のアクセス設定を開く",
-  "conn.guided.stepsSummary": "アクセストークンで接続",
   "conn.guided.instructions": "手順を表示",
-  "conn.guided.pasteLabel": "アクセストークン",
-  "conn.guided.pastePlaceholder": "ここにトークンを貼り付け",
-  "conn.guided.connect": "接続を保存",
-  "conn.guided.connecting": "接続中...",
   "conn.byok.title": "自分のカギで任意のプロバイダーを接続",
   "conn.byok.body":
     "プロバイダーの取得元 (source) と、そのプロバイダーが使う環境変数（カギ）を入れるだけ。制限や承認なしで、どの OpenTofu / Terraform プロバイダーでも動きます。",
   "conn.byok.noBillingNote":
     "自分のカギを使う接続に Takosumi の課金はありません。課金対象になるのは Takosumi が提供するリソースだけです。",
-  "conn.byok.usePreset": "代わりにガイド付きプリセットを使う",
-  "conn.advanced.summary": "アクセス情報を入力",
+  "conn.byok.usePreset": "インストール済み Recipe を使う",
   "conn.register": "接続を保存",
   "conn.registering": "保存中...",
   "conn.genericEnv.providerName": "プロバイダーの取得元",
-  "conn.genericEnv.providerPlaceholder": "snowflake-labs/snowflake",
+  "conn.genericEnv.providerPlaceholder": "examplecorp/example",
   "conn.genericEnv.envName": "env 名",
-  "conn.genericEnv.envNamePlaceholder": "SNOWFLAKE_PASSWORD",
+  "conn.genericEnv.envNamePlaceholder": "EXAMPLE_API_TOKEN",
   "conn.genericEnv.value": "値",
   "conn.genericEnv.valuePlaceholder": "値を貼り付け",
   "conn.genericEnv.addRow": "値を追加",
@@ -1049,13 +973,12 @@ export const ja = {
     "プロバイダーの取得元を入力してください。",
   "conn.genericEnv.nameRequired": "値のある行には環境変数名が必要です。",
   "conn.genericEnv.invalidName":
-    "「{name}」は使えません。SNOWFLAKE_PASSWORD のような大文字の env 名を使ってください。",
+    "「{name}」は使えません。EXAMPLE_API_TOKEN のような大文字の env 名を使ってください。",
   "conn.genericEnv.reservedName":
     "「{name}」は実行環境が使う予約名です。プロバイダー固有の env 名を使ってください。",
   "conn.genericEnv.duplicateName": "「{name}」はすでに追加されています。",
   "conn.genericEnv.oneRequired": "環境変数を 1 つ以上入力してください。",
   "conn.error.invalidProvider": "接続先が不正です。",
-  "conn.error.tokenRequired": "トークンを貼り付けてください。",
   "conn.error.fieldRequired": "{field} は必須です。",
   "conn.empty.title": "自分のカギで任意のプロバイダーを接続",
   "conn.empty.message":
@@ -1227,6 +1150,151 @@ export const ja = {
   "graph.noEdges.message":
     "サービスが他のサービスの値を使うようになると、ここにつながりが表示されます。",
 
+  // --- Resource Shape ----------------------------------------------------------
+  "resources.title": "リソース",
+  "resources.subtitle":
+    "Resource Shape の望ましい状態、配置先、観測結果を管理します。",
+  "resources.define": "リソースを定義",
+  "resources.empty": "この Resource Space にはリソースがありません。",
+  "resources.column.resource": "リソース",
+  "resources.column.phase": "状態",
+  "resources.column.target": "配置先",
+  "resources.column.managedBy": "管理元",
+  "resources.scope.title": "Resource Space",
+  "resources.scope.subtitle":
+    "Dashboard セッションでは、検証済み Workspace ID が Resource Space の境界になります。",
+  "resources.scope.label": "Space ID",
+  "resources.scope.required": "Resource Space が必要です。",
+  "resources.unavailable.title": "Resource Shape API は無効です",
+  "resources.unavailable.message":
+    "この operator では、永続 Resource Shape API と runner がまだ有効になっていません。",
+  "resources.inventory.title": "リソース一覧",
+  "resources.inventory.subtitle": "Space {space} の望ましい状態と観測状態",
+  "resources.editor.createTitle": "リソースを定義",
+  "resources.editor.editTitle": "望ましい状態を変更",
+  "resources.editor.subtitle":
+    "必ずプレビューで配置先と native plan を確認してから適用します。",
+  "resources.editor.kind": "Shape kind",
+  "resources.editor.kindHint":
+    "組み込み shape のほか、operator が明示登録した token も指定できます。",
+  "resources.editor.kindInvalid": "有効な Shape kind を入力してください。",
+  "resources.editor.name": "リソース名",
+  "resources.editor.nameRequired": "リソース名を入力してください。",
+  "resources.editor.project": "Project（任意）",
+  "resources.editor.environment": "Environment",
+  "resources.editor.targetPool": "TargetPool",
+  "resources.editor.policy": "SpacePolicy",
+  "resources.editor.spec": "Spec JSON",
+  "resources.editor.specHint":
+    "選択した Shape の spec だけを JSON object で入力します。認証情報は含めません。",
+  "resources.editor.advanced": "ラベルなどの詳細設定",
+  "resources.editor.labels": "Labels JSON",
+  "resources.editor.labelsHint": "値がすべて文字列の JSON object です。",
+  "resources.editor.specInvalid": "Spec JSON が不正です — {message}",
+  "resources.editor.labelsInvalid": "Labels JSON が不正です — {message}",
+  "resources.editor.preview": "プレビュー",
+  "resources.editor.previewRequired":
+    "現在の入力内容でもう一度プレビューしてください。",
+  "resources.editor.apply": "適用",
+  "resources.editor.applied": "リソースを適用しました。",
+  "resources.editor.importExisting": "既存 native resource を取り込む",
+  "resources.editor.nativeId": "Native resource ID",
+  "resources.editor.nativeIdHint":
+    "provider が発行した既存リソースの識別子です。認証情報は入力しません。",
+  "resources.editor.nativeIdRequired":
+    "Native resource ID を入力してください。",
+  "resources.editor.import": "取り込む",
+  "resources.editor.imported": "既存リソースを取り込みました。",
+  "resources.confirm.applyTitle": "リソースを適用しますか？",
+  "resources.confirm.updateTitle": "望ましい状態を変更しますか？",
+  "resources.confirm.applyMessage":
+    "{kind}/{name} を Target {target} に適用します。プレビュー済みの内容だけが実行されます。",
+  "resources.confirm.importTitle": "既存リソースを取り込みますか？",
+  "resources.confirm.importMessage":
+    "Native ID {nativeId} を {kind}/{name} として検証し、Takosumi の管理対象にします。",
+  "resources.preview.title": "プレビュー結果",
+  "resources.preview.current": "現在の入力",
+  "resources.preview.changed": "入力が変更されています",
+  "resources.preview.target": "Target",
+  "resources.preview.implementation": "Implementation",
+  "resources.preview.portability": "Portability",
+  "resources.preview.price": "見積価格",
+  "resources.preview.priceExpires": "見積の有効期限",
+  "resources.preview.nativePlan": "Native plan",
+  "resources.preview.risks": "注意事項",
+  "resources.preview.noRisks": "追加の注意事項はありません。",
+  "resources.targetPools.title": "TargetPool",
+  "resources.targetPools.subtitle":
+    "利用可能な Target と実装 descriptor を優先順に宣言します。",
+  "resources.targetPools.add": "TargetPool を追加",
+  "resources.targetPools.empty": "TargetPool がありません。",
+  "resources.targetPools.column.name": "名前",
+  "resources.targetPools.column.targets": "Target 数",
+  "resources.targetPools.column.updated": "更新日時",
+  "resources.targetPools.edit": "編集",
+  "resources.targetPools.editorTitle": "TargetPool 設定",
+  "resources.targetPools.name": "TargetPool 名",
+  "resources.targetPools.nameRequired": "TargetPool 名を入力してください。",
+  "resources.targetPools.spec": "TargetPool spec JSON",
+  "resources.targetPools.specInvalid":
+    "targets 配列を持つ有効な JSON object を入力してください。",
+  "resources.targetPools.saved": "TargetPool を保存しました。",
+  "resources.targetPools.deleteTitle": "TargetPool を削除しますか？",
+  "resources.targetPools.deleteMessage":
+    "TargetPool {name} を削除します。リソースから参照中の場合は拒否されます。",
+  "resources.targetPools.deleteAria": "TargetPool {name} を削除",
+  "resources.config.noSecrets":
+    "ここには非機密 descriptor だけを入力します。認証情報は Provider Connection に保存してください。",
+  "resources.policy.title": "SpacePolicy の詳細設定",
+  "resources.policy.subtitle": "配置制約、優先度、承認要件を JSON で設定",
+  "resources.policy.add": "SpacePolicy を追加",
+  "resources.policy.empty": "SpacePolicy がありません。",
+  "resources.policy.column.name": "名前",
+  "resources.policy.column.updated": "更新日時",
+  "resources.policy.edit": "編集",
+  "resources.policy.editorTitle": "SpacePolicy 設定",
+  "resources.policy.name": "SpacePolicy 名",
+  "resources.policy.nameRequired": "SpacePolicy 名を入力してください。",
+  "resources.policy.spec": "SpacePolicy spec JSON",
+  "resources.policy.specInvalid": "有効な JSON object を入力してください。",
+  "resources.policy.saved": "SpacePolicy を保存しました。",
+  "resources.policy.deleteTitle": "SpacePolicy を削除しますか？",
+  "resources.policy.deleteMessage": "SpacePolicy {name} を削除します。",
+  "resources.policy.deleteAria": "SpacePolicy {name} を削除",
+  "resources.policy.writeOnlyHint":
+    "同名ポリシーの現在値を上書きします。認証情報や秘密値は含めません。",
+  "resources.detail.subtitle": "Resource Space {space} の状態と操作履歴",
+  "resources.detail.back": "リソース一覧",
+  "resources.detail.observe": "観測",
+  "resources.detail.refresh": "状態を更新",
+  "resources.detail.actionComplete": "操作が完了しました。",
+  "resources.detail.loadFailed": "リソースを読み込めませんでした",
+  "resources.detail.status": "現在の状態",
+  "resources.detail.kind": "Kind",
+  "resources.detail.space": "Space",
+  "resources.detail.managedBy": "管理元",
+  "resources.detail.generation": "観測済み generation",
+  "resources.detail.resolution": "ResolutionLock",
+  "resources.detail.locked": "固定済み",
+  "resources.detail.yes": "はい",
+  "resources.detail.no": "いいえ",
+  "resources.detail.desired": "望ましい状態",
+  "resources.detail.desiredHint":
+    "Spec は折りたたんで表示し、変更前には必ず再プレビューします。",
+  "resources.detail.change": "変更する",
+  "resources.detail.showSpec": "Spec JSON を表示",
+  "resources.detail.conditions": "Conditions",
+  "resources.detail.conditionsHint": "Reconcile と drift の公開状態",
+  "resources.detail.outputs": "Output keys",
+  "resources.detail.outputsHint":
+    "値はこの一覧では表示せず、公開されているキー名だけを示します。",
+  "resources.detail.events": "操作履歴",
+  "resources.detail.eventsHint": "非機密な Activity / Run projection",
+  "resources.detail.noEvents": "操作履歴はまだありません。",
+  "resources.detail.deleteTitle": "リソースを削除しますか？",
+  "resources.detail.deleteMessage":
+    "{kind}/{name} と native resource の通常削除を実行します。この画面は force delete を行いません。",
+
   // --- account ---------------------------------------------------------------------
   "account.title": "アカウント",
   "account.subtitle": "サインイン情報と言語・表示の設定です。",
@@ -1237,7 +1305,6 @@ export const ja = {
   "account.profile.notSet": "未設定",
   "account.profile.provider": "サインイン方法",
   "account.profile.expires": "セッション期限",
-  "account.session.id": "セッション参照 ID",
   "account.session.userAgent": "ブラウザ",
   "account.session.details": "セッション詳細",
   "account.session.debug": "参照 ID",
@@ -1250,204 +1317,33 @@ export const ja = {
   "account.preferences.title": "表示設定",
   "account.preferences.body": "言語と見た目を変更できます。",
 
-  // --- cloud resources -------------------------------------------------------------
-  "cloudResources.title": "クラウドリソース",
-  "cloudResources.subtitle":
-    "今月の使用量、見積費用、リソース一覧を種類ごとに確認します。",
-  "cloudResources.unavailable.title": "Takosumi Cloud 専用です",
-  "cloudResources.unavailable.body":
-    "この実行環境では Cloud 専用エンドポイントは提供されていません。",
-  "cloudResources.error": "クラウド機能を読み込めませんでした: {message}",
-  "cloudResources.partialError": "一部の確認に失敗しました: {message}",
-  "cloudResources.resources.noAccount":
-    "接続済みアカウントが見つからないため、リソースは削除できません。",
-  "cloudResources.resources.deleteTitle": "リソースを削除",
-  "cloudResources.resources.deleteMessage":
-    "「{name}」を削除します。元に戻せません。",
-  "cloudResources.resources.deleted": "「{name}」を削除しました。",
-  "cloudResources.resources.copyId": "IDをコピー",
-  "cloudResources.copied": "コピーしました。",
-  "cloudResources.copyFailed":
-    "コピーできませんでした。クリップボードへのアクセスが許可されていない可能性があります。値を選択して手動でコピーしてください。",
-  "cloudResources.status.ready": "利用可能",
-  "cloudResources.status.check": "確認が必要",
-  "cloudResources.keys.title": "外部APIキー",
-  "cloudResources.keys.subtitle":
-    "Takosumi Cloud API を呼び出す外部アプリ用のキーを発行・確認します。",
-  "cloudResources.keys.scope": "読み取り / 書き込み",
-  "cloudResources.keys.defaultName": "Takosumi Cloud 外部APIキー",
-  "cloudResources.keys.name": "キー名",
-  "cloudResources.keys.nameRequired": "キー名を入力してください。",
-  "cloudResources.keys.create": "キーを作成",
-  "cloudResources.keys.created": "作成されたキー",
-  "cloudResources.keys.createdNotice":
-    "このキーを今コピーしてください。完全なキーは作成直後に一度だけ表示されます。",
-  "cloudResources.keys.lastUsed": "最終利用",
-  "cloudResources.keys.empty": "まだ外部APIキーはありません。",
-  "cloudResources.keys.error": "APIキーを読み込めませんでした: {message}",
-  "cloudResources.keys.secretNotice":
-    "既存キーは先頭部分のみ表示します。完全なキー値が必要な場合は新しいキーを作成してください。",
-  "cloudResources.keys.revoke": "取り消し",
-  "cloudResources.keys.revokeTitle": "外部APIキーを取り消し",
-  "cloudResources.keys.revokeMessage":
-    "「{name}」を取り消します。このキーを使っているアプリは接続できなくなります。",
-  "cloudResources.usage.title": "今月",
-  "cloudResources.usage.subtitle": "{period} の使用量と見積費用です。",
-  "cloudResources.usage.currentMonth": "今月",
-  "cloudResources.usage.totalCost": "見積費用",
-  "cloudResources.usage.resourceTypes": "リソース種類",
-  "cloudResources.usage.events": "使用イベント",
-  "cloudResources.usage.tableTitle": "種類別の使用量",
-  "cloudResources.usage.tableSubtitle":
-    "報告されたリソース種別を同じ基準でまとめ、管理面があるものはリソース数も表示します。",
-  "cloudResources.usage.resourceType": "種類",
-  "cloudResources.usage.resourceCount": "リソース数",
-  "cloudResources.usage.quantity": "使用量",
-  "cloudResources.usage.estimatedCost": "見積費用",
-  "cloudResources.usage.lastUsed": "最終利用",
-  "cloudResources.usage.management": "管理",
-  "cloudResources.usage.manageAvailable": "一覧あり",
-  "cloudResources.usage.usageOnly": "使用量のみ",
-  "cloudResources.usage.checkInventory": "確認",
-  "cloudResources.usage.noUsage": "今月の使用なし",
-  "cloudResources.usage.empty": "今月のクラウドリソース使用量はありません。",
-  "cloudResources.usage.error": "使用量を読み込めませんでした: {message}",
-  "cloudResources.usage.unit.runnerMinute": "実行時間（分）",
-  "cloudResources.usage.unit.gbHour": "GB時間",
-  "cloudResources.usage.unit.gb": "GB",
-  "cloudResources.usage.unit.compute": "コンピュート単位",
-  "cloudResources.usage.unit.aiRequest": "AIリクエスト",
-  "cloudResources.usage.unit.inputToken": "入力トークン",
-  "cloudResources.usage.unit.outputToken": "出力トークン",
-  "cloudResources.usage.unit.operation": "操作",
-  "cloudResources.management.title": "管理状態",
-  "cloudResources.management.subtitle":
-    "このワークスペースで使うリソース管理プロファイルの状態です。",
-  "cloudResources.management.profile": "管理プロファイル",
-  "cloudResources.management.auth": "認証状態",
-  "cloudResources.management.account": "アカウント",
-  "cloudResources.management.capabilities": "機能",
-  "cloudResources.inventory.title": "リソース一覧",
-  "cloudResources.inventory.subtitle":
-    "利用可能な管理面から見えるリソースを確認・削除します。",
-  "cloudResources.inventory.error":
-    "リソース一覧を読み込めませんでした: {message}",
-  "cloudResources.inventory.kv": "KV",
-  "cloudResources.inventory.r2": "オブジェクトストレージ",
-  "cloudResources.inventory.d1": "データベース",
-  "cloudResources.inventory.queues": "キュー",
-  "cloudResources.inventory.workflows": "ワークフロー",
-  "cloudResources.inventory.workers": "Edgeアプリ",
-  "cloudResources.inventory.showAll": "{count} 件すべて表示",
-  "cloudResources.inventory.showLess": "折りたたむ",
-  "cloudResources.inventory.remaining": "ほか {count} 件を表示",
-
   // --- billing -------------------------------------------------------------------
-  "billing.subtitle": "アカウントのプラン、使用量、支払い設定を確認します。",
-  "billing.usageQuotaTitle": "使用量 / 上限",
+  "billing.subtitle":
+    "プロバイダーに依存しない使用量とショーバック記録を確認します。",
+  "billing.usageQuotaTitle": "ショーバック",
   "billing.usageQuotaSubtitle":
-    "アカウントのクレジット、発生元ワークスペース、使用量を確認します。",
-  "billing.mode.disabled": "このアカウントでは課金は無効です。",
-  "billing.mode.checkoutOpen":
-    "プランを選択すると Takosumi Cloud リソースを使い始められます。有料操作は上限と支払い状態に基づいて実行前に確認されます。",
-  "billing.mode.cloudCredits":
-    "クレジットはアカウント全体で共有されます。有料操作は実行前に残高から確認されます。",
+    "この Workspace の記録モードとプロバイダー非依存な使用量を確認します。",
+  "billing.mode.disabled": "この Workspace ではショーバックは無効です。",
+  "billing.mode.label": "モード",
   "billing.mode.showback": "使用量は記録されますが、請求はありません。",
-  "billing.mode.enforce":
-    "有料操作はプラン、上限、支払い状態に基づいて実行前に確認されます。",
-  "billing.loading": "課金状態を読み込み中です...",
-  "billing.error": "課金状態を読み込めませんでした: {message}",
-  "billing.error.unknown": "不明なエラー",
-  "billing.status.unavailable": "現在利用できません。",
-  "billing.balance.title": "使用状況",
-  "billing.balance.availableUsd": "利用可能な残高",
-  "billing.balance.status": "状態",
-  "billing.balance.ready": "利用できます",
-  "billing.balance.actionRequired": "プランまたは支払い設定が必要です",
-  "billing.balance.reserved": "反映待ちの使用量",
-  "billing.quota.available": "利用可能な容量",
-  "billing.quota.reserved": "反映待ちの使用量",
-  "billing.quota.disabledHint": "課金が無効のため、容量の上限はありません。",
-  "billing.pendingUse.title": "反映待ちの使用量",
-  "billing.subscription.title": "サブスクリプション",
-  "billing.subscription.subtitle": "現在のプラン状態と次回請求を確認します。",
-  "billing.subscription.loading": "サブスクリプションを読み込み中です...",
-  "billing.subscription.error":
-    "サブスクリプションを読み込めませんでした: {message}",
-  "billing.subscription.empty": "有効なサブスクリプションはまだありません。",
-  "billing.subscription.plan": "プラン",
-  "billing.subscription.status": "状態",
-  "billing.subscription.nextBilling": "次回請求",
-  "billing.subscription.endsOn": "終了日",
-  "billing.subscription.status.cancelAtPeriodEnd": "解約予定",
-  "billing.subscription.cancelNotice":
-    "このサブスクリプションは現在の請求期間の終了時に解約されます。継続するにはプランを再開してください。",
-  "billing.subscription.manage": "サブスク管理・解約",
-  "billing.subscription.manageHint":
-    "Stripe の管理画面で支払い方法、請求書、プラン変更、解約を操作できます。",
-  "billing.subscription.status.active": "有効",
-  "billing.subscription.status.trialing": "トライアル中",
-  "billing.subscription.status.past_due": "支払い確認が必要",
-  "billing.subscription.status.unpaid": "未払い",
-  "billing.subscription.status.incomplete": "未完了",
-  "billing.subscription.status.incomplete_expired": "未完了",
-  "billing.subscription.status.canceled": "キャンセル済み",
-  "billing.subscription.status.cancelled": "キャンセル済み",
-  "billing.subscription.status.paused": "一時停止",
-  "billing.subscription.status.disputed": "異議申立中",
-  "billing.plans.title": "プラン",
-  "billing.plans.loading": "プランを読み込み中です...",
-  "billing.plans.error": "プランを読み込めませんでした: {message}",
-  "billing.plans.none": "現在、プランは提供されていません。",
-  "billing.plans.nonRefundable":
-    "購入前に金額と内容を確認できます。利用済みのサービスや完了した使用量は原則返金対象外です。カード明細には原則として TAKOSUMI と表示されます。",
-  "billing.plans.subscribe": "このプランにする",
-  "billing.policies.aria": "請求ポリシー",
-  "billing.policies.refund": "返金",
-  "billing.policies.cancellation": "キャンセル",
-  "billing.policies.terms": "利用規約",
-  "billing.policies.privacy": "プライバシー",
-  "billing.policies.support": "サポート",
-  "billing.portalOpening": "開いています...",
-  "billing.checkout.starting": "チェックアウトへ移動中...",
-  "billing.checkout.failed": "チェックアウトを開始できませんでした — {message}",
-  "billing.checkout.noUrl":
-    "決済ページの URL を取得できませんでした。しばらくしてからもう一度お試しください。",
-  "billing.portal.noUrl":
-    "支払い管理ページの URL を取得できませんでした。しばらくしてからもう一度お試しください。",
-  "billing.sessionExpired":
-    "セッションの有効期限が切れました。再度サインインしてください。",
-  "billing.checkout.success":
-    "プランの手続きが完了しました。反映まで少しかかる場合があります。",
-  "billing.checkout.cancelled": "購入をキャンセルしました。",
-  "billing.invoices.title": "請求履歴",
-  "billing.invoices.subtitle": "このアカウントの最近の Stripe 請求書です。",
-  "billing.invoices.loading": "請求履歴を読み込み中です...",
-  "billing.invoices.error": "請求履歴を読み込めませんでした: {message}",
-  "billing.invoices.empty": "請求書はまだありません。",
-  "billing.invoices.date": "日付",
-  "billing.invoices.status": "状態",
-  "billing.invoices.status.paid": "支払い済み",
-  "billing.invoices.status.open": "未払い",
-  "billing.invoices.status.draft": "下書き",
-  "billing.invoices.status.void": "無効",
-  "billing.invoices.status.uncollectible": "回収不能",
-  "billing.invoices.amount": "金額",
-  "billing.invoices.invoice": "請求書",
-  "billing.invoices.open": "開く",
+  "billing.loadError": "使用量設定を読み込めませんでした: {message}",
   "billing.usage.title": "使用量",
+  "billing.usage.subtitle":
+    "この Workspace のプロバイダー非依存な使用イベントです。",
+  "billing.usage.load": "使用量を読み込む",
+  "billing.usage.more": "さらに読み込む",
   "billing.usage.openHint": "使用履歴を開くと最近の明細を読み込みます。",
   "billing.usage.moreAvailable": "最近の明細を表示しています。",
   "billing.usage.loading": "使用量を読み込み中です...",
   "billing.usage.error": "使用量を読み込めませんでした: {message}",
   "billing.usage.empty": "使用量はまだありません。",
   "billing.usage.kind": "種別",
+  "billing.usage.time": "日時",
   "billing.usage.kind.runnerMinute": "実行時間",
   "billing.usage.kind.operation": "サービス操作",
   "billing.usage.kind.compute": "コンピュート",
   "billing.usage.kind.storage": "ストレージ",
   "billing.usage.quantity": "数量",
-  "billing.usage.credits": "USD",
-  "billing.usage.created": "日時",
-  "billing.ledger.title": "使用履歴",
+  "billing.usage.amount": "見積金額",
+  "billing.usage.unrated": "未評価",
 } as const;

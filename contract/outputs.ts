@@ -2,32 +2,29 @@
  * Output + OutputShare contract (`outputs` / `output_shares`).
  *
  * After a successful apply, `tofu output -json` is captured and projected: raw
- * outputs stay an ENCRYPTED artifact (`rawOutputArtifactKey`); the InstallConfig
- * outputAllowlist + sensitive-flag check + type validation produce
- * `workspaceOutputs` (same-Workspace dependency consumption) and `publicOutputs`
- * (UI / install summary / external display). Sensitive values never enter
- * either projection without explicit policy, and cross-Workspace sharing always
- * goes through an OutputShare.
- *
- * (Formerly `OutputSnapshot`. The transient `OutputSnapshot` alias is
- * re-exported from `./output-snapshots.ts` until the rename converges.)
+ * outputs stay an ENCRYPTED artifact (`rawArtifactRef`). A bounded,
+ * non-sensitive root-output capture produces `workspaceOutputs` for
+ * same-Workspace Dependency and Interface resolution. The explicit
+ * InstallConfig outputAllowlist separately produces `publicOutputs` for UI,
+ * install summaries, and external display. A workspace-captured value never
+ * becomes public merely because it is an ordinary OpenTofu Output. Sensitive
+ * values enter neither projection, and cross-Workspace sharing always goes
+ * through an OutputShare.
  */
+
+import type { JsonValue } from "./types.ts";
 
 export interface Output {
   readonly id: string;
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId: string;
   readonly capsuleId: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId: string;
   readonly stateGeneration: number;
-  /** R2_ARTIFACTS key of the encrypted raw `tofu output -json` artifact. */
-  readonly rawOutputArtifactKey: string;
-  readonly publicOutputs: Readonly<Record<string, unknown>>;
-  readonly workspaceOutputs: Readonly<Record<string, unknown>>;
-  /** @deprecated Use workspaceOutputs. */
-  readonly spaceOutputs: Readonly<Record<string, unknown>>;
+  /** Opaque storage reference for encrypted raw `tofu output -json`. */
+  readonly rawArtifactRef: string;
+  /** Explicit InstallConfig projection safe for UI/external display. */
+  readonly publicOutputs: Readonly<Record<string, JsonValue>>;
+  /** Bounded non-secret capture scoped to this Workspace. */
+  readonly workspaceOutputs: Readonly<Record<string, JsonValue>>;
   /** Digest over the projected outputs; drives stale propagation. */
   readonly outputDigest: string;
   readonly createdAt: string;
@@ -37,7 +34,16 @@ export interface Output {
  * Public Output projection. The raw encrypted artifact key is an internal
  * storage handle and is not part of edge/session API reads.
  */
-export type PublicOutput = Omit<Output, "rawOutputArtifactKey">;
+export type PublicOutput = Omit<Output, "rawArtifactRef">;
+
+/** Current public Output projection for one Capsule, or null before apply. */
+export interface OutputResponse {
+  readonly output: PublicOutput | null;
+}
+
+/** Stable failed-precondition reason for a broken Capsule -> Output cursor. */
+export const CURRENT_OUTPUT_INCONSISTENT_REASON =
+  "current_output_inconsistent" as const;
 
 export type OutputShareStatus = "pending" | "active" | "revoked";
 
@@ -49,7 +55,7 @@ export type OutputShareStatus = "pending" | "active" | "revoked";
  * `sensitive` flag — and DELIBERATELY no `value` field. The producer's resolved
  * output value (sensitive or not) is NEVER copied onto a grant: the share record
  * is the authorization, not the payload. The value stays in the producer's
- * encrypted raw-output artifact (`Output.rawOutputArtifactKey`) and is
+ * encrypted raw-output artifact (`Output.rawArtifactRef`) and is
  * re-resolved (and re-checked against the active grant) only at plan-time
  * `published_output` injection. Because the persisted `output_shares` row is
  * structurally names-only, it needs no separate at-rest encryption — there is no
@@ -75,15 +81,9 @@ export interface OutputShareEntry {
  */
 export interface OutputShare {
   readonly id: string;
-  readonly fromWorkspaceId?: string;
-  readonly toWorkspaceId?: string;
-  /** @deprecated Use fromWorkspaceId. */
-  readonly fromSpaceId: string;
-  /** @deprecated Use toWorkspaceId. */
-  readonly toSpaceId: string;
-  readonly producerCapsuleId?: string;
-  /** @deprecated Use producerCapsuleId. */
-  readonly producerInstallationId: string;
+  readonly fromWorkspaceId: string;
+  readonly toWorkspaceId: string;
+  readonly producerCapsuleId: string;
   readonly outputs: readonly OutputShareEntry[];
   readonly status: OutputShareStatus;
   readonly createdAt: string;

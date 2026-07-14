@@ -14,9 +14,9 @@ test("discoverHost reads Takosumi, capabilities, product, and OIDC issuer", asyn
       return json({
         product: "takos",
         name: "Takos",
+        oidcClientId: "takos-mobile-host-example",
         endpoints: {
-          mobilePushRegistrations:
-            "https://host.example/api/mobile/push-registrations",
+          notificationPushers: "https://host.example/api/notifications/pushers",
         },
       });
     }
@@ -32,11 +32,12 @@ test("discoverHost reads Takosumi, capabilities, product, and OIDC issuer", asyn
   expect(discovery.hostUrl).toBe("https://host.example");
   expect(discovery.detectedProduct).toBe("takos");
   expect(discovery.oidcIssuer).toBe("https://issuer.example");
+  expect(discovery.oidcClientId).toBe("takos-mobile-host-example");
   expect(discovery.oidcDiscoveryUrl).toBe(
     "https://issuer.example/.well-known/openid-configuration",
   );
-  expect(discovery.product?.endpoints?.mobilePushRegistrations).toBe(
-    "https://host.example/api/mobile/push-registrations",
+  expect(discovery.product?.endpoints?.notificationPushers).toBe(
+    "https://host.example/api/notifications/pushers",
   );
 });
 
@@ -147,6 +148,28 @@ test("discoverHost rejects mismatched products", async () => {
       fetch: fetcher,
     }),
   ).rejects.toThrow("Host is takos, not yurucommu.");
+});
+
+test("discoverHost requires an explicitly advertised OIDC issuer", async () => {
+  const fetcher: FetchLike = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/.well-known/takos")) {
+      return json({
+        product: "takos",
+        oidcClientId: "takos-mobile-host-example",
+      });
+    }
+    if (url.endsWith("/v1/capabilities")) return json({});
+    return new Response("", { status: 404 });
+  };
+
+  await expect(
+    discoverHost({
+      hostUrl: "https://host.example",
+      expectedProduct: "takos",
+      fetch: fetcher,
+    }),
+  ).rejects.toThrow("Host does not advertise an OIDC issuer.");
 });
 
 function json(value: unknown): Response {

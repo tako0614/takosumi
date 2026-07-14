@@ -19,12 +19,18 @@ func TestTargetPoolModelToSpecAcceptsAdminDefinedImplementations(t *testing.T) {
 		t.Fatalf("interfaces diagnostics: %v", diags)
 	}
 	implementation, diags := types.ObjectValue(targetPoolImplementationAttrTypes, map[string]attr.Value{
-		"shape":                types.StringValue("ContainerService"),
-		"implementation":       types.StringValue("custom_container_runtime"),
-		"native_resource_type": types.StringValue("custom.container_service"),
-		"plugin":               types.StringValue("container-plugin"),
-		"options_json":         types.StringValue(`{"runtimeClass":"edge"}`),
-		"interfaces":           interfaces,
+		"shape":                      types.StringValue("ContainerService"),
+		"implementation":             types.StringValue("custom_container_runtime"),
+		"native_resource_type":       types.StringValue("custom.container_service"),
+		"plugin":                     types.StringValue("container-plugin"),
+		"provider_source":            types.StringNull(),
+		"provider_alias":             types.StringNull(),
+		"provider_config_json":       types.StringNull(),
+		"module_template":            types.StringNull(),
+		"module_input_mappings_json": types.StringNull(),
+		"module_outputs_json":        types.StringNull(),
+		"options_json":               types.StringValue(`{"runtimeClass":"edge"}`),
+		"interfaces":                 interfaces,
 	})
 	if diags.HasError() {
 		t.Fatalf("implementation diagnostics: %v", diags)
@@ -104,12 +110,18 @@ func TestTargetPoolModelToSpecRejectsInvalidCapabilityLevel(t *testing.T) {
 		t.Fatalf("interfaces diagnostics: %v", diags)
 	}
 	implementation, diags := types.ObjectValue(targetPoolImplementationAttrTypes, map[string]attr.Value{
-		"shape":                types.StringValue("ContainerService"),
-		"implementation":       types.StringValue("custom_container"),
-		"native_resource_type": types.StringNull(),
-		"plugin":               types.StringNull(),
-		"options_json":         types.StringNull(),
-		"interfaces":           interfaces,
+		"shape":                      types.StringValue("ContainerService"),
+		"implementation":             types.StringValue("custom_container"),
+		"native_resource_type":       types.StringNull(),
+		"plugin":                     types.StringNull(),
+		"provider_source":            types.StringValue("example/runtime"),
+		"provider_alias":             types.StringNull(),
+		"provider_config_json":       types.StringNull(),
+		"module_template":            types.StringValue("example-runtime"),
+		"module_input_mappings_json": types.StringValue(`{}`),
+		"module_outputs_json":        types.StringValue(`[]`),
+		"options_json":               types.StringNull(),
+		"interfaces":                 interfaces,
 	})
 	if diags.HasError() {
 		t.Fatalf("implementation diagnostics: %v", diags)

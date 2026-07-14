@@ -1,7 +1,7 @@
 /**
  * RunGroup HTTP route tests (Core Specification §19 / §24).
  *
- *   POST /internal/v1/workspaces/:spaceId/plan-update   -> create a space_update RunGroup
+ *   POST /internal/v1/workspaces/:workspaceId/plan-update -> create a workspace_update RunGroup
  *   GET  /internal/v1/run-groups/:runGroupId        -> read group + member Runs + status
  *   POST /internal/v1/run-groups/:runGroupId/approve -> approve waiting members
  *
@@ -18,8 +18,9 @@ import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { Run } from "takosumi-contract/runs";
 import type { OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";
 import { applyExpectedGuardFromPlanRun } from "../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
-import type { OpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import type { OpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
@@ -42,8 +43,8 @@ function headers(extra: Record<string, string> = {}): Record<string, string> {
 
 /**
  * Runner whose producer apply emits a `base_domain` from a mutable holder so a
- * re-apply can emit a changed value. `producerId` is the producer Installation
- * id (set once it has been created); other installations emit a stable value.
+ * re-apply can emit a changed value. `producerId` is the producer Capsule id;
+ * other Capsules emit a stable value.
  */
 function runner(value: {
   producer: string;
@@ -68,7 +69,7 @@ function runner(value: {
           base_domain: {
             sensitive: false,
             value:
-              job.planRun.installationId === value.producerId
+              job.planRun.capsuleId === value.producerId
                 ? value.producer
                 : "consumer.example.com",
           },
@@ -78,24 +79,26 @@ function runner(value: {
   };
 }
 
-async function seedInstallation(
-  store: OpenTofuDeploymentStore,
+async function seedCapsule(
+  store: OpenTofuControlStore,
   operations: {
-    installations: {
+    capsules: {
       putInstallConfig: (config: InstallConfig) => Promise<InstallConfig>;
     };
   },
   app: { request: (path: string, init?: RequestInit) => Promise<Response> },
-  spaceId: string,
+  workspaceId: string,
   name: string,
 ): Promise<string> {
   const sourceRes = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
-      spaceId,
+      workspaceId,
       name: `${name}-repo`,
       url: `https://github.com/acme/${name}.git`,
+      defaultRef: "main",
+      defaultPath: ".",
     }),
   });
   expect(sourceRes.status).toBe(201);
@@ -104,10 +107,8 @@ async function seedInstallation(
   const nowIso = new Date(0).toISOString();
   const config: InstallConfig = {
     id: `cfg_${name}00000001`,
-    spaceId,
+    workspaceId,
     name: `${name}-module`,
-    installType: "opentofu_module",
-    trustLevel: "space",
     variableMapping: {},
     outputAllowlist:
       name === "producer"
@@ -123,10 +124,10 @@ async function seedInstallation(
     createdAt: nowIso,
     updatedAt: nowIso,
   };
-  await operations.installations.putInstallConfig(config);
+  await operations.capsules.putInstallConfig(config);
 
   const installRes = await app.request(
-    `/internal/v1/workspaces/${spaceId}/capsules`,
+    `/internal/v1/workspaces/${workspaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -139,19 +140,21 @@ async function seedInstallation(
     },
   );
   expect(installRes.status).toBe(201);
-  const installationId = (await installRes.json()).capsule.id as string;
-  const installation = await store.getInstallation(installationId);
-  expect(installation).toBeDefined();
-  await seedProviderConnections(store, installation!);
+  const capsuleId = (await installRes.json()).capsule.id as string;
+  const capsule = await store.getCapsule(capsuleId);
+  expect(capsule).toBeDefined();
+  await seedProviderConnections(store, capsule!);
 
   const snapshot: SourceSnapshot = {
     id: `snap_${name}00001`,
+    origin: "git",
+    workspaceId,
     sourceId,
     url: `https://github.com/acme/${name}.git`,
     ref: "main",
     resolvedCommit: "a".repeat(40),
     path: ".",
-    archiveObjectKey: `spaces/${spaceId}/sources/${sourceId}/snapshots/snap_${name}/source.tar.zst`,
+    archiveRef: `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_${name}/source.tar.zst`,
     archiveDigest: ARCHIVE_DIGEST,
     archiveSizeBytes: 1024,
     fetchedByRunId: `ssr_${name}00001`,
@@ -160,6 +163,8 @@ async function seedInstallation(
   await store.putSourceSnapshot(snapshot);
   const compatibilityReport: CapsuleCompatibilityReport = {
     id: `caprep_${name}00001`,
+    sourceId,
+    capsuleId,
     sourceSnapshotId: snapshot.id,
     level: "ready",
     findings: [],
@@ -170,30 +175,42 @@ async function seedInstallation(
     createdAt: nowIso,
   };
   await store.putCapsuleCompatibilityReport(compatibilityReport);
-  await store.patchInstallation(installationId, {
+  await store.patchCapsule(capsuleId, {
     compatibilityReportId: compatibilityReport.id,
     compatibilityStatus: compatibilityReport.level,
     updatedAt: nowIso,
   });
-  return installationId;
+  return capsuleId;
 }
 
-/** Applies a preview installation plan to completion (no approval gate). */
-async function applyInstallation(
+/** Applies a preview Capsule plan to completion (no approval gate). */
+async function applyCapsule(
   app: { request: (path: string, init?: RequestInit) => Promise<Response> },
-  installationId: string,
+  controller: {
+    runQueuedPlan(runId: string): Promise<unknown>;
+    runQueuedApply(runId: string): Promise<unknown>;
+  },
+  capsuleId: string,
 ): Promise<void> {
-  const planRes = await app.request(
-    `/internal/v1/capsules/${installationId}/plan`,
-    { method: "POST", headers: headers() },
-  );
-  expect(planRes.status).toBe(201);
+  const planRes = await app.request(`/internal/v1/capsules/${capsuleId}/plan`, {
+    method: "POST",
+    headers: headers(),
+  });
+  if (planRes.status !== 201) {
+    throw new Error(
+      `Capsule plan returned ${planRes.status}: ${await planRes.text()}`,
+    );
+  }
   const run = (await planRes.json()).run as Run;
+  if (run.status === "queued") await controller.runQueuedPlan(run.id);
   const planFetch = await app.request(`/internal/v1/plan-runs/${run.id}`, {
     headers: headers(),
   });
   expect(planFetch.status).toBe(200);
   const plan = (await planFetch.json()).planRun;
+  if (!plan.planDigest) {
+    throw new Error(`Capsule plan did not complete: ${JSON.stringify(plan)}`);
+  }
   const applyRes = await app.request("/internal/v1/apply-runs", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
@@ -203,10 +220,12 @@ async function applyInstallation(
     }),
   });
   expect(applyRes.status).toBe(201);
+  const apply = (await applyRes.json()).applyRun as Run;
+  if (apply.status === "queued") await controller.runQueuedApply(apply.id);
 }
 
 test("plan-update creates a RunGroup over stale consumers; GET reads members; approve is gated", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const producerValue = { producer: "v1.example.com" };
   const { app, operations } = await createTakosumiService({
     role: "takosumi-api",
@@ -215,13 +234,13 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
     },
     mountInternalLedgerRoutes: true,
-    opentofuDeploymentStore: store,
+    opentofuControlStore: store,
     opentofuRunner: runner(producerValue),
     opentofuConnectionVault: fakeProviderVault() as never,
-    startWorkerDaemon: false,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
   });
 
-  const spaceRes = await app.request("/internal/v1/workspaces", {
+  const workspaceRes = await app.request("/internal/v1/workspaces", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -231,22 +250,22 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
       ownerUserId: "user_test00000001",
     }),
   });
-  expect(spaceRes.status).toBe(201);
-  const spaceId = (await spaceRes.json()).space.id as string;
+  expect(workspaceRes.status).toBe(201);
+  const workspaceId = (await workspaceRes.json()).workspace.id as string;
 
-  const producer = await seedInstallation(
+  const producer = await seedCapsule(
     store,
     operations,
     app,
-    spaceId,
+    workspaceId,
     "producer",
   );
   producerValue.producerId = producer;
-  const consumer = await seedInstallation(
+  const consumer = await seedCapsule(
     store,
     operations,
     app,
-    spaceId,
+    workspaceId,
     "consumer",
   );
 
@@ -257,9 +276,9 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
       body: JSON.stringify({
-        producerInstallationId: producer,
+        producerCapsuleId: producer,
         mode: "variable_injection",
-        visibility: "space",
+        visibility: "workspace",
         outputs: {
           base_domain: {
             from: "base_domain",
@@ -273,12 +292,12 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
   expect(depRes.status).toBe(201);
 
   // Bring both up.
-  await applyInstallation(app, producer);
-  await applyInstallation(app, consumer);
+  await applyCapsule(app, operations.controller, producer);
+  await applyCapsule(app, operations.controller, consumer);
 
   // Before any stale: plan-update is failed_precondition nothing_to_update.
   const emptyRes = await app.request(
-    `/internal/v1/workspaces/${spaceId}/plan-update`,
+    `/internal/v1/workspaces/${workspaceId}/plan-update`,
     {
       method: "POST",
       headers: headers(),
@@ -287,10 +306,10 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
   expect(emptyRes.status).toBe(409);
   expect((await emptyRes.json()).error.code).toBe("failed_precondition");
 
-  // Space drift-check: active Installations are grouped under one RunGroup and
+  // Workspace drift-check: active Capsules are grouped under one RunGroup and
   // each member projects as read-only drift_check.
   const driftGroupRes = await app.request(
-    `/internal/v1/workspaces/${spaceId}/drift-check`,
+    `/internal/v1/workspaces/${workspaceId}/drift-check`,
     {
       method: "POST",
       headers: headers(),
@@ -301,7 +320,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
     runGroup: { id: string; type: string };
     runs: Run[];
   };
-  expect(driftGroup.runGroup.type).toBe("space_drift_check");
+  expect(driftGroup.runGroup.type).toBe("workspace_drift_check");
   expect(driftGroup.runs).toHaveLength(2);
   expect(driftGroup.runs.every((run) => run.type === "drift_check")).toBe(true);
   expect(
@@ -310,7 +329,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
 
   // Producer re-applies with a CHANGED output -> consumer goes stale.
   producerValue.producer = "v2.example.com";
-  await applyInstallation(app, producer);
+  await applyCapsule(app, operations.controller, producer);
   const consumerRow = await app.request(`/internal/v1/capsules/${consumer}`, {
     headers: headers(),
   });
@@ -318,7 +337,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
 
   // plan-update: builds the group with the consumer as the sole member.
   const updateRes = await app.request(
-    `/internal/v1/workspaces/${spaceId}/plan-update`,
+    `/internal/v1/workspaces/${workspaceId}/plan-update`,
     {
       method: "POST",
       headers: headers(),
@@ -329,9 +348,9 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
     runGroup: { id: string; type: string; status: string; graphJson: string };
     runs: Run[];
   };
-  expect(group.runGroup.type).toBe("space_update");
+  expect(group.runGroup.type).toBe("workspace_update");
   expect(group.runs).toHaveLength(1);
-  expect(group.runs[0]!.installationId).toBe(consumer);
+  expect(group.runs[0]!.capsuleId).toBe(consumer);
   expect(group.runs[0]!.runGroupId).toBe(group.runGroup.id);
 
   // GET the group: same member, computed status. Preview members auto-succeed
@@ -368,8 +387,8 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
   expect(missingRes.status).toBe(404);
 });
 
-test("plan-update rejects a malformed spaceId and run-group rejects a malformed id", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("plan-update rejects a malformed workspaceId and run-group rejects a malformed id", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const { app } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: {
@@ -377,9 +396,8 @@ test("plan-update rejects a malformed spaceId and run-group rejects a malformed 
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
     },
     mountInternalLedgerRoutes: true,
-    opentofuDeploymentStore: store,
+    opentofuControlStore: store,
     opentofuRunner: runner({ producer: "v1" }),
-    startWorkerDaemon: false,
   });
 
   const badSpace = await app.request(
@@ -406,7 +424,7 @@ test("plan-update rejects a malformed spaceId and run-group rejects a malformed 
   expect(badGroup.status).toBe(400);
 });
 
-test("Output Sync internal routes expose settings, snapshot, and disabled gate", async () => {
+test("retired Output Sync internal routes are not mounted", async () => {
   const { app } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: {
@@ -414,58 +432,9 @@ test("Output Sync internal routes expose settings, snapshot, and disabled gate",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
     },
   });
-  const workspaceId = "space_output_sync_1";
-  const create = await app.request("/internal/v1/workspaces", {
-    method: "POST",
-    headers: headers({ "content-type": "application/json" }),
-    body: JSON.stringify({
-      handle: "output-sync",
-      displayName: "Output Sync",
-      type: "personal",
-      ownerUserId: "user_test",
-    }),
-  });
-  expect(create.status).toBe(201);
-  const actualWorkspaceId = (await create.json()).space.id as string;
-  expect(actualWorkspaceId).not.toBe(workspaceId);
-
-  const status = await app.request(
-    `/internal/v1/workspaces/${actualWorkspaceId}/output-sync`,
+  const response = await app.request(
+    "/internal/v1/workspaces/ws_output_sync_1/output-sync",
     { headers: headers() },
   );
-  expect(status.status).toBe(200);
-  expect((await status.json()).state.enabled).toBe(true);
-
-  const snapshot = await app.request(
-    `/internal/v1/workspaces/${actualWorkspaceId}/output-sync/snapshot`,
-    { headers: headers() },
-  );
-  expect(snapshot.status).toBe(200);
-  expect(snapshot.headers.get("etag")).toBe('"takosumi-output-sync-0"');
-  const cachedSnapshot = await app.request(
-    `/internal/v1/workspaces/${actualWorkspaceId}/output-sync/snapshot`,
-    {
-      headers: headers({
-        "if-none-match": '"takosumi-output-sync-0"',
-      }),
-    },
-  );
-  expect(cachedSnapshot.status).toBe(304);
-
-  const disabled = await app.request(
-    `/internal/v1/workspaces/${actualWorkspaceId}/output-sync`,
-    {
-      method: "PATCH",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({ enabled: false }),
-    },
-  );
-  expect(disabled.status).toBe(200);
-  expect((await disabled.json()).state.enabled).toBe(false);
-
-  const reconcile = await app.request(
-    `/internal/v1/workspaces/${actualWorkspaceId}/output-sync/reconcile`,
-    { method: "POST", headers: headers() },
-  );
-  expect(reconcile.status).toBe(409);
+  expect(response.status).toBe(404);
 });

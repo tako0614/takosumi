@@ -1,13 +1,85 @@
 import { expect, test } from "bun:test";
 
-import { createConnectionOAuthHelpersFromEnv } from "../../../core/api/connection_oauth_helpers.ts";
+import { createConnectionOAuthHelpers } from "../../../core/api/connection_oauth_helpers.ts";
+import { createTakosumiService } from "../../../core/bootstrap.ts";
+import { connectionOAuthDescriptorsFromEnv } from "../../../providers/registry.ts";
+
+function createReferenceConnectionOAuthHelpers(
+  env: Readonly<Record<string, string | undefined>>,
+  fetchImpl?: typeof fetch,
+) {
+  return createConnectionOAuthHelpers(
+    {
+      stateSecret: env.TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET,
+      descriptors: connectionOAuthDescriptorsFromEnv(env),
+    },
+    fetchImpl,
+  );
+}
 
 const PRINCIPAL = {
   actor: "acct_1",
-  spaceIds: ["space_1"],
+  workspaceIds: ["ws_1"],
   operations: "*",
   runnerProfileIds: "*",
 } as const;
+
+test("generic OAuth engine installs an opaque host descriptor", async () => {
+  const helpers = createConnectionOAuthHelpers(
+    {
+      stateSecret: "state-secret",
+      descriptors: [
+        {
+          id: "acme-login",
+          providerSource: "registry.example.test/acme/widgets",
+          credentialRecipe: {
+            id: "operator-acme",
+            authMode: "oauth-bearer",
+            secretPartition: "operator-acme",
+          },
+          clientId: "acme-client",
+          authorizationUrl: "https://identity.acme.test/authorize",
+          tokenUrl: "https://identity.acme.test/token",
+          redirectUri: "https://operator.example.test/oauth/acme/callback",
+          scopes: ["widgets.write"],
+          mapTokenResponse: ({ tokenResponse }) => ({
+            ACME_BEARER: String(tokenResponse.opaque_credential ?? ""),
+          }),
+        },
+      ],
+    },
+    (async () =>
+      Response.json({
+        opaque_credential: "acme-run-credential",
+      })) as typeof fetch,
+  );
+
+  expect(Object.keys(helpers ?? {})).toEqual(["acme-login"]);
+  const started = await helpers!["acme-login"]!.start({
+    helperId: "acme-login",
+    request: new Request("https://operator.example.test/oauth/start"),
+    principal: PRINCIPAL,
+    body: { workspaceId: "ws_1", subject: "acct_1" },
+  });
+  const completed = await helpers!["acme-login"]!.complete({
+    helperId: "acme-login",
+    request: new Request("https://operator.example.test/oauth/callback"),
+    principal: PRINCIPAL,
+    code: "opaque-code",
+    state: started.state,
+    query: { code: "opaque-code", state: started.state },
+  });
+
+  expect(completed.request).toMatchObject({
+    provider: "registry.example.test/acme/widgets",
+    credentialRecipe: {
+      id: "operator-acme",
+      authMode: "oauth-bearer",
+      secretPartition: "operator-acme",
+    },
+    values: { ACME_BEARER: "acme-run-credential" },
+  });
+});
 
 test("Cloudflare OAuth helper signs state and returns an internal provider resolver request", async () => {
   let tokenRequest:
@@ -16,7 +88,7 @@ test("Cloudflare OAuth helper signs state and returns an internal provider resol
         readonly body: string;
       }
     | undefined;
-  const helpers = createConnectionOAuthHelpersFromEnv(
+  const helpers = createReferenceConnectionOAuthHelpers(
     {
       TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET: "state-secret",
       TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID: "cf-client",
@@ -39,11 +111,11 @@ test("Cloudflare OAuth helper signs state and returns an internal provider resol
   );
 
   const started = await helpers?.cloudflare?.start({
-    provider: "cloudflare",
+    helperId: "cloudflare",
     request: new Request("https://app.example.test/start"),
     principal: PRINCIPAL,
     body: {
-      spaceId: "space_1",
+      workspaceId: "ws_1",
       displayName: "Cloudflare OAuth",
       scopeHints: { accountId: "acct_cf" },
       // The cookie-gated start binds the authenticated subject into the state.
@@ -59,7 +131,7 @@ test("Cloudflare OAuth helper signs state and returns an internal provider resol
   expect(authUrl.searchParams.get("scope")).toBe("account:read zone:read");
 
   const completion = await helpers!.cloudflare!.complete({
-    provider: "cloudflare",
+    helperId: "cloudflare",
     request: new Request("https://app.example.test/callback"),
     principal: PRINCIPAL,
     code: "cf-code",
@@ -69,9 +141,13 @@ test("Cloudflare OAuth helper signs state and returns an internal provider resol
   expect(tokenRequest?.url).toBe("https://api.cloudflare.test/oauth2/token");
   expect(tokenRequest?.body).toContain("code=cf-code");
   expect(completion.request).toEqual({
-    spaceId: "space_1",
-    provider: "cloudflare",
-    kind: "generic_env_provider",
+    workspaceId: "ws_1",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    credentialRecipe: {
+      id: "cloudflare",
+      authMode: "oauth",
+      secretPartition: "provider-credentials",
+    },
     materialization: "oauth",
     displayName: "Cloudflare OAuth",
     scopeHints: { accountId: "acct_cf" },
@@ -83,7 +159,7 @@ test("Cloudflare OAuth helper signs state and returns an internal provider resol
 });
 
 test("Cloudflare OAuth state binds the subject under the HMAC: tampering fails verification", async () => {
-  const helpers = createConnectionOAuthHelpersFromEnv(
+  const helpers = createReferenceConnectionOAuthHelpers(
     {
       TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET: "state-secret",
       TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID: "cf-client",
@@ -98,18 +174,18 @@ test("Cloudflare OAuth state binds the subject under the HMAC: tampering fails v
       Response.json({ access_token: "cf-access-token" })) as typeof fetch,
   );
   const started = await helpers!.cloudflare!.start({
-    provider: "cloudflare",
+    helperId: "cloudflare",
     request: new Request("https://app.example.test/start"),
     principal: PRINCIPAL,
-    body: { spaceId: "space_1", subject: "tsub_owner" },
+    body: { workspaceId: "ws_1", subject: "tsub_owner" },
   });
   // Re-sign would be needed to change the subject; flipping the payload alone
   // breaks the signature, so verifyState (and thus complete) rejects it.
   const [payload, signature] = started!.state.split(".");
   const forgedPayloadJson = JSON.stringify({
-    provider: "cloudflare",
+    helperId: "cloudflare",
     expiresAt: Date.now() + 60_000,
-    body: { spaceId: "space_1", subject: "tsub_attacker" },
+    body: { workspaceId: "ws_1", subject: "tsub_attacker" },
     subject: "tsub_attacker",
   });
   const forgedPayload = btoa(forgedPayloadJson)
@@ -120,7 +196,7 @@ test("Cloudflare OAuth state binds the subject under the HMAC: tampering fails v
   const forgedState = `${forgedPayload}.${signature}`;
   await expect(
     helpers!.cloudflare!.complete({
-      provider: "cloudflare",
+      helperId: "cloudflare",
       request: new Request("https://app.example.test/callback"),
       principal: PRINCIPAL,
       code: "cf-code",
@@ -131,7 +207,7 @@ test("Cloudflare OAuth state binds the subject under the HMAC: tampering fails v
 });
 
 test("GCP OAuth helper creates authorized_user GOOGLE_CREDENTIALS", async () => {
-  const helpers = createConnectionOAuthHelpersFromEnv(
+  const helpers = createReferenceConnectionOAuthHelpers(
     {
       TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET: "state-secret",
       TAKOSUMI_GCP_OAUTH_CLIENT_ID: "gcp-client",
@@ -144,10 +220,10 @@ test("GCP OAuth helper creates authorized_user GOOGLE_CREDENTIALS", async () => 
   );
 
   const started = await helpers?.gcp?.start({
-    provider: "gcp",
+    helperId: "gcp",
     request: new Request("https://app.example.test/start"),
     principal: PRINCIPAL,
-    body: { spaceId: "space_1", displayName: "GCP OAuth" },
+    body: { workspaceId: "ws_1", displayName: "GCP OAuth" },
   });
   expect(started).toBeDefined();
   const authUrl = new URL(started!.authorizationUrl);
@@ -158,7 +234,7 @@ test("GCP OAuth helper creates authorized_user GOOGLE_CREDENTIALS", async () => 
   expect(authUrl.searchParams.get("prompt")).toBe("consent");
 
   const completion = await helpers!.gcp!.complete({
-    provider: "gcp",
+    helperId: "gcp",
     request: new Request("https://app.example.test/callback"),
     principal: PRINCIPAL,
     code: "gcp-code",
@@ -166,8 +242,12 @@ test("GCP OAuth helper creates authorized_user GOOGLE_CREDENTIALS", async () => 
     query: { code: "gcp-code", state: started!.state },
   });
   const request = completion.request;
-  expect(request.provider).toBe("google");
-  expect(request.kind).toBe("generic_env_provider");
+  expect(request.provider).toBe("registry.opentofu.org/hashicorp/google");
+  expect(request.credentialRecipe).toEqual({
+    id: "google",
+    authMode: "oauth",
+    secretPartition: "provider-credentials",
+  });
   expect(request.materialization).toBe("oauth");
   const credentials = JSON.parse(request.values.GOOGLE_CREDENTIALS);
   expect(credentials).toEqual({
@@ -179,10 +259,28 @@ test("GCP OAuth helper creates authorized_user GOOGLE_CREDENTIALS", async () => 
 });
 
 test("OAuth helpers are absent until state secret and provider config exist", () => {
-  expect(createConnectionOAuthHelpersFromEnv({})).toBeUndefined();
+  expect(createReferenceConnectionOAuthHelpers({})).toBeUndefined();
   expect(
-    createConnectionOAuthHelpersFromEnv({
+    createReferenceConnectionOAuthHelpers({
       TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET: "state-secret",
     }),
   ).toBeUndefined();
+});
+
+test("Core does not install vendor OAuth helpers from runtime env", async () => {
+  const created = await createTakosumiService({
+    runtimeEnv: {
+      TAKOSUMI_ENVIRONMENT: "test",
+      TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET: "state-secret",
+      TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID: "cf-client",
+      TAKOSUMI_CLOUDFLARE_OAUTH_REDIRECT_URI:
+        "https://operator.example.test/oauth/cloudflare/callback",
+      TAKOSUMI_CLOUDFLARE_OAUTH_AUTHORIZATION_URL:
+        "https://dash.cloudflare.test/oauth2/auth",
+      TAKOSUMI_CLOUDFLARE_OAUTH_TOKEN_URL:
+        "https://api.cloudflare.test/oauth2/token",
+    },
+  });
+
+  expect(created.operations.connectionOAuth).toBeUndefined();
 });

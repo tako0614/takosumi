@@ -5,16 +5,19 @@ import { createApiApp } from "../../../core/api/app.ts";
 import { runHandler } from "../../../core/api/deploy_control_shared.ts";
 import {
   OpenTofuControllerError,
-  OpenTofuDeploymentController,
+  OpenTofuController,
 } from "../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
-import { seedInstallationModel } from "../../helpers/deploy-control/model_fixture.ts";
+import { sourceSyncRequiredError } from "../../../core/domains/deploy-control/errors.ts";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import { seedCapsuleModel } from "../../helpers/deploy-control/model_fixture.ts";
 import { OutputSharesService } from "../../../core/domains/output-shares/mod.ts";
-import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
-import type { Workspace as Space } from "takosumi-contract/workspaces";
+import type { LegacyResourceStateAdoptionService } from "../../../core/domains/resource-shape/legacy_state_adoption.ts";
+import type { Output as Output } from "takosumi-contract/outputs";
+import type { Workspace } from "takosumi-contract/workspaces";
 
 class ForeignControllerError extends Error {
   readonly code = "failed_precondition";
+  readonly details = { reason: "foreign_failure" };
 }
 
 test("runHandler renders structural controller errors without collapsing to 500", async () => {
@@ -40,6 +43,35 @@ test("runHandler renders structural controller errors without collapsing to 500"
     error: {
       code: "failed_precondition",
       message: "foreign controller failure",
+      details: { reason: "foreign_failure" },
+    },
+  });
+});
+
+test("runHandler preserves the structured source-sync reason", async () => {
+  const context = {
+    req: {
+      path: "/internal/v1/test",
+      method: "POST",
+      header: () => undefined,
+    },
+    json: (body: unknown, status: number) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      }),
+  } as unknown as Context;
+
+  const response = await runHandler(context, async () => {
+    throw sourceSyncRequiredError("Source synchronization is required");
+  });
+
+  expect(response.status).toEqual(409);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      message: "Source synchronization is required",
+      details: { reason: "source_sync_required" },
     },
   });
 });
@@ -61,7 +93,8 @@ test("runHandler hides public hostname reservation owner details", async () => {
   const response = await runHandler(context, async () => {
     throw new OpenTofuControllerError(
       "failed_precondition",
-      "app_hostname_unavailable: yurucommu.app.takos.jp is already claimed by Capsule yurucommu (inst_1) in Workspace space_1",
+      "app_hostname_unavailable: yurucommu.app.takos.jp is already claimed by Capsule yurucommu (cap_1) in Workspace ws_1",
+      { reason: "app_hostname_unavailable" },
     );
   });
 
@@ -75,7 +108,7 @@ test("runHandler hides public hostname reservation owner details", async () => {
     },
   });
   expect(JSON.stringify(body)).not.toMatch(
-    /\b(?:Workspace|Capsule|inst_1|space_1|yurucommu\.app\.takos\.jp)\b/u,
+    /\b(?:Workspace|Capsule|cap_1|ws_1|yurucommu\.app\.takos\.jp)\b/u,
   );
 });
 
@@ -98,17 +131,22 @@ test("deploy_control_internal_routes — internal seam endpoints respond with 50
     ["POST", "/internal/v1/capsules/ins_abcdef12/plan", {}],
     ["GET", "/internal/v1/runs/plan_abcdef12", undefined],
     ["POST", "/internal/v1/runs/plan_abcdef12/approve", {}],
-    ["GET", "/internal/v1/workspaces/space_abcdef12/billing", undefined],
-    ["GET", "/internal/v1/workspaces/space_abcdef12/usage", undefined],
+    ["GET", "/internal/v1/workspaces/ws_abcdef12/billing", undefined],
     [
-      "POST",
-      "/internal/v1/workspaces/space_abcdef12/credits/top-up",
-      { credits: 1 },
+      "PATCH",
+      "/internal/v1/workspaces/ws_abcdef12/billing",
+      { billingSettings: { mode: "disabled" } },
+    ],
+    ["GET", "/internal/v1/workspaces/ws_abcdef12/usage", undefined],
+    [
+      "GET",
+      "/internal/v1/workspaces/ws_abcdef12/migrations/resource-state-adoption",
+      undefined,
     ],
     [
       "POST",
-      "/internal/v1/workspaces/space_abcdef12/subscription/change",
-      { billingSettings: { mode: "disabled", provider: "none" } },
+      "/internal/v1/workspaces/ws_abcdef12/migrations/resource-state-adoption",
+      {},
     ],
   ] as const;
 
@@ -127,6 +165,46 @@ test("deploy_control_internal_routes — internal seam endpoints respond with 50
     expect(typeof json.error.message).toEqual("string");
     expect(typeof json.error.requestId).toEqual("string");
   }
+});
+
+test("deploy_control_internal_routes — state adoption confirmation rejects incomplete report fields", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const migration = {
+    async report(workspaceId: string) {
+      return { workspaceId, candidates: [], issues: [] };
+    },
+    async confirm() {
+      throw new Error("confirmation must not run for an invalid body");
+    },
+  } as unknown as LegacyResourceStateAdoptionService;
+  const app = await createApiApp({
+    registerDeployControlInternalRoutes: true,
+    deployControlInternalRouteOptions: {
+      mountInternalLedgerRoutes: true,
+      controller: new OpenTofuController({
+        store,
+        now: () => 1,
+        newId: () => "plan_abcdef12",
+      }),
+      legacyResourceStateAdoptionService: migration,
+      getDeployControlToken: () => "deploy-control-token",
+    },
+    requestCorrelation: false,
+  });
+
+  const response = await app.request(
+    "/internal/v1/workspaces/ws_abcdef12/migrations/resource-state-adoption",
+    {
+      method: "POST",
+      headers: {
+        authorization: "Bearer deploy-control-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ resourceId: "tkrn:ws_abcdef12:resource" }),
+    },
+  );
+  expect(response.status).toEqual(400);
+  expect((await response.json()).error.code).toEqual("invalid_argument");
 });
 
 test("deploy_control_internal_routes — disabled without TAKOSUMI_DEPLOY_CONTROL_TOKEN", async () => {
@@ -166,21 +244,21 @@ test("deploy_control_internal_routes — rejects invalid bearer", async () => {
   expect((await response.json()).error.code).toEqual("unauthenticated");
 });
 
-test("deploy_control_internal_routes — scoped bearer enforces space and records actor", async () => {
-  // Installation-first model (spec §5): a raw POST /internal/v1/plan-runs
-  // targets an existing Installation. Seed one in the allowed space so the controller has a
-  // valid plan target; the denied case is rejected by the route's space-scope
+test("deploy_control_internal_routes — scoped bearer enforces Workspace and records actor", async () => {
+  // Capsule-first model (spec §5): a raw POST /internal/v1/plan-runs
+  // targets an existing Capsule. Seed one in the allowed Workspace so the controller has a
+  // valid plan target; the denied case is rejected by the route's Workspace scope
   // check before the controller is reached.
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const { installation } = await seedInstallationModel(store, {
-    spaceId: "space_allowed",
-    installationId: "inst_allowed1",
+  const store = new InMemoryOpenTofuControlStore();
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: "ws_allowed",
+    capsuleId: "cap_allowed1",
   });
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
       mountInternalLedgerRoutes: true,
-      controller: new OpenTofuDeploymentController({
+      controller: new OpenTofuController({
         store,
         now: () => 1,
         newId: () => "plan_abcdef12",
@@ -189,7 +267,7 @@ test("deploy_control_internal_routes — scoped bearer enforces space and record
         token === "scoped-token"
           ? {
               actor: "acct_123",
-              spaceIds: ["space_allowed"],
+              workspaceIds: ["ws_allowed"],
               operations: ["create"],
               runnerProfileIds: ["opentofu-default"],
             }
@@ -205,8 +283,8 @@ test("deploy_control_internal_routes — scoped bearer enforces space and record
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      spaceId: "space_denied",
-      installationId: installation.id,
+      workspaceId: "ws_denied",
+      capsuleId: capsule.id,
       operation: "create",
       source: { kind: "git", url: "https://github.com/example/app.git" },
       runnerProfileId: "opentofu-default",
@@ -221,10 +299,10 @@ test("deploy_control_internal_routes — scoped bearer enforces space and record
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      spaceId: "space_allowed",
-      installationId: installation.id,
+      workspaceId: "ws_allowed",
+      capsuleId: capsule.id,
       // The principal is scoped to `create`; pass it explicitly so the route's
-      // permission check matches (installationId would otherwise default to
+      // permission check matches (capsuleId would otherwise default to
       // `update`).
       operation: "create",
       source: { kind: "git", url: "https://github.com/example/app.git" },
@@ -237,17 +315,17 @@ test("deploy_control_internal_routes — scoped bearer enforces space and record
 });
 
 test("retired generic-env provider routes are not mounted", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
       mountInternalLedgerRoutes: true,
-      controller: new OpenTofuDeploymentController({ store }),
+      controller: new OpenTofuController({ store }),
       authorizeDeployControlBearer: ({ token }) =>
         token === "scoped-token"
           ? {
               actor: "acct_123",
-              spaceIds: ["space_allowed"],
+              workspaceIds: ["ws_allowed"],
               operations: "*",
               runnerProfileIds: "*",
             }
@@ -271,7 +349,7 @@ test("deploy_control_internal_routes — scoped bearer defaults to deny when sco
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
       mountInternalLedgerRoutes: true,
-      controller: new OpenTofuDeploymentController({
+      controller: new OpenTofuController({
         now: () => 1,
         newId: () => "plan_abcdef12",
       }),
@@ -288,7 +366,7 @@ test("deploy_control_internal_routes — scoped bearer defaults to deny when sco
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      spaceId: "space_allowed",
+      workspaceId: "ws_allowed",
       source: { kind: "git", url: "https://github.com/example/app.git" },
       runnerProfileId: "opentofu-default",
     }),
@@ -303,14 +381,14 @@ test("deploy_control_internal_routes — runner profile list is scoped", async (
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
       mountInternalLedgerRoutes: true,
-      controller: new OpenTofuDeploymentController({
+      controller: new OpenTofuController({
         now: () => 1,
       }),
       authorizeDeployControlBearer: ({ token }) =>
         token === "scoped-token"
           ? {
               actor: "acct_123",
-              spaceIds: ["space_allowed"],
+              workspaceIds: ["ws_allowed"],
               operations: ["create"],
               runnerProfileIds: ["opentofu-default"],
             }
@@ -335,20 +413,20 @@ test("deploy_control_internal_routes — runner profile list is scoped", async (
 const SHARE_TS = "2026-06-06T00:00:00.000Z";
 
 /**
- * Wires the internal routes over a store seeded with a producer Installation in
- * `space_allowed`, a consumer Space `space_consume1`, and a latest
- * OutputSnapshot projecting `bucket_name`. The bearer `scoped-token` maps to a
- * principal scoped to `space_allowed` only.
+ * Wires the internal routes over a store seeded with a producer Capsule in
+ * `ws_allowed`, a consumer Workspace `ws_consume1`, and a latest
+ * Output projecting `bucket_name`. The bearer `scoped-token` maps to a
+ * principal scoped to `ws_allowed` only.
  */
 async function outputShareApp() {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  await seedInstallationModel(store, {
-    spaceId: "space_allowed",
-    installationId: "inst_producer1",
+  const store = new InMemoryOpenTofuControlStore();
+  await seedCapsuleModel(store, {
+    workspaceId: "ws_allowed",
+    capsuleId: "cap_producer1",
     name: "producer",
   });
-  const consumer: Space = {
-    id: "space_consume1",
+  const consumer: Workspace = {
+    id: "ws_consume1",
     handle: "consumer",
     displayName: "Consumer",
     type: "personal",
@@ -356,24 +434,24 @@ async function outputShareApp() {
     createdAt: SHARE_TS,
     updatedAt: SHARE_TS,
   };
-  await store.putSpace(consumer);
-  const snapshot: OutputSnapshot = {
+  await store.putWorkspace(consumer);
+  const snapshot: Output = {
     id: "out_scoped01",
-    spaceId: "space_allowed",
-    installationId: "inst_producer1",
+    workspaceId: "ws_allowed",
+    capsuleId: "cap_producer1",
     stateGeneration: 1,
-    rawOutputArtifactKey: "k",
+    rawArtifactRef: "k",
     publicOutputs: {},
-    spaceOutputs: { bucket_name: "my-bucket" },
+    workspaceOutputs: { bucket_name: "my-bucket" },
     outputDigest: "sha256:o",
     createdAt: SHARE_TS,
   };
-  await store.putOutputSnapshot(snapshot);
+  await store.putOutput(snapshot);
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
       mountInternalLedgerRoutes: true,
-      controller: new OpenTofuDeploymentController({ store, now: () => 1 }),
+      controller: new OpenTofuController({ store, now: () => 1 }),
       outputSharesService: new OutputSharesService({
         store,
         now: () => SHARE_TS,
@@ -383,7 +461,7 @@ async function outputShareApp() {
         token === "scoped-token"
           ? {
               actor: "acct_123",
-              spaceIds: ["space_allowed"],
+              workspaceIds: ["ws_allowed"],
               operations: ["create"],
               runnerProfileIds: ["opentofu-default"],
             }
@@ -394,7 +472,7 @@ async function outputShareApp() {
   return app;
 }
 
-test("output-shares create — scoped bearer allowed on its fromSpace (§18)", async () => {
+test("output-shares create — scoped bearer allowed on its source Workspace (§18)", async () => {
   const app = await outputShareApp();
   const res = await app.request("/internal/v1/output-shares", {
     method: "POST",
@@ -403,9 +481,9 @@ test("output-shares create — scoped bearer allowed on its fromSpace (§18)", a
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      fromSpaceId: "space_allowed",
-      toSpaceId: "space_consume1",
-      producerInstallationId: "inst_producer1",
+      fromWorkspaceId: "ws_allowed",
+      toWorkspaceId: "ws_consume1",
+      producerCapsuleId: "cap_producer1",
       outputs: [{ name: "bucket_name" }],
     }),
   });
@@ -413,7 +491,7 @@ test("output-shares create — scoped bearer allowed on its fromSpace (§18)", a
   expect((await res.json()).share.status).toEqual("pending");
 });
 
-test("output-shares create — scoped bearer denied on a foreign fromSpace (§18)", async () => {
+test("output-shares create — scoped bearer denied on a foreign source Workspace (§18)", async () => {
   const app = await outputShareApp();
   const res = await app.request("/internal/v1/output-shares", {
     method: "POST",
@@ -422,9 +500,9 @@ test("output-shares create — scoped bearer denied on a foreign fromSpace (§18
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      fromSpaceId: "space_denied",
-      toSpaceId: "space_consume1",
-      producerInstallationId: "inst_producer1",
+      fromWorkspaceId: "ws_denied",
+      toWorkspaceId: "ws_consume1",
+      producerCapsuleId: "cap_producer1",
       outputs: [{ name: "bucket_name" }],
     }),
   });
@@ -432,11 +510,11 @@ test("output-shares create — scoped bearer denied on a foreign fromSpace (§18
   expect((await res.json()).error.code).toEqual("permission_denied");
 });
 
-test("output-shares list — scoped bearer denied on a foreign spaceId (§18)", async () => {
+test("output-shares list — scoped bearer denied on a foreign workspaceId (§18)", async () => {
   const app = await outputShareApp();
-  // space_denied01 is a valid id shape the scoped principal is NOT allowed.
+  // ws_denied01 is a valid id shape the scoped principal is NOT allowed.
   const res = await app.request(
-    "/internal/v1/output-shares?spaceId=space_denied01",
+    "/internal/v1/output-shares?workspaceId=ws_denied01",
     {
       headers: { authorization: "Bearer scoped-token" },
     },

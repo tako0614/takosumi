@@ -21,6 +21,13 @@ export type AccountsBearerRequiredScope = "read" | "write" | "admin";
 
 export type AccountsBearerSubject = {
   readonly subject: TakosumiSubject;
+  /**
+   * OIDC client-local subject (`sub`) carried by an OAuth access token.
+   * This is the subject an InterfaceBinding targets. It is intentionally
+   * distinct from the stable Takosumi account subject used for account-plane
+   * authorization.
+   */
+  readonly principalSubject?: string;
   readonly credential:
     "session" | "personal-access-token" | "oauth-access-token";
   readonly workspaceId?: string;
@@ -34,6 +41,10 @@ export async function requireAccountSession(input: {
   | { ok: false; response: Response }
 > {
   const sessionId = extractAccountSessionId(input.request);
+  // This guard accepts sessions only, so the lexical check validates the
+  // canonical format minted by this service; it does not route among
+  // credential kinds. Multi-kind account/control authentication resolves
+  // exact persisted records in requireAccountsBearer instead.
   if (!sessionId || !sessionId.startsWith("sess_")) {
     return { ok: false, response: bearerChallenge("invalid_session") };
   }
@@ -52,7 +63,7 @@ export async function requireAccountSession(input: {
 
 /**
  * Extract the bearer session_id from a request. Accepts (in order):
- *   1. The `Authorization: Bearer ...` header (compat with PAT callers).
+ *   1. The `Authorization: Bearer ...` header (non-cookie session clients).
  *   2. The `x-takosumi-account-session` header (compat with non-cookie clients).
  *   3. The `takosumi_session` HttpOnly cookie (Set by the server on
  *      OAuth callback / passkey complete — the canonical browser path).
@@ -263,10 +274,10 @@ export async function requireAccountsBearer(input: {
 }): Promise<
   { ok: true; auth: AccountsBearerSubject } | { ok: false; response: Response }
 > {
-  // PAT callers send the secret in the Authorization header; session
-  // callers may send the session_id in the header OR the takosumi_session
-  // HttpOnly cookie. Look at the Authorization header first because it is
-  // the only place a PAT secret can arrive.
+  // Non-session credentials arrive in the Authorization header. Sessions may
+  // also arrive in that header, the explicit session header, or the HttpOnly
+  // cookie. An explicit header always wins over a cookie so a stale browser
+  // session cannot override the caller's selected credential.
   const headerToken =
     bearerToken(input.request.headers.get("authorization")) ??
     input.request.headers.get("x-takosumi-account-session");
@@ -274,22 +285,68 @@ export async function requireAccountsBearer(input: {
   if (!token) {
     return { ok: false, response: bearerChallenge("invalid_token") };
   }
-  if (token.startsWith("sess_")) {
-    const session = await requireAccountSession(input);
-    if (!session.ok) return session;
+
+  // Token prefixes are generation/display formatting only. Resolve the same
+  // opaque value against every credential store so authorization follows the
+  // authenticated persisted record rather than caller-controlled spelling.
+  // Parallel exact lookups also avoid a prefix-dependent fast path and keep
+  // durable stores free to hash lookup keys internally.
+  const now = Date.now();
+  const [sessionRecord, accessRecord, personalAccessTokenRecord] =
+    await Promise.all([
+      input.store.findAccountSession(token),
+      findActiveAccessToken({ store: input.store, token, now }),
+      input.store.findPersonalAccessToken(token),
+    ]);
+
+  let sessionSubject: TakosumiSubject | undefined;
+  if (sessionRecord) {
+    if (sessionRecord.expiresAt <= now) {
+      await input.store.deleteAccountSession(token);
+    } else {
+      const account = await input.store.findAccount(sessionRecord.subject);
+      if (account) {
+        sessionSubject = sessionRecord.subject;
+      } else {
+        await input.store.deleteAccountSession(token);
+      }
+    }
+  }
+
+  const interfaceOAuth = accessRecord?.role === "interface-runtime";
+  const oauthAccessTokenCandidate =
+    accessRecord?.takosumiSubject && !interfaceOAuth
+      ? {
+          record: accessRecord,
+          takosumiSubject: accessRecord.takosumiSubject,
+        }
+      : undefined;
+  const activePersonalAccessTokenRecord =
+    personalAccessTokenRecord &&
+    personalAccessTokenIsActive(personalAccessTokenRecord, now)
+      ? personalAccessTokenRecord
+      : undefined;
+  const candidateCount =
+    Number(sessionSubject !== undefined) +
+    Number(oauthAccessTokenCandidate !== undefined) +
+    Number(activePersonalAccessTokenRecord !== undefined);
+
+  // Interface OAuth is audience-bound invocation authority, never an
+  // account/control-plane credential. Any cross-store collision is likewise
+  // rejected rather than choosing an order-dependent principal.
+  if (interfaceOAuth || candidateCount !== 1) {
+    return { ok: false, response: bearerChallenge("invalid_token") };
+  }
+
+  if (sessionSubject) {
     return {
       ok: true,
-      auth: { subject: session.subject, credential: "session" },
+      auth: { subject: sessionSubject, credential: "session" },
     };
   }
-  if (token.startsWith("takat_")) {
-    const record = await findActiveAccessToken({
-      store: input.store,
-      token,
-    });
-    if (!record?.takosumiSubject) {
-      return { ok: false, response: bearerChallenge("invalid_token") };
-    }
+
+  if (oauthAccessTokenCandidate) {
+    const { record, takosumiSubject } = oauthAccessTokenCandidate;
     if (!oauthAccessTokenHasScope(record.scope, input.scope)) {
       return {
         ok: false,
@@ -307,20 +364,25 @@ export async function requireAccountsBearer(input: {
     return {
       ok: true,
       auth: {
-        subject: record.takosumiSubject,
+        subject: takosumiSubject,
+        principalSubject: record.subject,
         credential: "oauth-access-token",
         ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
       },
     };
   }
-  if (!token.startsWith("takpat_")) {
+
+  // candidateCount === 1 guarantees this record exists after the two branches
+  // above. Keep the guard explicit so future candidate kinds remain fail-closed.
+  if (!activePersonalAccessTokenRecord) {
     return { ok: false, response: bearerChallenge("invalid_token") };
   }
-  const record = await input.store.findPersonalAccessToken(token);
-  if (!record || !personalAccessTokenIsActive(record, Date.now())) {
-    return { ok: false, response: bearerChallenge("invalid_token") };
-  }
-  if (!personalAccessTokenHasScope(record.scopes, input.scope)) {
+  if (
+    !personalAccessTokenHasScope(
+      activePersonalAccessTokenRecord.scopes,
+      input.scope,
+    )
+  ) {
     return {
       ok: false,
       response: errorJson(
@@ -334,13 +396,18 @@ export async function requireAccountsBearer(input: {
       ),
     };
   }
-  await input.store.recordPersonalAccessTokenUsed(record.tokenId, Date.now());
+  await input.store.recordPersonalAccessTokenUsed(
+    activePersonalAccessTokenRecord.tokenId,
+    now,
+  );
   return {
     ok: true,
     auth: {
-      subject: record.subject,
+      subject: activePersonalAccessTokenRecord.subject,
       credential: "personal-access-token",
-      ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
+      ...(activePersonalAccessTokenRecord.workspaceId
+        ? { workspaceId: activePersonalAccessTokenRecord.workspaceId }
+        : {}),
     },
   };
 }

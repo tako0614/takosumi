@@ -3,8 +3,9 @@
  *
  * A Project is a Workspace-owned grouping for one product, service,
  * application, or infrastructure group. Capsules live under a Project
- * (`capsules.projectId`); a default Project (`prj_default`) is backfilled per
- * Workspace so existing Workspace-direct Capsules keep a stable owner.
+ * (`capsules.projectId`); a Workspace-qualified default Project
+ * (`prj_default_<workspaceId>`) is backfilled so existing Workspace-direct
+ * Capsules keep a stable owner without sharing a global id.
  *
  * NEW in the Workspace / Project / Capsule final model — there is no transient
  * deprecated alias for an older noun, because Project did not previously exist.

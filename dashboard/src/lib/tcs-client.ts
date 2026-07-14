@@ -9,90 +9,24 @@
  * Access-Control-Allow-Origin: * on its read surface).
  */
 
+import type { GitAddress } from "takosumi-contract";
+
 export interface TcsLocalizedText {
   readonly ja: string;
   readonly en: string;
 }
 
-export interface TcsListingSource {
-  readonly git: string;
-  readonly ref?: string;
-  readonly resolvedCommit?: string;
-  readonly path: string;
-}
+/**
+ * Store discovery points at the same canonical Git coordinate vocabulary as a
+ * Takosumi Source. A Store may offer `ref` as a display hint, but install/run
+ * code must require the user or a reviewed plan to select the effective ref.
+ */
+export type TcsListingSource = Pick<GitAddress, "url" | "path"> &
+  Partial<Pick<GitAddress, "ref">>;
 
-export interface TcsListingInput {
-  readonly name: string;
-  readonly type?: "string" | "number" | "boolean" | "json";
-  readonly format?:
-    | "text"
-    | "url"
-    | "hostname"
-    | "subdomain"
-    | "password"
-    | "token"
-    | "email"
-    | "sha256";
-  readonly required?: boolean;
-  readonly advanced?: boolean;
-  readonly secret?: boolean;
-  readonly defaultValue?: string;
-  readonly label: TcsLocalizedText;
-  readonly helper?: TcsLocalizedText;
-  readonly placeholder?: string;
-}
-
-export interface TcsInstallExperience {
-  readonly projections?: readonly (
-    | {
-        readonly kind: "service_name";
-        readonly variable: string;
-      }
-    | {
-        readonly kind: "public_endpoint";
-        readonly variables: {
-          readonly subdomain?: string;
-          readonly url?: string;
-          readonly routePattern?: string;
-        };
-        readonly baseDomain?: string;
-      }
-    | {
-        readonly kind: "initial_secret";
-        readonly variable: string;
-        readonly secretKind?: "password" | "password_or_hash" | "token";
-        readonly optional?: boolean;
-      }
-    | {
-        readonly kind: "oidc_client";
-        readonly variables: {
-          readonly issuerUrl?: string;
-          readonly accountsUrl?: string;
-          readonly clientId?: string;
-          readonly redirectUri?: string;
-        };
-        readonly callbackPath?: string;
-        readonly scopes?: readonly string[];
-      }
-    | {
-        readonly kind: "artifact";
-        readonly variables: {
-          readonly url?: string;
-          readonly sha256?: string;
-        };
-      }
-  )[];
-}
-
-export interface TcsListingOutput {
-  readonly key: string;
-  readonly from: string;
-  readonly type: "string" | "url" | "hostname" | "number" | "boolean" | "json";
-  readonly required?: boolean;
-}
-
-export type TcsListingKind = "app" | "worker" | "storage" | "site";
-export type TcsListingSurface = "service" | "building_block" | "example";
+/** Operator-defined presentation tokens; neither field grants execution authority. */
+export type TcsListingKind = string;
+export type TcsListingSurface = string;
 
 export interface TcsListing {
   readonly id: string;
@@ -108,12 +42,6 @@ export interface TcsListing {
   readonly description: TcsLocalizedText;
   readonly badge: TcsLocalizedText;
   readonly iconUrl?: string;
-  /** Repo-owned install schema, attached only after repository hydration. */
-  readonly inputs?: readonly TcsListingInput[];
-  /** Repo-owned projections, attached only after repository hydration. */
-  readonly installExperience?: TcsInstallExperience;
-  /** Legacy Store payload field; raw Store responses strip it. */
-  readonly outputAllowlist?: readonly TcsListingOutput[];
   readonly publisher?: {
     readonly handle: string;
     readonly displayName?: string;
@@ -125,22 +53,10 @@ export interface TcsListing {
 
 export interface TcsRepoMetadata {
   readonly schemaVersion?: string;
-  readonly id?: string;
-  readonly modulePath?: string;
-  readonly kind?: TcsListingKind;
-  readonly surface?: TcsListingSurface;
-  readonly provider?: string;
-  readonly category?: string;
-  readonly tags?: readonly string[];
-  readonly suggestedName?: string;
   readonly name?: TcsLocalizedText;
   readonly description?: TcsLocalizedText;
   readonly badge?: TcsLocalizedText;
   readonly iconUrl?: string;
-  /** Optional install-form schema owned by the Git repository, not the Store. */
-  readonly inputs?: readonly TcsListingInput[];
-  /** Optional projections that connect generic form fields to OpenTofu inputs. */
-  readonly installExperience?: TcsInstallExperience;
 }
 
 export type TcsSort = "updated" | "created" | "name";
@@ -236,13 +152,105 @@ export async function fetchTcsListing(
 }
 
 export function sanitizeTcsListing(listing: TcsListing): TcsListing {
+  const unsafe = listing as TcsListing & Record<string, unknown>;
   const {
     inputs: _inputs,
     installExperience: _installExperience,
     outputAllowlist: _outputAllowlist,
+    primaryServer: _primaryServer,
+    primaryDefault: _primaryDefault,
+    seenOn: _seenOn,
+    iconUrl: unsafeIconUrl,
     ...rest
-  } = listing;
-  return rest;
+  } = unsafe;
+  const iconUrl = safePresentationHttpsUrl(unsafeIconUrl);
+  return {
+    ...rest,
+    source: sanitizeTcsListingSource(unsafe.source),
+    ...(iconUrl ? { iconUrl } : {}),
+  } as unknown as TcsListing;
+}
+
+function sanitizeTcsListingSource(value: unknown): TcsListingSource {
+  if (!isRecord(value)) throw new Error("listing source must be an object");
+  // Input-only migration for pre-v1 TCS nodes. `git` is normalized to the
+  // canonical `url` field only when `url` is absent; it is never returned or
+  // allowed to coexist with the canonical field.
+  const allowedKeys = new Set(["url", "git", "ref", "path"]);
+  const unexpected = Object.keys(value).filter((key) => !allowedKeys.has(key));
+  if (unexpected.length > 0) {
+    throw new Error(
+      `listing source has unsupported fields: ${unexpected.join(", ")}`,
+    );
+  }
+  const canonicalUrl = text(value.url);
+  const legacyGit = text(value.git);
+  const hasCanonicalUrl = value.url !== undefined;
+  const hasLegacyGit = value.git !== undefined;
+  if (hasCanonicalUrl && hasLegacyGit) {
+    throw new Error("listing source must not declare both url and legacy git");
+  }
+  if (hasCanonicalUrl && !canonicalUrl) {
+    throw new Error("listing source url must be a non-empty string");
+  }
+  if (hasLegacyGit && !legacyGit) {
+    throw new Error("listing source legacy git must be a non-empty string");
+  }
+  const url = safeListingGitUrl(hasCanonicalUrl ? canonicalUrl : legacyGit);
+  const path = safeListingSourcePath(value.path);
+  const ref = value.ref === undefined ? undefined : safeListingRef(value.ref);
+  if (!url || !path) {
+    throw new Error(
+      "listing source requires a credential-free HTTPS url and repo-relative path",
+    );
+  }
+  if (value.ref !== undefined && !ref)
+    throw new Error("listing source ref is unsafe");
+  return { url, ...(ref ? { ref } : {}), path };
+}
+
+function safeListingGitUrl(value: string | undefined): string | undefined {
+  if (!value || /[\0\r\n]/u.test(value)) return undefined;
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      !url.hostname ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      return undefined;
+    }
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeListingSourcePath(value: unknown): string | undefined {
+  const raw = text(value);
+  if (
+    !raw ||
+    raw.startsWith("/") ||
+    raw.includes("\\") ||
+    /[\0\r\n]/u.test(raw)
+  ) {
+    return undefined;
+  }
+  const segments = raw.replace(/\/+$/u, "").split("/");
+  if (segments.some((segment) => segment === ".." || segment === "")) {
+    return undefined;
+  }
+  return segments.filter((segment) => segment !== ".").join("/") || ".";
+}
+
+function safeListingRef(value: unknown): string | undefined {
+  const ref = text(value);
+  return ref && !ref.startsWith("-") && !/[\0\r\n]/u.test(ref)
+    ? ref
+    : undefined;
 }
 
 function sanitizeTcsListingsPage(page: TcsListingsPage): TcsListingsPage {
@@ -256,75 +264,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function githubRepoParts(
-  source: TcsListingSource,
-):
-  | { readonly owner: string; readonly repo: string; readonly ref: string }
-  | undefined {
-  try {
-    const url = new URL(source.git);
-    if (url.protocol !== "https:" || url.hostname !== "github.com") {
-      return undefined;
-    }
-    const parts = url.pathname
-      .replace(/\/+$/u, "")
-      .replace(/\.git$/iu, "")
-      .split("/")
-      .filter(Boolean);
-    if (parts.length < 2) return undefined;
-    const ref = (source.resolvedCommit ?? source.ref ?? "main").trim();
-    if (!ref) return undefined;
-    return { owner: parts[0], repo: parts[1], ref };
-  } catch {
-    return undefined;
-  }
-}
-
-function repoMetadataRawUrl(source: TcsListingSource): string | undefined {
-  const parts = githubRepoParts(source);
-  if (!parts) return undefined;
-  return `https://raw.githubusercontent.com/${encodeURIComponent(parts.owner)}/${encodeURIComponent(parts.repo)}/${encodeURIComponent(parts.ref)}/.well-known/tcs.json`;
-}
-
-function repoMetadataContentsApiUrl(
-  source: TcsListingSource,
-): string | undefined {
-  const parts = githubRepoParts(source);
-  if (!parts) return undefined;
-  return `https://api.github.com/repos/${encodeURIComponent(parts.owner)}/${encodeURIComponent(parts.repo)}/contents/.well-known%2Ftcs.json?ref=${encodeURIComponent(parts.ref)}`;
-}
-
-function repoAssetUrl(
-  source: TcsListingSource,
-  value: string | undefined,
-): string | undefined {
-  const raw = value?.trim();
+function safePresentationHttpsUrl(value: unknown): string | undefined {
+  const raw = text(value);
   if (!raw) return undefined;
   try {
     const url = new URL(raw);
-    return url.protocol === "https:" ? url.toString() : undefined;
-  } catch {
-    // Relative URL. Resolve it against the same git ref that supplied
-    // `.well-known/tcs.json`; the store remains only the repository pointer.
-  }
-
-  try {
-    const url = new URL(source.git);
-    if (url.protocol !== "https:" || url.hostname !== "github.com") {
-      return undefined;
-    }
-    const parts = url.pathname
-      .replace(/\/+$/u, "")
-      .replace(/\.git$/iu, "")
-      .split("/")
-      .filter(Boolean);
-    const ref = (source.resolvedCommit ?? source.ref ?? "main").trim();
-    const asset = raw.replace(/^\.?\//u, "");
-    if (parts.length < 2 || !ref || asset.includes("..")) return undefined;
-    return `https://raw.githubusercontent.com/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}/${encodeURIComponent(ref)}/${asset
-      .split("/")
-      .map(encodeURIComponent)
-      .join("/")}`;
+    return url.protocol === "https:" &&
+      url.hostname &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash
+      ? url.toString()
+      : undefined;
   } catch {
     return undefined;
   }
@@ -341,251 +293,22 @@ function localized(value: unknown): TcsLocalizedText | undefined {
   return ja || en ? { ja, en } : undefined;
 }
 
-function stringArray(value: unknown): readonly string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  return value.filter((item): item is string => typeof item === "string");
-}
-
-function repoInput(value: unknown): TcsListingInput | undefined {
-  if (!isRecord(value)) return undefined;
-  const name = text(value.name);
-  const label = localized(value.label);
-  if (!name || !label || !/^[A-Za-z_][A-Za-z0-9_.]*$/u.test(name)) {
-    return undefined;
-  }
-  const type = text(value.type);
-  if (type && !["string", "number", "boolean", "json"].includes(type)) {
-    return undefined;
-  }
-  const format = text(value.format);
-  if (
-    format &&
-    ![
-      "text",
-      "url",
-      "hostname",
-      "subdomain",
-      "password",
-      "token",
-      "email",
-      "sha256",
-    ].includes(format)
-  ) {
-    return undefined;
-  }
-  const helper = localized(value.helper);
-  return {
-    name,
-    ...(type ? { type: type as TcsListingInput["type"] } : {}),
-    ...(format ? { format: format as TcsListingInput["format"] } : {}),
-    ...(value.required === true ? { required: true } : {}),
-    ...(value.advanced === true ? { advanced: true } : {}),
-    ...(value.secret === true ? { secret: true } : {}),
-    ...(text(value.defaultValue)
-      ? { defaultValue: text(value.defaultValue) }
-      : {}),
-    label,
-    ...(helper ? { helper } : {}),
-    ...(text(value.placeholder)
-      ? { placeholder: text(value.placeholder) }
-      : {}),
-  };
-}
-
-function repoInputs(value: unknown): readonly TcsListingInput[] | undefined {
-  if (!Array.isArray(value) || value.length > 64) return undefined;
-  const parsed = value.map(repoInput);
-  return parsed.every((input): input is TcsListingInput => input !== undefined)
-    ? parsed
-    : undefined;
-}
-
-function optionalProjectionVariable(value: unknown): string | undefined {
-  const variable = text(value);
-  return variable && /^[A-Za-z_][A-Za-z0-9_.]*$/u.test(variable)
-    ? variable
-    : undefined;
-}
-
-function repoInstallExperience(
-  value: unknown,
-): TcsInstallExperience | undefined {
-  if (!isRecord(value) || !Array.isArray(value.projections)) return undefined;
-  const projections: Array<
-    NonNullable<TcsInstallExperience["projections"]>[number]
-  > = [];
-  for (const rawProjection of value.projections) {
-    if (!isRecord(rawProjection)) return undefined;
-    const kind = text(rawProjection.kind);
-    if (kind === "service_name") {
-      const variable = optionalProjectionVariable(rawProjection.variable);
-      if (!variable) return undefined;
-      projections.push({ kind, variable });
-      continue;
-    }
-    if (kind === "public_endpoint") {
-      if (!isRecord(rawProjection.variables)) return undefined;
-      const subdomain = optionalProjectionVariable(
-        rawProjection.variables.subdomain,
-      );
-      const url = optionalProjectionVariable(rawProjection.variables.url);
-      const routePattern = optionalProjectionVariable(
-        rawProjection.variables.routePattern,
-      );
-      if (!subdomain && !url && !routePattern) return undefined;
-      projections.push({
-        kind,
-        variables: {
-          ...(subdomain ? { subdomain } : {}),
-          ...(url ? { url } : {}),
-          ...(routePattern ? { routePattern } : {}),
-        },
-        ...(text(rawProjection.baseDomain)
-          ? { baseDomain: text(rawProjection.baseDomain) }
-          : {}),
-      });
-      continue;
-    }
-    if (kind === "initial_secret") {
-      const variable = optionalProjectionVariable(rawProjection.variable);
-      const secretKind = text(rawProjection.secretKind);
-      if (
-        !variable ||
-        (secretKind &&
-          !["password", "password_or_hash", "token"].includes(secretKind))
-      ) {
-        return undefined;
-      }
-      projections.push({
-        kind,
-        variable,
-        ...(secretKind
-          ? {
-              secretKind: secretKind as Extract<
-                NonNullable<TcsInstallExperience["projections"]>[number],
-                { kind: "initial_secret" }
-              >["secretKind"],
-            }
-          : {}),
-        ...(rawProjection.optional === true ? { optional: true } : {}),
-      });
-      continue;
-    }
-    if (kind === "oidc_client" || kind === "artifact") {
-      if (!isRecord(rawProjection.variables)) return undefined;
-      const variables = Object.fromEntries(
-        Object.entries(rawProjection.variables)
-          .map(([key, raw]) => [key, optionalProjectionVariable(raw)] as const)
-          .filter((entry): entry is readonly [string, string] =>
-            Boolean(entry[1]),
-          ),
-      );
-      if (Object.keys(variables).length === 0) return undefined;
-      if (kind === "oidc_client") {
-        const scopes = stringArray(rawProjection.scopes)
-          ?.map((scope) => scope.trim())
-          .filter(Boolean);
-        if (
-          rawProjection.scopes !== undefined &&
-          (!scopes ||
-            scopes.length === 0 ||
-            scopes.some(
-              (scope) => !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(scope),
-            ))
-        ) {
-          return undefined;
-        }
-        projections.push({
-          kind,
-          variables,
-          ...(text(rawProjection.callbackPath)
-            ? { callbackPath: text(rawProjection.callbackPath) }
-            : {}),
-          ...(scopes ? { scopes: [...new Set(scopes)] } : {}),
-        });
-      } else {
-        projections.push({ kind, variables });
-      }
-      continue;
-    }
-    return undefined;
-  }
-  return { projections };
-}
-
 export function parseTcsRepoMetadata(
   json: unknown,
 ): TcsRepoMetadata | undefined {
   if (!isRecord(json)) return undefined;
   const schemaVersion = text(json.schemaVersion);
   if (schemaVersion && schemaVersion !== "tcs.repo/v1") return undefined;
+  const iconUrl = safePresentationHttpsUrl(json.iconUrl);
   return {
     ...(schemaVersion ? { schemaVersion } : {}),
-    ...(text(json.id) ? { id: text(json.id) } : {}),
-    ...(text(json.modulePath) ? { modulePath: text(json.modulePath) } : {}),
-    ...(text(json.kind) ? { kind: text(json.kind) as TcsListingKind } : {}),
-    ...(text(json.surface)
-      ? { surface: text(json.surface) as TcsListingSurface }
-      : {}),
-    ...(text(json.provider) ? { provider: text(json.provider) } : {}),
-    ...(text(json.category) ? { category: text(json.category) } : {}),
-    ...(stringArray(json.tags) ? { tags: stringArray(json.tags) } : {}),
-    ...(text(json.suggestedName)
-      ? { suggestedName: text(json.suggestedName) }
-      : {}),
     ...(localized(json.name) ? { name: localized(json.name) } : {}),
     ...(localized(json.description)
       ? { description: localized(json.description) }
       : {}),
     ...(localized(json.badge) ? { badge: localized(json.badge) } : {}),
-    ...(text(json.iconUrl) ? { iconUrl: text(json.iconUrl) } : {}),
-    ...(repoInputs(json.inputs) ? { inputs: repoInputs(json.inputs) } : {}),
-    ...(repoInstallExperience(json.installExperience)
-      ? { installExperience: repoInstallExperience(json.installExperience) }
-      : {}),
+    ...(iconUrl ? { iconUrl } : {}),
   };
-}
-
-async function readGithubContentsJsonResponse(
-  res: Response,
-): Promise<unknown | null> {
-  const body = (await res.json()) as unknown;
-  if (!isRecord(body)) return null;
-  const content = typeof body.content === "string" ? body.content : undefined;
-  if (!content) return null;
-  const binary = atob(content.replace(/\s+/gu, ""));
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-}
-
-export async function fetchTcsRepoMetadata(
-  source: TcsListingSource,
-  signal?: AbortSignal,
-): Promise<TcsRepoMetadata | null> {
-  const apiUrl = repoMetadataContentsApiUrl(source);
-  const rawUrl = repoMetadataRawUrl(source);
-  if (!apiUrl || !rawUrl) return null;
-  const api = await fetch(apiUrl, {
-    headers: { accept: "application/vnd.github+json" },
-    signal,
-  });
-  if (api.status === 404) return null;
-  if (api.ok) {
-    const metadata = parseTcsRepoMetadata(
-      await readGithubContentsJsonResponse(api),
-    );
-    if (metadata) return metadata;
-  }
-
-  // A branch name on raw.githubusercontent.com can lag a just-pushed ref.
-  // Prefer the Contents API and use raw only when the API is unavailable.
-  const raw = await fetch(rawUrl, {
-    headers: { accept: "application/json" },
-    signal,
-  });
-  if (raw.status === 404) return null;
-  if (!raw.ok) throw new Error(`repo metadata ${api.status}/${raw.status}`);
-  return parseTcsRepoMetadata(await raw.json()) ?? null;
 }
 
 export function mergeTcsListingRepoMetadata(
@@ -593,101 +316,14 @@ export function mergeTcsListingRepoMetadata(
   metadata: TcsRepoMetadata | null,
 ): TcsListing {
   if (!metadata) return listing;
-  const source = {
-    ...listing.source,
-    path: metadata.modulePath ?? listing.source.path,
-  };
+  const iconUrl = safePresentationHttpsUrl(metadata.iconUrl);
   return {
     ...listing,
-    source,
-    ...(metadata.kind ? { kind: metadata.kind } : {}),
-    ...(metadata.surface ? { surface: metadata.surface } : {}),
-    ...(metadata.provider ? { provider: metadata.provider } : {}),
-    ...(metadata.category ? { category: metadata.category } : {}),
-    ...(metadata.suggestedName
-      ? { suggestedName: metadata.suggestedName }
-      : {}),
     ...(metadata.name ? { name: metadata.name } : {}),
     ...(metadata.description ? { description: metadata.description } : {}),
     ...(metadata.badge ? { badge: metadata.badge } : {}),
-    ...(metadata.iconUrl
-      ? { iconUrl: repoAssetUrl(source, metadata.iconUrl) ?? metadata.iconUrl }
-      : {}),
-    ...(metadata.inputs ? { inputs: metadata.inputs } : {}),
-    ...(metadata.installExperience
-      ? { installExperience: metadata.installExperience }
-      : {}),
+    ...(iconUrl ? { iconUrl } : {}),
   };
-}
-
-function repositorySuggestedName(source: TcsListingSource): string {
-  try {
-    const url = new URL(source.git);
-    const tail = url.pathname
-      .replace(/\/+$/u, "")
-      .replace(/\.git$/iu, "")
-      .split("/")
-      .filter(Boolean)
-      .at(-1);
-    if (tail) return tail.toLowerCase().replace(/[^a-z0-9-]+/gu, "-");
-  } catch {
-    // Fall through to the stable generic name for non-URL Git addresses.
-  }
-  return "opentofu-service";
-}
-
-/**
- * Builds the same install-form listing shape directly from repository-owned
- * metadata. Store nodes are discovery only, so a direct Git hand-off must be
- * able to render the repository's setup contract without first finding a Store
- * listing for it.
- */
-export function tcsListingFromRepoMetadata(
-  source: TcsListingSource,
-  metadata: TcsRepoMetadata,
-): TcsListing {
-  const suggestedName =
-    metadata.suggestedName ?? repositorySuggestedName(source);
-  const fallbackName = { ja: suggestedName, en: suggestedName };
-  const base: TcsListing = {
-    id: metadata.id ?? `repo/${suggestedName}`,
-    source,
-    kind: metadata.kind ?? "app",
-    surface: metadata.surface ?? "service",
-    provider: metadata.provider ?? "opentofu",
-    category: metadata.category ?? "general",
-    suggestedName,
-    name: metadata.name ?? fallbackName,
-    description: metadata.description ?? fallbackName,
-    badge: metadata.badge ?? { ja: "Git", en: "Git" },
-    createdAt: "1970-01-01T00:00:00.000Z",
-    updatedAt: "1970-01-01T00:00:00.000Z",
-  };
-  return mergeTcsListingRepoMetadata(base, metadata);
-}
-
-export async function hydrateTcsListingWithRepoMetadata(
-  listing: TcsListing,
-  signal?: AbortSignal,
-): Promise<TcsListing> {
-  return mergeTcsListingRepoMetadata(
-    listing,
-    await fetchTcsRepoMetadata(listing.source, signal),
-  );
-}
-
-/** Store installs require repository-owned presentation metadata. A thin Store
- * listing is only a discovery pointer and must never silently become an empty
- * install form when the repository metadata fetch fails. */
-export async function hydrateRequiredTcsListingWithRepoMetadata(
-  listing: TcsListing,
-  signal?: AbortSignal,
-): Promise<TcsListing> {
-  const metadata = await fetchTcsRepoMetadata(listing.source, signal);
-  if (!metadata) {
-    throw new Error("repository install metadata is unavailable");
-  }
-  return mergeTcsListingRepoMetadata(listing, metadata);
 }
 
 /** Normalized identity tuple used for cross-server de-duplication. */
@@ -695,11 +331,11 @@ export function tcsListingIdentity(source: TcsListingSource): string {
   let host = "";
   let rest = "";
   try {
-    const url = new URL(source.git);
+    const url = new URL(source.url);
     host = url.host.toLowerCase();
     rest = url.pathname.replace(/\/+$/, "").replace(/\.git$/i, "");
   } catch {
-    host = source.git.trim().toLowerCase();
+    host = source.url.trim().toLowerCase();
     rest = "";
   }
   const path = normalizeTcsSourcePath(source.path);

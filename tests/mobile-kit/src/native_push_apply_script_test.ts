@@ -39,14 +39,22 @@ test("native push apply script patches generated iOS and Android projects", () =
       "<string>production</string>",
     );
     expect(read(appDir, "src-tauri/gen/android/build.gradle.kts")).toContain(
-      'id("com.google.gms.google-services") version "4.4.2" apply false',
+      'id("com.google.gms.google-services") version "4.5.0" apply false',
     );
+    expect(
+      read(appDir, "src-tauri/gen/android/app/build.gradle.kts"),
+    ).toContain(
+      'implementation(platform("com.google.firebase:firebase-bom:34.15.0"))',
+    );
+    expect(
+      read(appDir, "src-tauri/gen/android/app/build.gradle.kts"),
+    ).toContain('implementation("com.google.firebase:firebase-installations")');
     expect(
       read(appDir, "src-tauri/gen/android/app/build.gradle.kts"),
     ).toContain('implementation("com.google.firebase:firebase-messaging")');
     expect(
       read(appDir, "src-tauri/gen/android/app/src/main/AndroidManifest.xml"),
-    ).toContain('android:name="app.tauri.mobilepush.FCMService"');
+    ).not.toContain("FCMService");
 
     const second = spawnSync(
       "bun",
@@ -70,7 +78,15 @@ test("native push apply script strictly verifies generated wiring without mutati
     const before = read(appDir, "src-tauri/gen/android/app/build.gradle.kts");
     const dryRun = spawnSync(
       "bun",
-      [scriptPath, "--app-dir", appDir, "--dry-run", "--strict"],
+      [
+        scriptPath,
+        "--app-dir",
+        appDir,
+        "--apple-environment",
+        "development",
+        "--dry-run",
+        "--strict",
+      ],
       {
         encoding: "utf8",
       },
@@ -82,14 +98,24 @@ test("native push apply script strictly verifies generated wiring without mutati
       before,
     );
 
-    const apply = spawnSync("bun", [scriptPath, "--app-dir", appDir], {
-      encoding: "utf8",
-    });
+    const apply = spawnSync(
+      "bun",
+      [scriptPath, "--app-dir", appDir, "--apple-environment", "development"],
+      { encoding: "utf8" },
+    );
     expect(apply.status).toBe(0);
 
     const verify = spawnSync(
       "bun",
-      [scriptPath, "--app-dir", appDir, "--dry-run", "--strict"],
+      [
+        scriptPath,
+        "--app-dir",
+        appDir,
+        "--apple-environment",
+        "development",
+        "--dry-run",
+        "--strict",
+      ],
       {
         encoding: "utf8",
       },
@@ -101,12 +127,88 @@ test("native push apply script strictly verifies generated wiring without mutati
   }
 });
 
+test("native push production verification rejects development entitlements", () => {
+  const appDir = mkdtempSync(path.join(tmpdir(), "takos-mobile-push-"));
+  try {
+    seedGeneratedNativeProject(appDir);
+    const developmentApply = spawnSync(
+      "bun",
+      [scriptPath, "--app-dir", appDir, "--apple-environment", "development"],
+      { encoding: "utf8" },
+    );
+    expect(developmentApply.status).toBe(0);
+
+    const productionAgainstDevelopment = spawnSync(
+      "bun",
+      [
+        scriptPath,
+        "--app-dir",
+        appDir,
+        "--apple-environment",
+        "production",
+        "--dry-run",
+        "--strict",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(productionAgainstDevelopment.status).toBe(1);
+    expect(productionAgainstDevelopment.stdout).toContain("would be updated");
+
+    const productionApply = spawnSync(
+      "bun",
+      [scriptPath, "--app-dir", appDir, "--apple-environment", "production"],
+      { encoding: "utf8" },
+    );
+    expect(productionApply.status).toBe(0);
+
+    const productionVerify = spawnSync(
+      "bun",
+      [
+        scriptPath,
+        "--app-dir",
+        appDir,
+        "--apple-environment",
+        "production",
+        "--dry-run",
+        "--strict",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(productionVerify.status).toBe(0);
+
+    const developmentAgainstProduction = spawnSync(
+      "bun",
+      [
+        scriptPath,
+        "--app-dir",
+        appDir,
+        "--apple-environment",
+        "development",
+        "--dry-run",
+        "--strict",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(developmentAgainstProduction.status).toBe(1);
+  } finally {
+    rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
 test("native push apply script strict mode fails on missing generated projects", () => {
   const appDir = mkdtempSync(path.join(tmpdir(), "takos-mobile-push-"));
   try {
     const result = spawnSync(
       "bun",
-      [scriptPath, "--app-dir", appDir, "--dry-run", "--strict"],
+      [
+        scriptPath,
+        "--app-dir",
+        appDir,
+        "--apple-environment",
+        "development",
+        "--dry-run",
+        "--strict",
+      ],
       {
         encoding: "utf8",
       },
@@ -115,6 +217,45 @@ test("native push apply script strict mode fails on missing generated projects",
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("src-tauri/gen/apple is missing");
     expect(result.stdout).toContain("src-tauri/gen/android is missing");
+  } finally {
+    rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
+test("native push apply script can verify one generated platform", () => {
+  const appDir = mkdtempSync(path.join(tmpdir(), "takos-mobile-push-"));
+  try {
+    seedGeneratedNativeProject(appDir);
+    const appleBefore = read(appDir, "src-tauri/gen/apple/App.entitlements");
+
+    const applyAndroid = spawnSync(
+      "bun",
+      [scriptPath, "--app-dir", appDir, "--platform", "android"],
+      { encoding: "utf8" },
+    );
+    expect(applyAndroid.status).toBe(0);
+    expect(applyAndroid.stdout).toContain(
+      "Tauri mobile push native apply (android)",
+    );
+    expect(applyAndroid.stdout).not.toContain("iOS aps-environment");
+    expect(read(appDir, "src-tauri/gen/apple/App.entitlements")).toBe(
+      appleBefore,
+    );
+
+    const verifyAndroid = spawnSync(
+      "bun",
+      [
+        scriptPath,
+        "--app-dir",
+        appDir,
+        "--platform",
+        "android",
+        "--dry-run",
+        "--strict",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(verifyAndroid.status).toBe(0);
   } finally {
     rmSync(appDir, { recursive: true, force: true });
   }

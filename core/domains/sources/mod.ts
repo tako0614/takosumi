@@ -27,24 +27,21 @@ import type {
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/install-configs";
+import { normalizeScopeBoundaryPolicy } from "takosumi-contract";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import {
   OpenTofuControllerError,
   requireNonEmptyString,
+  sourceSyncRequiredError,
 } from "../deploy-control/errors.ts";
-import { errorMessage } from "../deploy-control/projection.ts";
 import type {
-  OpenTofuDeploymentStore,
+  OpenTofuControlStore,
   StoredSource,
 } from "../deploy-control/store.ts";
 import type { Run } from "takosumi-contract/runs";
-import type { ObjectStoragePort } from "../../adapters/object-storage/mod.ts";
 import {
-  normalizedCapsuleArtifactBody,
-  normalizedModuleObjectKey,
-  parseNormalizedCapsuleArtifactBody,
   StaticHclCapsuleCompatibilityAnalyzer,
   type CapsuleCompatibilityAnalysis,
   type CapsuleCompatibilityAnalyzer,
@@ -52,11 +49,14 @@ import {
 } from "./capsule_compatibility.ts";
 import { evaluateSourceUrl } from "./url-policy.ts";
 import { canonicalProviderAddress } from "@takosumi/providers";
+import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 
-const DEFAULT_REF = "main";
+// Git already has a provider-neutral spelling for the remote's configured
+// default branch. Do not guess `main`/`master`: an omitted ref means HEAD,
+// while an explicitly supplied branch remains exact.
+const DEFAULT_REF = "HEAD";
 const DEFAULT_PATH = ".";
 const REPOSITORY_INSTALL_METADATA_PATH = ".well-known/tcs.json";
-const NORMALIZED_CAPSULE_ARTIFACT_BUCKET = "takos-artifacts";
 const SOURCE_SYNC_REQUEUE_STALE_MS = 10 * 60 * 1000;
 
 /**
@@ -69,7 +69,7 @@ const SOURCE_SYNC_REQUEUE_STALE_MS = 10 * 60 * 1000;
 export type EnqueueSourceSync = (dispatch: {
   readonly action: "source_sync";
   readonly runId: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly sourceId: string;
 }) => Promise<void>;
 
@@ -79,12 +79,12 @@ export type ReadCapsuleSourceFiles = (
 ) => Promise<readonly CapsuleSourceFile[]>;
 
 export interface SourcesServiceDependencies {
-  readonly store: OpenTofuDeploymentStore;
+  readonly store: OpenTofuControlStore;
+  /** Host authority for opaque durable source-archive references. */
+  readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   readonly enqueueSourceSync?: EnqueueSourceSync;
   readonly compatibilityAnalyzer?: CapsuleCompatibilityAnalyzer;
   readonly readCapsuleSourceFiles?: ReadCapsuleSourceFiles;
-  readonly normalizedArtifactStorage?: ObjectStoragePort;
-  readonly normalizedArtifactBucket?: string;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
   /** Per-source webhook secret generator. Defaults to a random URL-safe token. */
@@ -92,7 +92,8 @@ export interface SourcesServiceDependencies {
 }
 
 export class SourcesService {
-  readonly #store: OpenTofuDeploymentStore;
+  readonly #store: OpenTofuControlStore;
+  readonly #artifactReferenceAllocator?: ArtifactReferenceAllocator;
   readonly #enqueue: EnqueueSourceSync;
   readonly #compatibilityAnalyzer: CapsuleCompatibilityAnalyzer;
   readonly #readCapsuleSourceFiles: ReadCapsuleSourceFiles;
@@ -100,22 +101,18 @@ export class SourcesService {
     string,
     Promise<readonly CapsuleSourceFile[]>
   >();
-  readonly #normalizedArtifactStorage?: ObjectStoragePort;
-  readonly #normalizedArtifactBucket: string;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
   readonly #newHookSecret: () => string;
 
   constructor(deps: SourcesServiceDependencies) {
     this.#store = deps.store;
+    this.#artifactReferenceAllocator = deps.artifactReferenceAllocator;
     this.#enqueue = deps.enqueueSourceSync ?? (() => Promise.resolve());
     this.#compatibilityAnalyzer =
       deps.compatibilityAnalyzer ?? new StaticHclCapsuleCompatibilityAnalyzer();
     this.#readCapsuleSourceFiles =
       deps.readCapsuleSourceFiles ?? (() => Promise.resolve([]));
-    this.#normalizedArtifactStorage = deps.normalizedArtifactStorage;
-    this.#normalizedArtifactBucket =
-      deps.normalizedArtifactBucket ?? NORMALIZED_CAPSULE_ARTIFACT_BUCKET;
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
     this.#newHookSecret = deps.newHookSecret ?? defaultHookSecret;
@@ -124,14 +121,14 @@ export class SourcesService {
   /**
    * Registers a Source. Validates the URL policy (§7.1) and, when an
    * `authConnectionId` is supplied, checks the connection exists in the same
-   * space. Generates and returns the hook secret EXACTLY ONCE; stores its hash.
+   * Workspace. Generates and returns the hook secret EXACTLY ONCE; stores its hash.
    * Does NOT perform ls-remote (that is a queued source_sync); status is
    * `active`.
    */
   async createSource(
     request: CreateSourceRequest,
   ): Promise<CreateSourceResponse> {
-    requireNonEmptyString(request.spaceId, "spaceId");
+    requireNonEmptyString(request.workspaceId, "workspaceId");
     requireNonEmptyString(request.name, "name");
     requireNonEmptyString(request.url, "url");
     const policy = evaluateSourceUrl(request.url);
@@ -145,9 +142,9 @@ export class SourcesService {
     const defaultPath = nonEmpty(request.defaultPath) ?? DEFAULT_PATH;
     if (request.authConnectionId !== undefined) {
       requireNonEmptyString(request.authConnectionId, "authConnectionId");
-      await this.#requireConnectionInSpace(
+      await this.#requireConnectionInWorkspace(
         request.authConnectionId,
-        request.spaceId,
+        request.workspaceId,
       );
     }
 
@@ -157,8 +154,7 @@ export class SourcesService {
     const nowIso = this.#now().toISOString();
     const stored: StoredSource = {
       id,
-      workspaceId: request.spaceId,
-      spaceId: request.spaceId,
+      workspaceId: request.workspaceId,
       name: request.name,
       url: request.url.trim(),
       defaultRef,
@@ -177,12 +173,12 @@ export class SourcesService {
   }
 
   async listSources(
-    spaceId: string,
+    workspaceId: string,
     params?: PageParams,
   ): Promise<ListSourcesResponse> {
-    requireNonEmptyString(spaceId, "spaceId");
+    requireNonEmptyString(workspaceId, "workspaceId");
     const { items, nextCursor } = await this.#store.listSourcesPage(
-      spaceId,
+      workspaceId,
       params ?? {},
     );
     return {
@@ -224,9 +220,9 @@ export class SourcesService {
         delete (next as { authConnectionId?: string }).authConnectionId;
       } else {
         requireNonEmptyString(patch.authConnectionId, "authConnectionId");
-        await this.#requireConnectionInSpace(
+        await this.#requireConnectionInWorkspace(
           patch.authConnectionId,
-          stored.spaceId,
+          stored.workspaceId,
         );
         (next as { authConnectionId?: string }).authConnectionId =
           patch.authConnectionId;
@@ -288,7 +284,7 @@ export class SourcesService {
 
   /**
    * Creates a source_sync run for the source's default ref and enqueues it. The
-   * archive object key is precomputed per the agreed R2_SOURCE layout. Dedup:
+   * archive reference is allocated by the host storage adapter. Dedup:
    * when a run is already `queued`/`running` for this source, returns it instead
    * of creating a duplicate (used by the webhook / scheduler).
    */
@@ -308,7 +304,7 @@ export class SourcesService {
           await this.#enqueue({
             action: "source_sync",
             runId: existing.id,
-            spaceId: existing.spaceId,
+            workspaceId: existing.workspaceId,
             sourceId: existing.sourceId,
           });
           return { run: existing };
@@ -329,22 +325,29 @@ export class SourcesService {
     }
     const runId = this.#newId("ssr");
     const snapshotId = this.#newId("snap");
-    const archiveObjectKey = sourceArchiveObjectKey(
-      stored.spaceId,
+    if (!this.#artifactReferenceAllocator) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "source sync requires an artifact-reference allocator",
+      );
+    }
+    const archiveRef = await this.#artifactReferenceAllocator.allocate({
+      kind: "source_archive",
+      workspaceId: stored.workspaceId,
       sourceId,
       snapshotId,
-    );
+    });
+    requireNonEmptyString(archiveRef, "archiveRef");
     const nowIso = this.#now().toISOString();
     const run: SourceSyncRun = {
       id: runId,
       kind: "source_sync",
-      workspaceId: stored.spaceId,
-      spaceId: stored.spaceId,
+      workspaceId: stored.workspaceId,
       sourceId,
       url: stored.url,
       ref: stored.defaultRef,
       path: stored.defaultPath,
-      archiveObjectKey,
+      archiveRef,
       intent,
       status: "queued",
       createdAt: nowIso,
@@ -355,7 +358,7 @@ export class SourcesService {
     await this.#enqueue({
       action: "source_sync",
       runId,
-      spaceId: stored.spaceId,
+      workspaceId: stored.workspaceId,
       sourceId,
     });
     return { run };
@@ -366,7 +369,7 @@ export class SourcesService {
     request: CreateSourceCompatibilityCheckRequest = {},
   ): Promise<CapsuleCompatibilityReportResponse> {
     const stored = await this.#requireSource(sourceId);
-    const capsuleId = request.capsuleId ?? request.installationId;
+    const capsuleId = request.capsuleId;
     const snapshot = await this.#resolveCompatibilitySnapshot(
       sourceId,
       request.sourceSnapshotId,
@@ -377,16 +380,16 @@ export class SourcesService {
     // listings themselves are discovery/presentation metadata, not execution
     // authority.
     const context = capsuleId
-      ? await this.#compatibilityContextForInstallation(stored, capsuleId)
+      ? await this.#compatibilityContextForCapsule(stored, capsuleId)
       : await this.#compatibilityContextForInstallConfig(
-          stored.spaceId,
+          stored.workspaceId,
           request.installConfigId,
         );
     return await this.#runCompatibilityAnalysis({
       snapshot,
-      spaceId: stored.spaceId,
+      workspaceId: stored.workspaceId,
       sourceId,
-      ...(capsuleId ? { installationId: capsuleId } : {}),
+      ...(capsuleId ? { capsuleId } : {}),
       ...((request.modulePath ?? context.modulePath)
         ? { modulePath: request.modulePath ?? context.modulePath }
         : {}),
@@ -394,56 +397,22 @@ export class SourcesService {
     });
   }
 
-  /**
-   * Compatibility check for a no-Source {@link SourceSnapshot} (upload or
-   * prepared artifact). The snapshot already carries its owning Space, and
-   * policy comes from the consumer Installation's InstallConfig (plus the Space
-   * policy) rather than from a Source. The Capsule Gate / Normalizer run exactly
-   * as they do for a git snapshot.
-   */
-  async createCompatibilityCheckForSnapshot(
-    snapshot: SourceSnapshot,
-    options: {
-      readonly installationId?: string;
-      readonly modulePath?: string;
-    } = {},
-  ): Promise<CapsuleCompatibilityReportResponse> {
-    const policy = await this.#compatibilityPolicyForSnapshot(
-      snapshot.spaceId,
-      options.installationId,
-    );
-    return await this.#runCompatibilityAnalysis({
-      snapshot,
-      spaceId: snapshot.spaceId,
-      ...(options.installationId
-        ? { installationId: options.installationId }
-        : {}),
-      ...(options.modulePath ? { modulePath: options.modulePath } : {}),
-      ...(policy ? { policy } : {}),
-    });
-  }
-
-  /**
-   * Shared Capsule Gate / Normalizer core used by both the git-Source and the
-   * no-Source compatibility paths. `sourceId` is recorded on the run/report only
-   * when the snapshot came from a registered Source.
-   */
+  /** Shared read-only Capsule compatibility analysis for a Git SourceSnapshot. */
   async #runCompatibilityAnalysis(input: {
     readonly snapshot: SourceSnapshot;
-    readonly spaceId: string;
-    readonly sourceId?: string;
-    readonly installationId?: string;
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly capsuleId?: string;
     readonly modulePath?: string;
     readonly policy?: PolicyConfig;
   }): Promise<CapsuleCompatibilityReportResponse> {
-    const { snapshot, spaceId } = input;
+    const { snapshot, workspaceId } = input;
     const runId = this.#newId("ccr");
     const nowIso = this.#now().toISOString();
     const runningRun: Run = {
       id: runId,
-      workspaceId: spaceId,
-      spaceId,
-      ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+      workspaceId,
+      sourceId: input.sourceId,
       type: "compatibility_check",
       status: "running",
       sourceSnapshotId: snapshot.id,
@@ -459,28 +428,18 @@ export class SourcesService {
         runId,
         async (files) =>
           await this.#compatibilityAnalyzer.analyze({
-            ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+            sourceId: input.sourceId,
             sourceSnapshot: snapshot,
             files,
             ...(input.policy ? { policy: input.policy } : {}),
           }),
       );
     const analysis = analysisAttempt.analysis;
-    const normalizedArtifact = await this.#persistNormalizedArtifact(
-      snapshot,
-      analysis.normalizedFiles,
-    );
     const id = this.#newId("caprep");
-    const normalizedObjectKey =
-      normalizedArtifact?.objectKey ??
-      (analysis.normalizedFiles ? undefined : analysis.normalizedObjectKey);
-    const normalizedDigest =
-      normalizedArtifact?.digest ??
-      (analysis.normalizedFiles ? undefined : analysis.normalizedDigest);
     const report: CapsuleCompatibilityReport = {
       id,
-      ...(input.sourceId ? { sourceId: input.sourceId } : {}),
-      ...(input.installationId ? { installationId: input.installationId } : {}),
+      sourceId: input.sourceId,
+      ...(input.capsuleId ? { capsuleId: input.capsuleId } : {}),
       sourceSnapshotId: snapshot.id,
       level: analysis.level,
       findings: analysis.findings,
@@ -490,17 +449,15 @@ export class SourcesService {
       provisioners: analysis.provisioners,
       rootModuleVariables: analysis.rootModuleVariables,
       rootModuleOutputs: analysis.rootModuleOutputs,
-      ...(normalizedObjectKey ? { normalizedObjectKey } : {}),
-      ...(normalizedDigest ? { normalizedDigest } : {}),
       createdAt: this.#now().toISOString(),
     };
     await this.#store.putCapsuleCompatibilityReport(report);
     const succeededRun: Run = {
       ...runningRun,
-      status: analysisAttempt.diagnosticMessage ? "failed" : "succeeded",
+      status: analysisAttempt.errorCode ? "failed" : "succeeded",
       compatibilityReportId: report.id,
-      ...(analysisAttempt.diagnosticMessage
-        ? { errorCode: analysisAttempt.diagnosticMessage }
+      ...(analysisAttempt.errorCode
+        ? { errorCode: analysisAttempt.errorCode }
         : {}),
       finishedAt: this.#now().toISOString(),
     };
@@ -517,7 +474,7 @@ export class SourcesService {
     ) => Promise<CapsuleCompatibilityAnalysis>,
   ): Promise<{
     readonly analysis: CapsuleCompatibilityAnalysis;
-    readonly diagnosticMessage?: string;
+    readonly errorCode?: string;
   }> {
     try {
       const files = await this.#readCapsuleSourceFilesCached(snapshot, {
@@ -534,155 +491,44 @@ export class SourcesService {
     } catch (error) {
       return {
         analysis: compatibilityCheckFailureAnalysis(snapshot, error),
-        diagnosticMessage: errorMessage(error),
+        errorCode: "capsule_compatibility_check_failed",
       };
     }
   }
 
-  /**
-   * Records an upload-origin {@link SourceSnapshot}: the archive bytes are
-   * already in R2_SOURCE (written by the upload route); this only persists the
-   * ledger row. No Source, no Runner git clone. `resolvedCommit` is the bare
-   * 64-hex digest so the downstream plan module-source descriptor validates as
-   * a content-pinned source, and `url` is a self-describing upload origin.
-   */
-  async recordUploadSnapshot(input: {
-    readonly spaceId: string;
-    readonly archiveObjectKey: string;
-    readonly archiveDigest: string;
-    readonly archiveSizeBytes: number;
-    readonly path?: string;
-    /** Pre-generated id so the caller can key the R2 archive before recording. */
-    readonly snapshotId?: string;
-  }): Promise<SourceSnapshot> {
-    requireNonEmptyString(input.spaceId, "spaceId");
-    requireNonEmptyString(input.archiveObjectKey, "archiveObjectKey");
-    requireNonEmptyString(input.archiveDigest, "archiveDigest");
-    const snapshotId = nonEmpty(input.snapshotId) ?? this.#newId("snap");
-    const hexDigest = snapshotDigestHex(input.archiveDigest);
-    const snapshot: SourceSnapshot = {
-      id: snapshotId,
-      origin: "upload",
-      workspaceId: input.spaceId,
-      spaceId: input.spaceId,
-      url: `https://uploads.takosumi.com/${input.spaceId}`,
-      ref: "upload",
-      resolvedCommit: hexDigest.toLowerCase(),
-      path: safeSnapshotPath(input.path),
-      archiveObjectKey: input.archiveObjectKey,
-      archiveDigest: input.archiveDigest,
-      archiveSizeBytes: input.archiveSizeBytes,
-      fetchedByRunId: "upload",
-      fetchedAt: this.#now().toISOString(),
-    };
-    await this.#store.putSourceSnapshot(snapshot);
-    return snapshot;
-  }
-
-  /**
-   * Records a digest-pinned legacy prepared source archive as a SourceSnapshot.
-   * The archive bytes are already verified and stored in R2_SOURCE by the
-   * API/facade route. This is compatibility ingest for already-archived
-   * OpenTofu source bytes, not a deployable app artifact or build contract.
-   */
-  async recordArtifactSnapshot(input: {
-    readonly spaceId: string;
-    readonly url: string;
-    readonly archiveObjectKey: string;
-    readonly archiveDigest: string;
-    readonly archiveSizeBytes: number;
-    readonly path?: string;
-    readonly snapshotId?: string;
-  }): Promise<SourceSnapshot> {
-    requireNonEmptyString(input.spaceId, "spaceId");
-    requireNonEmptyString(input.url, "url");
-    requireNonEmptyString(input.archiveObjectKey, "archiveObjectKey");
-    requireNonEmptyString(input.archiveDigest, "archiveDigest");
-    const snapshotId = nonEmpty(input.snapshotId) ?? this.#newId("snap");
-    const hexDigest = snapshotDigestHex(input.archiveDigest);
-    const snapshot: SourceSnapshot = {
-      id: snapshotId,
-      origin: "artifact",
-      workspaceId: input.spaceId,
-      spaceId: input.spaceId,
-      url: input.url.trim(),
-      ref: "artifact",
-      resolvedCommit: hexDigest,
-      path: safeSnapshotPath(input.path),
-      archiveObjectKey: input.archiveObjectKey,
-      archiveDigest: input.archiveDigest,
-      archiveSizeBytes: input.archiveSizeBytes,
-      fetchedByRunId: "artifact",
-      fetchedAt: this.#now().toISOString(),
-    };
-    await this.#store.putSourceSnapshot(snapshot);
-    return snapshot;
-  }
-
-  /**
-   * Capsule Gate policy for a no-Source snapshot. Same merge of Space
-   * policy + InstallConfig policy as {@link #compatibilityContextForInstallation}
-   * but without the Source-id match (upload/artifact installations have no
-   * Source).
-   */
-  async #compatibilityPolicyForSnapshot(
-    spaceId: string,
-    installationId: string | undefined,
-  ): Promise<PolicyConfig | undefined> {
-    if (!installationId) return undefined;
-    const installation = await this.#store.getInstallation(installationId);
-    if (!installation) {
-      throw new OpenTofuControllerError(
-        "not_found",
-        `installation ${installationId} does not exist`,
-      );
-    }
-    if (installation.spaceId !== spaceId) {
-      throw new OpenTofuControllerError(
-        "permission_denied",
-        "capsule is not available to this workspace",
-      );
-    }
-    const [space, config] = await Promise.all([
-      this.#store.getSpace(installation.spaceId),
-      this.#store.getInstallConfig(installation.installConfigId),
-    ]);
-    return mergePolicyConfigs(space?.policy, config?.policy);
-  }
-
-  async #compatibilityContextForInstallation(
+  async #compatibilityContextForCapsule(
     source: StoredSource,
-    installationId: string | undefined,
+    capsuleId: string | undefined,
   ): Promise<{
     readonly policy?: PolicyConfig;
     readonly modulePath?: string;
   }> {
-    if (!installationId) return {};
-    const installation = await this.#store.getInstallation(installationId);
-    if (!installation) {
+    if (!capsuleId) return {};
+    const capsule = await this.#store.getCapsule(capsuleId);
+    if (!capsule) {
       throw new OpenTofuControllerError(
         "not_found",
-        `installation ${installationId} does not exist`,
+        `capsule ${capsuleId} does not exist`,
       );
     }
-    if (installation.spaceId !== source.spaceId) {
+    if (capsule.workspaceId !== source.workspaceId) {
       throw new OpenTofuControllerError(
         "permission_denied",
         "capsule is not available to this source workspace",
       );
     }
-    if (installation.sourceId !== source.id) {
+    if (capsule.sourceId !== source.id) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        `installation ${installationId} does not use source ${source.id}`,
+        `capsule ${capsuleId} does not use source ${source.id}`,
       );
     }
-    const [space, config] = await Promise.all([
-      this.#store.getSpace(installation.spaceId),
-      this.#store.getInstallConfig(installation.installConfigId),
+    const [workspace, config] = await Promise.all([
+      this.#store.getWorkspace(capsule.workspaceId),
+      this.#store.getInstallConfig(capsule.installConfigId),
     ]);
     return {
-      policy: mergePolicyConfigs(space?.policy, config?.policy),
+      policy: mergePolicyConfigs(workspace?.policy, config?.policy),
       ...(config?.modulePath ? { modulePath: config.modulePath } : {}),
     };
   }
@@ -691,25 +537,28 @@ export class SourcesService {
    * Resolves the Capsule Gate policy for a pre-install compatibility check that
    * carries a service-side `installConfigId` but no Capsule yet. The
    * InstallConfig's bounded policy is merged with
-   * the Space policy as a ceiling, exactly as {@link
-   * #compatibilityContextForInstallation} does for an existing Installation. The
+   * the Workspace policy as a ceiling, exactly as {@link
+   * #compatibilityContextForCapsule} does for an existing Capsule. The
    * instance-wide default allowlist is never touched: the analyzer UNIONs this
    * bounded policy with the default, so the extra allowance is scoped to this
    * single vetted config and the SAME policy is enforced again at plan/apply.
-   * A built-in `official` config (no `spaceId`) is usable from any Space; a
-   * Space-scoped config must belong to this Space.
+   * A Workspace-neutral config is usable from any Workspace; a
+   * Workspace-scoped config must belong to the requesting Workspace.
    */
   async #compatibilityPolicyForInstallConfig(
-    spaceId: string,
+    workspaceId: string,
     installConfigId: string | undefined,
   ): Promise<PolicyConfig | undefined> {
     return (
-      await this.#compatibilityContextForInstallConfig(spaceId, installConfigId)
+      await this.#compatibilityContextForInstallConfig(
+        workspaceId,
+        installConfigId,
+      )
     ).policy;
   }
 
   async #compatibilityContextForInstallConfig(
-    spaceId: string,
+    workspaceId: string,
     installConfigId: string | undefined,
   ): Promise<{
     readonly policy?: PolicyConfig;
@@ -723,44 +572,20 @@ export class SourcesService {
         `install config ${installConfigId} does not exist`,
       );
     }
-    if (config.spaceId !== undefined && config.spaceId !== spaceId) {
+    if (
+      config.workspaceId !== undefined &&
+      config.workspaceId !== workspaceId
+    ) {
       throw new OpenTofuControllerError(
         "permission_denied",
         "install config is not available to this workspace",
       );
     }
-    const space = await this.#store.getSpace(spaceId);
+    const workspace = await this.#store.getWorkspace(workspaceId);
     return {
-      policy: mergePolicyConfigs(space?.policy, config.policy),
+      policy: mergePolicyConfigs(workspace?.policy, config.policy),
       ...(config.modulePath ? { modulePath: config.modulePath } : {}),
     };
-  }
-
-  async #persistNormalizedArtifact(
-    snapshot: SourceSnapshot,
-    files: readonly CapsuleSourceFile[] | undefined,
-  ): Promise<
-    { readonly objectKey: string; readonly digest: string } | undefined
-  > {
-    if (!files || files.length === 0 || !this.#normalizedArtifactStorage) {
-      return undefined;
-    }
-    const objectKey = normalizedModuleObjectKey(snapshot);
-    const body = normalizedCapsuleArtifactBody({
-      sourceSnapshot: snapshot,
-      files,
-    });
-    const head = await this.#normalizedArtifactStorage.putObject({
-      bucket: this.#normalizedArtifactBucket,
-      key: objectKey,
-      body,
-      contentType: "application/json; charset=utf-8",
-      metadata: {
-        "takosumi-kind": "normalized-capsule",
-        "takosumi-source-snapshot-id": snapshot.id,
-      },
-    });
-    return { objectKey, digest: head.digest };
   }
 
   async getCompatibilityReport(
@@ -775,55 +600,6 @@ export class SourcesService {
       );
     }
     return { report };
-  }
-
-  async readNormalizedCapsuleArtifact(input: {
-    readonly sourceSnapshot: SourceSnapshot;
-    readonly objectKey: string;
-    readonly digest: `sha256:${string}`;
-  }): Promise<readonly CapsuleSourceFile[]> {
-    if (!this.#normalizedArtifactStorage) {
-      throw new OpenTofuControllerError(
-        "not_implemented",
-        "normalized capsule artifact storage is not configured",
-      );
-    }
-    const object = await this.#normalizedArtifactStorage.getObject({
-      bucket: this.#normalizedArtifactBucket,
-      key: input.objectKey,
-      expectedDigest: input.digest,
-    });
-    if (!object) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `normalized_capsule_artifact_missing: ${input.objectKey}`,
-      );
-    }
-    let artifact;
-    try {
-      artifact = parseNormalizedCapsuleArtifactBody(
-        new TextDecoder().decode(object.body),
-      );
-    } catch (error) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `normalized_capsule_artifact_invalid: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    if (
-      artifact.sourceSnapshotId !== input.sourceSnapshot.id ||
-      artifact.resolvedCommit !== input.sourceSnapshot.resolvedCommit ||
-      artifact.path !== input.sourceSnapshot.path
-    ) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `normalized_capsule_artifact_snapshot_mismatch: artifact ${input.objectKey} ` +
-          `does not match SourceSnapshot ${input.sourceSnapshot.id}`,
-      );
-    }
-    return artifact.files;
   }
 
   /**
@@ -919,8 +695,7 @@ export class SourcesService {
     }
     const latest = snapshots.at(-1);
     if (!latest) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
+      throw sourceSyncRequiredError(
         `source_sync_required: source ${sourceId} has no SourceSnapshot; run a source sync first`,
       );
     }
@@ -965,12 +740,12 @@ export class SourcesService {
     return stored;
   }
 
-  async #requireConnectionInSpace(
+  async #requireConnectionInWorkspace(
     connectionId: string,
-    spaceId: string,
+    workspaceId: string,
   ): Promise<void> {
     const connection = await this.#store.getConnection(connectionId);
-    if (!connection || connection.spaceId !== spaceId) {
+    if (!connection || connection.workspaceId !== workspaceId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "auth connection does not exist in this workspace",
@@ -986,67 +761,7 @@ export function toPublicSource(stored: StoredSource): Source {
     lastSeenCommit: _lastSeenCommit,
     ...rest
   } = stored;
-  const workspaceId = nonEmpty(rest.workspaceId) ?? nonEmpty(rest.spaceId);
-  const spaceId = nonEmpty(rest.spaceId) ?? workspaceId;
-  return {
-    ...rest,
-    ...(workspaceId ? { workspaceId } : {}),
-    ...(spaceId ? { spaceId } : {}),
-  } as Source;
-}
-
-/** R2_SOURCE archive key layout (agreed contract). */
-export function sourceArchiveObjectKey(
-  spaceId: string,
-  sourceId: string,
-  snapshotId: string,
-): string {
-  return `spaces/${spaceId}/sources/${sourceId}/snapshots/${snapshotId}/source.tar.zst`;
-}
-
-/**
- * R2_SOURCE archive key layout for an upload-origin snapshot (no Source id).
- * Internal/operator upload-compat ingest writes the Capsule archive here before
- * recording the upload {@link SourceSnapshot}.
- */
-export function uploadArchiveObjectKey(
-  spaceId: string,
-  snapshotId: string,
-): string {
-  return `spaces/${spaceId}/uploads/${snapshotId}/source.tar.zst`;
-}
-
-/**
- * R2_SOURCE archive key layout for a digest-pinned prepared artifact snapshot.
- */
-export function artifactArchiveObjectKey(
-  spaceId: string,
-  snapshotId: string,
-): string {
-  return `spaces/${spaceId}/artifact-snapshots/${snapshotId}/source.tar.zst`;
-}
-
-export { normalizedModuleObjectKey };
-
-function snapshotDigestHex(digest: string): string {
-  return (
-    digest.startsWith("sha256:") ? digest.slice("sha256:".length) : digest
-  ).toLowerCase();
-}
-
-function safeSnapshotPath(path: string | undefined): string {
-  const value = nonEmpty(path) ?? DEFAULT_PATH;
-  if (
-    value.startsWith("/") ||
-    value.split(/[\\/]+/).some((part) => part === "..") ||
-    value.includes("\0")
-  ) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "SourceSnapshot path must be a safe relative path",
-    );
-  }
-  return value;
+  return rest;
 }
 
 function modulePathWithinSnapshotArchive(
@@ -1084,6 +799,7 @@ function compatibilityCheckFailureAnalysis(
     findings: [
       {
         severity: "error",
+        compatibilityImpact: "unsupported",
         code: "capsule_compatibility_check_failed",
         message: "Takosumi could not inspect this Capsule before installation.",
         path: snapshot.path,
@@ -1097,8 +813,6 @@ function compatibilityCheckFailureAnalysis(
     provisioners: [],
     rootModuleVariables: [],
     rootModuleOutputs: [],
-    normalizedObjectKey: snapshot.archiveObjectKey,
-    normalizedDigest: snapshot.archiveDigest,
   };
 }
 
@@ -1156,7 +870,9 @@ function mergePolicyConfigs(
       installPolicy?.providerLockfile ?? spacePolicy?.providerLockfile,
     providerInstallation:
       installPolicy?.providerInstallation ?? spacePolicy?.providerInstallation,
-    scopeBoundary: installPolicy?.scopeBoundary ?? spacePolicy?.scopeBoundary,
+    scopeBoundary: normalizeScopeBoundaryPolicy(
+      installPolicy?.scopeBoundary ?? spacePolicy?.scopeBoundary,
+    ),
     quota: { ...(spacePolicy?.quota ?? {}), ...(installPolicy?.quota ?? {}) },
   };
 }

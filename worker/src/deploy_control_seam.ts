@@ -7,7 +7,8 @@ import {
   resolveEnabledRunnerProfiles,
 } from "../../core/domains/deploy-control/mod.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
-import type { CloudflareWorkerEnv } from "./bindings.ts";
+import type { CloudflareWorkerEnv, RunnerHostComposition } from "./bindings.ts";
+import type { OpenTofuRunnerExecutorRegistry } from "../../core/domains/deploy-control/mod.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
 
 /**
@@ -27,16 +28,21 @@ export function createDeployControlService(
   );
 }
 
-function deployControlServiceOptions(env: CloudflareWorkerEnv): {
+export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
   readonly runnerProfiles: readonly RunnerProfile[];
+  readonly runnerExecutors?: OpenTofuRunnerExecutorRegistry;
   readonly defaultRunnerProfileId?: string;
   readonly managedVanityHostnameSlotsPerOwner?: number;
 } {
+  const hostComposition = runnerHostCompositionFromEnv(env);
   const managedVanityHostnameSlotsPerOwner = nonNegativeInteger(
     env.TAKOSUMI_MANAGED_VANITY_HOST_SLOTS_PER_OWNER,
   );
   return {
-    runnerProfiles: resolveEnabledRunnerProfilesFromEnv(env),
+    runnerProfiles: resolveEnabledRunnerProfilesFromEnv(env, hostComposition),
+    ...(hostComposition?.executors
+      ? { runnerExecutors: hostComposition.executors }
+      : {}),
     ...(typeof env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID === "string" &&
     env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID.trim()
       ? {
@@ -79,20 +85,63 @@ export function createRunOwnerDeployControlService(
  */
 function resolveEnabledRunnerProfilesFromEnv(
   env: CloudflareWorkerEnv,
+  hostComposition: RunnerHostComposition | undefined,
 ): readonly RunnerProfile[] {
+  const profiles = [
+    ...createDefaultRunnerProfiles(),
+    ...(hostComposition?.profiles ?? []),
+  ];
+  assertUniqueRunnerProfileIds(profiles);
   return resolveEnabledRunnerProfiles(
-    createDefaultRunnerProfiles(),
+    profiles,
     env.TAKOSUMI_ENABLED_RUNNER_PROFILES,
-    {
-      requireGatewayEgressEvidence:
-        env.TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS === "open" &&
-        env.TAKOSUMI_PRODUCTION_HARDENING_GATE === "enforce",
-      egressEnforcementEvidenceRef:
-        env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF,
-      egressEnforcementEvidenceDigest:
-        env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST,
-    },
   );
+}
+
+function runnerHostCompositionFromEnv(
+  env: CloudflareWorkerEnv,
+): RunnerHostComposition | undefined {
+  const value = env.TAKOSUMI_RUNNER_HOST_COMPOSITION;
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(
+      "TAKOSUMI_RUNNER_HOST_COMPOSITION must be a host-code runtime object",
+    );
+  }
+  if (!Array.isArray(value.profiles)) {
+    throw new TypeError(
+      "TAKOSUMI_RUNNER_HOST_COMPOSITION.profiles must be an array",
+    );
+  }
+  const executors = value.executors;
+  if (
+    executors !== undefined &&
+    (typeof executors !== "object" ||
+      executors === null ||
+      typeof executors[Symbol.iterator] !== "function")
+  ) {
+    throw new TypeError(
+      "TAKOSUMI_RUNNER_HOST_COMPOSITION.executors must be an executor registry",
+    );
+  }
+  return value;
+}
+
+function assertUniqueRunnerProfileIds(
+  profiles: readonly RunnerProfile[],
+): void {
+  const ids = new Set<string>();
+  for (const profile of profiles) {
+    if (!profile.id?.trim()) {
+      throw new Error("runner host composition contains an empty profile id");
+    }
+    if (ids.has(profile.id)) {
+      throw new Error(
+        `runner host composition contains duplicate profile ${profile.id}`,
+      );
+    }
+    ids.add(profile.id);
+  }
 }
 
 /**

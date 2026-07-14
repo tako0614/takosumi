@@ -1,9 +1,9 @@
 /**
- * Owner-account billing and USD-denominated usage ledger contract.
+ * Portable OSS showback and commercial-enforcement composition contract.
  *
- * New billing code must use `usdMicros` fields: 1 USD = 1,000,000 micros.
- * Older `credits` fields remain as wire/storage compatibility aliases and are
- * interpreted as USD amounts where no `usdMicros` value exists.
+ * Commercial plans, subscriptions, balances, reservations, recharge attempts,
+ * payment-provider events, and invoices are host-owned records. They do not
+ * cross this OSS contract. Amounts use USD micros: 1 USD = 1,000,000 micros.
  */
 
 import type { JsonValue } from "./types.ts";
@@ -11,15 +11,6 @@ import type { PlanResourceChange } from "./internal-deploy-control-api.ts";
 
 export const USD_MICROS_PER_DOLLAR = 1_000_000;
 export const USD_MICROS_PER_CENT = 10_000;
-
-/**
- * Default showback price for OpenTofu runner execution.
- *
- * Takosumi Cloud can override final commercial pricing through its billing
- * enforcement/metering layer, but the core ledger must still emit fine-grained
- * USD usage instead of rounding short runs to a whole legacy credit.
- */
-export const RUNNER_MINUTE_USD_MICROS = USD_MICROS_PER_CENT;
 
 export function usdMicrosFromUsd(value: number): number {
   if (!Number.isFinite(value)) {
@@ -37,22 +28,6 @@ export function usdFromMicros(value: number): number {
     throw new TypeError("USD micros amount must be a safe integer");
   }
   return value / USD_MICROS_PER_DOLLAR;
-}
-
-export function legacyCreditsToUsdMicros(value: number): number {
-  return usdMicrosFromUsd(value);
-}
-
-export function usdMicrosToLegacyCredits(value: number): number {
-  return usdFromMicros(value);
-}
-
-export function runnerMinuteUsdMicros(quantity: number): number {
-  if (!Number.isFinite(quantity) || quantity < 0) {
-    throw new TypeError("runner minute quantity must be non-negative");
-  }
-  if (quantity === 0) return 0;
-  return Math.max(1, Math.ceil(quantity * RUNNER_MINUTE_USD_MICROS));
 }
 
 export function positiveUsdMicros(value: unknown, label: string): number {
@@ -86,180 +61,43 @@ export function nonNegativeUsdMicros(value: unknown, label: string): number {
  *   - `disabled` (self-host default): no billing ledger, no UI gate.
  *   - `showback`: record cost estimates and usage WITHOUT ever blocking apply.
  *
- * `enforce` (Stripe-backed payment gating / quota that blocks apply) is a
- * Takosumi Cloud-only CLOSED feature. It is intentionally NOT part of this
- * union: OSS code can never PRODUCE an enforce setting, and the only way to gate
- * an apply on payment is to inject a Cloud {@link BillingEnforcement} port (see
- * `core/bootstrap.ts`). The string `"enforce"` survives only as a DB enum /
- * migration value for rows a Cloud deployment may have written; OSS never reads
- * or acts on it.
+ * Commercial payment gating is represented only by an injected
+ * {@link BillingEnforcement} decision port. No commercial mode or provider is
+ * persisted in an OSS Workspace.
  */
 export type BillingMode = "disabled" | "showback";
-
-export type BillingProvider = "stripe" | "manual" | "none";
-
-/**
- * @deprecated Auto-recharge is a Cloud-only enforcement concern. Retained as an
- * inert wire/storage shape so the ledger tables and Cloud port can describe it;
- * OSS never produces or acts on it.
- */
-export interface BillingAutoRechargeSettings {
-  readonly enabled: boolean;
-  /** Recharge when available USD balance is below this amount. */
-  readonly thresholdUsdMicros: number;
-  /** Amount to charge/grant per automatic recharge. */
-  readonly rechargeUsdMicros: number;
-  /** Optional monthly safety cap for automatic recharge attempts. */
-  readonly monthlyLimitUsdMicros?: number;
-}
 
 export type BillingSettings =
   | {
       readonly mode: "disabled";
-      readonly provider: "none";
-      readonly reservationRequired?: false;
     }
   | {
       readonly mode: "showback";
-      readonly provider: BillingProvider;
-      readonly reservationRequired?: false;
     };
 
-export interface BillingAccount {
-  readonly id: string;
-  readonly ownerType: "user";
-  readonly ownerId: string;
-  readonly provider: "stripe" | "manual" | "none";
-  readonly stripeCustomerId?: string;
-  readonly stripeDefaultPaymentMethodId?: string;
-  readonly status: "active" | "past_due" | "disabled" | "trialing";
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
+/** Opaque meter kind; producers may introduce stable tokens without a release. */
+export type UsageEventKind = string;
 
-export interface SpaceSubscription {
-  readonly id: string;
-  readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId: string;
-  readonly billingAccountId: string;
-  readonly planId: string;
-  readonly status: "active" | "trialing" | "past_due" | "cancelled";
-  readonly currentPeriodStart: string;
-  readonly currentPeriodEnd: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export interface BillingPlanLimits {
-  /** Maximum USD micros one reviewed plan may reserve/capture. */
-  readonly maxEstimatedUsdMicrosPerRun?: number;
-  /** @deprecated Use maxEstimatedUsdMicrosPerRun. */
-  readonly maxEstimatedCreditsPerRun?: number;
-  /** Additional resource-count quotas enforced from `tofu show -json` changes. */
-  readonly quota?: Readonly<Record<string, number>>;
-}
-
-export interface BillingPlan {
-  readonly id: string;
-  readonly name: string;
-  readonly monthlyBasePrice: number;
-  /** Included monthly USD grant in micros. */
-  readonly includedUsdMicros?: number;
-  /** @deprecated Use includedUsdMicros. */
-  readonly includedCredits: number;
-  readonly limits: BillingPlanLimits;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export interface CreditBalance {
-  readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
-  readonly availableUsdMicros?: number;
-  readonly reservedUsdMicros?: number;
-  readonly monthlyIncludedUsdMicros?: number;
-  readonly purchasedUsdMicros?: number;
-  /** @deprecated Use availableUsdMicros. */
-  readonly availableCredits: number;
-  /** @deprecated Use reservedUsdMicros. */
-  readonly reservedCredits: number;
-  /** @deprecated Use monthlyIncludedUsdMicros. */
-  readonly monthlyIncludedCredits: number;
-  /** @deprecated Use purchasedUsdMicros. */
-  readonly purchasedCredits: number;
-  readonly updatedAt: string;
-}
-
-export interface CreditReservation {
-  readonly id: string;
-  readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
-  readonly runId: string;
-  readonly estimatedUsdMicros?: number;
-  /** @deprecated Use estimatedUsdMicros. */
-  readonly estimatedCredits: number;
-  readonly status: "reserved" | "captured" | "released" | "expired";
-  readonly mode: BillingMode;
-  readonly createdAt: string;
-  readonly expiresAt: string;
-}
-
-export type BillingAutoRechargeAttemptStatus =
-  "pending" | "pending_unknown" | "succeeded" | "failed";
-
-export interface BillingAutoRechargeAttempt {
-  readonly id: string;
-  readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
-  readonly runId: string;
-  readonly billingAccountId: string;
-  readonly idempotencyKey: string;
-  /** UTC calendar-month start used for monthly auto-recharge safety caps. */
-  readonly periodStart: string;
-  readonly periodEnd?: string;
-  readonly requestedUsdMicros: number;
-  readonly monthlyLimitUsdMicros?: number;
-  readonly chargedUsdMicros?: number;
-  readonly status: BillingAutoRechargeAttemptStatus;
-  readonly stripePaymentIntentId?: string;
-  readonly providerStatus?: string;
-  readonly failureReason?: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export type UsageEventKind =
-  | "runner_minute"
-  | "artifact_storage_gb_hour"
-  | "backup_storage_gb_hour"
-  | "egress_gb"
-  | "operation"
-  | "gateway_compute"
-  | "gateway_storage_gb_hour"
-  | "ai_request"
-  | "ai_input_token"
-  | "ai_output_token";
-
-export type UsageEventSource =
-  "runner" | "resource_meter" | "billing_reconciliation" | "manual_adjustment";
+/**
+ * Open producer token. `runner` is reserved for Core's execution estimator;
+ * hosts and installed meters may publish other stable tokens without a
+ * Takosumi contract release.
+ */
+export type UsageEventSource = string;
 
 /**
  * Provider/runtime-defined family for grouping billable managed resources.
  *
- * Takosumi Cloud extensions should use stable user-facing dotted names such as
- * `cloudflare.workers_script`, `cloudflare.kv`, `cloudflare.r2`,
- * `cloudflare.d1`, `cloudflare.queues`, `cloudflare.workflows`, or
- * `cloudflare.containers`.
- * Internal implementation backends must not
- * appear in public usage events, billing payloads, or Stripe meters.
  * The contract intentionally keeps this open so new managed resources can be
  * metered without a public contract migration.
  */
 export type UsageResourceFamily = string;
+
+/**
+ * Explicit evidence for whether a UsageEvent amount came from a configured
+ * host rating policy. `unrated` is not the same as a rated zero-cost event.
+ */
+export type UsageRatingStatus = "rated" | "unrated";
 
 export function usageMeterNameLeaksInternalWorkersBackend(
   value: string,
@@ -296,16 +134,14 @@ export interface CapsuleUsageSummary {
   readonly capsuleId: string;
   readonly usdMicros: number;
   readonly eventCount: number;
+  readonly ratedEventCount: number;
+  readonly unratedEventCount: number;
 }
 
 export interface UsageEvent {
   readonly id: string;
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
   readonly runId?: string;
   readonly meterId?: string;
   readonly resourceFamily?: UsageResourceFamily;
@@ -314,102 +150,86 @@ export interface UsageEvent {
   readonly resourceMetadata?: UsageResourceMetadata;
   readonly kind: UsageEventKind;
   readonly quantity: number;
-  readonly usdMicros?: number;
-  /** @deprecated Use usdMicros. */
-  readonly credits: number;
+  readonly usdMicros: number;
+  readonly ratingStatus: UsageRatingStatus;
   readonly source: UsageEventSource;
   readonly idempotencyKey: string;
   readonly createdAt: string;
 }
 
-export interface InvoiceUsageReconciliation {
-  readonly invoiceId: string;
-  readonly periodStart: string;
-  readonly periodEnd: string;
-  readonly meteredUsdMicros?: number;
-  readonly invoicedUsdMicros?: number;
-  readonly adjustmentUsdMicros?: number;
-  /** @deprecated Use meteredUsdMicros. */
-  readonly meteredCredits: number;
-  /** @deprecated Use invoicedUsdMicros. */
-  readonly invoicedCredits: number;
-  /** @deprecated Use adjustmentUsdMicros. */
-  readonly adjustmentCredits: number;
-  readonly usageEvent: UsageEvent;
+export function usageEventUsdMicros(event: UsageEvent): number {
+  const amount = nonNegativeUsdMicros(event.usdMicros, "usage usdMicros");
+  if (event.ratingStatus !== "rated" && event.ratingStatus !== "unrated") {
+    throw new TypeError("usage ratingStatus must be rated or unrated");
+  }
+  if (event.ratingStatus === "unrated" && amount !== 0) {
+    throw new TypeError("unrated usage must have zero usdMicros");
+  }
+  return amount;
 }
 
-export function creditBalanceAvailableUsdMicros(
-  balance: CreditBalance | undefined,
-): number {
-  if (!balance) return 0;
-  return (
-    balance.availableUsdMicros ??
-    legacyCreditsToUsdMicros(balance.availableCredits)
-  );
+// ---------------------------------------------------------------------------
+// Showback rating composition port
+// ---------------------------------------------------------------------------
+
+/** Result of an explicitly configured host rating policy. */
+export interface ShowbackRating {
+  readonly ratingStatus: UsageRatingStatus;
+  readonly usdMicros: number;
+  /** Non-secret host evidence stored with the plan audit when applicable. */
+  readonly audit?: Readonly<Record<string, JsonValue>>;
 }
 
-export function creditBalanceReservedUsdMicros(
-  balance: CreditBalance | undefined,
-): number {
-  if (!balance) return 0;
-  return (
-    balance.reservedUsdMicros ??
-    legacyCreditsToUsdMicros(balance.reservedCredits)
-  );
+/** Plan measurement handed to an injected {@link ShowbackRater}. */
+export interface PlanShowbackRatingContext {
+  readonly workspaceId: string;
+  readonly billingSubjectId: string;
+  readonly runId: string;
+  readonly capsuleId?: string;
+  readonly planResourceChanges: readonly PlanResourceChange[];
+  readonly now: number;
 }
 
-export function creditBalanceMonthlyIncludedUsdMicros(
-  balance: CreditBalance | undefined,
-): number {
-  if (!balance) return 0;
-  return (
-    balance.monthlyIncludedUsdMicros ??
-    legacyCreditsToUsdMicros(balance.monthlyIncludedCredits)
-  );
+/** Usage measurement handed to an injected {@link ShowbackRater}. */
+export interface UsageShowbackRatingContext {
+  readonly workspaceId: string;
+  readonly billingSubjectId: string;
+  readonly runId?: string;
+  readonly capsuleId?: string;
+  readonly meterId?: string;
+  readonly resourceFamily?: UsageResourceFamily;
+  readonly resourceId?: string;
+  readonly operation?: string;
+  readonly resourceMetadata?: UsageResourceMetadata;
+  readonly kind: UsageEventKind;
+  readonly quantity: number;
+  readonly source: UsageEventSource;
+  readonly createdAt: string;
 }
 
-export function creditBalancePurchasedUsdMicros(
-  balance: CreditBalance | undefined,
-): number {
-  if (!balance) return 0;
-  return (
-    balance.purchasedUsdMicros ??
-    legacyCreditsToUsdMicros(balance.purchasedCredits)
-  );
+/**
+ * Open host composition port that rates provider-neutral measurements.
+ *
+ * OSS does not ship prices. A self-host or Operator may install any explicit
+ * policy, while Cloud installs its own price-book-backed implementation.
+ */
+export interface ShowbackRater {
+  ratePlan(ctx: PlanShowbackRatingContext): Promise<ShowbackRating>;
+  rateUsage(ctx: UsageShowbackRatingContext): Promise<ShowbackRating>;
 }
 
-export function usageEventUsdMicros(event: {
-  readonly usdMicros?: number;
-  readonly credits?: number;
-}): number {
-  return event.usdMicros ?? legacyCreditsToUsdMicros(event.credits ?? 0);
-}
-
-export function creditReservationEstimatedUsdMicros(
-  reservation: CreditReservation,
-): number {
-  return (
-    reservation.estimatedUsdMicros ??
-    legacyCreditsToUsdMicros(reservation.estimatedCredits)
-  );
-}
-
-export function billingPlanIncludedUsdMicros(plan: BillingPlan): number {
-  return (
-    plan.includedUsdMicros ?? legacyCreditsToUsdMicros(plan.includedCredits)
-  );
-}
-
-export function billingPlanMaxEstimatedUsdMicros(
-  limits: BillingPlanLimits,
-): number | undefined {
-  return (
-    limits.maxEstimatedUsdMicrosPerRun ??
-    (limits.maxEstimatedCreditsPerRun === undefined
-      ? undefined
-      : legacyCreditsToUsdMicros(limits.maxEstimatedCreditsPerRun))
-  );
-}
+/**
+ * OSS default: preserve the measurement as explicitly unrated. This never
+ * blocks a Run and never invents a price from resource actions or duration.
+ */
+export const NOOP_SHOWBACK_RATER: ShowbackRater = {
+  async ratePlan(): Promise<ShowbackRating> {
+    return { ratingStatus: "unrated", usdMicros: 0 };
+  },
+  async rateUsage(): Promise<ShowbackRating> {
+    return { ratingStatus: "unrated", usdMicros: 0 };
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Composition ports (OSS/Cloud boundary, Seam B)
@@ -419,9 +239,9 @@ export function billingPlanMaxEstimatedUsdMicros(
 // no-op defaults below ({@link NOOP_BILLING_ENFORCEMENT} / {@link
 // NOOP_QUOTA_POLICY}), which NEVER block and NEVER touch a payment provider, so
 // `showback`/`disabled` are the only behaviors an OSS-only deployment can
-// exhibit. Takosumi Cloud injects real port implementations (Stripe-backed
-// reserve/capture/release + plan quota) from its closed `billing-enforce`
-// module, keeping all official-billing/enforced-payment code out of OSS source.
+// exhibit. A commercial host injects real reserve/capture/release and plan
+// quota implementations from its closed billing module, keeping all official
+// billing and enforced-payment code out of OSS source.
 //
 // These types intentionally live in the public contract so the Cloud delta can
 // implement them by importing `takosumi-contract` ONLY (never OSS internals).
@@ -429,17 +249,16 @@ export function billingPlanMaxEstimatedUsdMicros(
 
 /** Context handed to {@link BillingEnforcement.reservePlanBilling} at plan time. */
 export interface BillingReservationContext {
-  readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
+  readonly workspaceId: string;
+  /** Owner-account subject resolved by OSS from the canonical Workspace. */
+  readonly billingSubjectId: string;
   readonly runId: string;
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
   /** The OSS-resolved billing mode (`disabled` | `showback`). */
   readonly mode: BillingMode;
-  /** Transparent showback estimate the OSS controller already computed. */
+  /** Amount returned by the explicitly composed showback rater. */
   readonly estimatedUsdMicros: number;
+  readonly ratingStatus: UsageRatingStatus;
   readonly planResourceChanges: readonly PlanResourceChange[];
   /**
    * Whether layered policy + compatibility passed before billing. Enforcement
@@ -459,31 +278,27 @@ export interface BillingEnforcementDecision {
 }
 
 export interface BillingReservationCheckContext {
-  readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
+  readonly workspaceId: string;
+  readonly billingSubjectId: string;
   readonly runId: string;
   readonly now: number;
 }
 
 export interface BillingCaptureContext {
-  readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
+  readonly workspaceId: string;
+  readonly billingSubjectId: string;
   readonly runId: string;
   readonly applyRunId: string;
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
   /** USD micros the OSS controller recorded as the captured usage estimate. */
   readonly capturedUsdMicros: number;
+  readonly ratingStatus: UsageRatingStatus;
   readonly now: number;
 }
 
 export interface BillingReleaseContext {
-  readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
+  readonly workspaceId: string;
+  readonly billingSubjectId: string;
   readonly runId: string;
   readonly now: number;
 }
@@ -491,7 +306,7 @@ export interface BillingReleaseContext {
 /**
  * Cloud-injectable enforcement port mirroring the OSS controller's
  * reserve/capture/release surface. OSS supplies {@link NOOP_BILLING_ENFORCEMENT}
- * (showback: never blocks, never charges); Cloud supplies a Stripe-backed
+ * (showback: never blocks, never charges); a commercial host may supply an
  * implementation that reserves/captures USD balance against its own ledger and
  * can return blocking reasons.
  */
@@ -510,17 +325,25 @@ export interface BillingEnforcement {
   assertReservationSatisfied(
     ctx: BillingReservationCheckContext,
   ): Promise<void>;
-  /** Capture the reserved amount on a successful apply (Cloud debits balance). */
+  /**
+   * Capture after the provider apply succeeds. A required post-apply lifecycle
+   * action may still make the Run terminally failed while retaining the
+   * provider-applied StateVersion/Output; that provider mutation is still
+   * billable and must be captured rather than released. Implementations MUST
+   * be idempotent for the stable `(runId, applyRunId)` pair: Takosumi persists a
+   * pending finalization marker with the provider ledger and retries capture
+   * after process crashes or transient host failures.
+   */
   captureRunBilling(ctx: BillingCaptureContext): Promise<void>;
   /** Release a reservation on a failed/abandoned apply (Cloud restores balance). */
   releaseReservation(ctx: BillingReleaseContext): Promise<void>;
 }
 
 export interface QuotaEvaluationContext {
-  readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
+  readonly workspaceId: string;
+  readonly billingSubjectId: string;
   readonly estimatedUsdMicros: number;
+  readonly ratingStatus: UsageRatingStatus;
   readonly planResourceChanges: readonly PlanResourceChange[];
 }
 
@@ -551,3 +374,20 @@ export const NOOP_QUOTA_POLICY: QuotaPolicy = {
     return { reasons: [] };
   },
 };
+
+export interface BillingExtensionFactoryResult {
+  /** Host price policy; omission leaves OSS measurements explicitly unrated. */
+  readonly showbackRater?: ShowbackRater;
+  readonly billingEnforcement?: BillingEnforcement;
+  readonly quotaPolicy?: QuotaPolicy;
+}
+
+/**
+ * Seam B factory installed by Operator/Cloud at the host composition root.
+ * OSS asks the host for narrow decision ports and otherwise uses its no-op
+ * enforcement/quota defaults. Commercial persistence never crosses this seam.
+ */
+export interface BillingExtensionFactory {
+  create():
+    BillingExtensionFactoryResult | Promise<BillingExtensionFactoryResult>;
+}

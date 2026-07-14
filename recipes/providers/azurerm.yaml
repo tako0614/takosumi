@@ -1,6 +1,6 @@
 id: azurerm
 display_name: Azure Resource Manager
-provider_rule: azurerm
+secret_partition: provider-credentials
 terraform_source:
   - hashicorp/azurerm
   - registry.opentofu.org/hashicorp/azurerm
@@ -23,6 +23,22 @@ required_env_groups:
     ]
 auth_modes:
   arm_client_secret:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: ARM client secret, ja: ARM クライアントシークレット }
+    input_hints:
+      ARM_CLIENT_ID:
+        label: { en: Client ID, ja: クライアント ID }
+        required: true
+      ARM_CLIENT_SECRET:
+        label: { en: Client secret, ja: クライアントシークレット }
+        required: true
+      ARM_TENANT_ID:
+        label: { en: Tenant ID, ja: テナント ID }
+        required: true
+      ARM_SUBSCRIPTION_ID:
+        label: { en: Subscription ID, ja: サブスクリプション ID }
+        required: true
     env:
       ARM_CLIENT_ID:
         from: value
@@ -37,6 +53,24 @@ auth_modes:
         from: value
         name: subscription_id
   azure_client_secret:
+    presentation:
+      show_in_connection_setup: true
+      display_name:
+        en: Azure client secret variables
+        ja: Azure クライアントシークレット変数
+    input_hints:
+      AZURE_CLIENT_ID:
+        label: { en: Client ID, ja: クライアント ID }
+        required: true
+      AZURE_CLIENT_SECRET:
+        label: { en: Client secret, ja: クライアントシークレット }
+        required: true
+      AZURE_TENANT_ID:
+        label: { en: Tenant ID, ja: テナント ID }
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        label: { en: Subscription ID, ja: サブスクリプション ID }
+        required: true
     env:
       AZURE_CLIENT_ID:
         from: value

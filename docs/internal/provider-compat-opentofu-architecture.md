@@ -48,9 +48,11 @@ tests, deployment config, secrets, and provider-compatible profile behavior
 must live in the closed Cloud implementation, not in the OSS repo.
 
 The OSS platform worker may reserve public route seams through the Cloud
-extension route registry. A registry entry contains only the route base path and
-an abstract fetch-handler key (`handlerKey`); the provider-compatible behavior
-itself stays in the closed Cloud implementation.
+extension route registry. A registry entry contains the route base path, an
+abstract fetch-handler key (`handlerKey`), and, when the route accepts managed
+provider run tokens, an opaque `managedProviderProfile`. The matching
+service-side ProviderConnection explicitly declares that same profile. The
+provider-compatible behavior itself stays in the closed Cloud implementation.
 
 For official staging/production `app.takosumi.com`, the closed
 `takosumi-cloud/platform/worker.ts` wrapper is the Worker entry. It wraps
@@ -109,6 +111,13 @@ provider "cloudflare" {
   base_url   = "https://app.takosumi.com/compat/cloudflare/client/v4"
 }
 ```
+
+That `base_url` remains a natural Cloudflare provider argument; it is not
+credential or managed-capacity authority. Public usability and token issuance
+come only from the explicit matching `managedProviderProfile`. Deploying this
+contract therefore requires updating the operator-owned ProviderConnection and
+its extension descriptor together; either side missing or disagreeing fails
+closed.
 
 The first Cloud-only compatibility slice is limited to importing
 Workers-oriented resources into Takosumi Cloud resources: `EdgeWorker`, routes,

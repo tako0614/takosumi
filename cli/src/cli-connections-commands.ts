@@ -1,4 +1,3 @@
-import process from "node:process";
 import { readFile } from "node:fs/promises";
 import {
   booleanOption,
@@ -6,8 +5,7 @@ import {
   parseOptions,
 } from "./cli-options.ts";
 import {
-  connectionsCreateCloudflareHelpText,
-  connectionsCreateGenericEnvHelpText,
+  connectionsCreateHelpText,
   connectionsHelpText,
   connectionsListHelpText,
   connectionsRevokeHelpText,
@@ -15,8 +13,8 @@ import {
 } from "./cli-help.ts";
 import { isRecord, parseJson, stringValue } from "./cli-util.ts";
 import type { CliIo } from "./cli-io.ts";
+import { requestDeployControlApi } from "./cli-deploy-control-api.ts";
 import {
-  CONNECTIONS_GENERIC_ENV_PROVIDER_PATH,
   CONNECTIONS_PATH,
   type CreateConnectionFile,
 } from "takosumi-contract/connections";
@@ -31,12 +29,7 @@ export async function runConnections(
     return 0;
   }
   if (command === "list") return await runConnectionsList(rest, io);
-  if (command === "set-cloudflare-token") {
-    return await runConnectionsCreateCloudflareToken(rest, io);
-  }
-  if (command === "create-generic-env") {
-    return await runConnectionsCreateGenericEnv(rest, io);
-  }
+  if (command === "create") return await runConnectionsCreate(rest, io);
   if (command === "test") return await runConnectionsTest(rest, io);
   if (command === "revoke") return await runConnectionsRevoke(rest, io);
   io.stderr(`Unknown connections command: ${command}`);
@@ -66,44 +59,19 @@ export async function runConnectionsList(
   }
 }
 
-export async function runConnectionsCreateCloudflareToken(
+export async function runConnectionsCreate(
   args: string[],
   io: CliIo,
 ): Promise<number> {
   const options = parseOptions(args);
   if (options.help) {
-    io.stdout(connectionsCreateCloudflareHelpText());
+    io.stdout(connectionsCreateHelpText());
     return 0;
   }
   try {
-    const body = await cloudflareTokenConnectionBody(options);
+    const body = await connectionCreateBody(options);
     const response = await requestDeployControlApi({
-      path: `${CONNECTIONS_PATH}/cloudflare/token`,
-      method: "POST",
-      body,
-      options,
-    });
-    io.stdout(formatConnectionCreate(response, booleanOption(options, "json")));
-    return 0;
-  } catch (error) {
-    io.stderr(error instanceof Error ? error.message : String(error));
-    return error instanceof TypeError ? 2 : 1;
-  }
-}
-
-export async function runConnectionsCreateGenericEnv(
-  args: string[],
-  io: CliIo,
-): Promise<number> {
-  const options = parseOptions(args);
-  if (options.help) {
-    io.stdout(connectionsCreateGenericEnvHelpText());
-    return 0;
-  }
-  try {
-    const body = await genericEnvProviderConnectionBody(options);
-    const response = await requestDeployControlApi({
-      path: CONNECTIONS_GENERIC_ENV_PROVIDER_PATH,
+      path: CONNECTIONS_PATH,
       method: "POST",
       body,
       options,
@@ -179,90 +147,32 @@ export async function runConnectionsRevoke(
   }
 }
 
-async function requestDeployControlApi(input: {
-  path: string;
-  options: Record<string, string | boolean>;
-  method?: string;
-  body?: unknown;
-  allowEmpty?: boolean;
-}): Promise<unknown> {
-  const headers: Record<string, string> = { accept: "application/json" };
-  const token =
-    optionalStringOption(input.options, "token") ??
-    process.env.TAKOSUMI_DEPLOY_CONTROL_TOKEN;
-  if (token) headers.authorization = `Bearer ${token}`;
-  const init: RequestInit = { method: input.method ?? "GET", headers };
-  if (input.body !== undefined) {
-    headers["content-type"] = "application/json";
-    init.body = JSON.stringify(input.body);
-  }
-  const response = await fetch(
-    `${deployControlApiBase(input.options)}${input.path}`,
-    init,
-  );
-  const text = await response.text();
-  const body = text.trim().length > 0 ? parseJson(text) : undefined;
-  if (!response.ok) {
-    throw new Error(
-      deployControlApiErrorMessage(body, `HTTP ${response.status}`),
-    );
-  }
-  if (body === undefined) {
-    if (input.allowEmpty) return {};
-    throw new Error("Takosumi deploy-control returned an empty response");
-  }
-  return body;
-}
-
-function deployControlApiBase(
-  options: Record<string, string | boolean>,
-): string {
-  const raw =
-    optionalStringOption(options, "url") ??
-    optionalStringOption(options, "deployControlUrl") ??
-    process.env.TAKOSUMI_DEPLOY_CONTROL_URL ??
-    process.env.TAKOSUMI_ACCOUNTS_URL;
-  if (!raw) {
-    throw new Error(
-      "operator-selected deploy-control URL required: pass --url or set " +
-        "TAKOSUMI_DEPLOY_CONTROL_URL",
-    );
-  }
-  const url = new URL(raw);
-  url.pathname = url.pathname.replace(/\/+$/, "");
-  url.search = "";
-  url.hash = "";
-  return url.toString().replace(/\/$/, "");
-}
-
-export async function cloudflareTokenConnectionBody(
-  options: Record<string, string | boolean>,
-): Promise<Record<string, unknown>> {
-  const values = await valuesFromOptions(options, {
-    singleFileOption: "apiTokenFile",
-    singleEnvName: "CLOUDFLARE_API_TOKEN",
-  });
-  const scopeHints: Record<string, string> = {};
-  const accountId = optionalStringOption(options, "accountId");
-  if (accountId) scopeHints.accountId = accountId;
-  const zoneId = optionalStringOption(options, "zoneId");
-  if (zoneId) scopeHints.zoneId = zoneId;
-  return connectionBody(options, {
-    provider: "cloudflare",
-    kind: "cloudflare_api_token",
-    authMethod: "static_secret",
-    values,
-    scopeHints,
-  });
-}
-
-export async function genericEnvProviderConnectionBody(
+export async function connectionCreateBody(
   options: Record<string, string | boolean>,
 ): Promise<Record<string, unknown>> {
   const provider = optionalStringOption(options, "provider");
   if (!provider) throw new TypeError("--provider is required");
-  const workspaceId = optionalStringOption(options, "space");
-  if (!workspaceId) throw new TypeError("--space is required");
+  if (provider.split("/").length < 3) {
+    throw new TypeError("--provider must be a fully-qualified provider source");
+  }
+  const recipeId = optionalStringOption(options, "recipe");
+  if (!recipeId) throw new TypeError("--recipe is required");
+  const authMode = optionalStringOption(options, "authMode");
+  if (!authMode) throw new TypeError("--auth-mode is required");
+  const secretPartition = optionalStringOption(options, "secretPartition");
+  if (!secretPartition) throw new TypeError("--secret-partition is required");
+  const workspaceId = optionalStringOption(options, "workspace");
+  const requestedScope = optionalStringOption(options, "scope");
+  const scope = requestedScope ?? (workspaceId ? "workspace" : "operator");
+  if (scope !== "workspace" && scope !== "operator") {
+    throw new TypeError("--scope must be workspace or operator");
+  }
+  if (scope === "workspace" && !workspaceId) {
+    throw new TypeError("--workspace is required for --scope workspace");
+  }
+  if (scope === "operator" && workspaceId) {
+    throw new TypeError("--workspace cannot be combined with --scope operator");
+  }
   const values = await optionalValuesFromOptions(options);
   const files = await filesFromOptions(options);
   if (Object.keys(values).length === 0 && files.length === 0) {
@@ -273,50 +183,18 @@ export async function genericEnvProviderConnectionBody(
   const scopeHints = await scopeHintsFromOptions(options);
   return {
     provider,
-    workspaceId,
-    kind: "generic_env_provider",
-    authMethod: "static_secret",
-    scope: "space",
+    ...(workspaceId ? { workspaceId } : {}),
+    credentialRecipe: {
+      id: recipeId,
+      authMode,
+      secretPartition,
+    },
+    scope,
     ...(displayName ? { displayName } : {}),
     ...(Object.keys(scopeHints).length > 0 ? { scopeHints } : {}),
     ...(expiresAt ? { expiresAt } : {}),
     values,
     ...(files.length > 0 ? { files } : {}),
-  };
-}
-
-function connectionBody(
-  options: Record<string, string | boolean>,
-  base: {
-    provider: string;
-    kind: string;
-    authMethod: string;
-    values: Record<string, string>;
-    scopeHints?: Record<string, string>;
-  },
-): Record<string, unknown> {
-  const scope = optionalStringOption(options, "scope");
-  if (scope && scope !== "operator") {
-    throw new TypeError("operator CLI only accepts --scope operator");
-  }
-  if (optionalStringOption(options, "space")) {
-    throw new TypeError(
-      "operator CLI does not create Workspace-owned Provider Connection backing material",
-    );
-  }
-  const displayName = optionalStringOption(options, "displayName");
-  const expiresAt = optionalStringOption(options, "expiresAt");
-  return {
-    provider: base.provider,
-    kind: base.kind,
-    authMethod: base.authMethod,
-    scope: "operator",
-    ...(displayName ? { displayName } : {}),
-    ...(base.scopeHints && Object.keys(base.scopeHints).length > 0
-      ? { scopeHints: base.scopeHints }
-      : {}),
-    ...(expiresAt ? { expiresAt } : {}),
-    values: base.values,
   };
 }
 
@@ -330,29 +208,10 @@ async function optionalValuesFromOptions(
 
 async function valuesFromOptions(
   options: Record<string, string | boolean>,
-  single?: { singleFileOption: string; singleEnvName: string },
 ): Promise<Record<string, string>> {
   const valuesFile = optionalStringOption(options, "valuesFile");
-  const singleFile = single
-    ? optionalStringOption(options, single.singleFileOption)
-    : undefined;
-  if (valuesFile && singleFile) {
-    throw new TypeError(
-      "--values-file cannot be combined with provider token file options",
-    );
-  }
-  if (single && singleFile) {
-    const value = (await readFile(singleFile, "utf8")).trim();
-    if (!value)
-      throw new TypeError(`--${kebab(single.singleFileOption)} is empty`);
-    return { [single.singleEnvName]: value };
-  }
   if (!valuesFile) {
-    throw new TypeError(
-      single
-        ? `--values-file or --${kebab(single.singleFileOption)} is required`
-        : "--values-file is required",
-    );
+    throw new TypeError("--values-file is required");
   }
   const parsed = parseJson(await readFile(valuesFile, "utf8"));
   if (!isRecord(parsed))
@@ -492,29 +351,4 @@ function envNames(connection: Record<string, unknown>): readonly string[] {
           typeof value === "string" && value.length > 0,
       )
     : [];
-}
-
-function deployControlApiErrorMessage(
-  value: unknown,
-  fallback: string,
-): string {
-  if (!isRecord(value)) return fallback;
-  if (isRecord(value.error)) {
-    return (
-      stringValue(value.error.message) ??
-      stringValue(value.error_description) ??
-      stringValue(value.error.code) ??
-      fallback
-    );
-  }
-  return (
-    stringValue(value.error_description) ??
-    stringValue(value.message) ??
-    stringValue(value.error) ??
-    fallback
-  );
-}
-
-function kebab(value: string): string {
-  return value.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }

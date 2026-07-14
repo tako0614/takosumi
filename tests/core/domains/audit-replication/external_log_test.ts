@@ -1,14 +1,16 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  AuditReplicationConfigurationError,
   CompositeExternalReplicationSink,
-  type S3ImmutableLogPort,
-  S3ImmutableLogReplicationSink,
-  selectAuditExternalReplicationSink,
-  StdoutReplicationSink,
   verifyAuditReplicationConsistency,
 } from "../../../../core/domains/audit-replication/external_log.ts";
+import {
+  AuditReplicationConfigurationError,
+  requireAuditExternalReplicationSink,
+  type S3ObjectLockAuditPort,
+  S3ObjectLockAuditReplicationSink,
+  StdoutAuditReplicationSink,
+} from "../../../../core/adapters/audit-replication/mod.ts";
 import {
   AUDIT_CHAIN_GENESIS_HASH,
   chainAuditEvent,
@@ -27,8 +29,8 @@ function makeEvent(id: string, occurredAt: string): AuditEvent {
       roles: ["owner"],
       requestId: `req_${id}`,
     },
-    spaceId: "space_a",
-    groupId: "group_a",
+    workspaceId: "workspace_a",
+    runGroupId: "run_group_a",
     targetType: "worker",
     targetId: "worker_a",
     payload: { action: "allow" },
@@ -51,7 +53,7 @@ async function buildChain(count: number): Promise<ChainedAuditEvent[]> {
   return records;
 }
 
-class FakeS3Port implements S3ImmutableLogPort {
+class FakeS3Port implements S3ObjectLockAuditPort {
   readonly objects = new Map<string, { body: string; lockedUntil: string }>();
 
   putObject(input: {
@@ -95,9 +97,11 @@ class FakeS3Port implements S3ImmutableLogPort {
   }
 }
 
-test("StdoutReplicationSink captures records and is idempotent", async () => {
+test("StdoutAuditReplicationSink captures records and is idempotent", async () => {
   const lines: string[] = [];
-  const sink = new StdoutReplicationSink({ write: (line) => lines.push(line) });
+  const sink = new StdoutAuditReplicationSink({
+    write: (line) => lines.push(line),
+  });
   const chain = await buildChain(3);
   for (const record of chain) await sink.replicate(record);
   // Replay the first record - sink must dedupe.
@@ -108,10 +112,10 @@ test("StdoutReplicationSink captures records and is idempotent", async () => {
   assert.deepEqual(replayed.map((r) => r.sequence), [1, 2, 3]);
 });
 
-test("S3ImmutableLogReplicationSink writes objects with Object Lock", async () => {
+test("S3ObjectLockAuditReplicationSink writes immutable objects", async () => {
   const port = new FakeS3Port();
   const fixed = new Date("2026-05-01T00:00:00.000Z");
-  const sink = new S3ImmutableLogReplicationSink({
+  const sink = new S3ObjectLockAuditReplicationSink({
     port,
     bucket: "audit-bucket",
     prefix: "chain",
@@ -204,8 +208,8 @@ test("verifyAuditReplicationConsistency reports hash mismatch when external and 
 });
 
 test("CompositeExternalReplicationSink fans out and uses first sink as canonical readChain", async () => {
-  const a = new StdoutReplicationSink({ write: () => {} });
-  const b = new StdoutReplicationSink({ write: () => {} });
+  const a = new StdoutAuditReplicationSink({ write: () => {} });
+  const b = new StdoutAuditReplicationSink({ write: () => {} });
   const composite = new CompositeExternalReplicationSink([a, b]);
   const chain = await buildChain(2);
   for (const record of chain) await composite.replicate(record);
@@ -215,82 +219,45 @@ test("CompositeExternalReplicationSink fans out and uses first sink as canonical
   assert.equal((await composite.readChain()).length, 2);
 });
 
-test("selectAuditExternalReplicationSink fails closed in production without configuration", () => {
+test("requireAuditExternalReplicationSink fails closed without an injected immutable sink", () => {
   assert.throws(
     () =>
-      selectAuditExternalReplicationSink({
-        env: { TAKOSUMI_ENVIRONMENT: "production" },
+      requireAuditExternalReplicationSink({
+        environment: "production",
       }),
     AuditReplicationConfigurationError,
   );
   assert.throws(
     () =>
-      selectAuditExternalReplicationSink({
-        env: { TAKOSUMI_ENVIRONMENT: "staging" },
+      requireAuditExternalReplicationSink({
+        environment: "staging",
+        sink: new StdoutAuditReplicationSink({ write: () => {} }),
       }),
     AuditReplicationConfigurationError,
   );
 });
 
-test("selectAuditExternalReplicationSink returns undefined locally without config", () => {
-  const sink = selectAuditExternalReplicationSink({
-    env: { TAKOSUMI_ENVIRONMENT: "local" },
+test("requireAuditExternalReplicationSink permits an absent local sink", () => {
+  const sink = requireAuditExternalReplicationSink({
+    environment: "local",
   });
   assert.equal(sink, undefined);
 });
 
-test("selectAuditExternalReplicationSink builds stdout sink from env", () => {
-  const sink = selectAuditExternalReplicationSink({
-    env: {
-      TAKOSUMI_ENVIRONMENT: "production",
-      TAKOSUMI_AUDIT_REPLICATION_KIND: "stdout",
-    },
+test("requireAuditExternalReplicationSink accepts an explicitly injected immutable adapter", () => {
+  const injected = new S3ObjectLockAuditReplicationSink({
+    port: new FakeS3Port(),
+    bucket: "audit-bucket",
   });
-  assert.ok(sink instanceof StdoutReplicationSink);
-});
-
-test("selectAuditExternalReplicationSink builds s3 sink with bucket + port", () => {
-  const port = new FakeS3Port();
-  const sink = selectAuditExternalReplicationSink({
-    env: {
-      TAKOSUMI_ENVIRONMENT: "production",
-      TAKOSUMI_AUDIT_REPLICATION_KIND: "s3",
-      TAKOSUMI_AUDIT_REPLICATION_S3_BUCKET: "audit-bucket",
-      TAKOSUMI_AUDIT_REPLICATION_S3_PREFIX: "chain",
-      TAKOSUMI_AUDIT_REPLICATION_S3_RETENTION_MODE: "compliance",
-      TAKOSUMI_AUDIT_REPLICATION_S3_RETENTION_DAYS: "365",
-    },
-    s3Port: port,
+  const sink = requireAuditExternalReplicationSink({
+    environment: "production",
+    sink: injected,
   });
-  assert.ok(sink instanceof S3ImmutableLogReplicationSink);
+  assert.equal(sink, injected);
 });
 
-test("selectAuditExternalReplicationSink rejects s3 without bucket or port", () => {
-  assert.throws(
-    () =>
-      selectAuditExternalReplicationSink({
-        env: {
-          TAKOSUMI_ENVIRONMENT: "production",
-          TAKOSUMI_AUDIT_REPLICATION_KIND: "s3",
-        },
-      }),
-    AuditReplicationConfigurationError,
-  );
-  assert.throws(
-    () =>
-      selectAuditExternalReplicationSink({
-        env: {
-          TAKOSUMI_ENVIRONMENT: "production",
-          TAKOSUMI_AUDIT_REPLICATION_KIND: "s3",
-          TAKOSUMI_AUDIT_REPLICATION_S3_BUCKET: "audit-bucket",
-        },
-      }),
-    AuditReplicationConfigurationError,
-  );
-});
-
-test("StdoutReplicationSink readChain after random replicate order returns sorted chain", async () => {
-  const sink = new StdoutReplicationSink({ write: () => {} });
+test("StdoutAuditReplicationSink readChain after random replicate order returns sorted chain", async () => {
+  const sink = new StdoutAuditReplicationSink({ write: () => {} });
   const chain = await buildChain(4);
   // Replay out of order.
   await sink.replicate(chain[2]);
@@ -327,10 +294,10 @@ test("verifyAuditReplicationConsistency flags non-empty primary with empty exter
   assert.equal(result.reason, "external-empty-but-primary-not");
 });
 
-test("S3ImmutableLogReplicationSink keys lexically sort identical to sequence order", async () => {
+test("S3ObjectLockAuditReplicationSink keys sort identically to sequence order", async () => {
   const port = new FakeS3Port();
   const fixed = new Date("2026-05-01T00:00:00.000Z");
-  const sink = new S3ImmutableLogReplicationSink({
+  const sink = new S3ObjectLockAuditReplicationSink({
     port,
     bucket: "b",
     clock: () => fixed,

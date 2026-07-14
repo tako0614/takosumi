@@ -8,18 +8,10 @@
 
 import {
   APPLY_RUNS_PATH,
-  CONNECTIONS_AWS_ASSUME_ROLE_PATH,
-  CONNECTIONS_CLOUDFLARE_OAUTH_CALLBACK_PATH,
-  CONNECTIONS_CLOUDFLARE_OAUTH_START_PATH,
-  CONNECTIONS_CLOUDFLARE_TOKEN_PATH,
-  CONNECTIONS_GCP_IMPERSONATION_PATH,
-  CONNECTIONS_GCP_OAUTH_CALLBACK_PATH,
-  CONNECTIONS_GCP_OAUTH_START_PATH,
-  CONNECTIONS_GCP_SERVICE_ACCOUNT_JSON_PATH,
-  CONNECTIONS_GENERIC_ENV_PROVIDER_PATH,
+  CONNECTION_OAUTH_CALLBACK_PATH,
+  CONNECTION_OAUTH_START_PATH,
+  CONNECTION_SETUP_PATH,
   CONNECTIONS_PATH,
-  CONNECTIONS_SOURCE_HTTPS_TOKEN_PATH,
-  CONNECTIONS_SOURCE_SSH_KEY_PATH,
   CREDENTIAL_RECIPES_PATH,
   RUNNER_PROFILES_PATH,
 } from "@takosumi/internal/deploy-control-api";
@@ -39,38 +31,17 @@ export const TAKOSUMI_APPLY_RUN_ROUTE =
 // list (`.../state-versions`) are owned by the Capsule route group
 // (TAKOSUMI_API_CAPSULE_ROUTE / TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE);
 // the former separate ledger-seam duplicates were removed once both collapsed
-// onto /internal/v1. Only the Output read (no Capsule-group equivalent) keeps a
-// dedicated ledger constant.
-/** INTERNAL Output read used by the accounts plane. */
-export const TAKOSUMI_CAPSULE_OUTPUTS_ROUTE =
-  `${INTERNAL_V1_PREFIX}/capsules/:capsuleId/outputs` as const;
+// onto /internal/v1.
 
 // --- INTERNAL deploy-control resource routes (`/internal/v1`). ----------------
 export const TAKOSUMI_CONNECTIONS_ROUTE = CONNECTIONS_PATH;
 export const TAKOSUMI_CONNECTION_ROUTE =
   `${INTERNAL_V1_PREFIX}/connections/:connectionId` as const;
-export const TAKOSUMI_CONNECTIONS_SOURCE_HTTPS_TOKEN_ROUTE =
-  CONNECTIONS_SOURCE_HTTPS_TOKEN_PATH;
-export const TAKOSUMI_CONNECTIONS_SOURCE_SSH_KEY_ROUTE =
-  CONNECTIONS_SOURCE_SSH_KEY_PATH;
-export const TAKOSUMI_CONNECTIONS_CLOUDFLARE_TOKEN_ROUTE =
-  CONNECTIONS_CLOUDFLARE_TOKEN_PATH;
-export const TAKOSUMI_CONNECTIONS_AWS_ASSUME_ROLE_ROUTE =
-  CONNECTIONS_AWS_ASSUME_ROLE_PATH;
-export const TAKOSUMI_CONNECTIONS_GENERIC_ENV_PROVIDER_ROUTE =
-  CONNECTIONS_GENERIC_ENV_PROVIDER_PATH;
-export const TAKOSUMI_CONNECTIONS_CLOUDFLARE_OAUTH_START_ROUTE =
-  CONNECTIONS_CLOUDFLARE_OAUTH_START_PATH;
-export const TAKOSUMI_CONNECTIONS_CLOUDFLARE_OAUTH_CALLBACK_ROUTE =
-  CONNECTIONS_CLOUDFLARE_OAUTH_CALLBACK_PATH;
-export const TAKOSUMI_CONNECTIONS_GCP_OAUTH_START_ROUTE =
-  CONNECTIONS_GCP_OAUTH_START_PATH;
-export const TAKOSUMI_CONNECTIONS_GCP_OAUTH_CALLBACK_ROUTE =
-  CONNECTIONS_GCP_OAUTH_CALLBACK_PATH;
-export const TAKOSUMI_CONNECTIONS_GCP_IMPERSONATION_ROUTE =
-  CONNECTIONS_GCP_IMPERSONATION_PATH;
-export const TAKOSUMI_CONNECTIONS_GCP_SERVICE_ACCOUNT_JSON_ROUTE =
-  CONNECTIONS_GCP_SERVICE_ACCOUNT_JSON_PATH;
+export const TAKOSUMI_CONNECTION_SETUP_ROUTE = CONNECTION_SETUP_PATH;
+export const TAKOSUMI_CONNECTION_OAUTH_START_ROUTE =
+  CONNECTION_OAUTH_START_PATH;
+export const TAKOSUMI_CONNECTION_OAUTH_CALLBACK_ROUTE =
+  CONNECTION_OAUTH_CALLBACK_PATH;
 export const TAKOSUMI_CREDENTIAL_RECIPES_ROUTE = CREDENTIAL_RECIPES_PATH;
 export const TAKOSUMI_CREDENTIAL_RECIPE_ROUTE =
   `${INTERNAL_V1_PREFIX}/credential-recipes/:recipeId` as const;
@@ -96,7 +67,7 @@ export const TAKOSUMI_WORKSPACE_ROUTE =
 export const TAKOSUMI_WORKSPACE_CAPSULES_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/capsules` as const;
 // Project routes (Workspace / Project / Capsule final model). Additive: the
-// `:spaceId` segment keeps the current Workspace path until the coordinated
+// `:workspaceId` segment keeps the current Workspace path until the coordinated
 // route-path convergence flips `/spaces` -> `/workspaces`.
 export const TAKOSUMI_PROJECTS_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/projects` as const;
@@ -108,6 +79,9 @@ export const TAKOSUMI_API_CAPSULE_ROUTE =
 /** State history list for a Capsule. */
 export const TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE =
   `${INTERNAL_V1_PREFIX}/capsules/:capsuleId/state-versions` as const;
+/** Current public Output projection for a Capsule. */
+export const TAKOSUMI_API_CAPSULE_OUTPUTS_ROUTE =
+  `${INTERNAL_V1_PREFIX}/capsules/:capsuleId/outputs` as const;
 export const TAKOSUMI_STATE_VERSION_ROUTE =
   `${INTERNAL_V1_PREFIX}/state-versions/:stateVersionId` as const;
 export const TAKOSUMI_STATE_VERSION_ROLLBACK_PLAN_ROUTE =
@@ -121,7 +95,7 @@ export const TAKOSUMI_CAPSULE_PLAN_ROUTE =
 export const TAKOSUMI_CAPSULE_DESTROY_PLAN_ROUTE =
   `${INTERNAL_V1_PREFIX}/capsules/:capsuleId/destroy-plan` as const;
 /**
- * Installation drift-check route. Creates a read-only drift-check plan that
+ * Capsule drift-check route. Creates a read-only drift-check plan that
  * never parks waiting_approval and can never be applied.
  */
 export const TAKOSUMI_CAPSULE_DRIFT_CHECK_ROUTE =
@@ -149,12 +123,6 @@ export const TAKOSUMI_OUTPUT_SHARE_REVOKE_ROUTE =
   `${INTERNAL_V1_PREFIX}/output-shares/:shareId/revoke` as const;
 export const TAKOSUMI_WORKSPACE_PLAN_UPDATE_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/plan-update` as const;
-export const TAKOSUMI_WORKSPACE_OUTPUT_SYNC_ROUTE =
-  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/output-sync` as const;
-export const TAKOSUMI_WORKSPACE_OUTPUT_SYNC_SNAPSHOT_ROUTE =
-  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/output-sync/snapshot` as const;
-export const TAKOSUMI_WORKSPACE_OUTPUT_SYNC_RECONCILE_ROUTE =
-  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/output-sync/reconcile` as const;
 export const TAKOSUMI_WORKSPACE_DRIFT_CHECK_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/drift-check` as const;
 export const TAKOSUMI_RUN_GROUP_ROUTE =
@@ -167,15 +135,12 @@ export const TAKOSUMI_WORKSPACE_BILLING_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/billing` as const;
 export const TAKOSUMI_WORKSPACE_USAGE_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/usage` as const;
-export const TAKOSUMI_WORKSPACE_CREDIT_RESERVATIONS_ROUTE =
-  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/credit-reservations` as const;
-export const TAKOSUMI_WORKSPACE_CREDITS_TOP_UP_ROUTE =
-  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/credits/top-up` as const;
-export const TAKOSUMI_WORKSPACE_SUBSCRIPTION_CHANGE_ROUTE =
-  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/subscription/change` as const;
 export const TAKOSUMI_WORKSPACE_BACKUPS_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/backups` as const;
 export const TAKOSUMI_WORKSPACE_BACKUP_RESTORES_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/backups/:backupId/restores` as const;
 export const TAKOSUMI_CAPSULE_BACKUPS_ROUTE =
   `${INTERNAL_V1_PREFIX}/capsules/:capsuleId/backups` as const;
+/** Operator-only, explicit migration from retired backing-Capsule state. */
+export const TAKOSUMI_WORKSPACE_RESOURCE_STATE_ADOPTION_ROUTE =
+  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/resource-state-adoption` as const;

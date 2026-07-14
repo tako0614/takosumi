@@ -2,8 +2,8 @@
 
 This directory is **not a standalone deployable Worker anymore**. It is the
 Cloudflare reference entry point for the account-plane handler
-(session cookie, upstream sign-in, OIDC issuer/client projection, dashboard
-account-plane routes, Capsule runtime projection/export handoff, and any
+(session cookie, upstream sign-in, OIDC issuer/client registration, dashboard
+account-plane facade, Interface OAuth, and any
 Cloud-only billing hooks supplied by the host composition), consumed in-process
 by two build targets:
 
@@ -23,40 +23,42 @@ Both host workers reference this module through the
 `src/handler.ts`. The host worker supplies the actual mount, bindings, secrets,
 custom-domain route, and deploy command.
 
+Static downstream clients are configured with the non-secret JSON array
+`TAKOSUMI_ACCOUNTS_CLIENTS`. A Takos native client entry uses a unique client id
+per Takos host, the exact `takos://oauth/callback` redirect,
+`tokenEndpointAuthMethod: "none"`, and an explicit `allowedScopes` array. The
+Takos Worker advertises the same id through `OIDC_MOBILE_CLIENT_ID`; the mobile
+app never carries a client secret.
+
 Accounts is a backing layer, not a second control plane. Product control-plane
 resources (Workspaces, Projects, Capsules, Sources, ProviderConnections,
 CredentialRecipes, ProviderBindings, Secrets, Runs, StateVersions, Outputs,
 Runners, and AuditEvents) are created and read through `/api/v1/*`. The current
-`/v1/capsule-projections` route family keeps a legacy path name, but its
-role is supporting account-plane projection for Capsule runtimes: OIDC client
-metadata, Capsule runtime grant material, operator/showback usage projection when
-enabled, and export handoff. Accounts OIDC should be described as Capsule
-runtime identity projection and operator-managed sign-in support, not as a
-generic login/consent platform for arbitrary public clients. Official billing,
-usage metering sold as a service, and payment gates are Takosumi Cloud-only.
+Accounts does not own a Capsule/runtime projection or a second Run/Output
+ledger. Its session-authenticated control routes are a facade over the same
+canonical operations used by the control plane. Runtime discovery and grants
+are canonical `Interface` / `InterfaceBinding` records; standard OpenTofu
+Outputs are referenced only through explicit Interface input mappings.
 
 ## Files
 
-- `src/handler.ts` — env parsing, D1 store construction, cached Accounts handler
-  construction, signed R2 metadata-export worker. Exports `createCloudflareWorker`
-  (consumed in-process by the host worker) and `createR2InstallationExportWorker`
-  (legacy helper name for Capsule/account export artifacts).
+- `src/handler.ts` — env parsing, D1 store construction, and cached Accounts
+  handler construction. Exports `createCloudflareWorker`, consumed in-process by
+  the host worker.
 - `src/routes.ts` — `isAccountsApiPath` / `isWorkerLocalPath` / `ACCOUNTS_API_PREFIXES`
   path classification (also mirrored by `deploy/node-postgres/src/static-assets.ts`).
-- `src/routes_test.ts`, `src/worker_test.ts` — coverage for the kept handler/routes
-  logic (path classification, issuer policy, fail-closed, IPv6/CGNAT, R2 route-level
-  signed export).
+- `src/routes_test.ts`, `src/worker_test.ts` — coverage for the kept
+  handler/routes logic (path classification, issuer policy, fail-closed, and
+  IPv6/CGNAT handling).
 
 ## Routing shape
 
-The handler keeps `/healthz` and signed `/__takosumi/exports/...` downloads as
-edge-local routes. Those downloads serve Capsule/account export artifacts created
-for portability/import flows; they are not the operator's control/state backup
-or disaster-recovery store. Every account-plane path is handled directly by
+The handler keeps `/healthz` as an edge-local route. Every account-plane path is handled directly by
 `createEphemeralAccountsHandler` (or `createAccountsHandler` when a stable ES256
 JWK is configured) with a `D1AccountsStore`. The D1 schema is initialized lazily
-and idempotently before the first account-plane handler is built. Export requests
-write a metadata JSON bundle to R2 and return a signed same-origin download URL.
+and idempotently before the first account-plane handler is built. Control-plane
+state, Outputs, backups, and source transport remain owned by the canonical
+Takosumi control plane rather than Accounts storage.
 
 ## D1 schema migration
 

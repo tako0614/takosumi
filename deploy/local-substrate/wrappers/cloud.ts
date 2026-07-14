@@ -5,16 +5,13 @@
  * `app.takosumi.com`.
  *
  * It reuses the published reference composer's `buildComposedServer`
- * (node-postgres profile: Postgres store + accounts handler + healthz/export
+ * (node-postgres profile: Postgres store + accounts handler + healthz
  * pre-handler + serve) and only supplies the substrate-specific overrides:
  *   - the CoreDNS gateway projection writer that hands routes to Caddy.
  *
- * Execution is EXTERNAL: `TAKOSUMI_AGENT_URL` + `TAKOSUMI_AGENT_TOKEN` (set in
- * env/cloud.env, pointing at the `agent` service) are read by the service's
- * bootstrap agent detection, so source / lifecycle / capability operations are
- * dispatched to the `agent` container. This process holds NO docker.sock and
- * never spawns subprocesses — that privilege lives only on the agent, which
- * mirrors production (a Workers control plane cannot embed a subprocess agent).
+ * OpenTofu execution is external: the configured RunnerProfile points at the
+ * dedicated `opentofu-runner` service. This process holds no docker.sock and
+ * never spawns OpenTofu subprocesses.
  *
  * Imports straddle three mounts:
  *   - /workspace        = takosumi (the composer; buildComposedServer)
@@ -52,18 +49,6 @@ const routeProjectionFile =
   "/local-substrate-runtime/gateway-routes.json";
 await writeGatewayProjection(routeProjectionFile, []);
 
-if (!env.TAKOSUMI_AGENT_URL || !env.TAKOSUMI_AGENT_TOKEN) {
-  console.warn(
-    "[local-substrate-cloud] TAKOSUMI_AGENT_URL/TOKEN unset — the embedded " +
-      "service will register no providers and applies will fail until the " +
-      "external agent is configured.",
-  );
-}
-console.log(
-  `[local-substrate-cloud] composing control plane; execution dispatched to ` +
-    `${env.TAKOSUMI_AGENT_URL ?? "(no agent)"}`,
-);
-
 const sourceArchiveStore = createFileSourceArchiveStore(
   env.TAKOSUMI_LOCAL_SOURCE_ARCHIVE_DIR ??
     "/local-substrate-runtime/source-archives",
@@ -87,10 +72,8 @@ if (runnerProfiles.length === 0) {
   throw new Error("local-substrate cloud requires at least one runner profile");
 }
 
-// Blocks on serveOnAnyRuntime (port 8787 from config). The service's bootstrap
-// agent detection reads TAKOSUMI_AGENT_URL/TOKEN from this process env.
+// Blocks on serveOnAnyRuntime (port 8787 from config).
 await buildComposedServer({
-  implementations: [],
   opentofuRunner: externalRunnerUrl
     ? createHttpOpenTofuRunner({
         archiveStore: sourceArchiveStore,
@@ -99,7 +82,6 @@ await buildComposedServer({
     : createLocalOpenTofuRunner({
         archiveStore: sourceArchiveStore,
       }),
-  writeSourceArchive: sourceArchiveStore.write,
   runnerProfiles,
   defaultRunnerProfileId,
 });

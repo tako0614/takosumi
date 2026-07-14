@@ -23,7 +23,7 @@ export const DEPLOY_CONTROL_CREDENTIAL_ENDPOINTS: readonly DeployControlEndpoint
       method: "GET",
       path: TAKOSUMI_CREDENTIAL_RECIPES_ROUTE,
       summary:
-        "Lists built-in Credential Recipes used for optional guided setup.",
+        "Lists service-installed Credential Recipes used for optional guided setup.",
       auth: "deploy-control-token",
       operationId: "listCredentialRecipes",
       openapi: { okSchema: "ListCredentialRecipesResponse" },
@@ -32,7 +32,7 @@ export const DEPLOY_CONTROL_CREDENTIAL_ENDPOINTS: readonly DeployControlEndpoint
     {
       method: "GET",
       path: TAKOSUMI_CREDENTIAL_RECIPE_ROUTE,
-      summary: "Reads one built-in Credential Recipe.",
+      summary: "Reads one service-installed Credential Recipe.",
       auth: "deploy-control-token",
       operationId: "getCredentialRecipe",
       openapi: {

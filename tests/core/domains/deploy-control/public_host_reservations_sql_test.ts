@@ -1,10 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
 
 import type {
-  OpenTofuDeploymentStore,
+  OpenTofuControlStore,
   ReservePublicHostInput,
 } from "../../../../core/domains/deploy-control/store.ts";
-import { SqlOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store_sql.ts";
+import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 
 const clients: PGliteSqlClient[] = [];
@@ -14,11 +14,11 @@ afterAll(async () => {
 });
 
 async function seedWorkspace(
-  store: OpenTofuDeploymentStore,
+  store: OpenTofuControlStore,
   id: string,
   ownerUserId: string,
 ): Promise<void> {
-  await store.putSpace({
+  await store.putWorkspace({
     id,
     handle: id.replaceAll("_", "-"),
     displayName: id,
@@ -32,7 +32,7 @@ async function seedWorkspace(
 test("Postgres serializes owner vanity slots without counting scoped reservations", async () => {
   const client = await PGliteSqlClient.create();
   clients.push(client);
-  const store = new SqlOpenTofuDeploymentStore({ client });
+  const store = new SqlOpenTofuControlStore({ client });
 
   await seedWorkspace(store, "workspace_one", "owner_shared");
   await seedWorkspace(store, "workspace_two", "owner_shared");
@@ -42,8 +42,8 @@ test("Postgres serializes owner vanity slots without counting scoped reservation
     {
       hostname: "workspace-one-app.app.takos.jp",
       workspaceId: "workspace_one",
-      installationId: "capsule_scoped_one",
-      installationName: "scoped-one",
+      capsuleId: "capsule_scoped_one",
+      capsuleName: "scoped-one",
       allocationKind: "scoped",
       vanitySlotLimit: 1,
       now: "2026-07-11T00:00:01.000Z",
@@ -51,8 +51,8 @@ test("Postgres serializes owner vanity slots without counting scoped reservation
     {
       hostname: "workspace-two-app.app.takos.jp",
       workspaceId: "workspace_two",
-      installationId: "capsule_scoped_two",
-      installationName: "scoped-two",
+      capsuleId: "capsule_scoped_two",
+      capsuleName: "scoped-two",
       allocationKind: "scoped",
       vanitySlotLimit: 1,
       now: "2026-07-11T00:00:02.000Z",
@@ -67,8 +67,8 @@ test("Postgres serializes owner vanity slots without counting scoped reservation
     {
       hostname: "shared-one.app.takos.jp",
       workspaceId: "workspace_one",
-      installationId: "capsule_vanity_one",
-      installationName: "vanity-one",
+      capsuleId: "capsule_vanity_one",
+      capsuleName: "vanity-one",
       allocationKind: "vanity",
       vanitySlotLimit: 1,
       now: "2026-07-11T00:00:03.000Z",
@@ -76,8 +76,8 @@ test("Postgres serializes owner vanity slots without counting scoped reservation
     {
       hostname: "shared-two.app.takos.jp",
       workspaceId: "workspace_two",
-      installationId: "capsule_vanity_two",
-      installationName: "vanity-two",
+      capsuleId: "capsule_vanity_two",
+      capsuleName: "vanity-two",
       allocationKind: "vanity",
       vanitySlotLimit: 1,
       now: "2026-07-11T00:00:03.000Z",
@@ -100,8 +100,8 @@ test("Postgres serializes owner vanity slots without counting scoped reservation
   const otherOwner = await store.reservePublicHost({
     hostname: "other-owner.app.takos.jp",
     workspaceId: "workspace_other",
-    installationId: "capsule_other",
-    installationName: "other",
+    capsuleId: "capsule_other",
+    capsuleName: "other",
     allocationKind: "vanity",
     vanitySlotLimit: 1,
     now: "2026-07-11T00:00:04.000Z",

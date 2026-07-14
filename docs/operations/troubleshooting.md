@@ -16,11 +16,11 @@
 | plan が policy で止まる                 | Run `policyStatus: deny` / `warn`                                                                          | plan JSON の policy 評価結果 (provider / resource allowlist / scope / secret-backed provider policy / egress) を確認 |
 | apply が plan 検証で拒否される          | plan digest / source snapshot / compatibility report / dependency snapshot / state generation の検証エラー | re-plan して新しい saved plan を作る (apply は saved plan のみ)                                                      |
 | approval 待ちで進まない                 | Run `waiting_approval`                                                                                     | approver に escalation。 destroy は destroy_plan → approval → destroy_apply の 2 段                                  |
-| 同じ Capsule の run が進まない          | lease 取得待ち / Run `queued` のまま                                                                       | CoordinationObject lease の保持 run を確認、 expired なら takeover を待つ                                            |
+| 同じ Capsule の run が進まない          | lease 取得待ち / Run `queued` のまま                                                                       | configured lease adapter の保持 run を確認、expired なら fenced takeover を待つ                                      |
 | provider credential が拒否される        | plan/apply phase の provider エラー                                                                        | Connection を test、 revoked / expired なら rotate して再 mint                                                       |
 | unknown provider が runnable にならない | Compatibility Report の provider finding / missing Provider Connection                                     | declared-env CredentialRecipe、ProviderConnection status、runner profile provider allowlist、egress policy を確認   |
 | producer 更新後に downstream が古い     | Capsule `stale` マーク                                                                                     | dependency graph を確認し、 Workspace update として DAG 順に plan/apply                                              |
-| Runner Container が起動しない           | dispatch timeout / container error                                                                         | runner image / Container 設定を確認、 queue DLQ を確認                                                               |
+| runner が起動しない                     | dispatch timeout / runner infrastructure error                                                             | selected RunnerProfile / executor adapter / pool capacity を確認し、queue 使用時は DLQ を確認                       |
 | install / deploy が遅い                 | phase timings で `source_clone` / `tofu_init` / `tofu_apply` のどれかが長い                                | SourceSnapshot reuse、provider mirror/cache、app repo 側の image/build 最適化を分けて確認。keepalive は plan->apply / destroy-plan->destroy-apply の warm window にだけ効く |
 
 ## 切り分けの基本
@@ -41,15 +41,16 @@
 5. **遅さは phase timings で見る**: `source_clone` が長いなら Git/ref/path と
    SourceSnapshot reuse、`tofu_init` が長いなら provider mirror/cache、
    `tofu_apply` が長いなら provider 側 API / resource 作成待ちを確認する。
-   `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` は apply / destroy apply が plan
-   runner object に戻る短い window を温める設定。source_sync や別 plan の
-   cold start 対策ではない。温存対象は成功した plan のみで、source_sync /
-   compatibility_check / apply / destroy は成功後に破棄される。deploy 直後の
-   compatibility preflight timeout は `TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS`
-   を確認する。Cloudflare Containers の transient capacity error は
-   `TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS` /
-   `TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS`、恒常的な飽和は quota /
-   `max_instances` / runner profile を確認する。app bundle / container image /
+   keepalive / warm reuse を提供する executor adapter では、apply / destroy
+   apply が reviewed plan の executor に戻る短い window だけを温存する。
+   source_sync や別 plan の cold start 対策とは分ける。deploy 直後の
+   compatibility preflight timeout は configured compatibility-check timeout
+   を確認する。Cloudflare Container reference adapter を使う場合だけ
+   `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS`、
+   `TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS`、
+   `TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS`、`max_instances` を追加確認する。
+   他の adapter は自身の typed infrastructure error と pool policy を使う。
+   app bundle / container image /
    DB migration の最適化は app repo / CI / OpenTofu module 側で行う。
 
 ## エスカレーション

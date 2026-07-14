@@ -14,6 +14,7 @@ export const APPS: readonly Chip[] = [
   { label: "takos", hint: "chat (例)" },
   { label: "takos-office", hint: "docs / slide / sheet" },
   { label: "yurucommu", hint: "social (例)" },
+  { label: "yurumeet", hint: "talk (例)" },
   { label: "road-to-me", hint: "coach (例)" },
 ];
 

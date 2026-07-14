@@ -98,7 +98,6 @@ test("assertSourceUrlPolicy rejects private and metadata hosts", () => {
     "https://[fc00::1]/acme/repo.git",
     "https://[fe80::1]/acme/repo.git",
     "https://[::ffff:169.254.169.254]/acme/repo.git",
-    "https://metadata.google.internal/acme/repo.git",
     "https://localhost/acme/repo.git",
     "https://git.localhost/acme/repo.git",
     "ssh://git@127.0.0.1/acme/repo.git",
@@ -209,7 +208,7 @@ test("parseLsRemoteCommit returns undefined when no commit matches", () => {
   ).toBeUndefined();
 });
 
-test("resolveSourceCommit falls back from implicit main to remote HEAD", async () => {
+test("resolveSourceCommit resolves an explicit remote HEAD without guessing main", async () => {
   const root = await mkdtemp(join(tmpdir(), "takosumi-source-sync-"));
   try {
     git(root, ["init", "-b", "master", "repo"]);
@@ -227,7 +226,7 @@ test("resolveSourceCommit falls back from implicit main to remote HEAD", async (
     ]);
     const expectedCommit = git(repo, ["rev-parse", "HEAD"]);
     const context = { env: commandEnv() };
-    const source = { url: repo, ref: "main", path: "." };
+    const source = { url: repo, ref: "HEAD", path: "." };
 
     await expect(resolveSourceCommit(source, { context })).resolves.toBe(
       expectedCommit,
@@ -236,6 +235,34 @@ test("resolveSourceCommit falls back from implicit main to remote HEAD", async (
     const clone = join(root, "clone");
     await shallowCloneAtCommit(source, expectedCommit, clone, { context });
     expect(git(clone, ["rev-parse", "HEAD"])).toBe(expectedCommit);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveSourceCommit keeps an explicit branch exact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-sync-exact-"));
+  try {
+    git(root, ["init", "-b", "master", "repo"]);
+    const repo = join(root, "repo");
+    await writeFile(join(repo, "main.tf"), "terraform {}\n");
+    git(repo, ["add", "main.tf"]);
+    git(repo, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Takosumi Test",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+
+    await expect(
+      resolveSourceCommit(
+        { url: repo, ref: "main", path: "." },
+        { context: { env: commandEnv() } },
+      ),
+    ).rejects.toThrow("source ref did not resolve to a commit: main");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -283,17 +310,19 @@ test("resolveSourceCommit peels an annotated tag to its commit", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// archive object key safety (R2_SOURCE key layout).
+// archive ref safety for the R2_SOURCE adapter layout.
 // ---------------------------------------------------------------------------
 
 test("assertSafeArchiveObjectKey accepts the agreed layout and rejects traversal", () => {
   expect(() =>
     assertSafeArchiveObjectKey(
-      "spaces/spc_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      "workspaces/spc_1/sources/src_1/snapshots/snap_1/source.tar.zst",
     ),
   ).not.toThrow();
   expect(() => assertSafeArchiveObjectKey("/abs/key")).toThrow();
-  expect(() => assertSafeArchiveObjectKey("spaces/../etc/passwd")).toThrow();
+  expect(() =>
+    assertSafeArchiveObjectKey("workspaces/../etc/passwd"),
+  ).toThrow();
   expect(() => assertSafeArchiveObjectKey("other/prefix/key")).toThrow();
   expect(() => assertSafeArchiveObjectKey("")).toThrow();
 });
@@ -391,13 +420,13 @@ test("runSourceSync reuses an unchanged snapshot without cloning or archiving", 
         ref: resolvedCommit,
         path: ".",
       },
-      archiveObjectKey:
-        "spaces/space_1/sources/src_new/snapshots/snap_new/source.tar.zst",
+      archiveRef:
+        "workspaces/space_1/sources/src_new/snapshots/snap_new/source.tar.zst",
       reuseSnapshot: {
         id: "snap_prev",
         resolvedCommit,
-        archiveObjectKey:
-          "spaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
+        archiveRef:
+          "workspaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
         archiveDigest: `sha256:${"b".repeat(64)}`,
         archiveSizeBytes: 2048,
       },
@@ -413,8 +442,7 @@ test("runSourceSync reuses an unchanged snapshot without cloning or archiving", 
       archiveSizeBytes: 2048,
       sourceArchive: {
         kind: "object-storage",
-        archiveObjectKey:
-          "spaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
+        ref: "workspaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
         reusedFromSnapshotId: "snap_prev",
       },
     });

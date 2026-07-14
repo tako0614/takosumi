@@ -14,6 +14,7 @@ import {
   type ServeHttpHandle,
 } from "./shared/runtime/index.ts";
 import { StorageMigrationRunner } from "./adapters/storage/migration-runner/mod.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "./adapters/storage/artifact-references.ts";
 import {
   SecretEncryptionConfigurationError,
   selectSecretBoundaryCrypto,
@@ -25,11 +26,13 @@ import {
 import { SqlObservabilitySink } from "./domains/observability/mod.ts";
 import {
   type AuditExternalReplicationSink,
-  AuditReplicationConfigurationError,
   resolveAuditRetention,
-  selectAuditExternalReplicationSink,
   verifyAuditReplicationConsistency,
 } from "./domains/audit-replication/mod.ts";
+import {
+  AuditReplicationConfigurationError,
+  requireAuditExternalReplicationSink,
+} from "./adapters/audit-replication/mod.ts";
 import type {
   SqlClient,
   SqlParameters,
@@ -51,6 +54,14 @@ export interface StartedTakosumiService {
   readonly sharedSqlClient?: { client: SqlClient; close: () => Promise<void> };
 }
 
+export interface StartTakosumiServiceOptions {
+  /**
+   * Operator-composed append-only audit adapter. Provider-specific config and
+   * credentials stay in the host; core receives only the generic sink port.
+   */
+  readonly auditReplicationSink?: AuditExternalReplicationSink;
+}
+
 /**
  * Boot the service synchronously inside an async function. This used to be a
  * sequence of top-level `await` statements which made the module unsafe to
@@ -60,7 +71,9 @@ export interface StartedTakosumiService {
  * boot inside `startTakosumiService()` and gating the long-running entrypoint on
  * `import.meta.main` keeps the module import side-effect-free.
  */
-export async function startTakosumiService(): Promise<StartedTakosumiService> {
+export async function startTakosumiService(
+  options: StartTakosumiServiceOptions = {},
+): Promise<StartedTakosumiService> {
   const runtime = currentRuntime();
   const runtimeEnv: Record<string, string> = runtime.env.toObject();
   warnIfDevMode(runtimeEnv);
@@ -72,6 +85,7 @@ export async function startTakosumiService(): Promise<StartedTakosumiService> {
   const auditReplicationSink = assertAuditReplicationConfigured(
     runtime,
     runtimeEnv,
+    options.auditReplicationSink,
   );
   await maybeApplyDatabaseMigrations(runtimeEnv);
   await maybeApplyAuditRetention(runtimeEnv);
@@ -81,10 +95,10 @@ export async function startTakosumiService(): Promise<StartedTakosumiService> {
     auditReplicationSink,
   );
   const sharedSqlClientHandle = await createSharedSqlClient(runtimeEnv);
-  logDeploymentRecordStoreBackend(sharedSqlClientHandle !== undefined);
   const created = await createTakosumiService({
     runtimeEnv,
     runtimeConfig,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     ...(sharedSqlClientHandle
       ? { sqlClient: sharedSqlClientHandle.client }
       : {}),
@@ -326,30 +340,9 @@ async function maybeApplyAuditRetention(
 }
 
 /**
- * Surface the deployment-record-store backend selection at boot so
- * operators can spot the in-memory fallback in their logs. Without this
- * line, a missing `TAKOSUMI_DATABASE_URL` silently degrades durability
- * (the `(tenantId, name) → applied[]` mapping is wiped on every restart)
- * and the only way to detect it is a deploy round-trip.
- */
-function logDeploymentRecordStoreBackend(sqlClientResolved: boolean): void {
-  if (sqlClientResolved) {
-    log.info("service.boot.deployment_record_store_selected", {
-      backend: "sql",
-      source: "TAKOSUMI_DATABASE_URL",
-    });
-    return;
-  }
-  log.info("service.boot.deployment_record_store_selected", {
-    backend: "in_memory",
-    note: "TAKOSUMI_DATABASE_URL unset; restarts will lose state",
-  });
-}
-
-/**
  * Build a long-lived SqlClient that the service passes into
- * `createTakosumiService` so SQL-backed deployment and deployControl lifecycle records
- * survive process restart.
+ * `createTakosumiService` so SQL-backed OpenTofu control-plane records survive
+ * process restart.
  *
  * Returns `undefined` when no `DATABASE_URL` is configured or the pg
  * driver is unavailable; the service then boots with the in-memory
@@ -358,10 +351,7 @@ function logDeploymentRecordStoreBackend(sqlClientResolved: boolean): void {
  *
  * The returned handle is intentionally NOT closed by the service: the
  * underlying pg pool is reused for the lifetime of the process. The
- * shared instance is fine because `SqlTakosumiDeploymentRecordStore`
- * uses `takosumi_deployment_record_locks` lease rows instead of session-scoped
- * advisory locks, so successive acquire / release queries do not need
- * connection pinning.
+ * shared instance is reused for the lifetime of the process.
  */
 async function createSharedSqlClient(
   env: Record<string, string | undefined>,
@@ -473,9 +463,7 @@ function startHeartbeatIfConfigured(
   runtime: RuntimeAdapter,
   role: TakosumiProcessRole,
 ): void {
-  const heartbeatFile = runtime.env.get(
-    "TAKOSUMI_SERVICE_WORKER_HEARTBEAT_FILE",
-  );
+  const heartbeatFile = runtime.env.get("TAKOSUMI_SERVICE_HEARTBEAT_FILE");
   if (!heartbeatFile) return;
   if (!runtime.fs.available) {
     log.warn("service.heartbeat.unsupported_runtime", {
@@ -484,7 +472,7 @@ function startHeartbeatIfConfigured(
     return;
   }
   const intervalMs = Number(
-    runtime.env.get("TAKOSUMI_SERVICE_WORKER_POLL_INTERVAL_MS") ?? "250",
+    runtime.env.get("TAKOSUMI_SERVICE_HEARTBEAT_INTERVAL_MS") ?? "250",
   );
   const write = async () => {
     const now = new Date().toISOString();
@@ -585,9 +573,13 @@ function assertDatabaseEncryptionConfigured(
 function assertAuditReplicationConfigured(
   runtime: RuntimeAdapter,
   env: Record<string, string | undefined>,
+  injectedSink: AuditExternalReplicationSink | undefined,
 ): AuditExternalReplicationSink | undefined {
   try {
-    const sink = selectAuditExternalReplicationSink({ env });
+    const sink = requireAuditExternalReplicationSink({
+      environment: env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? env.ENVIRONMENT,
+      ...(injectedSink ? { sink: injectedSink } : {}),
+    });
     if (sink) {
       log.info("service.boot.audit_replication_sink_selected", {
         kind: sink.kind,

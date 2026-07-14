@@ -23,6 +23,7 @@ test("tauri plugin bridge maps typed native plugins to NativeBridge", async () =
   const receivedPushes: unknown[] = [];
   const tappedPushes: unknown[] = [];
   const refreshedPushTokens: unknown[] = [];
+  let pushUnregistrations = 0;
   const biometrics: unknown[] = [];
   const calls: unknown[] = [];
   const clips: unknown[] = [];
@@ -90,6 +91,9 @@ test("tauri plugin bridge maps typed native plugins to NativeBridge", async () =
       async register(input) {
         pushes.push(input);
         return { token: "push-token", environment: "test" };
+      },
+      async unregister() {
+        pushUnregistrations += 1;
       },
       async onNotificationReceived(handler) {
         receivedPushHandler = handler;
@@ -168,6 +172,8 @@ test("tauri plugin bridge maps typed native plugins to NativeBridge", async () =
       accountId: "acct_1",
     },
   ]);
+  await bridge.unregisterPushNotifications?.();
+  expect(pushUnregistrations).toBe(1);
   const unlistenReceived = await bridge.onPushNotificationReceived?.(
     (notification) => {
       receivedPushes.push(notification);
@@ -370,6 +376,7 @@ test("tauri default product bridge assembles product storage, keystore, push, an
   const opened: Array<[string | URL, string | undefined]> = [];
   const clips: unknown[] = [];
   let permissionRequested = false;
+  let pushUnregistered = false;
 
   const bridge = createTauriMobileDefaultProductBridge({
     productAdapter: {
@@ -443,6 +450,9 @@ test("tauri default product bridge assembles product storage, keystore, push, an
       async getToken() {
         return "push-token";
       },
+      async unregister() {
+        pushUnregistered = true;
+      },
     },
     clipboard: {
       async writeText(text, options) {
@@ -482,6 +492,8 @@ test("tauri default product bridge assembles product storage, keystore, push, an
     environment: undefined,
   });
   expect(permissionRequested).toBe(true);
+  await bridge.unregisterPushNotifications?.();
+  expect(pushUnregistered).toBe(true);
 
   await bridge.requestCall?.({
     roomUrl: "https://host.example/calls/room-1",
@@ -627,6 +639,7 @@ test("tauri helper adapters normalize push tokens and call intents", async () =>
       async requestToken() {
         return {
           token: "ios-token",
+          provider: "apns",
           environment: " simulator ",
         };
       },
@@ -639,6 +652,7 @@ test("tauri helper adapters normalize push tokens and call intents", async () =>
     }),
   ).resolves.toEqual({
     token: "ios-token",
+    provider: "apns",
     environment: "simulator",
   });
 
@@ -704,7 +718,12 @@ test("tauri mobile-push plugin adapter requests permission and normalizes tokens
     | undefined;
   let tappedHandler: typeof receivedHandler;
   let refreshHandler:
-    ((payload: { readonly token: string }) => void) | undefined;
+    | ((payload: {
+        readonly token: string;
+        readonly provider?: "apns" | "fcm";
+        readonly environment?: string;
+      }) => void)
+    | undefined;
   const notifications: unknown[] = [];
   const taps: unknown[] = [];
   const refreshes: unknown[] = [];
@@ -777,7 +796,11 @@ test("tauri mobile-push plugin adapter requests permission and normalizes tokens
   );
   receivedHandler?.({ title: "Incoming", data: { path: "/notifications" } });
   tappedHandler?.({ title: "Open", data: { route: "/chat" } });
-  refreshHandler?.({ token: "rotated-token" });
+  refreshHandler?.({
+    token: "rotated-token",
+    provider: "fcm",
+    environment: "production",
+  });
   expect(notifications).toEqual([
     {
       title: "Incoming",
@@ -799,7 +822,8 @@ test("tauri mobile-push plugin adapter requests permission and normalizes tokens
   expect(refreshes).toEqual([
     {
       token: "rotated-token",
-      environment: "device",
+      provider: "fcm",
+      environment: "production",
     },
   ]);
   await receivedUnlisten?.();
@@ -910,7 +934,7 @@ test("tauri keystore Stronghold password helper reads an existing keystore seed"
   const stores: string[] = [];
   const passwordSource = createTauriKeystoreStrongholdPassword({
     keystore: {
-      async store(value) {
+      async store(_service, _user, value) {
         stores.push(value);
       },
       async retrieve(service, user) {
@@ -942,7 +966,9 @@ test("tauri keystore Stronghold password helper migrates the Store fallback", as
   const stores: string[] = [];
   const passwordSource = createTauriKeystoreStrongholdPassword({
     keystore: {
-      async store(value) {
+      async store(service, user, value) {
+        expect(service).toBe("jp.takos.mobile");
+        expect(user).toBe("stronghold-password");
         stores.push(value);
       },
       async retrieve() {
@@ -968,6 +994,108 @@ test("tauri keystore Stronghold password helper migrates the Store fallback", as
     "takos-mobile-stronghold.from-store-fallback",
   );
   expect(stores).toEqual(["takos-mobile-stronghold.from-store-fallback"]);
+  expect(await handle.get<string>("takos.mobile.stronghold.password")).toBe(
+    "takos-mobile-stronghold.from-store-fallback",
+  );
+
+  const verifiedPasswordSource = createTauriKeystoreStrongholdPassword({
+    keystore: {
+      async store() {
+        throw new Error("verified migration must not store again");
+      },
+      async retrieve() {
+        return "takos-mobile-stronghold.from-store-fallback";
+      },
+      async remove() {},
+    },
+    service: "jp.takos.mobile",
+    user: "stronghold-password",
+    fallback: {
+      store: {
+        async load() {
+          return handle;
+        },
+      },
+      storePath: "takos-mobile-session.json",
+      key: "takos.mobile.stronghold.password",
+    },
+  });
+  expect(await verifiedPasswordSource()).toBe(
+    "takos-mobile-stronghold.from-store-fallback",
+  );
+  expect(
+    await handle.get<string>("takos.mobile.stronghold.password"),
+  ).toBeUndefined();
+});
+
+test("tauri keystore Stronghold password helper never silently uses plaintext after secure store failure", async () => {
+  const handle = memoryStore();
+  await handle.set(
+    "takos.mobile.stronghold.password",
+    "takos-mobile-stronghold.from-store-fallback",
+  );
+  const passwordSource = createTauriKeystoreStrongholdPassword({
+    keystore: {
+      async store() {
+        throw new Error("native storage unavailable");
+      },
+      async retrieve() {
+        return null;
+      },
+      async remove() {},
+    },
+    service: "jp.takos.mobile",
+    user: "stronghold-password",
+    fallback: {
+      store: {
+        async load() {
+          return handle;
+        },
+      },
+      storePath: "takos-mobile-session.json",
+      key: "takos.mobile.stronghold.password",
+    },
+  });
+
+  await expect(passwordSource()).rejects.toThrow("native storage unavailable");
+  expect(await handle.get<string>("takos.mobile.stronghold.password")).toBe(
+    "takos-mobile-stronghold.from-store-fallback",
+  );
+});
+
+test("tauri keystore Stronghold password helper rejects mismatched migration values", async () => {
+  const handle = memoryStore();
+  await handle.set(
+    "takos.mobile.stronghold.password",
+    "takos-mobile-stronghold.legacy-password-value",
+  );
+  const passwordSource = createTauriKeystoreStrongholdPassword({
+    keystore: {
+      async store() {},
+      async retrieve() {
+        return "takos-mobile-stronghold.native-password-value";
+      },
+      async remove() {},
+    },
+    service: "jp.takos.mobile",
+    user: "stronghold-password",
+    fallback: {
+      store: {
+        async load() {
+          return handle;
+        },
+      },
+      storePath: "takos-mobile-session.json",
+      key: "takos.mobile.stronghold.password",
+    },
+  });
+
+  await expect(passwordSource()).rejects.toThrow(
+    "Native and legacy Stronghold password values do not match.",
+  );
+  expect(await handle.get<string>("takos.mobile.stronghold.password")).toBe(
+    "takos-mobile-stronghold.legacy-password-value",
+  );
 });
 
 test("tauri invoke keystore adapter calls the plugin commands", async () => {
@@ -985,7 +1113,11 @@ test("tauri invoke keystore adapter calls the plugin commands", async () => {
     },
   });
 
-  await keystore.store("stored-secret");
+  await keystore.store(
+    "jp.takos.mobile",
+    "stronghold-password",
+    "stored-secret",
+  );
   await expect(
     keystore.retrieve("jp.takos.mobile", "stronghold-password"),
   ).resolves.toBe("stored-secret");
@@ -993,7 +1125,13 @@ test("tauri invoke keystore adapter calls the plugin commands", async () => {
   expect(calls).toEqual([
     {
       command: "plugin:keystore|store",
-      args: { payload: { value: "stored-secret" } },
+      args: {
+        payload: {
+          service: "jp.takos.mobile",
+          user: "stronghold-password",
+          value: "stored-secret",
+        },
+      },
     },
     {
       command: "plugin:keystore|retrieve",

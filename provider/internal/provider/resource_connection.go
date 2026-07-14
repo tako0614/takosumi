@@ -44,17 +44,15 @@ func resourceConnectionAttribute() schema.ListNestedAttribute {
 				"permissions": schema.SetAttribute{
 					Required:    true,
 					ElementType: types.StringType,
-					Description: "Grant permissions requested by the consumer.",
+					Description: "Open grant-permission tokens requested by the consumer. The selected Target implementation must advertise support.",
 					Validators: []validator.Set{
-						SetStringsOneOf(1, "read", "write", "connect", "publish", "consume"),
+						SetStringsToken(1),
 					},
 				},
 				"projection": schema.StringAttribute{
 					Required:    true,
-					Description: "How the selected adapter should project the connection to the consumer.",
-					Validators: []validator.String{
-						StringOneOf("env", "database_url", "runtime_binding", "volume_mount", "sdk_client"),
-					},
+					Description: "Open projection capability token. The selected Target implementation must advertise support.",
+					Validators:  []validator.String{StringToken()},
 				},
 			},
 		},

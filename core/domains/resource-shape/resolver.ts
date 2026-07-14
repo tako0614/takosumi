@@ -1,17 +1,14 @@
-// Resource Shape Resolver — PURE, deterministic.
+// Resource Shape Resolver — PURE, deterministic, and provider-neutral.
 //
-// The Resolver turns a desired Resource shape + interface set into a concrete
-// implementation on a concrete Target, scored against a TargetCapabilityMatrix
-// (`docs/internal/final-plan.md` §8). The decision is frozen as a ResolutionLock (§3.5):
-// once a resource is locked, Takosumi must not silently re-target it — migration
-// is an explicit operation. This module performs NO I/O and never reads the
-// clock or RNG; the service layer stamps `lockedAt`.
+// Every executable candidate comes from a TargetPool implementation descriptor.
+// Core never derives an implementation, provider, module, native resource type,
+// or capability matrix from a Target type, Resource kind, or vendor name. The
+// selected Target + complete descriptor are frozen in ResolutionLock; migration
+// remains an explicit operation.
 
 import type {
   CapabilityLevel,
-  ImplementationCapability,
   InterfaceCapabilityScore,
-  JsonObject,
   NativeResourceRef,
   ResolutionLock,
   ResolverInput,
@@ -19,9 +16,8 @@ import type {
   ResourceObject,
   ResourcePortability,
   SpacePolicy,
-  TargetCapabilityMatrix,
+  TargetImplementationDescriptor,
   TargetPoolEntry,
-  TargetType,
 } from "takosumi-contract";
 
 /** Result of {@link resolve}: a typed success/failure outcome (no throws). */
@@ -32,385 +28,101 @@ export type ResolveOutcome =
       readonly error: { readonly code: string; readonly message: string };
     };
 
-/**
- * Which interfaces a resource shape must have (`required`) versus may have
- * (`preferred`). Eligibility filtering uses `required`; requested interfaces
- * contribute to capability scoring / risk notes. Exported so the table is
- * directly testable.
- */
-export const SHAPE_INTERFACE_REQUIREMENTS: Readonly<
-  Record<
-    string,
-    {
-      readonly required: readonly string[];
-      readonly preferred: readonly string[];
-    }
-  >
-> = Object.freeze({
-  EdgeWorker: Object.freeze({
-    required: Object.freeze(["worker_fetch"]) as readonly string[],
-    preferred: Object.freeze([
-      "workers_bindings",
-      "node_compat",
-      "service_bindings",
-      "static_assets",
-    ]) as readonly string[],
-  }),
-  ObjectBucket: Object.freeze({
-    required: Object.freeze(["object_store"]) as readonly string[],
-    preferred: Object.freeze(["s3_api", "signed_url", "object_events"]),
-  }),
-  KVStore: Object.freeze({
-    required: Object.freeze(["kv_store"]) as readonly string[],
-    preferred: Object.freeze(["runtime_binding"]),
-  }),
-  Queue: Object.freeze({
-    required: Object.freeze(["queue"]) as readonly string[],
-    preferred: Object.freeze(["publish", "consume", "cloudevents"]),
-  }),
-  SQLDatabase: Object.freeze({
-    required: Object.freeze(["sql"]) as readonly string[],
-    preferred: Object.freeze(["sqlite", "postgres_protocol", "migrations"]),
-  }),
-  ContainerService: Object.freeze({
-    required: Object.freeze(["oci_container"]) as readonly string[],
-    preferred: Object.freeze([
-      "public_http",
-      "scale_to_zero",
-      "env_projection",
-    ]),
-  }),
-});
-
-/**
- * Map Target backend type to implementation for shapes where Takosumi owns the
- * service form. Generic-provider-backed surfaces such as S3/R2/GCS stay out of
- * this table and use the plain OpenTofu Stack flow instead.
- */
-export const SHAPE_TARGET_IMPLEMENTATION: Readonly<
-  Record<string, Partial<Record<TargetType, string>>>
-> = Object.freeze({
-  EdgeWorker: Object.freeze({
-    cloudflare: "cloudflare_workers",
-    takosumi_native: "takosumi_edge_runtime",
-  }),
-  ObjectBucket: Object.freeze({
-    cloudflare: "cloudflare_r2_bucket",
-    aws: "aws_s3_bucket",
-    gcp: "gcp_storage_bucket",
-    kubernetes: "minio_bucket",
-    takosumi_native: "takosumi_object_bucket",
-  }),
-  KVStore: Object.freeze({
-    cloudflare: "cloudflare_kv_namespace",
-    aws: "aws_dynamodb_kv",
-    kubernetes: "kubernetes_kv_store",
-    takosumi_native: "takosumi_kv_store",
-  }),
-  Queue: Object.freeze({
-    cloudflare: "cloudflare_queue",
-    aws: "aws_sqs_queue",
-    gcp: "gcp_pubsub_queue",
-    kubernetes: "kubernetes_queue",
-    takosumi_native: "takosumi_queue",
-  }),
-  SQLDatabase: Object.freeze({
-    cloudflare: "cloudflare_d1_database",
-    aws: "aws_rds_database",
-    gcp: "gcp_cloudsql_database",
-    kubernetes: "kubernetes_postgres_database",
-    takosumi_native: "takosumi_sql_database",
-  }),
-  ContainerService: Object.freeze({
-    cloudflare: "cloudflare_container",
-    aws: "aws_ecs_service",
-    gcp: "gcp_cloud_run_service",
-    kubernetes: "kubernetes_deployment",
-    vm: "vm_container_service",
-    takosumi_native: "takosumi_container_service",
-  }),
-});
-
-/**
- * Default per-implementation capability matrix. Only shapes that do not have an
- * adequate generic OpenTofu provider or standard API are advertised here by
- * default, and even then only when Takosumi needs typed service-form semantics.
- */
-export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
-  Object.freeze([
-    Object.freeze({
-      implementation: "cloudflare_workers",
-      targetType: "cloudflare",
-      shape: "EdgeWorker",
-      interfaces: Object.freeze({
-        worker_fetch: "native",
-        workers_bindings: "native",
-        node_compat: "shim",
-        service_bindings: "native",
-        static_assets: "native",
-      }),
-    }),
-    Object.freeze({
-      implementation: "takosumi_edge_runtime",
-      targetType: "takosumi_native",
-      shape: "EdgeWorker",
-      interfaces: Object.freeze({
-        worker_fetch: "native",
-        workers_bindings: "shim",
-        node_compat: "native",
-        service_bindings: "shim",
-        static_assets: "shim",
-      }),
-    }),
-    Object.freeze({
-      implementation: "cloudflare_r2_bucket",
-      targetType: "cloudflare",
-      shape: "ObjectBucket",
-      interfaces: Object.freeze({
-        object_store: "native",
-        s3_api: "native",
-        signed_url: "native",
-        object_events: "shim",
-      }),
-    }),
-    Object.freeze({
-      implementation: "cloudflare_kv_namespace",
-      targetType: "cloudflare",
-      shape: "KVStore",
-      interfaces: Object.freeze({
-        kv_store: "native",
-        runtime_binding: "native",
-      }),
-    }),
-    Object.freeze({
-      implementation: "cloudflare_queue",
-      targetType: "cloudflare",
-      shape: "Queue",
-      interfaces: Object.freeze({
-        queue: "native",
-        publish: "native",
-        consume: "native",
-        cloudevents: "shim",
-      }),
-    }),
-    Object.freeze({
-      implementation: "cloudflare_d1_database",
-      targetType: "cloudflare",
-      shape: "SQLDatabase",
-      interfaces: Object.freeze({
-        sql: "native",
-        sqlite: "native",
-        postgres_protocol: "unsupported",
-        migrations: "shim",
-      }),
-    }),
-    Object.freeze({
-      implementation: "cloudflare_container",
-      targetType: "cloudflare",
-      shape: "ContainerService",
-      interfaces: Object.freeze({
-        oci_container: "native",
-        public_http: "native",
-        scale_to_zero: "shim",
-        env_projection: "native",
-      }),
-    }),
-    Object.freeze({
-      implementation: "kubernetes_deployment",
-      targetType: "kubernetes",
-      shape: "ContainerService",
-      interfaces: Object.freeze({
-        oci_container: "native",
-        public_http: "shim",
-        scale_to_zero: "shim",
-        env_projection: "native",
-      }),
-    }),
-    Object.freeze({
-      implementation: "takosumi_container_service",
-      targetType: "takosumi_native",
-      shape: "ContainerService",
-      interfaces: Object.freeze({
-        oci_container: "native",
-        public_http: "native",
-        scale_to_zero: "native",
-        env_projection: "native",
-      }),
-    }),
-    Object.freeze({
-      implementation: "takosumi_object_bucket",
-      targetType: "takosumi_native",
-      shape: "ObjectBucket",
-      interfaces: Object.freeze({
-        object_store: "native",
-        s3_api: "native",
-        signed_url: "native",
-        object_events: "native",
-      }),
-    }),
-    Object.freeze({
-      implementation: "takosumi_kv_store",
-      targetType: "takosumi_native",
-      shape: "KVStore",
-      interfaces: Object.freeze({
-        kv_store: "native",
-        runtime_binding: "native",
-      }),
-    }),
-    Object.freeze({
-      implementation: "takosumi_queue",
-      targetType: "takosumi_native",
-      shape: "Queue",
-      interfaces: Object.freeze({
-        queue: "native",
-        publish: "native",
-        consume: "native",
-        cloudevents: "native",
-      }),
-    }),
-    Object.freeze({
-      implementation: "takosumi_sql_database",
-      targetType: "takosumi_native",
-      shape: "SQLDatabase",
-      interfaces: Object.freeze({
-        sql: "native",
-        sqlite: "native",
-        postgres_protocol: "shim",
-        migrations: "native",
-      }),
-    }),
-  ]) as TargetCapabilityMatrix;
-
-// --- internals ---------------------------------------------------------------
-
 function fail(code: string, message: string): ResolveOutcome {
   return { ok: false, error: { code, message } };
 }
 
-/** Resource name used for native-resource ids: prefer `spec.name`, else metadata. */
 function resourceName(resource: ResourceObject): string {
   const specName = (resource.spec as { readonly name?: unknown }).name;
   if (typeof specName === "string" && specName.length > 0) return specName;
   return resource.metadata.name;
 }
 
-/** `tkrn:{space}:{kind}:{name}` resource id (cf. §3.5 example). */
 function resourceId(resource: ResourceObject): string {
   return `tkrn:${resource.metadata.space}:${resource.kind}:${resource.metadata.name}`;
 }
 
-function findCapability(
-  matrix: TargetCapabilityMatrix,
-  implementation: string,
-  targetType?: TargetType,
-  shape?: string,
-): ImplementationCapability | undefined {
-  return matrix.find(
-    (c) =>
-      c.implementation === implementation &&
-      (targetType === undefined || c.targetType === targetType) &&
-      (shape === undefined || c.shape === shape),
-  );
-}
-
 function levelOf(
-  cap: ImplementationCapability | undefined,
+  descriptor: TargetImplementationDescriptor,
   iface: string,
 ): CapabilityLevel {
-  return (
-    (cap?.interfaces[iface] as CapabilityLevel | undefined) ?? "unsupported"
-  );
+  return descriptor.interfaces[iface] ?? "unsupported";
 }
 
-/** Deterministic string compare (no locale dependence). */
 function byName(a: string, b: string): number {
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;
 }
 
-/** Native resource graph for the selected implementation (`docs/internal/final-plan.md` §8/§16). */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  const object = value as Readonly<Record<string, unknown>>;
+  return `{${Object.keys(object)
+    .sort(byName)
+    .filter((key) => object[key] !== undefined)
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
+    .join(",")}}`;
+}
+
+function cloneDescriptor(
+  descriptor: TargetImplementationDescriptor,
+): TargetImplementationDescriptor {
+  return JSON.parse(
+    JSON.stringify(descriptor),
+  ) as TargetImplementationDescriptor;
+}
+
+function snapshotTarget(
+  entry: TargetPoolEntry,
+  descriptor: TargetImplementationDescriptor,
+): TargetPoolEntry {
+  return {
+    name: entry.name,
+    type: entry.type,
+    ...(entry.ref === undefined ? {} : { ref: entry.ref }),
+    ...(entry.credentialRef === undefined
+      ? {}
+      : { credentialRef: entry.credentialRef }),
+    ...(entry.region === undefined ? {} : { region: entry.region }),
+    priority: entry.priority,
+    implementations: [cloneDescriptor(descriptor)],
+  };
+}
+
 function nativeResourcesFor(
-  shape: string,
-  implementation: string,
+  descriptor: TargetImplementationDescriptor,
   name: string,
-  nativeResourceType?: string,
 ): readonly NativeResourceRef[] {
-  if (nativeResourceType) {
-    return [{ type: nativeResourceType, id: name }];
-  }
-  if (shape === "EdgeWorker") {
-    switch (implementation) {
-      case "cloudflare_workers":
-        return [{ type: "cloudflare.workers_script", id: name }];
-      case "takosumi_edge_runtime":
-        return [{ type: "takosumi.edge_worker", id: name }];
-      default:
-        return [];
-    }
-  }
-  switch (implementation) {
-    case "cloudflare_r2_bucket":
-      return [{ type: "cloudflare.r2_bucket", id: name }];
-    case "cloudflare_kv_namespace":
-      return [{ type: "cloudflare.kv_namespace", id: name }];
-    case "cloudflare_queue":
-      return [{ type: "cloudflare.queue", id: name }];
-    case "cloudflare_d1_database":
-      return [{ type: "cloudflare.d1_database", id: name }];
-    case "cloudflare_container":
-      return [{ type: "cloudflare.container", id: name }];
-    case "kubernetes_deployment":
-      return [{ type: "kubernetes.deployment", id: name }];
-    case "aws_s3_bucket":
-      return [{ type: "aws.s3_bucket", id: name }];
-    case "aws_sqs_queue":
-      return [{ type: "aws.sqs_queue", id: name }];
-    case "aws_rds_database":
-      return [{ type: "aws.rds_instance", id: name }];
-    case "aws_ecs_service":
-      return [{ type: "aws.ecs_service", id: name }];
-    case "gcp_storage_bucket":
-      return [{ type: "gcp.storage_bucket", id: name }];
-    case "gcp_pubsub_queue":
-      return [{ type: "gcp.pubsub_topic", id: name }];
-    case "gcp_cloudsql_database":
-      return [{ type: "gcp.cloudsql_database", id: name }];
-    case "gcp_cloud_run_service":
-      return [{ type: "gcp.cloud_run_service", id: name }];
-    case "takosumi_object_bucket":
-      return [{ type: "takosumi.object_bucket", id: name }];
-    case "takosumi_kv_store":
-      return [{ type: "takosumi.kv_store", id: name }];
-    case "takosumi_queue":
-      return [{ type: "takosumi.queue", id: name }];
-    case "takosumi_sql_database":
-      return [{ type: "takosumi.sql_database", id: name }];
-    case "takosumi_container_service":
-      return [{ type: "takosumi.container_service", id: name }];
-    default:
-      return [];
-  }
+  return descriptor.nativeResourceType
+    ? [{ type: descriptor.nativeResourceType, id: name }]
+    : [];
 }
 
 function computePortability(
   scores: readonly InterfaceCapabilityScore[],
 ): ResourcePortability {
-  const levels = scores.map((s) => s.level);
-  if (levels.every((l) => l === "native")) return "portable";
-  if (levels.some((l) => l === "emulated" || l === "unsupported"))
+  const levels = scores.map((score) => score.level);
+  if (levels.every((level) => level === "native")) return "portable";
+  if (levels.some((level) => level === "emulated" || level === "unsupported")) {
     return "partial";
-  if (levels.some((l) => l === "shim")) return "mostly_portable";
+  }
+  if (levels.some((level) => level === "shim")) return "mostly_portable";
   return "portable";
 }
 
 function capabilityScoresFor(
-  cap: ImplementationCapability | undefined,
+  descriptor: TargetImplementationDescriptor,
   interfaces: readonly string[],
 ): readonly InterfaceCapabilityScore[] {
   return interfaces.map((iface) => ({
     interface: iface,
-    level: levelOf(cap, iface),
+    level: levelOf(descriptor, iface),
   }));
 }
 
@@ -419,15 +131,17 @@ function riskNotesFor(
   scores: readonly InterfaceCapabilityScore[],
 ): string[] {
   const notes: string[] = [];
-  for (const s of scores) {
-    if (s.level === "shim") {
+  for (const score of scores) {
+    if (score.level === "shim") {
       notes.push(
-        `${s.interface} is provided via an adapter shim on ${implementation}`,
+        `${score.interface} is provided via an adapter shim on ${implementation}`,
       );
-    } else if (s.level === "emulated") {
-      notes.push(`${s.interface} is emulated by Takosumi on ${implementation}`);
-    } else if (s.level === "unsupported") {
-      notes.push(`${s.interface} is unsupported on ${implementation}`);
+    } else if (score.level === "emulated") {
+      notes.push(
+        `${score.interface} is emulated by Takosumi on ${implementation}`,
+      );
+    } else if (score.level === "unsupported") {
+      notes.push(`${score.interface} is unsupported on ${implementation}`);
     }
   }
   return notes;
@@ -435,58 +149,22 @@ function riskNotesFor(
 
 interface Selection {
   readonly entry: TargetPoolEntry;
-  readonly implementation: string;
-  readonly nativeResourceType?: string;
-  readonly plugin?: string;
-  readonly options?: JsonObject;
+  readonly descriptor: TargetImplementationDescriptor;
 }
 
-interface ImplementationCandidate {
-  readonly implementation: string;
-  readonly nativeResourceType?: string;
-  readonly plugin?: string;
-  readonly options?: JsonObject;
-}
-
-function targetImplementationsFor(
+function implementationFingerprint(
   shape: string,
-  entry: TargetPoolEntry,
-): readonly ImplementationCandidate[] {
-  const explicit = (entry.implementations ?? [])
-    .filter((impl) => impl.shape === shape)
-    .map((impl) => ({
-      implementation: impl.implementation,
-      ...(impl.nativeResourceType
-        ? { nativeResourceType: impl.nativeResourceType }
-        : {}),
-      ...(impl.plugin ? { plugin: impl.plugin } : {}),
-      ...(impl.options ? { options: impl.options } : {}),
-    }));
-  if (explicit.length > 0) return explicit;
-  const seeded = SHAPE_TARGET_IMPLEMENTATION[shape]?.[entry.type];
-  return seeded ? [{ implementation: seeded }] : [];
-}
-
-function targetPoolCapabilityMatrix(
-  matrix: TargetCapabilityMatrix,
-  entries: readonly TargetPoolEntry[],
-): TargetCapabilityMatrix {
-  const configured: ImplementationCapability[] = [];
-  for (const entry of entries) {
-    for (const impl of entry.implementations ?? []) {
-      configured.push({
-        implementation: impl.implementation,
-        targetType: entry.type,
-        shape: impl.shape,
-        interfaces: impl.interfaces,
-      });
-    }
-  }
-  return configured.length === 0 ? matrix : [...configured, ...matrix];
+  selection: Selection,
+): string {
+  return `resolution-v2:${canonicalJson({
+    shape,
+    target: snapshotTarget(selection.entry, selection.descriptor),
+    implementation: selection.descriptor,
+  })}`;
 }
 
 function capabilityRank(
-  cap: ImplementationCapability | undefined,
+  descriptor: TargetImplementationDescriptor,
   interfaces: readonly string[],
 ): number {
   const weights: Readonly<Record<CapabilityLevel, number>> = {
@@ -496,7 +174,7 @@ function capabilityRank(
     unsupported: 0,
   };
   return interfaces.reduce(
-    (sum, iface) => sum + weights[levelOf(cap, iface)],
+    (sum, iface) => sum + weights[levelOf(descriptor, iface)],
     0,
   );
 }
@@ -508,10 +186,9 @@ type SelectResult =
       readonly error: { readonly code: string; readonly message: string };
     };
 
-/** Apply SpacePolicy allow/deny, required-interface eligibility, then rank. */
+/** Apply SpacePolicy, filter explicit descriptor evidence, then rank. */
 function selectTarget(
   input: ResolverInput,
-  matrix: TargetCapabilityMatrix,
   requestedInterfaces: readonly string[],
 ): SelectResult {
   const policy: SpacePolicy["spec"] | undefined = input.spacePolicy?.spec;
@@ -521,7 +198,6 @@ function selectTarget(
   const eligible: Selection[] = [];
   let policyEligibleTargets = 0;
   for (const entry of input.targetPool.spec.targets) {
-    // Deny wins; an entry matches a policy token by BOTH its type and name.
     if (
       denied &&
       (denied.includes(entry.type) || denied.includes(entry.name))
@@ -536,31 +212,14 @@ function selectTarget(
       continue;
     }
     policyEligibleTargets += 1;
-    for (const candidate of targetImplementationsFor(
-      input.resource.kind,
-      entry,
-    )) {
-      const cap = findCapability(
-        matrix,
-        candidate.implementation,
-        entry.type,
-        input.resource.kind,
-      );
-      if (!cap || cap.shape !== input.resource.kind) continue;
+    for (const descriptor of entry.implementations ?? []) {
+      if (descriptor.shape !== input.resource.kind) continue;
       if (
         requestedInterfaces.every(
-          (iface) => levelOf(cap, iface) !== "unsupported",
+          (iface) => levelOf(descriptor, iface) !== "unsupported",
         )
       ) {
-        eligible.push({
-          entry,
-          implementation: candidate.implementation,
-          ...(candidate.nativeResourceType
-            ? { nativeResourceType: candidate.nativeResourceType }
-            : {}),
-          ...(candidate.plugin ? { plugin: candidate.plugin } : {}),
-          ...(candidate.options ? { options: candidate.options } : {}),
-        });
+        eligible.push({ entry, descriptor });
       }
     }
   }
@@ -579,92 +238,62 @@ function selectTarget(
       ok: false,
       error: {
         code: "capability_missing",
-        message: `no policy-eligible Target supports the required ${input.resource.kind} interfaces and adapter capabilities`,
+        message:
+          `no policy-eligible Target declares an implementation descriptor ` +
+          `for ${input.resource.kind} with the requested interfaces`,
       },
     };
   }
 
-  // Highest Target priority wins; when one Target exposes multiple
-  // implementations, prefer the better interface fit, then deterministic names.
   const ranked = [...eligible].sort(
     (a, b) =>
       b.entry.priority - a.entry.priority ||
-      capabilityRank(
-        findCapability(
-          matrix,
-          b.implementation,
-          b.entry.type,
-          input.resource.kind,
-        ),
-        requestedInterfaces,
-      ) -
-        capabilityRank(
-          findCapability(
-            matrix,
-            a.implementation,
-            a.entry.type,
-            input.resource.kind,
-          ),
-          requestedInterfaces,
-        ) ||
+      capabilityRank(b.descriptor, requestedInterfaces) -
+        capabilityRank(a.descriptor, requestedInterfaces) ||
       byName(a.entry.name, b.entry.name) ||
-      byName(a.implementation, b.implementation),
+      byName(a.descriptor.implementation, b.descriptor.implementation),
   );
   return { ok: true, selection: ranked[0]! };
 }
 
 function buildFreshOutput(
   input: ResolverInput,
-  matrix: TargetCapabilityMatrix,
   selection: Selection,
 ): ResolverOutput {
-  const { entry, implementation } = selection;
-  const cap = findCapability(
-    matrix,
-    implementation,
-    entry.type,
-    input.resource.kind,
-  );
-  const name = resourceName(input.resource);
-
-  const capabilityScores = capabilityScoresFor(cap, input.interfaces);
+  const descriptor = cloneDescriptor(selection.descriptor);
+  const capabilityScores = capabilityScoresFor(descriptor, input.interfaces);
   const portability = computePortability(capabilityScores);
   const nativeResourcePlan = nativeResourcesFor(
-    input.resource.kind,
-    implementation,
-    name,
-    selection.nativeResourceType,
+    descriptor,
+    resourceName(input.resource),
   );
-  const riskNotes = riskNotesFor(implementation, capabilityScores);
-
-  const lockAfterCreate =
-    input.spacePolicy?.spec.resolution.lockAfterCreate ?? false;
-
-  const reason: string[] = [
-    `${implementation} selected for ${input.resource.kind} on target ${entry.name} (priority ${entry.priority})`,
-    ...capabilityScores.map((s) => `${s.interface} ${s.level}`),
+  const riskNotes = riskNotesFor(descriptor.implementation, capabilityScores);
+  const targetSnapshot = snapshotTarget(selection.entry, descriptor);
+  const reason = [
+    `${descriptor.implementation} selected for ${input.resource.kind} on target ${selection.entry.name} (priority ${selection.entry.priority})`,
+    ...capabilityScores.map((score) => `${score.interface} ${score.level}`),
   ];
-
   const resolutionLock: ResolutionLock = {
     resourceId: resourceId(input.resource),
-    selectedImplementation: implementation,
-    target: entry.name,
-    locked: lockAfterCreate,
+    selectedImplementation: descriptor.implementation,
+    targetPool: input.targetPool.metadata.name,
+    target: selection.entry.name,
+    targetSnapshot,
+    implementationSnapshot: descriptor,
+    implementationFingerprint: implementationFingerprint(
+      input.resource.kind,
+      selection,
+    ),
+    locked: true,
     reason,
     portability,
     nativeResources: nativeResourcePlan,
-    // lockedAt is intentionally omitted: the service stamps the timestamp.
   };
 
   return {
-    selectedImplementation: implementation,
-    ...(selection.plugin
-      ? { selectedImplementationPlugin: selection.plugin }
-      : {}),
-    ...(selection.options
-      ? { selectedImplementationOptions: selection.options }
-      : {}),
-    selectedTarget: entry.name,
+    selectedImplementation: descriptor.implementation,
+    selectedImplementationDescriptor: descriptor,
+    selectedTarget: selection.entry.name,
     nativeResourcePlan,
     capabilityScores,
     portability,
@@ -673,91 +302,124 @@ function buildFreshOutput(
   };
 }
 
-/**
- * Re-derive the resolver output for an already-locked resolution WITHOUT
- * re-targeting it (`docs/internal/final-plan.md` §3.5). If the current request would have
- * picked a different Target, append a risk note recording the divergence but
- * keep the locked decision intact.
- */
+function descriptorFromLock(
+  input: ResolverInput,
+  lock: ResolutionLock,
+): TargetImplementationDescriptor | undefined {
+  if (lock.implementationSnapshot) {
+    return cloneDescriptor(lock.implementationSnapshot);
+  }
+  const snapshotted = lock.targetSnapshot?.implementations?.find(
+    (descriptor) =>
+      descriptor.shape === input.resource.kind &&
+      descriptor.implementation === lock.selectedImplementation,
+  );
+  if (snapshotted) return cloneDescriptor(snapshotted);
+
+  // Historical normalization only: an older lock can recover an explicitly
+  // declared descriptor from the same named Target. No type/vendor inference.
+  const currentTarget = input.targetPool.spec.targets.find(
+    (entry) => entry.name === lock.target,
+  );
+  const current = currentTarget?.implementations?.find(
+    (descriptor) =>
+      descriptor.shape === input.resource.kind &&
+      descriptor.implementation === lock.selectedImplementation,
+  );
+  return current ? cloneDescriptor(current) : undefined;
+}
+
+function targetFromLock(
+  input: ResolverInput,
+  lock: ResolutionLock,
+  descriptor: TargetImplementationDescriptor,
+): TargetPoolEntry | undefined {
+  if (lock.targetSnapshot) {
+    return snapshotTarget(lock.targetSnapshot, descriptor);
+  }
+  const current = input.targetPool.spec.targets.find(
+    (entry) => entry.name === lock.target,
+  );
+  return current ? snapshotTarget(current, descriptor) : undefined;
+}
+
 function buildLockedOutput(
   input: ResolverInput,
-  matrix: TargetCapabilityMatrix,
   lock: ResolutionLock,
+  descriptor: TargetImplementationDescriptor,
+  target: TargetPoolEntry,
   freshSelection: SelectResult,
 ): ResolverOutput {
-  const cap = findCapability(matrix, lock.selectedImplementation);
-  const name = resourceName(input.resource);
-
-  const capabilityScores = capabilityScoresFor(cap, input.interfaces);
+  const capabilityScores = capabilityScoresFor(descriptor, input.interfaces);
   const portability = lock.portability ?? computePortability(capabilityScores);
   const nativeResourcePlan =
     lock.nativeResources ??
-    nativeResourcesFor(input.resource.kind, lock.selectedImplementation, name);
-
+    nativeResourcesFor(descriptor, resourceName(input.resource));
   const riskNotes = riskNotesFor(lock.selectedImplementation, capabilityScores);
-  const lockedSelection =
-    freshSelection.ok &&
-    freshSelection.selection.entry.name === lock.target &&
-    freshSelection.selection.implementation === lock.selectedImplementation
-      ? freshSelection.selection
-      : undefined;
   if (
     freshSelection.ok &&
-    freshSelection.selection.entry.name !== lock.target
+    (freshSelection.selection.entry.name !== lock.target ||
+      freshSelection.selection.descriptor.implementation !==
+        lock.selectedImplementation)
   ) {
     riskNotes.push(
-      `resolution is locked to target ${lock.target}; the current request would prefer ${freshSelection.selection.entry.name}, but migration is an explicit operation (no silent re-target)`,
+      `resolution is locked to ${lock.selectedImplementation} on target ${lock.target}; the current request would prefer ${freshSelection.selection.descriptor.implementation} on ${freshSelection.selection.entry.name}, but migration is an explicit operation`,
     );
   }
 
+  const normalizedLock: ResolutionLock = {
+    ...lock,
+    targetSnapshot: target,
+    implementationSnapshot: descriptor,
+    implementationFingerprint:
+      lock.implementationFingerprint ??
+      implementationFingerprint(input.resource.kind, {
+        entry: target,
+        descriptor,
+      }),
+    locked: true,
+  };
   return {
     selectedImplementation: lock.selectedImplementation,
-    ...(lockedSelection?.plugin
-      ? { selectedImplementationPlugin: lockedSelection.plugin }
-      : {}),
-    ...(lockedSelection?.options
-      ? { selectedImplementationOptions: lockedSelection.options }
-      : {}),
+    selectedImplementationDescriptor: descriptor,
     selectedTarget: lock.target,
     nativeResourcePlan,
     capabilityScores,
     portability,
     riskNotes,
-    resolutionLock: lock,
+    resolutionLock: normalizedLock,
   };
 }
 
-/**
- * Resolve a desired Resource shape to an implementation + Target. Pure and
- * deterministic: no clock, no RNG, no I/O.
- */
+/** Resolve a Resource through explicit TargetPool descriptors only. */
 export function resolve(input: ResolverInput): ResolveOutcome {
-  const requirements = SHAPE_INTERFACE_REQUIREMENTS[input.resource.kind];
-  if (!requirements) {
-    return fail(
-      "unsupported_shape",
-      `resolver does not implement shape ${input.resource.kind}`,
-    );
-  }
-
-  const matrix = targetPoolCapabilityMatrix(
-    input.targetCapabilities ?? DEFAULT_RESOURCE_SHAPE_CAPABILITIES,
-    input.targetPool.spec.targets,
-  );
-  const freshSelection = selectTarget(input, matrix, input.interfaces);
-
-  // §3.5: a locked resolution is never silently re-targeted unless policy opts
-  // into auto-migration. Return the existing decision unchanged.
+  const freshSelection = selectTarget(input, input.interfaces);
   const lock = input.existingLock;
-  if (lock?.locked) {
-    const allowAutoMigration =
-      input.spacePolicy?.spec.resolution.allowAutoMigration ?? false;
-    if (!allowAutoMigration) {
-      return {
-        ok: true,
-        output: buildLockedOutput(input, matrix, lock, freshSelection),
-      };
+  if (lock) {
+    const descriptor = descriptorFromLock(input, lock);
+    if (!descriptor) {
+      return fail(
+        "resolution_descriptor_missing",
+        `locked implementation ${lock.selectedImplementation} on target ${lock.target} has no recoverable descriptor snapshot`,
+      );
     }
+    const target = targetFromLock(input, lock, descriptor);
+    if (!target) {
+      return fail(
+        "selected_target_missing",
+        `locked target ${lock.target} has no recoverable Target snapshot`,
+      );
+    }
+    return {
+      ok: true,
+      output: buildLockedOutput(
+        input,
+        lock,
+        descriptor,
+        target,
+        freshSelection,
+      ),
+    };
   }
 
   if (!freshSelection.ok) {
@@ -765,6 +427,6 @@ export function resolve(input: ResolverInput): ResolveOutcome {
   }
   return {
     ok: true,
-    output: buildFreshOutput(input, matrix, freshSelection.selection),
+    output: buildFreshOutput(input, freshSelection.selection),
   };
 }

@@ -20,6 +20,8 @@ import {
 import { isMobileProductKind } from "../../contract/mobile.ts";
 import { requireMobileProductKey } from "./product-key.ts";
 
+const MOBILE_AUTH_REQUEST_TTL_MS = 10 * 60 * 1000;
+
 export interface BeginMobileOidcSignInInput {
   readonly adapter: MobileProductAdapter;
   readonly discovery: HostDiscovery;
@@ -40,14 +42,33 @@ export interface CompleteMobileOidcSignInInput {
   readonly adapter: MobileProductAdapter;
   readonly nativeBridge: NativeBridge;
   readonly callbackUrl: string;
+  /**
+   * Persist the exchanged session before returning it. Defaults to true for
+   * backward compatibility. Controllers that need to reject stale async
+   * completions can set this to false and call persistMobileSession only after
+   * their generation check succeeds.
+   */
+  readonly persistSession?: boolean;
   readonly fetch?: FetchLike;
   readonly now?: () => Date;
+}
+
+export interface PersistMobileSessionInput {
+  readonly adapter: MobileProductAdapter;
+  readonly nativeBridge: NativeBridge;
+  readonly session: MobileSession;
 }
 
 export interface RefreshMobileSessionInput {
   readonly adapter: MobileProductAdapter;
   readonly nativeBridge: NativeBridge;
   readonly session: MobileSession;
+  /**
+   * Persist the refreshed session before returning it. Defaults to true.
+   * Lifecycle-aware controllers can disable this and commit only after their
+   * generation check succeeds.
+   */
+  readonly persistSession?: boolean;
   readonly fetch?: FetchLike;
   readonly now?: () => Date;
 }
@@ -70,6 +91,7 @@ export async function beginMobileOidcSignIn(
   input: BeginMobileOidcSignInInput,
 ): Promise<BeginMobileOidcSignInResult> {
   const store = requireMobileStore(input.nativeBridge);
+  const oidcClientId = mobileClientId(input.discovery);
   const metadata = await fetchOidcMetadata({
     issuer: input.discovery.oidcIssuer,
     fetch: input.fetch,
@@ -84,6 +106,7 @@ export async function beginMobileOidcSignIn(
     hostUrl: input.discovery.hostUrl,
     product: input.adapter.product,
     oidcIssuer: input.discovery.oidcIssuer,
+    oidcClientId,
     productEndpoints: normalizeProductEndpoints(
       input.discovery.product?.endpoints,
     ),
@@ -102,7 +125,7 @@ export async function beginMobileOidcSignIn(
     request,
     authorizationUrl: createOidcAuthorizationUrl({
       metadata,
-      clientId: mobileClientId(input.adapter),
+      clientId: oidcClientId,
       redirectUri,
       state,
       codeChallenge: pkce.codeChallenge,
@@ -115,7 +138,7 @@ export async function completeMobileOidcSignIn(
   input: CompleteMobileOidcSignInInput,
 ): Promise<MobileSession> {
   const store = requireMobileStore(input.nativeBridge);
-  const request = await loadMobileAuthRequest(input.adapter, store);
+  const request = await loadMobileAuthRequest(input.adapter, store, input.now);
   if (!request) throw new Error("No pending mobile sign-in request.");
 
   const callback = parseOidcCallback(input.callbackUrl, request.state);
@@ -125,7 +148,7 @@ export async function completeMobileOidcSignIn(
   });
   const token = await exchangeOidcCode({
     metadata,
-    clientId: mobileClientId(input.adapter),
+    clientId: request.oidcClientId,
     redirectUri: request.redirectUri,
     code: callback.code,
     codeVerifier: request.codeVerifier,
@@ -137,9 +160,21 @@ export async function completeMobileOidcSignIn(
     now: input.now,
   });
 
-  await storeMobileSession(input.adapter, store, session);
+  if (input.persistSession !== false) {
+    await storeMobileSession(input.adapter, store, session);
+  }
   await store.delete(mobileAuthRequestStorageKey(input.adapter));
   return session;
+}
+
+export async function persistMobileSession(
+  input: PersistMobileSessionInput,
+): Promise<void> {
+  await storeMobileSession(
+    input.adapter,
+    requireMobileStore(input.nativeBridge),
+    input.session,
+  );
 }
 
 export async function ensureFreshMobileSession(
@@ -160,6 +195,7 @@ export async function refreshMobileSession(
     throw new Error("Mobile session has no refresh token.");
   }
   const store = requireMobileStore(input.nativeBridge);
+  const oidcClientId = requireSessionMobileClientId(input.session);
   const metadata = await fetchOidcMetadata({
     issuer: input.session.oidcIssuer,
     fetch: input.fetch,
@@ -177,12 +213,14 @@ export async function refreshMobileSession(
     },
     body: new URLSearchParams({
       grant_type: "refresh_token",
-      client_id: mobileClientId(input.adapter),
+      client_id: oidcClientId,
       refresh_token: input.session.refreshToken,
     }),
   });
   if (!response.ok) {
-    await store.delete(mobileSessionStorageKey(input.adapter));
+    if (input.persistSession !== false) {
+      await store.delete(mobileSessionStorageKey(input.adapter));
+    }
     throw new Error(`Mobile session refresh failed: ${response.status}`);
   }
   const token = (await response.json()) as OidcTokenResponse;
@@ -191,7 +229,9 @@ export async function refreshMobileSession(
     token,
     now: input.now,
   });
-  await storeMobileSession(input.adapter, store, session);
+  if (input.persistSession !== false) {
+    await storeMobileSession(input.adapter, store, session);
+  }
   return session;
 }
 
@@ -237,6 +277,7 @@ function createMobileSession(input: {
     hostUrl: input.request.hostUrl,
     product: input.request.product,
     oidcIssuer: input.request.oidcIssuer,
+    oidcClientId: input.request.oidcClientId,
     productEndpoints: input.request.productEndpoints,
     accessToken: input.token.access_token,
     tokenType: input.token.token_type,
@@ -264,6 +305,7 @@ function createMobileSessionFromRefresh(input: {
     hostUrl: input.session.hostUrl,
     product: input.session.product,
     oidcIssuer: input.session.oidcIssuer,
+    oidcClientId: input.session.oidcClientId,
     productEndpoints: input.session.productEndpoints,
     accessToken: input.token.access_token,
     tokenType: input.token.token_type,
@@ -295,6 +337,7 @@ function mobileSessionNeedsRefresh(
 async function loadMobileAuthRequest(
   adapter: MobileProductAdapter,
   store: MobileKeyValueStore,
+  now: (() => Date) | undefined,
 ): Promise<MobileAuthRequest | undefined> {
   const raw = await store.get(mobileAuthRequestStorageKey(adapter));
   if (!raw) return undefined;
@@ -303,6 +346,7 @@ async function loadMobileAuthRequest(
     typeof parsed.hostUrl !== "string" ||
     parsed.product !== adapter.product ||
     typeof parsed.oidcIssuer !== "string" ||
+    typeof parsed.oidcClientId !== "string" ||
     !isOptionalProductEndpoints(parsed.productEndpoints) ||
     typeof parsed.redirectUri !== "string" ||
     typeof parsed.state !== "string" ||
@@ -310,6 +354,17 @@ async function loadMobileAuthRequest(
     typeof parsed.createdAt !== "string"
   ) {
     throw new Error("Stored mobile sign-in request is invalid.");
+  }
+  const createdAtMs = Date.parse(parsed.createdAt);
+  if (!Number.isFinite(createdAtMs)) {
+    throw new Error("Stored mobile sign-in request is invalid.");
+  }
+  if (
+    (now?.() ?? new Date()).getTime() - createdAtMs >
+    MOBILE_AUTH_REQUEST_TTL_MS
+  ) {
+    await store.delete(mobileAuthRequestStorageKey(adapter));
+    throw new Error("Pending mobile sign-in request has expired.");
   }
   return {
     ...(parsed as MobileAuthRequest),
@@ -323,6 +378,8 @@ function parseMobileSession(raw: string): MobileSession {
     typeof parsed.hostUrl !== "string" ||
     !isMobileProductKind(parsed.product) ||
     typeof parsed.oidcIssuer !== "string" ||
+    (parsed.oidcClientId !== undefined &&
+      typeof parsed.oidcClientId !== "string") ||
     !isOptionalProductEndpoints(parsed.productEndpoints) ||
     typeof parsed.accessToken !== "string" ||
     typeof parsed.tokenType !== "string" ||
@@ -364,8 +421,20 @@ function isProductEndpointsRecord(
   );
 }
 
-function mobileClientId(adapter: MobileProductAdapter): string {
-  return adapter.oidcClientId ?? `${adapter.product}-mobile`;
+function mobileClientId(discovery: HostDiscovery): string {
+  const clientId = discovery.oidcClientId?.trim();
+  if (!clientId) {
+    throw new Error("Host does not advertise a mobile OIDC client id.");
+  }
+  return clientId;
+}
+
+function requireSessionMobileClientId(session: MobileSession): string {
+  const clientId = session.oidcClientId?.trim();
+  if (!clientId) {
+    throw new Error("Mobile session is missing its OIDC client id.");
+  }
+  return clientId;
 }
 
 function requireMobileStore(nativeBridge: NativeBridge): MobileKeyValueStore {

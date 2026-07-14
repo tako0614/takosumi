@@ -22,9 +22,8 @@ describe("isAccountsApiPath", () => {
       "/v1/account/tokens",
       "/v1/auth/upstream/callback",
       "/v1/auth/passkeys/register/options",
-      "/v1/capsule-projections",
-      "/v1/capsule-projections/plan-runs",
-      "/internal/runtime-projection/materials/resolve",
+      "/v1/privacy/requests",
+      "/internal/v1/run-callback",
     ];
     for (const path of apiPaths) {
       expect(isAccountsApiPath(path)).toBe(true);
@@ -39,7 +38,7 @@ describe("isAccountsApiPath", () => {
       "/apps",
       "/install",
       "/dashboard",
-      "/dashboard/installations",
+      "/services/capsule_example",
       "/assets/app.js",
       "/favicon.ico",
     ]) {
@@ -81,6 +80,6 @@ describe("isWorkerLocalPath", () => {
     expect(isWorkerLocalPath("/healthz")).toBe(true);
     expect(isWorkerLocalPath("/healthz/")).toBe(true);
     expect(isWorkerLocalPath("/")).toBe(false);
-    expect(isWorkerLocalPath("/v1/capsule-projections")).toBe(false);
+    expect(isWorkerLocalPath("/v1/account/session/me")).toBe(false);
   });
 });

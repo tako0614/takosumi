@@ -9,8 +9,8 @@ export function isWorkerLocalPath(pathname: string): boolean {
 
 // Account-plane / service API namespaces handled by the accounts handler.
 // Everything NOT matched here is served as the dashboard SPA from the Worker's
-// static assets. `/healthz` and `/__takosumi/exports/*` are handled earlier in
-// the Worker, so they are not repeated here. (`/dashboard/*` is intentionally
+// static assets. `/healthz` is handled earlier in the Worker, so it is not
+// repeated here. (`/dashboard/*` is intentionally
 // NOT in this set: the SPA owns the dashboard UI now that the former
 // server-HTML dashboard has been removed from accounts-service.)
 //
@@ -20,13 +20,13 @@ export function isWorkerLocalPath(pathname: string): boolean {
 //     NOTE it is NOT under `/v1`, so it needs its own entry or the SPA
 //     `not_found_handling = single-page-application` fallback would shadow it.
 //   - `ACCOUNTS_IDENTITY_PREFIX` ("/v1") — covers /v1/account, /v1/auth,
-//     /v1/billing, /v1/capsule-projections. (Connections are served under
+//     and /v1/billing. (Connections are served under
 //     `/api/v1/connections`, the control surface — there is no /v1/connections.)
 //   - the OIDC issuer surfaces (/oauth, /.well-known). `/hooks` stays
 //     platform-worker-owned and is intentionally excluded here. (`/install` is
 //     a plain SPA route — the external install link is client-handled.)
-//   - "/internal" — the in-process / container-callback seam (covers the
-//     unified `/internal/v1` seam and the runtime-projection-material-resolver callback).
+//   - "/internal" — the in-process / container-callback seam (including the
+//     unified `/internal/v1` runner/executor callbacks).
 //
 // This set must cover EVERY non-`/dashboard` path the accounts handler routes,
 // or the SPA fallback would shadow it with index.html.

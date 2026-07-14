@@ -71,13 +71,13 @@ test("service actor adapter binds signed requests to the query string", async ()
   const headers = await adapter.signRequest({
     method: "POST",
     path: "/internal/test",
-    query: "?spaceId=space_a",
+    query: "?workspaceId=workspace_a",
     body,
     actor,
   });
 
   const accepted = await adapter.authenticate(
-    new Request("http://localhost/internal/test?spaceId=space_a", {
+    new Request("http://localhost/internal/test?workspaceId=workspace_a", {
       method: "POST",
       headers,
       body,
@@ -86,7 +86,7 @@ test("service actor adapter binds signed requests to the query string", async ()
   assert.equal(accepted.ok, true);
 
   const rejected = await adapter.authenticate(
-    new Request("http://localhost/internal/test?spaceId=space_b", {
+    new Request("http://localhost/internal/test?workspaceId=workspace_b", {
       method: "POST",
       headers,
       body,

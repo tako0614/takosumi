@@ -1,17 +1,12 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
-import { signTakosumiInternalRequest } from "takosumi-contract/internal/rpc";
 import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "../../../contract/api-surface.ts";
-import { InMemoryRuntimeAgentRegistry } from "../../../core/agents/mod.ts";
-import { createInMemoryAppContext } from "../../../core/app_context.ts";
 import { createApiApp } from "../../../core/api/app.ts";
-import { TAKOSUMI_RUNTIME_AGENT_PATHS } from "../../../core/api/runtime_agent_routes.ts";
-import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
+import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
 
 test("createApiApp exposes /openapi.json when enabled", async () => {
   const app = await createApiApp({
@@ -139,7 +134,7 @@ test("createApiApp does not mount retired public deployment routes", async () =>
     registerOpenApiRoute: true,
     getOpenApiBearerToken: () => "openapi-token",
     deployControlInternalRouteOptions: {
-      controller: new OpenTofuDeploymentController(),
+      controller: new OpenTofuController(),
       getDeployControlToken: () => "deploy-control-token",
     },
   });
@@ -151,11 +146,21 @@ test("createApiApp does not mount retired public deployment routes", async () =>
     ["POST", "/internal/v1/plan-runs"],
     ["POST", "/internal/v1/apply-runs"],
     ["GET", "/internal/v1/runner-profiles"],
-    ["GET", "/internal/v1/capsules/inst_abcdef12/outputs"],
   ] as const) {
     const response = await app.request(path, { method });
     assert.equal(response.status, 404, path);
   }
+
+  // The canonical Capsule Output route is mounted. A retired Installation-
+  // shaped id reaches the authenticated route family but fails canonical
+  // Capsule id validation rather than being interpreted as an alias.
+  const retiredOutputId = await app.request(
+    "/internal/v1/capsules/inst_abcdef12/outputs",
+    {
+      headers: { authorization: "Bearer deploy-control-token" },
+    },
+  );
+  assert.equal(retiredOutputId.status, 400);
 
   const capabilities = await (
     await app.request("/capabilities", {
@@ -219,9 +224,9 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   );
   assert.equal(openapi.components.schemas.PlanRun, undefined);
   assert.equal(openapi.components.schemas.ApplyRun, undefined);
-  assert.equal(openapi.components.schemas.DeploymentOutput, undefined);
+  assert.equal(openapi.components.schemas.ProjectedOutput, undefined);
   for (const schemaName of [
-    "OutputSnapshot",
+    "Output",
     "Deployment",
     "Dependency",
     "DependencyResponse",
@@ -263,106 +268,3 @@ test("createApiApp does not mount retired public deployment routes", async () =>
     );
   }
 });
-
-test("createApiApp mounts runtime-agent routes fail-closed when enabled", async () => {
-  const app = await createApiApp({
-    registerRuntimeAgentRoutes: true,
-    role: "takosumi-runtime-agent",
-  });
-
-  const response = await app.request(TAKOSUMI_RUNTIME_AGENT_PATHS.enroll, {
-    method: "POST",
-    body: JSON.stringify({ agentId: "agent_1", provider: "local" }),
-  });
-
-  assert.equal(response.status, 401);
-  assert.equal((await response.json()).error.code, "unauthenticated");
-});
-
-test("createApiApp accepts signed v1 runtime-agent routes when enabled", async () => {
-  const secret = "runtime-agent-secret";
-  const app = await createApiApp({
-    registerRuntimeAgentRoutes: true,
-    role: "takosumi-runtime-agent",
-    getInternalServiceSecret: () => secret,
-  });
-  const body = JSON.stringify({ agentId: "agent_1", provider: "local" });
-
-  const response = await app.request(TAKOSUMI_RUNTIME_AGENT_PATHS.enroll, {
-    method: "POST",
-    headers: await signedHeaders({
-      secret,
-      method: "POST",
-      path: TAKOSUMI_RUNTIME_AGENT_PATHS.enroll,
-      body,
-      actor: {
-        actorAccountId: "acct_runtime",
-        roles: ["admin"],
-        requestId: "req_runtime_enroll",
-        principalKind: "agent",
-        agentId: "wi_runtime_agent",
-      },
-    }),
-    body,
-  });
-
-  assert.equal(response.status, 201);
-  const responseBody = await response.json();
-  assert.equal(responseBody.agent.id, "agent_1");
-  assert.equal(responseBody.agent.provider, "local");
-});
-
-test("createApiApp uses context runtime-agent registry for mounted routes", async () => {
-  const secret = "runtime-agent-secret";
-  const registry = new InMemoryRuntimeAgentRegistry();
-  const context = createInMemoryAppContext({
-    adapters: { runtimeAgent: registry },
-  });
-  const app = await createApiApp({
-    context,
-    registerRuntimeAgentRoutes: true,
-    role: "takosumi-runtime-agent",
-    getInternalServiceSecret: () => secret,
-  });
-  const body = JSON.stringify({ agentId: "agent_context", provider: "local" });
-
-  const response = await app.request(TAKOSUMI_RUNTIME_AGENT_PATHS.enroll, {
-    method: "POST",
-    headers: await signedHeaders({
-      secret,
-      method: "POST",
-      path: TAKOSUMI_RUNTIME_AGENT_PATHS.enroll,
-      body,
-      actor: {
-        actorAccountId: "acct_runtime",
-        roles: ["admin"],
-        requestId: "req_runtime_context",
-        principalKind: "agent",
-        agentId: "wi_runtime_agent",
-      },
-    }),
-    body,
-  });
-
-  assert.equal(response.status, 201);
-  assert.equal((await registry.getAgent("agent_context"))?.provider, "local");
-});
-
-async function signedHeaders(input: {
-  readonly secret: string;
-  readonly method: string;
-  readonly path: string;
-  readonly body: string;
-  readonly actor: TakosumiActorContext;
-}): Promise<Headers> {
-  const signed = await signTakosumiInternalRequest({
-    ...input,
-    timestamp: new Date().toISOString(),
-    caller: input.actor.serviceId ?? input.actor.agentId ?? "takos-test",
-    audience: "takosumi",
-  });
-  return new Headers({
-    ...signed.headers,
-    "content-type": "application/json",
-  });
-}

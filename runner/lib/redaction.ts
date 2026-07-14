@@ -15,9 +15,6 @@ import {
   RUNNER_SECRET_ASSIGNMENT_PATTERN,
   RUNNER_TF_VAR_ASSIGNMENT_PATTERN,
 } from "./constants.ts";
-import {
-  allKnownCredentialEnvNames,
-} from "./credentials.ts";
 export function redactRunnerOutput(
   text: string,
   exactValues: readonly string[] = [],
@@ -47,7 +44,6 @@ export function redactRunnerOutput(
   for (const name of [
     "GIT_HTTPS_TOKEN",
     "GIT_SSH_PRIVATE_KEY",
-    ...allKnownCredentialEnvNames(),
   ]) {
     redacted = redacted.replaceAll(
       new RegExp(

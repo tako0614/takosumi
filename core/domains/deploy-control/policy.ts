@@ -3,10 +3,12 @@
  *
  * `evaluatePolicy` derives a `PolicyDecision` from a runner profile and the
  * providers a plan declares/observes: template-disabled gating + the §25 layer-4
- * provider allowlist (delegated to `takosumi-policy`) + credential-reference
- * presence. This file is a thin adapter: the provider-allowlist core lives in
+ * provider allowlist (delegated to `takosumi-policy`). Explicit ProviderBinding
+ * requirements are enforced by connection resolution, not duplicated here as
+ * RunnerProfile credential refs. This file is a thin adapter: the provider-allowlist core lives in
  * the policy package; here it is composed with the profile-specific concerns
- * (template-disabled state, credential refs) into the contract `PolicyDecision`.
+ * (explicit lifecycle/availability, credential refs) into the contract
+ * `PolicyDecision`.
  * Pure functions over contract types; no controller or store state.
  */
 
@@ -15,7 +17,6 @@ import type {
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
 import { evaluateProviderAllowlist, providerMatches } from "takosumi-policy";
-import { isCredentialFreeUtilityProvider } from "takosumi-contract/provider-env-rules";
 
 export function evaluatePolicy(input: {
   readonly profile: RunnerProfile;
@@ -31,8 +32,7 @@ export function evaluatePolicy(input: {
   readonly allowNoProviders?: boolean;
 }): PolicyDecision {
   const reasons: string[] = [];
-  const candidateReason = candidateProfileDisabledReason(input.profile);
-  if (candidateReason) reasons.push(candidateReason);
+  reasons.push(...runnerProfileStateReasons(input.profile));
   // §25 layer 4 (provider allowlist) lives in the policy package. The
   // profile-scoped reason wording is rebuilt here so the contract reasons keep
   // naming the runner profile (the package is profile-agnostic).
@@ -56,23 +56,6 @@ export function evaluatePolicy(input: {
       `provider ${notAllowed} is not allowed by runner profile ${input.profile.id}`,
     );
   }
-  // Credential-reference presence is a profile concern (the package evaluates
-  // only the allow/deny verdict): a denied provider is skipped (its credential
-  // is moot), a not-allowed provider is still checked to surface a complete set.
-  if (input.profile.requireCredentialRefs === true) {
-    for (const provider2 of input.requiredProviders) {
-      if (providerDenied(provider2, input.profile.deniedProviders ?? []))
-        continue;
-      if (isCredentialFreeUtilityProvider(provider2)) continue;
-      if (
-        !credentialRefPresent(provider2, input.profile.credentialRefs ?? [])
-      ) {
-        reasons.push(
-          `credential reference for provider ${provider2} is missing from runner profile ${input.profile.id}`,
-        );
-      }
-    }
-  }
   return {
     status: reasons.length === 0 ? "passed" : "blocked",
     reasons,
@@ -80,30 +63,27 @@ export function evaluatePolicy(input: {
   };
 }
 
-function candidateProfileDisabledReason(
-  profile: RunnerProfile,
-): string | undefined {
-  if (profile.labels?.["takosumi.com/profile-state"] !== "candidate") {
-    return undefined;
+function runnerProfileStateReasons(profile: RunnerProfile): readonly string[] {
+  const reasons: string[] = [];
+  if (!profile.lifecycle || profile.lifecycle.state !== "active") {
+    const state = profile.lifecycle?.state ?? "missing";
+    reasons.push(
+      `runner profile ${profile.id} lifecycle is ${state}; only active profiles can execute` +
+        (profile.lifecycle?.reason ? `: ${profile.lifecycle.reason}` : ""),
+    );
   }
-  if (profile.labels?.["takosumi.com/profile-enabled"] === "true") {
-    return undefined;
+  if (!profile.availability || profile.availability.state !== "available") {
+    reasons.push(
+      `runner profile ${profile.id} is unavailable` +
+        (profile.availability?.reason
+          ? `: ${profile.availability.reason}`
+          : ""),
+    );
   }
-  return `runner profile ${profile.id} is a disabled candidate; set takosumi.com/profile-enabled=true after operator validation`;
-}
-
-function credentialRefPresent(
-  provider: string,
-  refs: NonNullable<RunnerProfile["credentialRefs"]>,
-): boolean {
-  return refs.some((ref) => providerMatches(provider, ref.provider));
-}
-
-function providerDenied(
-  provider: string,
-  deniedProviders: readonly string[],
-): boolean {
-  return deniedProviders.some((denied) => providerMatches(provider, denied));
+  if (!profile.executorId?.trim()) {
+    reasons.push(`runner profile ${profile.id} has no executorId`);
+  }
+  return reasons;
 }
 
 export { providerMatches } from "takosumi-policy";

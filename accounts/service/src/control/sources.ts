@@ -6,7 +6,6 @@
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
-  Connection,
   ConnectionOAuthStartResponse,
   ConnectionResponse,
   ConnectionScopeHints,
@@ -14,10 +13,7 @@ import type {
   CreateConnectionFile,
   CreateConnectionRequest,
   DeployControlErrorCode,
-  Deployment,
-  InternalDeployRequest,
   ListConnectionsResponse,
-  ListDeploymentsResponse,
   ListRunnerProfilesResponse,
   OpenTofuModuleSource,
   PlanRunResponse,
@@ -25,7 +21,6 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
-  ArtifactSnapshotRequest,
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
@@ -36,10 +31,6 @@ import type {
   SourceSnapshot,
 } from "takosumi-contract/sources";
 import type {
-  DeployResponse,
-  PublicDeployResponse,
-} from "takosumi-contract/deploy";
-import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
@@ -47,7 +38,6 @@ import type {
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  CapsuleProviderEnvBindingSet,
   InstallConfig,
   Capsule,
   OutputAllowlistEntry,
@@ -64,11 +54,9 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  CapsuleProviderConnectionBinding,
-  CapsuleProviderConnectionBindings,
-  CapsuleProviderEnvBinding,
-  CapsuleProviderEnvBindings,
-  CapsuleProviderConnectionSet,
+  ProviderBinding,
+  ProviderBindings,
+  ProviderBindingSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -76,19 +64,12 @@ import type {
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
 import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
-import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
   CreateBackupResponse,
   CreateRestoreRequest,
   ListBackupsResponse,
 } from "takosumi-contract/backups";
-import type {
-  BillingSettings,
-  CreditBalance,
-  CreditReservation,
-  UsageEvent,
-} from "takosumi-contract/billing";
 import type {
   ListRunsResponse,
   Run,
@@ -98,14 +79,6 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import type {
-  AppCapsuleMode,
-  AppCapsuleStatus,
-  CapsuleRecord,
-  WorkspaceKind,
-} from "../ledger.ts";
-import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -134,22 +107,18 @@ import {
   parseControlPageParams,
   publicApplyActionResponse,
   publicCompatibilityReportResponse,
-  publicDeployResponse,
-  publicDeployment,
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
   requireWorkspaceAccess,
-  resolveProviderConnectionBindings,
+  resolveProviderBindings,
 } from "./shared.ts";
 import {
   booleanValue,
   connectionCredentialFiles,
   connectionScopeHints,
-  connectionScopeHintsFromValues,
   dependencyModeValue,
   dependencyVisibilityValue,
-  isGoogleCloudProvider,
   isJsonValue,
   isOutputsMapping,
   isPlainJsonObject,
@@ -158,27 +127,25 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseCapsuleProviderConnectionBinding,
-  parseCapsuleProviderConnectionBindings,
+  parseProviderBinding,
+  parseProviderBindings,
   parseLimit,
-  spaceTypeValue,
+  workspaceTypeValue,
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/capsules/install_config_bootstrap.ts";
+} from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
-import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 function sourceWorkspaceId(
-  source: Readonly<{ workspaceId?: string; spaceId?: string }>,
+  source: Readonly<{ workspaceId?: string }>,
 ): string | undefined {
-  return stringValue(source.workspaceId) ?? stringValue(source.spaceId);
+  return stringValue(source.workspaceId);
 }
 
 function sourceWorkspaceIdentityMissing(): Response {
@@ -236,11 +203,14 @@ export async function handleSources(
         subject: ctx.session.subject,
       });
       if (!auth.ok) return auth.response;
+      const response = await operations.createSourceSync(sourceId, {
+        dedupe: true,
+        intent,
+      });
       return jsonStatus(
-        await operations.createSourceSync(sourceId, {
-          dedupe: true,
-          intent,
-        }),
+        isRecord(response) && isRecord(response.run)
+          ? { ...response, run: publicSourceSyncRun(response.run) }
+          : response,
         201,
       );
     }
@@ -259,7 +229,14 @@ export async function handleSources(
       if (!auth.ok) return auth.response;
       const page = parseControlPageParams(url);
       if (!page.ok) return page.response;
-      return json(await operations.listSourceSnapshots(sourceId, page.params));
+      const response = await operations.listSourceSnapshots(
+        sourceId,
+        page.params,
+      );
+      return json({
+        ...response,
+        snapshots: response.snapshots.map(publicSourceSnapshot),
+      });
     }
     if (segments.length === 3 && segments[2] === "compatibility-check") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
@@ -288,10 +265,9 @@ export async function handleSources(
         );
       }
       const capsuleId = stringValue(body.capsuleId);
-      // Curated store deep-link path: when no Capsule exists yet, gate
-      // the pre-install check against the store's bounded InstallConfig so a
-      // vetted first-party module is judged by its own minimal allowlist
-      // (the instance-wide default allowlist is never widened — see
+      // Store deep-link path: when no Capsule exists yet, gate the pre-install
+      // check against the selected DB-owned InstallConfig. The instance-wide
+      // default allowlist is never widened (see
       // CreateSourceCompatibilityCheckRequest.installConfigId).
       const installConfigId = stringValue(body.installConfigId);
       const compatibilityRequest: CreateSourceCompatibilityCheckRequest = {
@@ -324,16 +300,18 @@ export async function handleSources(
       });
       if (!auth.ok) return auth.response;
       if (method === "GET") {
-        return json({ source });
+        return json({ source: publicSource(source) });
       }
       if (method === "PATCH") {
         const body = await readOptionalJsonObject(request);
         if (body === null) {
           return errorJson("invalid_json", "invalid json body", 400);
         }
-        return json(
-          await operations.patchSource(sourceId, body as PatchSourceRequest),
+        const response = await operations.patchSource(
+          sourceId,
+          body as PatchSourceRequest,
         );
+        return json({ ...response, source: publicSource(response.source) });
       }
       return methodNotAllowed("GET, PATCH");
     }
@@ -355,7 +333,7 @@ export async function handleCompatibilityReports(
     const reportWorkspaceId = report.sourceId
       ? sourceWorkspaceId((await operations.getSource(report.sourceId)).source)
       : report.capsuleId
-        ? (await operations.installations.getCapsule(report.capsuleId))
+        ? (await operations.capsules.getCapsule(report.capsuleId))
             .workspaceId
         : undefined;
     if (!reportWorkspaceId) {
@@ -379,11 +357,9 @@ async function listSources(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const workspaceId =
-    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
-    stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
-    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
-    stringValue(url.searchParams.get("space_id") ?? undefined);
+  const workspaceId = stringValue(
+    url.searchParams.get("workspaceId") ?? undefined,
+  );
   if (!workspaceId) {
     return errorJson(
       "invalid_request",
@@ -400,7 +376,11 @@ async function listSources(
   if (!auth.ok) return auth.response;
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
-  return json(await operations.listSources(workspaceId, page.params));
+  const response = await operations.listSources(workspaceId, page.params);
+  return json({
+    ...response,
+    sources: response.sources.map(publicSource),
+  });
 }
 
 async function createSource(
@@ -432,7 +412,7 @@ async function createSource(
   if (authConnectionId) {
     const connection = await operations.getConnection(authConnectionId);
     if (
-      connection.scope !== "space" ||
+      connection.scope !== "workspace" ||
       connection.workspaceId !== workspaceId
     ) {
       const connectionWorkspaceId = connection.workspaceId;
@@ -454,7 +434,6 @@ async function createSource(
   }
   const requestBody: CreateSourceRequest = {
     workspaceId,
-    spaceId: workspaceId,
     name,
     url: sourceUrl,
     ...(stringValue(body.defaultRef)
@@ -468,5 +447,21 @@ async function createSource(
       ? { autoSync: booleanValue(body.autoSync) === true }
       : {}),
   };
-  return jsonStatus(await operations.createSource(requestBody), 201);
+  const response = await operations.createSource(requestBody);
+  return jsonStatus(
+    { ...response, source: publicSource(response.source) },
+    201,
+  );
+}
+
+function publicSource(source: Source) {
+  return source;
+}
+
+function publicSourceSnapshot(snapshot: SourceSnapshot) {
+  return snapshot;
+}
+
+function publicSourceSyncRun(run: Record<string, unknown>) {
+  return run;
 }

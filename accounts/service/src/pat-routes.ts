@@ -17,7 +17,7 @@ import {
   decodePageCursor,
   paginateById,
   parsePageLimit,
-} from "./installation-routes.ts";
+} from "./pagination.ts";
 import type { ControlPlaneOperations } from "./control-operations.ts";
 
 /**
@@ -77,10 +77,10 @@ export async function handleCreatePersonalAccessToken(input: {
   }
   const name = stringValue(body.name)?.trim();
   const scopes = personalAccessTokenScopesValue(body.scopes);
-  const workspaceId = stringValue(body.workspace_id ?? body.workspaceId)?.trim();
+  const workspaceId = stringValue(body.workspace_id)?.trim();
   const now = Date.now();
   const expiresAtResult = personalAccessTokenExpiresAtValue(
-    body.expires_at ?? body.expiresAt,
+    body.expires_at,
     now,
   );
   if (!name || name.length > 80 || !scopes || expiresAtResult === "invalid") {
@@ -92,17 +92,12 @@ export async function handleCreatePersonalAccessToken(input: {
   }
   if (workspaceId) {
     const ownsWorkspace = await subjectOwnsWorkspace({
-      store: input.store,
       operations: input.operations,
       subject: session.subject,
       workspaceId,
     });
     if (!ownsWorkspace) {
-      return errorJson(
-        "workspace_not_found",
-        "workspace not found",
-        404,
-      );
+      return errorJson("workspace_not_found", "workspace not found", 404);
     }
   }
 
@@ -128,31 +123,19 @@ export async function handleCreatePersonalAccessToken(input: {
 }
 
 async function subjectOwnsWorkspace(input: {
-  readonly store: AccountsStore;
   readonly operations?: ControlPlaneOperations;
   readonly subject: TakosumiSubject;
   readonly workspaceId: string;
 }): Promise<boolean> {
-  const ownedWorkspaces = await input.store.listWorkspacesForOwner(
-    input.subject,
-  );
-  if (
-    ownedWorkspaces.some(
-      (workspace) => workspace.workspaceId === input.workspaceId,
-    )
-  ) {
-    return true;
-  }
-
   const operations = input.operations;
   if (!operations) return false;
   try {
-    const workspace = await operations.spaces.getWorkspace(input.workspaceId);
-    if (workspace.ownerUserId === input.subject) return true;
+    return (
+      await operations.workspaces.listWorkspacesForAccount(input.subject)
+    ).some((workspace) => workspace.id === input.workspaceId);
   } catch {
     return false;
   }
-  return false;
 }
 
 export async function handleRevokePersonalAccessToken(input: {
@@ -229,13 +212,14 @@ export function personalAccessTokenIntrospectionBody(
 ): Record<string, unknown> {
   return {
     active: true,
+    token_use: "personal_access",
     iss: issuer,
     sub: record.subject,
     client_id: "takosumi-accounts-pat",
     token_type: "Bearer",
     scope: record.scopes.join(" "),
     ...(record.workspaceId
-      ? { takosumi: { space_id: record.workspaceId } }
+      ? { takosumi: { workspace_id: record.workspaceId } }
       : {}),
     ...(record.expiresAt === undefined
       ? {}

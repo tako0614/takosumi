@@ -1,19 +1,19 @@
 /**
  * Unified Run read-projection facade (Core Specification §6.8 / §19 / §30).
  *
- * A thin collaborator pulled out of `OpenTofuDeploymentController`: every method
- * here is a read-only projection over the {@link OpenTofuDeploymentStore} (no
+ * A thin collaborator pulled out of `OpenTofuController`: every method
+ * here is a read-only projection over the {@link OpenTofuControlStore} (no
  * mutation, no run-execution coupling, no credential mint). The controller holds
  * one instance and re-exposes the public reads (`getRun` / `getRunLogs` /
  * `getRunEvents` / `getRunCost`) on its public API unchanged, so the `/api` run
  * ledger route layers keep calling the controller surface.
  *
  * Two pure projection helpers — {@link RunQueryService.planAwaitsApproval} and
- * {@link RunQueryService.installationProjection} — are owned here because they are
+ * {@link RunQueryService.capsuleProjection} — are owned here because they are
  * functions of a stored PlanRun alone (no controller mutation state). The
  * controller's run-engine mutations (`cancelRun` / `approveRun`) call back into
  * this service for those helpers so the §25 approval-gate logic and the §19 Run
- * installation projection live in exactly one place.
+ * Capsule projection live in exactly one place.
  */
 
 import type {
@@ -30,7 +30,7 @@ import type {
   RunLogsResponse,
 } from "takosumi-contract/runs";
 import type {
-  OpenTofuDeploymentStore,
+  OpenTofuControlStore,
   RecoverableOpenTofuRunListOptions,
   StoredRunRecord,
 } from "./store.ts";
@@ -43,12 +43,13 @@ import {
 } from "./projection_run.ts";
 
 /**
- * Recorded installation context + source/dependency snapshot projection threaded
- * onto the §19 Run projection options. Empty for runs without installation
+ * Recorded Capsule context + source/dependency snapshot projection threaded
+ * onto the §19 Run projection options. Empty for runs without Capsule
  * context.
  */
-export interface RunInstallationProjection {
-  installationId?: string;
+export interface RunCapsuleProjection {
+  capsuleId?: string;
+  resourceId?: string;
   environment?: string;
   sourceSnapshotId?: string;
   dependencySnapshotId?: string;
@@ -57,9 +58,9 @@ export interface RunInstallationProjection {
 
 /** Read-only unified Run projections over the run ledger. */
 export class RunQueryService {
-  readonly #store: OpenTofuDeploymentStore;
+  readonly #store: OpenTofuControlStore;
 
-  constructor(store: OpenTofuDeploymentStore) {
+  constructor(store: OpenTofuControlStore) {
     this.#store = store;
   }
 
@@ -75,17 +76,17 @@ export class RunQueryService {
     if (planRun) {
       return projectPlanRun(planRun, {
         awaitingApproval: await this.planAwaitsApproval(planRun),
-        ...this.installationProjection(planRun),
+        ...this.capsuleProjection(planRun),
       });
     }
     const applyRun = await this.#store.getApplyRun(id);
     if (applyRun) {
       // The ApplyRun does not carry env context; recover it from its PlanRun so
-      // the unified Run still projects installationId / environment / sourceSnapshotId.
+      // the unified Run still projects capsuleId / environment / sourceSnapshotId.
       const plan = await this.#store.getPlanRun(applyRun.planRunId);
       return projectApplyRun(
         applyRun,
-        plan ? this.installationProjection(plan) : {},
+        plan ? this.capsuleProjection(plan) : {},
       );
     }
     const sync = await this.#store.getSourceSyncRun(id);
@@ -101,14 +102,14 @@ export class RunQueryService {
    * Lists a Workspace's unified Run projections newest first. The store returns
    * raw internal run rows with DB-side limit/order. Project them directly so
    * the dashboard list does not re-read every selected row by id; ApplyRun rows
-   * still read their source PlanRun once when they need installation context.
+   * still read their source PlanRun once when they need Capsule context.
    */
   async listRuns(
-    spaceId: string,
+    workspaceId: string,
     options: { readonly limit?: number } = {},
   ): Promise<readonly Run[]> {
-    requireNonEmptyString(spaceId, "spaceId");
-    const rows = await this.#store.listRunsBySpace(spaceId, options);
+    requireNonEmptyString(workspaceId, "workspaceId");
+    const rows = await this.#store.listRunsByWorkspace(workspaceId, options);
     return await Promise.all(rows.map((row) => this.#projectStoredRun(row)));
   }
 
@@ -123,15 +124,12 @@ export class RunQueryService {
     if (isStoredPlanRun(row)) {
       return projectPlanRun(row, {
         awaitingApproval: await this.planAwaitsApproval(row),
-        ...this.installationProjection(row),
+        ...this.capsuleProjection(row),
       });
     }
     if (isStoredApplyRun(row)) {
       const plan = await this.#store.getPlanRun(row.planRunId);
-      return projectApplyRun(
-        row,
-        plan ? this.installationProjection(plan) : {},
-      );
+      return projectApplyRun(row, plan ? this.capsuleProjection(plan) : {});
     }
     if (isStoredSourceSyncRun(row)) return projectSourceSyncRun(row);
     if (isPublicRunRecord(row)) return row;
@@ -166,12 +164,10 @@ export class RunQueryService {
 
   /**
    * Public, non-secret cost projection for a `plan` / `destroy_plan` Run. It
-   * re-projects the billing reservation values the controller ALREADY computed
-   * at plan time (estimated credits / available credits / reservation status /
-   * the credit-shortfall + plan-limit reasons recorded on the run's policy
-   * decision), so a dashboard can explain, before apply, why an apply would be
-   * blocked under `enforce` mode. It computes no cost (never calls the credit
-   * estimator) and surfaces no secret material. Only a PlanRun (and the
+   * re-projects the values the controller ALREADY computed at plan time
+   * (estimated USD, showback or host-extension decision, and policy reasons),
+   * so a dashboard can explain the decision before apply. It computes no cost
+   * and surfaces no secret material. Only a PlanRun (and the
    * destroy_plan that is a PlanRun) carries billing; an ApplyRun / SourceSyncRun
    * resolves to the PlanRun that produced it where possible, else `not_found`.
    */
@@ -228,7 +224,13 @@ export class RunQueryService {
     if (compatibilityCheck) {
       return {
         diagnostics: compatibilityCheck.errorCode
-          ? [{ severity: "error", message: compatibilityCheck.errorCode }]
+          ? [
+              {
+                severity: "error",
+                code: compatibilityCheck.errorCode,
+                message: compatibilityCheck.errorCode,
+              },
+            ]
           : [],
         auditEvents: [],
       };
@@ -237,7 +239,13 @@ export class RunQueryService {
     if (backupRun) {
       return {
         diagnostics: backupRun.errorCode
-          ? [{ severity: "error", message: backupRun.errorCode }]
+          ? [
+              {
+                severity: "error",
+                code: backupRun.errorCode,
+                message: backupRun.errorCode,
+              },
+            ]
           : [],
         auditEvents: [],
       };
@@ -246,16 +254,22 @@ export class RunQueryService {
   }
 
   /**
-   * Projects a PlanRun's recorded installation context + source snapshot onto
-   * the §19 Run projection options. Empty for runs without installation
+   * Projects a PlanRun's recorded Capsule context + source snapshot onto
+   * the §19 Run projection options. Empty for runs without Capsule
    * context.
    */
-  installationProjection(planRun: PlanRun): RunInstallationProjection {
+  capsuleProjection(planRun: PlanRun): RunCapsuleProjection {
     return {
-      ...(planRun.installationContext
+      ...(planRun.capsuleContext
         ? {
-            installationId: planRun.installationContext.installationId,
-            environment: planRun.installationContext.environment,
+            capsuleId: planRun.capsuleContext.capsuleId,
+            environment: planRun.capsuleContext.environment,
+          }
+        : {}),
+      ...(planRun.resourceContext
+        ? {
+            resourceId: planRun.resourceContext.resourceId,
+            environment: planRun.resourceContext.environment,
           }
         : {}),
       ...(planRun.sourceSnapshotId
@@ -272,8 +286,7 @@ export class RunQueryService {
    * Whether a plan run is parked awaiting an explicit approval before its apply
    * may proceed (§25 action policy). `waiting_approval` is now a PERSISTED status
    * (the plan completion parks the plan there when it is a destroy plan, an
-   * action-policy delete/replace `requiresApproval` change, or a template
-   * destructive-confirmation change), so this is a pure read of the persisted
+   * action-policy delete/replace `requiresApproval` change), so this is a pure read of the persisted
    * status: a plan awaits approval iff it is still `waiting_approval` and has not
    * already been approved/applied.
    *
@@ -291,9 +304,6 @@ export class RunQueryService {
     if (planRun.status !== "succeeded") return Promise.resolve(false);
     if (planRun.operation === "destroy") return Promise.resolve(true);
     if (planRun.requiresApproval === true) return Promise.resolve(true);
-    if (planRun.templateBinding?.requiresConfirmation === true) {
-      return Promise.resolve(true);
-    }
     return Promise.resolve(false);
   }
 }
@@ -336,7 +346,11 @@ function sourceSyncDiagnostics(sync: SourceSyncRun): readonly RunDiagnostic[] {
     });
   }
   if (sync.error) {
-    diagnostics.push({ severity: "error", message: sync.error });
+    diagnostics.push({
+      severity: "error",
+      ...(sync.errorCode ? { code: sync.errorCode } : {}),
+      message: sync.error,
+    });
   }
   return diagnostics;
 }

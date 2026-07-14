@@ -4,19 +4,10 @@
 //
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
-import type {
-  RunRequest,
-} from "./types.ts";
-import {
-  readJsonObject,
-  parseAction,
-} from "./util.ts";
-import {
-  redactRunnerOutput,
-} from "./redaction.ts";
-import {
-  redactionValuesFromRequest,
-} from "./credentials.ts";
+import type { RunRequest } from "./types.ts";
+import { readJsonObject, parseAction } from "./util.ts";
+import { redactRunnerOutput } from "./redaction.ts";
+import { redactionValuesFromRequest } from "./credentials.ts";
 import {
   isSourceSyncRequest,
   runSourceSync,
@@ -29,10 +20,7 @@ import {
   handlePlanArtifactRequest,
   handleStateArtifactRequest,
 } from "./artifacts.ts";
-import {
-  runBackup,
-  runRelease,
-} from "./backup.ts";
+import { runBackup, runRelease } from "./backup.ts";
 import {
   runPlan,
   runReviewedPlanApply,
@@ -111,7 +99,7 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
     const runId = decodeURIComponent(match[1]);
 
     // Source-sync (LANE M1) is a distinct job carried on the `request` field as
-    // `{ action: "source_sync", source, credentials?, archiveObjectKey }`. It
+    // `{ action: "source_sync", source, credentials?, archiveRef }`. It
     // resolves a commit, builds a deterministic archive of source.path, PUTs the
     // bytes to the DO source-archive route, and returns resolution metadata. It
     // never runs tofu and never restores/persists OpenTofu state.
@@ -169,10 +157,7 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
           status: "failed",
           exitCode: 1,
           ...(errorCode ? { errorCode } : {}),
-          stderr: redactRunnerOutput(
-            errorText,
-            requestRedactionValues,
-          ),
+          stderr: redactRunnerOutput(errorText, requestRedactionValues),
         },
         { status: 500 },
       );

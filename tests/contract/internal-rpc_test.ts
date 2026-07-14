@@ -385,7 +385,7 @@ test("EnvTakosumiServiceDirectory resolves operator-namespaced env URLs", () => 
   const directory = new EnvTakosumiServiceDirectory({
     TAKOSUMI_DEPLOY_CONTROL_INTERNAL_URL: "https://deploy-control.internal",
     TAKOSUMI_ACCOUNTS_INTERNAL_URL: "https://accounts.internal",
-    TAKOSUMI_RUNTIME_AGENT_INTERNAL_URL: "https://runtime-agent.internal",
+    TAKOSUMI_OPENTOFU_RUNNER_INTERNAL_URL: "https://runner.internal",
   });
 
   assert.deepEqual(directory.resolve("deploy-control"), {
@@ -398,10 +398,10 @@ test("EnvTakosumiServiceDirectory resolves operator-namespaced env URLs", () => 
     audience: "accounts",
     url: "https://accounts.internal",
   });
-  assert.deepEqual(directory.resolve("runtime-agent"), {
-    serviceId: "runtime-agent",
-    audience: "runtime-agent",
-    url: "https://runtime-agent.internal",
+  assert.deepEqual(directory.resolve("opentofu-runner"), {
+    serviceId: "opentofu-runner",
+    audience: "opentofu-runner",
+    url: "https://runner.internal",
   });
   assert.equal(directory.resolve("git"), undefined);
 });

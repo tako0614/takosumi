@@ -52,7 +52,7 @@ export function upstreamLoginNotAllowedResponse(
   return json(
     {
       error: "access_denied",
-      error_description: "Takosumi Cloud preview access is limited before GA.",
+      error_description: "This deployment limits preview access before launch.",
     },
     403,
     {
@@ -68,7 +68,7 @@ export function accountLoginNotAllowedResponse(
 ): Response {
   return errorJson(
     "login_not_allowed",
-    "Takosumi Cloud preview access is limited before GA.",
+    "This deployment limits preview access before launch.",
     403,
     request,
     {

@@ -1,16 +1,12 @@
 import { expect, test } from "bun:test";
 
+import { SourcesService } from "../../../../core/domains/sources/mod.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
-  SourcesService,
-  normalizedModuleObjectKey,
-  sourceArchiveObjectKey,
-} from "../../../../core/domains/sources/mod.ts";
-import {
-  InMemoryOpenTofuDeploymentStore,
+  InMemoryOpenTofuControlStore,
   type StoredSource,
 } from "../../../../core/domains/deploy-control/store.ts";
-import type { Connection } from "@takosumi/internal/deploy-control-api";
-import { MemoryObjectStorage } from "../../../../core/adapters/object-storage/mod.ts";
+import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 
 function makeService(
@@ -18,20 +14,20 @@ function makeService(
     enqueueSourceSync?: (d: {
       action: "source_sync";
       runId: string;
-      spaceId: string;
+      workspaceId: string;
       sourceId: string;
     }) => Promise<void>;
     readCapsuleSourceFiles?: (
       snapshot: SourceSnapshot,
       options?: { readonly modulePath?: string },
     ) => Promise<readonly { readonly path: string; readonly text: string }[]>;
-    normalizedArtifactStorage?: MemoryObjectStorage;
   } = {},
 ) {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   let counter = 0;
   const service = new SourcesService({
     store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: () => new Date("2026-06-06T00:00:00.000Z"),
     newId: (prefix) =>
       `${prefix}_test${(counter += 1).toString().padStart(8, "0")}`,
@@ -42,22 +38,19 @@ function makeService(
     ...(overrides.readCapsuleSourceFiles
       ? { readCapsuleSourceFiles: overrides.readCapsuleSourceFiles }
       : {}),
-    ...(overrides.normalizedArtifactStorage
-      ? { normalizedArtifactStorage: overrides.normalizedArtifactStorage }
-      : {}),
   });
   return { store, service };
 }
 
 async function seedConnection(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   id: string,
-  spaceId: string,
+  workspaceId: string,
 ): Promise<void> {
-  const conn: Connection = {
+  const conn: ProviderConnection = {
     id,
-    spaceId,
-    scope: "space",
+    workspaceId,
+    scope: "workspace",
     provider: "source_git_https_token",
     providerSource: "git",
     kind: "source_git_https_token",
@@ -73,13 +66,13 @@ async function seedConnection(
 test("createSource validates URL policy and stores status active", async () => {
   const { store, service } = makeService();
   const { source, hookSecret } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "my repo",
     url: "https://github.com/acme/repo.git",
   });
   expect(source.id).toMatch(/^src_/);
   expect(source.status).toBe("active");
-  expect(source.defaultRef).toBe("main");
+  expect(source.defaultRef).toBe("HEAD");
   expect(source.defaultPath).toBe(".");
   expect(hookSecret).toBe("whk_fixed_secret_value");
   // The public source must NOT carry the hook secret hash or private fields.
@@ -96,7 +89,7 @@ test("createSource rejects a forbidden URL", async () => {
   const { service } = makeService();
   await expect(
     service.createSource({
-      spaceId: "space_1",
+      workspaceId: "workspace_1",
       name: "bad",
       url: "file:///etc/passwd",
     }),
@@ -111,13 +104,12 @@ test("createSource rejects blocked source hosts before source_sync", async () =>
     "https://[::1]/repo.git",
     "https://[fc00::1]/repo.git",
     "https://localhost/repo.git",
-    "ssh://git@metadata.google.internal/repo.git",
   ];
   for (const url of blocked) {
     const { service } = makeService();
     await expect(
       service.createSource({
-        spaceId: "space_1",
+        workspaceId: "workspace_1",
         name: "blocked",
         url,
       }),
@@ -125,11 +117,11 @@ test("createSource rejects blocked source hosts before source_sync", async () =>
   }
 });
 
-test("createSource rejects an authConnectionId that is not in the space", async () => {
+test("createSource rejects an authConnectionId that is not in the Workspace", async () => {
   const { service } = makeService();
   await expect(
     service.createSource({
-      spaceId: "space_1",
+      workspaceId: "workspace_1",
       name: "x",
       url: "https://github.com/a/b",
       authConnectionId: "conn_missing",
@@ -137,11 +129,11 @@ test("createSource rejects an authConnectionId that is not in the space", async 
   ).rejects.toThrow(/auth connection does not exist in this workspace/);
 });
 
-test("createSource accepts an authConnectionId present in the space", async () => {
+test("createSource accepts an authConnectionId present in the Workspace", async () => {
   const { store, service } = makeService();
-  await seedConnection(store, "conn_git1", "space_1");
+  await seedConnection(store, "conn_git1", "workspace_1");
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "x",
     url: "https://github.com/a/b",
     authConnectionId: "conn_git1",
@@ -149,45 +141,15 @@ test("createSource accepts an authConnectionId present in the space", async () =
   expect(source.authConnectionId).toBe("conn_git1");
 });
 
-test("recordArtifactSnapshot stores a no-Source prepared artifact snapshot", async () => {
-  const { store, service } = makeService();
-  const snapshot = await service.recordArtifactSnapshot({
-    spaceId: "space_1",
-    url: "https://artifacts.example.com/capsule/source.tar.zst",
-    snapshotId: "snap_artifact0001",
-    archiveObjectKey:
-      "spaces/space_1/artifact-snapshots/snap_artifact0001/source.tar.zst",
-    archiveDigest:
-      "sha256:ABCDEFabcdef0000000000000000000000000000000000000000000000000000",
-    archiveSizeBytes: 1234,
-    path: "infra",
-  });
-
-  expect(snapshot).toMatchObject({
-    id: "snap_artifact0001",
-    origin: "artifact",
-    spaceId: "space_1",
-    url: "https://artifacts.example.com/capsule/source.tar.zst",
-    ref: "artifact",
-    resolvedCommit:
-      "abcdefabcdef0000000000000000000000000000000000000000000000000000",
-    path: "infra",
-    archiveSizeBytes: 1234,
-    fetchedByRunId: "artifact",
-  });
-  expect(snapshot.sourceId).toBeUndefined();
-  expect(await store.getSourceSnapshot(snapshot.id)).toEqual(snapshot);
-});
-
 test("listSources / getSource project public records only", async () => {
   const { service } = makeService();
   await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "a",
     url: "https://github.com/a/b",
     autoSync: true,
   });
-  const list = await service.listSources("space_1");
+  const list = await service.listSources("workspace_1");
   expect(list.sources).toHaveLength(1);
   expect(JSON.stringify(list.sources)).not.toContain("hookSecretHash");
   expect(list.sources[0]?.autoSync).toBe(true);
@@ -198,9 +160,9 @@ test("listSources / getSource project public records only", async () => {
 
 test("patchSource updates fields, autoSync, and clears authConnectionId with null", async () => {
   const { store, service } = makeService();
-  await seedConnection(store, "conn_git1", "space_1");
+  await seedConnection(store, "conn_git1", "workspace_1");
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "a",
     url: "https://github.com/a/b",
     authConnectionId: "conn_git1",
@@ -219,7 +181,7 @@ test("patchSource updates fields, autoSync, and clears authConnectionId with nul
   expect(patched.source.authConnectionId).toBeUndefined();
 });
 
-test("createSync persists a queued run, precomputes the archive key, and enqueues", async () => {
+test("createSync persists a queued run, allocates the archive ref, and enqueues", async () => {
   const dispatched: unknown[] = [];
   const { store, service } = makeService({
     enqueueSourceSync: async (d) => {
@@ -227,22 +189,22 @@ test("createSync persists a queued run, precomputes the archive key, and enqueue
     },
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "a",
     url: "https://github.com/a/b",
   });
   const { run } = await service.createSync(source.id);
   expect(run.status).toBe("queued");
   expect(run.kind).toBe("source_sync");
-  expect(run.ref).toBe("main");
-  expect(run.archiveObjectKey).toBe(
-    sourceArchiveObjectKey("space_1", source.id, run.snapshotId!),
+  expect(run.ref).toBe("HEAD");
+  expect(run.archiveRef).toBe(
+    `workspaces/workspace_1/sources/${source.id}/snapshots/${run.snapshotId!}/source.tar.zst`,
   );
   expect(dispatched).toEqual([
     {
       action: "source_sync",
       runId: run.id,
-      spaceId: "space_1",
+      workspaceId: "workspace_1",
       sourceId: source.id,
     },
   ]);
@@ -258,7 +220,7 @@ test("createSync dedupe returns and re-enqueues the existing queued run", async 
     },
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "a",
     url: "https://github.com/a/b",
   });
@@ -269,13 +231,13 @@ test("createSync dedupe returns and re-enqueues the existing queued run", async 
     {
       action: "source_sync",
       runId: first.run.id,
-      spaceId: "space_1",
+      workspaceId: "workspace_1",
       sourceId: source.id,
     },
     {
       action: "source_sync",
       runId: first.run.id,
-      spaceId: "space_1",
+      workspaceId: "workspace_1",
       sourceId: source.id,
     },
   ]);
@@ -284,7 +246,7 @@ test("createSync dedupe returns and re-enqueues the existing queued run", async 
 test("createSync does not dedupe manual-plan refresh into an observe sync", async () => {
   const { service } = makeService();
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "a",
     url: "https://github.com/a/b",
   });
@@ -310,7 +272,7 @@ test("createSync dedupe does not re-enqueue a fresh running run", async () => {
     },
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "a",
     url: "https://github.com/a/b",
   });
@@ -347,7 +309,7 @@ test("createSync dedupe replaces a stale running run with a fresh run", async ()
     },
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "a",
     url: "https://github.com/a/b",
   });
@@ -380,7 +342,7 @@ test("createSync dedupe replaces a stale running run with a fresh run", async ()
     {
       action: "source_sync",
       runId: second.run.id,
-      spaceId: "space_1",
+      workspaceId: "workspace_1",
       sourceId: source.id,
     },
   ]);
@@ -389,7 +351,7 @@ test("createSync dedupe replaces a stale running run with a fresh run", async ()
 test("verifyHookSecret accepts the right bearer and rejects others", async () => {
   const { service } = makeService();
   const { source, hookSecret } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "a",
     url: "https://github.com/a/b",
   });
@@ -410,7 +372,7 @@ test("listAutoSyncSources returns only active autoSync sources, capped", async (
   ) => {
     await store.putSource({
       id,
-      spaceId: "space_1",
+      workspaceId: "workspace_1",
       name: id,
       url: "https://github.com/a/b",
       defaultRef: "main",
@@ -430,12 +392,8 @@ test("listAutoSyncSources returns only active autoSync sources, capped", async (
   expect((await service.listAutoSyncSources(0)).length).toBe(0);
 });
 
-test("createCompatibilityCheck stores normalized auto-capsulized artifact", async () => {
-  const objectStorage = new MemoryObjectStorage({
-    clock: () => new Date("2026-06-06T00:00:01.000Z"),
-  });
+test("createCompatibilityCheck preserves the immutable source instead of rewriting HCL", async () => {
   const { store, service } = makeService({
-    normalizedArtifactStorage: objectStorage,
     readCapsuleSourceFiles: async () => [
       {
         path: "main.tf",
@@ -461,19 +419,21 @@ output "public_url" {
     ],
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "capsule",
     url: "https://github.com/acme/capsule.git",
   });
   const { run } = await service.createSync(source.id);
   await store.putSourceSnapshot({
     id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
     sourceId: source.id,
     url: source.url,
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveObjectKey: run.archiveObjectKey,
+    archiveRef: run.archiveRef,
     archiveDigest: "sha256:source",
     archiveSizeBytes: 100,
     fetchedByRunId: run.id,
@@ -485,35 +445,14 @@ output "public_url" {
       sourceSnapshotId: run.snapshotId,
     });
 
-  expect(report.level).toBe("auto_capsulized");
-  expect(report.normalizedObjectKey).toBe(
-    normalizedModuleObjectKey({
-      ...run,
-      id: run.snapshotId!,
-      sourceId: source.id,
-      resolvedCommit: "abc123",
-      archiveDigest: "sha256:source",
-      archiveSizeBytes: 100,
-      fetchedByRunId: run.id,
-      fetchedAt: "2026-06-06T00:00:00.000Z",
-    } as SourceSnapshot),
-  );
-  expect(report.normalizedDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  const stored = await objectStorage.getObject({
-    bucket: "takos-artifacts",
-    key: report.normalizedObjectKey!,
-    expectedDigest: report.normalizedDigest as `sha256:${string}`,
-  });
-  expect(stored).toBeDefined();
-  const body = new TextDecoder().decode(stored!.body);
-  expect(body).toContain('"kind": "takosumi.normalized-capsule@v1"');
-  expect(body).not.toContain('backend "s3"');
-  expect(body).not.toContain('provider "cloudflare"');
+  expect(report.level).toBe("ready");
+  expect(report).not.toHaveProperty("normalizedObjectKey");
+  expect(report).not.toHaveProperty("normalizedDigest");
   const compatibilityRun =
     await store.getCompatibilityCheckRun("ccr_test00000004");
   expect(compatibilityRun).toMatchObject({
     id: "ccr_test00000004",
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     sourceId: source.id,
     type: "compatibility_check",
     status: "succeeded",
@@ -524,7 +463,7 @@ output "public_url" {
   expect(compatibilityResponseRun).toEqual(compatibilityRun);
 });
 
-test("createCompatibilityCheck applies Installation policy to Gate severity", async () => {
+test("createCompatibilityCheck applies Capsule policy to Gate severity", async () => {
   const observedOptions: unknown[] = [];
   const { store, service } = makeService({
     readCapsuleSourceFiles: async (_snapshot, options) => {
@@ -561,29 +500,31 @@ output "public_url" {
       ];
     },
   });
-  await store.putSpace({
-    id: "space_1",
-    handle: "space",
-    displayName: "Space",
+  await store.putWorkspace({
+    id: "workspace_1",
+    handle: "workspace",
+    displayName: "Workspace",
     type: "personal",
     ownerUserId: "user_1",
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "policy-capsule",
     url: "https://github.com/acme/policy-capsule.git",
   });
   const { run } = await service.createSync(source.id);
   await store.putSourceSnapshot({
     id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
     sourceId: source.id,
     url: source.url,
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveObjectKey: run.archiveObjectKey,
+    archiveRef: run.archiveRef,
     archiveDigest: "sha256:source",
     archiveSizeBytes: 100,
     fetchedByRunId: run.id,
@@ -592,13 +533,7 @@ output "public_url" {
   await store.putInstallConfig({
     id: "cfg_policy",
     name: "policy",
-    trustLevel: "space",
     modulePath: "deploy/opentofu",
-    normalization: {
-      allowBackendRewrite: true,
-      allowProviderLift: true,
-      allowAliasInjection: true,
-    },
     variableMapping: {},
     outputAllowlist: {},
     policy: {
@@ -610,9 +545,10 @@ output "public_url" {
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
-  await store.putInstallation({
-    id: "inst_policy",
-    spaceId: "space_1",
+  await store.putCapsule({
+    id: "capsule_policy",
+    workspaceId: "workspace_1",
+    projectId: "project_policy",
     name: "policy",
     slug: "policy",
     sourceId: source.id,
@@ -626,7 +562,7 @@ output "public_url" {
 
   const { report } = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
-    capsuleId: "inst_policy",
+    capsuleId: "capsule_policy",
   });
 
   expect(observedOptions).toEqual([
@@ -636,30 +572,16 @@ output "public_url" {
     },
   ]);
   expect(report.level).toBe("ready");
-  expect(report.findings).toEqual([
-    {
-      severity: "info",
-      code: "provider_connection_may_be_required",
-      message: "Provider custom/provider may require a Provider Connection.",
-      suggestion:
-        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
-    },
-  ]);
+  expect(report.findings).toEqual([]);
   expect(report.providers[0]).toMatchObject({ allowed: true });
   expect(report.resources.every((resource) => resource.allowed)).toBe(true);
   expect(report.dataSources).toEqual([{ type: "external", allowed: true }]);
   expect(report.provisioners).toEqual([{ type: "local-exec", allowed: true }]);
 });
 
-test("createCompatibilityCheck lifts unsupported -> ready via a curated bounded installConfigId (no Installation)", async () => {
-  // The store "選んで入れる" deep-link path: a vetted first-party module whose
-  // resource type is OUTSIDE the instance-wide DEFAULT allowlist becomes
-  // installable when its curated bounded InstallConfig is supplied, WITHOUT an
-  // Installation and WITHOUT widening the default allowlist.
-  // cloudflare_dns_record stays OUTSIDE the provider compatibility coverage
-  // allowlist (it can repoint arbitrary hostnames), so it is the right type to
-  // demonstrate that a curated bounded InstallConfig lifts a type the default
-  // rejects.
+test("createCompatibilityCheck applies a curated explicit allowlist without changing unset policy", async () => {
+  // The Store deep-link may narrow execution with an InstallConfig, but generic
+  // Core has no vendor resource catalog when policy is unset.
   const curatedHcl = `
 terraform {
   required_providers {
@@ -683,40 +605,41 @@ output "url" {
   const { store, service } = makeService({
     readCapsuleSourceFiles: async () => [{ path: "main.tf", text: curatedHcl }],
   });
-  await store.putSpace({
-    id: "space_1",
-    handle: "space",
-    displayName: "Space",
+  await store.putWorkspace({
+    id: "workspace_1",
+    handle: "workspace",
+    displayName: "Workspace",
     type: "personal",
     ownerUserId: "user_1",
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "dns-capsule",
     url: "https://github.com/acme/dns-capsule.git",
   });
   const { run } = await service.createSync(source.id);
   await store.putSourceSnapshot({
     id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
     sourceId: source.id,
     url: source.url,
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveObjectKey: run.archiveObjectKey,
+    archiveRef: run.archiveRef,
     archiveDigest: "sha256:source",
     archiveSizeBytes: 100,
     fetchedByRunId: run.id,
     fetchedAt: "2026-06-06T00:00:00.000Z",
   });
-  // A built-in `official` InstallConfig has no spaceId and is usable from any
-  // Space; its policy is the BOUNDED minimal allowlist for this module only.
+  // A built-in `official` InstallConfig has no workspaceId and is usable from any
+  // Workspace; its policy is the BOUNDED minimal allowlist for this module only.
   await store.putInstallConfig({
     id: "cfg-official-dns-capsule",
     name: "dns-capsule",
-    trustLevel: "official",
     variableMapping: {},
     outputAllowlist: {},
     policy: {
@@ -727,20 +650,18 @@ output "url" {
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
 
-  // Without the curated config, the DEFAULT allowlist rejects the resource.
+  // Unset policy follows the provider-neutral OpenTofu path.
   const baseline = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
   });
-  expect(baseline.report.level).toBe("unsupported");
+  expect(baseline.report.level).toBe("ready");
   expect(
     baseline.report.findings.some(
       (f) => f.code === "resource_type_not_allowed",
     ),
-  ).toBe(true);
+  ).toBe(false);
 
-  // With the curated bounded config, the Gate passes (ready) and the resource
-  // is allowed — yet the global default allowlist is untouched (the baseline
-  // above still rejects it).
+  // The curated config explicitly permits only the provider/resource it owns.
   const curated = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
     installConfigId: "cfg-official-dns-capsule",
@@ -754,47 +675,48 @@ output "url" {
   ).toBe(false);
 });
 
-test("createCompatibilityCheck rejects a curated installConfig from another space", async () => {
+test("createCompatibilityCheck rejects a curated installConfig from another Workspace", async () => {
   const { store, service } = makeService({
     readCapsuleSourceFiles: async () => [
       { path: "main.tf", text: 'output "x" { value = "y" }' },
     ],
   });
-  await store.putSpace({
-    id: "space_1",
-    handle: "space",
-    displayName: "Space",
+  await store.putWorkspace({
+    id: "workspace_1",
+    handle: "workspace",
+    displayName: "Workspace",
     type: "personal",
     ownerUserId: "user_1",
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "capsule",
     url: "https://github.com/acme/capsule.git",
   });
   const { run } = await service.createSync(source.id);
   await store.putSourceSnapshot({
     id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
     sourceId: source.id,
     url: source.url,
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveObjectKey: run.archiveObjectKey,
+    archiveRef: run.archiveRef,
     archiveDigest: "sha256:source",
     archiveSizeBytes: 100,
     fetchedByRunId: run.id,
     fetchedAt: "2026-06-06T00:00:00.000Z",
   });
-  // A Space-scoped config (has a spaceId) owned by a DIFFERENT space must not be
-  // borrowable to gate another space's check.
+  // A Workspace-scoped config owned by a DIFFERENT Workspace must not be
+  // borrowable to gate another Workspace's check.
   await store.putInstallConfig({
-    id: "cfg_other_space",
-    spaceId: "space_2",
+    id: "cfg_other_workspace",
+    workspaceId: "workspace_2",
     name: "other",
-    trustLevel: "space",
     variableMapping: {},
     outputAllowlist: {},
     policy: { allowedResourceTypes: ["cloudflare_pages_project"] },
@@ -804,35 +726,38 @@ test("createCompatibilityCheck rejects a curated installConfig from another spac
   await expect(
     service.createCompatibilityCheck(source.id, {
       sourceSnapshotId: run.snapshotId,
-      installConfigId: "cfg_other_space",
+      installConfigId: "cfg_other_workspace",
     }),
   ).rejects.toThrow(/install config is not available to this workspace/);
 });
 
-test("createCompatibilityCheck rejects an installation from another space", async () => {
+test("createCompatibilityCheck rejects a Capsule from another Workspace", async () => {
   const { store, service } = makeService();
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "capsule",
     url: "https://github.com/acme/capsule.git",
   });
   const { run } = await service.createSync(source.id);
   await store.putSourceSnapshot({
     id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
     sourceId: source.id,
     url: source.url,
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveObjectKey: run.archiveObjectKey,
+    archiveRef: run.archiveRef,
     archiveDigest: "sha256:source",
     archiveSizeBytes: 100,
     fetchedByRunId: run.id,
     fetchedAt: "2026-06-06T00:00:00.000Z",
   });
-  await store.putInstallation({
-    id: "inst_foreign",
-    spaceId: "space_2",
+  await store.putCapsule({
+    id: "capsule_foreign",
+    workspaceId: "workspace_2",
+    projectId: "project_foreign",
     name: "foreign",
     slug: "foreign",
     sourceId: source.id,
@@ -847,40 +772,43 @@ test("createCompatibilityCheck rejects an installation from another space", asyn
   await expect(
     service.createCompatibilityCheck(source.id, {
       sourceSnapshotId: run.snapshotId,
-      installationId: "inst_foreign",
+      capsuleId: "capsule_foreign",
     }),
   ).rejects.toThrow(/capsule is not available to this source workspace/);
 });
 
-test("createCompatibilityCheck rejects an installation for another source", async () => {
+test("createCompatibilityCheck rejects a Capsule for another source", async () => {
   const { store, service } = makeService();
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "capsule",
     url: "https://github.com/acme/capsule.git",
   });
   const { source: otherSource } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "other",
     url: "https://github.com/acme/other.git",
   });
   const { run } = await service.createSync(source.id);
   await store.putSourceSnapshot({
     id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
     sourceId: source.id,
     url: source.url,
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveObjectKey: run.archiveObjectKey,
+    archiveRef: run.archiveRef,
     archiveDigest: "sha256:source",
     archiveSizeBytes: 100,
     fetchedByRunId: run.id,
     fetchedAt: "2026-06-06T00:00:00.000Z",
   });
-  await store.putInstallation({
-    id: "inst_other_source",
-    spaceId: "space_1",
+  await store.putCapsule({
+    id: "capsule_other_source",
+    workspaceId: "workspace_1",
+    projectId: "project_other_source",
     name: "other",
     slug: "other",
     sourceId: otherSource.id,
@@ -895,7 +823,7 @@ test("createCompatibilityCheck rejects an installation for another source", asyn
   await expect(
     service.createCompatibilityCheck(source.id, {
       sourceSnapshotId: run.snapshotId,
-      installationId: "inst_other_source",
+      capsuleId: "capsule_other_source",
     }),
   ).rejects.toThrow(/does not use source/);
 });
@@ -936,19 +864,21 @@ output "public_url" {
     ],
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "providers",
     url: "https://github.com/acme/providers.git",
   });
   const { run } = await service.createSync(source.id);
   await store.putSourceSnapshot({
     id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
     sourceId: source.id,
     url: source.url,
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveObjectKey: run.archiveObjectKey,
+    archiveRef: run.archiveRef,
     archiveDigest: "sha256:source",
     archiveSizeBytes: 100,
     fetchedByRunId: run.id,
@@ -966,29 +896,7 @@ output "public_url" {
   expect(providerBySource.get("vercel/vercel")?.allowed).toBe(true);
   expect(providerBySource.get("draft/provider")?.allowed).toBe(true);
 
-  expect(report.findings).toEqual([
-    {
-      severity: "info",
-      code: "provider_connection_may_be_required",
-      message: "Provider draft/provider may require a Provider Connection.",
-      suggestion:
-        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
-    },
-    {
-      severity: "info",
-      code: "provider_connection_may_be_required",
-      message: "Provider hashicorp/aws may require a Provider Connection.",
-      suggestion:
-        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
-    },
-    {
-      severity: "info",
-      code: "provider_connection_may_be_required",
-      message: "Provider vercel/vercel may require a Provider Connection.",
-      suggestion:
-        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
-    },
-  ]);
+  expect(report.findings).toEqual([]);
 });
 
 test("createCompatibilityCheck returns an unsupported report when analysis fails", async () => {
@@ -998,19 +906,21 @@ test("createCompatibilityCheck returns an unsupported report when analysis fails
     },
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "capsule",
     url: "https://github.com/acme/capsule.git",
   });
   const { run } = await service.createSync(source.id);
   await store.putSourceSnapshot({
     id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
     sourceId: source.id,
     url: source.url,
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveObjectKey: run.archiveObjectKey,
+    archiveRef: run.archiveRef,
     archiveDigest: "sha256:source",
     archiveSizeBytes: 100,
     fetchedByRunId: run.id,
@@ -1029,9 +939,9 @@ test("createCompatibilityCheck returns an unsupported report when analysis fails
     resources: [],
     dataSources: [],
     provisioners: [],
-    normalizedObjectKey: run.archiveObjectKey,
-    normalizedDigest: "sha256:source",
   });
+  expect(checked.report).not.toHaveProperty("normalizedObjectKey");
+  expect(checked.report).not.toHaveProperty("normalizedDigest");
   expect(checked.report.findings).toEqual([
     expect.objectContaining({
       severity: "error",
@@ -1046,7 +956,7 @@ test("createCompatibilityCheck returns an unsupported report when analysis fails
     await store.getCompatibilityCheckRun("ccr_test00000004");
   expect(compatibilityRun).toMatchObject({
     id: "ccr_test00000004",
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     sourceId: source.id,
     type: "compatibility_check",
     status: "failed",
@@ -1054,7 +964,9 @@ test("createCompatibilityCheck returns an unsupported report when analysis fails
     compatibilityReportId: "caprep_test00000005",
     createdBy: "system",
   });
-  expect(compatibilityRun?.errorCode).toBe("runner unavailable");
+  expect(compatibilityRun?.errorCode).toBe(
+    "capsule_compatibility_check_failed",
+  );
 });
 
 test("createCompatibilityCheck treats snapshot path as restored archive root", async () => {
@@ -1088,7 +1000,7 @@ output "url" {
     },
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "takos",
     url: "https://github.com/tako0614/takos.git",
     defaultPath: "deploy/opentofu",
@@ -1096,12 +1008,14 @@ output "url" {
   const { run } = await service.createSync(source.id);
   await store.putSourceSnapshot({
     id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
     sourceId: source.id,
     url: source.url,
     ref: "main",
     resolvedCommit: "abc123",
     path: "deploy/opentofu",
-    archiveObjectKey: run.archiveObjectKey,
+    archiveRef: run.archiveRef,
     archiveDigest: "sha256:source",
     archiveSizeBytes: 100,
     fetchedByRunId: run.id,
@@ -1115,16 +1029,7 @@ output "url" {
 
   expect(observedOptions).toEqual([{ runId: "ccr_test00000004" }]);
   expect(report.level).toBe("ready");
-  expect(report.findings).toEqual([
-    {
-      severity: "info",
-      code: "provider_connection_may_be_required",
-      message:
-        "Provider cloudflare/cloudflare may require a Provider Connection.",
-      suggestion:
-        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
-    },
-  ]);
+  expect(report.findings).toEqual([]);
 });
 
 test("createCompatibilityCheck defaults to supplied InstallConfig modulePath", async () => {
@@ -1160,7 +1065,6 @@ output "url" {
   await store.putInstallConfig({
     id: "cfg-git-takos",
     name: "takos",
-    trustLevel: "official",
     modulePath: "deploy/opentofu",
     variableMapping: {},
     outputAllowlist: {},
@@ -1172,19 +1076,21 @@ output "url" {
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
   const { source } = await service.createSource({
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     name: "takos",
     url: "https://github.com/tako0614/takos.git",
   });
   const { run } = await service.createSync(source.id);
   await store.putSourceSnapshot({
     id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
     sourceId: source.id,
     url: source.url,
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveObjectKey: run.archiveObjectKey,
+    archiveRef: run.archiveRef,
     archiveDigest: "sha256:source",
     archiveSizeBytes: 100,
     fetchedByRunId: run.id,
@@ -1200,14 +1106,5 @@ output "url" {
     { modulePath: "deploy/opentofu", runId: "ccr_test00000004" },
   ]);
   expect(report.level).toBe("ready");
-  expect(report.findings).toEqual([
-    {
-      severity: "info",
-      code: "provider_connection_may_be_required",
-      message:
-        "Provider cloudflare/cloudflare may require a Provider Connection.",
-      suggestion:
-        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
-    },
-  ]);
+  expect(report.findings).toEqual([]);
 });

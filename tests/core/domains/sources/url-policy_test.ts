@@ -103,10 +103,6 @@ const DENIED: readonly DenyCase[] = [
   { url: "https://[fe80::1]/acme/repo.git", reason: "blocked_host" },
   { url: "https://localhost/acme/repo.git", reason: "blocked_host" },
   { url: "https://git.localhost/acme/repo.git", reason: "blocked_host" },
-  {
-    url: "ssh://git@metadata.google.internal/acme/repo.git",
-    reason: "blocked_host",
-  },
 ];
 
 describe("evaluateSourceUrl — allowed forms", () => {

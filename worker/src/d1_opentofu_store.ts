@@ -1,17 +1,17 @@
 /**
- * D1-backed control-plane ledger (core-spec.md §27) — Space-direct Installation
+ * D1-backed control-plane ledger (core-spec.md §27) — Workspace-direct Capsule
  * model.
  *
- * This is the Cloudflare D1 backend of {@link OpenTofuDeploymentStore}. It
- * materializes the §27 logical schema as real per-entity tables (`spaces`,
+ * This is the Cloudflare D1 backend of {@link OpenTofuControlStore}. It
+ * materializes the §27 logical schema as real per-entity tables (`workspaces`,
  * `sources`, `source_snapshots`, `connections`, `secret_blobs`,
- * `provider_envs`, `install_configs`, `installations`,
- * `provider_env_binding_sets`, `runs`, `state_snapshots`, `deployments`,
- * `artifacts`) created lazily with `CREATE TABLE IF NOT EXISTS` on first use
+ * `install_configs`, `capsules`, `provider_binding_sets`, `runs`,
+ * `state_versions`, `outputs`, `artifacts`) created lazily with
+ * `CREATE TABLE IF NOT EXISTS` on first use
  * (the schema-init promise is memoized per store instance).
  *
  * Several contract types carry more fields than the §27 columns (the internal
- * PlanRun / ApplyRun records especially, plus Connection / Source which extend
+ * PlanRun / ApplyRun records especially, plus ProviderConnection / Source which extend
  * the public row with internal-only data). For those rows the store populates
  * the §27-named indexed columns it filters/sorts on AND a `record_json` /
  * `run_json` TEXT column holding the full contract shape, so a put/get round-trip
@@ -21,7 +21,7 @@
  *
  * worker/ is outside the tsc include scope; this file is exercised by
  * `core/domains/deploy-control/store_{sources,connections}_test.ts`
- * through the shared {@link OpenTofuDeploymentStore} contract and bundled by the
+ * through the shared {@link OpenTofuControlStore} contract and bundled by the
  * worker build.
  */
 import {
@@ -43,13 +43,12 @@ import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import type {
   ApplyRun,
-  Connection,
-  Deployment,
+  ProviderConnection,
   InstallConfig,
-  Installation,
+  Capsule,
   PlanRun,
   RunnerProfile,
-  StateSnapshot,
+  StateVersion,
 } from "@takosumi/internal/deploy-control-api";
 import type {
   Source,
@@ -57,17 +56,14 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import type { Workspace as Space } from "takosumi-contract/workspaces";
-import type { WorkspaceOutputSyncState } from "takosumi-contract";
-import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
+import type { Workspace, WorkspaceMember } from "takosumi-contract/workspaces";
+import type { Project } from "takosumi-contract/projects";
+import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type {
   Dependency,
   DependencySnapshot,
 } from "takosumi-contract/dependencies";
-import type {
-  OutputShare,
-  Output as OutputSnapshot,
-} from "takosumi-contract/outputs";
+import type { OutputShare, Output as Output } from "takosumi-contract/outputs";
 import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import {
@@ -77,76 +73,58 @@ import {
   type PageParams,
   pageFromProbe,
   pageFromProbeBy,
+  pageSorted,
 } from "takosumi-contract/pagination";
 import type { BackupRecord } from "takosumi-contract/backups";
-import type {
-  BillingAccount,
-  BillingAutoRechargeAttempt,
-  BillingPlan,
-  CreditBalance,
-  CreditReservation,
-  SpaceSubscription,
-  UsageEvent,
-} from "takosumi-contract/billing";
-import { legacyCreditsToUsdMicros } from "takosumi-contract/billing";
+import type { UsageEvent } from "takosumi-contract/billing";
+import { usageEventUsdMicros } from "takosumi-contract/billing";
 import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "takosumi-contract/security";
 import type {
-  CommitAppliedDeploymentInput,
-  CommitAppliedDeploymentResult,
+  CommitRunStateInput,
+  CommitRunStateResult,
+  CommitResourceRunInput,
+  CommitResourceRunResult,
   CommitRestoredStateInput,
   CommitRestoredStateResult,
-  InstallationPatch,
-  InstallationPatchGuard,
-  OpenTofuDeploymentStore,
+  CapsuleRuntimeSafety,
+  CapsulePatch,
+  CapsuleStateVersionGuard,
+  OpenTofuControlStore,
   PlanRunInputs,
   PublicHostReservation,
-  PutUsageEventAndSpendCreditsResult,
   RecoverableOpenTofuRunListOptions,
   ReservePublicHostInput,
   ReservePublicHostResult,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
-  ClaimBillingAutoRechargeAttemptInput,
-  ClaimBillingAutoRechargeAttemptResult,
   CapsuleListPageParams,
-  CreditAmountInput,
-  SettleBillingAutoRechargeAttemptInput,
-  SettleBillingAutoRechargeAttemptResult,
   TransitionRunInput,
   TransitionRunResult,
-  WorkspaceCurrentOutputRecord,
 } from "../../core/domains/deploy-control/store.ts";
 import {
   clampActivityLimit,
   clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
+  capsuleRuntimeSafetyFromRun,
   compareStoredRunRecordsAsc,
-  InstallationPatchGuardConflict,
-  InstallationStateGenerationGuardConflict,
+  CapsuleStateVersionGuardConflict,
+  CapsuleStateGenerationGuardConflict,
   isRecoverableOpenTofuRunRecord,
+  normalizeStoredCapsuleCompatibilityLevel,
+  normalizeStoredCapsuleCompatibilityReport,
 } from "../../core/domains/deploy-control/store.ts";
 import {
   artifactRecordFromRow,
   coerceRunRowStatus,
-  creditAmountUsdMicros,
-  creditBalanceFromRow,
-  legacyStorageCreditsFromUsdMicros,
-  normalizeBillingAutoRechargeAttempt,
-  normalizeBillingPlan,
-  normalizeCreditBalance,
-  normalizeCreditReservation,
-  normalizeInstallationRecord,
-  normalizeOptionalInstallationRecord,
+  normalizeCapsuleRecord,
+  normalizeOptionalCapsuleRecord,
   normalizeOptionalSourceSnapshotRecord,
   normalizeSourceSnapshotRecord,
-  normalizeUsageEvent,
   usageEventFromRow,
-  usageResourceMetadataFromRow,
-  workspaceKeyOf,
 } from "../../core/domains/deploy-control/store_row_mappers.ts";
 import * as schema from "../../core/adapters/storage/drizzle/schema/d1.ts";
 import type { D1Database, D1Result } from "./bindings.ts";
@@ -164,6 +142,15 @@ const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
 const RUN_KIND_BACKUP = "backup" as const;
 const RUN_KIND_RESTORE = "restore" as const;
 
+function compatibilityReportSourceId(value: string | null | undefined): string {
+  if (!value?.trim()) {
+    throw new TypeError(
+      "CapsuleCompatibilityReport must reference a registered Git Source",
+    );
+  }
+  return value;
+}
+
 function d1RunCreatedAtMillisOrder(): SQL {
   return sql`
     CASE
@@ -175,6 +162,114 @@ function d1RunCreatedAtMillisOrder(): SQL {
       )
     END
   `;
+}
+
+/** Mirrors runtimeSafetyCandidateIsInFlight in the shared store model. */
+function d1RunRuntimeSafetyInFlightOrder(): SQL {
+  return sql`
+    CASE
+      WHEN ${schema.runs.type} = 'destroy_apply'
+        AND ${schema.runs.status} IN ('queued', 'running') THEN 1
+      WHEN ${schema.runs.type} = 'restore'
+        AND ${schema.runs.status} IN ('queued', 'running') THEN 1
+      ELSE 0
+    END
+  `;
+}
+
+/** Mirrors runtimeSafetyCandidateEffectTimestamp in the shared store model. */
+function d1RunRuntimeSafetyEffectAtMillisOrder(): SQL {
+  return sql`
+    CASE
+      WHEN ${schema.runs.type} IN ('apply', 'destroy_apply') THEN COALESCE(
+        CAST(json_extract(${schema.runs.runJson}, '$.finishedAt') AS REAL),
+        CAST(json_extract(${schema.runs.runJson}, '$.updatedAt') AS REAL),
+        ${schema.runs.heartbeatAt},
+        CAST(json_extract(${schema.runs.runJson}, '$.startedAt') AS REAL),
+        ${d1RunCreatedAtMillisOrder()}
+      )
+      WHEN ${schema.runs.type} = 'restore' THEN COALESCE(
+        CAST(
+          strftime('%s', json_extract(${schema.runs.runJson}, '$.finishedAt'))
+          AS INTEGER
+        ) * 1000 + CAST(
+          substr(
+            strftime('%f', json_extract(${schema.runs.runJson}, '$.finishedAt')),
+            4,
+            3
+          ) AS INTEGER
+        ),
+        ${schema.runs.heartbeatAt},
+        CAST(
+          strftime('%s', json_extract(${schema.runs.runJson}, '$.startedAt'))
+          AS INTEGER
+        ) * 1000 + CAST(
+          substr(
+            strftime('%f', json_extract(${schema.runs.runJson}, '$.startedAt')),
+            4,
+            3
+          ) AS INTEGER
+        ),
+        ${d1RunCreatedAtMillisOrder()}
+      )
+      ELSE ${d1RunCreatedAtMillisOrder()}
+    END
+  `;
+}
+
+/** Mirrors runtimeSafetyCandidateRiskRank in the shared store model. */
+function d1RunRuntimeSafetyRiskOrder(): SQL {
+  return sql`
+    CASE
+      WHEN ${schema.runs.type} = 'destroy_apply'
+        AND ${schema.runs.status} = 'succeeded' THEN 3
+      WHEN ${schema.runs.type} = 'destroy_apply'
+        AND ${schema.runs.status} IN ('queued', 'running') THEN 2
+      WHEN ${schema.runs.status} IN ('failed', 'expired') THEN 1
+      WHEN ${schema.runs.type} = 'restore'
+        AND ${schema.runs.status} IN ('queued', 'running') THEN 1
+      ELSE 0
+    END
+  `;
+}
+
+/** Mirrors applyRunMutationDispatched in the shared store model. */
+function d1RunMutationDispatched(): SQL {
+  return sql`
+    EXISTS (
+      SELECT 1
+      FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+      WHERE json_extract(
+        audit_event.value,
+        '$.data.providerDispatched'
+      ) = 1
+         OR json_extract(
+           audit_event.value,
+           '$.data.lifecycleActionDispatched'
+         ) = 1
+    )
+  `;
+}
+
+/** Mirrors applyRunBillingCapturePending in the shared store model. */
+function d1RunBillingCapturePending(): SQL {
+  return sql`
+    EXISTS (
+      SELECT 1
+      FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+      WHERE json_extract(audit_event.value, '$.type') = 'billing.capture.pending'
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+      WHERE json_extract(audit_event.value, '$.type') = 'billing.capture.completed'
+    )
+  `;
+}
+
+/** An expired apply/destroy is uncertain only after it started. */
+function d1RunStarted(): SQL {
+  return sql`json_extract(${schema.runs.runJson}, '$.startedAt') IS NOT NULL`;
 }
 
 /**
@@ -216,7 +311,8 @@ function d1KeysetWhereDesc(
   return filter === undefined ? keyset : and(filter, keyset);
 }
 
-export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentStore {
+export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
+  readonly persistence = "durable" as const;
   readonly #orm: DrizzleD1Database<typeof schema>;
   #initialized?: Promise<void>;
 
@@ -257,9 +353,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     await this.#putRun({
       id: run.id,
       runGroupId: null,
-      spaceId: run.workspaceId ?? run.spaceId,
-      installationId: run.installationId ?? null,
-      environment: run.installationContext?.environment ?? null,
+      workspaceId: run.workspaceId,
+      capsuleId: run.capsuleId ?? null,
+      environment: run.capsuleContext?.environment ?? null,
       type: planRunType(run),
       status: run.status,
       runJson: JSON.stringify(run),
@@ -281,8 +377,8 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     await this.#putRun({
       id: run.id,
       runGroupId: null,
-      spaceId: run.workspaceId ?? run.spaceId,
-      installationId: run.installationId ?? null,
+      workspaceId: run.workspaceId,
+      capsuleId: run.capsuleId ?? null,
       environment: null,
       type: applyRunType(run),
       status: run.status,
@@ -301,11 +397,12 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
    * Status-conditional, lease-fenced compare-and-set transition (same {won, run}
    * contract as the SQL store). A single conditional UPDATE fences on `id`,
    * `type` (the run family), `status ∈ expectFrom`, and — when set —
-   * `lease_token = expectLeaseToken`, so a concurrent claimer that already moved
-   * the row loses deterministically. On a win the status / run_json advance to
-   * `input.run`; `setLeaseToken` / `clearLeaseToken` / `clearHeartbeat` /
-   * `heartbeatAt` write the lease and heartbeat columns. A lost race (0 rows
-   * changed) re-reads the current row and returns it with `won: false`.
+   * `lease_token = expectLeaseToken`, and when set the JSON `startedAt` equals
+   * `expectStartedAt`, so a concurrent claimer or requeue loses deterministically.
+   * On a win the status / run_json advance to `input.run`; `setLeaseToken` /
+   * `clearLeaseToken` / `clearHeartbeat` / `heartbeatAt` write the lease and
+   * heartbeat columns. A lost race (0 rows changed) re-reads the current row and
+   * returns it with `won: false`.
    */
   async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     await this.#ensureSchema();
@@ -355,6 +452,11 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
             : input.expectHeartbeatAt === null
               ? isNull(schema.runs.heartbeatAt)
               : eq(schema.runs.heartbeatAt, input.expectHeartbeatAt),
+          input.expectStartedAt === undefined
+            ? undefined
+            : input.expectStartedAt === null
+              ? sql`json_extract(${schema.runs.runJson}, '$.startedAt') IS NULL`
+              : sql`json_extract(${schema.runs.runJson}, '$.startedAt') = ${input.expectStartedAt}`,
         ),
       )
       .run();
@@ -378,9 +480,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     await this.#putRun({
       id: run.id,
       runGroupId: null,
-      spaceId: run.spaceId,
+      workspaceId: run.workspaceId,
       sourceId: run.sourceId,
-      installationId: null,
+      capsuleId: null,
       environment: null,
       type: RUN_KIND_SOURCE_SYNC,
       status: run.status,
@@ -402,9 +504,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     await this.#putRun({
       id: run.id,
       runGroupId: run.runGroupId ?? null,
-      spaceId: run.spaceId,
+      workspaceId: run.workspaceId,
       sourceId: run.sourceId ?? null,
-      installationId: null,
+      capsuleId: null,
       environment: null,
       type: RUN_KIND_COMPATIBILITY_CHECK,
       status: run.status,
@@ -424,9 +526,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     await this.#putRun({
       id: run.id,
       runGroupId: run.runGroupId ?? null,
-      spaceId: run.spaceId,
+      workspaceId: run.workspaceId,
       sourceId: run.sourceId ?? null,
-      installationId: run.installationId ?? null,
+      capsuleId: run.capsuleId ?? null,
       environment: run.environment ?? null,
       type: run.type,
       status: run.status,
@@ -439,8 +541,8 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return await this.#getRun<Run>(id, [RUN_KIND_BACKUP, RUN_KIND_RESTORE]);
   }
 
-  async listRunsBySpace(
-    spaceId: string,
+  async listRunsByWorkspace(
+    workspaceId: string,
     options: { readonly limit?: number } = {},
   ): Promise<readonly StoredRunRecord[]> {
     const limit = clampRunListLimit(options.limit);
@@ -448,11 +550,67 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       schema.runs,
       schema.runs.runJson,
       {
-        where: eq(schema.runs.spaceId, spaceId),
+        where: eq(schema.runs.workspaceId, workspaceId),
         orderBy: [desc(d1RunCreatedAtMillisOrder()), desc(schema.runs.id)],
         limit,
       },
     );
+  }
+
+  async getCapsuleRuntimeSafety(
+    capsuleId: string,
+  ): Promise<CapsuleRuntimeSafety | undefined> {
+    const rows = await this.#drizzleManyJson<ApplyRun | Run>(
+      schema.runs,
+      schema.runs.runJson,
+      {
+        where: and(
+          eq(schema.runs.capsuleId, capsuleId),
+          or(
+            and(
+              eq(schema.runs.type, "apply"),
+              or(
+                eq(schema.runs.status, "succeeded"),
+                and(
+                  eq(schema.runs.status, "failed"),
+                  d1RunMutationDispatched(),
+                ),
+                and(eq(schema.runs.status, "expired"), d1RunStarted()),
+              ),
+            ),
+            and(
+              eq(schema.runs.type, "destroy_apply"),
+              or(
+                inArray(schema.runs.status, ["queued", "running", "succeeded"]),
+                and(
+                  eq(schema.runs.status, "failed"),
+                  d1RunMutationDispatched(),
+                ),
+                and(eq(schema.runs.status, "expired"), d1RunStarted()),
+              ),
+            ),
+            and(
+              eq(schema.runs.type, RUN_KIND_RESTORE),
+              inArray(schema.runs.status, [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "expired",
+              ]),
+            ),
+          ),
+        ),
+        orderBy: [
+          desc(d1RunRuntimeSafetyInFlightOrder()),
+          desc(d1RunRuntimeSafetyEffectAtMillisOrder()),
+          desc(d1RunRuntimeSafetyRiskOrder()),
+          desc(schema.runs.id),
+        ],
+        limit: 1,
+      },
+    );
+    return rows[0] ? capsuleRuntimeSafetyFromRun(rows[0]) : undefined;
   }
 
   async listRecoverableOpenTofuRuns(
@@ -462,17 +620,24 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       schema.runs,
       schema.runs.runJson,
       {
-        where: and(
-          inArray(schema.runs.status, ["queued", "running"]),
-          inArray(schema.runs.type, [
-            RUN_KIND_PLAN,
-            "destroy_plan",
-            "drift_check",
-            RUN_KIND_APPLY,
-            "destroy_apply",
-            RUN_KIND_SOURCE_SYNC,
-            RUN_KIND_RESTORE,
-          ]),
+        where: or(
+          and(
+            inArray(schema.runs.status, ["queued", "running"]),
+            inArray(schema.runs.type, [
+              RUN_KIND_PLAN,
+              "destroy_plan",
+              "drift_check",
+              RUN_KIND_APPLY,
+              "destroy_apply",
+              RUN_KIND_SOURCE_SYNC,
+              RUN_KIND_RESTORE,
+            ]),
+          ),
+          and(
+            inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+            inArray(schema.runs.status, ["succeeded", "failed"]),
+            d1RunBillingCapturePending(),
+          ),
         ),
       },
     );
@@ -486,7 +651,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   async listSourceSyncRuns(
     sourceId: string,
   ): Promise<readonly SourceSyncRun[]> {
-    const currentRows = await this.#drizzleManyJson<SourceSyncRun>(
+    return await this.#drizzleManyJson<SourceSyncRun>(
       schema.runs,
       schema.runs.runJson,
       {
@@ -497,23 +662,6 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         orderBy: [asc(schema.runs.createdAt), asc(schema.runs.id)],
       },
     );
-    const legacyRows = await this.#drizzleManyJson<SourceSyncRun>(
-      schema.runs,
-      schema.runs.runJson,
-      {
-        where: and(
-          eq(schema.runs.type, RUN_KIND_SOURCE_SYNC),
-          eq(schema.runs.installationId, sourceId),
-        ),
-        orderBy: [asc(schema.runs.createdAt), asc(schema.runs.id)],
-      },
-    );
-    const byId = new Map<string, SourceSyncRun>();
-    for (const row of [...currentRows, ...legacyRows]) byId.set(row.id, row);
-    return [...byId.values()].sort(
-      (a, b) =>
-        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-    );
   }
 
   // -- Artifact ledger (§30 artifacts) ---------------------------------------
@@ -523,7 +671,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       id: record.id,
       runId: record.runId,
       kind: record.kind,
-      objectKey: record.objectKey,
+      ref: record.ref,
       digest: record.digest,
       sizeBytes: record.sizeBytes,
       createdAt: record.createdAt,
@@ -547,7 +695,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
 
   async putPlanRunInputs(inputs: PlanRunInputs): Promise<void> {
     await this.#drizzleUpsert(
-      schema.runsInputs,
+      schema.planRunInputs,
       {
         planRunId: inputs.planRunId,
         inputsJson: inputs,
@@ -555,7 +703,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       {
         inputsJson: inputs,
       },
-      schema.runsInputs.planRunId,
+      schema.planRunInputs.planRunId,
     );
   }
 
@@ -563,205 +711,202 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     planRunId: string,
   ): Promise<PlanRunInputs | undefined> {
     return await this.#drizzleFirstJson<PlanRunInputs>(
-      schema.runsInputs,
-      schema.runsInputs.inputsJson,
-      eq(schema.runsInputs.planRunId, planRunId),
+      schema.planRunInputs,
+      schema.planRunInputs.inputsJson,
+      eq(schema.planRunInputs.planRunId, planRunId),
     );
   }
 
   async deletePlanRunInputs(planRunId: string): Promise<void> {
     await this.#drizzleDelete(
-      schema.runsInputs,
-      eq(schema.runsInputs.planRunId, planRunId),
+      schema.planRunInputs,
+      eq(schema.planRunInputs.planRunId, planRunId),
     );
   }
 
-  // -- Space ------------------------------------------------------------------
+  // -- Workspace ------------------------------------------------------------------
 
-  async putSpace(space: Space): Promise<Space> {
-    await this.#drizzleUpsert(schema.spaces, {
-      id: space.id,
-      handle: space.handle,
-      recordJson: space,
-      createdAt: space.createdAt,
-      updatedAt: space.updatedAt,
+  async putWorkspace(workspace: Workspace): Promise<Workspace> {
+    await this.#drizzleUpsert(schema.workspaces, {
+      id: workspace.id,
+      handle: workspace.handle,
+      recordJson: workspace,
+      createdAt: workspace.createdAt,
+      updatedAt: workspace.updatedAt,
     });
-    return space;
+    return workspace;
   }
 
-  async getSpace(id: string): Promise<Space | undefined> {
-    return await this.#drizzleFirstJson<Space>(
-      schema.spaces,
-      schema.spaces.recordJson,
-      eq(schema.spaces.id, id),
+  async getWorkspace(id: string): Promise<Workspace | undefined> {
+    return await this.#drizzleFirstJson<Workspace>(
+      schema.workspaces,
+      schema.workspaces.recordJson,
+      eq(schema.workspaces.id, id),
     );
   }
 
-  async listSpacesByIds(ids: readonly string[]): Promise<readonly Space[]> {
+  async listWorkspacesByIds(
+    ids: readonly string[],
+  ): Promise<readonly Workspace[]> {
     if (ids.length === 0) return [];
-    const rows = await this.#drizzleManyJson<Space>(
-      schema.spaces,
-      schema.spaces.recordJson,
-      { where: inArray(schema.spaces.id, [...new Set(ids)]) },
+    const rows = await this.#drizzleManyJson<Workspace>(
+      schema.workspaces,
+      schema.workspaces.recordJson,
+      { where: inArray(schema.workspaces.id, [...new Set(ids)]) },
     );
     const byId = new Map(rows.map((row) => [row.id, row] as const));
     return ids
       .map((id) => byId.get(id))
-      .filter((row): row is Space => row !== undefined);
+      .filter((row): row is Workspace => row !== undefined);
   }
 
-  async getSpaceByHandle(handle: string): Promise<Space | undefined> {
-    return await this.#drizzleFirstJson<Space>(
-      schema.spaces,
-      schema.spaces.recordJson,
-      eq(schema.spaces.handle, handle),
+  async getWorkspaceByHandle(handle: string): Promise<Workspace | undefined> {
+    return await this.#drizzleFirstJson<Workspace>(
+      schema.workspaces,
+      schema.workspaces.recordJson,
+      eq(schema.workspaces.handle, handle),
     );
   }
 
-  async listSpaces(): Promise<readonly Space[]> {
-    return await this.#drizzleManyJson<Space>(
-      schema.spaces,
-      schema.spaces.recordJson,
-      { orderBy: [asc(schema.spaces.createdAt), asc(schema.spaces.id)] },
-    );
-  }
-
-  async listSpacesByOwner(ownerUserId: string): Promise<readonly Space[]> {
-    return await this.#drizzleManyJson<Space>(
-      schema.spaces,
-      schema.spaces.recordJson,
+  async listWorkspaces(): Promise<readonly Workspace[]> {
+    return await this.#drizzleManyJson<Workspace>(
+      schema.workspaces,
+      schema.workspaces.recordJson,
       {
-        where: sql`${schema.spaces.recordJson} ->> 'ownerUserId' = ${ownerUserId}`,
-        orderBy: [asc(schema.spaces.createdAt), asc(schema.spaces.id)],
+        orderBy: [asc(schema.workspaces.createdAt), asc(schema.workspaces.id)],
       },
     );
   }
 
-  // -- Workspace Output Sync -------------------------------------------------
-
-  async putWorkspaceOutputSyncState(
-    state: WorkspaceOutputSyncState,
-  ): Promise<WorkspaceOutputSyncState> {
-    await this.#drizzleUpsert(
-      schema.workspaceOutputSync,
-      workspaceOutputSyncValues(state),
-      workspaceOutputSyncValues(state),
-      schema.workspaceOutputSync.workspaceId,
+  async listWorkspacesByOwner(
+    ownerUserId: string,
+  ): Promise<readonly Workspace[]> {
+    return await this.#drizzleManyJson<Workspace>(
+      schema.workspaces,
+      schema.workspaces.recordJson,
+      {
+        where: sql`${schema.workspaces.recordJson} ->> 'ownerUserId' = ${ownerUserId}`,
+        orderBy: [asc(schema.workspaces.createdAt), asc(schema.workspaces.id)],
+      },
     );
-    return state;
   }
 
-  async compareAndSetWorkspaceOutputSyncState(
-    expected: WorkspaceOutputSyncState | undefined,
-    next: WorkspaceOutputSyncState,
-  ): Promise<boolean> {
-    await this.#ensureSchema();
-    if (!expected) {
-      const result = await this.#orm
-        .insert(schema.workspaceOutputSync)
-        .values(workspaceOutputSyncValues(next))
-        .onConflictDoNothing()
-        .run();
-      return changes(result as D1Result) === 1;
-    }
-    const result = await this.#orm
-      .update(schema.workspaceOutputSync)
-      .set(workspaceOutputSyncValues(next))
-      .where(
-        and(
-          eq(schema.workspaceOutputSync.workspaceId, expected.workspaceId),
-          eq(schema.workspaceOutputSync.enabled, expected.enabled),
-          eq(
-            schema.workspaceOutputSync.outputRevision,
-            expected.outputRevision,
-          ),
-          eq(
-            schema.workspaceOutputSync.reconciledRevision,
-            expected.reconciledRevision,
-          ),
-          expected.activeRunGroupId === undefined
-            ? isNull(schema.workspaceOutputSync.activeRunGroupId)
-            : eq(
-                schema.workspaceOutputSync.activeRunGroupId,
-                expected.activeRunGroupId,
-              ),
-          eq(
-            schema.workspaceOutputSync.consecutivePasses,
-            expected.consecutivePasses,
-          ),
-          eq(schema.workspaceOutputSync.updatedAt, expected.updatedAt),
-        ),
-      )
-      .run();
-    return changes(result as D1Result) === 1;
+  async putWorkspaceMember(member: WorkspaceMember): Promise<WorkspaceMember> {
+    await this.#drizzleUpsert(
+      schema.workspaceMembers,
+      {
+        id: member.id,
+        workspaceId: member.workspaceId,
+        accountId: member.accountId,
+        status: member.status,
+        recordJson: member,
+        createdAt: member.createdAt,
+        updatedAt: member.updatedAt,
+      },
+      {
+        id: member.id,
+        status: member.status,
+        recordJson: member,
+        createdAt: member.createdAt,
+        updatedAt: member.updatedAt,
+      },
+      [schema.workspaceMembers.workspaceId, schema.workspaceMembers.accountId],
+    );
+    return member;
   }
 
-  async getWorkspaceOutputSyncState(
+  async getWorkspaceMember(
     workspaceId: string,
-  ): Promise<WorkspaceOutputSyncState | undefined> {
-    await this.#ensureSchema();
-    const row = await this.#orm
-      .select()
-      .from(schema.workspaceOutputSync)
-      .where(eq(schema.workspaceOutputSync.workspaceId, workspaceId))
-      .get();
-    return row ? workspaceOutputSyncStateFromD1Row(row) : undefined;
+    accountId: string,
+  ): Promise<WorkspaceMember | undefined> {
+    return await this.#drizzleFirstJson<WorkspaceMember>(
+      schema.workspaceMembers,
+      schema.workspaceMembers.recordJson,
+      and(
+        eq(schema.workspaceMembers.workspaceId, workspaceId),
+        eq(schema.workspaceMembers.accountId, accountId),
+      ),
+    );
   }
 
-  async listPendingWorkspaceOutputSyncStates(
-    limit: number,
-  ): Promise<readonly WorkspaceOutputSyncState[]> {
-    const normalizedLimit = Math.max(0, Math.floor(limit));
-    if (normalizedLimit === 0) return [];
-    await this.#ensureSchema();
-    const rows = await this.#orm
-      .select()
-      .from(schema.workspaceOutputSync)
-      .where(
-        and(
-          eq(schema.workspaceOutputSync.enabled, true),
-          or(
-            gt(
-              schema.workspaceOutputSync.outputRevision,
-              schema.workspaceOutputSync.reconciledRevision,
-            ),
-            sql`${schema.workspaceOutputSync.activeRunGroupId} is not null`,
-          ),
-        ),
-      )
-      .orderBy(
-        asc(schema.workspaceOutputSync.updatedAt),
-        asc(schema.workspaceOutputSync.workspaceId),
-      )
-      .limit(normalizedLimit);
-    return rows.map(workspaceOutputSyncStateFromD1Row);
-  }
-
-  async listCurrentOutputsByWorkspace(
+  async listWorkspaceMembers(
     workspaceId: string,
-  ): Promise<readonly WorkspaceCurrentOutputRecord[]> {
-    await this.#ensureSchema();
-    const currentOutputId = sql<string>`COALESCE(
-      json_extract(${schema.installations.recordJson}, '$.currentOutputId'),
-      ${schema.installations.currentOutputSnapshotId},
-      json_extract(${schema.installations.recordJson}, '$.currentOutputSnapshotId')
-    )`;
-    const rows = await this.#orm
-      .select({
-        capsule: schema.installations.recordJson,
-        output: schema.outputSnapshots.recordJson,
-      })
-      .from(schema.installations)
-      .innerJoin(
-        schema.outputSnapshots,
-        eq(schema.outputSnapshots.id, currentOutputId),
-      )
-      .where(eq(schema.installations.spaceId, workspaceId))
-      .orderBy(asc(schema.installations.id));
-    return rows.map((row) => ({
-      capsule: normalizeInstallationRecord(row.capsule as Installation),
-      output: row.output as OutputSnapshot,
-    }));
+  ): Promise<readonly WorkspaceMember[]> {
+    return await this.#drizzleManyJson<WorkspaceMember>(
+      schema.workspaceMembers,
+      schema.workspaceMembers.recordJson,
+      {
+        where: eq(schema.workspaceMembers.workspaceId, workspaceId),
+        orderBy: [
+          asc(schema.workspaceMembers.createdAt),
+          asc(schema.workspaceMembers.id),
+        ],
+      },
+    );
+  }
+
+  async listWorkspaceMembersByAccount(
+    accountId: string,
+  ): Promise<readonly WorkspaceMember[]> {
+    return await this.#drizzleManyJson<WorkspaceMember>(
+      schema.workspaceMembers,
+      schema.workspaceMembers.recordJson,
+      {
+        where: eq(schema.workspaceMembers.accountId, accountId),
+        orderBy: [
+          asc(schema.workspaceMembers.createdAt),
+          asc(schema.workspaceMembers.id),
+        ],
+      },
+    );
+  }
+
+  async putProject(project: Project): Promise<Project> {
+    await this.#drizzleUpsert(schema.projects, {
+      id: project.id,
+      workspaceId: project.workspaceId,
+      name: project.name,
+      slug: project.slug,
+      recordJson: project,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+    });
+    return project;
+  }
+
+  async getProject(id: string): Promise<Project | undefined> {
+    return await this.#drizzleFirstJson<Project>(
+      schema.projects,
+      schema.projects.recordJson,
+      eq(schema.projects.id, id),
+    );
+  }
+
+  async getProjectBySlug(
+    workspaceId: string,
+    slug: string,
+  ): Promise<Project | undefined> {
+    return await this.#drizzleFirstJson<Project>(
+      schema.projects,
+      schema.projects.recordJson,
+      and(
+        eq(schema.projects.workspaceId, workspaceId),
+        eq(schema.projects.slug, slug),
+      ),
+    );
+  }
+
+  async listProjectsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly Project[]> {
+    return await this.#drizzleManyJson<Project>(
+      schema.projects,
+      schema.projects.recordJson,
+      {
+        where: eq(schema.projects.workspaceId, workspaceId),
+        orderBy: [asc(schema.projects.createdAt), asc(schema.projects.id)],
+      },
+    );
   }
 
   // -- InstallConfig ----------------------------------------------------------
@@ -769,9 +914,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
     await this.#drizzleUpsert(schema.installConfigs, {
       id: config.id,
-      spaceId: config.spaceId ?? null,
-      installType: config.installType,
-      trustLevel: config.trustLevel,
+      workspaceId: config.workspaceId ?? null,
       recordJson: config,
       createdAt: config.createdAt,
       updatedAt: config.updatedAt,
@@ -780,48 +923,50 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   async getInstallConfig(id: string): Promise<InstallConfig | undefined> {
-    return await this.#drizzleFirstJson<InstallConfig>(
+    const config = await this.#drizzleFirstJson<InstallConfig>(
       schema.installConfigs,
       schema.installConfigs.recordJson,
       eq(schema.installConfigs.id, id),
     );
+    return config;
   }
 
   async listInstallConfigs(
-    spaceId?: string,
+    workspaceId?: string,
   ): Promise<readonly InstallConfig[]> {
-    return await this.#drizzleManyJson<InstallConfig>(
+    const configs = await this.#drizzleManyJson<InstallConfig>(
       schema.installConfigs,
       schema.installConfigs.recordJson,
       {
         where:
-          spaceId === undefined
+          workspaceId === undefined
             ? undefined
-            : eq(schema.installConfigs.spaceId, spaceId),
+            : eq(schema.installConfigs.workspaceId, workspaceId),
         orderBy: [
           asc(schema.installConfigs.createdAt),
           asc(schema.installConfigs.id),
         ],
       },
     );
+    return configs;
   }
 
-  // -- Installation -----------------------------------------------------------
+  // -- Capsule -----------------------------------------------------------
 
-  async putInstallation(installation: Installation): Promise<Installation> {
-    const normalized = normalizeInstallationRecord(installation);
-    await this.#drizzleUpsert(schema.installations, {
+  async putCapsule(capsule: Capsule): Promise<Capsule> {
+    const normalized = normalizeCapsuleRecord(capsule);
+    await this.#drizzleUpsert(schema.capsules, {
       id: normalized.id,
-      spaceId: normalized.workspaceId,
+      workspaceId: normalized.workspaceId,
+      projectId: normalized.projectId,
       name: normalized.name,
       slug: normalized.slug,
-      sourceId: normalized.sourceId ?? null,
-      installType: normalized.installType,
+      sourceId: normalized.sourceId,
       installConfigId: normalized.installConfigId,
       environment: normalized.environment,
-      currentDeploymentId: normalized.currentDeploymentId ?? null,
+      currentStateVersionId: normalized.currentStateVersionId ?? null,
       currentStateGeneration: normalized.currentStateGeneration,
-      currentOutputSnapshotId: normalized.currentOutputSnapshotId ?? null,
+      currentOutputId: normalized.currentOutputId ?? null,
       status: normalized.status,
       recordJson: normalized,
       createdAt: normalized.createdAt,
@@ -830,84 +975,78 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return normalized;
   }
 
-  async getInstallation(id: string): Promise<Installation | undefined> {
-    return normalizeOptionalInstallationRecord(
-      await this.#drizzleFirstJson<Installation>(
-        schema.installations,
-        schema.installations.recordJson,
-        eq(schema.installations.id, id),
+  async getCapsule(id: string): Promise<Capsule | undefined> {
+    return normalizeOptionalCapsuleRecord(
+      await this.#drizzleFirstJson<Capsule>(
+        schema.capsules,
+        schema.capsules.recordJson,
+        eq(schema.capsules.id, id),
       ),
     );
   }
 
-  async getInstallationByName(
-    spaceId: string,
+  async getCapsuleByName(
+    projectId: string,
     name: string,
     environment: string,
-  ): Promise<Installation | undefined> {
-    return normalizeOptionalInstallationRecord(
-      await this.#drizzleFirstJson<Installation>(
-        schema.installations,
-        schema.installations.recordJson,
+  ): Promise<Capsule | undefined> {
+    return normalizeOptionalCapsuleRecord(
+      await this.#drizzleFirstJson<Capsule>(
+        schema.capsules,
+        schema.capsules.recordJson,
         and(
-          eq(schema.installations.spaceId, spaceId),
-          eq(schema.installations.name, name),
-          eq(schema.installations.environment, environment),
-          ne(schema.installations.status, "destroyed"),
+          eq(schema.capsules.projectId, projectId),
+          eq(schema.capsules.name, name),
+          eq(schema.capsules.environment, environment),
+          ne(schema.capsules.status, "destroyed"),
         ),
       ),
     );
   }
 
-  async listInstallations(spaceId?: string): Promise<readonly Installation[]> {
+  async listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
     return (
-      await this.#drizzleManyJson<Installation>(
-        schema.installations,
-        schema.installations.recordJson,
+      await this.#drizzleManyJson<Capsule>(
+        schema.capsules,
+        schema.capsules.recordJson,
         {
           where:
-            spaceId === undefined
+            workspaceId === undefined
               ? undefined
-              : eq(schema.installations.spaceId, spaceId),
-          orderBy: [
-            asc(schema.installations.createdAt),
-            asc(schema.installations.id),
-          ],
+              : eq(schema.capsules.workspaceId, workspaceId),
+          orderBy: [asc(schema.capsules.createdAt), asc(schema.capsules.id)],
         },
       )
-    ).map(normalizeInstallationRecord);
+    ).map(normalizeCapsuleRecord);
   }
 
-  async listInstallationsPage(
-    spaceId: string,
+  async listCapsulesPage(
+    workspaceId: string,
     params: CapsuleListPageParams,
-  ): Promise<Page<Installation>> {
+  ): Promise<Page<Capsule>> {
     const limit = clampPageLimit(params.limit);
     const baseWhere =
       params.includeDestroyed === false
         ? and(
-            eq(schema.installations.spaceId, spaceId),
-            ne(schema.installations.status, "destroyed"),
+            eq(schema.capsules.workspaceId, workspaceId),
+            ne(schema.capsules.status, "destroyed"),
           )
-        : eq(schema.installations.spaceId, spaceId);
-    const rows = await this.#drizzleManyJson<Installation>(
-      schema.installations,
-      schema.installations.recordJson,
+        : eq(schema.capsules.workspaceId, workspaceId);
+    const rows = await this.#drizzleManyJson<Capsule>(
+      schema.capsules,
+      schema.capsules.recordJson,
       {
         where: d1KeysetWhere(
           baseWhere,
-          schema.installations.createdAt,
-          schema.installations.id,
+          schema.capsules.createdAt,
+          schema.capsules.id,
           decodeCursor(params.cursor),
         ),
-        orderBy: [
-          asc(schema.installations.createdAt),
-          asc(schema.installations.id),
-        ],
+        orderBy: [asc(schema.capsules.createdAt), asc(schema.capsules.id)],
         limit: limit + 1,
       },
     );
-    return pageFromProbe(rows.map(normalizeInstallationRecord), limit);
+    return pageFromProbe(rows.map(normalizeCapsuleRecord), limit);
   }
 
   async reservePublicHost(
@@ -915,7 +1054,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   ): Promise<ReservePublicHostResult> {
     await this.#ensureSchema();
     const hostname = input.hostname.toLowerCase();
-    const workspace = await this.getSpace(input.workspaceId);
+    const workspace = await this.getWorkspace(input.workspaceId);
     if (!workspace) {
       throw new Error("public host reservation workspace was not found");
     }
@@ -962,8 +1101,8 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         hostname,
         ownerUserId,
         input.workspaceId,
-        input.installationId,
-        input.installationName,
+        input.capsuleId,
+        input.capsuleName,
         input.allocationKind,
         input.now,
         input.now,
@@ -993,7 +1132,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     const normalized = publicHostReservationFromD1Row(reservation);
     if (
       normalized.status === "reserved" &&
-      normalized.installationId === input.installationId &&
+      normalized.capsuleId === input.capsuleId &&
       normalized.allocationKind === input.allocationKind
     ) {
       return { reserved: true, reservation: normalized };
@@ -1022,8 +1161,8 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return row ? publicHostReservationFromD1Row(row) : undefined;
   }
 
-  async releasePublicHostsForInstallation(
-    installationId: string,
+  async releasePublicHostsForCapsule(
+    capsuleId: string,
     now: string,
   ): Promise<void> {
     await this.#ensureSchema();
@@ -1036,101 +1175,101 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
          where installation_id = ?
            and status = 'reserved'`,
       )
-      .bind(now, now, installationId)
+      .bind(now, now, capsuleId)
       .run();
   }
 
-  async patchInstallation(
+  async patchCapsule(
     id: string,
-    patch: InstallationPatch,
-    guard?: InstallationPatchGuard,
-  ): Promise<Installation | undefined> {
-    const existing = await this.getInstallation(id);
+    patch: CapsulePatch,
+    guard?: CapsuleStateVersionGuard,
+  ): Promise<Capsule | undefined> {
+    const existing = await this.getCapsule(id);
     if (!existing) return undefined;
     if (
       guard !== undefined &&
-      (existing.currentDeploymentId !== guard.currentDeploymentId ||
+      (existing.currentStateVersionId !== guard.currentStateVersionId ||
         (guard.status !== undefined && existing.status !== guard.status))
     ) {
-      throw new InstallationPatchGuardConflict({
+      throw new CapsuleStateVersionGuardConflict({
         id,
-        expectedCurrentDeploymentId: guard.currentDeploymentId,
-        actualCurrentDeploymentId: existing.currentDeploymentId,
+        expectedCurrentStateVersionId: guard.currentStateVersionId,
+        actualCurrentStateVersionId: existing.currentStateVersionId,
         expectedStatus: guard.status,
         actualStatus: existing.status,
       });
     }
-    const updated: Installation = { ...existing, ...patch };
-    if (!guard) return await this.putInstallation(updated);
+    const updated: Capsule = { ...existing, ...patch };
+    if (!guard) return await this.putCapsule(updated);
     // Guarded path: a single conditional UPDATE so a concurrent writer that
-    // moved currentDeploymentId/status loses the race deterministically.
+    // moved currentStateVersionId/status loses the race deterministically.
     await this.#ensureSchema();
     const result = await this.#orm
-      .update(schema.installations)
+      .update(schema.capsules)
       .set({
-        currentDeploymentId: updated.currentDeploymentId ?? null,
+        currentStateVersionId: updated.currentStateVersionId ?? null,
         currentStateGeneration: updated.currentStateGeneration,
-        currentOutputSnapshotId: updated.currentOutputSnapshotId ?? null,
+        currentOutputId: updated.currentOutputId ?? null,
         status: updated.status,
-        recordJson: normalizeInstallationRecord(updated),
+        recordJson: normalizeCapsuleRecord(updated),
         updatedAt: updated.updatedAt,
       })
       .where(
         and(
-          eq(schema.installations.id, id),
-          guard.currentDeploymentId === undefined
-            ? isNull(schema.installations.currentDeploymentId)
+          eq(schema.capsules.id, id),
+          guard.currentStateVersionId === undefined
+            ? isNull(schema.capsules.currentStateVersionId)
             : eq(
-                schema.installations.currentDeploymentId,
-                guard.currentDeploymentId,
+                schema.capsules.currentStateVersionId,
+                guard.currentStateVersionId,
               ),
           guard.status === undefined
             ? undefined
-            : eq(schema.installations.status, guard.status),
+            : eq(schema.capsules.status, guard.status),
         ),
       )
       .run();
     if (changes(result as D1Result) > 0) {
-      return normalizeInstallationRecord(updated);
+      return normalizeCapsuleRecord(updated);
     }
-    const actual = await this.getInstallation(id);
+    const actual = await this.getCapsule(id);
     if (!actual) return undefined;
-    throw new InstallationPatchGuardConflict({
+    throw new CapsuleStateVersionGuardConflict({
       id,
-      expectedCurrentDeploymentId: guard.currentDeploymentId,
-      actualCurrentDeploymentId: actual.currentDeploymentId,
+      expectedCurrentStateVersionId: guard.currentStateVersionId,
+      actualCurrentStateVersionId: actual.currentStateVersionId,
       expectedStatus: guard.status,
       actualStatus: actual.status,
     });
   }
 
   /**
-   * Atomic apply / destroy-apply ledger commit (spec §20 / §21 / §16) for D1.
+   * Atomic provider-applied / destroy-apply ledger commit (spec §20 / §21 / §16) for D1.
    *
    * D1 has NO interactive transaction, but `batch([...])` commits a set of
    * statements atomically (all-or-nothing). So every WRITE — new/superseded
-   * Deployment(s), StateSnapshot, (apply) OutputSnapshot, and the Installation
+   * StateVersion, (apply) Output, and the Capsule
    * advance — is committed in ONE `this.#orm.batch(...)` call; a crash between
    * statements can no longer leave torn state.
    *
-   * The guarded Installation advance is still evaluated before the batch because
+   * The guarded Capsule advance is still evaluated before the batch because
    * D1 cannot branch a batch on an UPDATE row count. Apply ownership is stricter:
    * when an apply terminal row carries a lease token, the batch starts with a
    * guard statement that raises a deliberate SQL error unless the current run
    * row is still `running` with that token. That error rolls the whole batch
-   * back, so a stale owner cannot write Deployment/State/Output rows after
+   * back, so a stale owner cannot write StateVersion/Output rows after
    * another worker has taken the run over.
    *
-   * The Installation guard mirrors {@link patchInstallation}:
-   *   - row gone -> `{ installation: undefined }` (no writes), same as today;
-   *   - guard mismatch -> throw {@link InstallationPatchGuardConflict} (no writes);
+   * The Capsule guard mirrors {@link patchCapsule}:
+   *   - row gone -> `{ capsule: undefined }` (no writes), same as today;
+   *   - guard mismatch -> throw {@link CapsuleStateVersionGuardConflict} (no writes);
    *   - guard match -> batch all writes + the (now-safe) unconditional UPDATE.
    */
-  async commitAppliedDeployment(
-    input: CommitAppliedDeploymentInput,
-  ): Promise<CommitAppliedDeploymentResult> {
+  async commitRunState(
+    input: CommitRunStateInput,
+  ): Promise<CommitRunStateResult> {
     await this.#ensureSchema();
-    const { installationPatch } = input;
+    const { capsulePatch } = input;
     if (input.applyRunTerminal && input.applyRunLeaseToken !== undefined) {
       const row = await this.#orm
         .select({ leaseToken: schema.runs.leaseToken })
@@ -1146,22 +1285,22 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         return { applyRunLeaseLost: true };
       }
     }
-    const current = await this.getInstallation(installationPatch.id);
-    if (!current) return { installation: undefined };
-    const guard = installationPatch.guard;
+    const current = await this.getCapsule(capsulePatch.id);
+    if (!current) return { capsule: undefined };
+    const guard = capsulePatch.guard;
     if (
-      current.currentDeploymentId !== guard.currentDeploymentId ||
+      current.currentStateVersionId !== guard.currentStateVersionId ||
       (guard.status !== undefined && current.status !== guard.status)
     ) {
-      throw new InstallationPatchGuardConflict({
-        id: installationPatch.id,
-        expectedCurrentDeploymentId: guard.currentDeploymentId,
-        actualCurrentDeploymentId: current.currentDeploymentId,
+      throw new CapsuleStateVersionGuardConflict({
+        id: capsulePatch.id,
+        expectedCurrentStateVersionId: guard.currentStateVersionId,
+        actualCurrentStateVersionId: current.currentStateVersionId,
         expectedStatus: guard.status,
         actualStatus: current.status,
       });
     }
-    const updated: Installation = { ...current, ...installationPatch.patch };
+    const updated: Capsule = { ...current, ...capsulePatch.patch };
     const statements = [
       ...(input.applyRunTerminal && input.applyRunLeaseToken !== undefined
         ? [
@@ -1173,19 +1312,11 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
             ),
           ]
         : []),
-      ...(input.newDeployment
-        ? [d1UpsertDeploymentStmt(this.#orm, input.newDeployment)]
-        : []),
-      ...(input.supersededDeployment
-        ? [d1UpsertDeploymentStmt(this.#orm, input.supersededDeployment)]
-        : []),
-      d1UpsertStateSnapshotStmt(this.#orm, input.stateSnapshot),
-      ...(input.outputSnapshot
-        ? [d1UpsertOutputSnapshotStmt(this.#orm, input.outputSnapshot)]
-        : []),
-      // Commit-tail fold (S2): the succeeded ApplyRun + the applied PlanRun join
-      // the SAME atomic batch as the Deployment so a torn tail can no longer
-      // leave a stuck `running` run over a finished Deployment. The apply
+      d1UpsertStateVersionStmt(this.#orm, input.stateVersion),
+      ...(input.output ? [d1UpsertOutputStmt(this.#orm, input.output)] : []),
+      // Commit-tail fold (S2): the terminal ApplyRun + the applied PlanRun join
+      // the SAME atomic batch as the StateVersion so a torn tail can no longer
+      // leave a stuck `running` Run over finished state. The apply
       // terminal clears its lease fence (lease_token = NULL); the plan patch is a
       // plain row write (already terminal succeeded, no lease).
       ...(input.applyRunTerminal
@@ -1207,25 +1338,16 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
           ]
         : []),
       this.#orm
-        .update(schema.installations)
+        .update(schema.capsules)
         .set({
-          currentDeploymentId: updated.currentDeploymentId ?? null,
+          currentStateVersionId: updated.currentStateVersionId ?? null,
           currentStateGeneration: updated.currentStateGeneration,
-          currentOutputSnapshotId: updated.currentOutputSnapshotId ?? null,
+          currentOutputId: updated.currentOutputId ?? null,
           status: updated.status,
           recordJson: updated,
           updatedAt: updated.updatedAt,
         })
-        .where(eq(schema.installations.id, updated.id)),
-      ...(input.outputSyncRevisionBump
-        ? [
-            d1BumpWorkspaceOutputSyncRevisionStmt(
-              this.#orm,
-              input.outputSyncRevisionBump.workspaceId,
-              input.outputSyncRevisionBump.updatedAt,
-            ),
-          ]
-        : []),
+        .where(eq(schema.capsules.id, updated.id)),
     ];
     // D1's atomic batch. The binding always exposes batch in production; when a
     // (test) binding omits it, fall back to the prior non-atomic sequence — the
@@ -1251,22 +1373,66 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         throw error;
       }
     }
-    const outputSyncState = input.outputSyncRevisionBump
-      ? await this.getWorkspaceOutputSyncState(
-          input.outputSyncRevisionBump.workspaceId,
-        )
-      : undefined;
-    return {
-      installation: updated,
-      ...(outputSyncState ? { outputSyncState } : {}),
-    };
+    return { capsule: updated };
+  }
+
+  async commitResourceRun(
+    input: CommitResourceRunInput,
+  ): Promise<CommitResourceRunResult> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select({ leaseToken: schema.runs.leaseToken })
+      .from(schema.runs)
+      .where(
+        and(
+          eq(schema.runs.id, input.applyRunTerminal.id),
+          inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+        ),
+      )
+      .get();
+    if (row?.leaseToken !== input.applyRunLeaseToken) {
+      return { applyRunLeaseLost: true };
+    }
+    const statements = [
+      d1RunLeaseGuardStmt(
+        this.#orm,
+        input.applyRunTerminal.id,
+        input.applyRunLeaseToken,
+        [RUN_KIND_APPLY, "destroy_apply"],
+      ),
+      d1UpsertRunStmt(
+        this.#orm,
+        applyRunType(input.applyRunTerminal),
+        input.applyRunTerminal,
+      ),
+      d1UpsertRunStmt(
+        this.#orm,
+        planRunType(input.planRunApplied),
+        input.planRunApplied,
+      ),
+    ];
+    try {
+      if (typeof this.db.batch === "function") {
+        await this.#orm.batch(
+          statements as [(typeof statements)[number], ...typeof statements],
+        );
+      } else {
+        for (const statement of statements) await statement;
+      }
+    } catch (error) {
+      if (isD1RunLeaseLostError(error)) {
+        return { applyRunLeaseLost: true };
+      }
+      throw error;
+    }
+    return {};
   }
 
   async commitRestoredState(
     input: CommitRestoredStateInput,
   ): Promise<CommitRestoredStateResult> {
     await this.#ensureSchema();
-    const { installationPatch } = input;
+    const { capsulePatch } = input;
     const row = await this.#orm
       .select({ leaseToken: schema.runs.leaseToken })
       .from(schema.runs)
@@ -1280,22 +1446,22 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     if (row?.leaseToken !== input.restoreRunLeaseToken) {
       return { restoreRunLeaseLost: true };
     }
-    const current = await this.getInstallation(installationPatch.id);
-    if (!current) return { installation: undefined };
-    const guard = installationPatch.guard;
+    const current = await this.getCapsule(capsulePatch.id);
+    if (!current) return { capsule: undefined };
+    const guard = capsulePatch.guard;
     if (
       current.currentStateGeneration !== guard.currentStateGeneration ||
       (guard.status !== undefined && current.status !== guard.status)
     ) {
-      throw new InstallationStateGenerationGuardConflict({
-        id: installationPatch.id,
+      throw new CapsuleStateGenerationGuardConflict({
+        id: capsulePatch.id,
         expectedCurrentStateGeneration: guard.currentStateGeneration,
         actualCurrentStateGeneration: current.currentStateGeneration,
         expectedStatus: guard.status,
         actualStatus: current.status,
       });
     }
-    const updated: Installation = { ...current, ...installationPatch.patch };
+    const updated: Capsule = { ...current, ...capsulePatch.patch };
     const statements = [
       d1RunLeaseGuardStmt(
         this.#orm,
@@ -1303,25 +1469,25 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         input.restoreRunLeaseToken,
         [RUN_KIND_RESTORE],
       ),
-      d1InstallationStateGuardStmt(
+      d1CapsuleStateGuardStmt(
         this.#orm,
-        installationPatch.id,
+        capsulePatch.id,
         guard.currentStateGeneration,
         guard.status,
       ),
-      d1UpsertStateSnapshotStmt(this.#orm, input.stateSnapshot),
+      d1UpsertStateVersionStmt(this.#orm, input.stateVersion),
       d1UpsertRunStmt(this.#orm, RUN_KIND_RESTORE, input.restoreRunTerminal),
       this.#orm
-        .update(schema.installations)
+        .update(schema.capsules)
         .set({
-          currentDeploymentId: updated.currentDeploymentId ?? null,
+          currentStateVersionId: updated.currentStateVersionId ?? null,
           currentStateGeneration: updated.currentStateGeneration,
-          currentOutputSnapshotId: updated.currentOutputSnapshotId ?? null,
+          currentOutputId: updated.currentOutputId ?? null,
           status: updated.status,
           recordJson: updated,
           updatedAt: updated.updatedAt,
         })
-        .where(eq(schema.installations.id, updated.id)),
+        .where(eq(schema.capsules.id, updated.id)),
     ];
     const runBatch = async (): Promise<void> => {
       if (typeof this.db.batch === "function") {
@@ -1338,11 +1504,11 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       if (isD1RunLeaseLostError(error)) {
         return { restoreRunLeaseLost: true };
       }
-      if (isD1InstallationStateGuardError(error)) {
-        const actual = await this.getInstallation(installationPatch.id);
-        if (!actual) return { installation: undefined };
-        throw new InstallationStateGenerationGuardConflict({
-          id: installationPatch.id,
+      if (isD1CapsuleStateGuardError(error)) {
+        const actual = await this.getCapsule(capsulePatch.id);
+        if (!actual) return { capsule: undefined };
+        throw new CapsuleStateGenerationGuardConflict({
+          id: capsulePatch.id,
           expectedCurrentStateGeneration: guard.currentStateGeneration,
           actualCurrentStateGeneration: actual.currentStateGeneration,
           expectedStatus: guard.status,
@@ -1351,104 +1517,17 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       }
       throw error;
     }
-    return { installation: updated };
+    return { capsule: updated };
   }
 
-  // -- Deployment -------------------------------------------------------------
+  // -- ProviderConnection (+ sealed secret blob) --------------------------------------
 
-  async putDeployment(deployment: Deployment): Promise<Deployment> {
-    await this.#drizzleUpsert(schema.deployments, {
-      id: deployment.id,
-      spaceId: deployment.spaceId,
-      installationId: deployment.installationId,
-      environment: deployment.environment,
-      applyRunId: deployment.applyRunId,
-      sourceSnapshotId: deployment.sourceSnapshotId,
-      dependencySnapshotId: deployment.dependencySnapshotId ?? null,
-      stateGeneration: deployment.stateGeneration,
-      outputSnapshotId: deployment.outputSnapshotId,
-      outputsPublicJson: deployment.outputsPublic,
-      status: deployment.status,
-      createdAt: deployment.createdAt,
-    });
-    return deployment;
-  }
-
-  async getDeployment(id: string): Promise<Deployment | undefined> {
-    await this.#ensureSchema();
-    const row = await this.#orm
-      .select()
-      .from(schema.deployments)
-      .where(eq(schema.deployments.id, id))
-      .get();
-    return row ? deploymentFromDrizzleRow(row) : undefined;
-  }
-
-  async listDeploymentsByIds(
-    ids: readonly string[],
-  ): Promise<readonly Deployment[]> {
-    await this.#ensureSchema();
-    const uniqueIds = [...new Set(ids.filter((id) => id.length > 0))];
-    if (uniqueIds.length === 0) return [];
-    const rows = await this.#orm
-      .select()
-      .from(schema.deployments)
-      .where(inArray(schema.deployments.id, uniqueIds));
-    return rows.map(deploymentFromDrizzleRow);
-  }
-
-  async listDeployments(
-    installationId: string,
-  ): Promise<readonly Deployment[]> {
-    await this.#ensureSchema();
-    const rows = await this.#orm
-      .select()
-      .from(schema.deployments)
-      .where(eq(schema.deployments.installationId, installationId))
-      .orderBy(asc(schema.deployments.createdAt), asc(schema.deployments.id));
-    return rows.map(deploymentFromDrizzleRow);
-  }
-
-  async listDeploymentsBySpace(
-    spaceId: string,
-  ): Promise<readonly Deployment[]> {
-    await this.#ensureSchema();
-    const rows = await this.#orm
-      .select()
-      .from(schema.deployments)
-      .where(eq(schema.deployments.spaceId, spaceId))
-      .orderBy(asc(schema.deployments.createdAt), asc(schema.deployments.id));
-    return rows.map(deploymentFromDrizzleRow);
-  }
-
-  async listDeploymentsPage(
-    installationId: string,
-    params: PageParams,
-  ): Promise<Page<Deployment>> {
-    await this.#ensureSchema();
-    const limit = clampPageLimit(params.limit);
-    const rows = await this.#orm
-      .select()
-      .from(schema.deployments)
-      .where(
-        d1KeysetWhere(
-          eq(schema.deployments.installationId, installationId),
-          schema.deployments.createdAt,
-          schema.deployments.id,
-          decodeCursor(params.cursor),
-        ),
-      )
-      .orderBy(asc(schema.deployments.createdAt), asc(schema.deployments.id))
-      .limit(limit + 1);
-    return pageFromProbe(rows.map(deploymentFromDrizzleRow), limit);
-  }
-
-  // -- Connection (+ sealed secret blob) --------------------------------------
-
-  async putConnection(connection: Connection): Promise<Connection> {
+  async putConnection(
+    connection: ProviderConnection,
+  ): Promise<ProviderConnection> {
     await this.#drizzleUpsert(schema.connections, {
       id: connection.id,
-      spaceId: connection.spaceId,
+      workspaceId: connection.workspaceId ?? null,
       provider: connection.provider,
       status: connection.status,
       connectionJson: connection,
@@ -1458,20 +1537,22 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return connection;
   }
 
-  async getConnection(id: string): Promise<Connection | undefined> {
-    return await this.#drizzleFirstJson<Connection>(
+  async getConnection(id: string): Promise<ProviderConnection | undefined> {
+    return await this.#drizzleFirstJson<ProviderConnection>(
       schema.connections,
       schema.connections.connectionJson,
       eq(schema.connections.id, id),
     );
   }
 
-  async listConnections(spaceId: string): Promise<readonly Connection[]> {
-    return await this.#drizzleManyJson<Connection>(
+  async listConnections(
+    workspaceId: string,
+  ): Promise<readonly ProviderConnection[]> {
+    return await this.#drizzleManyJson<ProviderConnection>(
       schema.connections,
       schema.connections.connectionJson,
       {
-        where: eq(schema.connections.spaceId, spaceId),
+        where: eq(schema.connections.workspaceId, workspaceId),
         orderBy: [
           asc(schema.connections.createdAt),
           asc(schema.connections.id),
@@ -1481,16 +1562,16 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   async listConnectionsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
-  ): Promise<Page<Connection>> {
+  ): Promise<Page<ProviderConnection>> {
     const limit = clampPageLimit(params.limit);
-    const rows = await this.#drizzleManyJson<Connection>(
+    const rows = await this.#drizzleManyJson<ProviderConnection>(
       schema.connections,
       schema.connections.connectionJson,
       {
         where: d1KeysetWhere(
-          eq(schema.connections.spaceId, spaceId),
+          eq(schema.connections.workspaceId, workspaceId),
           schema.connections.createdAt,
           schema.connections.id,
           decodeCursor(params.cursor),
@@ -1505,12 +1586,12 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return pageFromProbe(rows, limit);
   }
 
-  async listOperatorConnections(): Promise<readonly Connection[]> {
-    const rows = await this.#drizzleManyJson<Connection>(
+  async listOperatorConnections(): Promise<readonly ProviderConnection[]> {
+    const rows = await this.#drizzleManyJson<ProviderConnection>(
       schema.connections,
       schema.connections.connectionJson,
       {
-        where: isNull(schema.connections.spaceId),
+        where: isNull(schema.connections.workspaceId),
         orderBy: [
           asc(schema.connections.createdAt),
           asc(schema.connections.id),
@@ -1535,7 +1616,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       {
         id: blob.id,
         connectionId: blob.connectionId,
-        spaceId: blob.spaceId ?? null,
+        workspaceId: blob.workspaceId ?? null,
         kind: blob.kind,
         ciphertext: blob.ciphertext,
         encryptedDek: blob.encryptedDek,
@@ -1548,7 +1629,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       },
       {
         id: blob.id,
-        spaceId: blob.spaceId ?? null,
+        workspaceId: blob.workspaceId ?? null,
         kind: blob.kind,
         ciphertext: blob.ciphertext,
         encryptedDek: blob.encryptedDek,
@@ -1586,7 +1667,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   async putSource(source: StoredSource): Promise<StoredSource> {
     await this.#drizzleUpsert(schema.sources, {
       id: source.id,
-      spaceId: source.spaceId,
+      workspaceId: source.workspaceId,
       status: source.status,
       recordJson: source,
       createdAt: source.createdAt,
@@ -1603,22 +1684,22 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
-  async listSources(spaceId?: string): Promise<readonly StoredSource[]> {
+  async listSources(workspaceId?: string): Promise<readonly StoredSource[]> {
     return await this.#drizzleManyJson<StoredSource>(
       schema.sources,
       schema.sources.recordJson,
       {
         where:
-          spaceId === undefined
+          workspaceId === undefined
             ? undefined
-            : eq(schema.sources.spaceId, spaceId),
+            : eq(schema.sources.workspaceId, workspaceId),
         orderBy: [asc(schema.sources.createdAt), asc(schema.sources.id)],
       },
     );
   }
 
   async listSourcesPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<StoredSource>> {
     const limit = clampPageLimit(params.limit);
@@ -1627,7 +1708,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       schema.sources.recordJson,
       {
         where: d1KeysetWhere(
-          eq(schema.sources.spaceId, spaceId),
+          eq(schema.sources.workspaceId, workspaceId),
           schema.sources.createdAt,
           schema.sources.id,
           decodeCursor(params.cursor),
@@ -1647,7 +1728,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     const normalized = normalizeSourceSnapshotRecord(snapshot);
     await this.#drizzleUpsert(schema.sourceSnapshots, {
       id: normalized.id,
-      sourceId: normalized.sourceId ?? null,
+      sourceId: normalized.sourceId,
       recordJson: normalized,
       fetchedAt: normalized.fetchedAt,
     });
@@ -1736,24 +1817,23 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   async putCapsuleCompatibilityReport(
     report: CapsuleCompatibilityReport,
   ): Promise<CapsuleCompatibilityReport> {
+    const normalized = normalizeStoredCapsuleCompatibilityReport(report);
     await this.#drizzleUpsert(schema.capsuleCompatibilityReports, {
-      id: report.id,
-      sourceId: report.sourceId ?? null,
-      installationId: report.installationId ?? null,
-      sourceSnapshotId: report.sourceSnapshotId,
-      level: report.level,
-      findingsJson: report.findings,
-      providersJson: report.providers,
-      resourcesJson: report.resources,
-      dataSourcesJson: report.dataSources,
-      provisionersJson: report.provisioners,
-      rootModuleVariablesJson: report.rootModuleVariables ?? [],
-      rootModuleOutputsJson: report.rootModuleOutputs ?? [],
-      normalizedObjectKey: report.normalizedObjectKey ?? null,
-      normalizedDigest: report.normalizedDigest ?? null,
-      createdAt: report.createdAt,
+      id: normalized.id,
+      sourceId: normalized.sourceId ?? null,
+      capsuleId: normalized.capsuleId ?? null,
+      sourceSnapshotId: normalized.sourceSnapshotId,
+      level: normalized.level,
+      findingsJson: normalized.findings,
+      providersJson: normalized.providers,
+      resourcesJson: normalized.resources,
+      dataSourcesJson: normalized.dataSources,
+      provisionersJson: normalized.provisioners,
+      rootModuleVariablesJson: normalized.rootModuleVariables ?? [],
+      rootModuleOutputsJson: normalized.rootModuleOutputs ?? [],
+      createdAt: normalized.createdAt,
     });
-    return report;
+    return normalized;
   }
 
   async getCapsuleCompatibilityReport(
@@ -1769,10 +1849,10 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     if (!row) return undefined;
     return {
       id: row.id,
-      ...(row.sourceId ? { sourceId: row.sourceId } : {}),
-      ...(row.installationId ? { installationId: row.installationId } : {}),
+      sourceId: compatibilityReportSourceId(row.sourceId),
+      ...(row.capsuleId ? { capsuleId: row.capsuleId } : {}),
       sourceSnapshotId: row.sourceSnapshotId,
-      level: row.level as CapsuleCompatibilityReport["level"],
+      level: normalizeStoredCapsuleCompatibilityLevel(row.level),
       findings: row.findingsJson as CapsuleCompatibilityReport["findings"],
       providers: row.providersJson as CapsuleCompatibilityReport["providers"],
       resources: row.resourcesJson as CapsuleCompatibilityReport["resources"],
@@ -1784,12 +1864,6 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         row.rootModuleVariablesJson as CapsuleCompatibilityReport["rootModuleVariables"],
       rootModuleOutputs:
         row.rootModuleOutputsJson as CapsuleCompatibilityReport["rootModuleOutputs"],
-      ...(row.normalizedObjectKey
-        ? { normalizedObjectKey: row.normalizedObjectKey }
-        : {}),
-      ...(row.normalizedDigest
-        ? { normalizedDigest: row.normalizedDigest }
-        : {}),
       createdAt: row.createdAt,
     };
   }
@@ -1798,7 +1872,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     sourceSnapshotId: string,
     options: {
       readonly sourceId?: string;
-      readonly installationId?: string;
+      readonly capsuleId?: string;
     } = {},
   ): Promise<CapsuleCompatibilityReport | undefined> {
     await this.#ensureSchema();
@@ -1807,20 +1881,14 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     ];
     if (options.sourceId) {
       filters.push(
-        or(
-          isNull(schema.capsuleCompatibilityReports.sourceId),
-          eq(schema.capsuleCompatibilityReports.sourceId, options.sourceId),
-        )!,
+        eq(schema.capsuleCompatibilityReports.sourceId, options.sourceId),
       );
     }
-    if (options.installationId) {
+    if (options.capsuleId) {
       filters.push(
         or(
-          isNull(schema.capsuleCompatibilityReports.installationId),
-          eq(
-            schema.capsuleCompatibilityReports.installationId,
-            options.installationId,
-          ),
+          isNull(schema.capsuleCompatibilityReports.capsuleId),
+          eq(schema.capsuleCompatibilityReports.capsuleId, options.capsuleId),
         )!,
       );
     }
@@ -1837,10 +1905,10 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     if (!row) return undefined;
     return {
       id: row.id,
-      ...(row.sourceId ? { sourceId: row.sourceId } : {}),
-      ...(row.installationId ? { installationId: row.installationId } : {}),
+      sourceId: compatibilityReportSourceId(row.sourceId),
+      ...(row.capsuleId ? { capsuleId: row.capsuleId } : {}),
       sourceSnapshotId: row.sourceSnapshotId,
-      level: row.level as CapsuleCompatibilityReport["level"],
+      level: normalizeStoredCapsuleCompatibilityLevel(row.level),
       findings: row.findingsJson as CapsuleCompatibilityReport["findings"],
       providers: row.providersJson as CapsuleCompatibilityReport["providers"],
       resources: row.resourcesJson as CapsuleCompatibilityReport["resources"],
@@ -1852,40 +1920,31 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         row.rootModuleVariablesJson as CapsuleCompatibilityReport["rootModuleVariables"],
       rootModuleOutputs:
         row.rootModuleOutputsJson as CapsuleCompatibilityReport["rootModuleOutputs"],
-      ...(row.normalizedObjectKey
-        ? { normalizedObjectKey: row.normalizedObjectKey }
-        : {}),
-      ...(row.normalizedDigest
-        ? { normalizedDigest: row.normalizedDigest }
-        : {}),
       createdAt: row.createdAt,
     };
   }
 
-  // -- InstallationProviderEnvBindingSet ------------------------------------------------------
+  // -- ProviderBindingSet ------------------------------------------------------
 
-  async putInstallationProviderEnvBindingSet(
-    profile: InstallationProviderEnvBindingSet,
-  ): Promise<InstallationProviderEnvBindingSet> {
+  async putProviderBindingSet(
+    profile: ProviderBindingSet,
+  ): Promise<ProviderBindingSet> {
     // One profile per (installation, environment): drop any stale row for the
     // same pair under a different id before upserting.
     await this.#ensureSchema();
     await this.#orm
-      .delete(schema.providerEnvBindingSets)
+      .delete(schema.providerBindingSets)
       .where(
         and(
-          eq(
-            schema.providerEnvBindingSets.installationId,
-            profile.installationId,
-          ),
-          eq(schema.providerEnvBindingSets.environment, profile.environment),
+          eq(schema.providerBindingSets.capsuleId, profile.capsuleId),
+          eq(schema.providerBindingSets.environment, profile.environment),
         ),
       )
       .run();
-    await this.#drizzleUpsert(schema.providerEnvBindingSets, {
+    await this.#drizzleUpsert(schema.providerBindingSets, {
       id: profile.id,
-      spaceId: profile.spaceId,
-      installationId: profile.installationId,
+      workspaceId: profile.workspaceId,
+      capsuleId: profile.capsuleId,
       environment: profile.environment,
       recordJson: profile,
       createdAt: profile.createdAt,
@@ -1894,37 +1953,37 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return profile;
   }
 
-  async deleteInstallationProviderEnvBindingSet(
-    installationId: string,
+  async deleteProviderBindingSet(
+    capsuleId: string,
     environment: string,
   ): Promise<void> {
     await this.#ensureSchema();
     await this.#orm
-      .delete(schema.providerEnvBindingSets)
+      .delete(schema.providerBindingSets)
       .where(
         and(
-          eq(schema.providerEnvBindingSets.installationId, installationId),
-          eq(schema.providerEnvBindingSets.environment, environment),
+          eq(schema.providerBindingSets.capsuleId, capsuleId),
+          eq(schema.providerBindingSets.environment, environment),
         ),
       )
       .run();
   }
 
-  async getInstallationProviderEnvBindingSetByInstallation(
-    installationId: string,
+  async getProviderBindingSetByCapsule(
+    capsuleId: string,
     environment: string,
-  ): Promise<InstallationProviderEnvBindingSet | undefined> {
-    const rows = await this.#drizzleManyJson<InstallationProviderEnvBindingSet>(
-      schema.providerEnvBindingSets,
-      schema.providerEnvBindingSets.recordJson,
+  ): Promise<ProviderBindingSet | undefined> {
+    const rows = await this.#drizzleManyJson<ProviderBindingSet>(
+      schema.providerBindingSets,
+      schema.providerBindingSets.recordJson,
       {
         where: and(
-          eq(schema.providerEnvBindingSets.installationId, installationId),
-          eq(schema.providerEnvBindingSets.environment, environment),
+          eq(schema.providerBindingSets.capsuleId, capsuleId),
+          eq(schema.providerBindingSets.environment, environment),
         ),
         orderBy: [
-          desc(schema.providerEnvBindingSets.createdAt),
-          desc(schema.providerEnvBindingSets.id),
+          desc(schema.providerBindingSets.createdAt),
+          desc(schema.providerBindingSets.id),
         ],
         limit: 1,
       },
@@ -1932,97 +1991,118 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return rows[0];
   }
 
-  // -- StateSnapshot ----------------------------------------------------------
+  // -- StateVersion ----------------------------------------------------------
 
-  async putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot> {
+  async putStateVersion(snapshot: StateVersion): Promise<StateVersion> {
     await this.#drizzleUpsert(
-      schema.stateSnapshots,
+      schema.stateVersions,
       {
         id: snapshot.id,
-        spaceId: snapshot.spaceId,
-        installationId: snapshot.installationId,
+        workspaceId: snapshot.workspaceId,
+        capsuleId: snapshot.capsuleId,
         environment: snapshot.environment,
         generation: snapshot.generation,
-        objectKey: snapshot.objectKey,
+        stateRef: snapshot.stateRef,
         digest: snapshot.digest,
         createdByRunId: snapshot.createdByRunId,
         createdAt: snapshot.createdAt,
       },
       {
         id: snapshot.id,
-        spaceId: snapshot.spaceId,
-        objectKey: snapshot.objectKey,
+        workspaceId: snapshot.workspaceId,
+        stateRef: snapshot.stateRef,
         digest: snapshot.digest,
         createdByRunId: snapshot.createdByRunId,
         createdAt: snapshot.createdAt,
       },
       [
-        schema.stateSnapshots.installationId,
-        schema.stateSnapshots.environment,
-        schema.stateSnapshots.generation,
+        schema.stateVersions.capsuleId,
+        schema.stateVersions.environment,
+        schema.stateVersions.generation,
       ],
     );
     return snapshot;
   }
 
-  async getLatestStateSnapshot(
-    installationId: string,
-    environment: string,
-  ): Promise<StateSnapshot | undefined> {
+  async getStateVersion(id: string): Promise<StateVersion | undefined> {
     await this.#ensureSchema();
     const row = await this.#orm
       .select()
-      .from(schema.stateSnapshots)
+      .from(schema.stateVersions)
+      .where(eq(schema.stateVersions.id, id))
+      .get();
+    return row ? stateVersionFromDrizzleRow(row) : undefined;
+  }
+
+  async getLatestStateVersion(
+    capsuleId: string,
+    environment: string,
+  ): Promise<StateVersion | undefined> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select()
+      .from(schema.stateVersions)
       .where(
         and(
-          eq(schema.stateSnapshots.installationId, installationId),
-          eq(schema.stateSnapshots.environment, environment),
+          eq(schema.stateVersions.capsuleId, capsuleId),
+          eq(schema.stateVersions.environment, environment),
         ),
       )
-      .orderBy(desc(schema.stateSnapshots.generation))
+      .orderBy(desc(schema.stateVersions.generation))
       .limit(1)
       .get();
-    return row ? stateSnapshotFromDrizzleRow(row) : undefined;
+    return row ? stateVersionFromDrizzleRow(row) : undefined;
   }
 
-  async listStateSnapshots(
-    installationId: string,
+  async listStateVersions(
+    capsuleId: string,
     environment: string,
-  ): Promise<readonly StateSnapshot[]> {
+  ): Promise<readonly StateVersion[]> {
     await this.#ensureSchema();
     const rows = await this.#orm
       .select()
-      .from(schema.stateSnapshots)
+      .from(schema.stateVersions)
       .where(
         and(
-          eq(schema.stateSnapshots.installationId, installationId),
-          eq(schema.stateSnapshots.environment, environment),
+          eq(schema.stateVersions.capsuleId, capsuleId),
+          eq(schema.stateVersions.environment, environment),
         ),
       )
-      .orderBy(asc(schema.stateSnapshots.generation));
-    return rows.map(stateSnapshotFromDrizzleRow);
+      .orderBy(asc(schema.stateVersions.generation));
+    return rows.map(stateVersionFromDrizzleRow);
   }
 
-  async listStateSnapshotsBySpace(
-    spaceId: string,
-  ): Promise<readonly StateSnapshot[]> {
+  async listStateVersionsPage(
+    capsuleId: string,
+    environment: string,
+    params: PageParams,
+  ): Promise<Page<StateVersion>> {
+    return pageSorted(
+      await this.listStateVersions(capsuleId, environment),
+      params,
+    );
+  }
+
+  async listStateVersionsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly StateVersion[]> {
     await this.#ensureSchema();
     const rows = await this.#orm
       .select()
-      .from(schema.stateSnapshots)
-      .where(eq(schema.stateSnapshots.spaceId, spaceId))
-      .orderBy(asc(schema.stateSnapshots.generation));
-    return rows.map(stateSnapshotFromDrizzleRow);
+      .from(schema.stateVersions)
+      .where(eq(schema.stateVersions.workspaceId, workspaceId))
+      .orderBy(asc(schema.stateVersions.generation));
+    return rows.map(stateVersionFromDrizzleRow);
   }
 
   // -- Dependency DAG (§14 / §15 / §27 installation_dependencies) --------------
 
   async putDependency(dependency: Dependency): Promise<Dependency> {
-    await this.#drizzleUpsert(schema.installationDependencies, {
+    await this.#drizzleUpsert(schema.dependencies, {
       id: dependency.id,
-      spaceId: dependency.spaceId,
-      producerInstallationId: dependency.producerInstallationId,
-      consumerInstallationId: dependency.consumerInstallationId,
+      workspaceId: dependency.workspaceId,
+      producerCapsuleId: dependency.producerCapsuleId,
+      consumerCapsuleId: dependency.consumerCapsuleId,
       recordJson: dependency,
       createdAt: dependency.createdAt,
     });
@@ -2031,61 +2111,55 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
 
   async getDependency(id: string): Promise<Dependency | undefined> {
     return await this.#drizzleFirstJson<Dependency>(
-      schema.installationDependencies,
-      schema.installationDependencies.recordJson,
-      eq(schema.installationDependencies.id, id),
+      schema.dependencies,
+      schema.dependencies.recordJson,
+      eq(schema.dependencies.id, id),
     );
   }
 
-  async listDependenciesBySpace(
-    spaceId: string,
+  async listDependenciesByWorkspace(
+    workspaceId: string,
   ): Promise<readonly Dependency[]> {
     return await this.#drizzleManyJson<Dependency>(
-      schema.installationDependencies,
-      schema.installationDependencies.recordJson,
+      schema.dependencies,
+      schema.dependencies.recordJson,
       {
-        where: eq(schema.installationDependencies.spaceId, spaceId),
+        where: eq(schema.dependencies.workspaceId, workspaceId),
         orderBy: [
-          asc(schema.installationDependencies.createdAt),
-          asc(schema.installationDependencies.id),
+          asc(schema.dependencies.createdAt),
+          asc(schema.dependencies.id),
         ],
       },
     );
   }
 
   async listDependenciesForConsumer(
-    consumerInstallationId: string,
+    consumerCapsuleId: string,
   ): Promise<readonly Dependency[]> {
     return await this.#drizzleManyJson<Dependency>(
-      schema.installationDependencies,
-      schema.installationDependencies.recordJson,
+      schema.dependencies,
+      schema.dependencies.recordJson,
       {
-        where: eq(
-          schema.installationDependencies.consumerInstallationId,
-          consumerInstallationId,
-        ),
+        where: eq(schema.dependencies.consumerCapsuleId, consumerCapsuleId),
         orderBy: [
-          asc(schema.installationDependencies.createdAt),
-          asc(schema.installationDependencies.id),
+          asc(schema.dependencies.createdAt),
+          asc(schema.dependencies.id),
         ],
       },
     );
   }
 
   async listDependenciesForProducer(
-    producerInstallationId: string,
+    producerCapsuleId: string,
   ): Promise<readonly Dependency[]> {
     return await this.#drizzleManyJson<Dependency>(
-      schema.installationDependencies,
-      schema.installationDependencies.recordJson,
+      schema.dependencies,
+      schema.dependencies.recordJson,
       {
-        where: eq(
-          schema.installationDependencies.producerInstallationId,
-          producerInstallationId,
-        ),
+        where: eq(schema.dependencies.producerCapsuleId, producerCapsuleId),
         orderBy: [
-          asc(schema.installationDependencies.createdAt),
-          asc(schema.installationDependencies.id),
+          asc(schema.dependencies.createdAt),
+          asc(schema.dependencies.id),
         ],
       },
     );
@@ -2093,8 +2167,8 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
 
   async deleteDependency(id: string): Promise<boolean> {
     return await this.#drizzleDelete(
-      schema.installationDependencies,
-      eq(schema.installationDependencies.id, id),
+      schema.dependencies,
+      eq(schema.dependencies.id, id),
     );
   }
 
@@ -2122,13 +2196,13 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
-  // -- OutputSnapshot (§16 / §27 output_snapshots) -----------------------------
+  // -- Output (§16 / §27 output_snapshots) -----------------------------
 
-  async putOutputSnapshot(snapshot: OutputSnapshot): Promise<OutputSnapshot> {
-    await this.#drizzleUpsert(schema.outputSnapshots, {
+  async putOutput(snapshot: Output): Promise<Output> {
+    await this.#drizzleUpsert(schema.outputs, {
       id: snapshot.id,
-      spaceId: snapshot.spaceId,
-      installationId: snapshot.installationId,
+      workspaceId: snapshot.workspaceId,
+      capsuleId: snapshot.capsuleId,
       stateGeneration: snapshot.stateGeneration,
       recordJson: snapshot,
       createdAt: snapshot.createdAt,
@@ -2136,26 +2210,24 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return snapshot;
   }
 
-  async getOutputSnapshot(id: string): Promise<OutputSnapshot | undefined> {
-    return await this.#drizzleFirstJson<OutputSnapshot>(
-      schema.outputSnapshots,
-      schema.outputSnapshots.recordJson,
-      eq(schema.outputSnapshots.id, id),
+  async getOutput(id: string): Promise<Output | undefined> {
+    return await this.#drizzleFirstJson<Output>(
+      schema.outputs,
+      schema.outputs.recordJson,
+      eq(schema.outputs.id, id),
     );
   }
 
-  async getLatestOutputSnapshot(
-    installationId: string,
-  ): Promise<OutputSnapshot | undefined> {
-    const rows = await this.#drizzleManyJson<OutputSnapshot>(
-      schema.outputSnapshots,
-      schema.outputSnapshots.recordJson,
+  async getLatestOutput(capsuleId: string): Promise<Output | undefined> {
+    const rows = await this.#drizzleManyJson<Output>(
+      schema.outputs,
+      schema.outputs.recordJson,
       {
-        where: eq(schema.outputSnapshots.installationId, installationId),
+        where: eq(schema.outputs.capsuleId, capsuleId),
         orderBy: [
-          desc(schema.outputSnapshots.stateGeneration),
-          desc(schema.outputSnapshots.createdAt),
-          desc(schema.outputSnapshots.id),
+          desc(schema.outputs.stateGeneration),
+          desc(schema.outputs.createdAt),
+          desc(schema.outputs.id),
         ],
         limit: 1,
       },
@@ -2163,35 +2235,33 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return rows[0];
   }
 
-  async listOutputSnapshots(
-    installationId: string,
-  ): Promise<readonly OutputSnapshot[]> {
-    return await this.#drizzleManyJson<OutputSnapshot>(
-      schema.outputSnapshots,
-      schema.outputSnapshots.recordJson,
+  async listOutputs(capsuleId: string): Promise<readonly Output[]> {
+    return await this.#drizzleManyJson<Output>(
+      schema.outputs,
+      schema.outputs.recordJson,
       {
-        where: eq(schema.outputSnapshots.installationId, installationId),
+        where: eq(schema.outputs.capsuleId, capsuleId),
         orderBy: [
-          schema.outputSnapshots.stateGeneration,
-          schema.outputSnapshots.createdAt,
-          schema.outputSnapshots.id,
+          schema.outputs.stateGeneration,
+          schema.outputs.createdAt,
+          schema.outputs.id,
         ],
       },
     );
   }
 
-  async listOutputSnapshotsBySpace(
-    spaceId: string,
-  ): Promise<readonly OutputSnapshot[]> {
-    return await this.#drizzleManyJson<OutputSnapshot>(
-      schema.outputSnapshots,
-      schema.outputSnapshots.recordJson,
+  async listOutputsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly Output[]> {
+    return await this.#drizzleManyJson<Output>(
+      schema.outputs,
+      schema.outputs.recordJson,
       {
-        where: eq(schema.outputSnapshots.spaceId, spaceId),
+        where: eq(schema.outputs.workspaceId, workspaceId),
         orderBy: [
-          schema.outputSnapshots.stateGeneration,
-          schema.outputSnapshots.createdAt,
-          schema.outputSnapshots.id,
+          schema.outputs.stateGeneration,
+          schema.outputs.createdAt,
+          schema.outputs.id,
         ],
       },
     );
@@ -2202,9 +2272,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   async putOutputShare(share: OutputShare): Promise<OutputShare> {
     await this.#drizzleUpsert(schema.outputShares, {
       id: share.id,
-      fromSpaceId: share.fromSpaceId,
-      toSpaceId: share.toSpaceId,
-      producerInstallationId: share.producerInstallationId,
+      fromWorkspaceId: share.fromWorkspaceId,
+      toWorkspaceId: share.toWorkspaceId,
+      producerCapsuleId: share.producerCapsuleId,
       status: share.status,
       recordJson: share,
       createdAt: share.createdAt,
@@ -2220,14 +2290,14 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
-  async listOutputSharesFromSpace(
-    fromSpaceId: string,
+  async listOutputSharesFromWorkspace(
+    fromWorkspaceId: string,
   ): Promise<readonly OutputShare[]> {
     return await this.#drizzleManyJson<OutputShare>(
       schema.outputShares,
       schema.outputShares.recordJson,
       {
-        where: eq(schema.outputShares.fromSpaceId, fromSpaceId),
+        where: eq(schema.outputShares.fromWorkspaceId, fromWorkspaceId),
         orderBy: [
           asc(schema.outputShares.createdAt),
           asc(schema.outputShares.id),
@@ -2236,14 +2306,14 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
-  async listOutputSharesToSpace(
-    toSpaceId: string,
+  async listOutputSharesToWorkspace(
+    toWorkspaceId: string,
   ): Promise<readonly OutputShare[]> {
     return await this.#drizzleManyJson<OutputShare>(
       schema.outputShares,
       schema.outputShares.recordJson,
       {
-        where: eq(schema.outputShares.toSpaceId, toSpaceId),
+        where: eq(schema.outputShares.toWorkspaceId, toWorkspaceId),
         orderBy: [
           asc(schema.outputShares.createdAt),
           asc(schema.outputShares.id),
@@ -2257,7 +2327,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   async putRunGroup(group: RunGroup): Promise<RunGroup> {
     await this.#drizzleUpsert(schema.runGroups, {
       id: group.id,
-      spaceId: group.spaceId,
+      workspaceId: group.workspaceId,
       type: group.type,
       recordJson: group,
       createdAt: group.createdAt,
@@ -2273,12 +2343,12 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
-  async listRunGroups(spaceId: string): Promise<readonly RunGroup[]> {
+  async listRunGroups(workspaceId: string): Promise<readonly RunGroup[]> {
     return await this.#drizzleManyJson<RunGroup>(
       schema.runGroups,
       schema.runGroups.recordJson,
       {
-        where: eq(schema.runGroups.spaceId, spaceId),
+        where: eq(schema.runGroups.workspaceId, workspaceId),
         orderBy: [asc(schema.runGroups.createdAt), asc(schema.runGroups.id)],
       },
     );
@@ -2287,13 +2357,13 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   // -- Activity audit_events (§27 audit_events / §34 Activity) ------------------
   //
   // The §27 audit_events table keeps searchable columns (space_id / created_at)
-  // for the Space-scoped Activity list; the full non-secret event round trips
+  // for the Workspace-scoped Activity list; the full non-secret event round trips
   // through record_json. Listing is newest-first with a clamped limit.
 
   async putActivityEvent(event: ActivityEvent): Promise<ActivityEvent> {
     await this.#drizzleUpsert(schema.auditEvents, {
       id: event.id,
-      spaceId: event.spaceId,
+      workspaceId: event.workspaceId,
       actorId: event.actorId ?? null,
       action: event.action,
       targetType: event.targetType,
@@ -2306,7 +2376,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   async listActivityEvents(
-    spaceId: string,
+    workspaceId: string,
     options: { readonly limit?: number } = {},
   ): Promise<readonly ActivityEvent[]> {
     const limit = clampActivityLimit(options.limit);
@@ -2314,7 +2384,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       schema.auditEvents,
       schema.auditEvents.recordJson,
       {
-        where: eq(schema.auditEvents.spaceId, spaceId),
+        where: eq(schema.auditEvents.workspaceId, workspaceId),
         orderBy: [
           desc(schema.auditEvents.createdAt),
           desc(schema.auditEvents.id),
@@ -2322,6 +2392,38 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         limit,
       },
     );
+  }
+
+  async listActivityEventsForTargetPage(
+    workspaceId: string,
+    targetType: string,
+    targetId: string,
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>> {
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const rows = await this.#drizzleManyJson<ActivityEvent>(
+      schema.auditEvents,
+      schema.auditEvents.recordJson,
+      {
+        where: d1KeysetWhereDesc(
+          and(
+            eq(schema.auditEvents.workspaceId, workspaceId),
+            eq(schema.auditEvents.targetType, targetType),
+            eq(schema.auditEvents.targetId, targetId),
+          ),
+          schema.auditEvents.createdAt,
+          schema.auditEvents.id,
+          cursor,
+        ),
+        orderBy: [
+          desc(schema.auditEvents.createdAt),
+          desc(schema.auditEvents.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
   }
 
   // -- credential_mint_events (spec invariant 17) -----------------------------
@@ -2334,10 +2436,10 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       runId: event.runId,
       // Physical columns space_id / installation_id are frozen; the contract
       // type renamed to workspaceId / capsuleId.
-      spaceId: event.workspaceId,
-      installationId: event.capsuleId,
+      workspaceId: event.workspaceId,
+      capsuleId: event.capsuleId,
       sourceId: event.sourceId,
-      connectionId: event.connectionId ?? event.providerEnvId ?? "",
+      connectionId: event.connectionId ?? "",
       phase: event.phase,
       recordJson: event,
       createdAt: event.createdAt,
@@ -2368,8 +2470,8 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       id: finding.id,
       // Physical columns space_id / installation_id are frozen; the contract
       // type renamed to workspaceId / capsuleId.
-      spaceId: finding.workspaceId,
-      installationId: finding.capsuleId ?? null,
+      workspaceId: finding.workspaceId,
+      capsuleId: finding.capsuleId ?? null,
       runId: finding.runId ?? null,
       severity: finding.severity,
       type: finding.type,
@@ -2380,7 +2482,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   async listSecurityFindings(
-    spaceId: string,
+    workspaceId: string,
     options: { readonly runId?: string; readonly limit?: number } = {},
   ): Promise<readonly SecurityFinding[]> {
     const limit = clampActivityLimit(options.limit);
@@ -2390,9 +2492,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       {
         where:
           options.runId === undefined
-            ? eq(schema.securityFindings.spaceId, spaceId)
+            ? eq(schema.securityFindings.workspaceId, workspaceId)
             : and(
-                eq(schema.securityFindings.spaceId, spaceId),
+                eq(schema.securityFindings.workspaceId, workspaceId),
                 eq(schema.securityFindings.runId, options.runId),
               ),
         orderBy: [
@@ -2404,745 +2506,59 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
-  // -- billing ledger ---------------------------------------------------------
-
-  async putBillingPlan(plan: BillingPlan): Promise<BillingPlan> {
-    const normalized = normalizeBillingPlan(plan);
-    await this.#drizzleUpsert(schema.billingPlans, {
-      id: normalized.id,
-      name: normalized.name,
-      monthlyBasePrice: normalized.monthlyBasePrice,
-      includedUsdMicros: normalized.includedUsdMicros,
-      includedCredits: legacyStorageCreditsFromUsdMicros(
-        normalized.includedUsdMicros ?? 0,
-      ),
-      limitsJson: normalized.limits,
-      recordJson: normalized,
-      createdAt: normalized.createdAt,
-      updatedAt: normalized.updatedAt,
-    });
-    return normalized;
-  }
-
-  async getBillingPlan(id: string): Promise<BillingPlan | undefined> {
-    const plan = await this.#drizzleFirstJson<BillingPlan>(
-      schema.billingPlans,
-      schema.billingPlans.recordJson,
-      eq(schema.billingPlans.id, id),
-    );
-    return plan ? normalizeBillingPlan(plan) : undefined;
-  }
-
-  async putBillingAccount(account: BillingAccount): Promise<BillingAccount> {
-    await this.#drizzleUpsert(schema.billingAccounts, {
-      id: account.id,
-      ownerType: account.ownerType,
-      ownerId: account.ownerId,
-      provider: account.provider,
-      status: account.status,
-      recordJson: account,
-      createdAt: account.createdAt,
-      updatedAt: account.updatedAt,
-    });
-    return account;
-  }
-
-  async getBillingAccount(id: string): Promise<BillingAccount | undefined> {
-    return await this.#drizzleFirstJson<BillingAccount>(
-      schema.billingAccounts,
-      schema.billingAccounts.recordJson,
-      eq(schema.billingAccounts.id, id),
-    );
-  }
-
-  async getBillingAccountForOwner(
-    ownerType: BillingAccount["ownerType"],
-    ownerId: string,
-  ): Promise<BillingAccount | undefined> {
-    const rows = await this.#drizzleManyJson<BillingAccount>(
-      schema.billingAccounts,
-      schema.billingAccounts.recordJson,
-      {
-        where: and(
-          eq(schema.billingAccounts.ownerType, ownerType),
-          eq(schema.billingAccounts.ownerId, ownerId),
-        ),
-        limit: 1,
-      },
-    );
-    return rows[0];
-  }
-
-  async putSpaceSubscription(
-    subscription: SpaceSubscription,
-  ): Promise<SpaceSubscription> {
-    await this.#drizzleUpsert(schema.spaceSubscriptions, {
-      id: subscription.id,
-      spaceId: subscription.spaceId,
-      billingAccountId: subscription.billingAccountId,
-      planId: subscription.planId,
-      status: subscription.status,
-      recordJson: subscription,
-      createdAt: subscription.createdAt,
-      updatedAt: subscription.updatedAt,
-    });
-    return subscription;
-  }
-
-  async getSpaceSubscription(
-    spaceId: string,
-  ): Promise<SpaceSubscription | undefined> {
-    const rows = await this.#drizzleManyJson<SpaceSubscription>(
-      schema.spaceSubscriptions,
-      schema.spaceSubscriptions.recordJson,
-      {
-        where: eq(schema.spaceSubscriptions.spaceId, spaceId),
-        orderBy: [
-          desc(schema.spaceSubscriptions.updatedAt),
-          desc(schema.spaceSubscriptions.id),
-        ],
-        limit: 1,
-      },
-    );
-    return rows[0];
-  }
-
-  async putCreditBalance(balance: CreditBalance): Promise<CreditBalance> {
-    const normalized = normalizeCreditBalance(balance);
-    await this.#drizzleUpsert(
-      schema.creditBalances,
-      {
-        spaceId: normalized.spaceId,
-        availableUsdMicros: normalized.availableUsdMicros,
-        reservedUsdMicros: normalized.reservedUsdMicros,
-        monthlyIncludedUsdMicros: normalized.monthlyIncludedUsdMicros,
-        purchasedUsdMicros: normalized.purchasedUsdMicros,
-        availableCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.availableUsdMicros ?? 0,
-        ),
-        reservedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.reservedUsdMicros ?? 0,
-        ),
-        monthlyIncludedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.monthlyIncludedUsdMicros ?? 0,
-        ),
-        purchasedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.purchasedUsdMicros ?? 0,
-        ),
-        updatedAt: normalized.updatedAt,
-      },
-      {
-        availableUsdMicros: normalized.availableUsdMicros,
-        reservedUsdMicros: normalized.reservedUsdMicros,
-        monthlyIncludedUsdMicros: normalized.monthlyIncludedUsdMicros,
-        purchasedUsdMicros: normalized.purchasedUsdMicros,
-        availableCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.availableUsdMicros ?? 0,
-        ),
-        reservedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.reservedUsdMicros ?? 0,
-        ),
-        monthlyIncludedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.monthlyIncludedUsdMicros ?? 0,
-        ),
-        purchasedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.purchasedUsdMicros ?? 0,
-        ),
-        updatedAt: normalized.updatedAt,
-      },
-      schema.creditBalances.spaceId,
-    );
-    return normalized;
-  }
-
-  async getCreditBalance(spaceId: string): Promise<CreditBalance | undefined> {
-    await this.#ensureSchema();
-    const row = await this.#orm
-      .select()
-      .from(schema.creditBalances)
-      .where(eq(schema.creditBalances.spaceId, spaceId))
-      .get();
-    return row ? creditBalanceFromRow(row) : undefined;
-  }
-
-  async reserveCredits(
-    spaceId: string,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<CreditBalance | undefined> {
-    await this.#ensureSchema();
-    const usdMicros = creditAmountUsdMicros(input);
-    const legacyCredits = legacyStorageCreditsFromUsdMicros(usdMicros);
-    const result = await this.db
-      .prepare(
-        `update credit_balances
-         set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) - ?,
-             reserved_usd_micros = coalesce(reserved_usd_micros, reserved_credits * 1000000) + ?,
-             available_credits = available_credits - ?,
-             reserved_credits = reserved_credits + ?,
-             updated_at = ?
-         where space_id = ?
-           and coalesce(available_usd_micros, available_credits * 1000000) >= ?`,
-      )
-      .bind(
-        usdMicros,
-        usdMicros,
-        legacyCredits,
-        legacyCredits,
-        input.updatedAt,
-        spaceId,
-        usdMicros,
-      )
-      .run();
-    if (changes(result) <= 0) return undefined;
-    return await this.getCreditBalance(spaceId);
-  }
-
-  async addCredits(
-    spaceId: string,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<CreditBalance> {
-    await this.#ensureSchema();
-    const usdMicros = creditAmountUsdMicros(input);
-    const legacyCredits = legacyStorageCreditsFromUsdMicros(usdMicros);
-    // Seed a zero row so the first grant lands (INSERT OR IGNORE).
-    await this.db
-      .prepare(
-        `insert or ignore into credit_balances
-           (space_id, available_usd_micros, reserved_usd_micros,
-            monthly_included_usd_micros, purchased_usd_micros,
-            available_credits, reserved_credits,
-            monthly_included_credits, purchased_credits, updated_at)
-         values (?, 0, 0, 0, 0, 0, 0, 0, 0, ?)`,
-      )
-      .bind(spaceId, input.updatedAt)
-      .run();
-    await this.db
-      .prepare(
-        `update credit_balances
-         set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) + ?,
-             purchased_usd_micros = coalesce(purchased_usd_micros, purchased_credits * 1000000) + ?,
-             available_credits = available_credits + ?,
-             purchased_credits = purchased_credits + ?,
-             updated_at = ?
-         where space_id = ?`,
-      )
-      .bind(
-        usdMicros,
-        usdMicros,
-        legacyCredits,
-        legacyCredits,
-        input.updatedAt,
-        spaceId,
-      )
-      .run();
-    // The seed + update guarantees a row exists.
-    return (await this.getCreditBalance(spaceId))!;
-  }
-
-  async reconcileMonthlyCredits(
-    spaceId: string,
-    input: {
-      readonly newMonthly: number;
-      readonly periodStartIso: string;
-      readonly updatedAt: string;
-    },
-  ): Promise<CreditBalance | undefined> {
-    await this.#ensureSchema();
-    const newMonthlyUsdMicros = legacyCreditsToUsdMicros(input.newMonthly);
-    const newMonthlyLegacyCredits =
-      legacyStorageCreditsFromUsdMicros(newMonthlyUsdMicros);
-    // Monthly RESET: carry over purchased credits, reset monthly to full.
-    // Column-relative, no read: available = max(0, available - oldMonthly) + new.
-    const result = await this.db
-      .prepare(
-        `update credit_balances
-         set available_usd_micros =
-               max(0, coalesce(available_usd_micros, available_credits * 1000000) -
-                      coalesce(monthly_included_usd_micros, monthly_included_credits * 1000000)) + ?,
-             monthly_included_usd_micros = ?,
-             available_credits =
-               max(0, available_credits - monthly_included_credits) + ?,
-             monthly_included_credits = ?,
-             updated_at = ?
-         where space_id = ?
-           and (monthly_included_credits != ? or updated_at < ?)`,
-      )
-      .bind(
-        newMonthlyUsdMicros,
-        newMonthlyUsdMicros,
-        newMonthlyLegacyCredits,
-        newMonthlyLegacyCredits,
-        input.updatedAt,
-        spaceId,
-        newMonthlyLegacyCredits,
-        input.periodStartIso,
-      )
-      .run();
-    if (changes(result) <= 0) return undefined;
-    return await this.getCreditBalance(spaceId);
-  }
-
-  async putCreditReservation(
-    reservation: CreditReservation,
-  ): Promise<CreditReservation> {
-    const normalized = normalizeCreditReservation(reservation);
-    await this.#drizzleUpsert(schema.creditReservations, {
-      id: normalized.id,
-      spaceId: normalized.spaceId,
-      runId: normalized.runId,
-      estimatedUsdMicros: normalized.estimatedUsdMicros,
-      estimatedCredits: legacyStorageCreditsFromUsdMicros(
-        normalized.estimatedUsdMicros ?? 0,
-      ),
-      status: normalized.status,
-      mode: normalized.mode,
-      recordJson: normalized,
-      createdAt: normalized.createdAt,
-      expiresAt: normalized.expiresAt,
-    });
-    return normalized;
-  }
-
-  async getCreditReservationForRun(
-    runId: string,
-  ): Promise<CreditReservation | undefined> {
-    const rows = await this.#drizzleManyJson<CreditReservation>(
-      schema.creditReservations,
-      schema.creditReservations.recordJson,
-      {
-        where: eq(schema.creditReservations.runId, runId),
-        orderBy: [
-          desc(schema.creditReservations.createdAt),
-          desc(schema.creditReservations.id),
-        ],
-        limit: 1,
-      },
-    );
-    return rows[0] ? normalizeCreditReservation(rows[0]) : undefined;
-  }
-
-  async listCreditReservations(
-    spaceId: string,
-    options: { readonly limit?: number } = {},
-  ): Promise<readonly CreditReservation[]> {
-    const rows = await this.#drizzleManyJson<CreditReservation>(
-      schema.creditReservations,
-      schema.creditReservations.recordJson,
-      {
-        where: eq(schema.creditReservations.spaceId, spaceId),
-        orderBy: [
-          desc(schema.creditReservations.createdAt),
-          desc(schema.creditReservations.id),
-        ],
-        limit: options.limit ?? 100,
-      },
-    );
-    return rows.map(normalizeCreditReservation);
-  }
-
-  async claimBillingAutoRechargeAttempt(
-    input: ClaimBillingAutoRechargeAttemptInput,
-  ): Promise<ClaimBillingAutoRechargeAttemptResult> {
-    await this.#ensureSchema();
-    const normalized = normalizeBillingAutoRechargeAttempt(input.attempt);
-    const existing = await this.#billingAutoRechargeAttemptByIdempotencyKey(
-      normalized.idempotencyKey,
-    );
-    if (existing) {
-      return {
-        claimed: false,
-        attempt: existing,
-        skippedReason: "already_claimed",
-      };
-    }
-    const result = await this.db
-      .prepare(
-        `insert into billing_auto_recharge_attempts (
-           id, space_id, run_id, billing_account_id, idempotency_key,
-           period_start, period_end, requested_usd_micros,
-           monthly_limit_usd_micros, charged_usd_micros, status,
-           stripe_payment_intent_id, provider_status, failure_reason,
-           record_json, created_at, updated_at
-         )
-         select
-           ?, ?, ?, ?, ?,
-           ?, ?, ?,
-           ?, ?, ?,
-           ?, ?, ?,
-           ?, ?, ?
-         where (
-           ? is null
-           or coalesce((
-             select sum(
-               case
-                 when status = 'succeeded'
-                   then coalesce(charged_usd_micros, requested_usd_micros)
-                 else requested_usd_micros
-               end
-             )
-             from billing_auto_recharge_attempts
-             where space_id = ?
-               and period_start = ?
-               and status in ('pending', 'pending_unknown', 'succeeded')
-           ), 0) + ? <= ?
-         )
-         on conflict(idempotency_key) do nothing`,
-      )
-      .bind(
-        normalized.id,
-        normalized.spaceId,
-        normalized.runId,
-        normalized.billingAccountId,
-        normalized.idempotencyKey,
-        normalized.periodStart,
-        normalized.periodEnd ?? null,
-        normalized.requestedUsdMicros,
-        normalized.monthlyLimitUsdMicros ?? null,
-        normalized.chargedUsdMicros ?? null,
-        normalized.status,
-        normalized.stripePaymentIntentId ?? null,
-        normalized.providerStatus ?? null,
-        normalized.failureReason ?? null,
-        JSON.stringify(normalized),
-        normalized.createdAt,
-        normalized.updatedAt,
-        input.monthlyLimitUsdMicros ?? null,
-        normalized.spaceId,
-        normalized.periodStart,
-        normalized.requestedUsdMicros,
-        input.monthlyLimitUsdMicros ?? null,
-      )
-      .run();
-    if (changes(result) > 0) {
-      return { claimed: true, attempt: normalized };
-    }
-    const raced = await this.#billingAutoRechargeAttemptByIdempotencyKey(
-      normalized.idempotencyKey,
-    );
-    if (raced) {
-      return {
-        claimed: false,
-        attempt: raced,
-        skippedReason: "already_claimed",
-      };
-    }
-    return { claimed: false, skippedReason: "monthly_limit_exceeded" };
-  }
-
-  async settleBillingAutoRechargeAttempt(
-    input: SettleBillingAutoRechargeAttemptInput,
-  ): Promise<SettleBillingAutoRechargeAttemptResult> {
-    await this.#ensureSchema();
-    const existing = await this.#billingAutoRechargeAttemptById(
-      input.attemptId,
-    );
-    if (!existing) {
-      return {
-        settled: false,
-        skippedReason: "attempt_not_found",
-      };
-    }
-    if (existing.status === "succeeded") {
-      return {
-        settled: false,
-        attempt: existing,
-        balance: await this.getCreditBalance(
-          existing.workspaceId ?? existing.spaceId,
-        ),
-        skippedReason: "already_succeeded",
-      };
-    }
-    const next = normalizeBillingAutoRechargeAttempt({
-      ...existing,
-      status: input.status,
-      ...(input.chargedUsdMicros !== undefined
-        ? { chargedUsdMicros: input.chargedUsdMicros }
-        : {}),
-      ...(input.stripePaymentIntentId
-        ? { stripePaymentIntentId: input.stripePaymentIntentId }
-        : {}),
-      ...(input.providerStatus ? { providerStatus: input.providerStatus } : {}),
-      ...(input.failureReason ? { failureReason: input.failureReason } : {}),
-      updatedAt: input.updatedAt,
-    });
-    const updateAttempt = this.db
-      .prepare(
-        `update billing_auto_recharge_attempts
-         set charged_usd_micros = ?,
-             status = ?,
-             stripe_payment_intent_id = ?,
-             provider_status = ?,
-             failure_reason = ?,
-             record_json = ?,
-             updated_at = ?
-         where id = ?
-           and status <> 'succeeded'`,
-      )
-      .bind(
-        next.chargedUsdMicros ?? null,
-        next.status,
-        next.stripePaymentIntentId ?? null,
-        next.providerStatus ?? null,
-        next.failureReason ?? null,
-        JSON.stringify(next),
-        next.updatedAt,
-        next.id,
-      );
-    if (next.status !== "succeeded") {
-      const result = await updateAttempt.run();
-      if (changes(result) <= 0) {
-        return {
-          settled: false,
-          attempt: await this.#billingAutoRechargeAttemptById(next.id),
-          balance: await this.getCreditBalance(
-            next.workspaceId ?? next.spaceId,
-          ),
-          skippedReason: "already_succeeded",
-        };
-      }
-      return { settled: true, attempt: next };
-    }
-    const chargedUsdMicros = next.chargedUsdMicros ?? next.requestedUsdMicros;
-    const legacyCredits = legacyStorageCreditsFromUsdMicros(chargedUsdMicros);
-    const seedBalance = this.db
-      .prepare(
-        `insert or ignore into credit_balances
-           (space_id, available_usd_micros, reserved_usd_micros,
-            monthly_included_usd_micros, purchased_usd_micros,
-            available_credits, reserved_credits,
-            monthly_included_credits, purchased_credits, updated_at)
-         values (?, 0, 0, 0, 0, 0, 0, 0, 0, ?)`,
-      )
-      .bind(next.spaceId, input.updatedAt);
-    const grantBalance = this.db
-      .prepare(
-        `update credit_balances
-         set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) + ?,
-             purchased_usd_micros = coalesce(purchased_usd_micros, purchased_credits * 1000000) + ?,
-             available_credits = available_credits + ?,
-             purchased_credits = purchased_credits + ?,
-             updated_at = ?
-         where space_id = ?`,
-      )
-      .bind(
-        chargedUsdMicros,
-        chargedUsdMicros,
-        legacyCredits,
-        legacyCredits,
-        input.updatedAt,
-        next.spaceId,
-      );
-    if (typeof this.db.batch !== "function") {
-      throw new Error(
-        "D1 batch support is required to settle billing auto recharge attempts",
-      );
-    }
-    try {
-      await this.db.batch([
-        d1BillingAutoRechargePendingGuardStmt(this.db, next.id),
-        updateAttempt,
-        seedBalance,
-        grantBalance,
-      ]);
-    } catch (error) {
-      if (isD1BillingAutoRechargeAlreadySettledError(error)) {
-        return {
-          settled: false,
-          attempt: await this.#billingAutoRechargeAttemptById(next.id),
-          balance: await this.getCreditBalance(
-            next.workspaceId ?? next.spaceId,
-          ),
-          skippedReason: "already_succeeded",
-        };
-      }
-      throw error;
-    }
-    return {
-      settled: true,
-      attempt: next,
-      balance: await this.getCreditBalance(next.workspaceId ?? next.spaceId),
-    };
-  }
-
-  async listBillingAutoRechargeAttempts(
-    spaceId: string,
-    options: { readonly limit?: number } = {},
-  ): Promise<readonly BillingAutoRechargeAttempt[]> {
-    const rows = await this.#drizzleManyJson<BillingAutoRechargeAttempt>(
-      schema.billingAutoRechargeAttempts,
-      schema.billingAutoRechargeAttempts.recordJson,
-      {
-        where: eq(schema.billingAutoRechargeAttempts.spaceId, spaceId),
-        orderBy: [
-          desc(schema.billingAutoRechargeAttempts.createdAt),
-          desc(schema.billingAutoRechargeAttempts.id),
-        ],
-        limit: options.limit ?? 100,
-      },
-    );
-    return rows.map(normalizeBillingAutoRechargeAttempt);
-  }
+  // -- usage ledger -----------------------------------------------------------
 
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
+    usageEventUsdMicros(event);
     const existing = await this.#usageEventByIdempotencyKey(
       event.idempotencyKey,
     );
     if (existing) return existing;
     await this.#ensureSchema();
-    const normalized = normalizeUsageEvent(event);
     try {
       await this.#orm
         .insert(schema.usageEvents)
         .values({
-          id: normalized.id,
-          spaceId: normalized.workspaceId ?? normalized.spaceId,
-          installationId: normalized.installationId ?? null,
-          runId: normalized.runId ?? null,
-          meterId: normalized.meterId ?? null,
-          resourceFamily: normalized.resourceFamily ?? null,
-          resourceId: normalized.resourceId ?? null,
-          operation: normalized.operation ?? null,
-          resourceMetadataJson: normalized.resourceMetadata ?? null,
-          kind: normalized.kind,
-          quantity: normalized.quantity,
-          usdMicros: normalized.usdMicros,
-          credits: legacyStorageCreditsFromUsdMicros(normalized.usdMicros ?? 0),
-          source: normalized.source,
-          idempotencyKey: normalized.idempotencyKey,
-          createdAt: normalized.createdAt,
+          id: event.id,
+          workspaceId: event.workspaceId,
+          capsuleId: event.capsuleId ?? null,
+          runId: event.runId ?? null,
+          meterId: event.meterId ?? null,
+          resourceFamily: event.resourceFamily ?? null,
+          resourceId: event.resourceId ?? null,
+          operation: event.operation ?? null,
+          resourceMetadataJson: event.resourceMetadata ?? null,
+          kind: event.kind,
+          quantity: event.quantity,
+          usdMicros: event.usdMicros,
+          ratingStatus: event.ratingStatus,
+          source: event.source,
+          idempotencyKey: event.idempotencyKey,
+          createdAt: event.createdAt,
         })
         .run();
-    } catch {
-      return (
-        (await this.#usageEventByIdempotencyKey(event.idempotencyKey)) ??
-        normalized
-      );
-    }
-    return normalized;
-  }
-
-  async putUsageEventAndSpendCredits(
-    event: UsageEvent,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<PutUsageEventAndSpendCreditsResult | undefined> {
-    const existing = await this.#usageEventByIdempotencyKey(
-      event.idempotencyKey,
-    );
-    if (existing) {
-      return {
-        usageEvent: existing,
-        balance: await this.getCreditBalance(
-          existing.workspaceId ?? existing.spaceId,
-        ),
-        inserted: false,
-      };
-    }
-    await this.#ensureSchema();
-    if (typeof this.db.batch !== "function") {
-      throw new Error(
-        "D1 batch support is required to spend credits for usage events",
-      );
-    }
-    const normalized = normalizeUsageEvent(event);
-    const usdMicros = creditAmountUsdMicros(input);
-    const legacyCredits = legacyStorageCreditsFromUsdMicros(usdMicros);
-    const spendBalance = this.db
-      .prepare(
-        `update credit_balances
-         set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) - ?,
-             available_credits = available_credits - ?,
-             updated_at = ?
-         where space_id = ?
-           and coalesce(available_usd_micros, available_credits * 1000000) >= ?
-           and not exists (
-             select 1 from usage_events where idempotency_key = ?
-           )`,
-      )
-      .bind(
-        usdMicros,
-        legacyCredits,
-        input.updatedAt,
-        normalized.spaceId,
-        usdMicros,
-        normalized.idempotencyKey,
-      );
-    const insertUsageEvent = this.db
-      .prepare(
-        `insert into usage_events (
-           id, space_id, installation_id, run_id, meter_id,
-           resource_family, resource_id, operation, resource_metadata_json,
-           kind, quantity, usd_micros, credits, source,
-           idempotency_key, created_at
-         )
-         select
-           ?, ?, ?, ?, ?,
-           ?, ?, ?, ?,
-           ?, ?, ?, ?, ?,
-           ?, ?
-         where changes() > 0`,
-      )
-      .bind(
-        normalized.id,
-        normalized.spaceId,
-        normalized.installationId ?? null,
-        normalized.runId ?? null,
-        normalized.meterId ?? null,
-        normalized.resourceFamily ?? null,
-        normalized.resourceId ?? null,
-        normalized.operation ?? null,
-        normalized.resourceMetadata
-          ? JSON.stringify(normalized.resourceMetadata)
-          : null,
-        normalized.kind,
-        normalized.quantity,
-        normalized.usdMicros ?? null,
-        legacyStorageCreditsFromUsdMicros(normalized.usdMicros ?? 0),
-        normalized.source,
-        normalized.idempotencyKey,
-        normalized.createdAt,
-      );
-    try {
-      await this.db.batch([spendBalance, insertUsageEvent]);
     } catch (error) {
       const raced = await this.#usageEventByIdempotencyKey(
-        normalized.idempotencyKey,
+        event.idempotencyKey,
       );
-      if (raced && isD1UsageEventIdempotencyError(error)) {
-        return {
-          usageEvent: raced,
-          balance: await this.getCreditBalance(
-            raced.workspaceId ?? raced.spaceId,
-          ),
-          inserted: false,
-        };
-      }
+      if (raced && isD1UsageEventIdempotencyError(error)) return raced;
       throw error;
     }
-    const recorded = await this.#usageEventByIdempotencyKey(
-      normalized.idempotencyKey,
-    );
-    if (!recorded) return undefined;
-    return {
-      usageEvent: recorded,
-      balance: await this.getCreditBalance(
-        recorded.workspaceId ?? recorded.spaceId,
-      ),
-      inserted: recorded.id === normalized.id,
-    };
+    return event;
   }
 
-  async listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]> {
+  async listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
     await this.#ensureSchema();
     const rows = await this.#orm
       .select()
       .from(schema.usageEvents)
-      .where(eq(schema.usageEvents.spaceId, spaceId))
+      .where(eq(schema.usageEvents.workspaceId, workspaceId))
       .orderBy(asc(schema.usageEvents.createdAt), asc(schema.usageEvents.id));
     return rows.map(usageEventFromRow);
   }
 
   async listUsageEventsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<UsageEvent>> {
     await this.#ensureSchema();
@@ -3152,7 +2568,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       .from(schema.usageEvents)
       .where(
         d1KeysetWhereDesc(
-          eq(schema.usageEvents.spaceId, spaceId),
+          eq(schema.usageEvents.workspaceId, workspaceId),
           schema.usageEvents.createdAt,
           schema.usageEvents.id,
           decodeCursor(params.cursor),
@@ -3175,30 +2591,6 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return row ? usageEventFromRow(row) : undefined;
   }
 
-  async #billingAutoRechargeAttemptById(
-    id: string,
-  ): Promise<BillingAutoRechargeAttempt | undefined> {
-    return await this.#drizzleFirstJson<BillingAutoRechargeAttempt>(
-      schema.billingAutoRechargeAttempts,
-      schema.billingAutoRechargeAttempts.recordJson,
-      eq(schema.billingAutoRechargeAttempts.id, id),
-    ).then((row) =>
-      row ? normalizeBillingAutoRechargeAttempt(row) : undefined,
-    );
-  }
-
-  async #billingAutoRechargeAttemptByIdempotencyKey(
-    idempotencyKey: string,
-  ): Promise<BillingAutoRechargeAttempt | undefined> {
-    return await this.#drizzleFirstJson<BillingAutoRechargeAttempt>(
-      schema.billingAutoRechargeAttempts,
-      schema.billingAutoRechargeAttempts.recordJson,
-      eq(schema.billingAutoRechargeAttempts.idempotencyKey, idempotencyKey),
-    ).then((row) =>
-      row ? normalizeBillingAutoRechargeAttempt(row) : undefined,
-    );
-  }
-
   // -- backups (§33 layer 1 / §26 R2_BACKUPS) ----------------------------------
   //
   // One pointer row per sealed control-backup bundle written to R2_BACKUPS. The
@@ -3208,8 +2600,8 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   async putBackupRecord(record: BackupRecord): Promise<BackupRecord> {
     await this.#drizzleUpsert(schema.backups, {
       id: record.id,
-      spaceId: record.spaceId,
-      installationId: record.installationId ?? null,
+      workspaceId: record.workspaceId,
+      capsuleId: record.capsuleId ?? null,
       environment: record.environment ?? null,
       createdByRunId: record.createdByRunId,
       recordJson: record,
@@ -3226,19 +2618,21 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
-  async listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]> {
+  async listBackupRecords(
+    workspaceId: string,
+  ): Promise<readonly BackupRecord[]> {
     return await this.#drizzleManyJson<BackupRecord>(
       schema.backups,
       schema.backups.recordJson,
       {
-        where: eq(schema.backups.spaceId, spaceId),
+        where: eq(schema.backups.workspaceId, workspaceId),
         orderBy: [desc(schema.backups.createdAt), desc(schema.backups.id)],
       },
     );
   }
 
   async listBackupRecordsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<BackupRecord>> {
     const limit = clampPageLimit(params.limit);
@@ -3248,7 +2642,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       schema.backups.recordJson,
       {
         where: d1KeysetWhereDesc(
-          eq(schema.backups.spaceId, spaceId),
+          eq(schema.backups.workspaceId, workspaceId),
           schema.backups.createdAt,
           schema.backups.id,
           decodeCursor(params.cursor),
@@ -3265,9 +2659,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   async #putRun(row: {
     readonly id: string;
     readonly runGroupId: string | null;
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly sourceId?: string | null;
-    readonly installationId: string | null;
+    readonly capsuleId: string | null;
     readonly environment: string | null;
     readonly type: string;
     readonly status: string;
@@ -3287,9 +2681,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     await this.#drizzleUpsert(schema.runs, {
       id: row.id,
       runGroupId: row.runGroupId,
-      spaceId: row.spaceId,
+      workspaceId: row.workspaceId,
       sourceId: row.sourceId ?? null,
-      installationId: row.installationId,
+      capsuleId: row.capsuleId,
       environment: row.environment,
       type: row.type,
       status: row.status,
@@ -3397,44 +2791,20 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 }
 
-export function createCloudflareD1OpenTofuDeploymentStore(
+export function createCloudflareD1OpenTofuControlStore(
   db: D1Database,
-): OpenTofuDeploymentStore {
-  return new CloudflareD1OpenTofuDeploymentStore(db);
+): OpenTofuControlStore {
+  return new CloudflareD1OpenTofuControlStore(db);
 }
 
 // -- atomic-commit statement builders ------------------------------------------
 //
 // These return the UNAWAITED drizzle insert builders the atomic
-// commitAppliedDeployment batch feeds to this.#orm.batch(...). The column
+// commitRunState batch feeds to this.#orm.batch(...). The column
 // payloads mirror the #drizzleUpsert calls in
-// put{Deployment,StateSnapshot,OutputSnapshot} exactly so a record written
+// put{StateVersion,Output} exactly so a record written
 // through the atomic batch is byte-for-byte identical to one written through the
 // individual put* path.
-
-function d1UpsertDeploymentStmt(
-  orm: DrizzleD1Database<typeof schema>,
-  deployment: Deployment,
-) {
-  const values = {
-    id: deployment.id,
-    spaceId: deployment.spaceId,
-    installationId: deployment.installationId,
-    environment: deployment.environment,
-    applyRunId: deployment.applyRunId,
-    sourceSnapshotId: deployment.sourceSnapshotId,
-    dependencySnapshotId: deployment.dependencySnapshotId ?? null,
-    stateGeneration: deployment.stateGeneration,
-    outputSnapshotId: deployment.outputSnapshotId,
-    outputsPublicJson: deployment.outputsPublic,
-    status: deployment.status,
-    createdAt: deployment.createdAt,
-  };
-  return orm
-    .insert(schema.deployments)
-    .values(values)
-    .onConflictDoUpdate({ target: schema.deployments.id, set: values });
-}
 
 /**
  * Batch-able §27 `runs` upsert (the commit-tail fold helper). Mirrors the
@@ -3453,9 +2823,9 @@ function d1UpsertRunStmt(
   const values = {
     id: run.id,
     runGroupId: generic.runGroupId ?? null,
-    spaceId: run.workspaceId ?? run.spaceId,
+    workspaceId: run.workspaceId,
     sourceId: generic.sourceId ?? null,
-    installationId: run.installationId ?? null,
+    capsuleId: run.capsuleId ?? null,
     environment: generic.environment ?? null,
     type,
     status: run.status,
@@ -3492,9 +2862,9 @@ function d1RunLeaseGuardStmt(
       .select({
         id: schema.runs.id,
         runGroupId: schema.runs.runGroupId,
-        spaceId: schema.runs.spaceId,
+        workspaceId: schema.runs.workspaceId,
         sourceId: schema.runs.sourceId,
-        installationId: schema.runs.installationId,
+        capsuleId: schema.runs.capsuleId,
         environment: schema.runs.environment,
         type: schema.runs.type,
         status: schema.runs.status,
@@ -3508,80 +2878,44 @@ function d1RunLeaseGuardStmt(
   );
 }
 
-function d1InstallationStateGuardStmt(
+function d1CapsuleStateGuardStmt(
   orm: DrizzleD1Database<typeof schema>,
-  installationId: string,
+  capsuleId: string,
   currentStateGeneration: number,
-  status: Installation["status"] | undefined,
+  status: Capsule["status"] | undefined,
 ) {
   const expected = orm
     .select({ one: sql`1` })
-    .from(schema.installations)
+    .from(schema.capsules)
     .where(
       and(
-        eq(schema.installations.id, installationId),
-        eq(schema.installations.currentStateGeneration, currentStateGeneration),
-        status === undefined
-          ? undefined
-          : eq(schema.installations.status, status),
+        eq(schema.capsules.id, capsuleId),
+        eq(schema.capsules.currentStateGeneration, currentStateGeneration),
+        status === undefined ? undefined : eq(schema.capsules.status, status),
       ),
     );
-  return orm.insert(schema.installations).select(
+  return orm.insert(schema.capsules).select(
     orm
       .select({
-        id: schema.installations.id,
-        spaceId: schema.installations.spaceId,
-        projectId: schema.installations.projectId,
-        name: schema.installations.name,
-        slug: schema.installations.slug,
-        sourceId: schema.installations.sourceId,
-        installType: schema.installations.installType,
-        installConfigId: schema.installations.installConfigId,
-        environment: schema.installations.environment,
-        currentDeploymentId: schema.installations.currentDeploymentId,
-        currentStateGeneration: schema.installations.currentStateGeneration,
-        currentOutputSnapshotId: schema.installations.currentOutputSnapshotId,
-        status: schema.installations.status,
-        recordJson: schema.installations.recordJson,
-        createdAt: schema.installations.createdAt,
-        updatedAt: schema.installations.updatedAt,
+        id: schema.capsules.id,
+        workspaceId: schema.capsules.workspaceId,
+        projectId: schema.capsules.projectId,
+        name: schema.capsules.name,
+        slug: schema.capsules.slug,
+        sourceId: schema.capsules.sourceId,
+        installConfigId: schema.capsules.installConfigId,
+        environment: schema.capsules.environment,
+        currentStateVersionId: schema.capsules.currentStateVersionId,
+        currentStateGeneration: schema.capsules.currentStateGeneration,
+        currentOutputId: schema.capsules.currentOutputId,
+        status: schema.capsules.status,
+        recordJson: schema.capsules.recordJson,
+        createdAt: schema.capsules.createdAt,
+        updatedAt: schema.capsules.updatedAt,
       })
-      .from(schema.installations)
-      .where(
-        and(eq(schema.installations.id, installationId), notExists(expected)),
-      ),
+      .from(schema.capsules)
+      .where(and(eq(schema.capsules.id, capsuleId), notExists(expected))),
   );
-}
-
-function d1BillingAutoRechargePendingGuardStmt(
-  db: D1Database,
-  attemptId: string,
-) {
-  return db
-    .prepare(
-      `insert into billing_auto_recharge_attempts (
-         id, space_id, run_id, billing_account_id, idempotency_key,
-         period_start, period_end, requested_usd_micros,
-         monthly_limit_usd_micros, charged_usd_micros, status,
-         stripe_payment_intent_id, provider_status, failure_reason,
-         record_json, created_at, updated_at
-       )
-       select
-         id, space_id, run_id, billing_account_id, idempotency_key,
-         period_start, period_end, requested_usd_micros,
-         monthly_limit_usd_micros, charged_usd_micros, status,
-         stripe_payment_intent_id, provider_status, failure_reason,
-         record_json, created_at, updated_at
-       from billing_auto_recharge_attempts
-       where id = ?
-         and not exists (
-           select 1
-           from billing_auto_recharge_attempts
-           where id = ?
-             and status <> 'succeeded'
-         )`,
-    )
-    .bind(attemptId, attemptId);
 }
 
 function isD1RunLeaseLostError(error: unknown): boolean {
@@ -3591,27 +2925,13 @@ function isD1RunLeaseLostError(error: unknown): boolean {
     : false;
 }
 
-function isD1InstallationStateGuardError(error: unknown): boolean {
-  // P4: the ledger table is physically `capsules`; the conflicting-insert guard
-  // (see d1InstallationStateGuardStmt) trips the `capsules.id` primary-key
-  // constraint. The pre-rename `installations.id` form is matched too so the
-  // guard keeps working on a database that has not yet applied the rename.
+function isD1CapsuleStateGuardError(error: unknown): boolean {
+  // The conflicting-insert guard (see d1CapsuleStateGuardStmt) trips the
+  // canonical `capsules.id` primary-key constraint. Schema migrations run
+  // before this path, so an unrenamed pre-v1 table is never runtime authority.
   return error instanceof Error
     ? error.message.includes("UNIQUE constraint failed: capsules.id") ||
-        error.message.includes("constraint failed: capsules.id") ||
-        error.message.includes("UNIQUE constraint failed: installations.id") ||
-        error.message.includes("constraint failed: installations.id")
-    : false;
-}
-
-function isD1BillingAutoRechargeAlreadySettledError(error: unknown): boolean {
-  return error instanceof Error
-    ? error.message.includes(
-        "UNIQUE constraint failed: billing_auto_recharge_attempts.id",
-      ) ||
-        error.message.includes(
-          "constraint failed: billing_auto_recharge_attempts.id",
-        )
+        error.message.includes("constraint failed: capsules.id")
     : false;
 }
 
@@ -3626,33 +2946,33 @@ function isD1UsageEventIdempotencyError(error: unknown): boolean {
     : false;
 }
 
-function d1UpsertStateSnapshotStmt(
+function d1UpsertStateVersionStmt(
   orm: DrizzleD1Database<typeof schema>,
-  snapshot: StateSnapshot,
+  snapshot: StateVersion,
 ) {
   return orm
-    .insert(schema.stateSnapshots)
+    .insert(schema.stateVersions)
     .values({
       id: snapshot.id,
-      spaceId: snapshot.workspaceId ?? snapshot.spaceId,
-      installationId: snapshot.capsuleId ?? snapshot.installationId,
+      workspaceId: snapshot.workspaceId,
+      capsuleId: snapshot.capsuleId,
       environment: snapshot.environment,
       generation: snapshot.generation,
-      objectKey: snapshot.objectKey,
+      stateRef: snapshot.stateRef,
       digest: snapshot.digest,
       createdByRunId: snapshot.createdByRunId,
       createdAt: snapshot.createdAt,
     })
     .onConflictDoUpdate({
       target: [
-        schema.stateSnapshots.installationId,
-        schema.stateSnapshots.environment,
-        schema.stateSnapshots.generation,
+        schema.stateVersions.capsuleId,
+        schema.stateVersions.environment,
+        schema.stateVersions.generation,
       ],
       set: {
         id: snapshot.id,
-        spaceId: snapshot.spaceId,
-        objectKey: snapshot.objectKey,
+        workspaceId: snapshot.workspaceId,
+        stateRef: snapshot.stateRef,
         digest: snapshot.digest,
         createdByRunId: snapshot.createdByRunId,
         createdAt: snapshot.createdAt,
@@ -3660,47 +2980,22 @@ function d1UpsertStateSnapshotStmt(
     });
 }
 
-function d1UpsertOutputSnapshotStmt(
+function d1UpsertOutputStmt(
   orm: DrizzleD1Database<typeof schema>,
-  snapshot: OutputSnapshot,
+  snapshot: Output,
 ) {
   const values = {
     id: snapshot.id,
-    spaceId: snapshot.spaceId,
-    installationId: snapshot.capsuleId ?? snapshot.installationId,
+    workspaceId: snapshot.workspaceId,
+    capsuleId: snapshot.capsuleId,
     stateGeneration: snapshot.stateGeneration,
     recordJson: snapshot,
     createdAt: snapshot.createdAt,
   };
   return orm
-    .insert(schema.outputSnapshots)
+    .insert(schema.outputs)
     .values(values)
-    .onConflictDoUpdate({ target: schema.outputSnapshots.id, set: values });
-}
-
-function d1BumpWorkspaceOutputSyncRevisionStmt(
-  orm: DrizzleD1Database<typeof schema>,
-  workspaceId: string,
-  updatedAt: string,
-) {
-  return orm
-    .insert(schema.workspaceOutputSync)
-    .values({
-      workspaceId,
-      enabled: true,
-      outputRevision: 1,
-      reconciledRevision: 0,
-      activeRunGroupId: null,
-      consecutivePasses: 0,
-      updatedAt,
-    })
-    .onConflictDoUpdate({
-      target: schema.workspaceOutputSync.workspaceId,
-      set: {
-        outputRevision: sql`${schema.workspaceOutputSync.outputRevision} + 1`,
-        updatedAt,
-      },
-    });
+    .onConflictDoUpdate({ target: schema.outputs.id, set: values });
 }
 
 function stripRunHeartbeat<R extends PlanRun | ApplyRun | SourceSyncRun | Run>(
@@ -3722,43 +3017,6 @@ function applyRunType(run: ApplyRun): string {
   return run.operation === "destroy" ? "destroy_apply" : RUN_KIND_APPLY;
 }
 
-// -- Deployment / StateSnapshot row mapping ------------------------------------
-//
-// The columnar deployments / state_snapshots tables carry every contract field
-// in §27 columns (no record_json), so Drizzle rows are reconstructed field-by-field.
-
-function deploymentFromDrizzleRow(row: {
-  readonly id: string;
-  readonly spaceId: string;
-  readonly installationId: string;
-  readonly environment: string;
-  readonly applyRunId: string;
-  readonly sourceSnapshotId: string;
-  readonly dependencySnapshotId: string | null;
-  readonly stateGeneration: number;
-  readonly outputSnapshotId: string;
-  readonly outputsPublicJson: unknown;
-  readonly status: string;
-  readonly createdAt: string;
-}): Deployment {
-  return {
-    id: row.id,
-    spaceId: row.spaceId,
-    installationId: row.installationId,
-    environment: row.environment,
-    applyRunId: row.applyRunId,
-    sourceSnapshotId: row.sourceSnapshotId,
-    ...(row.dependencySnapshotId !== null
-      ? { dependencySnapshotId: row.dependencySnapshotId }
-      : {}),
-    stateGeneration: row.stateGeneration,
-    outputSnapshotId: row.outputSnapshotId,
-    outputsPublic: jsonRecordFromD1Value(row.outputsPublicJson),
-    status: row.status as Deployment["status"],
-    createdAt: row.createdAt,
-  };
-}
-
 function jsonRecordFromD1Value(value: unknown): Record<string, unknown> {
   const parsed =
     typeof value === "string" && value.trim().length > 0
@@ -3777,26 +3035,24 @@ function parseD1JsonColumn(value: string): unknown {
   }
 }
 
-function stateSnapshotFromDrizzleRow(row: {
+function stateVersionFromDrizzleRow(row: {
   readonly id: string;
-  readonly spaceId: string;
-  readonly installationId: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
   readonly environment: string;
   readonly generation: number;
-  readonly objectKey: string;
+  readonly stateRef: string;
   readonly digest: string;
   readonly createdByRunId: string;
   readonly createdAt: string;
-}): StateSnapshot {
+}): StateVersion {
   return {
     id: row.id,
-    workspaceId: row.spaceId,
-    capsuleId: row.installationId,
-    spaceId: row.spaceId,
-    installationId: row.installationId,
+    workspaceId: row.workspaceId,
+    capsuleId: row.capsuleId,
     environment: row.environment,
     generation: row.generation,
-    objectKey: row.objectKey,
+    stateRef: row.stateRef,
     digest: row.digest,
     createdByRunId: row.createdByRunId,
     createdAt: row.createdAt,
@@ -3807,42 +3063,13 @@ function changes(result: D1Result): number {
   return result.meta?.changes ?? 0;
 }
 
-function workspaceOutputSyncValues(state: WorkspaceOutputSyncState) {
-  return {
-    workspaceId: state.workspaceId,
-    enabled: state.enabled,
-    outputRevision: state.outputRevision,
-    reconciledRevision: state.reconciledRevision,
-    activeRunGroupId: state.activeRunGroupId ?? null,
-    consecutivePasses: state.consecutivePasses,
-    updatedAt: state.updatedAt,
-  };
-}
-
-function workspaceOutputSyncStateFromD1Row(
-  row: typeof schema.workspaceOutputSync.$inferSelect,
-): WorkspaceOutputSyncState {
-  return {
-    workspaceId: row.workspaceId,
-    enabled: row.enabled,
-    outputRevision: row.outputRevision,
-    reconciledRevision: row.reconciledRevision,
-    ...(row.activeRunGroupId === null
-      ? {}
-      : { activeRunGroupId: row.activeRunGroupId }),
-    consecutivePasses: row.consecutivePasses,
-    updatedAt: row.updatedAt,
-  };
-}
-
 /**
  * Lazily create the §27 control-plane tables. Idempotent (`IF NOT EXISTS`);
  * called once per store instance via the memoized init promise. Rich internal
  * records (runner profiles, runs, install configs, connections, sources,
- * snapshots, internal provider resolver binding sets, spaces, provider resolver records) keep a `record_json`
- * / `run_json` TEXT column carrying the full contract shape alongside the §27
- * indexed columns; the columnar `deployments` / `state_snapshots` tables carry
- * every field in §27 columns directly. `runs_inputs` is the internal PlanRun
+ * snapshots, Provider Binding sets, Workspaces, and provider resolution
+ * records) keep a `record_json` / `run_json` TEXT column carrying the full
+ * contract shape alongside indexed columns. `runs_inputs` is the internal PlanRun
  * inputs sidecar (never projected); `secret_blobs` holds sealed ciphertext only.
  */
 export async function ensureD1OpenTofuLedgerSchema(
@@ -3858,17 +3085,21 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create unique index if not exists workspaces_handle_unique
       on workspaces (handle)`,
-    `create table if not exists workspace_output_sync (
-      workspace_id text primary key,
-      enabled integer not null default 1,
-      output_revision integer not null default 0,
-      reconciled_revision integer not null default 0,
-      active_run_group_id text,
-      consecutive_passes integer not null default 0,
+    `create table if not exists workspace_members (
+      id text primary key,
+      workspace_id text not null,
+      account_id text not null,
+      status text not null,
+      record_json text not null,
+      created_at text not null,
       updated_at text not null
     )`,
-    `create index if not exists workspace_output_sync_pending_idx
-      on workspace_output_sync (enabled, output_revision, reconciled_revision)`,
+    `create unique index if not exists workspace_members_workspace_account_unique
+      on workspace_members (workspace_id, account_id)`,
+    `create index if not exists workspace_members_workspace_status_idx
+      on workspace_members (workspace_id, status)`,
+    `create index if not exists workspace_members_account_status_idx
+      on workspace_members (account_id, status)`,
     `create table if not exists projects (
       id text primary key,
       workspace_id text not null,
@@ -3936,16 +3167,12 @@ export async function ensureD1OpenTofuLedgerSchema(
     `create table if not exists install_configs (
       id text primary key,
       space_id text,
-      install_type text not null,
-      trust_level text not null,
       record_json text not null,
       created_at text not null,
       updated_at text not null
     )`,
     `create index if not exists install_configs_space_idx
       on install_configs (space_id)`,
-    `create index if not exists install_configs_install_type_idx
-      on install_configs (install_type)`,
     `create table if not exists capsules (
       id text primary key,
       space_id text not null,
@@ -3966,8 +3193,8 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `drop index if exists capsules_space_name_environment_unique`,
     `drop index if exists installations_space_name_environment_unique`,
-    `create unique index if not exists capsules_space_name_environment_active_unique
-      on capsules (space_id, name, environment)
+    `create unique index if not exists capsules_project_name_environment_active_unique
+      on capsules (project_id, name, environment)
       where status != 'destroyed'`,
     `create index if not exists capsules_space_idx
       on capsules (space_id)`,
@@ -3988,8 +3215,6 @@ export async function ensureD1OpenTofuLedgerSchema(
       provisioners_json text not null,
       root_module_variables_json text not null default '[]',
       root_module_outputs_json text not null default '[]',
-      normalized_object_key text,
-      normalized_digest text,
       created_at text not null
     )`,
     `create index if not exists capsule_compatibility_reports_source_snapshot_idx
@@ -4033,6 +3258,8 @@ export async function ensureD1OpenTofuLedgerSchema(
       on runs (source_id)`,
     `create index if not exists runs_installation_idx
       on runs (installation_id)`,
+    `create index if not exists runs_installation_created_at_idx
+      on runs (installation_id, created_at)`,
     `create index if not exists runs_type_idx
       on runs (type)`,
     `create index if not exists runs_created_at_idx
@@ -4161,6 +3388,8 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create index if not exists audit_events_space_idx
       on audit_events (space_id)`,
+    `create index if not exists audit_events_space_target_created_id_idx
+      on audit_events (space_id, target_type, target_id, created_at, id)`,
     `create table if not exists credential_mint_events (
       id text primary key,
       run_id text not null,
@@ -4194,86 +3423,10 @@ export async function ensureD1OpenTofuLedgerSchema(
       on security_findings (run_id)`,
     `create index if not exists security_findings_severity_idx
       on security_findings (severity)`,
-    `create table if not exists billing_accounts (
-      id text primary key,
-      owner_type text not null,
-      owner_id text not null,
-      provider text not null,
-      status text not null,
-      record_json text not null,
-      created_at text not null,
-      updated_at text not null
-    )`,
-    `create index if not exists billing_accounts_owner_idx
-      on billing_accounts (owner_type, owner_id)`,
-    `create index if not exists billing_accounts_status_idx
-      on billing_accounts (status)`,
-    `create table if not exists plans (
-      id text primary key,
-      name text not null,
-      monthly_base_price integer not null,
-      included_usd_micros integer,
-      included_credits integer not null,
-      limits_json text not null,
-      record_json text not null,
-      created_at text not null,
-      updated_at text not null
-    )`,
-    `create table if not exists space_subscriptions (
-      id text primary key,
-      space_id text not null,
-      billing_account_id text not null,
-      plan_id text not null,
-      status text not null,
-      record_json text not null,
-      created_at text not null,
-      updated_at text not null
-    )`,
-    `create index if not exists space_subscriptions_space_idx
-      on space_subscriptions (space_id)`,
-    `create index if not exists space_subscriptions_billing_account_idx
-      on space_subscriptions (billing_account_id)`,
-    `create table if not exists credit_balances (
-      space_id text primary key,
-      available_usd_micros integer,
-      reserved_usd_micros integer,
-      monthly_included_usd_micros integer,
-      purchased_usd_micros integer,
-      available_credits integer not null,
-      reserved_credits integer not null,
-      monthly_included_credits integer not null,
-      purchased_credits integer not null,
-      updated_at text not null
-    )`,
-    `create table if not exists billing_auto_recharge_attempts (
-      id text primary key,
-      space_id text not null,
-      run_id text not null,
-      billing_account_id text not null,
-      idempotency_key text not null,
-      period_start text not null,
-      period_end text,
-      requested_usd_micros integer not null,
-      monthly_limit_usd_micros integer,
-      charged_usd_micros integer,
-      status text not null,
-      stripe_payment_intent_id text,
-      provider_status text,
-      failure_reason text,
-      record_json text not null,
-      created_at text not null,
-      updated_at text not null
-    )`,
-    `create unique index if not exists billing_auto_recharge_attempts_idempotency_unique
-      on billing_auto_recharge_attempts (idempotency_key)`,
-    `create index if not exists billing_auto_recharge_attempts_space_period_status_idx
-      on billing_auto_recharge_attempts (space_id, period_start, status)`,
-    `create index if not exists billing_auto_recharge_attempts_run_idx
-      on billing_auto_recharge_attempts (run_id)`,
     `create table if not exists usage_events (
       id text primary key,
-      space_id text not null,
-      installation_id text,
+      workspace_id text not null,
+      capsule_id text,
       run_id text,
       meter_id text,
       resource_family text,
@@ -4282,36 +3435,17 @@ export async function ensureD1OpenTofuLedgerSchema(
       resource_metadata_json text,
       kind text not null,
       quantity real not null,
-      usd_micros integer,
-      credits integer not null,
+      usd_micros integer not null,
       source text not null,
       idempotency_key text not null,
       created_at text not null
     )`,
-    `create index if not exists usage_events_space_idx
-      on usage_events (space_id)`,
+    `create index if not exists usage_events_workspace_idx
+      on usage_events (workspace_id)`,
     `create index if not exists usage_events_run_idx
       on usage_events (run_id)`,
     `create unique index if not exists usage_events_idempotency_key_unique
       on usage_events (idempotency_key)`,
-    `create table if not exists credit_reservations (
-      id text primary key,
-      space_id text not null,
-      run_id text not null,
-      estimated_usd_micros integer,
-      estimated_credits integer not null,
-      status text not null,
-      mode text not null,
-      record_json text not null,
-      created_at text not null,
-      expires_at text not null
-    )`,
-    `create index if not exists credit_reservations_space_idx
-      on credit_reservations (space_id)`,
-    `create index if not exists credit_reservations_run_idx
-      on credit_reservations (run_id)`,
-    `create index if not exists credit_reservations_status_idx
-      on credit_reservations (status)`,
     `create table if not exists public_host_reservations (
       hostname text primary key,
       owner_user_id text not null,
@@ -4359,19 +3493,36 @@ export async function ensureD1OpenTofuLedgerSchema(
       generation integer not null,
       observed_generation integer not null,
       outputs_json text,
+      execution_json text,
+      state_adoption_json text,
       conditions_json text,
       labels_json text,
       created_at text not null,
-      updated_at text not null
+      updated_at text not null,
+      observation_lease_id text,
+      observation_claimed_at text,
+      last_observation_attempt_at text
     )`,
     `create unique index if not exists resource_shapes_space_kind_name_unique
       on resource_shapes (space_id, kind, name)`,
     `create index if not exists resource_shapes_space_idx
       on resource_shapes (space_id)`,
+    `create index if not exists resource_shapes_space_created_id_idx
+      on resource_shapes (space_id, created_at, id)`,
+    `create index if not exists resource_shapes_observation_due_idx
+      on resource_shapes (
+        phase, last_observation_attempt_at, observation_claimed_at, id
+      )`,
     `create table if not exists resolution_locks (
       resource_id text primary key,
       selected_implementation text not null,
+      target_pool text,
       target text not null,
+      target_snapshot_json text,
+      implementation_snapshot_json text,
+      implementation_plugin text,
+      implementation_options_json text,
+      implementation_fingerprint text,
       locked integer not null,
       reason_json text not null,
       portability text,
@@ -4391,6 +3542,8 @@ export async function ensureD1OpenTofuLedgerSchema(
       on target_pools (space_id, name)`,
     `create index if not exists target_pools_space_idx
       on target_pools (space_id)`,
+    `create index if not exists target_pools_space_created_id_idx
+      on target_pools (space_id, created_at, id)`,
     `create table if not exists space_policies (
       id text primary key,
       space_id text not null,
@@ -4403,6 +3556,46 @@ export async function ensureD1OpenTofuLedgerSchema(
       on space_policies (space_id, name)`,
     `create index if not exists space_policies_space_idx
       on space_policies (space_id)`,
+    // Runtime declaration layer. Values are non-secret declaration documents
+    // and resolved public output inputs; credentials remain references only.
+    `create table if not exists interfaces (
+      id text primary key,
+      workspace_id text not null,
+      owner_kind text not null,
+      owner_id text not null,
+      name text not null,
+      interface_type text not null,
+      phase text not null,
+      generation integer not null,
+      resolved_revision integer not null,
+      record_json text not null,
+      created_at text not null,
+      updated_at text not null
+    )`,
+    `create unique index if not exists interfaces_active_name_unique
+      on interfaces (workspace_id, owner_kind, owner_id, name)
+      where phase <> 'Retired'`,
+    `create index if not exists interfaces_workspace_type_phase_idx
+      on interfaces (workspace_id, interface_type, phase)`,
+    `create table if not exists interface_bindings (
+      id text primary key,
+      workspace_id text not null,
+      interface_id text not null,
+      subject_kind text not null,
+      subject_id text not null,
+      phase text not null,
+      generation integer not null,
+      record_json text not null,
+      created_at text not null,
+      updated_at text not null
+    )`,
+    `create unique index if not exists interface_bindings_active_subject_unique
+      on interface_bindings (interface_id, subject_kind, subject_id)
+      where phase <> 'Revoked'`,
+    `create index if not exists interface_bindings_interface_idx
+      on interface_bindings (interface_id)`,
+    `create index if not exists interface_bindings_workspace_subject_idx
+      on interface_bindings (workspace_id, subject_kind, subject_id)`,
   ];
   const tableStatements = statements.filter((sql) => !isD1IndexStatement(sql));
   const indexStatements = statements.filter((sql) => isD1IndexStatement(sql));
@@ -4465,9 +3658,41 @@ export async function applyD1GuardedTableRenames(
 
 async function migrateD1OpenTofuLedgerSchema(db: D1Database): Promise<void> {
   await ensureD1SchemaMigrationLedger(db);
+  await prepareRetiredD1WorkspaceOutputSyncMigration(db);
   for (const migration of D1_OPEN_TOFU_SCHEMA_MIGRATIONS) {
     await applyD1OpenTofuSchemaMigration(db, migration);
   }
+}
+
+/**
+ * Migration 26 is immutable history and originally backfilled a table created
+ * by the then-current bootstrap schema. The table is no longer part of the
+ * current schema, so a fresh database needs this transient compatibility table
+ * only while replaying migration 26; migration 27 removes it immediately.
+ */
+async function prepareRetiredD1WorkspaceOutputSyncMigration(
+  db: D1Database,
+): Promise<void> {
+  const applied = await db
+    .prepare(`select version from schema_migrations where version = ?`)
+    .bind(26)
+    .first<{ readonly version: number }>();
+  if (applied || (await d1TableExists(db, "workspace_output_sync"))) {
+    return;
+  }
+  await db
+    .prepare(
+      `create table workspace_output_sync (
+        workspace_id text primary key,
+        enabled integer not null default 1,
+        output_revision integer not null default 0,
+        reconciled_revision integer not null default 0,
+        active_run_group_id text,
+        consecutive_passes integer not null default 0,
+        updated_at text not null
+      )`,
+    )
+    .run();
 }
 
 function isD1IndexStatement(sql: string): boolean {
@@ -4550,21 +3775,6 @@ credential_mint_events.source_id nullable source-scoped git mint audit pointer
 `,
     async apply(db) {
       await ensureD1Column(db, "credential_mint_events", "source_id", "text");
-    },
-  },
-  {
-    version: 5,
-    name: "d1_opentofu_credit_reservation_mode",
-    checksumSource: `
-credit_reservations.mode text not null default disabled
-`,
-    async apply(db) {
-      await ensureD1Column(
-        db,
-        "credit_reservations",
-        "mode",
-        "text not null default 'disabled'",
-      );
     },
   },
   {
@@ -4703,131 +3913,6 @@ usage_events.resource_metadata_json nullable non-secret resource metadata
         "resource_metadata_json",
         "text",
       );
-    },
-  },
-  {
-    version: 14,
-    name: "d1_opentofu_billing_usd_micros",
-    checksumSource: `
-plans.included_usd_micros nullable USD micros grant
-credit_balances USD micros columns nullable with legacy-credit backfill
-usage_events.usd_micros nullable with legacy-credit backfill
-credit_reservations.estimated_usd_micros nullable with legacy-credit backfill
-`,
-    async apply(db) {
-      await ensureD1Column(db, "plans", "included_usd_micros", "integer");
-      await db
-        .prepare(
-          `update plans
-           set included_usd_micros = included_credits * 1000000
-           where included_usd_micros is null`,
-        )
-        .run();
-      await ensureD1Column(
-        db,
-        "credit_balances",
-        "available_usd_micros",
-        "integer",
-      );
-      await ensureD1Column(
-        db,
-        "credit_balances",
-        "reserved_usd_micros",
-        "integer",
-      );
-      await ensureD1Column(
-        db,
-        "credit_balances",
-        "monthly_included_usd_micros",
-        "integer",
-      );
-      await ensureD1Column(
-        db,
-        "credit_balances",
-        "purchased_usd_micros",
-        "integer",
-      );
-      await db
-        .prepare(
-          `update credit_balances
-           set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000),
-               reserved_usd_micros = coalesce(reserved_usd_micros, reserved_credits * 1000000),
-               monthly_included_usd_micros = coalesce(monthly_included_usd_micros, monthly_included_credits * 1000000),
-               purchased_usd_micros = coalesce(purchased_usd_micros, purchased_credits * 1000000)`,
-        )
-        .run();
-      await ensureD1Column(db, "usage_events", "usd_micros", "integer");
-      await db
-        .prepare(
-          `update usage_events
-           set usd_micros = credits * 1000000
-           where usd_micros is null`,
-        )
-        .run();
-      await ensureD1Column(
-        db,
-        "credit_reservations",
-        "estimated_usd_micros",
-        "integer",
-      );
-      await db
-        .prepare(
-          `update credit_reservations
-           set estimated_usd_micros = estimated_credits * 1000000
-           where estimated_usd_micros is null`,
-        )
-        .run();
-    },
-  },
-  {
-    version: 15,
-    name: "d1_opentofu_billing_auto_recharge_attempts",
-    checksumSource: `
-billing_auto_recharge_attempts table with unique idempotency key
-monthly cap index over space_id, period_start, status
-`,
-    async apply(db) {
-      await db
-        .prepare(
-          `create table if not exists billing_auto_recharge_attempts (
-            id text primary key,
-            space_id text not null,
-            run_id text not null,
-            billing_account_id text not null,
-            idempotency_key text not null,
-            period_start text not null,
-            period_end text,
-            requested_usd_micros integer not null,
-            monthly_limit_usd_micros integer,
-            charged_usd_micros integer,
-            status text not null,
-            stripe_payment_intent_id text,
-            provider_status text,
-            failure_reason text,
-            record_json text not null,
-            created_at text not null,
-            updated_at text not null
-          )`,
-        )
-        .run();
-      await db
-        .prepare(
-          `create unique index if not exists billing_auto_recharge_attempts_idempotency_unique
-            on billing_auto_recharge_attempts (idempotency_key)`,
-        )
-        .run();
-      await db
-        .prepare(
-          `create index if not exists billing_auto_recharge_attempts_space_period_status_idx
-            on billing_auto_recharge_attempts (space_id, period_start, status)`,
-        )
-        .run();
-      await db
-        .prepare(
-          `create index if not exists billing_auto_recharge_attempts_run_idx
-            on billing_auto_recharge_attempts (run_id)`,
-        )
-        .run();
     },
   },
   {
@@ -5545,7 +4630,7 @@ OpenTofu outputs remain authoritative in the outputs table
                       and coalesce(
                         json_extract(c.record_json, '$.currentOutputId'),
                         c.current_output_snapshot_id,
-                        json_extract(c.record_json, '$.currentOutputSnapshotId')
+                        json_extract(c.record_json, '$.currentOutputId')
                       ) is not null
                   ) then 1 else 0 end,
                   0,
@@ -5559,7 +4644,494 @@ OpenTofu outputs remain authoritative in the outputs table
         .run();
     },
   },
+  {
+    version: 27,
+    name: "d1_opentofu_workspace_output_sync_retire",
+    checksumSource: `
+workspace_output_sync execution state is retired
+ordinary OpenTofu outputs remain in the outputs table
+historical migration 26 remains immutable
+`,
+    async apply(db) {
+      await db
+        .prepare(`drop index if exists workspace_output_sync_pending_idx`)
+        .run();
+      await db.prepare(`drop table if exists workspace_output_sync`).run();
+    },
+  },
+  {
+    version: 28,
+    name: "d1_resource_shape_resolution_lock_identity",
+    checksumSource: `
+resolution_locks.target_pool nullable legacy-compatible TargetPool identity
+resolution_locks.target_snapshot_json nullable immutable non-secret Target snapshot
+resolution_locks.implementation_snapshot_json nullable immutable non-secret implementation descriptor snapshot
+resolution_locks.implementation_plugin nullable pinned adapter plugin
+resolution_locks.implementation_options_json nullable pinned non-secret plugin options
+resolution_locks.implementation_fingerprint nullable canonical selected implementation identity
+`,
+    async apply(db) {
+      await ensureD1Column(db, "resolution_locks", "target_pool", "text");
+      await ensureD1Column(
+        db,
+        "resolution_locks",
+        "target_snapshot_json",
+        "text",
+      );
+      await ensureD1Column(
+        db,
+        "resolution_locks",
+        "implementation_snapshot_json",
+        "text",
+      );
+      await ensureD1Column(
+        db,
+        "resolution_locks",
+        "implementation_plugin",
+        "text",
+      );
+      await ensureD1Column(
+        db,
+        "resolution_locks",
+        "implementation_options_json",
+        "text",
+      );
+      await ensureD1Column(
+        db,
+        "resolution_locks",
+        "implementation_fingerprint",
+        "text",
+      );
+    },
+  },
+  {
+    version: 29,
+    name: "d1_capsule_compatibility_auto_rewrite_retire",
+    checksumSource: `
+legacy auto_capsulized reports normalize to ready
+legacy Capsule compatibilityStatus normalizes to ready
+normalized module artifact pointers are retired
+current Runs always dispatch the immutable SourceSnapshot archive
+`,
+    async apply(db) {
+      const columns = await d1ColumnNames(db, "capsule_compatibility_reports");
+      if (columns.size === 0) return;
+      const clearsLegacyPointers =
+        columns.has("normalized_object_key") &&
+        columns.has("normalized_digest");
+      await db
+        .prepare(
+          clearsLegacyPointers
+            ? `update capsule_compatibility_reports
+               set level = 'ready',
+                   normalized_object_key = null,
+                   normalized_digest = null
+               where level = 'auto_capsulized'`
+            : `update capsule_compatibility_reports
+               set level = 'ready'
+               where level = 'auto_capsulized'`,
+        )
+        .run();
+      await db
+        .prepare(
+          `update capsules
+           set record_json = json_set(
+             record_json,
+             '$.compatibilityStatus',
+             'ready'
+           )
+           where json_extract(
+             record_json,
+             '$.compatibilityStatus'
+           ) = 'auto_capsulized'`,
+        )
+        .run();
+    },
+  },
+  {
+    version: 30,
+    name: "d1_workspace_members_create",
+    checksumSource: `
+workspace_members is the canonical Workspace membership ledger
+every Workspace namespace owner is backfilled as an active owner member
+the separate membership snapshot and no-op outbox are retired
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `create table if not exists workspace_members (
+            id text primary key,
+            workspace_id text not null,
+            account_id text not null,
+            status text not null,
+            record_json text not null,
+            created_at text not null,
+            updated_at text not null
+          )`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create unique index if not exists workspace_members_workspace_account_unique
+             on workspace_members (workspace_id, account_id)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists workspace_members_workspace_status_idx
+             on workspace_members (workspace_id, status)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists workspace_members_account_status_idx
+             on workspace_members (account_id, status)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `insert into workspace_members (
+             id, workspace_id, account_id, status, record_json, created_at, updated_at
+           )
+           select
+             'wsm_' || id || '_' || json_extract(record_json, '$.ownerUserId'),
+             id,
+             json_extract(record_json, '$.ownerUserId'),
+             'active',
+             json_object(
+               'id', 'wsm_' || id || '_' || json_extract(record_json, '$.ownerUserId'),
+               'workspaceId', id,
+               'accountId', json_extract(record_json, '$.ownerUserId'),
+               'roles', json_array('owner'),
+               'status', 'active',
+               'createdAt', created_at,
+               'updatedAt', updated_at
+             ),
+             created_at,
+             updated_at
+           from workspaces
+           where nullif(json_extract(record_json, '$.ownerUserId'), '') is not null
+           on conflict(workspace_id, account_id) do nothing`,
+        )
+        .run();
+    },
+  },
+  {
+    version: 31,
+    name: "d1_capsule_install_discriminators_retire",
+    checksumSource: `
+install_configs.install_type physical discriminator removed
+capsules.install_type physical discriminator removed
+legacy installType/sourceKind/templateBinding JSON keys removed
+Git Source plus DB InstallConfig are the only Capsule execution authority
+`,
+    async apply(db) {
+      await rebuildD1InstallConfigsWithoutInstallType(db);
+      await rebuildD1CapsulesWithoutInstallType(db);
+    },
+  },
+  {
+    version: 32,
+    name: "d1_capsule_project_boundary_enforce",
+    checksumSource: `
+capsules.project_id is required for every current Capsule
+existing null project_id values point to the Workspace default Project
+active Capsule name uniqueness is scoped to project_id/name/environment
+source_id remains nullable only for historical pre-Git-only operator migration rows
+`,
+    async apply(db) {
+      await rebuildD1CapsulesWithRequiredProject(db);
+    },
+  },
+  {
+    version: 33,
+    name: "d1_resource_execution_state_add",
+    checksumSource: `
+resource_shapes.execution_json stores the latest Resource-owned run and state pointer
+no backing Capsule, Capsule StateVersion, or Capsule Output is created
+`,
+    async apply(db) {
+      if (!(await d1TableExists(db, "resource_shapes"))) return;
+      const columns = await d1ColumnNames(db, "resource_shapes");
+      if (!columns.has("execution_json")) {
+        await db
+          .prepare(`alter table resource_shapes add column execution_json text`)
+          .run();
+      }
+    },
+  },
+  {
+    version: 34,
+    name: "d1_connection_secret_partition_backfill",
+    checksumSource: `
+historical Connection rows receive their explicit encryption partition once
+provider-family inference is confined to this migration and absent current partitions fail closed
+secret blob kind metadata is normalized to the explicit partition token
+`,
+    async apply(db) {
+      if (!(await d1TableExists(db, "connections"))) return;
+      await db
+        .prepare(
+          `update connections
+           set connection_json = json_set(
+             connection_json,
+             '$.secretPartition',
+             case
+               when json_extract(connection_json, '$.kind') in ('source_git_https_token', 'source_git_ssh_key')
+                 then 'source:git'
+               when lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) = 'cloudflare'
+                 or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/cloudflare/cloudflare'
+                 then 'cloudflare'
+               when lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) = 'aws'
+                 or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/hashicorp/aws'
+                 then 'aws'
+               when lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) in ('google', 'gcp')
+                 or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/hashicorp/google'
+                 or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/hashicorp/google-beta'
+                 then 'gcp'
+               when lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) in ('kubernetes', 'helm')
+                 or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/hashicorp/kubernetes'
+                 or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/hashicorp/helm'
+                 then 'k8s'
+               else 'local-adapters'
+             end
+           )
+           where nullif(json_extract(connection_json, '$.secretPartition'), '') is null`,
+        )
+        .run();
+      if (!(await d1TableExists(db, "secret_blobs"))) return;
+      await db
+        .prepare(
+          `update secret_blobs
+           set kind = (
+                 select json_extract(connection_json, '$.secretPartition')
+                 from connections
+                 where connections.id = secret_blobs.connection_id
+               ),
+               blob_json = json_set(
+                 blob_json,
+                 '$.kind',
+                 (
+                   select json_extract(connection_json, '$.secretPartition')
+                   from connections
+                   where connections.id = secret_blobs.connection_id
+                 )
+               )
+           where exists (
+             select 1 from connections
+             where connections.id = secret_blobs.connection_id
+               and nullif(json_extract(connection_json, '$.secretPartition'), '') is not null
+           )`,
+        )
+        .run();
+    },
+  },
+  {
+    version: 35,
+    name: "d1_resource_legacy_state_adoption_add",
+    checksumSource: `
+resource_shapes.state_adoption_json stores only an operator-confirmed one-shot descriptor
+candidate reporting is read-only and Resource execution never scans for a legacy Capsule
+`,
+    async apply(db) {
+      if (!(await d1TableExists(db, "resource_shapes"))) return;
+      const columns = await d1ColumnNames(db, "resource_shapes");
+      if (!columns.has("state_adoption_json")) {
+        await db
+          .prepare(
+            `alter table resource_shapes add column state_adoption_json text`,
+          )
+          .run();
+      }
+    },
+  },
+  {
+    version: 36,
+    name: "d1_install_config_trust_level_retire",
+    checksumSource: `
+install_configs no longer stores trust_level
+InstallConfig record_json no longer carries trustLevel
+Store discovery requires an explicit store.source and trust labels never grant execution authority
+`,
+    async apply(db) {
+      await rebuildD1InstallConfigsWithoutTrustLevel(db);
+    },
+  },
+  {
+    version: 37,
+    name: "d1_oss_usage_ledger_clean_cut",
+    checksumSource: `
+usage_events uses canonical workspace_id and capsule_id columns
+usage_events.usd_micros is required and no commercial balance fields remain
+OSS commercial account plan subscription balance reservation and recharge tables are retired
+`,
+    async apply(db) {
+      await rebuildD1UsageEventsCanonical(db);
+      for (const table of [
+        "billing_accounts",
+        "plans",
+        "space_subscriptions",
+        "credit_balances",
+        "billing_auto_recharge_attempts",
+        "credit_reservations",
+      ]) {
+        await db.prepare(`drop table if exists ${table}`).run();
+      }
+    },
+  },
+  {
+    version: 38,
+    name: "d1_install_config_variable_defaults_normalize",
+    checksumSource: `
+pre-v1 InstallConfig variablePresentation string defaults are normalized once
+reserved service-name strings become explicit Capsule-derived default descriptors
+all other strings become literal descriptors and current reads perform no compatibility interpretation
+`,
+    async apply(db) {
+      await normalizeD1InstallConfigVariableDefaults(db);
+    },
+  },
+  {
+    version: 39,
+    name: "d1_usage_event_rating_status",
+    checksumSource: `
+usage_events.rating_status is explicit rated or unrated evidence
+pre-migration amounts had no explicit host rating authority and are reset to zero/unrated
+`,
+    async apply(db) {
+      await rebuildD1UsageEventsWithRatingStatus(db);
+    },
+  },
+  {
+    version: 40,
+    name: "d1_resource_list_keyset_indexes",
+    checksumSource: `
+Resource and TargetPool public lists use bounded keyset pagination
+Space plus created_at plus id indexes serve both first and cursor pages
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `create index if not exists resource_shapes_space_created_id_idx
+           on resource_shapes (space_id, created_at, id)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists target_pools_space_created_id_idx
+           on target_pools (space_id, created_at, id)`,
+        )
+        .run();
+    },
+  },
+  {
+    version: 41,
+    name: "d1_resource_event_target_keyset_index",
+    checksumSource: `
+Resource event reads project one target from the shared Activity ledger
+Space plus target_type plus target_id plus created_at plus id serves newest-first keyset pages
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `create index if not exists audit_events_space_target_created_id_idx
+           on audit_events (space_id, target_type, target_id, created_at, id)`,
+        )
+        .run();
+    },
+  },
+  {
+    version: 42,
+    name: "d1_resource_observation_schedule_lease",
+    checksumSource: `
+Scheduled Resource observation uses a durable internal lease and last-attempt timestamp
+Ready current-generation candidates are ordered globally without creating another Resource ledger
+Abandoned claims expire and exact lease tokens fence completion
+`,
+    async apply(db) {
+      if (!(await d1TableExists(db, "resource_shapes"))) return;
+      const columns = await d1ColumnNames(db, "resource_shapes");
+      if (!columns.has("observation_lease_id")) {
+        await db
+          .prepare(
+            `alter table resource_shapes add column observation_lease_id text`,
+          )
+          .run();
+      }
+      if (!columns.has("observation_claimed_at")) {
+        await db
+          .prepare(
+            `alter table resource_shapes add column observation_claimed_at text`,
+          )
+          .run();
+      }
+      if (!columns.has("last_observation_attempt_at")) {
+        await db
+          .prepare(
+            `alter table resource_shapes add column last_observation_attempt_at text`,
+          )
+          .run();
+      }
+      await db
+        .prepare(
+          `create index if not exists resource_shapes_observation_due_idx
+           on resource_shapes (
+             phase, last_observation_attempt_at, observation_claimed_at, id
+           )`,
+        )
+        .run();
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
+
+async function normalizeD1InstallConfigVariableDefaults(
+  db: D1Database,
+): Promise<void> {
+  if (!(await d1TableExists(db, "install_configs"))) return;
+  const rows = await db
+    .prepare(`select id, record_json from install_configs`)
+    .all<{ readonly id: string; readonly record_json: string }>();
+  for (const row of rows.results ?? []) {
+    let record: Record<string, unknown>;
+    try {
+      record = JSON.parse(row.record_json) as Record<string, unknown>;
+    } catch {
+      throw new Error(`InstallConfig ${row.id} contains invalid JSON`);
+    }
+    const presentation = record.variablePresentation;
+    if (!Array.isArray(presentation)) continue;
+    let changed = false;
+    const normalized = presentation.map((entry) => {
+      if (
+        !entry ||
+        typeof entry !== "object" ||
+        Array.isArray(entry) ||
+        typeof (entry as { readonly defaultValue?: unknown }).defaultValue !==
+          "string"
+      ) {
+        return entry;
+      }
+      changed = true;
+      const value = (entry as { readonly defaultValue: string }).defaultValue;
+      const defaultValue =
+        value === "service-name"
+          ? { source: "capsule_name" }
+          : value === "service-name-with-workspace" ||
+              value === "service-name-with-space"
+            ? { source: "workspace_scoped_capsule_name" }
+            : { source: "literal", value };
+      return { ...entry, defaultValue };
+    });
+    if (!changed) continue;
+    await db
+      .prepare(`update install_configs set record_json = ? where id = ?`)
+      .bind(
+        JSON.stringify({ ...record, variablePresentation: normalized }),
+        row.id,
+      )
+      .run();
+  }
+}
 
 /**
  * P4 helper: rename a D1 column only when the legacy column exists and the
@@ -5826,6 +5398,8 @@ const D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS = [
       on runs (source_id)`,
   `create index if not exists runs_installation_idx
       on runs (installation_id)`,
+  `create index if not exists runs_installation_created_at_idx
+      on runs (installation_id, created_at)`,
   `create index if not exists runs_type_idx
       on runs (type)`,
   `create index if not exists runs_created_at_idx
@@ -5862,6 +5436,8 @@ const D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS = [
       on run_groups (space_id)`,
   `create index if not exists audit_events_space_idx
       on audit_events (space_id)`,
+  `create index if not exists audit_events_space_target_created_id_idx
+      on audit_events (space_id, target_type, target_id, created_at, id)`,
   `create index if not exists credential_mint_events_run_idx
       on credential_mint_events (run_id)`,
   `create index if not exists credential_mint_events_space_idx
@@ -5874,26 +5450,12 @@ const D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS = [
       on security_findings (run_id)`,
   `create index if not exists security_findings_severity_idx
       on security_findings (severity)`,
-  `create index if not exists billing_accounts_owner_idx
-      on billing_accounts (owner_type, owner_id)`,
-  `create index if not exists billing_accounts_status_idx
-      on billing_accounts (status)`,
-  `create index if not exists space_subscriptions_space_idx
-      on space_subscriptions (space_id)`,
-  `create index if not exists space_subscriptions_billing_account_idx
-      on space_subscriptions (billing_account_id)`,
-  `create index if not exists usage_events_space_idx
-      on usage_events (space_id)`,
+  `create index if not exists usage_events_workspace_idx
+      on usage_events (workspace_id)`,
   `create index if not exists usage_events_run_idx
       on usage_events (run_id)`,
   `create unique index if not exists usage_events_idempotency_key_unique
       on usage_events (idempotency_key)`,
-  `create index if not exists credit_reservations_space_idx
-      on credit_reservations (space_id)`,
-  `create index if not exists credit_reservations_run_idx
-      on credit_reservations (run_id)`,
-  `create index if not exists credit_reservations_status_idx
-      on credit_reservations (status)`,
   `create index if not exists backups_space_idx
       on backups (space_id)`,
   `create index if not exists backups_installation_idx
@@ -5911,6 +5473,9 @@ async function ensureD1OpenTofuCanonicalIndexes(db: D1Database): Promise<void> {
     // checksumSource — are unchanged, so already-migrated ledgers stay stable.)
     const tableName = parseD1CreateIndexTable(statement);
     if (!(await d1TableExists(db, tableName))) continue;
+    const tableColumns = await d1ColumnNames(db, tableName);
+    const indexColumns = parseD1CreateIndexColumns(statement);
+    if (indexColumns.some((column) => !tableColumns.has(column))) continue;
     const indexName = parseD1CreateIndexName(statement);
     await db.prepare(`drop index if exists ${indexName}`).run();
     await db.prepare(statement).run();
@@ -5933,6 +5498,14 @@ function parseD1CreateIndexTable(statement: string): string {
     throw new Error(`Unable to parse D1 index target table from: ${statement}`);
   }
   return match[1];
+}
+
+function parseD1CreateIndexColumns(statement: string): readonly string[] {
+  const match = /\bon\s+[a-z_][a-z0-9_]*\s*\(([^)]+)\)/i.exec(statement);
+  if (!match) {
+    throw new Error(`Unable to parse D1 index columns from: ${statement}`);
+  }
+  return match[1].split(",").map((column) => column.trim());
 }
 
 async function sha256Digest(value: string): Promise<string> {
@@ -6237,6 +5810,430 @@ async function d1ColumnInfo(
   return result.results ?? [];
 }
 
+async function rebuildD1UsageEventsCanonical(db: D1Database): Promise<void> {
+  const columns = await d1ColumnNames(db, "usage_events");
+  if (columns.size === 0) return;
+  if (
+    columns.has("workspace_id") &&
+    columns.has("capsule_id") &&
+    !columns.has("space_id") &&
+    !columns.has("installation_id")
+  ) {
+    return;
+  }
+  await db.prepare(`drop table if exists usage_events__current`).run();
+  await db
+    .prepare(
+      `create table usage_events__current (
+        id text primary key,
+        workspace_id text not null,
+        capsule_id text,
+        run_id text,
+        meter_id text,
+        resource_family text,
+        resource_id text,
+        operation text,
+        resource_metadata_json text,
+        kind text not null,
+        quantity real not null,
+        usd_micros integer not null,
+        source text not null,
+        idempotency_key text not null,
+        created_at text not null
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into usage_events__current (
+        id, workspace_id, capsule_id, run_id, meter_id, resource_family,
+        resource_id, operation, resource_metadata_json, kind, quantity,
+        usd_micros, source, idempotency_key, created_at
+      )
+      select id, space_id, installation_id, run_id, meter_id, resource_family,
+             resource_id, operation, resource_metadata_json, kind, quantity,
+             usd_micros, source, idempotency_key, created_at
+      from usage_events
+      where usd_micros is not null`,
+    )
+    .run();
+  await db.prepare(`drop table usage_events`).run();
+  await db
+    .prepare(`alter table usage_events__current rename to usage_events`)
+    .run();
+  await db
+    .prepare(
+      `create index if not exists usage_events_workspace_idx
+       on usage_events (workspace_id)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists usage_events_run_idx
+       on usage_events (run_id)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create unique index if not exists usage_events_idempotency_key_unique
+       on usage_events (idempotency_key)`,
+    )
+    .run();
+}
+
+async function rebuildD1UsageEventsWithRatingStatus(
+  db: D1Database,
+): Promise<void> {
+  if (!(await d1TableExists(db, "usage_events"))) return;
+  await db.prepare(`drop table if exists usage_events__rated`).run();
+  await db
+    .prepare(
+      `create table usage_events__rated (
+        id text primary key,
+        workspace_id text not null,
+        capsule_id text,
+        run_id text,
+        meter_id text,
+        resource_family text,
+        resource_id text,
+        operation text,
+        resource_metadata_json text,
+        kind text not null,
+        quantity real not null,
+        usd_micros integer not null,
+        rating_status text not null
+          check (
+            rating_status in ('rated', 'unrated')
+            and (rating_status = 'rated' or usd_micros = 0)
+          ),
+        source text not null,
+        idempotency_key text not null,
+        created_at text not null
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into usage_events__rated (
+        id, workspace_id, capsule_id, run_id, meter_id, resource_family,
+        resource_id, operation, resource_metadata_json, kind, quantity,
+        usd_micros, rating_status, source, idempotency_key, created_at
+      )
+      select id, workspace_id, capsule_id, run_id, meter_id, resource_family,
+             resource_id, operation, resource_metadata_json, kind, quantity,
+             0, 'unrated', source, idempotency_key, created_at
+      from usage_events`,
+    )
+    .run();
+  await db.prepare(`drop table usage_events`).run();
+  await db
+    .prepare(`alter table usage_events__rated rename to usage_events`)
+    .run();
+  await db
+    .prepare(
+      `create index if not exists usage_events_workspace_idx
+       on usage_events (workspace_id)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists usage_events_run_idx
+       on usage_events (run_id)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create unique index if not exists usage_events_idempotency_key_unique
+       on usage_events (idempotency_key)`,
+    )
+    .run();
+}
+
+async function rebuildD1InstallConfigsWithoutInstallType(
+  db: D1Database,
+): Promise<void> {
+  const columns = await d1ColumnNames(db, "install_configs");
+  if (!columns.has("install_type")) return;
+  await db.prepare(`drop table if exists install_configs__current`).run();
+  await db
+    .prepare(
+      `create table install_configs__current (
+        id text primary key,
+        space_id text,
+        trust_level text not null,
+        record_json text not null,
+        created_at text not null,
+        updated_at text not null
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into install_configs__current
+        (id, space_id, trust_level, record_json, created_at, updated_at)
+       select id,
+              space_id,
+              trust_level,
+              json_remove(record_json, '$.installType', '$.sourceKind', '$.templateBinding'),
+              created_at,
+              updated_at
+       from install_configs`,
+    )
+    .run();
+  await db.prepare(`drop table install_configs`).run();
+  await db
+    .prepare(`alter table install_configs__current rename to install_configs`)
+    .run();
+  await db
+    .prepare(
+      `create index if not exists install_configs_space_idx
+       on install_configs (space_id)`,
+    )
+    .run();
+}
+
+async function rebuildD1InstallConfigsWithoutTrustLevel(
+  db: D1Database,
+): Promise<void> {
+  const columns = await d1ColumnNames(db, "install_configs");
+  if (!columns.has("trust_level")) return;
+  await db.prepare(`drop table if exists install_configs__current`).run();
+  await db
+    .prepare(
+      `create table install_configs__current (
+        id text primary key,
+        space_id text,
+        record_json text not null,
+        created_at text not null,
+        updated_at text not null
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into install_configs__current
+        (id, space_id, record_json, created_at, updated_at)
+       select id,
+              space_id,
+              json_remove(record_json, '$.trustLevel'),
+              created_at,
+              updated_at
+       from install_configs`,
+    )
+    .run();
+  await db.prepare(`drop table install_configs`).run();
+  await db
+    .prepare(`alter table install_configs__current rename to install_configs`)
+    .run();
+  await db
+    .prepare(
+      `create index if not exists install_configs_space_idx
+       on install_configs (space_id)`,
+    )
+    .run();
+}
+
+async function rebuildD1CapsulesWithoutInstallType(
+  db: D1Database,
+): Promise<void> {
+  const columns = await d1ColumnNames(db, "capsules");
+  if (!columns.has("install_type")) return;
+  await db.prepare(`drop table if exists capsules__current`).run();
+  await db
+    .prepare(
+      `create table capsules__current (
+        id text primary key,
+        space_id text not null,
+        project_id text,
+        name text not null,
+        slug text not null,
+        source_id text,
+        install_config_id text not null,
+        environment text not null,
+        current_state_version_id text,
+        current_state_generation integer not null default 0,
+        current_output_snapshot_id text,
+        status text not null,
+        record_json text not null,
+        created_at text not null,
+        updated_at text not null
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into capsules__current
+        (id, space_id, project_id, name, slug, source_id, install_config_id,
+         environment, current_state_version_id, current_state_generation,
+         current_output_snapshot_id, status, record_json, created_at, updated_at)
+       select id,
+              space_id,
+              project_id,
+              name,
+              slug,
+              source_id,
+              install_config_id,
+              environment,
+              current_state_version_id,
+              current_state_generation,
+              current_output_snapshot_id,
+              status,
+              json_remove(record_json, '$.installType'),
+              created_at,
+              updated_at
+       from capsules`,
+    )
+    .run();
+  await db.prepare(`drop table capsules`).run();
+  await db.prepare(`alter table capsules__current rename to capsules`).run();
+  await db
+    .prepare(
+      `create unique index if not exists capsules_space_name_environment_active_unique
+       on capsules (space_id, name, environment)
+       where status != 'destroyed'`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists capsules_space_idx on capsules (space_id)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists capsules_project_idx on capsules (project_id)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists capsules_current_state_version_idx
+       on capsules (current_state_version_id)`,
+    )
+    .run();
+}
+
+async function rebuildD1CapsulesWithRequiredProject(
+  db: D1Database,
+): Promise<void> {
+  if (!(await d1TableExists(db, "capsules"))) return;
+  const info = await d1ColumnInfo(db, "capsules");
+  const projectId = info.find((column) => column.name === "project_id");
+  if (!projectId) {
+    throw new Error(
+      "cannot enforce Capsule Project boundary: project_id is absent",
+    );
+  }
+
+  await db
+    .prepare(
+      `update capsules
+       set project_id = 'prj_default_' || space_id
+       where project_id is null
+         and exists (
+           select 1 from projects p
+           where p.id = 'prj_default_' || capsules.space_id
+         )`,
+    )
+    .run();
+  const unowned = await db
+    .prepare(`select count(*) as count from capsules where project_id is null`)
+    .first<{ count: number | string }>();
+  if (Number(unowned?.count ?? 0) > 0) {
+    throw new Error(
+      "cannot enforce Capsule Project boundary: a Capsule has no Project",
+    );
+  }
+
+  if (projectId.notnull === 1) {
+    await db
+      .prepare(
+        `drop index if exists capsules_space_name_environment_active_unique`,
+      )
+      .run();
+    await db
+      .prepare(
+        `create unique index if not exists capsules_project_name_environment_active_unique
+         on capsules (project_id, name, environment)
+         where status != 'destroyed'`,
+      )
+      .run();
+    return;
+  }
+
+  await db.prepare(`drop table if exists capsules__project_current`).run();
+  await db
+    .prepare(
+      `create table capsules__project_current (
+        id text primary key,
+        space_id text not null,
+        project_id text not null,
+        name text not null,
+        slug text not null,
+        source_id text,
+        install_config_id text not null,
+        environment text not null,
+        current_state_version_id text,
+        current_state_generation integer not null default 0,
+        current_output_snapshot_id text,
+        status text not null,
+        record_json text not null,
+        created_at text not null,
+        updated_at text not null
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into capsules__project_current
+        (id, space_id, project_id, name, slug, source_id, install_config_id,
+         environment, current_state_version_id, current_state_generation,
+         current_output_snapshot_id, status, record_json, created_at, updated_at)
+       select id,
+              space_id,
+              project_id,
+              name,
+              slug,
+              source_id,
+              install_config_id,
+              environment,
+              current_state_version_id,
+              current_state_generation,
+              current_output_snapshot_id,
+              status,
+              json_set(record_json, '$.projectId', project_id),
+              created_at,
+              updated_at
+       from capsules`,
+    )
+    .run();
+  await db.prepare(`drop table capsules`).run();
+  await db
+    .prepare(`alter table capsules__project_current rename to capsules`)
+    .run();
+  await db
+    .prepare(
+      `create unique index if not exists capsules_project_name_environment_active_unique
+       on capsules (project_id, name, environment)
+       where status != 'destroyed'`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists capsules_space_idx on capsules (space_id)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists capsules_project_idx on capsules (project_id)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists capsules_current_state_version_idx
+       on capsules (current_state_version_id)`,
+    )
+    .run();
+}
+
 async function rebuildConnectionsTableIfNeeded(db: D1Database): Promise<void> {
   const info = await d1ColumnInfo(db, "connections");
   const spaceId = info.find((row) => row.name === "space_id");
@@ -6408,7 +6405,7 @@ async function rebuildInstallationsTableIfNeeded(
   const sourceId = info.find((row) => row.name === "source_id");
   if (!sourceId || sourceId.notnull !== 1) return;
   const columns = await d1ColumnNames(db, "installations");
-  const hasCurrentOutputSnapshotId = columns.has("current_output_snapshot_id");
+  const hasCurrentOutputId = columns.has("current_output_snapshot_id");
   await db
     .prepare(`drop table if exists installations__takosumi_migrate`)
     .run();
@@ -6447,7 +6444,7 @@ async function rebuildInstallationsTableIfNeeded(
              environment,
              current_deployment_id,
              current_state_generation,
-             ${hasCurrentOutputSnapshotId ? "current_output_snapshot_id" : "null"},
+             ${hasCurrentOutputId ? "current_output_snapshot_id" : "null"},
              status,
              record_json,
              created_at,
@@ -6491,12 +6488,9 @@ async function rebuildInstallationsTableIfNeeded(
  * the source id stored in `installation_id` (and `run_json.sourceId`). The D1
  * column-add path (`ensureD1Column` / `rebuildRunsTableIfNeeded`) only
  * materializes the `source_id` column; it never normalizes those legacy rows.
- * Without this back-fill the only reader of historical rows would be the legacy
- * dual-read branch in {@link CloudflareD1OpenTofuDeploymentStore.listSourceSyncRuns}
- * (`installation_id == sourceId`), so dropping that branch later would silently
- * drop history. This normalizes the rows so `source_id` is the canonical key,
- * exactly like Postgres v42; the dual-read branch is intentionally kept for
- * backward compatibility until a separate change verifies a live DB.
+ * This normalizes every historical row before current readers use the canonical
+ * `source_id` key, exactly like Postgres v42. Current read paths have no retired
+ * `installation_id == sourceId` fallback.
  *
  * Idempotent: the `source_id is null` guard means re-running is a no-op once a
  * row has been normalized. Mirrors the Postgres
@@ -6526,8 +6520,8 @@ function publicHostReservationFromD1Row(
     hostname: String(row.hostname),
     ownerUserId: String(row.owner_user_id ?? row.workspace_id),
     workspaceId: String(row.workspace_id),
-    installationId: String(row.installation_id),
-    installationName: String(row.installation_name),
+    capsuleId: String(row.installation_id),
+    capsuleName: String(row.installation_name),
     allocationKind: row.allocation_kind === "vanity" ? "vanity" : "scoped",
     status:
       row.status === "released" || row.status === "reserved"

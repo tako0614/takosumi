@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@takosjp/takosumi-accounts-service": "workspace:*",
-    "@takosjp/takosumi-platform-services": "workspace:*",
     "hono": "^4.12.9",
     "pg": "^8.11.0"
   }

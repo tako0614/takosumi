@@ -1,8 +1,8 @@
 /**
  * Drift sweep unit tests (Core Specification §28 `scheduled/drift.ts`; §19
  * drift_check; Phase 8). The sweep is best-effort + bounded and takes a narrow
- * operations stub, so these assert: a bounded fan-out (one space_drift_check
- * RunGroup per Space with ACTIVE Installations up to the limit), a failing Space
+ * operations stub, so these assert: a bounded fan-out (one workspace_drift_check
+ * RunGroup per Workspace with active Capsules up to the limit), a failing Workspace
  * does not abort the sweep, and a non-positive limit is a no-op.
  *
  * The flag-off no-op (TAKOSUMI_DRIFT_CHECK_ENABLED unset) is enforced at the
@@ -12,32 +12,35 @@
  */
 
 import { expect, test } from "bun:test";
-import { driftSweep, type DriftSweepOperations } from "../../../../worker/src/scheduled/drift.ts";
+import {
+  driftSweep,
+  type DriftSweepOperations,
+} from "../../../../worker/src/scheduled/drift.ts";
 
 function makeOps(
   overrides: {
-    active?: readonly { id: string; spaceId: string }[];
+    active?: readonly { id: string; workspaceId: string }[];
     failOn?: ReadonlySet<string>;
   } = {},
 ): {
   ops: DriftSweepOperations;
   listCalls: number[];
-  driftCalls: { spaceId: string; limit?: number }[];
+  driftCalls: { workspaceId: string; limit?: number }[];
 } {
   const listCalls: number[] = [];
-  const driftCalls: { spaceId: string; limit?: number }[] = [];
+  const driftCalls: { workspaceId: string; limit?: number }[] = [];
   const ops: DriftSweepOperations = {
-    listActiveInstallations: (limit) => {
+    listActiveCapsules: (limit) => {
       listCalls.push(limit);
       const active = overrides.active ?? [
-        { id: "inst_a", workspaceId: "space_a" },
-        { id: "inst_b", workspaceId: "space_a" },
+        { id: "cap_a", workspaceId: "ws_a" },
+        { id: "cap_b", workspaceId: "ws_a" },
       ];
       return Promise.resolve(active.slice(0, limit));
     },
-    createSpaceDriftCheck: (spaceId, options) => {
-      driftCalls.push({ spaceId, limit: options?.limit });
-      if (overrides.failOn?.has(spaceId)) {
+    createWorkspaceDriftCheck: (workspaceId, options) => {
+      driftCalls.push({ workspaceId, limit: options?.limit });
+      if (overrides.failOn?.has(workspaceId)) {
         return Promise.reject(new Error("nope"));
       }
       return Promise.resolve({});
@@ -46,18 +49,18 @@ function makeOps(
   return { ops, listCalls, driftCalls };
 }
 
-test("drift sweep creates one RunGroup per space, bounded by installation limit", async () => {
+test("drift sweep creates one RunGroup per Workspace, bounded by Capsule limit", async () => {
   const { ops, listCalls, driftCalls } = makeOps({
     active: [
-      { id: "inst_a", workspaceId: "space_a" },
-      { id: "inst_b", workspaceId: "space_a" },
-      { id: "inst_c", workspaceId: "space_b" },
+      { id: "cap_a", workspaceId: "ws_a" },
+      { id: "cap_b", workspaceId: "ws_a" },
+      { id: "cap_c", workspaceId: "ws_b" },
     ],
   });
   const result = await driftSweep(ops, { limit: 2 });
   // The limit is pushed down to the listing so the fan-out is bounded.
   expect(listCalls).toEqual([2]);
-  expect(driftCalls).toEqual([{ spaceId: "space_a", limit: 2 }]);
+  expect(driftCalls).toEqual([{ workspaceId: "ws_a", limit: 2 }]);
   expect(result).toEqual({ scanned: 2, checked: 2 });
 });
 
@@ -67,19 +70,19 @@ test("drift sweep uses the default limit when none is given", async () => {
   expect(listCalls).toEqual([20]);
 });
 
-test("drift sweep continues past a failing installation", async () => {
+test("drift sweep continues past a failing Workspace", async () => {
   const { ops, driftCalls } = makeOps({
     active: [
-      { id: "inst_a", workspaceId: "space_a" },
-      { id: "inst_b", workspaceId: "space_b" },
+      { id: "cap_a", workspaceId: "ws_a" },
+      { id: "cap_b", workspaceId: "ws_b" },
     ],
-    failOn: new Set(["space_a"]),
+    failOn: new Set(["ws_a"]),
   });
   const result = await driftSweep(ops, { limit: 20 });
-  // Both Spaces are attempted; only the non-failing Space is counted as checked.
+  // Both Workspaces are attempted; only the non-failing one is counted.
   expect(driftCalls).toEqual([
-    { spaceId: "space_a", limit: 1 },
-    { spaceId: "space_b", limit: 1 },
+    { workspaceId: "ws_a", limit: 1 },
+    { workspaceId: "ws_b", limit: 1 },
   ]);
   expect(result).toEqual({ scanned: 2, checked: 1 });
 });

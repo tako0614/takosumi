@@ -6,10 +6,7 @@
 // service-local imports used by private runtime and implementation seams.
 //
 // Scope: the re-export list is an explicit allowlist of reference helpers:
-// JSON value scalars, condition / reason enums, internal API headers, runtime
-// agent contracts. This file deliberately avoids re-exporting component /
-// descriptor / binding surfaces or reference materializer APIs as a public
-// umbrella.
+// JSON value scalars, condition / reason enums, and internal API headers.
 //
 // New consumers must import directly from `takosumi-contract` or
 // `@takosumi/internal/deploy-control-api`.
@@ -21,7 +18,6 @@ export type {
   ConditionStatus,
   Digest,
   DomainEvent,
-  GrantEffect,
   GroupCreateRequest,
   GroupSummary,
   GroupSummaryStatus,
@@ -31,34 +27,13 @@ export type {
   JsonPrimitive,
   JsonValue,
   PrincipalKind,
-  ServiceEndpoint,
-  ServiceEndpointProtocol,
-  ServiceEndpointTrust,
-  ReferenceServiceGrant,
   SpaceCreateRequest,
   SpaceSummary,
   SpaceUpdateRequest,
-  TrustLevel,
 } from "./types.ts";
-
-export {
-  assertObjectAddress,
-  encodeObjectAddressName,
-  isObjectAddress,
-  joinObjectAddressSegments,
-  objectAddress,
-  objectAddressSegment,
-  type ObjectAddress,
-} from "./object-address.ts";
 export {
   CORE_CONDITION_REASONS,
   isCoreConditionReason,
   type CoreConditionReason,
 } from "./condition-reasons.ts";
-export {
-  type CoreBindingResolutionInput,
-  type CoreBindingValueResolution,
-} from "./binding-resolution.ts";
 export * from "./internal-api.ts";
-export * from "./runtime-agent.ts";
-export * from "./runtime-agent-lifecycle.ts";

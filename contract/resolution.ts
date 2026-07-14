@@ -6,25 +6,22 @@
 // ResolutionLock (§3.5, §10): once a resource is created, its implementation is
 // pinned and never silently re-targeted — migration is an explicit operation.
 
-import type { IsoTimestamp, JsonObject } from "./types.ts";
+import type { IsoTimestamp } from "./types.ts";
 import type { ResourceObject, ResourcePortability } from "./resource-shape.ts";
 import type {
   SpacePolicy,
-  TargetCapabilityLevel,
+  TargetImplementationDescriptor,
   TargetPool,
-  TargetType,
+  TargetPoolEntry,
 } from "./target.ts";
 
-/**
- * How well a Target satisfies an interface (`docs/internal/final-plan.md` §8):
- * `native` (provided directly), `shim` (adapter/runtime shim), `emulated`
- * (Takosumi substitutes), `unsupported`.
- */
-export type CapabilityLevel = TargetCapabilityLevel;
+/** Capability level is declared on the selected implementation descriptor. */
+export type CapabilityLevel =
+  TargetImplementationDescriptor["interfaces"][string];
 
 /** A native resource the implementation will create on the Target. */
 export interface NativeResourceRef {
-  /** e.g. `cloudflare.r2_bucket`, `aws.s3_bucket`. */
+  /** Opaque adapter-owned native resource type token. */
   readonly type: string;
   readonly id: string;
 }
@@ -34,20 +31,6 @@ export interface InterfaceCapabilityScore {
   readonly interface: string;
   readonly level: CapabilityLevel;
 }
-
-/**
- * Capability of one implementation candidate. The Resolver scores a resource's
- * required interfaces against this matrix to pick an implementation/Target.
- */
-export interface ImplementationCapability {
-  /** e.g. `cloudflare_r2`, `aws_s3`. */
-  readonly implementation: string;
-  readonly targetType: TargetType;
-  readonly shape: string;
-  readonly interfaces: Readonly<Record<string, CapabilityLevel>>;
-}
-
-export type TargetCapabilityMatrix = readonly ImplementationCapability[];
 
 /** Rough cost estimate attached to a resolution. */
 export interface ResourceCostEstimate {
@@ -61,7 +44,19 @@ export interface ResourceCostEstimate {
 export interface ResolutionLock {
   readonly resourceId: string;
   readonly selectedImplementation: string;
+  /** TargetPool whose concrete entry was selected. Optional only for legacy locks. */
+  readonly targetPool?: string;
   readonly target: string;
+  /**
+   * Immutable non-secret execution snapshot. Re-apply/delete use this value,
+   * never a mutable TargetPool lookup, so credentials references and adapter
+   * dispatch cannot silently drift after the first successful resolution.
+   */
+  readonly targetSnapshot?: TargetPoolEntry;
+  /** Complete selected descriptor snapshot. Required for every new lock. */
+  readonly implementationSnapshot?: TargetImplementationDescriptor;
+  /** Canonical v1 identity of the selected target + implementation tuple. */
+  readonly implementationFingerprint?: string;
   readonly locked: boolean;
   readonly reason: readonly string[];
   readonly portability?: ResourcePortability;
@@ -77,14 +72,12 @@ export interface ResolverInput {
   readonly spacePolicy?: SpacePolicy;
   readonly targetPool: TargetPool;
   readonly existingLock?: ResolutionLock;
-  readonly targetCapabilities?: TargetCapabilityMatrix;
 }
 
 /** Resolver outputs, verbatim from `docs/internal/final-plan.md` §8. */
 export interface ResolverOutput {
   readonly selectedImplementation: string;
-  readonly selectedImplementationPlugin?: string;
-  readonly selectedImplementationOptions?: JsonObject;
+  readonly selectedImplementationDescriptor: TargetImplementationDescriptor;
   readonly selectedTarget: string;
   readonly nativeResourcePlan: readonly NativeResourceRef[];
   readonly capabilityScores: readonly InterfaceCapabilityScore[];

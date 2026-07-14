@@ -1,5 +1,5 @@
-/* Rebuilt Installation-centric views (Installation list / detail / run summary / new flow /
- * space settings). Token-driven (--tg-*) like the rest of the design system.
+/* Rebuilt Capsule-centric views (Capsule list / detail / run summary / new flow /
+ * Workspace settings). Token-driven (--tg-*) like the rest of the design system.
  * Successor of the wave-* per-cluster files, which disappear with the legacy
  * views they styled. */
 
@@ -69,7 +69,7 @@
   gap: var(--tg-s-4);
 }
 
-/* ===== public Takosumi Cloud policy pages ===== */
+/* ===== public operator policy pages ===== */
 .legal-page {
   min-height: 100vh; /* fallback for browsers without dvh */
   min-height: 100dvh;
@@ -222,242 +222,12 @@
   }
 }
 
-/* ===== Takosumi Cloud resources ===== */
-.av-cloud-stack {
-  display: grid;
-  gap: var(--tg-s-4);
-}
-/* Manageable resource lists on the Cloud screen (KV / R2 / D1 / edge apps). */
-.av-cloud-res-groups {
-  display: grid;
-  gap: var(--tg-s-4);
-}
-.av-cloud-res-group {
-  display: grid;
-  gap: var(--tg-s-2);
-}
-.av-cloud-res-group-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--tg-s-2);
-  font-weight: 700;
-}
-.av-cloud-res-group-title {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  gap: var(--tg-s-2);
-}
-.av-cloud-res-more {
-  display: inline-flex;
-  width: fit-content;
-  align-items: center;
-  justify-content: center;
-  min-height: 34px;
-  padding: 0 var(--tg-s-3);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-subtle);
-  color: var(--tg-fg-muted);
-  font: inherit;
-  font-size: var(--tg-fs-sm);
-  font-weight: 700;
-  cursor: pointer;
-}
-.av-cloud-res-more:hover {
-  color: var(--tg-fg);
-  border-color: var(--tg-line-strong);
-}
-.av-cloud-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--tg-s-4);
-}
-.av-cloud-card {
-  min-width: 0;
-}
-.av-cloud-card-compact {
-  grid-column: 1 / -1;
-}
-.av-cloud-title {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--tg-s-2);
-  min-width: 0;
-}
-.av-cloud-title-icon {
-  display: inline-flex;
-  color: var(--tg-accent);
-}
-.av-cloud-copy-row {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) max-content;
-  align-items: center;
-  gap: var(--tg-s-2);
-  margin: var(--tg-s-3) 0 var(--tg-s-4);
-}
-.av-cloud-copy-label {
-  color: var(--tg-fg-subtle);
-  font-size: var(--tg-fs-sm);
-  font-weight: 600;
-}
-.av-cloud-copy-value {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.av-cloud-chip-block {
-  display: grid;
-  gap: var(--tg-s-2);
-}
-.av-cloud-chip-title {
-  margin: 0;
-  color: var(--tg-fg-subtle);
-  font-size: var(--tg-fs-sm);
-  font-weight: 700;
-}
-.av-cloud-chip-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--tg-s-2);
-}
-.av-cloud-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  max-width: 100%;
-  padding: 3px 9px;
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-subtle);
-  color: var(--tg-fg);
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-xs);
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-.av-cloud-detail {
-  margin-top: var(--tg-s-3);
-}
-.av-cloud-detail summary {
-  color: var(--tg-fg-subtle);
-  font-size: var(--tg-fs-sm);
-  font-weight: 700;
-}
-.av-cloud-key-create {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: end;
-  gap: var(--tg-s-3);
-  margin: var(--tg-s-3) 0 var(--tg-s-2);
-}
-.av-cloud-token-list,
-.av-cloud-usage-list {
-  display: grid;
-  gap: var(--tg-s-2);
-}
-.av-cloud-token-row,
-.av-cloud-usage-row {
-  display: grid;
-  align-items: center;
-  gap: var(--tg-s-3);
-  min-width: 0;
-  padding: var(--tg-s-2) 0;
-  border-bottom: 1px solid var(--tg-line);
-}
-.av-cloud-token-row {
-  grid-template-columns: minmax(0, 1fr) max-content;
-}
-.av-cloud-usage-row {
-  grid-template-columns: minmax(0, 1fr) max-content max-content;
-}
-.av-cloud-token-row:last-child,
-.av-cloud-usage-row:last-child {
-  border-bottom: 0;
-}
-.av-cloud-token-main {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.av-cloud-usage-main {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.av-cloud-token-name {
-  font-weight: 700;
-  overflow-wrap: anywhere;
-}
-.av-cloud-resource-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--tg-s-3);
-}
-.av-cloud-resource-card {
-  display: grid;
-  gap: var(--tg-s-3);
-  min-width: 0;
-  padding: var(--tg-s-3);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-subtle);
-}
-.av-cloud-resource-head {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) max-content;
-  align-items: center;
-  gap: var(--tg-s-2);
-  min-width: 0;
-  font-weight: 700;
-}
-
 /* ===== shared ===== */
 .av-actions {
   display: flex;
   align-items: center;
   gap: var(--tg-s-2);
   flex-wrap: wrap;
-}
-
-@media (max-width: 900px) {
-  .av-cloud-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .av-cloud-resource-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 640px) {
-  .av-cloud-res-group-head {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .av-cloud-res-group-head .tg-btn {
-    width: 100%;
-  }
-
-  .av-cloud-copy-row {
-    grid-template-columns: 1fr;
-    align-items: stretch;
-  }
-
-  .av-cloud-copy-value {
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-
-  .av-cloud-key-create,
-  .av-cloud-token-row,
-  .av-cloud-usage-row,
-  .av-cloud-resource-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* ===== Workspace empty state (home) ===== */
@@ -1068,7 +838,7 @@
   color: var(--tg-danger-text);
 }
 
-/* ===== recent runs strip (Installation detail / deploys) ===== */
+/* ===== recent runs strip (Capsule detail / deploys) ===== */
 .av-run-list {
   list-style: none;
   margin: 0;
@@ -1907,7 +1677,6 @@ button.tg-tab {
 @media (pointer: coarse) {
   .av-tile-manage,
   .av-service-row-delete,
-  .av-cloud-res-more,
   .legal-lang button,
   .legal-sign-in,
   .legal-nav-link {

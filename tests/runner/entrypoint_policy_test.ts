@@ -5,14 +5,14 @@ import {
   assertSourceUrlPolicy,
   requiredProviderSourcesFromTerraformText,
 } from "../../runner/entrypoint.ts";
+import { assertResolvedHostNotBlocked } from "../../runner/lib/policy.ts";
 
 const REQUEST = {
   planRun: {
     source: {
-      kind: "prepared",
-      url: "r2://takosumi-source/snap_test",
-      digest:
-        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      kind: "git",
+      url: "https://git.example.com/example/capsule.git",
+      commit: "1111111111111111111111111111111111111111",
     },
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   },
@@ -21,23 +21,31 @@ const REQUEST = {
 const DEFAULT_STYLE_CLOUDFLARE_PROFILE = {
   id: "opentofu-default",
   allowedProviders: ["cloudflare/cloudflare"],
-  requireCredentialRefs: true,
-  credentialRefs: [
+  requireProviderBindings: true,
+};
+
+const CLOUDFLARE_CREDENTIAL_MANIFEST = {
+  bindings: [
     {
-      provider: "cloudflare/cloudflare",
-      ref: "secret://takosumi/opentofu-default",
-      required: true,
+      providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+      connectionId: "conn_cloudflare",
+      recipeId: "cloudflare",
+      authMode: "api_token",
+      envNames: ["CLOUDFLARE_API_TOKEN"],
+      fileEnvNames: [],
+      requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
     },
   ],
 };
 
-test("pre-init policy accepts root-only TF_VAR provider credentials", () => {
+test("pre-init policy accepts CredentialRecipe provider env", () => {
   expect(() =>
     assertRunnerPolicyForRequest(
       {
         ...REQUEST,
         credentials: {
-          TF_VAR_cloudflare_main_api_token: "run-scoped-token",
+          env: { CLOUDFLARE_API_TOKEN: "run-scoped-token" },
+          manifest: CLOUDFLARE_CREDENTIAL_MANIFEST,
         },
       },
       DEFAULT_STYLE_CLOUDFLARE_PROFILE,
@@ -45,7 +53,7 @@ test("pre-init policy accepts root-only TF_VAR provider credentials", () => {
   ).not.toThrow();
 });
 
-test("pre-init policy admits credential-free utility providers without utility secrets", () => {
+test("pre-init policy admits credential-free providers when the profile does not require refs", () => {
   expect(() =>
     assertRunnerPolicyForRequest(
       {
@@ -58,7 +66,8 @@ test("pre-init policy admits credential-free utility providers without utility s
           ],
         },
         credentials: {
-          TF_VAR_cloudflare_main_api_token: "run-scoped-token",
+          env: { CLOUDFLARE_API_TOKEN: "run-scoped-token" },
+          manifest: CLOUDFLARE_CREDENTIAL_MANIFEST,
         },
       },
       {
@@ -67,32 +76,50 @@ test("pre-init policy admits credential-free utility providers without utility s
           "registry.opentofu.org/cloudflare/cloudflare",
           "registry.opentofu.org/hashicorp/http",
         ],
-        credentialRefs: [
-          {
-            provider: "registry.opentofu.org/cloudflare/cloudflare",
-            ref: "secret://takosumi/opentofu-default",
-            required: true,
-          },
-        ],
+        requireProviderBindings: false,
       },
     ),
   ).not.toThrow();
 });
 
-test("pre-init policy still fails closed when no root-only provider credential was minted", () => {
-  expect(() =>
-    assertRunnerPolicyForRequest(REQUEST, DEFAULT_STYLE_CLOUDFLARE_PROFILE),
-  ).toThrow("required credential env for provider");
-});
-
-test("pre-init policy allows generated-root runs to use nominal local source anchors", () => {
+test("pre-init policy never widens a default-registry rule to another registry", () => {
   expect(() =>
     assertRunnerPolicyForRequest(
       {
         ...REQUEST,
         planRun: {
           ...REQUEST.planRun,
-          source: { kind: "local", path: "/resource-shape/generated-root" },
+          requiredProviders: ["registry.example.com/cloudflare/cloudflare"],
+        },
+      },
+      {
+        ...DEFAULT_STYLE_CLOUDFLARE_PROFILE,
+        requireProviderBindings: false,
+      },
+    ),
+  ).toThrow(
+    "provider registry.example.com/cloudflare/cloudflare is not allowed",
+  );
+});
+
+test("pre-init policy still fails closed when no provider credential was minted", () => {
+  expect(() =>
+    assertRunnerPolicyForRequest(REQUEST, DEFAULT_STYLE_CLOUDFLARE_PROFILE),
+  ).toThrow("explicit run credential recipe is required for provider");
+});
+
+test("pre-init policy allows Resource runs with explicit operator modules", () => {
+  expect(() =>
+    assertRunnerPolicyForRequest(
+      {
+        ...REQUEST,
+        planRun: {
+          ...REQUEST.planRun,
+          source: {
+            kind: "operator_module",
+            digest:
+              "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          },
         },
         generatedRoot: {
           files: {
@@ -100,7 +127,8 @@ test("pre-init policy allows generated-root runs to use nominal local source anc
           },
         },
         credentials: {
-          TF_VAR_cloudflare_main_api_token: "run-scoped-token",
+          env: { CLOUDFLARE_API_TOKEN: "run-scoped-token" },
+          manifest: CLOUDFLARE_CREDENTIAL_MANIFEST,
         },
       },
       DEFAULT_STYLE_CLOUDFLARE_PROFILE,
@@ -118,20 +146,26 @@ test("pre-init policy accepts declared-env provider credentials under real env n
           requiredProviders: [provider],
         },
         credentials: {
-          SNOWFLAKE_PASSWORD: "run-scoped-secret",
+          env: { SNOWFLAKE_PASSWORD: "run-scoped-secret" },
+          manifest: {
+            bindings: [
+              {
+                providerSource: provider,
+                connectionId: "conn_snowflake",
+                recipeId: "generic-env",
+                authMode: "env",
+                envNames: ["SNOWFLAKE_PASSWORD"],
+                fileEnvNames: [],
+                requiredEnvGroups: [["SNOWFLAKE_PASSWORD"]],
+              },
+            ],
+          },
         },
       },
       {
         id: "opentofu-default",
         allowedProviders: [provider],
-        requireCredentialRefs: true,
-        credentialRefs: [
-          {
-            provider,
-            ref: "env://SNOWFLAKE_PASSWORD",
-            required: true,
-          },
-        ],
+        requireProviderBindings: true,
       },
     ),
   ).not.toThrow();
@@ -162,7 +196,7 @@ test("required provider extraction reads only required_providers sources", () =>
   ]);
 });
 
-test("pre-init policy ignores runner-reserved declared-env names", () => {
+test("pre-init policy rejects runner-reserved names in the credential manifest", () => {
   const provider = "registry.opentofu.org/example/example";
   expect(() =>
     assertRunnerPolicyForRequest(
@@ -172,27 +206,81 @@ test("pre-init policy ignores runner-reserved declared-env names", () => {
           requiredProviders: [provider],
         },
         credentials: {
-          TAKOSUMI_FORBIDDEN_TOKEN: "override",
+          env: { TAKOSUMI_FORBIDDEN_TOKEN: "override" },
+          manifest: {
+            bindings: [
+              {
+                providerSource: provider,
+                connectionId: "conn_example",
+                recipeId: "generic-env",
+                authMode: "env",
+                envNames: ["TAKOSUMI_FORBIDDEN_TOKEN"],
+                fileEnvNames: [],
+                requiredEnvGroups: [["TAKOSUMI_FORBIDDEN_TOKEN"]],
+              },
+            ],
+          },
         },
       },
       {
         id: "opentofu-default",
         allowedProviders: [provider],
-        requireCredentialRefs: true,
-        credentialRefs: [
-          {
-            provider,
-            ref: "env://TAKOSUMI_FORBIDDEN_TOKEN",
-            required: true,
-          },
-        ],
+        requireProviderBindings: true,
       },
     ),
-  ).toThrow("required credential env for provider");
+  ).toThrow("run credential manifest envNames contains an unsafe env name");
 });
 
 test("source URL policy rejects git/libcurl backslash parser differentials", () => {
   expect(() =>
     assertSourceUrlPolicy("https://github.com\\@10.0.0.1/acme/repo.git"),
   ).toThrow("source url is malformed");
+});
+
+test("resolved-host policy accepts public addresses through an injected runner resolver", async () => {
+  const seen: string[] = [];
+  await expect(
+    assertResolvedHostNotBlocked(
+      "git.example.test",
+      "source host",
+      async (host) => {
+        seen.push(host);
+        return ["203.0.113.10", "2001:db8::10"];
+      },
+    ),
+  ).resolves.toBeUndefined();
+  expect(seen).toEqual(["git.example.test"]);
+});
+
+test("resolved-host policy rejects any private answer and unresolved names", async () => {
+  await expect(
+    assertResolvedHostNotBlocked(
+      "mixed.example.test",
+      "source host",
+      async () => ["203.0.113.10", "10.0.0.5"],
+    ),
+  ).rejects.toThrow("resolves to a blocked address (10.0.0.5)");
+
+  await expect(
+    assertResolvedHostNotBlocked(
+      "missing.example.test",
+      "source host",
+      async () => [],
+    ),
+  ).rejects.toThrow("could not be resolved for SSRF validation");
+});
+
+test("resolved-host policy rejects internal names before invoking a resolver", async () => {
+  let called = false;
+  await expect(
+    assertResolvedHostNotBlocked(
+      "metadata.example.internal",
+      "source host",
+      async () => {
+        called = true;
+        return ["203.0.113.10"];
+      },
+    ),
+  ).rejects.toThrow("is an internal-only name");
+  expect(called).toBe(false);
 });

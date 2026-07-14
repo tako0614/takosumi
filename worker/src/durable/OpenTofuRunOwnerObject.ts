@@ -1,7 +1,10 @@
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "../bindings.ts";
 import { cachedRunOwnerDeployControlService } from "../deploy_control_seam.ts";
-import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
-import { InstallationLeaseBusyError } from "../../../core/domains/deploy-control/installation_lease.ts";
+import {
+  isRunnerInfrastructureRequeueError,
+  OpenTofuControllerError,
+} from "../../../core/domains/deploy-control/errors.ts";
+import { CapsuleLeaseBusyError } from "../../../core/domains/deploy-control/capsule_lease.ts";
 import type { RunStatus } from "takosumi-contract/runs";
 
 const RUN_OWNER_RECORD_KEY = "run";
@@ -21,7 +24,7 @@ interface RunOwnerStartRequest {
   readonly kind: "takosumi.opentofu-run-owner.start@v1";
   readonly action: OpenTofuRunAction;
   readonly runId: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly cause?: "controller_retry";
   readonly queueAttempt?: number;
   readonly messageId?: string;
@@ -32,7 +35,7 @@ interface RunOwnerRecord {
   readonly action: DispatchableRunAction;
   readonly requestedAction: OpenTofuRunAction;
   readonly runId: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly status: "scheduled" | "running" | "succeeded" | "failed";
   readonly attempts: number;
   readonly maxAttempts: number;
@@ -66,7 +69,7 @@ export interface OpenTofuRunOwnerObjectDeps {
     dispatch: {
       readonly action: DispatchableRunAction;
       readonly runId: string;
-      readonly spaceId: string;
+      readonly workspaceId: string;
     },
     env: CloudflareWorkerEnv,
   ) => Promise<void>;
@@ -74,7 +77,7 @@ export interface OpenTofuRunOwnerObjectDeps {
     dispatch: {
       readonly action: DispatchableRunAction;
       readonly runId: string;
-      readonly spaceId: string;
+      readonly workspaceId: string;
     },
     env: CloudflareWorkerEnv,
   ) => Promise<RunStatus | undefined>;
@@ -82,7 +85,7 @@ export interface OpenTofuRunOwnerObjectDeps {
     dispatch: {
       readonly action: DispatchableRunAction;
       readonly runId: string;
-      readonly spaceId: string;
+      readonly workspaceId: string;
     },
     env: CloudflareWorkerEnv,
   ) => Promise<void>;
@@ -197,7 +200,7 @@ export class OpenTofuRunOwnerObject {
           {
             action,
             runId: input.runId,
-            spaceId: input.spaceId,
+            workspaceId: input.workspaceId,
           },
           this.env,
         ).catch(() => undefined);
@@ -241,7 +244,7 @@ export class OpenTofuRunOwnerObject {
       action,
       requestedAction: input.action,
       runId: input.runId,
-      spaceId: input.spaceId,
+      workspaceId: input.workspaceId,
       status: "scheduled",
       attempts: 0,
       maxAttempts: RUN_OWNER_MAX_ATTEMPTS,
@@ -292,7 +295,7 @@ export class OpenTofuRunOwnerObject {
       const dispatch = {
         action: record.action,
         runId: record.runId,
-        spaceId: record.spaceId,
+        workspaceId: record.workspaceId,
       };
       await this.#dispatch(dispatch, this.env);
       const runStatus = await this.#readRunStatus(dispatch, this.env).catch(
@@ -353,7 +356,7 @@ export class OpenTofuRunOwnerObject {
     error: unknown,
     immediateControllerRetry: boolean,
   ): Promise<boolean> {
-    if (error instanceof InstallationLeaseBusyError) {
+    if (error instanceof CapsuleLeaseBusyError) {
       const nextAttemptAt = new Date(
         this.#now() + RUN_OWNER_LEASE_BUSY_DELAY_MS,
       ).toISOString();
@@ -362,7 +365,7 @@ export class OpenTofuRunOwnerObject {
         status: "scheduled",
         updatedAt: new Date(this.#now()).toISOString(),
         nextAttemptAt,
-        lastError: "installation lease busy",
+        lastError: "Capsule lease busy",
       });
       await this.#scheduleAlarm(Date.parse(nextAttemptAt));
       return false;
@@ -395,7 +398,7 @@ export class OpenTofuRunOwnerObject {
           {
             action: record.action,
             runId: record.runId,
-            spaceId: record.spaceId,
+            workspaceId: record.workspaceId,
           },
           this.env,
         );
@@ -465,7 +468,7 @@ async function dispatchToController(
   dispatch: {
     readonly action: DispatchableRunAction;
     readonly runId: string;
-    readonly spaceId: string;
+    readonly workspaceId: string;
   },
   env: CloudflareWorkerEnv,
 ): Promise<void> {
@@ -477,7 +480,7 @@ async function readRunStatusFromController(
   dispatch: {
     readonly action: DispatchableRunAction;
     readonly runId: string;
-    readonly spaceId: string;
+    readonly workspaceId: string;
   },
   env: CloudflareWorkerEnv,
 ): Promise<RunStatus | undefined> {
@@ -489,7 +492,7 @@ async function markRunRetriesExhausted(
   dispatch: {
     readonly action: DispatchableRunAction;
     readonly runId: string;
-    readonly spaceId: string;
+    readonly workspaceId: string;
   },
   env: CloudflareWorkerEnv,
 ): Promise<void> {
@@ -514,9 +517,9 @@ function parseStartRequest(
   }
   const action = parseAction(record.action);
   const runId = nonEmptyString(record.runId);
-  const spaceId = nonEmptyString(record.spaceId);
-  if (!runId || !spaceId) {
-    throw new Error("runId and spaceId are required");
+  const workspaceId = nonEmptyString(record.workspaceId);
+  if (!runId || !workspaceId) {
+    throw new Error("runId and workspaceId are required");
   }
   const queueAttempt =
     typeof record.queueAttempt === "number" &&
@@ -530,7 +533,7 @@ function parseStartRequest(
     kind: "takosumi.opentofu-run-owner.start@v1",
     action,
     runId,
-    spaceId,
+    workspaceId,
     ...(cause ? { cause } : {}),
     ...(queueAttempt !== undefined ? { queueAttempt } : {}),
     ...(messageId ? { messageId } : {}),
@@ -576,10 +579,7 @@ function clearRetryState(record: RunOwnerRecord): RunOwnerRecord {
 }
 
 function isControllerManagedRetryError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    /retryable_runner_infrastructure_error/i.test(error.message)
-  );
+  return isRunnerInfrastructureRequeueError(error);
 }
 
 function runDispatchFailureMessage(error: unknown): string {

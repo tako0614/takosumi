@@ -1,6 +1,6 @@
 id: google
 display_name: Google Cloud
-provider_rule: google
+secret_partition: provider-credentials
 terraform_source:
   - hashicorp/google
   - hashicorp/google-beta
@@ -16,7 +16,37 @@ required_env_groups:
   - [GOOGLE_CREDENTIALS]
   - [GOOGLE_APPLICATION_CREDENTIALS]
 auth_modes:
+  oauth:
+    env:
+      GOOGLE_CREDENTIALS:
+        from: secret
+        name: authorized_user_json
   service_account_json:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: Service account JSON, ja: サービスアカウント JSON }
+      setup_guide:
+        url: https://console.cloud.google.com/iam-admin/serviceaccounts
+        steps:
+          - en: Open Service Accounts and select the account used by OpenTofu.
+            ja: Service Accounts を開き、OpenTofu で使うアカウントを選びます。
+          - en: Create a JSON key with only the roles required by this stack.
+            ja: この Stack に必要なロールだけを持つ JSON キーを作成します。
+          - en: Paste the complete JSON document below.
+            ja: 完全な JSON ドキュメントを下へ貼り付けます。
+    input_hints:
+      GOOGLE_CREDENTIALS:
+        label: { en: Service account JSON, ja: サービスアカウント JSON }
+        required: true
+      GOOGLE_CLOUD_PROJECT:
+        label: { en: Project ID, ja: プロジェクト ID }
+        placeholder: my-project
+        required: false
+      GOOGLE_PROJECT:
+        hidden: true
+      GOOGLE_REGION:
+        label: { en: Region, ja: リージョン }
+        required: false
     env:
       GOOGLE_CREDENTIALS:
         from: secret

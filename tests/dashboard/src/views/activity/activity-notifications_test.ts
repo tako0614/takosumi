@@ -161,10 +161,10 @@ describe("History and notifications", () => {
   });
 
   test("run/service notification lines name the service when the payload allows", () => {
-    // The recorded Capsule id (metadata installationId / capsuleId or the
+    // The recorded Capsule id (metadata capsuleId or the
     // event target) resolves to its name — never an invented value.
     expect(notificationsSource).toContain("function eventCapsuleId(");
-    expect(notificationsSource).toContain('metaString(m, "installationId")');
+    expect(notificationsSource).toContain('metaString(m, "capsuleId")');
     expect(notificationsSource).toContain("loadCapsuleNameIndex");
     expect(notificationsSource).toContain("serviceNameFor(entry.event)");
     expect(notificationsSource).toContain('t("notif.event.planReadyNamed"');

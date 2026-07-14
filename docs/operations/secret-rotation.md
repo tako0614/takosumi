@@ -1,272 +1,115 @@
-# Secret Rotation Runbook
+# Secret rotation runbook
 
-> このページでわかること: Takosumi operated environment で secret を rotation する実行手順。
-> cadence / 監査要件 / 責任範囲は [Secret Rotation Policy](secret-rotation-policy.md) を正本とする。
+This runbook covers Takosumi OSS and Takosumi for Operator secret classes.
+Closed Takosumi Cloud payment, managed-capacity, and AI-upstream secrets are
+owned by `takosumi-cloud/docs/operations/secret-rotation.md`.
 
-## Scope
+Cadence, audit requirements, and responsibility follow
+[Secret Rotation Policy](secret-rotation-policy.md).
 
-この runbook は operator が repo 外の approved vault に保持する secret を対象にする。secret 値、token body、
-private key、provider credential JSON、rotation evidence は public repo に commit しない。
+## Scope and invariants
 
-operator が直接 push する Worker secret は Takosumi platform worker
-(`app.takosumi.com`) のものだけです。Workspace connection の secret は
-Takosumi vault / SecretBlob を通して rotate し、通常の GET API に raw value を
-返しません。
+Secret values, private keys, provider credential JSON, token bodies, and raw
+rotation evidence live in an approved vault outside every repository. Takosumi
+stores only encrypted/ref material appropriate to the owning domain and never
+returns raw values from normal GET APIs.
 
-Provider 対応が Cloudflare から AWS / GCP / GitHub / Kubernetes / Custom Provider
-Connection へ広がっても、provider credential を raw Worker env として増やさない。
-Provider credential は ProviderConnection / SecretBlob を rotate する。
-`AWS_ACCESS_KEY_ID` や `GOOGLE_APPLICATION_CREDENTIALS` のような
-provider-specific credential 名は runner の ambient env として常駐させず、credential
-mint が run / phase / provider scoped な material に変換して generated root へ渡す。
+- Workspace provider credentials are ProviderConnection/Secret material.
+- A CredentialRecipe injects env/files only into the intended Run phase.
+- Git source credentials do not become provider credentials.
+- OIDC signing keys and upstream client secrets are platform identity secrets.
+- InterfaceBinding credentials are invocation-time material and never Outputs.
+- A hosting extension's commercial or managed-service secrets do not become OSS
+  environment variables.
 
-## Before Rotation
+## Preparation
 
-1. 対象 environment、secret class、影響する Workspace / Capsule / ProviderConnection / backing Connection を特定する。
-2. [Secret Rotation Policy](secret-rotation-policy.md) の cadence、authorized role、maintenance window を確認する。
-3. current secret の参照先が repo 外の operator vault にあり、rollback 用に保持できることを確認する。
-4. rotation 中に触る API / CLI / provider dashboard の audit trail が有効であることを確認する。
-5. 対象 Provider Connection がどの CredentialRecipe / provider policy に属するか、OAuth helper / user-managed credential policy /
-   egress policy / custom runner class に影響するかを確認する。provider policy は credential ではないため、token rotation
-   では通常変更しない。
+1. Identify environment, secret class, owner, affected Workspace/Capsule or
+   ProviderConnection, and every consumer.
+2. Confirm the vault retains the previous version for the approved rollback
+   window.
+3. Confirm provider/operator audit trails and maintenance-window approval.
+4. Record only secret references/IDs and expected verification paths.
+5. Check whether the class supports overlapping old/new credentials.
 
-## Rotation Steps
+## Rotation
 
-1. 新しい secret を provider または operator vault で発行する。
-2. Takosumi の internal provider resolver / SecretBlob / Worker secret など、対象 class に応じた参照先を新 secret に更新する。
-3. 可能な class では grace window を取り、old secret と new secret の併用を許可する。
-4. 対象 route、runner phase、Connection test、または smoke test で new secret の動作を確認する。
-5. old secret を revoke する。grace window が必要な class では window 終了後に revoke する。
-6. operator audit log に secret class、environment、実施者、開始/終了時刻、old/new secret ref、検証結果を記録する。
+1. Issue the replacement at the provider or vault.
+2. Update the owning reference: ProviderConnection/Secret, signing-key config,
+   or the explicitly named runtime secret.
+3. Keep both versions only for a bounded supported overlap.
+4. Verify the exact Connection test, runner phase, OIDC flow, Interface
+   invocation, or internal control route.
+5. Revoke the previous value after verification and cache/overlap expiry.
+6. Record actor, timestamps, old/new references, revocation reference, and
+   verification result in the operator audit ledger.
 
-## Platform Worker Secret Push
+## Platform identity secrets
 
-platform worker の realized config は private repo が所有する:
+Upstream OAuth/OIDC providers use the generic descriptor array
+`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`. Non-secret endpoints, client id,
+redirect URI, and scopes live in the descriptor. `clientSecretEnv` names the
+operator-vault secret made available at runtime. Do not introduce a fixed
+provider-specific env family or place a client secret in the descriptor.
 
-```bash
-export TAKOSUMI_PRIVATE=/path/to/takosumi-private
-export TAKOSUMI_ENV=staging        # or production
-export TAKOSUMI_WRANGLER_CONFIG="$TAKOSUMI_PRIVATE/platform/wrangler.toml"
-export TAKOSUMI_SECRETS="$TAKOSUMI_PRIVATE/.secrets/$TAKOSUMI_ENV"
-```
+OIDC signing-key rotation uses an active private key plus, when needed, a
+public-only previous JWKS during a bounded overlap. Signing always uses the
+active key. After token and JWKS cache windows expire, remove the previous
+public key and verify discovery/JWKS again.
 
-secret file は 1 secret 1 file、mode `0600` にする。
+Evidence must prove the new key id is published, the previous key remains only
+for the declared overlap, old credentials were revoked, and no private key or
+client secret appears in evidence.
 
-```bash
-test -f "$TAKOSUMI_WRANGLER_CONFIG"
-test -d "$TAKOSUMI_SECRETS"
-find "$TAKOSUMI_SECRETS" -maxdepth 1 -type f -exec sh -c 'test "$(stat -c %a "$1")" = 600' sh {} \;
-```
+## ProviderConnection secrets
 
-local vault と remote Worker secret 名を確認する:
-
-```bash
-takosumi secrets status \
-  --config "$TAKOSUMI_WRANGLER_CONFIG" \
-  --secrets-dir "$TAKOSUMI_SECRETS"
-```
-
-`TAKOSUMI_DEPLOY_CONTROL_TOKEN` は現行実装の env 名です。operations docs では
-これを public API concept ではなく、platform worker 内の accounts/control-plane
-bearer secret class として扱います。値は operator vault にだけ置きます。
-Cloud-only AI Gateway extension 用の `TAKOSUMI_AI_GATEWAY_PROFILES` が env または wrangler config `[vars]`
-にある場合、
-`takosumi secrets status` は `openai_compatible` profile の `apiKeyEnv` が指す
-operator-held credential secret 名も不足検出します。Cloudflare Unified Billing
-profile では `TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN` のような Cloudflare API
-token secret、direct/BYOK provider profile では provider API key secret を指します。
-`workers_ai_binding` profile は Worker の `AI` binding を使うため upstream REST
-credential secret を要求しません。
-
-### Upstream OAuth sign-in secret
-
-Google OAuth provider を hosted Takosumi sign-in に使う場合、
-client id と redirect URI は realized wrangler config の `[vars]` に置き、client secret
-だけを operator vault の file に置く。secret 値を shell history や transcript に残さない。
-
-Google の例:
+Create a replacement Connection or secret version, test it, update explicit
+ProviderBindings/default selection, then revoke the old Connection. Never use
+an implicit fallback from an invalid or missing binding.
 
 ```bash
-grep -E 'TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_(CLIENT_ID|REDIRECT_URI)' \
-  "$TAKOSUMI_WRANGLER_CONFIG"
-
-# operator-private vault に値を置く。helper は secret 値を出力せず、
-# realized config の redirect URI も検証する。
-bun run write:takosumi-oauth-secret -- \
-  --private-root "$TAKOSUMI_PRIVATE" \
-  --environment "$TAKOSUMI_ENV" \
-  --provider google \
-  --edit
-```
-
-設定後は sign-in scope だけを先に確認する:
-
-```bash
-bun run check:takosumi-live-evidence-prereqs -- \
-  --private-root "$TAKOSUMI_PRIVATE" \
-  --environment "$TAKOSUMI_ENV" \
-  --scope sign-in
-
-takosumi secrets status \
-  --config "$TAKOSUMI_WRANGLER_CONFIG" \
-  --secrets-dir "$TAKOSUMI_SECRETS"
-```
-
-`ga:status -- --scope sign-in` は最終 completion audit も集約するため、
-readiness summary の next action も同時に表示される。OAuth secret / config だけの
-確認には上記の `check:takosumi-live-evidence-prereqs -- --scope sign-in` を使う。
-
-Worker secret を適用する:
-
-```bash
-takosumi secrets apply \
-  --config "$TAKOSUMI_WRANGLER_CONFIG" \
-  --secrets-dir "$TAKOSUMI_SECRETS"
-```
-
-`apply` は不足している rotate-safe generated secret を local vault に作ってから
-`wrangler secret put` の標準入力で push する。既存の OIDC signing key、
-secret-store passphrase、pairwise secret、provider credential は上書きしない。
-upstream OAuth client secret は manual protected secret なので自動生成しない。
-初回 vault 作成で protected key も生成する場合だけ、operator approval 後に
-`--init-protected` を付ける。remote push せず local vault だけ初期化する場合は
-`--local-only` を併用する。
-
-```bash
-takosumi secrets apply \
-  --config "$TAKOSUMI_WRANGLER_CONFIG" \
-  --secrets-dir "$TAKOSUMI_SECRETS" \
-  --init-protected \
-  --local-only
-```
-
-safe generated secret を個別に再生成する場合だけ `--regenerate` を使う:
-
-```bash
-takosumi secrets apply \
-  --config "$TAKOSUMI_WRANGLER_CONFIG" \
-  --secrets-dir "$TAKOSUMI_SECRETS" \
-  --regenerate TAKOSUMI_DEPLOY_CONTROL_TOKEN
-takosumi secrets apply \
-  --config "$TAKOSUMI_WRANGLER_CONFIG" \
-  --secrets-dir "$TAKOSUMI_SECRETS" \
-  --regenerate TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET
-```
-
-remote-only secret は自動削除しない。削除は `takosumi secrets status` で drift
-を確認した後に operator が明示的に `wrangler secret delete` で行う。
-
-Provider credential rotation は Worker secret push ではなく Connection 更新として
-行う。新 credential を repo 外の file に置き、CLI で新 Connection を作成し、
-必要な provider default を新 Connection へ向ける。
-
-```bash
-export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
-export TAKOSUMI_DEPLOY_CONTROL_TOKEN="$(cat "$TAKOSUMI_SECRETS/TAKOSUMI_DEPLOY_CONTROL_TOKEN")"
-
-takosumi connections set-cloudflare-token \
-  --api-token-file "$TAKOSUMI_PRIVATE/.secrets/provider/cloudflare-api-token.next" \
-  --default cloudflare
-
 takosumi connections test <new-connection-id>
 takosumi connections revoke <old-connection-id>
 ```
 
-bulk helper を使う場合も、一時 JSON は `/tmp` など repo 外に作成し、push 後に
-即削除する。shell history、terminal transcript、PR comment に secret value を
-残さない。
+Any helper input file stays outside the repo and is deleted after import.
+Shell history, logs, PR comments, and terminal transcripts must not contain the
+credential.
 
-## OIDC Account-Security Readiness Evidence
+## Worker secret delivery
 
-GA readiness の `oidc-account-security` は、OIDC conformance / rate-limit
-だけでは完了しない。operator は signing key rotation、upstream Google OAuth
-client secret rotation、audit event を private readiness evidence に記録する。
-
-Takosumi は secret value を表示しない。key rotation evidence は live issuer
-または capture 済み JWKS に新旧両方の `kid` が存在することを検証し、その
-JWKS digest を evidence に固定してから、既存 readiness JSON の
-`domains.oidc-account-security` だけを更新する。
-
-OIDC signing key rotation では active private key を差し替え、overlap window
-の間だけ previous public key を
-`TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS` に入れる。署名は常に active key
-だけで行い、JWKS には active public key と previous public key を同時に公開する。
-overlap window と token/JWKS cache window が終わったら
-`TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS` を削除し、再度 deploy する。
+The realized deploy config and vault location are operator-owned. Verify file
+permissions and list only remote secret names:
 
 ```bash
-curl -fsS https://app.takosumi.com/oauth/jwks \
-  > "$TAKOSUMI_PRIVATE/evidence/oidc-jwks-production.json"
-
-takosumi launch-readiness oidc-account-security evidence \
-  --file "$TAKOSUMI_PRIVATE/evidence/platform-readiness-production.json" \
-  --out "$TAKOSUMI_PRIVATE/evidence/platform-readiness-production.next.json" \
-  --issuer https://app.takosumi.com \
-  --jwks-file "$TAKOSUMI_PRIVATE/evidence/oidc-jwks-production.json" \
-  --key-id "$NEW_OIDC_KEY_ID" \
-  --previous-key-id "$OLD_OIDC_KEY_ID" \
-  --rotation-run-id "$OIDC_ROTATION_RUN_ID" \
-  --client-id "$GOOGLE_CLIENT_ID" \
-  --old-secret-id "$OLD_GOOGLE_SECRET_RECORD_ID" \
-  --new-secret-id "$NEW_GOOGLE_SECRET_RECORD_ID" \
-  --overlap-window-seconds 600 \
-  --revocation-event-id "$GOOGLE_SECRET_REVOCATION_EVENT_ID" \
-  --audit-event-id "$OPERATOR_AUDIT_EVENT_ID" \
-  --audit-subject "$OPERATOR_SUBJECT" \
-  --owner "$EVIDENCE_OWNER" \
-  --reviewer "$EVIDENCE_REVIEWER" \
-  --environment production \
-  --completed-at "$COMPLETED_AT" \
-  --ref-prefix "vault://platform-readiness/$OIDC_ROTATION_RUN_ID/domains/oidc-account-security" \
-  --json
-
-takosumi launch-readiness validate \
-  --file "$TAKOSUMI_PRIVATE/evidence/platform-readiness-production.next.json"
+test -f "$TAKOSUMI_WRANGLER_CONFIG"
+test -d "$TAKOSUMI_SECRETS"
+find "$TAKOSUMI_SECRETS" -maxdepth 1 -type f \
+  -exec sh -c 'test "$(stat -c %a "$1")" = 600' sh {} \;
+bunx wrangler@latest secret list --config "$TAKOSUMI_WRANGLER_CONFIG"
 ```
 
-`--key-id` または `--previous-key-id` が overlap JWKS に存在しない場合、この
-helper は失敗する。Google client secret の actual value は入力しない。
-`old-secret-id` / `new-secret-id` / `revocation-event-id` は operator vault /
-Google admin console / audit ledger の private record ID であり、public summary
-へは出さない。
-
-## Platform Worker Smoke
-
-Worker secret rotation 後は最低限以下を確認する:
-
-```bash
-curl -fsS https://app.takosumi.com/healthz
-curl -fsS https://app.takosumi.com/.well-known/openid-configuration | head -c 200
-curl -fsS https://app.takosumi.com/oauth/jwks >/dev/null
-curl -s -o /dev/null -w "%{http_code}" https://app.takosumi.com/api/v1/workspaces
-```
-
-expected:
-
-- OIDC issuer は `https://app.takosumi.com`
-- JWKS が 200
-- unauthenticated `/api/v1/workspaces` は 401
-- accounts/control-plane bearer or handshake token を rotate した場合は dashboard login
-  と `/api/v1` session-gated route が通る
-- provider / source Connection を rotate した場合は staging の Connection test と
-  source_sync / plan smoke が通る
+Push one approved value through standard input. Do not echo it, infer missing
+values, overwrite unrelated classes, or automatically delete remote-only
+secrets.
 
 ## Verification
 
-- Public API が raw secret を返さないこと。
-- plan / apply / destroy phase の credential mint が expected Connection から成功すること。
-- source phase の Git credential が provider credential と混ざらないこと。
-- logs が token body や private key material を含まないこと。
-- affected Capsule の next plan/apply が saved plan / source snapshot / dependency snapshot / state generation guard を維持すること。
+- health, readiness, OIDC discovery, and JWKS are valid;
+- unauthenticated APIs remain rejected;
+- the affected Connection/Run/Interface path works with the new material;
+- old material stops working after revocation;
+- state, Outputs, audit events, failure diagnostics, and logs contain no secret;
+- saved plan, source snapshot, dependency snapshot, and state generation guards
+  remain intact for the next affected Run.
 
 ## Rollback
 
-1. new secret による認証失敗を確認したら、old secret の revoke 前なら参照先を old secret ref に戻す。
-2. revoke 済みの場合は provider で emergency replacement を発行し、new secret と同じ手順で参照先を更新する。
-3. Worker secret の場合は operator vault の previous value を `takosumi secrets apply` で再 push する。
-4. rollback 後も audit log に原因、復旧時刻、残タスクを記録する。
+Before revocation, point the explicit reference back to the previous vault
+version. After revocation, issue an emergency replacement and repeat the same
+procedure. Always record the failure cause, recovery time, and remaining work.
 
-## Related Documents
+## Related documents
 
 - [Secret Rotation Policy](secret-rotation-policy.md)
 - [Troubleshooting Playbook](troubleshooting.md)

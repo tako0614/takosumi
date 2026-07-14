@@ -37,6 +37,13 @@ import {
   validateProductionTopologyDocument,
 } from "./cli-platform-readiness.ts";
 import { canonicalJson, isRecord, sha256Hex } from "./cli-util.ts";
+import {
+  createPlatformReadinessContributionRegistry,
+  isPlatformReadinessContribution,
+  platformReadinessContributionErrors,
+  type PlatformReadinessContribution,
+} from "takosumi-contract";
+import { platformReadinessDefinitionFromDocument } from "./cli-platform-readiness-definition.ts";
 import type { CliIo } from "./cli-io.ts";
 
 const oidcAccountSecurityEvidenceTypes = [
@@ -132,10 +139,15 @@ export async function runLaunchReadinessPublicSummary(
   const publicSummary =
     optionalStringOption(options, "publicSummary") ??
     defaultPlatformReadinessPublicSummary(report.ready);
-  const publicSummaryErrors = platformReadinessPublicSummaryErrors(
-    publicSummary,
-    { requireLaunchScope: report.ready },
-  );
+  const definitionResult = platformReadinessDefinitionFromDocument(document);
+  const publicSummaryErrors = [
+    ...definitionResult.errors,
+    ...platformReadinessPublicSummaryErrors(
+      publicSummary,
+      { requireLaunchScope: report.ready },
+      definitionResult.definition,
+    ),
+  ];
   if (publicSummaryErrors.length > 0) {
     io.stderr(publicSummaryErrors.join("\n"));
     return 2;
@@ -272,7 +284,9 @@ export async function runLaunchReadinessOidcAccountSecurityEvidence(
     } else if (oidcReady) {
       io.stdout(`Updated ${out}; oidc-account-security evidence is complete.`);
     } else {
-      io.stdout(`Updated ${out}; oidc-account-security evidence is incomplete.`);
+      io.stdout(
+        `Updated ${out}; oidc-account-security evidence is incomplete.`,
+      );
     }
     return oidcReady ? 0 : 1;
   } catch (error) {
@@ -423,7 +437,8 @@ function mergeOidcAccountSecurityEvidence(
   });
   if (
     !domains.some(
-      (entry: unknown) => isRecord(entry) && entry.id === "oidc-account-security",
+      (entry: unknown) =>
+        isRecord(entry) && entry.id === "oidc-account-security",
     )
   ) {
     throw new TypeError(
@@ -450,7 +465,8 @@ async function loadJwks(input: {
 }): Promise<Record<string, unknown>> {
   if (input.jwksFile) {
     const value = JSON.parse(await readFile(input.jwksFile, "utf8"));
-    if (!isRecord(value)) throw new TypeError("--jwks-file must be a JSON object");
+    if (!isRecord(value))
+      throw new TypeError("--jwks-file must be a JSON object");
     return value;
   }
   const discoveryUrl = `${input.issuer}/.well-known/openid-configuration`;
@@ -458,9 +474,8 @@ async function loadJwks(input: {
   if (discovery.issuer !== input.issuer) {
     throw new TypeError("OIDC discovery issuer does not match --issuer");
   }
-  const jwksUri = typeof discovery.jwks_uri === "string"
-    ? discovery.jwks_uri
-    : null;
+  const jwksUri =
+    typeof discovery.jwks_uri === "string" ? discovery.jwks_uri : null;
   if (!jwksUri) throw new TypeError("OIDC discovery is missing jwks_uri");
   return await fetchJsonObject(jwksUri, "OIDC JWKS");
 }
@@ -474,7 +489,8 @@ async function fetchJsonObject(
     throw new TypeError(`${label} request failed: HTTP ${response.status}`);
   }
   const value = await response.json();
-  if (!isRecord(value)) throw new TypeError(`${label} response must be an object`);
+  if (!isRecord(value))
+    throw new TypeError(`${label} response must be an object`);
   return value;
 }
 
@@ -518,7 +534,10 @@ function assertIsoTimestamp(value: string, label: string): void {
     throw new TypeError(`${label} must be an ISO-8601 UTC timestamp`);
   }
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime()) || parsed.getTime() > Date.now() + 300000) {
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.getTime() > Date.now() + 300000
+  ) {
     throw new TypeError(`${label} must be a non-future ISO-8601 UTC timestamp`);
   }
 }
@@ -542,14 +561,27 @@ function kebabOption(key: string): string {
   return key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
-export function runLaunchReadinessTemplate(args: string[], io: CliIo): number {
+export async function runLaunchReadinessTemplate(
+  args: string[],
+  io: CliIo,
+): Promise<number> {
   const options = parseOptions(args);
   if (options.help) {
     io.stdout(launchReadinessTemplateHelpText());
     return 0;
   }
-  io.stdout(JSON.stringify(buildPlatformReadinessTemplate(), null, 2));
-  return 0;
+  try {
+    const contributions = await loadPlatformReadinessContributionFile(
+      optionalStringOption(options, "contributionFile"),
+    );
+    io.stdout(
+      JSON.stringify(buildPlatformReadinessTemplate(contributions), null, 2),
+    );
+    return 0;
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
 }
 
 export async function runLaunchReadinessMigrateFinalModel(
@@ -582,7 +614,20 @@ export async function runLaunchReadinessMigrateFinalModel(
     return 2;
   }
 
-  const result = migratePlatformReadinessDocumentToFinalModel(document);
+  let contributions: readonly PlatformReadinessContribution[];
+  try {
+    contributions = await loadPlatformReadinessContributionFile(
+      optionalStringOption(options, "contributionFile"),
+    );
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
+
+  const result = migratePlatformReadinessDocumentToFinalModel(
+    document,
+    contributions,
+  );
   if (out && !dryRun && !check) {
     await writeFile(out, `${JSON.stringify(result.document, null, 2)}\n`);
   }
@@ -606,6 +651,27 @@ export async function runLaunchReadinessMigrateFinalModel(
     io.stdout("Platform readiness evidence already uses final-model names.");
   }
   return check && result.report.changed ? 1 : 0;
+}
+
+async function loadPlatformReadinessContributionFile(
+  file: string | undefined,
+): Promise<readonly PlatformReadinessContribution[]> {
+  if (!file) return [];
+  const parsed = JSON.parse(await readFile(file, "utf8")) as unknown;
+  const values = Array.isArray(parsed) ? parsed : [parsed];
+  if (values.length === 0) {
+    throw new TypeError("--contribution-file must not be an empty array");
+  }
+  const errors = values.flatMap((value, index) =>
+    isPlatformReadinessContribution(value)
+      ? []
+      : platformReadinessContributionErrors(
+          value,
+          `--contribution-file entry ${index}`,
+        ),
+  );
+  if (errors.length > 0) throw new TypeError(errors.join("\n"));
+  return createPlatformReadinessContributionRegistry(values).contributions;
 }
 
 export function runLaunchReadinessProductionTopologyTemplate(

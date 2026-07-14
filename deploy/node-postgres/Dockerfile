@@ -9,7 +9,6 @@ WORKDIR /work
 COPY package.json bun.lock tsconfig.json bunfig.toml /work/
 COPY accounts/contract /work/accounts/contract
 COPY accounts/service /work/accounts/service
-COPY accounts/platform-services /work/accounts/platform-services
 COPY cli /work/cli
 COPY deploy/node-postgres/package.json /work/deploy/node-postgres/package.json
 COPY deploy/node-postgres/src /work/deploy/node-postgres/src
@@ -38,11 +37,11 @@ COPY --from=dashboard --chown=bun:bun \
   /app/dashboard/dist
 
 # Outbound network destinations the accounts handler is allowed to reach.
-# Defaults cover the Postgres service alias used by docker-compose, Stripe
-# API, and Google upstream OAuth. Operators that embed this image elsewhere
+# Defaults cover the Postgres service alias used by docker-compose and Google
+# upstream OAuth. Operators that embed this image elsewhere
 # should override the build arg, or set TAKOSUMI_ACCOUNTS_ALLOW_NET at runtime
 # and enforce it at the container network / service-mesh layer.
-ARG TAKOSUMI_ACCOUNTS_ALLOW_NET="postgres:5432,accounts.google.com:443,oauth2.googleapis.com:443,openidconnect.googleapis.com:443,www.googleapis.com:443"
+ARG TAKOSUMI_ACCOUNTS_ALLOW_NET="postgres:5432"
 ENV TAKOSUMI_ACCOUNTS_ALLOW_NET=${TAKOSUMI_ACCOUNTS_ALLOW_NET}
 ENV TAKOSUMI_ACCOUNTS_BIND_HOST=0.0.0.0
 ENV TAKOSUMI_ACCOUNTS_PORT=8787

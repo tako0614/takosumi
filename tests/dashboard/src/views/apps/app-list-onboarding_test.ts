@@ -16,7 +16,7 @@ const installationsUiSource = read("lib/capsules-ui.ts");
 describe("AppListView app launcher", () => {
   test("first-run home onboards to add a service", () => {
     expect(appListSource).toContain("function WorkspaceStartPanel");
-    expect(appListSource).toContain("visibleCapsules().length > 0");
+    expect(appListSource).toContain("appTiles().length > 0");
     expect(appListSource).toContain("listWorkspacesCached");
     expect(appListSource).toContain("selectAvailableWorkspaceId");
     expect(appListSource).toContain("if (chosen !== current)");
@@ -29,34 +29,36 @@ describe("AppListView app launcher", () => {
     expect(appListSource).not.toContain('t("apps.start.add")');
   });
 
-  test("apps page is a grid of launchable app surfaces, not every service row", () => {
-    // Prefer declared app metadata, but also keep plain OpenTofu apps visible
-    // when they expose a launch URL. One service may contribute several tiles.
-    expect(installationsUiSource).toContain(
-      "export function appSurfacesFromOutputs",
+  test("apps page joins the Capsule ledger to authorized UI-surface Interfaces only", () => {
+    expect(installationsUiSource).not.toContain(
+      "appSurfaceFromProjectedOutputs",
     );
-    expect(installationsUiSource).toContain(
-      "export function appSurfacesFromDeployment",
-    );
+    expect(installationsUiSource).not.toContain("appSurfacesFromOutputs");
+    expect(installationsUiSource).not.toContain("outputs.apps");
+    expect(installationsUiSource).not.toContain("outputs.app_name");
+    expect(installationsUiSource).not.toContain("outputs.app_icon");
+    expect(installationsUiSource).not.toContain("outputs.app_image");
+    expect(installationsUiSource).not.toContain("appSurfacesFromDeployment");
     expect(installationsUiSource).toContain("export interface AppSurface");
     expect(installationsUiSource).toContain(
       "export function isVisibleServiceCapsule",
     );
     expect(installationsUiSource).toContain('inst.status !== "destroyed"');
-    // Launcher derives surfaces through the release-activation-GATED helper:
-    // a not-yet-activated surface keeps its tile but drops the URL (falling back
-    // to the detail screen) instead of linking a dead address.
-    expect(appListSource).toContain(
-      "appSurfacesFromDeployment(deployment, [], inst.id)",
-    );
+    expect(appListSource).toContain("listAuthorizedUiSurfaces");
+    expect(appListSource).toContain("refreshSession");
+    expect(appListSource).toContain("session.subject");
+    expect(appListSource).toContain("surface.capsuleId");
+    expect(appListSource).toContain("surface.interfaceId");
+    expect(appListSource).not.toContain("appSurfaceFromInstallConfigStore");
+    expect(appListSource).not.toContain("appSurfacesFromDeployment");
     expect(appListSource).toContain("getDashboardOverviewCached");
     expect(appListSource).toContain("listCapsulesCached");
-    expect(appListSource).toContain("listCurrentStateVersionsCached");
-    expect(appListSource).toContain("listInstallConfigsCached");
+    expect(appListSource).not.toContain("listCurrentStateVersionsCached");
+    expect(appListSource).not.toContain("listInstallConfigsCached");
     expect(appListSource).toContain("overview()?.nextCapsuleCursor");
     expect(appListSource).toContain("mergeById");
     expect(appListSource).toContain("surfacesByCapsule");
-    expect(appListSource).toContain("overview()?.currentStateVersions");
+    expect(appListSource).not.toContain("overview()?.currentStateVersions");
     expect(appListSource).not.toMatch(/\bgetDeployment\(/);
     expect(appListSource).toContain("const appTiles = createMemo");
     expect(appListSource).toContain("compareAppTiles");
@@ -68,7 +70,9 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain("function AppLauncher");
     expect(appListSource).toContain("function AppTileView");
     expect(appListSource).toContain("isVisibleServiceCapsule");
-    // Phone-home-screen launcher: an icon grid + a trailing add tile.
+    // One authorized Interface becomes one launcher tile.
+    expect(appListSource).toContain("if (!surfaces) continue");
+    expect(appListSource).not.toContain("key: `${inst.id}:store`");
     expect(appListSource).toContain('class="av-launcher"');
     expect(appListSource).toContain('class="av-tile"');
     expect(appListSource).toContain('class="av-tile av-tile-add"');
@@ -110,7 +114,14 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain('class="av-tile-image"');
     expect(appListSource).toContain('class="av-tile-emoji"');
     expect(appListSource).toContain("av-tile-icon-image");
-    // Every visible capsule gets a tile, so the tiles-but-empty panel is gone.
+    // Product identity comes from the Interface document; a display name must
+    // never select a Takosumi-bundled product icon.
+    expect(appListSource).not.toContain("CURATED_APP_ICONS");
+    expect(appListSource).not.toContain("curatedAppIcon");
+    expect(appListSource).not.toContain("yurucommu");
+    expect(appListSource).not.toContain("takos-office");
+    expect(appListSource).not.toContain("/tako.png");
+    // A Capsule without a UI Interface stays on /services, not in the launcher.
     expect(appListSource).not.toContain("AppsEmptyPanel");
     expect(appListSource).toContain('href="/store"');
     expect(appListSource).not.toContain('href="/new"');
@@ -138,16 +149,16 @@ describe("AppListView app launcher", () => {
     expect(appViewsCssSource).not.toContain(".av-service-card");
   });
 
-  test("opens the surface URL when present, else the service screen", () => {
+  test("opens the authorized Interface URL and keeps Capsule management separate", () => {
     expect(appListSource).toContain("function AppTileView");
     expect(appListSource).toContain("when={openUrl()}");
-    // Gated helper: openable → URL kept (tile opens the link); not openable →
-    // URL stripped so openUrl() is falsy and the tile opens the service screen.
-    expect(appListSource).toContain("appSurfacesFromDeployment");
+    // The resolved, authorized Interface supplies the URL directly.
+    expect(appListSource).toContain("listAuthorizedUiSurfaces");
+    expect(appListSource).not.toContain("appSurfaceFromInstallConfigStore");
+    expect(appListSource).not.toContain("appSurfacesFromDeployment");
     expect(appListSource).toContain('target="_blank"');
-    expect(appListSource).toContain("props.openDetail(tile.inst)");
     expect(appListSource).toContain('class="av-tile-manage"');
-    // Tapping the icon goes straight to the app's link (declared surface URL).
+    // Tapping the icon goes straight to the explicitly projected launch URL.
     expect(appListSource).toContain("href={url()}");
     expect(appListSource).not.toContain("window.open");
     // Needs-attention is a corner dot + screen-reader label, not a status pill.
@@ -156,26 +167,18 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain('class="sr-only"');
   });
 
-  test("never-deployed installs do not link to their planned (dead) URL", () => {
-    // Only a service with a current StateVersion may render an external link;
-    // otherwise the tile is the button variant that opens the service screen.
-    expect(appListSource).toContain("deployedCapsuleIds");
-    expect(appListSource).toContain("const openUrl");
-    expect(appListSource).toMatch(
-      /props\.tile\.deployed \? surface\(\)\.url : undefined/,
-    );
-    expect(appListSource).not.toContain("when={surface().url}");
-    // The stuck/failed state is visible on the tile itself.
-    expect(appListSource).toContain('class="av-tile-state"');
-    expect(appListSource).toContain("when={!props.tile.deployed}");
-    expect(appListSource).toContain("capsuleStatusLabel");
-    expect(appListSource).toContain("effectiveCapsuleStatus(props.tile.inst)");
+  test("never derives launch readiness or URLs from StateVersion or Store data", () => {
+    expect(appListSource).not.toContain("deployedCapsuleIds");
+    expect(appListSource).not.toContain("currentStateVersions");
+    expect(appListSource).not.toContain("installConfigs");
+    expect(appListSource).not.toContain("store?.kind");
+    expect(appListSource).not.toContain("planned URL");
+    expect(appListSource).toContain("surface.url");
   });
 
   test("a failed supplemental full-list fetch is surfaced, not silent truncation", () => {
     expect(appListSource).toContain("fullCapsules.error");
-    expect(appListSource).toContain("fullStateVersions.error");
-    expect(appListSource).toContain("fullInstallConfigs.error");
+    expect(appListSource).toContain("uiSurfaces.error");
     expect(appListSource).toContain("retryFullFetch");
     expect(appListSource).toContain('t("apps.listIncomplete")');
     expect(appListSource).toContain('t("common.retry")');

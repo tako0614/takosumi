@@ -4,7 +4,6 @@ import {
   classifyOpenTofuFailure,
   commandFailurePayload,
 } from "../../runner/lib/exec.ts";
-import { compactErrorCode } from "../../core/domains/deploy-control/projection_run.ts";
 
 const CASES = [
   ["Invalid provider source address", "provider_source_invalid"],
@@ -22,7 +21,7 @@ const CASES = [
     "provider_policy_denied",
   ],
   [
-    "runner profile private does not allow local source paths",
+    "runner profile private requires source_archive capability",
     "runner_capability_missing",
   ],
   [
@@ -63,12 +62,4 @@ test("command failure payload carries the stable code without exposing secrets",
   expect(payload.errorCode).toBe("provider_package_unavailable");
   expect(payload.stderr).toContain("[redacted]");
   expect(payload.stderr).not.toContain("secret-value");
-});
-
-test("public Run projection recovers a nested runner failure code", () => {
-  expect(
-    compactErrorCode(
-      "OpenTofu runner rejected plan run run_test: 500 (provider_platform_binary_unavailable: no package)",
-    ),
-  ).toBe("provider_platform_binary_unavailable");
 });

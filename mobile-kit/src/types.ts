@@ -4,10 +4,12 @@ import type {
   MobileProductWellKnown as ContractMobileProductWellKnown,
   MobileProductWellKnownEndpoints,
   MobilePushClientRegistration,
+  MobilePushProvider as ContractMobilePushProvider,
 } from "../../contract/mobile.ts";
 
 export type MobileHostableProductKind = ContractMobileHostableProductKind;
 export type MobileProductKind = ContractMobileProductKind;
+export type MobilePushProvider = ContractMobilePushProvider;
 
 export type ProductWellKnown = ContractMobileProductWellKnown;
 export type ProductWellKnownEndpoints = MobileProductWellKnownEndpoints;
@@ -15,11 +17,9 @@ export type ProductWellKnownEndpoints = MobileProductWellKnownEndpoints;
 export interface MobileHostCenterSource {
   readonly source?: string;
   readonly git?: string;
-  readonly installConfigId?: string;
   readonly ref?: string;
   readonly path?: string;
   readonly name?: string;
-  readonly vars?: Readonly<Record<string, string>>;
 }
 
 export interface MobileProductAdapter {
@@ -27,6 +27,11 @@ export interface MobileProductAdapter {
   readonly appName: string;
   readonly hostNoun: string;
   readonly hostCenterLabel?: string;
+  /**
+   * Explicit operator dashboard install endpoint. The shared mobile kit never
+   * assumes the official hosted Takosumi Cloud deployment.
+   */
+  readonly hostCenterUrl?: string;
   readonly hostCenterProduct?: MobileHostableProductKind;
   readonly hostCenterSource?: MobileHostCenterSource;
   readonly strictDiscoveryProduct?: boolean;
@@ -36,7 +41,8 @@ export interface MobileProductAdapter {
   readonly primaryActionLabel: string;
   readonly accentColor: string;
   readonly mobileScheme: string;
-  readonly oidcClientId?: string;
+  /** Explicit OAuth/OIDC scopes required by this product shell. */
+  readonly oidcScopes?: readonly string[];
   readonly requiredHostCapabilities?: readonly string[];
 }
 
@@ -80,7 +86,7 @@ export interface HostCapabilities {
     readonly issuer?: string;
   };
   readonly resources?: Record<string, unknown>;
-  readonly commercial?: Record<string, unknown>;
+  readonly extensions?: readonly string[];
   readonly [key: string]: unknown;
 }
 
@@ -92,6 +98,7 @@ export interface HostDiscovery {
   readonly capabilities?: HostCapabilities;
   readonly product?: ProductWellKnown;
   readonly oidcIssuer: string;
+  readonly oidcClientId?: string;
   readonly oidcDiscoveryUrl: string;
 }
 
@@ -176,6 +183,7 @@ export interface MobileAuthRequest {
   readonly hostUrl: string;
   readonly product: MobileProductKind;
   readonly oidcIssuer: string;
+  readonly oidcClientId: string;
   readonly productEndpoints?: ProductWellKnownEndpoints;
   readonly redirectUri: string;
   readonly state: string;
@@ -187,6 +195,7 @@ export interface MobileSession {
   readonly hostUrl: string;
   readonly product: MobileProductKind;
   readonly oidcIssuer: string;
+  readonly oidcClientId?: string;
   readonly productEndpoints?: ProductWellKnownEndpoints;
   readonly accessToken: string;
   readonly tokenType: string;
@@ -265,6 +274,7 @@ export interface NativeBridge {
   readonly registerPushNotifications?: (
     input: MobilePushRegistrationInput,
   ) => Promise<MobilePushRegistration | undefined>;
+  readonly unregisterPushNotifications?: () => Promise<void>;
   readonly onPushNotificationReceived?: (
     handler: (notification: MobilePushNotification) => void,
   ) => Promise<() => void>;

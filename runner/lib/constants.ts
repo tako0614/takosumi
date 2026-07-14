@@ -13,19 +13,16 @@ export const PROVIDER_PLUGIN_CACHE_DIR_ENV =
   "TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR";
 export const SOURCE_BUILD_CACHE_DIR_ENV = "TAKOSUMI_SOURCE_BUILD_CACHE_DIR";
 export const RUNNER_START_SERVER_ENV = "TAKOSUMI_RUNNER_START_SERVER";
-export const PROVIDER_SNAPSHOT_COMMAND_ENV =
-  "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND";
-export const PROVIDER_SNAPSHOT_COMMAND_ENV_PREFIX =
-  "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND_";
-export const PROVIDER_SNAPSHOT_POINTER_DIR_ENV =
-  "TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR";
+/**
+ * JSON object mapping opaque backup adapter ids to exact runner strategies.
+ * Provider names never select an adapter. Example:
+ * {"postgres-export":{"kind":"command","command":"..."}}
+ */
+export const BACKUP_ADAPTERS_ENV = "TAKOSUMI_BACKUP_ADAPTERS_JSON";
 
 export const port = Number(Bun.env.PORT ?? "8080");
 export const RUN_ROOT =
   Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
-export const DEFAULT_PREPARED_SOURCE_MAX_BYTES = 100 * 1024 * 1024;
-export const DEFAULT_PREPARED_SOURCE_MAX_DECOMPRESSED_BYTES =
-  10 * DEFAULT_PREPARED_SOURCE_MAX_BYTES;
 export const BASE_COMMAND_ENV_NAMES = [
   "PATH",
   "HOME",
@@ -45,6 +42,8 @@ export const BASE_COMMAND_ENV_NAMES = [
 // Default cap for the produced source archive when the runner profile does not
 // pin `resourceLimits.maxSourceArchiveBytes`. Source repos are small modules.
 export const DEFAULT_SOURCE_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024;
+export const DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES =
+  10 * DEFAULT_SOURCE_ARCHIVE_MAX_BYTES;
 // Raw `tofu show -json tfplan` can embed large provider payloads such as
 // Worker scripts. The runner still derives the small summary/resource list from
 // it, but the optional raw artifact is capped so the Durable Object relay does

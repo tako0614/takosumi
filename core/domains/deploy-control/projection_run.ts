@@ -28,11 +28,7 @@ import type {
   RunStatus,
   RunType,
 } from "takosumi-contract/runs";
-import type { JsonValue } from "takosumi-contract";
-import {
-  legacyCreditsToUsdMicros,
-  usdMicrosToLegacyCredits,
-} from "takosumi-contract/billing";
+import { normalizePlanResourceScope, type JsonValue } from "takosumi-contract";
 
 type RunEnvironmentEvidenceProjection = Pick<
   Run,
@@ -160,8 +156,8 @@ export interface ProjectPlanRunOptions {
    * `waiting_approval`.
    */
   readonly awaitingApproval?: boolean;
-  /** Installation the plan targets (spec §5: one Installation = one root). */
-  readonly installationId?: string;
+  /** Capsule the plan targets. */
+  readonly capsuleId?: string;
   readonly environment?: string;
   /** Resolved SourceSnapshot id, when the plan referenced one. */
   readonly sourceSnapshotId?: string;
@@ -184,13 +180,15 @@ export function projectPlanRun(
     id: planRun.id,
     ...(planRun.runGroupId ? { runGroupId: planRun.runGroupId } : {}),
     workspaceId: planRun.workspaceId,
-    spaceId: planRun.workspaceId ?? planRun.spaceId,
-    ...(options.installationId
+    ...(planRun.resourceContext
       ? {
-          capsuleId: options.installationId,
-          installationId: options.installationId,
+          subject: {
+            kind: "resource" as const,
+            id: planRun.resourceContext.resourceId,
+          },
         }
       : {}),
+    ...(options.capsuleId ? { capsuleId: options.capsuleId } : {}),
     ...(options.environment ? { environment: options.environment } : {}),
     type,
     status: planUnifiedStatus(
@@ -211,14 +209,23 @@ export function projectPlanRun(
       : {}),
     ...(planRun.planDigest ? { planDigest: planRun.planDigest } : {}),
     ...(planRun.planArtifact?.ref
-      ? { planArtifactKey: planRun.planArtifact.ref }
+      ? { planArtifactRef: planRun.planArtifact.ref }
       : {}),
     ...(planRun.planDigest && planRun.planArtifact
       ? { applyExpected: projectApplyExpectedGuard(planRun) }
       : {}),
     ...(planRun.summary ? { summary: planRun.summary } : {}),
     ...(planRun.planResourceChanges
-      ? { planResources: planRun.planResourceChanges }
+      ? {
+          planResources: planRun.planResourceChanges.map((change) => {
+            const { scope, ...projection } = change;
+            const normalizedScope = normalizePlanResourceScope(scope);
+            return {
+              ...projection,
+              ...(normalizedScope ? { scope: normalizedScope } : {}),
+            };
+          }),
+        }
       : {}),
     ...runEnvironmentEvidence(planRun),
     policyStatus: policyStatusFor(planRun.policy.status),
@@ -237,13 +244,10 @@ export function projectPlanRun(
 
 function projectApplyExpectedGuard(planRun: PlanRun): Run["applyExpected"] {
   if (!planRun.planDigest || !planRun.planArtifact) return undefined;
-  const capsuleId = planRun.capsuleId ?? planRun.installationId;
+  const capsuleId = planRun.capsuleId;
   return {
     planId: planRun.id,
     ...(capsuleId ? { capsuleId } : {}),
-    ...(planRun.installationId
-      ? { installationId: planRun.installationId }
-      : {}),
     ...(capsuleId
       ? { currentStateVersionId: planRun.capsuleCurrentStateVersionId ?? null }
       : {}),
@@ -257,17 +261,18 @@ function projectApplyExpectedGuard(planRun: PlanRun): Run["applyExpected"] {
     ...(planRun.providerLockDigest
       ? { providerLockDigest: planRun.providerLockDigest }
       : {}),
-    ...(planRun.resolvedProviderEnvBindingsDigest
+    ...(planRun.resolvedProviderBindingsDigest
       ? {
-          resolvedProviderEnvBindingsDigest:
-            planRun.resolvedProviderEnvBindingsDigest,
+          resolvedProviderBindingsDigest:
+            planRun.resolvedProviderBindingsDigest,
         }
       : {}),
   };
 }
 
 export interface ProjectApplyRunOptions {
-  readonly installationId?: string;
+  readonly capsuleId?: string;
+  readonly resourceId?: string;
   readonly environment?: string;
   readonly sourceSnapshotId?: string;
   /** Pinned DependencySnapshot id (spec §17), threaded from the source PlanRun. */
@@ -288,13 +293,10 @@ export function projectApplyRun(
     id: applyRun.id,
     ...(options.runGroupId ? { runGroupId: options.runGroupId } : {}),
     workspaceId: applyRun.workspaceId,
-    spaceId: applyRun.workspaceId ?? applyRun.spaceId,
-    ...(options.installationId
-      ? {
-          capsuleId: options.installationId,
-          installationId: options.installationId,
-        }
+    ...(options.resourceId
+      ? { subject: { kind: "resource" as const, id: options.resourceId } }
       : {}),
+    ...(options.capsuleId ? { capsuleId: options.capsuleId } : {}),
     ...(options.environment ? { environment: options.environment } : {}),
     type,
     status: applyUnifiedStatus(applyRun.status),
@@ -323,7 +325,6 @@ export function projectSourceSyncRun(run: SourceSyncRun): Run {
   return {
     id: run.id,
     workspaceId: run.workspaceId,
-    spaceId: run.spaceId,
     type: "source_sync",
     status: syncUnifiedStatus(run.status),
     ...(run.snapshotId && run.status === "succeeded"
@@ -333,112 +334,27 @@ export function projectSourceSyncRun(run: SourceSyncRun): Run {
     createdAt: run.createdAt,
     ...(run.startedAt ? { startedAt: run.startedAt } : {}),
     ...(run.finishedAt ? { finishedAt: run.finishedAt } : {}),
-    ...(run.error ? { errorCode: "source_sync_failed" } : {}),
+    ...(run.errorCode
+      ? { errorCode: run.errorCode }
+      : run.error
+        ? { errorCode: "source_sync_failed" }
+        : {}),
   };
 }
 
 function errorCodeFromPlan(planRun: PlanRun): string {
-  const message = planRun.diagnostics?.find(
-    (d) => d.severity === "error",
-  )?.message;
-  if (message) return compactErrorCode(message);
+  const code = planRun.diagnostics?.find(
+    (diagnostic) => diagnostic.severity === "error" && diagnostic.code,
+  )?.code;
+  if (code) return code;
   return planRun.policy.status === "blocked" ? "policy_denied" : "plan_failed";
 }
 
 function errorCodeFromApply(applyRun: ApplyRun): string {
-  const message = applyRun.diagnostics?.find(
-    (d) => d.severity === "error",
-  )?.message;
-  return message ? compactErrorCode(message) : "apply_failed";
-}
-
-/**
- * Derives a short stable error code token from a diagnostic message. Picks a
- * leading `snake_case:` token when present (the controller emits these, e.g.
- * `state_generation_mismatch: ...`); otherwise falls back to a generic code so
- * the public Run never leaks a full diagnostic string.
- */
-export function compactErrorCode(message: string): string {
-  if (isCreditRequiredErrorMessage(message)) return "credits_required";
-  if (isProviderConnectionChangedErrorMessage(message)) {
-    return "provider_connection_changed";
-  }
-  if (isProviderConnectionNotReadyErrorMessage(message)) {
-    return "provider_connection_not_ready";
-  }
-  if (isProviderConnectionSetupErrorMessage(message)) {
-    return "provider_connection_setup_required";
-  }
-  if (isCredentialServiceUnavailableErrorMessage(message)) {
-    return "credential_service_unavailable";
-  }
-  const providerRuntimeCode = message.match(
-    /\b(provider_source_invalid|provider_package_unavailable|provider_platform_binary_unavailable|provider_protocol_mismatch|provider_policy_denied|runner_capability_missing|provider_checksum_mismatch|opentofu_init_failed):/,
-  );
-  if (providerRuntimeCode) return providerRuntimeCode[1]!;
-  const match = message.match(/^([a-z][a-z0-9_]{2,63}):/);
-  return match ? match[1] : "run_failed";
-}
-
-function isCreditRequiredErrorMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
   return (
-    normalized.includes("cloud_extension_insufficient_credits") ||
-    normalized.includes('"reason":"insufficient_credits"') ||
-    normalized.includes('"reason": "insufficient_credits"') ||
-    (normalized.includes("reservationstatus") &&
-      normalized.includes("insufficient_credits")) ||
-    normalized.includes("usd balance reservation failed") ||
-    normalized.includes("insufficient credits")
-  );
-}
-
-function isProviderConnectionChangedErrorMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("resolved_bindings_changed") ||
-    normalized.includes("re-plan before apply")
-  );
-}
-
-function isProviderConnectionNotReadyErrorMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    (normalized.includes("credential_mint_failed") &&
-      normalized.includes("not verified")) ||
-    normalized.includes("pending (not verified)") ||
-    (normalized.includes("provider connection") &&
-      normalized.includes("status pending is not verified"))
-  );
-}
-
-function isProviderConnectionSetupErrorMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("credential_mint_failed") &&
-    (normalized.includes("provider connection evidence is required") ||
-      normalized.includes("provider connection resolution is required") ||
-      normalized.includes("root-only provider connection is required") ||
-      (normalized.includes("connection ") &&
-        normalized.includes(" not found")) ||
-      normalized.includes("provider connection is required") ||
-      normalized.includes("belongs to another space") ||
-      normalized.includes("git source connection") ||
-      normalized.includes("cannot back a provider env binding") ||
-      (normalized.includes("provider ") &&
-        normalized.includes(" does not match")))
-  );
-}
-
-function isCredentialServiceUnavailableErrorMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("credential_mint_failed") &&
-    (normalized.includes("connection vault is not configured") ||
-      normalized.includes("requires a managed provider credential issuer") ||
-      normalized.includes("could not mint a run-scoped provider token") ||
-      normalized.includes("gateway materialization is takosumi cloud-only") ||
-      normalized.includes("mint driver"))
+    applyRun.diagnostics?.find(
+      (diagnostic) => diagnostic.severity === "error" && diagnostic.code,
+    )?.code ?? "apply_failed"
   );
 }
 
@@ -446,13 +362,15 @@ function isCredentialServiceUnavailableErrorMessage(message: string): boolean {
 function planBillingAudit(
   planRun: PlanRun,
 ): Readonly<Record<string, JsonValue>> | undefined {
-  const evaluated = planRun.auditEvents.find(
-    (event) => event.type === "plan.policy_evaluated",
-  );
-  const billing = evaluated?.data?.billing;
-  return billing && typeof billing === "object" && !Array.isArray(billing)
-    ? (billing as Readonly<Record<string, JsonValue>>)
-    : undefined;
+  for (let index = planRun.auditEvents.length - 1; index >= 0; index -= 1) {
+    const event = planRun.auditEvents[index];
+    if (event?.type !== "plan.policy_evaluated") continue;
+    const billing = event.data?.billing;
+    if (billing && typeof billing === "object" && !Array.isArray(billing)) {
+      return billing as Readonly<Record<string, JsonValue>>;
+    }
+  }
+  return undefined;
 }
 
 function numberOrUndefined(value: JsonValue | undefined): number | undefined {
@@ -464,14 +382,10 @@ function numberOrUndefined(value: JsonValue | undefined): number | undefined {
 /**
  * Projects the public {@link RunCostInfo} for a `plan` / `destroy_plan` PlanRun.
  *
- * This is a PURE re-projection of values the controller ALREADY computed and
- * recorded on the run at plan time: the billing audit attached to the
- * `plan.policy_evaluated` event (mode / estimated USD / available USD /
- * reservation status) and the billing-shortfall reasons recorded on the run's
- * policy decision. It computes no cost (it never calls the credit estimator) and
- * surfaces no secret material — only the counts and reasons already persisted —
- * so a dashboard can explain, before apply, why an apply would be blocked under
- * `enforce` mode (insufficient USD balance / a billing-plan limit).
+ * This is a PURE re-projection of the stable core fields recorded under the
+ * `plan.policy_evaluated` billing audit. Host-owned commercial details remain
+ * opaque under `extension`; core never interprets provider-specific strings,
+ * balance fields, reservation statuses, or plan records.
  *
  * A plan that never reached billing evaluation (no `plan.policy_evaluated`
  * event, e.g. a still-queued or pre-policy-failure run) projects a
@@ -480,83 +394,38 @@ function numberOrUndefined(value: JsonValue | undefined): number | undefined {
 export function projectPlanRunCost(planRun: PlanRun): RunCostInfo {
   const billing = planBillingAudit(planRun);
   const modeValue = billing?.mode;
-  // OSS resolves only disabled|showback. A legacy/Cloud-written `enforce` audit
-  // value is surfaced as `showback` here; the actual gating (if any) is reported
-  // via `blocked` / `reasons` recorded by the injected enforcement port.
   const billingMode: RunCostInfo["billingMode"] =
-    modeValue === "showback" || modeValue === "enforce"
-      ? "showback"
-      : "disabled";
-  const legacyEstimatedCredits = numberOrUndefined(billing?.estimatedCredits);
-  const legacyAvailableCredits = numberOrUndefined(billing?.availableCredits);
+    modeValue === "showback" ? "showback" : "disabled";
+  const ratingValue = billing?.ratingStatus;
+  const ratingStatus: RunCostInfo["ratingStatus"] =
+    billingMode === "disabled"
+      ? "not_applicable"
+      : ratingValue === "rated"
+        ? "rated"
+        : "unrated";
   const estimatedUsdMicros =
-    numberOrUndefined(billing?.estimatedUsdMicros) ??
-    legacyCreditsToUsdMicros(legacyEstimatedCredits ?? 0);
-  const availableUsdMicros =
-    numberOrUndefined(billing?.availableUsdMicros) ??
-    (legacyAvailableCredits === undefined
-      ? undefined
-      : legacyCreditsToUsdMicros(legacyAvailableCredits));
-  const estimatedCredits = usdMicrosToLegacyCredits(estimatedUsdMicros);
-  const availableCredits =
-    availableUsdMicros === undefined
-      ? undefined
-      : usdMicrosToLegacyCredits(availableUsdMicros);
-  const reservationValue = billing?.reservationStatus;
-  const reservationStatus: RunCostInfo["reservationStatus"] | undefined =
-    reservationValue === "reserved" ||
-    reservationValue === "insufficient_credits"
-      ? reservationValue
-      : undefined;
-  const shortfallUsdMicros =
-    availableUsdMicros !== undefined && estimatedUsdMicros > availableUsdMicros
-      ? estimatedUsdMicros - availableUsdMicros
-      : undefined;
-  // Billing blocks the plan only when the run is policy-`blocked`: a passed
-  // plan never blocks on billing even in `enforce`. The credit-shortfall and
-  // plan-limit messages are recorded verbatim on the policy decision; keep the
-  // public-safe ones (they carry only credit counts and the billing plan id).
-  const reasons =
-    planRun.policy.status === "blocked"
-      ? planRun.policy.reasons.filter(isBillingReason)
-      : [];
-  // Billing blocks only when an injected Cloud enforcement port recorded an
-  // enforce decision (`mode: "enforce"` in its billing audit) AND that decision
-  // is a shortfall / plan-limit on a policy-`blocked` run. OSS showback uses the
-  // no-op port, which never records `enforce`, so this is structurally false for
-  // an OSS-only deployment (enforcement is reachable only via the injected port).
-  const enforcedByPort = modeValue === "enforce";
+    ratingStatus === "rated"
+      ? (numberOrUndefined(billing?.estimatedUsdMicros) ?? 0)
+      : 0;
+  const reasons = stringArray(billing?.reasons);
   const blocked =
-    enforcedByPort &&
-    (reservationStatus === "insufficient_credits" || reasons.length > 0);
+    planRun.policy.status === "blocked" && billing?.blocked === true;
+  const extension = billing?.extension;
   return {
     runId: planRun.id,
     billingMode,
     estimatedUsdMicros,
-    ...(availableUsdMicros !== undefined ? { availableUsdMicros } : {}),
-    ...(shortfallUsdMicros !== undefined ? { shortfallUsdMicros } : {}),
-    estimatedCredits,
-    ...(availableCredits !== undefined ? { availableCredits } : {}),
-    ...(reservationStatus ? { reservationStatus } : {}),
-    ...(shortfallUsdMicros !== undefined
-      ? { creditShortfall: usdMicrosToLegacyCredits(shortfallUsdMicros) }
-      : {}),
+    ratingStatus,
     blocked,
     reasons,
+    ...(extension && typeof extension === "object" && !Array.isArray(extension)
+      ? { extension: extension as Readonly<Record<string, JsonValue>> }
+      : {}),
   };
 }
 
-/**
- * True for a policy reason string that describes a billing/USD-balance block.
- * The controller emits USD balance reasons starting `USD balance reservation
- * failed:` and billing-plan limit reasons starting `billing plan `; legacy
- * credit reasons are accepted only for old persisted runs. These strings carry
- * only amounts / a billing plan id, never secrets.
- */
-function isBillingReason(reason: string): boolean {
-  return (
-    reason.startsWith("USD balance reservation failed:") ||
-    reason.startsWith("credit reservation failed:") ||
-    reason.startsWith("billing plan ")
-  );
+function stringArray(value: JsonValue | undefined): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }

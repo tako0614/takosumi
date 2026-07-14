@@ -156,8 +156,9 @@ function Inner() {
   const approveAll = createAction(async () => {
     await approveRunGroup(groupId());
     await refetch();
-    // The grouped apply changes multiple capsules — mirror RunView and drop
-    // the launcher projections so the home tiles reflect it without a reload.
+    // The grouped apply changes multiple Capsules — mirror RunView and drop
+    // installed-Capsule projections. The home reads runtime Interfaces through
+    // their own authoritative API when it mounts.
     clearLauncherCaches(snapshot()?.runGroup.workspaceId);
   });
 

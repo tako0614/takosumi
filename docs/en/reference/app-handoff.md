@@ -23,27 +23,30 @@ client
 
 ## Entry URL
 
-The public entrypoint is:
+The public entrypoint is on the Takosumi origin selected by the operator:
 
 ```text
-https://app.takosumi.com/install
+https://<takosumi-origin>/install
 ```
+
+The official Takosumi Cloud origin is `app.takosumi.com`, but the same protocol
+works at any explicit self-hosted or Operator origin.
 
 The dashboard may canonicalize the flow to `/new`, but external clients should
 link `/install`.
 
 Supported query parameters:
 
-| Parameter         | Required | Meaning                                             |
-| ----------------- | -------- | --------------------------------------------------- |
-| `git`             | no       | HTTPS Git URL for a plain OpenTofu/Terraform module |
-| `source`          | no       | Packed module address, for example `git::...?...`   |
-| `ref`             | no       | Git branch, tag, or commit                          |
-| `path`            | no       | Module path inside the repository                   |
-| `name`            | no       | Display name for the service                        |
-| `var.<name>`      | no       | Non-secret visible module input                     |
-| `product`         | no       | Client product key, only with `return_uri`          |
-| `return_uri`      | no       | Connection payload target, only with `product`      |
+| Parameter    | Required | Meaning                                             |
+| ------------ | -------- | --------------------------------------------------- |
+| `git`        | no       | HTTPS Git URL for a plain OpenTofu/Terraform module |
+| `source`     | no       | Packed module address, for example `git::...?...`   |
+| `ref`        | no       | Git branch, tag, or commit                          |
+| `path`       | no       | Module path inside the repository                   |
+| `name`       | no       | Display name for the service                        |
+| `var.<name>` | no       | Non-secret visible module input                     |
+| `product`    | no       | Client product key, only with `return_uri`          |
+| `return_uri` | no       | Connection payload target, only with `product`      |
 
 `git` or `source` selects what Takosumi should create. Store nodes are
 discovery / presentation entrypoints that prefill this URL; they are not the
@@ -69,8 +72,8 @@ They do not specify an OpenTofu source, so there is no install target.
 Example:
 
 ```text
-https://app.takosumi.com/install
-  ?git=https%3A%2F%2Fgithub.com%2Facme%2Fnotes.git
+https://takosumi.example.com/install
+  ?git=https%3A%2F%2Fgit.example.com%2Facme%2Fnotes.git
   &ref=v1.2.3
   &path=deploy%2Fopentofu
   &product=notes-app

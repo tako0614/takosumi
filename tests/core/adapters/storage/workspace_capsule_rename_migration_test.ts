@@ -110,7 +110,7 @@ async function seedPgLegacy(db: PGlite): Promise<void> {
   await db.exec(
     `insert into takosumi_opentofu_installations values (
        'cap_1', 'ws_1', 'web', 'production', 'src_1', 'cfg_1', 'dep_old', 'active',
-       '{"id":"cap_1","spaceId":"ws_1","name":"web","environment":"production","currentDeploymentId":"dep_old","currentOutputSnapshotId":"out_1","status":"active"}',
+       '{"id":"cap_1","spaceId":"ws_1","name":"web","environment":"production","currentStateVersionId":"dep_old","currentOutputId":"out_1","status":"active"}',
        '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z'
      )`,
   );
@@ -325,7 +325,7 @@ async function seedD1Legacy(db: SqliteFakeD1): Promise<void> {
       `insert into installations values (
         'cap_1','ws_1','web','web','src_1','opentofu_module','cfg_1','production',
         'dep_old',2,'out_1','active',
-        '{"id":"cap_1","spaceId":"ws_1","name":"web","environment":"production","currentDeploymentId":"dep_old","currentOutputSnapshotId":"out_1","status":"active"}',
+        '{"id":"cap_1","spaceId":"ws_1","name":"web","environment":"production","currentStateVersionId":"dep_old","currentOutputId":"out_1","status":"active"}',
         '2026-06-01T00:00:00.000Z','2026-06-01T00:00:00.000Z'
       )`,
     )

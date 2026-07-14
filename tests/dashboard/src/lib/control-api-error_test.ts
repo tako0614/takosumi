@@ -2,40 +2,44 @@ import { describe, expect, test } from "bun:test";
 import { ControlApiError } from "../../../../dashboard/src/lib/control-api.ts";
 
 describe("ControlApiError source-sync classification", () => {
-  test("treats the typed source_sync_required code as source sync retryable", () => {
+  test("reads source sync reasons from failed_precondition details", () => {
     const error = new ControlApiError(
       409,
-      "source_sync_required",
+      "failed_precondition",
       "Source contents are still being fetched.",
+      {
+        error: {
+          code: "failed_precondition",
+          message: "Source contents are still being fetched.",
+          details: { reason: "source_sync_required" },
+        },
+      },
     );
 
+    expect(error.reason).toBe("source_sync_required");
     expect(error.isSourceSyncRequired).toBe(true);
   });
 
-  test("keeps source_sync_required failed_precondition retryable for legacy route messages", () => {
-    const error = new ControlApiError(
+  test("does not infer source sync semantics from failed_precondition messages", () => {
+    const sourceMessageOnly = new ControlApiError(
       409,
       "failed_precondition",
-      "source_sync_required: source src_1 has no SourceSnapshot; run a source sync first",
-    );
-
-    expect(error.isSourceSyncRequired).toBe(true);
-  });
-
-  test("does not classify unrelated failed_precondition errors as source sync", () => {
-    const duplicateInstallation = new ControlApiError(
-      409,
-      "failed_precondition",
-      "installation @space/takos (production) already exists",
+      "source_sync_required: source src_1 has no SourceSnapshot",
     );
     const compatibilityNotRunnable = new ControlApiError(
       409,
       "failed_precondition",
       "compatibility_report_not_runnable: report caprep_1 is needs_patch",
     );
+    const nonContractCodeOnly = new ControlApiError(
+      409,
+      "source_sync_required",
+      "Source contents are still being fetched.",
+    );
 
-    expect(duplicateInstallation.isSourceSyncRequired).toBe(false);
+    expect(sourceMessageOnly.isSourceSyncRequired).toBe(false);
     expect(compatibilityNotRunnable.isSourceSyncRequired).toBe(false);
+    expect(nonContractCodeOnly.isSourceSyncRequired).toBe(false);
   });
 });
 
@@ -62,29 +66,15 @@ describe("ControlApiError duplicate service classification", () => {
     expect(error.isDuplicateService).toBe(true);
   });
 
-  test("keeps typed duplicate installation compatibility", () => {
-    const error = new ControlApiError(409, "failed_precondition", "exists", {
-      error: {
-        code: "failed_precondition",
-        details: {
-          reason: "duplicate_installation",
-        },
-      },
-    });
-
-    expect(error.reason).toBe("duplicate_installation");
-    expect(error.isDuplicateService).toBe(true);
-  });
-
-  test("keeps duplicate fallback for older deploy-control messages", () => {
+  test("does not infer duplicate semantics from Capsule messages", () => {
     const error = new ControlApiError(
       409,
       "failed_precondition",
-      "installation @workspace/takos (production) already exists",
+      "capsule @workspace/takos (production) already exists",
     );
 
     expect(error.reason).toBeUndefined();
-    expect(error.isDuplicateService).toBe(true);
+    expect(error.isDuplicateService).toBe(false);
   });
 
   test("does not treat unrelated 409s as duplicate services", () => {
@@ -106,14 +96,14 @@ describe("ControlApiError duplicate service classification", () => {
 });
 
 describe("ControlApiError app hostname classification", () => {
-  test("classifies app hostname collisions without exposing owner details", () => {
+  test("does not infer app hostname collisions from messages", () => {
     const error = new ControlApiError(
       409,
       "failed_precondition",
       "app_hostname_unavailable: already exists",
     );
 
-    expect(error.isAppHostnameUnavailable).toBe(true);
+    expect(error.isAppHostnameUnavailable).toBe(false);
     expect(error.isDuplicateService).toBe(false);
   });
 
@@ -134,23 +124,13 @@ describe("ControlApiError app hostname classification", () => {
     expect(error.isAppHostnameUnavailable).toBe(true);
   });
 
-  test("classifies older verbose hostname collision messages", () => {
+  test("does not infer app hostname collisions from verbose owner messages", () => {
     const error = new ControlApiError(
       409,
       "failed_precondition",
       "app_hostname_unavailable: yurucommu.app.takos.jp is already claimed by Capsule yurucommu (inst_1) in Workspace space_1",
     );
 
-    expect(error.isAppHostnameUnavailable).toBe(true);
-  });
-
-  test("classifies owner-detail hostname collision messages without the legacy prefix", () => {
-    const error = new ControlApiError(
-      409,
-      "failed_precondition",
-      "yurucommu.app.takos.jp is already claimed by Capsule yurucommu (inst_1) in Workspace space_1",
-    );
-
-    expect(error.isAppHostnameUnavailable).toBe(true);
+    expect(error.isAppHostnameUnavailable).toBe(false);
   });
 });

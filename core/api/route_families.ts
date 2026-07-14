@@ -5,12 +5,11 @@ import {
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "takosumi-contract/api-surface";
 import { DEPLOY_CONTROL_INTERNAL_ENDPOINTS } from "./deploy_control_internal_routes.ts";
-import { ARTIFACT_ENDPOINTS } from "./artifact_routes.ts";
-import { RUNTIME_AGENT_ENDPOINTS } from "./runtime_agent_routes.ts";
 import { READINESS_ENDPOINTS } from "./readiness_routes.ts";
 import { METRICS_ENDPOINTS } from "./metrics_routes.ts";
 import { OPENAPI_ENDPOINTS } from "./openapi_endpoint.ts";
 import { RESOURCE_SHAPE_ENDPOINTS } from "./resource_routes.ts";
+import { INTERFACE_ENDPOINTS } from "./interface_routes.ts";
 
 /**
  * Single source of truth for the API route inventory mounted by
@@ -18,7 +17,7 @@ import { RESOURCE_SHAPE_ENDPOINTS } from "./resource_routes.ts";
  * times — once for the `mounted` flags + per-endpoint summaries surfaced by
  * `/capabilities` (`capabilities.ts`), once for the OpenAPI document paths
  * (`openapi.ts`), and once as the concrete `app.get/post` mount calls — which
- * let `/capabilities` and `/openapi.json` drift apart (e.g. deployment-outputs
+ * let `/capabilities` and `/openapi.json` drift apart (e.g. Output reads
  * and `/v1/artifacts/kinds` were missing from one or both, summaries diverged,
  * and capabilities invented a `metrics-token` auth value OpenAPI never used)
  * and made adding an endpoint a multi-file edit.
@@ -49,8 +48,6 @@ export type ApiEndpointAuth =
   | "none"
   | "internal-service"
   | "inventory-bearer"
-  | "deploy-token"
-  | "artifact-read"
   | "deploy-control-token"
   | "metrics-scrape";
 
@@ -122,22 +119,20 @@ export interface RouteFamilyDescriptor {
 }
 
 export type RouteFamilyId =
-  | "runtime-agent"
   | "openapi"
   | "readiness"
-  | "artifact"
   | "deployControl-internal"
   | "metrics"
-  | "resource-shape";
+  | "resource-shape"
+  | "interfaces";
 
 export type RouteFamilyFlag =
-  | "runtimeAgentRoutesMounted"
   | "openApiRouteMounted"
   | "readinessRoutesMounted"
-  | "artifactRoutesMounted"
   | "deployControlInternalRoutesMounted"
   | "metricsRoutesMounted"
-  | "resourceShapeRoutesMounted";
+  | "resourceShapeRoutesMounted"
+  | "interfaceRoutesMounted";
 
 export type RouteFamilyMountedFlags = Record<RouteFamilyFlag, boolean>;
 
@@ -188,13 +183,6 @@ export const ALWAYS_MOUNTED_ENDPOINTS: readonly ApiEndpoint[] = [
  */
 export const ROUTE_FAMILIES: readonly RouteFamilyDescriptor[] = [
   {
-    id: "runtime-agent",
-    flag: "runtimeAgentRoutesMounted",
-    openapiTags: ["runtime-agent"],
-    defaultMounted: ({ role }) => role === "takosumi-runtime-agent",
-    endpoints: RUNTIME_AGENT_ENDPOINTS,
-  },
-  {
     id: "openapi",
     flag: "openApiRouteMounted",
     openapiTags: ["openapi"],
@@ -207,14 +195,6 @@ export const ROUTE_FAMILIES: readonly RouteFamilyDescriptor[] = [
     openapiTags: ["readiness", "status"],
     defaultMounted: () => false,
     endpoints: READINESS_ENDPOINTS,
-  },
-  {
-    id: "artifact",
-    flag: "artifactRoutesMounted",
-    openapiTags: ["artifact"],
-    defaultMounted: ({ role, hasOptions }) =>
-      role === "takosumi-api" && hasOptions,
-    endpoints: ARTIFACT_ENDPOINTS,
   },
   {
     id: "deployControl-internal",
@@ -238,6 +218,14 @@ export const ROUTE_FAMILIES: readonly RouteFamilyDescriptor[] = [
     defaultMounted: ({ role, hasOptions }) =>
       role === "takosumi-api" && hasOptions,
     endpoints: RESOURCE_SHAPE_ENDPOINTS,
+  },
+  {
+    id: "interfaces",
+    flag: "interfaceRoutesMounted",
+    openapiTags: ["interfaces"],
+    defaultMounted: ({ role, hasOptions }) =>
+      role === "takosumi-api" && hasOptions,
+    endpoints: INTERFACE_ENDPOINTS,
   },
 ] as const;
 

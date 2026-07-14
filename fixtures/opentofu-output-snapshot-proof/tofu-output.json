@@ -1,15 +1,15 @@
 {
-  "takosumi_launch_url": {
+  "site_origin": {
     "sensitive": false,
     "type": "string",
     "value": "https://demo.fixture.example"
   },
-  "takosumi_admin_url": {
+  "management_origin": {
     "sensitive": false,
     "type": "string",
     "value": "https://demo.fixture.example/admin"
   },
-  "health_url": {
+  "health_probe": {
     "sensitive": false,
     "type": "string",
     "value": "https://demo.fixture.example/health"

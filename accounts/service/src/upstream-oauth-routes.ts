@@ -3,7 +3,6 @@ import type { AccountsStore } from "./store.ts";
 import {
   buildUpstreamAuthorizationUrl,
   exchangeUpstreamAuthorizationCode,
-  googleOAuthProvider,
   type UpstreamOAuthProvider,
 } from "./upstream.ts";
 import type {
@@ -29,12 +28,6 @@ import {
 
 const upstreamOAuthStateCookie = "takosumi_oauth_state";
 const upstreamOAuthStateCookieMaxAgeSeconds = 10 * 60;
-const retiredUpstreamOAuthProviderIds = new Set(["github"]);
-
-export function isRetiredUpstreamOAuthProviderId(providerId: string): boolean {
-  return retiredUpstreamOAuthProviderIds.has(providerId.trim().toLowerCase());
-}
-
 export function upstreamOAuthNotConfigured(): Response {
   return json(
     {
@@ -48,27 +41,42 @@ export function upstreamOAuthNotConfigured(): Response {
 /**
  * GET /v1/auth/providers — public, unauthenticated read of which sign-in
  * methods the operator actually configured on this worker. The sign-in screen
- * reads this so it only enables buttons the backend can honour (clicking an
- * unconfigured provider otherwise hits a 503). Exposes provider ids + enabled
- * flags only — never client ids, secrets, or redirect URIs.
- *
- * Hosted Takosumi Cloud sign-in is intentionally Google-only for now. The
- * endpoint still reports passkey as disabled/enabled for future UI wiring, but
- * custom upstream IdP ids are not public dashboard login methods.
+ * reads this so it only offers methods the backend can honour. Every configured
+ * upstream registration is represented by a generic non-secret descriptor;
+ * clients must branch on `protocol`, never on provider ids or deployment host.
+ * Client ids, secrets, endpoints, scopes, and redirect URIs are never exposed.
  */
 export function handleAuthProvidersRequest(input: {
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
 }): Response {
-  const configuredUpstream = new Set(
-    (input.upstreamOAuth?.providers ?? []).map((p) => p.providerId),
-  );
   const providers: TakosumiAccountsAuthProvider[] = [];
-  // Built-in methods the sign-in screen always renders (enabled or disabled).
-  for (const id of ["google"] as const) {
-    providers.push({ id, enabled: configuredUpstream.has(id) });
+  const seen = new Set<string>();
+  for (const registration of input.upstreamOAuth?.providers ?? []) {
+    const id = registration.providerId.trim();
+    if (
+      !id ||
+      seen.has(id) ||
+      !isUsableUpstreamProvider(registration.provider, id)
+    ) {
+      continue;
+    }
+    seen.add(id);
+    providers.push({
+      id,
+      enabled: true,
+      label: registration.label?.trim() || "Single sign-on",
+      protocol: registration.protocol?.trim() || "oidc",
+    });
   }
-  providers.push({ id: "passkey", enabled: input.passkeys !== undefined });
+  if (input.passkeys !== undefined) {
+    providers.push({
+      id: "passkey",
+      enabled: true,
+      label: "Passkey",
+      protocol: "webauthn",
+    });
+  }
   const body: TakosumiAccountsAuthProvidersResponse = { providers };
   return json(body, 200, { "cache-control": "no-store" });
 }
@@ -346,33 +354,65 @@ function resolveUpstreamClient(
     (candidate) => candidate.providerId === providerId,
   );
   if (!client) return null;
-  if (isRetiredUpstreamOAuthProviderId(client.providerId)) return null;
-  const provider =
-    client.provider ?? builtinUpstreamOAuthProvider(client.providerId);
-  if (!provider) return null;
+  if (!isUsableUpstreamProvider(client.provider, client.providerId)) {
+    return null;
+  }
   return {
     client,
-    provider,
+    provider: client.provider,
   };
 }
 
-function builtinUpstreamOAuthProvider(
+function isUsableUpstreamProvider(
+  provider: unknown,
   providerId: string,
-): UpstreamOAuthProvider | undefined {
-  if (providerId === "google") return googleOAuthProvider();
-  return undefined;
+): provider is UpstreamOAuthProvider {
+  if (!provider || typeof provider !== "object") return false;
+  const candidate = provider as Partial<UpstreamOAuthProvider>;
+  if (
+    candidate.id !== providerId ||
+    typeof candidate.issuer !== "string" ||
+    typeof candidate.authorizationEndpoint !== "string" ||
+    typeof candidate.tokenEndpoint !== "string" ||
+    typeof candidate.userInfoEndpoint !== "string" ||
+    typeof candidate.subjectClaim !== "string" ||
+    !Array.isArray(candidate.defaultScopes)
+  ) {
+    return false;
+  }
+  return [
+    candidate.issuer,
+    candidate.authorizationEndpoint,
+    candidate.tokenEndpoint,
+    candidate.userInfoEndpoint,
+  ].every((value) => {
+    try {
+      const url = new URL(value);
+      return (
+        url.protocol === "https:" ||
+        (url.protocol === "http:" &&
+          (url.hostname === "localhost" ||
+            url.hostname === "127.0.0.1" ||
+            url.hostname === "[::1]"))
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
 function profileFromUpstreamUserInfo(userInfo: Record<string, unknown>): {
   email?: string;
   displayName?: string;
+  picture?: string;
   emailVerified?: boolean;
 } {
   return {
     email: stringValue(userInfo.email),
     displayName: stringValue(userInfo.name) ?? stringValue(userInfo.login),
+    picture: stringValue(userInfo.picture) ?? stringValue(userInfo.avatar_url),
     // Carry the upstream IdP's email_verified assertion through to the ID
-    // token. OIDC providers (e.g. Google) return a boolean `email_verified`
+    // token. OIDC providers can return a boolean `email_verified`
     // claim; providers that omit it leave this undefined (genuinely unknown),
     // and we never coerce unknown to true. A non-boolean value is ignored.
     emailVerified:

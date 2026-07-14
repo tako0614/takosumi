@@ -16,6 +16,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "./provider-resolution.ts";
+import type { PlanResourceScope } from "./plan-scope.ts";
 import type { JsonValue } from "./types.ts";
 
 export type RunType =
@@ -34,6 +35,13 @@ export type RunType =
   // artifact restored.
   | "restore";
 
+/**
+ * Run terminal status covers every phase pinned by the reviewed Plan. For an
+ * apply with required post-apply lifecycle actions, `succeeded` means both the
+ * provider apply and every action terminal-succeeded. `failed` may therefore
+ * coexist with a retained provider-applied StateVersion/Output; audit/errorCode
+ * distinguish that case from a provider execution failure.
+ */
 export type RunStatus =
   | "queued"
   | "running"
@@ -42,6 +50,11 @@ export type RunStatus =
   | "failed"
   | "cancelled"
   | "expired";
+
+export type RunSubject =
+  | { readonly kind: "capsule"; readonly id: string }
+  | { readonly kind: "resource"; readonly id: string }
+  | { readonly kind: "source"; readonly id: string };
 
 /** Default page size for a Workspace Run listing when no limit is given. */
 export const RUN_LIST_DEFAULT_LIMIT = 100;
@@ -66,19 +79,12 @@ export interface RunPlanResource {
   readonly address: string;
   readonly type: string;
   readonly actions: readonly string[];
-  readonly scope?: {
-    readonly cloudflareAccountId?: string;
-    readonly cloudflareZoneId?: string;
-    readonly awsAccountId?: string;
-    readonly awsRegion?: string;
-  };
+  readonly scope?: PlanResourceScope;
 }
 
 export interface RunApplyExpectedGuard {
   readonly planId: string;
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
   readonly currentStateVersionId?: string | null;
   readonly runnerId: string;
   readonly sourceDigest: string;
@@ -88,13 +94,13 @@ export interface RunApplyExpectedGuard {
   readonly planArtifactDigest: string;
   readonly sourceCommit?: string;
   readonly providerLockDigest?: string;
-  readonly resolvedProviderEnvBindingsDigest?: string;
+  readonly resolvedProviderBindingsDigest?: string;
 }
 
 /** Non-secret service-data restore evidence recorded on restore Runs. */
 export interface RunServiceDataRestoreResult {
   readonly status: "restored";
-  readonly objectKey: string;
+  readonly ref: string;
   readonly digest: string;
   readonly sizeBytes: number;
   readonly restoredCount?: number;
@@ -104,16 +110,12 @@ export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId: string;
   /** Present for Source-scoped rows such as `source_sync`. */
   readonly sourceId?: string;
+  /** Explicit execution subject for non-Capsule and new generic run flows. */
+  readonly subject?: RunSubject;
   /** Required for Capsule-bound rows; absent for Source-scoped rows. */
   readonly capsuleId?: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId?: string;
-  /** @deprecated Retired Deployment ledger pointer. */
-  readonly installationCurrentDeploymentId?: string;
   readonly environment?: string;
   readonly type: RunType;
   readonly status: RunStatus;
@@ -122,7 +124,7 @@ export interface Run {
   readonly compatibilityReportId?: string;
   readonly baseStateGeneration?: number;
   readonly planDigest?: string;
-  readonly planArtifactKey?: string;
+  readonly planArtifactRef?: string;
   /**
    * Non-secret guard the client must echo when applying a reviewed plan.
    * Present only on plan/destroy_plan rows that have a saved immutable plan.
@@ -143,10 +145,6 @@ export interface Run {
   readonly restoreServiceData?: boolean;
   readonly restoredStateVersionId?: string;
   readonly restoredFromStateVersionId?: string;
-  /** @deprecated Use restoredStateVersionId. */
-  readonly restoredStateSnapshotId?: string;
-  /** @deprecated Use restoredFromStateVersionId. */
-  readonly restoredFromStateSnapshotId?: string;
   readonly restoredServiceData?: RunServiceDataRestoreResult;
   readonly errorCode?: string;
   readonly createdBy: string;
@@ -173,6 +171,8 @@ export interface ListRunsResponse {
 
 export interface RunDiagnostic {
   readonly severity: "info" | "warning" | "error";
+  /** Stable machine-readable classification; UI must not parse `message`. */
+  readonly code?: string;
   readonly message: string;
   readonly detail?: string;
 }
@@ -206,53 +206,19 @@ export interface RunEventsResponse {
 }
 
 /**
- * Public, non-secret cost projection for a `plan` / `destroy_plan` Run
- * (`GET /internal/v1/runs/:runId/cost`). It surfaces the billing reservation values the
- * controller ALREADY computed at plan time so a dashboard can explain, before
- * apply, why an apply would be blocked under `enforce` mode (insufficient
- * USD balance / a billing-plan limit). It carries no cost formula and no
- * secret material — only counts already recorded on the run's billing audit.
- *
- *   - `billingMode`        — the Workspace's billing mode at plan time
- *                            (`disabled` / `showback` / `enforce`).
- *   - `estimatedUsdMicros` — the USD amount the controller estimated this plan
- *                            would consume on apply, in micros.
- *   - `availableUsdMicros` — the owning account's available USD balance observed
- *                            when a reservation was attempted, in micros, when
- *                            known.
- *   - `reservationStatus`  — `reserved` when credits were held, or
- *                            `insufficient_credits` when the reservation could
- *                            not be made (the apply would be blocked under
- *                            `enforce`). Absent when no reservation was needed.
- *   - `shortfallUsdMicros` — `estimatedUsdMicros - availableUsdMicros` when that is
- *                            positive (the missing amount), else absent.
- *   - `blocked`            — true when billing blocks this plan from applying
- *                            under `enforce` mode.
- *   - `reasons`            — public-safe human reasons billing blocked the plan
- *                            (the credit-shortfall / plan-limit messages already
- *                            recorded on the run's policy decision). Empty when
- *                            nothing billing-related blocked the plan.
+ * Public, non-secret showback projection for a plan Run. Core owns the stable
+ * estimate/mode/decision fields. A host may attach an opaque, non-secret
+ * extension object, but core and the OSS dashboard never infer commercial
+ * balance, reservation, plan, or payment semantics from it.
  */
 export interface RunCostInfo {
   readonly runId: string;
-  /**
-   * OSS resolves only `disabled` | `showback`. A Cloud-injected
-   * {@link BillingEnforcement} port reports its own gating through `blocked` /
-   * `reasons`; the mode stays `showback` from the OSS controller's perspective.
-   */
   readonly billingMode: "disabled" | "showback";
   readonly estimatedUsdMicros: number;
-  readonly availableUsdMicros?: number;
-  readonly shortfallUsdMicros?: number;
-  /** @deprecated Use estimatedUsdMicros. */
-  readonly estimatedCredits: number;
-  /** @deprecated Use availableUsdMicros. */
-  readonly availableCredits?: number;
-  readonly reservationStatus?: "reserved" | "insufficient_credits";
-  /** @deprecated Use shortfallUsdMicros. */
-  readonly creditShortfall?: number;
+  readonly ratingStatus: "not_applicable" | "rated" | "unrated";
   readonly blocked: boolean;
   readonly reasons: readonly string[];
+  readonly extension?: Readonly<Record<string, JsonValue>>;
 }
 
 /** Body of `GET /internal/v1/runs/:runId/cost`. */
@@ -261,12 +227,11 @@ export interface RunCostResponse {
 }
 
 export type RunGroupType =
-  | "space_update"
-  | "workspace_output_sync"
-  | "space_drift_check"
-  | "installation_install"
-  | "installation_update"
-  | "installation_destroy";
+  | "workspace_update"
+  | "workspace_drift_check"
+  | "capsule_install"
+  | "capsule_update"
+  | "capsule_destroy";
 
 export type RunGroupStatus =
   | "queued"
@@ -278,9 +243,7 @@ export type RunGroupStatus =
 
 export interface RunGroup {
   readonly id: string;
-  readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
+  readonly workspaceId: string;
   readonly type: RunGroupType;
   readonly status: RunGroupStatus;
   /** JSON-encoded DAG-ordered plan of member runs. */
@@ -306,15 +269,14 @@ export interface RunGroupResponse {
 /**
  * Non-public artifact ledger row (`artifacts`).
  *
- * Artifact bytes live in R2_SOURCE / R2_ARTIFACTS / R2_STATE / R2_BACKUPS.
- * The D1 ledger stores only this pointer metadata so a Run can be audited
- * without copying encrypted artifact bodies into D1.
+ * Artifact bytes live behind a host storage adapter. The control ledger stores
+ * only an opaque reference plus integrity metadata.
  */
 export interface ArtifactRecord {
   readonly id: string;
   readonly runId: string;
   readonly kind: string;
-  readonly objectKey: string;
+  readonly ref: string;
   readonly digest: string;
   readonly sizeBytes: number;
   readonly createdAt: string;

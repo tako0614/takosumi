@@ -27,33 +27,31 @@ export class R2BackupArtifactStore implements BackupArtifactStore {
   }
 
   async put(input: {
-    readonly objectKey: string;
+    readonly ref: string;
     readonly payload: Uint8Array;
     readonly contentType: string;
   }): Promise<{ readonly digest: string; readonly sizeBytes: number }> {
     const sealed = await this.#crypto.seal(input.payload);
     const digest = await digestBytes(sealed.ciphertext);
-    await this.#bucket.put(
-      input.objectKey,
-      toArrayBuffer(sealed.ciphertext),
-      {
-        httpMetadata: { contentType: input.contentType },
-        customMetadata: {
-          "takosumi-sealed": "1",
-          "takosumi-plaintext-digest": sealed.contentDigest,
-        },
+    const objectKey = input.ref;
+    await this.#bucket.put(objectKey, toArrayBuffer(sealed.ciphertext), {
+      httpMetadata: { contentType: input.contentType },
+      customMetadata: {
+        "takosumi-sealed": "1",
+        "takosumi-plaintext-digest": sealed.contentDigest,
       },
-    );
+    });
     return { digest, sizeBytes: sealed.ciphertext.byteLength };
   }
 
   async putPlain(input: {
-    readonly objectKey: string;
+    readonly ref: string;
     readonly payload: Uint8Array;
     readonly contentType: string;
   }): Promise<{ readonly digest: string; readonly sizeBytes: number }> {
     const digest = await digestBytes(input.payload);
-    await this.#bucket.put(input.objectKey, toArrayBuffer(input.payload), {
+    const objectKey = input.ref;
+    await this.#bucket.put(objectKey, toArrayBuffer(input.payload), {
       httpMetadata: { contentType: input.contentType },
       customMetadata: {
         "takosumi-public-backup-sidecar": "1",
@@ -75,7 +73,10 @@ export function backupArtifactStoreFromEnv(
   cryptoEnv: SecretCryptoEnvLike,
 ): BackupArtifactStore | undefined {
   if (!bucket) return undefined;
-  return new R2BackupArtifactStore(bucket, StateArtifactCrypto.fromEnv(cryptoEnv));
+  return new R2BackupArtifactStore(
+    bucket,
+    StateArtifactCrypto.fromEnv(cryptoEnv),
+  );
 }
 
 export function backupObjectReaderFromR2(
@@ -83,8 +84,8 @@ export function backupObjectReaderFromR2(
 ): BackupObjectReader | undefined {
   if (!bucket) return undefined;
   return {
-    get: async (objectKey: string): Promise<Uint8Array | undefined> => {
-      const object = await bucket.get(objectKey);
+    get: async (ref: string): Promise<Uint8Array | undefined> => {
+      const object = await bucket.get(ref);
       if (!object) return undefined;
       return new Uint8Array(await object.arrayBuffer());
     },

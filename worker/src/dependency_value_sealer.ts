@@ -2,7 +2,7 @@
 // (spec §11 / §18 invariant: secret outputs are never stored as cleartext ledger
 // values).
 //
-// A cross-Space `published_output` edge may inline a producer's *sensitive*
+// A cross-Workspace `published_output` edge may inline a producer's *sensitive*
 // output value into the consumer's pinned inputs. That value MUST NOT sit in
 // cleartext in the `dependency_snapshots` ledger row. This sealer reuses the
 // EXISTING AES-GCM at-rest envelope ({@link StateArtifactCrypto}, the same

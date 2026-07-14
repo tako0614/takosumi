@@ -390,7 +390,7 @@
   white-space: normal;
 }
 
-/* --- Deployment history list ----------------------------------------------- */
+/* --- StateVersion history list --------------------------------------------- */
 .wa-deploy-history {
   list-style: none;
   margin: 0;

@@ -13,7 +13,11 @@ CLI/API/runbook による運用、managed target catalog、商用運用を追加
 - CredentialRecipe seed、provider allowlist、ProviderConnection policy を管理する
 - ProviderConnection の封印済み backing material / secret 配信を管理する
 - Resource Shape / TargetPool / Adapter / compatibility profile の有効性を管理する
+- Resource Shape の scheduled observation の頻度・batch・並列数を runner capacity に合わせて管理する
 - state backend と lock backend を管理する
+- production / staging では database URL の形式から保存時暗号化を推測せず、storage adapter の証跡、または確認済みの
+  `TAKOSUMI_DATABASE_ENCRYPTION_AT_REST=verified` と非 secret の
+  `TAKOSUMI_DATABASE_ENCRYPTION_EVIDENCE` を設定する
 - OpenTofu runner image / local/docker/remote/operator runner pool を管理する
 - Workers for Platforms を使う場合は tenant/user Worker の ingress 境界として扱い、OpenTofu runner の実行境界と分ける
 - 顧客 / billing / metering / quota / support の運用を行う
@@ -77,24 +81,42 @@ official billing / quota / usage / support / SLA
 
 公式 managed capacity の実装・テスト・secrets・デプロイ設定は非公開の Cloud リポジトリに置きます。
 
+## Resource Shape scheduled observation
+
+platform worker は、有効な Resource Shape がある場合に read-only の scheduled observation を既定で実行します。
+対象は現 generation の適用が完了した `Ready` Resource だけです。観測は pinned Target / implementation に対する
+`drift_check` Run であり、apply / refresh は行いません。候補選択は全 Space 横断の durable lease で重複を防ぎ、
+失敗した Resource が同じ tick の別 Resource を止めることもありません。
+
+| 変数                                             | 既定値 | 許容範囲       | 意味                                     |
+| ------------------------------------------------ | ------ | -------------- | ---------------------------------------- |
+| `TAKOSUMI_RESOURCE_OBSERVATION_ENABLED`          | 自動   | `0` / `1`      | 未設定時は有効な shape kind があれば有効 |
+| `TAKOSUMI_RESOURCE_OBSERVATION_BATCH`            | `8`    | `1`–`32`       | 1 tick でclaimする最大Resource数         |
+| `TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY`      | `4`    | `1`–`8`        | 同時に実行する最大観測数                 |
+| `TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS` | `3600` | `300`–`604800` | 同一Resourceの最小観測間隔               |
+| `TAKOSUMI_RESOURCE_OBSERVATION_LEASE_SECONDS`    | `900`  | `600`–`7200`   | abandoned claimを再取得できるまでの時間  |
+
+範囲外または不正な値は安全な既定値に戻ります。batchを無制限に増やす用途ではなく、runner poolの容量に合わせて
+小さく保ってください。観測結果は `takosumi_resource_observation_count` metric の `outcome` labelで確認できます。
+
 ## 本番環境への準備
 
 OSS Operator GA の準備状況は以下です。
 
-| 領域               | 必要な証跡                                                                                                                   |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| Website/docs       | ドキュメントビルド、公開する場合はカスタムドメイン/TLS                                                                        |
-| Runner             | 非本番環境での OpenTofu plan/apply/destroy の実証                                                                             |
-| Release activation | webhook/materializer の実証、activation 失敗の表示、アプリ公開を有効にする場合は rollback 独立の履歴証跡                       |
-| Accounts/auth      | dashboard、session/OIDC（設定に応じて）、audit trail                                                                          |
-| State              | state backend、lock の証跡、backup/restore ドリル                                                                            |
-| Secrets            | 暗号化ストレージ、ローテーション手順、秘匿処理の証跡                                                                          |
-| Provider recipes   | CredentialRecipe seed、provider allowlist、ProviderConnection policy、ヘルパーのカバレッジ                                    |
-| Resource shapes    | TargetPool policy、adapter capability の証跡、ResolutionLock の動作                                                          |
-| Compatibility      | スコープ・バージョン指定の capability 一覧、非対応 API の不在証明                                                             |
-| Network            | provider allowlist と egress の適用                                                                                           |
-| Tenant isolation   | Workspace/team の分離と runner の分離                                                                                        |
-| Audit              | Run、secret、state、管理者操作の証跡                                                                                         |
+| 領域               | 必要な証跡                                                                                                         |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| Website/docs       | ドキュメントビルド、公開する場合はカスタムドメイン/TLS                                                             |
+| Runner             | 非本番環境での OpenTofu plan/apply/destroy の実証                                                                  |
+| Release activation | webhook/materializer の実証、terminal success gate、失敗時の state/output 保持と Run/Capsule/Interface 非Ready証跡 |
+| Accounts/auth      | dashboard、session/OIDC（設定に応じて）、audit trail                                                               |
+| State              | state backend、lock の証跡、backup/restore ドリル                                                                  |
+| Secrets            | 暗号化ストレージ、ローテーション手順、秘匿処理の証跡                                                               |
+| Provider recipes   | CredentialRecipe seed、provider allowlist、ProviderConnection policy、ヘルパーのカバレッジ                         |
+| Resource shapes    | TargetPool policy、adapter capability の証跡、ResolutionLock の動作                                                |
+| Compatibility      | スコープ・バージョン指定の capability 一覧、非対応 API の不在証明                                                  |
+| Network            | provider allowlist と egress の適用                                                                                |
+| Tenant isolation   | Workspace/team の分離と runner の分離                                                                              |
+| Audit              | Run、secret、state、管理者操作の証跡                                                                               |
 
 Cloud GA では追加で、公式 managed target、hosted compatibility profile、公式 billing、
 abuse 対策、support、usage metering、deprovision の証跡が必要になります。

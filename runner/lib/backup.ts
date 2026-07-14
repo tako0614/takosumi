@@ -17,9 +17,7 @@ import type {
   CommandContext,
 } from "./types.ts";
 import {
-  PROVIDER_SNAPSHOT_COMMAND_ENV,
-  PROVIDER_SNAPSHOT_COMMAND_ENV_PREFIX,
-  PROVIDER_SNAPSHOT_POINTER_DIR_ENV,
+  BACKUP_ADAPTERS_ENV,
   RUNNER_SECRET_ENV_NAME_PATTERN,
   RUNNER_SECRET_VALUE_PATTERN,
 } from "./constants.ts";
@@ -38,7 +36,6 @@ import { runCommand } from "./exec.ts";
 import { assertSafeRelativePath } from "./policy.ts";
 import {
   baseCommandEnv,
-  allKnownCredentialEnvNames,
   buildPhaseEnv,
   assertCommandEnvHasNoProviderCredentials,
   commandContextFromRequest,
@@ -191,17 +188,26 @@ export async function runProviderSnapshotBackup(
   runId: string,
   backup: BackupSpec,
 ): Promise<JsonRecord> {
-  const command = providerSnapshotCommand(backup.provider);
-  if (!command) {
-    const builtIn = await runBuiltInProviderSnapshotBackup(runId, backup);
-    if (builtIn) return builtIn;
+  const adapterId = backup.adapterId;
+  if (!adapterId) {
+    throw new Error("provider_snapshot requires backup.adapterId");
+  }
+  const adapter = backupAdapter(adapterId);
+  if (!adapter) {
     return {
       runId,
       action: "backup",
       status: "unsupported",
       exitCode: 0,
-      reason: `provider_snapshot requires operator-specific adapter command ${providerSnapshotCommandEnvNames(backup.provider).join(" or ")} or built-in pointer directory ${PROVIDER_SNAPSHOT_POINTER_DIR_ENV}`,
+      reason: `backup adapter ${adapterId} is not installed`,
     };
+  }
+  if (adapter.kind === "pointer") {
+    return await runProviderSnapshotPointerBackup(
+      runId,
+      backup,
+      adapter.directory,
+    );
   }
 
   const workspace = workspaceForRun(runId);
@@ -210,13 +216,13 @@ export async function runProviderSnapshotBackup(
     env: {
       ...baseCommandEnv(),
       TAKOSUMI_BACKUP_MODE: "provider_snapshot",
+      TAKOSUMI_BACKUP_ADAPTER_ID: adapterId,
       TAKOSUMI_BACKUP_OUTPUT_PATH: backup.outputPath,
-      TAKOSUMI_BACKUP_PROVIDER: backup.provider ?? "",
       TAKOSUMI_RUN_ID: runId,
     },
     timeoutMs: 10 * 60 * 1000,
   };
-  const result = await runCommand(["bash", "-lc", command.command], {
+  const result = await runCommand(["bash", "-lc", adapter.command], {
     cwd: workspace.root,
     context,
   });
@@ -258,56 +264,64 @@ export async function runProviderSnapshotBackup(
   };
 }
 
-export function providerSnapshotCommand(
-  provider: string | undefined,
-): { readonly command: string; readonly envName: string } | undefined {
-  for (const envName of providerSnapshotCommandEnvNames(provider)) {
-    const command = Bun.env[envName]?.trim();
-    if (command) return { command, envName };
+export type BackupAdapter =
+  | { readonly kind: "command"; readonly command: string }
+  | { readonly kind: "pointer"; readonly directory: string };
+
+/** Resolve only an exact operator-installed adapter id from one explicit map. */
+export function backupAdapter(
+  adapterId: string,
+  serializedRegistry = Bun.env[BACKUP_ADAPTERS_ENV],
+): BackupAdapter | undefined {
+  if (!isBackupAdapterId(adapterId)) {
+    throw new Error("backup adapter id must be a non-empty opaque token");
   }
-  return undefined;
-}
-
-export function providerSnapshotCommandEnvNames(
-  provider: string | undefined,
-): readonly string[] {
-  const names: string[] = [];
-  if (provider) {
-    names.push(
-      `${PROVIDER_SNAPSHOT_COMMAND_ENV_PREFIX}${providerSnapshotEnvSuffix(provider)}`,
-    );
+  if (!serializedRegistry?.trim()) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serializedRegistry);
+  } catch {
+    throw new Error(`${BACKUP_ADAPTERS_ENV} must be a JSON object`);
   }
-  names.push(PROVIDER_SNAPSHOT_COMMAND_ENV);
-  return names;
+  if (!isRecord(parsed)) {
+    throw new Error(`${BACKUP_ADAPTERS_ENV} must be a JSON object`);
+  }
+  if (!Object.hasOwn(parsed, adapterId)) return undefined;
+  const candidate = parsed[adapterId];
+  if (!isRecord(candidate)) {
+    throw new Error(`backup adapter ${adapterId} must be an object`);
+  }
+  if (candidate.kind === "command") {
+    const command = stringField(candidate, "command")?.trim();
+    if (!command) {
+      throw new Error(`backup adapter ${adapterId} requires command`);
+    }
+    return { kind: "command", command };
+  }
+  if (candidate.kind === "pointer") {
+    const directory = stringField(candidate, "directory")?.trim();
+    if (!directory) {
+      throw new Error(`backup adapter ${adapterId} requires directory`);
+    }
+    return { kind: "pointer", directory };
+  }
+  throw new Error(
+    `backup adapter ${adapterId} kind must be command or pointer`,
+  );
 }
 
-export function providerSnapshotEnvSuffix(provider: string): string {
-  return provider
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-export async function runBuiltInProviderSnapshotBackup(
+export async function runProviderSnapshotPointerBackup(
   runId: string,
   backup: BackupSpec,
-): Promise<JsonRecord | undefined> {
-  const pointerDir = Bun.env[PROVIDER_SNAPSHOT_POINTER_DIR_ENV]?.trim();
-  if (!pointerDir) {
-    return await runBuiltInNativeProviderSnapshotBackup(runId, backup);
-  }
-  const pointerPaths = providerSnapshotPointerPaths(
-    pointerDir,
+  pointerDirectory: string,
+): Promise<JsonRecord> {
+  const pointerPath = providerSnapshotPointerPath(
+    pointerDirectory,
     backup.outputPath,
-    backup.provider,
   );
   let pointerText: string;
-  let matchedPointerPath: string | undefined;
   try {
-    const matched = await readFirstExistingPointer(pointerPaths);
-    pointerText = matched.text;
-    matchedPointerPath = matched.path;
+    pointerText = await readFile(pointerPath, "utf8");
   } catch {
     return {
       runId,
@@ -315,7 +329,7 @@ export async function runBuiltInProviderSnapshotBackup(
       status: "missing",
       exitCode: 0,
       outputPath: backup.outputPath,
-      reason: `provider snapshot built-in pointer ${pointerPaths.join(" or ")} does not exist`,
+      reason: `provider snapshot artifact pointer ${pointerPath} does not exist`,
     };
   }
   const artifact = parseBackupArtifactPointer(pointerText);
@@ -326,7 +340,7 @@ export async function runBuiltInProviderSnapshotBackup(
       status: "missing",
       exitCode: 0,
       outputPath: backup.outputPath,
-      reason: `provider snapshot built-in pointer ${matchedPointerPath ?? pointerPaths[0]} is not a service-data artifact pointer JSON object`,
+      reason: `provider snapshot artifact pointer ${pointerPath} is not a service-data artifact pointer JSON object`,
     };
   }
   return {
@@ -339,95 +353,12 @@ export async function runBuiltInProviderSnapshotBackup(
   };
 }
 
-export async function readFirstExistingPointer(
-  paths: readonly string[],
-): Promise<{ readonly path: string; readonly text: string }> {
-  for (const path of paths) {
-    try {
-      return { path, text: await readFile(path, "utf8") };
-    } catch {
-      // Try the next provider-scoped / legacy pointer path.
-    }
-  }
-  throw new Error("provider snapshot pointer not found");
-}
-
-export function providerSnapshotPointerPaths(
+export function providerSnapshotPointerPath(
   pointerDir: string,
   outputPath: string,
-  provider: string | undefined,
-): readonly string[] {
+): string {
   const safeName = outputPath.replace(/[^A-Za-z0-9_.-]+/g, "_");
-  const legacy = join(pointerDir, `${safeName}.json`);
-  if (!provider) return [legacy];
-  const safeProvider = provider.replace(/[^A-Za-z0-9_.-]+/g, "_");
-  return [join(pointerDir, safeProvider, `${safeName}.json`), legacy];
-}
-
-export async function runBuiltInNativeProviderSnapshotBackup(
-  runId: string,
-  backup: BackupSpec,
-): Promise<JsonRecord | undefined> {
-  const provider = normalizeProviderSource(backup.provider);
-  const kind = builtInProviderSnapshotKind(provider);
-  if (!kind) return undefined;
-
-  const workspace = workspaceForRun(runId);
-  await mkdir(workspace.artifactDir, { recursive: true });
-  const manifest = {
-    kind,
-    version: 1,
-    runId,
-    provider,
-    outputPath: backup.outputPath,
-    capturedAt: new Date().toISOString(),
-    note: "Takosumi built-in provider snapshot adapter metadata. Provider-native snapshot bytes remain in the provider or service-owned artifact store; this manifest is a non-secret pointer/evidence object.",
-  };
-  const bytes = new TextEncoder().encode(JSON.stringify(manifest, null, 2));
-  const fileName = `${providerSnapshotEnvSuffix(provider).toLowerCase()}-${backup.outputPath.replace(/[^A-Za-z0-9_.-]+/g, "_")}.snapshot.json`;
-  await writeFile(join(workspace.artifactDir, fileName), bytes, {
-    mode: 0o600,
-  });
-  return {
-    runId,
-    action: "backup",
-    status: "succeeded",
-    exitCode: 0,
-    outputPath: backup.outputPath,
-    artifact: {
-      ref: `runner-local://${runId}/artifact/${fileName}`,
-      digest: await digestBytes(bytes),
-      sizeBytes: bytes.byteLength,
-      contentType: "application/json",
-      metadata: {
-        provider,
-        adapter: "takosumi-built-in-provider-snapshot",
-        adapterKind: kind,
-      },
-    },
-  };
-}
-
-export function normalizeProviderSource(provider: string | undefined): string {
-  const value = provider?.trim().toLowerCase();
-  if (!value) return "";
-  if (value.includes("/")) return value;
-  if (value === "cloudflare")
-    return "registry.opentofu.org/cloudflare/cloudflare";
-  if (value === "aws") return "registry.opentofu.org/hashicorp/aws";
-  return value;
-}
-
-export function builtInProviderSnapshotKind(
-  provider: string,
-): string | undefined {
-  if (provider === "registry.opentofu.org/cloudflare/cloudflare") {
-    return "cloudflare-provider-snapshot";
-  }
-  if (provider === "registry.opentofu.org/hashicorp/aws") {
-    return "aws-provider-snapshot";
-  }
-  return undefined;
+  return join(pointerDir, `${safeName}.json`);
 }
 
 export function parseBackup(request: unknown): BackupSpec {
@@ -440,17 +371,27 @@ export function parseBackup(request: unknown): BackupSpec {
     throw new Error("backup.mode must be provider_snapshot or custom_command");
   }
   const outputPath = requiredStringField(backup, "outputPath");
-  const provider = stringField(backup, "provider")?.trim();
+  const adapterId = stringField(backup, "adapterId")?.trim();
   const commands = stringArray(recordField(backup, "command"));
+  if (mode === "provider_snapshot" && !adapterId) {
+    throw new Error("provider_snapshot backup requires BackupConfig.adapterId");
+  }
+  if (adapterId && !isBackupAdapterId(adapterId)) {
+    throw new Error("backup.adapterId must be a non-empty opaque token");
+  }
   if (mode === "custom_command" && commands.length === 0) {
     throw new Error("custom_command backup requires BackupConfig.command");
   }
   return {
     mode,
     outputPath,
-    ...(provider ? { provider } : {}),
+    ...(adapterId ? { adapterId } : {}),
     ...(commands.length > 0 ? { command: commands } : {}),
   };
+}
+
+function isBackupAdapterId(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(value);
 }
 
 export function parseRelease(request: unknown): ReleaseSpec {
@@ -514,14 +455,11 @@ export function releaseActivation(
     ...(stringField(value, "workspaceId")
       ? { workspaceId: stringField(value, "workspaceId") }
       : {}),
-    ...(stringField(value, "spaceId")
-      ? { spaceId: stringField(value, "spaceId") }
+    ...(stringField(value, "capsuleId")
+      ? { capsuleId: stringField(value, "capsuleId") }
       : {}),
-    ...(stringField(value, "installationId")
-      ? { installationId: stringField(value, "installationId") }
-      : {}),
-    ...(stringField(value, "deploymentId")
-      ? { deploymentId: stringField(value, "deploymentId") }
+    ...(stringField(value, "stateVersionId")
+      ? { stateVersionId: stringField(value, "stateVersionId") }
       : {}),
   };
   return Object.keys(activation).length > 0 ? { activation } : {};
@@ -533,11 +471,6 @@ export function releaseCommandEnv(
   if (!isRecord(envRecord)) return undefined;
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(envRecord)) {
-    if (allKnownCredentialEnvNames().has(key)) {
-      throw new Error(
-        `command env unexpectedly carries provider credential env name ${key}`,
-      );
-    }
     if (isReservedProviderEnvName(key)) {
       throw new Error(`release command env must not override reserved ${key}`);
     }
@@ -599,8 +532,7 @@ export function releaseBaseEnv(
   release: ReleaseSpec,
 ): Record<string, string> {
   const outputs = release.outputs ?? {};
-  const workspaceId =
-    release.activation?.workspaceId ?? release.activation?.spaceId;
+  const workspaceId = release.activation?.workspaceId;
   return {
     TAKOSUMI_RELEASE_RUN_ID: runId,
     ...(release.activation?.applyRunId
@@ -609,19 +541,16 @@ export function releaseBaseEnv(
     ...(workspaceId
       ? {
           TAKOSUMI_WORKSPACE_ID: workspaceId,
-          TAKOSUMI_SPACE_ID: workspaceId,
-          TAKOSUMI_CLOUD_BILLING_WORKSPACE_ID: workspaceId,
         }
       : {}),
-    ...(release.activation?.installationId
+    ...(release.activation?.capsuleId
       ? {
-          TAKOSUMI_CAPSULE_ID: release.activation.installationId,
-          TAKOSUMI_CLOUD_BILLING_CAPSULE_ID: release.activation.installationId,
+          TAKOSUMI_CAPSULE_ID: release.activation.capsuleId,
         }
       : {}),
-    ...(release.activation?.deploymentId
+    ...(release.activation?.stateVersionId
       ? {
-          TAKOSUMI_STATE_VERSION_ID: release.activation.deploymentId,
+          TAKOSUMI_STATE_VERSION_ID: release.activation.stateVersionId,
         }
       : {}),
     TAKOSUMI_OUTPUTS_JSON: JSON.stringify(outputs),
@@ -631,16 +560,14 @@ export function releaseBaseEnv(
       ...(release.activation?.applyRunId
         ? { applyRunId: release.activation.applyRunId }
         : {}),
-      ...(workspaceId ? { workspaceId, spaceId: workspaceId } : {}),
-      ...(release.activation?.installationId
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(release.activation?.capsuleId
         ? {
-            installationId: release.activation.installationId,
-            capsuleId: release.activation.installationId,
-            installation: { id: release.activation.installationId },
+            capsuleId: release.activation.capsuleId,
           }
         : {}),
-      ...(release.activation?.deploymentId
-        ? { deploymentId: release.activation.deploymentId }
+      ...(release.activation?.stateVersionId
+        ? { stateVersionId: release.activation.stateVersionId }
         : {}),
       outputs,
     }),
@@ -656,11 +583,7 @@ export function parseBackupArtifactPointer(
     try {
       const parsed = JSON.parse(candidate) as unknown;
       if (!isRecord(parsed)) continue;
-      const ref =
-        stringField(parsed, "ref") ??
-        stringField(parsed, "objectKey") ??
-        stringField(parsed, "artifactKey") ??
-        stringField(parsed, "key");
+      const ref = stringField(parsed, "ref");
       if (!ref || !isSafeBackupArtifactRef(ref)) continue;
       const pointer: JsonRecord = { ref };
       const digest = stringField(parsed, "digest");
@@ -686,8 +609,10 @@ export function parseBackupArtifactPointer(
 }
 
 export function isSafeBackupArtifactRef(ref: string): boolean {
-  if (ref.length === 0 || ref.includes("\0")) return false;
-  if (/^https?:\/\//i.test(ref)) return false;
-  if (/^r2:\/\/[A-Za-z0-9._-]+\/[^\s]+$/u.test(ref)) return true;
-  return /^[A-Za-z0-9._/@:+-]+$/u.test(ref) && !ref.includes("..");
+  return (
+    ref.length > 0 &&
+    !ref.includes("\0") &&
+    !ref.includes("..") &&
+    /^[A-Za-z0-9][A-Za-z0-9._/@:+-]*$/u.test(ref)
+  );
 }
