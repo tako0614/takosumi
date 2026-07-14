@@ -42,6 +42,8 @@ import type {
   ResourceApplyBeginResult,
   ResourceApplyCommitInput,
   ResourceApplyCommitResult,
+  ResourceAtomicRemoveInput,
+  ResourceAtomicRemoveResult,
   ResourceCreateResult,
   ResourceDeleteClaimResult,
   ResourceObservationClaimInput,
@@ -53,8 +55,10 @@ import type {
 } from "./stores.ts";
 import {
   assertAbortInput,
+  assertAtomicRemoveInput,
   assertApplyPair,
   matchesApplyLock,
+  matchesExpectedLock,
   matchesVersion,
 } from "./stores.ts";
 
@@ -648,6 +652,7 @@ export function createD1ResourceShapeStores(db: D1Like): ResourceShapeStores {
     beginApply: (input) => beginD1Apply(db, input),
     commitApply: (input) => commitD1Apply(db, input),
     abortApply: (input) => abortD1Apply(db, input),
+    removeResource: (input) => removeD1Resource(db, input),
   };
 }
 
@@ -767,6 +772,46 @@ async function abortD1Apply(
     throw error;
   }
   return { status: "rolled_back" };
+}
+
+async function removeD1Resource(
+  db: D1Like,
+  input: ResourceAtomicRemoveInput,
+): Promise<ResourceAtomicRemoveResult> {
+  assertAtomicRemoveInput(input);
+  const batch = requireD1Batch(db);
+  try {
+    await batch([
+      atomicRemoveGuardStatement(db, input),
+      db
+        .prepare(`delete from ${names.resolutionLocks} where resource_id = ?`)
+        .bind(input.resourceId),
+      db
+        .prepare(`delete from ${names.resourceShapes} where id = ?`)
+        .bind(input.resourceId),
+    ]);
+  } catch (error) {
+    const [current, currentLock] = await Promise.all([
+      readD1Resource(db, input.resourceId),
+      readD1Lock(db, input.resourceId),
+    ]);
+    if (!current && !currentLock) return { status: "not_found" };
+    if (
+      !current ||
+      !matchesVersion(current, input.expected) ||
+      !matchesExpectedLock(currentLock, input.expectedLock)
+    ) {
+      return {
+        status: "conflict",
+        ...(current ? { record: current } : {}),
+        ...(currentLock ? { lock: currentLock } : {}),
+      };
+    }
+    // The exact pair is still present, so this was an actual storage failure;
+    // D1 batch semantics have rolled both delete statements back.
+    throw error;
+  }
+  return { status: "removed" };
 }
 
 function requireD1Batch(
@@ -890,6 +935,79 @@ function applyAndLockGuardStatement(
       lock.lockedAt,
       lock.updatedAt,
     );
+}
+
+function atomicRemoveGuardStatement(
+  db: D1Like,
+  input: ResourceAtomicRemoveInput,
+): D1LikePreparedStatement {
+  const expectedLock = input.expectedLock;
+  const lockPredicate = expectedLock
+    ? `exists (
+        select 1 from ${names.resolutionLocks} resolution
+        where resolution.resource_id = resource.id
+          and resolution.selected_implementation = ?
+          and resolution.target_pool is ?
+          and resolution.target = ?
+          and resolution.target_snapshot_json is ?
+          and resolution.implementation_snapshot_json is ?
+          and resolution.implementation_plugin is ?
+          and resolution.implementation_options_json is ?
+          and resolution.implementation_fingerprint is ?
+          and resolution.locked = ?
+          and resolution.reason_json = ?
+          and resolution.portability is ?
+          and resolution.native_resources_json is ?
+          and resolution.locked_at = ?
+          and resolution.updated_at = ?
+      )`
+    : `not exists (
+        select 1 from ${names.resolutionLocks} resolution
+        where resolution.resource_id = resource.id
+      )`;
+  return db
+    .prepare(
+      `insert into ${names.resourceShapes} (
+        id, space_id, kind, name, managed_by, spec_json, phase,
+        generation, observed_generation, created_at, updated_at
+      )
+      select ?, null, 'guard', 'guard', 'guard', '{}', 'Pending', 0, 0, '', ''
+      where not exists (
+        select 1 from ${names.resourceShapes} resource
+        where resource.id = ?
+          and resource.generation = ?
+          and resource.phase = ?
+          and resource.updated_at = ?
+          and ${lockPredicate}
+      )`,
+    )
+    .bind(
+      input.resourceId,
+      input.resourceId,
+      input.expected.generation,
+      input.expected.phase,
+      input.expected.updatedAt,
+      ...(expectedLock ? exactLockParameters(expectedLock) : []),
+    );
+}
+
+function exactLockParameters(lock: ResolutionLockRecord): readonly unknown[] {
+  return [
+    lock.selectedImplementation,
+    lock.targetPool ?? null,
+    lock.target,
+    jsonOrNull(lock.targetSnapshot),
+    jsonOrNull(lock.implementationSnapshot),
+    lock.selectedImplementationPlugin ?? null,
+    jsonOrNull(lock.selectedImplementationOptions),
+    lock.implementationFingerprint ?? null,
+    lock.locked ? 1 : 0,
+    JSON.stringify(lock.reason),
+    lock.portability ?? null,
+    jsonOrNull(lock.nativeResources),
+    lock.lockedAt,
+    lock.updatedAt,
+  ];
 }
 
 function resourceUpdateStatement(
