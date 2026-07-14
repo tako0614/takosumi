@@ -178,15 +178,14 @@ Capsule コンテキストを省略でき、使用量は Capsule id なしの所
 
 ## S3-compatible Object Storage endpoint
 
-S3-compatible エンドポイントは、Takosumi Cloud が提供する Object Storage を既存の S3
-SDK や S3-compatible OpenTofu provider から利用するためのデータプレーンです。AWS API
-完全互換ではありません。公開範囲は `compat.s3.v1` capability として明示します。
+`/v1/capabilities` が `compat.s3.v1` の data plane を公開している場合、S3-compatible
+エンドポイントから既存の S3 SDK / S3-compatible OpenTofu provider で Takosumi Cloud の
+`ObjectBucket` を利用できます。AWS API 完全互換ではなく、別の bucket lifecycle API でもありません。
 
 ```http
 GET  /compat/s3/v1/__takosumi/status
 GET  /compat/s3/v1
 HEAD /compat/s3/v1/{bucket}
-PUT  /compat/s3/v1/{bucket}
 GET  /compat/s3/v1/{bucket}?list-type=2
 GET  /compat/s3/v1/{bucket}/{key}
 HEAD /compat/s3/v1/{bucket}/{key}
@@ -196,15 +195,22 @@ DELETE /compat/s3/v1/{bucket}/{key}
 
 通常の Cloud API key (Takosumi Accounts パーソナルアクセストークン) は S3 SDK の
 クレデンシャルではありません。S3-compatible エンドポイントは AWS SigV4 形式のアクセスキー
-/ シークレットアクセスキーを検証します。アクセスキーは Workspace と許可バケットに
-紐づき、バケット記述子は Takosumi Cloud のマネージドリソース一覧から供給します。
+/ シークレットアクセスキーを検証します。各アクセスキーは明示的な Workspace Principal と
+許可バケットに紐づきます。バケット記述子は canonical `ObjectBucket`、解決済み `Interface`、
+一致する `NativeResource` を指し、Resource が `Ready` かつ Principal に必要な Interface 権限が
+ある場合だけ data request を処理します。
+
+bucket の作成・更新・import・削除は通常の `/v1/resources` preview / review / apply lifecycle で
+行います。bucket-level の S3 mutation method は `405 MethodNotAllowed` を返し、backend bucket や
+別の lifecycle record を作りません。
 
 `GET /compat/s3/v1/__takosumi/status` は SigV4 なしで読める運用状態です。Dashboard
 はこのステータスで設定済みバケット数を表示します。
 
-書き込み / 読み取り / 一覧操作は Cloud 使用量レジャーに事前課金します。所有ユーザーの USD 残高が
-不足している場合、`PUT` はバックエンド書き込み前に `402 PaymentRequired` で止まります。
-`DELETE` の後処理は残高不足でも詰まらないよう、操作課金を持たせません。
+対応する data operation は、その `ObjectBucket` に capture 済みの immutable な価格証跡から中央の
+Cloud usage ledger が評価します。価格・capture・invoice・支払い authority のどれかが欠ける場合は
+storage に触れる前に安全側へ停止します。usage event は source Workspace と canonical Resource を
+保持し、compatibility handler 自身は価格も並行 billing ledger も持ちません。
 
 ## API keys
 
