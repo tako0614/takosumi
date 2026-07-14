@@ -14,6 +14,7 @@ const adapter: MobileProductAdapter = {
   appName: "Takos",
   hostNoun: "Takos host",
   hostCenterLabel: "Host Takos",
+  hostCenterUrl: "https://operator.example/install",
   hostCenterSource: {
     git: "https://github.com/acme/takos.git",
     path: "deploy/opentofu",

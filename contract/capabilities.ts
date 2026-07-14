@@ -1,13 +1,8 @@
-import { TAKOSUMI_OUTPUT_SYNC_CAPABILITY } from "./output-sync.ts";
-
 export const TAKOSUMI_API_VERSION = "takosumi.dev/v1alpha1" as const;
-
-export type TakosumiEdition = "core" | "operator" | "cloud";
+export const TAKOSUMI_INTERFACES_CAPABILITY = "takosumi.interfaces.v1" as const;
 
 export interface TakosumiWellKnownDocument {
   readonly api_versions: readonly [typeof TAKOSUMI_API_VERSION];
-  /** @deprecated Clients must branch on `features` and `/v1/capabilities`, not edition names. */
-  readonly edition?: TakosumiEdition;
   readonly features: TakosumiWellKnownFeatures;
   readonly endpoints: TakosumiWellKnownEndpoints;
 }
@@ -18,23 +13,19 @@ export interface TakosumiWellKnownFeatures {
   readonly opentofu_runner: boolean;
   readonly oidc: boolean;
   readonly workload_identity: boolean;
-  readonly billing: boolean;
-  readonly operator_tenants: boolean;
   readonly compat_framework: boolean;
-  readonly compat_s3: boolean;
-  readonly compat_oci: boolean;
-  readonly compat_cloudevents: boolean;
-  readonly compat_provider_cloudflare_workers: boolean;
-  /** Takosumi-specific Workspace Output Sync extension availability. */
-  readonly output_sync: boolean;
+  /** Installed, versioned compatibility profile tokens. */
+  readonly compatibility_profiles: readonly string[];
+  /** Takosumi-managed runtime Interface/InterfaceBinding API availability. */
+  readonly interfaces: boolean;
 }
 
 export interface TakosumiWellKnownEndpoints {
   readonly api: string;
   readonly capabilities: string;
   readonly oidc_issuer: string;
-  readonly s3?: string;
-  readonly oci?: string;
+  /** Capability token -> public extension endpoint. */
+  readonly extensions?: Readonly<Record<string, string>>;
 }
 
 export interface TakosumiProductCapabilities {
@@ -44,49 +35,34 @@ export interface TakosumiProductCapabilities {
   readonly compat: TakosumiCompatCapabilities;
   readonly identity: TakosumiIdentityCapabilities;
   readonly operator: TakosumiOperatorCapabilities;
-  readonly commercial: TakosumiCommercialCapabilities;
   /** Versioned Takosumi extensions; these are not OpenTofu standards. */
   readonly extensions: readonly string[];
 }
 
-export interface TakosumiResourceCapabilities {
-  readonly Stack: boolean;
-  readonly EdgeWorker: boolean;
-  readonly ObjectBucket: boolean;
-  readonly KVStore: boolean;
-  readonly Queue: boolean;
-  readonly SQLDatabase: boolean;
-  readonly ContainerService: boolean;
-}
-
-export type KnownTakosumiAdapterCapability =
-  "opentofu" | "aws" | "cloudflare" | "kubernetes" | "vm" | "takosumi_native";
-
-export const TAKOSUMI_ADAPTER_CAPABILITY_KEYS: readonly KnownTakosumiAdapterCapability[] =
-  ["opentofu", "aws", "cloudflare", "kubernetes", "vm", "takosumi_native"];
+/**
+ * Open capability-token map. Bundled shapes have typed provider schemas;
+ * operator-defined tokens are advertised only when their host schema and
+ * adapter/plugin are installed.
+ */
+export type TakosumiResourceCapabilities = Readonly<Record<string, boolean>>;
 
 /**
- * Adapter capabilities are open-ended. Known keys describe built-in adapter
- * families; operators may publish additional plugin-backed adapter tokens.
+ * Adapter capabilities are open-ended. Operators publish only adapters that
+ * are actually installed; a provider or target family is never inferred from
+ * a compiled catalog.
  */
-export interface TakosumiAdapterCapabilities extends Readonly<
-  Record<string, boolean>
-> {
-  readonly opentofu: boolean;
-  readonly aws: boolean;
-  readonly cloudflare: boolean;
-  readonly kubernetes: boolean;
-  readonly vm: boolean;
-  readonly takosumi_native: boolean;
-}
+export type TakosumiAdapterCapabilities = Readonly<Record<string, boolean>>;
 
-export interface TakosumiCompatCapabilities {
-  readonly framework: boolean;
-  readonly s3: boolean;
-  readonly oci: boolean;
-  readonly cloudevents: boolean;
-  readonly provider_cloudflare_workers: boolean;
-}
+/**
+ * Compatibility-profile capability map.
+ *
+ * The named fields are the profiles understood by this client build. The map
+ * is intentionally open so an operator can advertise a versioned profile such
+ * as `redis.v1` or `example.events.v2` without waiting for a Takosumi contract
+ * release. Unknown keys are discovery tokens only; they do not make Core
+ * implement or validate the corresponding protocol.
+ */
+export type TakosumiCompatCapabilities = Readonly<Record<string, boolean>>;
 
 export interface TakosumiIdentityCapabilities {
   readonly oidc_issuer: boolean;
@@ -118,7 +94,10 @@ export const TAKOSUMI_OPERATOR_CAPABILITY_KEYS: readonly KnownTakosumiOperatorCa
     "audit_evidence",
   ];
 
-export interface TakosumiOperatorCapabilities {
+/** Known Operator functions plus operator-defined versioned capability tokens. */
+export interface TakosumiOperatorCapabilities extends Readonly<
+  Record<string, boolean>
+> {
   readonly multi_tenant_workspaces: boolean;
   readonly workspace_members: boolean;
   readonly runner_pools: boolean;
@@ -130,26 +109,18 @@ export interface TakosumiOperatorCapabilities {
   readonly audit_evidence: boolean;
 }
 
-export interface TakosumiCommercialCapabilities {
-  readonly billing: boolean;
-  readonly operator_tenants: boolean;
-  readonly payment_enforcement: boolean;
-}
-
 export interface CreateTakosumiDiscoveryOptions {
   readonly origin: string;
-  /** @deprecated Discovery output is capability-driven; edition is ignored. */
-  readonly edition?: TakosumiEdition;
   readonly resources?: Partial<TakosumiResourceCapabilities>;
   readonly adapters?: Partial<TakosumiAdapterCapabilities>;
   readonly identity?: Partial<TakosumiIdentityCapabilities>;
   readonly operator?: Partial<TakosumiOperatorCapabilities>;
-  readonly operatorTenants?: boolean;
-  readonly commercialBilling?: boolean;
-  readonly paymentEnforcement?: boolean;
   readonly compat?: Partial<TakosumiCompatCapabilities>;
-  readonly endpoints?: Partial<Pick<TakosumiWellKnownEndpoints, "s3" | "oci">>;
+  readonly endpoints?: Readonly<Record<string, string>>;
   readonly resourceShapesEnabled?: boolean;
+  readonly interfacesEnabled?: boolean;
+  /** Open, versioned product/extension capability tokens. */
+  readonly extensions?: readonly string[];
 }
 
 export function createTakosumiWellKnownDocument(
@@ -166,22 +137,20 @@ export function createTakosumiWellKnownDocument(
       opentofu_runner: capabilities.adapters.opentofu,
       oidc: capabilities.identity.oidc_issuer,
       workload_identity: capabilities.identity.workload_identity,
-      billing: capabilities.commercial.billing,
-      operator_tenants: capabilities.commercial.operator_tenants,
       compat_framework: capabilities.compat.framework,
-      compat_s3: capabilities.compat.s3,
-      compat_oci: capabilities.compat.oci,
-      compat_cloudevents: capabilities.compat.cloudevents,
-      compat_provider_cloudflare_workers:
-        capabilities.compat.provider_cloudflare_workers,
-      output_sync: true,
+      compatibility_profiles: Object.entries(capabilities.compat)
+        .filter(([token, enabled]) => token !== "framework" && enabled === true)
+        .map(([token]) => token)
+        .sort(),
+      interfaces: options.interfacesEnabled ?? false,
     },
     endpoints: {
       api: `${trimTrailingSlash(options.origin)}/api`,
       capabilities: `${trimTrailingSlash(options.origin)}/v1/capabilities`,
       oidc_issuer: trimTrailingSlash(options.origin),
-      ...(options.endpoints?.s3 ? { s3: options.endpoints.s3 } : {}),
-      ...(options.endpoints?.oci ? { oci: options.endpoints.oci } : {}),
+      ...(options.endpoints && Object.keys(options.endpoints).length > 0
+        ? { extensions: { ...options.endpoints } }
+        : {}),
     },
   };
 }
@@ -191,21 +160,20 @@ export function createTakosumiProductCapabilities(
 ): TakosumiProductCapabilities {
   const compat: TakosumiCompatCapabilities = {
     framework: true,
-    s3: false,
-    oci: false,
-    cloudevents: false,
-    provider_cloudflare_workers: false,
     ...(options.compat ?? {}),
   };
   const operator: TakosumiOperatorCapabilities = {
-    multi_tenant_workspaces: options.operatorTenants ?? false,
-    workspace_members: options.operatorTenants ?? false,
+    multi_tenant_workspaces: false,
+    workspace_members: false,
     runner_pools: false,
     operator_connections: false,
     managed_target_catalog: false,
     db_backed_configuration: false,
     cli_api_operations: false,
-    usage_showback: options.commercialBilling ?? false,
+    // OSS showback is an operator capability, not evidence that commercial
+    // billing or payment enforcement is mounted. Callers opt into it through
+    // `operator.usage_showback` independently.
+    usage_showback: false,
     audit_evidence: false,
     ...(options.operator ?? {}),
   };
@@ -214,28 +182,24 @@ export function createTakosumiProductCapabilities(
     resources: mergeResourceCapabilities(options.resources),
     adapters: {
       opentofu: true,
-      aws: false,
-      cloudflare: false,
-      kubernetes: false,
-      vm: false,
-      takosumi_native: false,
       ...(options.adapters ?? {}),
     },
     compat,
     identity: {
       oidc_issuer: true,
-      external_oidc_login: true,
+      external_oidc_login: false,
       workload_identity: false,
       ...(options.identity ?? {}),
     },
     operator,
-    commercial: {
-      billing: options.commercialBilling ?? false,
-      operator_tenants:
-        options.operatorTenants ?? operator.multi_tenant_workspaces,
-      payment_enforcement: options.paymentEnforcement ?? false,
-    },
-    extensions: [TAKOSUMI_OUTPUT_SYNC_CAPABILITY],
+    extensions: Object.freeze([
+      ...new Set([
+        ...(options.extensions ?? []).filter(
+          (token) => token.trim().length > 0,
+        ),
+        ...(options.interfacesEnabled ? [TAKOSUMI_INTERFACES_CAPABILITY] : []),
+      ]),
+    ]),
   };
 }
 
@@ -250,6 +214,7 @@ function mergeResourceCapabilities(
     Queue: resources?.Queue ?? false,
     SQLDatabase: resources?.SQLDatabase ?? false,
     ContainerService: resources?.ContainerService ?? false,
+    ...(resources ?? {}),
   };
 }
 

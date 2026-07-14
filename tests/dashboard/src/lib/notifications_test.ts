@@ -28,21 +28,22 @@ describe("attentionCount workspace scoping", () => {
     entry("workspace_a", "run.failed"),
     entry("workspace_a", "run.applied"),
     entry("workspace_b", "run.failed"),
-    entry("workspace_b", "installation.drift_detected"),
+    entry("workspace_b", "capsule.drift_detected"),
+    entry("workspace_b", "resource.drift_detected"),
   ];
 
   test("counts only the CURRENT workspace's failures when scoped", () => {
     // The bell badge / 要対応 banner must not keep the previous Workspace's
     // count after a switch — the feed stays cross-Workspace, the COUNT does not.
     expect(attentionCount(feed, "workspace_a")).toBe(1);
-    expect(attentionCount(feed, "workspace_b")).toBe(2);
+    expect(attentionCount(feed, "workspace_b")).toBe(3);
     expect(attentionCount(feed, "workspace_c")).toBe(0);
   });
 
   test("no scope (no workspace selected) counts every workspace", () => {
-    expect(attentionCount(feed)).toBe(3);
-    expect(attentionCount(feed, undefined)).toBe(3);
-    expect(attentionCount(feed, "")).toBe(3);
+    expect(attentionCount(feed)).toBe(4);
+    expect(attentionCount(feed, undefined)).toBe(4);
+    expect(attentionCount(feed, "")).toBe(4);
   });
 
   test("empty feed counts zero", () => {

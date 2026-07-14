@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import {
-  OpenTofuDeploymentController,
+  OpenTofuController,
   createDefaultRunnerProfiles,
   DEFAULT_OPENTOFU_RUNNER_PROFILE_ID,
   resolveEnabledRunnerProfiles,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import {
-  seedInstallationModel,
+  seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -24,8 +24,8 @@ function deterministicIds(): (prefix: string) => string {
 }
 
 async function seededController() {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const controller = new OpenTofuDeploymentController({
+  const store = new InMemoryOpenTofuControlStore();
+  const controller = new OpenTofuController({
     store,
     now: () => 1,
     newId: deterministicIds(),
@@ -35,25 +35,25 @@ async function seededController() {
     ),
     defaultRunnerProfileId: DEFAULT_OPENTOFU_RUNNER_PROFILE_ID,
   });
-  const { installation } = await seedInstallationModel(store, {
-    installationId: "inst_provider_neutral",
+  const { capsule } = await seedCapsuleModel(store, {
+    capsuleId: "inst_provider_neutral",
   });
-  await seedProviderConnections(store, installation, {
+  await seedProviderConnections(store, capsule, {
     requiredProviders: [VERCEL_PROVIDER],
   });
-  await store.putInstallation({
-    ...installation,
-    currentDeploymentId: "dep_seed",
+  await store.putCapsule({
+    ...capsule,
+    currentStateVersionId: "dep_seed",
     status: "active",
   });
-  return { controller, installation };
+  return { controller, capsule };
 }
 
 test("an arbitrary provider uses the default runner without provider routing", async () => {
-  const { controller, installation } = await seededController();
+  const { controller, capsule } = await seededController();
   const { planRun } = await controller.createPlanRun({
-    spaceId: installation.spaceId,
-    installationId: installation.id,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
     operation: "update",
     source: SOURCE,
     requiredProviders: [VERCEL_PROVIDER],
@@ -62,32 +62,29 @@ test("an arbitrary provider uses the default runner without provider routing", a
 });
 
 test("an explicit capability profile remains explicit", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const defaultProfile = createDefaultRunnerProfiles(1)[0]!;
   const privateNetwork = {
     ...defaultProfile,
     id: "private-network",
-    labels: {
-      ...defaultProfile.labels,
-      "takosumi.com/profile-enabled": "true",
-    },
+    labels: { purpose: "private-network" },
   };
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
     store,
     now: () => 1,
     newId: deterministicIds(),
     runnerProfiles: [defaultProfile, privateNetwork],
     defaultRunnerProfileId: DEFAULT_OPENTOFU_RUNNER_PROFILE_ID,
   });
-  const { installation } = await seedInstallationModel(store, {
-    installationId: "inst_private",
+  const { capsule } = await seedCapsuleModel(store, {
+    capsuleId: "inst_private",
   });
-  await seedProviderConnections(store, installation, {
+  await seedProviderConnections(store, capsule, {
     requiredProviders: [VERCEL_PROVIDER],
   });
   const { planRun } = await controller.createPlanRun({
-    spaceId: installation.spaceId,
-    installationId: installation.id,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
     operation: "update",
     source: SOURCE,
     runnerProfileId: "private-network",

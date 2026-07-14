@@ -10,7 +10,7 @@ import type { Run } from "../../../../dashboard/src/lib/control-api.ts";
 
 const BASE_RUN: Run = {
   id: "plan_1",
-  spaceId: "space_1",
+  workspaceId: "workspace_1",
   type: "plan",
   status: "succeeded",
   createdBy: "system",

@@ -2,6 +2,7 @@ import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 import type { CloudflareWorkerEnv, QueueBatch } from "./bindings.ts";
 import {
   createServiceWorkerRequest,
+  isInterfaceApiPath,
   isInternalControlPlanePath,
   isServiceControlPlanePath,
 } from "./routes.ts";
@@ -42,16 +43,12 @@ export interface CreateCloudflareWorkerOptions {
   readonly createServiceApp?: (
     env: CloudflareWorkerEnv,
   ) => Promise<CreatedCloudflareWorkerApp>;
-  readonly createRuntimeAgentApp?: (
-    env: CloudflareWorkerEnv,
-  ) => Promise<CreatedCloudflareWorkerApp>;
 }
 
 export function createCloudflareWorker(
   options: CreateCloudflareWorkerOptions = {},
 ): CloudflareWorkerHandler {
   let serviceApp: Promise<CreatedCloudflareWorkerApp> | undefined;
-  let runtimeAgentApp: Promise<CreatedCloudflareWorkerApp> | undefined;
 
   return {
     async fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response> {
@@ -66,14 +63,11 @@ export function createCloudflareWorker(
       if (internalPath && !internalEdgeIngressEnabled(env)) {
         return Response.json({ error: "not found" }, { status: 404 });
       }
-      if (isRuntimeAgentPath(url.pathname)) {
-        runtimeAgentApp ??= options.createRuntimeAgentApp
-          ? options.createRuntimeAgentApp(env)
-          : createWorkerServiceApp(env, "takosumi-runtime-agent");
-        const created = await runtimeAgentApp;
-        return created.app.fetch(createServiceWorkerRequest(request));
-      }
-      if (isServiceControlPlanePath(url.pathname) || internalPath) {
+      if (
+        isServiceControlPlanePath(url.pathname) ||
+        isInterfaceApiPath(url.pathname) ||
+        internalPath
+      ) {
         serviceApp ??= options.createServiceApp
           ? options.createServiceApp(env)
           : createWorkerServiceApp(env, "takosumi-api");
@@ -100,11 +94,6 @@ export function createDeployControlQueueConsumer(): (
   env: CloudflareWorkerEnv,
 ) => Promise<void> {
   return (batch, env) => consumeOpenTofuRunBatch(batch, env);
-}
-
-function isRuntimeAgentPath(pathname: string): boolean {
-  const prefix = `${INTERNAL_V1_PREFIX}/runtime/agents`;
-  return pathname === prefix || pathname.startsWith(`${prefix}/`);
 }
 
 function isCoordinationEdgePath(pathname: string): boolean {

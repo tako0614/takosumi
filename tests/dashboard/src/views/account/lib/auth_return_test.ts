@@ -38,10 +38,12 @@ afterEach(() => {
 
 test("safeOAuthReturnTo keeps same-origin paths", () => {
   expect(safeOAuthReturnTo("/")).toBe("/");
-  expect(safeOAuthReturnTo("/installations?tab=apps#latest")).toBe(
-    "/installations?tab=apps#latest",
+  expect(safeOAuthReturnTo("/services?tab=apps#latest")).toBe(
+    "/services?tab=apps#latest",
   );
-  expect(safeOAuthReturnTo("  /spaces/space_1  ")).toBe("/spaces/space_1");
+  expect(safeOAuthReturnTo("  /advanced/workspace  ")).toBe(
+    "/advanced/workspace",
+  );
 });
 
 test("safeOAuthReturnTo rejects open-redirect values", () => {

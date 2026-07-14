@@ -1,20 +1,21 @@
 import { expect, test } from "bun:test";
 
-import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import type {
   D1Database,
   D1PreparedStatement,
   D1Result,
 } from "../../../../worker/src/bindings.ts";
 
-test("d1 store persists security findings and billing ledger rows", async () => {
-  const store = new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1());
+test("d1 store persists security findings and provider-neutral usage", async () => {
+  const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
 
   await store.putSecurityFinding({
     id: "sec_1",
-    workspaceId: "space_1",
-    capsuleId: "inst_1",
+    workspaceId: "ws_1",
+    capsuleId: "capsule_1",
     runId: "run_1",
     severity: "error",
     type: "provider_install_denied",
@@ -24,7 +25,7 @@ test("d1 store persists security findings and billing ledger rows", async () => 
   });
   await store.putSecurityFinding({
     id: "sec_2",
-    workspaceId: "space_1",
+    workspaceId: "ws_1",
     runId: "run_2",
     severity: "warning",
     type: "policy_warning",
@@ -34,277 +35,150 @@ test("d1 store persists security findings and billing ledger rows", async () => 
   });
 
   expect(
-    (await store.listSecurityFindings("space_1")).map((row) => row.id),
+    (await store.listSecurityFindings("ws_1")).map((row) => row.id),
   ).toEqual(["sec_2", "sec_1"]);
   expect(
-    (await store.listSecurityFindings("space_1", { runId: "run_1" })).map(
+    (await store.listSecurityFindings("ws_1", { runId: "run_1" })).map(
       (row) => row.id,
     ),
   ).toEqual(["sec_1"]);
 
-  await store.putBillingAccount({
-    id: "bill_1",
-    ownerType: "user",
-    ownerId: "user_1",
-    provider: "stripe",
-    stripeCustomerId: "cus_1",
-    status: "active",
-    createdAt: "2026-06-07T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-  expect(await store.getBillingAccountForOwner("user", "user_1")).toMatchObject(
-    { id: "bill_1", provider: "stripe" },
-  );
-
-  await store.putBillingPlan({
-    id: "pro",
-    name: "Pro",
-    monthlyBasePrice: 2000,
-    includedCredits: 1000,
-    limits: {
-      maxEstimatedCreditsPerRun: 100,
-      quota: { resources: 20 },
-    },
-    createdAt: "2026-06-07T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-  expect(await store.getBillingPlan("pro")).toMatchObject({
-    id: "pro",
-    limits: {
-      maxEstimatedCreditsPerRun: 100,
-      quota: { resources: 20 },
-    },
-  });
-
-  await store.putSpaceSubscription({
-    id: "sub_1",
-    spaceId: "space_1",
-    billingAccountId: "bill_1",
-    planId: "pro",
-    status: "active",
-    currentPeriodStart: "2026-06-01T00:00:00.000Z",
-    currentPeriodEnd: "2026-07-01T00:00:00.000Z",
-    createdAt: "2026-06-07T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-  expect(await store.getSpaceSubscription("space_1")).toMatchObject({
-    id: "sub_1",
-    planId: "pro",
-  });
-
-  await store.putCreditBalance({
-    spaceId: "space_1",
-    availableCredits: 20,
-    reservedCredits: 5,
-    monthlyIncludedCredits: 10,
-    purchasedCredits: 15,
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-  expect(
-    await store.reserveCredits("space_1", {
-      credits: 7,
-      updatedAt: "2026-06-07T00:00:01.000Z",
-    }),
-  ).toMatchObject({
-    availableCredits: 13,
-    reservedCredits: 12,
-    updatedAt: "2026-06-07T00:00:01.000Z",
-  });
-  expect(
-    await store.reserveCredits("space_1", {
-      credits: 99,
-      updatedAt: "2026-06-07T00:00:02.000Z",
-    }),
-  ).toBeUndefined();
-
-  await store.putCreditReservation({
-    id: "creditres_1",
-    spaceId: "space_1",
-    runId: "plan_1",
-    estimatedCredits: 7,
-    status: "reserved",
-    mode: "enforce",
-    createdAt: "2026-06-07T00:00:01.000Z",
-    expiresAt: "2026-06-08T00:00:01.000Z",
-  });
-  expect(await store.getCreditReservationForRun("plan_1")).toMatchObject({
-    id: "creditres_1",
-    mode: "enforce",
-  });
-  expect(
-    (await store.listCreditReservations("space_1")).map((row) => row.id),
-  ).toEqual(["creditres_1"]);
-
   await store.putUsageEvent({
     id: "usage_1",
-    spaceId: "space_1",
-    installationId: "inst_1",
+    workspaceId: "ws_1",
+    capsuleId: "capsule_1",
     runId: "apply_1",
-    kind: "operation",
+    kind: "opentofu.apply",
     quantity: 1,
-    credits: 7,
+    usdMicros: 750_000,
+    ratingStatus: "rated",
     source: "runner",
-    idempotencyKey: "apply_1:operation",
+    idempotencyKey: "apply_1:opentofu.apply",
     createdAt: "2026-06-07T00:00:03.000Z",
   });
   await store.putUsageEvent({
     id: "usage_duplicate",
-    spaceId: "space_1",
+    workspaceId: "ws_1",
     runId: "apply_1",
-    kind: "operation",
+    kind: "opentofu.apply",
     quantity: 1,
-    credits: 999,
+    usdMicros: 999_000_000,
+    ratingStatus: "rated",
     source: "runner",
-    idempotencyKey: "apply_1:operation",
+    idempotencyKey: "apply_1:opentofu.apply",
     createdAt: "2026-06-07T00:00:04.000Z",
   });
-  expect(await store.listUsageEvents("space_1")).toEqual([
+  expect(await store.listUsageEvents("ws_1")).toEqual([
     {
       id: "usage_1",
-      workspaceId: "space_1",
-      spaceId: "space_1",
-      installationId: "inst_1",
+      workspaceId: "ws_1",
+      capsuleId: "capsule_1",
       runId: "apply_1",
-      kind: "operation",
+      kind: "opentofu.apply",
       quantity: 1,
-      credits: 7,
-      usdMicros: 7_000_000,
+      usdMicros: 750_000,
+      ratingStatus: "rated",
       source: "runner",
-      idempotencyKey: "apply_1:operation",
+      idempotencyKey: "apply_1:opentofu.apply",
       createdAt: "2026-06-07T00:00:03.000Z",
     },
   ]);
 });
 
-test("d1 commitAppliedDeployment writes the unit atomically and rolls back a guard conflict", async () => {
-  const store = new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1());
+test("d1 commitRunState writes the unit atomically and rolls back a guard conflict", async () => {
+  const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
   const TS = "2026-06-07T00:00:00.000Z";
-  await store.putInstallation({
-    id: "inst_1",
-    spaceId: "space_1",
-    name: "shop",
-    slug: "shop",
-    sourceId: "src_1",
-    installType: "opentofu_module",
-    installConfigId: "cfg_1",
-    environment: "production",
-    currentStateGeneration: 0,
-    status: "pending",
-    createdAt: TS,
-    updatedAt: TS,
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_1",
   });
-  const stateSnapshot = (gen: number, id: string) => ({
+  const stateVersion = (gen: number, id: string) => ({
     id,
-    spaceId: "space_1",
-    installationId: "inst_1",
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
     environment: "production",
     generation: gen,
-    objectKey: `spaces/space_1/installations/inst_1/envs/production/states/0000000${gen}.tfstate.enc`,
+    stateRef: `opaque-state-${gen}`,
     digest: "sha256:abc",
     createdByRunId: "run_apply_1",
     createdAt: TS,
   });
-  const deployment = (id: string, gen: number, out: string) => ({
+  const output = (id: string, gen: number) => ({
     id,
-    spaceId: "space_1",
-    installationId: "inst_1",
-    environment: "production",
-    applyRunId: "run_apply_1",
-    sourceSnapshotId: "snap_1",
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
     stateGeneration: gen,
-    outputSnapshotId: out,
-    outputsPublic: { launch_url: "https://x.example" },
-    status: "active" as const,
-    createdAt: TS,
-  });
-  const outputSnapshot = (id: string, gen: number) => ({
-    id,
-    spaceId: "space_1",
-    installationId: "inst_1",
-    stateGeneration: gen,
-    rawOutputArtifactKey:
-      "spaces/space_1/installations/inst_1/runs/run_apply_1/outputs.raw.json.enc",
+    rawArtifactRef: `opaque-output-${gen}`,
     publicOutputs: { launch_url: "https://x.example" },
-    spaceOutputs: { launch_url: "https://x.example" },
+    workspaceOutputs: { launch_url: "https://x.example" },
     outputDigest: "sha256:out",
     createdAt: TS,
   });
 
-  // Successful atomic commit: every record lands and the installation advances.
-  const ok = await store.commitAppliedDeployment({
-    newDeployment: deployment("dep_ok", 1, "out_ok"),
-    stateSnapshot: stateSnapshot(1, "state_ok"),
-    outputSnapshot: outputSnapshot("out_ok", 1),
-    installationPatch: {
-      id: "inst_1",
+  // Successful atomic commit: every record lands and the Capsule advances.
+  const ok = await store.commitRunState({
+    stateVersion: stateVersion(1, "state_ok"),
+    output: output("out_ok", 1),
+    capsulePatch: {
+      id: seeded.capsule.id,
       patch: {
-        currentDeploymentId: "dep_ok",
+        currentStateVersionId: "state_ok",
         status: "active",
         currentStateGeneration: 1,
-        currentOutputSnapshotId: "out_ok",
+        currentOutputId: "out_ok",
         updatedAt: TS,
       },
-      guard: { currentDeploymentId: undefined, status: "pending" },
+      guard: { currentStateVersionId: undefined, status: "pending" },
     },
   });
-  expect(ok.installation?.currentDeploymentId).toBe("dep_ok");
-  expect((await store.getDeployment("dep_ok"))?.status).toBe("active");
+  expect(ok.capsule?.currentStateVersionId).toBe("state_ok");
   expect(
-    (await store.getLatestStateSnapshot("inst_1", "production"))?.generation,
+    (await store.getLatestStateVersion(seeded.capsule.id, "production"))
+      ?.generation,
   ).toBe(1);
-  expect((await store.getOutputSnapshot("out_ok"))?.stateGeneration).toBe(1);
+  expect((await store.getOutput("out_ok"))?.stateGeneration).toBe(1);
 
-  // Guard conflict: the cursor is now `dep_ok`, so a stale `undefined` guard
+  // Guard conflict: the cursor is now `state_ok`, so a stale `undefined` guard
   // loses. D1 evaluates the guard against a pre-batch read and throws BEFORE the
-  // batch, so NO deployment / state / output record is ever written (atomic: the
+  // batch, so NO StateVersion / Output record is ever written (atomic: the
   // whole unit either commits in one batch or not at all).
   await expect(
-    store.commitAppliedDeployment({
-      newDeployment: deployment("dep_torn", 2, "out_torn"),
-      stateSnapshot: stateSnapshot(2, "state_torn"),
-      outputSnapshot: outputSnapshot("out_torn", 2),
-      installationPatch: {
-        id: "inst_1",
-        patch: { currentDeploymentId: "dep_torn", updatedAt: TS },
-        guard: { currentDeploymentId: undefined },
+    store.commitRunState({
+      stateVersion: stateVersion(2, "state_torn"),
+      output: output("out_torn", 2),
+      capsulePatch: {
+        id: seeded.capsule.id,
+        patch: { currentStateVersionId: "state_torn", updatedAt: TS },
+        guard: { currentStateVersionId: undefined },
       },
     }),
   ).rejects.toThrow();
-  expect(await store.getDeployment("dep_torn")).toBeUndefined();
-  expect(await store.getOutputSnapshot("out_torn")).toBeUndefined();
+  expect(await store.getStateVersion("state_torn")).toBeUndefined();
+  expect(await store.getOutput("out_torn")).toBeUndefined();
   expect(
-    (await store.getLatestStateSnapshot("inst_1", "production"))?.generation,
+    (await store.getLatestStateVersion(seeded.capsule.id, "production"))
+      ?.generation,
   ).toBe(1);
-  expect((await store.getInstallation("inst_1"))?.currentDeploymentId).toBe(
-    "dep_ok",
+  expect((await store.getCapsule(seeded.capsule.id))?.currentStateVersionId).toBe(
+    "state_ok",
   );
 });
 
-test("d1 commitAppliedDeployment rolls back when the apply lease changes after the pre-read", async () => {
+test("d1 commitRunState rolls back when the apply lease changes after the pre-read", async () => {
   const backing = new SqliteFakeD1();
-  const store = new CloudflareD1OpenTofuDeploymentStore(
+  const store = new CloudflareD1OpenTofuControlStore(
     new LeaseChangingD1(backing, "apply_interleave", "lease_taken"),
   );
   const TS = "2026-06-07T00:00:00.000Z";
 
-  await store.putInstallation({
-    id: "inst_interleave",
-    spaceId: "space_1",
-    name: "shop",
-    slug: "shop",
-    sourceId: "src_1",
-    installType: "opentofu_module",
-    installConfigId: "cfg_1",
-    environment: "production",
-    currentStateGeneration: 0,
-    status: "pending",
-    createdAt: TS,
-    updatedAt: TS,
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_interleave",
   });
   const planRun = {
     id: "plan_interleave",
-    spaceId: "space_1",
-    installationId: "inst_interleave",
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
     source: { kind: "git" as const, url: "https://example.com/repo.git" },
     sourceDigest: "sha256:src",
     operation: "apply" as const,
@@ -321,8 +195,8 @@ test("d1 commitAppliedDeployment rolls back when the apply lease changes after t
   const applyRun = {
     id: "apply_interleave",
     planRunId: "plan_interleave",
-    spaceId: "space_1",
-    installationId: "inst_interleave",
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
     operation: "apply" as const,
     runnerProfileId: "rp_1",
     status: "queued" as const,
@@ -353,59 +227,44 @@ test("d1 commitAppliedDeployment rolls back when the apply lease changes after t
   });
   expect(claim.won).toBe(true);
 
-  const committed = await store.commitAppliedDeployment({
-    newDeployment: {
-      id: "dep_interleave",
-      spaceId: "space_1",
-      installationId: "inst_interleave",
-      environment: "production",
-      applyRunId: "apply_interleave",
-      sourceSnapshotId: "snap_1",
-      stateGeneration: 1,
-      outputSnapshotId: "out_interleave",
-      outputsPublic: { launch_url: "https://x.example" },
-      status: "active",
-      createdAt: TS,
-    },
-    stateSnapshot: {
+  const committed = await store.commitRunState({
+    stateVersion: {
       id: "state_interleave",
-      spaceId: "space_1",
-      installationId: "inst_interleave",
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
       environment: "production",
       generation: 1,
-      objectKey:
-        "spaces/space_1/installations/inst_interleave/envs/production/states/00000001.tfstate.enc",
+      stateRef: "opaque-state-interleave",
       digest: "sha256:state",
       createdByRunId: "apply_interleave",
       createdAt: TS,
     },
-    outputSnapshot: {
+    output: {
       id: "out_interleave",
-      spaceId: "space_1",
-      installationId: "inst_interleave",
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
       stateGeneration: 1,
-      rawOutputArtifactKey:
-        "spaces/space_1/installations/inst_interleave/runs/apply_interleave/outputs.raw.json.enc",
+      rawArtifactRef: "opaque-output-interleave",
       publicOutputs: { launch_url: "https://x.example" },
-      spaceOutputs: { launch_url: "https://x.example" },
+      workspaceOutputs: { launch_url: "https://x.example" },
       outputDigest: "sha256:out",
       createdAt: TS,
     },
-    installationPatch: {
-      id: "inst_interleave",
+    capsulePatch: {
+      id: seeded.capsule.id,
       patch: {
-        currentDeploymentId: "dep_interleave",
+        currentStateVersionId: "state_interleave",
         status: "active",
         currentStateGeneration: 1,
-        currentOutputSnapshotId: "out_interleave",
+        currentOutputId: "out_interleave",
         updatedAt: TS,
       },
-      guard: { currentDeploymentId: undefined, status: "pending" },
+      guard: { currentStateVersionId: undefined, status: "pending" },
     },
     applyRunTerminal: {
       ...applyRun,
       status: "succeeded",
-      deploymentId: "dep_interleave",
+      stateVersionId: "state_interleave",
     },
     applyRunLeaseToken: "lease_fresh",
     planRunApplied: {
@@ -415,14 +274,14 @@ test("d1 commitAppliedDeployment rolls back when the apply lease changes after t
   });
 
   expect(committed.applyRunLeaseLost).toBe(true);
-  expect(await store.getDeployment("dep_interleave")).toBeUndefined();
-  expect(await store.getOutputSnapshot("out_interleave")).toBeUndefined();
+  expect(await store.getStateVersion("state_interleave")).toBeUndefined();
+  expect(await store.getOutput("out_interleave")).toBeUndefined();
   expect(
-    (await store.getLatestStateSnapshot("inst_interleave", "production"))
+    (await store.getLatestStateVersion(seeded.capsule.id, "production"))
       ?.generation,
   ).toBeUndefined();
   expect(
-    (await store.getInstallation("inst_interleave"))?.currentDeploymentId,
+    (await store.getCapsule(seeded.capsule.id))?.currentStateVersionId,
   ).toBeUndefined();
   expect((await store.getApplyRun("apply_interleave"))?.status).toBe("running");
   expect(
@@ -430,16 +289,24 @@ test("d1 commitAppliedDeployment rolls back when the apply lease changes after t
   ).toBeUndefined();
 });
 
-test("d1 store accepts operator-scoped connections without a space id", async () => {
-  const store = new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1());
+test("d1 store accepts operator-scoped connections without a Workspace id", async () => {
+  const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
 
   await store.putConnection({
     id: "conn_operator_cf",
-    provider: "cloudflare",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
     scope: "operator",
-    owner: "operator",
-    authMethod: "static_secret",
+    credentialRecipe: {
+      id: "generic-env",
+      authMode: "env",
+      secretPartition: "provider-credentials",
+      declaredEnv: true,
+    },
+    secretPartition: "provider-credentials",
+    kind: "generic_env_provider",
     status: "verified",
+    materialization: "secret",
     envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: "2026-06-07T00:00:00.000Z",
     updatedAt: "2026-06-07T00:00:00.000Z",
@@ -448,90 +315,6 @@ test("d1 store accepts operator-scoped connections without a space id", async ()
   expect((await store.listOperatorConnections()).map((row) => row.id)).toEqual([
     "conn_operator_cf",
   ]);
-});
-
-test("d1 auto recharge settle does not double-grant when another writer wins", async () => {
-  const backing = new SqliteFakeD1();
-  const store = new CloudflareD1OpenTofuDeploymentStore(backing);
-  const attempt = {
-    id: "takosumi-autorecharge:space_auto:run_auto",
-    spaceId: "space_auto",
-    runId: "run_auto",
-    billingAccountId: "bill_auto",
-    idempotencyKey: "takosumi-autorecharge:space_auto:run_auto",
-    periodStart: "2026-06-01T00:00:00.000Z",
-    requestedUsdMicros: 500_000,
-    monthlyLimitUsdMicros: 1_000_000,
-    status: "pending" as const,
-    createdAt: "2026-06-07T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  };
-  expect(
-    await store.claimBillingAutoRechargeAttempt({
-      attempt,
-      monthlyLimitUsdMicros: 1_000_000,
-    }),
-  ).toMatchObject({ claimed: true });
-
-  const racingStore = new CloudflareD1OpenTofuDeploymentStore(
-    new AutoRechargeSettledBeforeBatchD1(backing, {
-      attemptId: attempt.id,
-      spaceId: attempt.spaceId,
-      chargedUsdMicros: 500_000,
-      updatedAt: "2026-06-07T00:00:01.000Z",
-    }),
-  );
-  expect(
-    await racingStore.settleBillingAutoRechargeAttempt({
-      attemptId: attempt.id,
-      status: "succeeded",
-      chargedUsdMicros: 500_000,
-      stripePaymentIntentId: "pi_auto",
-      providerStatus: "succeeded",
-      updatedAt: "2026-06-07T00:00:02.000Z",
-    }),
-  ).toMatchObject({
-    settled: false,
-    skippedReason: "already_succeeded",
-  });
-
-  const balance = await store.getCreditBalance(attempt.spaceId);
-  expect(balance?.availableUsdMicros).toBe(500_000);
-  expect(balance?.purchasedUsdMicros).toBe(500_000);
-});
-
-test("d1 auto recharge settle fails closed when batch is unavailable", async () => {
-  const backing = new SqliteFakeD1();
-  const store = new CloudflareD1OpenTofuDeploymentStore(new NoBatchD1(backing));
-  const attempt = {
-    id: "takosumi-autorecharge:space_nobatch:run_nobatch",
-    spaceId: "space_nobatch",
-    runId: "run_nobatch",
-    billingAccountId: "bill_nobatch",
-    idempotencyKey: "takosumi-autorecharge:space_nobatch:run_nobatch",
-    periodStart: "2026-06-01T00:00:00.000Z",
-    requestedUsdMicros: 500_000,
-    status: "pending" as const,
-    createdAt: "2026-06-07T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  };
-  await store.claimBillingAutoRechargeAttempt({ attempt });
-
-  await expect(
-    store.settleBillingAutoRechargeAttempt({
-      attemptId: attempt.id,
-      status: "succeeded",
-      chargedUsdMicros: 500_000,
-      updatedAt: "2026-06-07T00:00:01.000Z",
-    }),
-  ).rejects.toThrow("D1 batch support is required");
-  expect(
-    (await store.listBillingAutoRechargeAttempts(attempt.spaceId))[0],
-  ).toMatchObject({
-    id: attempt.id,
-    status: "pending",
-  });
-  expect(await store.getCreditBalance(attempt.spaceId)).toBeUndefined();
 });
 
 class LeaseChangingD1 implements D1Database {
@@ -571,114 +354,6 @@ class LeaseChangingD1 implements D1Database {
       throw new Error("wrapped D1 binding does not support batch");
     }
     return this.inner.batch<T>(statements);
-  }
-}
-
-class NoBatchD1 implements D1Database {
-  constructor(private readonly inner: D1Database) {}
-
-  prepare(query: string): D1PreparedStatement {
-    return this.inner.prepare(query);
-  }
-}
-
-class AutoRechargeSettledBeforeBatchD1 implements D1Database {
-  #settled = false;
-
-  constructor(
-    private readonly inner: D1Database,
-    private readonly options: {
-      readonly attemptId: string;
-      readonly spaceId: string;
-      readonly chargedUsdMicros: number;
-      readonly updatedAt: string;
-    },
-  ) {}
-
-  prepare(query: string): D1PreparedStatement {
-    return this.inner.prepare(query);
-  }
-
-  async batch<T = unknown>(
-    statements: readonly D1PreparedStatement[],
-  ): Promise<readonly D1Result<T>[]> {
-    if (!this.inner.batch) {
-      throw new Error("wrapped D1 binding does not support batch");
-    }
-    if (!this.#settled) {
-      this.#settled = true;
-      await this.#settleExternally();
-    }
-    return this.inner.batch<T>(statements);
-  }
-
-  async #settleExternally(): Promise<void> {
-    const row = await this.inner
-      .prepare(
-        "select record_json from billing_auto_recharge_attempts where id = ?",
-      )
-      .bind(this.options.attemptId)
-      .first<{ readonly record_json: unknown }>();
-    const current =
-      typeof row?.record_json === "string"
-        ? (JSON.parse(row.record_json) as Record<string, unknown>)
-        : ((row?.record_json ?? {}) as Record<string, unknown>);
-    const next = {
-      ...current,
-      status: "succeeded",
-      chargedUsdMicros: this.options.chargedUsdMicros,
-      stripePaymentIntentId: "pi_external",
-      providerStatus: "succeeded",
-      updatedAt: this.options.updatedAt,
-    };
-    await this.inner
-      .prepare(
-        `update billing_auto_recharge_attempts
-         set status = 'succeeded',
-             charged_usd_micros = ?,
-             stripe_payment_intent_id = 'pi_external',
-             provider_status = 'succeeded',
-             record_json = ?,
-             updated_at = ?
-         where id = ?`,
-      )
-      .bind(
-        this.options.chargedUsdMicros,
-        JSON.stringify(next),
-        this.options.updatedAt,
-        this.options.attemptId,
-      )
-      .run();
-    await this.inner
-      .prepare(
-        `insert or ignore into credit_balances
-           (space_id, available_usd_micros, reserved_usd_micros,
-            monthly_included_usd_micros, purchased_usd_micros,
-            available_credits, reserved_credits,
-            monthly_included_credits, purchased_credits, updated_at)
-         values (?, 0, 0, 0, 0, 0, 0, 0, 0, ?)`,
-      )
-      .bind(this.options.spaceId, this.options.updatedAt)
-      .run();
-    await this.inner
-      .prepare(
-        `update credit_balances
-         set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) + ?,
-             purchased_usd_micros = coalesce(purchased_usd_micros, purchased_credits * 1000000) + ?,
-             available_credits = available_credits + ?,
-             purchased_credits = purchased_credits + ?,
-             updated_at = ?
-         where space_id = ?`,
-      )
-      .bind(
-        this.options.chargedUsdMicros,
-        this.options.chargedUsdMicros,
-        Math.ceil(this.options.chargedUsdMicros / 1_000_000),
-        Math.ceil(this.options.chargedUsdMicros / 1_000_000),
-        this.options.updatedAt,
-        this.options.spaceId,
-      )
-      .run();
   }
 }
 

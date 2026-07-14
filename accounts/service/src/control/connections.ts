@@ -1,14 +1,13 @@
 /**
- * Session-authed Connection (`/api/v1/connections`) control routes: list /
- * create / item test+revoke / Cloudflare credential OAuth start+callback.
- * `completeCloudflareOAuth` is exported because `handleControlRoute` invokes the
+ * Session-authed Provider Connection (`/api/v1/connections`) control routes: list /
+ * create / item test+revoke / provider-owned OAuth start+callback.
+ * `completeConnectionOAuth` is exported because `handleControlRoute` invokes the
  * cross-site OAuth callback before the session gate. Extracted from
  * `control-routes.ts` (P3 god-file split).
  */
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
-  Connection,
   ConnectionOAuthStartResponse,
   ConnectionResponse,
   ConnectionScopeHints,
@@ -16,10 +15,7 @@ import type {
   CreateConnectionFile,
   CreateConnectionRequest,
   DeployControlErrorCode,
-  Deployment,
-  InternalDeployRequest,
   ListConnectionsResponse,
-  ListDeploymentsResponse,
   ListRunnerProfilesResponse,
   OpenTofuModuleSource,
   PlanRunResponse,
@@ -27,7 +23,6 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
-  ArtifactSnapshotRequest,
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
@@ -38,10 +33,6 @@ import type {
   SourceSnapshot,
 } from "takosumi-contract/sources";
 import type {
-  DeployResponse,
-  PublicDeployResponse,
-} from "takosumi-contract/deploy";
-import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
@@ -49,7 +40,6 @@ import type {
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  CapsuleProviderEnvBindingSet,
   InstallConfig,
   Capsule,
   OutputAllowlistEntry,
@@ -66,34 +56,22 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  CapsuleProviderConnectionBinding,
-  CapsuleProviderConnectionBindings,
-  CapsuleProviderEnvBinding,
-  CapsuleProviderEnvBindings,
-  CapsuleProviderConnectionSet,
+  ProviderBinding,
+  ProviderBindings,
+  ProviderBindingSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
-import type { PublicDeployment } from "takosumi-contract/deployments";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type {
   BackupRecord,
   CreateBackupResponse,
   CreateRestoreRequest,
   ListBackupsResponse,
 } from "takosumi-contract/backups";
-import type {
-  BillingSettings,
-  CreditBalance,
-  CreditReservation,
-  UsageEvent,
-} from "takosumi-contract/billing";
 import type {
   ListRunsResponse,
   Run,
@@ -103,14 +81,6 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import type {
-  AppCapsuleMode,
-  AppCapsuleStatus,
-  CapsuleRecord,
-  WorkspaceKind,
-} from "../ledger.ts";
-import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -139,22 +109,19 @@ import {
   parseControlPageParams,
   publicApplyActionResponse,
   publicCompatibilityReportResponse,
-  publicDeployResponse,
-  publicDeployment,
   publicCapsule,
+  publicProviderConnection,
   publicPlanActionResponse,
   publicRun,
   requireWorkspaceAccess,
-  resolveProviderConnectionBindings,
+  resolveProviderBindings,
 } from "./shared.ts";
 import {
   booleanValue,
   connectionCredentialFiles,
   connectionScopeHints,
-  connectionScopeHintsFromValues,
   dependencyModeValue,
   dependencyVisibilityValue,
-  isGoogleCloudProvider,
   isJsonValue,
   isOutputsMapping,
   isPlainJsonObject,
@@ -163,22 +130,20 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseCapsuleProviderConnectionBinding,
-  parseCapsuleProviderConnectionBindings,
+  parseProviderBinding,
+  parseProviderBindings,
   parseLimit,
-  spaceTypeValue,
+  workspaceTypeValue,
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/capsules/install_config_bootstrap.ts";
+} from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
-import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 export async function handleConnections(
   ctx: ControlDispatchContext,
@@ -209,7 +174,7 @@ export async function handleConnections(
 
   // /api/v1/connections/:id/test ; /api/v1/connections/:id/revoke
   // (the item surface consolidated from the former /v1/connections edge). The
-  // cloudflare/oauth subroutes are `segments.length === 4` (handled below), so
+  // oauth/:helperId subroutes are `segments.length === 4` (handled below), so
   // a 3-segment connections path is always one of these two item ops.
   if (
     segments.length === 3 &&
@@ -227,7 +192,7 @@ export async function handleConnections(
     );
   }
 
-  // /api/v1/connections/cloudflare/oauth/start — credential OAuth helper
+  // /api/v1/connections/oauth/:helperId/start — credential OAuth helper
   // (present only when the operator wired the upstream client). The cookie-
   // authenticated `start` embeds the authenticated subject into the signed
   // OAuth state. The matching `callback` is handled BEFORE the session gate in
@@ -235,18 +200,18 @@ export async function handleConnections(
   // reaches this dispatcher.
   if (
     segments[0] === "connections" &&
-    segments[1] === "cloudflare" &&
-    segments[2] === "oauth" &&
+    segments[1] === "oauth" &&
     segments.length === 4
   ) {
     if (segments[3] === "start") {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await startCloudflareOAuth(
+      return await startConnectionOAuth(
         request,
         operations,
         store,
         ctx.session.subject,
         url,
+        decodeURIComponent(segments[2] ?? ""),
       );
     }
   }
@@ -259,11 +224,9 @@ async function listControlConnections(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const workspaceId =
-    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
-    stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
-    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
-    stringValue(url.searchParams.get("space_id") ?? undefined);
+  const workspaceId = stringValue(
+    url.searchParams.get("workspaceId") ?? undefined,
+  );
   // The accounts plane has no admin notion distinct from a normal session, so
   // a Workspace id is REQUIRED here; operator-scoped Connection listing stays on
   // the operator-bearer §30 surface. (If/when the accounts plane grows an admin
@@ -284,7 +247,11 @@ async function listControlConnections(
   if (!auth.ok) return auth.response;
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
-  return json(await operations.listConnections(workspaceId, page.params));
+  const response = await operations.listConnections(workspaceId, page.params);
+  return json({
+    ...response,
+    connections: response.connections.map(publicProviderConnection),
+  });
 }
 
 /**
@@ -294,8 +261,8 @@ async function listControlConnections(
  * raw-token "詳細設定" fallback both POST here.
  *
  * Invariants enforced here (independent of any client coercion):
- *   - the session subject must own the target Workspace (space-permission gate);
- *   - the created Connection is ALWAYS `scope: "space"`; Gateway/global
+ *   - the session subject must own the target Workspace (Workspace permission gate);
+ *   - the created Connection is ALWAYS `scope: "workspace"`; operator/global
  *     internal resolver records stay on the bearer-gated §30 surface, so we force
  *     `scope` server-side;
  *   - the secret `values` are write-only: they are forwarded to the controller
@@ -311,7 +278,7 @@ async function createControlConnection(
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const workspaceId = stringValue(body.workspaceId) ?? stringValue(body.space_id);
+  const workspaceId = stringValue(body.workspaceId);
   if (!workspaceId) {
     return errorJson("invalid_request", "workspaceId is required", 400);
   }
@@ -324,18 +291,40 @@ async function createControlConnection(
   if (!auth.ok) return auth.response;
   const requestedKind = stringValue(body.kind);
   const sourceGitKind =
-    requestedKind === "source_git_https_token" ? requestedKind : undefined;
-  const requestedCredentialDriver = stringValue(body.credentialDriver);
-  const requestedGenericEnv =
-    requestedKind === "generic_env_provider" ||
-    requestedCredentialDriver === "generic_env";
+    requestedKind === "source_git_https_token" ||
+    requestedKind === "source_git_ssh_key"
+      ? requestedKind
+      : undefined;
+  const requestedRecipe = isRecord(body.credentialRecipe)
+    ? {
+        id: stringValue(body.credentialRecipe.id),
+        authMode: stringValue(body.credentialRecipe.authMode),
+        secretPartition: stringValue(body.credentialRecipe.secretPartition),
+      }
+    : undefined;
+  if (
+    requestedRecipe &&
+    (!requestedRecipe.id ||
+      !requestedRecipe.authMode ||
+      !requestedRecipe.secretPartition)
+  ) {
+    return errorJson(
+      "invalid_request",
+      "credentialRecipe.id, credentialRecipe.authMode, and credentialRecipe.secretPartition are required",
+      400,
+    );
+  }
   const provider = sourceGitKind ? sourceGitKind : stringValue(body.provider);
   if (!provider) {
     return errorJson("invalid_request", "provider is required", 400);
   }
-  const normalizedProvider = isGoogleCloudProvider(provider)
-    ? "google"
-    : provider;
+  if (!sourceGitKind && !requestedRecipe) {
+    return errorJson(
+      "invalid_request",
+      "credentialRecipe is required for Provider Connections",
+      400,
+    );
+  }
   const values = stringRecord(body.values);
   const filesResult = connectionCredentialFiles(body.files);
   if (!filesResult.ok) {
@@ -346,43 +335,37 @@ async function createControlConnection(
   if (valueCount === 0 && files.length === 0) {
     return errorJson("invalid_request", "values or files is required", 400);
   }
-  if (!requestedGenericEnv && files.length > 0) {
-    return errorJson(
-      "invalid_request",
-      "credential files are only accepted for generic env provider connections",
-      400,
-    );
-  }
   if (sourceGitKind && !stringValue(values?.GIT_HTTPS_TOKEN)) {
-    return errorJson(
-      "invalid_request",
-      "values.GIT_HTTPS_TOKEN is required",
-      400,
-    );
+    if (
+      sourceGitKind === "source_git_https_token" ||
+      !stringValue(values?.GIT_SSH_PRIVATE_KEY)
+    ) {
+      return errorJson(
+        "invalid_request",
+        sourceGitKind === "source_git_https_token"
+          ? "values.GIT_HTTPS_TOKEN is required"
+          : "values.GIT_SSH_PRIVATE_KEY is required",
+        400,
+      );
+    }
   }
-  const scopeHints = connectionScopeHintsFromValues(
-    normalizedProvider,
-    values ?? {},
-    body.scopeHints,
-  );
+  const scopeHints = connectionScopeHints(body.scopeHints);
   const createRequest: CreateConnectionRequest = {
     workspaceId,
-    spaceId: workspaceId,
-    provider: normalizedProvider,
-    // Cloudflare gets the dedicated api-token kind; source Git gets the source
-    // credential kind; anything else is the generic-env provider kind.
-    kind: sourceGitKind
-      ? sourceGitKind
-      : requestedGenericEnv
-        ? "generic_env_provider"
-        : normalizedProvider === "cloudflare"
-          ? "cloudflare_api_token"
-          : normalizedProvider === "google"
-            ? "gcp_service_account_json"
-            : "generic_env_provider",
+    provider,
+    ...(sourceGitKind ? { kind: sourceGitKind } : {}),
+    ...(!sourceGitKind
+      ? {
+          credentialRecipe: {
+            id: requestedRecipe!.id!,
+            authMode: requestedRecipe!.authMode!,
+            secretPartition: requestedRecipe!.secretPartition!,
+          },
+        }
+      : {}),
     // Force Workspace scope: the dashboard session surface never mints an operator
     // default. Any caller-supplied `scope` is ignored.
-    scope: "space",
+    scope: "workspace",
     ...(stringValue(body.displayName)
       ? { displayName: stringValue(body.displayName) }
       : {}),
@@ -392,7 +375,13 @@ async function createControlConnection(
   };
   const response = await operations.createConnection(createRequest);
   // `response.connection` is the public projection (no secret values).
-  return jsonStatus(response, 201);
+  return jsonStatus(
+    {
+      ...response,
+      connection: publicProviderConnection(response.connection),
+    },
+    201,
+  );
 }
 
 /**
@@ -400,11 +389,11 @@ async function createControlConnection(
  * (`POST /api/v1/connections/:id/{test,revoke}`). This is the consolidated
  * surface that replaced the former account-plane `/v1/connections/:id` edge.
  *
- * The request only names the connection id, so space ownership is enforced by
+ * The request only names the connection id, so Workspace ownership is enforced by
  * first reading the Connection (a non-secret projection — the public Connection
  * type carries no values) to learn its `workspaceId`, then checking the session
  * subject owns that Workspace. To prevent cross-tenant probing of connection ids, a
- * missing connection, an absent `workspaceId`, and a space-ownership failure all
+ * missing connection, an absent `workspaceId`, and a Workspace-ownership failure all
  * answer a non-disclosing `connection_not_found` (404).
  */
 async function connectionItemOp(
@@ -456,7 +445,10 @@ async function resolveConnectionItemTarget(
   sessionSubject: string,
   connectionId: string,
 ): Promise<
-  | { readonly connection: Connection; readonly rawConnectionId: string }
+  | {
+      readonly connection: ProviderConnection;
+      readonly rawConnectionId: string;
+    }
   | undefined
 > {
   void sessionSubject;
@@ -472,25 +464,25 @@ async function resolveConnectionItemTarget(
 }
 
 /**
- * Begins the optional Cloudflare credential OAuth helper flow. Returns the
+ * Begins an optional provider-owned credential OAuth helper flow. Returns the
  * provider authorize URL the dashboard sends the user to. When the operator has
  * NOT wired the upstream OAuth client, the helper is absent and we return a
  * typed `feature_unavailable` (501) so the dashboard hides the OAuth button and
  * keeps the guided-token path; the dashboard never renders a dead OAuth button.
  */
-async function startCloudflareOAuth(
+async function startConnectionOAuth(
   request: Request,
   operations: ControlPlaneOperations,
   store: AccountsStore,
   sessionSubject: string,
   url: URL,
+  helperId: string,
 ): Promise<Response> {
-  const helper = operations.connectionOAuth?.cloudflare;
+  const helper = operations.connectionOAuth?.[helperId];
   if (!helper) return connectionOAuthUnavailable();
   const body = (await readJsonObject(request)) ?? {};
   const workspaceId =
     stringValue(body.workspaceId) ??
-    stringValue(body.space_id) ??
     stringValue(url.searchParams.get("workspaceId") ?? undefined);
   if (!workspaceId) {
     return errorJson("invalid_request", "workspaceId is required", 400);
@@ -515,7 +507,7 @@ async function startCloudflareOAuth(
 }
 
 /**
- * Completes the Cloudflare OAuth helper flow. This is the BACKEND callback the
+ * Completes a provider-owned OAuth helper flow. This is the BACKEND callback the
  * upstream redirects to via a top-level CROSS-SITE redirect. The browser sends
  * no Authorization header, and cookie policy can withhold the session cookie.
  * This handler therefore does NOT call `requireAccountSession`; it authorizes
@@ -530,12 +522,13 @@ async function startCloudflareOAuth(
  * Called directly by {@link handleControlRoute} BEFORE the session gate (it is
  * the one cross-site control route); it is never reached through `dispatch`.
  */
-export async function completeCloudflareOAuth(
+export async function completeConnectionOAuth(
   operations: ControlPlaneOperations,
   store: AccountsStore,
   url: URL,
+  helperId: string,
 ): Promise<Response> {
-  const helper = operations.connectionOAuth?.cloudflare;
+  const helper = operations.connectionOAuth?.[helperId];
   if (!helper) return connectionOAuthUnavailable();
   const code = stringValue(url.searchParams.get("code") ?? undefined);
   const state = stringValue(url.searchParams.get("state") ?? undefined);
@@ -579,7 +572,7 @@ export async function completeCloudflareOAuth(
     // Force Workspace scope regardless of what the helper produced.
     created = await operations.createConnection({
       ...createRequest,
-      scope: "space",
+      scope: "workspace",
     });
   } catch {
     return redirectToConnections(url, { error: "oauth_failed" });
@@ -601,7 +594,7 @@ export async function completeCloudflareOAuth(
 function connectionOAuthUnavailable(): Response {
   return errorJson(
     "feature_unavailable",
-    "Cloudflare OAuth is not configured on this deployment.",
+    "The requested credential OAuth helper is not installed on this deployment.",
     501,
   );
 }

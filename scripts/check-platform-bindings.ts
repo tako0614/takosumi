@@ -12,16 +12,24 @@
  */
 import { REQUIRED_PLATFORM_BINDINGS } from "../deploy/accounts-cloudflare/src/bindings-check.ts";
 
-const SECTIONS: ReadonlyArray<{ readonly label: string; readonly names: readonly string[] }> = [
+const SECTIONS: ReadonlyArray<{
+  readonly label: string;
+  readonly names: readonly string[];
+}> = [
   { label: "D1 databases", names: REQUIRED_PLATFORM_BINDINGS.d1 },
   { label: "R2 buckets", names: REQUIRED_PLATFORM_BINDINGS.r2 },
-  { label: "Durable Objects", names: REQUIRED_PLATFORM_BINDINGS.durableObjects },
+  {
+    label: "Durable Objects",
+    names: REQUIRED_PLATFORM_BINDINGS.durableObjects,
+  },
   { label: "Queues", names: REQUIRED_PLATFORM_BINDINGS.queues },
   { label: "Static assets", names: REQUIRED_PLATFORM_BINDINGS.assets },
 ];
 
 function main(): void {
-  console.log("Platform worker required bindings (deploy/platform/wrangler.toml):\n");
+  console.log(
+    "Platform worker required bindings (deploy/platform/wrangler.toml):\n",
+  );
   for (const section of SECTIONS) {
     console.log(`  ${section.label}:`);
     for (const name of section.names) {
@@ -33,10 +41,10 @@ function main(): void {
       "operator wrangler/Cloudflare credentials and wire the realized ids in the\n" +
       "operator-private config. After deploy, GET /readyz on the worker fails\n" +
       "with the named missing required bindings until every one is present.\n" +
-      "Cloud extension handlers are NOT part of OSS/operator readiness. In\n" +
-      "official Takosumi Cloud, TAKOSUMI_CLOUD_EXTENSIONS names logical handler\n" +
-      "keys that takosumi-cloud/platform/worker.ts resolves in-process; do not\n" +
-      "add separate [[services]] bindings for Cloud-only handlers.",
+      "Optional extension handlers are NOT part of OSS/operator readiness.\n" +
+      "TAKOSUMI_PLATFORM_EXTENSIONS names logical handler keys that an operator\n" +
+      "composition resolves in-process; do not add separate [[services]]\n" +
+      "bindings unless the operator deliberately uses a remote service.",
   );
 }
 

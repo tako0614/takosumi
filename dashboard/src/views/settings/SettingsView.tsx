@@ -1,7 +1,6 @@
 /**
- * 設定 hub — the third primary tab. The plan & billing state leads (a live
- * summary strip with the current plan, payment status, and balance — billing
- * is a first-class consumer surface, not a buried tab), then the everyday
+ * 設定 hub — the third primary tab. Provider-neutral usage/showback state can
+ * lead when enabled, followed by the everyday
  * items (account, billing detail, notifications), then the hosting-management
  * catalog behind one clearly-labeled entry (`/settings/manage`). Nothing was
  * removed from the old console IA — advanced surfaces are relocated.
@@ -14,21 +13,12 @@ import {
   UserCircle2,
   Wrench,
 } from "lucide-solid";
-import {
-  createMemo,
-  createResource,
-  Match,
-  Show,
-  Switch,
-  type JSX,
-} from "solid-js";
+import { createMemo, createResource, Match, Switch, type JSX } from "solid-js";
 import Page from "../account/components/auth/Page.tsx";
 import PageHeader from "../../components/ui/PageHeader.tsx";
-import { Badge, Button, Card } from "../../components/ui/index.ts";
+import { Button, Card } from "../../components/ui/index.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { getWorkspaceBilling } from "../../lib/control-api.ts";
-import { formatUsdMicros } from "../../lib/billing-format.ts";
-import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageKey } from "../../i18n/index.ts";
 
@@ -75,32 +65,12 @@ function LinkRow(props: { readonly link: SettingsLink }): JSX.Element {
   );
 }
 
-/** Live plan & payment strip. Hidden on self-host with billing disabled and
- * no subscription — there is nothing to pay there. */
+/** Provider-neutral showback strip. Commercial state belongs to extensions. */
 function BillingSummary(): JSX.Element {
   const [billing, { refetch: refetchBilling }] = createResource(
     () => currentWorkspaceId() || undefined,
     getWorkspaceBilling,
   );
-  const subscription = () => billing()?.subscription;
-  const planName = () => billing()?.plan?.name;
-  const balance = () => billing()?.balance;
-  const availableUsdMicros = () => balance()?.availableUsdMicros ?? 0;
-  // Any non-healthy subscription status needs attention + the recovery CTA —
-  // not just past_due. A canceled/unpaid/incomplete sub must not read as a
-  // healthy green badge.
-  const NEEDS_ATTENTION_STATUSES: ReadonlySet<string> = new Set([
-    "past_due",
-    "unpaid",
-    "canceled",
-    "cancelled",
-    "incomplete",
-    "incomplete_expired",
-  ]);
-  const needsAttention = () => {
-    const status = subscription()?.status;
-    return status !== undefined && NEEDS_ATTENTION_STATUSES.has(status);
-  };
   // A failed getWorkspaceBilling must not crash the whole /settings hub (a
   // primary nav tab): guard `billing.error` BEFORE reading `billing()`, whose
   // accessor THROWS while the resource is errored.
@@ -108,18 +78,9 @@ function BillingSummary(): JSX.Element {
     if (billing.error) return false;
     const data = billing();
     return (
-      data !== undefined &&
-      (isTakosumiCloudRuntime() ||
-        (data.settings?.mode ?? "disabled") !== "disabled" ||
-        data.subscription !== undefined)
+      data !== undefined && (data.settings?.mode ?? "disabled") !== "disabled"
     );
   });
-  const statusLabel = () => {
-    const status = subscription()?.status;
-    if (!status) return t("billing.balance.ready");
-    const key = `billing.subscription.status.${status}` as MessageKey;
-    return t(key) === key ? status : t(key);
-  };
   return (
     <Switch>
       <Match when={billing.error}>
@@ -149,37 +110,21 @@ function BillingSummary(): JSX.Element {
       <Match when={visible()}>
         <Card class="settings-billing-summary">
           <div class="settings-billing-row">
-          <span class="settings-link-icon" aria-hidden="true">
-            <CreditCard size={20} />
-          </span>
-          <div class="settings-link-text">
-            <span class="settings-link-title">
-              {planName() ?? t("settings.billingSummary.noPlan")}
-              <Show when={subscription()}>
-                <Badge tone={needsAttention() ? "danger" : "ok"}>
-                  {statusLabel()}
-                </Badge>
-              </Show>
+            <span class="settings-link-icon" aria-hidden="true">
+              <CreditCard size={20} />
             </span>
-            <span class="settings-link-desc">
-              <Show
-                when={availableUsdMicros() > 0}
-                fallback={t("settings.billing.desc")}
-              >
-                {t("billing.balance.availableUsd")}:{" "}
-                {formatUsdMicros(availableUsdMicros())}
-              </Show>
-            </span>
+            <div class="settings-link-text">
+              <span class="settings-link-title">
+                {t("settings.billing.title")}
+              </span>
+              <span class="settings-link-desc">
+                {t("billing.mode.showback")}
+              </span>
+            </div>
+            <Button variant="secondary" href="/settings/billing">
+              {t("settings.billingSummary.manage")}
+            </Button>
           </div>
-          <Button
-            variant={needsAttention() ? "primary" : "secondary"}
-            href="/settings/billing"
-          >
-            {needsAttention()
-              ? t("settings.billingSummary.fix")
-              : t("settings.billingSummary.manage")}
-          </Button>
-        </div>
         </Card>
       </Match>
     </Switch>

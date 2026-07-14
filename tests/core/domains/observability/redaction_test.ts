@@ -50,3 +50,20 @@ test("redaction masks bare provider token value shapes", () => {
     "failed with [REDACTED] and [REDACTED] in stderr",
   );
 });
+
+test("secret-like detection rejects private keys and credential-bearing service URLs", () => {
+  assert.equal(
+    containsSecretLikeString(
+      "-----BEGIN PRIVATE KEY-----\nnot-real-key\n-----END PRIVATE KEY-----",
+    ),
+    true,
+  );
+  assert.equal(
+    containsSecretLikeString("postgres://database.internal/workspace"),
+    true,
+  );
+  assert.equal(
+    containsSecretLikeString("https://service.example/workspace"),
+    false,
+  );
+});

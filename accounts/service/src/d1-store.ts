@@ -7,19 +7,6 @@ import {
   sqliteTable,
   text,
 } from "drizzle-orm/sqlite-core";
-import type {
-  ServiceBindingMaterialRecord,
-  ServiceGrantMaterialRecord,
-  CapsuleEventRecord,
-  CapsuleRecord,
-  LedgerAccountRecord,
-  RuntimeBindingRecord,
-  WorkspaceRecord,
-} from "./ledger.ts";
-import {
-  assertValidServiceBindingMaterialRecord,
-  assertValidServiceGrantMaterialRecord,
-} from "./ledger.ts";
 import { hashSessionId } from "./session-hash-salt.ts";
 // hashSecret is the canonical sha256:<base64url> hasher shared across the
 // package (previously re-implemented locally). Aliased to keep call sites.
@@ -28,15 +15,6 @@ import type {
   AccountSessionRecord,
   AccountsStore,
   AuthorizationCodeRecord,
-  BillingAccountRecord,
-  BillingUsageExportMark,
-  BillingUsageRecord,
-  BillingWebhookEventClaimResult,
-  BillingWebhookEventRecord,
-  LaunchTokenConsumeResult,
-  LaunchTokenConsumptionRecord,
-  LaunchTokenPruneResult,
-  LaunchTokenRecord,
   OidcClientRecord,
   PasskeyCredentialRecord,
   PersonalAccessTokenRecord,
@@ -46,7 +24,6 @@ import type {
   TokenRecord,
   UpstreamIdentityRecord,
 } from "./store.ts";
-import { LedgerAccountOwnershipConflictError } from "./store.ts";
 
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
@@ -75,12 +52,6 @@ export interface D1ExecResult {
 
 export type D1Value = string | number | null | ArrayBuffer | Uint8Array;
 
-// LedgerAccountOwnershipConflictError is the shared ownership-conflict error
-// thrown by every store's saveLedgerAccount (in-memory / Postgres / D1). It
-// lives in store.ts so all three implementations share one contract; D1 callers
-// import it through this store entrypoint.
-export { LedgerAccountOwnershipConflictError };
-
 // D1's `db.exec()` treats each line as a separate statement, so every
 // statement must fit on one line — both for real Cloudflare D1 and for
 // miniflare's emulation. Keep these single-line and terminated with `;`.
@@ -95,15 +66,6 @@ interface D1IndexEntry {
   readonly name: string;
   readonly key: string;
   readonly sortKey?: number;
-}
-
-interface D1DocumentRow {
-  readonly document: string;
-}
-
-interface D1DocumentWithKeyRow {
-  readonly document_key: string;
-  readonly document: string;
 }
 
 const d1AccountsDocuments = sqliteTable(
@@ -144,6 +106,10 @@ const d1AccountsSchema = {
 };
 
 type D1AccountsDrizzleDatabase = DrizzleD1Database<typeof d1AccountsSchema>;
+
+interface D1DocumentRow {
+  readonly document: string;
+}
 
 class D1AccountsDocumentIndexStore {
   readonly #db: D1AccountsDrizzleDatabase;
@@ -338,176 +304,6 @@ interface PasskeyChallengeDocument {
   readonly expiresAt: number;
 }
 
-interface StoredCapsuleRecordContext {
-  readonly documentKey?: string;
-  readonly workspaceId?: string;
-  readonly billingAccountId?: string;
-}
-
-function capsuleRecordFromStoredDocument(
-  value: unknown,
-  context: StoredCapsuleRecordContext = {},
-): CapsuleRecord {
-  const record = objectRecord(value);
-  if (
-    typeof record.capsuleId === "string" &&
-    typeof record.accountId === "string" &&
-    typeof record.workspaceId === "string" &&
-    typeof record.appId === "string"
-  ) {
-    return record as unknown as CapsuleRecord;
-  }
-
-  const source = objectRecord(record.source);
-  const capsuleId =
-    stringField(record.capsuleId) ??
-    context.documentKey ??
-    stringField(record.id) ??
-    stringField(record.installation_id);
-  const appId =
-    stringField(record.appId) ??
-    stringField(record.app_id) ??
-    stringField(record.capsule_id) ??
-    stringField(source.appId) ??
-    requiredStoredString(capsuleId, "capsuleId");
-
-  return {
-    capsuleId: requiredStoredString(capsuleId, "capsuleId"),
-    accountId: requiredStoredString(
-      stringField(record.accountId) ?? stringField(record.account_id),
-      "accountId",
-    ),
-    workspaceId: requiredStoredString(
-      stringField(record.workspaceId) ??
-        stringField(record.spaceId) ??
-        stringField(record.workspace_id) ??
-        stringField(record.space_id) ??
-        context.workspaceId,
-      "workspaceId",
-    ),
-    appId,
-    sourceGitUrl: requiredStoredString(
-      stringField(record.sourceGitUrl) ??
-        stringField(record.source_git_url) ??
-        stringField(source.gitUrl) ??
-        stringField(source.url),
-      "sourceGitUrl",
-    ),
-    sourceRef: requiredStoredString(
-      stringField(record.sourceRef) ??
-        stringField(record.source_ref) ??
-        stringField(source.ref),
-      "sourceRef",
-    ),
-    sourceCommit: requiredStoredString(
-      stringField(record.sourceCommit) ??
-        stringField(record.source_commit) ??
-        stringField(source.commit),
-      "sourceCommit",
-    ),
-    ...((stringField(record.sourcePath) ??
-    stringField(record.source_path) ??
-    stringField(source.path))
-      ? {
-          sourcePath: requiredStoredString(
-            stringField(record.sourcePath) ??
-              stringField(record.source_path) ??
-              stringField(source.path),
-            "sourcePath",
-          ),
-        }
-      : {}),
-    planDigest: requiredStoredString(
-      stringField(record.planDigest) ?? stringField(record.plan_digest),
-      "planDigest",
-    ),
-    ...((stringField(record.artifactDigest) ??
-    stringField(record.artifact_digest))
-      ? {
-          artifactDigest: requiredStoredString(
-            stringField(record.artifactDigest) ??
-              stringField(record.artifact_digest),
-            "artifactDigest",
-          ),
-        }
-      : {}),
-    mode: requiredStoredString(
-      stringField(record.mode),
-      "mode",
-    ) as CapsuleRecord["mode"],
-    ...((stringField(record.runtimeBindingId) ??
-    stringField(record.runtime_target_id))
-      ? {
-          runtimeBindingId: requiredStoredString(
-            stringField(record.runtimeBindingId) ??
-              stringField(record.runtime_target_id),
-            "runtimeBindingId",
-          ),
-        }
-      : {}),
-    ...((stringField(record.billingAccountId) ??
-    stringField(record.billing_account_id) ??
-    context.billingAccountId)
-      ? {
-          billingAccountId: requiredStoredString(
-            stringField(record.billingAccountId) ??
-              stringField(record.billing_account_id) ??
-              context.billingAccountId,
-            "billingAccountId",
-          ),
-        }
-      : {}),
-    status: requiredStoredString(
-      stringField(record.status),
-      "status",
-    ) as CapsuleRecord["status"],
-    createdBySubject: requiredStoredString(
-      stringField(record.createdBySubject) ??
-        stringField(record.created_by_subject),
-      "createdBySubject",
-    ) as TakosumiSubject,
-    createdAt: requiredStoredTimestamp(
-      record.createdAt ?? record.created_at,
-      "createdAt",
-    ),
-    updatedAt: requiredStoredTimestamp(
-      record.updatedAt ?? record.updated_at,
-      "updatedAt",
-    ),
-  };
-}
-
-function objectRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function stringField(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function requiredStoredString(
-  value: string | undefined,
-  fieldName: string,
-): string {
-  if (value) return value;
-  throw new Error(
-    `invalid D1 app_installations document: ${fieldName} missing`,
-  );
-}
-
-function requiredStoredTimestamp(value: unknown, fieldName: string): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.length > 0) {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  throw new Error(
-    `invalid D1 app_installations document: ${fieldName} missing`,
-  );
-}
-
 export class D1AccountsStore implements AccountsStore {
   readonly #db: D1Database;
   readonly #documents: D1AccountsDocumentIndexStore;
@@ -628,263 +424,6 @@ export class D1AccountsStore implements AccountsStore {
   async deleteAccountSession(sessionId: string): Promise<void> {
     const sessionHash = await hashSessionId(sessionId);
     await this.#delete("account_sessions", sessionHash);
-  }
-
-  async saveBillingAccount(record: BillingAccountRecord): Promise<void> {
-    const stored: BillingAccountRecord = {
-      ...record,
-      version: record.version ?? 1,
-    };
-    await this.#deleteIndexEntries(
-      "billing_accounts_by_subject",
-      stored.subject,
-    );
-    if (stored.stripeCustomerId) {
-      await this.#deleteIndexEntries(
-        "billing_accounts_by_stripe_customer",
-        stored.stripeCustomerId,
-      );
-    }
-    await this.#put(
-      "billing_accounts",
-      stored.billingAccountId,
-      stored,
-      billingAccountIndexes(stored),
-    );
-  }
-
-  /**
-   * G15 fix: compare-and-swap billing-account write for D1. Reads the stored
-   * document, and only when its `version` still equals `expectedVersion`
-   * (an absent version compares as 0) performs an atomic
-   * `#updateDocumentIfMatches` whose predicate is the exact stored document
-   * body. The winning write advances `version` by one; a concurrent writer
-   * that already advanced the row loses the byte-exact document match and
-   * causes this method to return `false`, mirroring the postgres
-   * `WHERE COALESCE(version, 0) = $expected` guard.
-   */
-  async saveBillingAccountIfVersion(
-    record: BillingAccountRecord,
-    expectedVersion: number,
-  ): Promise<boolean> {
-    const current = await this.#get<BillingAccountRecord>(
-      "billing_accounts",
-      record.billingAccountId,
-    );
-    if (!current) return false;
-    if ((current.version ?? 0) !== expectedVersion) return false;
-    const next: BillingAccountRecord = {
-      ...record,
-      version: expectedVersion + 1,
-    };
-    const swapped = await this.#updateDocumentIfMatches(
-      "billing_accounts",
-      record.billingAccountId,
-      JSON.stringify(current),
-      JSON.stringify(next),
-    );
-    if (!swapped) return false;
-    await this.#deleteIndexEntries("billing_accounts_by_subject", next.subject);
-    if (next.stripeCustomerId) {
-      await this.#deleteIndexEntries(
-        "billing_accounts_by_stripe_customer",
-        next.stripeCustomerId,
-      );
-    }
-    await this.#refreshIndexEntries(
-      "billing_accounts",
-      next.billingAccountId,
-      billingAccountIndexes(next),
-    );
-    return true;
-  }
-
-  findBillingAccount(
-    billingAccountId: string,
-  ): Promise<BillingAccountRecord | undefined> {
-    return this.#get("billing_accounts", billingAccountId);
-  }
-
-  async findBillingAccountForSubject(
-    subject: TakosumiSubject,
-  ): Promise<BillingAccountRecord | undefined> {
-    return (
-      await this.#listByIndex<BillingAccountRecord>(
-        "billing_accounts_by_subject",
-        subject,
-      )
-    )[0];
-  }
-
-  async findBillingAccountByStripeCustomerId(
-    stripeCustomerId: string,
-  ): Promise<BillingAccountRecord | undefined> {
-    return (
-      await this.#listByIndex<BillingAccountRecord>(
-        "billing_accounts_by_stripe_customer",
-        stripeCustomerId,
-      )
-    )[0];
-  }
-
-  saveBillingWebhookEvent(record: BillingWebhookEventRecord): Promise<void> {
-    return this.#put("billing_webhook_events", record.eventId, record);
-  }
-
-  findBillingWebhookEvent(
-    eventId: string,
-  ): Promise<BillingWebhookEventRecord | undefined> {
-    return this.#get("billing_webhook_events", eventId);
-  }
-
-  /**
-   * Atomic webhook claim built on SQLite's `INSERT OR IGNORE` (which the
-   * existing `#putIfAbsent` helper wraps). If the insert produced no row
-   * change, the event id was already recorded - read it back so the caller
-   * can short-circuit duplicate processing.
-   */
-  async claimBillingWebhookEvent(
-    record: BillingWebhookEventRecord,
-  ): Promise<BillingWebhookEventClaimResult> {
-    const inserted = await this.#putIfAbsent(
-      "billing_webhook_events",
-      record.eventId,
-      record,
-    );
-    if (inserted) return { inserted: true };
-    const existing = await this.#get<BillingWebhookEventRecord>(
-      "billing_webhook_events",
-      record.eventId,
-    );
-    if (!existing) return { inserted: true };
-    return { inserted: false, existing };
-  }
-
-  async saveBillingUsageRecord(record: BillingUsageRecord): Promise<void> {
-    // Cross-owner ownership guard, mirroring the Postgres path
-    // (postgres/billing.ts saveBillingUsageRecord), which uses a conditional
-    // ON CONFLICT ... DO UPDATE ... WHERE installation_id/billing_account_id
-    // match and throws when 0 rows are affected. The unconditional #put used
-    // before let the racy route-layer check-then-act mis-attribute a usage
-    // report to another installation. Enforce the invariant at the storage
-    // layer regardless of the route check.
-    const indexes: readonly D1IndexEntry[] = [
-      {
-        name: "billing_usage_by_installation",
-        key: record.capsuleId,
-        sortKey: record.reportedAt,
-      },
-      {
-        name: "billing_usage_by_billing_account",
-        key: record.billingAccountId,
-        sortKey: record.reportedAt,
-      },
-    ];
-    // G6 atomic claim: only the first writer for this usageReportId wins the
-    // insert (and its index rows are written by the same primitive).
-    const claimed = await this.#putIfAbsentWithIndexes(
-      "billing_usage_records",
-      record.usageReportId,
-      record,
-      indexes,
-    );
-    if (claimed) return;
-    // Key already exists. Reject a cross-owner overwrite; allow a same-owner
-    // idempotent re-report to update the row.
-    const existing = await this.#get<BillingUsageRecord>(
-      "billing_usage_records",
-      record.usageReportId,
-    );
-    if (
-      existing &&
-      (existing.capsuleId !== record.capsuleId ||
-        existing.billingAccountId !== record.billingAccountId)
-    ) {
-      throw new TypeError(
-        "billing usage report id is already owned by another installation",
-      );
-    }
-    // Same owner (or a row that vanished after the failed claim): perform the
-    // ordinary upsert, which deletes and reinserts the secondary index rows.
-    // For a same-owner re-report the index key (capsuleId) is unchanged,
-    // so the index rewrite is effectively a no-op beyond the sortKey refresh.
-    await this.#put(
-      "billing_usage_records",
-      record.usageReportId,
-      record,
-      indexes,
-    );
-  }
-
-  findBillingUsageRecord(
-    usageReportId: string,
-  ): Promise<BillingUsageRecord | undefined> {
-    return this.#get("billing_usage_records", usageReportId);
-  }
-
-  listBillingUsageRecordsForCapsule(
-    capsuleId: string,
-  ): Promise<readonly BillingUsageRecord[]> {
-    return this.#listByIndex("billing_usage_by_installation", capsuleId);
-  }
-
-  listBillingUsageRecordsForBillingAccount(
-    billingAccountId: string,
-  ): Promise<readonly BillingUsageRecord[]> {
-    return this.#listByIndex(
-      "billing_usage_by_billing_account",
-      billingAccountId,
-    );
-  }
-
-  async markBillingUsageRecordsExported(
-    mark: BillingUsageExportMark,
-  ): Promise<void> {
-    for (const usageReportId of mark.usageReportIds) {
-      const existing = await this.#get<BillingUsageRecord>(
-        "billing_usage_records",
-        usageReportId,
-      );
-      if (!existing) {
-        throw new TypeError("billing usage report was not found");
-      }
-      if (existing.billingAccountId !== mark.billingAccountId) {
-        throw new TypeError(
-          "billing usage report is owned by another billing account",
-        );
-      }
-      if (
-        existing.billingExportId &&
-        (existing.billingExportProvider !== mark.provider ||
-          existing.billingExportId !== mark.exportId ||
-          existing.billingExportReference !== mark.exportReference)
-      ) {
-        throw new TypeError("billing usage report was already exported");
-      }
-      await this.#put(
-        "billing_usage_records",
-        usageReportId,
-        {
-          ...existing,
-          billingExportProvider: mark.provider,
-          billingExportId: mark.exportId,
-          billingExportReference: mark.exportReference,
-          billingExportedAt: mark.exportedAt,
-        } satisfies BillingUsageRecord,
-        [
-          {
-            name: "billing_usage_by_installation",
-            key: existing.capsuleId,
-            sortKey: existing.reportedAt,
-          },
-          {
-            name: "billing_usage_by_billing_account",
-            key: existing.billingAccountId,
-            sortKey: existing.reportedAt,
-          },
-        ],
-      );
-    }
   }
 
   async savePrivacyRequest(record: PrivacyRequestRecord): Promise<void> {
@@ -1038,130 +577,15 @@ export class D1AccountsStore implements AccountsStore {
     );
   }
 
-  async consumeLaunchTokenJti(
-    record: LaunchTokenConsumptionRecord,
-  ): Promise<boolean> {
-    return await this.#putIfAbsent(
-      "launch_token_consumptions",
-      record.jti,
-      record,
-    );
-  }
-
-  async saveLaunchToken(record: LaunchTokenRecord): Promise<void> {
-    const existing = await this.#listByIndex<LaunchTokenRecord>(
-      "launch_tokens_by_installation",
-      record.capsuleId,
-    );
-    for (const token of existing) {
-      if (token.usedAt === undefined && token.expiresAt > record.createdAt) {
-        await this.#put(
-          "launch_tokens",
-          token.tokenHash,
-          { ...token, usedAt: record.createdAt },
-          launchTokenIndexes(token),
-        );
-      }
-    }
-    await this.#put(
-      "launch_tokens",
-      record.tokenHash,
-      record,
-      launchTokenIndexes(record),
-    );
-  }
-
-  async consumeLaunchToken(input: {
-    tokenHash: string;
-    capsuleId: string;
-    redirectUri: string;
-    consumedAt: number;
-  }): Promise<LaunchTokenConsumeResult> {
-    // F7 fix: launch-token consume must be atomic to avoid a read → check
-    // → write race where two concurrent consumers both observe
-    // `usedAt === undefined`. We still read first to surface the
-    // redirect-mismatch / expired / not-found error envelope, but the
-    // actual "claim the token" step is performed by an atomic conditional
-    // UPDATE on the SQLite document row. The marker is the JSON document
-    // payload itself: we serialize the consumed record and only persist
-    // it when the previous document had no `"usedAt"` key (i.e. the
-    // first consumer wins). The CAS predicate is the document's current
-    // value, mirroring postgres/launch-tokens.ts:116-126 which uses
-    // `WHERE used_at IS NULL`.
-    const record = await this.#get<LaunchTokenRecord>(
-      "launch_tokens",
-      input.tokenHash,
-    );
-    if (!record || record.capsuleId !== input.capsuleId) {
-      return { ok: false, reason: "not_found" };
-    }
-    if (record.redirectUri !== input.redirectUri) {
-      return { ok: false, reason: "redirect_mismatch" };
-    }
-    if (record.expiresAt <= input.consumedAt) {
-      return { ok: false, reason: "expired" };
-    }
-    if (record.usedAt !== undefined) return { ok: false, reason: "used" };
-    const consumed = { ...record, usedAt: input.consumedAt };
-    const claimed = await this.#updateDocumentIfMatches(
-      "launch_tokens",
-      input.tokenHash,
-      JSON.stringify(record),
-      JSON.stringify(consumed),
-    );
-    if (!claimed) {
-      // Another consumer won the race. Either it was already consumed
-      // (used) or the record changed in some other way (which would
-      // currently only happen if `saveLaunchToken` was concurrently
-      // refreshing it, but in production that path only marks tokens
-      // used). Treat as "used" for the closed error envelope.
-      return { ok: false, reason: "used" };
-    }
-    // Refresh indexes for the now-consumed record so future lookups by
-    // installation reflect the `usedAt` state. Index entries are derived
-    // from the record so we only need to rewrite the secondary index
-    // rows; the document body was already overwritten atomically.
-    await this.#refreshIndexEntries(
-      "launch_tokens",
-      consumed.tokenHash,
-      launchTokenIndexes(consumed),
-    );
-    return { ok: true, record: consumed };
-  }
-
-  async pruneLaunchTokens(input: {
-    expiredBefore: number;
-    usedBefore: number;
-  }): Promise<LaunchTokenPruneResult> {
-    let expired = 0;
-    let used = 0;
-    const tokens = await this.#listBucket<LaunchTokenRecord>("launch_tokens");
-    for (const token of tokens) {
-      if (token.usedAt !== undefined && token.usedAt <= input.usedBefore) {
-        await this.#delete("launch_tokens", token.tokenHash);
-        used += 1;
-        continue;
-      }
-      if (token.expiresAt <= input.expiredBefore) {
-        await this.#delete("launch_tokens", token.tokenHash);
-        expired += 1;
-      }
-    }
-    return { deleted: expired + used, expired, used };
-  }
-
   saveOidcClient(record: OidcClientRecord): Promise<void> {
     return this.#saveOidcClient(record);
   }
 
   async #saveOidcClient(record: OidcClientRecord): Promise<void> {
-    await this.#deleteIndexEntries(
-      "oidc_clients_by_installation",
-      record.capsuleId,
-    );
+    await this.#deleteIndexEntries("oidc_clients_by_capsule", record.capsuleId);
     await this.#put("oidc_clients", record.clientId, record, [
       {
-        name: "oidc_clients_by_installation",
+        name: "oidc_clients_by_capsule",
         key: record.capsuleId,
         sortKey: record.createdAt,
       },
@@ -1177,7 +601,7 @@ export class D1AccountsStore implements AccountsStore {
   ): Promise<OidcClientRecord | undefined> {
     return (
       await this.#listByIndex<OidcClientRecord>(
-        "oidc_clients_by_installation",
+        "oidc_clients_by_capsule",
         capsuleId,
       )
     )[0];
@@ -1525,268 +949,6 @@ export class D1AccountsStore implements AccountsStore {
     return taken.challenge;
   }
 
-  async saveLedgerAccount(record: LedgerAccountRecord): Promise<void> {
-    // F7 fix: defense-in-depth at the store layer. If the account row
-    // already exists with a different legalOwnerSubject, reject the write
-    // rather than silently overwriting. The application path in
-    // installation-lifecycle-routes.ts already performs a check-and-set
-    // guard; this prevents a buggy or malicious caller from skipping
-    // that guard at the store boundary. Mirrors the postgres path's
-    // intent (caller-enforced) by enforcing it once more here.
-    const existing = await this.#get<LedgerAccountRecord>(
-      "ledger_accounts",
-      record.accountId,
-    );
-    if (existing && existing.legalOwnerSubject !== record.legalOwnerSubject) {
-      throw new LedgerAccountOwnershipConflictError(
-        record.accountId,
-        existing.legalOwnerSubject,
-        record.legalOwnerSubject,
-      );
-    }
-    await this.#put("ledger_accounts", record.accountId, record, [
-      {
-        name: "ledger_accounts_by_owner",
-        key: record.legalOwnerSubject,
-        sortKey: record.createdAt,
-      },
-    ]);
-  }
-
-  findLedgerAccount(
-    accountId: string,
-  ): Promise<LedgerAccountRecord | undefined> {
-    return this.#get("ledger_accounts", accountId);
-  }
-
-  saveWorkspace(record: WorkspaceRecord): Promise<void> {
-    return this.#put("spaces", record.workspaceId, record, [
-      {
-        name: "spaces_by_account",
-        key: record.accountId,
-        sortKey: record.createdAt,
-      },
-    ]);
-  }
-
-  findWorkspace(workspaceId: string): Promise<WorkspaceRecord | undefined> {
-    return this.#get("spaces", workspaceId);
-  }
-
-  listWorkspacesForAccount(
-    accountId: string,
-  ): Promise<readonly WorkspaceRecord[]> {
-    return this.#listByIndex("spaces_by_account", accountId);
-  }
-
-  async listWorkspacesForOwner(
-    subject: TakosumiSubject,
-  ): Promise<readonly WorkspaceRecord[]> {
-    // KV-index store: resolve the subject's legally-owned ledger accounts via
-    // the `ledger_accounts_by_owner` index, then collect each account's spaces
-    // via `spaces_by_account`, deduplicating by workspaceId.
-    let ownedAccounts = await this.#listByIndex<LedgerAccountRecord>(
-      "ledger_accounts_by_owner",
-      subject,
-    );
-    if (ownedAccounts.length === 0) {
-      // Lazy backfill: the `ledger_accounts_by_owner` index is written only on
-      // `saveLedgerAccount`, so ledger accounts persisted BEFORE this index
-      // existed have no index entry and the lookup above returns empty. An
-      // empty result is ambiguous — the subject may genuinely own nothing, or
-      // their (legacy) ledger accounts may simply be un-indexed. Resolve the
-      // ambiguity by scanning `ledger_accounts` and (re)writing the by-owner
-      // index entries for every row found, then re-reading the index. This is
-      // idempotent and self-healing: once the index is populated this branch
-      // is not re-entered for an owning subject, and the happy path (a
-      // non-empty index) is never touched. The in-memory + Postgres stores
-      // already return all legal-owner spaces; this keeps D1 in parity.
-      const reindexed = await this.#backfillLedgerAccountsByOwnerIndex();
-      if (reindexed) {
-        ownedAccounts = await this.#listByIndex<LedgerAccountRecord>(
-          "ledger_accounts_by_owner",
-          subject,
-        );
-      }
-    }
-    const byId = new Map<string, WorkspaceRecord>();
-    for (const account of ownedAccounts) {
-      const spaces = await this.#listByIndex<WorkspaceRecord>(
-        "spaces_by_account",
-        account.accountId,
-      );
-      for (const space of spaces) {
-        byId.set(space.workspaceId, space);
-      }
-    }
-    return [...byId.values()];
-  }
-
-  /**
-   * Reindex helper for the `ledger_accounts_by_owner` secondary index. Scans
-   * every `ledger_accounts` document and (re)writes its by-owner index entry
-   * keyed on `legalOwnerSubject`. Needed because the index is written only on
-   * `saveLedgerAccount`, so ledger accounts persisted before the index existed
-   * have no entry; `listWorkspacesForOwner` invokes this lazily when its by-owner
-   * lookup is empty so legacy org owners no longer degrade to direct-owner
-   * spaces. Idempotent: `#refreshIndexEntries` deletes and rewrites the
-   * document's index rows, so re-running it on an already-indexed store is a
-   * no-op beyond rewriting the same rows. Returns whether any rows were found
-   * (false ⇒ the bucket is empty, so re-reading the index would be wasted).
-   */
-  async #backfillLedgerAccountsByOwnerIndex(): Promise<boolean> {
-    const accounts =
-      await this.#listBucket<LedgerAccountRecord>("ledger_accounts");
-    for (const account of accounts) {
-      await this.#refreshIndexEntries("ledger_accounts", account.accountId, [
-        {
-          name: "ledger_accounts_by_owner",
-          key: account.legalOwnerSubject,
-          sortKey: account.createdAt,
-        },
-      ]);
-    }
-    return accounts.length > 0;
-  }
-
-  saveAppCapsule(record: CapsuleRecord): Promise<void> {
-    const indexes: D1IndexEntry[] = [
-      {
-        name: "installations_by_space",
-        key: record.workspaceId,
-        sortKey: record.createdAt,
-      },
-    ];
-    if (record.billingAccountId) {
-      indexes.push({
-        name: "installations_by_billing_account",
-        key: record.billingAccountId,
-        sortKey: record.createdAt,
-      });
-    }
-    return this.#put("app_installations", record.capsuleId, record, indexes);
-  }
-
-  findAppCapsule(capsuleId: string): Promise<CapsuleRecord | undefined> {
-    return this.#get<unknown>("app_installations", capsuleId).then((record) =>
-      record === undefined
-        ? undefined
-        : capsuleRecordFromStoredDocument(record, { documentKey: capsuleId }),
-    );
-  }
-
-  listAppCapsulesForWorkspace(
-    workspaceId: string,
-  ): Promise<readonly CapsuleRecord[]> {
-    return this.#listAppCapsulesByIndex("installations_by_space", workspaceId);
-  }
-
-  listAppCapsulesForBillingAccount(
-    billingAccountId: string,
-  ): Promise<readonly CapsuleRecord[]> {
-    return this.#listAppCapsulesByIndex(
-      "installations_by_billing_account",
-      billingAccountId,
-    );
-  }
-
-  saveRuntimeBinding(record: RuntimeBindingRecord): Promise<void> {
-    // Wave 6 dropped runtime_bindings. Phase I converted the Postgres path
-    // to a no-op shim. D1 path follows the same pattern (Phase K audit K5):
-    // RuntimeBindingRecord remains a live in-memory orchestration entity
-    // but is no longer persisted.
-    void record;
-    return Promise.resolve();
-  }
-
-  findRuntimeBinding(
-    runtimeBindingId: string,
-  ): Promise<RuntimeBindingRecord | undefined> {
-    void runtimeBindingId;
-    return Promise.resolve(undefined);
-  }
-
-  saveServiceBindingMaterial(
-    record: ServiceBindingMaterialRecord,
-  ): Promise<void> {
-    assertValidServiceBindingMaterialRecord(record);
-    return this.#put("service_binding_materials", record.bindingId, record, [
-      {
-        name: "service_binding_materials_by_installation",
-        key: record.capsuleId,
-        sortKey: record.createdAt,
-      },
-    ]);
-  }
-
-  listServiceBindingMaterialsForCapsule(
-    capsuleId: string,
-  ): Promise<readonly ServiceBindingMaterialRecord[]> {
-    return this.#listByIndex(
-      "service_binding_materials_by_installation",
-      capsuleId,
-    );
-  }
-
-  saveServiceGrantMaterial(record: ServiceGrantMaterialRecord): Promise<void> {
-    // Wave 6 dropped app_grants; Phase I no-op shim precedent applies.
-    try {
-      assertValidServiceGrantMaterialRecord(record);
-    } catch (error) {
-      return Promise.reject(error);
-    }
-    return Promise.resolve();
-  }
-
-  findServiceGrantMaterial(
-    grantId: string,
-  ): Promise<ServiceGrantMaterialRecord | undefined> {
-    void grantId;
-    return Promise.resolve(undefined);
-  }
-
-  listServiceGrantMaterialsForCapsule(
-    capsuleId: string,
-  ): Promise<readonly ServiceGrantMaterialRecord[]> {
-    void capsuleId;
-    return Promise.resolve([]);
-  }
-
-  async appendCapsuleEvent(record: CapsuleEventRecord): Promise<void> {
-    // SECURITY (audit hash-chain fork): D1 has no per-installation row lock, so
-    // two concurrent appends that read the same chain tail would each INSERT a
-    // successor sharing previousEventHash, forking the tamper-evident ledger.
-    // Key the event document by its CHAIN POSITION (capsuleId,
-    // previousEventHash) and insert with INSERT OR IGNORE, so only one successor
-    // per position can win. The loser gets inserted === false and we throw;
-    // appendLedgerEvent's retry loop then re-reads the advanced tail and
-    // re-appends. (Postgres achieves the same via FOR UPDATE NOWAIT.)
-    const chainKey = `${record.capsuleId}::${record.previousEventHash ?? "<genesis>"}`;
-    const inserted = await this.#putIfAbsentWithIndexes(
-      "installation_events",
-      chainKey,
-      record,
-      [
-        {
-          name: "installation_events_by_installation",
-          key: record.capsuleId,
-          sortKey: record.createdAt,
-        },
-      ],
-    );
-    if (!inserted) {
-      throw new Error(
-        `installation event chain position already claimed for ` +
-          `${record.capsuleId} (previousEventHash=` +
-          `${record.previousEventHash ?? "<genesis>"}); concurrent appender won`,
-      );
-    }
-  }
-
-  listCapsuleEvents(capsuleId: string): Promise<readonly CapsuleEventRecord[]> {
-    return this.#listByIndex("installation_events_by_installation", capsuleId);
-  }
-
   async #put<T>(
     bucket: string,
     key: string,
@@ -1845,45 +1007,6 @@ export class D1AccountsStore implements AccountsStore {
     return true;
   }
 
-  /**
-   * Atomic compare-and-swap on the document body. Replaces the row only
-   * when the current document equals `expectedDocument`. Returns true if
-   * the update affected exactly one row; false otherwise. Mirrors the
-   * postgres path's `UPDATE ... WHERE used_at IS NULL` pattern but for
-   * the JSON-blob shape used by D1.
-   */
-  async #updateDocumentIfMatches(
-    bucket: string,
-    key: string,
-    expectedDocument: string,
-    nextDocument: string,
-  ): Promise<boolean> {
-    await this.initialize();
-    const result = await this.#db
-      .prepare(
-        "UPDATE takosumi_accounts_documents SET document = ?, updated_at = ? WHERE bucket = ? AND key = ? AND document = ?",
-      )
-      .bind(nextDocument, Date.now(), bucket, key, expectedDocument)
-      .run();
-    const changes =
-      d1ChangeCount(result) ?? (await this.#selectLastChangeCount());
-    return changes > 0;
-  }
-
-  /**
-   * Rewrites the secondary index rows for an existing document key
-   * without touching the document body. Used by atomic CAS update paths
-   * that already wrote the document via `#updateDocumentIfMatches`.
-   */
-  async #refreshIndexEntries(
-    bucket: string,
-    key: string,
-    indexes: readonly D1IndexEntry[],
-  ): Promise<void> {
-    await this.initialize();
-    await this.#documents.refreshIndexEntries(bucket, key, indexes);
-  }
-
   async #get<T>(bucket: string, key: string): Promise<T | undefined> {
     await this.initialize();
     return await this.#documents.get<T>(bucket, key);
@@ -1928,30 +1051,6 @@ export class D1AccountsStore implements AccountsStore {
     return await this.#documents.listByIndex<T>(indexName, indexKey);
   }
 
-  async #listAppCapsulesByIndex(
-    indexName: string,
-    indexKey: string,
-  ): Promise<CapsuleRecord[]> {
-    await this.initialize();
-    const rows = await this.#db
-      .prepare(
-        "SELECT i.document_key, d.document FROM takosumi_accounts_indexes i INNER JOIN takosumi_accounts_documents d ON d.bucket = i.bucket AND d.key = i.document_key WHERE i.index_name = ? AND i.index_key = ? ORDER BY i.sort_key, i.document_key",
-      )
-      .bind(indexName, indexKey)
-      .all<D1DocumentWithKeyRow>();
-    return (rows.results ?? []).map((row) =>
-      capsuleRecordFromStoredDocument(JSON.parse(row.document) as unknown, {
-        documentKey: row.document_key,
-        ...(indexName === "installations_by_space"
-          ? { workspaceId: indexKey }
-          : {}),
-        ...(indexName === "installations_by_billing_account"
-          ? { billingAccountId: indexKey }
-          : {}),
-      }),
-    );
-  }
-
   async #listBucket<T>(bucket: string): Promise<T[]> {
     await this.initialize();
     return await this.#documents.listBucket<T>(bucket);
@@ -1986,38 +1085,6 @@ function accountIndexes(
 function normalizeAccountEmail(email: string | undefined): string | undefined {
   const trimmed = email?.trim().toLowerCase();
   return trimmed ? trimmed : undefined;
-}
-
-function launchTokenIndexes(
-  record: LaunchTokenRecord,
-): readonly D1IndexEntry[] {
-  return [
-    {
-      name: "launch_tokens_by_installation",
-      key: record.capsuleId,
-      sortKey: record.createdAt,
-    },
-  ];
-}
-
-function billingAccountIndexes(
-  record: BillingAccountRecord,
-): readonly D1IndexEntry[] {
-  const indexes: D1IndexEntry[] = [
-    {
-      name: "billing_accounts_by_subject",
-      key: record.subject,
-      sortKey: record.createdAt,
-    },
-  ];
-  if (record.stripeCustomerId) {
-    indexes.push({
-      name: "billing_accounts_by_stripe_customer",
-      key: record.stripeCustomerId,
-      sortKey: record.createdAt,
-    });
-  }
-  return indexes;
 }
 
 function d1ChangeCount(result: D1Result): number | undefined {

@@ -1,30 +1,14 @@
 /**
- * Logical provider partition that isolates secret material by external system.
+ * Opaque logical partition that isolates secret material by recipe/connection.
  *
  * Each partition is encrypted with an independent boundary key so that a
  * compromise of one cloud's master key does not propagate to other clouds
  * (Phase 18.2 H14).
  */
-export type CloudPartition =
-  | "global"
-  | "cloudflare"
-  | "aws"
-  | "gcp"
-  | "k8s"
-  | "local-adapters";
+export type SecretPartition = string;
 
-export const CLOUD_PARTITIONS: readonly CloudPartition[] = [
-  "global",
-  "cloudflare",
-  "aws",
-  "gcp",
-  "k8s",
-  "local-adapters",
-];
-
-export function isCloudPartition(value: unknown): value is CloudPartition {
-  return typeof value === "string" &&
-    (CLOUD_PARTITIONS as readonly string[]).includes(value);
+export function isSecretPartition(value: unknown): value is SecretPartition {
+  return typeof value === "string" && value.trim() !== "" && !/\s/u.test(value);
 }
 
 /**
@@ -46,11 +30,8 @@ export interface SecretVersionRef {
 export interface SecretRecord extends SecretVersionRef {
   readonly createdAt: string;
   readonly metadata: Record<string, unknown>;
-  /**
-   * Logical cloud partition that owns this secret. Defaults to `global`
-   * when `putSecret` does not specify one.
-   */
-  readonly cloudPartition: CloudPartition;
+  /** Opaque logical partition. Defaults to `global` when omitted on write. */
+  readonly secretPartition: SecretPartition;
   /** Optional rotation policy. */
   readonly rotationPolicy?: SecretRotationPolicy;
   /** ISO timestamp of the last successful read. Updated by `getSecret`. */
@@ -62,14 +43,14 @@ export interface SecretStorePort {
     readonly name: string;
     readonly value: string;
     readonly metadata?: Record<string, unknown>;
-    readonly cloudPartition?: CloudPartition;
+    readonly secretPartition?: SecretPartition;
     readonly rotationPolicy?: SecretRotationPolicy;
   }): Promise<SecretRecord>;
   getSecret(ref: SecretVersionRef): Promise<string | undefined>;
   getSecretRecord(ref: SecretVersionRef): Promise<SecretRecord | undefined>;
   latestSecret(name: string): Promise<SecretRecord | undefined>;
   listSecrets(filter?: {
-    readonly cloudPartition?: CloudPartition;
+    readonly secretPartition?: SecretPartition;
     readonly name?: string;
   }): Promise<readonly SecretRecord[]>;
   deleteSecret(ref: SecretVersionRef): Promise<boolean>;

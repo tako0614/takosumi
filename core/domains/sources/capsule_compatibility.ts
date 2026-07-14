@@ -5,10 +5,10 @@ import type {
   CapsuleProviderRequirement,
   CapsuleProvisionerSummary,
   CapsuleResourceSummary,
+  CapsuleRootModuleOutputDeclaration,
 } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
-import { isCredentialFreeUtilityProvider } from "takosumi-contract/provider-env-rules";
 
 export interface CapsuleSourceFile {
   readonly path: string;
@@ -16,8 +16,7 @@ export interface CapsuleSourceFile {
 }
 
 export interface CapsuleCompatibilityAnalysisInput {
-  /** Present for git-Source snapshots; absent for upload-origin snapshots. */
-  readonly sourceId?: string;
+  readonly sourceId: string;
   readonly sourceSnapshot: SourceSnapshot;
   readonly files: readonly CapsuleSourceFile[];
   readonly policy?: PolicyConfig;
@@ -31,10 +30,7 @@ export interface CapsuleCompatibilityAnalysis {
   readonly dataSources: readonly CapsuleDataSourceSummary[];
   readonly provisioners: readonly CapsuleProvisionerSummary[];
   readonly rootModuleVariables: readonly string[];
-  readonly rootModuleOutputs: readonly string[];
-  readonly normalizedObjectKey?: string;
-  readonly normalizedDigest?: string;
-  readonly normalizedFiles?: readonly CapsuleSourceFile[];
+  readonly rootModuleOutputs: readonly CapsuleRootModuleOutputDeclaration[];
 }
 
 export interface CapsuleCompatibilityAnalyzer {
@@ -43,57 +39,12 @@ export interface CapsuleCompatibilityAnalyzer {
   ): Promise<CapsuleCompatibilityAnalysis>;
 }
 
-const NO_DEFAULT_PROVIDER_ALLOWLIST = new Set<string>();
-
-// Default instance-wide resource-type allowlist (Core Specification §29 policy
-// layer "resource-type allowlist"). The managed Takosumi default deliberately
-// admits the *standard, tenant-scoped, data-plane* Cloudflare resource types so
-// a plain Cloudflare Capsule (a Worker, a Pages site, its D1 / KV / Queues / R2
-// data) is installable out of the box without a curated bounded InstallConfig.
-//
-// Excluded on purpose — these are NOT in the default and require an explicit
-// Space/InstallConfig allowlist to ever run, because each can reach beyond the
-// Capsule's own data plane and affect other domains / tenants:
-//   - cloudflare_dns_record  : can repoint arbitrary hostnames (domain / record
-//                              takeover on any zone the token can write).
-//   - cloudflare_zone / cloudflare_account / *_member / zone- or account-level
-//     settings: account/zone configuration and other-tenant-affecting types are
-//     never allowed by the default OSS resource-type policy.
-//
-// This is a security-boundary widening of the *resource-type* layer only. The
-// other policy layers (Capsule Gate provisioner/filesystem checks, provider
-// allowlist, billing/credit reservation, scope/action policy, quota) are
-// unchanged and still apply.
-const DEFAULT_ALLOWED_RESOURCE_TYPES = new Set([
-  // Cloudflare standard data-plane resources (tenant-scoped, no cross-domain
-  // reach). Workers static assets ship inside cloudflare_workers_script in
-  // provider v5, so no separate assets resource type is required.
-  "cloudflare_workers_script",
-  "cloudflare_workers_script_subdomain",
-  "cloudflare_workers_route",
-  "cloudflare_pages_project",
-  "cloudflare_d1_database",
-  "cloudflare_queue",
-  "cloudflare_workers_kv_namespace",
-  "cloudflare_r2_bucket",
-  // AWS storage + benign helper providers retained from the prior default.
-  "aws_s3_bucket",
-  "aws_s3_bucket_public_access_block",
-  "random_id",
-  "tls_private_key",
-]);
-
-const DEFAULT_DENIED_RESOURCE_TYPES = new Set([
-  "cloudflare_dns_record",
-  "cloudflare_zone",
-  "cloudflare_account",
-  "cloudflare_account_member",
-]);
-
-const DEFAULT_ALLOWED_DATA_SOURCE_TYPES = new Set([
-  "terraform_remote_state",
-  "http",
-]);
+/**
+ * `undefined` means that the operator did not configure a type allowlist.
+ * This is intentionally different from an empty set, which denies every type.
+ * Core must not smuggle a vendor catalog into the meaning of "unset".
+ */
+type ExplicitAllowlist = ReadonlySet<string> | undefined;
 
 const CREDENTIAL_PROVIDER_ATTRIBUTES = new Set([
   "access_key",
@@ -123,6 +74,7 @@ export function analyzeOpenTofuCapsuleFiles(
       findings: [
         {
           severity: "warning",
+          compatibilityImpact: "needs_patch",
           code: "capsule_source_files_unavailable",
           message:
             "Capsule source files are unavailable to the compatibility analyzer; runner-backed archive expansion is required for full Gate findings.",
@@ -137,16 +89,16 @@ export function analyzeOpenTofuCapsuleFiles(
       provisioners: [],
       rootModuleVariables: [],
       rootModuleOutputs: [],
-      normalizedObjectKey: input.sourceSnapshot.archiveObjectKey,
-      normalizedDigest: input.sourceSnapshot.archiveDigest,
     };
   }
 
   const allHclFiles = input.files.filter((file) => file.path.endsWith(".tf"));
   const hclFiles = selectReachableModuleTreeFiles(allHclFiles, findings);
+  const rootModuleOutputs = collectRootModuleOutputDeclarations(hclFiles);
   if (hclFiles.length === 0) {
     findings.push({
       severity: "error",
+      compatibilityImpact: "unsupported",
       code: "opentofu_configuration_missing",
       message: "No .tf files were found in the Capsule path.",
       path: input.sourceSnapshot.path,
@@ -154,19 +106,44 @@ export function analyzeOpenTofuCapsuleFiles(
         "Point the install path at an OpenTofu module-compatible configuration.",
     });
   }
+  for (const output of rootModuleOutputs) {
+    if (output.sensitive === null || output.ephemeral === null) {
+      findings.push({
+        severity: "error",
+        compatibilityImpact: "unsupported",
+        code: "output_metadata_expression_unsupported",
+        message:
+          `Root module Output ${output.name} uses a non-literal sensitive or ` +
+          "ephemeral expression that compatibility analysis cannot preserve safely.",
+        suggestion:
+          "Use literal true/false Output metadata so a generated root can preserve it exactly.",
+      });
+      continue;
+    }
+    if (!output.ephemeral) continue;
+    findings.push({
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      code: "ephemeral_root_output_unsupported",
+      message:
+        `Root module Output ${output.name} is ephemeral and cannot be persisted ` +
+        "or re-exported by a generated OpenTofu root.",
+      suggestion:
+        "Keep transient values inside the module or expose a separate non-ephemeral Output intended for the Capsule ledger.",
+    });
+  }
 
   const providerAllowlist = allowedProviderSet(input.policy);
-  const resourceAllowlist = allowedSet(
-    DEFAULT_ALLOWED_RESOURCE_TYPES,
+  const resourceAllowlist = explicitAllowlist(
     input.policy?.allowedResourceTypes,
   );
-  const dataSourceAllowlist = allowedSet(
-    DEFAULT_ALLOWED_DATA_SOURCE_TYPES,
+  const dataSourceAllowlist = explicitAllowlist(
     input.policy?.allowedDataSourceTypes,
   );
-  const provisionerAllowlist = allowedSet(
-    new Set<string>(),
-    input.policy?.allowedProvisionerTypes,
+  // Provisioners execute arbitrary processes. Unlike provider/resource/data
+  // type policy, absence is therefore a deliberate deny-by-default boundary.
+  const provisionerAllowlist = new Set(
+    input.policy?.allowedProvisionerTypes ?? [],
   );
   const providers = collectProviders(hclFiles, findings, providerAllowlist);
   const resources = collectResources(hclFiles, resourceAllowlist);
@@ -180,6 +157,7 @@ export function analyzeOpenTofuCapsuleFiles(
   if (providers.length === 0 && hasProviderBackedBlocks) {
     findings.push({
       severity: "warning",
+      compatibilityImpact: "needs_patch",
       code: "required_providers_missing",
       message: "No required_providers block was detected.",
       suggestion:
@@ -190,6 +168,7 @@ export function analyzeOpenTofuCapsuleFiles(
   if (!hasOutputBlock(hclFiles)) {
     findings.push({
       severity: "warning",
+      compatibilityImpact: "needs_patch",
       code: "outputs_missing",
       message: "No output blocks were detected.",
       suggestion:
@@ -201,18 +180,11 @@ export function analyzeOpenTofuCapsuleFiles(
     if (!provider.allowed) {
       findings.push({
         severity: "error",
+        compatibilityImpact: "unsupported",
         code: "provider_not_allowed",
         message: `Provider ${provider.source} is not allowed by policy.`,
         suggestion:
           "Use a fully qualified OpenTofu provider source such as namespace/name or registry.opentofu.org/namespace/name.",
-      });
-    } else if (!isCredentialFreeUtilityProvider(provider.source)) {
-      findings.push({
-        severity: "info",
-        code: "provider_connection_may_be_required",
-        message: `Provider ${provider.source} may require a Provider Connection.`,
-        suggestion:
-          "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
       });
     }
   }
@@ -220,10 +192,11 @@ export function analyzeOpenTofuCapsuleFiles(
     if (!resource.allowed) {
       findings.push({
         severity: "error",
+        compatibilityImpact: "unsupported",
         code: "resource_type_not_allowed",
         message: `Resource type ${resource.type} is not allowed by policy.`,
         suggestion:
-          "Use an allowed resource type or update the Space/InstallConfig resource policy.",
+          "Use an allowed resource type or update the Workspace/InstallConfig resource policy.",
       });
     }
   }
@@ -231,6 +204,8 @@ export function analyzeOpenTofuCapsuleFiles(
     if (!dataSource.allowed) {
       findings.push({
         severity: dataSource.type === "external" ? "error" : "warning",
+        compatibilityImpact:
+          dataSource.type === "external" ? "unsupported" : "needs_patch",
         code:
           dataSource.type === "external"
             ? "external_data_source_unsupported"
@@ -243,6 +218,7 @@ export function analyzeOpenTofuCapsuleFiles(
     if (!provisioner.allowed) {
       findings.push({
         severity: "error",
+        compatibilityImpact: "unsupported",
         code: "provisioner_unsupported",
         message: `Provisioner ${provisioner.type} is not supported for one-touch Capsule execution.`,
         suggestion:
@@ -252,11 +228,6 @@ export function analyzeOpenTofuCapsuleFiles(
   }
 
   const level = compatibilityLevel(findings);
-  const normalizedFiles =
-    level === "auto_capsulized"
-      ? normalizeAutoCapsulizedFiles(input.files, hclFiles)
-      : undefined;
-  const executionRootFiles = normalizedFiles ?? hclFiles;
   return {
     level,
     findings,
@@ -264,64 +235,9 @@ export function analyzeOpenTofuCapsuleFiles(
     resources,
     dataSources,
     provisioners,
-    rootModuleVariables: collectRootModuleVariableNames(executionRootFiles),
-    rootModuleOutputs: collectRootModuleOutputNames(executionRootFiles),
-    normalizedObjectKey: normalizedFiles
-      ? normalizedModuleObjectKey(input.sourceSnapshot)
-      : input.sourceSnapshot.archiveObjectKey,
-    ...(normalizedFiles
-      ? {}
-      : { normalizedDigest: input.sourceSnapshot.archiveDigest }),
-    ...(normalizedFiles ? { normalizedFiles } : {}),
+    rootModuleVariables: collectRootModuleVariableNames(hclFiles),
+    rootModuleOutputs,
   };
-}
-
-function normalizeAutoCapsulizedFiles(
-  allFiles: readonly CapsuleSourceFile[],
-  hclFiles: readonly CapsuleSourceFile[],
-): readonly CapsuleSourceFile[] {
-  const normalizedHclFiles = hclFiles
-    .map((file) => ({
-      path: file.path,
-      text: normalizeAutoCapsulizedHcl(file.text),
-    }))
-    .filter((file) => file.text.trim().length > 0);
-  // Non-.tf files (migrations, schemas, templates, scripts …) are carried
-  // through unchanged so the normalized module artifact stays a complete
-  // Capsule, not just its rewritten HCL.
-  const passthroughFiles = allFiles.filter(
-    (file) => !file.path.endsWith(".tf"),
-  );
-  return [...normalizedHclFiles, ...passthroughFiles].sort((a, b) =>
-    a.path.localeCompare(b.path),
-  );
-}
-
-function normalizeAutoCapsulizedHcl(text: string): string {
-  const removals: BlockRange[] = [];
-  for (const backend of matchNamedBlockRanges(text, "backend")) {
-    removals.push(backend);
-  }
-  for (const provider of matchNamedBlockRanges(text, "provider")) {
-    if (!containsCredentialAttribute(provider.body)) removals.push(provider);
-  }
-  if (removals.length === 0) return text;
-  return removeRanges(text, removals)
-    .replace(/\n{3,}/g, "\n\n")
-    .trimStart();
-}
-
-function removeRanges(text: string, ranges: readonly BlockRange[]): string {
-  const merged = [...ranges].sort((a, b) => a.start - b.start);
-  let out = "";
-  let cursor = 0;
-  for (const range of merged) {
-    if (range.start < cursor) continue;
-    out += text.slice(cursor, range.start);
-    cursor = range.end;
-  }
-  out += text.slice(cursor);
-  return out;
 }
 
 function selectReachableModuleTreeFiles(
@@ -353,6 +269,7 @@ function selectReachableModuleTreeFiles(
         if (!resolved) {
           findings.push({
             severity: "error",
+            compatibilityImpact: "unsupported",
             code: "local_module_source_escapes_capsule",
             message: `Module ${moduleBlock.name} uses local source ${source} outside the Capsule archive.`,
             path: file.path,
@@ -364,6 +281,7 @@ function selectReachableModuleTreeFiles(
         if (!byDir.has(resolved)) {
           findings.push({
             severity: "warning",
+            compatibilityImpact: "needs_patch",
             code: "local_module_source_missing",
             message: `Module ${moduleBlock.name} local source ${source} was not found in the Capsule archive.`,
             path: file.path,
@@ -411,96 +329,10 @@ function resolveLocalModuleDir(
   return out.length === 0 ? "." : out.join("/");
 }
 
-export function normalizedCapsuleArtifactBody(input: {
-  readonly sourceSnapshot: SourceSnapshot;
-  readonly files: readonly CapsuleSourceFile[];
-}): string {
-  return (
-    JSON.stringify(
-      {
-        kind: "takosumi.normalized-capsule@v1",
-        sourceSnapshotId: input.sourceSnapshot.id,
-        resolvedCommit: input.sourceSnapshot.resolvedCommit,
-        path: input.sourceSnapshot.path,
-        files: [...input.files]
-          .map((file) => ({ path: file.path, text: file.text }))
-          .sort((a, b) => a.path.localeCompare(b.path)),
-      },
-      null,
-      2,
-    ) + "\n"
-  );
-}
-
-export interface NormalizedCapsuleArtifact {
-  readonly kind: "takosumi.normalized-capsule@v1";
-  readonly sourceSnapshotId: string;
-  readonly resolvedCommit: string;
-  readonly path: string;
-  readonly files: readonly CapsuleSourceFile[];
-}
-
-export function parseNormalizedCapsuleArtifactBody(
-  body: string,
-): NormalizedCapsuleArtifact {
-  const parsed: unknown = JSON.parse(body);
-  if (!isPlainRecord(parsed)) {
-    throw new Error("normalized capsule artifact must be a JSON object");
-  }
-  if (parsed.kind !== "takosumi.normalized-capsule@v1") {
-    throw new Error("normalized capsule artifact kind is unsupported");
-  }
-  const sourceSnapshotId = stringRecordField(parsed, "sourceSnapshotId");
-  const resolvedCommit = stringRecordField(parsed, "resolvedCommit");
-  const path = stringRecordField(parsed, "path");
-  const filesValue = parsed.files;
-  if (!Array.isArray(filesValue) || filesValue.length === 0) {
-    throw new Error(
-      "normalized capsule artifact files must be a non-empty array",
-    );
-  }
-  const files = filesValue.map((file) => {
-    if (!isPlainRecord(file)) {
-      throw new Error("normalized capsule artifact file must be an object");
-    }
-    return {
-      path: stringRecordField(file, "path"),
-      text: stringRecordField(file, "text"),
-    };
-  });
-  return {
-    kind: "takosumi.normalized-capsule@v1",
-    sourceSnapshotId,
-    resolvedCommit,
-    path,
-    files,
-  };
-}
-
-export function normalizedModuleObjectKey(snapshot: SourceSnapshot): string {
-  const base = snapshot.archiveObjectKey.replace(/\/source\.tar\.zst$/, "");
-  return `${base}/normalized-module.json`;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function stringRecordField(
-  record: Record<string, unknown>,
-  field: string,
-): string {
-  const value = record[field];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`normalized capsule artifact ${field} must be a string`);
-  }
-  return value;
-}
-
 function collectProviders(
   files: readonly CapsuleSourceFile[],
   findings: CapsuleGateFinding[],
-  allowedProviders: ReadonlySet<string>,
+  allowedProviders: ExplicitAllowlist,
 ): CapsuleProviderRequirement[] {
   const providers = new Map<string, Set<string>>();
   for (const file of files) {
@@ -511,8 +343,12 @@ function collectProviders(
         for (const providerBlock of matchArbitraryNamedAssignments(
           requiredBlock.body,
         )) {
+          // OpenTofu's source-address default for a local provider name is the
+          // HashiCorp namespace. Record that real address rather than treating
+          // valid OpenTofu shorthand as a Takosumi-specific provider.
           const source =
-            stringAttribute(providerBlock.body, "source") ?? providerBlock.name;
+            stringAttribute(providerBlock.body, "source") ??
+            `hashicorp/${providerBlock.name}`;
           const aliases = aliasesAttribute(providerBlock.body);
           const entry = providers.get(source) ?? new Set<string>();
           for (const alias of aliases) entry.add(alias);
@@ -524,27 +360,34 @@ function collectProviders(
       if (containsCredentialAttribute(providerBlock.body)) {
         findings.push({
           severity: "warning",
+          compatibilityImpact: "needs_patch",
           code: "provider_credentials_in_source",
           message: `Provider ${providerBlock.name} contains credential-like attributes.`,
           path: file.path,
+          context: { provider: providerBlock.name },
           suggestion:
-            "Move provider credentials to the Takosumi generated root through Provider Env binding and Connection/Vault backing material.",
+            "Remove provider credentials from HCL and deliver them at Run time through a Provider Connection and Credential Recipe.",
         });
       }
       if (providerBlock.body.trim().length > 0) {
         findings.push({
           severity: "info",
-          code: "provider_block_lift_candidate",
-          message: `Provider ${providerBlock.name} can be lifted into the generated root if it contains only configuration values.`,
+          compatibilityImpact: "none",
+          code: "provider_configuration_preserved",
+          message: `Provider ${providerBlock.name} configuration remains part of the repository module.`,
           path: file.path,
+          context: { provider: providerBlock.name },
+          suggestion:
+            "Keep non-secret provider configuration in the module; deliver secret material through a Provider Connection.",
         });
       }
     }
     for (const backend of matchNamedBlocks(file.text, "backend")) {
       findings.push({
         severity: "info",
-        code: "backend_override_candidate",
-        message: `Backend ${backend.name} will be replaced by Takosumi-controlled state.`,
+        compatibilityImpact: "none",
+        code: "backend_state_isolated",
+        message: `Backend ${backend.name} is not rewritten; Takosumi owns the Run state boundary outside the repository configuration.`,
         path: file.path,
       });
     }
@@ -553,6 +396,7 @@ function collectProviders(
       if (source && isUnpinnedRemoteModule(source)) {
         findings.push({
           severity: "warning",
+          compatibilityImpact: "needs_patch",
           code: "remote_module_unpinned",
           message: `Module ${moduleBlock.name} uses an unpinned remote source.`,
           path: file.path,
@@ -573,7 +417,7 @@ function collectProviders(
 
 function collectResources(
   files: readonly CapsuleSourceFile[],
-  allowedResources: ReadonlySet<string>,
+  allowedResources: ExplicitAllowlist,
 ): CapsuleResourceSummary[] {
   const counts = new Map<string, number>();
   for (const file of files) {
@@ -592,7 +436,7 @@ function collectResources(
 
 function collectDataSources(
   files: readonly CapsuleSourceFile[],
-  allowedDataSources: ReadonlySet<string>,
+  allowedDataSources: ExplicitAllowlist,
 ): CapsuleDataSourceSummary[] {
   const types = new Set<string>();
   for (const file of files) {
@@ -603,7 +447,13 @@ function collectDataSources(
   return Array.from(types)
     .map((type) => ({
       type,
-      allowed: allowedDataSources.has(type),
+      // external executes a local program and stays deny-by-default. Ordinary
+      // provider data sources use the generic OpenTofu path unless an operator
+      // supplied an explicit allowlist.
+      allowed:
+        allowedDataSources === undefined
+          ? type !== "external"
+          : allowlistContains(allowedDataSources, type),
     }))
     .sort((a, b) => a.type.localeCompare(b.type));
 }
@@ -631,6 +481,7 @@ function collectDependencyLockFindings(
   if (!lock) return;
   findings.push({
     severity: "info",
+    compatibilityImpact: "none",
     code: "dependency_lock_detected",
     message:
       "A provider dependency lockfile is present and will be reviewed by the provider lockfile policy after credential-free init.",
@@ -669,13 +520,14 @@ function collectFilesystemSensitiveExpressionFindings(
     if (moduleLocalHits.length > 0) {
       findings.push({
         severity: "warning",
+        compatibilityImpact: "none",
         code: "filesystem_sensitive_expression",
         message: `Module-local OpenTofu filesystem expressions were detected: ${moduleLocalHits
           .map((hit) => hit.label)
           .join(", ")}.`,
         path: file.path,
         suggestion:
-          "Keep artifact paths explicit and confined to files shipped inside the normalized module.",
+          "Keep artifact paths explicit and confined to files shipped inside the repository module.",
       });
     }
 
@@ -685,6 +537,7 @@ function collectFilesystemSensitiveExpressionFindings(
     if (hostHits.length > 0) {
       findings.push({
         severity: "warning",
+        compatibilityImpact: "needs_patch",
         code: "filesystem_host_path_expression",
         message: `Host-path-sensitive OpenTofu expressions were detected: ${hostHits
           .map((hit) => hit.label)
@@ -702,39 +555,17 @@ function compatibilityLevel(
 ): CapsuleCompatibilityLevel {
   if (
     findings.some(
-      (finding) =>
-        finding.severity === "error" &&
-        (finding.code.includes("unsupported") ||
-          finding.code === "provider_not_allowed" ||
-          finding.code === "resource_type_not_allowed" ||
-          finding.code === "opentofu_configuration_missing" ||
-          finding.code === "local_module_source_escapes_capsule"),
+      (finding) => finding.compatibilityImpact === "unsupported",
     )
   ) {
     return "unsupported";
   }
   if (
     findings.some(
-      (finding) =>
-        finding.severity === "warning" &&
-        (finding.code === "required_providers_missing" ||
-          finding.code === "outputs_missing" ||
-          finding.code === "provider_credentials_in_source" ||
-          finding.code === "filesystem_host_path_expression" ||
-          finding.code === "remote_module_unpinned" ||
-          finding.code === "local_module_source_missing"),
+      (finding) => finding.compatibilityImpact === "needs_patch",
     )
   ) {
     return "needs_patch";
-  }
-  if (
-    findings.some(
-      (finding) =>
-        finding.code === "backend_override_candidate" ||
-        finding.code === "provider_block_lift_candidate",
-    )
-  ) {
-    return "auto_capsulized";
   }
   return "ready";
 }
@@ -752,30 +583,40 @@ export function collectRootModuleVariableNames(
 export function collectRootModuleOutputNames(
   files: readonly CapsuleSourceFile[],
 ): readonly string[] {
-  return collectRootModuleNamedBlocks(files, "output");
-}
-
-export interface RootModuleOutputDeclaration {
-  readonly name: string;
-  readonly sensitive: boolean;
+  return collectRootModuleOutputDeclarations(files).map((output) => output.name);
 }
 
 export function collectRootModuleOutputDeclarations(
   files: readonly CapsuleSourceFile[],
-): readonly RootModuleOutputDeclaration[] {
-  const byName = new Map<string, RootModuleOutputDeclaration>();
+): readonly CapsuleRootModuleOutputDeclaration[] {
+  const byName = new Map<string, CapsuleRootModuleOutputDeclaration>();
   for (const file of files) {
     if (!isRootModuleTfFile(file.path)) continue;
     for (const block of matchNamedBlocks(file.text, "output")) {
       byName.set(block.name, {
         name: block.name,
-        sensitive: /^\s*sensitive\s*=\s*true\s*$/imu.test(block.body),
+        sensitive: literalBooleanAttribute(block.body, "sensitive"),
+        ephemeral: literalBooleanAttribute(block.body, "ephemeral"),
       });
     }
   }
   return Array.from(byName.values()).sort((a, b) =>
     a.name.localeCompare(b.name),
   );
+}
+
+function literalBooleanAttribute(
+  blockBody: string,
+  attribute: "sensitive" | "ephemeral",
+): boolean | null {
+  const assignment = new RegExp(`^\\s*${attribute}\\s*=`, "imu");
+  if (!assignment.test(blockBody)) return false;
+  const literal = new RegExp(
+    `^\\s*${attribute}\\s*=\\s*(true|false)\\s*(?:(?:#|//).*)?$`,
+    "imu",
+  ).exec(blockBody);
+  if (!literal) return null;
+  return literal[1] === "true";
 }
 
 function collectRootModuleNamedBlocks(
@@ -798,17 +639,10 @@ function isRootModuleTfFile(path: string): boolean {
 
 function providerAllowed(
   source: string,
-  allowedProviders: ReadonlySet<string>,
+  allowedProviders: ExplicitAllowlist,
 ): boolean {
-  return (
-    providerInSet(source, allowedProviders) ||
-    isQualifiedProviderSource(source) ||
-    isQualifiedProviderSource(
-      source.startsWith("registry.opentofu.org/")
-        ? source
-        : `registry.opentofu.org/${source}`,
-    )
-  );
+  if (!isQualifiedProviderSource(source)) return false;
+  return allowlistContains(allowedProviders, source, providerInSet);
 }
 
 function providerInSet(
@@ -834,26 +668,42 @@ function isQualifiedProviderSource(source: string): boolean {
 
 function resourceTypeAllowed(
   type: string,
-  allowedResources: ReadonlySet<string>,
+  allowedResources: ExplicitAllowlist,
 ): boolean {
-  if (allowedResources.has(type)) return true;
-  return !DEFAULT_DENIED_RESOURCE_TYPES.has(type);
+  return allowlistContains(allowedResources, type);
 }
 
-function allowedSet(
-  defaults: ReadonlySet<string>,
+function explicitAllowlist(
   configured: readonly string[] | undefined,
-): ReadonlySet<string> {
-  if (configured === undefined) return defaults;
-  return new Set([...defaults, ...configured]);
+): ExplicitAllowlist {
+  return configured === undefined ? undefined : new Set(configured);
+}
+
+function allowlistContains(
+  allowlist: ExplicitAllowlist,
+  value: string,
+  contains: (
+    value: string,
+    allowlist: ReadonlySet<string>,
+  ) => boolean = (candidate, entries) => entries.has(candidate),
+): boolean {
+  return (
+    allowlist === undefined ||
+    allowlist.has("*") ||
+    contains(value, allowlist)
+  );
 }
 
 function allowedProviderSet(
   policy: PolicyConfig | undefined,
-): ReadonlySet<string> {
-  if (policy?.allowedProviders === undefined) return NO_DEFAULT_PROVIDER_ALLOWLIST;
+): ExplicitAllowlist {
+  if (policy?.allowedProviders === undefined) return undefined;
   const providers = new Set<string>();
   for (const provider of policy.allowedProviders) {
+    if (provider === "*") {
+      providers.add(provider);
+      continue;
+    }
     providers.add(provider);
     providers.add(
       provider.startsWith("registry.opentofu.org/")

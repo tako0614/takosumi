@@ -77,25 +77,16 @@ services:
         condition: service_healthy
       migrations:
         condition: service_completed_successfully
-    volumes:
-      # Writable mount for the metadata-only installation export worker. The
-      # root filesystem is read-only (`read_only: true`), so the export
-      # output directory the accounts service writes archives to needs a
-      # dedicated writable mount. This matches the documented default
-      # TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR (.env.example) so enabling exports
-      # does not hit EROFS at runtime. Operators who serve exports through
-      # Caddy/nginx point that static server at this same volume (or override
-      # both EXPORT_OUTPUT_DIR and this mount to a bind-mount of their own).
-      - exports-data:/var/lib/takosumi-accounts/exports
     environment:
       TAKOSUMI_ACCOUNTS_ISSUER: ${TAKOSUMI_ACCOUNTS_ISSUER:-https://app.example.com}
       TAKOSUMI_ACCOUNTS_BIND_HOST: ${TAKOSUMI_ACCOUNTS_BIND_HOST:-0.0.0.0}
       TAKOSUMI_ACCOUNTS_DATABASE_URL: postgres://takosumi:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/takosumi_accounts
+      TAKOSUMI_ACCOUNTS_CLIENTS: ${TAKOSUMI_ACCOUNTS_CLIENTS:-}
       TAKOSUMI_ACCOUNTS_CLIENT_ID: ${TAKOSUMI_ACCOUNTS_CLIENT_ID:-}
       TAKOSUMI_ACCOUNTS_REDIRECT_URIS: ${TAKOSUMI_ACCOUNTS_REDIRECT_URIS:-}
       TAKOSUMI_ACCOUNTS_CLIENT_SECRET: ${TAKOSUMI_ACCOUNTS_CLIENT_SECRET:-}
-      TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS: ${TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS:-closed}
-      TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST: ${TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST:-}
+      TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD: ${TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD:-}
+      TAKOSUMI_ACCOUNTS_ALLOWED_SCOPES: ${TAKOSUMI_ACCOUNTS_ALLOWED_SCOPES:-}
     expose:
       - "8787"
     healthcheck:
@@ -133,4 +124,3 @@ volumes:
   postgres-data:
   caddy-data:
   caddy-config:
-  exports-data:

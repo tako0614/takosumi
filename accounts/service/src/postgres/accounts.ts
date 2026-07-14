@@ -30,6 +30,7 @@ const accounts = accountsV1.table("accounts", {
   email: text("email"),
   emailVerified: boolean("email_verified"),
   displayName: text("display_name"),
+  picture: text("picture"),
   termsVersion: text("terms_version"),
   termsAcceptedAt: timestamp("terms_accepted_at", {
     mode: "date",
@@ -96,6 +97,7 @@ export async function saveAccount(
         // previously-asserted value when a later save omits the claim.
         emailVerified: record.emailVerified ?? null,
         displayName: record.displayName ?? null,
+        picture: record.picture ?? null,
         termsVersion: record.termsVersion ?? null,
         termsAcceptedAt: record.termsAcceptedAt
           ? toDate(record.termsAcceptedAt)
@@ -110,6 +112,7 @@ export async function saveAccount(
           email: sql`excluded.email`,
           emailVerified: sql`coalesce(excluded.email_verified, ${accounts.emailVerified})`,
           displayName: sql`excluded.display_name`,
+          picture: sql`coalesce(excluded.picture, ${accounts.picture})`,
           termsVersion: sql`coalesce(excluded.terms_version, ${accounts.termsVersion})`,
           termsAcceptedAt: sql`coalesce(excluded.terms_accepted_at, ${accounts.termsAcceptedAt})`,
           termsAcceptedSource: sql`coalesce(excluded.terms_accepted_source, ${accounts.termsAcceptedSource})`,
@@ -131,6 +134,7 @@ export async function findAccount(
         email: accounts.email,
         email_verified: accounts.emailVerified,
         display_name: accounts.displayName,
+        picture: accounts.picture,
         terms_version: accounts.termsVersion,
         terms_accepted_at: accounts.termsAcceptedAt,
         terms_accepted_source: accounts.termsAcceptedSource,
@@ -157,6 +161,7 @@ export async function findAccountByVerifiedEmail(
         email: accounts.email,
         email_verified: accounts.emailVerified,
         display_name: accounts.displayName,
+        picture: accounts.picture,
         terms_version: accounts.termsVersion,
         terms_accepted_at: accounts.termsAcceptedAt,
         terms_accepted_source: accounts.termsAcceptedSource,

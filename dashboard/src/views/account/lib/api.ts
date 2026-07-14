@@ -1,8 +1,6 @@
 /**
  * Typed RPC client for the ACCOUNT-PLANE endpoints the dashboard still needs:
- * auth (upstream OAuth) and Stripe billing checkout/portal. The account-plane
- * `/v1/capsule-projections` projection surface and legacy `/v1/connections`
- * group are gone from the SPA — Capsules and connections live entirely on
+ * auth (upstream OAuth). Capsules and connections live entirely on
  * the session-authed control surface (`lib/control-api.ts`); session reads go
  * through `./session.ts` directly.
  *
@@ -10,15 +8,9 @@
  * (`credentials: "include"`) via {@link apiFetch} (transport in ./http) and
  * uses contract-mirrored paths (./paths).
  */
-import * as billing from "./billing.ts";
 import * as auth from "./auth.ts";
 
 export const rpc = {
-  billing: {
-    checkout: billing.startStripeCheckout,
-    portal: billing.startStripePortal,
-    summary: billing.getStripeBillingSummary,
-  },
   auth: {
     listProviders: auth.listAuthProviders,
     startUpstreamOAuth: auth.startUpstreamOAuth,
@@ -30,24 +22,15 @@ export const rpc = {
 
 export { ApiError } from "./http.ts";
 
-// Provider presentation descriptors (guided token flows / field catalogs) for
-// the connections tab. Pure client-side presentation data — the connection
-// CRUD itself goes through lib/control-api.ts.
+// Generic projection of service-installed CredentialRecipe presentation for
+// the connections tab. The dashboard contains no provider catalog.
 export {
-  CLOUDFLARE_CREATE_TOKEN_URL,
-  PROVIDERS,
-  providerDescriptor,
+  credentialRecipePresentationText,
+  providerSetupOptionsFromCredentialRecipes,
 } from "./connections.ts";
 export type {
-  ProviderDescriptor,
+  ProviderConnectionSetupOption,
   ProviderCredentialField,
-  ProviderTokenHelper,
 } from "./connections.ts";
 
-export type {
-  StripeBillingInvoice,
-  StripeBillingSummary,
-  StripeCheckoutResult,
-  StripePortalResult,
-} from "./billing.ts";
 export type { CallbackResult } from "./auth.ts";

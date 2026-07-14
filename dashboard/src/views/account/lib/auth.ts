@@ -1,5 +1,5 @@
 /**
- * Auth flows for the account-plane RPC client: upstream OAuth (Google),
+ * Auth flows for the account-plane RPC client: generic upstream OAuth/OIDC,
  * navigation-based. (Passkey/WebAuthn client code returns together with an
  * actual passkey sign-in UI — the API stays on the backend.)
  */
@@ -11,7 +11,7 @@ const STATE_KEY = "tg_oauth_state";
 const RETURN_KEY = "tg_oauth_return";
 const PROVIDER_KEY = "tg_oauth_provider";
 
-type Provider = "google";
+type Provider = string;
 
 /**
  * Read which sign-in methods the operator configured on this worker. Public +
@@ -62,8 +62,7 @@ export function startUpstreamOAuth(provider: Provider): void {
 
 export function recallOAuthProvider(): Provider | null {
   if (typeof sessionStorage === "undefined") return null;
-  const v = sessionStorage.getItem(PROVIDER_KEY);
-  return v === "google" ? v : null;
+  return safeProviderId(sessionStorage.getItem(PROVIDER_KEY));
 }
 
 export function recallOAuthReturnTo(): string {
@@ -122,4 +121,11 @@ export function safeOAuthReturnTo(value: string | null | undefined): string {
   } catch {
     return "/";
   }
+}
+
+function safeProviderId(value: string | null | undefined): string | null {
+  const provider = value?.trim();
+  return provider && /^[a-z0-9][a-z0-9._:-]{0,127}$/iu.test(provider)
+    ? provider
+    : null;
 }

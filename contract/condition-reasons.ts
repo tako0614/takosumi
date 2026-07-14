@@ -1,6 +1,7 @@
 /**
- * Core condition reason catalog. Single-source-of-truth via `as const`; the type
- * union and the runtime list are derived together.
+ * Reasons emitted by Takosumi Core. This is a core-owned catalog, not the
+ * admission schema for `Condition.reason`: installed adapters may emit other
+ * valid machine-readable tokens and the public wire field remains `string`.
  *
  * Relocated from the retired `takosumi-v1.ts` reference umbrella.
  */

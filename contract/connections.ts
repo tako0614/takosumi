@@ -1,33 +1,18 @@
 import type { JsonValue } from "./types.ts";
+import type { SourceGitConnectionKind } from "./sources.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
 // INTERNAL deploy-control seam — Connections surface under `/internal/v1`
-// (reached in-process / by the account plane, NOT edge-public). Connection
-// creation is split into kind-specific subroutes; the base path is the
-// operator/space listing.
+// (reached in-process / by the account plane, NOT edge-public). Provider-owned
+// setup and OAuth helpers are selected by opaque helper ids; Core never grows a
+// route matrix for individual vendors.
 export const CONNECTIONS_PATH = `${INTERNAL_V1_PREFIX}/connections` as const;
-export const CONNECTIONS_SOURCE_HTTPS_TOKEN_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/source/https-token` as const;
-export const CONNECTIONS_SOURCE_SSH_KEY_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/source/ssh-key` as const;
-export const CONNECTIONS_CLOUDFLARE_TOKEN_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/cloudflare/token` as const;
-export const CONNECTIONS_AWS_ASSUME_ROLE_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/aws/assume-role` as const;
-export const CONNECTIONS_GENERIC_ENV_PROVIDER_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/generic-env-provider` as const;
-export const CONNECTIONS_CLOUDFLARE_OAUTH_START_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/cloudflare/oauth/start` as const;
-export const CONNECTIONS_CLOUDFLARE_OAUTH_CALLBACK_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/cloudflare/oauth/callback` as const;
-export const CONNECTIONS_GCP_OAUTH_START_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/gcp/oauth/start` as const;
-export const CONNECTIONS_GCP_OAUTH_CALLBACK_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/gcp/oauth/callback` as const;
-export const CONNECTIONS_GCP_IMPERSONATION_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/gcp/impersonation` as const;
-export const CONNECTIONS_GCP_SERVICE_ACCOUNT_JSON_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/gcp/service-account-json` as const;
+export const CONNECTION_SETUP_PATH =
+  `${INTERNAL_V1_PREFIX}/connections/setups/:setupId` as const;
+export const CONNECTION_OAUTH_START_PATH =
+  `${INTERNAL_V1_PREFIX}/connections/oauth/:helperId/start` as const;
+export const CONNECTION_OAUTH_CALLBACK_PATH =
+  `${INTERNAL_V1_PREFIX}/connections/oauth/:helperId/callback` as const;
 export const CONNECTION_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/connections/${encodeURIComponent(id)}`;
 export const CONNECTION_TEST_PATH = (id: string): string =>
@@ -35,7 +20,7 @@ export const CONNECTION_TEST_PATH = (id: string): string =>
 export const CONNECTION_REVOKE_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/connections/${encodeURIComponent(id)}/revoke`;
 
-export type ConnectionScopeKind = "operator" | "space";
+export type ConnectionScopeKind = "operator" | "workspace";
 
 /**
  * Operational credential state machine (vault authority). The public read view
@@ -45,43 +30,51 @@ export type ConnectionStatus =
   "pending" | "verified" | "revoked" | "expired" | "error";
 
 /**
- * Single Provider Connection kind axis. The vault routes mint/verify drivers
- * from this one value, and the
- * `oauth` vs `secret` distinction is carried by the stored
- * {@link ProviderConnectionMaterialization}.
+ * Open recipe reference that controls env/file/pre-run materialization.
+ * Operators may install recipes unknown to this build; Core therefore treats
+ * both identifiers as opaque, versionable tokens rather than a closed enum.
  */
-export const PROVIDER_CONNECTION_KINDS = [
-  "source_git_https_token",
-  "source_git_ssh_key",
-  "cloudflare_oauth",
-  "cloudflare_api_token",
-  "aws_assume_role",
-  "gcp_oauth_bootstrap",
-  "gcp_service_account_json",
-  "gcp_service_account_impersonation",
-  "static_secret",
-  "generic_env_provider",
-  "manual",
-] as const;
+export interface ProviderConnectionRecipeRef {
+  readonly id: string;
+  readonly authMode: string;
+  /**
+   * Opaque at-rest secret partition selected by the recipe/connection. Core
+   * persists this value and never derives a closed cloud family at open time.
+   */
+  readonly secretPartition?: string;
+  /** Resolved delivery names pinned when the connection is created. */
+  readonly envNames?: readonly string[];
+  readonly fileEnvNames?: readonly string[];
+  readonly requiredEnvGroups?: readonly (readonly string[])[];
+  /**
+   * Installed recipe capability allowing caller-declared env/file names. This
+   * is copied from the resolved recipe definition; callers cannot enable it by
+   * choosing a reserved recipe id.
+   */
+  readonly declaredEnv?: boolean;
+  /** Explicit pre-run driver token selected by the recipe, if any. */
+  readonly preRunAction?: string;
+}
 
-export type ProviderConnectionKind = (typeof PROVIDER_CONNECTION_KINDS)[number];
+/** True when the installed recipe permits caller-declared env/file names. */
+export function usesDeclaredEnvCredentialRecipe(
+  connection: Pick<ProviderConnection, "credentialRecipe">,
+): boolean {
+  return connection.credentialRecipe?.declaredEnv === true;
+}
 
-export const PROVIDER_CONNECTION_MATERIALIZATIONS = [
-  "oauth",
-  "secret",
-] as const;
-
-export type ProviderConnectionMaterialization =
-  (typeof PROVIDER_CONNECTION_MATERIALIZATIONS)[number];
+/** Opaque audit/UI label. CredentialRecipe is the sole execution authority. */
+export type ProviderConnectionMaterialization = string;
 
 export function isProviderConnectionMaterialization(
   value: unknown,
 ): value is ProviderConnectionMaterialization {
   return (
     typeof value === "string" &&
-    PROVIDER_CONNECTION_MATERIALIZATIONS.includes(
-      value as ProviderConnectionMaterialization,
-    )
+    value.trim() !== "" &&
+    !/\s/u.test(value) &&
+    value !== "gateway" &&
+    value !== "runner_token"
   );
 }
 
@@ -118,9 +111,6 @@ export function publicProviderConnectionStatus(
 }
 
 export interface ConnectionScopeHints {
-  readonly accountId?: string;
-  readonly zoneId?: string;
-  readonly workersSubdomain?: string;
   /**
    * Marks an operator-scoped Provider Connection as a public managed-provider
    * compatibility endpoint, not as a raw operator credential. Only rows with
@@ -140,43 +130,51 @@ export interface ConnectionScopeHints {
    * values always win. Credential-shaped fields are rejected by the vault.
    */
   readonly moduleInputDefaults?: Readonly<Record<string, JsonValue>>;
+  /**
+   * Opaque non-secret settings consumed only by the explicitly selected
+   * provider helper/runtime driver. Core validates JSON shape and secret-like
+   * keys but does not interpret a vendor schema.
+   */
+  readonly providerSettings?: Readonly<Record<string, JsonValue>>;
+  /**
+   * Opaque operator-owned profile that authorizes this row as a public managed
+   * Provider Connection. The same exact token is declared by the receiving
+   * platform extension and is used as the run-token audience. Core never
+   * derives it from a provider address, hostname, or `providerConfig` value.
+   */
   readonly managedProviderProfile?: string;
   /**
    * Public hostname namespace owned by this managed target. A hosted operator
    * may use a different namespace per environment without rewriting repository
-   * install metadata (for example app-staging.takos.jp in staging).
+   * install metadata (for example an operator-managed staging namespace).
    */
   readonly managedPublicBaseDomain?: string;
-  readonly cloudflareTokenVending?: CloudflareTokenVendingConfig;
-  readonly repoUrl?: string;
-  readonly username?: string;
-  readonly knownHostsEntry?: string;
-  readonly awsRoleArn?: string;
-  readonly awsExternalId?: string;
-  readonly awsRegion?: string;
-  readonly gcpServiceAccountEmail?: string;
-  readonly gcpProjectId?: string;
-  readonly templateId?: string;
 }
 
-export interface CloudflareTokenVendingConfig {
-  readonly policies: readonly CloudflareTokenPolicy[];
-  readonly ttlSeconds?: number;
-  readonly namePrefix?: string;
-  readonly condition?: Readonly<Record<string, JsonValue>>;
+/** Returns the explicit managed-provider profile, normalized for comparison. */
+export function managedProviderProfile(
+  scopeHints: ConnectionScopeHints | undefined,
+): string | undefined {
+  const profile = scopeHints?.managedProviderProfile;
+  return typeof profile === "string" && profile.trim().length > 0
+    ? profile.trim()
+    : undefined;
 }
 
-export interface CloudflareTokenPolicy {
-  readonly id?: string;
-  readonly effect: "allow" | "deny";
-  readonly permission_groups: readonly CloudflarePermissionGroup[];
-  readonly resources: Readonly<Record<string, JsonValue>>;
-}
-
-export interface CloudflarePermissionGroup {
-  readonly id: string;
-  readonly meta?: Readonly<Record<string, string>>;
-  readonly name?: string;
+/**
+ * Public managed capacity is opt-in service-side configuration. An opaque
+ * provider-block value such as `providerConfig.base_url` is never authority to
+ * expose an operator credential or let a pending row back a Workspace Run.
+ */
+export function isPublicManagedProviderConnection(
+  connection: Pick<ProviderConnection, "scope" | "workspaceId" | "scopeHints">,
+): boolean {
+  return (
+    connection.scope === "operator" &&
+    connection.workspaceId === undefined &&
+    connection.scopeHints?.managedProvider === true &&
+    managedProviderProfile(connection.scopeHints) !== undefined
+  );
 }
 
 /**
@@ -190,20 +188,28 @@ export interface CloudflarePermissionGroup {
  *
  *   - `status` is the operational vault state machine; the public read view maps
  *     it through {@link publicProviderConnectionStatus}.
- *   - `materialization` (oauth | secret) is stored at register time (folded from
- *     the former `ProviderEnv.materialization`); it labels OAuth-minted vs
- *     static-secret credentials and feeds the resolved-binding digest.
+ *   - `materialization` is an opaque inert audit/UI label. It never selects a
+ *     verifier, mint driver, admission path, env name, file, or pre-run action;
+ *     those semantics belong exclusively to `credentialRecipe`.
  *   - `envNames` is the credential's declared env-name set (the former
  *     `ProviderEnv.requiredEnvNames`).
  */
 export interface ProviderConnection {
   readonly id: string;
   readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
   readonly provider: string;
   readonly providerSource: string;
-  readonly kind?: ProviderConnectionKind;
+  /** Canonical credential materialization authority for provider connections. */
+  readonly credentialRecipe?: ProviderConnectionRecipeRef;
+  /**
+   * Resolved opaque at-rest partition persisted with any sealed credential
+   * material. New credential registrations require it; credentialless
+   * metadata connections may omit it. Vault open fails closed when absent and
+   * never derives a provider family at read time.
+   */
+  readonly secretPartition?: string;
+  /** Source-phase transport discriminator; absent for Provider Connections. */
+  readonly kind?: SourceGitConnectionKind;
   readonly scope: ConnectionScopeKind;
   readonly displayName?: string;
   readonly status: ConnectionStatus;
@@ -217,19 +223,14 @@ export interface ProviderConnection {
   readonly expiresAt?: string;
 }
 
-/** @deprecated migration-debt alias for the unified {@link ProviderConnection}. */
-export type Connection = ProviderConnection;
-
 export interface ListProviderConnectionsResponse {
   readonly providerConnections: readonly ProviderConnection[];
 }
 
 /**
  * Provider-address (or alias) -> Provider Connection mapping for one
- * Capsule. The single binding shape; replaces the former
- * `CapsuleProviderConnectionBinding` (connectionId) and
- * `CapsuleProviderEnvBinding` (envId) pair (they always pointed at the same
- * row, since `ProviderEnv.id == Connection.id`).
+ * Capsule. The binding points directly at the selected Provider Connection;
+ * no parallel resolver entity or alias identifier exists.
  */
 export interface ProviderBinding {
   readonly provider: string;
@@ -244,57 +245,27 @@ export type ProviderBindings = readonly ProviderBinding[];
 export interface ProviderBindingSet {
   readonly id: string;
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId: string;
   readonly capsuleId: string;
-  /** @deprecated Use capsuleId. */
-  readonly installationId: string;
   readonly environment: string;
   readonly bindings: ProviderBindings;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
-/** @deprecated migration-debt alias for {@link ProviderBinding}. */
-export type CapsuleProviderConnectionBinding = ProviderBinding;
-/** @deprecated migration-debt alias for {@link ProviderBindings}. */
-export type CapsuleProviderConnectionBindings = ProviderBindings;
-/** @deprecated migration-debt alias for {@link ProviderBindingSet}. */
-export type CapsuleProviderConnectionSet = ProviderBindingSet;
-/** @deprecated migration-debt alias for {@link ProviderBinding}. */
-export type CapsuleProviderEnvBinding = ProviderBinding;
-/** @deprecated migration-debt alias for {@link ProviderBindings}. */
-export type CapsuleProviderEnvBindings = ProviderBindings;
-/** @deprecated migration-debt alias for {@link ProviderBindingSet}. */
-export type CapsuleProviderEnvBindingSet = ProviderBindingSet;
-
-// --- transient deprecated `Installation*` binding aliases (pre-rename names) ---
-/** @deprecated use {@link CapsuleProviderConnectionBinding}. */
-export type InstallationProviderConnectionBinding = ProviderBinding;
-/** @deprecated use {@link CapsuleProviderConnectionBindings}. */
-export type InstallationProviderConnectionBindings = ProviderBindings;
-/** @deprecated use {@link CapsuleProviderConnectionSet}. */
-export type InstallationProviderConnectionSet = ProviderBindingSet;
-/** @deprecated use {@link CapsuleProviderEnvBinding}. */
-export type InstallationProviderEnvBinding = ProviderBinding;
-/** @deprecated use {@link CapsuleProviderEnvBindings}. */
-export type InstallationProviderEnvBindings = ProviderBindings;
-/** @deprecated use {@link CapsuleProviderEnvBindingSet}. */
-export type InstallationProviderEnvBindingSet = ProviderBindingSet;
-
 export interface CreateConnectionRequest {
   readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
   readonly provider: string;
-  readonly kind?: ProviderConnectionKind;
+  /** Explicit recipe/mode selected by a setup helper or generic create flow. */
+  readonly credentialRecipe?: ProviderConnectionRecipeRef;
+  /** Source-phase transport discriminator; Provider Connections use a recipe. */
+  readonly kind?: SourceGitConnectionKind;
   readonly displayName?: string;
   readonly scope?: ConnectionScopeKind;
   readonly scopeHints?: ConnectionScopeHints;
   readonly expiresAt?: string;
   /**
-   * Credential materialization label stored on the connection. Defaults to
-   * `secret`; the OAuth callback path supplies `oauth`.
+   * Opaque audit/UI label stored on the connection. Defaults to `secret` and
+   * has no execution or admission semantics.
    */
   readonly materialization?: ProviderConnectionMaterialization;
   readonly values: Readonly<Record<string, string>>;
@@ -308,10 +279,24 @@ export interface CreateConnectionFile {
   readonly envName?: string;
 }
 
+/**
+ * Provider-neutral input to an explicitly selected provider-owned setup
+ * helper. The helper returns a normal {@link CreateConnectionRequest}; helper
+ * metadata never becomes a second credential authority.
+ */
+export interface ConnectionSetupRequest {
+  readonly workspaceId?: string;
+  readonly provider?: string;
+  readonly displayName?: string;
+  readonly scope?: ConnectionScopeKind;
+  readonly scopeHints?: ConnectionScopeHints;
+  readonly expiresAt?: string;
+  readonly values: Readonly<Record<string, string>>;
+  readonly files?: readonly CreateConnectionFile[];
+}
+
 export interface ConnectionOAuthStartRequest {
   readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
   readonly displayName?: string;
   readonly scope?: ConnectionScopeKind;
   readonly scopeHints?: ConnectionScopeHints;
@@ -324,20 +309,6 @@ export interface ConnectionOAuthStartResponse {
   readonly authorizationUrl: string;
   readonly state: string;
   readonly expiresAt?: string;
-}
-
-export interface GcpImpersonationConnectionRequest {
-  readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
-  readonly displayName?: string;
-  readonly scope?: ConnectionScopeKind;
-  readonly scopeHints: ConnectionScopeHints & {
-    readonly gcpServiceAccountEmail: string;
-    readonly gcpProjectId: string;
-  };
-  readonly expiresAt?: string;
-  readonly values: Readonly<Record<string, string>>;
 }
 
 export interface ConnectionResponse {

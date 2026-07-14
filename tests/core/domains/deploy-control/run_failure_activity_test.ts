@@ -3,11 +3,11 @@
  * Activity).
  *
  * A plan / destroy_plan / apply / destroy_apply that reaches a `failed` terminal
- * state records a Space-scoped `run.failed` Activity event so the dashboard's
+ * state records a Workspace-scoped `run.failed` Activity event so the dashboard's
  * Activity view shows the failure (not only the per-run audit trail). The event
  * carries PUBLIC-SAFE metadata only: a compact error CODE (never the raw
  * diagnostic message), the run phase, the operation, and the targeted
- * Installation id.
+ * Capsule id.
  */
 
 import { expect, test } from "bun:test";
@@ -19,18 +19,22 @@ import type {
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   applyExpectedGuardFromPlanRun,
-  OpenTofuDeploymentController,
+  OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import type { ActivityRecorder, RecordActivityInput } from "../../../../core/domains/activity/mod.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import type {
+  ActivityRecorder,
+  RecordActivityInput,
+} from "../../../../core/domains/activity/mod.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
-  seedInstallationModel,
+  seedCapsuleModel,
   seedProviderConnections,
-  type SeedModelOptions,
+  type SeedCapsuleModelOptions,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 
 const PLAN_DIGEST =
@@ -97,59 +101,62 @@ function applyFailingRunner(
 
 async function seededFailureController(
   runner: OpenTofuRunner,
-  options: SeedModelOptions = {},
+  options: SeedCapsuleModelOptions = {},
 ): Promise<{
-  store: OpenTofuDeploymentStore;
-  controller: OpenTofuDeploymentController;
+  store: OpenTofuControlStore;
+  controller: OpenTofuController;
   events: RecordActivityInput[];
 }> {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const seeded = await seedInstallationModel(store, {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "ws_test001",
+    capsuleId: "cap_fixture1",
     environment: "preview",
     ...options,
   });
-  await seedProviderConnections(store, seeded.installation);
+  await seedProviderConnections(store, seeded.capsule);
   const { recorder, events } = recordingActivity();
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
     store,
     runner,
     vault: fakeProviderVault() as never,
     activity: recorder,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
   return { store, controller, events };
 }
 
-test("a failed plan records a Space run.failed Activity event with a compact error code", async () => {
+test("a failed plan records a Workspace run.failed Activity event with a compact error code", async () => {
   const { controller, events } = await seededFailureController(
     planFailingRunner("runner_crashed: plan blew up at provider init"),
   );
 
-  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
   expect(planRun.status).toEqual("failed");
 
   const failures = events.filter((e) => e.action === "run.failed");
   expect(failures).toHaveLength(1);
   const event = failures[0]!;
-  expect(event.spaceId).toEqual("space_test");
+  expect(event.workspaceId).toEqual("ws_test001");
   expect(event.targetType).toEqual("run");
   expect(event.targetId).toEqual(planRun.id);
   expect(event.runId).toEqual(planRun.id);
   expect(event.metadata.phase).toEqual("plan");
   expect(event.metadata.operation).toEqual("create");
-  expect(event.metadata.installationId).toEqual("inst_fixture");
+  expect(event.metadata.capsuleId).toEqual("cap_fixture1");
   // The compact CODE is surfaced; the raw diagnostic message is NOT.
-  expect(event.metadata.errorCode).toEqual("runner_crashed");
+  expect(event.metadata.errorCode).toEqual("plan_failed");
   expect(JSON.stringify(event.metadata)).not.toContain("blew up");
 });
 
-test("a failed apply records a Space run.failed Activity event tagged phase apply", async () => {
+test("a failed apply records a Workspace run.failed Activity event tagged phase apply", async () => {
   const { controller, events } = await seededFailureController(
     applyFailingRunner("apply_rejected: provider returned 500"),
   );
 
-  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
   expect(planRun.status).toEqual("succeeded");
 
   const { applyRun } = await controller.createApplyRun({
@@ -162,17 +169,17 @@ test("a failed apply records a Space run.failed Activity event tagged phase appl
   // Exactly one failure event (the apply), keyed to the apply run.
   expect(failures).toHaveLength(1);
   const event = failures[0]!;
-  expect(event.spaceId).toEqual("space_test");
+  expect(event.workspaceId).toEqual("ws_test001");
   expect(event.targetId).toEqual(applyRun.id);
   expect(event.runId).toEqual(applyRun.id);
   expect(event.metadata.phase).toEqual("apply");
-  expect(event.metadata.installationId).toEqual("inst_fixture");
-  expect(event.metadata.errorCode).toEqual("apply_rejected");
+  expect(event.metadata.capsuleId).toEqual("cap_fixture1");
+  expect(event.metadata.errorCode).toEqual("apply_failed");
 });
 
 test("a successful plan + apply records NO run.failed Activity event", async () => {
   // A plan that succeeds and an apply that returns a clean result must not emit
-  // any failure event onto the Space Activity ledger.
+  // any failure event onto the Workspace Activity ledger.
   const { controller, events } = await seededFailureController({
     plan: (_job: OpenTofuPlanJob) =>
       Promise.resolve({
@@ -190,7 +197,7 @@ test("a successful plan + apply records NO run.failed Activity event", async () 
     apply: (_job: OpenTofuApplyJob) => Promise.resolve({}),
   });
 
-  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
   expect(planRun.status).toEqual("succeeded");
   const { applyRun } = await controller.createApplyRun({
     planRunId: planRun.id,

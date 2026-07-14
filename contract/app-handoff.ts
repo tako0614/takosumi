@@ -1,7 +1,5 @@
 export const TAKOSUMI_APP_HANDOFF_PUBLIC_PATH = "/install" as const;
 export const TAKOSUMI_APP_HANDOFF_DASHBOARD_PATH = "/new" as const;
-export const TAKOSUMI_CLOUD_APP_HANDOFF_URL =
-  "https://app.takosumi.com/install" as const;
 
 export type TakosumiAppProductKey = string;
 
@@ -11,16 +9,15 @@ export interface TakosumiAppHandoff {
 }
 
 export interface CreateTakosumiAppHandoffUrlInput {
-  readonly baseUrl?: string;
+  /** Operator- or caller-owned install endpoint. Core never selects a host. */
+  readonly baseUrl: string;
   readonly product?: TakosumiAppProductKey;
   readonly returnUri?: string;
   readonly source?: string;
   readonly git?: string;
-  readonly installConfigId?: string;
   readonly ref?: string;
   readonly path?: string;
   readonly name?: string;
-  readonly vars?: Readonly<Record<string, string>>;
 }
 
 export interface CreateTakosumiAppConnectHrefInput {
@@ -70,14 +67,31 @@ export function appendTakosumiAppHandoff(
 export function createTakosumiAppHandoffUrl(
   input: CreateTakosumiAppHandoffUrlInput,
 ): string {
-  const url = new URL(input.baseUrl ?? TAKOSUMI_CLOUD_APP_HANDOFF_URL);
+  const url = new URL(input.baseUrl);
+  for (const key of [
+    "source",
+    "git",
+    "installConfigId",
+    "ref",
+    "path",
+    "name",
+    "product",
+    "return_uri",
+  ]) {
+    url.searchParams.delete(key);
+  }
+  for (const key of [...url.searchParams.keys()]) {
+    if (key.startsWith("var.") || key.startsWith("varjson.")) {
+      url.searchParams.delete(key);
+    }
+  }
   const source = safeQueryValue(input.source);
   const git = safeQueryValue(input.git);
-  const installConfigId = safeQueryValue(input.installConfigId);
-  if (!source && !git && !installConfigId) {
-    throw new Error(
-      "App handoff URL requires git, source, or installConfigId.",
-    );
+  if (source && git) {
+    throw new Error("App handoff URL requires exactly one of git or source.");
+  }
+  if (!source && !git) {
+    throw new Error("App handoff URL requires git or source.");
   }
 
   if (input.product || input.returnUri) {
@@ -93,21 +107,9 @@ export function createTakosumiAppHandoffUrl(
   }
   if (source) url.searchParams.set("source", source);
   if (!source && git) url.searchParams.set("git", git);
-  if (installConfigId) {
-    url.searchParams.set("installConfigId", installConfigId);
-  }
   if (input.ref != null) url.searchParams.set("ref", input.ref);
   if (input.path != null) url.searchParams.set("path", input.path);
   if (input.name) url.searchParams.set("name", input.name);
-  for (const [key, value] of Object.entries(input.vars ?? {}).sort()) {
-    if (!isTakosumiAppHandoffVariableName(key)) {
-      throw new Error(`App handoff variable name is invalid: ${key}`);
-    }
-    if (!isTakosumiAppHandoffVariableValue(value)) {
-      throw new Error(`App handoff variable value is invalid: ${key}`);
-    }
-    url.searchParams.set(`var.${key}`, value);
-  }
   return url.toString();
 }
 
@@ -202,18 +204,6 @@ export function takosumiAppProductLabel(product: string): string {
     .filter(Boolean)
     .map((part) => part[0]?.toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-export function isTakosumiAppHandoffVariableName(name: string): boolean {
-  const trimmed = name.trim();
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(trimmed)) return false;
-  return !/(secret|token|password|credential|private_?key|api_?key)/iu.test(
-    trimmed,
-  );
-}
-
-export function isTakosumiAppHandoffVariableValue(value: string): boolean {
-  return value.length <= 512 && !hasUnsafeBytes(value);
 }
 
 function parseBoundedString(value: unknown, maxLength: number): string | null {

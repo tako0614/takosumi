@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { InstallationLeaseBusyError } from "../../../../core/domains/deploy-control/installation_lease.ts";
+import { CapsuleLeaseBusyError } from "../../../../core/domains/deploy-control/capsule_lease.ts";
+import {
+  OpenTofuControllerError,
+  RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
+} from "../../../../core/domains/deploy-control/errors.ts";
 import { OpenTofuRunOwnerObject } from "../../../../worker/src/durable/OpenTofuRunOwnerObject.ts";
 import type { CloudflareWorkerEnv } from "../../../../worker/src/bindings.ts";
 
@@ -19,7 +23,7 @@ test("OpenTofu run owner stores identity only and schedules an alarm", async () 
         kind: "takosumi.opentofu-run-owner.start@v1",
         action: "plan",
         runId: "run_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         queueAttempt: 2,
         messageId: "msg_1",
         request: { token: "secret-that-must-not-persist" },
@@ -31,7 +35,7 @@ test("OpenTofu run owner stores identity only and schedules an alarm", async () 
   assert.equal(storage.alarmAt, Date.parse("2026-06-22T08:00:00.000Z"));
   const record = await storage.get<Record<string, unknown>>("run");
   assert.equal(record?.runId, "run_1");
-  assert.equal(record?.spaceId, "space_1");
+  assert.equal(record?.workspaceId, "space_1");
   assert.equal(record?.action, "plan");
   assert.equal(record?.queueAttempt, 2);
   assert.equal(record?.messageId, "msg_1");
@@ -61,7 +65,7 @@ test("OpenTofu run owner alarm dispatches once and records success", async () =>
   await owner.alarm();
 
   assert.deepEqual(calls, [
-    { action: "apply", runId: "run_1", spaceId: "space_1" },
+    { action: "apply", runId: "run_1", workspaceId: "space_1" },
   ]);
   const record = await storage.get<Record<string, unknown>>("run");
   assert.equal(record?.status, "succeeded");
@@ -107,7 +111,7 @@ test("OpenTofu run owner debug and drain expose operator-safe state", async () =
     record?: { status?: string; attempts?: number };
   };
   assert.deepEqual(calls, [
-    { action: "source_sync", runId: "run_1", spaceId: "space_1" },
+    { action: "source_sync", runId: "run_1", workspaceId: "space_1" },
   ]);
   assert.equal(drainBody.record?.status, "succeeded");
   assert.equal(drainBody.record?.attempts, 1);
@@ -133,7 +137,7 @@ test("OpenTofu run owner maps destroy queue work to apply dispatch", async () =>
   await owner.alarm();
 
   assert.deepEqual(calls, [
-    { action: "apply", runId: "run_1", spaceId: "space_1" },
+    { action: "apply", runId: "run_1", workspaceId: "space_1" },
   ]);
 });
 
@@ -154,15 +158,17 @@ test("OpenTofu run owner immediately reschedules controller-managed retries", as
               kind: "takosumi.opentofu-run-owner.start@v1",
               action: "apply",
               runId: "run_1",
-              spaceId: "space_1",
+              workspaceId: "space_1",
               cause: "controller_retry",
               messageId: "retry_msg_1",
             }),
           }),
         );
         assert.equal(response.status, 202);
-        throw new Error(
-          "retryable_runner_infrastructure_error: apply run run_1 requeued after runner reset",
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "retryable runner infrastructure error: apply run run_1 requeued",
+          { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
         );
       }
     },
@@ -269,7 +275,7 @@ test("OpenTofu run owner reschedules lease-busy work without burning attempts", 
       now: () => now,
       dispatch: () =>
         Promise.reject(
-          new InstallationLeaseBusyError("installation:inst_1:production"),
+          new CapsuleLeaseBusyError("capsule:inst_1:production"),
         ),
     },
   );
@@ -280,7 +286,7 @@ test("OpenTofu run owner reschedules lease-busy work without burning attempts", 
   const record = await storage.get<Record<string, unknown>>("run");
   assert.equal(record?.status, "scheduled");
   assert.equal(record?.attempts, 0);
-  assert.equal(record?.lastError, "installation lease busy");
+  assert.equal(record?.lastError, "Capsule lease busy");
   assert.equal(storage.alarmAt, now + 10_000);
 });
 
@@ -344,7 +350,7 @@ test("OpenTofu run owner marks source_sync retries exhausted after owner retry b
   }
 
   assert.deepEqual(marked, [
-    { action: "source_sync", runId: "run_1", spaceId: "space_1" },
+    { action: "source_sync", runId: "run_1", workspaceId: "space_1" },
   ]);
   const record = await storage.get<Record<string, unknown>>("run");
   assert.equal(record?.status, "failed");
@@ -360,7 +366,7 @@ test("OpenTofu run owner recovers stuck running records quickly", async () => {
     action: "apply",
     requestedAction: "destroy",
     runId: "run_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     status: "running",
     attempts: 1,
     maxAttempts: 3,
@@ -388,7 +394,7 @@ test("OpenTofu run owner accepts controller retry over a terminal owner record",
     action: "source_sync",
     requestedAction: "source_sync",
     runId: "run_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     status: "succeeded",
     attempts: 1,
     maxAttempts: 3,
@@ -418,7 +424,7 @@ test("OpenTofu run owner accepts controller retry over a terminal owner record",
         kind: "takosumi.opentofu-run-owner.start@v1",
         action: "source_sync",
         runId: "run_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         cause: "controller_retry",
         messageId: "retry_msg_1",
       }),
@@ -435,7 +441,7 @@ test("OpenTofu run owner accepts controller retry over a terminal owner record",
   await owner.alarm();
 
   assert.deepEqual(calls, [
-    { action: "source_sync", runId: "run_1", spaceId: "space_1" },
+    { action: "source_sync", runId: "run_1", workspaceId: "space_1" },
   ]);
   record = await storage.get<Record<string, unknown>>("run");
   assert.equal(record?.status, "succeeded");
@@ -452,7 +458,7 @@ test("OpenTofu run owner reschedules a terminal owner record when the ledger is 
     action: "apply",
     requestedAction: "apply",
     runId: "run_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     status: "succeeded",
     attempts: 1,
     maxAttempts: 3,
@@ -493,7 +499,7 @@ test("OpenTofu run owner reschedules a terminal owner record when the ledger is 
   await owner.alarm();
 
   assert.deepEqual(calls, [
-    { action: "apply", runId: "run_1", spaceId: "space_1" },
+    { action: "apply", runId: "run_1", workspaceId: "space_1" },
   ]);
   record = await storage.get<Record<string, unknown>>("run");
   assert.equal(record?.status, "succeeded");
@@ -513,7 +519,7 @@ test("OpenTofu run owner does not echo invalid request details", async () => {
         kind: "takosumi.opentofu-run-owner.start@v1",
         action: "backup",
         runId: "run_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         token: "secret-token-that-must-not-echo",
       }),
     }),
@@ -536,7 +542,7 @@ async function start(
         kind: "takosumi.opentofu-run-owner.start@v1",
         action,
         runId: "run_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
       }),
     }),
   );

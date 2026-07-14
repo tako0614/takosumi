@@ -17,6 +17,13 @@ export class MalformedJsonRequestError extends Error {
   }
 }
 
+export class RequestBodyTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super(`Request body exceeds ${maxBytes} bytes`);
+    this.name = "RequestBodyTooLargeError";
+  }
+}
+
 export function apiError(
   code: string,
   message: string,
@@ -61,6 +68,12 @@ export function apiExceptionResponse(c: Context, error: unknown): Response {
   if (error instanceof MalformedJsonRequestError) {
     return c.json(apiError("invalid_json", error.message, undefined, requestId), 400);
   }
+  if (error instanceof RequestBodyTooLargeError) {
+    return c.json(
+      apiError("payload_too_large", error.message, undefined, requestId),
+      413,
+    );
+  }
   if (error instanceof DomainError) {
     return c.json(
       apiError(error.code, error.message, error.details, requestId),
@@ -92,8 +105,23 @@ function httpStatusForDomainErrorCode(
 
 export async function readJsonObject(
   request: Request,
+  options: { readonly maxBytes?: number } = {},
 ): Promise<Record<string, unknown>> {
+  const contentLength = Number(request.headers.get("content-length"));
+  if (
+    options.maxBytes !== undefined &&
+    Number.isFinite(contentLength) &&
+    contentLength > options.maxBytes
+  ) {
+    throw new RequestBodyTooLargeError(options.maxBytes);
+  }
   const rawBody = await request.text();
+  if (
+    options.maxBytes !== undefined &&
+    new TextEncoder().encode(rawBody).byteLength > options.maxBytes
+  ) {
+    throw new RequestBodyTooLargeError(options.maxBytes);
+  }
   if (rawBody.trim() === "") return {};
   let value: unknown;
   try {

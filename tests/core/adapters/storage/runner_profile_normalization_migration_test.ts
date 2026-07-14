@@ -98,8 +98,8 @@ test("D1 normalizes current InstallConfig runner profiles without rewriting hist
     await db
       .prepare(
         `insert into install_configs (
-           id, space_id, install_type, trust_level, record_json, created_at, updated_at
-         ) values (?, null, 'opentofu_module', 'untrusted', ?, '', '')`,
+           id, space_id, record_json, created_at, updated_at
+         ) values (?, null, ?, '', '')`,
       )
       .bind(id, JSON.stringify({ id, runnerId }))
       .run();
@@ -107,10 +107,10 @@ test("D1 normalizes current InstallConfig runner profiles without rewriting hist
   await db
     .prepare(
       `insert into install_configs (
-         id, space_id, install_type, trust_level, record_json, created_at, updated_at
+         id, space_id, record_json, created_at, updated_at
        ) values
-         ('cfg_custom', null, 'opentofu_module', 'untrusted', ?, '', ''),
-         ('cfg_unset', null, 'opentofu_module', 'untrusted', ?, '', '')`,
+         ('cfg_custom', null, ?, '', ''),
+         ('cfg_unset', null, ?, '', '')`,
     )
     .bind(
       JSON.stringify({ id: "cfg_custom", runnerId: "private-network" }),

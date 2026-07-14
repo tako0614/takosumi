@@ -38,7 +38,7 @@ After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warni
 ## Smoke flow D — Takosumi upstream OAuth
 
 1. Navigate: `https://app.takosumi.test/sign-in`
-2. Expect: redirect to `https://oauth-mock.test/google/authorize?...` when Google is selected.
+2. Expect: redirect to `https://oauth-mock.test/local-oidc/authorize?...` when Local OIDC is selected.
 3. Complete the local mock backend flow.
 4. Expect: redirect back to `https://app.takosumi.test/sign-in/callback?code=...`
 5. Expect: the dashboard session is established.

@@ -9,59 +9,35 @@
  * the dashboard ships no WebAuthn client yet, and a control that can never
  * work reads as broken. It returns together with the client.
  */
-import { createEffect, createSignal, type JSX, onMount, Show } from "solid-js";
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  type JSX,
+  onMount,
+  Show,
+} from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
-import { Monitor, Moon, Sun } from "lucide-solid";
+import { LogIn, Monitor, Moon, Sun } from "lucide-solid";
+import type { TakosumiAccountsAuthProvider } from "@takosjp/takosumi-accounts-contract";
 import { installReturnContext } from "../../lib/install-return-context.ts";
+import {
+  loadPlatformContributions,
+  platformContributionsForSlot,
+} from "../../lib/platform-contributions.ts";
 import {
   setThemePreference,
   themePreference,
   type ThemePreference,
 } from "../../lib/theme.ts";
-import {
-  dashboardProductName,
-  isTakosumiCloudRuntime,
-} from "../../lib/deployment-brand.ts";
+import { dashboardProductName } from "../../lib/runtime-capabilities.ts";
 import type { MessageKey } from "../../i18n/index.ts";
 import { rpc } from "../account/lib/api.ts";
 import { refreshSession } from "../account/lib/session.ts";
 import LogoMark from "../account/components/brand/LogoMark.tsx";
 import { setDocumentTitle, t } from "../../i18n/index.ts";
 
-type Provider = "google";
-
-interface ProviderInfo {
-  id: Provider;
-  name: string;
-  icon: () => JSX.Element;
-}
-
-const PROVIDERS: ProviderInfo[] = [
-  {
-    id: "google",
-    name: "Google",
-    icon: () => (
-      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-        <path
-          fill="#4285f4"
-          d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.8h5.4c-.2 1.3-1 2.4-2 3.1v2.6h3.3c2-1.8 3-4.5 3-7.5z"
-        />
-        <path
-          fill="#34a853"
-          d="M12 22c2.7 0 5-.9 6.7-2.4l-3.3-2.6c-.9.6-2.1 1-3.4 1-2.6 0-4.9-1.8-5.7-4.2H3v2.6C4.7 19.7 8.1 22 12 22z"
-        />
-        <path
-          fill="#fbbc05"
-          d="M6.3 13.8c-.2-.6-.3-1.2-.3-1.8s.1-1.2.3-1.8V7.6H3C2.4 8.9 2 10.4 2 12s.4 3.1 1 4.4l3.3-2.6z"
-        />
-        <path
-          fill="#ea4335"
-          d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.9-2.9C16.9 2.9 14.7 2 12 2 8.1 2 4.7 4.3 3 7.6l3.3 2.6c.8-2.4 3.1-4.3 5.7-4.3z"
-        />
-      </svg>
-    ),
-  },
-];
+type Provider = string;
 
 const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
   system: "theme.system",
@@ -104,6 +80,11 @@ function clearAutoStartAttempt(): void {
 }
 
 export function SignInPanel() {
+  const [platformContributions] = createResource(loadPlatformContributions);
+  const termsContribution = () =>
+    platformContributionsForSlot(platformContributions(), "legal.terms")[0];
+  const privacyContribution = () =>
+    platformContributionsForSlot(platformContributions(), "legal.privacy")[0];
   const [params] = useSearchParams<{
     return?: string;
     return_to?: string;
@@ -111,7 +92,9 @@ export function SignInPanel() {
   }>();
   // Start all-disabled and flip on by operator config: failing closed means we
   // never briefly render an enabled button that the backend would 503.
-  const [enabled, setEnabled] = createSignal<Record<string, boolean>>({});
+  const [providers, setProviders] = createSignal<
+    readonly TakosumiAccountsAuthProvider[]
+  >([]);
   const [providersLoaded, setProvidersLoaded] = createSignal(false);
   const [providersLoadFailed, setProvidersLoadFailed] = createSignal(false);
   const [autoStarted, setAutoStarted] = createSignal(false);
@@ -119,15 +102,11 @@ export function SignInPanel() {
   const loadProviders = () => {
     setProvidersLoaded(false);
     setProvidersLoadFailed(false);
-    setEnabled({});
+    setProviders([]);
     void rpc.auth
       .listProviders()
       .then((res) => {
-        const map: Record<string, boolean> = {};
-        for (const provider of res.providers) {
-          map[provider.id] = provider.enabled;
-        }
-        setEnabled(map);
+        setProviders(res.providers.filter(isDashboardOAuthProvider));
         setProvidersLoaded(true);
       })
       .catch(() => {
@@ -140,11 +119,12 @@ export function SignInPanel() {
 
   onMount(loadProviders);
 
-  const isEnabled = (p: Provider): boolean => enabled()[p] === true;
-  const enabledProviders = (): readonly Provider[] =>
-    PROVIDERS.filter((p) => isEnabled(p.id)).map((p) => p.id);
+  const isEnabled = (p: Provider): boolean =>
+    providers().some((provider) => provider.id === p && provider.enabled);
+  const enabledProviders = (): readonly TakosumiAccountsAuthProvider[] =>
+    providers().filter((provider) => provider.enabled);
   const hasEnabledProvider = (): boolean =>
-    PROVIDERS.some((p) => isEnabled(p.id));
+    providers().some((provider) => provider.enabled);
   const providerSubText = (p: Provider): string | undefined => {
     if (!providersLoaded()) return t("auth.providerChecking");
     if (providersLoadFailed()) return t("auth.providerRetryNeeded");
@@ -156,7 +136,6 @@ export function SignInPanel() {
     rpc.auth.startUpstreamOAuth(p);
   };
   const shouldAutoStart = (): boolean => {
-    if (!isTakosumiCloudRuntime()) return false;
     if (params.manual === "1") return false;
     // A prior auto-start this browser session that never landed us signed in
     // (OAuth failure, or a session cookie that didn't persist so AuthGuard
@@ -164,15 +143,16 @@ export function SignInPanel() {
     // redirect loop. Fall back to the manual provider buttons instead.
     if (autoStartAlreadyAttempted()) return false;
     if (!providersLoaded() || providersLoadFailed()) return false;
-    const ids = enabledProviders();
-    return ids.length === 1 && ids[0] === "google";
+    return enabledProviders().length === 1;
   };
 
   createEffect(() => {
     if (autoStarted() || !shouldAutoStart()) return;
+    const provider = enabledProviders()[0];
+    if (!provider) return;
     setAutoStarted(true);
     markAutoStartAttempted();
-    select("google");
+    select(provider.id);
   });
 
   const returnParam = () => params.return || params.return_to;
@@ -202,15 +182,8 @@ export function SignInPanel() {
 
   return (
     <div class="sign-in-panel">
-      <h1 class="sign-in-title">
-        {t(isTakosumiCloudRuntime() ? "auth.signInCloud" : "auth.signIn")}
-      </h1>
-      <p class="sign-in-sub">
-        {t(isTakosumiCloudRuntime() ? "auth.signInSubCloud" : "auth.signInSub")}
-      </p>
-      <Show when={isTakosumiCloudRuntime()}>
-        <p class="sign-in-preview-note">{t("auth.signInCloudPreview")}</p>
-      </Show>
+      <h1 class="sign-in-title">{dashboardProductName()}</h1>
+      <p class="sign-in-sub">{t("auth.signInSub")}</p>
       <Show when={pendingInstall()}>
         <div
           class="sign-in-return-context"
@@ -226,7 +199,7 @@ export function SignInPanel() {
         </div>
       </Show>
       <div class="sign-in-buttons">
-        {PROVIDERS.map((p) => (
+        {providers().map((p) => (
           <button
             type="button"
             class="sign-in-btn"
@@ -234,10 +207,14 @@ export function SignInPanel() {
             disabled={!isEnabled(p.id)}
             onClick={() => select(p.id)}
           >
-            <span class="sign-in-icon">{p.icon()}</span>
+            <span class="sign-in-icon">
+              <LogIn size={20} aria-hidden="true" />
+            </span>
             <span class="sign-in-text">
               <span class="sign-in-label">
-                {t("auth.continueWith", { provider: p.name })}
+                {t("auth.continueWith", {
+                  provider: p.label?.trim() || t("auth.singleSignOn"),
+                })}
               </span>
               <Show when={providerSubText(p.id)}>
                 {(subText) => <span class="sign-in-sub-text">{subText()}</span>}
@@ -297,16 +274,16 @@ export function SignInPanel() {
           </button>
         </div>
       </Show>
-      <Show when={isTakosumiCloudRuntime()}>
+      <Show when={termsContribution() && privacyContribution()}>
         <p class="sign-in-terms">
           {/* No hardcoded space between fragments: JA joins without one and
               the EN values carry their own spacing. */}
           {t("auth.termsPrefix")}
-          <a href="/legal/terms-of-service" class="link">
+          <a href={termsContribution()?.href} class="link">
             {t("auth.termsOfService")}
           </a>
           {t("auth.and")}
-          <a href="/legal/privacy-policy" class="link">
+          <a href={privacyContribution()?.href} class="link">
             {t("auth.privacyPolicy")}
           </a>
           {t("auth.termsSuffix")}
@@ -352,12 +329,7 @@ export default function SignInView() {
       <div class="auth-flow">
         <a href="/" class="auth-brand">
           <BrandLogoMark />
-          <span class="auth-brand-text">
-            {dashboardProductName()}
-            <Show when={isTakosumiCloudRuntime()}>
-              <span class="auth-brand-sub">Cloud</span>
-            </Show>
-          </span>
+          <span class="auth-brand-text">{dashboardProductName()}</span>
         </a>
         <SignInPanel />
         <ThemeSwitcher />
@@ -395,9 +367,7 @@ export function SignInCallbackView() {
     // from sessionStorage (stashed by startUpstreamOAuth) and fall back to the
     // URL only if the SPA initiated the flow via a deep link.
     const provider =
-      (params.provider as Provider | undefined) ??
-      rpc.auth.recallOAuthProvider() ??
-      undefined;
+      params.provider ?? rpc.auth.recallOAuthProvider() ?? undefined;
     if (typeof code !== "string" || typeof state !== "string" || !provider) {
       setError(t("auth.retryableCallbackFailure"));
       return;
@@ -460,4 +430,10 @@ export function SignInCallbackView() {
 
 export function requiresDocumentNavigation(returnTo: string): boolean {
   return returnTo === "/oauth" || returnTo.startsWith("/oauth/");
+}
+
+function isDashboardOAuthProvider(
+  provider: TakosumiAccountsAuthProvider,
+): boolean {
+  return provider.protocol.trim().toLowerCase() !== "webauthn";
 }

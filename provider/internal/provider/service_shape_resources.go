@@ -328,7 +328,7 @@ func NewSQLDatabaseResource() resource.Resource {
 	return &serviceShapeResource{cfg: serviceShapeConfig{
 		typeSuffix:  "sql_database",
 		kind:        client.KindSQLDatabase,
-		description: "Provider-neutral SQL database shape. Use sqlite for D1-like serverless SQL, or postgres/mysql when an operator target advertises those capabilities.",
+		description: "Provider-neutral SQL database shape. Engine is an open capability token and requires explicit operator Target support.",
 		spec:        specSQLDatabase,
 	}}
 }
@@ -374,8 +374,8 @@ func (r *serviceShapeResource) Schema(_ context.Context, _ resource.SchemaReques
 	case specSQLDatabase:
 		attrs["engine"] = schema.StringAttribute{
 			Optional:    true,
-			Description: "Optional SQL engine token: sqlite, postgres, or mysql.",
-			Validators:  []validator.String{StringOneOf("sqlite", "postgres", "mysql")},
+			Description: "Optional open SQL engine capability token. Defaults to sqlite; the selected Target implementation must advertise it.",
+			Validators:  []validator.String{StringToken()},
 		}
 		attrs["migrations_path"] = schema.StringAttribute{
 			Optional:    true,
@@ -503,7 +503,7 @@ func (r *serviceShapeResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 	readSpace := effectiveSpace(state.Space, r.data.defaultSpace)
-	res, err := r.data.client.GetResource(ctx, r.cfg.kind, state.Name.ValueString(), readSpace)
+	res, err := r.data.client.ObserveResource(ctx, r.cfg.kind, state.Name.ValueString(), readSpace)
 	if err != nil {
 		if errors.Is(err, client.ErrNotFound) {
 			resp.State.RemoveResource(ctx)

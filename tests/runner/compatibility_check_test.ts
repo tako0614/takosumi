@@ -19,6 +19,11 @@ import {
 import type { RunWorkspace } from "../../runner/lib/types.ts";
 
 const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
+const RESTORED_GIT_SOURCE = {
+  kind: "git",
+  url: "https://git.example.com/example/capsule.git",
+  commit: "0123456789abcdef0123456789abcdef01234567",
+} as const;
 
 function testWorkspace(root: string): RunWorkspace {
   return {
@@ -29,7 +34,7 @@ function testWorkspace(root: string): RunWorkspace {
     restoredStatePath: join(root, "terraform.tfstate"),
     moduleInfoPath: join(root, "module-info.json"),
     generatedRootDir: join(root, "generated-root"),
-    templateModuleDir: join(root, "generated-root", "template-module"),
+    childModuleDir: join(root, "generated-root", "module"),
     artifactDir: join(root, "artifact"),
     depsDir: join(root, "deps"),
   };
@@ -362,14 +367,12 @@ test("backup action runs custom_command in the restored source and returns artif
   }
 });
 
-test("backup action reports provider_snapshot unsupported without adapter command", async () => {
+test("backup action does not invent a provider-specific snapshot without an explicit adapter", async () => {
   const runId = `provider_snapshot_unsupported_${crypto.randomUUID().replace(/-/g, "")}`;
-  const previous = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-  const previousPointerDir = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
+  const previous = Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON;
   const root = join(RUN_ROOT, runId);
   try {
-    delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-    delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
+    delete Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON;
 
     const response = await handleRunnerRequest(
       new Request(`https://runner/runs/${runId}`, {
@@ -383,6 +386,7 @@ test("backup action reports provider_snapshot unsupported without adapter comman
             backup: {
               mode: "provider_snapshot",
               outputPath: "provider.snapshot",
+              adapterId: "cloud-provider-snapshot",
             },
           },
         }),
@@ -398,160 +402,24 @@ test("backup action reports provider_snapshot unsupported without adapter comman
       exitCode: 0,
     });
     expect(String((body as Record<string, unknown>).reason)).toContain(
-      "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND",
+      "cloud-provider-snapshot",
     );
   } finally {
-    if (previous === undefined)
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-    else Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND = previous;
-    if (previousPointerDir === undefined) {
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-    } else {
-      Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR = previousPointerDir;
-    }
+    if (previous === undefined) delete Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON;
+    else Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON = previous;
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("backup action has a built-in Cloudflare provider_snapshot adapter", async () => {
-  const runId = `provider_snapshot_cloudflare_builtin_${crypto.randomUUID().replace(/-/g, "")}`;
-  const previousGeneric = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-  const scopedEnv =
-    "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND_REGISTRY_OPENTOFU_ORG_CLOUDFLARE_CLOUDFLARE";
-  const previousScoped = Bun.env[scopedEnv];
-  const previousPointerDir = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-  const root = join(RUN_ROOT, runId);
-  try {
-    delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-    delete Bun.env[scopedEnv];
-    delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-
-    const response = await handleRunnerRequest(
-      new Request(`https://runner/runs/${runId}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          kind: "takosumi.opentofu-run@v1",
-          action: "backup",
-          runId,
-          request: {
-            backup: {
-              mode: "provider_snapshot",
-              outputPath: "provider.snapshot",
-              provider: "registry.opentofu.org/cloudflare/cloudflare",
-            },
-          },
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as Record<string, unknown>;
-    expect(body).toMatchObject({
-      runId,
-      action: "backup",
-      status: "succeeded",
-      exitCode: 0,
-      outputPath: "provider.snapshot",
-      artifact: {
-        digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-        contentType: "application/json",
-        metadata: {
-          provider: "registry.opentofu.org/cloudflare/cloudflare",
-          adapter: "takosumi-built-in-provider-snapshot",
-          adapterKind: "cloudflare-provider-snapshot",
-        },
-      },
-    });
-    const artifact = (body.artifact ?? {}) as Record<string, unknown>;
-    expect(String(artifact.ref)).toMatch(
-      new RegExp(`^runner-local://${runId}/artifact/.+\\.snapshot\\.json$`),
-    );
-  } finally {
-    if (previousGeneric === undefined)
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-    else Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND = previousGeneric;
-    if (previousScoped === undefined) delete Bun.env[scopedEnv];
-    else Bun.env[scopedEnv] = previousScoped;
-    if (previousPointerDir === undefined) {
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-    } else {
-      Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR = previousPointerDir;
-    }
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("backup action has a built-in AWS provider_snapshot adapter", async () => {
-  const runId = `provider_snapshot_aws_builtin_${crypto.randomUUID().replace(/-/g, "")}`;
-  const previousGeneric = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-  const scopedEnv =
-    "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND_REGISTRY_OPENTOFU_ORG_HASHICORP_AWS";
-  const previousScoped = Bun.env[scopedEnv];
-  const previousPointerDir = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-  const root = join(RUN_ROOT, runId);
-  try {
-    delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-    delete Bun.env[scopedEnv];
-    delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-
-    const response = await handleRunnerRequest(
-      new Request(`https://runner/runs/${runId}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          kind: "takosumi.opentofu-run@v1",
-          action: "backup",
-          runId,
-          request: {
-            backup: {
-              mode: "provider_snapshot",
-              outputPath: "provider.snapshot",
-              provider: "aws",
-            },
-          },
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body).toMatchObject({
-      runId,
-      action: "backup",
-      status: "succeeded",
-      exitCode: 0,
-      artifact: {
-        metadata: {
-          provider: "registry.opentofu.org/hashicorp/aws",
-          adapterKind: "aws-provider-snapshot",
-        },
-      },
-    });
-  } finally {
-    if (previousGeneric === undefined)
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-    else Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND = previousGeneric;
-    if (previousScoped === undefined) delete Bun.env[scopedEnv];
-    else Bun.env[scopedEnv] = previousScoped;
-    if (previousPointerDir === undefined) {
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-    } else {
-      Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR = previousPointerDir;
-    }
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("backup action uses built-in provider_snapshot pointer directory", async () => {
+test("backup action uses an explicit provider_snapshot artifact pointer directory", async () => {
   const runId = `provider_snapshot_builtin_${crypto.randomUUID().replace(/-/g, "")}`;
-  const previous = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-  const previousPointerDir = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
+  const previous = Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON;
   const root = join(RUN_ROOT, runId);
   const pointerDir = join(root, "provider-snapshots");
   try {
-    delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-    Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR = pointerDir;
+    Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON = JSON.stringify({
+      "pointer-export": { kind: "pointer", directory: pointerDir },
+    });
     await mkdir(pointerDir, { recursive: true });
     await writeFile(
       join(pointerDir, "provider.snapshot.json"),
@@ -575,6 +443,7 @@ test("backup action uses built-in provider_snapshot pointer directory", async ()
             backup: {
               mode: "provider_snapshot",
               outputPath: "provider.snapshot",
+              adapterId: "pointer-export",
             },
           },
         }),
@@ -597,107 +466,27 @@ test("backup action uses built-in provider_snapshot pointer directory", async ()
       },
     });
   } finally {
-    if (previous === undefined)
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-    else Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND = previous;
-    if (previousPointerDir === undefined) {
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-    } else {
-      Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR = previousPointerDir;
-    }
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("backup action prefers provider-scoped built-in provider_snapshot pointers", async () => {
-  const runId = `provider_snapshot_scoped_${crypto.randomUUID().replace(/-/g, "")}`;
-  const previous = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-  const previousPointerDir = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-  const root = join(RUN_ROOT, runId);
-  const pointerDir = join(root, "provider-snapshots");
-  const providerDir = join(
-    pointerDir,
-    "registry.opentofu.org_cloudflare_cloudflare",
-  );
-  try {
-    delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-    Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR = pointerDir;
-    await mkdir(pointerDir, { recursive: true });
-    await mkdir(providerDir, { recursive: true });
-    await writeFile(
-      join(pointerDir, "provider.snapshot.json"),
-      JSON.stringify({
-        ref: "r2://service-data/provider/legacy-snapshot.json.enc",
-        digest: `sha256:${"d".repeat(64)}`,
-        sizeBytes: 111,
-      }),
-    );
-    await writeFile(
-      join(providerDir, "provider.snapshot.json"),
-      JSON.stringify({
-        ref: "r2://service-data/provider/cloudflare-snapshot.json.enc",
-        digest: `sha256:${"e".repeat(64)}`,
-        sizeBytes: 222,
-        metadata: { provider: "registry.opentofu.org/cloudflare/cloudflare" },
-      }),
-    );
-
-    const response = await handleRunnerRequest(
-      new Request(`https://runner/runs/${runId}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          kind: "takosumi.opentofu-run@v1",
-          action: "backup",
-          runId,
-          request: {
-            backup: {
-              mode: "provider_snapshot",
-              outputPath: "provider.snapshot",
-              provider: "registry.opentofu.org/cloudflare/cloudflare",
-            },
-          },
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body).toMatchObject({
-      runId,
-      action: "backup",
-      status: "succeeded",
-      outputPath: "provider.snapshot",
-      artifact: {
-        ref: "r2://service-data/provider/cloudflare-snapshot.json.enc",
-        digest: `sha256:${"e".repeat(64)}`,
-        sizeBytes: 222,
-      },
-    });
-  } finally {
-    if (previous === undefined)
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-    else Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND = previous;
-    if (previousPointerDir === undefined) {
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-    } else {
-      Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR = previousPointerDir;
-    }
+    if (previous === undefined) delete Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON;
+    else Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON = previous;
     await rm(root, { recursive: true, force: true });
   }
 });
 
 test("backup action runs provider_snapshot adapter without restored source", async () => {
   const runId = `provider_snapshot_${crypto.randomUUID().replace(/-/g, "")}`;
-  const previous = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
+  const previous = Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON;
   const root = join(RUN_ROOT, runId);
   try {
     await rm(root, { recursive: true, force: true });
-    Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND =
+    const command =
       `test "$TAKOSUMI_BACKUP_MODE" = provider_snapshot && ` +
+      `test "$TAKOSUMI_BACKUP_ADAPTER_ID" = snapshot-command && ` +
       `test "$TAKOSUMI_BACKUP_OUTPUT_PATH" = provider.snapshot && ` +
       `test "$TAKOSUMI_RUN_ID" = ${runId} && ` +
       `printf '%s\\n' '{"ref":"r2://service-data/provider/provider.tar.zst.enc","digest":"sha256:${"b".repeat(64)}","sizeBytes":456}'`;
+    Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON = JSON.stringify({
+      "snapshot-command": { kind: "command", command },
+    });
 
     const response = await handleRunnerRequest(
       new Request(`https://runner/runs/${runId}`, {
@@ -711,6 +500,7 @@ test("backup action runs provider_snapshot adapter without restored source", asy
             backup: {
               mode: "provider_snapshot",
               outputPath: "provider.snapshot",
+              adapterId: "snapshot-command",
             },
           },
         }),
@@ -732,32 +522,28 @@ test("backup action runs provider_snapshot adapter without restored source", asy
       },
     });
   } finally {
-    if (previous === undefined)
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
-    else Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND = previous;
+    if (previous === undefined) delete Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON;
+    else Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON = previous;
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("backup action prefers provider-scoped provider_snapshot adapter command", async () => {
+test("backup action selects only the exact provider_snapshot adapter id", async () => {
   const runId = `provider_snapshot_command_scoped_${crypto.randomUUID().replace(/-/g, "")}`;
-  const genericEnv = "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND";
-  const scopedEnv =
-    "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND_REGISTRY_OPENTOFU_ORG_CLOUDFLARE_CLOUDFLARE";
-  const previousGeneric = Bun.env[genericEnv];
-  const previousScoped = Bun.env[scopedEnv];
-  const previousPointerDir = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
+  const previous = Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON;
   const root = join(RUN_ROOT, runId);
   try {
     await rm(root, { recursive: true, force: true });
-    delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-    Bun.env[genericEnv] = "exit 27";
-    Bun.env[scopedEnv] =
+    const command =
       `test "$TAKOSUMI_BACKUP_MODE" = provider_snapshot && ` +
+      `test "$TAKOSUMI_BACKUP_ADAPTER_ID" = selected-adapter && ` +
       `test "$TAKOSUMI_BACKUP_OUTPUT_PATH" = provider.snapshot && ` +
-      `test "$TAKOSUMI_BACKUP_PROVIDER" = registry.opentofu.org/cloudflare/cloudflare && ` +
       `test "$TAKOSUMI_RUN_ID" = ${runId} && ` +
       `printf '%s\\n' '{"ref":"r2://service-data/provider/cloudflare-native.json.enc","digest":"sha256:${"f".repeat(64)}","sizeBytes":654}'`;
+    Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON = JSON.stringify({
+      "other-adapter": { kind: "command", command: "exit 27" },
+      "selected-adapter": { kind: "command", command },
+    });
 
     const response = await handleRunnerRequest(
       new Request(`https://runner/runs/${runId}`, {
@@ -771,7 +557,7 @@ test("backup action prefers provider-scoped provider_snapshot adapter command", 
             backup: {
               mode: "provider_snapshot",
               outputPath: "provider.snapshot",
-              provider: "registry.opentofu.org/cloudflare/cloudflare",
+              adapterId: "selected-adapter",
             },
           },
         }),
@@ -793,15 +579,8 @@ test("backup action prefers provider-scoped provider_snapshot adapter command", 
       },
     });
   } finally {
-    if (previousGeneric === undefined) delete Bun.env[genericEnv];
-    else Bun.env[genericEnv] = previousGeneric;
-    if (previousScoped === undefined) delete Bun.env[scopedEnv];
-    else Bun.env[scopedEnv] = previousScoped;
-    if (previousPointerDir === undefined) {
-      delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
-    } else {
-      Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR = previousPointerDir;
-    }
+    if (previous === undefined) delete Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON;
+    else Bun.env.TAKOSUMI_BACKUP_ADAPTERS_JSON = previous;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -809,7 +588,7 @@ test("backup action prefers provider-scoped provider_snapshot adapter command", 
 test("plan with mirror-required policy forces tofu init through a strict filesystem mirror config", async () => {
   const runId = `mirror_test_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, runId);
-  const sourceRoot = await mkdtemp(join(tmpdir(), "takosumi-source-"));
+  const sourceRoot = join(root, "source");
   const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-bin-"));
   const mirrorRoot = await mkdtemp(join(tmpdir(), "takosumi-mirror-"));
   const providerPath = join(
@@ -832,6 +611,7 @@ test("plan with mirror-required policy forces tofu init through a strict filesys
   const providerCache = join(root, "provider-cache");
   try {
     await mkdir(providerPath, { recursive: true });
+    await mkdir(sourceRoot, { recursive: true });
     await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
     const tofuPath = join(fakeBin, "tofu");
     await writeFile(
@@ -888,21 +668,20 @@ esac
             planRun: {
               id: "plan_mirror",
               operation: "create",
-              source: { kind: "local", path: sourceRoot },
+              source: RESTORED_GIT_SOURCE,
               requiredProviders: [
                 "registry.opentofu.org/cloudflare/cloudflare",
               ],
             },
             providerInstallationPolicy: { requireMirror: true },
             runnerProfile: {
-              sourcePolicy: { allowLocalSource: true },
               allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
             },
             generatedRoot: {
               files: {
                 "main.tf": [
-                  'module "app" {',
-                  '  source = "./template-module"',
+                  'module "child" {',
+                  '  source = "./module"',
                   "}",
                   "",
                 ].join("\n"),
@@ -968,7 +747,6 @@ esac
       Bun.env.OPENTOFU_PROVIDER_MIRROR = previousMirror;
     }
     await rm(root, { recursive: true, force: true });
-    await rm(sourceRoot, { recursive: true, force: true });
     await rm(fakeBin, { recursive: true, force: true });
     await rm(mirrorRoot, { recursive: true, force: true });
   }
@@ -1067,6 +845,7 @@ test("generated-root destroy plan restores uploaded state before tofu plan", asy
   );
   try {
     await mkdir(sourceRoot, { recursive: true });
+    await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
     const putState = await handleRunnerRequest(
       new Request(`https://runner/runs/${runId}/artifacts/tfstate`, {
         method: "PUT",
@@ -1130,23 +909,21 @@ esac
             planRun: {
               id: runId,
               operation: "destroy",
-              source: { kind: "local", path: sourceRoot },
+              source: RESTORED_GIT_SOURCE,
               requiredProviders: [],
             },
             runnerProfile: {
-              sourcePolicy: { allowLocalSource: true },
               allowedProviders: [],
             },
             generatedRoot: {
               files: {
                 "main.tf": [
-                  'module "app" {',
-                  '  source = "./template-module"',
+                  'module "child" {',
+                  '  source = "./module"',
                   "}",
                   "",
                 ].join("\n"),
               },
-              moduleFiles: [{ path: "main.tf", text: "terraform {}\n" }],
             },
             variables: {},
           },
@@ -1175,6 +952,101 @@ esac
   }
 });
 
+test("generated-root refresh plan passes -refresh-only without destroy semantics", async () => {
+  const runId = `plan_refresh_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, runId);
+  const sourceRoot = join(root, "source");
+  const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-plan-refresh-bin-"));
+  const previousPath = Bun.env.PATH;
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
+    const tofuPath = join(fakeBin, "tofu");
+    await writeFile(
+      tofuPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  init)
+    echo "init"
+    ;;
+  plan)
+    found_refresh=0
+    found_destroy=0
+    out=""
+    previous=""
+    for arg in "$@"; do
+      if [ "$arg" = "-refresh-only" ]; then found_refresh=1; fi
+      if [ "$arg" = "-destroy" ]; then found_destroy=1; fi
+      if [ "$previous" = "-out" ]; then out="$arg"; fi
+      previous="$arg"
+    done
+    test "$found_refresh" = "1" || { echo "missing -refresh-only" >&2; exit 11; }
+    test "$found_destroy" = "0" || { echo "unexpected -destroy" >&2; exit 12; }
+    test -n "$out"
+    printf 'fake-refresh-plan' > "$out"
+    ;;
+  show)
+    printf '{"format_version":"1.2","resource_changes":[{"address":"null_resource.example","type":"null_resource","change":{"actions":["update"]}}]}'
+    ;;
+  *)
+    echo "unexpected tofu command: $*" >&2
+    exit 2
+    ;;
+esac
+`,
+    );
+    await chmod(tofuPath, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+
+    const response = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "plan",
+          runId,
+          request: {
+            planRun: {
+              id: runId,
+              operation: "update",
+              refreshOnly: true,
+              source: RESTORED_GIT_SOURCE,
+              requiredProviders: [],
+            },
+            runnerProfile: { allowedProviders: [] },
+            generatedRoot: {
+              files: {
+                "main.tf": [
+                  'module "child" {',
+                  '  source = "./module"',
+                  "}",
+                  "",
+                ].join("\n"),
+              },
+            },
+            variables: {},
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      readonly status?: string;
+      readonly summary?: { readonly change?: number };
+    };
+    expect(body.status).toBe("succeeded");
+    expect(body.summary?.change).toBe(1);
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
 test("generated-root apply falls back to terraform.tfstate outputs when tofu output is empty", async () => {
   const runId = `apply_outputs_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, runId);
@@ -1185,6 +1057,7 @@ test("generated-root apply falls back to terraform.tfstate outputs when tofu out
   const planDigest = await digestBytes(planBytes);
   try {
     await mkdir(sourceRoot, { recursive: true });
+    await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
     const putPlan = await handleRunnerRequest(
       new Request(`https://runner/runs/${runId}/artifacts/tfplan`, {
         method: "PUT",
@@ -1233,7 +1106,7 @@ esac
           request: {
             planRun: {
               id: runId,
-              source: { kind: "local", path: sourceRoot },
+              source: RESTORED_GIT_SOURCE,
               requiredProviders: [],
             },
             planArtifact: {
@@ -1242,24 +1115,22 @@ esac
               digest: planDigest,
             },
             runnerProfile: {
-              sourcePolicy: { allowLocalSource: true },
               allowedProviders: [],
             },
             generatedRoot: {
               files: {
                 "main.tf": [
-                  'module "app" {',
-                  '  source = "./template-module"',
+                  'module "child" {',
+                  '  source = "./module"',
                   "}",
                   "",
                 ].join("\n"),
                 "outputs.tf": [
-                  'output "worker_name" { value = module.app.worker_name }',
-                  'output "url" { value = module.app.url }',
+                  'output "worker_name" { value = module.child.worker_name }',
+                  'output "url" { value = module.child.url }',
                   "",
                 ].join("\n"),
               },
-              moduleFiles: [{ path: "main.tf", text: "terraform {}\n" }],
             },
             variables: {},
           },

@@ -1,12 +1,27 @@
 import { expect, test } from "bun:test";
 import {
   createMobileApiClient,
-  MOBILE_PUSH_REGISTRATION_PATH,
-  registerMobilePushWithHost,
-  resolveMobilePushRegistrationEndpoint,
-  unregisterMobilePushWithHost,
+  MobileApiError,
+  NOTIFICATION_PUSHER_REGISTRATION_PATH,
+  registerNotificationPusherWithHost,
+  resolveNotificationPusherEndpoint,
+  unregisterNotificationPusherWithHost,
   type MobileSession,
+  type NotificationPusher,
 } from "../../../mobile-kit/src/index.ts";
+
+const pusher = {
+  kind: "http",
+  app_id: "jp.example.mobile",
+  app_display_name: "Example",
+  pushkey: "push-token",
+  data: {
+    url: "https://push.example/_matrix/push/v1/notify",
+    format: "event_id_only",
+    provider: "fcm",
+    environment: "production",
+  },
+} satisfies NotificationPusher;
 
 test("createMobileApiClient sends bearer auth to host API", async () => {
   const requests: Request[] = [];
@@ -14,9 +29,7 @@ test("createMobileApiClient sends bearer auth to host API", async () => {
     session: session(),
     fetch: async (input, init) => {
       requests.push(new Request(input, init));
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { "content-type": "application/json" },
-      });
+      return json({ ok: true });
     },
   });
 
@@ -27,107 +40,94 @@ test("createMobileApiClient sends bearer auth to host API", async () => {
   expect(requests[0].headers.get("authorization")).toBe("Bearer access-1");
 });
 
-test("registerMobilePushWithHost posts typed push registration to host API", async () => {
-  const requests: Request[] = [];
-
-  await registerMobilePushWithHost({
-    session: session({
-      productEndpoints: {
-        mobilePushRegistrations: "/custom/mobile-push",
-      },
-    }),
-    registration: {
-      token: "push-token",
-      environment: "production",
-    },
-    fetch: async (input, init) => {
-      requests.push(new Request(input, init));
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { "content-type": "application/json" },
-      });
-    },
+test("createMobileApiClient exposes authorization failures as typed errors", async () => {
+  const client = createMobileApiClient({
+    session: session(),
+    fetch: async () => new Response("forbidden", { status: 403 }),
   });
 
-  expect(requests[0].url).toBe("https://host.example/custom/mobile-push");
+  try {
+    await client.json("/api/spaces");
+    throw new Error("expected request to fail");
+  } catch (error) {
+    expect(error).toBeInstanceOf(MobileApiError);
+    expect((error as MobileApiError).status).toBe(403);
+    expect((error as MobileApiError).path).toBe("/api/spaces");
+  }
+});
+
+test("registerNotificationPusherWithHost posts the product-neutral pusher", async () => {
+  const requests: Request[] = [];
+
+  await registerNotificationPusherWithHost({
+    session: session({
+      productEndpoints: { notificationPushers: "/custom/pushers" },
+    }),
+    pusher,
+    scope: "account:user-1",
+    fetch: collect(requests),
+  });
+
+  expect(requests[0].url).toBe("https://host.example/custom/pushers");
   expect(requests[0].method).toBe("POST");
   expect(requests[0].headers.get("authorization")).toBe("Bearer access-1");
   expect(requests[0].headers.get("content-type")).toBe("application/json");
   expect(await requests[0].json()).toEqual({
-    token: "push-token",
-    environment: "production",
     product: "takos",
-    host_url: "https://host.example",
+    scope: "account:user-1",
+    pusher,
   });
 });
 
-test("registerMobilePushWithHost accepts same-origin advertised absolute endpoints", async () => {
+test("registerNotificationPusherWithHost accepts a same-origin advertised endpoint", async () => {
   const requests: Request[] = [];
 
-  await registerMobilePushWithHost({
+  await registerNotificationPusherWithHost({
     session: session({
       productEndpoints: {
-        mobilePushRegistrations:
-          "https://host.example/api/mobile/push-registrations",
+        notificationPushers: "https://host.example/api/notifications/pushers",
       },
     }),
-    registration: {
-      token: "push-token",
-    },
-    fetch: async (input, init) => {
-      requests.push(new Request(input, init));
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { "content-type": "application/json" },
-      });
-    },
+    pusher,
+    fetch: collect(requests),
   });
 
   expect(requests[0].url).toBe(
-    "https://host.example/api/mobile/push-registrations",
+    "https://host.example/api/notifications/pushers",
   );
 });
 
-test("unregisterMobilePushWithHost deletes typed push registration from host API", async () => {
+test("unregisterNotificationPusherWithHost deletes by app id and pushkey", async () => {
   const requests: Request[] = [];
 
-  await unregisterMobilePushWithHost({
+  await unregisterNotificationPusherWithHost({
     session: session(),
-    registration: {
-      token: "push-token",
-      environment: "production",
-    },
-    fetch: async (input, init) => {
-      requests.push(new Request(input, init));
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { "content-type": "application/json" },
-      });
-    },
+    appId: pusher.app_id,
+    pushkey: pusher.pushkey,
+    fetch: collect(requests),
   });
 
   expect(requests[0].url).toBe(
-    "https://host.example/api/mobile/push-registrations",
+    "https://host.example/api/notifications/pushers",
   );
   expect(requests[0].method).toBe("DELETE");
   expect(requests[0].headers.get("authorization")).toBe("Bearer access-1");
-  expect(requests[0].headers.get("content-type")).toBe("application/json");
   expect(await requests[0].json()).toEqual({
-    token: "push-token",
-    environment: "production",
     product: "takos",
-    host_url: "https://host.example",
+    app_id: "jp.example.mobile",
+    pushkey: "push-token",
   });
 });
 
-test("registerMobilePushWithHost rejects cross-origin advertised endpoints", async () => {
+test("notification pusher helper rejects cross-origin host endpoints", async () => {
   await expect(
-    registerMobilePushWithHost({
+    registerNotificationPusherWithHost({
       session: session({
         productEndpoints: {
-          mobilePushRegistrations: "https://evil.example/mobile-push",
+          notificationPushers: "https://evil.example/pushers",
         },
       }),
-      registration: {
-        token: "push-token",
-      },
+      pusher,
       fetch: async () => {
         throw new Error("must not send request");
       },
@@ -135,9 +135,24 @@ test("registerMobilePushWithHost rejects cross-origin advertised endpoints", asy
   ).rejects.toThrow("Host endpoint must stay on the connected host.");
 });
 
-test("resolveMobilePushRegistrationEndpoint falls back to the standard path", () => {
-  expect(resolveMobilePushRegistrationEndpoint(session())).toBe(
-    MOBILE_PUSH_REGISTRATION_PATH,
+test("notification pusher helper rejects insecure remote gateways before fetch", async () => {
+  await expect(
+    registerNotificationPusherWithHost({
+      session: session(),
+      pusher: {
+        ...pusher,
+        data: { ...pusher.data, url: "http://push.example/notify" },
+      },
+      fetch: async () => {
+        throw new Error("must not send request");
+      },
+    }),
+  ).rejects.toThrow("Notification pusher is invalid (pusher.data)");
+});
+
+test("resolveNotificationPusherEndpoint falls back to the standard path", () => {
+  expect(resolveNotificationPusherEndpoint(session())).toBe(
+    NOTIFICATION_PUSHER_REGISTRATION_PATH,
   );
 });
 
@@ -151,4 +166,17 @@ function session(input: Partial<MobileSession> = {}): MobileSession {
     createdAt: "2026-06-30T00:00:00.000Z",
     ...input,
   };
+}
+
+function collect(requests: Request[]) {
+  return async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push(new Request(input, init));
+    return json({ ok: true });
+  };
+}
+
+function json(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    headers: { "content-type": "application/json" },
+  });
 }

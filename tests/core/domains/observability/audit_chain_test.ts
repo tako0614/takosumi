@@ -1,7 +1,10 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { AuditEvent } from "../../../../core/domains/audit/types.ts";
-import { InMemoryObservabilitySink, verifyAuditHashChain } from "../../../../core/domains/observability/mod.ts";
+import {
+  InMemoryObservabilitySink,
+  verifyAuditHashChain,
+} from "../../../../core/domains/observability/mod.ts";
 
 test("audit hash chain verifies appended events", async () => {
   const sink = new InMemoryObservabilitySink();
@@ -17,7 +20,7 @@ test("audit hash chain detects tampered event payload", async () => {
   await sink.appendAudit(event("audit_1", "2026-04-27T00:00:00.000Z"));
   await sink.appendAudit(event("audit_2", "2026-04-27T00:01:00.000Z"));
 
-  const records = [...await sink.listAudit()];
+  const records = [...(await sink.listAudit())];
   records[0] = {
     ...records[0],
     event: {
@@ -37,7 +40,7 @@ test("audit hash chain detects broken previous hash linkage", async () => {
   await sink.appendAudit(event("audit_1", "2026-04-27T00:00:00.000Z"));
   await sink.appendAudit(event("audit_2", "2026-04-27T00:01:00.000Z"));
 
-  const records = [...await sink.listAudit()];
+  const records = [...(await sink.listAudit())];
   records[1] = { ...records[1], previousHash: "bad" };
 
   const result = await verifyAuditHashChain(records);
@@ -58,8 +61,8 @@ function event(id: string, occurredAt: string): AuditEvent {
       requestId: `req_${id}`,
       sessionId: "secret_session",
     },
-    spaceId: "space_a",
-    groupId: "group_a",
+    workspaceId: "space_a",
+    runGroupId: "group_a",
     targetType: "worker",
     targetId: "worker_a",
     payload: { action: "allow", token: "secret_token" },

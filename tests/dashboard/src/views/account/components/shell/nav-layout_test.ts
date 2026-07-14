@@ -27,6 +27,7 @@ const workspaceSettingsSource = read(
   "views/workspace/WorkspaceSettingsView.tsx",
 );
 const userMenuSource = read("views/account/components/auth/UserMenu.tsx");
+const runtimeCapabilitiesSource = read("lib/runtime-capabilities.ts");
 const indexSource = read("index.tsx");
 const shellCssSource = read("styles/shell.css");
 
@@ -95,7 +96,6 @@ describe("dashboard shell navigation layout", () => {
     for (const href of [
       '"/services"',
       '"/connections"',
-      '"/cloud"',
       '"/runs"',
       '"/graph"',
       '"/activity"',
@@ -107,7 +107,6 @@ describe("dashboard shell navigation layout", () => {
     for (const route of [
       '<Route path="/services" component={ServiceListView} />',
       '<Route path="/connections" component={ConnectionsView} />',
-      '<Route path="/cloud" component={CloudResourcesView} />',
       '<Route path="/runs" component={RunsListView} />',
       '<Route path="/graph" component={GraphView} />',
       '<Route path="/activity" component={ActivityView} />',
@@ -136,17 +135,12 @@ describe("dashboard shell navigation layout", () => {
     }
   });
 
-  test("Cloud-only manage entries are runtime-gated off Cloud", () => {
-    // The /cloud entry renders an "unavailable" dead-end on self-host/Takos, so
-    // the manage catalog gates it behind the Cloud runtime.
-    const cloudEntry = navSource.slice(
-      navSource.indexOf('href: "/cloud"'),
-      navSource.indexOf('href: "/cloud"') + 200,
-    );
-    expect(cloudEntry).toContain("cloudOnly: true");
+  test("host extensions contribute manage entries without Cloud code in OSS", () => {
     const manageSource = read("views/settings/ManageView.tsx");
-    expect(manageSource).toContain("isTakosumiCloudRuntime");
-    expect(manageSource).toContain("dest.cloudOnly");
+    expect(manageSource).toContain("loadPlatformContributions");
+    expect(manageSource).toContain('"navigation.manage"');
+    expect(navSource).not.toContain('href: "/cloud"');
+    expect(indexSource).not.toContain("CloudResourcesView");
   });
 
   test("the store is a first-class tab (no /store → /new bounce)", () => {
@@ -189,8 +183,10 @@ describe("dashboard shell navigation layout", () => {
     expect(userMenuSource).toContain('href="/settings/account"');
     // Docs link must stay host-relative on the standalone dashboard so a
     // self-hosted deployment never points at app.takosumi.com.
-    expect(userMenuSource).toContain("docsHref");
-    expect(userMenuSource).toContain('"/docs/"');
+    expect(userMenuSource).toContain("dashboardDocsHref");
+    expect(runtimeCapabilitiesSource).toContain(
+      'isTakosEmbeddedRuntime() ? "https://docs.takos.jp" : "/docs/"',
+    );
     expect(userMenuSource).not.toContain("app.takosumi.com");
     expect(userMenuSource).not.toContain("WorkspaceSwitcher");
     expect(userMenuSource).not.toContain('href="/connections"');
@@ -259,24 +255,8 @@ describe("dashboard shell navigation layout", () => {
     expect(workspaceSettingsSource).toContain(
       "<BillingTab workspaceId={id} />",
     );
-    expect(workspaceSettingsSource).toContain(
-      'href: "/advanced/workspace/cloud"',
-    );
-    expect(workspaceSettingsSource).toContain(
-      'label: t("workspaceSettings.tab.cloud")',
-    );
-    expect(workspaceSettingsSource).toContain(
-      'href: "/advanced/workspace/keys"',
-    );
-    expect(workspaceSettingsSource).toContain(
-      'label: t("workspaceSettings.tab.keys")',
-    );
-    expect(workspaceSettingsSource).toContain(
-      "<CloudResourcesPanel showHeader={false} />",
-    );
-    expect(workspaceSettingsSource).toContain(
-      "<CloudApiKeysPanel showHeader={false} />",
-    );
+    expect(workspaceSettingsSource).not.toContain("CloudResourcesPanel");
+    expect(workspaceSettingsSource).not.toContain("CloudApiKeysPanel");
     expect(workspaceSettingsSource).not.toContain(
       "<BillingTab workspaceId={id()} />",
     );

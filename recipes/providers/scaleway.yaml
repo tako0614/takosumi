@@ -1,6 +1,6 @@
 id: scaleway
 display_name: Scaleway
-provider_rule: scaleway
+secret_partition: provider-credentials
 terraform_source:
   - scaleway/scaleway
   - registry.opentofu.org/scaleway/scaleway
@@ -17,6 +17,28 @@ required_env_groups:
   - [SCW_PROFILE]
 auth_modes:
   access_key:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: Access key, ja: アクセスキー }
+    input_hints:
+      SCW_ACCESS_KEY:
+        label: { en: Access key, ja: アクセスキー }
+        required: true
+      SCW_SECRET_KEY:
+        label: { en: Secret key, ja: シークレットキー }
+        required: true
+      SCW_DEFAULT_PROJECT_ID:
+        label: { en: Project ID, ja: プロジェクト ID }
+        required: false
+      SCW_DEFAULT_ORGANIZATION_ID:
+        label: { en: Organization ID, ja: 組織 ID }
+        required: false
+      SCW_DEFAULT_REGION:
+        label: { en: Region, ja: リージョン }
+        required: false
+      SCW_DEFAULT_ZONE:
+        label: { en: Zone, ja: ゾーン }
+        required: false
     env:
       SCW_ACCESS_KEY:
         from: secret

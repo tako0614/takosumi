@@ -1,4 +1,4 @@
-// OIDC client (per-installation downstream OAuth/OIDC client) storage.
+// Capsule OIDC client registration storage owned by the Accounts schema.
 // Free-function module preserving the upsert + lookup semantics of the
 // original PostgresAccountsStore.
 
@@ -13,12 +13,12 @@ import {
   toDate,
 } from "./internal.ts";
 
-const installation = pgSchema("installation_v1");
+const accountsV1 = pgSchema("accounts_v1");
 
-const oidcClients = installation.table("oidc_clients", {
+const oidcClients = accountsV1.table("oidc_clients", {
   clientId: text("client_id").primaryKey(),
-  capsuleId: text("installation_id").notNull(),
-  serviceId: text("service_id").notNull(),
+  capsuleId: text("capsule_id").notNull(),
+  serviceId: text("namespace_path").notNull(),
   issuerUrl: text("issuer_url").notNull(),
   redirectUris: text("redirect_uris").array().notNull(),
   allowedScopes: text("allowed_scopes").array().notNull(),
@@ -83,8 +83,8 @@ export async function findOidcClientForCapsule(
 
 const oidcClientColumns = {
   client_id: oidcClients.clientId,
-  installation_id: oidcClients.capsuleId,
-  service_id: oidcClients.serviceId,
+  capsule_id: oidcClients.capsuleId,
+  namespace_path: oidcClients.serviceId,
   issuer_url: oidcClients.issuerUrl,
   redirect_uris: oidcClients.redirectUris,
   allowed_scopes: oidcClients.allowedScopes,

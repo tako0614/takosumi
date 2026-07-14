@@ -17,6 +17,7 @@ import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/dep
 import type {
   ConnectionScopeHints,
   ConnectionScopeKind,
+  ConnectionSetupRequest,
   CreateConnectionRequest,
   DeployControlErrorCode,
   DeployControlErrorEnvelope,
@@ -25,27 +26,26 @@ import type {
   OpenTofuOperation,
 } from "@takosumi/internal/deploy-control-api";
 import type { CreatePlanRunRequest } from "@takosumi/internal/deploy-control-api";
-import {
-  clampPageLimit,
-  decodeCursor,
-  type PageParams,
-} from "takosumi-contract/pagination";
+import { type PageParams } from "takosumi-contract/pagination";
 import type { WorkspacesService } from "../domains/workspaces/mod.ts";
+import type { ProjectsService } from "../domains/projects/mod.ts";
 import type { CapsulesService } from "../domains/capsules/mod.ts";
 import type { ConnectionsService } from "../domains/connections/mod.ts";
 import type { DependenciesService } from "../domains/dependencies/mod.ts";
 import type { OutputSharesService } from "../domains/output-shares/mod.ts";
 import type { RunGroupsService } from "../domains/run-groups/mod.ts";
-import type { OutputSyncService } from "../domains/output-sync/mod.ts";
 import type { ActivityService } from "../domains/activity/mod.ts";
 import type { BackupsService } from "../domains/backups/mod.ts";
+import type { LegacyResourceStateAdoptionService } from "../domains/resource-shape/legacy_state_adoption.ts";
 import {
   OpenTofuControllerError,
   type OpenTofuControllerErrorCode,
-  type OpenTofuDeploymentController,
+  type OpenTofuController,
 } from "../domains/deploy-control/mod.ts";
 import { log } from "../shared/log.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
+import { isRecord } from "../shared/mod.ts";
+import { parsePageQuery } from "./page_query.ts";
 
 export const DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
 
@@ -116,9 +116,7 @@ function mountByMethod(
 const ID_PATTERNS = {
   planRunId: /^plan_[0-9a-zA-Z]{8,64}$/,
   applyRunId: /^apply_[0-9a-zA-Z]{8,64}$/,
-  // The CapsulesService still mints `inst_...` while storage rows converge.
-  capsuleId: /^inst_[0-9a-zA-Z]{8,64}$/,
-  installationId: /^inst_[0-9a-zA-Z]{8,64}$/,
+  capsuleId: /^cap_[0-9a-zA-Z]{8,64}$/,
 } as const;
 
 const UUID_PATTERN =
@@ -127,13 +125,13 @@ const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 export const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
 export const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
-export const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
+export const WORKSPACE_ID_PATTERN = /^ws_[0-9a-zA-Z]{3,64}$/;
 export const RUN_ID_PATTERN =
   /^(?:(?:plan|apply|ssr|ccr)_[0-9a-zA-Z]{8,64}|(?:backup|restore)_[0-9a-zA-Z]{4,64})$/;
 export const DEPENDENCY_ID_PATTERN = /^dep_[0-9a-zA-Z]{8,64}$/;
 export const OUTPUT_SHARE_ID_PATTERN = /^oshare_[0-9a-zA-Z]{8,64}$/;
 export const RUN_GROUP_ID_PATTERN = /^rg_[0-9a-zA-Z]{8,64}$/;
-export const DEPLOYMENT_ID_PATTERN = /^dep(loy)?_[0-9a-zA-Z]{8,64}$/;
+export const STATE_VERSION_ID_PATTERN = /^state_[0-9a-zA-Z]{8,64}$/;
 export const COMPATIBILITY_REPORT_ID_PATTERN = /^caprep_[0-9a-zA-Z]{8,64}$/;
 export const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9_-]{1,63}$/;
 export const CUSTOM_PROVIDER_PACK_ID_PATTERN = /^cpp_[0-9a-zA-Z]{8,64}$/;
@@ -143,28 +141,22 @@ export const ALLOWED_KEYS: Record<
   ReadonlySet<string>
 > = {
   planRunCreate: new Set([
-    "spaceId",
+    "workspaceId",
     "source",
     "runnerProfileId",
-    "installationId",
+    "capsuleId",
     "operation",
     "variables",
     "requiredProviders",
-    "templateId",
-    "templateVersion",
-    "inputs",
   ]),
-  applyRunCreate: new Set([
-    "planRunId",
-    "approval",
-    "expected",
-    "confirmDestructive",
-  ]),
+  applyRunCreate: new Set(["planRunId", "approval", "expected"]),
   connectionCreate: new Set([
-    "spaceId",
+    "workspaceId",
     "provider",
     "kind",
     "authMethod",
+    "credentialRecipe",
+    "materialization",
     "displayName",
     "scope",
     "scopeHints",
@@ -173,7 +165,7 @@ export const ALLOWED_KEYS: Record<
     "files",
   ]),
   connectionOAuthStart: new Set([
-    "spaceId",
+    "workspaceId",
     "displayName",
     "scope",
     "scopeHints",
@@ -181,16 +173,18 @@ export const ALLOWED_KEYS: Record<
     "redirectUri",
     "successRedirectUri",
   ]),
-  connectionGcpImpersonation: new Set([
-    "spaceId",
+  connectionSetup: new Set([
+    "workspaceId",
+    "provider",
     "displayName",
     "scope",
     "scopeHints",
     "expiresAt",
     "values",
+    "files",
   ]),
   sourceCreate: new Set([
-    "spaceId",
+    "workspaceId",
     "name",
     "url",
     "defaultRef",
@@ -207,93 +201,52 @@ export const ALLOWED_KEYS: Record<
   sourceCompatibilityCheck: new Set([
     "sourceSnapshotId",
     "modulePath",
-    "installationId",
+    "capsuleId",
     "installConfigId",
   ]),
-  artifactSnapshot: new Set(["url", "digest", "format", "path"]),
-  providerEnvPut: new Set([
-    "spaceId",
-    "providerSource",
-    "displayName",
-    "materialization",
-    "status",
-    "requiredEnvNames",
-    "secretRef",
-    "expiresAt",
-  ]),
-  spaceCreate: new Set([
-    "handle",
-    "displayName",
-    "type",
-    "ownerUserId",
-    "billingAccountId",
-  ]),
-  spacePatch: new Set(["displayName"]),
-  outputSyncPatch: new Set(["enabled"]),
-  installationCreate: new Set([
+  workspaceCreate: new Set(["handle", "displayName", "type", "ownerUserId"]),
+  workspacePatch: new Set(["displayName", "policy", "archived"]),
+  projectCreate: new Set(["name", "slug", "projectJson"]),
+  capsuleCreate: new Set([
     "name",
     "environment",
+    "projectId",
     "sourceId",
     "installConfigId",
     "modulePath",
     "runnerId",
     "outputAllowlist",
+    "interfaceBlueprints",
     "vars",
     "managedPublicHostname",
   ]),
-  installationPatch: new Set(["status"]),
-  installationPlan: new Set(["runnerId", "compatibilityReportId"]),
-  installationDestroyPlan: new Set(["runnerId"]),
+  capsulePatch: new Set(["status"]),
+  capsulePlan: new Set(["runnerId", "compatibilityReportId"]),
+  capsuleDestroyPlan: new Set(["runnerId"]),
   runApprove: new Set(["reason"]),
   dependencyCreate: new Set([
-    "producerInstallationId",
+    "producerCapsuleId",
     "mode",
     "outputs",
     "visibility",
   ]),
-  serviceExportCreate: new Set([
-    "id",
-    "producerCapsuleId",
-    "outputId",
-    "outputGeneration",
-    "stateVersionId",
-    "applyRunId",
-    "name",
-    "capabilities",
-    "visibility",
-    "status",
-    "endpoints",
-    "auth",
-    "labels",
-    "metadata",
-  ]),
-  serviceBindingCreate: new Set([
-    "id",
-    "target",
-    "selector",
-    "dependencyMode",
-    "grantRequest",
-    "dependencySnapshotId",
-  ]),
-  serviceGrantCreate: new Set(["id", "material", "expiresAt", "rotatedAt"]),
   outputShareCreate: new Set([
-    "fromSpaceId",
-    "toSpaceId",
-    "producerInstallationId",
+    "fromWorkspaceId",
+    "toWorkspaceId",
+    "producerCapsuleId",
     "outputs",
     "sensitivePolicy",
   ]),
-  creditsTopUp: new Set(["usdMicros", "credits"]),
-  subscriptionChange: new Set(["billingSettings"]),
-  deploy: new Set([
-    "spaceId",
-    "name",
-    "environment",
-    "snapshotId",
-    "vars",
-    "providerEnvBindings",
-    "planOnly",
-    "autoApprove",
+  billingSettingsUpdate: new Set(["billingSettings"]),
+  resourceStateAdoptionConfirm: new Set([
+    "resourceId",
+    "resourceUpdatedAt",
+    "expectedLegacyCapsuleName",
+    "capsuleId",
+    "stateVersionId",
+    "stateGeneration",
+    "stateRef",
+    "stateDigest",
   ]),
 };
 
@@ -302,28 +255,22 @@ export type DeployControlRouteName =
   | "applyRunCreate"
   | "connectionCreate"
   | "connectionOAuthStart"
-  | "connectionGcpImpersonation"
+  | "connectionSetup"
   | "sourceCreate"
   | "sourcePatch"
   | "sourceCompatibilityCheck"
-  | "artifactSnapshot"
-  | "spaceCreate"
-  | "spacePatch"
-  | "outputSyncPatch"
-  | "installationCreate"
-  | "installationPatch"
-  | "installationPlan"
-  | "installationDestroyPlan"
-  | "providerEnvPut"
+  | "workspaceCreate"
+  | "workspacePatch"
+  | "projectCreate"
+  | "capsuleCreate"
+  | "capsulePatch"
+  | "capsulePlan"
+  | "capsuleDestroyPlan"
   | "runApprove"
   | "dependencyCreate"
-  | "serviceExportCreate"
-  | "serviceBindingCreate"
-  | "serviceGrantCreate"
   | "outputShareCreate"
-  | "creditsTopUp"
-  | "subscriptionChange"
-  | "deploy";
+  | "billingSettingsUpdate"
+  | "resourceStateAdoptionConfirm";
 
 export interface DeployControlInternalRouteDependencies {
   /**
@@ -347,7 +294,7 @@ export interface DeployControlInternalRouteDependencies {
    * OpenTofu deployment controller. When unset, mounted endpoints return 501
    * after successful auth.
    */
-  readonly controller?: OpenTofuDeploymentController;
+  readonly controller?: OpenTofuController;
   /**
    * Optional provider OAuth helpers. These are helper flows for creating
    * write-only Provider Connection backing material; they are not a third
@@ -356,22 +303,36 @@ export interface DeployControlInternalRouteDependencies {
    */
   readonly connectionOAuthHelpers?: ConnectionOAuthHelpers;
   /**
+   * Optional provider-owned setup dispatcher. Core passes an opaque setup id
+   * and write-only setup body; the composition root/provider package returns a
+   * normal CreateConnectionRequest.
+   */
+  readonly buildConnectionSetupRequest?: (
+    setupId: string,
+    input: ConnectionSetupRequest,
+  ) => CreateConnectionRequest;
+  /**
    * Internal compatibility seam for legacy `/v1/*` ledger routes consumed by
    * in-process accounts / CLI code. Public platform API hosts leave this off so
-   * PlanRun / ApplyRun / RunnerProfile / DeploymentOutput DTOs are not
+   * PlanRun / ApplyRun / RunnerProfile DTOs are not
    * externally callable.
    */
   readonly mountInternalLedgerRoutes?: boolean;
   /**
-   * Spaces domain service (Core Specification §4). When unset, the Space routes
+   * Workspaces domain service (Core Specification §4). When unset, the routes
    * return 501 after successful auth.
    */
-  readonly spacesService?: WorkspacesService;
+  readonly workspacesService?: WorkspacesService;
   /**
-   * Installations domain service (Core Specification §5 / §11). When unset, the
-   * Installation / InstallConfig routes return 501 after successful auth.
+   * Projects domain service. Projects are the durable Workspace-owned grouping
+   * that every Capsule belongs to; this is not a catalog or deployment alias.
    */
-  readonly installationsService?: CapsulesService;
+  readonly projectsService?: ProjectsService;
+  /**
+   * Capsules domain service (Core Specification §5 / §11). When unset, the
+   * Capsule / InstallConfig routes return 501 after successful auth.
+   */
+  readonly capsulesService?: CapsulesService;
   /** Internal provider resolver creation plus provider connection resolution. */
   readonly connectionsService?: ConnectionsService;
   /**
@@ -381,7 +342,7 @@ export interface DeployControlInternalRouteDependencies {
   readonly dependenciesService?: DependenciesService;
   /**
    * OutputShares domain service (Core Specification §18). When unset, the
-   * cross-Space OutputShare routes return 501 after successful auth.
+   * cross-Workspace OutputShare routes return 501 after successful auth.
    */
   readonly outputSharesService?: OutputSharesService;
   /**
@@ -389,49 +350,34 @@ export interface DeployControlInternalRouteDependencies {
    * plan-update / run-group routes return 501 after successful auth.
    */
   readonly runGroupsService?: RunGroupsService;
-  /** Takosumi-specific Workspace Output Sync extension. */
-  readonly outputSyncService?: OutputSyncService;
   /**
    * Activity domain service (Core Specification §27 / §34). When unset, the
    * Activity listing route returns 501 after successful auth, and the connection
-   * route skips its Space-scoped audit emission.
+   * route skips its Workspace-scoped audit emission.
    */
   readonly activityService?: ActivityService;
   /**
    * Control-backups domain service (Core Specification §33 / §26). When unset,
    * the backup routes return 501 after successful auth. The service is itself
-   * disabled (createBackup -> 501) until a host wires the R2_BACKUPS artifact
+   * disabled (createBackup -> 501) until a host wires the backup artifact
    * store + crypto seam.
    */
   readonly backupsService?: BackupsService;
   /**
-   * Raw writer for internal/operator upload-compat source archives into
-   * R2_SOURCE. The internal upload route streams bytes here at the SAME raw key
-   * the OpenTofu runner restores from (no logical-bucket prefix). When unset,
-   * the upload + deploy compatibility routes return 501. Runtime-neutral by
-   * design: the worker wires `env.R2_SOURCE.put`.
+   * Operator-only, one-time migration service. Reporting is read-only and
+   * confirmation requires an exact reviewed candidate.
    */
-  readonly writeSourceArchive?: SourceArchiveWriter;
+  readonly legacyResourceStateAdoptionService?: LegacyResourceStateAdoptionService;
 }
 
-/**
- * Writes upload Capsule archive bytes to R2_SOURCE at the exact `key` the runner
- * restores from. Resolves once the bytes are durably stored.
- */
-export type SourceArchiveWriter = (
-  key: string,
-  bytes: Uint8Array,
-) => Promise<void>;
-
-export interface ConnectionOAuthHelpers {
-  readonly cloudflare?: ConnectionOAuthHelper;
-  readonly gcp?: ConnectionOAuthHelper;
-}
+export type ConnectionOAuthHelpers = Readonly<
+  Record<string, ConnectionOAuthHelper>
+>;
 
 export interface ConnectionOAuthStartBody {
-  readonly spaceId?: string;
+  readonly workspaceId?: string;
   readonly displayName?: string;
-  readonly scope?: "operator" | "space";
+  readonly scope?: "operator" | "workspace";
   readonly scopeHints?: ConnectionScopeHints;
   readonly expiresAt?: string;
   readonly redirectUri?: string;
@@ -453,14 +399,16 @@ export interface ConnectionOAuthStartResponse {
 }
 
 export interface ConnectionOAuthStartInput {
-  readonly provider: "cloudflare" | "gcp";
+  /** Explicit provider-owned helper id. */
+  readonly helperId: string;
   readonly request: Request;
   readonly principal: DeployControlPrincipal;
   readonly body: ConnectionOAuthStartBody;
 }
 
 export interface ConnectionOAuthCallbackInput {
-  readonly provider: "cloudflare" | "gcp";
+  /** Explicit provider-owned helper id. */
+  readonly helperId: string;
   readonly request: Request;
   readonly principal: DeployControlPrincipal;
   readonly code: string;
@@ -496,7 +444,7 @@ export interface DeployControlBearerAuthorizationInput {
 
 export interface DeployControlPrincipal {
   readonly actor: string;
-  readonly spaceIds?: readonly string[] | "*";
+  readonly workspaceIds?: readonly string[] | "*";
   readonly operations?: readonly OpenTofuOperation[] | "*";
   readonly runnerProfileIds?: readonly string[] | "*";
 }
@@ -507,7 +455,7 @@ export type DeployControlAuthResult =
 
 /**
  * The cross-group context handed to every per-resource-group mount function. It
- * pairs the resolved {@link OpenTofuDeploymentController} (guaranteed present —
+ * pairs the resolved {@link OpenTofuController} (guaranteed present —
  * the controller-absent path is handled by the descriptor-driven 501 fallback)
  * with the raw {@link DeployControlInternalRouteDependencies} (for the optional
  * per-domain services + the bearer resolver) and the shared body-limit
@@ -516,7 +464,7 @@ export type DeployControlAuthResult =
 export interface DeployControlRouteContext {
   readonly app: Hono;
   readonly dependencies: DeployControlInternalRouteDependencies;
-  readonly controller: OpenTofuDeploymentController;
+  readonly controller: OpenTofuController;
   /** Hono body-limit middleware shared by every JSON-body route. */
   readonly deployControlBodyLimit: ReturnType<typeof bodyLimit>;
 }
@@ -584,7 +532,7 @@ export interface DefineRouteOptions {
  * Composes the shared per-handler prologue: authorize -> optional service-guard
  * -> optional id-validate -> optional body-limit -> {@link runHandler}. Each
  * route supplies only its inner controller call (which may run
- * {@link ensureSpacePermission} on the resolved entity). This collapses the
+ * {@link ensureWorkspacePermission} on the resolved entity). This collapses the
  * ~10-line authorize/validate/runHandler boilerplate that was repeated across
  * every handler.
  */
@@ -677,7 +625,7 @@ export async function authorizeDeployControl(
     ok: true,
     principal: {
       actor: "deploy-control-bearer",
-      spaceIds: "*",
+      workspaceIds: "*",
       operations: "*",
       runnerProfileIds: "*",
     },
@@ -694,9 +642,8 @@ export function ensurePlanCreatePermission(
   request: CreatePlanRunRequest,
 ): void {
   const operation =
-    request.operation ??
-    ((request.capsuleId ?? request.installationId) ? "update" : "create");
-  ensureSpacePermission(principal, request.workspaceId ?? request.spaceId);
+    request.operation ?? (request.capsuleId ? "update" : "create");
+  ensureWorkspacePermission(principal, request.workspaceId);
   ensureOperationPermission(principal, operation);
   if (request.runnerProfileId) {
     ensureRunnerProfilePermission(principal, request.runnerProfileId);
@@ -716,71 +663,71 @@ export function ensureApplyPermission(
     readonly runnerProfileId: string;
   },
 ): void {
-  ensureSpacePermission(principal, planRun.workspaceId);
+  ensureWorkspacePermission(principal, planRun.workspaceId);
   ensureOperationPermission(principal, planRun.operation);
   ensureRunnerProfilePermission(principal, planRun.runnerProfileId);
 }
 
-export function ensureSpacePermission(
+export function ensureWorkspacePermission(
   principal: DeployControlPrincipal,
-  spaceId: string | undefined,
+  workspaceId: string | undefined,
 ): void {
-  if (spaceId && spacePermissionAllows(principal, spaceId)) return;
+  if (workspaceId && workworkspacePermissionAllows(principal, workspaceId))
+    return;
   throw new OpenTofuControllerError(
     "permission_denied",
     "deploy control principal cannot access this workspace",
   );
 }
 
-export function spacePermissionAllows(
+export function workworkspacePermissionAllows(
   principal: DeployControlPrincipal,
-  spaceId: string,
+  workspaceId: string,
 ): boolean {
-  return scopeAllows(principal.spaceIds, spaceId);
+  return scopeAllows(principal.workspaceIds, workspaceId);
 }
 
 /**
- * Space creation is not gated by an existing space id, so a space-scoped
- * principal (`spaceIds: string[]`) cannot mint arbitrary Spaces; only the
- * unrestricted deploy-control bearer (`spaceIds: "*"`) may.
+ * Workspace creation is not gated by an existing Workspace id, so a scoped
+ * principal cannot mint arbitrary Workspaces; only an unrestricted bearer may.
  */
-export function ensureSpaceCreatePermission(
+export function ensureWorkspaceCreatePermission(
   principal: DeployControlPrincipal,
 ): void {
-  if (principal.spaceIds === "*") return;
+  if (principal.workspaceIds === "*") return;
   throw new OpenTofuControllerError(
     "permission_denied",
-    `deploy control principal ${principal.actor} cannot create spaces`,
+    `deploy control principal ${principal.actor} cannot create workspaces`,
   );
 }
 
 /**
- * Operator-scoped connections (spec §8: no owning Space) are instance-wide;
- * only the unrestricted bearer may touch them. A space-scoped connection
- * falls back to the normal space permission check.
+ * Operator-scoped connections (spec §8: no owning Workspace) are instance-wide;
+ * only the unrestricted bearer may touch them. A Workspace-scoped connection
+ * falls back to the normal Workspace permission check.
  *
  * An explicit `scope: "operator"` request must come from the unrestricted
- * bearer (`spaceIds === "*"`) even when a spaceId is also supplied: a hybrid
- * `{ spaceId, scope: "operator" }` request must not let a space session mint an
+ * bearer (`workspaceIds === "*"`) even when a workspaceId is also supplied: a hybrid
+ * `{ workspaceId, scope: "operator" }` request must not let a Workspace session mint an
  * operator-scoped provider connection (privilege-escalation guard; the vault
  * rejects the row too).
  */
 export function ensureConnectionPermission(
   principal: DeployControlPrincipal,
-  spaceId: string | undefined,
+  workspaceId: string | undefined,
   scope?: ConnectionScopeKind,
 ): void {
-  if (scope === "operator" && principal.spaceIds !== "*") {
+  if (scope === "operator" && principal.workspaceIds !== "*") {
     throw new OpenTofuControllerError(
       "permission_denied",
       `deploy control principal ${principal.actor} cannot manage operator-scoped connections`,
     );
   }
-  if (spaceId !== undefined) {
-    ensureSpacePermission(principal, spaceId);
+  if (workspaceId !== undefined) {
+    ensureWorkspacePermission(principal, workspaceId);
     return;
   }
-  if (principal.spaceIds === "*") return;
+  if (principal.workspaceIds === "*") return;
   throw new OpenTofuControllerError(
     "permission_denied",
     `deploy control principal ${principal.actor} cannot manage operator-scoped connections`,
@@ -907,16 +854,23 @@ function publicControllerError(error: unknown): {
   readonly details?: unknown;
 } {
   const message = controllerErrorMessage(error);
-  if (
-    /^app_hostname_unavailable\b/u.test(message) ||
-    /\balready claimed by Capsule\b.*\bWorkspace\b/iu.test(message)
-  ) {
+  const details = controllerErrorDetails(error);
+  const reason = isRecord(details) ? details.reason : undefined;
+  if (reason === "app_hostname_unavailable") {
     return {
       message: "app_hostname_unavailable: already exists",
       details: { reason: "app_hostname_unavailable" },
     };
   }
-  return { message };
+  return {
+    message,
+    ...(details !== undefined ? { details } : {}),
+  };
+}
+
+function controllerErrorDetails(error: unknown): unknown {
+  if (error instanceof OpenTofuControllerError) return error.details;
+  return isRecord(error) ? error.details : undefined;
 }
 
 export async function readJsonBody<T>(
@@ -1071,59 +1025,16 @@ export function parsePageParams(
 ):
   | { readonly kind: "ok"; readonly value: PageParams }
   | { readonly kind: "invalid"; readonly response: Response } {
-  const rawLimit = c.req.query("limit");
-  let limit: number | undefined;
-  if (rawLimit !== undefined && rawLimit !== "") {
-    if (!/^\d+$/.test(rawLimit)) {
-      return {
+  const parsed = parsePageQuery(c.req.query("limit"), c.req.query("cursor"));
+  return parsed.ok
+    ? { kind: "ok", value: parsed.value }
+    : {
         kind: "invalid",
         response: c.json(
-          errorEnvelope(
-            c,
-            "invalid_argument",
-            "limit must be a positive integer",
-          ),
+          errorEnvelope(c, "invalid_argument", parsed.message),
           400,
         ),
       };
-    }
-    const parsed = Number(rawLimit);
-    if (!Number.isInteger(parsed) || parsed < 1) {
-      return {
-        kind: "invalid",
-        response: c.json(
-          errorEnvelope(
-            c,
-            "invalid_argument",
-            "limit must be a positive integer",
-          ),
-          400,
-        ),
-      };
-    }
-    limit = clampPageLimit(parsed);
-  }
-  const rawCursor = c.req.query("cursor");
-  if (rawCursor !== undefined && rawCursor !== "") {
-    if (decodeCursor(rawCursor) === undefined) {
-      return {
-        kind: "invalid",
-        response: c.json(
-          errorEnvelope(c, "invalid_argument", "cursor is malformed"),
-          400,
-        ),
-      };
-    }
-  }
-  return {
-    kind: "ok",
-    value: {
-      ...(limit !== undefined ? { limit } : {}),
-      ...(rawCursor !== undefined && rawCursor !== ""
-        ? { cursor: rawCursor }
-        : {}),
-    },
-  };
 }
 
 function controllerHttpStatus(

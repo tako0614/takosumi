@@ -33,99 +33,73 @@ test("assertDatabaseEncryptionAtRest fails closed in staging with plain postgres
   );
 });
 
-test("assertDatabaseEncryptionAtRest accepts sslmode=require in production", () => {
+test("database URL hints do not count as at-rest encryption evidence", () => {
+  for (const databaseUrl of [
+    "postgres://user:pass@db.example.com/takos?sslmode=verify-full",
+    "custom-managed://database?encrypted=true",
+    "d1://cloudflare-d1-binding",
+    "sqlite:///var/lib/takos/db.sqlite?key=secret",
+  ]) {
+    assert.throws(
+      () =>
+        assertDatabaseEncryptionAtRest({
+          env: {
+            TAKOSUMI_ENVIRONMENT: "production",
+            DATABASE_URL: databaseUrl,
+          },
+        }),
+      DatabaseEncryptionConfigurationError,
+    );
+  }
+});
+
+test("assertDatabaseEncryptionAtRest accepts host-injected adapter evidence", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
-      DATABASE_URL:
-        "postgres://user:pass@db.example.com:5432/takos?sslmode=require",
+      DATABASE_URL: "custom://database",
     },
+    evidence: { id: "adapter.storage.encryption/v1" },
   });
   assert.equal(result.satisfied, true);
-  assert.equal(result.evidence, "sslmode=require");
+  assert.equal(result.evidence, "adapter.storage.encryption/v1");
 });
 
-test("assertDatabaseEncryptionAtRest accepts sslmode=verify-full in production", () => {
+test("assertDatabaseEncryptionAtRest accepts explicit operator evidence", () => {
   const result = assertDatabaseEncryptionAtRest({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
-      DATABASE_URL:
-        "postgres://user:pass@db.example.com:5432/takos?sslmode=verify-full",
+      DATABASE_URL: "custom://database",
+      TAKOSUMI_DATABASE_ENCRYPTION_AT_REST: "verified",
+      TAKOSUMI_DATABASE_ENCRYPTION_EVIDENCE: "kms-policy/production-v3",
     },
   });
   assert.equal(result.satisfied, true);
-  assert.equal(result.evidence, "sslmode=verify-full");
+  assert.equal(result.evidence, "kms-policy/production-v3");
 });
 
-test("assertDatabaseEncryptionAtRest rejects sslmode=disable in production", () => {
-  assert.throws(
-    () =>
-      assertDatabaseEncryptionAtRest({
-        env: {
-          TAKOSUMI_ENVIRONMENT: "production",
-          DATABASE_URL:
-            "postgres://user:pass@db.example.com:5432/takos?sslmode=disable",
-        },
-      }),
-    DatabaseEncryptionConfigurationError,
-  );
-});
-
-test("assertDatabaseEncryptionAtRest accepts encrypted=true generic flag", () => {
-  const result = assertDatabaseEncryptionAtRest({
-    env: {
-      TAKOSUMI_ENVIRONMENT: "production",
-      DATABASE_URL: "mysql://user:pass@db.example.com/takos?encrypted=true",
+test("operator evidence uses an exact token and a safe evidence id", () => {
+  for (const env of [
+    {
+      TAKOSUMI_DATABASE_ENCRYPTION_AT_REST: "true",
     },
-  });
-  assert.equal(result.satisfied, true);
-  assert.equal(result.evidence, "encrypted-flag");
-});
-
-test("assertDatabaseEncryptionAtRest accepts D1 (managed encrypted)", () => {
-  const result = assertDatabaseEncryptionAtRest({
-    env: {
-      TAKOSUMI_ENVIRONMENT: "production",
-      DATABASE_URL: "d1://takos-prod-d1-binding",
+    {
+      TAKOSUMI_DATABASE_ENCRYPTION_AT_REST: "verified",
+      TAKOSUMI_DATABASE_ENCRYPTION_EVIDENCE: "contains spaces",
     },
-  });
-  assert.equal(result.satisfied, true);
-  assert.equal(result.evidence, "d1-managed-encryption");
-});
-
-test("assertDatabaseEncryptionAtRest accepts sqlcipher in production", () => {
-  const result = assertDatabaseEncryptionAtRest({
-    env: {
-      TAKOSUMI_ENVIRONMENT: "production",
-      DATABASE_URL: "sqlcipher:///var/lib/takos/audit.db?key=...",
-    },
-  });
-  assert.equal(result.satisfied, true);
-  assert.equal(result.evidence, "sqlcipher");
-});
-
-test("assertDatabaseEncryptionAtRest accepts sqlite with key=", () => {
-  const result = assertDatabaseEncryptionAtRest({
-    env: {
-      TAKOSUMI_ENVIRONMENT: "production",
-      DATABASE_URL: "sqlite:///var/lib/takos/audit.db?key=secret",
-    },
-  });
-  assert.equal(result.satisfied, true);
-  assert.equal(result.evidence, "sqlite-with-key");
-});
-
-test("assertDatabaseEncryptionAtRest rejects plain sqlite in production", () => {
-  assert.throws(
-    () =>
-      assertDatabaseEncryptionAtRest({
-        env: {
-          TAKOSUMI_ENVIRONMENT: "production",
-          DATABASE_URL: "sqlite:///var/lib/takos/audit.db",
-        },
-      }),
-    DatabaseEncryptionConfigurationError,
-  );
+  ]) {
+    assert.throws(
+      () =>
+        assertDatabaseEncryptionAtRest({
+          env: {
+            TAKOSUMI_ENVIRONMENT: "production",
+            DATABASE_URL: "custom://database",
+            ...env,
+          },
+        }),
+      DatabaseEncryptionConfigurationError,
+    );
+  }
 });
 
 test("assertDatabaseEncryptionAtRest production ignores TAKOSUMI_DEV_MODE override", () => {
@@ -181,11 +155,12 @@ test("inspectDatabaseEncryption preserves info without throwing", () => {
   const inspection = inspectDatabaseEncryption({
     env: {
       TAKOSUMI_ENVIRONMENT: "production",
-      DATABASE_URL: "postgres://u:p@db/t?sslmode=require",
+      DATABASE_URL: "custom://database",
     },
+    evidence: { id: "storage-adapter/key-policy-v1" },
   });
   assert.equal(inspection.satisfied, true);
-  assert.equal(inspection.evidence, "sslmode=require");
+  assert.equal(inspection.evidence, "storage-adapter/key-policy-v1");
 });
 
 test("resolveBootDatabaseUrl prefers TAKOSUMI_DATABASE_URL over DATABASE_URL", () => {

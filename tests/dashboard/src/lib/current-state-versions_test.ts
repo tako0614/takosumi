@@ -12,17 +12,14 @@ function stubCurrentStateVersionFetch(): () => readonly string[] {
     calls.push(typeof input === "string" ? input : String(input));
     return new Response(
       JSON.stringify({
-        deployments: [
+        stateVersions: [
           {
-            id: "dep_1",
-            spaceId: "space_1",
-            installationId: "inst_1",
+            id: "state_1",
+            workspaceId: "space_1",
+            capsuleId: "inst_1",
             environment: "prod",
-            applyRunId: "apply_1",
-            sourceSnapshotId: "snap_1",
-            stateGeneration: 1,
-            outputsPublic: { app_name: "Yurucommu" },
-            status: "active",
+            generation: 1,
+            createdByRunId: "apply_1",
             createdAt: "2026-07-01T00:00:00.000Z",
           },
         ],
@@ -51,6 +48,6 @@ describe("listCurrentStateVersionsCached", () => {
       "/api/v1/workspaces/space_1/current-state-versions?includeDestroyed=false",
     ]);
     expect(a).toEqual(b);
-    expect(a[0]?.id).toBe("dep_1");
+    expect(a[0]?.id).toBe("state_1");
   });
 });

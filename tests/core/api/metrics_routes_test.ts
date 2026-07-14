@@ -29,7 +29,7 @@ test("metrics route returns Prometheus text exposition", async () => {
     kind: "gauge",
     value: 2,
     tags: { status: "open" },
-    spaceId: "space:one",
+    workspaceId: "space:one",
     observedAt: "2026-05-04T00:00:00.000Z",
   });
   const app = createApp("scrape-token", observability);
@@ -44,7 +44,7 @@ test("metrics route returns Prometheus text exposition", async () => {
   assert.match(body, /# TYPE takosumi_revoke_debt_count gauge/);
   assert.match(
     body,
-    /takosumi_revoke_debt_count\{spaceId="space:one",status="open"\} 2/,
+    /takosumi_revoke_debt_count\{status="open",workspace_id="space:one"\} 2/,
   );
 });
 
@@ -55,7 +55,7 @@ test("renderPrometheusMetrics aggregates counters and histograms", () => {
       name: "takosumi_rate_limit_throttle_count",
       kind: "counter",
       value: 2,
-      tags: { route: "/v1/installations" },
+      tags: { route: "/api/v1/capsules" },
       observedAt: "2026-05-04T00:00:00.000Z",
     },
     {
@@ -63,7 +63,7 @@ test("renderPrometheusMetrics aggregates counters and histograms", () => {
       name: "takosumi_rate_limit_throttle_count",
       kind: "counter",
       value: 3,
-      tags: { route: "/v1/installations" },
+      tags: { route: "/api/v1/capsules" },
       observedAt: "2026-05-04T00:00:01.000Z",
     },
     {
@@ -71,23 +71,23 @@ test("renderPrometheusMetrics aggregates counters and histograms", () => {
       name: "takosumi_apply_duration_seconds",
       kind: "histogram",
       value: 0.2,
-      spaceId: "space:one",
-      tags: { operationKind: "create" },
+      workspaceId: "space:one",
+      tags: { operation_kind: "create" },
       observedAt: "2026-05-04T00:00:02.000Z",
     },
   ]);
 
   assert.match(
     rendered,
-    /takosumi_rate_limit_throttle_count\{route="\/v1\/installations"\} 5/,
+    /takosumi_rate_limit_throttle_count\{route="\/api\/v1\/capsules"\} 5/,
   );
   assert.match(
     rendered,
-    /takosumi_apply_duration_seconds_bucket\{operationKind="create",spaceId="space:one",le="\+Inf"\} 1/,
+    /takosumi_apply_duration_seconds_bucket\{operation_kind="create",workspace_id="space:one",le="\+Inf"\} 1/,
   );
   assert.match(
     rendered,
-    /takosumi_apply_duration_seconds_sum\{operationKind="create",spaceId="space:one"\} 0.2/,
+    /takosumi_apply_duration_seconds_sum\{operation_kind="create",workspace_id="space:one"\} 0.2/,
   );
 });
 
@@ -98,22 +98,22 @@ test("renderPrometheusMetrics exposes zero dashboard series for missing families
     {
       defaultTags: {
         environment: "production",
-        runtime_cell_id: "cell_a",
+        runner_profile_id: "runner_a",
       },
     },
   );
 
   assert.match(
     rendered,
-    /takosumi_runner_queue_age_seconds\{environment="production",runtime_cell_id="cell_a",operationKind="none",status="idle",space_id="none"\} 0/,
+    /takosumi_runner_queue_age_seconds\{environment="production",runner_profile_id="runner_a",operation_kind="none",status="idle",workspace_id="none"\} 0/,
   );
   assert.match(
     rendered,
-    /takosumi_api_request_duration_seconds_bucket\{environment="production",runtime_cell_id="cell_a",method="GET",route="\/api\/\*",status="200",le="\+Inf"\} 0/,
+    /takosumi_api_request_duration_seconds_bucket\{environment="production",runner_profile_id="runner_a",method="GET",route="\/api\/\*",status="200",le="\+Inf"\} 0/,
   );
   assert.match(
     rendered,
-    /takosumi_oidc_request_count\{environment="production",runtime_cell_id="cell_a",method="GET",route="\/\.well-known\/openid-configuration",status="200"\} 0/,
+    /takosumi_oidc_request_count\{environment="production",runner_profile_id="runner_a",method="GET",route="\/\.well-known\/openid-configuration",status="200"\} 0/,
   );
 });
 
@@ -127,9 +127,9 @@ test("renderPrometheusMetrics keeps real families instead of adding defaults", (
         value: 12,
         tags: {
           environment: "production",
-          operationKind: "apply",
-          runtime_cell_id: "cell_a",
-          space_id: "space_live",
+          operation_kind: "apply",
+          runner_profile_id: "runner_a",
+          workspace_id: "space_live",
           status: "dequeued",
         },
         observedAt: "2026-05-04T00:00:00.000Z",
@@ -139,18 +139,18 @@ test("renderPrometheusMetrics keeps real families instead of adding defaults", (
     {
       defaultTags: {
         environment: "production",
-        runtime_cell_id: "cell_a",
+        runner_profile_id: "runner_a",
       },
     },
   );
 
   assert.match(
     rendered,
-    /takosumi_runner_queue_age_seconds\{environment="production",operationKind="apply",runtime_cell_id="cell_a",space_id="space_live",status="dequeued"\} 12/,
+    /takosumi_runner_queue_age_seconds\{environment="production",operation_kind="apply",runner_profile_id="runner_a",status="dequeued",workspace_id="space_live"\} 12/,
   );
   assert.doesNotMatch(
     rendered,
-    /takosumi_runner_queue_age_seconds\{environment="production",operationKind="none"/,
+    /takosumi_runner_queue_age_seconds\{environment="production",operation_kind="none"/,
   );
 });
 

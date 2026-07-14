@@ -7,7 +7,7 @@ import type {
   OidcTokenResponse,
   PkcePair,
 } from "./types.ts";
-import { hostEndpoint } from "./url.ts";
+import { hostEndpoint, normalizeHostUrl, requireSecureWebUrl } from "./url.ts";
 
 const verifierAlphabet =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
@@ -36,20 +36,45 @@ export async function fetchOidcMetadata(input: {
   readonly fetch?: FetchLike;
 }): Promise<OidcMetadata> {
   const fetcher = input.fetch ?? globalThis.fetch.bind(globalThis);
+  const expectedIssuer = normalizeOidcIssuer(input.issuer, "OIDC issuer");
   const response = await fetcher(
-    hostEndpoint(input.issuer, "/.well-known/openid-configuration"),
+    hostEndpoint(expectedIssuer, "/.well-known/openid-configuration"),
     { headers: { accept: "application/json" } },
   );
   if (!response.ok) {
     throw new Error(`OIDC discovery failed: ${response.status}`);
   }
-  return (await response.json()) as OidcMetadata;
+  const value = (await response.json()) as Partial<OidcMetadata>;
+  const metadataIssuer = normalizeOidcIssuer(
+    value.issuer,
+    "OIDC metadata issuer",
+  );
+  if (metadataIssuer !== expectedIssuer) {
+    throw new Error("OIDC metadata issuer does not match requested issuer.");
+  }
+  return {
+    ...value,
+    issuer: metadataIssuer,
+    authorization_endpoint: normalizeOidcEndpoint(
+      value.authorization_endpoint,
+      "OIDC authorization endpoint",
+    ),
+    token_endpoint: normalizeOidcEndpoint(
+      value.token_endpoint,
+      "OIDC token endpoint",
+    ),
+  } as OidcMetadata;
 }
 
 export function createOidcAuthorizationUrl(
   input: OidcAuthorizationUrlInput,
 ): string {
-  const url = new URL(input.metadata.authorization_endpoint);
+  const url = new URL(
+    normalizeOidcEndpoint(
+      input.metadata.authorization_endpoint,
+      "OIDC authorization endpoint",
+    ),
+  );
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", input.clientId);
   url.searchParams.set("redirect_uri", input.redirectUri);
@@ -81,6 +106,10 @@ export async function exchangeOidcCode(
   if (!input.metadata.token_endpoint) {
     throw new Error("OIDC metadata is missing token endpoint.");
   }
+  const tokenEndpoint = normalizeOidcEndpoint(
+    input.metadata.token_endpoint,
+    "OIDC token endpoint",
+  );
   const fetcher = input.fetch ?? globalThis.fetch.bind(globalThis);
   const body = new URLSearchParams({
     grant_type: "authorization_code",
@@ -89,7 +118,7 @@ export async function exchangeOidcCode(
     code: input.code,
     code_verifier: input.codeVerifier,
   });
-  const response = await fetcher(input.metadata.token_endpoint, {
+  const response = await fetcher(tokenEndpoint, {
     method: "POST",
     headers: {
       accept: "application/json",
@@ -108,6 +137,26 @@ export async function exchangeOidcCode(
     throw new Error("OIDC token response is missing token type.");
   }
   return token;
+}
+
+function normalizeOidcIssuer(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} is missing.`);
+  }
+  const url = requireSecureWebUrl(value.trim(), label);
+  if (url.pathname !== "/" || url.search || url.hash) {
+    throw new Error(`${label} must be a bare origin.`);
+  }
+  return normalizeHostUrl(url.toString());
+}
+
+function normalizeOidcEndpoint(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} is missing.`);
+  }
+  const url = requireSecureWebUrl(value.trim(), label);
+  if (url.hash) throw new Error(`${label} must not include a fragment.`);
+  return url.toString();
 }
 
 function createRandomVerifier(cryptoSource: Crypto, length = 64): string {

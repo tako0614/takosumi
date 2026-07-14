@@ -14,17 +14,6 @@ function providerSourcesFromMirrorConfig(config: string): readonly string[] {
   ).sort();
 }
 
-function defaultMirroredProvidersFromSource(source: string): readonly string[] {
-  const block = source.match(
-    /const DEFAULT_MIRRORED_PROVIDERS = \[([\s\S]*?)\] as const;/u,
-  )?.[1];
-  expect(block).toBeString();
-  return Array.from(
-    block!.matchAll(/"([^"]+)"/gu),
-    (match) => match[1]!,
-  ).sort();
-}
-
 test("runner provider mirror pins Cloudflare to the GA Takos lockfile version", async () => {
   const config = await readFile(MIRROR_PROVIDERS, "utf8");
 
@@ -45,7 +34,7 @@ test("runner provider mirror uses exact versions for offline-only providers", as
   expect(config).not.toContain("hashicorp/aws");
 });
 
-test("runner provider mirror and tofu.rc stay lockstep for baked offline providers", async () => {
+test("runner image may curate a cache without making its providers runtime defaults", async () => {
   const mirror = await readFile(MIRROR_PROVIDERS, "utf8");
   const tofuRc = await readFile(TOFU_RC, "utf8");
   const providersTs = await readFile(PROVIDERS_TS, "utf8");
@@ -57,12 +46,13 @@ test("runner provider mirror and tofu.rc stay lockstep for baked offline provide
     "registry.opentofu.org/hashicorp/random",
     "registry.opentofu.org/hashicorp/tls",
   ]);
-  expect(defaultMirroredProvidersFromSource(providersTs)).toEqual(providers);
   for (const provider of providers) {
-    expect(tofuRc).toContain(JSON.stringify(provider));
+    expect(tofuRc).not.toContain(JSON.stringify(provider));
+    expect(providersTs).not.toContain(JSON.stringify(provider));
   }
   expect(tofuRc).toContain("filesystem_mirror");
-  expect(tofuRc).toContain("direct");
+  expect(tofuRc).toContain("direct {}");
+  expect(providersTs).not.toContain("DEFAULT_MIRRORED_PROVIDERS");
 });
 
 test("runner image configures only an OpenTofu provider plugin cache", async () => {

@@ -14,10 +14,12 @@ import type {
   SpacePolicySpec,
   TargetPoolSpec,
 } from "takosumi-contract";
-import { RESOURCE_SHAPE_KINDS } from "takosumi-contract";
+import { isResourceShapeKind, RESOURCE_SHAPE_KINDS } from "takosumi-contract";
+import type { PageParams } from "takosumi-contract/pagination";
 import { apiError, readJsonObject, requestIdFromContext } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
+import { parsePageQuery } from "./page_query.ts";
 import {
   type ApplyResourceRequest,
   formatResourceShapeId,
@@ -29,8 +31,8 @@ export interface RegisterResourceShapeRoutesOptions {
   readonly service: ResourceShapeService;
   /**
    * Public Resource Shape kinds this host exposes. Omitted keeps the dev/test
-   * default of all compiled shape kinds, while operator/Cloud composition can
-   * fail closed to an explicit allowlist.
+   * default of the bundled shape kinds. Operator/plugin composition enables
+   * additional opaque kind tokens explicitly; the API has no closed enum.
    */
   readonly enabledResourceShapeKinds?: readonly ResourceShapeKind[];
   /**
@@ -65,18 +67,66 @@ export interface RegisterResourceShapeRoutesOptions {
   }) => boolean | Promise<boolean>;
 }
 
-/** Route inventory for the resource-shape family (not yet OpenAPI-published). */
+/** Single-source route inventory for capabilities and OpenAPI publication. */
 export const RESOURCE_SHAPE_ENDPOINTS: readonly ApiEndpoint[] = [
-  endpoint("POST", "/v1/resources/preview", "previewResource"),
-  endpoint("PUT", "/v1/resources/:kind/:name", "putResource"),
-  endpoint("GET", "/v1/resources/:kind/:name", "getResource"),
-  endpoint("GET", "/v1/resources", "listResources"),
-  endpoint("DELETE", "/v1/resources/:kind/:name", "deleteResource"),
-  endpoint("PUT", "/v1/target-pools/:name", "putTargetPool"),
-  endpoint("GET", "/v1/target-pools/:name", "getTargetPool"),
-  endpoint("GET", "/v1/target-pools", "listTargetPools"),
-  endpoint("DELETE", "/v1/target-pools/:name", "deleteTargetPool"),
-  endpoint("PUT", "/v1/space-policies/:name", "putSpacePolicy"),
+  endpoint("POST", "/v1/resources/preview", "previewResource", {
+    okSchema: "ResourceShapePreviewResponse",
+  }),
+  endpoint("PUT", "/v1/resources/:kind/:name", "putResource", {
+    requestSchema: "ResourceShapeApplyRequest",
+  }),
+  endpoint("POST", "/v1/resources/:kind/:name/import", "importResource", {
+    requestSchema: "ResourceShapeImportRequest",
+    okSchema: "ResourceShapeImportResponse",
+  }),
+  endpoint("GET", "/v1/resources/:kind/:name", "getResource", {
+    query: ["space"],
+  }),
+  endpoint("GET", "/v1/resources/:kind/:name/events", "listResourceEvents", {
+    okSchema: "ListResourceEventsResponse",
+    query: ["space", "limit", "cursor"],
+  }),
+  endpoint("POST", "/v1/resources/:kind/:name/observe", "observeResource", {
+    query: ["space"],
+  }),
+  endpoint("POST", "/v1/resources/:kind/:name/refresh", "refreshResource", {
+    query: ["space"],
+  }),
+  endpoint("GET", "/v1/resources", "listResources", {
+    okSchema: "ListResourceShapesResponse",
+    query: ["space", "limit", "cursor"],
+  }),
+  endpoint("DELETE", "/v1/resources/:kind/:name", "deleteResource", {
+    query: ["space", "force"],
+  }),
+  endpoint("PUT", "/v1/target-pools/:name", "putTargetPool", {
+    okSchema: "TargetPoolResponse",
+  }),
+  endpoint("GET", "/v1/target-pools/:name", "getTargetPool", {
+    okSchema: "TargetPoolResponse",
+    query: ["space"],
+  }),
+  endpoint("GET", "/v1/target-pools", "listTargetPools", {
+    okSchema: "ListTargetPoolsResponse",
+    query: ["space", "limit", "cursor"],
+  }),
+  endpoint("DELETE", "/v1/target-pools/:name", "deleteTargetPool", {
+    query: ["space"],
+  }),
+  endpoint("PUT", "/v1/space-policies/:name", "putSpacePolicy", {
+    okSchema: "SpacePolicyResponse",
+  }),
+  endpoint("GET", "/v1/space-policies/:name", "getSpacePolicy", {
+    okSchema: "SpacePolicyResponse",
+    query: ["space"],
+  }),
+  endpoint("GET", "/v1/space-policies", "listSpacePolicies", {
+    okSchema: "ListSpacePoliciesResponse",
+    query: ["space", "limit", "cursor"],
+  }),
+  endpoint("DELETE", "/v1/space-policies/:name", "deleteSpacePolicy", {
+    query: ["space"],
+  }),
 ] as const;
 
 export function registerResourceShapeRoutes(
@@ -103,9 +153,32 @@ export function registerResourceShapeRoutes(
     if (!auth.ok) return auth.response;
     const parsed = await parseResourceBody(c, auth.actor);
     if ("response" in parsed) return parsed.response;
-    const result = await service.apply(parsed.request);
+    const review = parseDeploymentReview(c, parsed.body);
+    if ("response" in review) return review.response;
+    const result = await service.apply(parsed.request, review.value);
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(withId(parsed.request, result.value), 200);
+  });
+
+  app.post("/v1/resources/:kind/:name/import", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
+    const parsed = await parseResourceBody(c, auth.actor);
+    if ("response" in parsed) return parsed.response;
+    const nativeId = stringField(parsed.body, "nativeId");
+    if (!nativeId) return badRequest(c, "nativeId is required");
+    const result = await service.importResource({
+      ...parsed.request,
+      nativeId,
+    });
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(
+      {
+        ...withId(parsed.request, result.value.resource),
+        import: result.value.import,
+      },
+      200,
+    );
   });
 
   app.get("/v1/resources/:kind/:name", async (c) => {
@@ -130,13 +203,97 @@ export function registerResourceShapeRoutes(
     );
   });
 
+  app.get("/v1/resources/:kind/:name/events", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
+    const kind = parseKind(c, enabledKinds);
+    if ("response" in kind) return kind.response;
+    const space = requireQuery(c, "space");
+    if ("response" in space) return space.response;
+    const page = parseResourcePageQuery(c);
+    if ("response" in page) return page.response;
+    const result = await service.listEvents(
+      space.value,
+      kind.value,
+      c.req.param("name"),
+      page.value,
+    );
+    return c.json(
+      {
+        events: result.items,
+        ...(result.nextCursor !== undefined
+          ? { nextCursor: result.nextCursor }
+          : {}),
+      },
+      200,
+    );
+  });
+
+  app.post("/v1/resources/:kind/:name/observe", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
+    const kind = parseKind(c, enabledKinds);
+    if ("response" in kind) return kind.response;
+    const space = requireQuery(c, "space");
+    if ("response" in space) return space.response;
+    const result = await service.observe(
+      space.value,
+      kind.value,
+      c.req.param("name"),
+      auth.actor,
+    );
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(
+      {
+        id: formatResourceShapeId(space.value, kind.value, c.req.param("name")),
+        ...result.value.resource,
+        observation: result.value.observation,
+      },
+      200,
+    );
+  });
+
+  app.post("/v1/resources/:kind/:name/refresh", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
+    const kind = parseKind(c, enabledKinds);
+    if ("response" in kind) return kind.response;
+    const space = requireQuery(c, "space");
+    if ("response" in space) return space.response;
+    const result = await service.refresh(
+      space.value,
+      kind.value,
+      c.req.param("name"),
+      auth.actor,
+    );
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(
+      {
+        id: formatResourceShapeId(space.value, kind.value, c.req.param("name")),
+        ...result.value.resource,
+        refresh: result.value.refresh,
+      },
+      200,
+    );
+  });
+
   app.get("/v1/resources", async (c) => {
     const auth = await authorizeResourceShape(c, options);
     if (!auth.ok) return auth.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
-    const resources = await service.list(space.value);
-    return c.json({ resources }, 200);
+    const page = parseResourcePageQuery(c);
+    if ("response" in page) return page.response;
+    const result = await service.listPage(space.value, page.value);
+    return c.json(
+      {
+        resources: result.items,
+        ...(result.nextCursor !== undefined
+          ? { nextCursor: result.nextCursor }
+          : {}),
+      },
+      200,
+    );
   });
 
   app.delete("/v1/resources/:kind/:name", async (c) => {
@@ -201,8 +358,18 @@ export function registerResourceShapeRoutes(
     if (!auth.ok) return auth.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
-    const pools = await service.listTargetPools(space.value);
-    return c.json({ targetPools: pools }, 200);
+    const page = parseResourcePageQuery(c);
+    if ("response" in page) return page.response;
+    const result = await service.listTargetPoolsPage(space.value, page.value);
+    return c.json(
+      {
+        targetPools: result.items,
+        ...(result.nextCursor !== undefined
+          ? { nextCursor: result.nextCursor }
+          : {}),
+      },
+      200,
+    );
   });
 
   app.get("/v1/target-pools/:name", async (c) => {
@@ -228,7 +395,11 @@ export function registerResourceShapeRoutes(
     if (!auth.ok) return auth.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
-    await service.deleteTargetPool(space.value, c.req.param("name"));
+    const result = await service.deleteTargetPool(
+      space.value,
+      c.req.param("name"),
+    );
+    if (!result.ok) return errorResponse(c, result.error);
     return c.body(null, 204);
   });
 
@@ -247,11 +418,61 @@ export function registerResourceShapeRoutes(
     return c.json(record, 200);
   });
 
+  app.get("/v1/space-policies", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
+    const space = requireQuery(c, "space");
+    if ("response" in space) return space.response;
+    const page = parseResourcePageQuery(c);
+    if ("response" in page) return page.response;
+    const result = await service.listSpacePoliciesPage(space.value, page.value);
+    return c.json(
+      {
+        spacePolicies: result.items,
+        ...(result.nextCursor !== undefined
+          ? { nextCursor: result.nextCursor }
+          : {}),
+      },
+      200,
+    );
+  });
+
+  app.get("/v1/space-policies/:name", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
+    const space = requireQuery(c, "space");
+    if ("response" in space) return space.response;
+    const record = await service.getSpacePolicy(
+      space.value,
+      c.req.param("name"),
+    );
+    if (!record) {
+      return errorResponse(c, {
+        code: "not_found",
+        message: "SpacePolicy was not found in this space",
+      });
+    }
+    return c.json(record, 200);
+  });
+
+  app.delete("/v1/space-policies/:name", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
+    const space = requireQuery(c, "space");
+    if ("response" in space) return space.response;
+    await service.deleteSpacePolicy(space.value, c.req.param("name"));
+    return c.body(null, 204);
+  });
+
   async function parseResourceBody(
     c: Context,
     actor: ActorContext,
   ): Promise<
-    { readonly request: ApplyResourceRequest } | { readonly response: Response }
+    | {
+        readonly request: ApplyResourceRequest;
+        readonly body: Record<string, unknown>;
+      }
+    | { readonly response: Response }
   > {
     const body = await readJsonObject(c.req.raw);
     const kind = parseKindFromBodyOrParam(c, body, enabledKinds);
@@ -294,6 +515,7 @@ export function registerResourceShapeRoutes(
     if (!space)
       return { response: badRequest(c, "metadata.space is required") };
     return {
+      body,
       request: {
         actor,
         space,
@@ -381,8 +603,8 @@ function withId(req: ApplyResourceRequest, value: object): object {
   return { id: formatResourceShapeId(req.space, req.kind, req.name), ...value };
 }
 
-function isResourceKind(value: string): value is ResourceShapeKind {
-  return (RESOURCE_SHAPE_KINDS as readonly string[]).includes(value);
+function isResourceKindToken(value: string): value is ResourceShapeKind {
+  return isResourceShapeKind(value);
 }
 
 function parseKind(
@@ -390,8 +612,8 @@ function parseKind(
   enabledKinds: ReadonlySet<ResourceShapeKind>,
 ): { readonly value: ResourceShapeKind } | { readonly response: Response } {
   const kind = c.req.param("kind");
-  if (!kind || !isResourceKind(kind)) {
-    return { response: badRequest(c, `unknown resource kind: ${kind}`) };
+  if (!kind || !isResourceKindToken(kind)) {
+    return { response: badRequest(c, `invalid resource kind: ${kind}`) };
   }
   if (!enabledKinds.has(kind)) {
     return { response: badRequest(c, `resource kind is not enabled: ${kind}`) };
@@ -418,8 +640,8 @@ function parseKindFromBodyOrParam(
     return parseKind(c, enabledKinds);
   }
   const fromBody = stringField(body, "kind");
-  if (!fromBody || !isResourceKind(fromBody)) {
-    return { response: badRequest(c, `unknown resource kind: ${fromBody}`) };
+  if (!fromBody || !isResourceKindToken(fromBody)) {
+    return { response: badRequest(c, `invalid resource kind: ${fromBody}`) };
   }
   if (!enabledKinds.has(fromBody)) {
     return {
@@ -438,11 +660,65 @@ function requireQuery(
   return { value };
 }
 
+function parseResourcePageQuery(
+  c: Context,
+): { readonly value: PageParams } | { readonly response: Response } {
+  const parsed = parsePageQuery(c.req.query("limit"), c.req.query("cursor"));
+  return parsed.ok
+    ? { value: parsed.value }
+    : { response: badRequest(c, parsed.message) };
+}
+
 function stringField(
   body: Record<string, unknown>,
   key: string,
 ): string | undefined {
   return stringValue(body[key]);
+}
+
+function parseDeploymentReview(
+  c: Context,
+  body: Record<string, unknown>,
+):
+  | {
+      readonly value: {
+        readonly planDigest: string;
+        readonly quoteId?: string;
+        readonly quoteDigest?: string;
+      };
+    }
+  | { readonly response: Response } {
+  const raw = body.review;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      response: badRequest(
+        c,
+        "deployment review from POST /v1/resources/preview is required",
+      ),
+    };
+  }
+  const review = raw as Record<string, unknown>;
+  const planDigest = stringField(review, "planDigest");
+  if (!planDigest) {
+    return { response: badRequest(c, "review.planDigest is required") };
+  }
+  const quoteId = stringField(review, "quoteId");
+  const quoteDigest = stringField(review, "quoteDigest");
+  if (Boolean(quoteId) !== Boolean(quoteDigest)) {
+    return {
+      response: badRequest(
+        c,
+        "review.quoteId and review.quoteDigest must be provided together",
+      ),
+    };
+  }
+  return {
+    value: {
+      planDigest,
+      ...(quoteId ? { quoteId } : {}),
+      ...(quoteDigest ? { quoteDigest } : {}),
+    },
+  };
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -473,7 +749,7 @@ function errorResponse(
 
 function httpStatusForServiceError(
   code: ResourceServiceErrorCode,
-): 400 | 404 | 409 | 502 {
+): 400 | 402 | 404 | 409 | 502 {
   switch (code) {
     case "invalid_spec":
     case "invalid_name":
@@ -498,19 +774,36 @@ function httpStatusForServiceError(
     case "invalid_lifecycle_policy":
     case "invalid_delete_policy":
     case "invalid_target_pool":
+    case "invalid_import":
     case "unsupported_shape":
+    case "deployment_quote_invalid":
       return 400;
     case "target_pool_not_found":
     case "connection_not_found":
     case "not_found":
       return 404;
     case "policy_denied":
+    case "target_pool_in_use":
     case "capability_missing":
     case "selected_target_missing":
+    case "resolution_descriptor_missing":
     case "connection_not_ready":
     case "delete_blocked":
+    case "observe_blocked":
+    case "refresh_blocked":
+    case "import_conflict":
+    case "reconcile_conflict":
+    case "deployment_review_required":
+    case "deployment_plan_changed":
       return 409;
+    case "deployment_admission_denied":
+      return 402;
     case "apply_failed":
+    case "deployment_finalize_pending":
+    case "deployment_billing_finalize_failed":
+    case "observe_failed":
+    case "refresh_failed":
+    case "import_failed":
     case "delete_failed":
       return 502;
   }
@@ -520,7 +813,12 @@ function endpoint(
   method: ApiEndpoint["method"],
   path: string,
   operationId: string,
+  openapi: Partial<ApiEndpoint["openapi"]> = {},
 ): ApiEndpoint {
+  const { okSchema = "ResourceShapeResponse", ...openapiOptions } = openapi;
+  const pathParams = [...path.matchAll(/:([A-Za-z_][A-Za-z0-9_]*)/g)].map(
+    (match) => match[1]!,
+  );
   return {
     method,
     path,
@@ -528,6 +826,11 @@ function endpoint(
     auth: "deploy-control-token",
     operationId,
     tag: "resource-shape",
-    openapi: { okSchema: "ResourceShapeResponse" },
+    openapi: {
+      okSchema,
+      ...(method === "DELETE" ? { okStatus: "204" as const } : {}),
+      ...(pathParams.length > 0 ? { pathParams } : {}),
+      ...openapiOptions,
+    },
   };
 }

@@ -5,31 +5,31 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { JsonValue } from "takosumi-contract";
 import type {
-  DeploymentOutput as OutputSnapshotProjection,
   OpenTofuModuleSource,
   OpenTofuOutputEnvelope,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
 import {
-  extractDeploymentOutputs as extractOutputSnapshotProjection,
   parseOpenTofuOutputs,
   toDeployControlOutputEnvelope,
-} from "../../accounts/platform-services/src/opentofu-output-resolver.ts";
+} from "./opentofu-output.ts";
 import {
   applyExpectedGuardFromPlanRun,
-  OpenTofuDeploymentController,
+  DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
+  OpenTofuController,
   type OpenTofuApplyJob,
   type OpenTofuPlanJob,
   type OpenTofuRunner,
 } from "../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import {
   FIXTURE_AWS_MIRROR_EVIDENCE,
   FIXTURE_AWS_PROVIDER,
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
-  seedInstallationModel,
+  seedCapsuleModel,
   seedProviderConnections,
 } from "../helpers/deploy-control/model_fixture.ts";
 
@@ -46,15 +46,15 @@ const ACCEPTED_LIVE_REF_PREFIXES = [
   "secret-manager://",
 ] as const;
 
-export interface OpenTofuOutputSnapshotProofInput {
+export interface OpenTofuOutputProofInput {
   readonly kind: typeof INPUT_KIND;
   readonly live?: boolean;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly source: OpenTofuModuleSource;
   readonly runnerProfileId?: string;
   readonly requiredProviders?: readonly string[];
   readonly variables?: Readonly<Record<string, JsonValue>>;
-  readonly outputKinds?: Readonly<Record<string, string>>;
+  readonly outputKinds: Readonly<Record<string, string>>;
   readonly outputs: {
     readonly file: string;
     readonly ref: string;
@@ -64,7 +64,7 @@ export interface OpenTofuOutputSnapshotProofInput {
   };
 }
 
-export interface OpenTofuOutputSnapshotProof {
+export interface OpenTofuOutputProof {
   readonly kind: typeof PROOF_KIND;
   readonly status: "passed";
   readonly generatedAt: string;
@@ -79,7 +79,7 @@ export interface OpenTofuOutputSnapshotProof {
     readonly planDigest: string;
     readonly providerLockDigest: string;
     readonly applyRunOutputsDigest: string;
-    readonly outputSnapshotDigest: string;
+    readonly outputDigest: string;
     readonly applyAuditEventCount: number;
     readonly stateLockStatus: string;
   };
@@ -93,15 +93,22 @@ export interface OpenTofuOutputSnapshotProof {
     readonly id: string;
     readonly status: string;
   };
-  readonly installation: {
+  readonly capsule: {
     readonly id: string;
     readonly status: string;
-    readonly currentDeploymentId: string | null;
+    readonly currentStateVersionId: string | null;
   };
-  readonly deployment: {
+  readonly stateVersion: {
     readonly id: string;
-    readonly status: string;
-    readonly outputs: readonly OutputSnapshotProjection[];
+    readonly generation: number;
+    readonly createdByRunId: string;
+  };
+  readonly output: {
+    readonly id: string;
+    readonly stateGeneration: number;
+    readonly publicOutputs: Readonly<Record<string, JsonValue>>;
+    readonly workspaceOutputs: Readonly<Record<string, JsonValue>>;
+    readonly outputDigest: string;
   };
   readonly checks: readonly {
     readonly name: string;
@@ -110,15 +117,15 @@ export interface OpenTofuOutputSnapshotProof {
   }[];
 }
 
-export interface RunOpenTofuOutputSnapshotProofOptions {
+export interface RunOpenTofuOutputProofOptions {
   readonly inputPath?: string;
   readonly outputPath?: string;
   readonly now?: () => string;
 }
 
-export async function runOpenTofuOutputSnapshotProof(
-  options: RunOpenTofuOutputSnapshotProofOptions = {},
-): Promise<OpenTofuOutputSnapshotProof> {
+export async function runOpenTofuOutputProof(
+  options: RunOpenTofuOutputProofOptions = {},
+): Promise<OpenTofuOutputProof> {
   const inputPath = resolve(options.inputPath ?? DEFAULT_INPUT);
   const baseDir = dirname(inputPath);
   const inputBytes = await readFile(inputPath);
@@ -129,13 +136,10 @@ export async function runOpenTofuOutputSnapshotProof(
   const outputBytes = await readFile(outputsPath);
   const parsedOutputs = parseOpenTofuOutputs(outputBytes.toString("utf8"));
   const outputEnvelope = toDeployControlOutputEnvelope(parsedOutputs);
-  const expectedOutputs = extractOutputSnapshotProjection({
-    outputs: parsedOutputs,
-    outputKinds: input.outputKinds,
-  }).map((output) => ({
-    ...output,
-    kind: output.kind.endsWith("_url") ? "url" : output.kind,
-  }));
+  const expectedPublicOutputs = projectProofOutputs(
+    outputEnvelope,
+    input.outputKinds,
+  );
   const source = normalizeSource(input.source, baseDir);
   const nowMs = Date.parse(options.now?.() ?? new Date().toISOString());
   const ids = deterministicIds();
@@ -144,46 +148,46 @@ export async function runOpenTofuOutputSnapshotProof(
     outputEnvelope,
     outputsDigest: digestBytes(outputBytes),
   });
-  // Capsule Installation model: a plan/apply targets an existing Installation
-  // row. Seed the Space-direct Installation model into the store and
-  // attach a prior current Deployment so the apply guard
-  // (`installationCurrentDeploymentId`) is satisfiable for this single-shot proof.
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const seeded = await seedInstallationModel(store, {
-    spaceId: input.spaceId,
-    installationId: ids.next("inst"),
+  // A plan/apply targets an existing Capsule. Attach a prior state pointer so
+  // the apply guard (`capsuleCurrentStateVersionId`) is satisfiable for this
+  // single-shot proof.
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: input.workspaceId,
+    capsuleId: ids.next("cap"),
     sourceUrl: source.kind === "git" ? source.url : undefined,
     installConfig: {
       outputAllowlist: Object.fromEntries(
-        expectedOutputs.map((output) => [
-          output.name,
+        Object.keys(expectedPublicOutputs).map((name) => [
+          name,
           {
-            from: output.name,
-            type: output.kind.endsWith("_url") ? "url" : output.kind,
+            from: name,
+            type: input.outputKinds[name]?.endsWith("_url") ? "url" : "json",
           },
         ]),
       ),
     },
   });
-  await seedProviderConnections(store, seeded.installation, {
+  await seedProviderConnections(store, seeded.capsule, {
     requiredProviders: input.requiredProviders,
   });
-  const seedDeploymentId = ids.next("dep");
-  await store.putInstallation({
-    ...seeded.installation,
-    currentDeploymentId: seedDeploymentId,
+  const previousStateVersionId = ids.next("state");
+  await store.putCapsule({
+    ...seeded.capsule,
+    currentStateVersionId: previousStateVersionId,
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
     store,
     runner,
     runnerProfiles: [runnerProfile],
     defaultRunnerProfileId: runnerProfile.id,
     vault: fakeProviderVault() as never,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: () => nowMs,
     newId: ids.next,
   });
 
-  const plan = await controller.createInstallationPlan(seeded.installation.id);
+  const plan = await controller.createCapsulePlan(seeded.capsule.id);
   if (plan.planRun.status !== "succeeded") {
     throw new Error(
       `fixture plan Run did not succeed: ${JSON.stringify(plan.planRun.diagnostics ?? [])}`,
@@ -204,35 +208,29 @@ export async function runOpenTofuOutputSnapshotProof(
       `fixture apply Run did not succeed: ${JSON.stringify(applied.applyRun.diagnostics ?? [])}`,
     );
   }
-  if (!applied.installation || !applied.deployment) {
+  if (!applied.capsule) {
+    throw new Error("fixture apply Run did not return its Capsule projection");
+  }
+  const stateVersionId = applied.applyRun.stateVersionId;
+  const outputId = applied.applyRun.outputId;
+  if (!stateVersionId || !outputId) {
     throw new Error(
-      "fixture apply Run did not materialize Installation/Deployment",
+      "successful apply did not record StateVersion and Output ids",
+    );
+  }
+  const stateVersion = await store.getStateVersion(stateVersionId);
+  const output = await store.getOutput(outputId);
+  if (!stateVersion || !output) {
+    throw new Error("successful apply ledger pointers do not resolve");
+  }
+  const applyRunOutputsDigest = digestJson(output.publicOutputs);
+  if (applyRunOutputsDigest !== digestJson(expectedPublicOutputs)) {
+    throw new Error(
+      "canonical Output.publicOutputs does not match the explicit service-side mapping",
     );
   }
 
-  // The internal apply compatibility record keeps the full projected output
-  // list while Deployment records the public name -> value projection as
-  // `outputsPublic`. Assert the public OutputSnapshot projection is exactly
-  // the name -> value reduction from the same source.
-  const deploymentOutputs = applied.applyRun.outputs ?? [];
-  const applyRunOutputsDigest = digestJson(deploymentOutputs);
-  const outputSnapshotDigest = applyRunOutputsDigest;
-  const expectedOutputsPublic = Object.fromEntries(
-    deploymentOutputs.map((output) => [output.name, output.value]),
-  );
-  if (
-    digestJson(applied.deployment.outputsPublic) !==
-    digestJson(expectedOutputsPublic)
-  ) {
-    throw new Error("apply outputs do not match Deployment outputsPublic projection");
-  }
-  if (outputSnapshotDigest !== digestJson(expectedOutputs)) {
-    throw new Error(
-      "OutputSnapshot projection does not match well-known OpenTofu outputs",
-    );
-  }
-
-  const proof: OpenTofuOutputSnapshotProof = {
+  const proof: OpenTofuOutputProof = {
     kind: PROOF_KIND,
     status: "passed",
     generatedAt: options.now?.() ?? new Date(nowMs).toISOString(),
@@ -247,7 +245,7 @@ export async function runOpenTofuOutputSnapshotProof(
       planDigest: plan.planRun.planDigest!,
       providerLockDigest: plan.planRun.providerLockDigest!,
       applyRunOutputsDigest,
-      outputSnapshotDigest,
+      outputDigest: output.outputDigest,
       applyAuditEventCount: applied.applyRun.auditEvents.length,
       stateLockStatus: applied.applyRun.stateLock.status,
     },
@@ -261,22 +259,29 @@ export async function runOpenTofuOutputSnapshotProof(
       id: applied.applyRun.id,
       status: applied.applyRun.status,
     },
-    installation: {
-      id: applied.installation.id,
-      status: applied.installation.status,
-      currentDeploymentId: applied.installation.currentDeploymentId ?? null,
+    capsule: {
+      id: applied.capsule.id,
+      status: applied.capsule.status,
+      currentStateVersionId: applied.capsule.currentStateVersionId ?? null,
     },
-    deployment: {
-      id: applied.deployment.id,
-      status: applied.deployment.status,
-      outputs: deploymentOutputs,
+    stateVersion: {
+      id: stateVersion.id,
+      generation: stateVersion.generation,
+      createdByRunId: stateVersion.createdByRunId,
+    },
+    output: {
+      id: output.id,
+      stateGeneration: output.stateGeneration,
+      publicOutputs: output.publicOutputs,
+      workspaceOutputs: output.workspaceOutputs,
+      outputDigest: output.outputDigest,
     },
     checks: [
       {
         name: "opentofu-output-import",
         status: "passed",
         message:
-          "operator-supplied tofu output -json was parsed as OutputSnapshot projection evidence",
+          "operator-supplied tofu output -json was parsed as Output projection evidence",
       },
       {
         name: "run-ledger",
@@ -285,10 +290,10 @@ export async function runOpenTofuOutputSnapshotProof(
           "internal plan/apply compatibility records were created through the OpenTofu deploy control API",
       },
       {
-        name: "output-snapshot-projection",
+        name: "state-version-output-ledger",
         status: "passed",
         message:
-          "successful apply outputs match the OutputSnapshot projection recorded on Deployment",
+          "successful apply recorded canonical StateVersion and Output rows without a second compatibility ledger",
       },
     ],
   };
@@ -353,12 +358,30 @@ class ProofRunner implements OpenTofuRunner {
   }
 }
 
-function parseProofInput(value: unknown): OpenTofuOutputSnapshotProofInput {
+function projectProofOutputs(
+  outputs: OpenTofuOutputEnvelope,
+  outputKinds: Readonly<Record<string, string>>,
+): Readonly<Record<string, JsonValue>> {
+  const projected: Record<string, JsonValue> = {};
+  for (const name of Object.keys(outputKinds)) {
+    const output = outputs[name];
+    if (!output) {
+      throw new Error(`mapped OpenTofu output ${name} is missing`);
+    }
+    if (output.sensitive === true) {
+      throw new Error(`mapped OpenTofu output ${name} is sensitive`);
+    }
+    projected[name] = output.value;
+  }
+  return projected;
+}
+
+function parseProofInput(value: unknown): OpenTofuOutputProofInput {
   const input = record(value, "proof input");
   if (input.kind !== INPUT_KIND) {
     throw new Error(`proof input kind must be ${INPUT_KIND}`);
   }
-  requireNonEmptyString(input.spaceId, "spaceId");
+  requireNonEmptyString(input.workspaceId, "workspaceId");
   const source = parseSource(input.source);
   const outputs = record(input.outputs, "outputs");
   requireNonEmptyString(outputs.file, "outputs.file");
@@ -368,7 +391,7 @@ function parseProofInput(value: unknown): OpenTofuOutputSnapshotProofInput {
   return {
     kind: INPUT_KIND,
     live: input.live === true,
-    spaceId: input.spaceId,
+    workspaceId: input.workspaceId,
     source,
     runnerProfileId:
       typeof input.runnerProfileId === "string"
@@ -383,9 +406,7 @@ function parseProofInput(value: unknown): OpenTofuOutputSnapshotProofInput {
     variables: isRecord(input.variables)
       ? (input.variables as Readonly<Record<string, JsonValue>>)
       : undefined,
-    outputKinds: isStringRecord(input.outputKinds)
-      ? input.outputKinds
-      : undefined,
+    outputKinds: requiredStringRecord(input.outputKinds, "outputKinds"),
     outputs: {
       file: outputs.file,
       ref: outputs.ref,
@@ -398,38 +419,20 @@ function parseProofInput(value: unknown): OpenTofuOutputSnapshotProofInput {
 
 function parseSource(value: unknown): OpenTofuModuleSource {
   const source = record(value, "source");
-  switch (source.kind) {
-    case "git":
-      requireNonEmptyString(source.url, "source.url");
-      return {
-        kind: "git",
-        url: source.url,
-        ref: optionalString(source.ref),
-        commit: optionalString(source.commit),
-        modulePath: optionalString(source.modulePath),
-      };
-    case "prepared":
-      requireNonEmptyString(source.url, "source.url");
-      requireNonEmptyString(source.digest, "source.digest");
-      return {
-        kind: "prepared",
-        url: source.url,
-        digest: source.digest,
-        modulePath: optionalString(source.modulePath),
-      };
-    case "local":
-      requireNonEmptyString(source.path, "source.path");
-      return {
-        kind: "local",
-        path: source.path,
-        modulePath: optionalString(source.modulePath),
-      };
-    default:
-      throw new Error("source.kind must be git, prepared, or local");
+  if (source.kind !== "git") {
+    throw new Error("source.kind must be git");
   }
+  requireNonEmptyString(source.url, "source.url");
+  return {
+    kind: "git",
+    url: source.url,
+    ref: optionalString(source.ref),
+    commit: optionalString(source.commit),
+    modulePath: optionalString(source.modulePath),
+  };
 }
 
-function validateEvidenceRefs(input: OpenTofuOutputSnapshotProofInput): void {
+function validateEvidenceRefs(input: OpenTofuOutputProofInput): void {
   if (input.live !== true) return;
   for (const [name, ref] of [
     ["operator.opentofuApplyRef", input.operator.opentofuApplyRef],
@@ -446,13 +449,16 @@ function validateEvidenceRefs(input: OpenTofuOutputSnapshotProofInput): void {
 }
 
 function runnerProfileForInput(
-  input: OpenTofuOutputSnapshotProofInput,
+  input: OpenTofuOutputProofInput,
   now: number,
 ): RunnerProfile {
   return {
     id: input.runnerProfileId ?? "opentofu-default",
     name: "Fixture Cloudflare Container runner",
     substrate: "cloudflare-containers",
+    executorId: DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
+    lifecycle: { state: "active" },
+    availability: { state: "available" },
     stateBackend: {
       kind: "operator-managed",
       ref: "state://fixture/opentofu-proof",
@@ -464,20 +470,15 @@ function runnerProfileForInput(
     allowedProviders: input.requiredProviders?.length
       ? input.requiredProviders
       : ["*"],
-    sourcePolicy: { allowLocalSource: true },
     createdAt: now,
   };
 }
 
 function normalizeSource(
   source: OpenTofuModuleSource,
-  baseDir: string,
+  _baseDir: string,
 ): OpenTofuModuleSource {
-  if (source.kind !== "local") return source;
-  return {
-    ...source,
-    path: resolveRelative(baseDir, source.path),
-  };
+  return source;
 }
 
 function sourceCommitFromProofSource(source: OpenTofuModuleSource): string {
@@ -561,6 +562,22 @@ function isStringRecord(
   return Object.values(value).every((entry) => typeof entry === "string");
 }
 
+function requiredStringRecord(
+  value: unknown,
+  label: string,
+): Readonly<Record<string, string>> {
+  if (
+    !isStringRecord(value) ||
+    Object.keys(value).length === 0 ||
+    Object.entries(value).some(
+      ([name, kind]) => name.trim().length === 0 || kind.trim().length === 0,
+    )
+  ) {
+    throw new Error(`${label} must be a non-empty string map`);
+  }
+  return value;
+}
+
 function optionalString(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   requireNonEmptyString(value, "optional string");
@@ -576,9 +593,7 @@ function requireNonEmptyString(
   }
 }
 
-function parseCliArgs(
-  args: readonly string[],
-): RunOpenTofuOutputSnapshotProofOptions {
+function parseCliArgs(args: readonly string[]): RunOpenTofuOutputProofOptions {
   const options: { inputPath?: string; outputPath?: string } = {};
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -616,13 +631,13 @@ function requireNext(
 function printHelp(): void {
   console.log(`Usage: bun tests/proofs/opentofu-output-snapshot.ts [--input proof-input.json] [--output proof.json]
 
-Verifies operator-supplied tofu output -json can be recorded as an OutputSnapshot
+Verifies operator-supplied tofu output -json can be recorded as an Output
 projection through the OpenTofu Run ledger.`);
 }
 
 if (import.meta.main) {
   try {
-    const proof = await runOpenTofuOutputSnapshotProof(
+    const proof = await runOpenTofuOutputProof(
       parseCliArgs(process.argv.slice(2)),
     );
     console.log(JSON.stringify(proof, null, 2));

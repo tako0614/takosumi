@@ -1,6 +1,6 @@
 id: kubernetes
 display_name: Kubernetes
-provider_rule: kubernetes
+secret_partition: provider-credentials
 terraform_source:
   - hashicorp/kubernetes
   - registry.opentofu.org/hashicorp/kubernetes
@@ -19,6 +19,22 @@ auth_modes:
         from: value
         name: kubeconfig_path
   token:
+    presentation:
+      show_in_connection_setup: true
+      display_name:
+        { en: Cluster endpoint and token, ja: クラスター endpoint とトークン }
+    input_hints:
+      KUBE_HOST:
+        label: { en: Cluster endpoint, ja: クラスター endpoint }
+        placeholder: https://cluster.example.com
+        required: true
+      KUBE_TOKEN:
+        label: { en: Bearer token, ja: Bearer トークン }
+        required: true
+      KUBE_CLUSTER_CA_CERT_DATA:
+        label:
+          { en: Cluster CA certificate data, ja: クラスター CA 証明書データ }
+        required: false
     env:
       KUBE_HOST:
         from: value

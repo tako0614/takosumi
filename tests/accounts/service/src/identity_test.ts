@@ -20,6 +20,7 @@ test("resolveUpstreamAccount creates and reuses a stable Takosumi account", asyn
     profile: {
       email: "octo@example.test",
       displayName: "Octo",
+      picture: "https://id.example.test/octo.png",
     },
     now: 1000,
   });
@@ -39,6 +40,7 @@ test("resolveUpstreamAccount creates and reuses a stable Takosumi account", asyn
   expect(second.subject.startsWith("tsub_")).toEqual(true);
   expect(second.email).toEqual("octo@example.test");
   expect(second.displayName).toEqual("Octo Cat");
+  expect(second.picture).toEqual("https://id.example.test/octo.png");
   expect(second.createdAt).toEqual(1000);
   expect(second.updatedAt).toEqual(2000);
 });
@@ -48,8 +50,8 @@ test("resolveUpstreamAccount carries the upstream email_verified assertion", asy
   const verified = (await resolveUpstreamAccount({
     store,
     subjectSecret: "subject-secret",
-    providerId: "google",
-    upstreamIssuer: "https://accounts.google.com",
+    providerId: "primary-oidc",
+    upstreamIssuer: "https://idp.example.test",
     upstreamSubject: "verified-user",
     profile: {
       email: "verified@example.test",

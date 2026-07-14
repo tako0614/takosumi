@@ -13,6 +13,8 @@ const enNav: DefaultTheme.NavItem[] = [
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
   { text: "Reference", link: "/en/reference/model" },
   { text: "Hosted Cloud", link: "https://app.takosumi.com/docs/en/" },
+  // Legal pages are English templates shared with the JA tree (no separate /en/legal).
+  { text: "Legal", link: "/legal/terms-of-service" },
 ];
 
 const jaSidebar: DefaultTheme.SidebarMulti = {
@@ -85,6 +87,14 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         { text: "App Handoff", link: "/en/reference/app-handoff" },
         { text: "Docs contract", link: "/en/reference/docs-contract" },
         { text: "Glossary", link: "/en/reference/glossary" },
+      ],
+    },
+    {
+      text: "Legal",
+      items: [
+        { text: "Terms", link: "/legal/terms-of-service" },
+        { text: "Privacy", link: "/legal/privacy-policy" },
+        { text: "DPA", link: "/legal/data-processing-agreement" },
       ],
     },
   ],

@@ -102,11 +102,6 @@ func TestEdgeWorkerCreateAcceptsEndpointDefinedProfileTokens(t *testing.T) {
 	ctx := context.Background()
 	var gotProfiles []any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/v1/resources/EdgeWorker/api" {
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-			http.NotFound(w, r)
-			return
-		}
 		var req client.Resource
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Errorf("decode request: %v", err)
@@ -118,6 +113,20 @@ func TestEdgeWorkerCreateAcceptsEndpointDefinedProfileTokens(t *testing.T) {
 			t.Errorf("expected profiles list in request, got %#v", req.Spec["profiles"])
 		}
 		gotProfiles = rawProfiles
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/resources/preview" {
+			_ = json.NewEncoder(w).Encode(client.PreviewResourceResult{
+				Resource:              req,
+				PlanDigest:            "sha256:plan",
+				SpecDigest:            "sha256:spec",
+				ResolutionFingerprint: "sha256:resolution",
+			})
+			return
+		}
+		if r.Method != http.MethodPut || r.URL.Path != "/v1/resources/EdgeWorker/api" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
 		req.Status = &client.Status{
 			Phase: "Ready",
 			Resolution: client.Resolution{

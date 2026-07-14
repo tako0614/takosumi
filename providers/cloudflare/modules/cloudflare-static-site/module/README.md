@@ -1,4 +1,4 @@
-# cloudflare-static-site (first-party Capsule module)
+# cloudflare-static-site (example Capsule module)
 
 Creates a Cloudflare Pages project that serves a static site.
 
@@ -9,6 +9,7 @@ Creates a Cloudflare Pages project that serves a static site.
   `productionBranch` (string, optional, default `main`).
 - Outputs: `project_name`, `url`.
 
-This directory is baked into the runner image at
-`/app/templates/cloudflare-static-site/module`. Takosumi generates a root module
-that wires this module via `source = "./template-module"` with the typed inputs.
+Install it by selecting this repository, a pinned ref/commit, and this module
+path. Takosumi snapshots those Git bytes and generates a root module that wires
+the selected child through `source = "./module"`. The runner image contains no
+copy of this module.

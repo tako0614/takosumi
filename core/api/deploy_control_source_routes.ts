@@ -17,7 +17,7 @@ import {
   type DeployControlEndpoint,
   type DeployControlRouteContext,
   COMPATIBILITY_REPORT_ID_PATTERN,
-  ensureSpacePermission,
+  ensureWorkspacePermission,
   errorEnvelope,
   parsePageParams,
   readOptionalJsonBody,
@@ -58,10 +58,10 @@ export const DEPLOY_CONTROL_SOURCE_ENDPOINTS: readonly DeployControlEndpoint[] =
     {
       method: "GET",
       path: TAKOSUMI_SOURCES_ROUTE,
-      summary: "Lists Sources for a Space (never includes the hook secret).",
+      summary: "Lists Sources for a Workspace (never includes the hook secret).",
       auth: "deploy-control-token",
       operationId: "listSources",
-      openapi: { query: ["spaceId"], okSchema: "ListSourcesResponse" },
+      openapi: { query: ["workspaceId"], okSchema: "ListSourcesResponse" },
       notImplementedMessage: "sources not wired",
     },
     {
@@ -155,7 +155,7 @@ export function mountDeployControlSourceRoutes(
       enforceBody: true,
       handler: async ({ c, principal }) => {
         const body = await readJsonBody<CreateSourceRequest>(c, "sourceCreate");
-        ensureSpacePermission(principal, body.workspaceId ?? body.spaceId);
+        ensureWorkspacePermission(principal, body.workspaceId);
         const response = await controller.createSource(body);
         return c.json(response, 201);
       },
@@ -165,18 +165,21 @@ export function mountDeployControlSourceRoutes(
   app.get(TAKOSUMI_SOURCES_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
-    const spaceId = c.req.query("spaceId") ?? "";
-    if (spaceId.trim().length === 0) {
+    const workspaceId = c.req.query("workspaceId") ?? "";
+    if (workspaceId.trim().length === 0) {
       return c.json(
-        errorEnvelope(c, "invalid_argument", "spaceId query is required"),
+        errorEnvelope(c, "invalid_argument", "workspaceId query is required"),
         400,
       );
     }
     const page = parsePageParams(c);
     if (page.kind === "invalid") return page.response;
     return await runHandler(c, async () => {
-      ensureSpacePermission(auth.principal, spaceId);
-      return c.json(await controller.listSources(spaceId, page.value), 200);
+      ensureWorkspacePermission(auth.principal, workspaceId);
+      return c.json(
+        await controller.listSources(workspaceId, page.value),
+        200,
+      );
     });
   });
 
@@ -187,7 +190,7 @@ export function mountDeployControlSourceRoutes(
       param: SOURCE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const response = await controller.getSource(id);
-        ensureSpacePermission(principal, response.source.spaceId);
+        ensureWorkspacePermission(principal, response.source.workspaceId);
         return c.json(response, 200);
       },
     }),
@@ -202,7 +205,7 @@ export function mountDeployControlSourceRoutes(
       enforceBody: true,
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getSource(id);
-        ensureSpacePermission(principal, existing.source.spaceId);
+        ensureWorkspacePermission(principal, existing.source.workspaceId);
         const body = await readJsonBody<PatchSourceRequest>(c, "sourcePatch");
         return c.json(await controller.patchSource(id, body), 200);
       },
@@ -218,7 +221,7 @@ export function mountDeployControlSourceRoutes(
       enforceBody: false,
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getSource(id);
-        ensureSpacePermission(principal, existing.source.spaceId);
+        ensureWorkspacePermission(principal, existing.source.workspaceId);
         const body =
           await readOptionalJsonBody<CreateSourceCompatibilityCheckRequest>(
             c,
@@ -253,30 +256,8 @@ export function mountDeployControlSourceRoutes(
       },
       handler: async ({ c, principal, id }) => {
         const response = await controller.getCompatibilityReport(id);
-        let spaceId: string | undefined;
-        if (response.report.sourceId) {
-          const existing = await controller.getSource(response.report.sourceId);
-          spaceId = existing.source.spaceId;
-        } else if (response.report.installationId) {
-          const existing = await controller.getInstallation(
-            response.report.installationId,
-          );
-          spaceId = existing.capsule.workspaceId;
-        } else if (response.report.sourceSnapshotId) {
-          const snapshot = await controller.getSourceSnapshot(
-            response.report.sourceSnapshotId,
-          );
-          // The snapshot carries its owning Space directly (origin-agnostic),
-          // so upload-origin snapshots resolve without a git Source.
-          spaceId = snapshot.spaceId;
-        }
-        if (!spaceId) {
-          throw new OpenTofuControllerError(
-            "not_found",
-            `compatibility report ${id} has no resolvable owner`,
-          );
-        }
-        ensureSpacePermission(principal, spaceId);
+        const existing = await controller.getSource(response.report.sourceId);
+        ensureWorkspacePermission(principal, existing.source.workspaceId);
         return c.json(response, 200);
       },
     }),
@@ -289,7 +270,7 @@ export function mountDeployControlSourceRoutes(
       param: SOURCE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getSource(id);
-        ensureSpacePermission(principal, existing.source.spaceId);
+        ensureWorkspacePermission(principal, existing.source.workspaceId);
         return c.json(await controller.createSourceSync(id), 201);
       },
     }),
@@ -302,7 +283,7 @@ export function mountDeployControlSourceRoutes(
       param: SOURCE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getSource(id);
-        ensureSpacePermission(principal, existing.source.spaceId);
+        ensureWorkspacePermission(principal, existing.source.workspaceId);
         const page = parsePageParams(c);
         if (page.kind === "invalid") return page.response;
         return c.json(

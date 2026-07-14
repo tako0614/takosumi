@@ -5,7 +5,6 @@
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
-  Connection,
   ConnectionOAuthStartResponse,
   ConnectionResponse,
   ConnectionScopeHints,
@@ -13,10 +12,7 @@ import type {
   CreateConnectionFile,
   CreateConnectionRequest,
   DeployControlErrorCode,
-  Deployment,
-  InternalDeployRequest,
   ListConnectionsResponse,
-  ListDeploymentsResponse,
   ListRunnerProfilesResponse,
   OpenTofuModuleSource,
   PlanRunResponse,
@@ -24,7 +20,6 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
-  ArtifactSnapshotRequest,
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
@@ -35,10 +30,6 @@ import type {
   SourceSnapshot,
 } from "takosumi-contract/sources";
 import type {
-  DeployResponse,
-  PublicDeployResponse,
-} from "takosumi-contract/deploy";
-import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
@@ -46,8 +37,9 @@ import type {
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  CapsuleProviderEnvBindingSet,
   InstallConfig,
+  InstallConfigLifecycleAction,
+  InstallConfigVariableDefault,
   Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
@@ -63,11 +55,9 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  CapsuleProviderConnectionBinding,
-  CapsuleProviderConnectionBindings,
-  CapsuleProviderEnvBinding,
-  CapsuleProviderEnvBindings,
-  CapsuleProviderConnectionSet,
+  ProviderBinding,
+  ProviderBindings,
+  ProviderBindingSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -75,19 +65,12 @@ import type {
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
 import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
-import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
   CreateBackupResponse,
   CreateRestoreRequest,
   ListBackupsResponse,
 } from "takosumi-contract/backups";
-import type {
-  BillingSettings,
-  CreditBalance,
-  CreditReservation,
-  UsageEvent,
-} from "takosumi-contract/billing";
 import type {
   ListRunsResponse,
   Run,
@@ -97,14 +80,6 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import type {
-  AppCapsuleMode,
-  AppCapsuleStatus,
-  CapsuleRecord,
-  WorkspaceKind,
-} from "../ledger.ts";
-import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -133,46 +108,41 @@ import {
   parseControlPageParams,
   publicApplyActionResponse,
   publicCompatibilityReportResponse,
-  publicDeployResponse,
-  publicDeployment,
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
   requireWorkspaceAccess,
-  resolveProviderConnectionBindings,
+  resolveProviderBindings,
 } from "./shared.ts";
 import {
   booleanValue,
   connectionCredentialFiles,
   connectionScopeHints,
-  connectionScopeHintsFromValues,
   dependencyModeValue,
   dependencyVisibilityValue,
-  isGoogleCloudProvider,
   isJsonValue,
   isOutputsMapping,
   isPlainJsonObject,
   jsonRecordValue,
   modulePathValue,
   outputAllowlistValue,
+  installExperienceValue,
+  installConfigVariableDefaultValue,
+  variablePresentationValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseCapsuleProviderConnectionBinding,
-  parseCapsuleProviderConnectionBindings,
+  parseProviderBinding,
+  parseProviderBindings,
   parseLimit,
-  spaceTypeValue,
+  workspaceTypeValue,
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
-import {
-  defaultCapsuleOutputAllowlist,
-  isNonselectableRepositoryStoreInstallConfigId,
-} from "../../../../core/domains/capsules/install_config_bootstrap.ts";
+import { parseInterfaceBlueprintsValue } from "./interface-blueprints.ts";
+import { defaultCapsuleOutputAllowlist } from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
-import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 export async function handleInstallConfigs(
   ctx: ControlDispatchContext,
@@ -181,7 +151,7 @@ export async function handleInstallConfigs(
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
   // /api/v1/capsule-configs, normalized to the historical handler key.
-  if (segments.length === 1 && segments[0] === "install-configs") {
+  if (segments.length === 1 && segments[0] === "capsule-configs") {
     if (method !== "GET") return methodNotAllowed("GET");
     return await listInstallConfigs(
       operations,
@@ -190,13 +160,12 @@ export async function handleInstallConfigs(
       url,
     );
   }
-  if (segments.length === 2 && segments[0] === "install-configs") {
+  if (segments.length === 2 && segments[0] === "capsule-configs") {
     if (method !== "GET" && method !== "PATCH") {
       return methodNotAllowed("GET, PATCH");
     }
     const installConfigId = decodeURIComponent(segments[1] ?? "");
-    const config =
-      await operations.installations.getInstallConfig(installConfigId);
+    const config = await operations.capsules.getInstallConfig(installConfigId);
     if (config.workspaceId !== undefined) {
       const auth = await requireWorkspaceAccess({
         operations,
@@ -219,7 +188,7 @@ async function patchScopedInstallConfig(
   operations: ControlPlaneOperations,
   config: InstallConfig,
 ): Promise<Response> {
-  const scopedWorkspaceId = config.workspaceId ?? config.spaceId;
+  const scopedWorkspaceId = config.workspaceId;
   if (
     !scopedWorkspaceId ||
     config.internal?.reason !== "per_install_overrides"
@@ -234,11 +203,35 @@ async function patchScopedInstallConfig(
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const variableMappingPatch = body.variableMapping;
   const removeVariables = stringArrayValue(body.removeVariables);
-  const storeInputDefaults = body.storeInputDefaults;
+  const variablePresentationDefaults = body.variablePresentationDefaults;
+  const variablePresentationPatch =
+    body.variablePresentation === undefined
+      ? undefined
+      : variablePresentationValue(body.variablePresentation);
+  const installExperiencePatch =
+    body.installExperience === undefined
+      ? undefined
+      : installExperienceValue(body.installExperience);
   const outputAllowlistPatch =
     body.outputAllowlist === undefined
       ? undefined
       : outputAllowlistValue(body.outputAllowlist);
+  const interfaceBlueprintsResult =
+    body.interfaceBlueprints === undefined
+      ? undefined
+      : parseInterfaceBlueprintsValue(body.interfaceBlueprints);
+  const interfaceBlueprintsPatch =
+    interfaceBlueprintsResult?.ok === true
+      ? interfaceBlueprintsResult.value
+      : undefined;
+  const lifecycleActionsPatch =
+    body.lifecycleActions === undefined
+      ? undefined
+      : lifecycleActionsValue(body.lifecycleActions);
+  const lifecycleActionPolicyPatch =
+    body.lifecycleActionPolicy === undefined
+      ? undefined
+      : lifecycleActionPolicyValue(body.lifecycleActionPolicy);
   if (
     variableMappingPatch !== undefined &&
     !isPlainJsonObject(variableMappingPatch)
@@ -250,12 +243,32 @@ async function patchScopedInstallConfig(
     );
   }
   if (
-    storeInputDefaults !== undefined &&
-    !isPlainJsonObject(storeInputDefaults)
+    variablePresentationDefaults !== undefined &&
+    !isPlainJsonObject(variablePresentationDefaults)
   ) {
     return errorJson(
       "invalid_request",
-      "storeInputDefaults must be a JSON object",
+      "variablePresentationDefaults must be a JSON object",
+      400,
+    );
+  }
+  if (
+    body.variablePresentation !== undefined &&
+    variablePresentationPatch === undefined
+  ) {
+    return errorJson(
+      "invalid_request",
+      "variablePresentation must be an array of service-side variable declarations",
+      400,
+    );
+  }
+  if (
+    body.installExperience !== undefined &&
+    installExperiencePatch === undefined
+  ) {
+    return errorJson(
+      "invalid_request",
+      "installExperience must be a valid service-side projection declaration",
       400,
     );
   }
@@ -276,7 +289,36 @@ async function patchScopedInstallConfig(
       400,
     );
   }
-  const storeInputDefaultStrings: Record<string, string> = {};
+  if (
+    interfaceBlueprintsResult !== undefined &&
+    !interfaceBlueprintsResult.ok
+  ) {
+    return errorJson("invalid_request", interfaceBlueprintsResult.message, 400);
+  }
+  if (
+    body.lifecycleActions !== undefined &&
+    lifecycleActionsPatch === undefined
+  ) {
+    return errorJson(
+      "invalid_request",
+      "lifecycleActions must be versioned command action objects",
+      400,
+    );
+  }
+  if (
+    body.lifecycleActionPolicy !== undefined &&
+    lifecycleActionPolicyPatch === undefined
+  ) {
+    return errorJson(
+      "invalid_request",
+      "lifecycleActionPolicy must explicitly allow executors and runner capabilities, or be null",
+      400,
+    );
+  }
+  const variablePresentationDefaultValues: Record<
+    string,
+    InstallConfigVariableDefault
+  > = {};
   for (const [key, value] of Object.entries(variableMappingPatch ?? {})) {
     if (!isJsonValue(value)) {
       return errorJson(
@@ -286,47 +328,124 @@ async function patchScopedInstallConfig(
       );
     }
   }
-  for (const [key, value] of Object.entries(storeInputDefaults ?? {})) {
-    if (typeof value !== "string") {
+  for (const [key, value] of Object.entries(
+    variablePresentationDefaults ?? {},
+  )) {
+    const parsed = installConfigVariableDefaultValue(value);
+    if (!parsed) {
       return errorJson(
         "invalid_request",
-        `storeInputDefaults.${key} must be a string`,
+        `variablePresentationDefaults.${key} must be a literal, capsule_name, or workspace_scoped_capsule_name default`,
         400,
       );
     }
-    storeInputDefaultStrings[key] = value;
+    variablePresentationDefaultValues[key] = parsed;
   }
-  const existingStore = config.store;
+  const nextVariablePresentation = (
+    variablePresentationPatch ??
+    config.variablePresentation ??
+    []
+  ).map((input) =>
+    Object.prototype.hasOwnProperty.call(
+      variablePresentationDefaultValues,
+      input.name,
+    )
+      ? {
+          ...input,
+          defaultValue: variablePresentationDefaultValues[input.name],
+        }
+      : input,
+  );
   const nextVariableMapping = { ...config.variableMapping };
   for (const name of removeVariables ?? []) {
     delete nextVariableMapping[name];
   }
   Object.assign(nextVariableMapping, variableMappingPatch ?? {});
+  const nextPolicy = policyWithLifecycleActionPatch(
+    config.policy,
+    lifecycleActionPolicyPatch,
+  );
   const now = new Date().toISOString();
-  const updated = await operations.installations.putInstallConfig({
+  const updated = await operations.capsules.putInstallConfig({
     ...config,
     variableMapping: nextVariableMapping,
+    variablePresentation: nextVariablePresentation,
+    ...(installExperiencePatch
+      ? { installExperience: installExperiencePatch }
+      : {}),
     outputAllowlist: outputAllowlistPatch ?? config.outputAllowlist,
-    store:
-      existingStore && storeInputDefaults
-        ? {
-            ...existingStore,
-            inputs: existingStore.inputs.map((input) =>
-              Object.prototype.hasOwnProperty.call(
-                storeInputDefaultStrings,
-                input.name,
-              )
-                ? {
-                    ...input,
-                    defaultValue: storeInputDefaultStrings[input.name],
-                  }
-                : input,
-            ),
-          }
-        : existingStore,
+    interfaceBlueprints: interfaceBlueprintsPatch ?? config.interfaceBlueprints,
+    lifecycleActions: lifecycleActionsPatch ?? config.lifecycleActions,
+    policy: nextPolicy,
     updatedAt: now,
   });
   return json({ installConfig: publicInstallConfig(updated) });
+}
+
+function lifecycleActionsValue(
+  value: unknown,
+): readonly InstallConfigLifecycleAction[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const actions: InstallConfigLifecycleAction[] = [];
+  for (const item of value) {
+    if (!isPlainJsonObject(item)) return undefined;
+    if (
+      item.apiVersion !== "takosumi.dev/v1alpha1" ||
+      item.kind !== "command" ||
+      typeof item.id !== "string" ||
+      (item.phase !== "post_apply" && item.phase !== "pre_destroy") ||
+      (item.executor !== "runner" && item.executor !== "operator") ||
+      !Array.isArray(item.command) ||
+      !item.command.every((part) => typeof part === "string") ||
+      typeof item.runnerCapability !== "string" ||
+      (item.workingDirectory !== undefined &&
+        typeof item.workingDirectory !== "string") ||
+      (item.timeoutSeconds !== undefined &&
+        typeof item.timeoutSeconds !== "number") ||
+      (item.useProviderCredentials !== undefined &&
+        typeof item.useProviderCredentials !== "boolean") ||
+      (item.env !== undefined && !stringRecordValue(item.env))
+    ) {
+      return undefined;
+    }
+    actions.push(item as unknown as InstallConfigLifecycleAction);
+  }
+  return actions;
+}
+
+type LifecycleActionPolicy = NonNullable<PolicyConfig["lifecycleActions"]>;
+
+function lifecycleActionPolicyValue(
+  value: unknown,
+): LifecycleActionPolicy | null | undefined {
+  if (value === null) return null;
+  if (!isPlainJsonObject(value)) return undefined;
+  if (
+    !Array.isArray(value.allowedExecutors) ||
+    !value.allowedExecutors.every(
+      (executor) => executor === "runner" || executor === "operator",
+    ) ||
+    !Array.isArray(value.allowedRunnerCapabilities) ||
+    !value.allowedRunnerCapabilities.every(
+      (capability) => typeof capability === "string",
+    ) ||
+    (value.allowProviderCredentials !== undefined &&
+      typeof value.allowProviderCredentials !== "boolean")
+  ) {
+    return undefined;
+  }
+  return value as unknown as LifecycleActionPolicy;
+}
+
+function policyWithLifecycleActionPatch(
+  policy: PolicyConfig,
+  patch: LifecycleActionPolicy | null | undefined,
+): PolicyConfig {
+  if (patch === undefined) return policy;
+  if (patch !== null) return { ...policy, lifecycleActions: patch };
+  const { lifecycleActions: _lifecycleActions, ...withoutLifecycleActions } =
+    policy;
+  return withoutLifecycleActions;
 }
 
 function stringArrayValue(value: unknown): readonly string[] | undefined {
@@ -344,34 +463,12 @@ function stringArrayValue(value: unknown): readonly string[] | undefined {
 export function publicInstallConfig(
   config: InstallConfig,
 ): PublicInstallConfig {
-  const {
-    installType: _installType,
-    templateBinding: _templateBinding,
-    sourceKind: _sourceKind,
-    runnerId: _runnerId,
-    internal: _internal,
-    ...publicRecord
-  } = config;
+  const { runnerId: _runnerId, internal: _internal, ...publicRecord } = config;
   const store = config.store;
   return {
     ...publicRecord,
     ...(store ? { store } : {}),
-    sourceKind: publicInstallConfigSourceKind(config),
   };
-}
-
-function publicInstallConfigSourceKind(
-  config: InstallConfig,
-): PublicInstallConfig["sourceKind"] {
-  if (config.sourceKind === "generic_capsule") return "generic_capsule";
-  if (
-    config.sourceKind === "first_party_capsule" ||
-    config.sourceKind === "official_template" ||
-    config.templateBinding
-  ) {
-    return "first_party_capsule";
-  }
-  return "generic_capsule";
 }
 
 type InstallConfigListView = "all" | "store";
@@ -396,9 +493,7 @@ function parseInstallConfigListView(
 
 function isStoreInstallConfig(config: InstallConfig): boolean {
   if (config.workspaceId !== undefined) return false;
-  if (config.store?.source === undefined) return false;
-  if (config.sourceKind !== "generic_capsule") return false;
-  return config.trustLevel === "trusted";
+  return config.store?.source !== undefined;
 }
 
 async function listInstallConfigs(
@@ -407,11 +502,9 @@ async function listInstallConfigs(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const workspaceId =
-    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
-    stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
-    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
-    stringValue(url.searchParams.get("space_id") ?? undefined);
+  const workspaceId = stringValue(
+    url.searchParams.get("workspaceId") ?? undefined,
+  );
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
   const view = parseInstallConfigListView(url);
@@ -421,13 +514,9 @@ async function listInstallConfigs(
   // mirroring the §30 `/api/v1/capsule-configs` projection. The shared +
   // scoped union is a small set, so it is materialized, merge-sorted by
   // (createdAt, id), and bounded with the in-memory keyset pager.
-  const sharedConfigs = (
-    await operations.installations.listInstallConfigs()
-  ).filter(
+  const sharedConfigs = (await operations.capsules.listInstallConfigs()).filter(
     (config) =>
-      config.workspaceId === undefined &&
-      config.spaceId === undefined &&
-      isSelectableInstallConfig(config),
+      config.workspaceId === undefined && isSelectableInstallConfig(config),
   );
   if (workspaceId !== undefined) {
     const auth = await requireWorkspaceAccess({
@@ -441,7 +530,7 @@ async function listInstallConfigs(
   const scoped =
     workspaceId === undefined || view.view === "store"
       ? []
-      : (await operations.installations.listInstallConfigs(workspaceId)).filter(
+      : (await operations.capsules.listInstallConfigs(workspaceId)).filter(
           isSelectableInstallConfig,
         );
   const merged = (
@@ -460,9 +549,8 @@ async function listInstallConfigs(
 }
 
 export function isSelectableInstallConfig(config: InstallConfig): boolean {
-  if (isNonselectableRepositoryStoreInstallConfigId(config.id)) return false;
   if (config.internal?.reason === "per_install_overrides") return false;
-  const scopedId = config.workspaceId ?? config.spaceId;
+  const scopedId = config.workspaceId;
   if (scopedId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {
     return false;
   }

@@ -52,7 +52,7 @@ export interface FsAdapter {
   readTextFileSync(path: string | URL): string;
   /**
    * Create a uniquely-named temporary directory and return its absolute
-   * path. Used by the deploy control pipeline to stage git / prepared source
+   * path. Used by the deploy control pipeline to stage immutable Git source
    * checkouts before running OpenTofu. Available on Node/Bun;
    * throws on Workers (`makeTempDir` → `node:fs/promises#mkdtemp`).
    */

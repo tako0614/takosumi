@@ -37,7 +37,8 @@ UI.
 
 ## Current Surface
 
-- Normalize host URLs and app handoff payloads.
+- Normalize host URLs and app handoff payloads. Remote HTTP hosts are rejected;
+  HTTP is limited to loopback development while normal hosts require HTTPS.
 - Parse product mobile route payloads such as `notesapp://open?path=/notes` and
   `chatapp://open?url=https://host.example/rooms` so native deep
   links and push taps can open same-origin host routes through the current
@@ -46,8 +47,11 @@ UI.
   coordinates plus a return URI. A product key alone is never an install target.
 - Preserve App Handoff setup payloads through discovery state.
 - Discover host capabilities through `.well-known` and capabilities endpoints.
-- Build OIDC authorization URLs and token exchanges with PKCE material.
-- Store pending sign-in requests and mobile sessions through the native bridge store.
+- Build OIDC authorization URLs and token exchanges with PKCE material. The
+  issuer must be advertised explicitly; discovery validates issuer equality,
+  required endpoints, and HTTPS endpoint transport.
+- Store pending sign-in requests and mobile sessions through the native bridge
+  store. Pending sign-in requests expire after ten minutes.
 - Keep a product-local recent host list in normal persistent storage so
   mobile clients can reconnect to known product hosts
   without retyping URLs, and let users remove one remembered host or clear the
@@ -70,13 +74,14 @@ UI.
 - Keep route deep links pending across sign-in when the payload includes
   `host_url`, then open the requested host route after the mobile session is
   established.
-- Provide a small host API helper for posting typed native push registrations
-  through the current mobile session bearer token.
-  The shared host payload carries only the product, host URL, token, and
-  environment.
+- Provide a small host API helper for registering product-neutral HTTP pushers
+  through the current mobile session bearer token. It uses the host-advertised
+  `notificationPushers` endpoint, falling back to
+  `POST /api/notifications/pushers`, and sends `app_id`, opaque `pushkey`, and
+  validated gateway data instead of inventing a mobile-only token endpoint.
 - Prefer `NativeBridge.secureStore` for OIDC request/session material when a
   product shell provides one. Tauri's normal store plugin remains the
-  device-persistent fallback; secure storage can be backed by a product-local
+  device-persistent migration source; secure storage can be backed by a product-local
   Stronghold or platform keychain adapter.
 - Provide first-run action metadata shared by product mobile shells.
 - Define the native bridge contract for launch payloads, in-app browser handoff, persistent storage, QR scanning, local notifications, biometric auth, remote push, call intents, and plain-text clipboard writes.
@@ -86,12 +91,13 @@ UI.
   dependencies.
 - Provide typed Tauri Stronghold password-source helpers. Product shells can
   use a mobile keystore-backed source for Android Keystore / iOS Keychain and
-  keep a Tauri Store-backed seed as desktop/dev fallback and migration source,
+  recognize a legacy Tauri Store-backed seed only as a migration source,
   without requiring a checked-in development password.
-- Provide typed Tauri helper adapters for optional remote push token sources
-  and opener-backed call intents. These helpers normalize product-local plugin
-  output into the shared native bridge contract; they do not make remote push or
-  incoming-call support part of the Takosumi Mobile Kit runtime.
+- Provide typed Tauri helper adapters for optional remote push registration
+  sources, provider unregistration, and opener-backed call intents. These
+  helpers normalize product-local plugin output into the shared native bridge
+  contract; they do not make remote push or incoming-call support part of the
+  Takosumi Mobile Kit runtime.
 - Provide a product-agnostic `shareMobileUrl` helper that prefers Web Share,
   falls back to the native bridge's plain-text clipboard write seam, then to the
   browser clipboard when available.
@@ -100,18 +106,19 @@ UI.
 - Accept a typed Tauri OS platform adapter so product shells can keep
   mobile-only plugin capabilities such as QR scanning and biometric auth scoped
   to iOS / Android even when desktop Tauri scripts exist.
-- Provide a typed adapter for the community `tauri-plugin-mobile-push-api`
-  shape (`requestPermission()`, `getToken()`, notification events, and token
-  refresh events) without making that package a Takosumi Mobile Kit dependency.
-  Product shells can wire this adapter by default while keeping APNs / Firebase
-  project configuration product-local.
+- Provide a typed adapter shape for product-local mobile-push plugins
+  (`requestPermission()`, `getToken()`, optional `unregister()`, notification
+  events, and registration-refresh events) without making a native package a
+  Takosumi Mobile Kit dependency. The generic `token` field is an opaque
+  cross-provider value; it can hold an APNs device token or an FCM Firebase
+  Installation ID (FID).
 - Provide a typed Tauri mobile product bridge factory that wires the common
   deep-link, opener, store, Stronghold, notification, clipboard, and QR scanner
   plugin shape while keeping product shells responsible for importing the
   actual Tauri plugin modules.
 - Provide a default typed Tauri product bridge factory that also derives
   product-scoped storage names, builds the Stronghold password source from a
-  product-local keystore service, keeps the Store migration fallback, normalizes
+  product-local keystore service, verifies and removes the Store migration source, normalizes
   the optional mobile-push plugin shape, and supplies the opener-backed call
   fallback.
 - Provide standard Tauri product storage / Stronghold naming derived from the
@@ -139,55 +146,23 @@ UI.
   submit eligibility so product shells do not hand-code raw trim/length guards.
 - Provide a headless mobile client controller for URL/QR connect, host discovery, OIDC sign-in, session restore, home refresh, and sign-out.
 - Provide a shared Tauri mobile doctor script used by product shells to validate config, capability permissions, app icons, plugin wiring, and native toolchain readiness.
+- Provide a shared native-init wrapper that runs Tauri Android/iOS generation and
+  immediately applies the selected product project's non-secret push wiring.
+  Provider files, signing, and device evidence remain product/operator-owned.
+- Validate one release-evidence contract from both the strict evidence gate and
+  the non-failing status reporter, so a status cannot report ready while signing,
+  store upload, screenshots, or physical-device smoke evidence is absent.
 
-Native implementations are intentionally product-local. Product apps replace the browser bridge with a Tauri/plugin-backed bridge without changing Takosumi host discovery or OIDC helpers. As of the current Tauri v2 official plugin surface we rely on `@tauri-apps/plugin-notification` for local notifications, not APNs/FCM remote push; remote push token registration is therefore an optional typed adapter that a product shell can back with a platform-specific or community plugin. Call intents are also optional: the shared helper can use Tauri opener as a standard in-app-browser fallback, while true incoming-call UI remains product/native plugin work. The controller can register a native push token with a product-owned host callback when both sides opt in, but Takosumi Mobile Kit does not invent a host endpoint. Secure token storage is also an optional typed adapter: products can use the kit's Tauri mobile product bridge / Stronghold helper or provide another platform keychain implementation as `NativeBridge.secureStore` without making this package depend on native plugin packages. The included Stronghold password helpers remove the checked-in static development password. Product shells can use a mobile keystore-backed source for the Stronghold password seed and keep the product-scoped Tauri Store seed as a fallback for desktop/dev and migration. Biometric auth is treated as an unlock gate, not as secret derivation, because the Tauri biometric plugin authenticates the user but does not return password material.
+Native implementations are intentionally product-local. Product apps replace the browser bridge with a Tauri/plugin-backed bridge without changing Takosumi host discovery or OIDC helpers. As of the current Tauri v2 official plugin surface we rely on `@tauri-apps/plugin-notification` for local notifications, not APNs/FCM remote push; remote push registration is therefore an optional typed adapter that a product shell backs with a platform-specific implementation. Call intents are also optional: the shared helper can use Tauri opener as a standard in-app-browser fallback, while true incoming-call UI remains product/native plugin work. The controller can pass a native provider registration identifier to a product-owned callback, unregister it on session teardown, and register the opaque value through the portable Notification Pusher contract; the host implementation remains product-owned. Secure token storage is also an optional typed adapter: products can use the kit's Tauri mobile product bridge / Stronghold helper or provide another platform keychain implementation as `NativeBridge.secureStore` without making this package depend on native plugin packages. The included Stronghold password helpers remove the checked-in static development password. Product shells can migrate a legacy product-scoped Tauri Store seed into native secure storage; the plaintext migration value is retained only until a later app start reads the same seed back from native storage, then it is deleted. Native store failure never silently falls back to plaintext. Biometric auth is treated as an unlock gate, not as secret derivation, because the Tauri biometric plugin authenticates the user but does not return password material.
 
-Community remote push plugin wiring stays product-local:
-
-```ts
-import { createTauriMobileDefaultProductBridge } from "@takosjp/takosumi-mobile-kit";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import {
-  getToken,
-  onNotificationReceived,
-  onNotificationTapped,
-  onTokenRefresh,
-  requestPermission as requestMobilePushPermission,
-} from "tauri-plugin-mobile-push-api";
-
-createTauriMobileDefaultProductBridge({
-  productAdapter,
-  keychainService: "jp.example.notes.mobile",
-  invoke,
-  path: { appDataDir, join },
-  deepLink: { getCurrent, onOpenUrl },
-  clipboard: { writeText },
-  opener: { openUrl },
-  store: { load },
-  stronghold: Stronghold,
-  platform: { platform },
-  notification: {
-    isPermissionGranted,
-    requestPermission: requestNotificationPermission,
-    sendNotification,
-  },
-  barcodeScanner: { scan, qrCodeFormat: Format.QRCode },
-  mobilePush: {
-    requestPermission: requestMobilePushPermission,
-    getToken,
-    onNotificationReceived,
-    onNotificationTapped,
-    onTokenRefresh,
-  },
-  biometric: { authenticate },
-});
-```
-
-`tauri-plugin-mobile-push@0.1.4` reports working Android event listeners and a
-known iOS limitation where listener registration succeeds but notification /
-token-refresh events are not delivered yet. The shared controller treats these
-listeners as best-effort lifecycle hooks; registration and normal sign-in remain
-usable when an event surface is unavailable.
+The community `tauri-plugin-mobile-push@0.1.4` adapter remains available for
+experimentation, but it is not a GA implementation: its locked Rust command
+surface does not provide a verified Android token path, listener registration
+is incomplete, and its platform event lifecycle is not sufficient for a
+shipping claim. Product shells must keep remote push feature-off until they
+provide a product-owned native adapter, delivery backend, token lifecycle, and
+physical-device evidence. The shared typed adapter is an integration seam, not
+readiness evidence.
 
 ## Checks
 
@@ -206,31 +181,34 @@ bun ../../takosumi/mobile-kit/scripts/check-tauri-mobile.mjs \
   --dev-port 1420
 ```
 
-When a product opts into `tauri-plugin-mobile-push-api`, add:
+For legacy/community adapter experiments only, add:
 
 ```sh
   --remote-push-plugin mobile-push
 ```
 
-The doctor treats the plugin dependency, `mobile-push:default` capability, and
-Rust plugin registration as checked-in requirements. iOS Push Notifications
-capability / `aps-environment` entitlement and Android Firebase / FCM project
-wiring are native project files that are reported as native-readiness warnings
-until the product has run `tauri ios init` / `tauri android init` and added
-store/team-specific push configuration outside the shared kit. Product shells
-should expose `tauri:native-push:apply` for patching generated projects and
-`tauri:native-push:verify` as a strict dry-run release check that fails when
-generated native files still need patching.
+The doctor then checks the community dependency, capability, and Rust plugin
+registration, but passing those static checks is not a GA claim. A shipping
+product should instead use its release-status and evidence gates to require a
+product-owned native plugin, delivery backend, provider-error cleanup, token
+replacement, and device evidence.
 
 At the ecosystem root, `bun run check:mobile-apps` remains the normal shared
 foundation and product web-surface gate. `bun run check:mobile-apps:native` is
 the stricter native release-readiness gate: it runs each product's
-`mobile:native-release-check`, turns native toolchain warnings into failures,
-and also requires the generated Android/iOS push wiring to pass in strict
-dry-run mode. `bun run check:mobile-apps:release` adds product release evidence
-checks for signed artifacts, store upload references, store screenshots, and
-device smoke records. `bun run status:mobile-apps:release` reports the same
-release blocker categories without failing, which is useful while the apps are
-not yet store-ready. Keep these gates separate so day-to-day mobile shell work
-can stay green before store/team-specific native projects, SDKs, and release
-evidence are available.
+`mobile:native-release-check` and turns native toolchain/generated-project
+warnings into failures. `bun run check:mobile-apps:release` adds product release
+evidence checks for signed artifacts, store upload references, store
+screenshots, device smoke, native security, mobile OIDC integration, and remote
+push. `bun run
+status:mobile-apps:release` reports implementation, environment, operator, and
+evidence blocker categories without failing, which is useful while the apps
+are not yet store-ready. Keep these gates separate so day-to-day mobile shell
+work can stay green before store/team-specific native projects, SDKs, and
+release evidence are available.
+
+Each product can additionally expose a repository-only release gate by running
+the status reporter with `--skip-toolchain-probe --fail-on-repo-blockers`. That
+gate fails source/configuration defects while continuing to list generated
+project, SDK, provider, signing, store, and physical-device blockers under their
+actual owners.

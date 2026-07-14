@@ -13,8 +13,7 @@ import { t } from "../../../../i18n/index.ts";
 import {
   dashboardProductName,
   isTakosEmbeddedRuntime,
-  isTakosumiCloudRuntime,
-} from "../../../../lib/deployment-brand.ts";
+} from "../../../../lib/runtime-capabilities.ts";
 
 export default function Sidebar() {
   const loc = useLocation();
@@ -27,7 +26,6 @@ export default function Sidebar() {
           href={takosEmbedded() ? undefined : "/"}
           size={22}
           productName={dashboardProductName()}
-          showSub={!takosEmbedded() && isTakosumiCloudRuntime()}
         />
         <Show when={takosEmbedded()}>
           <span class="sidebar-context-label">{t("nav.deployContext")}</span>

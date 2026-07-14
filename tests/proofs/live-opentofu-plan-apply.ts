@@ -10,15 +10,17 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import {
   applyExpectedGuardFromPlanRun,
-  OpenTofuDeploymentController,
+  DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
+  OpenTofuController,
   type OpenTofuApplyJob,
   type OpenTofuDestroyJob,
   type OpenTofuPlanJob,
   type OpenTofuRunner,
 } from "../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../core/domains/deploy-control/store.ts";
-import { seedInstallationModel } from "../helpers/deploy-control/model_fixture.ts";
-import { parseOpenTofuOutputs } from "../../accounts/platform-services/src/opentofu-output-resolver.ts";
+import { InMemoryOpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
+import { seedCapsuleModel } from "../helpers/deploy-control/model_fixture.ts";
+import { parseOpenTofuOutputs } from "./opentofu-output.ts";
 
 const FIXTURE_SOURCE = "fixtures/opentofu-output-snapshot-proof/source";
 const PROOF_KIND = "takosumi.live-local-opentofu-plan-apply-proof@v1";
@@ -40,58 +42,55 @@ export interface LiveOpenTofuPlanApplyProof {
   };
 }
 
-export async function runLiveOpenTofuPlanApplyProof(options: {
-  readonly outputPath?: string;
-  readonly now?: () => string;
-} = {}): Promise<LiveOpenTofuPlanApplyProof> {
-  const tofuVersion = (await runTofu(["version", "-json"], process.cwd())).trim();
+export async function runLiveOpenTofuPlanApplyProof(
+  options: {
+    readonly outputPath?: string;
+    readonly now?: () => string;
+  } = {},
+): Promise<LiveOpenTofuPlanApplyProof> {
+  const tofuVersion = (
+    await runTofu(["version", "-json"], process.cwd())
+  ).trim();
   const temp = await mkdtemp(`${tmpdir()}/takosumi-live-tofu-`);
   try {
     const workdir = `${temp}/module`;
     await cp(resolve(FIXTURE_SOURCE), workdir, { recursive: true });
     const runnerProfile = liveLocalRunnerProfile(Date.now());
     const ids = deterministicIds();
-    // Capsule Installation model: seed the Space-direct Installation
-    // model and attach a prior current Deployment so this single-shot proof's
-    // apply passes the `installationCurrentDeploymentId` guard.
-    const store = new InMemoryOpenTofuDeploymentStore();
-    const seeded = await seedInstallationModel(store, {
-      spaceId: "space_live_local",
-      installationId: ids.next("inst"),
+    // Capsule-first model: seed the Workspace-owned Capsule
+    // and attach a prior current StateVersion pointer so this single-shot proof's
+    // apply passes the `capsuleCurrentStateVersionId` guard.
+    const store = new InMemoryOpenTofuControlStore();
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: "ws_live_local",
+      capsuleId: ids.next("cap"),
       installConfig: {
         outputAllowlist: {
-          takosumi_launch_url: {
-            from: "takosumi_launch_url",
-            type: "url",
-          },
-          takosumi_admin_url: {
-            from: "takosumi_admin_url",
-            type: "url",
-          },
-          health_url: {
-            from: "health_url",
-            type: "url",
+          provider_proof_path: {
+            from: "provider_proof_path",
+            type: "string",
           },
         },
       },
     });
-    await store.putInstallation({
-      ...seeded.installation,
-      currentDeploymentId: ids.next("dep"),
+    await store.putCapsule({
+      ...seeded.capsule,
+      currentStateVersionId: ids.next("state"),
     });
-    const controller = new OpenTofuDeploymentController({
+    const controller = new OpenTofuController({
       store,
       runner: new LocalTofuRunner(workdir),
       runnerProfiles: [runnerProfile],
       defaultRunnerProfileId: runnerProfile.id,
+      artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
       now: () => Date.parse(options.now?.() ?? new Date().toISOString()),
       newId: ids.next,
     });
-    const planned = await controller.createInstallationPlan(
-      seeded.installation.id,
-    );
+    const planned = await controller.createCapsulePlan(seeded.capsule.id);
     if (planned.planRun.status !== "succeeded") {
-      throw new Error(`PlanRun failed: ${JSON.stringify(planned.planRun.diagnostics ?? [])}`);
+      throw new Error(
+        `PlanRun failed: ${JSON.stringify(planned.planRun.diagnostics ?? [])}`,
+      );
     }
     const applied = await controller.createApplyRun({
       planRunId: planned.planRun.id,
@@ -103,12 +102,14 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
       },
     });
     if (applied.applyRun.status !== "succeeded") {
-      throw new Error(`ApplyRun failed: ${JSON.stringify(applied.applyRun.diagnostics ?? [])}`);
+      throw new Error(
+        `ApplyRun failed: ${JSON.stringify(applied.applyRun.diagnostics ?? [])}`,
+      );
     }
     const proofFile = `${workdir}/takosumi-provider-proof.txt`;
     await access(proofFile);
-    const destroyPlan = await controller.createInstallationDestroyPlan(
-      seeded.installation.id,
+    const destroyPlan = await controller.createCapsuleDestroyPlan(
+      seeded.capsule.id,
     );
     await controller.approveRun(destroyPlan.planRun.id);
     const destroyed = await controller.createApplyRun({
@@ -119,6 +120,12 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
       throw new Error(
         `Destroy failed: ${JSON.stringify(destroyed.applyRun.diagnostics ?? [])}`,
       );
+    }
+    const output = applied.applyRun.outputId
+      ? await store.getOutput(applied.applyRun.outputId)
+      : undefined;
+    if (!output) {
+      throw new Error("ApplyRun succeeded without a canonical Output row");
     }
     const resourceRemoved = await access(proofFile).then(
       () => false,
@@ -132,10 +139,7 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
       runnerProfileId: runnerProfile.id,
       evidence: {
         planDigest: planned.planRun.planDigest!,
-        // The internal apply compatibility output list feeds the
-        // OutputSnapshot projection; Deployment records the public projection
-        // as `outputsPublic`.
-        outputCount: applied.applyRun.outputs?.length ?? 0,
+        outputCount: Object.keys(output.publicOutputs).length,
         stateLockStatus: applied.applyRun.stateLock.status,
         applyAuditEventCount: applied.applyRun.auditEvents.length,
         providerSource: "registry.opentofu.org/hashicorp/local",
@@ -144,10 +148,14 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
       },
     };
     if (proof.evidence.outputCount < 1) {
-      throw new Error("live local OpenTofu proof did not record OutputSnapshot projection");
+      throw new Error(
+        "live local OpenTofu proof did not record Output projection",
+      );
     }
     if (!proof.evidence.resourceRemoved) {
-      throw new Error("live local OpenTofu proof did not destroy the provider resource");
+      throw new Error(
+        "live local OpenTofu proof did not destroy the provider resource",
+      );
     }
     if (options.outputPath) {
       const outputPath = resolve(options.outputPath);
@@ -168,13 +176,16 @@ class LocalTofuRunner implements OpenTofuRunner {
 
   async plan(job: OpenTofuPlanJob) {
     await runTofu(["init", "-input=false", "-no-color"], this.#workdir);
-    await runTofu([
-      "plan",
-      ...(job.planRun.operation === "destroy" ? ["-destroy"] : []),
-      "-input=false",
-      "-no-color",
-      "-out=tfplan",
-    ], this.#workdir);
+    await runTofu(
+      [
+        "plan",
+        ...(job.planRun.operation === "destroy" ? ["-destroy"] : []),
+        "-input=false",
+        "-no-color",
+        "-out=tfplan",
+      ],
+      this.#workdir,
+    );
     const planJson = await runTofu(["show", "-json", "tfplan"], this.#workdir);
     const planDigest = digestBytes(new TextEncoder().encode(planJson));
     const providerLockDigest = digestBytes(
@@ -188,7 +199,7 @@ class LocalTofuRunner implements OpenTofuRunner {
         digest: planDigest,
         contentType: "application/vnd.opentofu.plan",
       },
-      sourceCommit: digestJson({ kind: "local", path: this.#workdir }),
+      sourceCommit: digestJson(job.planRun.source),
       providerLockDigest,
       requiredProviders: ["registry.opentofu.org/hashicorp/local"],
       providerInstallation: [localProviderInstallationEvidence()],
@@ -197,7 +208,10 @@ class LocalTofuRunner implements OpenTofuRunner {
   }
 
   async apply(_job: OpenTofuApplyJob) {
-    await runTofu(["apply", "-input=false", "-no-color", "tfplan"], this.#workdir);
+    await runTofu(
+      ["apply", "-input=false", "-no-color", "tfplan"],
+      this.#workdir,
+    );
     const outputs = await runTofu(["output", "-json"], this.#workdir);
     return {
       outputs: parseOpenTofuOutputs(outputs) as OpenTofuOutputEnvelope,
@@ -209,7 +223,10 @@ class LocalTofuRunner implements OpenTofuRunner {
   }
 
   async destroy(_job: OpenTofuDestroyJob) {
-    await runTofu(["apply", "-input=false", "-no-color", "tfplan"], this.#workdir);
+    await runTofu(
+      ["apply", "-input=false", "-no-color", "tfplan"],
+      this.#workdir,
+    );
     return {
       stateDigest: digestBytes(
         await readFile(`${this.#workdir}/terraform.tfstate`),
@@ -251,6 +268,9 @@ function liveLocalRunnerProfile(now: number): RunnerProfile {
     id: "opentofu-default",
     name: "OpenTofu default live proof",
     substrate: "local",
+    executorId: DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
+    lifecycle: { state: "active" },
+    availability: { state: "available" },
     tofuVersion: "operator-managed",
     stateBackend: {
       kind: "local",
@@ -258,8 +278,7 @@ function liveLocalRunnerProfile(now: number): RunnerProfile {
       lock: { kind: "operator", ref: "lock://fixture/opentofu-default" },
     },
     allowedProviders: ["*"],
-    requireCredentialRefs: false,
-    sourcePolicy: { allowLocalSource: true },
+    requireProviderBindings: false,
     resourceLimits: { maxRunSeconds: 120, cpu: "1", memoryMb: 512 },
     networkPolicy: { mode: "operator-managed" },
     createdAt: now,
@@ -313,7 +332,8 @@ function canonical(value: unknown): unknown {
 
 if (import.meta.main) {
   const outputIndex = process.argv.indexOf("--output");
-  const outputPath = outputIndex >= 0 ? process.argv[outputIndex + 1] : undefined;
+  const outputPath =
+    outputIndex >= 0 ? process.argv[outputIndex + 1] : undefined;
   const proof = await runLiveOpenTofuPlanApplyProof({
     ...(outputPath ? { outputPath } : {}),
   });

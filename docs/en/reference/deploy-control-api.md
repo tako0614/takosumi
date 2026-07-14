@@ -22,6 +22,8 @@ Secret
 Run
 StateVersion
 Output
+Interface
+InterfaceBinding
 AuditEvent
 ```
 
@@ -52,59 +54,99 @@ POST   /runs/:id/approve
 POST   /runs/:id/cancel
 
 GET    /state/:capsule_id/versions
-GET    /outputs/:capsule_id
+GET    /capsules/:capsule_id/outputs
+
+POST   /v1/interfaces
+GET    /v1/interfaces
+GET    /v1/interfaces/:id
+PATCH  /v1/interfaces/:id
+DELETE /v1/interfaces/:id
+
+POST   /v1/interfaces/:id/bindings
+GET    /v1/interfaces/:id/bindings
+GET    /v1/interfaces/:id/bindings/:bindingId
+DELETE /v1/interfaces/:id/bindings/:bindingId
 
 POST   /secrets
 GET    /audit
 ```
 
-## Output Sync
+## Outputs and Runtime Interfaces
 
-Output Sync is an optional Takosumi feature, not an OpenTofu standard. A host
-that implements it advertises capability `takosumi.output-sync.v1`. It is
-enabled by default per Workspace and can be disabled without disabling normal
-Output capture or explicit Dependencies.
+After a successful apply, Takosumi captures ordinary root-module Outputs from
+`tofu output -json` in the StateVersion / Output ledger. The module owns each
+Output name and value shape. Takosumi does not require a reserved name, nested
+schema, runtime declaration, or credential in an Output.
 
-The public API consists of four routes:
+To expose a deployed runtime as MCP, HTTP, a file handler, or another protocol,
+create a service-side `Interface`. `Interface.spec` contains the consumer-owned
+`type` and `version`, an arbitrary non-secret JSON `document`, and `access`.
+Explicit `inputs` connect dynamic public values.
 
-```text
-GET   /api/v1/workspaces/{workspaceId}/output-sync
-PATCH /api/v1/workspaces/{workspaceId}/output-sync
-GET   /api/v1/workspaces/{workspaceId}/output-sync/snapshot
-POST  /api/v1/workspaces/{workspaceId}/output-sync/reconcile
+```json
+{
+  "workspaceId": "ws_1",
+  "name": "researchTools",
+  "ownerRef": { "kind": "Capsule", "id": "cap_1" },
+  "spec": {
+    "type": "mcp.server",
+    "version": "2025-11-25",
+    "document": {
+      "transport": "streamable-http",
+      "display": { "title": "Research tools" }
+    },
+    "inputs": {
+      "endpoint": {
+        "source": "capsule_output",
+        "capsuleId": "cap_1",
+        "outputName": "mcp_url"
+      }
+    },
+    "access": {
+      "visibility": "workspace",
+      "resourceUriInput": "endpoint"
+    }
+  }
+}
 ```
 
-The settings API reads and changes the Workspace setting. The snapshot returns
-the current non-sensitive Outputs for the Workspace. Reconcile evaluates
-eligible Capsules under the normal Run policy and approval rules. Output Sync
-does not define a public event feed.
-Active members may read settings and snapshots. Only owners and admins may
-change settings or start reconciliation.
+Input sources are `literal`, `capsule_output`, and `resource_output`. An input
+may include an RFC 6901 JSON Pointer when only part of an Output is needed.
+Takosumi resolves values into `status.resolvedInputs` and records provenance
+from the originating Run / StateVersion / Output digest or Resource generation.
+Outputs marked sensitive by OpenTofu or the explicit mapping, and unavailable
+values, are not eligible runtime inputs. Output names themselves remain opaque.
 
-Reconcile pins each Capsule to its currently applied SourceSnapshot and plans
-`active` / `stale` Capsules in Dependency-DAG layers. Members in one layer may
-run in parallel; the next layer starts only after the prior layer is a no-op or
-has applied successfully. Clean plans auto-apply, destructive plans stop at the
-normal approval gate, and follow-up Output changes are bounded to five
-convergence passes. Git ref updates are not mixed into this operation.
+An `InterfaceBinding` explicitly authorizes a Principal, ServiceAccount,
+Capsule, or Resource with permissions and a credential-delivery method. The
+credential value is never stored in the Interface, Binding, Output, state, Run,
+log, or audit record. A supported issuer or materializer delivers it only to an
+authorized invocation; unsupported delivery fails closed as `NotReady`.
 
-`service_exports` and `service_bindings` are optional Takosumi Output
-Convention values carried by ordinary OpenTofu Outputs. They may describe an
-endpoint, capability, authentication scheme, scope, or grant reference, but
-must not contain tokens, passwords, or live data. Runtime data remains behind
-the declared MCP, HTTP, S3, or other interface. Apply rejects credential-like
-metadata keys and URLs containing userinfo or credential query parameters.
+Principal `oauth2` delivery becomes Ready only with a credential-free absolute
+HTTPS resource URI, a host issuer, and host-side proof that the Interface owner
+controls that hostname. A literal or Output URL alone is neither ownership proof
+nor OAuth audience authority.
 
-Using an Output across Workspace boundaries requires an explicit
-`OutputShare`. When Output Sync is disabled or unavailable, `tofu output -json`
-capture, the Capsule Output API, explicit Dependencies, and
-`terraform_remote_state` continue to work independently.
+When an Output changes, only Interfaces that explicitly reference it resolve a
+new revision. This does not plan or apply the whole Workspace, nor does it
+reapply consumer Capsules. Use an explicit Capsule Dependency or
+`terraform_remote_state` when the desired relationship is ordinary
+OpenTofu-to-OpenTofu input wiring.
 
 ## Provider Connections
 
 ProviderConnection creation stores credential metadata and encrypted secret
 references. A Run resolves ProviderBindings to ProviderConnections, evaluates the
 CredentialRecipe, and injects only temporary env/file material into the runner.
+
+Operator-managed capacity is an explicit service-side contract. A public
+managed ProviderConnection declares an opaque `managedProviderProfile`, and its
+receiving platform extension declares the exact same profile. Run-scoped token
+audience verification uses this profile; Takosumi does not derive authority
+from `providerConfig.base_url`, the request host/path, or the provider address.
+Missing/mismatched profiles are unavailable, and OSS defines no fixed profile
+catalog. `providerConfig` stays ordinary non-secret provider-block JSON.
 
 Provider resolution statuses in OSS are:
 
@@ -138,6 +180,95 @@ audit evidence
 ```
 
 Secrets are redacted before logs or diagnostics are persisted.
+
+## Release Activation Seam
+
+Takosumi OSS treats provider infrastructure/state materialization and declared,
+service-side InstallConfig Capsule lifecycle actions as one reviewed Run
+boundary. Lifecycle actions are pinned with the Plan; they are never discovered
+from a Git manifest, repository metadata, or OpenTofu Output.
+
+With no declared action, a successful provider `apply` is sufficient. When a
+`post_apply` action is declared, the host must inject the generic release
+activator and that action must return terminal `succeeded` before the Capsule
+runtime can become ready.
+
+The seam is intentionally generic:
+
+```text
+OpenTofu apply
+  -> construct provider-applied StateVersion / Output
+  -> declared post_apply action (host-injected activator)
+  -> atomic ledger commit:
+       succeeded => Run succeeded + Capsule active
+       otherwise => StateVersion / Output retained + Run failed + Capsule error
+  -> materialize Ready Interface blueprints only after succeeded
+```
+
+Operator webhook activators receive no provider credentials, no runner env, and
+no sensitive OpenTofu outputs. Runner activators receive only dispatch-scoped
+ProviderConnection / CredentialRecipe material minted from the same reviewed
+ProviderBinding set as apply/destroy. Secret-shaped output names or values are
+filtered before either hook. Every result other than `succeeded` (`pending`,
+`skipped`, `failed`, a missing activator, or an exception) fails closed. The
+provider-applied StateVersion / Output and actual provider apply usage/billing
+capture are retained, but the Run fails with
+`capsule_lifecycle_action_failed`, the Capsule becomes `error`, and Interface
+blueprints do not become Ready. The Plan is consumed as applied, so generic
+recovery is a fresh reviewed plan/apply rather than retrying the same Plan.
+
+A declared `pre_destroy` action runs before provider destroy. Takosumi does not
+call `runner.destroy` unless the action terminally succeeds. Failure after an
+activator was invoked makes runtime safety Unknown; a pre-mutation failure such
+as a missing activator re-evaluates the still-pinned runtime revision.
+
+Capsules may mark individual post-apply commands with `executor = "runner"` or
+`executor = "operator"`. Runner commands are restored into the source snapshot
+and receive non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON` plus
+dispatch-only provider credentials when the reviewed run had ProviderBindings.
+Operator commands are not attempted by the built-in runner activator. Without
+an operator/Cloud release activator that owns the credential boundary for work
+outside the runner sandbox, the Run fails closed immediately.
+Commands may also declare `timeout_seconds` / `timeoutSeconds` as an execution
+constraint. This remains a service-side InstallConfig declaration, not a Git
+manifest or OpenTofu Output: Takosumi does not interpret the command semantics,
+but the runner enforces the declared timeout for long app-owned activation
+bridges such as container artifact upload or provider-gap setup.
+
+The platform Worker can enable the generic webhook bridge with:
+
+```text
+TAKOSUMI_RELEASE_ACTIVATOR_URL
+TAKOSUMI_RELEASE_ACTIVATOR_TOKEN
+```
+
+The URL is non-secret operator config. The token is a Worker secret. Production
+URLs must be `https`; `http` is accepted only in explicit local substrate/dev
+mode. The webhook receives a `takosumi.operator.release-activation@v2` JSON
+payload with canonical `workspaceId`, Capsule, StateVersion, Output, and Run
+ledger references plus already-filtered non-sensitive outputs. It does not
+accept retired Space / Installation / Deployment aliases. Public readiness
+evidence is expressed as Workspace /
+Project / Capsule / StateVersion / Output claims. This payload is an
+operator-controlled bridge contract, not a customer API surface. It must return
+one of:
+
+```json
+{ "status": "skipped" }
+{ "status": "pending", "message": "queued" }
+{ "status": "succeeded", "healthUrl": "https://example.com/healthz" }
+{ "status": "failed", "message": "publication failed" }
+```
+
+The webhook materializer is where product-specific publication lives. Takosumi
+Core only forwards the SourceSnapshot reference, non-sensitive outputs, and
+declared opaque argv commands. It does not inspect whether those commands migrate
+a database, publish an artifact, update an index, or perform another app-owned
+activation task.
+Any URL in a successful response is operational health evidence only. Launcher
+URLs and presentation are declared and authorized separately through an
+`interface.ui.surface` Interface and InterfaceBinding; the activator response
+is neither runtime-surface authority nor a fallback.
 
 ## Out Of Scope For Deploy-Control
 

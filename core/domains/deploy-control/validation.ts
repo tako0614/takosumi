@@ -2,19 +2,19 @@
  * Request / source validation and identity checks for the deploy-control domain.
  *
  * These pure guards validate PlanRun/ApplyRun request shape, OpenTofu module
- * source identity, the planned-installation generation guard, and derive
+ * source identity, the planned-Capsule generation guard, and derive
  * normalized variables/providers. They throw `OpenTofuControllerError` on
  * invalid input; no controller or store state.
  */
 
 import type { JsonValue } from "takosumi-contract";
 import type {
-  Installation,
-  OpenTofuModuleSource,
+  Capsule,
+  OpenTofuExecutionSource,
   OpenTofuOperation,
   PlanRun,
-  RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
+import type { InstallContextVariableMapping } from "takosumi-contract/install-configs";
 import {
   isRecord,
   OpenTofuControllerError,
@@ -25,53 +25,39 @@ import {
   BlockedHostError,
 } from "takosumi-contract/reference/host-blocklist";
 
-const SHA256_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
-
 /**
- * Apply-time guard that the planned Installation still matches the PlanRun: it
- * has not moved to another Space and its current Deployment has not advanced
+ * Apply-time guard that the planned Capsule still matches the PlanRun: it
+ * has not moved to another Workspace and its current StateVersion has not advanced
  * since the plan was created.
  *
- * The Space-direct Installation no longer carries `runnerProfileId` or a
+ * The Workspace-owned Capsule no longer carries `runnerProfileId` or a
  * `source` identity (those are resolved through the InstallConfig / Source),
- * so only the Space binding and the current-Deployment cursor are checked here.
- * `Installation.currentDeploymentId` is optional (`string | undefined`) while
- * `PlanRun.installationCurrentDeploymentId` stays `string | null` internally;
- * both null and undefined mean "no current Deployment", so they are normalized
+ * so only the Workspace binding and current-StateVersion cursor are checked here.
+ * `Capsule.currentStateVersionId` is optional (`string | undefined`) while
+ * `PlanRun.capsuleCurrentStateVersionId` stays `string | null` internally;
+ * both null and undefined mean "no current StateVersion", so they are normalized
  * before comparison.
  */
-export function validatePlannedInstallationCurrent(input: {
+export function validatePlannedCapsuleCurrent(input: {
   readonly planRun: PlanRun;
-  readonly installation: Installation;
+  readonly capsule: Capsule;
 }): void {
-  if (input.installation.spaceId !== input.planRun.spaceId) {
+  if (input.capsule.workspaceId !== input.planRun.workspaceId) {
     throw new OpenTofuControllerError(
       "failed_precondition",
       "capsule no longer belongs to the planned workspace",
     );
   }
-  const actualCurrentDeploymentId =
-    input.installation.currentDeploymentId ?? null;
-  const expectedCurrentDeploymentId =
-    input.planRun.installationCurrentDeploymentId ?? null;
-  if (actualCurrentDeploymentId !== expectedCurrentDeploymentId) {
+  const actualCurrentStateVersionId =
+    input.capsule.currentStateVersionId ?? null;
+  const expectedCurrentStateVersionId =
+    input.planRun.capsuleCurrentStateVersionId ?? null;
+  if (actualCurrentStateVersionId !== expectedCurrentStateVersionId) {
     throw new OpenTofuControllerError(
       "failed_precondition",
-      `installation ${input.installation.id} current Deployment changed since PlanRun ${input.planRun.id}`,
+      `capsule ${input.capsule.id} current StateVersion changed since PlanRun ${input.planRun.id}`,
     );
   }
-}
-
-export function validateSourceAllowedByProfile(
-  source: OpenTofuModuleSource,
-  profile: RunnerProfile,
-): void {
-  if (source.kind !== "local") return;
-  if (profile.sourcePolicy?.allowLocalSource === true) return;
-  throw new OpenTofuControllerError(
-    "failed_precondition",
-    `runner profile ${profile.id} does not allow local source paths`,
-  );
 }
 
 export function normalizeProviders(
@@ -94,6 +80,62 @@ export function normalizeVariables(
     );
   }
   return normalizeVariablePathRecord(variables, "variables");
+}
+
+/** Materialize non-secret Workspace/Capsule identity into declared var paths. */
+export function materializeInstallContextVariables(
+  mapping: InstallContextVariableMapping | undefined,
+  context: { readonly workspaceId: string; readonly capsuleId: string },
+): Readonly<Record<string, JsonValue>> {
+  if (mapping === undefined) return {};
+  const flat: Record<string, JsonValue> = {};
+  for (const [path, source] of Object.entries(mapping)) {
+    if (source !== "workspace_id" && source !== "capsule_id") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `installContextVariableMapping.${path} has unsupported source ${String(source)}`,
+      );
+    }
+    flat[path] =
+      source === "workspace_id" ? context.workspaceId : context.capsuleId;
+  }
+  return normalizeVariablePathRecord(flat, "installContextVariableMapping");
+}
+
+/**
+ * Merge authenticated ledger identity into ordinary module variables.
+ *
+ * Context values are authoritative for their explicitly mapped leaves, while
+ * every unrelated operator/user variable remains intact. This is deliberately
+ * separate from `mergeJsonVariableDefaults`, whose projection semantics return
+ * only keys requested by its second argument.
+ */
+export function mergeInstallContextVariables(
+  variables: Readonly<Record<string, unknown>> | undefined,
+  mapping: InstallContextVariableMapping | undefined,
+  context: { readonly workspaceId: string; readonly capsuleId: string },
+): Readonly<Record<string, JsonValue>> {
+  const normalized = normalizeVariables(variables);
+  const authoritative = materializeInstallContextVariables(mapping, context);
+  return overrideJsonRecord(normalized, authoritative);
+}
+
+function overrideJsonRecord(
+  base: Readonly<Record<string, JsonValue>>,
+  authoritative: Readonly<Record<string, JsonValue>>,
+): Readonly<Record<string, JsonValue>> {
+  const out: Record<string, JsonValue> = {};
+  for (const [key, value] of Object.entries(base)) {
+    out[key] = cloneJsonValue(value);
+  }
+  for (const [key, value] of Object.entries(authoritative)) {
+    const existing = out[key];
+    out[key] =
+      isJsonObject(existing) && isJsonObject(value)
+        ? overrideJsonRecord(existing, value)
+        : cloneJsonValue(value);
+  }
+  return out;
 }
 
 const VARIABLE_PATH_SEGMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -246,51 +288,39 @@ export function validateOperation(operation: OpenTofuOperation): void {
   );
 }
 
-export function validateSource(source: OpenTofuModuleSource): void {
+export function validateSource(source: OpenTofuExecutionSource): void {
+  if (source.kind === "operator_module") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "operator_module source is accepted only by the Resource run seam",
+    );
+  }
   if (!isRecord(source)) {
     throw new OpenTofuControllerError(
       "invalid_argument",
       "source must be a JSON object",
     );
   }
-  switch (source.kind) {
-    case "git":
-      requireNonEmptyString(source.url, "source.url");
-      validateHttpsSourceUrl(source.url, "git source url");
-      if (source.ref !== undefined)
-        requireNonEmptyString(source.ref, "source.ref");
-      if (source.commit !== undefined) {
-        requireNonEmptyString(source.commit, "source.commit");
-        if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(source.commit)) {
-          throw new OpenTofuControllerError(
-            "invalid_argument",
-            "source.commit must be a full git object id",
-          );
-        }
-      }
-      if (source.ref !== undefined)
-        validateSafeGitSelector(source.ref, "source.ref");
-      break;
-    case "prepared":
-      requireNonEmptyString(source.url, "source.url");
-      validateHttpsSourceUrl(source.url, "prepared source url");
-      requireNonEmptyString(source.digest, "source.digest");
-      if (!SHA256_DIGEST_RE.test(source.digest)) {
-        throw new OpenTofuControllerError(
-          "invalid_argument",
-          "prepared source digest must be sha256:<64 lowercase hex>",
-        );
-      }
-      break;
-    case "local":
-      requireNonEmptyString(source.path, "source.path");
-      break;
-    default:
+  if (source.kind !== "git") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "Stack source.kind must be git",
+    );
+  }
+  requireNonEmptyString(source.url, "source.url");
+  validateHttpsSourceUrl(source.url, "git source url");
+  if (source.ref !== undefined) requireNonEmptyString(source.ref, "source.ref");
+  if (source.commit !== undefined) {
+    requireNonEmptyString(source.commit, "source.commit");
+    if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(source.commit)) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        "source.kind must be git, prepared, or local",
+        "source.commit must be a full git object id",
       );
+    }
   }
+  if (source.ref !== undefined)
+    validateSafeGitSelector(source.ref, "source.ref");
   if (source.modulePath !== undefined) {
     requireNonEmptyString(source.modulePath, "source.modulePath");
     validateSafeModulePath(source.modulePath);

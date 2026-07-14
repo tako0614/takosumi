@@ -8,7 +8,7 @@ import type {
 import type { JsonValue } from "takosumi-contract/reference/compat";
 import type { CloudflareWorkerEnv } from "./bindings.ts";
 
-const RELEASE_ACTIVATOR_KIND = "takosumi.operator.release-activation@v1";
+const RELEASE_ACTIVATOR_KIND = "takosumi.operator.release-activation@v2";
 const ALLOWED_STATUSES = [
   "skipped",
   "pending",
@@ -56,7 +56,7 @@ export function createWebhookReleaseActivator(
         };
         return {
           status: input.commands.length === 0 ? "skipped" : "pending",
-          kind: "takosumi.operator.release-activation@v1",
+          kind: RELEASE_ACTIVATOR_KIND,
           message:
             "operator release activator only accepts executor=operator commands",
           metadata,
@@ -112,8 +112,7 @@ export function createCompositeReleaseActivator(options: {
   readonly runner?: ReleaseActivator;
   readonly operator?: ReleaseActivator;
 }): ReleaseActivator | undefined {
-  if (!options.runner) return options.operator;
-  if (!options.operator) return options.runner;
+  if (!options.runner && !options.operator) return undefined;
   return {
     async activate(input) {
       if (input.commands.length === 0) return { status: "skipped" };
@@ -125,17 +124,20 @@ export function createCompositeReleaseActivator(options: {
       );
       const runnerResult =
         runnerCommands.length > 0
-          ? await options.runner!.activate({
-              ...input,
-              commands: runnerCommands,
-            })
+          ? options.runner
+            ? await options.runner.activate({
+                ...input,
+                commands: runnerCommands,
+              })
+            : missingReleaseActivatorResult("runner", runnerCommands.length)
           : undefined;
       const operatorResult =
         operatorCommands.length > 0
-          ? await options.operator!.activate({
-              ...input,
-              commands: operatorCommands,
-            })
+          ? options.operator
+            ? await options.operator.activate(
+                operatorActivationInput(input, operatorCommands),
+              )
+            : missingReleaseActivatorResult("operator", operatorCommands.length)
           : undefined;
       return combineActivationResults({
         runnerCommands,
@@ -143,6 +145,33 @@ export function createCompositeReleaseActivator(options: {
         runnerResult,
         operatorResult,
       });
+    },
+  };
+}
+
+function operatorActivationInput(
+  input: ReleaseActivationInput,
+  commands: ReleaseActivationInput["commands"],
+): ReleaseActivationInput {
+  const operatorInput = { ...input, commands };
+  // Provider credentials are minted only for runner-executed commands. A
+  // composite phase may also contain operator commands, but that boundary must
+  // never expose the runner's dispatch-only bundle to the operator adapter.
+  delete operatorInput.credentials;
+  return operatorInput;
+}
+
+function missingReleaseActivatorResult(
+  executor: "runner" | "operator",
+  commandCount: number,
+): ReleaseActivationResult {
+  return {
+    status: "pending",
+    kind: RELEASE_ACTIVATOR_KIND,
+    message: `${executor} release commands require a configured ${executor} release activator`,
+    metadata: {
+      commandCount,
+      missingExecutor: executor,
     },
   };
 }
@@ -165,7 +194,7 @@ export function createRunnerReleaseActivator(
         };
         return {
           status: "pending",
-          kind: "takosumi.operator.release-activation@v1",
+          kind: RELEASE_ACTIVATOR_KIND,
           message: `${phase} release commands require an operator release activator`,
           metadata,
         };
@@ -177,7 +206,7 @@ export function createRunnerReleaseActivator(
           message: `${phase} release commands require a source snapshot archive`,
         };
       }
-      const workspaceId = releaseActivationWorkspaceId(input);
+      const workspaceId = input.applyRun.workspaceId;
       const result = await runner.release!({
         runId: releaseCommandRunId(input.applyRun.id),
         commands: input.commands,
@@ -185,9 +214,9 @@ export function createRunnerReleaseActivator(
         nonSensitiveOutputs: input.nonSensitiveOutputs,
         ...(input.credentials ? { credentials: input.credentials } : {}),
         applyRunId: input.applyRun.id,
-        ...(workspaceId ? { workspaceId } : {}),
-        installationId: input.installation.id,
-        deploymentId: input.deployment.id,
+        workspaceId,
+        capsuleId: input.capsule.id,
+        stateVersionId: input.stateVersion.id,
       });
       const metadata: Readonly<Record<string, JsonValue>> = {
         releaseRunId: result.runId,
@@ -285,34 +314,31 @@ function releaseActivationWebhookPayload(
   input: ReleaseActivationInput,
   options: { readonly sourceArchiveBucket?: string } = {},
 ) {
-  const credentialEnv = releaseActivationCredentialEnv(input.credentials);
-  const workspaceId = releaseActivationWorkspaceId(input);
+  const workspaceId = input.applyRun.workspaceId;
   const sourceArchiveBucket = options.sourceArchiveBucket?.trim();
   return {
     kind: RELEASE_ACTIVATOR_KIND,
     planRunId: input.planRun.id,
     applyRunId: input.applyRun.id,
-    ...(workspaceId ? { workspaceId, spaceId: workspaceId } : {}),
-    installation: {
-      id: input.installation.id,
-      name: input.installation.name,
-      environment: input.installation.environment,
-      sourceId: input.installation.sourceId,
-      installConfigId: input.installation.installConfigId,
+    workspaceId,
+    capsule: {
+      id: input.capsule.id,
+      name: input.capsule.name,
+      environment: input.capsule.environment,
+      sourceId: input.capsule.sourceId,
+      installConfigId: input.capsule.installConfigId,
     },
-    deployment: {
-      id: input.deployment.id,
-      sourceSnapshotId: input.deployment.sourceSnapshotId,
-      stateGeneration: input.deployment.stateGeneration,
-      outputSnapshotId: input.deployment.outputSnapshotId,
-      status: input.deployment.status,
+    stateVersion: {
+      id: input.stateVersion.id,
+      generation: input.stateVersion.generation,
+      digest: input.stateVersion.digest,
+      createdByRunId: input.stateVersion.createdByRunId,
     },
-    outputSnapshot: {
-      id: input.outputSnapshot.id,
-      stateGeneration: input.outputSnapshot.stateGeneration,
-      outputDigest: input.outputSnapshot.outputDigest,
+    output: {
+      id: input.output.id,
+      stateGeneration: input.output.stateGeneration,
+      outputDigest: input.output.outputDigest,
     },
-    ...(credentialEnv ? { credentials: { env: credentialEnv } } : {}),
     ...(input.sourceSnapshot
       ? {
           sourceSnapshot: {
@@ -321,7 +347,7 @@ function releaseActivationWebhookPayload(
             ...(sourceArchiveBucket
               ? { archiveBucket: sourceArchiveBucket }
               : {}),
-            archiveObjectKey: input.sourceSnapshot.archiveObjectKey,
+            archiveRef: input.sourceSnapshot.archiveRef,
             archiveDigest: input.sourceSnapshot.archiveDigest,
             resolvedCommit: input.sourceSnapshot.resolvedCommit,
             path: input.sourceSnapshot.path,
@@ -331,29 +357,6 @@ function releaseActivationWebhookPayload(
     nonSensitiveOutputs: input.nonSensitiveOutputs,
     commands: input.commands,
   };
-}
-
-function releaseActivationWorkspaceId(
-  input: ReleaseActivationInput,
-): string | undefined {
-  return input.applyRun.workspaceId ?? input.applyRun.spaceId;
-}
-
-function releaseActivationCredentialEnv(
-  credentials: ReleaseActivationInput["credentials"] | undefined,
-): Readonly<Record<string, string>> | undefined {
-  if (!credentials) return undefined;
-  const env =
-    "env" in credentials &&
-    credentials.env &&
-    typeof credentials.env === "object"
-      ? credentials.env
-      : credentials;
-  const out: Record<string, string> = {};
-  for (const [name, value] of Object.entries(env)) {
-    if (typeof value === "string") out[name] = value;
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function releaseCommandRunId(applyRunId: string): string {
@@ -393,9 +396,6 @@ function parseReleaseActivatorResponse(
     ...(stringField(value, "kind") ? { kind: stringField(value, "kind") } : {}),
     ...(stringField(value, "message")
       ? { message: stringField(value, "message") }
-      : {}),
-    ...(stringField(value, "launchUrl")
-      ? { launchUrl: stringField(value, "launchUrl") }
       : {}),
     ...(stringField(value, "healthUrl")
       ? { healthUrl: stringField(value, "healthUrl") }

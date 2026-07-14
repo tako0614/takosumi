@@ -1,7 +1,13 @@
 # Takosumi Accounts migrations
 
 Postgres-backed migrations for the `accounts_v1` schema used by Takosumi
-Accounts (identity, billing, Installation ownership, OIDC issuer).
+Accounts (identity, sessions, OIDC, personal access tokens, and privacy
+requests). Older numbered migrations preserve the historical schema evolution;
+migration `032` removes the former Capsule/runtime projection ledger instead of
+making it part of the current Accounts boundary, and migration `034` removes
+the former commercial billing persistence after host extensions became its
+sole owner. Migration `035` persists the optional upstream profile image used
+by ordinary OAuth UserInfo responses.
 
 - **Substrate**: Postgres (the `node-postgres` reference distribution and any
   compatible operator deployment).

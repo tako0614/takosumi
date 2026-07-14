@@ -2,32 +2,32 @@ import { expect, test } from "bun:test";
 
 import {
   applyExpectedGuardFromPlanRun,
-  OpenTofuDeploymentController,
+  OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /**
- * Seeds a succeeded plan run flagged `requiresConfirmation` (the
- * waiting_approval gate) so we can drive the approve transition directly.
+ * Seeds a plan parked in the persisted `waiting_approval` state so we can
+ * drive the approve transition directly.
  */
 async function seedWaitingApprovalPlan(
-  store: InMemoryOpenTofuDeploymentStore,
+  store: InMemoryOpenTofuControlStore,
   id = "plan_wait",
 ): Promise<PlanRun> {
   const planRun: PlanRun = {
     id,
-    spaceId: "space_1",
+    workspaceId: "workspace_1",
     source: { kind: "git", url: "https://x/r.git", ref: "main", path: "." },
     sourceDigest: "sha256:src",
     operation: "update",
     runnerProfileId: "opentofu-default",
     variablesDigest: "sha256:vars",
     requiredProviders: [],
-    status: "succeeded",
+    status: "waiting_approval",
     policy: { status: "passed", reasons: [], checkedAt: 1 },
     policyDecisionDigest: "sha256:policy",
     planDigest: PLAN_DIGEST,
@@ -36,11 +36,7 @@ async function seedWaitingApprovalPlan(
       ref: "rl://plan",
       digest: PLAN_DIGEST,
     },
-    templateBinding: {
-      templateId: "tpl",
-      templateVersion: "1",
-      requiresConfirmation: true,
-    },
+    requiresApproval: true,
     auditEvents: [],
     createdAt: 1,
     updatedAt: 1,
@@ -49,19 +45,19 @@ async function seedWaitingApprovalPlan(
   return planRun;
 }
 
-function controller(store: InMemoryOpenTofuDeploymentStore) {
-  return new OpenTofuDeploymentController({ store, now: () => 100 });
+function controller(store: InMemoryOpenTofuControlStore) {
+  return new OpenTofuController({ store, now: () => 100 });
 }
 
 test("a destructive-confirmation plan projects as waiting_approval", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await seedWaitingApprovalPlan(store);
   const run = await controller(store).getRun("plan_wait");
   expect(run.status).toBe("waiting_approval");
 });
 
 test("approveRun clears the gate and the run projects as succeeded", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await seedWaitingApprovalPlan(store);
   const ctrl = controller(store);
   const approved = await ctrl.approveRun("plan_wait", { approvedBy: "ops" });
@@ -74,7 +70,7 @@ test("approveRun clears the gate and the run projects as succeeded", async () =>
 });
 
 test("approveRun redacts secret-like approval reasons before persistence", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await seedWaitingApprovalPlan(store);
   const ctrl = controller(store);
   await ctrl.approveRun("plan_wait", {
@@ -91,20 +87,20 @@ test("approveRun redacts secret-like approval reasons before persistence", async
 });
 
 test("createApplyRun redacts approval reasons before persistence", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const planRun = await seedWaitingApprovalPlan(store);
   await store.putPlanRun({
     ...planRun,
-    templateBinding: undefined,
     status: "succeeded",
+    requiresApproval: false,
   });
 
   const created = await controller(store).createApplyRun({
     planRunId: "plan_wait",
     expected: applyExpectedGuardFromPlanRun({
       ...planRun,
-      templateBinding: undefined,
       status: "succeeded",
+      requiresApproval: false,
     }),
     approval: {
       approvedBy: "ops",
@@ -122,7 +118,7 @@ test("createApplyRun redacts approval reasons before persistence", async () => {
 });
 
 test("approveRun is idempotent on an already-approved plan", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await seedWaitingApprovalPlan(store);
   const ctrl = controller(store);
   await ctrl.approveRun("plan_wait", { approvedBy: "ops" });
@@ -137,19 +133,23 @@ test("approveRun is idempotent on an already-approved plan", async () => {
 });
 
 test("approveRun rejects a plan that is not awaiting approval", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  // A plan with no destructive-confirmation flag is not awaiting approval.
+  const store = new InMemoryOpenTofuControlStore();
+  // A succeeded plan with no action-policy gate is not awaiting approval.
   const planRun = await seedWaitingApprovalPlan(store, "plan_ready");
-  await store.putPlanRun({ ...planRun, templateBinding: undefined });
+  await store.putPlanRun({
+    ...planRun,
+    status: "succeeded",
+    requiresApproval: false,
+  });
   await expect(
     controller(store).approveRun("plan_ready"),
   ).rejects.toMatchObject({ code: "failed_precondition" });
 });
 
 test("concurrent approveRun cannot double-approve a modern waiting_approval plan", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  // A modern row parks in the persisted `waiting_approval` status (not the
-  // legacy `succeeded`). Two concurrent approves both read waiting_approval;
+  const store = new InMemoryOpenTofuControlStore();
+  // The row parks in the persisted `waiting_approval` status. Two concurrent
+  // approves both read waiting_approval;
   // the fenced CAS (expectFrom scoped to the read status) must let exactly one
   // win so the approval record + audit trail are not duplicated.
   const seeded = await seedWaitingApprovalPlan(store, "plan_modern");
@@ -179,7 +179,7 @@ test("concurrent approveRun cannot double-approve a modern waiting_approval plan
 });
 
 test("approveRun throws not_found for an unknown id", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   await expect(
     controller(store).approveRun("plan_missing"),
   ).rejects.toMatchObject({ code: "not_found" });

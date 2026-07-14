@@ -1,12 +1,12 @@
 /**
  * Persistence boundary for the control-plane ledger (core-spec.md §27).
  *
- * The logical schema is the Space-direct OpenTofu Capsule DAG model: spaces,
+ * The logical schema is the Workspace-owned OpenTofu Capsule DAG model: workspaces,
  * sources(+snapshots), connections(+secret blobs), install_configs,
- * installations (active UNIQUE(space_id, name, environment)), provider_env_binding_sets,
+ * capsules (active UNIQUE(project_id, name, environment)), provider binding sets,
  * a SINGLE `runs` table (internal PlanRun / ApplyRun / SourceSyncRun records
  * persist as rows discriminated by run kind; the public §19 Run is a
- * projection), state_snapshots, and deployments.
+ * projection), StateVersions, and Outputs.
  *
  * The in-memory implementation is for dev/test only. Production/staging hosts
  * inject the SQL store or the D1 store, both of which materialize the §27
@@ -14,27 +14,31 @@
  */
 import type {
   ApplyRun,
-  Connection,
-  Deployment,
+  ProviderConnection,
+  DispatchStateAdoption,
   DispatchGeneratedRoot,
   InstallConfig,
-  Installation,
+  Capsule,
   PlanRun,
   RunnerProfile,
   RunStatus,
-  StateSnapshot,
+  StateVersion,
 } from "@takosumi/internal/deploy-control-api";
 import { coerceRunStatus } from "@takosumi/internal/deploy-control-api";
-import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import type {
+  CapsuleCompatibilityLevel,
+  CapsuleCompatibilityReport,
+} from "takosumi-contract/capsules";
 import type {
   Source,
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
-import type { Workspace as Space } from "takosumi-contract/workspaces";
-import type { WorkspaceOutputSyncState } from "takosumi-contract/output-sync";
-import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
+import type { Workspace, WorkspaceMember } from "takosumi-contract/workspaces";
+import type { Project } from "takosumi-contract/projects";
+import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type {
+  InstallConfigLifecycleAction,
   OutputAllowlistEntry,
   SourceBuildConfig,
 } from "takosumi-contract/install-configs";
@@ -55,10 +59,7 @@ import {
   pageSortedBy,
   pageSortedDesc,
 } from "takosumi-contract/pagination";
-import type {
-  OutputShare,
-  Output as OutputSnapshot,
-} from "takosumi-contract/outputs";
+import type { OutputShare, Output } from "takosumi-contract/outputs";
 import {
   RUN_LIST_DEFAULT_LIMIT,
   RUN_LIST_MAX_LIMIT,
@@ -67,25 +68,8 @@ import {
   type RunGroup,
 } from "takosumi-contract/runs";
 import type { BackupRecord } from "takosumi-contract/backups";
-import type {
-  BillingAccount,
-  BillingAutoRechargeAttempt,
-  BillingPlan,
-  CreditBalance,
-  CreditReservation,
-  SpaceSubscription,
-  UsageEvent,
-} from "takosumi-contract/billing";
-import {
-  creditBalanceAvailableUsdMicros,
-  creditBalanceMonthlyIncludedUsdMicros,
-  creditBalancePurchasedUsdMicros,
-  creditBalanceReservedUsdMicros,
-  billingPlanIncludedUsdMicros,
-  legacyCreditsToUsdMicros,
-  usageEventUsdMicros,
-  usdMicrosToLegacyCredits,
-} from "takosumi-contract/billing";
+import type { UsageEvent } from "takosumi-contract/billing";
+import { usageEventUsdMicros } from "takosumi-contract/billing";
 import type {
   CredentialMintEvent,
   SecurityFinding,
@@ -98,6 +82,31 @@ export interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
 }
 
+/** Validates the current persisted compatibility enum and fails closed. */
+export function normalizeStoredCapsuleCompatibilityLevel(
+  level: unknown,
+): CapsuleCompatibilityLevel {
+  if (level === "ready" || level === "needs_patch" || level === "unsupported") {
+    return level;
+  }
+  throw new TypeError(`invalid Capsule compatibility level: ${String(level)}`);
+}
+
+/** Validates a persisted report against the current public contract. */
+export function normalizeStoredCapsuleCompatibilityReport(
+  report: CapsuleCompatibilityReport,
+): CapsuleCompatibilityReport {
+  if (!report.sourceId?.trim()) {
+    throw new TypeError(
+      "CapsuleCompatibilityReport must reference a registered Git Source",
+    );
+  }
+  normalizeStoredCapsuleCompatibilityLevel(
+    (report as { readonly level: unknown }).level,
+  );
+  return report;
+}
+
 /**
  * Internal (non-public) plan inputs persisted alongside a PlanRun so the queue
  * consumer can re-run the plan after the create call returns. The public PlanRun
@@ -108,16 +117,25 @@ export interface CapsuleListPageParams extends PageParams {
 export interface PlanRunInputs {
   readonly planRunId: string;
   readonly variables: Readonly<Record<string, JsonValue>>;
-  /**
-   * Generated-root dispatch data. New Capsule sidecars carry `generatedRoot`
-   * for both built-in template modules and generic Capsules; embedded template
-   * modules are carried as `generatedRoot.moduleFiles`. The queue consumer re-reads
-   * this sidecar and threads it onto the runner dispatch payload. Never
-   * projected into the public ledger.
-   */
+  /** Optional child-module wrapper generated from DB/provider configuration. */
   readonly generatedRoot?: DispatchGeneratedRoot;
+  /** Resource Shape-only operator module; never sourced from Capsule input. */
+  readonly operatorModule?: {
+    readonly files: readonly {
+      readonly path: string;
+      readonly text: string;
+    }[];
+  };
+  /** Confirmed one-shot Resource state adoption; never part of a public Run. */
+  readonly stateAdoption?: DispatchStateAdoption;
+  /** Workspace-local, non-secret capture selection; never a public projection. */
+  readonly workspaceOutputAllowlist?: Readonly<
+    Record<string, OutputAllowlistEntry>
+  >;
+  /** Explicit InstallConfig projection for UI/public Output reads. */
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly sourceBuild?: SourceBuildConfig;
+  readonly lifecycleActions?: readonly InstallConfigLifecycleAction[];
   /**
    * At-rest seal of the SENSITIVE-bearing sidecar payload (spec §11 / §18). A
    * sensitive `published_output` value injected into a plan flows into
@@ -134,23 +152,23 @@ export interface PlanRunInputs {
 
 /**
  * Sealed credential blob persisted alongside (but separate from) the public
- * Connection record. The plaintext is the JSON of `{ [envName]: value }`
+ * ProviderConnection record. The plaintext is the JSON of `{ [envName]: value }`
  * encrypted as ONE blob via the secret-boundary crypto. The store only ever
  * sees ciphertext; it never decrypts.
  */
-export type StoredSecretBlobKind =
-  | "source_https_token"
-  | "source_ssh_private_key"
-  | "cloudflare_oauth_refresh_token"
-  | "cloudflare_api_token"
-  | "aws_external_id"
-  | "gcp_oauth_refresh_token"
-  | "static_secret";
+/**
+ * Opaque encryption-partition token persisted with the sealed blob.
+ *
+ * Historical rows may contain provider-labelled values. New writes use the
+ * connection's explicit `secretPartition`; Core must never grow a provider or
+ * auth-flow enum merely to persist encrypted bytes.
+ */
+export type StoredSecretBlobKind = string;
 
 export interface StoredSecretBlob {
   readonly id: string;
   readonly connectionId: string;
-  readonly spaceId?: string;
+  readonly workspaceId?: string;
   readonly kind: StoredSecretBlobKind;
   /** Base64 of the sealed bytes (the crypto prepends the nonce to the ciphertext). */
   readonly ciphertext: string;
@@ -180,62 +198,62 @@ export interface StoredSource extends Source {
   readonly autoSync: boolean;
 }
 
-export interface InstallationPatchGuard {
-  readonly currentDeploymentId: string | undefined;
-  readonly status?: Installation["status"];
+export interface CapsuleStateVersionGuard {
+  readonly currentStateVersionId: string | undefined;
+  readonly status?: Capsule["status"];
 }
 
-export class InstallationPatchGuardConflict extends Error {
-  readonly expectedCurrentDeploymentId: string | undefined;
-  readonly actualCurrentDeploymentId: string | undefined;
-  readonly expectedStatus?: Installation["status"];
-  readonly actualStatus?: Installation["status"];
+export class CapsuleStateVersionGuardConflict extends Error {
+  readonly expectedCurrentStateVersionId: string | undefined;
+  readonly actualCurrentStateVersionId: string | undefined;
+  readonly expectedStatus?: Capsule["status"];
+  readonly actualStatus?: Capsule["status"];
 
   constructor(input: {
     readonly id: string;
-    readonly expectedCurrentDeploymentId: string | undefined;
-    readonly actualCurrentDeploymentId: string | undefined;
-    readonly expectedStatus?: Installation["status"];
-    readonly actualStatus?: Installation["status"];
+    readonly expectedCurrentStateVersionId: string | undefined;
+    readonly actualCurrentStateVersionId: string | undefined;
+    readonly expectedStatus?: Capsule["status"];
+    readonly actualStatus?: Capsule["status"];
   }) {
     super(
-      `installation ${input.id} currentDeploymentId guard lost the race: ` +
-        `expected ${input.expectedCurrentDeploymentId ?? "<none>"} but row ` +
-        `is now ${input.actualCurrentDeploymentId ?? "<none>"}` +
+      `Capsule ${input.id} currentStateVersionId guard lost the race: ` +
+        `expected ${input.expectedCurrentStateVersionId ?? "<none>"} but row ` +
+        `is now ${input.actualCurrentStateVersionId ?? "<none>"}` +
         (input.expectedStatus === undefined
           ? ""
           : `; status expected ${input.expectedStatus} but row is ${input.actualStatus}`),
     );
-    this.name = "InstallationPatchGuardConflict";
-    this.expectedCurrentDeploymentId = input.expectedCurrentDeploymentId;
-    this.actualCurrentDeploymentId = input.actualCurrentDeploymentId;
+    this.name = "CapsuleStateVersionGuardConflict";
+    this.expectedCurrentStateVersionId = input.expectedCurrentStateVersionId;
+    this.actualCurrentStateVersionId = input.actualCurrentStateVersionId;
     this.expectedStatus = input.expectedStatus;
     this.actualStatus = input.actualStatus;
   }
 }
 
-export class InstallationStateGenerationGuardConflict extends Error {
+export class CapsuleStateGenerationGuardConflict extends Error {
   readonly expectedCurrentStateGeneration: number;
   readonly actualCurrentStateGeneration: number;
-  readonly expectedStatus?: Installation["status"];
-  readonly actualStatus?: Installation["status"];
+  readonly expectedStatus?: Capsule["status"];
+  readonly actualStatus?: Capsule["status"];
 
   constructor(input: {
     readonly id: string;
     readonly expectedCurrentStateGeneration: number;
     readonly actualCurrentStateGeneration: number;
-    readonly expectedStatus?: Installation["status"];
-    readonly actualStatus?: Installation["status"];
+    readonly expectedStatus?: Capsule["status"];
+    readonly actualStatus?: Capsule["status"];
   }) {
     super(
-      `installation ${input.id} currentStateGeneration guard lost the race: ` +
+      `Capsule ${input.id} currentStateGeneration guard lost the race: ` +
         `expected ${input.expectedCurrentStateGeneration} but row is ` +
         `${input.actualCurrentStateGeneration}` +
         (input.expectedStatus === undefined
           ? ""
           : `; status expected ${input.expectedStatus} but row is ${input.actualStatus}`),
     );
-    this.name = "InstallationStateGenerationGuardConflict";
+    this.name = "CapsuleStateGenerationGuardConflict";
     this.expectedCurrentStateGeneration = input.expectedCurrentStateGeneration;
     this.actualCurrentStateGeneration = input.actualCurrentStateGeneration;
     this.expectedStatus = input.expectedStatus;
@@ -243,10 +261,8 @@ export class InstallationStateGenerationGuardConflict extends Error {
   }
 }
 
-export interface CommitAppliedDeploymentResult {
-  readonly installation?: Installation;
-  /** Output Sync state after an atomic revision bump, when requested. */
-  readonly outputSyncState?: WorkspaceOutputSyncState;
+export interface CommitRunStateResult {
+  readonly capsule?: Capsule;
   /**
    * The apply run no longer holds the expected lease fence. No commit writes were
    * applied; callers must treat this as a stale worker/no-op.
@@ -261,8 +277,8 @@ export interface PublicHostReservation {
   readonly hostname: string;
   readonly ownerUserId: string;
   readonly workspaceId: string;
-  readonly installationId: string;
-  readonly installationName: string;
+  readonly capsuleId: string;
+  readonly capsuleName: string;
   readonly allocationKind: ManagedPublicHostnameReservationKind;
   readonly status: PublicHostReservationStatus;
   readonly reservedAt: string;
@@ -273,8 +289,8 @@ export interface PublicHostReservation {
 export interface ReservePublicHostInput {
   readonly hostname: string;
   readonly workspaceId: string;
-  readonly installationId: string;
-  readonly installationName: string;
+  readonly capsuleId: string;
+  readonly capsuleName: string;
   readonly allocationKind: ManagedPublicHostnameReservationKind;
   /** Omitted means the operator does not limit owner vanity slots. */
   readonly vanitySlotLimit?: number;
@@ -297,13 +313,13 @@ export type ReservePublicHostResult =
       readonly vanitySlotLimit: number;
     };
 
-/** Fields a controller may patch on an Installation row. */
-export type InstallationPatch = Partial<
+/** Fields a controller may patch on a Capsule row. */
+export type CapsulePatch = Partial<
   Pick<
-    Installation,
-    | "currentDeploymentId"
+    Capsule,
+    | "currentStateVersionId"
     | "currentStateGeneration"
-    | "currentOutputSnapshotId"
+    | "currentOutputId"
     | "compatibilityReportId"
     | "compatibilityStatus"
     | "status"
@@ -314,66 +330,19 @@ export type InstallationPatch = Partial<
 >;
 
 /**
- * The all-or-nothing set of ledger writes that finalize a successful apply or
- * destroy-apply (core-spec.md §20 / §21 / §16). The controller READS the
- * previous-current Deployment (for the superseded / destroyed status flip) and
- * BUILDS every record up front, then hands the bundle to
- * {@link OpenTofuDeploymentStore.commitAppliedDeployment} so a crash mid-write
- * can no longer leave a Deployment without its StateSnapshot/OutputSnapshot, or
- * a state generation advanced without its Deployment.
- *
- * The unit is:
- *   - `newDeployment` — the new `active` Deployment (apply); absent for a
- *     destroy-apply, which records no new Deployment.
- *   - `supersededDeployment` — the previously-current Deployment with its status
- *     already flipped (apply → `superseded`, destroy → `destroyed`); absent when
- *     there was no prior current Deployment, or it was not in a flippable state.
- *   - `stateSnapshot` — the §20 StateSnapshot metadata for the persisted
- *     generation.
- *   - `outputSnapshot` — the §16 OutputSnapshot (apply only; absent for destroy).
- *   - `installationPatch` — the GUARDED Installation advance (currentDeploymentId
- *     / status / currentStateGeneration / currentOutputSnapshotId). When the
- *     guard would not match the current row, the installation patch is NOT
- *     applied and the result `installation` is `undefined` — the SAME
- *     guard-miss semantics as {@link OpenTofuDeploymentStore.patchInstallation}.
- *     A guard *conflict* (row moved out from under the writer) still throws
- *     {@link InstallationPatchGuardConflict}.
- *   - `applyRunTerminal` — the succeeded apply / destroy-apply ApplyRun, written
- *     into the SAME atomic unit so the run's terminal status can never tear from
- *     the Deployment it produced (a crash between the commit and a separate
- *     terminal write would otherwise leave a stuck `running` run over a finished
- *     Deployment). Its `lease_token` fence is CLEARED on the same write (mirrors
- *     {@link OpenTofuDeploymentStore.transitionRun} `clearLeaseToken`). Absent for
- *     the no-state-context fallback path (which has no atomic unit to join).
- *   - `planRunApplied` — the source PlanRun carrying its `appliedApplyRunId`
- *     marker (apply-once), written into the SAME atomic unit so the
- *     plan-was-applied fact lands with the Deployment + terminal ApplyRun. The
- *     PlanRun is already terminal (`succeeded`) and carries no lease fence, so it
- *     is a plain row write (no lease column change). Absent on the fallback path.
+ * Atomic provider-applied ledger commit: Run + StateVersion + Output. The
+ * terminal Run may be failed and Capsule `error` when a pinned post-apply
+ * lifecycle action did not terminal-succeed; provider state is still retained.
  */
-export interface CommitAppliedDeploymentInput {
-  readonly newDeployment?: Deployment;
-  readonly supersededDeployment?: Deployment;
-  readonly stateSnapshot: StateSnapshot;
-  readonly outputSnapshot?: OutputSnapshot;
-  /**
-   * Takosumi-specific Output Sync extension update. When present, stores bump
-   * the Workspace revision in the same atomic unit. Disabled Workspaces still
-   * advance the revision so re-enabling can reconcile every missed change.
-   */
-  readonly outputSyncRevisionBump?: {
-    readonly workspaceId: string;
-    readonly updatedAt: string;
-  };
-  readonly installationPatch: {
+export interface CommitRunStateInput {
+  readonly stateVersion: StateVersion;
+  readonly output?: Output;
+  readonly capsulePatch: {
     readonly id: string;
-    readonly patch: InstallationPatch;
-    readonly guard: InstallationPatchGuard;
+    readonly patch: CapsulePatch;
+    readonly guard: CapsuleStateVersionGuard;
   };
-  /**
-   * Succeeded apply / destroy-apply ApplyRun, committed atomically with the
-   * Deployment. Its lease fence token is cleared on the same write.
-   */
+  /** Terminal apply / destroy-apply Run committed with StateVersion/Output. */
   readonly applyRunTerminal?: ApplyRun;
   /**
    * Fence token held by the worker attempting to commit `applyRunTerminal`.
@@ -382,14 +351,24 @@ export interface CommitAppliedDeploymentInput {
    */
   readonly applyRunLeaseToken?: string;
   /**
-   * Source PlanRun with its `appliedApplyRunId` marker (apply-once), committed
-   * atomically with the Deployment. Plain row write (no lease change).
+   * Source PlanRun with its `appliedApplyRunId` marker (apply-once).
    */
   readonly planRunApplied?: PlanRun;
 }
 
+/** Atomic terminal commit for a first-class Resource apply/destroy Run. */
+export interface CommitResourceRunInput {
+  readonly applyRunTerminal: ApplyRun;
+  readonly planRunApplied: PlanRun;
+  readonly applyRunLeaseToken: string;
+}
+
+export interface CommitResourceRunResult {
+  readonly applyRunLeaseLost?: true;
+}
+
 export interface CommitRestoredStateResult {
-  readonly installation?: Installation;
+  readonly capsule?: Capsule;
   /**
    * The restore run no longer holds the expected lease fence. No restore ledger
    * writes were applied; callers must treat this as a stale worker/no-op.
@@ -397,19 +376,14 @@ export interface CommitRestoredStateResult {
   readonly restoreRunLeaseLost?: true;
 }
 
-export interface WorkspaceCurrentOutputRecord {
-  readonly capsule: Installation;
-  readonly output: OutputSnapshot;
-}
-
 export interface CommitRestoredStateInput {
-  readonly stateSnapshot: StateSnapshot;
-  readonly installationPatch: {
+  readonly stateVersion: StateVersion;
+  readonly capsulePatch: {
     readonly id: string;
-    readonly patch: InstallationPatch;
+    readonly patch: CapsulePatch;
     readonly guard: {
       readonly currentStateGeneration: number;
-      readonly status?: Installation["status"];
+      readonly status?: Capsule["status"];
     };
   };
   readonly restoreRunTerminal: Run;
@@ -419,7 +393,7 @@ export interface CommitRestoredStateInput {
 /**
  * Status-conditional, lease-fenced compare-and-set transition of a single run
  * row (the most correctness-critical primitive of the queue consumer). Unlike
- * {@link OpenTofuDeploymentStore.putPlanRun} / `putApplyRun` (which INSERT/upsert
+ * {@link OpenTofuControlStore.putPlanRun} / `putApplyRun` (which INSERT/upsert
  * the initial creation), `transitionRun` is the post-insert mutation: it advances
  * a run's `status` (and lease/heartbeat) ONLY when the row still matches the
  * pre-read expectation, so two consumers racing the same `queued → running`
@@ -438,6 +412,10 @@ export interface CommitRestoredStateInput {
  *     current heartbeat column to equal this value (`null` means absent). This
  *     fences stale-`running` takeovers so only the first consumer that observed
  *     the stale heartbeat can re-claim the run.
+ *   - `expectStartedAt` — when set, the CAS additionally requires the persisted
+ *     run payload's `startedAt` to equal this value (`null` means absent). This
+ *     lets cancellation distinguish a never-started queued row from the same
+ *     run requeued after execution already began.
  *   - `run` — the new run payload to persist on a win; its `status` is the SET
  *     target (the row's status column + run JSON both move to `run.status`).
  *   - `setLeaseToken` / `clearLeaseToken` — the lease column write on a win:
@@ -461,6 +439,7 @@ export interface TransitionRunInput {
   readonly expectFrom: readonly RunStatus[];
   readonly expectLeaseToken?: string;
   readonly expectHeartbeatAt?: number | null;
+  readonly expectStartedAt?: number | string | null;
   readonly run: PlanRun | ApplyRun | SourceSyncRun | Run;
   readonly setLeaseToken?: string;
   readonly clearLeaseToken?: boolean;
@@ -481,64 +460,57 @@ export interface RecoverableOpenTofuRunListOptions {
   readonly limit?: number;
 }
 
-export interface CreditAmountInput {
-  readonly usdMicros?: number;
-  /**
-   * @deprecated Use `usdMicros`. Legacy credits are interpreted as USD amounts.
-   */
-  readonly credits?: number;
-}
-
-export interface ClaimBillingAutoRechargeAttemptInput {
-  readonly attempt: BillingAutoRechargeAttempt;
-  readonly monthlyLimitUsdMicros?: number;
-}
-
-export type ClaimBillingAutoRechargeAttemptResult =
+/**
+ * Durable runtime-safety projection derived from the single Run ledger.
+ * Interface authorization consults this value at the capability boundary, so
+ * correctness never depends solely on an in-process terminal-run observer.
+ */
+export type CapsuleRuntimeSafety =
   | {
-      readonly claimed: true;
-      readonly attempt: BillingAutoRechargeAttempt;
+      readonly phase: "safe";
+      readonly runId: string;
+      readonly runType: "apply" | "restore";
     }
   | {
-      readonly claimed: false;
-      readonly attempt: BillingAutoRechargeAttempt;
-      readonly skippedReason: "already_claimed";
+      readonly phase: "unknown";
+      readonly runId: string;
+      readonly runType: "apply" | "destroy_apply" | "restore";
     }
   | {
-      readonly claimed: false;
-      readonly skippedReason: "monthly_limit_exceeded";
+      readonly phase: "terminating";
+      readonly runId: string;
+      readonly runType: "destroy_apply";
+    }
+  | {
+      readonly phase: "retired";
+      readonly runId: string;
+      readonly runType: "destroy_apply";
     };
 
-export interface SettleBillingAutoRechargeAttemptInput {
-  readonly attemptId: string;
-  readonly status: "pending_unknown" | "succeeded" | "failed";
-  readonly chargedUsdMicros?: number;
-  readonly stripePaymentIntentId?: string;
-  readonly providerStatus?: string;
-  readonly failureReason?: string;
-  readonly updatedAt: string;
+/**
+ * Durable post-commit billing-finalization markers carried by the ApplyRun
+ * ledger row itself. `pending` is committed atomically with provider state;
+ * `completed` is appended only after the idempotent host capture succeeds.
+ */
+export const APPLY_BILLING_CAPTURE_PENDING_EVENT =
+  "billing.capture.pending" as const;
+export const APPLY_BILLING_CAPTURE_COMPLETED_EVENT =
+  "billing.capture.completed" as const;
+
+export function applyRunBillingCapturePending(run: ApplyRun): boolean {
+  let latestPending = -1;
+  let latestCompleted = -1;
+  for (let index = 0; index < run.auditEvents.length; index += 1) {
+    const type = run.auditEvents[index]?.type;
+    if (type === APPLY_BILLING_CAPTURE_PENDING_EVENT) latestPending = index;
+    if (type === APPLY_BILLING_CAPTURE_COMPLETED_EVENT) latestCompleted = index;
+  }
+  return latestPending > latestCompleted;
 }
 
-export type SettleBillingAutoRechargeAttemptResult =
-  | {
-      readonly settled: true;
-      readonly attempt: BillingAutoRechargeAttempt;
-      readonly balance?: CreditBalance;
-    }
-  | {
-      readonly settled: false;
-      readonly attempt?: BillingAutoRechargeAttempt;
-      readonly balance?: CreditBalance;
-      readonly skippedReason: "already_succeeded" | "attempt_not_found";
-    };
-
-export interface PutUsageEventAndSpendCreditsResult {
-  readonly usageEvent: UsageEvent;
-  readonly balance?: CreditBalance;
-  readonly inserted: boolean;
-}
-
-export interface OpenTofuDeploymentStore {
+export interface OpenTofuControlStore {
+  /** Declares whether ledger writes survive process restart. */
+  readonly persistence: "durable" | "ephemeral";
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile>;
   getRunnerProfile(id: string): Promise<RunnerProfile | undefined>;
   listRunnerProfiles(): Promise<readonly RunnerProfile[]>;
@@ -575,15 +547,20 @@ export interface OpenTofuDeploymentStore {
   getCompatibilityCheckRun(id: string): Promise<Run | undefined>;
   putBackupRun(run: Run): Promise<Run>;
   getBackupRun(id: string): Promise<Run | undefined>;
-  listRunsBySpace(
-    spaceId: string,
+  listRunsByWorkspace(
+    workspaceId: string,
     options?: { readonly limit?: number },
   ): Promise<readonly StoredRunRecord[]>;
+  /** Latest decisive mutation for runtime Interface safety, if one exists. */
+  getCapsuleRuntimeSafety(
+    capsuleId: string,
+  ): Promise<CapsuleRuntimeSafety | undefined>;
   /**
    * Internal scheduler safety net read: returns oldest-first dispatchable
-   * non-terminal OpenTofu run rows whose owner may need to be re-poked. This is
-   * intentionally not the public newest-first run list, because repair must find
-   * very old active rows even when they are far outside dashboard pagination.
+   * non-terminal OpenTofu rows plus terminal provider-applied rows whose durable
+   * billing finalization marker is still pending. This is intentionally not the
+   * public newest-first run list, because repair must find very old work even
+   * when it is far outside dashboard pagination.
    */
   listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
@@ -595,131 +572,106 @@ export interface OpenTofuDeploymentStore {
   putArtifactRecord(record: ArtifactRecord): Promise<ArtifactRecord>;
   listArtifactRecordsForRun(runId: string): Promise<readonly ArtifactRecord[]>;
 
-  // Space records (spec §4). The owner namespace Installations live under.
-  putSpace(space: Space): Promise<Space>;
-  getSpace(id: string): Promise<Space | undefined>;
-  listSpacesByIds(ids: readonly string[]): Promise<readonly Space[]>;
-  getSpaceByHandle(handle: string): Promise<Space | undefined>;
-  listSpaces(): Promise<readonly Space[]>;
+  // Workspace records (spec §4). The owner namespace Capsules live under.
+  putWorkspace(workspace: Workspace): Promise<Workspace>;
+  getWorkspace(id: string): Promise<Workspace | undefined>;
+  listWorkspacesByIds(ids: readonly string[]): Promise<readonly Workspace[]>;
+  getWorkspaceByHandle(handle: string): Promise<Workspace | undefined>;
+  listWorkspaces(): Promise<readonly Workspace[]>;
   /**
-   * Lists only the Spaces directly owned by `ownerUserId` (spec §4), same
-   * `(createdAt, id)` sort as `listSpaces`. Used by the dashboard session
+   * Lists only the Workspaces directly owned by `ownerUserId` (spec §4), same
+   * `(createdAt, id)` sort as `listWorkspaces`. Used by the dashboard session
    * `GET /api/v1/workspaces` to scope the read to the caller's spaces instead of
-   * loading every tenant's Space and filtering in the route.
+   * loading every tenant's Workspace and filtering in the route.
    */
-  listSpacesByOwner(ownerUserId: string): Promise<readonly Space[]>;
+  listWorkspacesByOwner(ownerUserId: string): Promise<readonly Workspace[]>;
 
-  // Takosumi-specific Output Sync extension state. This is intentionally
-  // separate from the OpenTofu Workspace/Output contracts.
-  putWorkspaceOutputSyncState(
-    state: WorkspaceOutputSyncState,
-  ): Promise<WorkspaceOutputSyncState>;
-  compareAndSetWorkspaceOutputSyncState(
-    expected: WorkspaceOutputSyncState | undefined,
-    next: WorkspaceOutputSyncState,
-  ): Promise<boolean>;
-  getWorkspaceOutputSyncState(
+  // Canonical Workspace membership ledger. The Workspace namespace owner is
+  // persisted as an ordinary active owner member on Workspace creation.
+  putWorkspaceMember(member: WorkspaceMember): Promise<WorkspaceMember>;
+  getWorkspaceMember(
     workspaceId: string,
-  ): Promise<WorkspaceOutputSyncState | undefined>;
-  listPendingWorkspaceOutputSyncStates(
-    limit: number,
-  ): Promise<readonly WorkspaceOutputSyncState[]>;
-  listCurrentOutputsByWorkspace(
+    accountId: string,
+  ): Promise<WorkspaceMember | undefined>;
+  listWorkspaceMembers(
     workspaceId: string,
-  ): Promise<readonly WorkspaceCurrentOutputRecord[]>;
+  ): Promise<readonly WorkspaceMember[]>;
+  listWorkspaceMembersByAccount(
+    accountId: string,
+  ): Promise<readonly WorkspaceMember[]>;
 
-  // InstallConfig records (spec §11). `spaceId` absent = built-in shared config.
+  // Workspace-owned Project records. Capsules reference one Project id.
+  putProject(project: Project): Promise<Project>;
+  getProject(id: string): Promise<Project | undefined>;
+  getProjectBySlug(
+    workspaceId: string,
+    slug: string,
+  ): Promise<Project | undefined>;
+  listProjectsByWorkspace(workspaceId: string): Promise<readonly Project[]>;
+
+  // InstallConfig records. `workspaceId` absent = operator-shared config.
   putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
   getInstallConfig(id: string): Promise<InstallConfig | undefined>;
-  listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]>;
+  listInstallConfigs(workspaceId?: string): Promise<readonly InstallConfig[]>;
 
-  // Installation records (spec §5 / §27, active UNIQUE(space_id, name, environment)).
-  putInstallation(installation: Installation): Promise<Installation>;
-  getInstallation(id: string): Promise<Installation | undefined>;
-  getInstallationByName(
-    spaceId: string,
+  // Capsule records (active UNIQUE(project_id, name, environment)).
+  putCapsule(capsule: Capsule): Promise<Capsule>;
+  getCapsule(id: string): Promise<Capsule | undefined>;
+  getCapsuleByName(
+    projectId: string,
     name: string,
     environment: string,
-  ): Promise<Installation | undefined>;
-  listInstallations(spaceId?: string): Promise<readonly Installation[]>;
+  ): Promise<Capsule | undefined>;
+  listCapsules(workspaceId?: string): Promise<readonly Capsule[]>;
   /**
-   * Keyset-paged Installation listing (spec §30 list route). Pages by the
+   * Keyset-paged Capsule listing (spec §30 list route). Pages by the
    * existing `(createdAt, id)` sort; returns at most `params.limit` (default /
    * cap {@link MAX_PAGE_LIMIT}) rows plus an opaque `nextCursor` when more exist.
    */
-  listInstallationsPage(
-    spaceId: string,
+  listCapsulesPage(
+    workspaceId: string,
     params: CapsuleListPageParams,
-  ): Promise<Page<Installation>>;
+  ): Promise<Page<Capsule>>;
   reservePublicHost(
     input: ReservePublicHostInput,
   ): Promise<ReservePublicHostResult>;
   getPublicHostReservation(
     hostname: string,
   ): Promise<PublicHostReservation | undefined>;
-  releasePublicHostsForInstallation(
-    installationId: string,
-    now: string,
-  ): Promise<void>;
-  patchInstallation(
+  releasePublicHostsForCapsule(capsuleId: string, now: string): Promise<void>;
+  patchCapsule(
     id: string,
-    patch: InstallationPatch,
-    guard?: InstallationPatchGuard,
-  ): Promise<Installation | undefined>;
+    patch: CapsulePatch,
+    guard?: CapsuleStateVersionGuard,
+  ): Promise<Capsule | undefined>;
 
-  /**
-   * Atomically commits the ledger writes that finalize a successful apply /
-   * destroy-apply (spec §20 / §21 / §16): the new/superseded Deployment(s), the
-   * StateSnapshot, the (apply-only) OutputSnapshot, and the GUARDED Installation
-   * advance — all-or-nothing so a mid-sequence failure can never leave torn
-   * state. Returns the patched Installation, or `{ installation: undefined }`
-   * when the guard would not match (same guard-miss semantics as
-   * {@link patchInstallation}); throws {@link InstallationPatchGuardConflict}
-   * when the row moved out from under the writer. See
-   * {@link CommitAppliedDeploymentInput} for how the controller builds the unit.
-   */
-  commitAppliedDeployment(
-    input: CommitAppliedDeploymentInput,
-  ): Promise<CommitAppliedDeploymentResult>;
+  /** Atomically commits terminal Run + StateVersion + optional Output + Capsule cursor. */
+  commitRunState(input: CommitRunStateInput): Promise<CommitRunStateResult>;
+  commitResourceRun(
+    input: CommitResourceRunInput,
+  ): Promise<CommitResourceRunResult>;
 
   commitRestoredState(
     input: CommitRestoredStateInput,
   ): Promise<CommitRestoredStateResult>;
 
-  putDeployment(deployment: Deployment): Promise<Deployment>;
-  getDeployment(id: string): Promise<Deployment | undefined>;
-  listDeploymentsByIds(ids: readonly string[]): Promise<readonly Deployment[]>;
-  listDeployments(installationId: string): Promise<readonly Deployment[]>;
-  /**
-   * Lists ALL Deployments for a Space in one query (space-scoped read used by
-   * the control-backup bundle to avoid a per-Installation round-trip). Backed by
-   * the `space_id` column/index; the in-memory store filters. Order is not
-   * contractual — callers that need per-Installation grouping/order re-group.
-   */
-  listDeploymentsBySpace(spaceId: string): Promise<readonly Deployment[]>;
-  /** Keyset-paged Deployment listing for an Installation (spec §30). */
-  listDeploymentsPage(
-    installationId: string,
-    params: PageParams,
-  ): Promise<Page<Deployment>>;
-
-  // Connection records (public fields) + their sealed secret blobs. The blob is
-  // stored in a separate namespace so the public Connection can be listed
+  // ProviderConnection records (public fields) + their sealed secret blobs. The blob is
+  // stored in a separate namespace so the public ProviderConnection can be listed
   // without ever touching ciphertext.
-  putConnection(connection: Connection): Promise<Connection>;
-  getConnection(id: string): Promise<Connection | undefined>;
-  listConnections(spaceId: string): Promise<readonly Connection[]>;
-  /** Keyset-paged Space Connection listing (spec §30 connection list route). */
+  putConnection(connection: ProviderConnection): Promise<ProviderConnection>;
+  getConnection(id: string): Promise<ProviderConnection | undefined>;
+  listConnections(workspaceId: string): Promise<readonly ProviderConnection[]>;
+  /** Keyset-paged Workspace ProviderConnection listing (spec §30 connection list route). */
   listConnectionsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
-  ): Promise<Page<Connection>>;
+  ): Promise<Page<ProviderConnection>>;
   /**
-   * Lists instance-wide `operator`-scoped Connections (no owning Space). Backs
+   * Lists instance-wide `operator`-scoped Connections (no owning Workspace). Backs
    * the §30 operator-scope `GET /api/connections` listing for the unrestricted
-   * bearer when `?spaceId` is omitted.
+   * bearer when `?workspaceId` is omitted.
    */
-  listOperatorConnections(): Promise<readonly Connection[]>;
+  listOperatorConnections(): Promise<readonly ProviderConnection[]>;
   deleteConnection(id: string): Promise<boolean>;
 
   putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob>;
@@ -730,10 +682,10 @@ export interface OpenTofuDeploymentStore {
   // autoSync). The hook secret plaintext is NEVER stored.
   putSource(source: StoredSource): Promise<StoredSource>;
   getSource(id: string): Promise<StoredSource | undefined>;
-  listSources(spaceId?: string): Promise<readonly StoredSource[]>;
-  /** Keyset-paged Source listing for a Space (spec §30 source list route). */
+  listSources(workspaceId?: string): Promise<readonly StoredSource[]>;
+  /** Keyset-paged Source listing for a Workspace (spec §30 source list route). */
   listSourcesPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<StoredSource>>;
   deleteSource(id: string): Promise<boolean>;
@@ -746,8 +698,7 @@ export interface OpenTofuDeploymentStore {
    * Lists SourceSnapshots for a batch of Source ids in ONE query (used by the
    * control-backup bundle to replace a per-Source round-trip). SourceSnapshots
    * have no `space_id` column, so this batches by the already-loaded id list
-   * rather than space-scoping; upload-origin snapshots (no `sourceId`) are not
-   * returned. An empty `sourceIds` yields an empty result. Order is not
+   * rather than space-scoping. An empty `sourceIds` yields an empty result. Order is not
    * contractual — callers re-group/sort per Source.
    */
   listSourceSnapshotsBySourceIds(
@@ -774,56 +725,64 @@ export interface OpenTofuDeploymentStore {
     sourceSnapshotId: string,
     options?: {
       readonly sourceId?: string;
-      readonly installationId?: string;
+      readonly capsuleId?: string;
     },
   ): Promise<CapsuleCompatibilityReport | undefined>;
 
-  // Legacy-named ProviderBinding records, one row per
+  // Provider Binding records, one row per
   // (capsule, environment), with that pair as the upsert key.
-  putInstallationProviderEnvBindingSet(
-    profile: InstallationProviderEnvBindingSet,
-  ): Promise<InstallationProviderEnvBindingSet>;
-  deleteInstallationProviderEnvBindingSet(
-    installationId: string,
+  putProviderBindingSet(
+    profile: ProviderBindingSet,
+  ): Promise<ProviderBindingSet>;
+  deleteProviderBindingSet(
+    capsuleId: string,
     environment: string,
   ): Promise<void>;
-  getInstallationProviderEnvBindingSetByInstallation(
-    installationId: string,
+  getProviderBindingSetByCapsule(
+    capsuleId: string,
     environment: string,
-  ): Promise<InstallationProviderEnvBindingSet | undefined>;
+  ): Promise<ProviderBindingSet | undefined>;
 
-  // StateSnapshot records (spec §20). Immutable per-(installation, environment,
+  // StateVersion records (spec §20). Immutable per-(Capsule, environment,
   // generation) metadata recorded after a successful apply/destroy state
-  // persist. The encrypted state bytes live in R2_STATE; only the metadata
+  // persist. The encrypted state bytes live in the state store; only the metadata
   // enters the ledger.
-  putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot>;
-  getLatestStateSnapshot(
-    installationId: string,
+  putStateVersion(snapshot: StateVersion): Promise<StateVersion>;
+  getStateVersion(id: string): Promise<StateVersion | undefined>;
+  getLatestStateVersion(
+    capsuleId: string,
     environment: string,
-  ): Promise<StateSnapshot | undefined>;
-  listStateSnapshots(
-    installationId: string,
+  ): Promise<StateVersion | undefined>;
+  listStateVersions(
+    capsuleId: string,
     environment: string,
-  ): Promise<readonly StateSnapshot[]>;
+  ): Promise<readonly StateVersion[]>;
+  listStateVersionsPage(
+    capsuleId: string,
+    environment: string,
+    params: PageParams,
+  ): Promise<Page<StateVersion>>;
   /**
-   * Lists ALL StateSnapshots for a Space in one query (space-scoped read used by
-   * the control-backup bundle to avoid a per-Installation round-trip). Backed by
-   * the `space_id` column; the in-memory store filters. Spans all environments —
-   * callers that need per-(installation, environment) grouping/order re-group.
+   * Lists all StateVersions for a Workspace in one query. SQL adapters may use
+   * a legacy physical `space_id` column internally. Spans all environments;
+   * callers that need per-(Capsule, environment) grouping/order re-group.
    */
-  listStateSnapshotsBySpace(spaceId: string): Promise<readonly StateSnapshot[]>;
+  listStateVersionsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly StateVersion[]>;
 
-  // Dependency DAG edges (spec §14 / §15 / §27 installation_dependencies). A
-  // Dependency connects a producer Installation's outputs to a consumer
-  // Installation's inputs within the SAME Space.
+  // Dependency DAG edges. A Dependency connects a producer Capsule's outputs
+  // to a consumer Capsule's inputs within the same Workspace.
   putDependency(dependency: Dependency): Promise<Dependency>;
   getDependency(id: string): Promise<Dependency | undefined>;
-  listDependenciesBySpace(spaceId: string): Promise<readonly Dependency[]>;
+  listDependenciesByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly Dependency[]>;
   listDependenciesForConsumer(
-    consumerInstallationId: string,
+    consumerCapsuleId: string,
   ): Promise<readonly Dependency[]>;
   listDependenciesForProducer(
-    producerInstallationId: string,
+    producerCapsuleId: string,
   ): Promise<readonly Dependency[]>;
   deleteDependency(id: string): Promise<boolean>;
 
@@ -835,58 +794,64 @@ export interface OpenTofuDeploymentStore {
   ): Promise<DependencySnapshot>;
   getDependencySnapshot(id: string): Promise<DependencySnapshot | undefined>;
 
-  // OutputSnapshot records (spec §16 / §27 output_snapshots). Recorded after a
-  // successful apply: the projected spaceOutputs / publicOutputs + digest; the
-  // raw envelope stays an encrypted R2_ARTIFACTS artifact (rawOutputArtifactKey).
-  putOutputSnapshot(snapshot: OutputSnapshot): Promise<OutputSnapshot>;
-  getOutputSnapshot(id: string): Promise<OutputSnapshot | undefined>;
-  getLatestOutputSnapshot(
-    installationId: string,
-  ): Promise<OutputSnapshot | undefined>;
-  listOutputSnapshots(
-    installationId: string,
-  ): Promise<readonly OutputSnapshot[]>;
+  // Output records (spec §16 / §27 output_snapshots). Recorded after a
+  // successful apply: bounded Workspace-local outputs + the separately
+  // allowlisted publicOutputs + digest; the raw envelope stays an encrypted
+  // artifact-store object (rawArtifactRef).
+  putOutput(snapshot: Output): Promise<Output>;
+  getOutput(id: string): Promise<Output | undefined>;
+  getLatestOutput(capsuleId: string): Promise<Output | undefined>;
+  listOutputs(capsuleId: string): Promise<readonly Output[]>;
   /**
-   * Lists ALL OutputSnapshots for a Space in one query (space-scoped read used by
-   * the control-backup bundle to avoid a per-Installation round-trip). Backed by
-   * the `space_id` column; the in-memory store filters. Order is not
-   * contractual — callers that need per-Installation grouping/order re-group.
+   * Lists all Outputs for a Workspace in one query. SQL adapters may use a
+   * legacy physical `space_id` column internally. Order is not contractual;
+   * callers that need per-Capsule grouping/order re-group.
    */
-  listOutputSnapshotsBySpace(
-    spaceId: string,
-  ): Promise<readonly OutputSnapshot[]>;
+  listOutputsByWorkspace(workspaceId: string): Promise<readonly Output[]>;
 
-  // OutputShare records (spec §18 / §27 output_shares). A cross-Space grant from
-  // a producer Installation's projected outputs (in fromSpace) to a consumer
-  // Space (toSpace). The grant carries names + optional aliases only (sensitive
+  // OutputShare records. A cross-Workspace grant from a producer Capsule's
+  // projected outputs to a consumer Workspace. The grant carries names and
+  // optional aliases only (sensitive
   // sharing is not supported, invariant 12); resolved output VALUES are never
   // stored on the share.
   putOutputShare(share: OutputShare): Promise<OutputShare>;
   getOutputShare(id: string): Promise<OutputShare | undefined>;
-  /** Shares GRANTED BY a Space (the producer side; spaceId = fromSpaceId). */
-  listOutputSharesFromSpace(
-    fromSpaceId: string,
+  /** Shares granted by a Workspace (the producer side). */
+  listOutputSharesFromWorkspace(
+    fromWorkspaceId: string,
   ): Promise<readonly OutputShare[]>;
-  /** Shares GRANTED TO a Space (the consumer side; spaceId = toSpaceId). */
-  listOutputSharesToSpace(toSpaceId: string): Promise<readonly OutputShare[]>;
+  /** Shares granted to a Workspace (the consumer side). */
+  listOutputSharesToWorkspace(
+    toWorkspaceId: string,
+  ): Promise<readonly OutputShare[]>;
 
   // RunGroup records (spec §19 / §24 / §27 run_groups). Orders multiple Runs
-  // across the dependency DAG (e.g. a Space update after stale propagation).
+  // across the dependency DAG (e.g. a Workspace update after stale propagation).
   putRunGroup(group: RunGroup): Promise<RunGroup>;
   getRunGroup(id: string): Promise<RunGroup | undefined>;
-  listRunGroups(spaceId: string): Promise<readonly RunGroup[]>;
+  listRunGroups(workspaceId: string): Promise<readonly RunGroup[]>;
 
   // Activity audit-trail records (spec §27 audit_events / §34 Activity). The
-  // Space-scoped audit ledger surfaced in the dashboard Activity view. Listing
+  // Workspace-scoped audit ledger surfaced in the dashboard Activity view. Listing
   // orders newest first (createdAt desc, id desc) and defaults to 100 rows.
   putActivityEvent(event: ActivityEvent): Promise<ActivityEvent>;
   listActivityEvents(
-    spaceId: string,
+    workspaceId: string,
     options?: { readonly limit?: number },
   ): Promise<readonly ActivityEvent[]>;
+  /**
+   * Newest-first keyset page for one target inside the shared Activity ledger.
+   * Resource Shape exposes this filtered projection as Resource events.
+   */
+  listActivityEventsForTargetPage(
+    workspaceId: string,
+    targetType: string,
+    targetId: string,
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>>;
 
   // Credential mint audit rows (spec invariant 17). Values are never persisted;
-  // this ledger records only run/space/installation/connection/phase metadata.
+  // this ledger records only run/Workspace/Capsule/connection/phase metadata.
   putCredentialMintEvent(
     event: CredentialMintEvent,
   ): Promise<CredentialMintEvent>;
@@ -898,121 +863,34 @@ export interface OpenTofuDeploymentStore {
   // emitted by Capsule Gate, plan policy, and later scanners.
   putSecurityFinding(finding: SecurityFinding): Promise<SecurityFinding>;
   listSecurityFindings(
-    spaceId: string,
+    workspaceId: string,
     options?: { readonly runId?: string; readonly limit?: number },
   ): Promise<readonly SecurityFinding[]>;
 
-  // Billing USD ledger (§28). Plan creates reservations in showback/enforce;
-  // apply confirms/captures them before provider credential mint. Legacy
-  // `credits` inputs are interpreted as whole-dollar compatibility aliases.
-  putBillingPlan(plan: BillingPlan): Promise<BillingPlan>;
-  getBillingPlan(id: string): Promise<BillingPlan | undefined>;
-  putBillingAccount(account: BillingAccount): Promise<BillingAccount>;
-  getBillingAccount(id: string): Promise<BillingAccount | undefined>;
-  getBillingAccountForOwner(
-    ownerType: BillingAccount["ownerType"],
-    ownerId: string,
-  ): Promise<BillingAccount | undefined>;
-  putSpaceSubscription(
-    subscription: SpaceSubscription,
-  ): Promise<SpaceSubscription>;
-  getSpaceSubscription(spaceId: string): Promise<SpaceSubscription | undefined>;
-  putCreditBalance(balance: CreditBalance): Promise<CreditBalance>;
-  getCreditBalance(spaceId: string): Promise<CreditBalance | undefined>;
-  reserveCredits(
-    spaceId: string,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<CreditBalance | undefined>;
-  /**
-   * Atomically adds a credit GRANT (top-up / pack purchase / subscription
-   * invoice grant) to a Space's available + purchased columns in a single
-   * UPDATE — no read-modify-write — so concurrent webhook deliveries cannot
-   * lose updates. Creates a zero balance row first when the Space has none, so
-   * the first grant lands. `usdMicros` must be positive. Legacy `credits`
-   * remains accepted as a whole-dollar compatibility alias. Returns the new
-   * balance.
-   */
-  addCredits(
-    spaceId: string,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<CreditBalance>;
-  /**
-   * Atomically applies the monthly subscription RESET: carries over purchased
-   * USD grant and resets the monthly allotment to full, in one conditional
-   * UPDATE — `available = max(0, available - oldMonthly) + newMonthly`,
-   * `monthlyIncludedUsdMicros = newMonthly` (all column-relative, no read). The
-   * WHERE guard (`monthlyIncludedCredits != newMonthly OR updatedAt <
-   * periodStartIso`) makes it idempotent per billing period so concurrent
-   * reconciles cannot double-grant. Returns the balance when applied,
-   * `undefined` when the guard skipped it (already reconciled) or the row is
-   * absent.
-   */
-  reconcileMonthlyCredits(
-    spaceId: string,
-    input: {
-      readonly newMonthly: number;
-      readonly periodStartIso: string;
-      readonly updatedAt: string;
-    },
-  ): Promise<CreditBalance | undefined>;
-  putCreditReservation(
-    reservation: CreditReservation,
-  ): Promise<CreditReservation>;
-  getCreditReservationForRun(
-    runId: string,
-  ): Promise<CreditReservation | undefined>;
-  listCreditReservations(
-    spaceId: string,
-    options?: { readonly limit?: number },
-  ): Promise<readonly CreditReservation[]>;
-  /**
-   * Claims monthly auto-recharge capacity before a Stripe off-session charge is
-   * attempted. `pending` and `succeeded` attempts count toward the optional
-   * monthly limit so concurrent runs cannot all pass the cap check and then
-   * charge. Idempotency is keyed by `attempt.idempotencyKey`; an existing row is
-   * returned without mutating or charging again.
-   */
-  claimBillingAutoRechargeAttempt(
-    input: ClaimBillingAutoRechargeAttemptInput,
-  ): Promise<ClaimBillingAutoRechargeAttemptResult>;
-  settleBillingAutoRechargeAttempt(
-    input: SettleBillingAutoRechargeAttemptInput,
-  ): Promise<SettleBillingAutoRechargeAttemptResult>;
-  listBillingAutoRechargeAttempts(
-    spaceId: string,
-    options?: { readonly limit?: number },
-  ): Promise<readonly BillingAutoRechargeAttempt[]>;
+  // Provider-neutral OSS showback ledger. Commercial plans, subscriptions,
+  // balances, reservations, payment-provider records, and settlement live in
+  // the host extension and never enter this store.
   putUsageEvent(event: UsageEvent): Promise<UsageEvent>;
-  /**
-   * Idempotently records a new billable usage event and atomically spends USD
-   * balance for it. Existing `idempotencyKey` returns the existing usage event
-   * without spending again. Insufficient balance returns `undefined` and must
-   * not insert the usage event.
-   */
-  putUsageEventAndSpendCredits(
-    event: UsageEvent,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<PutUsageEventAndSpendCreditsResult | undefined>;
-  listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]>;
-  /** Keyset-paged usage-event listing for a Space (spec §30 pagination). */
+  listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]>;
+  /** Keyset-paged usage-event listing for a Workspace (spec §30 pagination). */
   listUsageEventsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<UsageEvent>>;
 
-  // Control-backup ledger pointers (spec §33 layer 1 / §26 R2_BACKUPS). One row
-  // per sealed control-backup bundle written to R2_BACKUPS. The bundle bytes
-  // live in object storage; only the pointer (objectKey / digest / sizeBytes)
+  // Control-backup ledger pointers. One row per sealed control-backup bundle
+  // written to artifact storage. The bundle bytes
+  // live in artifact storage; only the pointer (ref / digest / sizeBytes)
   // enters the ledger. Listing orders newest first (createdAt desc, id desc).
   putBackupRecord(record: BackupRecord): Promise<BackupRecord>;
   getBackupRecord(id: string): Promise<BackupRecord | undefined>;
-  listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]>;
+  listBackupRecords(workspaceId: string): Promise<readonly BackupRecord[]>;
   /**
-   * Keyset-paged control-backup listing for a Space (spec §30 pagination).
+   * Keyset-paged control-backup listing for a Workspace (spec §30 pagination).
    * Ordered newest-first (createdAt DESC, id DESC), so the keyset descends.
    */
   listBackupRecordsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<BackupRecord>>;
 }
@@ -1030,11 +908,12 @@ function coerceRunRowStatus<R extends PlanRun | ApplyRun>(
   return { ...run, status: coerceRunStatus(run.status) } as R;
 }
 
-export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
+export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
+  readonly persistence = "ephemeral" as const;
   readonly #runnerProfiles = new Map<string, RunnerProfile>();
-  readonly #planRuns = new Map<string, PlanRun>();
+  /** Single in-memory Run ledger; typed methods below are filtered views. */
+  readonly #runs = new Map<string, StoredRunRecord>();
   readonly #planRunInputs = new Map<string, PlanRunInputs>();
-  readonly #applyRuns = new Map<string, ApplyRun>();
   /**
    * Per-run lease fence tokens. `leaseToken` is NOT a field of the public
    * PlanRun / ApplyRun JSON (it rides only the indexed `runs.lease_token`
@@ -1043,18 +922,13 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
    * {@link transitionRun}.
    */
   readonly #runLeases = new Map<string, string>();
-  readonly #sourceSyncRuns = new Map<string, SourceSyncRun>();
-  readonly #backupRuns = new Map<string, Run>();
-  readonly #spaces = new Map<string, Space>();
-  readonly #workspaceOutputSyncStates = new Map<
-    string,
-    WorkspaceOutputSyncState
-  >();
+  readonly #workspaces = new Map<string, Workspace>();
+  readonly #workspaceMembers = new Map<string, WorkspaceMember>();
+  readonly #projects = new Map<string, Project>();
   readonly #installConfigs = new Map<string, InstallConfig>();
-  readonly #installations = new Map<string, Installation>();
+  readonly #capsules = new Map<string, Capsule>();
   readonly #publicHostReservations = new Map<string, PublicHostReservation>();
-  readonly #deployments = new Map<string, Deployment>();
-  readonly #connections = new Map<string, Connection>();
+  readonly #connections = new Map<string, ProviderConnection>();
   readonly #secretBlobs = new Map<string, StoredSecretBlob>();
   readonly #sources = new Map<string, StoredSource>();
   readonly #sourceSnapshots = new Map<string, SourceSnapshot>();
@@ -1062,35 +936,22 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     string,
     CapsuleCompatibilityReport
   >();
-  readonly #providerEnvBindingSets = new Map<
-    string,
-    InstallationProviderEnvBindingSet
-  >();
-  readonly #stateSnapshots = new Map<string, StateSnapshot>();
+  readonly #providerBindingSets = new Map<string, ProviderBindingSet>();
+  readonly #stateVersions = new Map<string, StateVersion>();
   readonly #dependencies = new Map<string, Dependency>();
   readonly #dependencySnapshots = new Map<string, DependencySnapshot>();
-  readonly #outputSnapshots = new Map<string, OutputSnapshot>();
+  readonly #outputs = new Map<string, Output>();
   readonly #outputShares = new Map<string, OutputShare>();
   readonly #runGroups = new Map<string, RunGroup>();
-  readonly #compatibilityCheckRuns = new Map<string, Run>();
   readonly #activityEvents = new Map<string, ActivityEvent>();
   readonly #credentialMintEvents = new Map<string, CredentialMintEvent>();
   readonly #securityFindings = new Map<string, SecurityFinding>();
-  readonly #billingPlans = new Map<string, BillingPlan>();
-  readonly #billingAccounts = new Map<string, BillingAccount>();
-  readonly #spaceSubscriptions = new Map<string, SpaceSubscription>();
-  readonly #creditBalances = new Map<string, CreditBalance>();
-  readonly #creditReservations = new Map<string, CreditReservation>();
-  readonly #billingAutoRechargeAttempts = new Map<
-    string,
-    BillingAutoRechargeAttempt
-  >();
   readonly #usageEvents = new Map<string, UsageEvent>();
   readonly #backupRecords = new Map<string, BackupRecord>();
   readonly #artifactRecords = new Map<string, ArtifactRecord>();
 
   constructor() {
-    maybeWarnInMemoryStore("InMemoryOpenTofuDeploymentStore");
+    maybeWarnInMemoryStore("InMemoryOpenTofuControlStore");
   }
 
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile> {
@@ -1111,12 +972,15 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   putPlanRun(run: PlanRun): Promise<PlanRun> {
-    this.#planRuns.set(run.id, run);
+    this.#runs.set(run.id, run);
     return Promise.resolve(run);
   }
 
   getPlanRun(id: string): Promise<PlanRun | undefined> {
-    return Promise.resolve(coerceRunRowStatus(this.#planRuns.get(id)));
+    const run = this.#runs.get(id);
+    return Promise.resolve(
+      run && isPlanRunRecord(run) ? coerceRunRowStatus(run) : undefined,
+    );
   }
 
   putPlanRunInputs(inputs: PlanRunInputs): Promise<void> {
@@ -1134,12 +998,15 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   putApplyRun(run: ApplyRun): Promise<ApplyRun> {
-    this.#applyRuns.set(run.id, run);
+    this.#runs.set(run.id, run);
     return Promise.resolve(run);
   }
 
   getApplyRun(id: string): Promise<ApplyRun | undefined> {
-    return Promise.resolve(coerceRunRowStatus(this.#applyRuns.get(id)));
+    const run = this.#runs.get(id);
+    return Promise.resolve(
+      run && isApplyRunRecord(run) ? coerceRunRowStatus(run) : undefined,
+    );
   }
 
   /**
@@ -1147,20 +1014,14 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
    * conditional write are already atomic with respect to other awaits; the JS
    * predicate is byte-identical in SEMANTICS to the SQL / D1 fenced UPDATE:
    * the transition fires only when the current status is in `expectFrom` AND
-   * (when `expectLeaseToken` is set) the current lease token matches. A miss
-   * re-reads (here: returns the unchanged in-memory row) with `won: false`.
+   * (when set) the lease, heartbeat, and started-at fences match. A miss re-reads
+   * (here: returns the unchanged in-memory row) with `won: false`.
    */
   transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
-    const map: Map<string, PlanRun | ApplyRun | SourceSyncRun | Run> =
-      input.kind === "plan"
-        ? this.#planRuns
-        : input.kind === "apply"
-          ? this.#applyRuns
-          : input.kind === "source_sync"
-            ? this.#sourceSyncRuns
-            : this.#backupRuns;
-    const current = map.get(input.id);
-    if (!current) return Promise.resolve({ won: false });
+    const current = this.#runs.get(input.id);
+    if (!current || transitionKindForRun(current) !== input.kind) {
+      return Promise.resolve({ won: false });
+    }
     const currentLease = this.#runLeases.get(input.id);
     const statusMatches = input.expectFrom.includes(current.status);
     const leaseMatches =
@@ -1170,7 +1031,16 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     const heartbeatMatches =
       input.expectHeartbeatAt === undefined ||
       input.expectHeartbeatAt === currentHeartbeat;
-    if (!statusMatches || !leaseMatches || !heartbeatMatches) {
+    const currentStartedAt = current.startedAt ?? null;
+    const startedAtMatches =
+      input.expectStartedAt === undefined ||
+      input.expectStartedAt === currentStartedAt;
+    if (
+      !statusMatches ||
+      !leaseMatches ||
+      !heartbeatMatches ||
+      !startedAtMatches
+    ) {
       return Promise.resolve({ won: false, run: current });
     }
     const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
@@ -1180,7 +1050,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
             ...input.run,
             ...resolvedHeartbeat(input),
           } as PlanRun | ApplyRun | SourceSyncRun | Run);
-    map.set(input.id, persisted);
+    this.#runs.set(input.id, persisted);
     if (input.clearLeaseToken) {
       this.#runLeases.delete(input.id);
     } else if (input.setLeaseToken !== undefined) {
@@ -1190,17 +1060,19 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
-    this.#sourceSyncRuns.set(run.id, run);
+    this.#runs.set(run.id, run);
     return Promise.resolve(run);
   }
 
   getSourceSyncRun(id: string): Promise<SourceSyncRun | undefined> {
-    return Promise.resolve(this.#sourceSyncRuns.get(id));
+    const run = this.#runs.get(id);
+    return Promise.resolve(run && isSourceSyncRunRecord(run) ? run : undefined);
   }
 
   listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]> {
     return Promise.resolve(
-      Array.from(this.#sourceSyncRuns.values())
+      Array.from(this.#runs.values())
+        .filter(isSourceSyncRunRecord)
         .filter((row) => row.sourceId === sourceId)
         .sort(
           (a, b) =>
@@ -1217,12 +1089,17 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
         ),
       );
     }
-    this.#compatibilityCheckRuns.set(run.id, run);
+    this.#runs.set(run.id, run);
     return Promise.resolve(run);
   }
 
   getCompatibilityCheckRun(id: string): Promise<Run | undefined> {
-    return Promise.resolve(this.#compatibilityCheckRuns.get(id));
+    const run = this.#runs.get(id);
+    return Promise.resolve(
+      run && isPublicRunRecord(run) && run.type === "compatibility_check"
+        ? run
+        : undefined,
+    );
   }
 
   putBackupRun(run: Run): Promise<Run> {
@@ -1231,28 +1108,45 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
         new Error("putBackupRun only accepts backup/restore runs"),
       );
     }
-    this.#backupRuns.set(run.id, run);
+    this.#runs.set(run.id, run);
     return Promise.resolve(run);
   }
 
   getBackupRun(id: string): Promise<Run | undefined> {
-    return Promise.resolve(this.#backupRuns.get(id));
+    const run = this.#runs.get(id);
+    return Promise.resolve(
+      run &&
+        isPublicRunRecord(run) &&
+        (run.type === "backup" || run.type === "restore")
+        ? run
+        : undefined,
+    );
   }
 
-  listRunsBySpace(
-    spaceId: string,
+  listRunsByWorkspace(
+    workspaceId: string,
     options: { readonly limit?: number } = {},
   ): Promise<readonly StoredRunRecord[]> {
     const limit = clampRunListLimit(options.limit);
-    const rows: StoredRunRecord[] = [
-      ...this.#planRuns.values(),
-      ...this.#applyRuns.values(),
-      ...this.#sourceSyncRuns.values(),
-      ...this.#compatibilityCheckRuns.values(),
-      ...this.#backupRuns.values(),
-    ].filter((row) => row.spaceId === spaceId);
+    const rows = Array.from(this.#runs.values()).filter(
+      (row) => row.workspaceId === workspaceId,
+    );
     return Promise.resolve(
       rows.sort(compareStoredRunRecordsDesc).slice(0, limit),
+    );
+  }
+
+  getCapsuleRuntimeSafety(
+    capsuleId: string,
+  ): Promise<CapsuleRuntimeSafety | undefined> {
+    const rows = Array.from(this.#runs.values()).filter(
+      (run): run is ApplyRun | Run =>
+        (isApplyRunRecord(run) || isPublicRunRecord(run)) &&
+        runtimeSafetyCandidate(run, capsuleId),
+    );
+    const latest = rows.sort(compareRuntimeSafetyCandidatesDesc)[0];
+    return Promise.resolve(
+      latest ? capsuleRuntimeSafetyFromRun(latest) : undefined,
     );
   }
 
@@ -1260,12 +1154,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     options: RecoverableOpenTofuRunListOptions,
   ): Promise<readonly StoredRunRecord[]> {
     const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
-    const rows: StoredRunRecord[] = [
-      ...this.#planRuns.values(),
-      ...this.#applyRuns.values(),
-      ...this.#sourceSyncRuns.values(),
-      ...this.#backupRuns.values(),
-    ];
+    const rows = Array.from(this.#runs.values());
     return Promise.resolve(
       rows
         .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
@@ -1290,41 +1179,43 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
-  putSpace(space: Space): Promise<Space> {
-    this.#spaces.set(space.id, space);
-    return Promise.resolve(space);
+  putWorkspace(workspace: Workspace): Promise<Workspace> {
+    this.#workspaces.set(workspace.id, workspace);
+    return Promise.resolve(workspace);
   }
 
-  getSpace(id: string): Promise<Space | undefined> {
-    return Promise.resolve(this.#spaces.get(id));
+  getWorkspace(id: string): Promise<Workspace | undefined> {
+    return Promise.resolve(this.#workspaces.get(id));
   }
 
-  listSpacesByIds(ids: readonly string[]): Promise<readonly Space[]> {
+  listWorkspacesByIds(ids: readonly string[]): Promise<readonly Workspace[]> {
     return Promise.resolve(
       ids
-        .map((id) => this.#spaces.get(id))
-        .filter((row): row is Space => row !== undefined),
+        .map((id) => this.#workspaces.get(id))
+        .filter((row): row is Workspace => row !== undefined),
     );
   }
 
-  getSpaceByHandle(handle: string): Promise<Space | undefined> {
+  getWorkspaceByHandle(handle: string): Promise<Workspace | undefined> {
     return Promise.resolve(
-      Array.from(this.#spaces.values()).find((row) => row.handle === handle),
+      Array.from(this.#workspaces.values()).find(
+        (row) => row.handle === handle,
+      ),
     );
   }
 
-  listSpaces(): Promise<readonly Space[]> {
+  listWorkspaces(): Promise<readonly Workspace[]> {
     return Promise.resolve(
-      Array.from(this.#spaces.values()).sort(
+      Array.from(this.#workspaces.values()).sort(
         (a, b) =>
           a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
       ),
     );
   }
 
-  listSpacesByOwner(ownerUserId: string): Promise<readonly Space[]> {
+  listWorkspacesByOwner(ownerUserId: string): Promise<readonly Workspace[]> {
     return Promise.resolve(
-      Array.from(this.#spaces.values())
+      Array.from(this.#workspaces.values())
         .filter((row) => row.ownerUserId === ownerUserId)
         .sort(
           (a, b) =>
@@ -1333,65 +1224,78 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
-  putWorkspaceOutputSyncState(
-    state: WorkspaceOutputSyncState,
-  ): Promise<WorkspaceOutputSyncState> {
-    this.#workspaceOutputSyncStates.set(state.workspaceId, state);
-    return Promise.resolve(state);
+  putWorkspaceMember(member: WorkspaceMember): Promise<WorkspaceMember> {
+    this.#workspaceMembers.set(
+      workspaceMemberKey(member.workspaceId, member.accountId),
+      member,
+    );
+    return Promise.resolve(member);
   }
 
-  compareAndSetWorkspaceOutputSyncState(
-    expected: WorkspaceOutputSyncState | undefined,
-    next: WorkspaceOutputSyncState,
-  ): Promise<boolean> {
-    const current = this.#workspaceOutputSyncStates.get(next.workspaceId);
-    if (!sameWorkspaceOutputSyncState(current, expected))
-      return Promise.resolve(false);
-    this.#workspaceOutputSyncStates.set(next.workspaceId, next);
-    return Promise.resolve(true);
-  }
-
-  getWorkspaceOutputSyncState(
+  getWorkspaceMember(
     workspaceId: string,
-  ): Promise<WorkspaceOutputSyncState | undefined> {
-    return Promise.resolve(this.#workspaceOutputSyncStates.get(workspaceId));
-  }
-
-  listPendingWorkspaceOutputSyncStates(
-    limit: number,
-  ): Promise<readonly WorkspaceOutputSyncState[]> {
+    accountId: string,
+  ): Promise<WorkspaceMember | undefined> {
     return Promise.resolve(
-      Array.from(this.#workspaceOutputSyncStates.values())
-        .filter(
-          (state) =>
-            state.enabled &&
-            (state.outputRevision > state.reconciledRevision ||
-              state.activeRunGroupId !== undefined),
-        )
-        .sort(
-          (a, b) =>
-            a.updatedAt.localeCompare(b.updatedAt) ||
-            a.workspaceId.localeCompare(b.workspaceId),
-        )
-        .slice(0, Math.max(0, limit)),
+      this.#workspaceMembers.get(workspaceMemberKey(workspaceId, accountId)),
     );
   }
 
-  listCurrentOutputsByWorkspace(
+  listWorkspaceMembers(
     workspaceId: string,
-  ): Promise<readonly WorkspaceCurrentOutputRecord[]> {
-    const records: WorkspaceCurrentOutputRecord[] = [];
-    for (const capsule of this.#installations.values()) {
-      if (capsule.workspaceId !== workspaceId) continue;
-      const outputId =
-        capsule.currentOutputId ?? capsule.currentOutputSnapshotId;
-      if (!outputId) continue;
-      const output = this.#outputSnapshots.get(outputId);
-      if (!output) continue;
-      records.push({ capsule, output });
-    }
-    records.sort((a, b) => a.capsule.id.localeCompare(b.capsule.id));
-    return Promise.resolve(records);
+  ): Promise<readonly WorkspaceMember[]> {
+    return Promise.resolve(
+      Array.from(this.#workspaceMembers.values())
+        .filter((row) => row.workspaceId === workspaceId)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
+    );
+  }
+
+  listWorkspaceMembersByAccount(
+    accountId: string,
+  ): Promise<readonly WorkspaceMember[]> {
+    return Promise.resolve(
+      Array.from(this.#workspaceMembers.values())
+        .filter((row) => row.accountId === accountId)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
+    );
+  }
+
+  putProject(project: Project): Promise<Project> {
+    this.#projects.set(project.id, project);
+    return Promise.resolve(project);
+  }
+
+  getProject(id: string): Promise<Project | undefined> {
+    return Promise.resolve(this.#projects.get(id));
+  }
+
+  getProjectBySlug(
+    workspaceId: string,
+    slug: string,
+  ): Promise<Project | undefined> {
+    return Promise.resolve(
+      Array.from(this.#projects.values()).find(
+        (row) => row.workspaceId === workspaceId && row.slug === slug,
+      ),
+    );
+  }
+
+  listProjectsByWorkspace(workspaceId: string): Promise<readonly Project[]> {
+    return Promise.resolve(
+      Array.from(this.#projects.values())
+        .filter((row) => row.workspaceId === workspaceId)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
+    );
   }
 
   putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
@@ -1403,12 +1307,12 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(this.#installConfigs.get(id));
   }
 
-  listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]> {
+  listInstallConfigs(workspaceId?: string): Promise<readonly InstallConfig[]> {
     const rows = Array.from(this.#installConfigs.values());
     const filtered =
-      spaceId === undefined
+      workspaceId === undefined
         ? rows
-        : rows.filter((row) => row.spaceId === spaceId);
+        : rows.filter((row) => row.workspaceId === workspaceId);
     return Promise.resolve(
       filtered.sort(
         (a, b) =>
@@ -1417,56 +1321,56 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
-  putInstallation(installationInput: Installation): Promise<Installation> {
-    const installation = normalizeInstallation(installationInput);
-    for (const existing of this.#installations.values()) {
+  putCapsule(capsuleInput: Capsule): Promise<Capsule> {
+    const capsule = normalizeCapsule(capsuleInput);
+    for (const existing of this.#capsules.values()) {
       if (
-        existing.id !== installation.id &&
+        existing.id !== capsule.id &&
         existing.status !== "destroyed" &&
-        installation.status !== "destroyed" &&
-        existing.spaceId === installation.spaceId &&
-        existing.name === installation.name &&
-        existing.environment === installation.environment
+        capsule.status !== "destroyed" &&
+        existing.projectId === capsule.projectId &&
+        existing.name === capsule.name &&
+        existing.environment === capsule.environment
       ) {
         return Promise.reject(
           new Error(
-            `installation unique(space_id, name, environment) violated: ` +
-              `@${installation.spaceId}/${installation.name} ` +
-              `(${installation.environment})`,
+            `capsule unique(project_id, name, environment) violated: ` +
+              `${capsule.projectId}/${capsule.name} ` +
+              `(${capsule.environment})`,
           ),
         );
       }
     }
-    this.#installations.set(installation.id, installation);
-    return Promise.resolve(installation);
+    this.#capsules.set(capsule.id, capsule);
+    return Promise.resolve(capsule);
   }
 
-  getInstallation(id: string): Promise<Installation | undefined> {
-    return Promise.resolve(this.#installations.get(id));
+  getCapsule(id: string): Promise<Capsule | undefined> {
+    return Promise.resolve(this.#capsules.get(id));
   }
 
-  getInstallationByName(
-    spaceId: string,
+  getCapsuleByName(
+    projectId: string,
     name: string,
     environment: string,
-  ): Promise<Installation | undefined> {
+  ): Promise<Capsule | undefined> {
     return Promise.resolve(
-      Array.from(this.#installations.values()).find(
+      Array.from(this.#capsules.values()).find(
         (row) =>
           row.status !== "destroyed" &&
-          row.spaceId === spaceId &&
+          row.projectId === projectId &&
           row.name === name &&
           row.environment === environment,
       ),
     );
   }
 
-  listInstallations(spaceId?: string): Promise<readonly Installation[]> {
-    const rows = Array.from(this.#installations.values());
+  listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
+    const rows = Array.from(this.#capsules.values());
     const filtered =
-      spaceId === undefined
+      workspaceId === undefined
         ? rows
-        : rows.filter((row) => row.spaceId === spaceId);
+        : rows.filter((row) => row.workspaceId === workspaceId);
     return Promise.resolve(
       filtered.sort(
         (a, b) =>
@@ -1475,11 +1379,11 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
-  async listInstallationsPage(
-    spaceId: string,
+  async listCapsulesPage(
+    workspaceId: string,
     params: CapsuleListPageParams,
-  ): Promise<Page<Installation>> {
-    const rows = await this.listInstallations(spaceId);
+  ): Promise<Page<Capsule>> {
+    const rows = await this.listCapsules(workspaceId);
     const visibleRows =
       params.includeDestroyed === false
         ? rows.filter((row) => row.status !== "destroyed")
@@ -1491,7 +1395,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     input: ReservePublicHostInput,
   ): Promise<ReservePublicHostResult> {
     const hostname = input.hostname.toLowerCase();
-    const workspace = this.#spaces.get(input.workspaceId);
+    const workspace = this.#workspaces.get(input.workspaceId);
     if (!workspace) {
       throw new Error("public host reservation workspace was not found");
     }
@@ -1500,7 +1404,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     if (
       existing &&
       existing.status === "reserved" &&
-      existing.installationId !== input.installationId
+      existing.capsuleId !== input.capsuleId
     ) {
       return {
         reserved: false,
@@ -1535,12 +1439,12 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
       hostname,
       ownerUserId,
       workspaceId: input.workspaceId,
-      installationId: input.installationId,
-      installationName: input.installationName,
+      capsuleId: input.capsuleId,
+      capsuleName: input.capsuleName,
       allocationKind: input.allocationKind,
       status: "reserved",
       reservedAt:
-        existing?.installationId === input.installationId
+        existing?.capsuleId === input.capsuleId
           ? existing.reservedAt
           : input.now,
       updatedAt: input.now,
@@ -1557,13 +1461,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
-  releasePublicHostsForInstallation(
-    installationId: string,
-    now: string,
-  ): Promise<void> {
+  releasePublicHostsForCapsule(capsuleId: string, now: string): Promise<void> {
     for (const [hostname, reservation] of this.#publicHostReservations) {
       if (
-        reservation.installationId !== installationId ||
+        reservation.capsuleId !== capsuleId ||
         reservation.status !== "reserved"
       ) {
         continue;
@@ -1578,30 +1479,30 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve();
   }
 
-  patchInstallation(
+  patchCapsule(
     id: string,
-    patch: InstallationPatch,
-    guard?: InstallationPatchGuard,
-  ): Promise<Installation | undefined> {
-    const existing = this.#installations.get(id);
+    patch: CapsulePatch,
+    guard?: CapsuleStateVersionGuard,
+  ): Promise<Capsule | undefined> {
+    const existing = this.#capsules.get(id);
     if (!existing) return Promise.resolve(undefined);
     if (
       guard !== undefined &&
-      (existing.currentDeploymentId !== guard.currentDeploymentId ||
+      (existing.currentStateVersionId !== guard.currentStateVersionId ||
         (guard.status !== undefined && existing.status !== guard.status))
     ) {
       return Promise.reject(
-        new InstallationPatchGuardConflict({
+        new CapsuleStateVersionGuardConflict({
           id,
-          expectedCurrentDeploymentId: guard.currentDeploymentId,
-          actualCurrentDeploymentId: existing.currentDeploymentId,
+          expectedCurrentStateVersionId: guard.currentStateVersionId,
+          actualCurrentStateVersionId: existing.currentStateVersionId,
           expectedStatus: guard.status,
           actualStatus: existing.status,
         }),
       );
     }
-    const updated = normalizeInstallation({ ...existing, ...patch });
-    this.#installations.set(id, updated);
+    const updated = normalizeCapsule({ ...existing, ...patch });
+    this.#capsules.set(id, updated);
     return Promise.resolve(updated);
   }
 
@@ -1609,18 +1510,16 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
    * In-memory commit. The store is single-threaded, so the sequential writes are
    * already atomic with respect to other awaits — there is no concurrent writer
    * to interleave. There is, however, NO rollback: if a write throws partway
-   * (e.g. the guarded patch hits a conflict), the Deployment / StateSnapshot /
-   * OutputSnapshot already set into the maps stay set. The SQL and D1 backends
+   * (e.g. the guarded patch hits a conflict), the StateVersion /
+   * Output already set into the maps stay set. The SQL and D1 backends
    * roll back / batch for true all-or-nothing; the in-memory store is dev/test
    * only and surfaces the error to the caller, which fails the run. To keep the
-   * guard-conflict case torn-free even here, the GUARDED installation patch is
+   * guard-conflict case torn-free even here, the guarded Capsule patch is
    * evaluated FIRST so a guard miss/conflict short-circuits before any
-   * Deployment / snapshot write lands.
+   * StateVersion / Output write lands.
    */
-  commitAppliedDeployment(
-    input: CommitAppliedDeploymentInput,
-  ): Promise<CommitAppliedDeploymentResult> {
-    const { installationPatch } = input;
+  commitRunState(input: CommitRunStateInput): Promise<CommitRunStateResult> {
+    const { capsulePatch } = input;
     if (
       input.applyRunTerminal &&
       input.applyRunLeaseToken !== undefined &&
@@ -1629,79 +1528,62 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     ) {
       return Promise.resolve({ applyRunLeaseLost: true });
     }
-    const existing = this.#installations.get(installationPatch.id);
+    const existing = this.#capsules.get(capsulePatch.id);
     if (!existing) {
-      return Promise.resolve({ installation: undefined });
+      return Promise.resolve({ capsule: undefined });
     }
-    const guard = installationPatch.guard;
+    const guard = capsulePatch.guard;
     if (
-      existing.currentDeploymentId !== guard.currentDeploymentId ||
+      existing.currentStateVersionId !== guard.currentStateVersionId ||
       (guard.status !== undefined && existing.status !== guard.status)
     ) {
       return Promise.reject(
-        new InstallationPatchGuardConflict({
-          id: installationPatch.id,
-          expectedCurrentDeploymentId: guard.currentDeploymentId,
-          actualCurrentDeploymentId: existing.currentDeploymentId,
+        new CapsuleStateVersionGuardConflict({
+          id: capsulePatch.id,
+          expectedCurrentStateVersionId: guard.currentStateVersionId,
+          actualCurrentStateVersionId: existing.currentStateVersionId,
           expectedStatus: guard.status,
           actualStatus: existing.status,
         }),
       );
     }
-    if (input.newDeployment) {
-      this.#deployments.set(input.newDeployment.id, input.newDeployment);
-    }
-    if (input.supersededDeployment) {
-      this.#deployments.set(
-        input.supersededDeployment.id,
-        input.supersededDeployment,
-      );
-    }
-    this.#stateSnapshots.set(input.stateSnapshot.id, input.stateSnapshot);
-    if (input.outputSnapshot) {
-      this.#outputSnapshots.set(input.outputSnapshot.id, input.outputSnapshot);
+    this.#stateVersions.set(input.stateVersion.id, input.stateVersion);
+    if (input.output) {
+      this.#outputs.set(input.output.id, input.output);
     }
     // Commit-tail fold (S2): the terminal ApplyRun + the applied PlanRun land in
-    // the SAME atomic unit as the Deployment so a crash can no longer tear them.
+    // the SAME atomic unit as the StateVersion so a crash can no longer tear them.
     // The apply terminal clears its lease fence (mirrors transitionRun
     // clearLeaseToken); the plan patch is a plain write (already terminal, no
     // lease).
     if (input.applyRunTerminal) {
-      this.#applyRuns.set(input.applyRunTerminal.id, input.applyRunTerminal);
+      this.#runs.set(input.applyRunTerminal.id, input.applyRunTerminal);
       this.#runLeases.delete(input.applyRunTerminal.id);
     }
     if (input.planRunApplied) {
-      this.#planRuns.set(input.planRunApplied.id, input.planRunApplied);
+      this.#runs.set(input.planRunApplied.id, input.planRunApplied);
     }
-    let outputSyncState: WorkspaceOutputSyncState | undefined;
-    if (input.outputSyncRevisionBump) {
-      const current =
-        this.#workspaceOutputSyncStates.get(
-          input.outputSyncRevisionBump.workspaceId,
-        ) ??
-        defaultWorkspaceOutputSyncState(
-          input.outputSyncRevisionBump.workspaceId,
-          input.outputSyncRevisionBump.updatedAt,
-        );
-      outputSyncState = {
-        ...current,
-        outputRevision: current.outputRevision + 1,
-        updatedAt: input.outputSyncRevisionBump.updatedAt,
-      };
-      this.#workspaceOutputSyncStates.set(
-        outputSyncState.workspaceId,
-        outputSyncState,
-      );
-    }
-    const updated = normalizeInstallation({
+    const updated = normalizeCapsule({
       ...existing,
-      ...installationPatch.patch,
+      ...capsulePatch.patch,
     });
-    this.#installations.set(installationPatch.id, updated);
-    return Promise.resolve({
-      installation: updated,
-      ...(outputSyncState ? { outputSyncState } : {}),
-    });
+    this.#capsules.set(capsulePatch.id, updated);
+    return Promise.resolve({ capsule: updated });
+  }
+
+  commitResourceRun(
+    input: CommitResourceRunInput,
+  ): Promise<CommitResourceRunResult> {
+    if (
+      this.#runLeases.get(input.applyRunTerminal.id) !==
+      input.applyRunLeaseToken
+    ) {
+      return Promise.resolve({ applyRunLeaseLost: true });
+    }
+    this.#runs.set(input.applyRunTerminal.id, input.applyRunTerminal);
+    this.#runs.set(input.planRunApplied.id, input.planRunApplied);
+    this.#runLeases.delete(input.applyRunTerminal.id);
+    return Promise.resolve({});
   }
 
   commitRestoredState(
@@ -1713,19 +1595,19 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     ) {
       return Promise.resolve({ restoreRunLeaseLost: true });
     }
-    const { installationPatch } = input;
-    const existing = this.#installations.get(installationPatch.id);
+    const { capsulePatch } = input;
+    const existing = this.#capsules.get(capsulePatch.id);
     if (!existing) {
-      return Promise.resolve({ installation: undefined });
+      return Promise.resolve({ capsule: undefined });
     }
-    const guard = installationPatch.guard;
+    const guard = capsulePatch.guard;
     if (
       existing.currentStateGeneration !== guard.currentStateGeneration ||
       (guard.status !== undefined && existing.status !== guard.status)
     ) {
       return Promise.reject(
-        new InstallationStateGenerationGuardConflict({
-          id: installationPatch.id,
+        new CapsuleStateGenerationGuardConflict({
+          id: capsulePatch.id,
           expectedCurrentStateGeneration: guard.currentStateGeneration,
           actualCurrentStateGeneration: existing.currentStateGeneration,
           expectedStatus: guard.status,
@@ -1733,76 +1615,30 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
         }),
       );
     }
-    const updated = normalizeInstallation({
+    const updated = normalizeCapsule({
       ...existing,
-      ...installationPatch.patch,
+      ...capsulePatch.patch,
     });
-    this.#stateSnapshots.set(input.stateSnapshot.id, input.stateSnapshot);
-    this.#backupRuns.set(input.restoreRunTerminal.id, input.restoreRunTerminal);
+    this.#stateVersions.set(input.stateVersion.id, input.stateVersion);
+    this.#runs.set(input.restoreRunTerminal.id, input.restoreRunTerminal);
     this.#runLeases.delete(input.restoreRunTerminal.id);
-    this.#installations.set(installationPatch.id, updated);
-    return Promise.resolve({ installation: updated });
+    this.#capsules.set(capsulePatch.id, updated);
+    return Promise.resolve({ capsule: updated });
   }
 
-  putDeployment(deployment: Deployment): Promise<Deployment> {
-    this.#deployments.set(deployment.id, deployment);
-    return Promise.resolve(deployment);
-  }
-
-  getDeployment(id: string): Promise<Deployment | undefined> {
-    return Promise.resolve(this.#deployments.get(id));
-  }
-
-  listDeploymentsByIds(ids: readonly string[]): Promise<readonly Deployment[]> {
-    const uniqueIds = [...new Set(ids.filter((id) => id.length > 0))];
-    return Promise.resolve(
-      uniqueIds
-        .map((id) => this.#deployments.get(id))
-        .filter(
-          (deployment): deployment is Deployment => deployment !== undefined,
-        ),
-    );
-  }
-
-  listDeployments(installationId: string): Promise<readonly Deployment[]> {
-    return Promise.resolve(
-      Array.from(this.#deployments.values())
-        .filter((row) => row.installationId === installationId)
-        .sort(
-          (a, b) =>
-            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        ),
-    );
-  }
-
-  listDeploymentsBySpace(spaceId: string): Promise<readonly Deployment[]> {
-    return Promise.resolve(
-      Array.from(this.#deployments.values()).filter(
-        (row) => row.spaceId === spaceId,
-      ),
-    );
-  }
-
-  async listDeploymentsPage(
-    installationId: string,
-    params: PageParams,
-  ): Promise<Page<Deployment>> {
-    return pageSorted(await this.listDeployments(installationId), params);
-  }
-
-  putConnection(connection: Connection): Promise<Connection> {
+  putConnection(connection: ProviderConnection): Promise<ProviderConnection> {
     this.#connections.set(connection.id, connection);
     return Promise.resolve(connection);
   }
 
-  getConnection(id: string): Promise<Connection | undefined> {
+  getConnection(id: string): Promise<ProviderConnection | undefined> {
     return Promise.resolve(this.#connections.get(id));
   }
 
-  listConnections(spaceId: string): Promise<readonly Connection[]> {
+  listConnections(workspaceId: string): Promise<readonly ProviderConnection[]> {
     return Promise.resolve(
       Array.from(this.#connections.values())
-        .filter((row) => row.spaceId === spaceId)
+        .filter((row) => row.workspaceId === workspaceId)
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -1811,16 +1647,18 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   async listConnectionsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
-  ): Promise<Page<Connection>> {
-    return pageSorted(await this.listConnections(spaceId), params);
+  ): Promise<Page<ProviderConnection>> {
+    return pageSorted(await this.listConnections(workspaceId), params);
   }
 
-  listOperatorConnections(): Promise<readonly Connection[]> {
+  listOperatorConnections(): Promise<readonly ProviderConnection[]> {
     return Promise.resolve(
       Array.from(this.#connections.values())
-        .filter((row) => row.spaceId === undefined && row.scope === "operator")
+        .filter(
+          (row) => row.workspaceId === undefined && row.scope === "operator",
+        )
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -1854,12 +1692,12 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(this.#sources.get(id));
   }
 
-  listSources(spaceId?: string): Promise<readonly StoredSource[]> {
+  listSources(workspaceId?: string): Promise<readonly StoredSource[]> {
     const rows = Array.from(this.#sources.values());
     const filtered =
-      spaceId === undefined
+      workspaceId === undefined
         ? rows
-        : rows.filter((row) => row.spaceId === spaceId);
+        : rows.filter((row) => row.workspaceId === workspaceId);
     return Promise.resolve(
       filtered.sort(
         (a, b) =>
@@ -1869,10 +1707,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   async listSourcesPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<StoredSource>> {
-    return pageSorted(await this.listSources(spaceId), params);
+    return pageSorted(await this.listSources(workspaceId), params);
   }
 
   deleteSource(id: string): Promise<boolean> {
@@ -1929,8 +1767,9 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   putCapsuleCompatibilityReport(
     report: CapsuleCompatibilityReport,
   ): Promise<CapsuleCompatibilityReport> {
-    this.#capsuleCompatibilityReports.set(report.id, report);
-    return Promise.resolve(report);
+    const normalized = normalizeStoredCapsuleCompatibilityReport(report);
+    this.#capsuleCompatibilityReports.set(normalized.id, normalized);
+    return Promise.resolve(normalized);
   }
 
   getCapsuleCompatibilityReport(
@@ -1943,7 +1782,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     sourceSnapshotId: string,
     options: {
       readonly sourceId?: string;
-      readonly installationId?: string;
+      readonly capsuleId?: string;
     } = {},
   ): Promise<CapsuleCompatibilityReport | undefined> {
     const candidates = [...this.#capsuleCompatibilityReports.values()]
@@ -1951,11 +1790,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
         (report) =>
           report.sourceSnapshotId === sourceSnapshotId &&
           (options.sourceId === undefined ||
-            report.sourceId === undefined ||
             report.sourceId === options.sourceId) &&
-          (options.installationId === undefined ||
-            report.installationId === undefined ||
-            report.installationId === options.installationId),
+          (options.capsuleId === undefined ||
+            report.capsuleId === undefined ||
+            report.capsuleId === options.capsuleId),
       )
       .sort(
         (a, b) =>
@@ -1964,104 +1802,101 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(candidates[0]);
   }
 
-  putInstallationProviderEnvBindingSet(
-    profile: InstallationProviderEnvBindingSet,
-  ): Promise<InstallationProviderEnvBindingSet> {
-    // One profile per (installation, environment): drop a stale row under a
+  putProviderBindingSet(
+    profile: ProviderBindingSet,
+  ): Promise<ProviderBindingSet> {
+    // One profile per (Capsule, environment): drop a stale row under a
     // different id for the same pair.
-    for (const [key, existing] of this.#providerEnvBindingSets) {
+    for (const [key, existing] of this.#providerBindingSets) {
       if (
-        existing.installationId === profile.installationId &&
+        existing.capsuleId === profile.capsuleId &&
         existing.environment === profile.environment &&
         key !== profile.id
       ) {
-        this.#providerEnvBindingSets.delete(key);
+        this.#providerBindingSets.delete(key);
       }
     }
-    this.#providerEnvBindingSets.set(profile.id, profile);
+    this.#providerBindingSets.set(profile.id, profile);
     return Promise.resolve(profile);
   }
 
-  deleteInstallationProviderEnvBindingSet(
-    installationId: string,
+  deleteProviderBindingSet(
+    capsuleId: string,
     environment: string,
   ): Promise<void> {
-    for (const [key, existing] of this.#providerEnvBindingSets) {
+    for (const [key, existing] of this.#providerBindingSets) {
       if (
-        existing.installationId === installationId &&
+        existing.capsuleId === capsuleId &&
         existing.environment === environment
       ) {
-        this.#providerEnvBindingSets.delete(key);
+        this.#providerBindingSets.delete(key);
       }
     }
     return Promise.resolve();
   }
 
-  getInstallationProviderEnvBindingSetByInstallation(
-    installationId: string,
+  getProviderBindingSetByCapsule(
+    capsuleId: string,
     environment: string,
-  ): Promise<InstallationProviderEnvBindingSet | undefined> {
+  ): Promise<ProviderBindingSet | undefined> {
     return Promise.resolve(
-      Array.from(this.#providerEnvBindingSets.values()).find(
-        (row) =>
-          row.installationId === installationId &&
-          row.environment === environment,
+      Array.from(this.#providerBindingSets.values()).find(
+        (row) => row.capsuleId === capsuleId && row.environment === environment,
       ),
     );
   }
 
-  putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot> {
-    // Populate both the canonical (workspaceId/capsuleId) and the transient
-    // deprecated (spaceId/installationId) names so the installationId-keyed
-    // filters resolve a snapshot written with only the new field names.
-    const workspaceId = snapshot.workspaceId ?? snapshot.spaceId ?? "";
-    const capsuleId = snapshot.capsuleId ?? snapshot.installationId ?? "";
-    const normalized: StateSnapshot = {
-      ...snapshot,
-      workspaceId,
-      spaceId: workspaceId,
-      capsuleId,
-      installationId: capsuleId,
-    };
-    this.#stateSnapshots.set(normalized.id, normalized);
-    return Promise.resolve(normalized);
+  putStateVersion(snapshot: StateVersion): Promise<StateVersion> {
+    this.#stateVersions.set(snapshot.id, snapshot);
+    return Promise.resolve(snapshot);
   }
 
-  listStateSnapshots(
-    installationId: string,
+  getStateVersion(id: string): Promise<StateVersion | undefined> {
+    return Promise.resolve(this.#stateVersions.get(id));
+  }
+
+  listStateVersions(
+    capsuleId: string,
     environment: string,
-  ): Promise<readonly StateSnapshot[]> {
+  ): Promise<readonly StateVersion[]> {
     return Promise.resolve(
-      Array.from(this.#stateSnapshots.values())
+      Array.from(this.#stateVersions.values())
         .filter(
           (row) =>
-            row.installationId === installationId &&
-            row.environment === environment,
+            row.capsuleId === capsuleId && row.environment === environment,
         )
         .sort((a, b) => a.generation - b.generation),
     );
   }
 
-  listStateSnapshotsBySpace(
-    spaceId: string,
-  ): Promise<readonly StateSnapshot[]> {
+  async listStateVersionsPage(
+    capsuleId: string,
+    environment: string,
+    params: PageParams,
+  ): Promise<Page<StateVersion>> {
+    return pageSorted(
+      await this.listStateVersions(capsuleId, environment),
+      params,
+    );
+  }
+
+  listStateVersionsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly StateVersion[]> {
     return Promise.resolve(
-      Array.from(this.#stateSnapshots.values()).filter(
-        (row) => row.spaceId === spaceId,
+      Array.from(this.#stateVersions.values()).filter(
+        (row) => row.workspaceId === workspaceId,
       ),
     );
   }
 
-  getLatestStateSnapshot(
-    installationId: string,
+  getLatestStateVersion(
+    capsuleId: string,
     environment: string,
-  ): Promise<StateSnapshot | undefined> {
-    let latest: StateSnapshot | undefined;
-    for (const row of this.#stateSnapshots.values()) {
-      if (
-        row.installationId !== installationId ||
-        row.environment !== environment
-      )
+  ): Promise<StateVersion | undefined> {
+    let latest: StateVersion | undefined;
+    for (const row of this.#stateVersions.values()) {
+      if (row.capsuleId !== capsuleId || row.environment !== environment)
         continue;
       if (!latest || row.generation > latest.generation) latest = row;
     }
@@ -2077,10 +1912,12 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(this.#dependencies.get(id));
   }
 
-  listDependenciesBySpace(spaceId: string): Promise<readonly Dependency[]> {
+  listDependenciesByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly Dependency[]> {
     return Promise.resolve(
       Array.from(this.#dependencies.values())
-        .filter((row) => row.spaceId === spaceId)
+        .filter((row) => row.workspaceId === workspaceId)
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -2089,11 +1926,11 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   listDependenciesForConsumer(
-    consumerInstallationId: string,
+    consumerCapsuleId: string,
   ): Promise<readonly Dependency[]> {
     return Promise.resolve(
       Array.from(this.#dependencies.values())
-        .filter((row) => row.consumerInstallationId === consumerInstallationId)
+        .filter((row) => row.consumerCapsuleId === consumerCapsuleId)
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -2102,11 +1939,11 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   listDependenciesForProducer(
-    producerInstallationId: string,
+    producerCapsuleId: string,
   ): Promise<readonly Dependency[]> {
     return Promise.resolve(
       Array.from(this.#dependencies.values())
-        .filter((row) => row.producerInstallationId === producerInstallationId)
+        .filter((row) => row.producerCapsuleId === producerCapsuleId)
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -2129,21 +1966,19 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(this.#dependencySnapshots.get(id));
   }
 
-  putOutputSnapshot(snapshot: OutputSnapshot): Promise<OutputSnapshot> {
-    this.#outputSnapshots.set(snapshot.id, snapshot);
+  putOutput(snapshot: Output): Promise<Output> {
+    this.#outputs.set(snapshot.id, snapshot);
     return Promise.resolve(snapshot);
   }
 
-  getOutputSnapshot(id: string): Promise<OutputSnapshot | undefined> {
-    return Promise.resolve(this.#outputSnapshots.get(id));
+  getOutput(id: string): Promise<Output | undefined> {
+    return Promise.resolve(this.#outputs.get(id));
   }
 
-  getLatestOutputSnapshot(
-    installationId: string,
-  ): Promise<OutputSnapshot | undefined> {
-    let latest: OutputSnapshot | undefined;
-    for (const row of this.#outputSnapshots.values()) {
-      if (row.installationId !== installationId) continue;
+  getLatestOutput(capsuleId: string): Promise<Output | undefined> {
+    let latest: Output | undefined;
+    for (const row of this.#outputs.values()) {
+      if (row.capsuleId !== capsuleId) continue;
       // The latest projection is the one at the highest state generation; ties
       // (re-applied same generation) break to the most recently created.
       if (
@@ -2158,12 +1993,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(latest);
   }
 
-  listOutputSnapshots(
-    installationId: string,
-  ): Promise<readonly OutputSnapshot[]> {
+  listOutputs(capsuleId: string): Promise<readonly Output[]> {
     return Promise.resolve(
-      Array.from(this.#outputSnapshots.values())
-        .filter((row) => row.installationId === installationId)
+      Array.from(this.#outputs.values())
+        .filter((row) => row.capsuleId === capsuleId)
         .sort(
           (a, b) =>
             a.stateGeneration - b.stateGeneration ||
@@ -2173,12 +2006,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
-  listOutputSnapshotsBySpace(
-    spaceId: string,
-  ): Promise<readonly OutputSnapshot[]> {
+  listOutputsByWorkspace(workspaceId: string): Promise<readonly Output[]> {
     return Promise.resolve(
-      Array.from(this.#outputSnapshots.values()).filter(
-        (row) => row.spaceId === spaceId,
+      Array.from(this.#outputs.values()).filter(
+        (row) => row.workspaceId === workspaceId,
       ),
     );
   }
@@ -2192,12 +2023,12 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(this.#outputShares.get(id));
   }
 
-  listOutputSharesFromSpace(
-    fromSpaceId: string,
+  listOutputSharesFromWorkspace(
+    fromWorkspaceId: string,
   ): Promise<readonly OutputShare[]> {
     return Promise.resolve(
       Array.from(this.#outputShares.values())
-        .filter((row) => row.fromSpaceId === fromSpaceId)
+        .filter((row) => row.fromWorkspaceId === fromWorkspaceId)
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -2205,10 +2036,12 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
-  listOutputSharesToSpace(toSpaceId: string): Promise<readonly OutputShare[]> {
+  listOutputSharesToWorkspace(
+    toWorkspaceId: string,
+  ): Promise<readonly OutputShare[]> {
     return Promise.resolve(
       Array.from(this.#outputShares.values())
-        .filter((row) => row.toSpaceId === toSpaceId)
+        .filter((row) => row.toWorkspaceId === toWorkspaceId)
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -2225,10 +2058,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(this.#runGroups.get(id));
   }
 
-  listRunGroups(spaceId: string): Promise<readonly RunGroup[]> {
+  listRunGroups(workspaceId: string): Promise<readonly RunGroup[]> {
     return Promise.resolve(
       Array.from(this.#runGroups.values())
-        .filter((row) => row.spaceId === spaceId)
+        .filter((row) => row.workspaceId === workspaceId)
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -2242,12 +2075,12 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   listActivityEvents(
-    spaceId: string,
+    workspaceId: string,
     options: { readonly limit?: number } = {},
   ): Promise<readonly ActivityEvent[]> {
     const limit = clampActivityLimit(options.limit);
     const rows = Array.from(this.#activityEvents.values())
-      .filter((row) => row.spaceId === spaceId)
+      .filter((row) => row.workspaceId === workspaceId)
       // Newest first: createdAt desc, then id desc as a stable tie-break.
       .sort(
         (a, b) =>
@@ -2255,6 +2088,26 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
       )
       .slice(0, limit);
     return Promise.resolve(rows);
+  }
+
+  listActivityEventsForTargetPage(
+    workspaceId: string,
+    targetType: string,
+    targetId: string,
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>> {
+    const newestFirst = Array.from(this.#activityEvents.values())
+      .filter(
+        (row) =>
+          row.workspaceId === workspaceId &&
+          row.targetType === targetType &&
+          row.targetId === targetId,
+      )
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      );
+    return Promise.resolve(pageSortedDesc(newestFirst, params));
   }
 
   putCredentialMintEvent(
@@ -2283,13 +2136,13 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   listSecurityFindings(
-    spaceId: string,
+    workspaceId: string,
     options: { readonly runId?: string; readonly limit?: number } = {},
   ): Promise<readonly SecurityFinding[]> {
     const limit = clampActivityLimit(options.limit);
     return Promise.resolve(
       Array.from(this.#securityFindings.values())
-        .filter((row) => row.workspaceId === spaceId)
+        .filter((row) => row.workspaceId === workspaceId)
         .filter((row) =>
           options.runId === undefined ? true : row.runId === options.runId,
         )
@@ -2299,329 +2152,6 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
         )
         .slice(0, limit),
     );
-  }
-
-  putCreditBalance(balance: CreditBalance): Promise<CreditBalance> {
-    const normalized = normalizeCreditBalance(balance);
-    this.#creditBalances.set(billingScopeKey(balance), normalized);
-    return Promise.resolve(normalized);
-  }
-
-  putBillingPlan(plan: BillingPlan): Promise<BillingPlan> {
-    const normalized = normalizeBillingPlan(plan);
-    this.#billingPlans.set(plan.id, normalized);
-    return Promise.resolve(normalized);
-  }
-
-  getBillingPlan(id: string): Promise<BillingPlan | undefined> {
-    const plan = this.#billingPlans.get(id);
-    return Promise.resolve(plan ? normalizeBillingPlan(plan) : undefined);
-  }
-
-  putBillingAccount(account: BillingAccount): Promise<BillingAccount> {
-    this.#billingAccounts.set(account.id, account);
-    return Promise.resolve(account);
-  }
-
-  getBillingAccount(id: string): Promise<BillingAccount | undefined> {
-    return Promise.resolve(this.#billingAccounts.get(id));
-  }
-
-  getBillingAccountForOwner(
-    ownerType: BillingAccount["ownerType"],
-    ownerId: string,
-  ): Promise<BillingAccount | undefined> {
-    const account = Array.from(this.#billingAccounts.values()).find(
-      (row) => row.ownerType === ownerType && row.ownerId === ownerId,
-    );
-    return Promise.resolve(account);
-  }
-
-  putSpaceSubscription(
-    subscription: SpaceSubscription,
-  ): Promise<SpaceSubscription> {
-    this.#spaceSubscriptions.set(subscription.id, subscription);
-    return Promise.resolve(subscription);
-  }
-
-  getSpaceSubscription(
-    spaceId: string,
-  ): Promise<SpaceSubscription | undefined> {
-    const subscriptions = Array.from(this.#spaceSubscriptions.values())
-      .filter((row) => row.spaceId === spaceId)
-      .sort(
-        (a, b) =>
-          b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id),
-      );
-    return Promise.resolve(subscriptions[0]);
-  }
-
-  getCreditBalance(spaceId: string): Promise<CreditBalance | undefined> {
-    const balance = this.#creditBalances.get(spaceId);
-    return Promise.resolve(
-      balance ? normalizeCreditBalance(balance) : undefined,
-    );
-  }
-
-  reserveCredits(
-    spaceId: string,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<CreditBalance | undefined> {
-    const balance = normalizeCreditBalance(this.#creditBalances.get(spaceId));
-    const usdMicros = creditAmountUsdMicros(input);
-    if (!balance || creditBalanceAvailableUsdMicros(balance) < usdMicros) {
-      return Promise.resolve(undefined);
-    }
-    const availableUsdMicros =
-      creditBalanceAvailableUsdMicros(balance) - usdMicros;
-    const reservedUsdMicros =
-      creditBalanceReservedUsdMicros(balance) + usdMicros;
-    const next = {
-      ...balance,
-      availableUsdMicros,
-      reservedUsdMicros,
-      availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
-      reservedCredits: usdMicrosToLegacyCredits(reservedUsdMicros),
-      updatedAt: input.updatedAt,
-    };
-    const normalized = normalizeCreditBalance(next);
-    this.#creditBalances.set(spaceId, normalized);
-    return Promise.resolve(normalized);
-  }
-
-  addCredits(
-    spaceId: string,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<CreditBalance> {
-    const existing = normalizeCreditBalance(this.#creditBalances.get(spaceId));
-    const usdMicros = creditAmountUsdMicros(input);
-    const availableUsdMicros =
-      creditBalanceAvailableUsdMicros(existing) + usdMicros;
-    const purchasedUsdMicros =
-      creditBalancePurchasedUsdMicros(existing) + usdMicros;
-    const reservedUsdMicros = creditBalanceReservedUsdMicros(existing);
-    const monthlyIncludedUsdMicros =
-      creditBalanceMonthlyIncludedUsdMicros(existing);
-    const next: CreditBalance = {
-      workspaceId: spaceId,
-      spaceId,
-      availableUsdMicros,
-      reservedUsdMicros,
-      monthlyIncludedUsdMicros,
-      purchasedUsdMicros,
-      availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
-      reservedCredits: usdMicrosToLegacyCredits(reservedUsdMicros),
-      monthlyIncludedCredits: usdMicrosToLegacyCredits(
-        monthlyIncludedUsdMicros,
-      ),
-      purchasedCredits: usdMicrosToLegacyCredits(purchasedUsdMicros),
-      updatedAt: input.updatedAt,
-    };
-    const normalized = normalizeCreditBalance(next);
-    this.#creditBalances.set(spaceId, normalized);
-    return Promise.resolve(normalized);
-  }
-
-  reconcileMonthlyCredits(
-    spaceId: string,
-    input: {
-      readonly newMonthly: number;
-      readonly periodStartIso: string;
-      readonly updatedAt: string;
-    },
-  ): Promise<CreditBalance | undefined> {
-    const balance = normalizeCreditBalance(this.#creditBalances.get(spaceId));
-    if (!balance) return Promise.resolve(undefined);
-    const balanceUpdatedAtMs = Date.parse(balance.updatedAt);
-    const periodStartMs = Date.parse(input.periodStartIso);
-    const alreadyReconciled =
-      creditBalanceMonthlyIncludedUsdMicros(balance) ===
-        legacyCreditsToUsdMicros(input.newMonthly) &&
-      Number.isFinite(balanceUpdatedAtMs) &&
-      Number.isFinite(periodStartMs) &&
-      balanceUpdatedAtMs >= periodStartMs;
-    if (alreadyReconciled) return Promise.resolve(undefined);
-    const monthlyIncludedUsdMicros = legacyCreditsToUsdMicros(input.newMonthly);
-    const availableUsdMicros =
-      Math.max(
-        0,
-        creditBalanceAvailableUsdMicros(balance) -
-          creditBalanceMonthlyIncludedUsdMicros(balance),
-      ) + monthlyIncludedUsdMicros;
-    const next: CreditBalance = {
-      ...balance,
-      availableUsdMicros,
-      monthlyIncludedUsdMicros,
-      availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
-      monthlyIncludedCredits: input.newMonthly,
-      updatedAt: input.updatedAt,
-    };
-    const normalized = normalizeCreditBalance(next);
-    this.#creditBalances.set(spaceId, normalized);
-    return Promise.resolve(normalized);
-  }
-
-  putCreditReservation(
-    reservation: CreditReservation,
-  ): Promise<CreditReservation> {
-    const normalized = normalizeCreditReservation(reservation);
-    this.#creditReservations.set(reservation.id, normalized);
-    return Promise.resolve(normalized);
-  }
-
-  getCreditReservationForRun(
-    runId: string,
-  ): Promise<CreditReservation | undefined> {
-    const reservations = Array.from(this.#creditReservations.values())
-      .filter((row) => row.runId === runId)
-      .sort(
-        (a, b) =>
-          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
-      );
-    return Promise.resolve(
-      reservations[0] ? normalizeCreditReservation(reservations[0]) : undefined,
-    );
-  }
-
-  listCreditReservations(
-    spaceId: string,
-    options: { readonly limit?: number } = {},
-  ): Promise<readonly CreditReservation[]> {
-    const limit = options.limit ?? 100;
-    const reservations = Array.from(this.#creditReservations.values())
-      .filter((row) => row.spaceId === spaceId)
-      .sort(
-        (a, b) =>
-          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
-      )
-      .slice(0, limit);
-    return Promise.resolve(reservations.map(normalizeCreditReservation));
-  }
-
-  claimBillingAutoRechargeAttempt(
-    input: ClaimBillingAutoRechargeAttemptInput,
-  ): Promise<ClaimBillingAutoRechargeAttemptResult> {
-    const normalized = normalizeBillingAutoRechargeAttempt(input.attempt);
-    const existing = Array.from(
-      this.#billingAutoRechargeAttempts.values(),
-    ).find((row) => row.idempotencyKey === normalized.idempotencyKey);
-    if (existing) {
-      return Promise.resolve({
-        claimed: false,
-        attempt: normalizeBillingAutoRechargeAttempt(existing),
-        skippedReason: "already_claimed",
-      });
-    }
-    if (input.monthlyLimitUsdMicros !== undefined) {
-      const countedUsdMicros = Array.from(
-        this.#billingAutoRechargeAttempts.values(),
-      )
-        .filter(
-          (row) =>
-            row.spaceId === normalized.spaceId &&
-            row.periodStart === normalized.periodStart &&
-            (row.status === "pending" ||
-              row.status === "pending_unknown" ||
-              row.status === "succeeded"),
-        )
-        .reduce(
-          (sum, row) => sum + billingAutoRechargeAttemptCountedUsdMicros(row),
-          0,
-        );
-      if (
-        countedUsdMicros + normalized.requestedUsdMicros >
-        input.monthlyLimitUsdMicros
-      ) {
-        return Promise.resolve({
-          claimed: false,
-          skippedReason: "monthly_limit_exceeded",
-        });
-      }
-    }
-    this.#billingAutoRechargeAttempts.set(normalized.id, normalized);
-    return Promise.resolve({ claimed: true, attempt: normalized });
-  }
-
-  settleBillingAutoRechargeAttempt(
-    input: SettleBillingAutoRechargeAttemptInput,
-  ): Promise<SettleBillingAutoRechargeAttemptResult> {
-    const existing = this.#billingAutoRechargeAttempts.get(input.attemptId);
-    if (!existing) {
-      return Promise.resolve({
-        settled: false,
-        skippedReason: "attempt_not_found",
-      });
-    }
-    if (existing.status === "succeeded") {
-      return Promise.resolve({
-        settled: false,
-        attempt: normalizeBillingAutoRechargeAttempt(existing),
-        balance: normalizeCreditBalance(
-          this.#creditBalances.get(billingScopeKey(existing)),
-        ),
-        skippedReason: "already_succeeded",
-      });
-    }
-    const next = normalizeBillingAutoRechargeAttempt({
-      ...existing,
-      status: input.status,
-      ...(input.chargedUsdMicros !== undefined
-        ? { chargedUsdMicros: input.chargedUsdMicros }
-        : {}),
-      ...(input.stripePaymentIntentId
-        ? { stripePaymentIntentId: input.stripePaymentIntentId }
-        : {}),
-      ...(input.providerStatus ? { providerStatus: input.providerStatus } : {}),
-      ...(input.failureReason ? { failureReason: input.failureReason } : {}),
-      updatedAt: input.updatedAt,
-    });
-    this.#billingAutoRechargeAttempts.set(next.id, next);
-    if (next.status !== "succeeded") {
-      return Promise.resolve({ settled: true, attempt: next });
-    }
-    const chargedUsdMicros = next.chargedUsdMicros ?? next.requestedUsdMicros;
-    const existingBalance = normalizeCreditBalance(
-      this.#creditBalances.get(billingScopeKey(next)),
-    );
-    const availableUsdMicros =
-      creditBalanceAvailableUsdMicros(existingBalance) + chargedUsdMicros;
-    const purchasedUsdMicros =
-      creditBalancePurchasedUsdMicros(existingBalance) + chargedUsdMicros;
-    const reservedUsdMicros = creditBalanceReservedUsdMicros(existingBalance);
-    const monthlyIncludedUsdMicros =
-      creditBalanceMonthlyIncludedUsdMicros(existingBalance);
-    const balance = normalizeCreditBalance({
-      workspaceId: next.workspaceId,
-      spaceId: next.workspaceId,
-      availableUsdMicros,
-      reservedUsdMicros,
-      monthlyIncludedUsdMicros,
-      purchasedUsdMicros,
-      availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
-      reservedCredits: usdMicrosToLegacyCredits(reservedUsdMicros),
-      monthlyIncludedCredits: usdMicrosToLegacyCredits(
-        monthlyIncludedUsdMicros,
-      ),
-      purchasedCredits: usdMicrosToLegacyCredits(purchasedUsdMicros),
-      updatedAt: input.updatedAt,
-    })!;
-    this.#creditBalances.set(billingScopeKey(next), balance);
-    return Promise.resolve({ settled: true, attempt: next, balance });
-  }
-
-  listBillingAutoRechargeAttempts(
-    spaceId: string,
-    options: { readonly limit?: number } = {},
-  ): Promise<readonly BillingAutoRechargeAttempt[]> {
-    const limit = options.limit ?? 100;
-    const attempts = Array.from(this.#billingAutoRechargeAttempts.values())
-      .filter((row) => row.spaceId === spaceId)
-      .sort(
-        (a, b) =>
-          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
-      )
-      .slice(0, limit);
-    return Promise.resolve(attempts.map(normalizeBillingAutoRechargeAttempt));
   }
 
   putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
@@ -2634,51 +2164,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(normalized);
   }
 
-  putUsageEventAndSpendCredits(
-    event: UsageEvent,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<PutUsageEventAndSpendCreditsResult | undefined> {
-    const existing = Array.from(this.#usageEvents.values()).find(
-      (row) => row.idempotencyKey === event.idempotencyKey,
-    );
-    if (existing) {
-      return Promise.resolve({
-        usageEvent: existing,
-        balance: normalizeCreditBalance(
-          this.#creditBalances.get(billingScopeKey(event)),
-        ),
-        inserted: false,
-      });
-    }
-    const balance = normalizeCreditBalance(
-      this.#creditBalances.get(billingScopeKey(event)),
-    );
-    const usdMicros = creditAmountUsdMicros(input);
-    if (!balance || creditBalanceAvailableUsdMicros(balance) < usdMicros) {
-      return Promise.resolve(undefined);
-    }
-    const availableUsdMicros =
-      creditBalanceAvailableUsdMicros(balance) - usdMicros;
-    const nextBalance = normalizeCreditBalance({
-      ...balance,
-      availableUsdMicros,
-      availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
-      updatedAt: input.updatedAt,
-    });
-    const normalized = normalizeUsageEvent(event);
-    this.#creditBalances.set(billingScopeKey(event), nextBalance);
-    this.#usageEvents.set(event.id, normalized);
-    return Promise.resolve({
-      usageEvent: normalized,
-      balance: nextBalance,
-      inserted: true,
-    });
-  }
-
-  listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]> {
+  listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
     return Promise.resolve(
       Array.from(this.#usageEvents.values())
-        .filter((row) => row.spaceId === spaceId)
+        .filter((row) => row.workspaceId === workspaceId)
         .sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -2687,10 +2176,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   async listUsageEventsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<UsageEvent>> {
-    const newestFirst = [...(await this.listUsageEvents(spaceId))].sort(
+    const newestFirst = [...(await this.listUsageEvents(workspaceId))].sort(
       (a, b) =>
         b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
     );
@@ -2706,10 +2195,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(this.#backupRecords.get(id));
   }
 
-  listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]> {
+  listBackupRecords(workspaceId: string): Promise<readonly BackupRecord[]> {
     return Promise.resolve(
       Array.from(this.#backupRecords.values())
-        .filter((row) => row.spaceId === spaceId)
+        .filter((row) => row.workspaceId === workspaceId)
         // Newest first: createdAt desc, then id desc as a stable tie-break.
         .sort(
           (a, b) =>
@@ -2719,11 +2208,11 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   async listBackupRecordsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<BackupRecord>> {
     // Newest-first listing ⇒ descending keyset pager.
-    return pageSortedDesc(await this.listBackupRecords(spaceId), params);
+    return pageSortedDesc(await this.listBackupRecords(workspaceId), params);
   }
 }
 
@@ -2770,6 +2259,151 @@ export function clampRecoverableOpenTofuRunListLimit(
   return floored;
 }
 
+/** True only for rows that can change whether a Capsule runtime is safe. */
+export function runtimeSafetyCandidate(
+  row: ApplyRun | Run,
+  capsuleId: string,
+): boolean {
+  if (row.capsuleId !== capsuleId) return false;
+  if ("planRunId" in row) {
+    if (row.operation === "destroy") {
+      if (
+        row.status === "queued" ||
+        row.status === "running" ||
+        row.status === "succeeded"
+      ) {
+        return true;
+      }
+      if (row.status === "failed") return applyRunMutationDispatched(row);
+      return row.status === "expired" && row.startedAt !== undefined;
+    }
+    // A normal apply keeps the pinned revision while queued/running. A prior
+    // unsafe result therefore remains decisive until a later apply succeeds.
+    if (row.status === "succeeded") return true;
+    if (row.status === "failed") return applyRunMutationDispatched(row);
+    return row.status === "expired" && row.startedAt !== undefined;
+  }
+  return (
+    row.type === "restore" &&
+    ["queued", "running", "succeeded", "failed", "expired"].includes(row.status)
+  );
+}
+
+/**
+ * Failed apply/destroy rows are decisive only after provider dispatch or a
+ * service-side lifecycle action was actually invoked. Pre-flight credential,
+ * policy, stale-plan, unavailable-activator, or queue failures cannot have
+ * changed the Capsule and therefore keep the last pinned runtime revision.
+ */
+export function applyRunMutationDispatched(row: ApplyRun): boolean {
+  return row.auditEvents.some(
+    (event) =>
+      event.data?.providerDispatched === true ||
+      event.data?.lifecycleActionDispatched === true,
+  );
+}
+
+export function capsuleRuntimeSafetyFromRun(
+  row: ApplyRun | Run,
+): CapsuleRuntimeSafety {
+  if ("planRunId" in row) {
+    if (row.operation === "destroy") {
+      if (row.status === "succeeded") {
+        return { phase: "retired", runId: row.id, runType: "destroy_apply" };
+      }
+      if (row.status === "queued" || row.status === "running") {
+        return {
+          phase: "terminating",
+          runId: row.id,
+          runType: "destroy_apply",
+        };
+      }
+      return { phase: "unknown", runId: row.id, runType: "destroy_apply" };
+    }
+    return row.status === "succeeded"
+      ? { phase: "safe", runId: row.id, runType: "apply" }
+      : { phase: "unknown", runId: row.id, runType: "apply" };
+  }
+  return row.status === "succeeded"
+    ? { phase: "safe", runId: row.id, runType: "restore" }
+    : { phase: "unknown", runId: row.id, runType: "restore" };
+}
+
+/**
+ * True while a destructive Run can still mutate the Capsule after every
+ * already-terminal Run in the ledger. Creation time cannot order this case: a
+ * restore may wait for approval, then become queued long after a newer apply
+ * succeeded. An in-flight restore/destroy therefore always wins the safety
+ * projection until it reaches a terminal status.
+ */
+export function runtimeSafetyCandidateIsInFlight(row: ApplyRun | Run): boolean {
+  if ("planRunId" in row) {
+    return (
+      row.operation === "destroy" &&
+      (row.status === "queued" || row.status === "running")
+    );
+  }
+  return (
+    row.type === "restore" &&
+    (row.status === "queued" || row.status === "running")
+  );
+}
+
+/**
+ * Timestamp of the decisive safety EFFECT, rather than immutable Run creation.
+ * Apply-family rows maintain numeric updated/finished timestamps. Restore rows
+ * use an ISO finished/started time plus the numeric heartbeat stamped by the
+ * fenced claim/terminal transition. Legacy rows fall back to createdAt.
+ */
+export function runtimeSafetyCandidateEffectTimestamp(
+  row: ApplyRun | Run,
+): number {
+  if ("planRunId" in row) {
+    return (
+      runTimestampValue(row.finishedAt) ??
+      runTimestampValue(row.updatedAt) ??
+      runTimestampValue(row.heartbeatAt) ??
+      runTimestampValue(row.startedAt) ??
+      runTimestampValue(row.createdAt) ??
+      0
+    );
+  }
+  return (
+    runTimestampValue(row.finishedAt) ??
+    runTimestampValue(row.heartbeatAt) ??
+    runTimestampValue(row.startedAt) ??
+    runTimestampValue(row.createdAt) ??
+    0
+  );
+}
+
+/** Fail-closed tie breaker when two effects share the same clock tick. */
+export function runtimeSafetyCandidateRiskRank(row: ApplyRun | Run): number {
+  const phase = capsuleRuntimeSafetyFromRun(row).phase;
+  if (phase === "retired") return 3;
+  if (phase === "terminating") return 2;
+  if (phase === "unknown") return 1;
+  return 0;
+}
+
+/**
+ * Shared newest-decisive-first ordering used by the in-memory backend and
+ * mirrored by the PostgreSQL/D1 ORDER BY expressions.
+ */
+export function compareRuntimeSafetyCandidatesDesc(
+  a: ApplyRun | Run,
+  b: ApplyRun | Run,
+): number {
+  return (
+    Number(runtimeSafetyCandidateIsInFlight(b)) -
+      Number(runtimeSafetyCandidateIsInFlight(a)) ||
+    runtimeSafetyCandidateEffectTimestamp(b) -
+      runtimeSafetyCandidateEffectTimestamp(a) ||
+    runtimeSafetyCandidateRiskRank(b) - runtimeSafetyCandidateRiskRank(a) ||
+    b.id.localeCompare(a.id)
+  );
+}
+
 /** Newest-first sort across internal numeric timestamps and ISO public rows. */
 export function compareStoredRunRecordsDesc(
   a: StoredRunRecord,
@@ -2796,6 +2430,21 @@ export function isRecoverableOpenTofuRunRecord(
   row: StoredRunRecord,
   options: RecoverableOpenTofuRunListOptions,
 ): boolean {
+  if (
+    isApplyRunRecord(row) &&
+    (row.status === "succeeded" || row.status === "failed") &&
+    applyRunBillingCapturePending(row)
+  ) {
+    const committedAt =
+      runTimestampValue(row.finishedAt) ??
+      runTimestampValue(row.updatedAt) ??
+      storedRunRecordTimestamp(row);
+    return (
+      Number.isFinite(committedAt) &&
+      committedAt > 0 &&
+      committedAt <= options.staleQueuedBeforeMs
+    );
+  }
   if (row.status !== "queued" && row.status !== "running") return false;
   if (!isDispatchableOpenTofuRunRecord(row)) return false;
   const createdAt = storedRunRecordTimestamp(row);
@@ -2844,8 +2493,25 @@ function isSourceSyncRunRecord(row: StoredRunRecord): row is SourceSyncRun {
   return "kind" in row && row.kind === "source_sync";
 }
 
+function isPublicRunRecord(row: StoredRunRecord): row is Run {
+  return (
+    !isPlanRunRecord(row) &&
+    !isApplyRunRecord(row) &&
+    !isSourceSyncRunRecord(row)
+  );
+}
+
 function isRestoreRunRecord(row: StoredRunRecord): row is Run {
-  return "type" in row && row.type === "restore";
+  return isPublicRunRecord(row) && row.type === "restore";
+}
+
+function transitionKindForRun(
+  row: StoredRunRecord,
+): TransitionRunInput["kind"] | undefined {
+  if (isPlanRunRecord(row)) return "plan";
+  if (isApplyRunRecord(row)) return "apply";
+  if (isSourceSyncRunRecord(row)) return "source_sync";
+  return isRestoreRunRecord(row) ? "restore" : undefined;
 }
 
 function resolvedHeartbeat(
@@ -2863,217 +2529,35 @@ function stripRunHeartbeat<R extends PlanRun | ApplyRun | SourceSyncRun | Run>(
   return withoutHeartbeat as R;
 }
 
-/**
- * Backfills the transient dual identity fields on a Capsule so every read
- * carries BOTH the canonical (`workspaceId` / `currentStateVersionId` /
- * `currentOutputId`) and the deprecated (`spaceId` / `currentDeploymentId` /
- * `currentOutputSnapshotId`) names. Callers (tests, older writers) may set only
- * one side; this keeps reads on either name resolvable during the rename.
- */
-export function normalizeInstallation(
-  installation: Installation,
-): Installation {
-  // Workspace identity is never independently cleared, so fill both names from
-  // whichever side a writer set. The state-version / output pointers CAN be
-  // cleared (destroy), and the writers patch the legacy `currentDeploymentId` /
-  // `currentOutputSnapshotId` fields, so the canonical `currentStateVersionId` /
-  // `currentOutputId` MIRROR those legacy fields exactly (including a clear).
-  const workspaceId = installation.workspaceId ?? installation.spaceId;
-  return {
-    ...installation,
-    workspaceId,
-    spaceId: workspaceId,
-    currentStateVersionId: installation.currentDeploymentId,
-    currentOutputId: installation.currentOutputSnapshotId,
-  };
+export function normalizeCapsule(capsule: Capsule): Capsule {
+  if (capsule.compatibilityStatus !== undefined) {
+    normalizeStoredCapsuleCompatibilityLevel(capsule.compatibilityStatus);
+  }
+  return capsule;
 }
 
 export function normalizeSourceSnapshot(
   snapshot: SourceSnapshot,
 ): SourceSnapshot {
-  const workspaceId = snapshot.workspaceId ?? snapshot.spaceId;
-  return {
-    ...snapshot,
-    workspaceId,
-    spaceId: workspaceId,
-  };
-}
-
-/**
- * Resolves the Workspace identity key for billing records during the Workspace
- * rename: prefer the canonical `workspaceId`, fall back to the deprecated
- * `spaceId`. Records always carry one at runtime.
- */
-function billingScopeKey(scope: {
-  readonly workspaceId?: string;
-  readonly spaceId?: string;
-}): string {
-  return scope.workspaceId ?? scope.spaceId ?? "";
-}
-
-function creditAmountUsdMicros(input: CreditAmountInput): number {
-  if (input.usdMicros !== undefined) {
-    if (
-      !Number.isSafeInteger(input.usdMicros) ||
-      !Number.isFinite(input.usdMicros) ||
-      input.usdMicros <= 0
-    ) {
-      throw new TypeError("usdMicros must be a positive integer");
-    }
-    return input.usdMicros;
+  if (snapshot.origin !== "git" || !snapshot.sourceId?.trim()) {
+    throw new TypeError(
+      "SourceSnapshot must originate from a registered Git Source",
+    );
   }
-  if (
-    input.credits === undefined ||
-    !Number.isFinite(input.credits) ||
-    input.credits <= 0
-  ) {
-    throw new TypeError("usdMicros must be a positive integer");
-  }
-  return legacyCreditsToUsdMicros(input.credits);
-}
-
-function normalizeBillingPlan(plan: BillingPlan): BillingPlan {
-  const includedUsdMicros = billingPlanIncludedUsdMicros(plan);
-  return {
-    ...plan,
-    includedUsdMicros,
-    includedCredits: usdMicrosToLegacyCredits(includedUsdMicros),
-  };
-}
-
-function normalizeCreditBalance(balance: CreditBalance): CreditBalance;
-function normalizeCreditBalance(
-  balance: CreditBalance | undefined,
-): CreditBalance | undefined;
-function normalizeCreditBalance(
-  balance: CreditBalance | undefined,
-): CreditBalance | undefined {
-  if (!balance) return undefined;
-  const availableUsdMicros = creditBalanceAvailableUsdMicros(balance);
-  const reservedUsdMicros = creditBalanceReservedUsdMicros(balance);
-  const monthlyIncludedUsdMicros =
-    creditBalanceMonthlyIncludedUsdMicros(balance);
-  const purchasedUsdMicros = creditBalancePurchasedUsdMicros(balance);
-  return {
-    ...balance,
-    workspaceId: balance.workspaceId ?? balance.spaceId,
-    availableUsdMicros,
-    reservedUsdMicros,
-    monthlyIncludedUsdMicros,
-    purchasedUsdMicros,
-    availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
-    reservedCredits: usdMicrosToLegacyCredits(reservedUsdMicros),
-    monthlyIncludedCredits: usdMicrosToLegacyCredits(monthlyIncludedUsdMicros),
-    purchasedCredits: usdMicrosToLegacyCredits(purchasedUsdMicros),
-  };
+  return snapshot;
 }
 
 function normalizeUsageEvent(event: UsageEvent): UsageEvent {
   const usdMicros = usageEventUsdMicros(event);
   return {
     ...event,
-    workspaceId: event.workspaceId ?? event.spaceId ?? "",
+    workspaceId: event.workspaceId,
     usdMicros,
-    credits: usdMicrosToLegacyCredits(usdMicros),
   };
 }
 
-function normalizeCreditReservation(
-  reservation: CreditReservation,
-): CreditReservation {
-  const estimatedUsdMicros =
-    reservation.estimatedUsdMicros ??
-    legacyCreditsToUsdMicros(reservation.estimatedCredits);
-  return {
-    ...reservation,
-    workspaceId: reservation.workspaceId ?? reservation.spaceId ?? "",
-    estimatedUsdMicros,
-    estimatedCredits: usdMicrosToLegacyCredits(estimatedUsdMicros),
-  };
-}
-
-function normalizeBillingAutoRechargeAttempt(
-  attempt: BillingAutoRechargeAttempt,
-): BillingAutoRechargeAttempt {
-  if (
-    attempt.status !== "pending" &&
-    attempt.status !== "pending_unknown" &&
-    attempt.status !== "succeeded" &&
-    attempt.status !== "failed"
-  ) {
-    throw new TypeError("auto recharge status is invalid");
-  }
-  if (
-    !Number.isSafeInteger(attempt.requestedUsdMicros) ||
-    attempt.requestedUsdMicros <= 0
-  ) {
-    throw new TypeError("auto recharge requestedUsdMicros must be positive");
-  }
-  if (
-    attempt.monthlyLimitUsdMicros !== undefined &&
-    (!Number.isSafeInteger(attempt.monthlyLimitUsdMicros) ||
-      attempt.monthlyLimitUsdMicros <= 0)
-  ) {
-    throw new TypeError("auto recharge monthlyLimitUsdMicros must be positive");
-  }
-  if (
-    attempt.chargedUsdMicros !== undefined &&
-    (!Number.isSafeInteger(attempt.chargedUsdMicros) ||
-      attempt.chargedUsdMicros < 0)
-  ) {
-    throw new TypeError("auto recharge chargedUsdMicros must be non-negative");
-  }
-  return {
-    ...attempt,
-    ...(attempt.status === "succeeded"
-      ? {
-          chargedUsdMicros:
-            attempt.chargedUsdMicros ?? attempt.requestedUsdMicros,
-        }
-      : {}),
-  };
-}
-
-function billingAutoRechargeAttemptCountedUsdMicros(
-  attempt: BillingAutoRechargeAttempt,
-): number {
-  if (attempt.status === "succeeded") {
-    return attempt.chargedUsdMicros ?? attempt.requestedUsdMicros;
-  }
-  if (attempt.status === "pending" || attempt.status === "pending_unknown") {
-    return attempt.requestedUsdMicros;
-  }
-  return 0;
-}
-
-export function defaultWorkspaceOutputSyncState(
-  workspaceId: string,
-  updatedAt: string,
-): WorkspaceOutputSyncState {
-  return {
-    workspaceId,
-    enabled: true,
-    outputRevision: 0,
-    reconciledRevision: 0,
-    consecutivePasses: 0,
-    updatedAt,
-  };
-}
-
-function sameWorkspaceOutputSyncState(
-  left: WorkspaceOutputSyncState | undefined,
-  right: WorkspaceOutputSyncState | undefined,
-): boolean {
-  if (!left || !right) return left === right;
-  return (
-    left.workspaceId === right.workspaceId &&
-    left.enabled === right.enabled &&
-    left.outputRevision === right.outputRevision &&
-    left.reconciledRevision === right.reconciledRevision &&
-    left.activeRunGroupId === right.activeRunGroupId &&
-    left.consecutivePasses === right.consecutivePasses &&
-    left.updatedAt === right.updatedAt
-  );
+function workspaceMemberKey(workspaceId: string, accountId: string): string {
+  return `${workspaceId}\u0000${accountId}`;
 }
 
 function maybeWarnInMemoryStore(storeName: string): void {
@@ -3081,7 +2565,7 @@ function maybeWarnInMemoryStore(storeName: string): void {
   log.warn("service.deploy_control.in_memory_store", {
     store: storeName,
     detail:
-      "OpenTofu run, Installation, and Deployment records will NOT persist " +
+      "OpenTofu Run, Capsule, StateVersion, and Output records will NOT persist " +
       "across restart or isolate recycle. Inject a durable store for " +
       "production/staging.",
   });

@@ -34,25 +34,24 @@ rehearsal が provider-free in-process smoke runner に落ちない。
 ## Current smoke coverage (30 smoke-script checks)
 
 `scripts/smoke.sh` のチェック一覧 — 「smoke green = Takosumi だけで動かして deploy しても 99% 動く」を目標に、 honest pass のみを数える。各 script header に詳細を置く。
-Accounts Worker unit sentinel: worker_test.ts 30 case (issuer policy + IPv6/CGNAT + fail-closed + R2 route-level signed export / malformed URL / data-bearing refusal).
+Accounts Worker unit sentinel: worker_test.ts (issuer policy, provider-neutral login configuration, and fail-closed durable bindings).
 
-| 範疇               | 件数 | 代表 check                                                                                                                                                          |
-| ------------------ | ---: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ingress            |    3 | `phase0.hello`, `accounts.oidc-discovery`, `service.health`                                                                                                         |
-| prod-mirror        |    9 | `prod-mirror.landing.*` (4) + `prod-mirror.docs.index` + `prod-mirror.cloud.*` (4)                                                                                  |
-| OAuth              |    3 | `oauth.e2e.google`, `oauth.tls-negative`, `oauth.csrf-replay`                                                                                                       |
-| tenant             |    1 | `tenant.isolation` (cross-subject installation read must fail)                                                                                                      |
-| docs               |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                                                                                         |
-| passkey            |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                                                                                          |
-| deploy control API |    1 | `deploy-control.api.e2e` (Capsule, Run, StateVersion, Output ledger path)                                                                                           |
-| workers            |    1 | `workers.cli-smoke` (service Worker health + capabilities + D1 semantics; Accounts Worker signed-export route is required only when the workers profile is primary) |
-| route-registrar    |    1 | `registrar.alive` (service → Caddy admin sync via internal network)                                                                                                 |
-| object store       |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                                                                                              |
-| migrations         |    1 | `migration.idempotency` (Accounts Worker D1 restart preserves schema byte-identical)                                                                                |
-| otel               |    1 | `otel.pipeline` (synthetic OTLP trace lands in Jaeger)                                                                                                              |
-| k6 perf            |    1 | `k6.baseline` (20 RPS × 20s with deploy control plan + OIDC thresholds — regression watch, NOT SLO)                                                                 |
-| mailpit            |    1 | `mailpit` (SMTP catcher reachable + probe email delivered)                                                                                                          |
-| stripe             |    1 | `stripe.webhook.e2e` (HMAC verify + idempotency + tolerance)                                                                                                        |
+| 範疇               | 件数 | 代表 check                                                                                          |
+| ------------------ | ---: | --------------------------------------------------------------------------------------------------- |
+| ingress            |    3 | `phase0.hello`, `accounts.oidc-discovery`, `service.health`                                         |
+| prod-mirror        |    9 | `prod-mirror.landing.*` (4) + `prod-mirror.docs.index` + `prod-mirror.cloud.*` (4)                  |
+| OAuth              |    3 | `oauth.e2e.oidc`, `oauth.tls-negative`, `oauth.csrf-replay`                                         |
+| tenant             |    1 | `tenant.isolation` (cross-subject installation read must fail)                                      |
+| docs               |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                         |
+| passkey            |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                          |
+| deploy control API |    1 | `deploy-control.api.e2e` (Capsule, Run, StateVersion, Output ledger path)                           |
+| workers            |    1 | `workers.cli-smoke` (service Worker health + capabilities + D1 semantics)                           |
+| route-registrar    |    1 | `registrar.alive` (service → Caddy admin sync via internal network)                                 |
+| object store       |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                              |
+| migrations         |    1 | `migration.idempotency` (Accounts Worker D1 restart preserves schema byte-identical)                |
+| otel               |    1 | `otel.pipeline` (synthetic OTLP trace lands in Jaeger)                                              |
+| k6 perf            |    1 | `k6.baseline` (20 RPS × 20s with deploy control plan + OIDC thresholds — regression watch, NOT SLO) |
+| mailpit            |    1 | `mailpit` (SMTP catcher reachable + probe email delivered)                                          |
 
 加えて repo 側の unit / worker / browser-evidence self-test は root の quality gate で実行する。公開面 / egress の companion gate として `scripts/prove-no-public-leak.sh` も用意している。
 
@@ -72,7 +71,7 @@ when preparing a release.
 
 If `TAKOSUMI_RELEASE_ACTIVATOR_URL` is configured for the platform under test,
 also record a fresh release activation proof outside the generic smoke count:
-the materializer receives the `takosumi.operator.release-activation@v1`
+the materializer receives the `takosumi.operator.release-activation@v2`
 payload, success is visible as a `release_activation.succeeded` Activity, and a
 forced materializer failure/pending response is surfaced without rolling back
 the OpenTofu apply ledger.
@@ -169,11 +168,8 @@ takosumi/deploy/local-substrate/
 │   ├── Corefile
 │   └── zones/{takosumi.test.zone, deny-letsencrypt.zone}
 ├── pebble/pebble-config.json
-├── factories/
-│   └── local-substrate-factories.ts   # 公開 DNS provider import-time deny
 ├── wrappers/
 │   ├── cloud.ts                    # composed control-plane service + account-plane
-│   ├── agent.ts                    # runtime-agent (execution plane) over TAKOSUMI_AGENT_URL
 │   └── takosumi-platform-worker-runner.mjs # local-only Miniflare D1/R2/Queue/DO runner for deploy/platform/worker.ts
 ├── route-registrar/
 │   ├── package.json

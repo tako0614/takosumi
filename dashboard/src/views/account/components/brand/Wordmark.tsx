@@ -4,14 +4,12 @@ import LogoMark from "./LogoMark.tsx";
 interface Props {
   size?: number;
   href?: string;
-  showSub?: boolean;
   productName?: string;
   class?: string;
 }
 
 /**
  * Takosumi wordmark — provided logo mark + product name.
- * Cloud deployments may opt into the subtitle explicitly.
  */
 export default function Wordmark(props: Props): JSX.Element {
   const inner = (
@@ -21,11 +19,6 @@ export default function Wordmark(props: Props): JSX.Element {
       </span>
       <span class="wordmark-text">
         {props.productName ?? "Takosumi"}
-        {props.showSub === true && (
-          <span class="wordmark-sub" style="margin-left:6px">
-            Cloud
-          </span>
-        )}
       </span>
     </>
   );

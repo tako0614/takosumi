@@ -2,8 +2,6 @@ import type { InstallConfig } from "@takosumi/internal/deploy-control-api";
 import type { ManagedPublicHostnameMode } from "takosumi-contract/install-configs";
 import { installExperiencePublicEndpoint } from "takosumi-contract";
 
-export const DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN = "app.takos.jp";
-
 export type PublicHostPolicyKind = "managed_default_hostname" | "custom_domain";
 
 export function managedPublicHostnameMode(
@@ -16,12 +14,10 @@ export function managedPublicHostnameMode(
 
 export function managedPublicBaseDomainFromInstallConfig(
   installConfig: InstallConfig | undefined,
-): string {
-  return (
-    normalizeManagedPublicBaseDomain(
-      installExperiencePublicEndpoint(installConfig?.store?.installExperience)
-        ?.baseDomain,
-    ) ?? DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN
+): string | undefined {
+  return normalizeManagedPublicBaseDomain(
+    installExperiencePublicEndpoint(installConfig?.installExperience)
+      ?.baseDomain,
   );
 }
 
@@ -44,13 +40,12 @@ export function normalizeManagedPublicBaseDomain(
 
 export function managedPublicHostFromLabel(
   value: unknown,
-  baseDomain = DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
+  baseDomain: string,
 ): string | undefined {
   const label = typeof value === "string" ? value.trim() : "";
   if (!isManagedPublicHostLabel(label)) return undefined;
-  const normalizedBase =
-    normalizeManagedPublicBaseDomain(baseDomain) ??
-    DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN;
+  const normalizedBase = normalizeManagedPublicBaseDomain(baseDomain);
+  if (!normalizedBase) return undefined;
   return `${label}.${normalizedBase}`;
 }
 
@@ -82,7 +77,7 @@ export function normalizeManagedPublicHostLabel(
 export function managedPublicHostForWorkspace(
   workspaceHandle: unknown,
   requestedSlug: unknown,
-  baseDomain = DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
+  baseDomain: string,
 ): string | undefined {
   const label = managedPublicLabelForWorkspace(workspaceHandle, requestedSlug);
   return label ? managedPublicHostFromLabel(label, baseDomain) : undefined;
@@ -90,11 +85,10 @@ export function managedPublicHostForWorkspace(
 
 export function isManagedPublicHost(
   host: string,
-  baseDomain = DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
+  baseDomain: string,
 ): boolean {
-  const normalizedBase =
-    normalizeManagedPublicBaseDomain(baseDomain) ??
-    DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN;
+  const normalizedBase = normalizeManagedPublicBaseDomain(baseDomain);
+  if (!normalizedBase) return false;
   const normalizedHost = host.toLowerCase();
   if (!normalizedHost.endsWith(`.${normalizedBase}`)) return false;
   const label = normalizedHost.slice(
@@ -106,7 +100,7 @@ export function isManagedPublicHost(
 
 export function publicHostPolicyKind(
   host: string,
-  baseDomains: readonly string[] = [DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN],
+  baseDomains: readonly string[] = [],
 ): PublicHostPolicyKind {
   return baseDomains.some((baseDomain) => isManagedPublicHost(host, baseDomain))
     ? "managed_default_hostname"
@@ -114,16 +108,14 @@ export function publicHostPolicyKind(
 }
 
 export function normalizeManagedPublicBaseDomains(
-  values: readonly string[] | undefined,
+  values: readonly unknown[] | undefined,
 ): readonly string[] {
   const normalized = new Set<string>();
   for (const value of values ?? []) {
     const domain = normalizeManagedPublicBaseDomain(value);
     if (domain) normalized.add(domain);
   }
-  return normalized.size > 0
-    ? [...normalized]
-    : [DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN];
+  return [...normalized];
 }
 
 function isManagedPublicHostLabel(value: string): boolean {

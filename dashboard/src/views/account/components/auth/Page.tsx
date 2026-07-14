@@ -1,7 +1,7 @@
 import { createEffect, type JSX } from "solid-js";
 import AuthGuard from "./AuthGuard.tsx";
 import type { SessionRecord } from "../../lib/session.ts";
-import { dashboardProductName } from "../../../../lib/deployment-brand.ts";
+import { dashboardProductName } from "../../../../lib/runtime-capabilities.ts";
 
 interface Props {
   /**

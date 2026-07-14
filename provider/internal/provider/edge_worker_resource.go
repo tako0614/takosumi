@@ -187,7 +187,7 @@ func (r *edgeWorkerResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 	readSpace := effectiveSpace(state.Space, r.data.defaultSpace)
-	res, err := r.data.client.GetResource(ctx, client.KindEdgeWorker, state.Name.ValueString(), readSpace)
+	res, err := r.data.client.ObserveResource(ctx, client.KindEdgeWorker, state.Name.ValueString(), readSpace)
 	if err != nil {
 		if errors.Is(err, client.ErrNotFound) {
 			resp.State.RemoveResource(ctx)

@@ -47,6 +47,6 @@ host のクエリは systemd-resolved の per-domain split で CoreDNS に流す
 Phase 0–2 では単一 bridge network `takos-local-internal`。 Phase 3 で:
 
 - `takos-local-internal` — emulator / Caddy / CoreDNS / Pebble / service / accounts / Miniflare Worker mirrors。 `internal: true` で外向き禁止
-- `takos-local-egress` — 実 cloud compute (Fargate / Cloud Run / …) を呼ぶ runtime-agent のみ join。 default gateway 経由で外向き可
+- `takos-local-egress` — source fetch と provider API を実行する OpenTofu Runner のみ join。default gateway 経由で外向き可
 
-これにより「実 cloud に出る path は runtime-agent からだけ」を物理層で保証する。
+これにより「実 cloud に出る execution path は Runner からだけ」を物理層で保証する。

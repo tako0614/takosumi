@@ -18,6 +18,7 @@ export class LocalOperatorConfig implements OperatorConfigPort {
 
   constructor(options: LocalOperatorConfigOptions = {}) {
     const source = options.source ?? "local";
+    assertOperatorConfigSource(source);
     this.#clock = options.clock ?? (() => new Date());
     this.#values = new Map(
       Object.entries(options.values ?? {}).map(([key, value]) => [
@@ -52,6 +53,7 @@ export function normalizeValue(
   value: LocalOperatorConfigInputValue,
   source: OperatorConfigSource,
 ): OperatorConfigValue {
+  assertOperatorConfigSource(source);
   if (typeof value === "string") {
     return Object.freeze({ kind: "plain", key, source, value });
   }
@@ -62,6 +64,12 @@ export function normalizeValue(
     ref: Object.freeze({ ...value }),
     redacted: true,
   });
+}
+
+function assertOperatorConfigSource(source: string): void {
+  if (!/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(source)) {
+    throw new Error("operator config source must be a valid adapter token");
+  }
 }
 
 export function cloneValue<T extends OperatorConfigValue | undefined>(

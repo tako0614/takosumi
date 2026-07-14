@@ -118,7 +118,7 @@ function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
     listing.provider,
     listing.category,
     ...(listing.badges ?? []),
-    listing.source.git,
+    listing.source.url,
   ]
     .join(" ")
     .toLowerCase();
@@ -680,7 +680,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                       <div>
                         <dt>{s("sourceLocation", props.locale)}</dt>
                         <dd class="tcs-mono tcs-break">
-                          {listing().source.git}
+                          {listing().source.url}
                         </dd>
                       </div>
                       <Show when={listing().source.path}>
@@ -693,10 +693,10 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                       </Show>
                     </dl>
                     <Show
-                      when={repoUrl(listing().source.git)}
+                      when={repoUrl(listing().source.url)}
                       fallback={
                         <span class="tcs-mono tcs-break">
-                          {listing().source.git}
+                          {listing().source.url}
                         </span>
                       }
                     >

@@ -32,7 +32,7 @@ describe("RunsListView", () => {
     );
   });
 
-  test("builds the list from the real Run ledger and installation API", () => {
+  test("builds the list from the real Run ledger and Capsule API", () => {
     expect(source).toContain("listRuns");
     expect(source).toContain("listCapsules");
     expect(source).toContain("rowsFromRuns");
@@ -83,10 +83,10 @@ describe("RunsListView", () => {
   });
 
   test("names the service on every row the payload allows", () => {
-    // Backup runs record only the legacy installationId alias (read in the
-    // shared lib's runCapsuleId).
+    // The shared helper reads the canonical Capsule subject from every Run.
     expect(source).toContain("runCapsuleId");
-    expect(approvalLibSource).toContain("installationId");
+    expect(approvalLibSource).toContain("return run.capsuleId");
+    expect(approvalLibSource).not.toContain("installationId");
     // Preparation runs (追加前の確認) carry a sourceId — resolve the Source name.
     expect(source).toContain("listSources");
     expect(source).toContain("sourceNames.get(run.sourceId)");

@@ -5,10 +5,7 @@ import {
   type OidcClientProjection,
   type PublicEndpointProjection,
 } from "takosumi-contract";
-import {
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
-  normalizeIssuer,
-} from "@takosjp/takosumi-accounts-contract";
+import { normalizeIssuer } from "@takosjp/takosumi-accounts-contract";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import type { AccountsStore, OidcClientRecord } from "../store.ts";
 import {
@@ -17,25 +14,17 @@ import {
   managedPublicHostForWorkspace,
   normalizeManagedPublicBaseDomain,
 } from "../../../../core/domains/deploy-control/managed_public_domains.ts";
-import { refreshRepoOwnedInstallConfigForCapsule } from "./repo-owned-install-config.ts";
 
-type InstallExperience = NonNullable<
-  InstallConfig["store"]
->["installExperience"];
 interface ResolvedTakosumiAccountsOidcExperience {
-  readonly issuerUrlVariable: string;
-  readonly clientIdVariable: string;
+  readonly issuerUrlVariable?: string;
+  readonly clientIdVariable?: string;
   readonly callbackPath: string;
   readonly accountsUrlVariable?: string;
   readonly redirectUriVariable?: string;
   readonly scopes?: readonly string[];
 }
 
-const DEFAULT_TAKOSUMI_ACCOUNTS_OIDC: ResolvedTakosumiAccountsOidcExperience = {
-  issuerUrlVariable: "takosumi_accounts_issuer_url",
-  clientIdVariable: "takosumi_accounts_client_id",
-  callbackPath: "/api/auth/callback/takos",
-};
+const OIDC_CLIENT_NAMESPACE = "identity.oidc";
 
 export async function ensureTakosumiAccountsOidcForCapsule(input: {
   readonly operations: ControlPlaneOperations;
@@ -49,14 +38,12 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   if (!oidcExperience) {
     return;
   }
-  const workspace = await input.operations.spaces.getWorkspace(
+  const workspace = await input.operations.workspaces.getWorkspace(
     input.capsule.workspaceId,
   );
   const redirectOrigin = appOriginFromInstallVariables(
     input.installConfig.variableMapping,
-    installExperiencePublicEndpoint(
-      input.installConfig.store?.installExperience,
-    ),
+    installExperiencePublicEndpoint(input.installConfig.installExperience),
     workspace.handle,
     input.managedPublicBaseDomain,
     input.installConfig.managedPublicHostname?.mode ?? "scoped",
@@ -91,7 +78,7 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
             oidcExperience,
           ) ?? `toc_${crypto.randomUUID()}`,
         capsuleId: input.capsule.id,
-        namespacePath: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
+        namespacePath: OIDC_CLIENT_NAMESPACE,
         issuerUrl,
         redirectUris,
         allowedScopes: oidcAllowedScopes(oidcExperience.scopes),
@@ -104,8 +91,12 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   await input.store.saveOidcClient(client);
   const variableMapping = {
     ...input.installConfig.variableMapping,
-    [oidcExperience.issuerUrlVariable]: client.issuerUrl,
-    [oidcExperience.clientIdVariable]: client.clientId,
+    ...(oidcExperience.issuerUrlVariable
+      ? { [oidcExperience.issuerUrlVariable]: client.issuerUrl }
+      : {}),
+    ...(oidcExperience.clientIdVariable
+      ? { [oidcExperience.clientIdVariable]: client.clientId }
+      : {}),
     ...(oidcExperience.accountsUrlVariable
       ? { [oidcExperience.accountsUrlVariable]: client.issuerUrl }
       : {}),
@@ -113,7 +104,7 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
       ? { [oidcExperience.redirectUriVariable]: redirectUri }
       : {}),
   };
-  await input.operations.installations.putInstallConfig({
+  await input.operations.capsules.putInstallConfig({
     ...input.installConfig,
     variableMapping,
     updatedAt: new Date(now).toISOString(),
@@ -151,15 +142,9 @@ export async function ensureTakosumiAccountsOidcForExistingCapsule(input: {
   readonly managedPublicBaseDomain?: string;
 }): Promise<void> {
   if (!input.issuer) return;
-  const storedInstallConfig =
-    await input.operations.installations.getInstallConfig(
-      input.capsule.installConfigId,
-    );
-  const installConfig = await refreshRepoOwnedInstallConfigForCapsule({
-    operations: input.operations,
-    capsule: input.capsule,
-    installConfig: storedInstallConfig,
-  });
+  const installConfig = await input.operations.capsules.getInstallConfig(
+    input.capsule.installConfigId,
+  );
   await ensureTakosumiAccountsOidcForCapsule({
     operations: input.operations,
     store: input.store,
@@ -175,77 +160,21 @@ export async function ensureTakosumiAccountsOidcForExistingCapsule(input: {
 function installOidcClientExperience(
   config: InstallConfig,
 ): ResolvedTakosumiAccountsOidcExperience | undefined {
-  const store = config.store;
-  const configured = installExperienceOidcClient(store?.installExperience);
-  if (configured) {
-    return {
-      ...DEFAULT_TAKOSUMI_ACCOUNTS_OIDC,
-      ...configured,
-    };
-  }
-  const standard = standardOidcExperienceFromVariables(config.variableMapping);
-  return standard;
-}
-
-function standardOidcExperienceFromVariables(
-  variables: InstallConfig["variableMapping"],
-): ResolvedTakosumiAccountsOidcExperience | undefined {
-  if (
-    !Object.prototype.hasOwnProperty.call(
-      variables,
-      "takosumi_accounts_issuer_url",
-    ) &&
-    !Object.prototype.hasOwnProperty.call(
-      variables,
-      "takosumi_accounts_client_id",
-    ) &&
-    !Object.prototype.hasOwnProperty.call(
-      variables,
-      "takosumi_accounts_redirect_uri",
-    )
-  ) {
-    return undefined;
-  }
-  const redirectUri = stringInstallVariable(
-    variables.takosumi_accounts_redirect_uri,
-  );
-  const callbackPath = redirectUri
-    ? callbackPathFromRedirectUri(redirectUri)
-    : undefined;
-  return {
-    ...DEFAULT_TAKOSUMI_ACCOUNTS_OIDC,
-    ...(Object.prototype.hasOwnProperty.call(variables, "takosumi_accounts_url")
-      ? { accountsUrlVariable: "takosumi_accounts_url" }
-      : {}),
-    ...(Object.prototype.hasOwnProperty.call(
-      variables,
-      "takosumi_accounts_redirect_uri",
-    )
-      ? { redirectUriVariable: "takosumi_accounts_redirect_uri" }
-      : {}),
-    ...(callbackPath ? { callbackPath } : {}),
-  };
-}
-
-function callbackPathFromRedirectUri(value: string): string | undefined {
-  try {
-    const url = new URL(value);
-    return url.pathname && url.pathname !== "/" ? url.pathname : undefined;
-  } catch {
-    return undefined;
-  }
+  const configured = installExperienceOidcClient(config.installExperience);
+  return configured ? { ...configured } : undefined;
 }
 
 function mappedOidcClientId(
   variables: InstallConfig["variableMapping"],
   oidcExperience: ResolvedTakosumiAccountsOidcExperience,
 ): string | undefined {
+  if (!oidcExperience.clientIdVariable) return undefined;
   const clientId = variables[oidcExperience.clientIdVariable];
   return stringInstallVariable(clientId);
 }
 
-function normalizedCallbackPath(value: string | undefined): string {
-  const trimmed = value?.trim() || DEFAULT_TAKOSUMI_ACCOUNTS_OIDC.callbackPath;
+function normalizedCallbackPath(value: string): string {
+  const trimmed = value.trim();
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
@@ -256,42 +185,42 @@ function appOriginFromInstallVariables(
   managedPublicBaseDomain?: string,
   managedPublicHostnameMode: "scoped" | "vanity" = "scoped",
 ): string | undefined {
-  const declaredBaseDomain = publicEndpointBaseDomain(publicEndpoint?.baseDomain);
+  if (!publicEndpoint) return undefined;
+  const declaredBaseDomain = publicEndpointBaseDomain(
+    publicEndpoint?.baseDomain,
+  );
   const baseDomain =
     normalizeManagedPublicBaseDomain(managedPublicBaseDomain) ??
     declaredBaseDomain;
-  const requestedSlug = firstMappedString(variables, [
-    publicEndpoint?.subdomainVariable,
-    "public_subdomain",
-    "worker_name",
-    "project_name",
-  ]);
-  for (const variableName of uniqueStrings([
-    publicEndpoint?.urlVariable,
-    "public_url",
-    "app_url",
-  ])) {
+  const requestedSlug = publicEndpoint.subdomainVariable
+    ? stringInstallVariable(variables[publicEndpoint.subdomainVariable])
+    : undefined;
+  for (const variableName of publicEndpoint.urlVariable
+    ? [publicEndpoint.urlVariable]
+    : []) {
     const appUrl = stringInstallVariable(variables[variableName]);
     if (!appUrl) continue;
     try {
       const url = new URL(appUrl);
       if (url.protocol !== "https:" || !url.hostname) continue;
-      const matchedBaseDomain = [baseDomain, declaredBaseDomain].find(
-        (candidate) => isManagedPublicHost(url.hostname, candidate),
-      );
+      const matchedBaseDomain = [baseDomain, declaredBaseDomain]
+        .filter((candidate): candidate is string => Boolean(candidate))
+        .find((candidate) => isManagedPublicHost(url.hostname, candidate));
       if (matchedBaseDomain) {
         const requestedLabel =
           managedPublicHostnameMode === "vanity" && requestedSlug
             ? requestedSlug
             : url.hostname.slice(0, -(matchedBaseDomain.length + 1));
         const managedHost =
-          managedPublicHostnameMode === "vanity"
+          baseDomain && managedPublicHostnameMode === "vanity"
             ? managedPublicHostFromLabel(requestedLabel, baseDomain)
-            : managedPublicHostForWorkspace(
-                workspaceHandle,
-                requestedLabel,
-                baseDomain,
-              );
+            : baseDomain
+              ? managedPublicHostForWorkspace(
+                  workspaceHandle,
+                  requestedLabel,
+                  baseDomain,
+                )
+              : undefined;
         if (managedHost) return `https://${managedHost}`;
       }
       return url.origin;
@@ -299,47 +228,26 @@ function appOriginFromInstallVariables(
       continue;
     }
   }
-  const managedHost =
-    managedPublicHostnameMode === "vanity"
+  const managedHost = baseDomain
+    ? managedPublicHostnameMode === "vanity"
       ? managedPublicHostFromLabel(requestedSlug, baseDomain)
       : managedPublicHostForWorkspace(
           workspaceHandle,
           requestedSlug,
           baseDomain,
-        );
+        )
+    : undefined;
   return managedHost ? `https://${managedHost}` : undefined;
 }
 
-function firstMappedString(
-  variables: InstallConfig["variableMapping"],
-  names: readonly (string | undefined)[],
-): string | undefined {
-  for (const name of uniqueStrings(names)) {
-    const value = stringInstallVariable(variables[name]);
-    if (value) return value;
-  }
-  return undefined;
-}
-
-function publicEndpointBaseDomain(value: unknown): string {
+function publicEndpointBaseDomain(value: unknown): string | undefined {
   const baseDomain = stringInstallVariable(value)?.toLowerCase();
   return baseDomain &&
     /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u.test(
       baseDomain,
     )
     ? baseDomain
-    : "app.takos.jp";
-}
-
-function uniqueStrings(
-  values: readonly (string | undefined)[],
-): readonly string[] {
-  const seen = new Set<string>();
-  for (const value of values) {
-    const normalized = value?.trim();
-    if (normalized) seen.add(normalized);
-  }
-  return [...seen];
+    : undefined;
 }
 
 function stringInstallVariable(value: unknown): string | undefined {

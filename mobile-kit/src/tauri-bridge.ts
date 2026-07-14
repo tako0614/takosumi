@@ -5,6 +5,7 @@ import type {
   MobileLocalNotification,
   MobileProductAdapter,
   MobilePushNotification,
+  MobilePushProvider,
   MobilePushRegistration,
   MobilePushRegistrationInput,
   MobileClipboardText,
@@ -82,7 +83,11 @@ export interface CreateTauriPersistentStrongholdPasswordOptions {
 }
 
 export interface TauriKeystoreAdapter {
-  readonly store: (value: string) => Promise<void>;
+  readonly store: (
+    service: string,
+    user: string,
+    value: string,
+  ) => Promise<void>;
   readonly retrieve: (
     service: string,
     user: string,
@@ -134,6 +139,7 @@ export interface TauriPushNotificationsAdapter {
   readonly register: (
     input: MobilePushRegistrationInput,
   ) => Promise<MobilePushRegistration | undefined>;
+  readonly unregister?: () => Promise<void>;
   readonly onNotificationReceived?: (
     handler: (notification: MobilePushNotification) => void,
   ) => Promise<() => void>;
@@ -148,6 +154,7 @@ export interface TauriPushNotificationsAdapter {
 
 export interface TauriPushToken {
   readonly token: string;
+  readonly provider?: MobilePushProvider;
   readonly environment?: string;
 }
 
@@ -183,6 +190,8 @@ export interface TauriMobilePushNotification {
 
 export interface TauriMobilePushTokenRefresh {
   readonly token: string;
+  readonly provider?: MobilePushProvider;
+  readonly environment?: string;
 }
 
 export interface TauriPluginListener {
@@ -192,6 +201,7 @@ export interface TauriPluginListener {
 export interface TauriMobilePushPluginModule {
   readonly requestPermission: () => Promise<TauriMobilePushPermission>;
   readonly getToken: () => Promise<string | TauriPushToken | undefined>;
+  readonly unregister?: () => Promise<void>;
   readonly onNotificationReceived?: (
     handler: (notification: TauriMobilePushNotification) => void,
   ) => Promise<TauriPluginListener>;
@@ -433,6 +443,9 @@ export function createTauriPluginNativeBridge(
     registerPushNotifications: pushAdapter
       ? async (input) => await pushAdapter.register(input)
       : undefined,
+    unregisterPushNotifications: pushAdapter?.unregister
+      ? async () => await pushAdapter.unregister!()
+      : undefined,
     onPushNotificationReceived: pushAdapter?.onNotificationReceived
       ? async (handler) => await pushAdapter.onNotificationReceived!(handler)
       : undefined,
@@ -469,6 +482,7 @@ export function createTauriPushNotificationsAdapter(
       if (!registration) return undefined;
       return {
         token: registration.token,
+        provider: registration.provider,
         environment:
           registration.environment ?? resolvePushEnvironment(options, input),
       };
@@ -491,6 +505,9 @@ export function createTauriMobilePushPluginAdapter(
   });
   return {
     ...baseAdapter,
+    unregister: options.mobilePush.unregister
+      ? async () => await options.mobilePush.unregister!()
+      : undefined,
     onNotificationReceived: options.mobilePush.onNotificationReceived
       ? async (handler) =>
           createTauriPluginUnlisten(
@@ -514,7 +531,10 @@ export function createTauriMobilePushPluginAdapter(
               if (!payload.token) return;
               handler({
                 token: payload.token,
-                environment: resolvePushEnvironment(options, input),
+                provider: normalizePushProvider(payload.provider),
+                environment:
+                  normalizePushEnvironment(payload.environment) ??
+                  resolvePushEnvironment(options, input),
               });
             }),
           )
@@ -729,9 +749,9 @@ export function createTauriInvokeKeystoreAdapter(
   options: CreateTauriInvokeKeystoreAdapterOptions,
 ): TauriKeystoreAdapter {
   return {
-    async store(value) {
+    async store(service, user, value) {
       await options.invoke("plugin:keystore|store", {
-        payload: { value },
+        payload: { service, user, value },
       });
     },
     async retrieve(service, user) {
@@ -845,27 +865,64 @@ async function loadKeystoreStrongholdPassword(
   options: CreateTauriKeystoreStrongholdPasswordOptions,
 ): Promise<string> {
   const existing = await tryRetrieveKeystorePassword(options);
-  if (isUsableStrongholdPassword(existing)) return existing;
+  if (isUsableStrongholdPassword(existing)) {
+    await removeVerifiedStrongholdPasswordMigrationFallback(options, existing);
+    return existing;
+  }
 
   if (options.fallback) {
-    const fallbackPassword = await loadPersistentStrongholdPassword({
-      ...options.fallback,
-      crypto: options.fallback.crypto ?? options.crypto,
-    });
-    try {
-      await options.keystore.store(fallbackPassword);
-    } catch {
+    const fallbackPassword = await loadExistingPersistentStrongholdPassword(
+      options.fallback,
+    );
+    if (isUsableStrongholdPassword(fallbackPassword)) {
+      await options.keystore.store(
+        options.service,
+        options.user,
+        fallbackPassword,
+      );
+      // Keep the legacy value until a later app start reads the same value back
+      // from native secure storage. This avoids losing an existing Stronghold
+      // vault if a native store implementation reports success too early.
       return fallbackPassword;
     }
-    return fallbackPassword;
   }
 
   const password = `${options.prefix ?? "takosumi-mobile-stronghold"}.${randomHex(
     options.byteLength ?? 32,
     options.crypto,
   )}`;
-  await options.keystore.store(password);
+  await options.keystore.store(options.service, options.user, password);
   return password;
+}
+
+async function loadExistingPersistentStrongholdPassword(
+  options: CreateTauriPersistentStrongholdPasswordOptions,
+): Promise<string | undefined> {
+  const key = options.key ?? "takosumi.mobile.stronghold.password";
+  const handle = await options.store.load(options.storePath);
+  const existing = await handle.get<unknown>(key);
+  return isUsableStrongholdPassword(existing) ? existing : undefined;
+}
+
+async function removeVerifiedStrongholdPasswordMigrationFallback(
+  options: CreateTauriKeystoreStrongholdPasswordOptions,
+  keystorePassword: string,
+): Promise<void> {
+  if (!options.fallback) return;
+  const key = options.fallback.key ?? "takosumi.mobile.stronghold.password";
+  const handle = await options.fallback.store.load(options.fallback.storePath);
+  const fallbackPassword = await handle.get<unknown>(key);
+  if (fallbackPassword === undefined || fallbackPassword === null) return;
+  if (!isUsableStrongholdPassword(fallbackPassword)) {
+    throw new Error("Legacy Stronghold password migration value is invalid.");
+  }
+  if (fallbackPassword !== keystorePassword) {
+    throw new Error(
+      "Native and legacy Stronghold password values do not match.",
+    );
+  }
+  await handle.delete(key);
+  await handle.save();
 }
 
 async function tryRetrieveKeystorePassword(
@@ -932,8 +989,13 @@ function normalizePushTokenResult(
   if (!result?.token) return undefined;
   return {
     token: result.token,
+    provider: normalizePushProvider(result.provider),
     environment: normalizePushEnvironment(result.environment),
   };
+}
+
+function normalizePushProvider(value: unknown): MobilePushProvider | undefined {
+  return value === "apns" || value === "fcm" ? value : undefined;
 }
 
 function normalizePushEnvironment(value: unknown): string | undefined {

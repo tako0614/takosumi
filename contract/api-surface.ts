@@ -9,13 +9,12 @@
  *
  * Taxonomy:
  * - {@link API_V1_PREFIX}     ONE edge-public customer surface (deploy-control +
- *                             installation lifecycle). Auth resolves from an
+ *                             Capsule lifecycle). Auth resolves from an
  *                             account session or PAT. Operator bearer belongs
  *                             to host-internal seams, not this prefix.
  * - {@link INTERNAL_V1_PREFIX} ONE internal seam: the in-process deploy-control
- *                             ledger contract, runtime-agent compatibility
- *                             routes, and OpenTofu container callbacks. Never
- *                             edge-public.
+ *                             ledger contract and OpenTofu Runner callbacks.
+ *                             Never edge-public.
  * - {@link ACCOUNTS_IDENTITY_PREFIX} accounts identity/billing (OIDC issuer
  *                             session surface): `/v1/account`, `/v1/auth`,
  *                             `/v1/billing`, passkeys. Sibling to `/oauth`.

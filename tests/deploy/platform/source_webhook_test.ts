@@ -1,38 +1,40 @@
 import { expect, test } from "bun:test";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { CloudflareD1OpenTofuControlStore } from "../../../worker/src/d1_opentofu_store.ts";
 
 import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "../../../contract/api-surface.ts";
-import { InMemoryRuntimeAgentRegistry } from "../../../core/agents/registry.ts";
-import { OpenTofuControllerError } from "../../../core/domains/deploy-control/mod.ts";
+import { TAKOSUMI_PLATFORM_HARDENING_GATE_EVIDENCE_KIND } from "../../../contract/platform-hardening.ts";
 import {
   driftCheckEnabled,
   evaluateProductionHardeningGates,
+  OSS_PLATFORM_HARDENING_CONTRIBUTION,
   handleOperatorBillingRequest,
-  handlePlatformCloudExtensionRequest,
-  handlePlatformCloudExtensionCatalogRequest,
-  handlePlatformCloudExtensionRouteRequest,
-  handlePlatformCloudUsageRecordRequest,
+  handlePlatformExtensionRequest,
+  handlePlatformExtensionCatalogRequest,
+  handlePlatformExtensionContributionsRequest,
+  handlePlatformExtensionRouteRequest,
   handlePlatformMetricsDashboardRequest,
   handlePlatformMetricsRequest,
   handlePlatformResourceShapeApiRequest,
   handlePlatformRunOwnerRequest,
-  handlePlatformRuntimeCellDrillRequest,
   handleSourceWebhookRequest,
   isOperatorBillingPath,
   isOidcMetricPath,
-  isPlatformCloudUsageRecordPath,
-  isPlatformCloudExtensionCatalogPath,
+  isPlatformExtensionCatalogPath,
+  isPlatformExtensionContributionsPath,
   isPlatformResourceShapeApiPath,
-  matchPlatformCloudExtensionRoute,
-  platformCloudExtensionCatalog,
-  platformCloudExtensionRoutes,
-  platformCloudExtensionSessionCanAccessCapsuleProjection,
-  platformCloudExtensionVerifiedBillingSession,
-  verifyPlatformCloudExtensionSession,
+  matchPlatformExtensionRoute,
+  platformExtensionCatalog,
+  platformExtensionContributionCatalog,
+  platformExtensionRoutes,
+  platformOperatorCapabilities,
+  platformExtensionSessionCanAccessCapsule,
+  platformExtensionVerifiedWorkspaceSession,
+  verifyPlatformExtensionSession,
   platformResourceShapeApiEnabled,
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
@@ -41,141 +43,60 @@ import {
   pollAutoSyncSources,
   planStaleCapsuleUpdates,
   repairStaleOpenTofuRuns,
+  resourceObservationEnabled,
+  scheduledResourceObservationOptions,
   scheduledSourcePollBatch,
   schedulePlatformSideEffect,
   summarizePrometheusMetrics,
-  verifyPlatformCloudExtensionPersonalAccessToken,
-  verifyPlatformCloudExtensionServiceAccessToken,
+  verifyPlatformExtensionBearerToken,
   withPlatformAssetCacheHeaders,
   type OperatorBillingOperations,
   type SourcePollOperations,
   type SourceWebhookOperations,
 } from "../../../deploy/platform/worker.ts";
 import { createManagedProviderRunToken } from "../../../core/shared/managed_provider_tokens.ts";
+import { MapResourceShapeSchemaRegistry } from "../../../core/domains/resource-shape/mod.ts";
 
-const TEST_CLOUD_USAGE_PRICE_BOOK = JSON.stringify({
-  minimumGrossMarginBps: 3_000,
-  meters: [
+test("platform Operator capabilities require both explicit config and live bindings", () => {
+  const empty = platformOperatorCapabilities({} as never, true);
+  expect(Object.values(empty).every((enabled) => !enabled)).toBe(true);
+
+  const database = { prepare() {} };
+  const configured = platformOperatorCapabilities(
     {
-      meterIdPrefix: "ai:",
-      kind: "ai_request",
-      unit: "request",
-      chargeUsdMicrosPerUnit: 1_000,
-      estimatedCostUsdMicrosPerUnit: 0,
-      minimumChargeUsdMicros: 1_000,
-    },
-    {
-      meterIdPrefix: "ai:",
-      kind: "ai_input_token",
-      unit: "token",
-      chargeUsdMicrosPerMillionUnits: 300_000,
-      estimatedCostUsdMicrosPerMillionUnits: 150_000,
-      minimumChargeUsdMicros: 2,
-    },
-    {
-      meterIdPrefix: "cloudflare:workers_script:",
-      kind: "gateway_compute",
-      unit: "operation",
-      chargeUsdMicrosPerUnit: 1_000,
-      estimatedCostUsdMicrosPerUnit: 100,
-      minimumChargeUsdMicros: 1_000,
-    },
-    {
-      meterIdPrefix: "cloudflare:kv:",
-      kind: "gateway_compute",
-      unit: "operation",
-      chargeUsdMicrosPerUnit: 500,
-      estimatedCostUsdMicrosPerUnit: 100,
-      minimumChargeUsdMicros: 500,
-    },
-    {
-      meterIdPrefix: "cloudflare:kv:",
-      kind: "gateway_storage_gb_hour",
-      unit: "gb_hour",
-      chargeUsdMicrosPerMillionUnits: 100_000,
-      estimatedCostUsdMicrosPerMillionUnits: 50_000,
-      minimumChargeUsdMicros: 2,
-    },
-    {
-      meterIdPrefix: "cloudflare:r2:",
-      kind: "gateway_compute",
-      unit: "operation",
-      chargeUsdMicrosPerUnit: 500,
-      estimatedCostUsdMicrosPerUnit: 100,
-      minimumChargeUsdMicros: 500,
-    },
-    {
-      meterIdPrefix: "cloudflare:r2:",
-      kind: "gateway_storage_gb_hour",
-      unit: "gb_hour",
-      chargeUsdMicrosPerMillionUnits: 100_000,
-      estimatedCostUsdMicrosPerMillionUnits: 50_000,
-      minimumChargeUsdMicros: 2,
-    },
-    {
-      meterIdPrefix: "cloudflare:d1:",
-      kind: "gateway_compute",
-      unit: "operation",
-      chargeUsdMicrosPerUnit: 500,
-      estimatedCostUsdMicrosPerUnit: 100,
-      minimumChargeUsdMicros: 500,
-    },
-    {
-      meterIdPrefix: "cloudflare:vectorize:",
-      kind: "gateway_compute",
-      unit: "operation",
-      chargeUsdMicrosPerUnit: 500,
-      estimatedCostUsdMicrosPerUnit: 100,
-      minimumChargeUsdMicros: 500,
-    },
-    {
-      meterIdPrefix: "cloudflare:workflows:",
-      kind: "gateway_compute",
-      unit: "operation",
-      chargeUsdMicrosPerUnit: 1_000,
-      estimatedCostUsdMicrosPerUnit: 100,
-      minimumChargeUsdMicros: 1_000,
-    },
-    {
-      meterIdPrefix: "cloudflare:containers:",
-      kind: "gateway_compute",
-      unit: "vcpu_second",
-      chargeUsdMicrosPerMillionUnits: 1_000_000,
-      estimatedCostUsdMicrosPerMillionUnits: 500_000,
-      minimumChargeUsdMicros: 2,
-    },
-    {
-      meterIdPrefix: "cloudflare:durable_objects:",
-      kind: "gateway_compute",
-      unit: "operation",
-      chargeUsdMicrosPerUnit: 500,
-      estimatedCostUsdMicrosPerUnit: 100,
-      minimumChargeUsdMicros: 500,
-    },
-    {
-      meterIdPrefix: "cloudflare:queues:",
-      kind: "gateway_compute",
-      unit: "operation",
-      chargeUsdMicrosPerUnit: 500,
-      estimatedCostUsdMicrosPerUnit: 100,
-      minimumChargeUsdMicros: 500,
-    },
-    {
-      meterIdPrefix: "takosumi:resource_shape:",
-      kind: "gateway_compute",
-      unit: "operation",
-      chargeUsdMicrosPerUnit: 2_000,
-      estimatedCostUsdMicrosPerUnit: 100,
-      minimumChargeUsdMicros: 2_000,
-    },
-  ],
+      TAKOSUMI_OPERATOR_CAPABILITIES: "all",
+      TAKOSUMI_ACCOUNTS_DB: database,
+      TAKOSUMI_CONTROL_DB: database,
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: "control-token",
+      RUNNER: { get() {} },
+    } as never,
+    true,
+  );
+  expect(configured).toEqual({
+    multi_tenant_workspaces: true,
+    workspace_members: true,
+    runner_pools: true,
+    operator_connections: true,
+    managed_target_catalog: true,
+    db_backed_configuration: true,
+    cli_api_operations: true,
+    usage_showback: true,
+    audit_evidence: true,
+  });
+
+  const missingBindings = platformOperatorCapabilities(
+    { TAKOSUMI_OPERATOR_CAPABILITIES: "all" } as never,
+    true,
+  );
+  expect(Object.values(missingBindings).every((enabled) => !enabled)).toBe(
+    true,
+  );
 });
 
 function runRecord(overrides: Record<string, unknown>): never {
   return {
     id: "run_1",
     workspaceId: "space_a",
-    spaceId: "space_a",
     type: "plan",
     status: "queued",
     createdBy: "system",
@@ -344,14 +265,14 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
   const planned: string[] = [];
   const result = await planStaleCapsuleUpdates(
     {
-      spaces: {
+      workspaces: {
         listWorkspaces: () =>
           Promise.resolve([
             { id: "space_a" },
             { id: "space_archived", archivedAt: "2026-07-01T00:00:00.000Z" },
           ]),
       },
-      installations: {
+      capsules: {
         listCapsules: (workspaceId) =>
           Promise.resolve(
             workspaceId === "space_a"
@@ -359,10 +280,10 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
                   {
                     id: "inst_needs_plan",
                     workspaceId,
-                    spaceId: workspaceId,
+                    projectId: "prj_default",
+                    sourceId: "src_default",
                     name: "needs-plan",
                     slug: "needs-plan",
-                    installType: "opentofu_module",
                     installConfigId: "cfg",
                     environment: "production",
                     currentStateGeneration: 1,
@@ -373,10 +294,10 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
                   {
                     id: "inst_has_plan",
                     workspaceId,
-                    spaceId: workspaceId,
+                    projectId: "prj_default",
+                    sourceId: "src_default",
                     name: "has-plan",
                     slug: "has-plan",
-                    installType: "opentofu_module",
                     installConfigId: "cfg",
                     environment: "production",
                     currentStateGeneration: 1,
@@ -387,10 +308,10 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
                   {
                     id: "inst_active",
                     workspaceId,
-                    spaceId: workspaceId,
+                    projectId: "prj_default",
+                    sourceId: "src_default",
                     name: "active",
                     slug: "active",
-                    installType: "opentofu_module",
                     installConfigId: "cfg",
                     environment: "production",
                     currentStateGeneration: 1,
@@ -410,7 +331,6 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
               type: "plan",
               status: "waiting_approval",
               capsuleId: "inst_has_plan",
-              installationId: "inst_has_plan",
             }),
           ]),
       },
@@ -436,7 +356,7 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
   const scheduled: unknown[] = [];
   const result = await repairStaleOpenTofuRuns(
     {
-      spaces: {
+      workspaces: {
         listWorkspaces: () =>
           Promise.resolve([
             { id: "space_a" },
@@ -473,6 +393,15 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
               status: "queued",
               createdAt: new Date(now - 100).toISOString(),
             }),
+            // The store exposes a terminal ApplyRun here only when its durable
+            // billing.capture.pending marker still needs idempotent repair.
+            runRecord({
+              id: "apply_billing_pending",
+              type: "apply",
+              status: "succeeded",
+              createdAt: new Date(now - 20_000).toISOString(),
+              finishedAt: new Date(now - 10_000).toISOString(),
+            }),
             runRecord({
               id: "backup_stale_but_not_dispatchable",
               type: "backup",
@@ -494,7 +423,6 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
             runRecord({
               id: "archived_space_run",
               workspaceId: "space_archived",
-              spaceId: "space_archived",
               type: "apply",
               status: "queued",
               createdAt: new Date(now - 10_000).toISOString(),
@@ -524,14 +452,31 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
     },
   ]);
   expect(scheduled).toEqual([
-    { action: "apply", runId: "apply_stale_destroy", spaceId: "space_a" },
-    { action: "plan", runId: "plan_stale_running", spaceId: "space_a" },
-    { action: "source_sync", runId: "sync_stale", spaceId: "space_a" },
+    {
+      action: "apply",
+      runId: "apply_stale_destroy",
+      workspaceId: "space_a",
+    },
+    {
+      action: "plan",
+      runId: "plan_stale_running",
+      workspaceId: "space_a",
+    },
+    {
+      action: "source_sync",
+      runId: "sync_stale",
+      workspaceId: "space_a",
+    },
+    {
+      action: "apply",
+      runId: "apply_billing_pending",
+      workspaceId: "space_a",
+    },
   ]);
   expect(result).toEqual({
     workspacesScanned: 1,
-    runsScanned: 8,
-    rescheduled: 3,
+    runsScanned: 9,
+    rescheduled: 4,
   });
 });
 
@@ -554,96 +499,115 @@ test("drift sweep is OFF by default and only enabled by the =1 flag", () => {
   ).toBe(true);
 });
 
+test("Resource observation follows enabled shapes and has bounded operator knobs", () => {
+  expect(resourceObservationEnabled({} as never)).toBe(false);
+  expect(
+    resourceObservationEnabled({
+      TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
+    } as never),
+  ).toBe(true);
+  expect(
+    resourceObservationEnabled({
+      TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
+      TAKOSUMI_RESOURCE_OBSERVATION_ENABLED: "0",
+    } as never),
+  ).toBe(false);
+  expect(
+    resourceObservationEnabled({
+      TAKOSUMI_RESOURCE_OBSERVATION_ENABLED: "1",
+    } as never),
+  ).toBe(true);
+  expect(
+    resourceObservationEnabled({
+      TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
+      TAKOSUMI_RESOURCE_OBSERVATION_ENABLED: "true",
+    } as never),
+  ).toBe(false);
+
+  expect(scheduledResourceObservationOptions({} as never)).toEqual({
+    limit: 8,
+    concurrency: 4,
+    intervalMs: 60 * 60 * 1000,
+    leaseMs: 15 * 60 * 1000,
+  });
+  expect(
+    scheduledResourceObservationOptions({
+      TAKOSUMI_RESOURCE_OBSERVATION_BATCH: "3",
+      TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY: "7",
+      TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS: "300",
+      TAKOSUMI_RESOURCE_OBSERVATION_LEASE_SECONDS: "600",
+    } as never),
+  ).toEqual({
+    limit: 3,
+    concurrency: 3,
+    intervalMs: 300_000,
+    leaseMs: 600_000,
+  });
+  expect(
+    scheduledResourceObservationOptions({
+      TAKOSUMI_RESOURCE_OBSERVATION_BATCH: "0",
+      TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY: "99",
+      TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS: "1",
+      TAKOSUMI_RESOURCE_OBSERVATION_LEASE_SECONDS: "1",
+    } as never),
+  ).toEqual({
+    limit: 8,
+    concurrency: 4,
+    intervalMs: 60 * 60 * 1000,
+    leaseMs: 15 * 60 * 1000,
+  });
+});
+
 test("production hardening gates require platform opening evidence", () => {
   const missing = evaluateProductionHardeningGates({
     TAKOSUMI_PRODUCTION_HARDENING_GATE: "enforce",
   } as never);
   expect(missing.ok).toBe(false);
   expect(missing.enforced).toBe(true);
-  expect(missing.checks.containerSmoke.reason).toBe("missing_evidence_ref");
-  expect(missing.checks.platformControlPlaneSmoke.reason).toBe(
-    "missing_evidence_ref",
-  );
-  expect(missing.checks.egressEnforcement.reason).toBe("missing_evidence_ref");
-  expect(missing.checks.restoreRehearsal.reason).toBe("missing_evidence_ref");
-  expect(missing.checks.credentialRecipes.reason).toBe("missing_evidence_ref");
-  expect(missing.checks.costAttribution.reason).toBe("missing_evidence_ref");
-  expect(missing.checks.secretBoundary.reason).toBe("missing_evidence_ref");
+  expect(missing.contributions[0]?.id).toBe("takosumi-oss");
+  expect(missing.contributions[0]?.checks[0]?.reason).toBe("missing_evidence");
 
+  const bundle = {
+    kind: TAKOSUMI_PLATFORM_HARDENING_GATE_EVIDENCE_KIND,
+    contributions: [
+      {
+        id: OSS_PLATFORM_HARDENING_CONTRIBUTION.id,
+        capability: OSS_PLATFORM_HARDENING_CONTRIBUTION.capability,
+        checks: OSS_PLATFORM_HARDENING_CONTRIBUTION.checks.map(({ id }) => ({
+          id,
+          evidenceRef:
+            "git+ssh://git@git.example.net/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#evidence.md",
+          evidenceDigest:
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        })),
+      },
+    ],
+  };
+  bundle.contributions[0]!.checks[0]!.evidenceDigest = "not-a-digest";
   const invalidDigest = evaluateProductionHardeningGates({
-    TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#container.md",
-    TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST: "not-a-digest",
-    TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#platform-control-plane-smoke.md",
-    TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_DIGEST:
-      "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#egress.md",
-    TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST:
-      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#restore.md",
-    TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST:
-      "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#providers.md",
-    TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST:
-      "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#cost-attribution.md",
-    TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST:
-      "sha256:9999999999999999999999999999999999999999999999999999999999999999",
-    TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#secrets.md",
-    TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST:
-      "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    TAKOSUMI_PLATFORM_HARDENING_EVIDENCE: JSON.stringify(bundle),
   } as never);
   expect(invalidDigest.ok).toBe(false);
-  expect(invalidDigest.checks.containerSmoke.reason).toBe(
+  expect(invalidDigest.contributions[0]?.checks[0]?.reason).toBe(
     "evidence_digest_must_be_sha256",
   );
 
+  bundle.contributions[0]!.checks[0]!.evidenceDigest =
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  bundle.contributions[0]!.checks[0]!.evidenceRef =
+    "git+ssh://git@git.example.net/operator/proofs.git#evidence.md";
   const mutableRef = evaluateProductionHardeningGates({
-    TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git#container.md",
-    TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST:
-      "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    TAKOSUMI_PLATFORM_HARDENING_EVIDENCE: JSON.stringify(bundle),
   } as never);
   expect(mutableRef.ok).toBe(false);
-  expect(mutableRef.checks.containerSmoke.reason).toBe(
+  expect(mutableRef.contributions[0]?.checks[0]?.reason).toBe(
     "evidence_ref_must_be_commit_pinned",
   );
 
+  bundle.contributions[0]!.checks[0]!.evidenceRef =
+    "git+ssh://git@git.example.net/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#evidence.md";
   const ok = evaluateProductionHardeningGates({
-    TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#container.md",
-    TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST:
-      "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#platform-control-plane-smoke.md",
-    TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_DIGEST:
-      "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#egress.md",
-    TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST:
-      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#restore.md",
-    TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST:
-      "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#providers.md",
-    TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST:
-      "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#cost-attribution.md",
-    TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST:
-      "sha256:9999999999999999999999999999999999999999999999999999999999999999",
-    TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF:
-      "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#secrets.md",
-    TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST:
-      "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    TAKOSUMI_PLATFORM_HARDENING_EVIDENCE: JSON.stringify(bundle),
   } as never);
   expect(ok.ok).toBe(true);
 });
@@ -712,7 +676,6 @@ test("platform run owner route is operator bearer gated and reschedules from the
     getRun: async (id: string) => ({
       id,
       workspaceId: "space_123",
-      spaceId: "space_123",
       sourceId: "src_123",
       type: "source_sync",
       status: "queued",
@@ -779,7 +742,7 @@ test("platform run owner route is operator bearer gated and reschedules from the
         kind: "takosumi.opentofu-run-owner.start@v1",
         action: "source_sync",
         runId: "ssr_12345678",
-        spaceId: "space_123",
+        workspaceId: "space_123",
         cause: "controller_retry",
         queueAttempt: 1,
         messageId: "operator-repair:ssr_12345678:21i3v9",
@@ -849,8 +812,8 @@ test("platform metrics dashboard renders protected live metric samples", async (
         });
         return new Response(
           [
-            'takosumi_deploy_operation_count{environment="production",runtime_cell_id="cell",space_id="space",capsule_id="cap",operationKind="apply",status="succeeded"} 1',
-            'takosumi_apply_duration_seconds_bucket{environment="production",runtime_cell_id="cell",space_id="space",capsule_id="cap",operationKind="apply",status="succeeded",le="1"} 1',
+            'takosumi_deploy_operation_count{environment="production",runner_profile_id="runner",workspace_id="workspace",capsule_id="cap",operation_kind="apply",status="succeeded"} 1',
+            'takosumi_apply_duration_seconds_bucket{environment="production",runner_profile_id="runner",workspace_id="workspace",capsule_id="cap",operation_kind="apply",status="succeeded",le="1"} 1',
           ].join("\n"),
           {
             status: 200,
@@ -910,7 +873,7 @@ test("platform metrics route does not capture dashboard paths", async () => {
 test("platform metrics summary captures required metric and label coverage", () => {
   const summary = summarizePrometheusMetrics(
     [
-      'takosumi_deploy_operation_count{environment="production",runtime_cell_id="cell",space_id="space",capsule_id="cap",operationKind="apply",status="succeeded"} 1',
+      'takosumi_deploy_operation_count{environment="production",runner_profile_id="runner",workspace_id="workspace",capsule_id="cap",operation_kind="apply",status="succeeded"} 1',
       'custom_metric{environment="production"} 1',
     ].join("\n"),
   );
@@ -1015,625 +978,194 @@ test("platform asset cache helper leaves non-assets untouched", () => {
   ).toBe(response);
 });
 
-function makeOperatorBillingOps(): {
-  ops: OperatorBillingOperations;
-  subscriptionCalls: {
-    spaceId: string;
-    billingSettings: unknown;
-  }[];
-  topUpCalls: {
-    spaceId: string;
-    input: { readonly usdMicros?: number; readonly credits?: number };
-  }[];
-} {
-  const subscriptionCalls: {
-    spaceId: string;
-    billingSettings: unknown;
-  }[] = [];
-  const topUpCalls: {
-    spaceId: string;
-    input: { readonly usdMicros?: number; readonly credits?: number };
-  }[] = [];
-  return {
-    ops: {
-      getWorkspaceBilling: async (spaceId) => ({
-        billing: {
-          settings: { mode: "showback", provider: "manual" },
-          balance: { spaceId, availableCredits: 0, reservedCredits: 0 },
-        },
-      }),
-      changeWorkspaceSubscription: async (spaceId, input) => {
-        subscriptionCalls.push({
-          spaceId,
-          billingSettings: input.billingSettings,
-        });
-        return { billing: { settings: input.billingSettings } };
-      },
-      topUpWorkspaceCredits: async (spaceId, input) => {
-        topUpCalls.push({ spaceId, input });
-        return {
-          balance: {
-            spaceId,
-            availableUsdMicros: input.usdMicros ?? 0,
-            availableCredits: input.credits ?? 0,
-          },
-        };
-      },
-    },
-    subscriptionCalls,
-    topUpCalls,
-  };
-}
-
-test("operator billing route is deploy-control bearer gated", async () => {
-  const { ops, subscriptionCalls } = makeOperatorBillingOps();
+test("operator billing endpoint is read-only showback", async () => {
   const url = new URL(
-    "https://app.takosumi.com/internal/platform/spaces/space_12345678/subscription/change",
+    "https://app.takosumi.com/internal/platform/workspaces/ws_12345678/billing",
   );
+  const operations: OperatorBillingOperations = {
+    getWorkspaceBilling: async (workspaceId) => ({
+      billing: {
+        settings: { mode: workspaceId ? "showback" : "disabled" },
+      },
+    }),
+  };
+  const unauthorized = await handleOperatorBillingRequest(
+    new Request(url),
+    url,
+    { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never,
+    operations,
+  );
+  expect(unauthorized?.status).toBe(401);
+
   const response = await handleOperatorBillingRequest(
     new Request(url, {
-      method: "POST",
-      body: JSON.stringify({
-        billingSettings: { mode: "showback", provider: "manual" },
-      }),
+      headers: { authorization: "Bearer operator-secret" },
     }),
     url,
     { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never,
-    ops,
+    operations,
   );
-  expect(response?.status).toBe(401);
-  expect(subscriptionCalls).toHaveLength(0);
-});
-
-test("operator billing route reads and changes billing settings for the source Workspace boundary", async () => {
-  const { ops, subscriptionCalls, topUpCalls } = makeOperatorBillingOps();
-  const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never;
-  const headers = {
-    authorization: "Bearer operator-secret",
-    "content-type": "application/json",
-  };
-  const readUrl = new URL(
-    "https://app.takosumi.com/internal/platform/spaces/space_12345678/billing",
-  );
-  const read = await handleOperatorBillingRequest(
-    new Request(readUrl, { headers }),
-    readUrl,
-    env,
-    ops,
-  );
-  expect(read?.status).toBe(200);
-  expect((await read?.json()).billing.settings).toEqual({
-    mode: "showback",
-    provider: "manual",
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({
+    billing: { settings: { mode: "showback" } },
   });
-
-  const changeUrl = new URL(
-    "https://app.takosumi.com/internal/platform/spaces/space_12345678/subscription/change",
-  );
-  const changed = await handleOperatorBillingRequest(
-    new Request(changeUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        billingSettings: { mode: "showback", provider: "manual" },
-      }),
-    }),
-    changeUrl,
-    env,
-    ops,
-  );
-  expect(changed?.status).toBe(200);
-  expect((await changed?.json()).billing.settings).toEqual({
-    mode: "showback",
-    provider: "manual",
-  });
-  expect(subscriptionCalls).toEqual([
-    {
-      spaceId: "space_12345678",
-      billingSettings: { mode: "showback", provider: "manual" },
-    },
-  ]);
-
-  const topUpUrl = new URL(
-    "https://app.takosumi.com/internal/platform/spaces/space_12345678/credits/top-up",
-  );
-  const topUp = await handleOperatorBillingRequest(
-    new Request(topUpUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ usdMicros: 5_000_000 }),
-    }),
-    topUpUrl,
-    env,
-    ops,
-  );
-  expect(topUp?.status).toBe(200);
-  expect((await topUp?.json()).balance).toMatchObject({
-    spaceId: "space_12345678",
-    availableUsdMicros: 5_000_000,
-  });
-  expect(topUpCalls).toEqual([
-    { spaceId: "space_12345678", input: { usdMicros: 5_000_000 } },
-  ]);
-});
-
-test("operator billing path classifier includes top-up routes", () => {
   expect(
     isOperatorBillingPath(
-      "/internal/platform/spaces/space_12345678/credits/top-up",
+      "/internal/platform/workspaces/ws_12345678/credits/top-up",
     ),
-  ).toBe(true);
+  ).toBe(false);
   expect(
     isOperatorBillingPath(
-      "/internal/platform/spaces/not-a-space/credits/top-up",
+      "/internal/platform/workspaces/ws_12345678/subscription/change",
     ),
   ).toBe(false);
 });
 
-test("platform Cloud usage record route prices and spends runtime usage", async () => {
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: unknown;
-  }[] = [];
-  const url = new URL("https://app.takosumi.com/internal/platform/cloud/usage");
-  const response = await handlePlatformCloudUsageRecordRequest(
-    new Request(url, {
-      method: "POST",
-      headers: {
-        authorization: "Bearer usage-secret",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        spaceId: "space_cloud",
-        periodStart: "2026-06-28T10:00:00.000Z",
-        periodEnd: "2026-06-28T10:00:01.000Z",
-        meters: [
-          {
-            installationId: "inst_cloud",
-            meterId: "cloudflare:workers_script:request",
-            resourceFamily: "cloudflare.workers_script",
-            resourceId: "script:api",
-            operation: "request",
-            kind: "gateway_compute",
-            quantity: 1,
-          },
-        ],
-      }),
-    }),
-    url,
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN: "usage-secret",
-    } as never,
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input });
-    },
-  );
-
-  expect(response?.status).toBe(202);
-  expect(await response?.json()).toEqual({ ok: true, usageEvents: 1 });
-  expect(recorded).toEqual([
-    {
-      spaceId: "space_cloud",
-      input: expect.objectContaining({
-        installationId: "inst_cloud",
-        meterId: "cloudflare:workers_script:request",
-        resourceFamily: "cloudflare.workers_script",
-        resourceId: "script:api",
-        operation: "request",
-        kind: "gateway_compute",
-        quantity: 1,
-        usdMicros: 1_000,
-        source: "resource_meter",
-        spendRequired: true,
-        createdAt: "2026-06-28T10:00:01.000Z",
-      }),
-    },
-  ]);
-});
-
-test("platform Cloud usage record route prices Vectorize managed operations", async () => {
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: unknown;
-  }[] = [];
-  const url = new URL("https://app.takosumi.com/internal/platform/cloud/usage");
-  const response = await handlePlatformCloudUsageRecordRequest(
-    new Request(url, {
-      method: "POST",
-      headers: {
-        authorization: "Bearer usage-secret",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        spaceId: "space_cloud",
-        periodStart: "2026-06-28T10:00:00.000Z",
-        periodEnd: "2026-06-28T10:00:01.000Z",
-        meters: [
-          {
-            installationId: "inst_cloud",
-            meterId: "cloudflare:vectorize:create",
-            resourceFamily: "cloudflare.vectorize",
-            resourceId: "vectorize:takos-embeddings",
-            operation: "create",
-            kind: "gateway_compute",
-            quantity: 1,
-          },
-        ],
-      }),
-    }),
-    url,
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN: "usage-secret",
-    } as never,
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input });
-    },
-  );
-
-  expect(response?.status).toBe(202);
-  expect(await response?.json()).toEqual({ ok: true, usageEvents: 1 });
-  expect(recorded).toEqual([
-    {
-      spaceId: "space_cloud",
-      input: expect.objectContaining({
-        installationId: "inst_cloud",
-        meterId: "cloudflare:vectorize:create",
-        resourceFamily: "cloudflare.vectorize",
-        resourceId: "vectorize:takos-embeddings",
-        operation: "create",
-        kind: "gateway_compute",
-        quantity: 1,
-        usdMicros: 500,
-        source: "resource_meter",
-        spendRequired: true,
-        createdAt: "2026-06-28T10:00:01.000Z",
-      }),
-    },
-  ]);
-});
-
-test("platform Cloud usage record route maps insufficient balance to payment required", async () => {
-  const url = new URL("https://app.takosumi.com/internal/platform/cloud/usage");
-  const response = await handlePlatformCloudUsageRecordRequest(
-    new Request(url, {
-      method: "POST",
-      headers: {
-        authorization: "Bearer usage-secret",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        spaceId: "space_cloud",
-        periodStart: "2026-06-28T10:00:00.000Z",
-        periodEnd: "2026-06-28T10:00:01.000Z",
-        meters: [
-          {
-            meterId: "cloudflare:workers_script:request",
-            resourceFamily: "cloudflare.workers_script",
-            resourceId: "script:api",
-            operation: "request",
-            kind: "gateway_compute",
-            quantity: 1,
-          },
-        ],
-      }),
-    }),
-    url,
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN: "usage-secret",
-    } as never,
-    async () => {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "metered usage spend failed: insufficient USD balance",
-        {
-          reason: "insufficient_credits",
-          workspaceId: "space_cloud",
-          usdMicros: 1_000,
-        },
-      );
-    },
-  );
-
-  expect(response?.status).toBe(402);
-  expect(await response?.json()).toEqual({
-    error: "cloud_extension_insufficient_credits",
-    reason: "insufficient_credits",
-  });
-});
-
-test("platform Cloud usage record path is a stable internal endpoint", async () => {
-  expect(isPlatformCloudUsageRecordPath("/internal/platform/cloud/usage")).toBe(
-    true,
-  );
-  expect(
-    isPlatformCloudUsageRecordPath("/internal/platform/cloud/usage/"),
-  ).toBe(false);
-  const url = new URL("https://app.takosumi.com/internal/platform/cloud/usage");
-  const response = await handlePlatformCloudUsageRecordRequest(
-    new Request(url, {
-      method: "POST",
-      body: JSON.stringify({}),
-    }),
-    url,
-    { TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN: "usage-secret" } as never,
-    async () => {
-      throw new Error("must not record unauthenticated usage");
-    },
-  );
-  expect(response?.status).toBe(401);
-});
-
-test("operator billing route validates settings before mutation", async () => {
-  const { ops, subscriptionCalls } = makeOperatorBillingOps();
-  const url = new URL(
-    "https://app.takosumi.com/internal/platform/spaces/space_12345678/subscription/change",
-  );
-  const response = await handleOperatorBillingRequest(
-    new Request(url, {
-      method: "POST",
-      headers: {
-        authorization: "Bearer operator-secret",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        billingSettings: { mode: "showback", provider: "bogus" },
-      }),
-    }),
-    url,
-    { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never,
-    ops,
-  );
-  expect(response?.status).toBe(400);
-  expect(subscriptionCalls).toHaveLength(0);
-});
-
-test("runtime-cell drill route is deploy-control bearer gated", async () => {
-  const registry = new InMemoryRuntimeAgentRegistry();
-  const url = new URL(
-    "https://app.takosumi.com/internal/platform/runtime-cells/platform-production-primary/drill",
-  );
-  const response = await handlePlatformRuntimeCellDrillRequest(
-    new Request(url, {
-      method: "POST",
-      body: JSON.stringify({ action: "drain" }),
-    }),
-    url,
-    { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never,
-    registry,
-  );
-  expect(response?.status).toBe(401);
-  expect(await registry.listAgents()).toHaveLength(0);
-  expect(await registry.listWork()).toHaveLength(0);
-});
-
-test("runtime-cell drill route records drain and evacuation events", async () => {
-  const registry = new InMemoryRuntimeAgentRegistry();
-  const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never;
-  const headers = {
-    authorization: "Bearer operator-secret",
-    "content-type": "application/json",
-  };
-
-  const drainUrl = new URL(
-    "https://app.takosumi.com/internal/platform/runtime-cells/platform-production-primary/drill",
-  );
-  const drain = await handlePlatformRuntimeCellDrillRequest(
-    new Request(drainUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ action: "drain", reason: "test-drain" }),
-    }),
-    drainUrl,
-    env,
-    registry,
-  );
-  expect(drain?.status).toBe(200);
-  const drainBody = await drain?.json();
-  expect(drainBody.kind).toBe("takosumi.platform-runtime-cell-drill@v1");
-  expect(drainBody.action).toBe("drain");
-  expect(drainBody.runtimeCellId).toBe("platform-production-primary");
-  expect(drainBody.eventId).toStartWith(
-    "runtime_drain_platform-production-primary_",
-  );
-  expect(drainBody.status).toBe("completed");
-  const drainAgent = await registry.getAgent(drainBody.agentId);
-  expect(drainAgent?.status).toBe("draining");
-  const drainWork = await registry.getWork(drainBody.workId);
-  expect(drainWork?.status).toBe("completed");
-  expect(drainWork?.metadata.runtimeCellId).toBe("platform-production-primary");
-
-  const evacuation = await handlePlatformRuntimeCellDrillRequest(
-    new Request(drainUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        action: "evacuation",
-        reason: "test-evacuation",
-      }),
-    }),
-    drainUrl,
-    env,
-    registry,
-  );
-  expect(evacuation?.status).toBe(200);
-  const evacuationBody = await evacuation?.json();
-  expect(evacuationBody.action).toBe("evacuation");
-  expect(evacuationBody.evacuationRunId).toStartWith(
-    "runtime_evac_platform-production-primary_",
-  );
-  expect(evacuationBody.status).toBe("completed");
-  const evacuationWork = await registry.getWork(evacuationBody.workId);
-  expect(evacuationWork?.status).toBe("completed");
-  expect(evacuationWork?.result?.action).toBe("evacuation");
-});
-
-// --- Generic, config-driven Cloud extension seam (Seam A) ------------------
+// --- Generic, config-driven platform extension seam ------------------------
 //
 // The OSS platform worker names no Cloud feature. The extension seam is driven
-// entirely by the operator/Cloud-supplied `TAKOSUMI_CLOUD_EXTENSIONS` env var
+// entirely by the operator/Cloud-supplied `TAKOSUMI_PLATFORM_EXTENSIONS` env var
 // (a JSON array of opaque `{ basePath, handlerKey, requiredScopes? }`
 // descriptors). When that env is unset, every extension path 404s; when it is
 // set, a matching path verifies the platform session and dispatches to the
 // named in-process handler.
 
-test("platformCloudExtensionRoutes is empty when the env is unset", () => {
-  expect(platformCloudExtensionRoutes({})).toEqual([]);
-  expect(
-    platformCloudExtensionRoutes({ TAKOSUMI_CLOUD_EXTENSIONS: "" }),
-  ).toEqual([]);
+test("platformExtensionRoutes is empty when the env is unset", () => {
+  expect(platformExtensionRoutes({})).toEqual([]);
+  expect(platformExtensionRoutes({ TAKOSUMI_PLATFORM_EXTENSIONS: "" })).toEqual(
+    [],
+  );
 });
 
-test("platformCloudExtensionRoutes parses opaque descriptors", () => {
+test("platformExtensionRoutes parses opaque descriptors", () => {
   expect(
-    platformCloudExtensionRoutes({
-      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
           id: "ai",
-          kind: "ai_gateway",
-          protocol: "openai-compatible",
           basePath: "/gateway/ai/v1",
-          handlerKey: "TAKOSUMI_CLOUD_AI",
+          handlerKey: "TEST_AI_EXTENSION",
           capabilities: ["openai.chat_completions", "openai.embeddings"],
-          smokeChecks: ["models", "chat"],
           authMode: "platform",
           requiredScopes: ["ai.chat"],
-          fallbackUsage: [
-            {
-              pathTemplate: "/chat/completions",
-              methods: ["POST"],
-              meterIdPrefix: "ai:",
-              kind: "ai_request",
-              quantity: 1,
-              operationByMethod: { POST: "chat" },
-            },
-          ],
         },
-        { basePath: "/compat/x", handlerKey: "TAKOSUMI_CLOUD_X" },
+        { basePath: "/compat/x", handlerKey: "TEST_X_EXTENSION" },
       ]),
     }),
   ).toEqual([
     {
       id: "ai",
-      kind: "ai_gateway",
-      protocol: "openai-compatible",
       basePath: "/gateway/ai/v1",
-      handlerKey: "TAKOSUMI_CLOUD_AI",
+      handlerKey: "TEST_AI_EXTENSION",
       capabilities: ["openai.chat_completions", "openai.embeddings"],
-      smokeChecks: ["models", "chat"],
       authMode: "platform",
       requiredScopes: ["ai.chat"],
-      fallbackUsage: [
-        {
-          pathTemplate: "/chat/completions",
-          methods: ["POST"],
-          meterIdPrefix: "ai:",
-          kind: "ai_request",
-          quantity: 1,
-          operationByMethod: { POST: "chat" },
-        },
-      ],
     },
-    { basePath: "/compat/x", handlerKey: "TAKOSUMI_CLOUD_X" },
+    { basePath: "/compat/x", handlerKey: "TEST_X_EXTENSION" },
   ]);
 });
 
-test("platformCloudExtensionRoutes merges extra fallback usage descriptors", () => {
-  expect(
-    platformCloudExtensionRoutes({
-      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+test("platformExtensionRoutes validates safe extension-owned contributions", () => {
+  const [route] = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/extensions/example",
+        handlerKey: "TEST_EXTENSION",
+        contributions: [
+          {
+            id: "example-settings",
+            slot: "navigation.manage",
+            href: "/extensions/example/settings",
+            label: "Example settings",
+            labels: { ja: "拡張設定" },
+            order: 20,
+          },
+        ],
+      },
+    ]),
+  });
+  expect(route?.contributions?.[0]).toMatchObject({
+    id: "example-settings",
+    slot: "navigation.manage",
+    href: "/extensions/example/settings",
+  });
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
-          basePath: "/compat/cloudflare/client/v4",
-          handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-          fallbackUsage: [
+          basePath: "/extensions/example",
+          handlerKey: "TEST_EXTENSION",
+          contributions: [
             {
-              pathTemplate: "/accounts/*/r2/buckets",
-              methods: ["POST"],
-              meterIdPrefix: "cloudflare:r2:",
-              kind: "gateway_compute",
-              quantity: 1,
+              id: "escape",
+              slot: "navigation.manage",
+              href: "/admin",
+              label: "Escape",
             },
           ],
         },
       ]),
-      TAKOSUMI_CLOUD_EXTENSIONS_EXTRA: JSON.stringify([
+    }),
+  ).toThrow("must stay under /extensions/example");
+});
+
+test("platformExtensionRoutes merges duplicate capability descriptors", () => {
+  expect(
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
           basePath: "/compat/cloudflare/client/v4",
-          handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-          fallbackUsage: [
-            {
-              pathTemplate:
-                "/accounts/*/storage/kv/namespaces/:resourceId/values/**",
-              methods: ["PUT"],
-              meterIdPrefix: "cloudflare:kv:",
-              kind: "gateway_compute",
-              quantity: 1,
-              operationByMethod: { PUT: "value_write" },
-            },
-          ],
+          handlerKey: "TEST_COMPAT_EXTENSION",
+          capabilities: ["compat.object-store.v1"],
+        },
+        {
+          basePath: "/compat/cloudflare/client/v4",
+          handlerKey: "TEST_COMPAT_EXTENSION",
+          capabilities: ["compat.kv.v1"],
         },
       ]),
     }),
   ).toEqual([
     {
       basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-      fallbackUsage: [
-        {
-          pathTemplate: "/accounts/*/r2/buckets",
-          methods: ["POST"],
-          meterIdPrefix: "cloudflare:r2:",
-          kind: "gateway_compute",
-          quantity: 1,
-        },
-        {
-          pathTemplate:
-            "/accounts/*/storage/kv/namespaces/:resourceId/values/**",
-          methods: ["PUT"],
-          meterIdPrefix: "cloudflare:kv:",
-          kind: "gateway_compute",
-          quantity: 1,
-          operationByMethod: { PUT: "value_write" },
-        },
-      ],
+      handlerKey: "TEST_COMPAT_EXTENSION",
+      capabilities: ["compat.object-store.v1", "compat.kv.v1"],
     },
   ]);
 });
 
-test("platformCloudExtensionRoutes rejects malformed descriptors", () => {
+test("platformExtensionRoutes rejects malformed descriptors", () => {
   expect(() =>
-    platformCloudExtensionRoutes({ TAKOSUMI_CLOUD_EXTENSIONS: "{" }),
+    platformExtensionRoutes({ TAKOSUMI_PLATFORM_EXTENSIONS: "{" }),
   ).toThrow("must be valid JSON");
   expect(() =>
-    platformCloudExtensionRoutes({
-      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([{ handlerKey: "X" }]),
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([{ handlerKey: "X" }]),
     }),
   ).toThrow("basePath");
   expect(() =>
-    platformCloudExtensionRoutes({
-      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([{ basePath: "/x" }]),
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([{ basePath: "/x" }]),
     }),
   ).toThrow("handlerKey");
   expect(() =>
-    platformCloudExtensionRoutes({
-      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         { basePath: "/x", handlerKey: "X", capabilities: "ai" },
       ]),
     }),
   ).toThrow("capabilities");
 });
 
-test("the seam claims no extension path when TAKOSUMI_CLOUD_EXTENSIONS is unset", async () => {
-  // With no TAKOSUMI_CLOUD_EXTENSIONS the seam matches nothing, so the request
+test("the seam claims no extension path when TAKOSUMI_PLATFORM_EXTENSIONS is unset", async () => {
+  // With no TAKOSUMI_PLATFORM_EXTENSIONS the seam matches nothing, so the request
   // is NOT claimed (returns undefined) and falls through to the accounts handler
   // — i.e. an OSS worker with no Cloud config exposes no extension paths.
-  const result = await handlePlatformCloudExtensionRequest(
+  const result = await handlePlatformExtensionRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/models"),
     {
       // A binding object exists on env, but with no descriptors it is unreachable.
-      TAKOSUMI_CLOUD_AI: { fetch: async () => Response.json({}) },
+      TEST_AI_EXTENSION: { fetch: async () => Response.json({}) },
     } as never,
   );
   expect(result).toBeUndefined();
@@ -1656,7 +1188,6 @@ test("platform worker exposes product discovery before accounts handler", async 
   expect(discovery.status).toBe(200);
   const discoveryBody = await discovery.json();
   expect(discoveryBody.api_versions).toEqual([TAKOSUMI_API_VERSION]);
-  expect(discoveryBody.edition).toBeUndefined();
   expect(discoveryBody.endpoints.capabilities).toBe(
     `https://app.takosumi.com${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
   );
@@ -1676,8 +1207,44 @@ test("platform worker exposes product discovery before accounts handler", async 
     "SQLDatabase",
     "Stack",
   ]);
-  expect(capabilitiesBody.adapters.cloudflare).toBe(false);
-  expect(capabilitiesBody.compat.provider_cloudflare_workers).toBe(false);
+  expect(capabilitiesBody.adapters.cloudflare).toBeUndefined();
+  expect(
+    capabilitiesBody.compat["compat.cloudflare.workers.v1"],
+  ).toBeUndefined();
+  expect(capabilitiesBody.operator.usage_showback).toBe(false);
+  expect(capabilitiesBody).not.toHaveProperty("commercial");
+});
+
+test("platform discovery publishes commercial functions only as explicit extension tokens", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const database = { prepare() {} };
+  const response = await worker.fetch(
+    new Request(
+      `https://operator.example${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
+    ),
+    {
+      TAKOSUMI_ACCOUNTS_DB: database,
+      TAKOSUMI_CONTROL_DB: database,
+      TAKOSUMI_OPERATOR_CAPABILITIES:
+        "multi_tenant_workspaces workspace_members usage_showback",
+      TAKOSUMI_COMMERCIAL_BILLING_HANDLER: { fetch() {} },
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/v1/billing",
+          handlerKey: "TAKOSUMI_COMMERCIAL_BILLING_HANDLER",
+          capabilities: ["billing.commercial.v1"],
+        },
+      ]),
+    } as never,
+  );
+
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body.operator.multi_tenant_workspaces).toBe(true);
+  expect(body.operator.workspace_members).toBe(true);
+  expect(body.operator.usage_showback).toBe(true);
+  expect(body.extensions).toContain("billing.commercial.v1");
+  expect(body).not.toHaveProperty("commercial");
 });
 
 test("platform worker product discovery exposes Cloud endpoint capabilities without claiming Resource Shape API", async () => {
@@ -1688,40 +1255,32 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
       `https://app.takosumi.com${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
     ),
     {
-      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
-          kind: "ai_gateway",
-          protocol: "openai-compatible",
           basePath: "/gateway/ai/v1",
-          handlerKey: "TAKOSUMI_CLOUD_AI",
+          handlerKey: "TEST_AI_EXTENSION",
           capabilities: ["ai.gateway"],
         },
         {
-          kind: "provider_compat",
-          provider: "cloudflare",
           basePath: "/compat/cloudflare/client/v4",
-          handlerKey: "TAKOSUMI_CLOUD_CLOUDFLARE",
+          handlerKey: "TEST_PROVIDER_EXTENSION",
           capabilities: ["compat.cloudflare.workers.v1"],
         },
         {
-          kind: "provider_compat",
-          provider: "object-storage",
-          protocol: "s3-compatible",
           basePath: "/compat/s3/v1",
-          handlerKey: "TAKOSUMI_CLOUD_S3",
+          handlerKey: "TEST_STORAGE_EXTENSION",
           capabilities: ["compat.s3.v1"],
         },
         {
-          kind: "managed_usage",
           basePath: "/cloud/usage",
-          handlerKey: "TAKOSUMI_CLOUD_USAGE",
+          handlerKey: "TEST_USAGE_EXTENSION",
           capabilities: ["cloud.usage"],
         },
       ]),
-      TAKOSUMI_CLOUD_AI: { fetch: async () => Response.json({}) },
-      TAKOSUMI_CLOUD_CLOUDFLARE: { fetch: async () => Response.json({}) },
-      TAKOSUMI_CLOUD_S3: { fetch: async () => Response.json({}) },
-      TAKOSUMI_CLOUD_USAGE: { fetch: async () => Response.json({}) },
+      TEST_AI_EXTENSION: { fetch: async () => Response.json({}) },
+      TEST_PROVIDER_EXTENSION: { fetch: async () => Response.json({}) },
+      TEST_STORAGE_EXTENSION: { fetch: async () => Response.json({}) },
+      TEST_USAGE_EXTENSION: { fetch: async () => Response.json({}) },
     } as never,
   );
 
@@ -1742,45 +1301,51 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
     "SQLDatabase",
     "Stack",
   ]);
-  expect(body.adapters.cloudflare).toBe(false);
-  expect(body.adapters.takosumi_native).toBe(false);
-  expect(body.compat.provider_cloudflare_workers).toBe(true);
-  expect(body.compat.s3).toBe(true);
+  expect(body.adapters.cloudflare).toBeUndefined();
+  expect(body.adapters.takosumi_native).toBeUndefined();
+  expect(body.compat["compat.cloudflare.workers.v1"]).toBe(true);
+  expect(body.compat["compat.s3.v1"]).toBe(true);
   const discovery = await worker.fetch(
     new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
     {
-      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
-          kind: "provider_compat",
-          provider: "object-storage",
-          protocol: "s3-compatible",
           basePath: "/compat/s3/v1",
-          handlerKey: "TAKOSUMI_CLOUD_S3",
+          handlerKey: "TEST_STORAGE_EXTENSION",
           capabilities: ["compat.s3.v1"],
         },
       ]),
-      TAKOSUMI_CLOUD_S3: { fetch: async () => Response.json({}) },
+      TEST_STORAGE_EXTENSION: { fetch: async () => Response.json({}) },
     } as never,
   );
   expect(discovery.status).toBe(200);
   const discoveryBody = await discovery.json();
   expect(discoveryBody.features.resource_shapes).toBe(false);
-  expect(discoveryBody.endpoints.s3).toBe(
+  expect(discoveryBody.features.compatibility_profiles).toEqual([
+    "compat.s3.v1",
+  ]);
+  expect(discoveryBody.endpoints.extensions["compat.s3.v1"]).toBe(
     "https://app.takosumi.com/compat/s3/v1",
   );
 });
 
 test("platform Resource Shape API discovery is gated by deploy-control token and D1", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const schemaRegistry = new MapResourceShapeSchemaRegistry({
+    CustomService: () => ({
+      ok: true,
+      value: { spec: {}, interfaces: [], connections: {} },
+    }),
+  });
   const env = {
     TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
     TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_RESOURCE_SHAPES:
-      "EdgeWorker,ObjectBucket,KVStore,Queue,SQLDatabase",
-    TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
-    TAKOSUMI_RESOURCE_ADAPTER_EXTENSIONS:
-      "operator.edge-runtime operator.container-runtime operator.edge-runtime",
+      "EdgeWorker,ObjectBucket,KVStore,Queue,SQLDatabase,CustomService",
+    TAKOSUMI_RESOURCE_SHAPE_SCHEMA_REGISTRY: schemaRegistry,
+    TAKOSUMI_RESOURCE_ADAPTERS:
+      "cloudflare,operator.edge-runtime,operator.container-runtime",
   } as never;
 
   expect(platformResourceShapeApiEnabled({} as never)).toBe(false);
@@ -1801,8 +1366,9 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   expect(body.resources.Queue).toBe(true);
   expect(body.resources.SQLDatabase).toBe(true);
   expect(body.resources.ContainerService).toBe(false);
+  expect(body.resources.CustomService).toBe(true);
   expect(body.adapters.cloudflare).toBe(true);
-  expect(body.adapters.takosumi_native).toBe(false);
+  expect(body.adapters.takosumi_native).toBeUndefined();
   expect(body.adapters["operator.edge-runtime"]).toBe(true);
   expect(body.adapters["operator.container-runtime"]).toBe(true);
 
@@ -1854,8 +1420,8 @@ test("platform Resource Shape API does not advertise shapes without an operator 
   const body = await capabilities.json();
   expect(body.resources.EdgeWorker).toBe(false);
   expect(body.resources.ObjectBucket).toBe(false);
-  expect(body.adapters.opentofu).toBe(false);
-  expect(body.adapters.cloudflare).toBe(false);
+  expect(body.adapters.opentofu).toBe(true);
+  expect(body.adapters.cloudflare).toBeUndefined();
 
   const discovery = await worker.fetch(
     new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
@@ -1867,6 +1433,10 @@ test("platform Resource Shape API does not advertise shapes without an operator 
 
 test("platform Resource Shape API routes are routed before accounts and bearer-gated", async () => {
   expect(isPlatformResourceShapeApiPath("/v1/resources")).toBe(true);
+  expect(isPlatformResourceShapeApiPath("/v1/interfaces")).toBe(true);
+  expect(isPlatformResourceShapeApiPath("/v1/interfaces/if_1/bindings")).toBe(
+    true,
+  );
   expect(isPlatformResourceShapeApiPath("/v1/target-pools/default")).toBe(true);
   expect(isPlatformResourceShapeApiPath("/v1/space-policies/default")).toBe(
     true,
@@ -1933,21 +1503,12 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
   expect(authorized.status).toBe(200);
 });
 
-test("platform Resource Shape API accepts user tokens without installation registration and charges owner account credits", async () => {
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: unknown;
-  }[] = [];
-  const authorized: {
-    readonly spaceId: string;
-    readonly input: unknown;
-  }[] = [];
+test("platform Resource Shape API accepts user tokens without applying hosted pricing in OSS", async () => {
   const env = {
     TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
     TAKOSUMI_ENVIRONMENT: "test",
     TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
     TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker,ObjectBucket",
     TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
   } as never;
@@ -1978,99 +1539,79 @@ test("platform Resource Shape API accepts user tokens without installation regis
       authenticated: true,
       authKind: "personal-access-token",
       subject: "tsub_cloud",
-      spaceId: "space_cloud",
+      workspaceId: "space_cloud",
       scopes: ["admin"],
     }),
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input });
-    },
-    async (spaceId, input) => {
-      authorized.push({ spaceId, input });
-    },
   );
 
   expect(response.status).toBe(200);
-  expect(authorized).toEqual([
-    {
-      spaceId: "space_cloud",
-      input: expect.objectContaining({
-        meterId: "takosumi:resource_shape:target_pool_put",
-        resourceFamily: "takosumi.target_pool",
-        resourceId: "target-pool:default",
-        operation: "target_pool_put",
-        kind: "gateway_compute",
-        quantity: 1,
-        usdMicros: 2_000,
-        source: "resource_meter",
-        spendRequired: true,
-      }),
-    },
-  ]);
-  expect(recorded).toEqual(authorized);
-  expect(
-    (recorded[0]?.input as { installationId?: string }).installationId,
-  ).toBeUndefined();
 });
 
-test("platform Resource Shape API fails closed before forwarding when owner account credits are insufficient", async () => {
-  let recorded = false;
+test("platform Resource Shape session auth rejects a Space outside the verified Workspace", async () => {
   const env = {
     TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
     TAKOSUMI_ENVIRONMENT: "test",
     TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker,ObjectBucket",
-    TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
+    TAKOSUMI_RESOURCE_SHAPES: "ObjectBucket",
   } as never;
+  const verify = async () => ({
+    authenticated: true as const,
+    authKind: "personal-access-token" as const,
+    subject: "tsub_member",
+    workspaceId: "space_allowed",
+    scopes: ["admin"],
+  });
 
-  const response = await handlePlatformResourceShapeApiRequest(
+  const bodyMismatch = await handlePlatformResourceShapeApiRequest(
     new Request("https://app.takosumi.com/v1/target-pools/default", {
       method: "PUT",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer takpat_cloud",
-      },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        space: "space_cloud",
-        spec: {
-          targets: [],
-        },
+        workspaceId: "space_allowed",
+        space: "space_victim",
+        spec: { targets: [] },
       }),
     }),
     env,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      subject: "tsub_cloud",
-      spaceId: "space_cloud",
-      scopes: ["admin"],
-    }),
-    async () => {
-      recorded = true;
-    },
-    async () => {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "metered usage spend failed: insufficient USD balance",
-        {
-          reason: "insufficient_credits",
-          workspaceId: "space_cloud",
-          usdMicros: 2_000,
-        },
-      );
-    },
+    verify,
   );
-
-  expect(response.status).toBe(402);
-  expect(await response.json()).toEqual({
-    error: "cloud_extension_insufficient_credits",
-    reason: "insufficient_credits",
+  expect(bodyMismatch.status).toBe(403);
+  expect(await bodyMismatch.json()).toEqual({
+    error: "forbidden",
+    error_description: "Resource Space must match the verified Workspace",
   });
-  expect(recorded).toBe(false);
+
+  const queryMismatch = await handlePlatformResourceShapeApiRequest(
+    new Request(
+      "https://app.takosumi.com/v1/resources?workspaceId=space_allowed&space=space_victim",
+    ),
+    env,
+    verify,
+  );
+  expect(queryMismatch.status).toBe(403);
+
+  const conflictingSelectors = await handlePlatformResourceShapeApiRequest(
+    new Request(
+      "https://app.takosumi.com/v1/resources/ObjectBucket/private-assets",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: "space_allowed",
+          space: "space_allowed",
+          metadata: { space: "space_victim" },
+          spec: { name: "private-assets" },
+        }),
+      },
+    ),
+    env,
+    verify,
+  );
+  expect(conflictingSelectors.status).toBe(403);
 });
 
-test("a configured cloud extension dispatches to the named handler through worker.fetch", async () => {
+test("a configured platform extension rejects an unverified bearer", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const forwarded: { url: string; authorization: string | null }[] = [];
   const response = await worker.fetch(
@@ -2078,10 +1619,10 @@ test("a configured cloud extension dispatches to the named handler through worke
       headers: { authorization: "Bearer runtime-token" },
     }),
     {
-      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
-        { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
       ]),
-      TAKOSUMI_CLOUD_AI: {
+      TEST_AI_EXTENSION: {
         fetch: async (request: Request) => {
           forwarded.push({
             url: request.url,
@@ -2092,24 +1633,17 @@ test("a configured cloud extension dispatches to the named handler through worke
       },
     } as never,
   );
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ object: "list", data: [] });
-  // Raw credential material is never forwarded to the Cloud handler.
-  expect(forwarded).toEqual([
-    {
-      url: "https://app.takosumi.com/gateway/ai/v1/models",
-      authorization: null,
-    },
-  ]);
+  expect(response.status).toBe(401);
+  expect(forwarded).toEqual([]);
 });
 
-test("a configured cloud extension 404s when its handler is absent", async () => {
+test("a configured platform extension 404s when its handler is absent", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const response = await worker.fetch(
     new Request("https://app.takosumi.com/gateway/ai/v1/models"),
     {
-      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
-        { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
       ]),
     } as never,
   );
@@ -2117,7 +1651,7 @@ test("a configured cloud extension 404s when its handler is absent", async () =>
   expect(await response.json()).toEqual({ error: "not found" });
 });
 
-test("handler-auth cloud extensions preserve signed protocol auth and strip spoofed context", async () => {
+test("handler-auth platform extensions preserve signed protocol auth and strip spoofed context", async () => {
   const forwarded: {
     readonly authorization: string | null;
     readonly cookie: string | null;
@@ -2125,8 +1659,7 @@ test("handler-auth cloud extensions preserve signed protocol auth and strip spoo
     readonly spoofedSpace: string | null;
     readonly billingSpace: string | null;
   }[] = [];
-  const recorded: { readonly spaceId: string; readonly input: unknown }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
+  const response = await handlePlatformExtensionRouteRequest(
     new Request("https://app.takosumi.com/compat/s3/v1/assets/object.txt", {
       method: "PUT",
       headers: {
@@ -2134,58 +1667,35 @@ test("handler-auth cloud extensions preserve signed protocol auth and strip spoo
           "AWS4-HMAC-SHA256 Credential=AKID/20260629/auto/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc",
         cookie: "takosumi_session=sess_cookie",
         "x-auth-key": "raw-cloudflare-key",
-        "x-takosumi-cloud-space-id": "space_attacker",
-        "x-takosumi-cloud-billing-workspace-id": "space_attacker",
+        "x-takosumi-platform-workspace-id": "space_attacker",
       },
       body: "hello",
     }),
     {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_S3: {
+      TEST_STORAGE_EXTENSION: {
         fetch: async (request: Request) => {
           forwarded.push({
             authorization: request.headers.get("authorization"),
             cookie: request.headers.get("cookie"),
             rawCloudflareKey: request.headers.get("x-auth-key"),
-            spoofedSpace: request.headers.get("x-takosumi-cloud-space-id"),
+            spoofedSpace: request.headers.get(
+              "x-takosumi-platform-workspace-id",
+            ),
             billingSpace: request.headers.get(
-              "x-takosumi-cloud-billing-workspace-id",
+              "x-takosumi-platform-workspace-id",
             ),
           });
-          return Response.json(
-            { ok: true },
-            {
-              headers: {
-                "x-takosumi-cloud-usage-space-id": "space_storage",
-                "x-takosumi-cloud-usage-period-start":
-                  "2026-06-29T00:00:00.000Z",
-                "x-takosumi-cloud-usage-period-end": "2026-06-29T00:00:01.000Z",
-                "x-takosumi-cloud-usage-meters": JSON.stringify([
-                  {
-                    meterId: "cloudflare:r2:object_write",
-                    resourceFamily: "cloudflare.r2",
-                    resourceId: "bucket:assets",
-                    operation: "object_write",
-                    kind: "gateway_compute",
-                    quantity: 1,
-                  },
-                ]),
-              },
-            },
-          );
+          return Response.json({ ok: true });
         },
       },
     } as never,
     {
       basePath: "/compat/s3/v1",
-      handlerKey: "TAKOSUMI_CLOUD_S3",
+      handlerKey: "TEST_STORAGE_EXTENSION",
       authMode: "handler",
     },
     async () => {
       throw new Error("handler-auth routes must not use platform session auth");
-    },
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input });
     },
   );
 
@@ -2201,65 +1711,52 @@ test("handler-auth cloud extensions preserve signed protocol auth and strip spoo
       billingSpace: null,
     },
   ]);
-  expect(recorded).toEqual([
-    {
-      spaceId: "space_storage",
-      input: expect.objectContaining({
-        meterId: "cloudflare:r2:object_write",
-        resourceFamily: "cloudflare.r2",
-        resourceId: "bucket:assets",
-        operation: "object_write",
-        kind: "gateway_compute",
-        quantity: 1,
-        usdMicros: 500,
-        spendRequired: true,
-      }),
-    },
-  ]);
 });
 
-test("cloud extension route injects verified session context and strips raw credentials", async () => {
+test("platform extension route injects verified session context and strips raw credentials", async () => {
   const forwarded: {
     authorization: string | null;
     cookie: string | null;
     authenticated: string | null;
     subject: string | null;
-    spaceId: string | null;
+    workspaceId: string | null;
     billingWorkspaceId: string | null;
   }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
+  const response = await handlePlatformExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/models", {
       headers: {
         authorization: "Bearer raw-token",
         cookie: "takosumi_session=sess_cookie",
-        "x-takosumi-cloud-authenticated": "1",
+        "x-takosumi-platform-authenticated": "1",
       },
     }),
     {
-      TAKOSUMI_CLOUD_AI: {
+      TEST_AI_EXTENSION: {
         fetch: async (request: Request) => {
           forwarded.push({
             authorization: request.headers.get("authorization"),
             cookie: request.headers.get("cookie"),
             authenticated: request.headers.get(
-              "x-takosumi-cloud-authenticated",
+              "x-takosumi-platform-authenticated",
             ),
-            subject: request.headers.get("x-takosumi-cloud-subject"),
-            spaceId: request.headers.get("x-takosumi-cloud-space-id"),
+            subject: request.headers.get("x-takosumi-platform-subject"),
+            workspaceId: request.headers.get(
+              "x-takosumi-platform-workspace-id",
+            ),
             billingWorkspaceId: request.headers.get(
-              "x-takosumi-cloud-billing-workspace-id",
+              "x-takosumi-platform-workspace-id",
             ),
           });
           return Response.json({ object: "list", data: [] });
         },
       },
     } as never,
-    { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
+    { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
     async () => ({
       authenticated: true,
       authKind: "session",
       subject: "tsub_cloud",
-      spaceId: "space_cloud",
+      workspaceId: "space_cloud",
     }),
   );
   expect(response.status).toBe(200);
@@ -2269,53 +1766,49 @@ test("cloud extension route injects verified session context and strips raw cred
       cookie: null,
       authenticated: "1",
       subject: "tsub_cloud",
-      spaceId: "space_cloud",
+      workspaceId: "space_cloud",
       billingWorkspaceId: "space_cloud",
     },
   ]);
 });
 
-test("cloud extension route rejects spoofed source Workspace context", async () => {
+test("platform extension route replaces spoofed Workspace context", async () => {
   let forwarded = false;
-  const response = await handlePlatformCloudExtensionRouteRequest(
+  const response = await handlePlatformExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
       headers: {
-        "x-takosumi-cloud-billing-workspace-id": "space_attacker",
+        "x-takosumi-platform-workspace-id": "space_attacker",
       },
     }),
     {
-      TAKOSUMI_CLOUD_AI: {
+      TEST_AI_EXTENSION: {
         fetch: async () => {
           forwarded = true;
           return Response.json({ ok: true });
         },
       },
     } as never,
-    { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
+    { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
     async () => ({
       authenticated: true,
       authKind: "session",
       subject: "tsub_cloud",
-      spaceId: "space_cloud",
+      workspaceId: "space_cloud",
     }),
   );
 
-  expect(response.status).toBe(403);
-  expect(await response.json()).toEqual({
-    error: "cloud_extension_billing_context_mismatch",
-    reason: "usage_workspace_id_mismatch",
-  });
-  expect(forwarded).toBe(false);
+  expect(response.status).toBe(200);
+  expect(forwarded).toBe(true);
 });
 
-test("cloud extension billing context lets personal access tokens select an accessible Workspace without installation registration", async () => {
+test("platform workspace verification lets personal access tokens select an accessible Workspace", async () => {
   const checked: string[] = [];
-  const verified = await platformCloudExtensionVerifiedBillingSession(
+  const verified = await platformExtensionVerifiedWorkspaceSession(
     new Request("https://app.takosumi.com/compat/cloudflare/client/v4", {
       headers: {
         authorization: "Bearer takpat_cloud",
-        "x-takosumi-cloud-billing-workspace-id": "space_cloud",
+        "x-takosumi-platform-workspace-id": "space_cloud",
       },
     }),
     {} as never,
@@ -2325,6 +1818,7 @@ test("cloud extension billing context lets personal access tokens select an acce
       subject: "tsub_cloud",
       scopes: ["admin"],
     },
+    "space_cloud",
     async (_request, _env, workspaceId) => {
       checked.push(workspaceId);
       return workspaceId === "space_cloud";
@@ -2332,24 +1826,24 @@ test("cloud extension billing context lets personal access tokens select an acce
   );
 
   expect(verified.ok).toBe(true);
-  if (!verified.ok) throw new Error("expected verified billing context");
+  if (!verified.ok) throw new Error("expected verified workspace context");
   expect(checked).toEqual(["space_cloud"]);
   expect(verified.session).toEqual({
     authenticated: true,
     authKind: "personal-access-token",
     subject: "tsub_cloud",
     scopes: ["admin"],
-    spaceId: "space_cloud",
+    workspaceId: "space_cloud",
   });
 });
 
-test("cloud extension billing context keeps service tokens bound to token metadata", async () => {
+test("platform workspace verification keeps service tokens bound to token metadata", async () => {
   let checked = false;
-  const verified = await platformCloudExtensionVerifiedBillingSession(
+  const verified = await platformExtensionVerifiedWorkspaceSession(
     new Request("https://app.takosumi.com/compat/cloudflare/client/v4", {
       headers: {
         authorization: "Bearer taksrv_cloud",
-        "x-takosumi-cloud-billing-workspace-id": "space_cloud",
+        "x-takosumi-platform-workspace-id": "space_cloud",
       },
     }),
     {} as never,
@@ -2359,6 +1853,7 @@ test("cloud extension billing context keeps service tokens bound to token metada
       subject: "svc",
       scopes: ["admin"],
     },
+    "space_cloud",
     async () => {
       checked = true;
       return true;
@@ -2366,28 +1861,29 @@ test("cloud extension billing context keeps service tokens bound to token metada
   );
 
   expect(verified.ok).toBe(false);
-  if (verified.ok) throw new Error("expected billing context rejection");
+  if (verified.ok) throw new Error("expected workspace context rejection");
   expect(checked).toBe(false);
   expect(verified.response.status).toBe(403);
   expect(await verified.response.json()).toEqual({
-    error: "cloud_extension_billing_context_mismatch",
-    reason: "usage_workspace_id_mismatch",
+    error: "access_denied",
+    error_description: "workspace context is not authorized",
   });
 });
 
-test("cloud extension authenticates managed provider run tokens with Workspace context", async () => {
+test("platform extension authenticates managed provider run tokens with Workspace context", async () => {
   const issued = await createManagedProviderRunToken({
     secret: "managed-secret",
+    audience: "compat.cloudflare.workers.v1",
     workspaceId: "space_cc8dbfedfc6347d5",
-    installationId: "inst_ca4ebb681fb24044",
+    capsuleId: "capsule_ca4ebb681fb24044",
     connectionId: "conn_operator_takosumi_cloud_cloudflare_compat",
     provider: "cloudflare",
-    providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+    phase: "apply",
     scopes: ["write"],
   });
-  expect(issued.token).toMatch(/^takmpt_[A-Za-z0-9_-]+$/);
+  expect(issued.token).toMatch(/^takmpt_v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
 
-  const session = await verifyPlatformCloudExtensionSession(
+  const session = await verifyPlatformExtensionSession(
     new Request(
       "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc_takosumi_cloud/d1/database",
       {
@@ -2398,31 +1894,35 @@ test("cloud extension authenticates managed provider run tokens with Workspace c
     { TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret" } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_PROVIDER_COMPAT_CLOUDFLARE_WORKERS",
+      handlerKey: "TEST_PROVIDER_COMPAT_EXTENSION",
       requiredScopes: ["write"],
+      managedProviderProfile: "compat.cloudflare.workers.v1",
     },
   );
 
   expect(session).toEqual({
     authenticated: true,
     authKind: "service-token",
-    subject: "takosumi-managed-provider-run",
-    spaceId: "space_cc8dbfedfc6347d5",
-    installationId: "inst_ca4ebb681fb24044",
+    subject:
+      "provider-connection:conn_operator_takosumi_cloud_cloudflare_compat",
+    workspaceId: "space_cc8dbfedfc6347d5",
+    capsuleId: "capsule_ca4ebb681fb24044",
     scopes: ["write"],
   });
 });
 
-test("cloud extension rejects managed provider run tokens for another provider base URL", async () => {
+test("platform extension rejects managed provider run tokens for another explicit profile", async () => {
   const issued = await createManagedProviderRunToken({
     secret: "managed-secret",
+    audience: "compat.cloudflare.workers.v1",
     workspaceId: "space_cc8dbfedfc6347d5",
+    connectionId: "conn_managed",
     provider: "cloudflare",
-    providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+    phase: "apply",
     scopes: ["write"],
   });
 
-  const session = await verifyPlatformCloudExtensionSession(
+  const session = await verifyPlatformExtensionSession(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
       headers: { authorization: `Bearer ${issued.token}` },
@@ -2430,7 +1930,34 @@ test("cloud extension rejects managed provider run tokens for another provider b
     { TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret" } as never,
     {
       basePath: "/gateway/ai/v1",
-      handlerKey: "TAKOSUMI_CLOUD_AI",
+      handlerKey: "TEST_AI_EXTENSION",
+      requiredScopes: ["write"],
+      managedProviderProfile: "gateway.ai.v1",
+    },
+  );
+
+  expect(session).toEqual({ authenticated: false });
+});
+
+test("platform extension without an explicit profile rejects managed provider run tokens", async () => {
+  const issued = await createManagedProviderRunToken({
+    secret: "managed-secret",
+    audience: "operator.example.provider.v1",
+    workspaceId: "space_cc8dbfedfc6347d5",
+    connectionId: "conn_managed",
+    provider: "registry.example/operator/provider",
+    phase: "apply",
+    scopes: ["write"],
+  });
+
+  const session = await verifyPlatformExtensionSession(
+    new Request("https://provider.example.test/api/resources", {
+      headers: { authorization: `Bearer ${issued.token}` },
+    }),
+    { TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret" } as never,
+    {
+      basePath: "/api",
+      handlerKey: "TEST_PROVIDER_EXTENSION",
       requiredScopes: ["write"],
     },
   );
@@ -2438,9 +1965,9 @@ test("cloud extension rejects managed provider run tokens for another provider b
   expect(session).toEqual({ authenticated: false });
 });
 
-test("cloud extension billing context accepts Capsule projection ids", async () => {
+test("platform extension billing context reads the canonical Capsule", async () => {
   const seenPaths: string[] = [];
-  const allowed = await platformCloudExtensionSessionCanAccessCapsuleProjection(
+  const allowed = await platformExtensionSessionCanAccessCapsule(
     new Request("https://app.takosumi.com/compat/cloudflare/client/v4", {
       headers: {
         authorization: "Bearer session-token",
@@ -2451,36 +1978,30 @@ test("cloud extension billing context accepts Capsule projection ids", async () 
     "space_cloud",
     async (request) => {
       seenPaths.push(new URL(request.url).pathname);
-      if (new URL(request.url).pathname.startsWith("/api/v1/capsules/")) {
-        return Response.json({ error: "not_found" }, { status: 404 });
-      }
       return Response.json({
-        installation: {
+        capsule: {
           id: "inst_projection",
-          space_id: "space_cloud",
+          workspaceId: "space_cloud",
         },
       });
     },
   );
 
   expect(allowed).toBe(true);
-  expect(seenPaths).toEqual([
-    "/api/v1/capsules/inst_projection",
-    "/v1/capsule-projections/inst_projection",
-  ]);
+  expect(seenPaths).toEqual(["/api/v1/capsules/inst_projection"]);
 });
 
-test("cloud extension requiredScopes gate token auth", async () => {
+test("platform extension requiredScopes gate token auth", async () => {
   const binding = {
-    TAKOSUMI_CLOUD_AI: { fetch: async () => Response.json({ ok: true }) },
+    TEST_AI_EXTENSION: { fetch: async () => Response.json({ ok: true }) },
   } as never;
   const route = {
     basePath: "/gateway/ai/v1",
-    handlerKey: "TAKOSUMI_CLOUD_AI",
+    handlerKey: "TEST_AI_EXTENSION",
     requiredScopes: ["ai.chat"],
   };
 
-  const denied = await handlePlatformCloudExtensionRouteRequest(
+  const denied = await handlePlatformExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
     }),
@@ -2495,7 +2016,7 @@ test("cloud extension requiredScopes gate token auth", async () => {
   );
   expect(denied.status).toBe(401);
 
-  const allowed = await handlePlatformCloudExtensionRouteRequest(
+  const allowed = await handlePlatformExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
     }),
@@ -2512,7 +2033,7 @@ test("cloud extension requiredScopes gate token auth", async () => {
 
   // A full human session is allowed through regardless of descriptor scopes;
   // the Cloud handler performs any finer authorization.
-  const session = await handlePlatformCloudExtensionRouteRequest(
+  const session = await handlePlatformExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
     }),
@@ -2527,1076 +2048,18 @@ test("cloud extension requiredScopes gate token auth", async () => {
   expect(session.status).toBe(200);
 });
 
-test("cloud extension usage headers are priced, recorded, and stripped from client responses", async () => {
-  const periodStart = "2026-06-28T10:00:00.000Z";
-  const periodEnd = "2026-06-28T10:00:01.000Z";
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: unknown;
-  }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () =>
-          Response.json(
-            { success: true },
-            {
-              headers: {
-                "x-takosumi-cloud-usage-space-id": "space_cloud",
-                "x-takosumi-cloud-usage-period-start": periodStart,
-                "x-takosumi-cloud-usage-period-end": periodEnd,
-                "x-takosumi-cloud-usage-meters": JSON.stringify([
-                  {
-                    installationId: "inst_cloud",
-                    meterId: "cloudflare:workers_script:deploy",
-                    resourceFamily: "cloudflare.workers_script",
-                    resourceId: "script:api",
-                    operation: "deploy",
-                    kind: "gateway_compute",
-                    quantity: 1,
-                    usdMicros: 99_999_999,
-                  },
-                ]),
-              },
-            },
-          ),
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "service-token",
-      subject: "svc",
-      spaceId: "space_cloud",
-      scopes: ["admin"],
-    }),
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input });
-    },
-  );
-
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ success: true });
-  expect(response.headers.get("x-takosumi-cloud-usage-space-id")).toBeNull();
-  expect(response.headers.get("x-takosumi-cloud-usage-meters")).toBeNull();
-  expect(recorded).toEqual([
-    {
-      spaceId: "space_cloud",
-      input: expect.objectContaining({
-        installationId: "inst_cloud",
-        meterId: "cloudflare:workers_script:deploy",
-        resourceFamily: "cloudflare.workers_script",
-        resourceId: "script:api",
-        operation: "deploy",
-        kind: "gateway_compute",
-        quantity: 1,
-        usdMicros: 1_000,
-        source: "resource_meter",
-        spendRequired: true,
-        createdAt: periodEnd,
-      }),
-    },
-  ]);
-});
-
-test("cloud extension usage headers price Cloudflare Queue meters", async () => {
-  const periodStart = "2026-06-28T10:00:00.000Z";
-  const periodEnd = "2026-06-28T10:00:01.000Z";
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: unknown;
-  }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/queues",
-      { method: "POST" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () =>
-          Response.json(
-            { success: true },
-            {
-              status: 201,
-              headers: {
-                "x-takosumi-cloud-usage-space-id": "space_cloud",
-                "x-takosumi-cloud-usage-period-start": periodStart,
-                "x-takosumi-cloud-usage-period-end": periodEnd,
-                "x-takosumi-cloud-usage-meters": JSON.stringify([
-                  {
-                    installationId: "inst_cloud",
-                    meterId: "cloudflare:queues:create",
-                    resourceFamily: "cloudflare.queues",
-                    resourceId: "queues:jobs",
-                    operation: "create",
-                    kind: "gateway_compute",
-                    quantity: 1,
-                  },
-                ]),
-              },
-            },
-          ),
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "session",
-      subject: "tsub_cloud",
-    }),
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input });
-    },
-  );
-
-  expect(response.status).toBe(201);
-  expect(response.headers.has("x-takosumi-cloud-usage-meters")).toBe(false);
-  expect(recorded).toEqual([
-    {
-      spaceId: "space_cloud",
-      input: expect.objectContaining({
-        installationId: "inst_cloud",
-        meterId: "cloudflare:queues:create",
-        resourceFamily: "cloudflare.queues",
-        resourceId: "queues:jobs",
-        operation: "create",
-        kind: "gateway_compute",
-        quantity: 1,
-        usdMicros: 500,
-        source: "resource_meter",
-        spendRequired: true,
-        createdAt: periodEnd,
-      }),
-    },
-  ]);
-});
-
-test("cloud extension usage headers use token Workspace context when the extension omits a Workspace header", async () => {
-  const periodStart = "2026-06-28T10:00:00.000Z";
-  const periodEnd = "2026-06-28T10:00:01.000Z";
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: unknown;
-  }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () =>
-          Response.json(
-            { success: true },
-            {
-              status: 201,
-              headers: {
-                "x-takosumi-cloud-usage-period-start": periodStart,
-                "x-takosumi-cloud-usage-period-end": periodEnd,
-                "x-takosumi-cloud-usage-meters": JSON.stringify([
-                  {
-                    installationId: "inst_cloud",
-                    meterId: "cloudflare:workers_script:deploy",
-                    resourceFamily: "cloudflare.workers_script",
-                    resourceId: "script:api",
-                    operation: "deploy",
-                    kind: "gateway_compute",
-                    quantity: 1,
-                  },
-                ]),
-              },
-            },
-          ),
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "service-token",
-      subject: "svc:takosumi-cloud:inst_cloud",
-      spaceId: "space_from_token",
-      installationId: "inst_cloud",
-      scopes: ["admin"],
-    }),
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input });
-    },
-  );
-
-  expect(response.status).toBe(201);
-  expect(await response.json()).toEqual({ success: true });
-  expect(response.headers.has("x-takosumi-cloud-usage-meters")).toBe(false);
-  expect(recorded).toEqual([
-    {
-      spaceId: "space_from_token",
-      input: expect.objectContaining({
-        installationId: "inst_cloud",
-        meterId: "cloudflare:workers_script:deploy",
-        resourceFamily: "cloudflare.workers_script",
-        resourceId: "script:api",
-        operation: "deploy",
-        kind: "gateway_compute",
-        quantity: 1,
-        usdMicros: 1_000,
-        source: "resource_meter",
-        spendRequired: true,
-        createdAt: periodEnd,
-      }),
-    },
-  ]);
-});
-
-test("cloud extension fallback usage records successful extension calls without upstream usage headers", async () => {
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: unknown;
-  }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () => Response.json({ success: true }, { status: 201 }),
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-      fallbackUsage: [
-        {
-          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
-          methods: ["PUT", "PATCH", "GET", "DELETE"],
-          meterIdPrefix: "cloudflare:workers_script:",
-          resourceFamily: "cloudflare.workers_script",
-          resourceIdPrefix: "script:",
-          resourceIdParam: "resourceId",
-          kind: "gateway_compute",
-          quantity: 1,
-          operationByMethod: {
-            PUT: "deploy",
-            PATCH: "deploy",
-            GET: "read",
-            DELETE: "delete",
-          },
-        },
-      ],
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "session",
-      subject: "tsub_cloud",
-      spaceId: "space_cloud",
-      installationId: "inst_cloud",
-    }),
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input });
-    },
-    async () => {},
-  );
-
-  expect(response.status).toBe(201);
-  expect(await response.json()).toEqual({ success: true });
-  expect(recorded).toEqual([
-    {
-      spaceId: "space_cloud",
-      input: expect.objectContaining({
-        installationId: "inst_cloud",
-        meterId: "cloudflare:workers_script:deploy",
-        resourceFamily: "cloudflare.workers_script",
-        resourceId: "script:api",
-        operation: "deploy",
-        kind: "gateway_compute",
-        quantity: 1,
-        usdMicros: 1_000,
-        source: "resource_meter",
-        spendRequired: true,
-      }),
-    },
-  ]);
-});
-
-test("cloud extension fallback usage supports unregistered provider calls with Workspace-only billing", async () => {
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: unknown;
-  }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () => Response.json({ success: true }, { status: 201 }),
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-      fallbackUsage: [
-        {
-          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
-          methods: ["PUT"],
-          meterIdPrefix: "cloudflare:workers_script:",
-          resourceFamily: "cloudflare.workers_script",
-          resourceIdPrefix: "script:",
-          resourceIdParam: "resourceId",
-          kind: "gateway_compute",
-          quantity: 1,
-          operationByMethod: { PUT: "deploy" },
-        },
-      ],
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      subject: "tsub_cloud",
-      spaceId: "space_cloud",
-      scopes: ["admin"],
-    }),
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input });
-    },
-    async () => {},
-  );
-
-  expect(response.status).toBe(201);
-  expect(recorded).toEqual([
-    {
-      spaceId: "space_cloud",
-      input: expect.objectContaining({
-        meterId: "cloudflare:workers_script:deploy",
-        resourceFamily: "cloudflare.workers_script",
-        resourceId: "script:api",
-        operation: "deploy",
-        kind: "gateway_compute",
-        quantity: 1,
-        usdMicros: 1_000,
-        source: "resource_meter",
-        spendRequired: true,
-      }),
-    },
-  ]);
-  expect(
-    (recorded[0]?.input as { installationId?: string }).installationId,
-  ).toBeUndefined();
-});
-
-test("cloud extension fallback usage can meter nested data-plane value keys", async () => {
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: unknown;
-  }[] = [];
-  let forwarded = false;
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/storage/kv/namespaces/user-kv/values/folder/session",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () => {
-          forwarded = true;
-          return Response.json({ success: true }, { status: 200 });
-        },
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-      fallbackUsage: [
-        {
-          pathTemplate:
-            "/accounts/*/storage/kv/namespaces/:resourceId/values/**",
-          methods: ["PUT"],
-          meterIdPrefix: "cloudflare:kv:",
-          resourceFamily: "cloudflare.kv",
-          resourceIdPrefix: "kv:",
-          resourceIdParam: "resourceId",
-          kind: "gateway_compute",
-          quantity: 1,
-          operationByMethod: { PUT: "value_write" },
-        },
-      ],
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "session",
-      subject: "tsub_cloud",
-      spaceId: "space_cloud",
-      installationId: "inst_cloud",
-    }),
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input });
-    },
-    async () => {},
-  );
-
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ success: true });
-  expect(forwarded).toBe(true);
-  expect(recorded).toEqual([
-    {
-      spaceId: "space_cloud",
-      input: expect.objectContaining({
-        installationId: "inst_cloud",
-        meterId: "cloudflare:kv:value_write",
-        resourceFamily: "cloudflare.kv",
-        resourceId: "kv:user-kv",
-        operation: "value_write",
-        kind: "gateway_compute",
-        quantity: 1,
-        usdMicros: 500,
-        source: "resource_meter",
-        spendRequired: true,
-      }),
-    },
-  ]);
-});
-
-test("cloud extension fallback usage can meter nested R2 object keys", async () => {
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: unknown;
-  }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/r2/buckets/assets/objects/images/logo.png",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () => Response.json({ success: true }, { status: 200 }),
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-      fallbackUsage: [
-        {
-          pathTemplate: "/accounts/*/r2/buckets/:resourceId/objects/**",
-          methods: ["GET", "HEAD", "PUT", "POST", "PATCH"],
-          meterIdPrefix: "cloudflare:r2:",
-          resourceFamily: "cloudflare.r2",
-          resourceIdPrefix: "r2:",
-          resourceIdParam: "resourceId",
-          kind: "gateway_compute",
-          quantity: 1,
-          operationByMethod: {
-            GET: "object_read",
-            HEAD: "object_read",
-            PUT: "object_write",
-            POST: "object_write",
-            PATCH: "object_write",
-          },
-        },
-      ],
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "session",
-      subject: "tsub_cloud",
-      spaceId: "space_cloud",
-      installationId: "inst_cloud",
-    }),
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input });
-    },
-    async () => {},
-  );
-
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ success: true });
-  expect(recorded).toEqual([
-    {
-      spaceId: "space_cloud",
-      input: expect.objectContaining({
-        installationId: "inst_cloud",
-        meterId: "cloudflare:r2:object_write",
-        resourceFamily: "cloudflare.r2",
-        resourceId: "r2:assets",
-        operation: "object_write",
-        kind: "gateway_compute",
-        quantity: 1,
-        usdMicros: 500,
-        source: "resource_meter",
-        spendRequired: true,
-      }),
-    },
-  ]);
-});
-
-test("cloud extension fallback usage requires source Workspace context for billable writes", async () => {
-  let forwarded = false;
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () => {
-          forwarded = true;
-          return Response.json({ success: true }, { status: 201 });
-        },
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-      fallbackUsage: [
-        {
-          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
-          methods: ["PUT"],
-          meterIdPrefix: "cloudflare:workers_script:",
-          resourceFamily: "cloudflare.workers_script",
-          resourceIdPrefix: "script:",
-          resourceIdParam: "resourceId",
-          kind: "gateway_compute",
-          quantity: 1,
-          operationByMethod: { PUT: "deploy" },
-        },
-      ],
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "session",
-      subject: "tsub_cloud",
-    }),
-    async () => {
-      throw new Error("must not record without workspace context");
-    },
-  );
-
-  expect(response.status).toBe(402);
-  expect(await response.json()).toEqual({
-    error: "cloud_extension_billing_context_required",
-    reason: "usage_workspace_id_missing",
-  });
-  expect(forwarded).toBe(false);
-});
-
-test("cloud extension usage spend failure fails closed", async () => {
-  let forwarded = false;
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () => {
-          forwarded = true;
-          return Response.json({ success: true }, { status: 201 });
-        },
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-      fallbackUsage: [
-        {
-          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
-          methods: ["PUT"],
-          meterIdPrefix: "cloudflare:workers_script:",
-          resourceFamily: "cloudflare.workers_script",
-          resourceIdPrefix: "script:",
-          resourceIdParam: "resourceId",
-          kind: "gateway_compute",
-          quantity: 1,
-          operationByMethod: { PUT: "deploy" },
-        },
-      ],
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "session",
-      subject: "tsub_cloud",
-      spaceId: "space_cloud",
-      installationId: "inst_cloud",
-    }),
-    async () => {
-      throw new Error("insufficient credits");
-    },
-    async () => {},
-  );
-
-  expect(response.status).toBe(502);
-  expect(await response.json()).toEqual({
-    error: "cloud_extension_usage_metering_failed",
-    reason: "usage_record_failed",
-  });
-  expect(forwarded).toBe(false);
-});
-
-test("cloud extension usage spend failure maps insufficient balance to payment required", async () => {
-  let forwarded = false;
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () => {
-          forwarded = true;
-          return Response.json({ success: true }, { status: 201 });
-        },
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-      fallbackUsage: [
-        {
-          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
-          methods: ["PUT"],
-          meterIdPrefix: "cloudflare:workers_script:",
-          resourceFamily: "cloudflare.workers_script",
-          resourceIdPrefix: "script:",
-          resourceIdParam: "resourceId",
-          kind: "gateway_compute",
-          quantity: 1,
-          operationByMethod: { PUT: "deploy" },
-        },
-      ],
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "session",
-      subject: "tsub_cloud",
-      spaceId: "space_cloud",
-      installationId: "inst_cloud",
-    }),
-    async () => {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "metered usage spend failed: insufficient USD balance",
-        {
-          reason: "insufficient_credits",
-          workspaceId: "space_cloud",
-          usdMicros: 1_000,
-        },
-      );
-    },
-    async () => {},
-  );
-
-  expect(response.status).toBe(402);
-  expect(await response.json()).toEqual({
-    error: "cloud_extension_insufficient_credits",
-    reason: "insufficient_credits",
-  });
-  expect(forwarded).toBe(false);
-});
-
-test("cloud extension fallback usage precharges spend before forwarding billable calls", async () => {
-  let forwarded = false;
-  let recorded = false;
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () => {
-          forwarded = true;
-          return Response.json({ success: true }, { status: 201 });
-        },
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-      fallbackUsage: [
-        {
-          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
-          methods: ["PUT"],
-          meterIdPrefix: "cloudflare:workers_script:",
-          resourceFamily: "cloudflare.workers_script",
-          resourceIdPrefix: "script:",
-          resourceIdParam: "resourceId",
-          kind: "gateway_compute",
-          quantity: 1,
-          operationByMethod: { PUT: "deploy" },
-        },
-      ],
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "session",
-      subject: "tsub_cloud",
-      spaceId: "space_cloud",
-      installationId: "inst_cloud",
-    }),
-    async () => {
-      recorded = true;
-    },
-    async () => {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "metered usage spend failed: insufficient USD balance",
-        {
-          reason: "insufficient_credits",
-          workspaceId: "space_cloud",
-          usdMicros: 1_000,
-        },
-      );
-    },
-  );
-
-  expect(response.status).toBe(402);
-  expect(await response.json()).toEqual({
-    error: "cloud_extension_insufficient_credits",
-    reason: "insufficient_credits",
-  });
-  expect(forwarded).toBe(false);
-  expect(recorded).toBe(false);
-});
-
-test("cloud extension fallback usage does not block DELETE cleanup", async () => {
-  let forwarded = false;
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
-      { method: "DELETE" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () => {
-          forwarded = true;
-          return Response.json({ success: true }, { status: 200 });
-        },
-      },
-    } as never,
-    {
-      basePath: "/compat/cloudflare/client/v4",
-      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
-      fallbackUsage: [
-        {
-          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
-          methods: ["DELETE"],
-          meterIdPrefix: "cloudflare:workers_script:",
-          resourceFamily: "cloudflare.workers_script",
-          resourceIdPrefix: "script:",
-          resourceIdParam: "resourceId",
-          kind: "gateway_compute",
-          quantity: 1,
-          operationByMethod: { DELETE: "delete" },
-        },
-      ],
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "session",
-      subject: "tsub_cloud",
-      spaceId: "space_cloud",
-      installationId: "inst_cloud",
-    }),
-    async () => {
-      throw new Error("DELETE cleanup must not record priced usage");
-    },
-    async () => {
-      throw new Error("DELETE cleanup must not precharge credits");
-    },
-  );
-
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ success: true });
-  expect(forwarded).toBe(true);
-});
-
-test("cloud extension fallback precharge skips duplicate response usage and records extra meters", async () => {
-  const periodStart = "2026-06-28T10:00:00.000Z";
-  const periodEnd = "2026-06-28T10:00:01.000Z";
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: Record<string, unknown>;
-  }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
-      method: "POST",
-    }),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_AI: {
-        fetch: async () =>
-          Response.json(
-            { id: "chatcmpl" },
-            {
-              headers: {
-                "x-takosumi-cloud-usage-space-id": "space_cloud",
-                "x-takosumi-cloud-usage-period-start": periodStart,
-                "x-takosumi-cloud-usage-period-end": periodEnd,
-                "x-takosumi-cloud-usage-meters": JSON.stringify([
-                  {
-                    installationId: "inst_cloud",
-                    meterId: "ai:takosumi-default:chat.completions:request",
-                    resourceFamily: "takosumi.ai_gateway",
-                    resourceId: "takosumi/default",
-                    operation: "chat.completions",
-                    kind: "ai_request",
-                    quantity: 1,
-                  },
-                  {
-                    installationId: "inst_cloud",
-                    meterId: "ai:chat:input_token",
-                    resourceFamily: "ai.chat",
-                    operation: "chat.input_tokens",
-                    kind: "ai_input_token",
-                    quantity: 100,
-                  },
-                ]),
-              },
-            },
-          ),
-      },
-    } as never,
-    {
-      basePath: "/gateway/ai/v1",
-      handlerKey: "TAKOSUMI_CLOUD_AI",
-      fallbackUsage: [
-        {
-          pathTemplate: "/chat/completions",
-          methods: ["POST"],
-          meterIdPrefix: "ai:",
-          resourceFamily: "ai.chat",
-          kind: "ai_request",
-          quantity: 1,
-          operationByMethod: { POST: "chat" },
-        },
-      ],
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "session",
-      subject: "tsub_cloud",
-      spaceId: "space_cloud",
-      installationId: "inst_cloud",
-    }),
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input: input as Record<string, unknown> });
-    },
-    async () => {},
-  );
-
-  expect(response.status).toBe(200);
-  expect(recorded).toHaveLength(2);
-  expect(recorded[0]).toEqual({
-    spaceId: "space_cloud",
-    input: expect.objectContaining({
-      installationId: "inst_cloud",
-      meterId: "ai:chat",
-      resourceFamily: "ai.chat",
-      operation: "chat",
-      kind: "ai_request",
-      quantity: 1,
-      usdMicros: 1_000,
-      spendRequired: true,
-    }),
-  });
-  expect(recorded[1]).toEqual({
-    spaceId: "space_cloud",
-    input: expect.objectContaining({
-      installationId: "inst_cloud",
-      meterId: "ai:chat:input_token",
-      resourceFamily: "ai.chat",
-      operation: "chat.input_tokens",
-      kind: "ai_input_token",
-      quantity: 100,
-      usdMicros: 30,
-      spendRequired: true,
-      createdAt: periodEnd,
-    }),
-  });
-});
-
-test("cloud usage extension records managed Containers and Durable Objects meters", async () => {
-  const periodStart = "2026-06-29T00:00:00.000Z";
-  const periodEnd = "2026-06-29T00:01:00.000Z";
-  const recorded: {
-    readonly spaceId: string;
-    readonly input: Record<string, unknown>;
-  }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request("https://app.takosumi.com/cloud/usage/resource-meters", {
-      method: "POST",
-    }),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_USAGE: {
-        fetch: async () =>
-          Response.json(
-            { ok: true, reports: 1, workspaceId: "space_cloud" },
-            {
-              headers: {
-                "x-takosumi-cloud-usage-space-id": "space_cloud",
-                "x-takosumi-cloud-usage-period-start": periodStart,
-                "x-takosumi-cloud-usage-period-end": periodEnd,
-                "x-takosumi-cloud-usage-meters": JSON.stringify([
-                  {
-                    installationId: "inst_cloud",
-                    meterId: "cloudflare:containers:vcpu_second",
-                    resourceFamily: "cloudflare.containers",
-                    resourceId: "container:api",
-                    operation: "vcpu_second",
-                    kind: "gateway_compute",
-                    quantity: 4,
-                  },
-                  {
-                    installationId: "inst_cloud",
-                    meterId: "cloudflare:durable_objects:operation",
-                    resourceFamily: "cloudflare.durable_objects",
-                    resourceId: "durable_object:session",
-                    operation: "operation",
-                    kind: "gateway_compute",
-                    quantity: 2,
-                  },
-                ]),
-              },
-            },
-          ),
-      },
-    } as never,
-    { basePath: "/cloud/usage", handlerKey: "TAKOSUMI_CLOUD_USAGE" },
-    async () => ({
-      authenticated: true,
-      authKind: "service-token",
-      subject: "svc_cloud_usage",
-      spaceId: "space_cloud",
-      installationId: "inst_cloud",
-      scopes: ["cloud.usage.write"],
-    }),
-    async (spaceId, input) => {
-      recorded.push({ spaceId, input: input as Record<string, unknown> });
-    },
-  );
-
-  expect(response.status).toBe(200);
-  expect(recorded).toEqual([
-    {
-      spaceId: "space_cloud",
-      input: expect.objectContaining({
-        installationId: "inst_cloud",
-        meterId: "cloudflare:containers:vcpu_second",
-        resourceFamily: "cloudflare.containers",
-        resourceId: "container:api",
-        operation: "vcpu_second",
-        kind: "gateway_compute",
-        quantity: 4,
-        usdMicros: 4,
-        spendRequired: true,
-        createdAt: periodEnd,
-      }),
-    },
-    {
-      spaceId: "space_cloud",
-      input: expect.objectContaining({
-        installationId: "inst_cloud",
-        meterId: "cloudflare:durable_objects:operation",
-        resourceFamily: "cloudflare.durable_objects",
-        resourceId: "durable_object:session",
-        operation: "operation",
-        kind: "gateway_compute",
-        quantity: 2,
-        usdMicros: 1_000,
-        spendRequired: true,
-        createdAt: periodEnd,
-      }),
-    },
-  ]);
-});
-
-test("cloud extension usage metering fails closed for unknown meters", async () => {
-  const recorded: unknown[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
-      method: "POST",
-    }),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_AI: {
-        fetch: async () =>
-          Response.json(
-            { id: "chatcmpl" },
-            {
-              headers: {
-                "x-takosumi-cloud-usage-space-id": "space_cloud",
-                "x-takosumi-cloud-usage-period-start":
-                  "2026-06-28T10:00:00.000Z",
-                "x-takosumi-cloud-usage-period-end": "2026-06-28T10:00:01.000Z",
-                "x-takosumi-cloud-usage-meters": JSON.stringify([
-                  {
-                    meterId: "unknown:meter",
-                    kind: "ai_request",
-                    quantity: 1,
-                  },
-                ]),
-              },
-            },
-          ),
-      },
-    } as never,
-    { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
-    async () => ({
-      authenticated: true,
-      authKind: "service-token",
-      subject: "svc",
-      spaceId: "space_cloud",
-      scopes: ["admin"],
-    }),
-    async (_spaceId, input) => {
-      recorded.push(input);
-    },
-  );
-
-  expect(response.status).toBe(502);
-  expect(await response.json()).toEqual({
-    error: "cloud_extension_usage_metering_failed",
-    reason: "usage_price_missing",
-  });
-  expect(recorded).toEqual([]);
-});
-
-test("cloud extension authenticates personal access tokens through accounts introspection", async () => {
+test("platform extension derives personal access identity from introspection claims, not token prefixes", async () => {
   const introspectionRequests: { url: string; body: string }[] = [];
-  const context = await verifyPlatformCloudExtensionPersonalAccessToken(
+  const context = await verifyPlatformExtensionBearerToken(
     new Request("https://app.takosumi.com/gateway/ai/v1/models", {
-      headers: { authorization: "Bearer takpat_cloud" },
+      headers: { authorization: "Bearer opaque-personal-credential" },
     }),
     {
       TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
       TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
     } as never,
-    "takpat_cloud",
-    { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
+    "opaque-personal-credential",
+    { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
     async (request: Request) => {
       introspectionRequests.push({
         url: request.url,
@@ -3604,9 +2067,10 @@ test("cloud extension authenticates personal access tokens through accounts intr
       });
       return Response.json({
         active: true,
+        token_use: "personal_access",
         scope: "ai.chat ai.models.read",
         sub: "tsub_pat_user",
-        takosumi: { space_id: "space_pat_default" },
+        takosumi: { workspace_id: "space_pat_default" },
       });
     },
   );
@@ -3614,139 +2078,590 @@ test("cloud extension authenticates personal access tokens through accounts intr
     authenticated: true,
     authKind: "personal-access-token",
     subject: "tsub_pat_user",
-    spaceId: "space_pat_default",
+    workspaceId: "space_pat_default",
     scopes: ["ai.chat", "ai.models.read"],
   });
   expect(introspectionRequests[0]?.url).toBe(
     "https://app.takosumi.com/oauth/introspect",
   );
-  expect(introspectionRequests[0]?.body).toContain("token=takpat_cloud");
+  expect(introspectionRequests[0]?.body).toContain(
+    "token=opaque-personal-credential",
+  );
+  expect(introspectionRequests[0]?.body).toContain(
+    "resource=https%3A%2F%2Fapp.takosumi.com%2Fgateway%2Fai%2Fv1",
+  );
 });
 
-test("cloud extension service access token enforces descriptor scopes", async () => {
+test("platform extension authenticates delegated OAuth access claims without prefix routing", async () => {
+  const context = await verifyPlatformExtensionBearerToken(
+    new Request(
+      "https://app.takosumi.com/v1/interfaces?workspaceId=space_oauth",
+      {
+        headers: { authorization: "Bearer opaque-delegated-credential" },
+      },
+    ),
+    {
+      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
+      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
+    } as never,
+    "opaque-delegated-credential",
+    undefined,
+    async () =>
+      Response.json({
+        active: true,
+        token_use: "oauth_access",
+        scope: "openid capsules:read",
+        sub: "tsub_runtime",
+        takosumi: { workspace_id: "space_oauth" },
+      }),
+  );
+
+  expect(context).toEqual({
+    authenticated: true,
+    authKind: "oauth-access-token",
+    subject: "tsub_runtime",
+    workspaceId: "space_oauth",
+    scopes: ["openid", "capsules:read"],
+  });
+});
+
+test("platform Interface API enforces delegated OAuth Capsule scopes", async () => {
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+  } as never;
+  const request = () =>
+    new Request(
+      "https://app.takosumi.com/v1/interfaces?workspaceId=space_oauth&permission=mcp.invoke",
+      { headers: { authorization: "Bearer takat_runtime" } },
+    );
+
+  const denied = await handlePlatformResourceShapeApiRequest(
+    request(),
+    env,
+    async () => ({
+      authenticated: true,
+      authKind: "oauth-access-token",
+      subject: "tsub_runtime",
+      workspaceId: "space_oauth",
+      scopes: ["openid", "profile"],
+    }),
+  );
+  expect(denied.status).toBe(403);
+  expect((await denied.json()).error).toBe("insufficient_scope");
+
+  const allowed = await handlePlatformResourceShapeApiRequest(
+    request(),
+    env,
+    async () => ({
+      authenticated: true,
+      authKind: "oauth-access-token",
+      subject: "tsub_runtime",
+      workspaceId: "space_oauth",
+      scopes: ["openid", "capsules:read"],
+    }),
+  );
+  expect(allowed.status).toBe(200);
+  expect(await allowed.json()).toEqual({ interfaces: [] });
+
+  const mutationDenied = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/interfaces", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer takat_runtime",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    }),
+    env,
+    async () => ({
+      authenticated: true,
+      authKind: "oauth-access-token",
+      subject: "tsub_runtime",
+      workspaceId: "space_oauth",
+      scopes: ["openid", "capsules:write"],
+    }),
+  );
+  expect(mutationDenied.status).toBe(403);
+  expect((await mutationDenied.json()).error).toBe("insufficient_scope");
+
+  const tokenIssueReachedRuntimeBoundary =
+    await handlePlatformResourceShapeApiRequest(
+      new Request("https://app.takosumi.com/v1/interfaces/if_missing/token", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer takat_runtime",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ permission: "mcp.invoke" }),
+      }),
+      env,
+      async () => ({
+        authenticated: true,
+        authKind: "oauth-access-token",
+        subject: "tsub_runtime",
+        workspaceId: "space_oauth",
+        scopes: ["openid", "capsules:read"],
+      }),
+    );
+  // Token issuance is an invocation read, not a control mutation. The 404 is
+  // Core's non-enumerating missing-Interface response, proving ingress did not
+  // reject the POST as a write.
+  expect(tokenIssueReachedRuntimeBoundary.status).toBe(404);
+});
+
+test("platform Interface ingress rejects oversized control bodies before JSON parsing", async () => {
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+  } as never;
+  const response = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/interfaces", {
+      method: "POST",
+      headers: {
+        cookie: "takosumi_session=test",
+        "content-type": "application/json",
+      },
+      body: `{"padding":"${"x".repeat(1_048_576)}"}`,
+    }),
+    env,
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "account_operator",
+      workspaceId: "space_oauth",
+    }),
+  );
+  expect(response.status).toBe(413);
+  expect((await response.json()).error).toBe("request_too_large");
+});
+
+test("platform Interface API binds delegated OAuth requests to their Workspace", async () => {
+  const db = new SqliteFakeD1();
+  const env = {
+    TAKOSUMI_CONTROL_DB: db,
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+  } as never;
+  const controlSession = async () => ({
+    authenticated: true as const,
+    authKind: "personal-access-token" as const,
+    subject: "account_a",
+    workspaceId: "workspace_a",
+    scopes: ["read", "write"],
+  });
+  const runtimeSession = async () => ({
+    authenticated: true as const,
+    authKind: "oauth-access-token" as const,
+    subject: "principal_a",
+    workspaceId: "workspace_a",
+    scopes: ["openid", "capsules:read"],
+  });
+  const bodyFor = (workspaceId: string) => ({
+    workspaceId,
+    name: "external-mcp",
+    ownerRef: { kind: "Workspace", id: workspaceId },
+    spec: {
+      type: "mcp.server",
+      version: "2025-11-25",
+      document: { transport: "streamable-http" },
+      inputs: {
+        endpoint: { source: "literal", value: "https://mcp.example.test" },
+      },
+      access: { visibility: "workspace" },
+    },
+  });
+
+  const crossCreate = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/interfaces", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer takat_runtime",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(bodyFor("workspace_b")),
+    }),
+    env,
+    controlSession,
+  );
+  expect(crossCreate.status).toBe(403);
+  expect(await crossCreate.json()).toMatchObject({
+    error: "access_denied",
+    error_description: "workspace context is not authorized",
+  });
+
+  await new CloudflareD1OpenTofuControlStore(db).putWorkspace({
+    id: "workspace_b",
+    handle: "workspace-b",
+    displayName: "Workspace B",
+    type: "personal",
+    ownerUserId: "owner_b",
+    createdAt: "2026-07-13T00:00:00.000Z",
+    updatedAt: "2026-07-13T00:00:00.000Z",
+  });
+
+  const seeded = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/interfaces", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer resource-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(bodyFor("workspace_b")),
+    }),
+    env,
+  );
+  expect(seeded.status).toBe(201);
+  const seededId = (await seeded.json()).metadata.id as string;
+
+  const crossRead = await handlePlatformResourceShapeApiRequest(
+    new Request(
+      `https://app.takosumi.com/v1/interfaces/${seededId}?permission=mcp.invoke`,
+      {
+        headers: { authorization: "Bearer takat_runtime" },
+      },
+    ),
+    env,
+    runtimeSession,
+  );
+  // No matching Binding exists, so runtime reads stay non-enumerable even
+  // before the cross-Workspace distinction could be disclosed.
+  expect(crossRead.status).toBe(404);
+});
+
+test("platform Interface ingress separates control and runtime credentials", async () => {
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+  } as never;
+  const url =
+    "https://app.takosumi.com/v1/interfaces?workspaceId=workspace_auth";
+  const readOnlyPatSession = async () => ({
+    authenticated: true as const,
+    authKind: "personal-access-token" as const,
+    subject: "account_a",
+    workspaceId: "workspace_auth",
+    scopes: ["read"],
+  });
+
+  for (const mutation of [
+    { method: "POST", path: "/v1/interfaces", body: "{}" },
+    { method: "PATCH", path: "/v1/interfaces/if_auth", body: "{}" },
+    { method: "DELETE", path: "/v1/interfaces/if_auth" },
+    {
+      method: "POST",
+      path: "/v1/interfaces/if_auth/bindings",
+      body: "{}",
+    },
+    {
+      method: "DELETE",
+      path: "/v1/interfaces/if_auth/bindings/binding_auth",
+    },
+  ]) {
+    const readOnlyPatWrite = await handlePlatformResourceShapeApiRequest(
+      new Request(`https://app.takosumi.com${mutation.path}`, {
+        method: mutation.method,
+        headers: {
+          authorization: "Bearer takpat_read",
+          ...(mutation.body ? { "content-type": "application/json" } : {}),
+        },
+        ...(mutation.body ? { body: mutation.body } : {}),
+      }),
+      env,
+      readOnlyPatSession,
+    );
+    expect(readOnlyPatWrite.status, `${mutation.method} ${mutation.path}`).toBe(
+      403,
+    );
+    expect((await readOnlyPatWrite.json()).error).toBe("insufficient_scope");
+  }
+
+  const readOnlyPatRead = await handlePlatformResourceShapeApiRequest(
+    new Request(url, {
+      headers: { authorization: "Bearer takpat_read" },
+    }),
+    env,
+    readOnlyPatSession,
+  );
+  expect(readOnlyPatRead.status).toBe(200);
+  expect(await readOnlyPatRead.json()).toEqual({ interfaces: [] });
+
+  for (const method of ["GET", "POST"]) {
+    const serviceToken = await handlePlatformResourceShapeApiRequest(
+      new Request(url, {
+        method,
+        headers: {
+          authorization: "Bearer taksrv_runtime",
+          ...(method === "POST" ? { "content-type": "application/json" } : {}),
+        },
+        ...(method === "POST" ? { body: "{}" } : {}),
+      }),
+      env,
+      async () => ({
+        authenticated: true,
+        authKind: "service-token",
+        subject: "capsule_runtime",
+        workspaceId: "workspace_auth",
+        scopes: ["admin"],
+      }),
+    );
+    expect(serviceToken.status).toBe(403);
+    expect((await serviceToken.json()).error).toBe("access_denied");
+  }
+});
+
+test("platform Interface ingress rejects signed managed-provider run tokens", async () => {
+  const issued = await createManagedProviderRunToken({
+    secret: "managed-secret",
+    audience: "operator.example.provider.v1",
+    workspaceId: "space_0123456789abcdef",
+    connectionId: "conn_managed",
+    provider: "cloudflare",
+    phase: "apply",
+    scopes: ["admin", "write"],
+  });
+  const response = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/interfaces", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${issued.token}`,
+        "content-type": "application/json",
+      },
+      body: "{}",
+    }),
+    {
+      TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+      TAKOSUMI_ENVIRONMENT: "test",
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+      TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret",
+    } as never,
+  );
+
+  expect(response.status).toBe(401);
+  expect((await response.json()).error).toBe("unauthenticated");
+});
+
+test("platform extension accepts exact-audience Interface OAuth evidence as an account principal", async () => {
   const env = {
     TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
     TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
   } as never;
   const route = {
     basePath: "/gateway/ai/v1",
-    handlerKey: "TAKOSUMI_CLOUD_AI",
+    handlerKey: "TEST_AI_EXTENSION",
     requiredScopes: ["ai.chat"],
   };
-  const introspect = (scope: string) => async () =>
-    Response.json({ active: true, scope, sub: "svc" });
+  const introspect =
+    (scope: string, audience = "https://app.takosumi.com/gateway/ai/v1") =>
+    async () =>
+      Response.json({
+        active: true,
+        token_use: "interface_oauth",
+        aud: audience,
+        scope,
+        sub: "principal_a",
+        takosumi: {
+          workspace_id: "workspace_a",
+          capsule_id: "capsule_a",
+          interface_id: "interface_ai",
+          interface_binding_id: "binding_ai",
+          interface_resolved_revision: 4,
+        },
+      });
 
-  const denied = await verifyPlatformCloudExtensionServiceAccessToken(
+  const denied = await verifyPlatformExtensionBearerToken(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
     }),
     env,
-    "taksrv_token",
+    "opaque-interface-credential",
     route,
     introspect("ai.models.read"),
   );
   expect(denied).toEqual({ authenticated: false });
 
-  const allowed = await verifyPlatformCloudExtensionServiceAccessToken(
+  const allowed = await verifyPlatformExtensionBearerToken(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
     }),
     env,
-    "taksrv_token",
+    "opaque-interface-credential",
     route,
     introspect("ai.chat"),
   );
   expect(allowed.authenticated).toBe(true);
-  expect(allowed.authKind).toBe("service-token");
+  expect(allowed).toMatchObject({
+    authKind: "interface-oauth-token",
+    subject: "principal_a",
+    workspaceId: "workspace_a",
+    capsuleId: "capsule_a",
+    audience: "https://app.takosumi.com/gateway/ai/v1",
+    interfaceId: "interface_ai",
+    interfaceBindingId: "binding_ai",
+    interfaceResolvedRevision: 4,
+    scopes: ["ai.chat"],
+  });
+
+  const wrongAudience = await verifyPlatformExtensionBearerToken(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions"),
+    env,
+    "opaque-interface-credential",
+    route,
+    introspect("ai.chat", "https://other.example.test/ai"),
+  );
+  expect(wrongAudience).toEqual({ authenticated: false });
+
+  const unknownTokenUse = await verifyPlatformExtensionBearerToken(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions"),
+    env,
+    "opaque-unknown-credential",
+    route,
+    async () =>
+      Response.json({
+        active: true,
+        token_use: "future_credential_kind",
+        scope: "ai.chat",
+        sub: "principal_a",
+      }),
+  );
+  expect(unknownTokenUse).toEqual({ authenticated: false });
 });
 
-test("cloud extension route matcher rejects near-prefixes", () => {
-  const routes = platformCloudExtensionRoutes({
-    TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
-      { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
+test("platform extension route matcher rejects near-prefixes", () => {
+  const routes = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
     ]),
   });
+  expect(matchPlatformExtensionRoute("/gateway/ai/v1", routes)).toBeDefined();
   expect(
-    matchPlatformCloudExtensionRoute("/gateway/ai/v1", routes),
+    matchPlatformExtensionRoute("/gateway/ai/v1/models", routes),
   ).toBeDefined();
   expect(
-    matchPlatformCloudExtensionRoute("/gateway/ai/v1/models", routes),
-  ).toBeDefined();
-  expect(
-    matchPlatformCloudExtensionRoute("/gateway/ai/v1-other", routes),
+    matchPlatformExtensionRoute("/gateway/ai/v1-other", routes),
   ).toBeUndefined();
-  expect(
-    matchPlatformCloudExtensionRoute("/gateway/ai", routes),
-  ).toBeUndefined();
+  expect(matchPlatformExtensionRoute("/gateway/ai", routes)).toBeUndefined();
 });
 
-test("cloud extension catalog reports configured extensions without binding names", async () => {
+test("platform extension catalog reports configured extensions without binding names", async () => {
   const env = {
-    TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
       {
         id: "ai",
-        kind: "ai_gateway",
-        protocol: "openai-compatible",
         basePath: "/gateway/ai/v1",
-        handlerKey: "TAKOSUMI_CLOUD_AI",
+        handlerKey: "TEST_AI_EXTENSION",
         capabilities: ["openai.chat_completions"],
-        smokeChecks: ["models"],
         requiredScopes: ["ai.chat"],
       },
-      { basePath: "/compat/x", handlerKey: "TAKOSUMI_CLOUD_X" },
+      { basePath: "/compat/x", handlerKey: "TEST_X_EXTENSION" },
     ]),
-    TAKOSUMI_CLOUD_AI: { fetch: async () => new Response("") },
+    TEST_AI_EXTENSION: { fetch: async () => new Response("") },
   } as never;
-  const catalog = platformCloudExtensionCatalog(
-    env,
-    "https://app.takosumi.com",
-  );
-  expect(catalog.kind).toBe("takosumi.platform-cloud-extensions@v1");
+  const catalog = platformExtensionCatalog(env, "https://app.takosumi.com");
+  expect(catalog.kind).toBe("takosumi.platform-extensions@v1");
   expect(catalog.summary).toEqual({ total: 2, configured: 1, missing: 1 });
   expect(catalog.extensions).toEqual([
     {
       id: "ai",
-      kind: "ai_gateway",
-      protocol: "openai-compatible",
       basePath: "/gateway/ai/v1",
       configured: true,
       capabilities: ["openai.chat_completions"],
-      smokeChecks: ["models"],
       requiredScopes: ["ai.chat"],
     },
     { basePath: "/compat/x", configured: false },
   ]);
   // The catalog never leaks the underlying handler keys.
-  expect(JSON.stringify(catalog)).not.toContain("TAKOSUMI_CLOUD_AI");
+  expect(JSON.stringify(catalog)).not.toContain("TEST_AI_EXTENSION");
 });
 
-test("cloud extension catalog accepts dashboard sessions or operator bearer", async () => {
+test("public contribution catalog exposes only safe links with live handlers", async () => {
+  const env = {
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/extensions/live",
+        handlerKey: "TEST_LIVE_EXTENSION",
+        contributions: [
+          {
+            id: "live",
+            slot: "navigation.manage",
+            href: "/extensions/live/ui",
+            label: "Live extension",
+          },
+        ],
+      },
+      {
+        basePath: "/extensions/missing",
+        handlerKey: "TEST_MISSING_EXTENSION",
+        contributions: [
+          {
+            id: "missing",
+            slot: "navigation.manage",
+            href: "/extensions/missing/ui",
+            label: "Missing extension",
+          },
+        ],
+      },
+    ]),
+    TEST_LIVE_EXTENSION: { fetch: async () => new Response("") },
+  } as never;
   expect(
-    isPlatformCloudExtensionCatalogPath("/__takosumi/cloud/extensions"),
+    isPlatformExtensionContributionsPath("/__takosumi/platform/contributions"),
+  ).toBe(true);
+  expect(platformExtensionContributionCatalog(env).contributions).toEqual([
+    {
+      id: "live",
+      slot: "navigation.manage",
+      href: "/extensions/live/ui",
+      label: "Live extension",
+    },
+  ]);
+  const response = handlePlatformExtensionContributionsRequest(
+    new Request("https://operator.example/__takosumi/platform/contributions"),
+    new URL("https://operator.example/__takosumi/platform/contributions"),
+    env,
+  );
+  expect(response.status).toBe(200);
+  const body = await response.text();
+  expect(body).toContain("Live extension");
+  expect(body).not.toContain("TEST_LIVE_EXTENSION");
+  expect(body).not.toContain("Missing extension");
+});
+
+test("platform extension catalog accepts dashboard sessions or operator bearer", async () => {
+  expect(
+    isPlatformExtensionCatalogPath("/__takosumi/platform/extensions"),
   ).toBe(true);
 
-  const noSession = await handlePlatformCloudExtensionCatalogRequest(
-    new Request("https://app.takosumi.com/__takosumi/cloud/extensions"),
-    new URL("https://app.takosumi.com/__takosumi/cloud/extensions"),
+  const noSession = await handlePlatformExtensionCatalogRequest(
+    new Request("https://app.takosumi.com/__takosumi/platform/extensions"),
+    new URL("https://app.takosumi.com/__takosumi/platform/extensions"),
     {} as never,
     async () => ({ authenticated: false }),
   );
   expect(noSession.status).toBe(401);
 
-  const wrongBearer = await handlePlatformCloudExtensionCatalogRequest(
-    new Request("https://app.takosumi.com/__takosumi/cloud/extensions", {
+  const wrongBearer = await handlePlatformExtensionCatalogRequest(
+    new Request("https://app.takosumi.com/__takosumi/platform/extensions", {
       headers: { authorization: "Bearer wrong" },
     }),
-    new URL("https://app.takosumi.com/__takosumi/cloud/extensions"),
+    new URL("https://app.takosumi.com/__takosumi/platform/extensions"),
     { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never,
   );
   expect(wrongBearer.status).toBe(401);
 
-  const sessionResponse = await handlePlatformCloudExtensionCatalogRequest(
-    new Request("https://app.takosumi.com/__takosumi/cloud/extensions", {
+  const sessionResponse = await handlePlatformExtensionCatalogRequest(
+    new Request("https://app.takosumi.com/__takosumi/platform/extensions", {
       headers: { cookie: "takosumi_session=test" },
     }),
-    new URL("https://app.takosumi.com/__takosumi/cloud/extensions"),
+    new URL("https://app.takosumi.com/__takosumi/platform/extensions"),
     {} as never,
     async () => ({
       authenticated: true,
@@ -3756,22 +2671,22 @@ test("cloud extension catalog accepts dashboard sessions or operator bearer", as
   );
   expect(sessionResponse.status).toBe(200);
 
-  const response = await handlePlatformCloudExtensionCatalogRequest(
-    new Request("https://app.takosumi.com/__takosumi/cloud/extensions", {
+  const response = await handlePlatformExtensionCatalogRequest(
+    new Request("https://app.takosumi.com/__takosumi/platform/extensions", {
       headers: { authorization: "Bearer operator-secret" },
     }),
-    new URL("https://app.takosumi.com/__takosumi/cloud/extensions"),
+    new URL("https://app.takosumi.com/__takosumi/platform/extensions"),
     { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never,
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({
-    kind: "takosumi.platform-cloud-extensions@v1",
+    kind: "takosumi.platform-extensions@v1",
     extensions: [],
   });
 });
 
-test("handlePlatformCloudExtensionRequest returns undefined for unmatched paths", async () => {
-  const result = await handlePlatformCloudExtensionRequest(
+test("handlePlatformExtensionRequest returns undefined for unmatched paths", async () => {
+  const result = await handlePlatformExtensionRequest(
     new Request("https://app.takosumi.com/api/v1/workspaces"),
     {} as never,
   );

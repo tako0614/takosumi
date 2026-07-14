@@ -20,7 +20,13 @@ const checks = [
   },
   {
     label: "strict generated native push wiring",
-    args: [nativePushScript, "--dry-run", "--strict"],
+    args: [
+      nativePushScript,
+      "--apple-environment",
+      "production",
+      "--dry-run",
+      "--strict",
+    ],
   },
 ];
 

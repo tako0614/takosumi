@@ -19,7 +19,7 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
       return Response.json({
         status: "succeeded",
         kind: "operator.release",
-        launchUrl: "https://app.example.test",
+        healthUrl: "https://app.example.test/healthz",
         metadata: { route: "app.example.test/*" },
       });
     },
@@ -30,7 +30,7 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
   expect(result).toEqual({
     status: "succeeded",
     kind: "operator.release",
-    launchUrl: "https://app.example.test",
+    healthUrl: "https://app.example.test/healthz",
     metadata: { route: "app.example.test/*" },
   });
   expect(capturedRequest?.method).toBe("POST");
@@ -41,26 +41,24 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
 
   const payload = (await capturedRequest!.json()) as Record<string, unknown>;
   expect(payload).toMatchObject({
-    kind: "takosumi.operator.release-activation@v1",
+    kind: "takosumi.operator.release-activation@v2",
     planRunId: "run_plan_1",
     applyRunId: "run_apply_1",
     workspaceId: "space_1",
-    spaceId: "space_1",
-    installation: {
+    capsule: {
       id: "inst_1",
       name: "site",
       environment: "production",
       sourceId: "src_1",
       installConfigId: "cfg_1",
     },
-    deployment: {
-      id: "dep_1",
-      sourceSnapshotId: "snap_1",
-      stateGeneration: 3,
-      outputSnapshotId: "out_1",
-      status: "active",
+    stateVersion: {
+      id: "state_1",
+      generation: 3,
+      digest: "sha256:state",
+      createdByRunId: "run_apply_1",
     },
-    outputSnapshot: {
+    output: {
       id: "out_1",
       stateGeneration: 3,
       outputDigest: "sha256:outputs",
@@ -69,8 +67,8 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
       id: "snap_1",
       origin: "git",
       archiveBucket: "takosumi-source-staging",
-      archiveObjectKey:
-        "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      archiveRef:
+        "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
       archiveDigest: `sha256:${"a".repeat(64)}`,
       resolvedCommit: "abc123",
       path: ".",
@@ -90,6 +88,7 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
   });
   expect(payload).not.toHaveProperty("planRun");
   expect(payload).not.toHaveProperty("applyRun");
+  expect(payload).not.toHaveProperty("credentials");
 });
 
 test("webhook release activator derives workspace context from canonical applyRun workspaceId", async () => {
@@ -111,11 +110,10 @@ test("webhook release activator derives workspace context from canonical applyRu
 
   expect(capturedPayload).toMatchObject({
     workspaceId: "space_canonical",
-    spaceId: "space_canonical",
   });
 });
 
-test("webhook release activator forwards dispatch-only provider credentials", async () => {
+test("webhook release activator never forwards dispatch-only provider credentials", async () => {
   let capturedPayload: Record<string, unknown> | undefined;
   const activator = createWebhookReleaseActivator({
     url: "https://materializer.example.test/activate",
@@ -137,12 +135,7 @@ test("webhook release activator forwards dispatch-only provider credentials", as
     },
   } as ReleaseActivationInput);
 
-  expect(capturedPayload?.credentials).toEqual({
-    env: {
-      CLOUDFLARE_API_TOKEN: "fixture-provider-token",
-      CLOUDFLARE_ACCOUNT_ID: "ts_acc_takosumi_cloud",
-    },
-  });
+  expect(capturedPayload).not.toHaveProperty("credentials");
   expect(capturedPayload).not.toHaveProperty("planRun");
   expect(capturedPayload).not.toHaveProperty("applyRun");
 });
@@ -182,19 +175,19 @@ test("runner release activator runs opaque post-apply commands", async () => {
     runId: "release_run_apply_1",
     applyRunId: "run_apply_1",
     workspaceId: "space_1",
-    installationId: "inst_1",
-    deploymentId: "dep_1",
+    capsuleId: "inst_1",
+    stateVersionId: "state_1",
     sourceSnapshot: {
       id: "snap_1",
-      archiveObjectKey:
-        "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      archiveRef:
+        "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
     },
     nonSensitiveOutputs: {
       public_url: "https://app.example.test",
       worker_script_name: "site-worker",
     },
     credentials: {
-      CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+      env: { CLOUDFLARE_API_TOKEN: "fixture-provider-token" },
     },
     commands: [
       {
@@ -249,7 +242,7 @@ test("webhook release activator leaves runner commands pending without posting",
   expect(called).toBe(false);
   expect(result).toEqual({
     status: "pending",
-    kind: "takosumi.operator.release-activation@v1",
+    kind: "takosumi.operator.release-activation@v2",
     message:
       "operator release activator only accepts executor=operator commands",
     metadata: {
@@ -338,6 +331,93 @@ test("composite release activator routes runner and operator commands by executo
   ]);
 });
 
+test("composite release activator fails closed when mixed commands lack runner activator", async () => {
+  let capturedOperatorCommands: ReleaseActivationInput["commands"] = [];
+  const operator = {
+    async activate(input: ReleaseActivationInput) {
+      capturedOperatorCommands = input.commands;
+      return { status: "succeeded" as const };
+    },
+  };
+  const activator = createCompositeReleaseActivator({ operator });
+
+  const result = await activator!.activate(
+    fakeActivationInput([
+      {
+        id: "runner-activate",
+        phase: "post_apply",
+        executor: "runner",
+        command: ["bun", "run", "app:activate"],
+      },
+      {
+        id: "operator-publish",
+        phase: "post_apply",
+        executor: "operator",
+        command: ["bun", "run", "publish"],
+      },
+    ]),
+  );
+
+  expect(capturedOperatorCommands.map((command) => command.id)).toEqual([
+    "operator-publish",
+  ]);
+  expect(result).toMatchObject({
+    status: "pending",
+    kind: "takosumi.release-activation.composite@v1",
+    metadata: {
+      runnerCommandCount: 1,
+      operatorCommandCount: 1,
+      runnerStatus: "pending",
+      operatorStatus: "succeeded",
+    },
+  });
+});
+
+test("composite release activator never passes runner credentials to operator branch", async () => {
+  let runnerCredentials: ReleaseActivationInput["credentials"];
+  let operatorCredentials: ReleaseActivationInput["credentials"];
+  let operatorOwnsCredentials = true;
+  const runner = {
+    async activate(input: ReleaseActivationInput) {
+      runnerCredentials = input.credentials;
+      return { status: "succeeded" as const };
+    },
+  };
+  const operator = {
+    async activate(input: ReleaseActivationInput) {
+      operatorCredentials = input.credentials;
+      operatorOwnsCredentials = Object.hasOwn(input, "credentials");
+      return { status: "succeeded" as const };
+    },
+  };
+  const activator = createCompositeReleaseActivator({ runner, operator });
+  const input = {
+    ...fakeActivationInput([
+      {
+        id: "runner-activate",
+        phase: "post_apply",
+        executor: "runner",
+        command: ["bun", "run", "app:activate"],
+      },
+      {
+        id: "operator-publish",
+        phase: "post_apply",
+        executor: "operator",
+        command: ["bun", "run", "publish"],
+      },
+    ]),
+    credentials: {
+      env: { CLOUDFLARE_API_TOKEN: "fixture-provider-token" },
+    },
+  } as ReleaseActivationInput;
+
+  await activator!.activate(input);
+
+  expect(runnerCredentials).toEqual(input.credentials);
+  expect(operatorCredentials).toBeUndefined();
+  expect(operatorOwnsCredentials).toBe(false);
+});
+
 test("runner release activator leaves commands pending without source archive", async () => {
   let called = false;
   const activator = createRunnerReleaseActivator({
@@ -384,7 +464,7 @@ test("runner release activator leaves operator commands pending", async () => {
   expect(called).toBe(false);
   expect(result).toEqual({
     status: "pending",
-    kind: "takosumi.operator.release-activation@v1",
+    kind: "takosumi.operator.release-activation@v2",
     message:
       "post-apply release commands require an operator release activator",
     metadata: {
@@ -565,9 +645,9 @@ function fakeRunnerActivationInput(): ReleaseActivationInput {
       },
     ]),
     credentials: {
-      CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+      env: { CLOUDFLARE_API_TOKEN: "fixture-provider-token" },
     },
-  } as ReleaseActivationInput;
+  };
 }
 
 function fakeOperatorActivationInput(): ReleaseActivationInput {
@@ -586,22 +666,26 @@ function fakeActivationInput(
 ): ReleaseActivationInput {
   return {
     planRun: { id: "run_plan_1" },
-    applyRun: { id: "run_apply_1", spaceId: "space_1" },
-    installation: {
+    applyRun: { id: "run_apply_1", workspaceId: "space_1" },
+    capsule: {
       id: "inst_1",
       name: "site",
       environment: "production",
       sourceId: "src_1",
       installConfigId: "cfg_1",
     },
-    deployment: {
-      id: "dep_1",
-      sourceSnapshotId: "snap_1",
-      stateGeneration: 3,
-      outputSnapshotId: "out_1",
-      status: "active",
+    stateVersion: {
+      id: "state_1",
+      workspaceId: "space_1",
+      capsuleId: "inst_1",
+      environment: "production",
+      generation: 3,
+      stateRef: "workspaces/space_1/capsules/inst_1/states/3.tfstate.enc",
+      digest: "sha256:state",
+      createdByRunId: "run_apply_1",
+      createdAt: "2026-06-07T00:00:01.000Z",
     },
-    outputSnapshot: {
+    output: {
       id: "out_1",
       stateGeneration: 3,
       outputDigest: "sha256:outputs",
@@ -609,14 +693,14 @@ function fakeActivationInput(
     sourceSnapshot: {
       id: "snap_1",
       origin: "git",
-      spaceId: "space_1",
+      workspaceId: "space_1",
       sourceId: "src_1",
       url: "https://github.com/acme/site.git",
       ref: "main",
       resolvedCommit: "abc123",
       path: ".",
-      archiveObjectKey:
-        "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      archiveRef:
+        "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
       archiveDigest: `sha256:${"a".repeat(64)}`,
       archiveSizeBytes: 128,
       fetchedByRunId: "source_sync_1",

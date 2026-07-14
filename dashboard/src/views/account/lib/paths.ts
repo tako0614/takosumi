@@ -1,6 +1,5 @@
 /**
- * API paths for the account-plane RPC client (sign-in / session / Stripe
- * billing — the only account-plane endpoints the dashboard still calls).
+ * API paths for the account-plane RPC client (sign-in and session).
  *
  * The account plane is mounted in-process at the worker origin root, so every
  * path is a same-origin `/v1/*` URL. The canonical path constants live in the
@@ -15,15 +14,6 @@ import {
 } from "@takosjp/takosumi-accounts-contract";
 
 export const SESSION_ME = "/v1/account/session/me";
-
-// Stripe checkout / customer portal are Takosumi Cloud-only endpoints. The OSS
-// account plane no longer serves them (they 404 on an OSS-only deployment;
-// Takosumi Cloud serves them). The dashboard keeps the client paths as plain
-// literals so the same SPA can talk to a Cloud-backed origin without a separate
-// build.
-export const STRIPE_CHECKOUT = "/v1/billing/stripe/checkout";
-export const STRIPE_PORTAL = "/v1/billing/stripe/portal";
-export const STRIPE_SUMMARY = "/v1/billing/stripe/summary";
 
 export const UPSTREAM_AUTHORIZE = TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH;
 export const UPSTREAM_CALLBACK = TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH;

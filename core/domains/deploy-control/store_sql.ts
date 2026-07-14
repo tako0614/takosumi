@@ -5,11 +5,10 @@
  * the contract object as JSON so the public run ledger can evolve without a
  * schema migration for every non-indexed field.
  *
- * Logical schema is the Space-direct Installation model: spaces, install_configs,
- * provider_envs, installations (active UNIQUE(space_id, name,
- * environment)), provider_env_binding_sets (keyed (installation_id, environment)),
- * state_snapshots (keyed (installation_id, environment, generation) UNIQUE),
- * deployments (new shape), and a SINGLE `runs` table — the internal PlanRun
+ * Logical schema is the Workspace/Capsule model. Frozen pre-v1 physical column
+ * names such as `space_id` / `installation_id` remain private to this adapter;
+ * TypeScript schema keys and JSON records are canonical. A SINGLE `runs` table
+ * stores the internal PlanRun
  * (kind `plan`), ApplyRun (kind `apply`), SourceSyncRun (kind `source_sync`),
  * CompatibilityCheck Run (kind `compatibility_check`), and Backup Run records
  * persist as rows discriminated by `kind`; the typed accessors verify the row
@@ -17,13 +16,12 @@
  */
 import type {
   ApplyRun,
-  Connection,
-  Deployment,
+  ProviderConnection,
   InstallConfig,
-  Installation,
+  Capsule,
   PlanRun,
   RunnerProfile,
-  StateSnapshot,
+  StateVersion,
 } from "@takosumi/internal/deploy-control-api";
 import type { SqlClient } from "../../adapters/storage/sql.ts";
 import {
@@ -32,7 +30,6 @@ import {
   desc,
   eq,
   gt,
-  gte,
   inArray,
   isNull,
   lt,
@@ -46,17 +43,14 @@ import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import type { Workspace as Space } from "takosumi-contract/workspaces";
-import type { WorkspaceOutputSyncState } from "takosumi-contract";
-import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
+import type { Workspace, WorkspaceMember } from "takosumi-contract/workspaces";
+import type { Project } from "takosumi-contract/projects";
+import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type {
   Dependency,
   DependencySnapshot,
 } from "takosumi-contract/dependencies";
-import type {
-  OutputShare,
-  Output as OutputSnapshot,
-} from "takosumi-contract/outputs";
+import type { OutputShare, Output } from "takosumi-contract/outputs";
 import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import {
@@ -66,76 +60,59 @@ import {
   type PageParams,
   pageFromProbe,
   pageFromProbeBy,
+  pageSorted,
 } from "takosumi-contract/pagination";
 import type { BackupRecord } from "takosumi-contract/backups";
-import type {
-  BillingAccount,
-  BillingAutoRechargeAttempt,
-  BillingPlan,
-  CreditBalance,
-  CreditReservation,
-  SpaceSubscription,
-  UsageEvent,
-} from "takosumi-contract/billing";
-import { legacyCreditsToUsdMicros } from "takosumi-contract/billing";
+import type { UsageEvent } from "takosumi-contract/billing";
 import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "takosumi-contract/security";
 import type {
-  CommitAppliedDeploymentInput,
-  CommitAppliedDeploymentResult,
+  CommitRunStateInput,
+  CommitRunStateResult,
+  CommitResourceRunInput,
+  CommitResourceRunResult,
   CommitRestoredStateInput,
   CommitRestoredStateResult,
-  InstallationPatch,
-  InstallationPatchGuard,
-  OpenTofuDeploymentStore,
+  CapsuleRuntimeSafety,
+  CapsulePatch,
+  CapsuleStateVersionGuard,
+  OpenTofuControlStore,
   PlanRunInputs,
   PublicHostReservation,
-  PutUsageEventAndSpendCreditsResult,
   RecoverableOpenTofuRunListOptions,
   ReservePublicHostInput,
   ReservePublicHostResult,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
-  ClaimBillingAutoRechargeAttemptInput,
-  ClaimBillingAutoRechargeAttemptResult,
   CapsuleListPageParams,
-  CreditAmountInput,
-  SettleBillingAutoRechargeAttemptInput,
-  SettleBillingAutoRechargeAttemptResult,
   TransitionRunInput,
   TransitionRunResult,
-  WorkspaceCurrentOutputRecord,
 } from "./store.ts";
 import {
   clampActivityLimit,
   clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
+  capsuleRuntimeSafetyFromRun,
   compareStoredRunRecordsAsc,
-  InstallationPatchGuardConflict,
-  InstallationStateGenerationGuardConflict,
+  CapsuleStateVersionGuardConflict,
+  CapsuleStateGenerationGuardConflict,
   isRecoverableOpenTofuRunRecord,
+  normalizeStoredCapsuleCompatibilityLevel,
+  normalizeStoredCapsuleCompatibilityReport,
 } from "./store.ts";
 import {
   artifactRecordFromRow,
   coerceRunRowStatus,
-  creditAmountUsdMicros,
-  creditBalanceFromRow,
-  legacyStorageCreditsFromUsdMicros,
-  normalizeBillingAutoRechargeAttempt,
-  normalizeBillingPlan,
-  normalizeCreditBalance,
-  normalizeCreditReservation,
-  normalizeInstallationRecord,
-  normalizeOptionalInstallationRecord,
+  normalizeCapsuleRecord,
+  normalizeOptionalCapsuleRecord,
   normalizeOptionalSourceSnapshotRecord,
   normalizeSourceSnapshotRecord,
   normalizeUsageEvent,
   usageEventFromRow,
   usageResourceMetadataFromRow,
-  workspaceKeyOf,
 } from "./store_row_mappers.ts";
 import type { SqlTransaction } from "../../adapters/storage/sql.ts";
 
@@ -147,6 +124,15 @@ const RUN_KINDS_PLAN = ["plan", "destroy_plan"] as const;
 const RUN_KINDS_APPLY = ["apply", "destroy_apply"] as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync";
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check";
+
+function compatibilityReportSourceId(value: string | null | undefined): string {
+  if (!value?.trim()) {
+    throw new TypeError(
+      "CapsuleCompatibilityReport must reference a registered Git Source",
+    );
+  }
+  return value;
+}
 const RUN_KIND_BACKUP = "backup";
 const RUN_KIND_RESTORE = "restore";
 
@@ -158,6 +144,105 @@ function pgRunCreatedAtMillisOrder(): SQL {
       ELSE EXTRACT(EPOCH FROM ${pgSchema.runs.createdAt}::timestamptz) * 1000
     END
   `;
+}
+
+/**
+ * Safety ordering is based on the lifecycle effect, not immutable creation.
+ * A restore can sit in waiting_approval while newer applies finish, then become
+ * queued; while destructive work is in flight it must dominate every terminal
+ * candidate regardless of when its Run row was created.
+ */
+function pgRunRuntimeSafetyInFlightOrder(): SQL {
+  return sql`
+    CASE
+      WHEN ${pgSchema.runs.kind} = 'destroy_apply'
+        AND ${pgSchema.runs.status} IN ('queued', 'running') THEN 1
+      WHEN ${pgSchema.runs.kind} = 'restore'
+        AND ${pgSchema.runs.status} IN ('queued', 'running') THEN 1
+      ELSE 0
+    END
+  `;
+}
+
+/** Mirrors runtimeSafetyCandidateEffectTimestamp in store.ts. */
+function pgRunRuntimeSafetyEffectAtMillisOrder(): SQL {
+  return sql`
+    CASE
+      WHEN ${pgSchema.runs.kind} IN ('apply', 'destroy_apply') THEN COALESCE(
+        NULLIF(${pgSchema.runs.runJson} ->> 'finishedAt', '')::double precision,
+        NULLIF(${pgSchema.runs.runJson} ->> 'updatedAt', '')::double precision,
+        ${pgSchema.runs.heartbeatAt}::double precision,
+        NULLIF(${pgSchema.runs.runJson} ->> 'startedAt', '')::double precision,
+        ${pgRunCreatedAtMillisOrder()}
+      )
+      WHEN ${pgSchema.runs.kind} = 'restore' THEN COALESCE(
+        EXTRACT(
+          EPOCH FROM NULLIF(${pgSchema.runs.runJson} ->> 'finishedAt', '')::timestamptz
+        ) * 1000,
+        ${pgSchema.runs.heartbeatAt}::double precision,
+        EXTRACT(
+          EPOCH FROM NULLIF(${pgSchema.runs.runJson} ->> 'startedAt', '')::timestamptz
+        ) * 1000,
+        ${pgRunCreatedAtMillisOrder()}
+      )
+      ELSE ${pgRunCreatedAtMillisOrder()}
+    END
+  `;
+}
+
+/** Mirrors runtimeSafetyCandidateRiskRank in store.ts. */
+function pgRunRuntimeSafetyRiskOrder(): SQL {
+  return sql`
+    CASE
+      WHEN ${pgSchema.runs.kind} = 'destroy_apply'
+        AND ${pgSchema.runs.status} = 'succeeded' THEN 3
+      WHEN ${pgSchema.runs.kind} = 'destroy_apply'
+        AND ${pgSchema.runs.status} IN ('queued', 'running') THEN 2
+      WHEN ${pgSchema.runs.status} IN ('failed', 'expired') THEN 1
+      WHEN ${pgSchema.runs.kind} = 'restore'
+        AND ${pgSchema.runs.status} IN ('queued', 'running') THEN 1
+      ELSE 0
+    END
+  `;
+}
+
+/** Mirrors applyRunMutationDispatched in the shared store model. */
+function pgRunMutationDispatched(): SQL {
+  return sql`
+    EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(
+        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+      ) AS audit_event
+      WHERE audit_event -> 'data' ->> 'providerDispatched' = 'true'
+         OR audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
+    )
+  `;
+}
+
+/** Mirrors applyRunBillingCapturePending in the shared store model. */
+function pgRunBillingCapturePending(): SQL {
+  return sql`
+    EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(
+        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+      ) AS audit_event
+      WHERE audit_event ->> 'type' = 'billing.capture.pending'
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(
+        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+      ) AS audit_event
+      WHERE audit_event ->> 'type' = 'billing.capture.completed'
+    )
+  `;
+}
+
+/** An expired apply/destroy is uncertain only after it started. */
+function pgRunStarted(): SQL {
+  return sql`NULLIF(${pgSchema.runs.runJson} ->> 'startedAt', '') IS NOT NULL`;
 }
 
 /**
@@ -199,7 +284,8 @@ function pgKeysetWhereDesc(
   return filter === undefined ? keyset : and(filter, keyset);
 }
 
-export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
+export class SqlOpenTofuControlStore implements OpenTofuControlStore {
+  readonly persistence = "durable" as const;
   readonly #client: SqlClient;
   readonly #db: PgRemoteDatabase<typeof pgSchema>;
 
@@ -256,8 +342,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           : "plan",
       {
         id: run.id,
-        spaceId: run.workspaceId ?? run.spaceId,
-        installationId: run.installationId ?? null,
+        workspaceId: run.workspaceId,
+        capsuleId: run.capsuleId ?? null,
         createdAt: run.createdAt,
         json: run,
       },
@@ -276,8 +362,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       run.operation === "destroy" ? "destroy_apply" : "apply",
       {
         id: run.id,
-        spaceId: run.workspaceId ?? run.spaceId,
-        installationId: run.installationId ?? null,
+        workspaceId: run.workspaceId,
+        capsuleId: run.capsuleId ?? null,
         createdAt: run.createdAt,
         json: run,
       },
@@ -296,8 +382,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
    * consumer's correctness-critical claim primitive). Mirrors the CAS shape of
    * the revoke-debt `#updateMutable`: a guarded drizzle UPDATE that only matches
    * the row when its `status` is still in `expectFrom` (and, when set, its
-   * `leaseToken` still equals `expectLeaseToken`). On a win the row's status /
-   * run JSON advance to `input.run`; `setLeaseToken` / `clearLeaseToken` /
+   * `leaseToken` still equals `expectLeaseToken`, and when set the persisted
+   * `startedAt` equals `expectStartedAt`). On a win the row's status / run JSON
+   * advance to `input.run`; `setLeaseToken` / `clearLeaseToken` /
    * `clearHeartbeat` / `heartbeatAt` write the lease and heartbeat columns. A
    * lost race (0 rows) re-reads the current row and returns it with `won: false`.
    */
@@ -348,6 +435,11 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
             : input.expectHeartbeatAt === null
               ? isNull(pgSchema.runs.heartbeatAt)
               : eq(pgSchema.runs.heartbeatAt, input.expectHeartbeatAt),
+          input.expectStartedAt === undefined
+            ? sql`true`
+            : input.expectStartedAt === null
+              ? sql`${pgSchema.runs.runJson} ->> 'startedAt' IS NULL`
+              : sql`${pgSchema.runs.runJson} ->> 'startedAt' = ${String(input.expectStartedAt)}`,
         ),
       )
       .returning({ json: pgSchema.runs.runJson });
@@ -370,9 +462,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
     await this.#putRunDrizzle(RUN_KIND_SOURCE_SYNC, {
       id: run.id,
-      spaceId: run.workspaceId ?? run.spaceId,
+      workspaceId: run.workspaceId,
       sourceId: run.sourceId,
-      installationId: null,
+      capsuleId: null,
       createdAt: run.createdAt,
       json: run,
     });
@@ -391,9 +483,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     }
     await this.#putRunDrizzle(RUN_KIND_COMPATIBILITY_CHECK, {
       id: run.id,
-      spaceId: run.workspaceId ?? run.spaceId,
+      workspaceId: run.workspaceId,
       sourceId: run.sourceId ?? null,
-      installationId: null,
+      capsuleId: null,
       createdAt: run.createdAt,
       json: run,
     });
@@ -410,8 +502,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     }
     await this.#putRunDrizzle(run.type, {
       id: run.id,
-      spaceId: run.workspaceId ?? run.spaceId,
-      installationId: run.installationId ?? null,
+      workspaceId: run.workspaceId,
+      capsuleId: run.capsuleId ?? null,
       createdAt: run.createdAt,
       json: run,
     });
@@ -422,8 +514,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return await this.#getRun<Run>(id, [RUN_KIND_BACKUP, RUN_KIND_RESTORE]);
   }
 
-  async listRunsBySpace(
-    spaceId: string,
+  async listRunsByWorkspace(
+    workspaceId: string,
     options: { readonly limit?: number } = {},
   ): Promise<readonly StoredRunRecord[]> {
     const limit = clampRunListLimit(options.limit);
@@ -431,11 +523,71 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       pgSchema.runs,
       pgSchema.runs.runJson,
       {
-        where: eq(pgSchema.runs.spaceId, spaceId),
+        where: eq(pgSchema.runs.workspaceId, workspaceId),
         orderBy: [desc(pgRunCreatedAtMillisOrder()), desc(pgSchema.runs.id)],
         limit,
       },
     );
+  }
+
+  async getCapsuleRuntimeSafety(
+    capsuleId: string,
+  ): Promise<CapsuleRuntimeSafety | undefined> {
+    const rows = await this.#pgManyJson<ApplyRun | Run>(
+      pgSchema.runs,
+      pgSchema.runs.runJson,
+      {
+        where: and(
+          eq(pgSchema.runs.capsuleId, capsuleId),
+          or(
+            and(
+              eq(pgSchema.runs.kind, "apply"),
+              or(
+                eq(pgSchema.runs.status, "succeeded"),
+                and(
+                  eq(pgSchema.runs.status, "failed"),
+                  pgRunMutationDispatched(),
+                ),
+                and(eq(pgSchema.runs.status, "expired"), pgRunStarted()),
+              ),
+            ),
+            and(
+              eq(pgSchema.runs.kind, "destroy_apply"),
+              or(
+                inArray(pgSchema.runs.status, [
+                  "queued",
+                  "running",
+                  "succeeded",
+                ]),
+                and(
+                  eq(pgSchema.runs.status, "failed"),
+                  pgRunMutationDispatched(),
+                ),
+                and(eq(pgSchema.runs.status, "expired"), pgRunStarted()),
+              ),
+            ),
+            and(
+              eq(pgSchema.runs.kind, RUN_KIND_RESTORE),
+              inArray(pgSchema.runs.status, [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "expired",
+              ]),
+            ),
+          ),
+        ),
+        orderBy: [
+          desc(pgRunRuntimeSafetyInFlightOrder()),
+          desc(pgRunRuntimeSafetyEffectAtMillisOrder()),
+          desc(pgRunRuntimeSafetyRiskOrder()),
+          desc(pgSchema.runs.id),
+        ],
+        limit: 1,
+      },
+    );
+    return rows[0] ? capsuleRuntimeSafetyFromRun(rows[0]) : undefined;
   }
 
   async listRecoverableOpenTofuRuns(
@@ -445,15 +597,22 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       .select({ json: pgSchema.runs.runJson })
       .from(pgSchema.runs)
       .where(
-        and(
-          inArray(pgSchema.runs.status, ["queued", "running"]),
-          inArray(pgSchema.runs.kind, [
-            ...RUN_KINDS_PLAN,
-            "drift_check",
-            ...RUN_KINDS_APPLY,
-            RUN_KIND_SOURCE_SYNC,
-            RUN_KIND_RESTORE,
-          ]),
+        or(
+          and(
+            inArray(pgSchema.runs.status, ["queued", "running"]),
+            inArray(pgSchema.runs.kind, [
+              ...RUN_KINDS_PLAN,
+              "drift_check",
+              ...RUN_KINDS_APPLY,
+              RUN_KIND_SOURCE_SYNC,
+              RUN_KIND_RESTORE,
+            ]),
+          ),
+          and(
+            inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+            inArray(pgSchema.runs.status, ["succeeded", "failed"]),
+            pgRunBillingCapturePending(),
+          ),
         ),
       );
     const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
@@ -478,25 +637,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         ),
       )
       .orderBy(asc(pgSchema.runs.createdAt), asc(pgSchema.runs.id));
-    const legacyRows = await this.#db
-      .select({ json: pgSchema.runs.runJson })
-      .from(pgSchema.runs)
-      .where(
-        and(
-          eq(pgSchema.runs.kind, RUN_KIND_SOURCE_SYNC),
-          eq(pgSchema.runs.installationId, sourceId),
-        ),
-      )
-      .orderBy(asc(pgSchema.runs.createdAt), asc(pgSchema.runs.id));
-    const byId = new Map<string, SourceSyncRun>();
-    for (const row of [...currentRows, ...legacyRows]) {
-      const parsed = parseRow(row) as SourceSyncRun;
-      byId.set(parsed.id, parsed);
-    }
-    return [...byId.values()].sort(
-      (a, b) =>
-        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-    );
+    return currentRows.map((row) => parseRow(row) as SourceSyncRun);
   }
 
   // --- artifact ledger (§30 artifacts) -------------------------------------
@@ -506,7 +647,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       id: record.id,
       runId: record.runId,
       kind: record.kind,
-      objectKey: record.objectKey,
+      ref: record.ref,
       digest: record.digest,
       sizeBytes: record.sizeBytes,
       createdAt: record.createdAt,
@@ -529,9 +670,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     kind: string,
     fields: {
       readonly id: string;
-      readonly spaceId: string;
+      readonly workspaceId: string;
       readonly sourceId?: string | null;
-      readonly installationId: string | null;
+      readonly capsuleId: string | null;
       readonly createdAt: number | string;
       readonly json: unknown;
     },
@@ -544,9 +685,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     const values = {
       id: fields.id,
       kind,
-      spaceId: fields.spaceId,
+      workspaceId: fields.workspaceId,
       sourceId: fields.sourceId ?? null,
-      installationId: fields.installationId,
+      capsuleId: fields.capsuleId,
       // The §27 ledger keeps status / lease coordination as indexed columns; the
       // canonical value still rides in run_json. Default status to `queued` so a
       // run without an explicit status still satisfies the NOT NULL column.
@@ -565,9 +706,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         target: pgSchema.runs.id,
         set: {
           kind: values.kind,
-          spaceId: values.spaceId,
+          workspaceId: values.workspaceId,
           sourceId: values.sourceId,
-          installationId: values.installationId,
+          capsuleId: values.capsuleId,
           status: values.status,
           leaseToken: values.leaseToken,
           heartbeatAt: values.heartbeatAt,
@@ -594,10 +735,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
 
   async putPlanRunInputs(inputs: PlanRunInputs): Promise<void> {
     await this.#db
-      .insert(pgSchema.runsInputs)
+      .insert(pgSchema.planRunInputs)
       .values({ planRunId: inputs.planRunId, inputsJson: inputs })
       .onConflictDoUpdate({
-        target: pgSchema.runsInputs.planRunId,
+        target: pgSchema.planRunInputs.planRunId,
         set: { inputsJson: inputs },
       });
   }
@@ -606,222 +747,234 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     planRunId: string,
   ): Promise<PlanRunInputs | undefined> {
     const rows = await this.#db
-      .select({ json: pgSchema.runsInputs.inputsJson })
-      .from(pgSchema.runsInputs)
-      .where(eq(pgSchema.runsInputs.planRunId, planRunId))
+      .select({ json: pgSchema.planRunInputs.inputsJson })
+      .from(pgSchema.planRunInputs)
+      .where(eq(pgSchema.planRunInputs.planRunId, planRunId))
       .limit(1);
     return parseRow(rows[0]) as PlanRunInputs | undefined;
   }
 
   async deletePlanRunInputs(planRunId: string): Promise<void> {
     await this.#db
-      .delete(pgSchema.runsInputs)
-      .where(eq(pgSchema.runsInputs.planRunId, planRunId));
+      .delete(pgSchema.planRunInputs)
+      .where(eq(pgSchema.planRunInputs.planRunId, planRunId));
   }
 
-  // --- spaces (§4) ----------------------------------------------------------
+  // --- Workspaces (§4) -----------------------------------------------------
 
-  async putSpace(space: Space): Promise<Space> {
+  async putWorkspace(workspace: Workspace): Promise<Workspace> {
     await this.#db
-      .insert(pgSchema.spaces)
+      .insert(pgSchema.workspaces)
       .values({
-        id: space.id,
-        handle: space.handle,
-        spaceJson: space,
-        createdAt: space.createdAt,
-        updatedAt: space.updatedAt,
+        id: workspace.id,
+        handle: workspace.handle,
+        spaceJson: workspace,
+        createdAt: workspace.createdAt,
+        updatedAt: workspace.updatedAt,
       })
       .onConflictDoUpdate({
-        target: pgSchema.spaces.id,
+        target: pgSchema.workspaces.id,
         set: {
-          handle: space.handle,
-          spaceJson: space,
-          createdAt: space.createdAt,
-          updatedAt: space.updatedAt,
+          handle: workspace.handle,
+          spaceJson: workspace,
+          createdAt: workspace.createdAt,
+          updatedAt: workspace.updatedAt,
         },
       });
-    return space;
+    return workspace;
   }
 
-  async getSpace(id: string): Promise<Space | undefined> {
+  async getWorkspace(id: string): Promise<Workspace | undefined> {
     const rows = await this.#db
-      .select({ json: pgSchema.spaces.spaceJson })
-      .from(pgSchema.spaces)
-      .where(eq(pgSchema.spaces.id, id))
+      .select({ json: pgSchema.workspaces.spaceJson })
+      .from(pgSchema.workspaces)
+      .where(eq(pgSchema.workspaces.id, id))
       .limit(1);
-    return parseRow(rows[0]) as Space | undefined;
+    return parseRow(rows[0]) as Workspace | undefined;
   }
 
-  async listSpacesByIds(ids: readonly string[]): Promise<readonly Space[]> {
+  async listWorkspacesByIds(
+    ids: readonly string[],
+  ): Promise<readonly Workspace[]> {
     if (ids.length === 0) return [];
     const rows = await this.#db
-      .select({ json: pgSchema.spaces.spaceJson })
-      .from(pgSchema.spaces)
-      .where(inArray(pgSchema.spaces.id, [...new Set(ids)]));
+      .select({ json: pgSchema.workspaces.spaceJson })
+      .from(pgSchema.workspaces)
+      .where(inArray(pgSchema.workspaces.id, [...new Set(ids)]));
     const byId = new Map(
       rows.map((row) => {
-        const value = parseRow(row) as Space;
+        const value = parseRow(row) as Workspace;
         return [value.id, value] as const;
       }),
     );
     return ids
       .map((id) => byId.get(id))
-      .filter((row): row is Space => row !== undefined);
+      .filter((row): row is Workspace => row !== undefined);
   }
 
-  async getSpaceByHandle(handle: string): Promise<Space | undefined> {
+  async getWorkspaceByHandle(handle: string): Promise<Workspace | undefined> {
     const rows = await this.#db
-      .select({ json: pgSchema.spaces.spaceJson })
-      .from(pgSchema.spaces)
-      .where(eq(pgSchema.spaces.handle, handle))
+      .select({ json: pgSchema.workspaces.spaceJson })
+      .from(pgSchema.workspaces)
+      .where(eq(pgSchema.workspaces.handle, handle))
       .limit(1);
-    return parseRow(rows[0]) as Space | undefined;
+    return parseRow(rows[0]) as Workspace | undefined;
   }
 
-  async listSpaces(): Promise<readonly Space[]> {
+  async listWorkspaces(): Promise<readonly Workspace[]> {
     const rows = await this.#db
-      .select({ json: pgSchema.spaces.spaceJson })
-      .from(pgSchema.spaces)
-      .orderBy(asc(pgSchema.spaces.createdAt), asc(pgSchema.spaces.id));
-    return rows.map((row) => parseRow(row) as Space);
+      .select({ json: pgSchema.workspaces.spaceJson })
+      .from(pgSchema.workspaces)
+      .orderBy(asc(pgSchema.workspaces.createdAt), asc(pgSchema.workspaces.id));
+    return rows.map((row) => parseRow(row) as Workspace);
   }
 
-  async listSpacesByOwner(ownerUserId: string): Promise<readonly Space[]> {
+  async listWorkspacesByOwner(
+    ownerUserId: string,
+  ): Promise<readonly Workspace[]> {
     const rows = await this.#db
-      .select({ json: pgSchema.spaces.spaceJson })
-      .from(pgSchema.spaces)
+      .select({ json: pgSchema.workspaces.spaceJson })
+      .from(pgSchema.workspaces)
       .where(
-        sql`${pgSchema.spaces.spaceJson} ->> 'ownerUserId' = ${ownerUserId}`,
+        sql`${pgSchema.workspaces.spaceJson} ->> 'ownerUserId' = ${ownerUserId}`,
       )
-      .orderBy(asc(pgSchema.spaces.createdAt), asc(pgSchema.spaces.id));
-    return rows.map((row) => parseRow(row) as Space);
+      .orderBy(asc(pgSchema.workspaces.createdAt), asc(pgSchema.workspaces.id));
+    return rows.map((row) => parseRow(row) as Workspace);
   }
 
-  // --- Workspace Output Sync ------------------------------------------------
-
-  async putWorkspaceOutputSyncState(
-    state: WorkspaceOutputSyncState,
-  ): Promise<WorkspaceOutputSyncState> {
-    const rows = await this.#db
-      .insert(pgSchema.workspaceOutputSync)
-      .values(workspaceOutputSyncValues(state))
+  async putWorkspaceMember(member: WorkspaceMember): Promise<WorkspaceMember> {
+    await this.#db
+      .insert(pgSchema.workspaceMembers)
+      .values({
+        id: member.id,
+        workspaceId: member.workspaceId,
+        accountId: member.accountId,
+        status: member.status,
+        memberJson: member,
+        createdAt: member.createdAt,
+        updatedAt: member.updatedAt,
+      })
       .onConflictDoUpdate({
-        target: pgSchema.workspaceOutputSync.workspaceId,
-        set: workspaceOutputSyncValues(state),
-      })
-      .returning();
-    return workspaceOutputSyncStateFromPgRow(rows[0]);
+        target: [
+          pgSchema.workspaceMembers.workspaceId,
+          pgSchema.workspaceMembers.accountId,
+        ],
+        set: {
+          id: member.id,
+          status: member.status,
+          memberJson: member,
+          createdAt: member.createdAt,
+          updatedAt: member.updatedAt,
+        },
+      });
+    return member;
   }
 
-  async compareAndSetWorkspaceOutputSyncState(
-    expected: WorkspaceOutputSyncState | undefined,
-    next: WorkspaceOutputSyncState,
-  ): Promise<boolean> {
-    if (!expected) {
-      const rows = await this.#db
-        .insert(pgSchema.workspaceOutputSync)
-        .values(workspaceOutputSyncValues(next))
-        .onConflictDoNothing()
-        .returning({ workspaceId: pgSchema.workspaceOutputSync.workspaceId });
-      return rows.length === 1;
-    }
-    const rows = await this.#db
-      .update(pgSchema.workspaceOutputSync)
-      .set(workspaceOutputSyncValues(next))
-      .where(
-        and(
-          eq(pgSchema.workspaceOutputSync.workspaceId, expected.workspaceId),
-          eq(pgSchema.workspaceOutputSync.enabled, expected.enabled),
-          eq(
-            pgSchema.workspaceOutputSync.outputRevision,
-            expected.outputRevision,
-          ),
-          eq(
-            pgSchema.workspaceOutputSync.reconciledRevision,
-            expected.reconciledRevision,
-          ),
-          expected.activeRunGroupId === undefined
-            ? isNull(pgSchema.workspaceOutputSync.activeRunGroupId)
-            : eq(
-                pgSchema.workspaceOutputSync.activeRunGroupId,
-                expected.activeRunGroupId,
-              ),
-          eq(
-            pgSchema.workspaceOutputSync.consecutivePasses,
-            expected.consecutivePasses,
-          ),
-          eq(pgSchema.workspaceOutputSync.updatedAt, expected.updatedAt),
-        ),
-      )
-      .returning({ workspaceId: pgSchema.workspaceOutputSync.workspaceId });
-    return rows.length === 1;
-  }
-
-  async getWorkspaceOutputSyncState(
+  async getWorkspaceMember(
     workspaceId: string,
-  ): Promise<WorkspaceOutputSyncState | undefined> {
-    const rows = await this.#db
-      .select()
-      .from(pgSchema.workspaceOutputSync)
-      .where(eq(pgSchema.workspaceOutputSync.workspaceId, workspaceId))
-      .limit(1);
-    const row = rows[0];
-    return row ? workspaceOutputSyncStateFromPgRow(row) : undefined;
-  }
-
-  async listPendingWorkspaceOutputSyncStates(
-    limit: number,
-  ): Promise<readonly WorkspaceOutputSyncState[]> {
-    const normalizedLimit = Math.max(0, Math.floor(limit));
-    if (normalizedLimit === 0) return [];
-    const rows = await this.#db
-      .select()
-      .from(pgSchema.workspaceOutputSync)
-      .where(
-        and(
-          eq(pgSchema.workspaceOutputSync.enabled, true),
-          or(
-            gt(
-              pgSchema.workspaceOutputSync.outputRevision,
-              pgSchema.workspaceOutputSync.reconciledRevision,
-            ),
-            sql`${pgSchema.workspaceOutputSync.activeRunGroupId} is not null`,
-          ),
-        ),
-      )
-      .orderBy(
-        asc(pgSchema.workspaceOutputSync.updatedAt),
-        asc(pgSchema.workspaceOutputSync.workspaceId),
-      )
-      .limit(normalizedLimit);
-    return rows.map(workspaceOutputSyncStateFromPgRow);
-  }
-
-  async listCurrentOutputsByWorkspace(
-    workspaceId: string,
-  ): Promise<readonly WorkspaceCurrentOutputRecord[]> {
-    const currentOutputId = sql<string>`COALESCE(
-      ${pgSchema.installations.installationJson} ->> 'currentOutputId',
-      ${pgSchema.installations.installationJson} ->> 'currentOutputSnapshotId'
-    )`;
-    const rows = await this.#db
-      .select({
-        capsule: pgSchema.installations.installationJson,
-        output: pgSchema.outputSnapshots.snapshotJson,
-      })
-      .from(pgSchema.installations)
-      .innerJoin(
-        pgSchema.outputSnapshots,
-        eq(pgSchema.outputSnapshots.id, currentOutputId),
-      )
-      .where(eq(pgSchema.installations.spaceId, workspaceId))
-      .orderBy(asc(pgSchema.installations.id));
-    return rows.map((row) => ({
-      capsule: normalizeInstallationRecord(
-        parseJson(row.capsule) as Installation,
+    accountId: string,
+  ): Promise<WorkspaceMember | undefined> {
+    return await this.#pgFirstJson<WorkspaceMember>(
+      pgSchema.workspaceMembers,
+      pgSchema.workspaceMembers.memberJson,
+      and(
+        eq(pgSchema.workspaceMembers.workspaceId, workspaceId),
+        eq(pgSchema.workspaceMembers.accountId, accountId),
       ),
-      output: parseJson(row.output) as OutputSnapshot,
-    }));
+    );
+  }
+
+  async listWorkspaceMembers(
+    workspaceId: string,
+  ): Promise<readonly WorkspaceMember[]> {
+    return await this.#pgManyJson<WorkspaceMember>(
+      pgSchema.workspaceMembers,
+      pgSchema.workspaceMembers.memberJson,
+      {
+        where: eq(pgSchema.workspaceMembers.workspaceId, workspaceId),
+        orderBy: [
+          asc(pgSchema.workspaceMembers.createdAt),
+          asc(pgSchema.workspaceMembers.id),
+        ],
+      },
+    );
+  }
+
+  async listWorkspaceMembersByAccount(
+    accountId: string,
+  ): Promise<readonly WorkspaceMember[]> {
+    return await this.#pgManyJson<WorkspaceMember>(
+      pgSchema.workspaceMembers,
+      pgSchema.workspaceMembers.memberJson,
+      {
+        where: eq(pgSchema.workspaceMembers.accountId, accountId),
+        orderBy: [
+          asc(pgSchema.workspaceMembers.createdAt),
+          asc(pgSchema.workspaceMembers.id),
+        ],
+      },
+    );
+  }
+
+  async putProject(project: Project): Promise<Project> {
+    await this.#db
+      .insert(pgSchema.projects)
+      .values({
+        id: project.id,
+        workspaceId: project.workspaceId,
+        name: project.name,
+        slug: project.slug,
+        projectJson: project,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+      })
+      .onConflictDoUpdate({
+        target: pgSchema.projects.id,
+        set: {
+          workspaceId: project.workspaceId,
+          name: project.name,
+          slug: project.slug,
+          projectJson: project,
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt,
+        },
+      });
+    return project;
+  }
+
+  async getProject(id: string): Promise<Project | undefined> {
+    return await this.#pgFirstJson<Project>(
+      pgSchema.projects,
+      pgSchema.projects.projectJson,
+      eq(pgSchema.projects.id, id),
+    );
+  }
+
+  async getProjectBySlug(
+    workspaceId: string,
+    slug: string,
+  ): Promise<Project | undefined> {
+    return await this.#pgFirstJson<Project>(
+      pgSchema.projects,
+      pgSchema.projects.projectJson,
+      and(
+        eq(pgSchema.projects.workspaceId, workspaceId),
+        eq(pgSchema.projects.slug, slug),
+      ),
+    );
+  }
+
+  async listProjectsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly Project[]> {
+    return await this.#pgManyJson<Project>(
+      pgSchema.projects,
+      pgSchema.projects.projectJson,
+      {
+        where: eq(pgSchema.projects.workspaceId, workspaceId),
+        orderBy: [asc(pgSchema.projects.createdAt), asc(pgSchema.projects.id)],
+      },
+    );
   }
 
   // --- install_configs (§11) ------------------------------------------------
@@ -829,9 +982,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
     await this.#pgUpsert(pgSchema.installConfigs, {
       id: config.id,
-      spaceId: config.spaceId ?? null,
-      installType: config.installType,
-      trustLevel: config.trustLevel,
+      workspaceId: config.workspaceId ?? null,
       configJson: config,
       createdAt: config.createdAt,
       updatedAt: config.updatedAt,
@@ -840,145 +991,140 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async getInstallConfig(id: string): Promise<InstallConfig | undefined> {
-    return await this.#pgFirstJson<InstallConfig>(
+    const config = await this.#pgFirstJson<InstallConfig>(
       pgSchema.installConfigs,
       pgSchema.installConfigs.configJson,
       eq(pgSchema.installConfigs.id, id),
     );
+    return config;
   }
 
   async listInstallConfigs(
-    spaceId?: string,
+    workspaceId?: string,
   ): Promise<readonly InstallConfig[]> {
-    return await this.#pgManyJson<InstallConfig>(
+    const configs = await this.#pgManyJson<InstallConfig>(
       pgSchema.installConfigs,
       pgSchema.installConfigs.configJson,
       {
         where:
-          spaceId === undefined
+          workspaceId === undefined
             ? undefined
-            : eq(pgSchema.installConfigs.spaceId, spaceId),
+            : eq(pgSchema.installConfigs.workspaceId, workspaceId),
         orderBy: [
           asc(pgSchema.installConfigs.createdAt),
           asc(pgSchema.installConfigs.id),
         ],
       },
     );
+    return configs;
   }
 
-  // --- installations (§5 / §27, active UNIQUE(space_id, name, environment)) -
+  // --- Capsules (§5 / §27, active UNIQUE(project_id, name, environment)) ---
 
-  async putInstallation(installation: Installation): Promise<Installation> {
-    const values = installationValues(installation);
+  async putCapsule(capsule: Capsule): Promise<Capsule> {
+    const values = capsuleValues(capsule);
     await this.#db
-      .insert(pgSchema.installations)
+      .insert(pgSchema.capsules)
       .values(values)
       .onConflictDoUpdate({
-        target: pgSchema.installations.id,
+        target: pgSchema.capsules.id,
         set: {
-          spaceId: values.spaceId,
+          workspaceId: values.workspaceId,
+          projectId: values.projectId,
           name: values.name,
           environment: values.environment,
           sourceId: values.sourceId,
           installConfigId: values.installConfigId,
-          currentDeploymentId: values.currentDeploymentId,
+          currentStateVersionId: values.currentStateVersionId,
           status: values.status,
-          installationJson: values.installationJson,
+          capsuleJson: values.capsuleJson,
           createdAt: values.createdAt,
           updatedAt: values.updatedAt,
         },
       });
-    return normalizeInstallationRecord(installation);
+    return normalizeCapsuleRecord(capsule);
   }
 
-  async getInstallation(id: string): Promise<Installation | undefined> {
+  async getCapsule(id: string): Promise<Capsule | undefined> {
     const rows = await this.#db
-      .select({ json: pgSchema.installations.installationJson })
-      .from(pgSchema.installations)
-      .where(eq(pgSchema.installations.id, id))
+      .select({ json: pgSchema.capsules.capsuleJson })
+      .from(pgSchema.capsules)
+      .where(eq(pgSchema.capsules.id, id))
       .limit(1);
-    return normalizeOptionalInstallationRecord(
-      parseRow(rows[0]) as Installation | undefined,
+    return normalizeOptionalCapsuleRecord(
+      parseRow(rows[0]) as Capsule | undefined,
     );
   }
 
-  async getInstallationByName(
-    spaceId: string,
+  async getCapsuleByName(
+    projectId: string,
     name: string,
     environment: string,
-  ): Promise<Installation | undefined> {
+  ): Promise<Capsule | undefined> {
     const rows = await this.#db
-      .select({ json: pgSchema.installations.installationJson })
-      .from(pgSchema.installations)
+      .select({ json: pgSchema.capsules.capsuleJson })
+      .from(pgSchema.capsules)
       .where(
         and(
-          eq(pgSchema.installations.spaceId, spaceId),
-          eq(pgSchema.installations.name, name),
-          eq(pgSchema.installations.environment, environment),
-          ne(pgSchema.installations.status, "destroyed"),
+          eq(pgSchema.capsules.projectId, projectId),
+          eq(pgSchema.capsules.name, name),
+          eq(pgSchema.capsules.environment, environment),
+          ne(pgSchema.capsules.status, "destroyed"),
         ),
       )
       .limit(1);
-    return normalizeOptionalInstallationRecord(
-      parseRow(rows[0]) as Installation | undefined,
+    return normalizeOptionalCapsuleRecord(
+      parseRow(rows[0]) as Capsule | undefined,
     );
   }
 
-  async listInstallations(spaceId?: string): Promise<readonly Installation[]> {
+  async listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
     const query = this.#db
-      .select({ json: pgSchema.installations.installationJson })
-      .from(pgSchema.installations)
+      .select({ json: pgSchema.capsules.capsuleJson })
+      .from(pgSchema.capsules)
       .$dynamic();
     const rows = await (
-      spaceId === undefined
+      workspaceId === undefined
         ? query
-        : query.where(eq(pgSchema.installations.spaceId, spaceId))
-    ).orderBy(
-      asc(pgSchema.installations.createdAt),
-      asc(pgSchema.installations.id),
-    );
-    return rows.map((row) =>
-      normalizeInstallationRecord(parseRow(row) as Installation),
-    );
+        : query.where(eq(pgSchema.capsules.workspaceId, workspaceId))
+    ).orderBy(asc(pgSchema.capsules.createdAt), asc(pgSchema.capsules.id));
+    return rows.map((row) => normalizeCapsuleRecord(parseRow(row) as Capsule));
   }
 
-  async listInstallationsPage(
-    spaceId: string,
+  async listCapsulesPage(
+    workspaceId: string,
     params: CapsuleListPageParams,
-  ): Promise<Page<Installation>> {
+  ): Promise<Page<Capsule>> {
     const limit = clampPageLimit(params.limit);
     const baseWhere =
       params.includeDestroyed === false
         ? and(
-            eq(pgSchema.installations.spaceId, spaceId),
-            ne(pgSchema.installations.status, "destroyed"),
+            eq(pgSchema.capsules.workspaceId, workspaceId),
+            ne(pgSchema.capsules.status, "destroyed"),
           )
-        : eq(pgSchema.installations.spaceId, spaceId);
-    const rows = await this.#pgManyJson<Installation>(
-      pgSchema.installations,
-      pgSchema.installations.installationJson,
+        : eq(pgSchema.capsules.workspaceId, workspaceId);
+    const rows = await this.#pgManyJson<Capsule>(
+      pgSchema.capsules,
+      pgSchema.capsules.capsuleJson,
       {
         where: pgKeysetWhere(
           baseWhere,
-          pgSchema.installations.createdAt,
-          pgSchema.installations.id,
+          pgSchema.capsules.createdAt,
+          pgSchema.capsules.id,
           decodeCursor(params.cursor),
         ),
-        orderBy: [
-          asc(pgSchema.installations.createdAt),
-          asc(pgSchema.installations.id),
-        ],
+        orderBy: [asc(pgSchema.capsules.createdAt), asc(pgSchema.capsules.id)],
         limit: limit + 1,
       },
     );
-    return pageFromProbe(rows.map(normalizeInstallationRecord), limit);
+    return pageFromProbe(rows.map(normalizeCapsuleRecord), limit);
   }
 
   async reservePublicHost(
     input: ReservePublicHostInput,
   ): Promise<ReservePublicHostResult> {
     const hostname = input.hostname.toLowerCase();
-    const workspace = await this.getSpace(input.workspaceId);
+    const workspace = await this.getWorkspace(input.workspaceId);
     if (!workspace) {
       throw new Error("public host reservation workspace was not found");
     }
@@ -1016,8 +1162,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           hostname,
           ownerUserId,
           input.workspaceId,
-          input.installationId,
-          input.installationName,
+          input.capsuleId,
+          input.capsuleName,
           input.allocationKind,
           input.now,
         ],
@@ -1089,8 +1235,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return row ? publicHostReservationFromRow(row) : undefined;
   }
 
-  async releasePublicHostsForInstallation(
-    installationId: string,
+  async releasePublicHostsForCapsule(
+    capsuleId: string,
     now: string,
   ): Promise<void> {
     await this.#client.query(
@@ -1100,103 +1246,131 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
            released_at = $2
        where installation_id = $1
          and status = 'reserved'`,
-      [installationId, now],
+      [capsuleId, now],
     );
   }
 
-  async patchInstallation(
+  async patchCapsule(
     id: string,
-    patch: InstallationPatch,
-    guard?: InstallationPatchGuard,
-  ): Promise<Installation | undefined> {
-    const current = await this.getInstallation(id);
+    patch: CapsulePatch,
+    guard?: CapsuleStateVersionGuard,
+  ): Promise<Capsule | undefined> {
+    const current = await this.getCapsule(id);
     if (!current) return undefined;
     if (
       guard !== undefined &&
-      (current.currentDeploymentId !== guard.currentDeploymentId ||
+      (current.currentStateVersionId !== guard.currentStateVersionId ||
         (guard.status !== undefined && current.status !== guard.status))
     ) {
-      throw new InstallationPatchGuardConflict({
+      throw new CapsuleStateVersionGuardConflict({
         id,
-        expectedCurrentDeploymentId: guard.currentDeploymentId,
-        actualCurrentDeploymentId: current.currentDeploymentId,
+        expectedCurrentStateVersionId: guard.currentStateVersionId,
+        actualCurrentStateVersionId: current.currentStateVersionId,
         expectedStatus: guard.status,
         actualStatus: current.status,
       });
     }
-    const updated: Installation = { ...current, ...patch };
-    if (!guard) return await this.putInstallation(updated);
-    // Guarded path: fence on current_deployment_id (and optionally status) in the
+    const updated: Capsule = { ...current, ...patch };
+    if (!guard) return await this.putCapsule(updated);
+    // Guarded path: fence on current_state_version_id (and optionally status) in the
     // UPDATE predicate so a concurrent writer cannot win the race between read and
     // write. `is not distinct from` matches NULL == NULL for the unset cursor.
-    const values = installationValues(updated);
-    const guardedCurrentDeployment =
-      guard.currentDeploymentId === undefined ||
-      guard.currentDeploymentId === null
-        ? isNull(pgSchema.installations.currentDeploymentId)
+    const values = capsuleValues(updated);
+    const guardedCurrentStateVersion =
+      guard.currentStateVersionId === undefined ||
+      guard.currentStateVersionId === null
+        ? isNull(pgSchema.capsules.currentStateVersionId)
         : eq(
-            pgSchema.installations.currentDeploymentId,
-            guard.currentDeploymentId,
+            pgSchema.capsules.currentStateVersionId,
+            guard.currentStateVersionId,
           );
     const rows = await this.#db
-      .update(pgSchema.installations)
+      .update(pgSchema.capsules)
       .set({
-        spaceId: values.spaceId,
+        workspaceId: values.workspaceId,
         name: values.name,
         environment: values.environment,
         sourceId: values.sourceId,
         installConfigId: values.installConfigId,
-        currentDeploymentId: values.currentDeploymentId,
+        currentStateVersionId: values.currentStateVersionId,
         status: values.status,
-        installationJson: values.installationJson,
+        capsuleJson: values.capsuleJson,
         updatedAt: values.updatedAt,
       })
       .where(
         and(
-          eq(pgSchema.installations.id, updated.id),
-          guardedCurrentDeployment,
+          eq(pgSchema.capsules.id, updated.id),
+          guardedCurrentStateVersion,
           guard.status === undefined
             ? sql`true`
-            : eq(pgSchema.installations.status, guard.status),
+            : eq(pgSchema.capsules.status, guard.status),
         ),
       )
-      .returning({ json: pgSchema.installations.installationJson });
-    const patched = normalizeOptionalInstallationRecord(
-      parseRow(rows[0]) as Installation | undefined,
+      .returning({ json: pgSchema.capsules.capsuleJson });
+    const patched = normalizeOptionalCapsuleRecord(
+      parseRow(rows[0]) as Capsule | undefined,
     );
     if (patched) return patched;
-    const actual = await this.getInstallation(id);
+    const actual = await this.getCapsule(id);
     if (!actual) return undefined;
-    throw new InstallationPatchGuardConflict({
+    throw new CapsuleStateVersionGuardConflict({
       id,
-      expectedCurrentDeploymentId: guard.currentDeploymentId,
-      actualCurrentDeploymentId: actual.currentDeploymentId,
+      expectedCurrentStateVersionId: guard.currentStateVersionId,
+      actualCurrentStateVersionId: actual.currentStateVersionId,
       expectedStatus: guard.status,
       actualStatus: actual.status,
     });
   }
 
   /**
-   * Atomic apply / destroy-apply ledger commit (spec §20 / §21 / §16). All
-   * writes — new/superseded Deployment(s), StateSnapshot, (apply) OutputSnapshot,
-   * and the guarded Installation advance — run inside ONE Postgres interactive
+   * Atomic provider-applied / destroy-apply ledger commit (spec §20 / §21 / §16). All
+   * writes — StateVersion, (apply) Output,
+   * and the guarded Capsule advance — run inside ONE Postgres interactive
    * transaction so a mid-sequence failure rolls the whole unit back instead of
    * leaving torn state. The transaction is opened through the {@link SqlClient}
    * `transaction` seam (a pinned connection), which every SqlClient implements.
    *
    * The guard is fenced in the UPDATE predicate exactly as
-   * {@link patchInstallation}: a guard miss (no row updated) re-reads to decide
-   * between `{ installation: undefined }` (row gone) and a thrown
-   * {@link InstallationPatchGuardConflict} (row moved). A thrown conflict aborts
+   * {@link patchCapsule}: a guard miss (no row updated) re-reads to decide
+   * between `{ capsule: undefined }` (row gone) and a thrown
+   * {@link CapsuleStateVersionGuardConflict} (row moved). A thrown conflict aborts
    * the transaction and rolls back every preceding write.
    */
-  async commitAppliedDeployment(
-    input: CommitAppliedDeploymentInput,
-  ): Promise<CommitAppliedDeploymentResult> {
+  async commitRunState(
+    input: CommitRunStateInput,
+  ): Promise<CommitRunStateResult> {
     return await this.#client.transaction(
       async (transaction: SqlTransaction) => {
         const txDb = this.#drizzleForClient(transaction);
-        return await this.#commitAppliedDeploymentWrites(txDb, input);
+        return await this.#commitRunStateWrites(txDb, input);
+      },
+    );
+  }
+
+  async commitResourceRun(
+    input: CommitResourceRunInput,
+  ): Promise<CommitResourceRunResult> {
+    return await this.#client.transaction(
+      async (transaction: SqlTransaction) => {
+        const db = this.#drizzleForClient(transaction);
+        const committed = await pgUpdateTerminalRunWithLease(
+          db,
+          input.applyRunTerminal.operation === "destroy"
+            ? "destroy_apply"
+            : "apply",
+          RUN_KINDS_APPLY,
+          input.applyRunTerminal,
+          input.applyRunLeaseToken,
+        );
+        if (!committed) return { applyRunLeaseLost: true };
+        await pgUpsertRun(
+          db,
+          input.planRunApplied.operation === "destroy"
+            ? "destroy_plan"
+            : "plan",
+          input.planRunApplied,
+        );
+        return {};
       },
     );
   }
@@ -1215,18 +1389,18 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           input.restoreRunLeaseToken,
         );
         if (!restoreRunCommitted) return { restoreRunLeaseLost: true };
-        await pgUpsertStateSnapshot(db, input.stateSnapshot);
+        await pgUpsertStateVersion(db, input.stateVersion);
 
-        const { installationPatch } = input;
-        const current = await this.#getInstallationOn(db, installationPatch.id);
-        if (!current) return { installation: undefined };
-        const guard = installationPatch.guard;
+        const { capsulePatch } = input;
+        const current = await this.#getCapsuleOn(db, capsulePatch.id);
+        if (!current) return { capsule: undefined };
+        const guard = capsulePatch.guard;
         if (
           current.currentStateGeneration !== guard.currentStateGeneration ||
           (guard.status !== undefined && current.status !== guard.status)
         ) {
-          throw new InstallationStateGenerationGuardConflict({
-            id: installationPatch.id,
+          throw new CapsuleStateGenerationGuardConflict({
+            id: capsulePatch.id,
             expectedCurrentStateGeneration: guard.currentStateGeneration,
             actualCurrentStateGeneration: current.currentStateGeneration,
             expectedStatus: guard.status,
@@ -1234,42 +1408,42 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           });
         }
 
-        const updated: Installation = {
+        const updated: Capsule = {
           ...current,
-          ...installationPatch.patch,
+          ...capsulePatch.patch,
         };
-        const values = installationValues(updated);
+        const values = capsuleValues(updated);
         const rows = await db
-          .update(pgSchema.installations)
+          .update(pgSchema.capsules)
           .set({
-            spaceId: values.spaceId,
+            workspaceId: values.workspaceId,
             name: values.name,
             environment: values.environment,
             sourceId: values.sourceId,
             installConfigId: values.installConfigId,
-            currentDeploymentId: values.currentDeploymentId,
+            currentStateVersionId: values.currentStateVersionId,
             status: values.status,
-            installationJson: values.installationJson,
+            capsuleJson: values.capsuleJson,
             updatedAt: values.updatedAt,
           })
           .where(
             and(
-              eq(pgSchema.installations.id, updated.id),
-              sql`COALESCE((${pgSchema.installations.installationJson}->>'currentStateGeneration')::integer, 0) = ${guard.currentStateGeneration}`,
+              eq(pgSchema.capsules.id, updated.id),
+              sql`COALESCE((${pgSchema.capsules.capsuleJson}->>'currentStateGeneration')::integer, 0) = ${guard.currentStateGeneration}`,
               guard.status === undefined
                 ? sql`true`
-                : eq(pgSchema.installations.status, guard.status),
+                : eq(pgSchema.capsules.status, guard.status),
             ),
           )
-          .returning({ json: pgSchema.installations.installationJson });
-        const patched = normalizeOptionalInstallationRecord(
-          parseRow(rows[0]) as Installation | undefined,
+          .returning({ json: pgSchema.capsules.capsuleJson });
+        const patched = normalizeOptionalCapsuleRecord(
+          parseRow(rows[0]) as Capsule | undefined,
         );
-        if (patched) return { installation: patched };
-        const actual = await this.#getInstallationOn(db, installationPatch.id);
-        if (!actual) return { installation: undefined };
-        throw new InstallationStateGenerationGuardConflict({
-          id: installationPatch.id,
+        if (patched) return { capsule: patched };
+        const actual = await this.#getCapsuleOn(db, capsulePatch.id);
+        if (!actual) return { capsule: undefined };
+        throw new CapsuleStateGenerationGuardConflict({
+          id: capsulePatch.id,
           expectedCurrentStateGeneration: guard.currentStateGeneration,
           actualCurrentStateGeneration: actual.currentStateGeneration,
           expectedStatus: guard.status,
@@ -1281,15 +1455,15 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
 
   /**
    * Runs the apply-commit write set against the given drizzle handle (the shared
-   * `#db` or a transaction-bound one). Returns `{ installation }` patched, or
-   * `{ installation: undefined }` on a guard miss whose installation row is gone;
-   * throws {@link InstallationPatchGuardConflict} on a guard conflict.
+   * `#db` or a transaction-bound one). Returns `{ capsule }` patched, or
+   * `{ capsule: undefined }` on a guard miss whose Capsule row is gone;
+   * throws {@link CapsuleStateVersionGuardConflict} on a guard conflict.
    */
-  async #commitAppliedDeploymentWrites(
+  async #commitRunStateWrites(
     db: PgRemoteDatabase<typeof pgSchema>,
-    input: CommitAppliedDeploymentInput,
-  ): Promise<CommitAppliedDeploymentResult> {
-    const { installationPatch } = input;
+    input: CommitRunStateInput,
+  ): Promise<CommitRunStateResult> {
+    const { capsulePatch } = input;
     let applyRunCommitted = false;
     if (input.applyRunTerminal && input.applyRunLeaseToken !== undefined) {
       applyRunCommitted = await pgUpdateTerminalRunWithLease(
@@ -1303,18 +1477,12 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       );
       if (!applyRunCommitted) return { applyRunLeaseLost: true };
     }
-    if (input.newDeployment) {
-      await pgUpsertDeployment(db, input.newDeployment);
-    }
-    if (input.supersededDeployment) {
-      await pgUpsertDeployment(db, input.supersededDeployment);
-    }
-    await pgUpsertStateSnapshot(db, input.stateSnapshot);
-    if (input.outputSnapshot) {
-      await pgUpsertOutputSnapshot(db, input.outputSnapshot);
+    await pgUpsertStateVersion(db, input.stateVersion);
+    if (input.output) {
+      await pgUpsertOutput(db, input.output);
     }
     // Commit-tail fold (S2): the succeeded ApplyRun + the applied PlanRun land in
-    // the SAME interactive transaction as the Deployment. The apply terminal
+    // the SAME interactive transaction as the StateVersion. The apply terminal
     // clears its lease fence (`lease_token = NULL`, mirrors transitionRun
     // clearLeaseToken); the plan patch is a plain row write (already terminal).
     if (input.applyRunTerminal && !applyRunCommitted) {
@@ -1337,95 +1505,83 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         input.planRunApplied,
       );
     }
-    // Guarded Installation advance, fenced on current_deployment_id (and
+    // Guarded Capsule advance, fenced on current_state_version_id (and
     // optionally status) so the patch lands atomically with the writes above.
-    const guard = installationPatch.guard;
-    const current = await this.#getInstallationOn(db, installationPatch.id);
-    if (!current) return { installation: undefined };
+    const guard = capsulePatch.guard;
+    const current = await this.#getCapsuleOn(db, capsulePatch.id);
+    if (!current) return { capsule: undefined };
     if (
-      current.currentDeploymentId !== guard.currentDeploymentId ||
+      current.currentStateVersionId !== guard.currentStateVersionId ||
       (guard.status !== undefined && current.status !== guard.status)
     ) {
-      throw new InstallationPatchGuardConflict({
-        id: installationPatch.id,
-        expectedCurrentDeploymentId: guard.currentDeploymentId,
-        actualCurrentDeploymentId: current.currentDeploymentId,
+      throw new CapsuleStateVersionGuardConflict({
+        id: capsulePatch.id,
+        expectedCurrentStateVersionId: guard.currentStateVersionId,
+        actualCurrentStateVersionId: current.currentStateVersionId,
         expectedStatus: guard.status,
         actualStatus: current.status,
       });
     }
-    const updated: Installation = { ...current, ...installationPatch.patch };
-    const values = installationValues(updated);
-    const guardedCurrentDeployment =
-      guard.currentDeploymentId === undefined ||
-      guard.currentDeploymentId === null
-        ? isNull(pgSchema.installations.currentDeploymentId)
+    const updated: Capsule = { ...current, ...capsulePatch.patch };
+    const values = capsuleValues(updated);
+    const guardedCurrentStateVersion =
+      guard.currentStateVersionId === undefined ||
+      guard.currentStateVersionId === null
+        ? isNull(pgSchema.capsules.currentStateVersionId)
         : eq(
-            pgSchema.installations.currentDeploymentId,
-            guard.currentDeploymentId,
+            pgSchema.capsules.currentStateVersionId,
+            guard.currentStateVersionId,
           );
     const rows = await db
-      .update(pgSchema.installations)
+      .update(pgSchema.capsules)
       .set({
-        spaceId: values.spaceId,
+        workspaceId: values.workspaceId,
         name: values.name,
         environment: values.environment,
         sourceId: values.sourceId,
         installConfigId: values.installConfigId,
-        currentDeploymentId: values.currentDeploymentId,
+        currentStateVersionId: values.currentStateVersionId,
         status: values.status,
-        installationJson: values.installationJson,
+        capsuleJson: values.capsuleJson,
         updatedAt: values.updatedAt,
       })
       .where(
         and(
-          eq(pgSchema.installations.id, updated.id),
-          guardedCurrentDeployment,
+          eq(pgSchema.capsules.id, updated.id),
+          guardedCurrentStateVersion,
           guard.status === undefined
             ? sql`true`
-            : eq(pgSchema.installations.status, guard.status),
+            : eq(pgSchema.capsules.status, guard.status),
         ),
       )
-      .returning({ json: pgSchema.installations.installationJson });
-    const patched = normalizeOptionalInstallationRecord(
-      parseRow(rows[0]) as Installation | undefined,
+      .returning({ json: pgSchema.capsules.capsuleJson });
+    const patched = normalizeOptionalCapsuleRecord(
+      parseRow(rows[0]) as Capsule | undefined,
     );
-    if (patched) {
-      const outputSyncState = input.outputSyncRevisionBump
-        ? await pgBumpWorkspaceOutputSyncRevision(
-            db,
-            input.outputSyncRevisionBump.workspaceId,
-            input.outputSyncRevisionBump.updatedAt,
-          )
-        : undefined;
-      return {
-        installation: patched,
-        ...(outputSyncState ? { outputSyncState } : {}),
-      };
-    }
-    const actual = await this.#getInstallationOn(db, installationPatch.id);
-    if (!actual) return { installation: undefined };
-    throw new InstallationPatchGuardConflict({
-      id: installationPatch.id,
-      expectedCurrentDeploymentId: guard.currentDeploymentId,
-      actualCurrentDeploymentId: actual.currentDeploymentId,
+    if (patched) return { capsule: patched };
+    const actual = await this.#getCapsuleOn(db, capsulePatch.id);
+    if (!actual) return { capsule: undefined };
+    throw new CapsuleStateVersionGuardConflict({
+      id: capsulePatch.id,
+      expectedCurrentStateVersionId: guard.currentStateVersionId,
+      actualCurrentStateVersionId: actual.currentStateVersionId,
       expectedStatus: guard.status,
       actualStatus: actual.status,
     });
   }
 
-  /** Reads one Installation by id on the given drizzle handle (tx-aware). */
-  async #getInstallationOn(
+  /** Reads one Capsule by id on the given drizzle handle (tx-aware). */
+  async #getCapsuleOn(
     db: PgRemoteDatabase<typeof pgSchema>,
     id: string,
-  ): Promise<Installation | undefined> {
+  ): Promise<Capsule | undefined> {
     const rows = await db
-      .select({ json: pgSchema.installations.installationJson })
-      .from(pgSchema.installations)
-      .where(eq(pgSchema.installations.id, id))
+      .select({ json: pgSchema.capsules.capsuleJson })
+      .from(pgSchema.capsules)
+      .where(eq(pgSchema.capsules.id, id))
       .limit(1);
-    return normalizeOptionalInstallationRecord(
-      parseRow(rows[0]) as Installation | undefined,
+    return normalizeOptionalCapsuleRecord(
+      parseRow(rows[0]) as Capsule | undefined,
     );
   }
 
@@ -1450,98 +1606,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
-  // --- deployments (§21, new shape) -----------------------------------------
-
-  async putDeployment(deployment: Deployment): Promise<Deployment> {
-    await pgUpsertDeployment(this.#db, deployment);
-    return deployment;
-  }
-
-  async getDeployment(id: string): Promise<Deployment | undefined> {
-    return await this.#pgFirstJson<Deployment>(
-      pgSchema.deployments,
-      pgSchema.deployments.deploymentJson,
-      eq(pgSchema.deployments.id, id),
-    );
-  }
-
-  async listDeploymentsByIds(
-    ids: readonly string[],
-  ): Promise<readonly Deployment[]> {
-    const uniqueIds = [...new Set(ids.filter((id) => id.length > 0))];
-    if (uniqueIds.length === 0) return [];
-    return await this.#pgManyJson<Deployment>(
-      pgSchema.deployments,
-      pgSchema.deployments.deploymentJson,
-      {
-        where: inArray(pgSchema.deployments.id, uniqueIds),
-      },
-    );
-  }
-
-  async listDeployments(
-    installationId: string,
-  ): Promise<readonly Deployment[]> {
-    return await this.#pgManyJson<Deployment>(
-      pgSchema.deployments,
-      pgSchema.deployments.deploymentJson,
-      {
-        where: eq(pgSchema.deployments.installationId, installationId),
-        orderBy: [
-          asc(pgSchema.deployments.createdAt),
-          asc(pgSchema.deployments.id),
-        ],
-      },
-    );
-  }
-
-  async listDeploymentsBySpace(
-    spaceId: string,
-  ): Promise<readonly Deployment[]> {
-    return await this.#pgManyJson<Deployment>(
-      pgSchema.deployments,
-      pgSchema.deployments.deploymentJson,
-      {
-        where: eq(pgSchema.deployments.spaceId, spaceId),
-        orderBy: [
-          asc(pgSchema.deployments.createdAt),
-          asc(pgSchema.deployments.id),
-        ],
-      },
-    );
-  }
-
-  async listDeploymentsPage(
-    installationId: string,
-    params: PageParams,
-  ): Promise<Page<Deployment>> {
-    const limit = clampPageLimit(params.limit);
-    const rows = await this.#pgManyJson<Deployment>(
-      pgSchema.deployments,
-      pgSchema.deployments.deploymentJson,
-      {
-        where: pgKeysetWhere(
-          eq(pgSchema.deployments.installationId, installationId),
-          pgSchema.deployments.createdAt,
-          pgSchema.deployments.id,
-          decodeCursor(params.cursor),
-        ),
-        orderBy: [
-          asc(pgSchema.deployments.createdAt),
-          asc(pgSchema.deployments.id),
-        ],
-        limit: limit + 1,
-      },
-    );
-    return pageFromProbe(rows, limit);
-  }
-
   // --- connections + sealed secret blobs ------------------------------------
 
-  async putConnection(connection: Connection): Promise<Connection> {
+  async putConnection(
+    connection: ProviderConnection,
+  ): Promise<ProviderConnection> {
     await this.#pgUpsert(pgSchema.connections, {
       id: connection.id,
-      spaceId: connection.spaceId,
+      workspaceId: connection.workspaceId ?? null,
       provider: connection.provider,
       status: connection.status,
       connectionJson: connection,
@@ -1551,20 +1623,22 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return connection;
   }
 
-  async getConnection(id: string): Promise<Connection | undefined> {
-    return await this.#pgFirstJson<Connection>(
+  async getConnection(id: string): Promise<ProviderConnection | undefined> {
+    return await this.#pgFirstJson<ProviderConnection>(
       pgSchema.connections,
       pgSchema.connections.connectionJson,
       eq(pgSchema.connections.id, id),
     );
   }
 
-  async listConnections(spaceId: string): Promise<readonly Connection[]> {
-    return await this.#pgManyJson<Connection>(
+  async listConnections(
+    workspaceId: string,
+  ): Promise<readonly ProviderConnection[]> {
+    return await this.#pgManyJson<ProviderConnection>(
       pgSchema.connections,
       pgSchema.connections.connectionJson,
       {
-        where: eq(pgSchema.connections.spaceId, spaceId),
+        where: eq(pgSchema.connections.workspaceId, workspaceId),
         orderBy: [
           asc(pgSchema.connections.createdAt),
           asc(pgSchema.connections.id),
@@ -1574,16 +1648,16 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async listConnectionsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
-  ): Promise<Page<Connection>> {
+  ): Promise<Page<ProviderConnection>> {
     const limit = clampPageLimit(params.limit);
-    const rows = await this.#pgManyJson<Connection>(
+    const rows = await this.#pgManyJson<ProviderConnection>(
       pgSchema.connections,
       pgSchema.connections.connectionJson,
       {
         where: pgKeysetWhere(
-          eq(pgSchema.connections.spaceId, spaceId),
+          eq(pgSchema.connections.workspaceId, workspaceId),
           pgSchema.connections.createdAt,
           pgSchema.connections.id,
           decodeCursor(params.cursor),
@@ -1598,12 +1672,12 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return pageFromProbe(rows, limit);
   }
 
-  async listOperatorConnections(): Promise<readonly Connection[]> {
-    return await this.#pgManyJson<Connection>(
+  async listOperatorConnections(): Promise<readonly ProviderConnection[]> {
+    return await this.#pgManyJson<ProviderConnection>(
       pgSchema.connections,
       pgSchema.connections.connectionJson,
       {
-        where: isNull(pgSchema.connections.spaceId),
+        where: isNull(pgSchema.connections.workspaceId),
         orderBy: [
           asc(pgSchema.connections.createdAt),
           asc(pgSchema.connections.id),
@@ -1625,7 +1699,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       {
         id: blob.id,
         connectionId: blob.connectionId,
-        spaceId: blob.spaceId ?? null,
+        workspaceId: blob.workspaceId ?? null,
         kind: blob.kind,
         ciphertext: blob.ciphertext,
         encryptedDek: blob.encryptedDek,
@@ -1638,7 +1712,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       },
       {
         id: blob.id,
-        spaceId: blob.spaceId ?? null,
+        workspaceId: blob.workspaceId ?? null,
         kind: blob.kind,
         ciphertext: blob.ciphertext,
         encryptedDek: blob.encryptedDek,
@@ -1676,7 +1750,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putSource(source: StoredSource): Promise<StoredSource> {
     await this.#pgUpsert(pgSchema.sources, {
       id: source.id,
-      spaceId: source.spaceId,
+      workspaceId: source.workspaceId,
       status: source.status,
       sourceJson: source,
       createdAt: source.createdAt,
@@ -1693,22 +1767,22 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
-  async listSources(spaceId?: string): Promise<readonly StoredSource[]> {
+  async listSources(workspaceId?: string): Promise<readonly StoredSource[]> {
     return await this.#pgManyJson<StoredSource>(
       pgSchema.sources,
       pgSchema.sources.sourceJson,
       {
         where:
-          spaceId === undefined
+          workspaceId === undefined
             ? undefined
-            : eq(pgSchema.sources.spaceId, spaceId),
+            : eq(pgSchema.sources.workspaceId, workspaceId),
         orderBy: [asc(pgSchema.sources.createdAt), asc(pgSchema.sources.id)],
       },
     );
   }
 
   async listSourcesPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<StoredSource>> {
     const limit = clampPageLimit(params.limit);
@@ -1717,7 +1791,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       pgSchema.sources.sourceJson,
       {
         where: pgKeysetWhere(
-          eq(pgSchema.sources.spaceId, spaceId),
+          eq(pgSchema.sources.workspaceId, workspaceId),
           pgSchema.sources.createdAt,
           pgSchema.sources.id,
           decodeCursor(params.cursor),
@@ -1737,7 +1811,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     const normalized = normalizeSourceSnapshotRecord(snapshot);
     await this.#pgUpsert(pgSchema.sourceSnapshots, {
       id: normalized.id,
-      sourceId: normalized.sourceId ?? null,
+      sourceId: normalized.sourceId,
       snapshotJson: normalized,
       fetchedAt: normalized.fetchedAt,
     });
@@ -1826,24 +1900,23 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putCapsuleCompatibilityReport(
     report: CapsuleCompatibilityReport,
   ): Promise<CapsuleCompatibilityReport> {
+    const normalized = normalizeStoredCapsuleCompatibilityReport(report);
     await this.#pgUpsert(pgSchema.capsuleCompatibilityReports, {
-      id: report.id,
-      sourceId: report.sourceId ?? null,
-      installationId: report.installationId ?? null,
-      sourceSnapshotId: report.sourceSnapshotId,
-      level: report.level,
-      findingsJson: report.findings,
-      providersJson: report.providers,
-      resourcesJson: report.resources,
-      dataSourcesJson: report.dataSources,
-      provisionersJson: report.provisioners,
-      rootModuleVariablesJson: report.rootModuleVariables ?? [],
-      rootModuleOutputsJson: report.rootModuleOutputs ?? [],
-      normalizedObjectKey: report.normalizedObjectKey ?? null,
-      normalizedDigest: report.normalizedDigest ?? null,
-      createdAt: report.createdAt,
+      id: normalized.id,
+      sourceId: normalized.sourceId ?? null,
+      capsuleId: normalized.capsuleId ?? null,
+      sourceSnapshotId: normalized.sourceSnapshotId,
+      level: normalized.level,
+      findingsJson: normalized.findings,
+      providersJson: normalized.providers,
+      resourcesJson: normalized.resources,
+      dataSourcesJson: normalized.dataSources,
+      provisionersJson: normalized.provisioners,
+      rootModuleVariablesJson: normalized.rootModuleVariables ?? [],
+      rootModuleOutputsJson: normalized.rootModuleOutputs ?? [],
+      createdAt: normalized.createdAt,
     });
-    return report;
+    return normalized;
   }
 
   async getCapsuleCompatibilityReport(
@@ -1858,10 +1931,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     if (!row) return undefined;
     return {
       id: row.id,
-      ...(row.sourceId ? { sourceId: row.sourceId } : {}),
-      ...(row.installationId ? { installationId: row.installationId } : {}),
+      sourceId: compatibilityReportSourceId(row.sourceId),
+      ...(row.capsuleId ? { capsuleId: row.capsuleId } : {}),
       sourceSnapshotId: row.sourceSnapshotId,
-      level: row.level as CapsuleCompatibilityReport["level"],
+      level: normalizeStoredCapsuleCompatibilityLevel(row.level),
       findings: parseJson(
         row.findingsJson,
       ) as CapsuleCompatibilityReport["findings"],
@@ -1883,12 +1956,6 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       rootModuleOutputs: parseJson(
         row.rootModuleOutputsJson,
       ) as CapsuleCompatibilityReport["rootModuleOutputs"],
-      ...(row.normalizedObjectKey
-        ? { normalizedObjectKey: row.normalizedObjectKey }
-        : {}),
-      ...(row.normalizedDigest
-        ? { normalizedDigest: row.normalizedDigest }
-        : {}),
       createdAt: row.createdAt,
     };
   }
@@ -1897,7 +1964,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     sourceSnapshotId: string,
     options: {
       readonly sourceId?: string;
-      readonly installationId?: string;
+      readonly capsuleId?: string;
     } = {},
   ): Promise<CapsuleCompatibilityReport | undefined> {
     const filters = [
@@ -1908,20 +1975,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     ];
     if (options.sourceId) {
       filters.push(
-        or(
-          isNull(pgSchema.capsuleCompatibilityReports.sourceId),
-          eq(pgSchema.capsuleCompatibilityReports.sourceId, options.sourceId),
-        )!,
+        eq(pgSchema.capsuleCompatibilityReports.sourceId, options.sourceId),
       );
     }
-    if (options.installationId) {
+    if (options.capsuleId) {
       filters.push(
         or(
-          isNull(pgSchema.capsuleCompatibilityReports.installationId),
-          eq(
-            pgSchema.capsuleCompatibilityReports.installationId,
-            options.installationId,
-          ),
+          isNull(pgSchema.capsuleCompatibilityReports.capsuleId),
+          eq(pgSchema.capsuleCompatibilityReports.capsuleId, options.capsuleId),
         )!,
       );
     }
@@ -1938,10 +1999,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     if (!row) return undefined;
     return {
       id: row.id,
-      ...(row.sourceId ? { sourceId: row.sourceId } : {}),
-      ...(row.installationId ? { installationId: row.installationId } : {}),
+      sourceId: compatibilityReportSourceId(row.sourceId),
+      ...(row.capsuleId ? { capsuleId: row.capsuleId } : {}),
       sourceSnapshotId: row.sourceSnapshotId,
-      level: row.level as CapsuleCompatibilityReport["level"],
+      level: normalizeStoredCapsuleCompatibilityLevel(row.level),
       findings: parseJson(
         row.findingsJson,
       ) as CapsuleCompatibilityReport["findings"],
@@ -1963,39 +2024,30 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       rootModuleOutputs: parseJson(
         row.rootModuleOutputsJson,
       ) as CapsuleCompatibilityReport["rootModuleOutputs"],
-      ...(row.normalizedObjectKey
-        ? { normalizedObjectKey: row.normalizedObjectKey }
-        : {}),
-      ...(row.normalizedDigest
-        ? { normalizedDigest: row.normalizedDigest }
-        : {}),
       createdAt: row.createdAt,
     };
   }
 
-  // --- provider env binding sets (§9, keyed (installation_id, environment)) --
+  // --- Provider Binding sets (physical key: installation_id, environment) --
 
-  async putInstallationProviderEnvBindingSet(
-    profile: InstallationProviderEnvBindingSet,
-  ): Promise<InstallationProviderEnvBindingSet> {
-    // One profile per (installation, environment): delete any stale row for the
+  async putProviderBindingSet(
+    profile: ProviderBindingSet,
+  ): Promise<ProviderBindingSet> {
+    // One profile per (Capsule, environment): delete any stale row for the
     // same pair under a different id before upserting.
     await this.#db
-      .delete(pgSchema.providerEnvBindingSets)
+      .delete(pgSchema.providerBindingSets)
       .where(
         and(
-          eq(
-            pgSchema.providerEnvBindingSets.installationId,
-            profile.installationId,
-          ),
-          eq(pgSchema.providerEnvBindingSets.environment, profile.environment),
-          ne(pgSchema.providerEnvBindingSets.id, profile.id),
+          eq(pgSchema.providerBindingSets.capsuleId, profile.capsuleId),
+          eq(pgSchema.providerBindingSets.environment, profile.environment),
+          ne(pgSchema.providerBindingSets.id, profile.id),
         ),
       );
-    await this.#pgUpsert(pgSchema.providerEnvBindingSets, {
+    await this.#pgUpsert(pgSchema.providerBindingSets, {
       id: profile.id,
-      spaceId: profile.spaceId,
-      installationId: profile.installationId,
+      workspaceId: profile.workspaceId,
+      capsuleId: profile.capsuleId,
       environment: profile.environment,
       profileJson: profile,
       createdAt: profile.createdAt,
@@ -2004,35 +2056,35 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return profile;
   }
 
-  async deleteInstallationProviderEnvBindingSet(
-    installationId: string,
+  async deleteProviderBindingSet(
+    capsuleId: string,
     environment: string,
   ): Promise<void> {
     await this.#db
-      .delete(pgSchema.providerEnvBindingSets)
+      .delete(pgSchema.providerBindingSets)
       .where(
         and(
-          eq(pgSchema.providerEnvBindingSets.installationId, installationId),
-          eq(pgSchema.providerEnvBindingSets.environment, environment),
+          eq(pgSchema.providerBindingSets.capsuleId, capsuleId),
+          eq(pgSchema.providerBindingSets.environment, environment),
         ),
       );
   }
 
-  async getInstallationProviderEnvBindingSetByInstallation(
-    installationId: string,
+  async getProviderBindingSetByCapsule(
+    capsuleId: string,
     environment: string,
-  ): Promise<InstallationProviderEnvBindingSet | undefined> {
-    const rows = await this.#pgManyJson<InstallationProviderEnvBindingSet>(
-      pgSchema.providerEnvBindingSets,
-      pgSchema.providerEnvBindingSets.profileJson,
+  ): Promise<ProviderBindingSet | undefined> {
+    const rows = await this.#pgManyJson<ProviderBindingSet>(
+      pgSchema.providerBindingSets,
+      pgSchema.providerBindingSets.profileJson,
       {
         where: and(
-          eq(pgSchema.providerEnvBindingSets.installationId, installationId),
-          eq(pgSchema.providerEnvBindingSets.environment, environment),
+          eq(pgSchema.providerBindingSets.capsuleId, capsuleId),
+          eq(pgSchema.providerBindingSets.environment, environment),
         ),
         orderBy: [
-          desc(pgSchema.providerEnvBindingSets.createdAt),
-          desc(pgSchema.providerEnvBindingSets.id),
+          desc(pgSchema.providerBindingSets.createdAt),
+          desc(pgSchema.providerBindingSets.id),
         ],
         limit: 1,
       },
@@ -2040,58 +2092,77 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return rows[0];
   }
 
-  // --- state_snapshots (§20, keyed (installation_id, environment, generation)) -
+  // --- StateVersion (physical key: installation_id, environment, generation) -
 
-  async putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot> {
-    await pgUpsertStateSnapshot(this.#db, snapshot);
+  async putStateVersion(snapshot: StateVersion): Promise<StateVersion> {
+    await pgUpsertStateVersion(this.#db, snapshot);
     return snapshot;
   }
 
-  async getLatestStateSnapshot(
-    installationId: string,
+  async getStateVersion(id: string): Promise<StateVersion | undefined> {
+    return await this.#pgFirstJson<StateVersion>(
+      pgSchema.stateVersions,
+      pgSchema.stateVersions.snapshotJson,
+      eq(pgSchema.stateVersions.id, id),
+    );
+  }
+
+  async getLatestStateVersion(
+    capsuleId: string,
     environment: string,
-  ): Promise<StateSnapshot | undefined> {
-    const rows = await this.#pgManyJson<StateSnapshot>(
-      pgSchema.stateSnapshots,
-      pgSchema.stateSnapshots.snapshotJson,
+  ): Promise<StateVersion | undefined> {
+    const rows = await this.#pgManyJson<StateVersion>(
+      pgSchema.stateVersions,
+      pgSchema.stateVersions.snapshotJson,
       {
         where: and(
-          eq(pgSchema.stateSnapshots.installationId, installationId),
-          eq(pgSchema.stateSnapshots.environment, environment),
+          eq(pgSchema.stateVersions.capsuleId, capsuleId),
+          eq(pgSchema.stateVersions.environment, environment),
         ),
-        orderBy: [desc(pgSchema.stateSnapshots.generation)],
+        orderBy: [desc(pgSchema.stateVersions.generation)],
         limit: 1,
       },
     );
     return rows[0];
   }
 
-  async listStateSnapshots(
-    installationId: string,
+  async listStateVersions(
+    capsuleId: string,
     environment: string,
-  ): Promise<readonly StateSnapshot[]> {
-    return await this.#pgManyJson<StateSnapshot>(
-      pgSchema.stateSnapshots,
-      pgSchema.stateSnapshots.snapshotJson,
+  ): Promise<readonly StateVersion[]> {
+    return await this.#pgManyJson<StateVersion>(
+      pgSchema.stateVersions,
+      pgSchema.stateVersions.snapshotJson,
       {
         where: and(
-          eq(pgSchema.stateSnapshots.installationId, installationId),
-          eq(pgSchema.stateSnapshots.environment, environment),
+          eq(pgSchema.stateVersions.capsuleId, capsuleId),
+          eq(pgSchema.stateVersions.environment, environment),
         ),
-        orderBy: [asc(pgSchema.stateSnapshots.generation)],
+        orderBy: [asc(pgSchema.stateVersions.generation)],
       },
     );
   }
 
-  async listStateSnapshotsBySpace(
-    spaceId: string,
-  ): Promise<readonly StateSnapshot[]> {
-    return await this.#pgManyJson<StateSnapshot>(
-      pgSchema.stateSnapshots,
-      pgSchema.stateSnapshots.snapshotJson,
+  async listStateVersionsPage(
+    capsuleId: string,
+    environment: string,
+    params: PageParams,
+  ): Promise<Page<StateVersion>> {
+    return pageSorted(
+      await this.listStateVersions(capsuleId, environment),
+      params,
+    );
+  }
+
+  async listStateVersionsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly StateVersion[]> {
+    return await this.#pgManyJson<StateVersion>(
+      pgSchema.stateVersions,
+      pgSchema.stateVersions.snapshotJson,
       {
-        where: eq(pgSchema.stateSnapshots.spaceId, spaceId),
-        orderBy: [asc(pgSchema.stateSnapshots.generation)],
+        where: eq(pgSchema.stateVersions.workspaceId, workspaceId),
+        orderBy: [asc(pgSchema.stateVersions.generation)],
       },
     );
   }
@@ -2099,11 +2170,11 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   // --- installation_dependencies (§14 / §15) --------------------------------
 
   async putDependency(dependency: Dependency): Promise<Dependency> {
-    await this.#pgUpsert(pgSchema.installationDependencies, {
+    await this.#pgUpsert(pgSchema.dependencies, {
       id: dependency.id,
-      spaceId: dependency.spaceId,
-      producerInstallationId: dependency.producerInstallationId,
-      consumerInstallationId: dependency.consumerInstallationId,
+      workspaceId: dependency.workspaceId,
+      producerCapsuleId: dependency.producerCapsuleId,
+      consumerCapsuleId: dependency.consumerCapsuleId,
       dependencyJson: dependency,
       createdAt: dependency.createdAt,
     });
@@ -2112,61 +2183,55 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
 
   async getDependency(id: string): Promise<Dependency | undefined> {
     return await this.#pgFirstJson<Dependency>(
-      pgSchema.installationDependencies,
-      pgSchema.installationDependencies.dependencyJson,
-      eq(pgSchema.installationDependencies.id, id),
+      pgSchema.dependencies,
+      pgSchema.dependencies.dependencyJson,
+      eq(pgSchema.dependencies.id, id),
     );
   }
 
-  async listDependenciesBySpace(
-    spaceId: string,
+  async listDependenciesByWorkspace(
+    workspaceId: string,
   ): Promise<readonly Dependency[]> {
     return await this.#pgManyJson<Dependency>(
-      pgSchema.installationDependencies,
-      pgSchema.installationDependencies.dependencyJson,
+      pgSchema.dependencies,
+      pgSchema.dependencies.dependencyJson,
       {
-        where: eq(pgSchema.installationDependencies.spaceId, spaceId),
+        where: eq(pgSchema.dependencies.workspaceId, workspaceId),
         orderBy: [
-          asc(pgSchema.installationDependencies.createdAt),
-          asc(pgSchema.installationDependencies.id),
+          asc(pgSchema.dependencies.createdAt),
+          asc(pgSchema.dependencies.id),
         ],
       },
     );
   }
 
   async listDependenciesForConsumer(
-    consumerInstallationId: string,
+    consumerCapsuleId: string,
   ): Promise<readonly Dependency[]> {
     return await this.#pgManyJson<Dependency>(
-      pgSchema.installationDependencies,
-      pgSchema.installationDependencies.dependencyJson,
+      pgSchema.dependencies,
+      pgSchema.dependencies.dependencyJson,
       {
-        where: eq(
-          pgSchema.installationDependencies.consumerInstallationId,
-          consumerInstallationId,
-        ),
+        where: eq(pgSchema.dependencies.consumerCapsuleId, consumerCapsuleId),
         orderBy: [
-          asc(pgSchema.installationDependencies.createdAt),
-          asc(pgSchema.installationDependencies.id),
+          asc(pgSchema.dependencies.createdAt),
+          asc(pgSchema.dependencies.id),
         ],
       },
     );
   }
 
   async listDependenciesForProducer(
-    producerInstallationId: string,
+    producerCapsuleId: string,
   ): Promise<readonly Dependency[]> {
     return await this.#pgManyJson<Dependency>(
-      pgSchema.installationDependencies,
-      pgSchema.installationDependencies.dependencyJson,
+      pgSchema.dependencies,
+      pgSchema.dependencies.dependencyJson,
       {
-        where: eq(
-          pgSchema.installationDependencies.producerInstallationId,
-          producerInstallationId,
-        ),
+        where: eq(pgSchema.dependencies.producerCapsuleId, producerCapsuleId),
         orderBy: [
-          asc(pgSchema.installationDependencies.createdAt),
-          asc(pgSchema.installationDependencies.id),
+          asc(pgSchema.dependencies.createdAt),
+          asc(pgSchema.dependencies.id),
         ],
       },
     );
@@ -2174,8 +2239,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
 
   async deleteDependency(id: string): Promise<boolean> {
     return await this.#pgDelete(
-      pgSchema.installationDependencies,
-      eq(pgSchema.installationDependencies.id, id),
+      pgSchema.dependencies,
+      eq(pgSchema.dependencies.id, id),
     );
   }
 
@@ -2205,31 +2270,29 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
 
   // --- output_snapshots (§16) -----------------------------------------------
 
-  async putOutputSnapshot(snapshot: OutputSnapshot): Promise<OutputSnapshot> {
-    await pgUpsertOutputSnapshot(this.#db, snapshot);
+  async putOutput(snapshot: Output): Promise<Output> {
+    await pgUpsertOutput(this.#db, snapshot);
     return snapshot;
   }
 
-  async getOutputSnapshot(id: string): Promise<OutputSnapshot | undefined> {
-    return await this.#pgFirstJson<OutputSnapshot>(
-      pgSchema.outputSnapshots,
-      pgSchema.outputSnapshots.snapshotJson,
-      eq(pgSchema.outputSnapshots.id, id),
+  async getOutput(id: string): Promise<Output | undefined> {
+    return await this.#pgFirstJson<Output>(
+      pgSchema.outputs,
+      pgSchema.outputs.snapshotJson,
+      eq(pgSchema.outputs.id, id),
     );
   }
 
-  async getLatestOutputSnapshot(
-    installationId: string,
-  ): Promise<OutputSnapshot | undefined> {
-    const rows = await this.#pgManyJson<OutputSnapshot>(
-      pgSchema.outputSnapshots,
-      pgSchema.outputSnapshots.snapshotJson,
+  async getLatestOutput(capsuleId: string): Promise<Output | undefined> {
+    const rows = await this.#pgManyJson<Output>(
+      pgSchema.outputs,
+      pgSchema.outputs.snapshotJson,
       {
-        where: eq(pgSchema.outputSnapshots.installationId, installationId),
+        where: eq(pgSchema.outputs.capsuleId, capsuleId),
         orderBy: [
-          desc(pgSchema.outputSnapshots.stateGeneration),
-          desc(pgSchema.outputSnapshots.createdAt),
-          desc(pgSchema.outputSnapshots.id),
+          desc(pgSchema.outputs.stateGeneration),
+          desc(pgSchema.outputs.createdAt),
+          desc(pgSchema.outputs.id),
         ],
         limit: 1,
       },
@@ -2237,35 +2300,33 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return rows[0];
   }
 
-  async listOutputSnapshots(
-    installationId: string,
-  ): Promise<readonly OutputSnapshot[]> {
-    return await this.#pgManyJson<OutputSnapshot>(
-      pgSchema.outputSnapshots,
-      pgSchema.outputSnapshots.snapshotJson,
+  async listOutputs(capsuleId: string): Promise<readonly Output[]> {
+    return await this.#pgManyJson<Output>(
+      pgSchema.outputs,
+      pgSchema.outputs.snapshotJson,
       {
-        where: eq(pgSchema.outputSnapshots.installationId, installationId),
+        where: eq(pgSchema.outputs.capsuleId, capsuleId),
         orderBy: [
-          pgSchema.outputSnapshots.stateGeneration,
-          pgSchema.outputSnapshots.createdAt,
-          pgSchema.outputSnapshots.id,
+          pgSchema.outputs.stateGeneration,
+          pgSchema.outputs.createdAt,
+          pgSchema.outputs.id,
         ],
       },
     );
   }
 
-  async listOutputSnapshotsBySpace(
-    spaceId: string,
-  ): Promise<readonly OutputSnapshot[]> {
-    return await this.#pgManyJson<OutputSnapshot>(
-      pgSchema.outputSnapshots,
-      pgSchema.outputSnapshots.snapshotJson,
+  async listOutputsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly Output[]> {
+    return await this.#pgManyJson<Output>(
+      pgSchema.outputs,
+      pgSchema.outputs.snapshotJson,
       {
-        where: eq(pgSchema.outputSnapshots.spaceId, spaceId),
+        where: eq(pgSchema.outputs.workspaceId, workspaceId),
         orderBy: [
-          pgSchema.outputSnapshots.stateGeneration,
-          pgSchema.outputSnapshots.createdAt,
-          pgSchema.outputSnapshots.id,
+          pgSchema.outputs.stateGeneration,
+          pgSchema.outputs.createdAt,
+          pgSchema.outputs.id,
         ],
       },
     );
@@ -2276,9 +2337,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putOutputShare(share: OutputShare): Promise<OutputShare> {
     await this.#pgUpsert(pgSchema.outputShares, {
       id: share.id,
-      fromSpaceId: share.fromSpaceId,
-      toSpaceId: share.toSpaceId,
-      producerInstallationId: share.producerInstallationId,
+      fromWorkspaceId: share.fromWorkspaceId,
+      toWorkspaceId: share.toWorkspaceId,
+      producerCapsuleId: share.producerCapsuleId,
       status: share.status,
       shareJson: share,
       createdAt: share.createdAt,
@@ -2294,14 +2355,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
-  async listOutputSharesFromSpace(
-    fromSpaceId: string,
+  async listOutputSharesFromWorkspace(
+    fromWorkspaceId: string,
   ): Promise<readonly OutputShare[]> {
     return await this.#pgManyJson<OutputShare>(
       pgSchema.outputShares,
       pgSchema.outputShares.shareJson,
       {
-        where: eq(pgSchema.outputShares.fromSpaceId, fromSpaceId),
+        where: eq(pgSchema.outputShares.fromWorkspaceId, fromWorkspaceId),
         orderBy: [
           asc(pgSchema.outputShares.createdAt),
           asc(pgSchema.outputShares.id),
@@ -2310,14 +2371,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
-  async listOutputSharesToSpace(
-    toSpaceId: string,
+  async listOutputSharesToWorkspace(
+    toWorkspaceId: string,
   ): Promise<readonly OutputShare[]> {
     return await this.#pgManyJson<OutputShare>(
       pgSchema.outputShares,
       pgSchema.outputShares.shareJson,
       {
-        where: eq(pgSchema.outputShares.toSpaceId, toSpaceId),
+        where: eq(pgSchema.outputShares.toWorkspaceId, toWorkspaceId),
         orderBy: [
           asc(pgSchema.outputShares.createdAt),
           asc(pgSchema.outputShares.id),
@@ -2331,7 +2392,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putRunGroup(group: RunGroup): Promise<RunGroup> {
     await this.#pgUpsert(pgSchema.runGroups, {
       id: group.id,
-      spaceId: group.spaceId,
+      workspaceId: group.workspaceId,
       type: group.type,
       groupJson: group,
       createdAt: group.createdAt,
@@ -2347,12 +2408,12 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
-  async listRunGroups(spaceId: string): Promise<readonly RunGroup[]> {
+  async listRunGroups(workspaceId: string): Promise<readonly RunGroup[]> {
     return await this.#pgManyJson<RunGroup>(
       pgSchema.runGroups,
       pgSchema.runGroups.groupJson,
       {
-        where: eq(pgSchema.runGroups.spaceId, spaceId),
+        where: eq(pgSchema.runGroups.workspaceId, workspaceId),
         orderBy: [
           asc(pgSchema.runGroups.createdAt),
           asc(pgSchema.runGroups.id),
@@ -2371,7 +2432,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putActivityEvent(event: ActivityEvent): Promise<ActivityEvent> {
     await this.#pgUpsert(pgSchema.auditEvents, {
       id: event.id,
-      spaceId: event.spaceId,
+      workspaceId: event.workspaceId,
       actorId: event.actorId ?? null,
       action: event.action,
       targetType: event.targetType,
@@ -2384,7 +2445,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async listActivityEvents(
-    spaceId: string,
+    workspaceId: string,
     options: { readonly limit?: number } = {},
   ): Promise<readonly ActivityEvent[]> {
     const limit = clampActivityLimit(options.limit);
@@ -2392,7 +2453,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       pgSchema.auditEvents,
       pgSchema.auditEvents.eventJson,
       {
-        where: eq(pgSchema.auditEvents.spaceId, spaceId),
+        where: eq(pgSchema.auditEvents.workspaceId, workspaceId),
         orderBy: [
           desc(pgSchema.auditEvents.createdAt),
           desc(pgSchema.auditEvents.id),
@@ -2400,6 +2461,38 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         limit,
       },
     );
+  }
+
+  async listActivityEventsForTargetPage(
+    workspaceId: string,
+    targetType: string,
+    targetId: string,
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>> {
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const rows = await this.#pgManyJson<ActivityEvent>(
+      pgSchema.auditEvents,
+      pgSchema.auditEvents.eventJson,
+      {
+        where: pgKeysetWhereDesc(
+          and(
+            eq(pgSchema.auditEvents.workspaceId, workspaceId),
+            eq(pgSchema.auditEvents.targetType, targetType),
+            eq(pgSchema.auditEvents.targetId, targetId),
+          ),
+          pgSchema.auditEvents.createdAt,
+          pgSchema.auditEvents.id,
+          cursor,
+        ),
+        orderBy: [
+          desc(pgSchema.auditEvents.createdAt),
+          desc(pgSchema.auditEvents.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
   }
 
   // --- credential_mint_events (spec invariant 17) ---------------------------
@@ -2415,10 +2508,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       runId: event.runId,
       // Physical columns space_id / installation_id are frozen; the contract
       // type renamed to workspaceId / capsuleId.
-      spaceId: event.workspaceId,
-      installationId: event.capsuleId ?? null,
+      workspaceId: event.workspaceId,
+      capsuleId: event.capsuleId ?? null,
       sourceId: event.sourceId ?? null,
-      connectionId: event.connectionId ?? event.providerEnvId ?? "",
+      connectionId: event.connectionId ?? "",
       phase: event.phase,
       eventJson: event,
       createdAt: event.createdAt,
@@ -2447,8 +2540,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       id: finding.id,
       // Physical columns space_id / installation_id are frozen; the contract
       // type renamed to workspaceId / capsuleId.
-      spaceId: finding.workspaceId,
-      installationId: finding.capsuleId ?? null,
+      workspaceId: finding.workspaceId,
+      capsuleId: finding.capsuleId ?? null,
       runId: finding.runId ?? null,
       severity: finding.severity,
       type: finding.type,
@@ -2459,7 +2552,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async listSecurityFindings(
-    spaceId: string,
+    workspaceId: string,
     options: { readonly runId?: string; readonly limit?: number } = {},
   ): Promise<readonly SecurityFinding[]> {
     const limit = clampActivityLimit(options.limit);
@@ -2469,9 +2562,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       {
         where:
           options.runId === undefined
-            ? eq(pgSchema.securityFindings.spaceId, spaceId)
+            ? eq(pgSchema.securityFindings.workspaceId, workspaceId)
             : and(
-                eq(pgSchema.securityFindings.spaceId, spaceId),
+                eq(pgSchema.securityFindings.workspaceId, workspaceId),
                 eq(pgSchema.securityFindings.runId, options.runId),
               ),
         orderBy: [
@@ -2483,597 +2576,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
-  // --- billing ledger (§28) -------------------------------------------------
-
-  async putBillingPlan(plan: BillingPlan): Promise<BillingPlan> {
-    const normalized = normalizeBillingPlan(plan);
-    await this.#pgUpsert(
-      pgSchema.billingPlans,
-      {
-        id: normalized.id,
-        name: normalized.name,
-        monthlyBasePrice: normalized.monthlyBasePrice,
-        includedUsdMicros: normalized.includedUsdMicros,
-        includedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.includedUsdMicros ?? 0,
-        ),
-        limitsJson: normalized.limits,
-        planJson: normalized,
-        createdAt: normalized.createdAt,
-        updatedAt: normalized.updatedAt,
-      },
-      {
-        name: normalized.name,
-        monthlyBasePrice: normalized.monthlyBasePrice,
-        includedUsdMicros: normalized.includedUsdMicros,
-        includedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.includedUsdMicros ?? 0,
-        ),
-        limitsJson: normalized.limits,
-        planJson: normalized,
-        updatedAt: normalized.updatedAt,
-      },
-      pgSchema.billingPlans.id,
-    );
-    return normalized;
-  }
-
-  async getBillingPlan(id: string): Promise<BillingPlan | undefined> {
-    const rows = await this.#pgManyJson<BillingPlan>(
-      pgSchema.billingPlans,
-      pgSchema.billingPlans.planJson,
-      {
-        where: eq(pgSchema.billingPlans.id, id),
-        limit: 1,
-      },
-    );
-    return rows[0] ? normalizeBillingPlan(rows[0]) : undefined;
-  }
-
-  async putBillingAccount(account: BillingAccount): Promise<BillingAccount> {
-    await this.#pgUpsert(
-      pgSchema.billingAccounts,
-      {
-        id: account.id,
-        ownerType: account.ownerType,
-        ownerId: account.ownerId,
-        provider: account.provider,
-        status: account.status,
-        accountJson: account,
-        createdAt: account.createdAt,
-        updatedAt: account.updatedAt,
-      },
-      {
-        ownerType: account.ownerType,
-        ownerId: account.ownerId,
-        provider: account.provider,
-        status: account.status,
-        accountJson: account,
-        updatedAt: account.updatedAt,
-      },
-      pgSchema.billingAccounts.id,
-    );
-    return account;
-  }
-
-  async getBillingAccount(id: string): Promise<BillingAccount | undefined> {
-    const rows = await this.#pgManyJson<BillingAccount>(
-      pgSchema.billingAccounts,
-      pgSchema.billingAccounts.accountJson,
-      {
-        where: eq(pgSchema.billingAccounts.id, id),
-        limit: 1,
-      },
-    );
-    return rows[0];
-  }
-
-  async getBillingAccountForOwner(
-    ownerType: BillingAccount["ownerType"],
-    ownerId: string,
-  ): Promise<BillingAccount | undefined> {
-    const rows = await this.#pgManyJson<BillingAccount>(
-      pgSchema.billingAccounts,
-      pgSchema.billingAccounts.accountJson,
-      {
-        where: and(
-          eq(pgSchema.billingAccounts.ownerType, ownerType),
-          eq(pgSchema.billingAccounts.ownerId, ownerId),
-        ),
-        limit: 1,
-      },
-    );
-    return rows[0];
-  }
-
-  async putSpaceSubscription(
-    subscription: SpaceSubscription,
-  ): Promise<SpaceSubscription> {
-    await this.#pgUpsert(
-      pgSchema.spaceSubscriptions,
-      {
-        id: subscription.id,
-        spaceId: subscription.spaceId,
-        billingAccountId: subscription.billingAccountId,
-        planId: subscription.planId,
-        status: subscription.status,
-        subscriptionJson: subscription,
-        createdAt: subscription.createdAt,
-        updatedAt: subscription.updatedAt,
-      },
-      {
-        spaceId: subscription.spaceId,
-        billingAccountId: subscription.billingAccountId,
-        planId: subscription.planId,
-        status: subscription.status,
-        subscriptionJson: subscription,
-        updatedAt: subscription.updatedAt,
-      },
-      pgSchema.spaceSubscriptions.id,
-    );
-    return subscription;
-  }
-
-  async getSpaceSubscription(
-    spaceId: string,
-  ): Promise<SpaceSubscription | undefined> {
-    const rows = await this.#pgManyJson<SpaceSubscription>(
-      pgSchema.spaceSubscriptions,
-      pgSchema.spaceSubscriptions.subscriptionJson,
-      {
-        where: eq(pgSchema.spaceSubscriptions.spaceId, spaceId),
-        orderBy: [
-          desc(pgSchema.spaceSubscriptions.updatedAt),
-          desc(pgSchema.spaceSubscriptions.id),
-        ],
-        limit: 1,
-      },
-    );
-    return rows[0];
-  }
-
-  async putCreditBalance(balance: CreditBalance): Promise<CreditBalance> {
-    const normalized = normalizeCreditBalance(balance);
-    await this.#pgUpsert(
-      pgSchema.creditBalances,
-      {
-        spaceId: normalized.spaceId,
-        availableUsdMicros: normalized.availableUsdMicros,
-        reservedUsdMicros: normalized.reservedUsdMicros,
-        monthlyIncludedUsdMicros: normalized.monthlyIncludedUsdMicros,
-        purchasedUsdMicros: normalized.purchasedUsdMicros,
-        availableCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.availableUsdMicros ?? 0,
-        ),
-        reservedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.reservedUsdMicros ?? 0,
-        ),
-        monthlyIncludedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.monthlyIncludedUsdMicros ?? 0,
-        ),
-        purchasedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.purchasedUsdMicros ?? 0,
-        ),
-        updatedAt: normalized.updatedAt,
-      },
-      {
-        availableUsdMicros: normalized.availableUsdMicros,
-        reservedUsdMicros: normalized.reservedUsdMicros,
-        monthlyIncludedUsdMicros: normalized.monthlyIncludedUsdMicros,
-        purchasedUsdMicros: normalized.purchasedUsdMicros,
-        availableCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.availableUsdMicros ?? 0,
-        ),
-        reservedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.reservedUsdMicros ?? 0,
-        ),
-        monthlyIncludedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.monthlyIncludedUsdMicros ?? 0,
-        ),
-        purchasedCredits: legacyStorageCreditsFromUsdMicros(
-          normalized.purchasedUsdMicros ?? 0,
-        ),
-        updatedAt: normalized.updatedAt,
-      },
-      pgSchema.creditBalances.spaceId,
-    );
-    return normalized;
-  }
-
-  async getCreditBalance(spaceId: string): Promise<CreditBalance | undefined> {
-    const rows = await this.#db
-      .select()
-      .from(pgSchema.creditBalances)
-      .where(eq(pgSchema.creditBalances.spaceId, spaceId))
-      .limit(1);
-    const row = rows[0];
-    if (!row) return undefined;
-    return creditBalanceFromRow(row);
-  }
-
-  async reserveCredits(
-    spaceId: string,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<CreditBalance | undefined> {
-    const usdMicros = creditAmountUsdMicros(input);
-    const legacyCredits = legacyStorageCreditsFromUsdMicros(usdMicros);
-    const rows = await this.#db
-      .update(pgSchema.creditBalances)
-      .set({
-        availableUsdMicros: sql`coalesce(${pgSchema.creditBalances.availableUsdMicros}, ${pgSchema.creditBalances.availableCredits} * 1000000) - ${usdMicros}`,
-        reservedUsdMicros: sql`coalesce(${pgSchema.creditBalances.reservedUsdMicros}, ${pgSchema.creditBalances.reservedCredits} * 1000000) + ${usdMicros}`,
-        availableCredits: sql`${pgSchema.creditBalances.availableCredits} - ${legacyCredits}`,
-        reservedCredits: sql`${pgSchema.creditBalances.reservedCredits} + ${legacyCredits}`,
-        updatedAt: input.updatedAt,
-      })
-      .where(
-        and(
-          eq(pgSchema.creditBalances.spaceId, spaceId),
-          gte(
-            sql`coalesce(${pgSchema.creditBalances.availableUsdMicros}, ${pgSchema.creditBalances.availableCredits} * 1000000)`,
-            usdMicros,
-          ),
-        ),
-      )
-      .returning();
-    const row = rows[0];
-    if (!row) return undefined;
-    return creditBalanceFromRow(row);
-  }
-
-  async addCredits(
-    spaceId: string,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<CreditBalance> {
-    const usdMicros = creditAmountUsdMicros(input);
-    const legacyCredits = legacyStorageCreditsFromUsdMicros(usdMicros);
-    // Ensure a row exists so the first grant lands (a no-op upsert seeds zero).
-    await this.#db
-      .insert(pgSchema.creditBalances)
-      .values({
-        spaceId,
-        availableUsdMicros: 0,
-        reservedUsdMicros: 0,
-        monthlyIncludedUsdMicros: 0,
-        purchasedUsdMicros: 0,
-        availableCredits: 0,
-        reservedCredits: 0,
-        monthlyIncludedCredits: 0,
-        purchasedCredits: 0,
-        updatedAt: input.updatedAt,
-      })
-      .onConflictDoNothing({ target: pgSchema.creditBalances.spaceId });
-    const rows = await this.#db
-      .update(pgSchema.creditBalances)
-      .set({
-        availableUsdMicros: sql`coalesce(${pgSchema.creditBalances.availableUsdMicros}, ${pgSchema.creditBalances.availableCredits} * 1000000) + ${usdMicros}`,
-        purchasedUsdMicros: sql`coalesce(${pgSchema.creditBalances.purchasedUsdMicros}, ${pgSchema.creditBalances.purchasedCredits} * 1000000) + ${usdMicros}`,
-        availableCredits: sql`${pgSchema.creditBalances.availableCredits} + ${legacyCredits}`,
-        purchasedCredits: sql`${pgSchema.creditBalances.purchasedCredits} + ${legacyCredits}`,
-        updatedAt: input.updatedAt,
-      })
-      .where(eq(pgSchema.creditBalances.spaceId, spaceId))
-      .returning();
-    const row = rows[0]!;
-    return creditBalanceFromRow(row);
-  }
-
-  async reconcileMonthlyCredits(
-    spaceId: string,
-    input: {
-      readonly newMonthly: number;
-      readonly periodStartIso: string;
-      readonly updatedAt: string;
-    },
-  ): Promise<CreditBalance | undefined> {
-    const newMonthlyUsdMicros = legacyCreditsToUsdMicros(input.newMonthly);
-    const newMonthlyLegacyCredits =
-      legacyStorageCreditsFromUsdMicros(newMonthlyUsdMicros);
-    // Conditional, idempotent-per-period monthly RESET: carry over purchased
-    // USD balance and reset the monthly allotment to full. Column-relative so
-    // no read is needed: available = max(0, available - oldMonthly) + newMonthly.
-    const rows = await this.#db
-      .update(pgSchema.creditBalances)
-      .set({
-        availableUsdMicros: sql`greatest(0, coalesce(${pgSchema.creditBalances.availableUsdMicros}, ${pgSchema.creditBalances.availableCredits} * 1000000) - coalesce(${pgSchema.creditBalances.monthlyIncludedUsdMicros}, ${pgSchema.creditBalances.monthlyIncludedCredits} * 1000000)) + ${newMonthlyUsdMicros}`,
-        monthlyIncludedUsdMicros: newMonthlyUsdMicros,
-        availableCredits: sql`greatest(0, ${pgSchema.creditBalances.availableCredits} - ${pgSchema.creditBalances.monthlyIncludedCredits}) + ${newMonthlyLegacyCredits}`,
-        monthlyIncludedCredits: newMonthlyLegacyCredits,
-        updatedAt: input.updatedAt,
-      })
-      .where(
-        and(
-          eq(pgSchema.creditBalances.spaceId, spaceId),
-          or(
-            ne(
-              pgSchema.creditBalances.monthlyIncludedCredits,
-              newMonthlyLegacyCredits,
-            ),
-            lt(pgSchema.creditBalances.updatedAt, input.periodStartIso),
-          ),
-        ),
-      )
-      .returning();
-    const row = rows[0];
-    if (!row) return undefined;
-    return creditBalanceFromRow(row);
-  }
-
-  async putCreditReservation(
-    reservation: CreditReservation,
-  ): Promise<CreditReservation> {
-    const normalized = normalizeCreditReservation(reservation);
-    await this.#pgUpsert(pgSchema.creditReservations, {
-      id: normalized.id,
-      spaceId: normalized.spaceId,
-      runId: normalized.runId,
-      estimatedUsdMicros: normalized.estimatedUsdMicros,
-      estimatedCredits: legacyStorageCreditsFromUsdMicros(
-        normalized.estimatedUsdMicros ?? 0,
-      ),
-      status: normalized.status,
-      mode: normalized.mode,
-      reservationJson: normalized,
-      createdAt: normalized.createdAt,
-      expiresAt: normalized.expiresAt,
-    });
-    return normalized;
-  }
-
-  async getCreditReservationForRun(
-    runId: string,
-  ): Promise<CreditReservation | undefined> {
-    const rows = await this.#pgManyJson<CreditReservation>(
-      pgSchema.creditReservations,
-      pgSchema.creditReservations.reservationJson,
-      {
-        where: eq(pgSchema.creditReservations.runId, runId),
-        orderBy: [
-          desc(pgSchema.creditReservations.createdAt),
-          desc(pgSchema.creditReservations.id),
-        ],
-        limit: 1,
-      },
-    );
-    return rows[0];
-  }
-
-  async listCreditReservations(
-    spaceId: string,
-    options: { readonly limit?: number } = {},
-  ): Promise<readonly CreditReservation[]> {
-    const rows = await this.#pgManyJson<CreditReservation>(
-      pgSchema.creditReservations,
-      pgSchema.creditReservations.reservationJson,
-      {
-        where: eq(pgSchema.creditReservations.spaceId, spaceId),
-        orderBy: [
-          desc(pgSchema.creditReservations.createdAt),
-          desc(pgSchema.creditReservations.id),
-        ],
-        limit: options.limit ?? 100,
-      },
-    );
-    return rows.map(normalizeCreditReservation);
-  }
-
-  async claimBillingAutoRechargeAttempt(
-    input: ClaimBillingAutoRechargeAttemptInput,
-  ): Promise<ClaimBillingAutoRechargeAttemptResult> {
-    const normalized = normalizeBillingAutoRechargeAttempt(input.attempt);
-    return await this.#client.transaction(async (transaction) => {
-      await transaction.query(
-        `select pg_advisory_xact_lock(hashtext($1::text))`,
-        [
-          `takosumi:auto_recharge:${normalized.spaceId}:${normalized.periodStart}`,
-        ],
-      );
-      const existing = await billingAutoRechargeAttemptByIdempotencyKeySql(
-        transaction,
-        normalized.idempotencyKey,
-      );
-      if (existing) {
-        return {
-          claimed: false,
-          attempt: existing,
-          skippedReason: "already_claimed",
-        };
-      }
-      const inserted = await transaction.query<{ json: unknown }>(
-        `insert into takosumi_billing_auto_recharge_attempts (
-           id, space_id, run_id, billing_account_id, idempotency_key,
-           period_start, period_end, requested_usd_micros,
-           monthly_limit_usd_micros, charged_usd_micros, status,
-           stripe_payment_intent_id, provider_status, failure_reason,
-           attempt_json, created_at, updated_at
-         )
-         select
-           $1::text, $2::text, $3::text, $4::text, $5::text,
-           $6::text, $7::text, $8::bigint,
-           $9::bigint, $10::bigint, $11::text,
-           $12::text, $13::text, $14::text,
-           $15::jsonb, $16::text, $17::text
-         where (
-           $18::bigint is null
-           or coalesce((
-             select sum(
-               case
-                 when status = 'succeeded'
-                   then coalesce(charged_usd_micros, requested_usd_micros)
-                 else requested_usd_micros
-               end
-             )
-             from takosumi_billing_auto_recharge_attempts
-             where space_id = $2::text
-               and period_start = $6::text
-               and status in ('pending', 'pending_unknown', 'succeeded')
-           ), 0) + $8::bigint <= $18::bigint
-         )
-         on conflict (idempotency_key) do nothing
-         returning attempt_json as json`,
-        billingAutoRechargeAttemptSqlParams(
-          normalized,
-          input.monthlyLimitUsdMicros,
-        ),
-      );
-      const row = inserted.rows[0];
-      if (row) {
-        return {
-          claimed: true,
-          attempt: normalizeBillingAutoRechargeAttempt(
-            parseJson(row.json) as BillingAutoRechargeAttempt,
-          ),
-        };
-      }
-      const raced = await billingAutoRechargeAttemptByIdempotencyKeySql(
-        transaction,
-        normalized.idempotencyKey,
-      );
-      if (raced) {
-        return {
-          claimed: false,
-          attempt: raced,
-          skippedReason: "already_claimed",
-        };
-      }
-      return {
-        claimed: false,
-        skippedReason: "monthly_limit_exceeded",
-      };
-    });
-  }
-
-  async settleBillingAutoRechargeAttempt(
-    input: SettleBillingAutoRechargeAttemptInput,
-  ): Promise<SettleBillingAutoRechargeAttemptResult> {
-    return await this.#client.transaction(
-      async (transaction: SqlTransaction) => {
-        const existingRows = await transaction.query<{ json: unknown }>(
-          `select attempt_json as json
-           from takosumi_billing_auto_recharge_attempts
-           where id = $1
-           for update`,
-          [input.attemptId],
-        );
-        const existing = existingRows.rows[0]
-          ? normalizeBillingAutoRechargeAttempt(
-              parseJson(
-                existingRows.rows[0].json,
-              ) as BillingAutoRechargeAttempt,
-            )
-          : undefined;
-        if (!existing) {
-          return {
-            settled: false,
-            skippedReason: "attempt_not_found",
-          };
-        }
-        if (existing.status === "succeeded") {
-          return {
-            settled: false,
-            attempt: existing,
-            balance: await billingCreditBalanceForSpace(
-              transaction,
-              workspaceKeyOf(existing),
-            ),
-            skippedReason: "already_succeeded",
-          };
-        }
-        const next = normalizeBillingAutoRechargeAttempt({
-          ...existing,
-          status: input.status,
-          ...(input.chargedUsdMicros !== undefined
-            ? { chargedUsdMicros: input.chargedUsdMicros }
-            : {}),
-          ...(input.stripePaymentIntentId
-            ? { stripePaymentIntentId: input.stripePaymentIntentId }
-            : {}),
-          ...(input.providerStatus
-            ? { providerStatus: input.providerStatus }
-            : {}),
-          ...(input.failureReason
-            ? { failureReason: input.failureReason }
-            : {}),
-          updatedAt: input.updatedAt,
-        });
-        await transaction.query(
-          `update takosumi_billing_auto_recharge_attempts
-           set charged_usd_micros = $2,
-               status = $3,
-               stripe_payment_intent_id = $4,
-               provider_status = $5,
-               failure_reason = $6,
-               attempt_json = $7::jsonb,
-               updated_at = $8
-           where id = $1`,
-          [
-            next.id,
-            next.chargedUsdMicros ?? null,
-            next.status,
-            next.stripePaymentIntentId ?? null,
-            next.providerStatus ?? null,
-            next.failureReason ?? null,
-            JSON.stringify(next),
-            next.updatedAt,
-          ],
-        );
-        if (next.status !== "succeeded") {
-          return { settled: true, attempt: next };
-        }
-        const chargedUsdMicros =
-          next.chargedUsdMicros ?? next.requestedUsdMicros;
-        const legacyCredits =
-          legacyStorageCreditsFromUsdMicros(chargedUsdMicros);
-        await transaction.query(
-          `insert into takosumi_credit_balances
-             (space_id, available_usd_micros, reserved_usd_micros,
-              monthly_included_usd_micros, purchased_usd_micros,
-              available_credits, reserved_credits,
-              monthly_included_credits, purchased_credits, updated_at)
-           values ($1, 0, 0, 0, 0, 0, 0, 0, 0, $2)
-           on conflict (space_id) do nothing`,
-          [next.spaceId, input.updatedAt],
-        );
-        await transaction.query(
-          `update takosumi_credit_balances
-           set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) + $2,
-               purchased_usd_micros = coalesce(purchased_usd_micros, purchased_credits * 1000000) + $2,
-               available_credits = available_credits + $3,
-               purchased_credits = purchased_credits + $3,
-               updated_at = $4
-           where space_id = $1`,
-          [next.spaceId, chargedUsdMicros, legacyCredits, input.updatedAt],
-        );
-        return {
-          settled: true,
-          attempt: next,
-          balance: await billingCreditBalanceForSpace(
-            transaction,
-            workspaceKeyOf(next),
-          ),
-        };
-      },
-    );
-  }
-
-  async listBillingAutoRechargeAttempts(
-    spaceId: string,
-    options: { readonly limit?: number } = {},
-  ): Promise<readonly BillingAutoRechargeAttempt[]> {
-    const rows = await this.#pgManyJson<BillingAutoRechargeAttempt>(
-      pgSchema.billingAutoRechargeAttempts,
-      pgSchema.billingAutoRechargeAttempts.attemptJson,
-      {
-        where: eq(pgSchema.billingAutoRechargeAttempts.spaceId, spaceId),
-        orderBy: [
-          desc(pgSchema.billingAutoRechargeAttempts.createdAt),
-          desc(pgSchema.billingAutoRechargeAttempts.id),
-        ],
-        limit: options.limit ?? 100,
-      },
-    );
-    return rows.map(normalizeBillingAutoRechargeAttempt);
-  }
+  // --- provider-neutral OSS showback usage --------------------------------
 
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
     const existing = await this.#usageEventByIdempotencyKey(
@@ -3085,8 +2588,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       pgSchema.usageEvents,
       {
         id: normalized.id,
-        spaceId: normalized.spaceId,
-        installationId: normalized.installationId ?? null,
+        workspaceId: normalized.workspaceId,
+        capsuleId: normalized.capsuleId ?? null,
         runId: normalized.runId ?? null,
         meterId: normalized.meterId ?? null,
         resourceFamily: normalized.resourceFamily ?? null,
@@ -3096,15 +2599,15 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         kind: normalized.kind,
         quantity: normalized.quantity,
         usdMicros: normalized.usdMicros,
-        credits: legacyStorageCreditsFromUsdMicros(normalized.usdMicros ?? 0),
+        ratingStatus: normalized.ratingStatus,
         source: normalized.source,
         idempotencyKey: normalized.idempotencyKey,
         createdAt: normalized.createdAt,
       },
       {
         id: normalized.id,
-        spaceId: normalized.spaceId,
-        installationId: normalized.installationId ?? null,
+        workspaceId: normalized.workspaceId,
+        capsuleId: normalized.capsuleId ?? null,
         runId: normalized.runId ?? null,
         meterId: normalized.meterId ?? null,
         resourceFamily: normalized.resourceFamily ?? null,
@@ -3114,163 +2617,13 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         kind: normalized.kind,
         quantity: normalized.quantity,
         usdMicros: normalized.usdMicros,
-        credits: legacyStorageCreditsFromUsdMicros(normalized.usdMicros ?? 0),
+        ratingStatus: normalized.ratingStatus,
         source: normalized.source,
         createdAt: normalized.createdAt,
       },
       pgSchema.usageEvents.idempotencyKey,
     );
     return normalized;
-  }
-
-  async putUsageEventAndSpendCredits(
-    event: UsageEvent,
-    input: CreditAmountInput & { readonly updatedAt: string },
-  ): Promise<PutUsageEventAndSpendCreditsResult | undefined> {
-    const existing = await this.#usageEventByIdempotencyKey(
-      event.idempotencyKey,
-    );
-    if (existing) {
-      return {
-        usageEvent: existing,
-        balance: await this.getCreditBalance(workspaceKeyOf(existing)),
-        inserted: false,
-      };
-    }
-    const normalized = normalizeUsageEvent(event);
-    const usdMicros = creditAmountUsdMicros(input);
-    const legacyCredits = legacyStorageCreditsFromUsdMicros(usdMicros);
-    try {
-      return await this.#client.transaction(
-        async (
-          transaction: SqlTransaction,
-        ): Promise<PutUsageEventAndSpendCreditsResult | undefined> => {
-          const spendRows = await transaction.query<{ spaceId: string }>(
-            `update takosumi_credit_balances
-             set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) - $2,
-                 available_credits = available_credits - $3,
-                 updated_at = $4
-             where space_id = $1
-               and coalesce(available_usd_micros, available_credits * 1000000) >= $2
-               and not exists (
-                 select 1 from takosumi_usage_events where idempotency_key = $5
-               )
-             returning space_id as "spaceId"`,
-            [
-              normalized.spaceId,
-              usdMicros,
-              legacyCredits,
-              input.updatedAt,
-              normalized.idempotencyKey,
-            ],
-          );
-          if (spendRows.rows.length === 0) {
-            const racedRows = await transaction.query<{
-              id: string;
-              spaceId: string;
-              installationId: string | null;
-              runId: string | null;
-              meterId: string | null;
-              resourceFamily: string | null;
-              resourceId: string | null;
-              operation: string | null;
-              resourceMetadataJson: unknown;
-              kind: string;
-              quantity: number;
-              usdMicros: number | null;
-              credits: number;
-              source: string;
-              idempotencyKey: string;
-              createdAt: string;
-            }>(
-              `select
-                 id,
-                 space_id as "spaceId",
-                 installation_id as "installationId",
-                 run_id as "runId",
-                 meter_id as "meterId",
-                 resource_family as "resourceFamily",
-                 resource_id as "resourceId",
-                 operation,
-                 resource_metadata_json as "resourceMetadataJson",
-                 kind,
-                 quantity,
-                 usd_micros as "usdMicros",
-                 credits,
-                 source,
-                 idempotency_key as "idempotencyKey",
-                 created_at as "createdAt"
-               from takosumi_usage_events
-               where idempotency_key = $1
-               limit 1`,
-              [normalized.idempotencyKey],
-            );
-            const raced = racedRows.rows[0];
-            if (!raced) return undefined;
-            return {
-              usageEvent: usageEventFromRow(raced),
-              balance: await billingCreditBalanceForSpace(
-                transaction,
-                workspaceKeyOf(normalized),
-              ),
-              inserted: false,
-            };
-          }
-          await transaction.query(
-            `insert into takosumi_usage_events (
-               id, space_id, installation_id, run_id, meter_id,
-               resource_family, resource_id, operation, resource_metadata_json,
-               kind, quantity, usd_micros, credits, source,
-               idempotency_key, created_at
-             )
-             values (
-               $1, $2, $3, $4, $5,
-               $6, $7, $8, $9::jsonb,
-               $10, $11, $12, $13, $14,
-               $15, $16
-             )`,
-            [
-              normalized.id,
-              normalized.spaceId,
-              normalized.installationId ?? null,
-              normalized.runId ?? null,
-              normalized.meterId ?? null,
-              normalized.resourceFamily ?? null,
-              normalized.resourceId ?? null,
-              normalized.operation ?? null,
-              normalized.resourceMetadata ?? null,
-              normalized.kind,
-              normalized.quantity,
-              normalized.usdMicros,
-              legacyStorageCreditsFromUsdMicros(normalized.usdMicros ?? 0),
-              normalized.source,
-              normalized.idempotencyKey,
-              normalized.createdAt,
-            ],
-          );
-          return {
-            usageEvent: normalized,
-            balance: await billingCreditBalanceForSpace(
-              transaction,
-              workspaceKeyOf(normalized),
-            ),
-            inserted: true,
-          };
-        },
-      );
-    } catch (error) {
-      const raced = await this.#usageEventByIdempotencyKey(
-        normalized.idempotencyKey,
-      );
-      if (raced && isSqlUsageEventIdempotencyConflict(error)) {
-        return {
-          usageEvent: raced,
-          balance: await this.getCreditBalance(workspaceKeyOf(raced)),
-          inserted: false,
-        };
-      }
-      throw error;
-    }
   }
 
   async #usageEventByIdempotencyKey(
@@ -3286,11 +2639,11 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return usageEventFromRow(row);
   }
 
-  async listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]> {
+  async listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
     const rows = await this.#db
       .select()
       .from(pgSchema.usageEvents)
-      .where(eq(pgSchema.usageEvents.spaceId, spaceId))
+      .where(eq(pgSchema.usageEvents.workspaceId, workspaceId))
       .orderBy(
         asc(pgSchema.usageEvents.createdAt),
         asc(pgSchema.usageEvents.id),
@@ -3299,7 +2652,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async listUsageEventsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<UsageEvent>> {
     const limit = clampPageLimit(params.limit);
@@ -3308,7 +2661,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       .from(pgSchema.usageEvents)
       .where(
         pgKeysetWhereDesc(
-          eq(pgSchema.usageEvents.spaceId, spaceId),
+          eq(pgSchema.usageEvents.workspaceId, workspaceId),
           pgSchema.usageEvents.createdAt,
           pgSchema.usageEvents.id,
           decodeCursor(params.cursor),
@@ -3322,17 +2675,17 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return pageFromProbe(rows.map(usageEventFromRow), limit);
   }
 
-  // --- backups (§33 layer 1 / §26 R2_BACKUPS) -------------------------------
+  // --- backups (§33 layer 1; bytes live in the configured artifact store) ----
   //
   // One ledger pointer row per sealed control-backup bundle. The bundle bytes
-  // live in R2_BACKUPS; only the pointer round trips through `backup_json`.
+  // live outside the ledger; only the pointer round trips through `backup_json`.
   // Listing is newest-first (created_at desc, id desc).
 
   async putBackupRecord(record: BackupRecord): Promise<BackupRecord> {
     await this.#pgUpsert(pgSchema.backups, {
       id: record.id,
-      spaceId: record.spaceId,
-      installationId: record.installationId ?? null,
+      workspaceId: record.workspaceId,
+      capsuleId: record.capsuleId ?? null,
       environment: record.environment ?? null,
       createdByRunId: record.createdByRunId ?? null,
       backupJson: record,
@@ -3349,19 +2702,21 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
-  async listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]> {
+  async listBackupRecords(
+    workspaceId: string,
+  ): Promise<readonly BackupRecord[]> {
     return await this.#pgManyJson<BackupRecord>(
       pgSchema.backups,
       pgSchema.backups.backupJson,
       {
-        where: eq(pgSchema.backups.spaceId, spaceId),
+        where: eq(pgSchema.backups.workspaceId, workspaceId),
         orderBy: [desc(pgSchema.backups.createdAt), desc(pgSchema.backups.id)],
       },
     );
   }
 
   async listBackupRecordsPage(
-    spaceId: string,
+    workspaceId: string,
     params: PageParams,
   ): Promise<Page<BackupRecord>> {
     const limit = clampPageLimit(params.limit);
@@ -3371,7 +2726,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       pgSchema.backups.backupJson,
       {
         where: pgKeysetWhereDesc(
-          eq(pgSchema.backups.spaceId, spaceId),
+          eq(pgSchema.backups.workspaceId, workspaceId),
           pgSchema.backups.createdAt,
           pgSchema.backups.id,
           decodeCursor(params.cursor),
@@ -3464,159 +2819,21 @@ function parseJson(value: unknown): unknown {
   return value;
 }
 
-function billingAutoRechargeAttemptSqlParams(
-  attempt: BillingAutoRechargeAttempt,
-  monthlyLimitUsdMicros: number | undefined,
-): readonly (string | number | null)[] {
-  return [
-    attempt.id,
-    workspaceKeyOf(attempt),
-    attempt.runId,
-    attempt.billingAccountId,
-    attempt.idempotencyKey,
-    attempt.periodStart,
-    attempt.periodEnd ?? null,
-    attempt.requestedUsdMicros,
-    attempt.monthlyLimitUsdMicros ?? null,
-    attempt.chargedUsdMicros ?? null,
-    attempt.status,
-    attempt.stripePaymentIntentId ?? null,
-    attempt.providerStatus ?? null,
-    attempt.failureReason ?? null,
-    JSON.stringify(attempt),
-    attempt.createdAt,
-    attempt.updatedAt,
-    monthlyLimitUsdMicros ?? null,
-  ];
-}
-
-async function billingCreditBalanceForSpace(
-  client: SqlTransaction,
-  spaceId: string,
-): Promise<CreditBalance | undefined> {
-  const rows = await client.query<{
-    spaceId: string;
-    availableUsdMicros: number | string | null;
-    reservedUsdMicros: number | string | null;
-    monthlyIncludedUsdMicros: number | string | null;
-    purchasedUsdMicros: number | string | null;
-    availableCredits: number | string;
-    reservedCredits: number | string;
-    monthlyIncludedCredits: number | string;
-    purchasedCredits: number | string;
-    updatedAt: string;
-  }>(
-    `select
-       space_id as "spaceId",
-       available_usd_micros as "availableUsdMicros",
-       reserved_usd_micros as "reservedUsdMicros",
-       monthly_included_usd_micros as "monthlyIncludedUsdMicros",
-       purchased_usd_micros as "purchasedUsdMicros",
-       available_credits as "availableCredits",
-       reserved_credits as "reservedCredits",
-       monthly_included_credits as "monthlyIncludedCredits",
-       purchased_credits as "purchasedCredits",
-       updated_at as "updatedAt"
-     from takosumi_credit_balances
-     where space_id = $1
-     limit 1`,
-    [spaceId],
-  );
-  const row = rows.rows[0];
-  if (!row) return undefined;
-  return creditBalanceFromRow({
-    spaceId: row.spaceId,
-    availableUsdMicros:
-      row.availableUsdMicros === null ? null : Number(row.availableUsdMicros),
-    reservedUsdMicros:
-      row.reservedUsdMicros === null ? null : Number(row.reservedUsdMicros),
-    monthlyIncludedUsdMicros:
-      row.monthlyIncludedUsdMicros === null
-        ? null
-        : Number(row.monthlyIncludedUsdMicros),
-    purchasedUsdMicros:
-      row.purchasedUsdMicros === null ? null : Number(row.purchasedUsdMicros),
-    availableCredits: Number(row.availableCredits),
-    reservedCredits: Number(row.reservedCredits),
-    monthlyIncludedCredits: Number(row.monthlyIncludedCredits),
-    purchasedCredits: Number(row.purchasedCredits),
-    updatedAt: row.updatedAt,
-  });
-}
-
-async function billingAutoRechargeAttemptByIdempotencyKeySql(
-  client: SqlTransaction,
-  idempotencyKey: string,
-): Promise<BillingAutoRechargeAttempt | undefined> {
-  const rows = await client.query<{ json: unknown }>(
-    `select attempt_json as json
-     from takosumi_billing_auto_recharge_attempts
-     where idempotency_key = $1
-     limit 1`,
-    [idempotencyKey],
-  );
-  const row = rows.rows[0];
-  return row
-    ? normalizeBillingAutoRechargeAttempt(
-        parseJson(row.json) as BillingAutoRechargeAttempt,
-      )
-    : undefined;
-}
-
-function isSqlUsageEventIdempotencyConflict(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return (
-    error.message.includes("takosumi_usage_events_idempotency") ||
-    error.message.includes("usage_events_idempotency") ||
-    error.message.includes("idempotency_key")
-  );
-}
-
-function installationValues(installation: Installation) {
-  const normalized = normalizeInstallationRecord(installation);
+function capsuleValues(capsule: Capsule) {
+  const normalized = normalizeCapsuleRecord(capsule);
   return {
     id: normalized.id,
-    spaceId: normalized.workspaceId,
+    workspaceId: normalized.workspaceId,
+    projectId: normalized.projectId,
     name: normalized.name,
     environment: normalized.environment,
-    sourceId: normalized.sourceId ?? null,
+    sourceId: normalized.sourceId,
     installConfigId: normalized.installConfigId,
-    currentDeploymentId: normalized.currentDeploymentId ?? null,
+    currentStateVersionId: normalized.currentStateVersionId ?? null,
     status: normalized.status,
-    installationJson: normalized,
+    capsuleJson: normalized,
     createdAt: normalized.createdAt,
     updatedAt: normalized.updatedAt,
-  };
-}
-
-function workspaceOutputSyncValues(state: WorkspaceOutputSyncState) {
-  return {
-    workspaceId: state.workspaceId,
-    enabled: state.enabled,
-    outputRevision: state.outputRevision,
-    reconciledRevision: state.reconciledRevision,
-    activeRunGroupId: state.activeRunGroupId ?? null,
-    consecutivePasses: state.consecutivePasses,
-    updatedAt: state.updatedAt,
-  };
-}
-
-function workspaceOutputSyncStateFromPgRow(
-  row: typeof pgSchema.workspaceOutputSync.$inferSelect | undefined,
-): WorkspaceOutputSyncState {
-  if (!row) {
-    throw new Error("workspace output sync row was not returned");
-  }
-  return {
-    workspaceId: row.workspaceId,
-    enabled: row.enabled,
-    outputRevision: row.outputRevision,
-    reconciledRevision: row.reconciledRevision,
-    ...(row.activeRunGroupId === null
-      ? {}
-      : { activeRunGroupId: row.activeRunGroupId }),
-    consecutivePasses: row.consecutivePasses,
-    updatedAt: row.updatedAt,
   };
 }
 
@@ -3630,17 +2847,17 @@ function stripRunHeartbeat<R extends PlanRun | ApplyRun | SourceSyncRun | Run>(
 
 // --- tx-aware upserts -------------------------------------------------------
 //
-// These mirror the `#pgUpsert(...)` payloads in putDeployment / putStateSnapshot
-// / putOutputSnapshot but take an explicit drizzle handle so the SAME insert can
+// These mirror the `#pgUpsert(...)` payloads in putStateVersion
+// / putOutput but take an explicit drizzle handle so the SAME insert can
 // run on either the shared `#db` (the put* methods) or a transaction-bound
-// drizzle handle (the atomic commitAppliedDeployment path). Keeping ONE column
+// drizzle handle (the atomic commitRunState path). Keeping ONE column
 // payload per entity means the transactional and non-transactional writes stay
 // byte-for-byte identical.
 
 /**
  * Tx-aware §27 `runs` upsert (the commit-tail fold helper). Writes a PlanRun /
  * ApplyRun row through the given drizzle handle (the transaction-bound one), so
- * the run-status write commits atomically with the Deployment. Mirrors the
+ * the run-status write commits atomically with the StateVersion. Mirrors the
  * `#putRunDrizzle` column payload exactly. `clearLease` nulls the lease fence on
  * the same write (the terminal ApplyRun path); otherwise the lease column rides
  * the run's own `heartbeatAt`.
@@ -3657,10 +2874,9 @@ async function pgUpsertRun(
   const values = {
     id: run.id,
     kind,
-    spaceId: run.workspaceId ?? run.spaceId,
+    workspaceId: run.workspaceId,
     sourceId: null,
-    installationId:
-      "installationId" in run ? (run.installationId ?? null) : null,
+    capsuleId: run.capsuleId ?? null,
     status: run.status,
     leaseToken: null as string | null,
     heartbeatAt: run.heartbeatAt ?? null,
@@ -3674,9 +2890,9 @@ async function pgUpsertRun(
       target: pgSchema.runs.id,
       set: {
         kind: values.kind,
-        spaceId: values.spaceId,
+        workspaceId: values.workspaceId,
         sourceId: values.sourceId,
-        installationId: values.installationId,
+        capsuleId: values.capsuleId,
         status: values.status,
         leaseToken: values.leaseToken,
         heartbeatAt: values.heartbeatAt,
@@ -3695,10 +2911,9 @@ async function pgUpdateTerminalRunWithLease(
 ): Promise<boolean> {
   const values = {
     kind,
-    spaceId: run.workspaceId ?? run.spaceId,
+    workspaceId: run.workspaceId,
     sourceId: "sourceId" in run ? (run.sourceId ?? null) : null,
-    installationId:
-      "installationId" in run ? (run.installationId ?? null) : null,
+    capsuleId: "capsuleId" in run ? (run.capsuleId ?? null) : null,
     status: run.status,
     leaseToken: null as string | null,
     heartbeatAt: run.heartbeatAt ?? null,
@@ -3720,55 +2935,16 @@ async function pgUpdateTerminalRunWithLease(
   return rows.length > 0;
 }
 
-async function pgUpsertDeployment(
+async function pgUpsertStateVersion(
   db: PgRemoteDatabase<typeof pgSchema>,
-  deployment: Deployment,
+  snapshot: StateVersion,
 ): Promise<void> {
   await db
-    .insert(pgSchema.deployments)
-    .values({
-      id: deployment.id,
-      spaceId: deployment.spaceId,
-      installationId: deployment.installationId,
-      environment: deployment.environment,
-      applyRunId: deployment.applyRunId,
-      sourceSnapshotId: deployment.sourceSnapshotId,
-      dependencySnapshotId: deployment.dependencySnapshotId ?? null,
-      stateGeneration: deployment.stateGeneration,
-      outputSnapshotId: deployment.outputSnapshotId,
-      status: deployment.status,
-      deploymentJson: deployment,
-      createdAt: deployment.createdAt,
-    })
-    .onConflictDoUpdate({
-      target: pgSchema.deployments.id,
-      set: {
-        id: deployment.id,
-        spaceId: deployment.spaceId,
-        installationId: deployment.installationId,
-        environment: deployment.environment,
-        applyRunId: deployment.applyRunId,
-        sourceSnapshotId: deployment.sourceSnapshotId,
-        dependencySnapshotId: deployment.dependencySnapshotId ?? null,
-        stateGeneration: deployment.stateGeneration,
-        outputSnapshotId: deployment.outputSnapshotId,
-        status: deployment.status,
-        deploymentJson: deployment,
-        createdAt: deployment.createdAt,
-      },
-    });
-}
-
-async function pgUpsertStateSnapshot(
-  db: PgRemoteDatabase<typeof pgSchema>,
-  snapshot: StateSnapshot,
-): Promise<void> {
-  await db
-    .insert(pgSchema.stateSnapshots)
+    .insert(pgSchema.stateVersions)
     .values({
       id: snapshot.id,
-      spaceId: snapshot.workspaceId ?? snapshot.spaceId,
-      installationId: snapshot.capsuleId ?? snapshot.installationId,
+      workspaceId: snapshot.workspaceId,
+      capsuleId: snapshot.capsuleId,
       environment: snapshot.environment,
       generation: snapshot.generation,
       snapshotJson: snapshot,
@@ -3776,71 +2952,44 @@ async function pgUpsertStateSnapshot(
     })
     .onConflictDoUpdate({
       target: [
-        pgSchema.stateSnapshots.installationId,
-        pgSchema.stateSnapshots.environment,
-        pgSchema.stateSnapshots.generation,
+        pgSchema.stateVersions.capsuleId,
+        pgSchema.stateVersions.environment,
+        pgSchema.stateVersions.generation,
       ],
       set: {
         id: snapshot.id,
-        spaceId: snapshot.workspaceId ?? snapshot.spaceId,
+        workspaceId: snapshot.workspaceId,
         snapshotJson: snapshot,
         createdAt: snapshot.createdAt,
       },
     });
 }
 
-async function pgUpsertOutputSnapshot(
+async function pgUpsertOutput(
   db: PgRemoteDatabase<typeof pgSchema>,
-  snapshot: OutputSnapshot,
+  snapshot: Output,
 ): Promise<void> {
   await db
-    .insert(pgSchema.outputSnapshots)
+    .insert(pgSchema.outputs)
     .values({
       id: snapshot.id,
-      spaceId: snapshot.workspaceId ?? snapshot.spaceId,
-      installationId: snapshot.capsuleId ?? snapshot.installationId,
+      workspaceId: snapshot.workspaceId,
+      capsuleId: snapshot.capsuleId,
       stateGeneration: snapshot.stateGeneration,
       snapshotJson: snapshot,
       createdAt: snapshot.createdAt,
     })
     .onConflictDoUpdate({
-      target: pgSchema.outputSnapshots.id,
+      target: pgSchema.outputs.id,
       set: {
         id: snapshot.id,
-        spaceId: snapshot.workspaceId ?? snapshot.spaceId,
-        installationId: snapshot.capsuleId ?? snapshot.installationId,
+        workspaceId: snapshot.workspaceId,
+        capsuleId: snapshot.capsuleId,
         stateGeneration: snapshot.stateGeneration,
         snapshotJson: snapshot,
         createdAt: snapshot.createdAt,
       },
     });
-}
-
-async function pgBumpWorkspaceOutputSyncRevision(
-  db: PgRemoteDatabase<typeof pgSchema>,
-  workspaceId: string,
-  updatedAt: string,
-): Promise<WorkspaceOutputSyncState> {
-  const rows = await db
-    .insert(pgSchema.workspaceOutputSync)
-    .values({
-      workspaceId,
-      enabled: true,
-      outputRevision: 1,
-      reconciledRevision: 0,
-      activeRunGroupId: null,
-      consecutivePasses: 0,
-      updatedAt,
-    })
-    .onConflictDoUpdate({
-      target: pgSchema.workspaceOutputSync.workspaceId,
-      set: {
-        outputRevision: sql`${pgSchema.workspaceOutputSync.outputRevision} + 1`,
-        updatedAt,
-      },
-    })
-    .returning();
-  return workspaceOutputSyncStateFromPgRow(rows[0]);
 }
 
 function selectedDriverColumns(query: string): readonly string[] {
@@ -3867,8 +3016,8 @@ function publicHostReservationFromRow(
     hostname: String(row.hostname),
     ownerUserId: String(row.owner_user_id ?? row.workspace_id),
     workspaceId: String(row.workspace_id),
-    installationId: String(row.installation_id),
-    installationName: String(row.installation_name),
+    capsuleId: String(row.installation_id),
+    capsuleName: String(row.installation_name),
     allocationKind: row.allocation_kind === "vanity" ? "vanity" : "scoped",
     status:
       row.status === "released" || row.status === "reserved"

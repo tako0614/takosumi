@@ -2,10 +2,8 @@
  * Cloudflare credential driver (token-vending mint + verify).
  *
  * This is the provider-specific credential implementation the provider runtime
- * registry (`@takosumi/providers`) refers to. It is a self-contained,
- * dependency-light extraction of the Cloudflare logic that lives inline in the
- * in-process vault (`core/adapters/vault/mod.ts`): the API token-vending
- * mint (`POST /user/tokens`) and the token verify (`GET /user/tokens/verify`).
+ * registry (`@takosumi/providers`) refers to. It owns the API token-vending
+ * mint (`POST /user/tokens`) and token verification (`GET /user/tokens/verify`).
  *
  * Boundary: this driver NEVER opens sealed secret blobs and NEVER touches the
  * secret-boundary crypto. The vault opens the connection's sealed values (the
@@ -13,23 +11,20 @@
  * values to this driver; the driver only mints a short-lived scoped token from
  * Cloudflare and returns the resulting env map / verify result. Crypto and
  * secret-opening stay in core.
- *
- * The logic here is byte-identical to the inline vault behavior so this can be
- * delegated to without a behavior change.
  */
-import type {
-  CloudflareTokenVendingConfig,
-  Connection,
-} from "takosumi-contract/connections";
+import type { ProviderConnection } from "takosumi-contract/connections";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
+import {
+  cloudflareProviderSettings,
+  type CloudflareTokenVendingConfig,
+} from "./settings.ts";
 
 /** Cloudflare API origin for the token endpoints. */
 const CLOUDFLARE_API_TOKENS_URL =
   "https://api.cloudflare.com/client/v4/user/tokens";
 const CLOUDFLARE_API_TOKEN_VERIFY_URL =
   "https://api.cloudflare.com/client/v4/user/tokens/verify";
-const CLOUDFLARE_ACCOUNTS_URL =
-  "https://api.cloudflare.com/client/v4/accounts";
+const CLOUDFLARE_ACCOUNTS_URL = "https://api.cloudflare.com/client/v4/accounts";
 
 /**
  * Injected fetch seam so the driver is unit-testable without real network.
@@ -42,8 +37,8 @@ export type CloudflareFetch = (
 
 /**
  * A typed driver error. The vault re-wraps this into its own
- * `ConnectionVaultError("failed_precondition", …)` when delegating, so the
- * `message` text is the load-bearing contract and is kept byte-identical.
+ * `ConnectionVaultError("failed_precondition", …)` so callers receive one
+ * stable typed failure boundary.
  */
 export class CloudflareCredentialError extends Error {
   constructor(message: string) {
@@ -62,7 +57,7 @@ export interface MintedCloudflareToken {
 /** Token-vending mint input. The vault supplies the already-opened values. */
 export interface MintCloudflareApiTokenInput {
   /** The connection row (for id, scopeHints.cloudflareTokenVending). */
-  readonly connection: Connection;
+  readonly connection: ProviderConnection;
   /**
    * The decrypted bootstrap CF API token (from
    * `values.CLOUDFLARE_API_TOKEN ?? values.CF_API_TOKEN`), opened by the vault.
@@ -99,8 +94,10 @@ export interface CloudflareMintedProviderValues {
  * `scopeHints.cloudflareTokenVending` config. The vault gates on this to decide
  * whether to delegate the mint to this driver.
  */
-export function isCloudflareTokenVending(connection: Connection): boolean {
-  return Boolean(connection.scopeHints?.cloudflareTokenVending);
+export function isCloudflareTokenVending(connection: ProviderConnection): boolean {
+  return Boolean(
+    cloudflareProviderSettings(connection.scopeHints).tokenVending,
+  );
 }
 
 /**
@@ -109,19 +106,15 @@ export function isCloudflareTokenVending(connection: Connection): boolean {
  * scoped token and returns the values with `CLOUDFLARE_API_TOKEN` replaced by
  * the minted token, plus the mint evidence.
  *
- * `delivery` is threaded from the vault (`provider_env` for the legacy
- * provider-mint path, `generated_root_variable` for the per-alias path) so the
- * evidence's `rootOnly` flag is preserved byte-identically.
  */
 export async function mintCloudflareProviderValues(input: {
-  readonly connection: Connection;
+  readonly connection: ProviderConnection;
   /** The already-opened static env values for the connection. */
   readonly values: Readonly<Record<string, string>>;
-  readonly delivery: ProviderCredentialMintEvidence["delivery"];
   readonly fetch: CloudflareFetch;
   readonly now: () => Date;
 }): Promise<CloudflareMintedProviderValues> {
-  const { connection, values, delivery } = input;
+  const { connection, values } = input;
   const bootstrapToken =
     values.CLOUDFLARE_API_TOKEN ?? values.CF_API_TOKEN ?? "";
   if (!bootstrapToken) {
@@ -141,11 +134,8 @@ export async function mintCloudflareProviderValues(input: {
       CLOUDFLARE_API_TOKEN: minted.token,
     },
     evidence: {
-      providerEnvId: connection.id,
       connectionId: connection.id,
       provider: connection.provider,
-      delivery,
-      rootOnly: delivery === "generated_root_variable",
       temporary: true,
       ttlEnforced: true,
       expiresAt: minted.expiresAt,
@@ -157,17 +147,18 @@ export async function mintCloudflareProviderValues(input: {
 
 /**
  * Mints a short-lived scoped Cloudflare API token via `POST /user/tokens`,
- * authenticated with the bootstrap token. Byte-identical to the inline vault
- * `#mintCloudflareApiToken`.
+ * authenticated with the bootstrap token.
  */
 export async function mintCloudflareApiToken(
   input: MintCloudflareApiTokenInput,
 ): Promise<MintedCloudflareToken> {
   const { connection, bootstrapToken } = input;
-  const vending = connection.scopeHints?.cloudflareTokenVending;
+  const vending = cloudflareProviderSettings(
+    connection.scopeHints,
+  ).tokenVending;
   if (!vending || !Array.isArray(vending.policies)) {
     throw new CloudflareCredentialError(
-      `cloudflare token-vending connection ${connection.id} requires scopeHints.cloudflareTokenVending.policies`,
+      `cloudflare token-vending connection ${connection.id} requires scopeHints.providerSettings.tokenVending.policies`,
     );
   }
   const now = input.now();
@@ -238,8 +229,7 @@ export async function mintCloudflareApiToken(
 }
 
 /**
- * Verifies a Cloudflare API token via `GET /user/tokens/verify`. Byte-identical
- * to the inline vault `#verifyCloudflareToken`.
+ * Verifies a Cloudflare API token via `GET /user/tokens/verify`.
  */
 export async function verifyCloudflareToken(
   input: VerifyCloudflareTokenInput,
@@ -334,7 +324,7 @@ async function verifyCloudflareAccountAccess(
   };
 }
 
-// --- internal helpers (byte-identical copies of the inline vault helpers) ---
+// --- provider-owned internal helpers ---
 
 function cloudflareTokenTtlSeconds(value: unknown): number {
   if (value === undefined) return 3600;
@@ -345,14 +335,14 @@ function cloudflareTokenTtlSeconds(value: unknown): number {
     value > 86400
   ) {
     throw new CloudflareCredentialError(
-      "scopeHints.cloudflareTokenVending.ttlSeconds must be an integer between 60 and 86400",
+      "scopeHints.providerSettings.tokenVending.ttlSeconds must be an integer between 60 and 86400",
     );
   }
   return value;
 }
 
 function cloudflareTokenName(
-  connection: Connection,
+  connection: ProviderConnection,
   now: Date,
   prefix?: string,
 ): string {

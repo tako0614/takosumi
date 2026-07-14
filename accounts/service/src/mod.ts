@@ -6,15 +6,11 @@ import {
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
-  TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTION_PLAN_RUNS_PATH,
-  TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH,
   TAKOSUMI_ACCOUNTS_INTROSPECT_PATH,
   TAKOSUMI_ACCOUNTS_JWKS_PATH,
   TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_PROVIDER_COMPAT_CLOUDFLARE_WORKERS,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH,
@@ -39,12 +35,6 @@ export {
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
 } from "@takosjp/takosumi-accounts-contract";
 
-import type { AccountsCapsuleExportBundle } from "./export-bundle.ts";
-import type {
-  ServiceBindingMaterialKind,
-  ServiceBindingMaterialRecord,
-  CapsuleRecord,
-} from "./ledger.ts";
 import {
   type AccountSessionRecord,
   type AccountsStore,
@@ -52,26 +42,7 @@ import {
   type OidcClientAuthMethod,
   type TakosumiAccountRecord,
 } from "./store.ts";
-import type { SharedCellRuntimeAllocator } from "./runtime.ts";
 import type { UpstreamOAuthProvider } from "./upstream.ts";
-import {
-  handleCreateAppCapsule,
-  handleDownloadAppCapsuleExport,
-  handlePlanAppCapsuleDeployment,
-  handleGetAppCapsuleExportOperation,
-  handleReportCapsuleBillingUsage,
-  handleRequestAppCapsuleExport,
-  handleRequestAppCapsuleMaterialize,
-  handleUninstallAppCapsule,
-  handleUpdateAppCapsuleRevision,
-  handleUpdateAppCapsuleStatus,
-} from "./installation-lifecycle-routes.ts";
-import {
-  handleGetAppCapsule,
-  handleListAppCapsules,
-  handleListCapsuleServices,
-  handleListCapsuleEvents,
-} from "./installation-routes.ts";
 import { signEs256Jwt } from "./jwt.ts";
 import {
   handlePasskeyAuthenticateComplete,
@@ -90,6 +61,7 @@ import {
   handleGetPrivacyRequest,
   handleListPrivacyRequests,
   matchPrivacyRequestRoute,
+  normalizePrivacyRetentionPolicyRef,
 } from "./privacy-routes.ts";
 import {
   handleAuthorize,
@@ -105,26 +77,19 @@ import {
   readJsonObject,
   stringValue,
 } from "./http-helpers.ts";
-import {
-  handleStripeBillingCheckout,
-  handleStripeBillingPortal,
-  handleStripeBillingSummary,
-  handleStripeBillingWebhook,
-  TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
-  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH,
-  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_PORTAL_PATH,
-  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_SUMMARY_PATH,
-  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_WEBHOOK_PATH,
-  type StripeBillingCheckoutOptions,
-  type StripeBillingWebhookOptions,
-} from "./billing-checkout.ts";
-import { base64UrlEncodeBytes, constantTimeEqual } from "./encoding.ts";
+import { constantTimeEqual } from "./encoding.ts";
 import {
   extractAccountSessionId,
   handleAccountSessionMeDelete,
   handleAccountSessionMeGet,
+  requireAccountsBearer,
   requireAccountSession,
   TAKOSUMI_ACCOUNTS_SESSION_ME_PATH,
+} from "./account-session.ts";
+export {
+  requireAccountsBearer,
+  type AccountsBearerRequiredScope,
+  type AccountsBearerSubject,
 } from "./account-session.ts";
 import {
   type LoginEmailAllowlist,
@@ -135,123 +100,34 @@ import {
   measureServerTiming,
   serverTimingBucketForPath,
 } from "./server-timing.ts";
-import { handleConsumeLaunchToken } from "./installation-routes-internal.ts";
 import {
   handleAuthProvidersRequest,
   handleUpstreamAuthorizeRequest,
   handleUpstreamCallbackRequest,
   upstreamOAuthNotConfigured,
 } from "./upstream-oauth-routes.ts";
-export {
-  handleAuthProvidersRequest,
-  isRetiredUpstreamOAuthProviderId,
-} from "./upstream-oauth-routes.ts";
-import {
-  type CapsuleRoute,
-  matchAccountTokenRevokeRoute,
-  matchCapsuleRoute,
-} from "./route-matchers.ts";
-import {
-  handleCapsulePlanRunFacade,
-  type DeployControlFacadeOptions,
-} from "./deploy-control-facade.ts";
+export { handleAuthProvidersRequest } from "./upstream-oauth-routes.ts";
+import { matchAccountTokenRevokeRoute } from "./route-matchers.ts";
 import {
   type ControlPlaneOperations,
   handleControlRoute,
   isControlRoutePath,
 } from "./control-routes.ts";
-import { maybeEnsurePersonalWorkspaceForSession } from "./control-personal-space.ts";
-import {
-  isRuntimeProjectionMaterialResolveContext,
-  resolveTakosumiRuntimeProjectionMaterial,
-  TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH,
-} from "./runtime-projection-material-resolver.ts";
-import {
-  platformAccessBlocked,
-  type PlatformAccessPolicy,
-  platformGuardedCapsuleMutation,
-} from "./platform-access-policy.ts";
-import {
-  requireAppCapsuleAccountAccess,
-  requireAppCapsuleCreateWriteAccess,
-  requireCapsulePlanRunWriteAccess,
-} from "./installation-auth.ts";
-
-export {
-  requestDeploymentApply,
-  requestDeploymentPlanRun,
-  requestCapsuleApply,
-  requestCapsulePlanRun,
-  requestRollback,
-} from "./deploy-control-facade.ts";
-export type {
-  DeployControlOperations,
-  DeployControlFacadeOptions,
-} from "./deploy-control-facade.ts";
+import { maybeEnsurePersonalWorkspaceForSession } from "./control-personal-workspace.ts";
 export type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
 } from "./control-routes.ts";
-export {
-  TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
-  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH,
-  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_PORTAL_PATH,
-  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_SUMMARY_PATH,
-  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_WEBHOOK_PATH,
-} from "./billing-checkout.ts";
-export type {
-  StripeBillingCheckoutOptions,
-  StripeBillingWebhookOptions,
-} from "./billing-checkout.ts";
 export type { LoginEmailAllowlist } from "./login-email-allowlist.ts";
-export { createOpenPlatformAccessPolicy } from "./platform-access-policy.ts";
-export type {
-  PlatformAccessPolicy,
-  PlatformReadinessReportForOpenAccess,
-} from "./platform-access-policy.ts";
 
 export * from "./subject.ts";
 export * from "./store.ts";
+export * from "./interface-oauth-token.ts";
 export * from "./upstream.ts";
+export * from "./upstream-config.ts";
 export * from "./passkey.ts";
 export * from "./identity.ts";
 export * from "./jwt.ts";
-// `ledger.ts` re-export is intentionally selective: the v1 contract reset
-// (Wave 6) removed `RuntimeBindingRecord` / `ServiceBindingMaterialRecord` / `ServiceGrantMaterialRecord`
-// / `CapsuleEventRecord` / `AppCapsuleLedgerStore` from the public
-// surface. They remain `@internal` to `accounts-service` for ledger storage
-// only and are not re-exported from the package barrel.
-export {
-  APP_INSTALLATION_STATUS_TRANSITIONS,
-  assertValidServiceBindingMaterialDeclaration,
-  assertValidServiceBindingMaterialRecord,
-  assertValidServiceGrantMaterialRecord,
-  buildCapsuleEvent,
-  canTransitionAppCapsuleStatus,
-  isServiceBindingMaterialKind,
-  isServiceGrantMaterialCapability,
-  isValidBindingName,
-  transitionAppCapsuleStatus,
-  validateServiceBindingMaterialDeclaration,
-  validateServiceBindingMaterialRecord,
-  validateServiceGrantMaterialRecord,
-  verifyCapsuleEventHashChain,
-} from "./ledger.ts";
-export type {
-  ServiceBindingMaterialKind,
-  ServiceGrantMaterialCapability,
-  AppCapsuleMode,
-  AppCapsuleStatus,
-  CapsuleRecord,
-  LedgerAccountRecord,
-  WorkspaceKind,
-  WorkspaceRecord,
-  ValidationIssue,
-} from "./ledger.ts";
-export * from "./runtime.ts";
-export * from "./export-bundle.ts";
-export * from "./export-download-url.ts";
-export * from "./runtime-projection-material-resolver.ts";
 export * from "./postgres-store.ts";
 export * from "./d1-store.ts";
 export {
@@ -262,8 +138,6 @@ export type { PasskeyChallengeIntent } from "./passkey-challenge-store.ts";
 
 export type AccountsHandler = (request: Request) => Promise<Response>;
 
-export const TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER =
-  "x-takosumi-materialize-drill-token";
 export const TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER =
   "x-takosumi-privacy-operations-token";
 
@@ -271,12 +145,11 @@ export interface AccountsHandlerOptions {
   issuer?: string;
   jwks?: JsonWebKeySet;
   clients?: readonly OidcClientRegistration[];
-  store?: AccountsStore;
+  /** Durable store chosen explicitly by the production-capable composition root. */
+  store: AccountsStore;
   oidcFlow?: OidcAuthorizationCodeFlow;
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
-  launchTokens?: LaunchTokenOptions;
-  deployControl?: DeployControlFacadeOptions;
   /**
    * In-process deploy-control operations facade backing the session-authed
    * `/api/v1/*` account-plane routes the dashboard SPA calls (M10). The
@@ -287,25 +160,7 @@ export interface AccountsHandlerOptions {
   controlPlaneOperations?: ControlPlaneOperations;
   /** Operator-owned hostname namespace used for managed Capsule endpoints. */
   managedPublicBaseDomain?: string;
-  publicBillingPlans?: readonly Record<string, unknown>[];
-  billingCheckout?: StripeBillingCheckoutOptions;
-  billingWebhook?: StripeBillingWebhookOptions;
-  runtimeServiceTokens?: RuntimeServiceTokenOptions;
-  bindingMaterializer?: ServiceBindingMaterializer;
-  sharedCellRuntime?: SharedCellRuntimeAllocator;
-  materializeWorker?: AppCapsuleMaterializeWorker;
-  exportWorker?: AppCapsuleExportWorker;
-  platformAccess?: PlatformAccessPolicy;
   loginEmailAllowlist?: LoginEmailAllowlist;
-  runtimeProjectionMaterialResolver?: RuntimeProjectionMaterialResolverHttpOptions;
-  /**
-   * Operator-only token that lets the dedicated-materialize readiness drill
-   * request materialization while hosted platform access is still closed. This
-   * bypasses only the launch-readiness gate; account session, Capsule
-   * ownership, idempotency, cost acknowledgement, and permission digest checks
-   * still run normally.
-   */
-  materializeDrillToken?: string;
   /**
    * Operator-only token for marking privacy export/delete requests complete.
    * Customers may create/read their own requests with their account session,
@@ -313,14 +168,8 @@ export interface AccountsHandlerOptions {
    * the customer whose data is being handled.
    */
   privacyOperationsToken?: string;
-  /**
-   * HMAC secret used to sign installation export download redirects. When
-   * omitted the handler falls back to the
-   * `TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET` env var; if both are
-   * missing the download route responds 503 `feature_unavailable` rather
-   * than emit unsigned URLs to tenant-scoped artifacts.
-   */
-  exportDownloadSigningSecret?: string | Uint8Array;
+  /** Operator-owned retention policy attached to newly created requests. */
+  privacyRetentionPolicyRef?: string;
 }
 
 export interface EphemeralAccountsHandlerOptions {
@@ -331,23 +180,11 @@ export interface EphemeralAccountsHandlerOptions {
   store?: AccountsStore;
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
-  launchTokens?: EphemeralLaunchTokenOptions;
-  deployControl?: DeployControlFacadeOptions;
   controlPlaneOperations?: ControlPlaneOperations;
   managedPublicBaseDomain?: string;
-  publicBillingPlans?: readonly Record<string, unknown>[];
-  billingCheckout?: StripeBillingCheckoutOptions;
-  billingWebhook?: StripeBillingWebhookOptions;
-  runtimeServiceTokens?: RuntimeServiceTokenOptions;
-  bindingMaterializer?: ServiceBindingMaterializer;
-  sharedCellRuntime?: SharedCellRuntimeAllocator;
-  materializeWorker?: AppCapsuleMaterializeWorker;
-  exportWorker?: AppCapsuleExportWorker;
-  platformAccess?: PlatformAccessPolicy;
   loginEmailAllowlist?: LoginEmailAllowlist;
-  runtimeProjectionMaterialResolver?: RuntimeProjectionMaterialResolverHttpOptions;
   privacyOperationsToken?: string;
-  exportDownloadSigningSecret?: string | Uint8Array;
+  privacyRetentionPolicyRef?: string;
   /**
    * Escape hatch for the fail-closed ephemeral-key guard. The ephemeral
    * handler generates a fresh per-process ECDSA signing keypair, which is
@@ -358,7 +195,7 @@ export interface EphemeralAccountsHandlerOptions {
    * live id_tokens. By default `createEphemeralAccountsHandler` therefore
    * hard-fails when the issuer is https (mirroring the
    * `TAKOSUMI_ACCOUNTS_ISSUER` hard-fail), pointing the operator at
-   * `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` + the two pairwise secrets.
+   * `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` and the OIDC pairwise secret.
    *
    * Set this to `true` ONLY where the ephemeral key is deliberate even though
    * the issuer is https-style — e.g. tests and local-substrate / LAN dev
@@ -366,19 +203,6 @@ export interface EphemeralAccountsHandlerOptions {
    * provide a stable JWK instead of setting this flag.
    */
   allowEphemeralKeyOnHttpsIssuer?: boolean;
-}
-
-export interface RuntimeProjectionMaterialResolverHttpOptions {
-  readonly token: string;
-  readonly billingPortalUrl?: string;
-  readonly internalUrl?: string;
-  readonly allowDeployControlCapsules?: boolean;
-}
-
-export interface RuntimeServiceTokenOptions {
-  readonly introspectionClientId: string;
-  readonly defaultTtlSeconds?: number;
-  readonly maxTtlSeconds?: number;
 }
 
 export interface AccountsServerOptions extends AccountsHandlerOptions {
@@ -395,116 +219,11 @@ export interface OidcAuthorizationCodeFlow {
 export interface OidcClientRegistration {
   clientId: string;
   redirectUris: readonly string[];
+  /** If present, authorization requests are limited to this exact set. */
+  allowedScopes?: readonly string[];
   clientSecret?: string;
   tokenEndpointAuthMethod?: OidcClientAuthMethod;
 }
-
-export interface ServiceBindingMaterializerInput {
-  installation: CapsuleRecord;
-  binding: ServiceBindingMaterialRecord;
-  declaration?: Record<string, unknown>;
-  issuer: string;
-}
-
-export interface ServiceBindingMaterializationResult {
-  configRef: string;
-  secretRefs?: readonly string[];
-  env?: Record<string, string>;
-}
-
-export type ServiceBindingMaterializer = (
-  input: ServiceBindingMaterializerInput,
-) =>
-  | ServiceBindingMaterializationResult
-  | undefined
-  | Promise<ServiceBindingMaterializationResult | undefined>;
-
-export interface AppCapsuleMaterializeRequest {
-  readonly mode: "dedicated";
-  readonly region: string;
-  readonly plan: Record<string, unknown>;
-  readonly cutover: Record<string, unknown>;
-  readonly confirm: {
-    readonly costAck: true;
-    readonly permissionDigest: string;
-  };
-}
-
-export interface AppCapsuleMaterializeWorkerInput {
-  readonly installation: CapsuleRecord;
-  readonly operationId: string;
-  readonly request: AppCapsuleMaterializeRequest;
-  readonly preserve: Record<string, unknown>;
-  readonly preserveDigest: string;
-}
-
-export interface AppCapsuleMaterializeWorkerResult {
-  readonly runtimeTarget: {
-    readonly runtimeTargetId?: string;
-    readonly targetType?: "dedicated";
-    readonly targetId: string;
-  };
-  readonly continuity: AppCapsuleMaterializeContinuityEvidence;
-  readonly preserveDigest?: string;
-  readonly reason?: string;
-}
-
-interface AppCapsuleConfirmRecord {
-  readonly permissionDigest: string;
-  readonly costAck: boolean;
-  readonly approvalRequired?: boolean;
-  readonly expiresAt?: string;
-}
-
-export interface AppCapsuleMaterializeContinuityEvidence {
-  readonly sourceDataNamespace: string | null;
-  readonly oidcClient: Record<string, unknown> | null;
-  readonly preservedServiceBindings: readonly {
-    readonly name: string;
-    readonly kind: ServiceBindingMaterialKind;
-    readonly configRef: string;
-    readonly secretRefs: readonly string[];
-  }[];
-  readonly cutover: {
-    readonly fromTargetId: string | null;
-    readonly toTargetId: string;
-    readonly ready: boolean;
-    readonly strategy?: string;
-  };
-}
-
-export type AppCapsuleMaterializeWorker = (
-  input: AppCapsuleMaterializeWorkerInput,
-) =>
-  | AppCapsuleMaterializeWorkerResult
-  | Promise<AppCapsuleMaterializeWorkerResult>;
-
-export interface AppCapsuleExportRequest {
-  readonly includeData: boolean;
-  readonly format: "bundle";
-  readonly encryption: {
-    readonly method: "none" | "age";
-    readonly recipients: readonly string[];
-  };
-  readonly scope: Record<string, unknown>;
-}
-
-export interface AppCapsuleExportWorkerInput {
-  readonly installation: CapsuleRecord;
-  readonly operationId: string;
-  readonly request: AppCapsuleExportRequest;
-  readonly bundle: AccountsCapsuleExportBundle;
-}
-
-export interface AppCapsuleExportWorkerResult {
-  readonly downloadUrl: string;
-  readonly downloadExpiresAt?: string;
-  readonly archiveDigest?: string;
-}
-
-export type AppCapsuleExportWorker = (
-  input: AppCapsuleExportWorkerInput,
-) => AppCapsuleExportWorkerResult | Promise<AppCapsuleExportWorkerResult>;
 
 export interface UpstreamOAuthOptions {
   subjectSecret: string | Uint8Array | CryptoKey;
@@ -515,11 +234,16 @@ export interface UpstreamOAuthOptions {
 
 export interface UpstreamOAuthClientRegistration {
   providerId: string;
+  /** Non-secret provider label returned by auth-provider discovery. */
+  label?: string;
+  /** Open protocol token returned by auth-provider discovery. */
+  protocol?: string;
   clientId: string;
   clientSecret?: string;
   redirectUri: string;
   scopes?: readonly string[];
-  provider?: UpstreamOAuthProvider;
+  /** Explicit provider protocol/endpoints; providerId alone selects nothing. */
+  provider: UpstreamOAuthProvider;
 }
 
 export interface PasskeyHttpOptions {
@@ -528,21 +252,6 @@ export interface PasskeyHttpOptions {
   origin: string;
   sessionTtlMs?: number;
 }
-
-export interface LaunchTokenOptions {
-  issuer?: string;
-  pairwiseSubjectSecret?: string | Uint8Array | CryptoKey;
-}
-
-export interface EphemeralLaunchTokenOptions {
-  /**
-   * Reserved for future ephemeral launch-token configuration.
-   * Opaque launch tokens do not require signing keys.
-   */
-  _reserved?: never;
-}
-
-export const TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_SUFFIX = "/launch-token";
 
 const emptyJwks: JsonWebKeySet = { keys: [] };
 
@@ -567,8 +276,7 @@ export async function createEphemeralAccountsHandler(
         `signing key: the per-process key breaks id_token verification on ` +
         `restart and under horizontal scale. Set ` +
         `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK + ` +
-        `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET + ` +
-        `TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET for a stable signing ` +
+        `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET for a stable signing ` +
         `key, or pass allowEphemeralKeyOnHttpsIssuer:true for deliberate ` +
         `dev/test issuers.`,
     );
@@ -586,34 +294,16 @@ export async function createEphemeralAccountsHandler(
   return createAccountsHandler({
     issuer,
     clients: options.clients,
-    store: options.store,
+    store: options.store ?? new InMemoryAccountsStore(),
     upstreamOAuth: options.upstreamOAuth,
     passkeys: options.passkeys,
-    deployControl: options.deployControl,
     controlPlaneOperations: options.controlPlaneOperations,
     ...(options.managedPublicBaseDomain
       ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
       : {}),
-    publicBillingPlans: options.publicBillingPlans,
-    billingCheckout: options.billingCheckout,
-    runtimeServiceTokens: options.runtimeServiceTokens,
-    bindingMaterializer: options.bindingMaterializer,
-    sharedCellRuntime: options.sharedCellRuntime,
-    materializeWorker: options.materializeWorker,
-    exportWorker: options.exportWorker,
-    platformAccess: options.platformAccess ?? {
-      status: "closed",
-    },
     loginEmailAllowlist: options.loginEmailAllowlist,
-    runtimeProjectionMaterialResolver:
-      options.runtimeProjectionMaterialResolver,
     privacyOperationsToken: options.privacyOperationsToken,
-    exportDownloadSigningSecret: options.exportDownloadSigningSecret,
-    launchTokens: {
-      pairwiseSubjectSecret: `takosumi-dev-launch-pairwise:${
-        options.subject ?? keyId
-      }`,
-    },
+    privacyRetentionPolicyRef: options.privacyRetentionPolicyRef,
     jwks: {
       keys: [
         {
@@ -705,21 +395,29 @@ function createRequestScopedAccountsStore(
 }
 
 export function createAccountsHandler(
-  options: AccountsHandlerOptions = {},
+  options: AccountsHandlerOptions,
 ): AccountsHandler {
+  if (!options?.store) {
+    throw new TypeError(
+      "createAccountsHandler requires an explicit AccountsStore; use createEphemeralAccountsHandler for deliberate in-memory dev/test state",
+    );
+  }
   const issuer = normalizeIssuer(options.issuer);
   const discovery = buildOidcDiscoveryDocument({ issuer });
   const jwks = options.jwks ?? emptyJwks;
   const clients = new Map(
     (options.clients ?? []).map((client) => [client.clientId, client]),
   );
-  const baseStore = options.store ?? new InMemoryAccountsStore();
+  const baseStore = options.store;
   const isProductionIssuer = isHttpsIssuer(issuer);
   const loginEmailAllowlist = options.loginEmailAllowlist;
+  const privacyRetentionPolicyRef = options.privacyRetentionPolicyRef
+    ? normalizePrivacyRetentionPolicyRef(options.privacyRetentionPolicyRef)
+    : undefined;
 
   // Per-isolate rate limiters. Each entry maps client IP to a sliding window
   // of recent request timestamps. These limiters guard the abuse-prone OIDC
-  // and installation surfaces so a single bad actor cannot trivially exhaust
+  // surfaces so a single bad actor cannot trivially exhaust
   // the issuer. Per-isolate state means a Workers deployment with multiple
   // isolates only enforces the budget locally; operators MUST add an
   // edge-level rate limiter (Cloudflare WAF / Caddy rate_limit / etc.) for
@@ -728,8 +426,6 @@ export function createAccountsHandler(
   const authorizeLimiter = createInMemoryRateLimiter(60);
   const tokenLimiter = createInMemoryRateLimiter(120);
   const accountTokensLimiter = createInMemoryRateLimiter(10);
-  const installationsLimiter = createInMemoryRateLimiter(30);
-  const launchConsumeLimiter = createInMemoryRateLimiter(30);
 
   const inner = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -739,50 +435,6 @@ export function createAccountsHandler(
     if (url.pathname === "/healthz") {
       if (!isGetOrHead(request)) return methodNotAllowed("GET, HEAD");
       return json({ ok: true, service: "takosumi-accounts" });
-    }
-
-    if (
-      url.pathname ===
-      TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH
-    ) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      if (!options.runtimeProjectionMaterialResolver) {
-        return errorJson("not_found", "not found", 404);
-      }
-      const authBlocked = requireRuntimeProjectionMaterialResolverAccess({
-        request,
-        token: options.runtimeProjectionMaterialResolver.token,
-      });
-      if (authBlocked) return authBlocked;
-      const body = await readJsonObject(request);
-      if (!isRuntimeProjectionMaterialResolveContext(body)) {
-        return errorJson(
-          "invalid_request",
-          "request body must contain capsuleId plus sourceRef or kind",
-          400,
-        );
-      }
-      const material = await resolveTakosumiRuntimeProjectionMaterial({
-        store,
-        issuer,
-        internalUrl: options.runtimeProjectionMaterialResolver.internalUrl,
-        billingPortalUrl:
-          options.runtimeProjectionMaterialResolver.billingPortalUrl,
-        allowDeployControlCapsules:
-          options.runtimeProjectionMaterialResolver.allowDeployControlCapsules,
-        context: body,
-      });
-      if (Array.isArray(material)) {
-        return json({ materials: material });
-      }
-      if (!material) {
-        return errorJson(
-          "platform_service_not_found",
-          "platform service not found",
-          404,
-        );
-      }
-      return json({ material });
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH) {
@@ -822,6 +474,7 @@ export function createAccountsHandler(
         flow: options.oidcFlow,
         clients,
         store,
+        operations: options.controlPlaneOperations,
       });
     }
 
@@ -879,82 +532,6 @@ export function createAccountsHandler(
       return methodNotAllowed("DELETE, GET");
     }
 
-    if (url.pathname === TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      if (!options.billingCheckout) {
-        return errorJson(
-          "feature_unavailable",
-          "Stripe billing checkout is not configured.",
-          503,
-          request,
-        );
-      }
-      if (!billingCheckoutSmokeAllowed(request, options.billingCheckout)) {
-        const blocked = platformAccessBlocked(options.platformAccess);
-        if (blocked) return blocked;
-      }
-      return await handleStripeBillingCheckout({
-        request,
-        store,
-        operations: options.controlPlaneOperations,
-        checkout: options.billingCheckout,
-      });
-    }
-
-    if (url.pathname === TAKOSUMI_ACCOUNTS_BILLING_STRIPE_PORTAL_PATH) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      if (!options.billingCheckout) {
-        return errorJson(
-          "feature_unavailable",
-          "Stripe billing portal is not configured.",
-          503,
-          request,
-        );
-      }
-      return await handleStripeBillingPortal({
-        request,
-        store,
-        portal: options.billingCheckout,
-      });
-    }
-
-    if (url.pathname === TAKOSUMI_ACCOUNTS_BILLING_STRIPE_SUMMARY_PATH) {
-      if (request.method !== "GET" && request.method !== "HEAD") {
-        return methodNotAllowed("GET, HEAD");
-      }
-      if (!options.billingCheckout) {
-        return errorJson(
-          "feature_unavailable",
-          "Stripe billing summary is not configured.",
-          503,
-          request,
-        );
-      }
-      return await handleStripeBillingSummary({
-        request,
-        store,
-        billing: options.billingCheckout,
-      });
-    }
-
-    if (isStripeBillingWebhookPath(url.pathname)) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      if (!options.billingWebhook) {
-        return errorJson(
-          "feature_unavailable",
-          "Stripe billing webhook is not configured.",
-          503,
-          request,
-        );
-      }
-      return await handleStripeBillingWebhook({
-        request,
-        store,
-        operations: options.controlPlaneOperations,
-        webhook: options.billingWebhook,
-      });
-    }
-
     if (url.pathname === TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH) {
       if (request.method === "GET") {
         return await handleListPersonalAccessTokens({ request, url, store });
@@ -988,6 +565,9 @@ export function createAccountsHandler(
           request,
           store,
           subject: session.subject,
+          ...(privacyRetentionPolicyRef
+            ? { policyRef: privacyRetentionPolicyRef }
+            : {}),
         });
       }
       return methodNotAllowed("GET, POST");
@@ -1117,233 +697,6 @@ export function createAccountsHandler(
       });
     }
 
-    if (url.pathname === TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTION_PLAN_RUNS_PATH) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      const authBlocked = await requireCapsulePlanRunWriteAccess({
-        request: request.clone(),
-        store,
-      });
-      if (authBlocked) return authBlocked;
-      if (!options.deployControl) {
-        return errorJson(
-          "feature_unavailable",
-          "Capsule PlanRun is temporarily unavailable.",
-          503,
-        );
-      }
-      return await handleCapsulePlanRunFacade({
-        request,
-        deployControl: options.deployControl,
-      });
-    }
-
-    if (url.pathname === TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH) {
-      if (request.method === "POST") {
-        const limited = installationsLimiter.consume(request);
-        if (limited) return limited;
-        const createAccess = await requireAppCapsuleCreateWriteAccess({
-          request: request.clone(),
-          store,
-        });
-        if (createAccess instanceof Response) return createAccess;
-        return await handleCreateAppCapsule({
-          request,
-          store,
-          issuer,
-          deployControl: options.deployControl,
-          launchTokens: options.launchTokens,
-          bindingMaterializer: options.bindingMaterializer,
-          sharedCellRuntime: options.sharedCellRuntime,
-          authenticatedSubject: createAccess.auth.subject,
-          authorizedAccountId: createAccess.accountId,
-          authorizedWorkspaceId: createAccess.workspaceId,
-        });
-      }
-      if (request.method === "GET") {
-        return await handleListAppCapsules({
-          request,
-          url,
-          store,
-          deployControl: options.deployControl,
-        });
-      }
-      return methodNotAllowed("GET, POST");
-    }
-
-    const capsuleRoute = matchCapsuleRoute(url.pathname);
-    if (capsuleRoute) {
-      const materializeDrillAllowed =
-        capsuleRoute.kind === "materialize" &&
-        request.method === "POST" &&
-        materializeDrillAccessAllowed({
-          request,
-          token: options.materializeDrillToken,
-        });
-      if (
-        platformGuardedCapsuleMutation(capsuleRoute.kind, request.method) &&
-        !materializeDrillAllowed
-      ) {
-        const blocked = platformAccessBlocked(options.platformAccess);
-        if (blocked) return blocked;
-      }
-      const accountAccess = capsuleRouteAccountAccess(
-        capsuleRoute,
-        request.method,
-      );
-      if (accountAccess) {
-        const authBlocked = await requireAppCapsuleAccountAccess({
-          request,
-          store,
-          capsuleId: capsuleRoute.capsuleId,
-          scope: accountAccess,
-        });
-        if (authBlocked) return authBlocked;
-      }
-      if (capsuleRoute.kind === "capsule" && request.method === "GET") {
-        return await handleGetAppCapsule({
-          capsuleId: capsuleRoute.capsuleId,
-          request,
-          store,
-          deployControl: options.deployControl,
-        });
-      }
-      if (capsuleRoute.kind === "capsule" && request.method === "DELETE") {
-        return await handleUninstallAppCapsule({
-          capsuleId: capsuleRoute.capsuleId,
-          request,
-          store,
-        });
-      }
-      if (capsuleRoute.kind === "status" && request.method === "PATCH") {
-        const authBlocked = await requireAppCapsuleAccountAccess({
-          request,
-          store,
-          capsuleId: capsuleRoute.capsuleId,
-          scope: "write",
-        });
-        if (authBlocked) return authBlocked;
-        return await handleUpdateAppCapsuleStatus({
-          capsuleId: capsuleRoute.capsuleId,
-          request,
-          store,
-        });
-      }
-      if (
-        capsuleRoute.kind === "revision-plan-run" &&
-        request.method === "POST"
-      ) {
-        return await handlePlanAppCapsuleDeployment({
-          capsuleId: capsuleRoute.capsuleId,
-          request,
-          store,
-          deployControl: options.deployControl,
-        });
-      }
-      if (capsuleRoute.kind === "revision" && request.method === "POST") {
-        return await handleUpdateAppCapsuleRevision({
-          capsuleId: capsuleRoute.capsuleId,
-          operation: "revision",
-          request,
-          store,
-          deployControl: options.deployControl,
-        });
-      }
-      if (capsuleRoute.kind === "rollback" && request.method === "POST") {
-        return await handleUpdateAppCapsuleRevision({
-          capsuleId: capsuleRoute.capsuleId,
-          operation: "rollback",
-          request,
-          store,
-          deployControl: options.deployControl,
-        });
-      }
-      if (capsuleRoute.kind === "materialize" && request.method === "POST") {
-        return await handleRequestAppCapsuleMaterialize({
-          capsuleId: capsuleRoute.capsuleId,
-          request,
-          store,
-          materializeWorker: options.materializeWorker,
-        });
-      }
-      if (capsuleRoute.kind === "export" && request.method === "POST") {
-        return await handleRequestAppCapsuleExport({
-          capsuleId: capsuleRoute.capsuleId,
-          request,
-          store,
-          exportWorker: options.exportWorker,
-        });
-      }
-      if (
-        capsuleRoute.kind === "export-operation" &&
-        request.method === "GET"
-      ) {
-        return await handleGetAppCapsuleExportOperation({
-          capsuleId: capsuleRoute.capsuleId,
-          operationId: capsuleRoute.operationId,
-          store,
-        });
-      }
-      if (capsuleRoute.kind === "export-download" && request.method === "GET") {
-        return await handleDownloadAppCapsuleExport({
-          capsuleId: capsuleRoute.capsuleId,
-          operationId: capsuleRoute.operationId,
-          store,
-          exportDownloadSigningSecret: options.exportDownloadSigningSecret,
-        });
-      }
-      if (capsuleRoute.kind === "events" && request.method === "GET") {
-        return await handleListCapsuleEvents({
-          capsuleId: capsuleRoute.capsuleId,
-          request,
-          url,
-          store,
-        });
-      }
-      if (capsuleRoute.kind === "services" && request.method === "GET") {
-        return await handleListCapsuleServices({
-          capsuleId: capsuleRoute.capsuleId,
-          request,
-          store,
-          deployControl: options.deployControl,
-        });
-      }
-      if (
-        capsuleRoute.kind === "service-rotate-token" &&
-        request.method === "POST"
-      ) {
-        return await handleRotateRuntimeServiceToken({
-          capsuleId: capsuleRoute.capsuleId,
-          serviceId: capsuleRoute.serviceId,
-          request,
-          store,
-          runtimeServiceTokens: options.runtimeServiceTokens,
-        });
-      }
-      if (
-        capsuleRoute.kind === "billing-usage-reports" &&
-        request.method === "POST"
-      ) {
-        return await handleReportCapsuleBillingUsage({
-          capsuleId: capsuleRoute.capsuleId,
-          request,
-          store,
-        });
-      }
-      if (
-        capsuleRoute.kind === "launch-token-consume" &&
-        request.method === "POST"
-      ) {
-        const limited = launchConsumeLimiter.consume(request);
-        if (limited) return limited;
-        return await handleConsumeLaunchToken({
-          capsuleId: capsuleRoute.capsuleId,
-          request,
-          store,
-        });
-      }
-      return methodNotAllowed("DELETE, GET, PATCH, POST");
-    }
-
     // Account-plane session-authed deploy-control surface. Owns the edge-public
     // `/api/v1/*` namespace the dashboard SPA calls same-origin with its account
     // session (NOT the operator deploy-control bearer). Dispatched here before
@@ -1363,8 +716,6 @@ export function createAccountsHandler(
             ...(options.managedPublicBaseDomain
               ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
               : {}),
-            publicBillingPlans: options.publicBillingPlans,
-            sharedCellRuntime: options.sharedCellRuntime,
           }),
       );
       if (controlResponse) return appendServerTiming(controlResponse, timings);
@@ -1377,195 +728,6 @@ export function createAccountsHandler(
     const response = await inner(request);
     return withSecurityHeaders(response, isProductionIssuer);
   };
-}
-
-function isStripeBillingWebhookPath(pathname: string): boolean {
-  return (
-    pathname === TAKOSUMI_ACCOUNTS_BILLING_STRIPE_WEBHOOK_PATH ||
-    pathname === `/api${TAKOSUMI_ACCOUNTS_BILLING_STRIPE_WEBHOOK_PATH}`
-  );
-}
-
-const AI_GATEWAY_RUNTIME_SERVICE_SCOPES = [
-  "ai.models.read",
-  "ai.chat",
-  "ai.embeddings",
-] as const;
-const PROVIDER_COMPAT_CLOUDFLARE_WORKERS_RUNTIME_SERVICE_SCOPES = [
-  "provider.compat.cloudflare_workers.read",
-  "provider.compat.cloudflare_workers.write",
-] as const;
-const RUNTIME_SERVICE_SCOPE_POLICIES = {
-  [TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY]:
-    AI_GATEWAY_RUNTIME_SERVICE_SCOPES,
-  [TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_PROVIDER_COMPAT_CLOUDFLARE_WORKERS]:
-    PROVIDER_COMPAT_CLOUDFLARE_WORKERS_RUNTIME_SERVICE_SCOPES,
-} as const;
-const DEFAULT_RUNTIME_SERVICE_TOKEN_TTL_SECONDS = 15 * 60;
-const MAX_RUNTIME_SERVICE_TOKEN_TTL_SECONDS = 60 * 60;
-
-async function handleRotateRuntimeServiceToken(input: {
-  capsuleId: string;
-  serviceId: string;
-  request: Request;
-  store: AccountsStore;
-  runtimeServiceTokens?: RuntimeServiceTokenOptions;
-}): Promise<Response> {
-  const serviceScopes = runtimeServiceScopesFor(input.serviceId);
-  if (!serviceScopes) {
-    return errorJson(
-      "platform_service_not_found",
-      "platform service not found",
-      404,
-    );
-  }
-  if (!input.runtimeServiceTokens?.introspectionClientId) {
-    return errorJson(
-      "feature_unavailable",
-      "Runtime service token rotation is not configured.",
-      503,
-    );
-  }
-  const body = await readJsonObject(input.request);
-  if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const scopes = runtimeServiceTokenScopesValue(body.scopes, serviceScopes);
-  if (!scopes) {
-    return errorJson(
-      "invalid_request",
-      "scopes must be omitted or a non-empty subset of the runtime service scopes",
-      400,
-    );
-  }
-  const ttlSeconds = runtimeServiceTokenTtlSecondsValue({
-    value: body.ttlSeconds ?? body.ttl_seconds,
-    defaultTtlSeconds: input.runtimeServiceTokens.defaultTtlSeconds,
-    maxTtlSeconds: input.runtimeServiceTokens.maxTtlSeconds,
-  });
-  if (ttlSeconds === "invalid") {
-    return errorJson(
-      "invalid_request",
-      "ttlSeconds must be a positive integer within the runtime token maximum",
-      400,
-    );
-  }
-  const installation = await input.store.findAppCapsule(input.capsuleId);
-  if (!installation) {
-    return errorJson("installation_not_found", "installation not found", 404);
-  }
-  if (installation.status !== "ready") {
-    return errorJson(
-      "state_conflict",
-      "runtime service tokens can only be issued for ready Capsules",
-      409,
-    );
-  }
-  const now = Date.now();
-  const expiresAt = now + ttlSeconds * 1000;
-  const token = generateRuntimeServiceToken();
-  await input.store.saveAccessToken(token, {
-    clientId: input.runtimeServiceTokens.introspectionClientId,
-    subject: `svc:${input.serviceId}:${input.capsuleId}`,
-    takosumiSubject: installation.createdBySubject,
-    capsuleId: installation.capsuleId,
-    appId: installation.appId,
-    workspaceId: installation.workspaceId,
-    role: "runtime",
-    scope: scopes.join(" "),
-    expiresAt,
-  });
-  return json({
-    token,
-    token_type: "Bearer",
-    expires_in: ttlSeconds,
-    expires_at: new Date(expiresAt).toISOString(),
-    scope: scopes.join(" "),
-    service: {
-      id: input.serviceId,
-      status: "active",
-      scopes,
-    },
-  });
-}
-
-function runtimeServiceTokenScopesValue(
-  value: unknown,
-  serviceScopes: readonly string[],
-): readonly string[] | undefined {
-  if (value === undefined) return serviceScopes;
-  if (!Array.isArray(value) || value.length < 1) return undefined;
-  const scopes: string[] = [];
-  const seen = new Set<string>();
-  const allowed = new Set(serviceScopes);
-  for (const scope of value) {
-    if (typeof scope !== "string" || !allowed.has(scope) || seen.has(scope)) {
-      return undefined;
-    }
-    seen.add(scope);
-    scopes.push(scope);
-  }
-  return scopes;
-}
-
-function runtimeServiceScopesFor(
-  serviceId: string,
-): readonly string[] | undefined {
-  return RUNTIME_SERVICE_SCOPE_POLICIES[
-    serviceId as keyof typeof RUNTIME_SERVICE_SCOPE_POLICIES
-  ];
-}
-
-function runtimeServiceTokenTtlSecondsValue(input: {
-  value: unknown;
-  defaultTtlSeconds?: number;
-  maxTtlSeconds?: number;
-}): number | "invalid" {
-  const defaultTtlSeconds = checkedPositiveInteger(
-    input.defaultTtlSeconds,
-    DEFAULT_RUNTIME_SERVICE_TOKEN_TTL_SECONDS,
-  );
-  const maxTtlSeconds = checkedPositiveInteger(
-    input.maxTtlSeconds,
-    MAX_RUNTIME_SERVICE_TOKEN_TTL_SECONDS,
-  );
-  if (input.value === undefined) {
-    return Math.min(defaultTtlSeconds, maxTtlSeconds);
-  }
-  if (
-    typeof input.value !== "number" ||
-    !Number.isInteger(input.value) ||
-    input.value <= 0 ||
-    input.value > maxTtlSeconds
-  ) {
-    return "invalid";
-  }
-  return input.value;
-}
-
-function checkedPositiveInteger(
-  value: number | undefined,
-  fallback: number,
-): number {
-  return Number.isInteger(value) && value !== undefined && value > 0
-    ? value
-    : fallback;
-}
-
-function generateRuntimeServiceToken(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return `taksrv_${base64UrlEncodeBytes(bytes)}`;
-}
-
-function billingCheckoutSmokeAllowed(
-  request: Request,
-  checkout: StripeBillingCheckoutOptions,
-): boolean {
-  const expected = checkout.smokeToken;
-  if (!expected) return false;
-  const presented = request.headers.get(
-    TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
-  );
-  return Boolean(presented && constantTimeEqual(presented, expected));
 }
 
 const HSTS_HEADER_VALUE = "max-age=31536000; includeSubDomains; preload";
@@ -1636,7 +798,7 @@ export interface AccountsServerHandle {
 }
 
 export function startAccountsServer(
-  options: AccountsServerOptions = {},
+  options: AccountsServerOptions,
 ): AccountsServerHandle {
   const bunGlobal = (
     globalThis as {
@@ -1706,7 +868,7 @@ const RATE_LIMIT_MAX_TRACKED_CLIENTS = 4096;
  * many isolates only enforces the budget locally. Operators MUST add an
  * edge-level limiter (Cloudflare WAF, Caddy `rate_limit`, etc.) on top of
  * this for production-grade protection. The limiter exists to make abuse
- * of the abuse-prone OIDC / installation routes obviously expensive from a
+ * of the abuse-prone identity routes obviously expensive from a
  * single source rather than to be a definitive defense.
  *
  * @param maxPerMinute Maximum requests per client IP in any 60 s window.
@@ -1793,37 +955,6 @@ function passkeysNotConfigured(): Response {
   );
 }
 
-function requireRuntimeProjectionMaterialResolverAccess(input: {
-  request: Request;
-  token: string;
-}): Response | undefined {
-  // Constant-time comparison of the static shared-secret bearer token, matching
-  // every other auth check in this service. Passing the full header to
-  // constantTimeEqual is safe: it XOR-folds the length difference with no early
-  // length short-circuit, so it does not leak a per-byte timing side channel.
-  const header = input.request.headers.get("authorization") ?? "";
-  if (constantTimeEqual(header, `Bearer ${input.token}`)) {
-    return undefined;
-  }
-  return errorJson(
-    "unauthorized",
-    "runtime projection material resolver token is required",
-    401,
-    undefined,
-    { "www-authenticate": "Bearer" },
-  );
-}
-
-function materializeDrillAccessAllowed(input: {
-  request: Request;
-  token: string | undefined;
-}): boolean {
-  if (!input.token) return false;
-  const header =
-    input.request.headers.get(TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER) ?? "";
-  return constantTimeEqual(header, input.token);
-}
-
 function requirePrivacyOperationsAccess(input: {
   request: Request;
   token: string | undefined;
@@ -1844,36 +975,4 @@ function requirePrivacyOperationsAccess(input: {
     401,
     undefined,
   );
-}
-
-function capsuleRouteAccountAccess(
-  route: CapsuleRoute,
-  method: string,
-): "read" | "write" | undefined {
-  if (route.kind === "billing-usage-reports") return undefined;
-  if (route.kind === "capsule") {
-    if (method === "DELETE") return "write";
-    return undefined;
-  }
-  if (
-    (route.kind === "revision" ||
-      route.kind === "revision-plan-run" ||
-      route.kind === "rollback" ||
-      route.kind === "materialize" ||
-      route.kind === "service-rotate-token" ||
-      route.kind === "export") &&
-    method === "POST"
-  ) {
-    return "write";
-  }
-  if (
-    (route.kind === "events" ||
-      route.kind === "services" ||
-      route.kind === "export-operation" ||
-      route.kind === "export-download") &&
-    method === "GET"
-  ) {
-    return "read";
-  }
-  return undefined;
 }

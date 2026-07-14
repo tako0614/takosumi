@@ -817,7 +817,7 @@ test("OpenTofu runner Durable Object restores and persists operator-managed stat
   const calls: string[] = [];
   const r2 = new FakeR2Bucket();
   const stateBackendRef = "state://takosumi/opentofu-default";
-  const stateKey = `${await testStateBackendPrefix(stateBackendRef)}/installations/inst_1/terraform.tfstate`;
+  const stateKey = `${await testStateBackendPrefix(stateBackendRef)}/capsules/inst_1/terraform.tfstate`;
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
@@ -881,8 +881,8 @@ test("OpenTofu runner Durable Object restores and persists operator-managed stat
         request: {
           planRun: {
             id: "plan_1",
-            installationId: "inst_1",
-            spaceId: "space_1",
+            capsuleId: "inst_1",
+            workspaceId: "space_1",
             runnerProfileId: "opentofu-default",
             source: {
               kind: "git",
@@ -930,7 +930,7 @@ test("OpenTofu runner Durable Object restores a verified R2_STATE object into a 
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });
   const sourceKey =
-    "spaces/space_1/installations/inst_1/envs/production/states/00000001.tfstate.enc";
+    "workspaces/space_1/capsules/inst_1/environments/production/state-versions/00000001.tfstate.enc";
   const sealed = await crypto.seal(STATE_BYTES);
   await state.put(sourceKey, sealed.ciphertext, {
     httpMetadata: { contentType: "application/octet-stream" },
@@ -961,13 +961,15 @@ test("OpenTofu runner Durable Object restores a verified R2_STATE object into a 
         runId: "restore_1",
         request: {
           stateScope: {
-            spaceId: "space_1",
-            installationId: "inst_1",
+            workspaceId: "space_1",
+            subject: { kind: "capsule", id: "inst_1" },
             environment: "production",
             generation: 2,
+            stateRef:
+              "workspaces/space_1/capsules/inst_1/environments/production/state-versions/00000002.tfstate.enc",
           },
           restoreState: {
-            objectKey: sourceKey,
+            stateRef: sourceKey,
             digest: sealed.contentDigest,
           },
         },
@@ -977,26 +979,26 @@ test("OpenTofu runner Durable Object restores a verified R2_STATE object into a 
 
   assert.equal(response.status, 200);
   const payload = (await response.json()) as {
-    state: { generation: number; objectKey: string; digest: string };
+    state: { generation: number; stateRef: string; digest: string };
   };
   assert.equal(payload.state.generation, 2);
   assert.equal(
-    payload.state.objectKey,
-    "spaces/space_1/installations/inst_1/envs/production/states/00000002.tfstate.enc",
+    payload.state.stateRef,
+    "workspaces/space_1/capsules/inst_1/environments/production/state-versions/00000002.tfstate.enc",
   );
-  const restored = state.body(payload.state.objectKey);
+  const restored = state.body(payload.state.stateRef);
   assert.ok(restored);
   assert.deepEqual(
     await crypto.open(restored, payload.state.digest),
     STATE_BYTES,
   );
   const current = state.body(
-    "spaces/space_1/installations/inst_1/envs/production/states/current.json",
+    "workspaces/space_1/capsules/inst_1/environments/production/state-versions/current.json",
   );
   assert.ok(current);
   assert.equal(
     JSON.parse(new TextDecoder().decode(current)).objectKey,
-    payload.state.objectKey,
+    payload.state.stateRef,
   );
 });
 

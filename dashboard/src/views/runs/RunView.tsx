@@ -29,6 +29,7 @@ import {
 } from "solid-js";
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import { Activity, ExternalLink } from "lucide-solid";
+import { redactString } from "takosumi-contract/redaction";
 import Page from "../account/components/auth/Page.tsx";
 import {
   approveRun,
@@ -41,7 +42,7 @@ import {
   getRunCostInfo,
   getRunLogs,
   listActivity,
-  listDeployments,
+  listStateVersions,
   listProviderConnections,
   listRuns,
   destroyPlanCapsule,
@@ -56,7 +57,8 @@ import {
   type RunLogs,
   type RunPlanResource,
 } from "../../lib/control-api.ts";
-import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
+import { hasPlatformExtensionCapability } from "../../lib/runtime-capabilities.ts";
+import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
   changeCountsForRun,
@@ -73,9 +75,8 @@ import {
   isReviewRun,
 } from "../../lib/run-approval.ts";
 import {
-  deploymentReadinessAfterApply,
-  launchUrlFromDeployment,
-  type DeploymentReadiness,
+  stateVersionReadinessAfterApply,
+  type StateVersionReadiness,
 } from "../../lib/capsules-ui.ts";
 import {
   appendAppHandoff,
@@ -97,6 +98,8 @@ import { runFailureHint } from "../../lib/run-errors.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
+import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
+import { refreshSession } from "../account/lib/session.ts";
 import {
   formatDateTime,
   locale,
@@ -138,27 +141,7 @@ function formatUsdMicros(value: number): string {
 }
 
 function costEstimatedUsdMicros(cost: RunCostInfo): number {
-  return (
-    cost.estimatedUsdMicros ?? Math.round(cost.estimatedCredits * 1_000_000)
-  );
-}
-
-function costAvailableUsdMicros(cost: RunCostInfo): number | undefined {
-  return (
-    cost.availableUsdMicros ??
-    (cost.availableCredits === undefined
-      ? undefined
-      : Math.round(cost.availableCredits * 1_000_000))
-  );
-}
-
-function costShortfallUsdMicros(cost: RunCostInfo): number | undefined {
-  return (
-    cost.shortfallUsdMicros ??
-    (cost.creditShortfall === undefined
-      ? undefined
-      : Math.round(cost.creditShortfall * 1_000_000))
-  );
+  return cost.estimatedUsdMicros;
 }
 
 function isRequestTimeout(error: unknown): boolean {
@@ -194,9 +177,8 @@ function latestApplyRunForPlan(
 function hasCostToShow(cost: RunCostInfo): boolean {
   return (
     cost.blocked ||
+    cost.ratingStatus === "unrated" ||
     costEstimatedUsdMicros(cost) > 0 ||
-    cost.reservationStatus !== undefined ||
-    costShortfallUsdMicros(cost) !== undefined ||
     cost.reasons.length > 0
   );
 }
@@ -204,53 +186,30 @@ function hasCostToShow(cost: RunCostInfo): boolean {
 /** Pre-apply cost / shortfall panel — backend-computed values only. */
 function CostNotice(props: { readonly cost: RunCostInfo }) {
   const cost = () => props.cost;
-  const cloudBilling = () => isTakosumiCloudRuntime();
+  const commercialBilling = () =>
+    hasPlatformExtensionCapability("billing.commercial.v1");
   const estimatedUsdMicros = () => costEstimatedUsdMicros(cost());
-  const availableUsdMicros = () => costAvailableUsdMicros(cost());
-  const shortfallUsdMicros = () => costShortfallUsdMicros(cost());
   return (
     <div class={`wa-cost${cost().blocked ? " wa-cost-blocked" : ""}`}>
-      <Show when={estimatedUsdMicros() > 0}>
-        <Show when={cloudBilling()}>
-          <p class="wa-cost-line">
-            {t("run.cost.required", {
-              n: formatUsdMicros(estimatedUsdMicros()),
-            })}
-          </p>
-        </Show>
+      <Show when={cost().ratingStatus === "unrated"}>
+        <p class="wa-cost-line">{t("run.cost.unrated")}</p>
       </Show>
-      <Show when={availableUsdMicros() !== undefined}>
-        <Show when={cloudBilling()}>
-          <p class="wa-cost-line muted">
-            {t("run.cost.balance", {
-              n: formatUsdMicros(availableUsdMicros() ?? 0),
-            })}
-          </p>
-        </Show>
+      <Show when={estimatedUsdMicros() > 0}>
+        <p class="wa-cost-line">
+          {t("run.cost.required", {
+            n: formatUsdMicros(estimatedUsdMicros()),
+          })}
+        </p>
       </Show>
       <Show when={cost().blocked}>
-        <p class="wa-error">
-          <Show
-            when={cloudBilling()}
-            fallback={<>{t("run.cost.capacityBlocked")}</>}
-          >
-            {t(
-              shortfallUsdMicros() !== undefined
-                ? "run.cost.shortfall"
-                : "run.cost.blocked",
-              {
-                n: formatUsdMicros(shortfallUsdMicros() ?? 0),
-              },
-            )}
-          </Show>
-        </p>
-        <Show when={cloudBilling() && cost().reasons.length > 0}>
+        <p class="wa-error">{t("run.cost.capacityBlocked")}</p>
+        <Show when={cost().reasons.length > 0}>
           <ul class="wa-cost-reasons">
             <For each={cost().reasons}>{(reason) => <li>{reason}</li>}</For>
           </ul>
         </Show>
         <Show
-          when={cloudBilling()}
+          when={commercialBilling()}
           fallback={
             <>
               <p class="muted">{t("run.cost.operatorHelp")}</p>
@@ -269,64 +228,10 @@ function CostNotice(props: { readonly cost: RunCostInfo }) {
   );
 }
 
-/** True when an apply rejection is the destructive-confirmation precondition. */
-function isDestructiveConfirmationRequired(error: ControlApiError): boolean {
-  const message = (error.message ?? "").toLowerCase();
-  return (
-    message.includes("confirmdestructive") || message.includes("destructive")
-  );
-}
-
 function diagnosticDisplayText(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  const redacted = value
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gu, "Bearer [REDACTED]")
-    .replace(
-      /\b(?:sk|pk|rk|ghp|github_pat|glpat|xox[baprs])_[A-Za-z0-9._-]+/gu,
-      "[REDACTED]",
-    )
-    .replace(
-      /\b[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Z0-9_]*=([^\s"']+)/giu,
-      (match) => match.replace(/=.+$/u, "=[REDACTED]"),
-    );
+  const redacted = redactString(value);
   return redacted.length > 4_000 ? `${redacted.slice(0, 4_000)}...` : redacted;
-}
-
-function isCreditsRequiredText(value: string | undefined): boolean {
-  if (!value) return false;
-  const normalized = value.toLowerCase();
-  return (
-    normalized.includes("credits_required") ||
-    normalized.includes("cloud_extension_insufficient_credits") ||
-    normalized.includes('"reason":"insufficient_credits"') ||
-    normalized.includes('"reason": "insufficient_credits"') ||
-    (normalized.includes("reservationstatus") &&
-      normalized.includes("insufficient_credits")) ||
-    normalized.includes("usd balance reservation failed") ||
-    normalized.includes("insufficient credits")
-  );
-}
-
-function isCreditsRequiredRun(
-  run: Run,
-  diagnostics: readonly RunDiagnostic[],
-): boolean {
-  return (
-    run.errorCode === "credits_required" ||
-    diagnostics.some(
-      (diagnostic) =>
-        isCreditsRequiredText(diagnostic.message) ||
-        isCreditsRequiredText(diagnostic.detail),
-    )
-  );
-}
-
-function isManagedHostnameSlotLimitText(value: string | undefined): boolean {
-  return Boolean(
-    value
-      ?.toLowerCase()
-      .includes("managed_public_hostname_slot_limit_reached"),
-  );
 }
 
 function isManagedHostnameSlotLimitRun(
@@ -337,8 +242,7 @@ function isManagedHostnameSlotLimitRun(
     run.errorCode === "managed_public_hostname_slot_limit_reached" ||
     diagnostics.some(
       (diagnostic) =>
-        isManagedHostnameSlotLimitText(diagnostic.message) ||
-        isManagedHostnameSlotLimitText(diagnostic.detail),
+        diagnostic.code === "managed_public_hostname_slot_limit_reached",
     )
   );
 }
@@ -348,67 +252,6 @@ type AccessIssueKind =
   | "connection_setup"
   | "connection_changed"
   | "credential_service";
-
-function accessIssueFromText(
-  value: string | undefined,
-): AccessIssueKind | undefined {
-  if (!value) return undefined;
-  const normalized = value.toLowerCase();
-  if (normalized.includes("provider_connection_changed")) {
-    return "connection_changed";
-  }
-  if (normalized.includes("provider_connection_not_ready")) {
-    return "connection_verification";
-  }
-  if (normalized.includes("provider_connection_setup_required")) {
-    return "connection_setup";
-  }
-  if (normalized.includes("credential_service_unavailable")) {
-    return "credential_service";
-  }
-  if (
-    normalized.includes("resolved_bindings_changed") ||
-    normalized.includes("re-plan before apply")
-  ) {
-    return "connection_changed";
-  }
-  if (
-    (normalized.includes("credential_mint_failed") &&
-      normalized.includes("not verified")) ||
-    normalized.includes("pending (not verified)") ||
-    (normalized.includes("provider connection") &&
-      normalized.includes("status pending is not verified"))
-  ) {
-    return "connection_verification";
-  }
-  if (
-    normalized.includes("credential_mint_failed") &&
-    (normalized.includes("provider connection evidence is required") ||
-      normalized.includes("provider connection resolution is required") ||
-      normalized.includes("root-only provider connection is required") ||
-      (normalized.includes("connection ") &&
-        normalized.includes(" not found")) ||
-      normalized.includes("provider connection is required") ||
-      normalized.includes("belongs to another space") ||
-      normalized.includes("git source connection") ||
-      normalized.includes("cannot back a provider env binding") ||
-      (normalized.includes("provider ") &&
-        normalized.includes(" does not match")))
-  ) {
-    return "connection_setup";
-  }
-  if (
-    normalized.includes("credential_mint_failed") &&
-    (normalized.includes("connection vault is not configured") ||
-      normalized.includes("requires a managed provider credential issuer") ||
-      normalized.includes("could not mint a run-scoped provider token") ||
-      normalized.includes("gateway materialization is takosumi cloud-only") ||
-      normalized.includes("mint driver"))
-  ) {
-    return "credential_service";
-  }
-  return undefined;
-}
 
 function accessIssueFromErrorCode(
   errorCode: string | undefined,
@@ -434,9 +277,7 @@ function accessIssueForRun(
   const codeIssue = accessIssueFromErrorCode(run.errorCode);
   if (codeIssue) return codeIssue;
   for (const diagnostic of diagnostics) {
-    const issue =
-      accessIssueFromText(diagnostic.message) ??
-      accessIssueFromText(diagnostic.detail);
+    const issue = accessIssueFromErrorCode(diagnostic.code);
     if (issue) return issue;
   }
   return undefined;
@@ -504,41 +345,28 @@ function accessIssueDiagnostic(issue: AccessIssueKind): {
 }
 
 function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
-  const creditsRequired = () =>
-    isCreditsRequiredText(props.diagnostic.message) ||
-    isCreditsRequiredText(props.diagnostic.detail);
   const hostnameSlotLimit = () =>
-    isManagedHostnameSlotLimitText(props.diagnostic.message) ||
-    isManagedHostnameSlotLimitText(props.diagnostic.detail);
-  const accessIssue = () =>
-    accessIssueFromText(props.diagnostic.message) ??
-    accessIssueFromText(props.diagnostic.detail);
+    props.diagnostic.code === "managed_public_hostname_slot_limit_reached";
+  const accessIssue = () => accessIssueFromErrorCode(props.diagnostic.code);
   const message = () =>
-    creditsRequired()
-      ? t("run.diagnostics.creditsRequiredShort")
-      : hostnameSlotLimit()
-        ? t("run.diagnostics.hostnameSlotLimitShort")
+    hostnameSlotLimit()
+      ? t("run.diagnostics.hostnameSlotLimitShort")
       : accessIssue()
         ? accessIssueDiagnostic(accessIssue()!).short
         : (diagnosticDisplayText(props.diagnostic.message) ?? "diagnostic");
   const detail = () =>
-    creditsRequired()
-      ? t("run.diagnostics.creditsRequiredDetail")
-      : hostnameSlotLimit()
-        ? t("run.diagnostics.hostnameSlotLimitDetail")
+    hostnameSlotLimit()
+      ? t("run.diagnostics.hostnameSlotLimitDetail")
       : accessIssue()
         ? accessIssueDiagnostic(accessIssue()!).detail
         : diagnosticDisplayText(props.diagnostic.detail);
-  // A RAW (unclassified) runner error keeps its own newlines — the .wa-diag-msg
+  // A raw (code-less) runner error keeps its own newlines — the .wa-diag-msg
   // span flattens them into flowing prose. Render multi-line raw text in a
   // <pre> (THEME's .wa-pre applies white-space: pre-wrap). Classified issues
-  // stay a tidy one-line span. (Provider-connection causes are already given a
-  // friendly short message + hint via the accessIssue classification above.)
+  // stay a tidy one-line span. Provider-connection causes are selected only by
+  // the diagnostic's stable code and receive friendly copy above.
   const rawMultilineMessage = () =>
-    !creditsRequired() &&
-    !hostnameSlotLimit() &&
-    !accessIssue() &&
-    /\n/u.test(message());
+    !hostnameSlotLimit() && !accessIssue() && /\n/u.test(message());
   return (
     <li class={`wa-diag wa-diag-${props.diagnostic.severity}`}>
       <span class="wa-diag-sev">
@@ -653,20 +481,7 @@ function providerResolutionTone(status: ProviderResolution["status"]): Tone {
 }
 
 function providerDisplayName(provider: string): string {
-  const tail = provider.toLowerCase().trim().split("/").at(-1) ?? provider;
-  switch (tail) {
-    case "aws":
-      return "AWS";
-    case "cloudflare":
-      return "Cloudflare";
-    case "google":
-    case "google-beta":
-      return "Google Cloud";
-    case "hcloud":
-      return "Hetzner Cloud";
-    default:
-      return tail ? tail.charAt(0).toUpperCase() + tail.slice(1) : provider;
-  }
+  return readableProviderSourceLabel(provider);
 }
 
 function providerResolutionNeedsAttention(row: ProviderResolutionRow): boolean {
@@ -778,30 +593,15 @@ function planResourceScopeLabel(
   scope: RunPlanResource["scope"] | undefined,
 ): string | undefined {
   if (!scope) return undefined;
-  const parts = [
-    scope.cloudflareAccountId
-      ? t("run.scope.cloudflareAccount", { id: scope.cloudflareAccountId })
-      : undefined,
-    scope.cloudflareZoneId
-      ? t("run.scope.cloudflareZone", { id: scope.cloudflareZoneId })
-      : undefined,
-    scope.awsAccountId
-      ? t("run.scope.awsAccount", { id: scope.awsAccountId })
-      : undefined,
-    scope.awsRegion
-      ? t("run.scope.awsRegion", { region: scope.awsRegion })
-      : undefined,
-  ].filter((part): part is string => Boolean(part));
+  const parts = Object.entries(scope.facts)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([dimension, value]) => `${dimension}: ${String(value)}`);
   return parts.length > 0 ? parts.join(" / ") : undefined;
 }
 
 function planResourceDisplayLabel(resource: RunPlanResource): string {
   const tail = resource.type.trim().split(".").at(-1) ?? resource.type;
-  const withoutProvider = tail.replace(
-    /^(cloudflare|aws|google|google-beta|hcloud|digitalocean|vultr|scaleway|openstack)_/,
-    "",
-  );
-  const words = withoutProvider
+  const words = tail
     .split("_")
     .map((word) => word.trim())
     .filter(Boolean);
@@ -934,9 +734,9 @@ function Inner() {
     () => run.latest?.workspaceId ?? null,
     listProviderConnections,
   );
-  // Activity feeds post-apply readiness and launch-URL resolution, so fetch it
-  // only for a succeeded apply/destroy-apply run, then poll only while release
-  // activation remains unsettled.
+  // Activity feeds post-apply readiness, so fetch it only for a succeeded
+  // apply/destroy-apply run, then poll only while release activation remains
+  // unsettled. Runtime launch URLs are read separately from Interface.
   const [activity, { refetch: refetchActivity }] = createResource(
     () => {
       const r = run.latest;
@@ -952,7 +752,7 @@ function Inner() {
   const capsuleId = () => run.latest?.capsuleId ?? null;
   const [capsule] = createResource(capsuleId, getCapsule);
   const appName = () => capsule.latest?.name;
-  const appliedRunDeploymentKey = createMemo(() => {
+  const appliedRunStateVersionKey = createMemo(() => {
     const r = run.latest;
     const id = capsuleId();
     if (!id || !r || r.type !== "apply" || r.status !== "succeeded") {
@@ -960,57 +760,79 @@ function Inner() {
     }
     return `${id}:${r.id}`;
   });
-  const [deployments, { refetch: refetchDeployments }] = createResource(
-    appliedRunDeploymentKey,
+  const [stateVersions, { refetch: refetchStateVersions }] = createResource(
+    appliedRunStateVersionKey,
     async (key) => {
       const [id] = key.split(":");
       try {
-        return await listDeployments(id);
+        return await listStateVersions(id);
       } catch {
         return [];
       }
     },
   );
-  const completedRunDeployment = createMemo(() => {
+  const completedRunStateVersion = createMemo(() => {
     const r = run.latest;
     if (!r || r.type !== "apply" || r.status !== "succeeded") {
       return undefined;
     }
-    return (deployments() ?? []).find(
-      (row) => row.applyRunId === r.id && row.status !== "destroyed",
-    );
+    return (stateVersions() ?? []).find((row) => row.createdByRunId === r.id);
   });
-  const completedRunReadiness = createMemo((): DeploymentReadiness => {
+  const completedRunReadiness = createMemo((): StateVersionReadiness => {
     const r = run.latest;
     if (!r || r.type !== "apply" || r.status !== "succeeded") {
       return "settling";
     }
-    if (deployments.loading || activity.loading) {
+    if (stateVersions.loading || activity.loading) {
       return "settling";
     }
     // A failed activity fetch must NOT strand readiness in "settling" forever
     // (activity never retries), nor throw out of this memo — reading an errored
-    // resource throws. Fall back to computing readiness from the deployment
-    // alone; a `takosumi_release` deployment then reads as activation-pending
-    // (never openable without confirmed activation), everything else as ready.
-    return deploymentReadinessAfterApply(
-      completedRunDeployment(),
+    // resource throws. Fall back to computing readiness from the stateVersion
+    // alone. Lifecycle requirements are not inferred from OpenTofu Outputs;
+    // matching lifecycle activity is the only activation signal here.
+    return stateVersionReadinessAfterApply(
+      completedRunStateVersion(),
       activity.error ? [] : (activity() ?? []),
       capsuleId() ?? undefined,
     );
   });
-  const completedRunLaunchUrl = createMemo(() => {
+  const completedRunUiSurfaceKey = createMemo(() => {
     const r = run.latest;
-    if (!r || r.type !== "apply" || r.status !== "succeeded") return undefined;
-    if (completedRunReadiness() !== "ready") return undefined;
-    return launchUrlFromDeployment(
-      completedRunDeployment(),
-      activity.error ? [] : (activity() ?? []),
-      capsuleId() ?? undefined,
-    );
+    const id = capsuleId();
+    if (
+      !r ||
+      !id ||
+      r.type !== "apply" ||
+      r.status !== "succeeded" ||
+      completedRunReadiness() !== "ready"
+    ) {
+      return undefined;
+    }
+    return { workspaceId: r.workspaceId, capsuleId: id, runId: r.id };
+  });
+  const [completedRunUiSurfaces] = createResource(
+    completedRunUiSurfaceKey,
+    async ({ workspaceId, capsuleId: id }) => {
+      const session = await refreshSession();
+      if (!session) throw new Error("dashboard session is unavailable");
+      return await listAuthorizedUiSurfaces(workspaceId, session.subject, {
+        capsuleId: id,
+      });
+    },
+  );
+  const completedRunLaunchUrl = createMemo(() => {
+    // Runtime launch surfaces are Interface-owned. StateVersion history,
+    // OpenTofu Outputs, Store metadata, and release activation responses do
+    // not carry or infer a launch URL. Any malformed/unbound Interface read
+    // fails closed to the service-detail action below.
+    if (completedRunUiSurfaces.error) return undefined;
+    return completedRunUiSurfaces()?.[0]?.url;
   });
 
-  const clearLauncherCaches = (workspaceId: string | undefined): void => {
+  const clearWorkspaceProjectionCaches = (
+    workspaceId: string | undefined,
+  ): void => {
     if (!workspaceId) return;
     clearCapsuleListCache(workspaceId);
     clearCurrentStateVersionCache(workspaceId);
@@ -1042,7 +864,7 @@ function Inner() {
     const key = `${r.id}:${r.status}:${r.workspaceId}`;
     if (lastLauncherCacheClearKey() === key) return;
     setLastLauncherCacheClearKey(key);
-    clearLauncherCaches(r.workspaceId);
+    clearWorkspaceProjectionCaches(r.workspaceId);
   });
 
   // Primary: subscribe to run status over SSE (real-time push, no client poll).
@@ -1119,7 +941,7 @@ function Inner() {
     const readiness = completedRunReadiness();
     if (readiness === "ready" || readiness === "activation_failed") return;
     const timer = setTimeout(() => {
-      void Promise.all([refetchDeployments(), refetchActivity()]);
+      void Promise.all([refetchStateVersions(), refetchActivity()]);
     }, RELEASE_ACTIVATION_POLL_MS);
     onCleanup(() => clearTimeout(timer));
   });
@@ -1179,10 +1001,6 @@ function Inner() {
     providerRows().filter(providerResolutionNeedsAttention),
   );
   const diagnosticRows = createMemo(() => logData()?.diagnostics ?? []);
-  const creditsRequired = createMemo(() => {
-    const r = run.latest;
-    return r ? isCreditsRequiredRun(r, diagnosticRows()) : false;
-  });
   const connectionVerificationRequired = createMemo(() => {
     const r = run.latest;
     return r ? accessIssueForRun(r, diagnosticRows()) !== undefined : false;
@@ -1193,7 +1011,6 @@ function Inner() {
   });
   const showDiagnosticsPanel = createMemo(
     () =>
-      creditsRequired() ||
       connectionVerificationRequired() ||
       diagnosticRows().length > 0 ||
       Boolean(logs.error) ||
@@ -1286,23 +1103,22 @@ function Inner() {
       changeCounts().delete > 0 ||
       !changeCountsKnown());
 
-  const deploy = createAction(async (confirmDestructive?: boolean) => {
+  const deploy = createAction(async (confirmedReview?: boolean) => {
     let envelope: unknown;
     const currentRun = run.latest;
+    if (
+      currentRun &&
+      requiresDestructiveConfirmation(currentRun) &&
+      confirmedReview !== true
+    ) {
+      setNeedsConfirm(true);
+      return;
+    }
     try {
       envelope = await createApplyRun(runId(), {
-        confirmDestructive,
         timeoutMs: APPLY_REQUEST_TIMEOUT_MS,
       });
     } catch (error) {
-      if (
-        error instanceof ControlApiError &&
-        error.status === 409 &&
-        isDestructiveConfirmationRequired(error)
-      ) {
-        setNeedsConfirm(true);
-        return;
-      }
       if (currentRun && isRequestTimeout(error)) {
         const recovered = latestApplyRunForPlan(
           await listRuns(currentRun.workspaceId, 30),
@@ -1312,7 +1128,6 @@ function Inner() {
           envelope = { run: recovered };
         } else {
           envelope = await createApplyRun(runId(), {
-            confirmDestructive,
             timeoutMs: APPLY_REQUEST_TIMEOUT_MS,
           });
         }
@@ -1322,7 +1137,7 @@ function Inner() {
     }
     setNeedsConfirm(false);
     setApplied(true);
-    clearLauncherCaches(currentRun?.workspaceId);
+    clearWorkspaceProjectionCaches(currentRun?.workspaceId);
     // Jump to the apply Run when the backend surfaced its id — that page then
     // polls to "デプロイが完了しました" on its own. Fallback: stay here with the
     // applied notice (the legacy behaviour).
@@ -1593,7 +1408,7 @@ function Inner() {
             return {
               kind: "error",
               text: t("run.summary.activationFailed"),
-              sub: t("app.outputs.activationFailed"),
+              sub: t("app.surfaces.activationFailed"),
             };
           }
         }
@@ -1610,13 +1425,6 @@ function Inner() {
             kind: "action",
             text: t("run.summary.hostnameSlotLimit"),
             sub: t("run.summary.hostnameSlotLimitHint"),
-          };
-        }
-        if (isCreditsRequiredRun(r, diagnosticRows())) {
-          return {
-            kind: "action",
-            text: t("run.summary.creditsRequired"),
-            sub: t("run.summary.creditsRequiredHint"),
           };
         }
         const accessIssue = accessIssueForRun(r, diagnosticRows());
@@ -1707,13 +1515,6 @@ function Inner() {
               sub: t("run.summary.hostnameSlotLimitHint"),
             };
           }
-          if (isCreditsRequiredRun(r, diagnosticRows())) {
-            return {
-              kind: "action",
-              text: t("run.summary.creditsRequired"),
-              sub: t("run.summary.creditsRequiredHint"),
-            };
-          }
           const accessIssue = accessIssueForRun(r, diagnosticRows());
           if (accessIssue) {
             const accessSummary = accessIssueSummary(accessIssue);
@@ -1770,15 +1571,11 @@ function Inner() {
   });
 
   // Consumer install/update error card copy — one friendly sentence, never the
-  // raw control-plane text. A failed deploy action carries a raw ControlApiError
-  // message (untranslated, with internal IDs); classify known access issues,
-  // else the generic hint. The raw text stays in the folded expert console.
+  // raw control-plane text. Action errors have already crossed a presentation
+  // boundary that intentionally retains no machine classification; only a
+  // persisted Run/RunDiagnostic code may select issue-specific behavior.
   const installErrorText = (): string => {
-    const raw = deploy.error();
-    if (raw) {
-      const issue = accessIssueFromText(raw);
-      return issue ? accessIssueSummary(issue).sub : t("install.errorSub");
-    }
+    if (deploy.error()) return t("install.errorSub");
     return summary()?.sub ?? summary()?.text ?? t("install.errorSub");
   };
 
@@ -1975,7 +1772,7 @@ function Inner() {
                   : t("install.errorTitle")}
               </h2>
               {/* One plain sentence with the next action — the summary layer
-                  already classifies credits / account-access / known failure
+                  already classifies billing / account-access / known failure
                   codes. The console stays behind 詳細を見る. */}
               <p>{installErrorText()}</p>
               <div class="av-install-actions">
@@ -2226,13 +2023,7 @@ function Inner() {
                     when={(() => {
                       const c = costInfo();
                       if (!c || !isDeployableRun(r())) return undefined;
-                      return isTakosumiCloudRuntime()
-                        ? hasCostToShow(c)
-                          ? c
-                          : undefined
-                        : c.blocked
-                          ? c
-                          : undefined;
+                      return hasCostToShow(c) ? c : undefined;
                     })()}
                   >
                     {(c) => <CostNotice cost={c()} />}
@@ -2254,9 +2045,7 @@ function Inner() {
                     {/* Deploy CTA counts aren't trustworthy until the logs
                         land — hold the deploy / destructive gate as a skeleton
                         so it doesn't flash the wrong button first. */}
-                    <Show
-                      when={isDeployableRun(r()) && !deployCtaReady(r())}
-                    >
+                    <Show when={isDeployableRun(r()) && !deployCtaReady(r())}>
                       <Skeleton variant="row" count={1} />
                     </Show>
 
@@ -2559,18 +2348,6 @@ function Inner() {
                 <Show when={showDiagnosticsPanel()}>
                   <Card>
                     <CardHeader title={t("run.diagnostics.title")} />
-                    <Show when={creditsRequired()}>
-                      <div class="wa-stack">
-                        <p class="wa-notice">
-                          {t("run.diagnostics.creditsRequired")}
-                        </p>
-                        <Show when={isTakosumiCloudRuntime()}>
-                          <Button variant="secondary" size="sm" href="/billing">
-                            {t("run.cost.billingCta")}
-                          </Button>
-                        </Show>
-                      </div>
-                    </Show>
                     <Show when={connectionVerificationRequired()}>
                       <div class="wa-stack">
                         <p class="wa-notice">
@@ -2590,7 +2367,6 @@ function Inner() {
                         <Show
                           when={
                             r().status === "failed" &&
-                            !creditsRequired() &&
                             !connectionVerificationRequired()
                           }
                         >

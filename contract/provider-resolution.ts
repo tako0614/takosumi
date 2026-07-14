@@ -1,28 +1,10 @@
 import {
-  PROVIDER_CONNECTION_MATERIALIZATIONS,
   type ProviderConnectionMaterialization,
 } from "./connections.ts";
-import type { IsoTimestamp } from "./types.ts";
-
-export const PROVIDER_DELIVERY_MODES = PROVIDER_CONNECTION_MATERIALIZATIONS;
-
-export type ProviderDeliveryMode = ProviderConnectionMaterialization;
-
-/** @deprecated migration-debt alias for {@link ProviderConnectionMaterialization}. */
-export type ProviderEnvMaterialization = ProviderConnectionMaterialization;
-
-export function isProviderDeliveryMode(
-  value: unknown,
-): value is ProviderDeliveryMode {
-  return (
-    typeof value === "string" &&
-    PROVIDER_DELIVERY_MODES.includes(value as ProviderDeliveryMode)
-  );
-}
 
 export const PROVIDER_RESOLUTION_STATUSES = [
-  "resolved_provider_env",
-  "blocked_missing_env",
+  "resolved_provider_connection",
+  "blocked_missing_connection",
   "blocked_policy",
 ] as const;
 
@@ -39,16 +21,10 @@ export function isProviderResolutionStatus(
 }
 
 export type ProviderRequirementDiscoverySource =
-  | "required_providers"
-  | "provider_block"
-  | "generated_root";
+  "required_providers" | "provider_block" | "generated_root";
 
 export type ProviderRequirementPhase =
-  | "init"
-  | "plan"
-  | "apply"
-  | "destroy"
-  | "drift_check";
+  "init" | "plan" | "apply" | "destroy" | "drift_check";
 
 export interface ProviderRequirement {
   readonly providerSource: string;
@@ -61,16 +37,16 @@ export interface ProviderRequirement {
 }
 
 export interface BaseProviderResolutionEvidence {
-  readonly kind: "provider_env" | "blocked";
+  readonly kind: "provider_connection" | "blocked";
   readonly provider: string;
-  readonly envId?: string;
-  readonly materialization?: ProviderEnvMaterialization;
+  readonly connectionId?: string;
+  readonly materialization?: ProviderConnectionMaterialization;
 }
 
-export interface ProviderEnvResolutionEvidence extends BaseProviderResolutionEvidence {
-  readonly kind: "provider_env";
-  readonly envId: string;
-  readonly materialization: "oauth" | "secret";
+export interface ProviderConnectionResolutionEvidence extends BaseProviderResolutionEvidence {
+  readonly kind: "provider_connection";
+  readonly connectionId: string;
+  readonly materialization: ProviderConnectionMaterialization;
   readonly requiredEnvNames: readonly string[];
 }
 
@@ -80,23 +56,18 @@ export interface BlockedProviderResolutionEvidence extends BaseProviderResolutio
 }
 
 export type ProviderResolutionEvidence =
-  | ProviderEnvResolutionEvidence
-  | BlockedProviderResolutionEvidence;
+  ProviderConnectionResolutionEvidence | BlockedProviderResolutionEvidence;
 
 export interface ProviderResolution {
   readonly requirement: ProviderRequirement;
   readonly status: ProviderResolutionStatus;
-  readonly envId?: string;
-  readonly materialization?: ProviderEnvMaterialization;
+  readonly connectionId?: string;
+  readonly materialization?: ProviderConnectionMaterialization;
   readonly blockedReason?: string;
   readonly evidence: ProviderResolutionEvidence;
 }
 
-export const PUBLIC_PROVIDER_RESOLUTION_STATUSES = [
-  "resolved_provider_connection",
-  "blocked_missing_connection",
-  "blocked_policy",
-] as const;
+export const PUBLIC_PROVIDER_RESOLUTION_STATUSES = PROVIDER_RESOLUTION_STATUSES;
 
 export type PublicProviderResolutionStatus =
   (typeof PUBLIC_PROVIDER_RESOLUTION_STATUSES)[number];
@@ -131,12 +102,7 @@ export interface PublicProviderResolution {
 }
 
 export type RunEnvironmentPhase =
-  | "init"
-  | "plan"
-  | "apply"
-  | "destroy_plan"
-  | "destroy_apply"
-  | "drift_check";
+  "init" | "plan" | "apply" | "destroy_plan" | "destroy_apply" | "drift_check";
 
 export type RunEnvironmentFilePurpose =
   | "credential"
@@ -163,14 +129,4 @@ export interface RunEnvironment {
   readonly stateBackendRef: string;
   readonly dependencySnapshotId?: string;
   readonly savedPlanDigest?: string;
-}
-
-export interface RuntimeGrantProjection {
-  readonly grantId: string;
-  readonly serviceExportId: string;
-  readonly serviceBindingId: string;
-  readonly capsuleId: string;
-  readonly capability: string;
-  readonly expiresAt?: IsoTimestamp;
-  readonly rotationPolicyId?: string;
 }

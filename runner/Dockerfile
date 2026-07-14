@@ -27,29 +27,21 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 # Provider mirror (baked, offline plan/apply).
 #
-# Pre-mirror the provider set the bundled first-party modules need into a filesystem
-# mirror so `tofu init` resolves providers from disk with NO network round-trip
-# to registry.opentofu.org. The baked tofu.rc (TF_CLI_CONFIG_FILE) wires a
-# provider_installation block whose filesystem_mirror is authoritative for the
-# mirrored providers and `direct { exclude=[...] }` forbids reaching the network
-# for exactly those providers. Runtime-generated per-run CLI configs may use a
-# run-local cache or the operator-configured TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR
-# for provider binaries only.
+# Pre-mirror a curated cache into the reference image. The cache is an image
+# optimization, not a provider catalog: the baked tofu.rc lets every provider
+# use either the filesystem mirror or its ordinary registry. Mirror-only runs
+# receive a generated CLI config with their explicit provider set. Runtime
+# configs may use a run-local cache or the operator-configured
+# TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR for provider binaries only.
 #
-# Mirror list covers the providers the bundled first-party modules require:
-# cloudflare + random + tls for Cloudflare sample modules. Generic AWS/S3/R2/GCS
-# stacks use the ordinary provider install/cache path instead of a Takosumi-owned
-# storage template baked into the image. google is still omitted for size; it
-# falls through to `direct` (network) install unless a strict mirror policy
-# blocks the run.
+# The concrete list is owned only by runner/mirror-providers.tf and can change
+# with reference-image workload evidence without changing core semantics.
 # ---------------------------------------------------------------------------
 ENV OPENTOFU_PROVIDER_MIRROR=/opt/opentofu/provider-mirror
 ENV TF_CLI_CONFIG_FILE=/opt/opentofu/tofu.rc
 
-# The baked CLI config. The provider_installation filesystem_mirror serves the
-# mirrored providers from disk and `direct { exclude }` keeps tofu from going to
-# the network for them. Per-run generated configs may add a run-local or
-# operator-configured provider plugin cache.
+# The baked provider-neutral CLI config. Per-run generated configs may add a
+# run-local or operator-configured provider plugin cache and strict policy.
 COPY runner/tofu.rc ${TF_CLI_CONFIG_FILE}
 
 # Minimal build-time config that pins the provider set to mirror. Lives in its
@@ -66,20 +58,11 @@ RUN set -eux; \
     rm -rf /opt/opentofu/mirror-build; \
     ls -R "${OPENTOFU_PROVIDER_MIRROR}" | head -40
 
-# Bundled first-party Capsule modules baked into a flat in-image layout
-# (templates/<id>/module + template.ts metadata; the .ts files are inert in the
-# image). The provider-agnostic `core` module lives under `opentofu-modules/`;
-# the provider-specific modules live under `providers/<provider>/modules/<id>/`.
-# Each is copied to `/app/templates/<id>/` so `template.localModulePath` (e.g.
-# /app/templates/cloudflare-hello-worker/module) stays a stable in-image path; the
-# runner copies it to /work/generated-root/template-module at plan/apply time.
-# Template-less Capsule runs copy their SourceSnapshot/normalized module into the
-# same generated-root child-module slot.
+# Capsule execution authority comes from the immutable Git/SourceSnapshot
+# selected by the PlanRun. The image deliberately contains no app/module
+# catalog. Explicit Resource Shape modules arrive through the operator-only
+# dispatch seam after registry resolution.
 WORKDIR /app
-COPY opentofu-modules/core/ ./templates/core/
-COPY providers/cloudflare/modules/cloudflare-hello-worker/ ./templates/cloudflare-hello-worker/
-COPY providers/cloudflare/modules/cloudflare-static-site/ ./templates/cloudflare-static-site/
-COPY providers/cloudflare/modules/cloudflare-worker-service/ ./templates/cloudflare-worker-service/
 
 # The runner server imports the dependency-free shared provider->env-name table
 # from the contract layer via a relative path. The build context is the repo root

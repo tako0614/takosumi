@@ -2,23 +2,23 @@
  * DependenciesService unit tests (Core Specification §14 / §15 / §18).
  *
  * Covers the structural invariants the service enforces per mode/visibility:
- * variable_injection+space (same-Space), remote_state+space (same-Space, empty
- * mapping allowed), and published_output+cross_space (backed by an active
+ * variable_injection+workspace (same-Workspace), remote_state+workspace (same-Workspace, empty
+ * mapping allowed), and published_output+cross_workspace (backed by an active
  * OutputShare); no self-edge, cycle rejection via takosumi-graph, and
  * producer/consumer existence. Plan-time pinning + apply verification are
  * exercised by the deploy-control integration tests, not here.
  */
 
 import { expect, test } from "bun:test";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import {
-  InMemoryInstallationCoordination,
-  InstallationLeaseBusyError,
-} from "../../../../core/domains/deploy-control/installation_lease.ts";
-import { seedInstallationModel } from "../../../helpers/deploy-control/model_fixture.ts";
-import type { OutputShare, Output as OutputSnapshot } from "takosumi-contract/outputs";
+  InMemoryCapsuleCoordination,
+  CapsuleLeaseBusyError,
+} from "../../../../core/domains/deploy-control/capsule_lease.ts";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import type { OutputShare, Output as Output } from "takosumi-contract/outputs";
 import {
   type CreateDependencyRequest,
   DependenciesService,
@@ -29,7 +29,7 @@ function deterministicIds(): (prefix: string) => string {
   return (prefix) => `${prefix}_${String(next++).padStart(4, "0")}`;
 }
 
-function service(store: OpenTofuDeploymentStore): DependenciesService {
+function service(store: OpenTofuControlStore): DependenciesService {
   return new DependenciesService({
     store,
     newId: deterministicIds(),
@@ -37,23 +37,23 @@ function service(store: OpenTofuDeploymentStore): DependenciesService {
   });
 }
 
-/** Seeds two installations (producer + consumer) in the same Space. */
+/** Seeds two Capsules (producer + consumer) in the same Workspace. */
 async function seedPair(
-  store: OpenTofuDeploymentStore,
-  spaceId = "space_test",
+  store: OpenTofuControlStore,
+  workspaceId = "workspace_test",
 ): Promise<{ producer: string; consumer: string }> {
-  await seedInstallationModel(store, {
-    spaceId,
+  await seedCapsuleModel(store, {
+    workspaceId,
     sourceId: "src_producer",
     installConfigId: "cfg_producer",
-    installationId: "inst_producer",
+    capsuleId: "inst_producer",
     name: "producer",
   });
-  await seedInstallationModel(store, {
-    spaceId,
+  await seedCapsuleModel(store, {
+    workspaceId,
     sourceId: "src_consumer",
     installConfigId: "cfg_consumer",
-    installationId: "inst_consumer",
+    capsuleId: "inst_consumer",
     name: "consumer",
   });
   return { producer: "inst_producer", consumer: "inst_consumer" };
@@ -62,57 +62,59 @@ async function seedPair(
 function baseRequest(
   producer: string,
   consumer: string,
-  spaceId = "space_test",
+  workspaceId = "workspace_test",
 ): CreateDependencyRequest {
   return {
-    spaceId,
-    producerInstallationId: producer,
-    consumerInstallationId: consumer,
+    workspaceId,
+    producerCapsuleId: producer,
+    consumerCapsuleId: consumer,
     mode: "variable_injection",
-    visibility: "space",
+    visibility: "workspace",
     outputs: {
       base_domain: { from: "base_domain", to: "base_domain", required: true },
     },
   };
 }
 
-test("createDependency persists a valid same-space variable_injection edge", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("createDependency persists a valid same-Workspace variable_injection edge", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
   const svc = service(store);
 
-  const dependency = await svc.createDependency(baseRequest(producer, consumer));
+  const dependency = await svc.createDependency(
+    baseRequest(producer, consumer),
+  );
 
   expect(dependency.id).toEqual("dep_0001");
-  expect(dependency.spaceId).toEqual("space_test");
-  expect(dependency.producerInstallationId).toEqual(producer);
-  expect(dependency.consumerInstallationId).toEqual(consumer);
+  expect(dependency.workspaceId).toEqual("workspace_test");
+  expect(dependency.producerCapsuleId).toEqual(producer);
+  expect(dependency.consumerCapsuleId).toEqual(consumer);
   expect(dependency.mode).toEqual("variable_injection");
-  expect(dependency.visibility).toEqual("space");
+  expect(dependency.visibility).toEqual("workspace");
   expect(dependency.outputs.base_domain.from).toEqual("base_domain");
 
   const persisted = await store.getDependency("dep_0001");
   expect(persisted?.id).toEqual("dep_0001");
 });
 
-test("listForInstallation splits asProducer / asConsumer", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("listForCapsule splits asProducer / asConsumer", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
   const svc = service(store);
 
   await svc.createDependency(baseRequest(producer, consumer));
 
-  const producerView = await svc.listForInstallation(producer);
+  const producerView = await svc.listForCapsule(producer);
   expect(producerView.asProducer).toHaveLength(1);
   expect(producerView.asConsumer).toHaveLength(0);
 
-  const consumerView = await svc.listForInstallation(consumer);
+  const consumerView = await svc.listForCapsule(consumer);
   expect(consumerView.asProducer).toHaveLength(0);
   expect(consumerView.asConsumer).toHaveLength(1);
 });
 
 test("deleteDependency removes the edge", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
   const svc = service(store);
 
@@ -124,7 +126,7 @@ test("deleteDependency removes the edge", async () => {
 });
 
 test("a self-edge is rejected invalid_argument", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const { producer } = await seedPair(store);
   const svc = service(store);
 
@@ -133,39 +135,39 @@ test("a self-edge is rejected invalid_argument", async () => {
   ).rejects.toMatchObject({ code: "invalid_argument" });
 });
 
-test("cross_space + variable_injection is rejected failed_precondition", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("cross_workspace + variable_injection is rejected failed_precondition", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
   const svc = service(store);
 
-  // variable_injection cannot cross a Space boundary; cross_space requires a
+  // variable_injection cannot cross a Workspace boundary; cross_workspace requires a
   // published_output edge backed by an OutputShare.
   await expect(
     svc.createDependency({
       ...baseRequest(producer, consumer),
-      visibility: "cross_space",
+      visibility: "cross_workspace",
     }),
   ).rejects.toMatchObject({ code: "failed_precondition" });
 });
 
-test("published_output + space visibility is rejected invalid_argument", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("published_output + workspace visibility is rejected invalid_argument", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
   const svc = service(store);
 
-  // published_output is the cross-Space mode; same-Space output flow is
+  // published_output is the cross-Workspace mode; same-Workspace output flow is
   // variable_injection.
   await expect(
     svc.createDependency({
       ...baseRequest(producer, consumer),
       mode: "published_output",
-      visibility: "space",
+      visibility: "workspace",
     }),
   ).rejects.toMatchObject({ code: "invalid_argument" });
 });
 
 test("a variable_injection edge with an empty outputs mapping is rejected invalid_argument", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
   const svc = service(store);
 
@@ -175,7 +177,7 @@ test("a variable_injection edge with an empty outputs mapping is rejected invali
 });
 
 test("a missing producer or consumer is rejected not_found", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const { consumer } = await seedPair(store);
   const svc = service(store);
 
@@ -184,19 +186,21 @@ test("a missing producer or consumer is rejected not_found", async () => {
   ).rejects.toMatchObject({ code: "not_found" });
 });
 
-test("a cross-space edge is rejected failed_precondition", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  await seedPair(store, "space_a");
-  // Producer in space_a, but request claims space_b.
+test("a cross-Workspace edge is rejected failed_precondition", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedPair(store, "workspace_a");
+  // Producer in workspace_a, but request claims workspace_b.
   const svc = service(store);
 
   await expect(
-    svc.createDependency(baseRequest("inst_producer", "inst_consumer", "space_b")),
+    svc.createDependency(
+      baseRequest("inst_producer", "inst_consumer", "workspace_b"),
+    ),
   ).rejects.toMatchObject({ code: "failed_precondition" });
 });
 
 test("a cycle-creating edge is rejected failed_precondition (dependency_cycle)", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
   const svc = service(store);
 
@@ -211,10 +215,10 @@ test("a cycle-creating edge is rejected failed_precondition (dependency_cycle)",
   ).rejects.toThrow(/dependency_cycle/);
 });
 
-test("concurrent inverse-edge creates under a space lease: at most one persists (no DAG wedge)", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("concurrent inverse-edge creates under a Workspace lease: at most one persists (no DAG wedge)", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
-  // A coordination-injected service serializes the per-Space cycle
+  // A coordination-injected service serializes the per-Workspace cycle
   // check-then-write. Two concurrent inverse-edge creates (A→B and B→A) must NOT
   // both pass the acyclic check and persist (which would wedge the DAG with a
   // cycle); the lease lets at most one through.
@@ -222,7 +226,7 @@ test("concurrent inverse-edge creates under a space lease: at most one persists 
     store,
     newId: deterministicIds(),
     now: () => "2026-06-06T00:00:00.000Z",
-    coordination: new InMemoryInstallationCoordination(),
+    coordination: new InMemoryCapsuleCoordination(),
   });
 
   const results = await Promise.allSettled([
@@ -236,22 +240,22 @@ test("concurrent inverse-edge creates under a space lease: at most one persists 
   );
   // At most one create persisted (the lease prevents the double-insert).
   expect(fulfilled.length).toBeLessThanOrEqual(1);
-  // The Space holds at most one edge -> the graph is still a DAG (acyclic).
-  const persisted = await store.listDependenciesBySpace("space_test");
+  // The Workspace holds at most one edge -> the graph is still a DAG (acyclic).
+  const persisted = await store.listDependenciesByWorkspace("workspace_test");
   expect(persisted.length).toBeLessThanOrEqual(1);
   // Any loser rejects with a TYPED error (lease-busy or the cycle precondition),
   // never an uncaught bare Error.
   for (const r of rejected) {
     const reason = r.reason;
     const typed =
-      reason instanceof InstallationLeaseBusyError ||
+      reason instanceof CapsuleLeaseBusyError ||
       reason instanceof OpenTofuControllerError;
     expect(typed).toBe(true);
   }
 });
 
 test("createDependency surfaces OpenTofuControllerError instances", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   const { producer } = await seedPair(store);
   const svc = service(store);
   await expect(
@@ -260,37 +264,37 @@ test("createDependency surfaces OpenTofuControllerError instances", async () => 
 });
 
 // ---------------------------------------------------------------------------
-// remote_state (spec §15): same-Space only; outputs mapping MAY be empty.
+// remote_state (spec §15): same-Workspace only; outputs mapping MAY be empty.
 // ---------------------------------------------------------------------------
 
-test("a same-space remote_state edge with an empty outputs mapping is accepted", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("a same-Workspace remote_state edge with an empty outputs mapping is accepted", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
   const svc = service(store);
 
   const dependency = await svc.createDependency({
-    spaceId: "space_test",
-    producerInstallationId: producer,
-    consumerInstallationId: consumer,
+    workspaceId: "workspace_test",
+    producerCapsuleId: producer,
+    consumerCapsuleId: consumer,
     mode: "remote_state",
-    visibility: "space",
+    visibility: "workspace",
     outputs: {},
   });
   expect(dependency.mode).toEqual("remote_state");
   expect(Object.keys(dependency.outputs)).toHaveLength(0);
 });
 
-test("a same-space remote_state edge with a non-empty mapping is validated and accepted", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("a same-Workspace remote_state edge with a non-empty mapping is validated and accepted", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
   const svc = service(store);
 
   const dependency = await svc.createDependency({
-    spaceId: "space_test",
-    producerInstallationId: producer,
-    consumerInstallationId: consumer,
+    workspaceId: "workspace_test",
+    producerCapsuleId: producer,
+    consumerCapsuleId: consumer,
     mode: "remote_state",
-    visibility: "space",
+    visibility: "workspace",
     outputs: {
       base_domain: { from: "base_domain", to: "base_domain", required: true },
     },
@@ -299,73 +303,74 @@ test("a same-space remote_state edge with a non-empty mapping is validated and a
   expect(dependency.outputs.base_domain.from).toEqual("base_domain");
 });
 
-test("a remote_state edge with cross_space visibility is rejected failed_precondition", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("a remote_state edge with cross_workspace visibility is rejected failed_precondition", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
   const svc = service(store);
 
   await expect(
     svc.createDependency({
-      spaceId: "space_test",
-      producerInstallationId: producer,
-      consumerInstallationId: consumer,
+      workspaceId: "workspace_test",
+      producerCapsuleId: producer,
+      consumerCapsuleId: consumer,
       mode: "remote_state",
-      visibility: "cross_space",
+      visibility: "cross_workspace",
       outputs: {},
     }),
   ).rejects.toMatchObject({ code: "failed_precondition" });
 });
 
 // ---------------------------------------------------------------------------
-// published_output (spec §18): cross_space backed by an ACTIVE OutputShare.
+// published_output (spec §18): cross_workspace backed by an ACTIVE OutputShare.
 // ---------------------------------------------------------------------------
 
 /**
- * Seeds a producer Installation in `space_producer` and a consumer Installation
- * in `space_consumer`, with the producer having published `base_domain` in its
- * latest OutputSnapshot.
+ * Seeds a producer Capsule in `workspace_producer` and a consumer Capsule
+ * in `workspace_consumer`, with the producer having published `base_domain` in its
+ * latest Output.
  */
-async function seedCrossSpacePair(
-  store: OpenTofuDeploymentStore,
+async function seedCrossWorkspacePair(
+  store: OpenTofuControlStore,
 ): Promise<{ producer: string; consumer: string }> {
-  await seedInstallationModel(store, {
-    spaceId: "space_producer",
+  await seedCapsuleModel(store, {
+    workspaceId: "workspace_producer",
     sourceId: "src_producer",
     installConfigId: "cfg_producer",
-    installationId: "inst_producer",
+    capsuleId: "inst_producer",
     name: "producer",
   });
-  await seedInstallationModel(store, {
-    spaceId: "space_consumer",
+  await seedCapsuleModel(store, {
+    workspaceId: "workspace_consumer",
     sourceId: "src_consumer",
     installConfigId: "cfg_consumer",
-    installationId: "inst_consumer",
+    capsuleId: "inst_consumer",
     name: "consumer",
   });
-  const snapshot: OutputSnapshot = {
+  const snapshot: Output = {
     id: "out_producer",
-    spaceId: "space_producer",
-    installationId: "inst_producer",
+    workspaceId: "workspace_producer",
+    capsuleId: "inst_producer",
     stateGeneration: 1,
-    rawOutputArtifactKey: "spaces/space_producer/installations/inst_producer/x.enc",
+    rawArtifactRef:
+      "workspaces/workspace_producer/capsules/inst_producer/x.enc",
     publicOutputs: {},
-    spaceOutputs: { base_domain: "shota.example.com" },
+    workspaceOutputs: { base_domain: "shota.example.com" },
     outputDigest: "sha256:deadbeef",
     createdAt: "2026-06-06T00:00:00.000Z",
   };
-  await store.putOutputSnapshot(snapshot);
+  await store.putOutput(snapshot);
   return { producer: "inst_producer", consumer: "inst_consumer" };
 }
 
 async function seedShare(
-  store: OpenTofuDeploymentStore,
+  store: OpenTofuControlStore,
   overrides: Partial<OutputShare> = {},
 ): Promise<OutputShare> {
   const share: OutputShare = {
     id: "oshare_1",
-    fromSpaceId: "space_producer",
-    toSpaceId: "space_consumer",
-    producerInstallationId: "inst_producer",
+    fromWorkspaceId: "workspace_producer",
+    toWorkspaceId: "workspace_consumer",
+    producerCapsuleId: "inst_producer",
     outputs: [{ name: "base_domain", sensitive: false }],
     status: "active",
     createdAt: "2026-06-06T00:00:00.000Z",
@@ -374,15 +379,13 @@ async function seedShare(
   return await store.putOutputShare(share);
 }
 
-function publishedRequest(
-  from: string,
-): CreateDependencyRequest {
+function publishedRequest(from: string): CreateDependencyRequest {
   return {
-    spaceId: "space_consumer",
-    producerInstallationId: "inst_producer",
-    consumerInstallationId: "inst_consumer",
+    workspaceId: "workspace_consumer",
+    producerCapsuleId: "inst_producer",
+    consumerCapsuleId: "inst_consumer",
     mode: "published_output",
-    visibility: "cross_space",
+    visibility: "cross_workspace",
     outputs: {
       // The consumer maps from the SHARED name the grant exposes.
       base_domain: { from, to: "base_domain", required: true },
@@ -391,23 +394,27 @@ function publishedRequest(
 }
 
 test("a published_output edge covered by an active share is accepted", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  await seedCrossSpacePair(store);
+  const store = new InMemoryOpenTofuControlStore();
+  await seedCrossWorkspacePair(store);
   await seedShare(store);
   const svc = service(store);
 
-  const dependency = await svc.createDependency(publishedRequest("base_domain"));
+  const dependency = await svc.createDependency(
+    publishedRequest("base_domain"),
+  );
   expect(dependency.mode).toEqual("published_output");
-  expect(dependency.visibility).toEqual("cross_space");
-  expect(dependency.spaceId).toEqual("space_consumer");
+  expect(dependency.visibility).toEqual("cross_workspace");
+  expect(dependency.workspaceId).toEqual("workspace_consumer");
 });
 
 test("a published_output edge maps from the share ALIAS when the grant renames", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  await seedCrossSpacePair(store);
+  const store = new InMemoryOpenTofuControlStore();
+  await seedCrossWorkspacePair(store);
   // The grant exposes base_domain under the alias `upstream_domain`.
   await seedShare(store, {
-    outputs: [{ name: "base_domain", alias: "upstream_domain", sensitive: false }],
+    outputs: [
+      { name: "base_domain", alias: "upstream_domain", sensitive: false },
+    ],
   });
   const svc = service(store);
 
@@ -416,13 +423,15 @@ test("a published_output edge maps from the share ALIAS when the grant renames",
     svc.createDependency(publishedRequest("base_domain")),
   ).rejects.toThrow(/output_share_required/);
   // Mapping from the ALIAS the grant exposes is covered.
-  const dependency = await svc.createDependency(publishedRequest("upstream_domain"));
+  const dependency = await svc.createDependency(
+    publishedRequest("upstream_domain"),
+  );
   expect(dependency.outputs.base_domain.from).toEqual("upstream_domain");
 });
 
 test("a published_output edge with no active share is rejected failed_precondition (output_share_required)", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  await seedCrossSpacePair(store);
+  const store = new InMemoryOpenTofuControlStore();
+  await seedCrossWorkspacePair(store);
   const svc = service(store);
 
   await expect(
@@ -434,8 +443,8 @@ test("a published_output edge with no active share is rejected failed_preconditi
 });
 
 test("a published_output edge with only a pending share is rejected output_share_required", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  await seedCrossSpacePair(store);
+  const store = new InMemoryOpenTofuControlStore();
+  await seedCrossWorkspacePair(store);
   await seedShare(store, { status: "pending" });
   const deps = service(store);
 
@@ -445,9 +454,12 @@ test("a published_output edge with only a pending share is rejected output_share
 });
 
 test("a published_output edge with a revoked share is rejected output_share_required", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  await seedCrossSpacePair(store);
-  await seedShare(store, { status: "revoked", revokedAt: "2026-06-06T01:00:00.000Z" });
+  const store = new InMemoryOpenTofuControlStore();
+  await seedCrossWorkspacePair(store);
+  await seedShare(store, {
+    status: "revoked",
+    revokedAt: "2026-06-06T01:00:00.000Z",
+  });
   const svc = service(store);
 
   await expect(
@@ -456,8 +468,8 @@ test("a published_output edge with a revoked share is rejected output_share_requ
 });
 
 test("a published_output edge can be covered by a sensitive share entry", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  await seedCrossSpacePair(store);
+  const store = new InMemoryOpenTofuControlStore();
+  await seedCrossWorkspacePair(store);
   await seedShare(store, {
     outputs: [{ name: "admin_token", sensitive: true }],
   });
@@ -476,20 +488,20 @@ test("a published_output edge can be covered by a sensitive share entry", async 
   expect(dependency.outputs.admin_token.from).toEqual("admin_token");
 });
 
-test("a published_output edge within one Space is rejected failed_precondition", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
+test("a published_output edge within one Workspace is rejected failed_precondition", async () => {
+  const store = new InMemoryOpenTofuControlStore();
   const { producer, consumer } = await seedPair(store);
   const svc = service(store);
 
-  // Same-Space producer + consumer but cross_space/published_output: there is no
+  // Same-Workspace producer + consumer but cross_workspace/published_output: there is no
   // boundary to cross.
   await expect(
     svc.createDependency({
-      spaceId: "space_test",
-      producerInstallationId: producer,
-      consumerInstallationId: consumer,
+      workspaceId: "workspace_test",
+      producerCapsuleId: producer,
+      consumerCapsuleId: consumer,
       mode: "published_output",
-      visibility: "cross_space",
+      visibility: "cross_workspace",
       outputs: {
         base_domain: { from: "base_domain", to: "base_domain", required: true },
       },

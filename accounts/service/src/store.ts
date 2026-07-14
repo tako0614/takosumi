@@ -2,20 +2,6 @@ import type {
   TakosumiAccountsPatScope,
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
-import type {
-  ServiceBindingMaterialRecord,
-  ServiceGrantMaterialRecord,
-  AppCapsuleLedgerStore,
-  CapsuleEventRecord,
-  CapsuleRecord,
-  LedgerAccountRecord,
-  RuntimeBindingRecord,
-  WorkspaceRecord,
-} from "./ledger.ts";
-import {
-  assertValidServiceBindingMaterialRecord,
-  assertValidServiceGrantMaterialRecord,
-} from "./ledger.ts";
 
 export interface AuthorizationCodeRecord {
   clientId: string;
@@ -24,7 +10,6 @@ export interface AuthorizationCodeRecord {
   subject: string;
   takosumiSubject?: TakosumiSubject;
   capsuleId?: string;
-  appId?: string;
   workspaceId?: string;
   role?: string;
   nonce?: string;
@@ -35,13 +20,18 @@ export interface AuthorizationCodeRecord {
 
 export interface TokenRecord {
   clientId: string;
+  /** Invocation-time OAuth audience. Absent on ordinary client tokens. */
+  audience?: string;
   scope: string;
   subject: string;
   takosumiSubject?: TakosumiSubject;
   capsuleId?: string;
-  appId?: string;
   workspaceId?: string;
   role?: string;
+  /** Interface evidence carried only by short-lived interface OAuth tokens. */
+  interfaceId?: string;
+  interfaceBindingId?: string;
+  interfaceResolvedRevision?: number;
   expiresAt: number;
 }
 
@@ -75,6 +65,8 @@ export interface TakosumiAccountRecord {
    */
   emailVerified?: boolean;
   displayName?: string;
+  /** Optional upstream profile image URL exposed through OIDC UserInfo. */
+  picture?: string;
   termsVersion?: string;
   termsAcceptedAt?: number;
   termsAcceptedSource?: string;
@@ -108,43 +100,6 @@ export interface AccountSessionRecord {
   expiresAt: number;
 }
 
-export interface LaunchTokenConsumptionRecord {
-  jti: string;
-  capsuleId: string;
-  subject: TakosumiSubject;
-  audience: string;
-  expiresAt: number;
-  consumedAt: number;
-}
-
-export interface LaunchTokenRecord {
-  tokenHash: string;
-  jti: string;
-  capsuleId: string;
-  accountId: string;
-  workspaceId: string;
-  appId: string;
-  subject: TakosumiSubject;
-  redirectUri: string;
-  scope: readonly string[];
-  expiresAt: number;
-  createdAt: number;
-  usedAt?: number;
-}
-
-export type LaunchTokenConsumeResult =
-  | { ok: true; record: LaunchTokenRecord }
-  | {
-      ok: false;
-      reason: "not_found" | "redirect_mismatch" | "expired" | "used";
-    };
-
-export interface LaunchTokenPruneResult {
-  deleted: number;
-  expired: number;
-  used: number;
-}
-
 /**
  * Result of {@link AccountsStore.pruneRefreshChain}. Counts the rows deleted
  * from each retention-managed refresh-chain / authorization-code table so the
@@ -167,39 +122,8 @@ export interface RefreshChainPruneResult {
   authCodeTokenLinks: number;
 }
 
-/**
- * Thrown by `AccountsStore.saveLedgerAccount` (in-memory / Postgres / D1) when
- * the caller attempts to bind an existing accountId to a different
- * `legalOwnerSubject` than the row already records. The application-layer
- * guard in `installation-lifecycle-routes.ts` should reject this case before
- * it reaches the store, but every store re-checks for defense-in-depth and
- * rejects identically (rather than one throwing, one silently no-op'ing, and
- * one overwriting).
- */
-export class LedgerAccountOwnershipConflictError extends Error {
-  readonly accountId: string;
-  readonly existingLegalOwnerSubject: string;
-  readonly attemptedLegalOwnerSubject: string;
-
-  constructor(
-    accountId: string,
-    existingLegalOwnerSubject: string,
-    attemptedLegalOwnerSubject: string,
-  ) {
-    super(
-      `ledger account ${accountId} already owned by a different Takosumi subject`,
-    );
-    this.name = "LedgerAccountOwnershipConflictError";
-    this.accountId = accountId;
-    this.existingLegalOwnerSubject = existingLegalOwnerSubject;
-    this.attemptedLegalOwnerSubject = attemptedLegalOwnerSubject;
-  }
-}
-
 export type OidcClientAuthMethod =
-  | "client_secret_basic"
-  | "client_secret_post"
-  | "none";
+  "client_secret_basic" | "client_secret_post" | "none";
 
 export interface OidcClientRecord {
   clientId: string;
@@ -213,148 +137,6 @@ export interface OidcClientRecord {
   clientSecretHash?: string;
   createdAt: number;
   updatedAt: number;
-}
-
-export type BillingAccountProvider = "stripe" | "manual";
-export type BillingAccountStatus =
-  | "active"
-  | "trialing"
-  | "incomplete"
-  | "incomplete_expired"
-  | "past_due"
-  | "unpaid"
-  | "canceled"
-  | "paused"
-  // `disputed` is not a Stripe Subscription status. We assign it locally when a
-  // chargeback (`charge.dispute.created`) opens, suspending entitlements until
-  // the dispute resolves (`charge.dispute.closed`).
-  | "disputed";
-
-export interface BillingAccountRecord {
-  billingAccountId: string;
-  subject: TakosumiSubject;
-  provider: BillingAccountProvider;
-  stripeCustomerId?: string;
-  stripeSubscriptionId?: string;
-  stripePriceId?: string;
-  stripeDefaultPaymentMethodId?: string;
-  planCode?: string;
-  currentPeriodEndUnix?: number;
-  lastInvoiceId?: string;
-  dunningStartedAt?: number;
-  nextPaymentAttemptUnix?: number;
-  dunningAttemptCount?: number;
-  dunningAction?: "retry_scheduled" | "marked_uncollectible";
-  dunningExhaustedAt?: number;
-  lastCreditEventId?: string;
-  lastCreditKind?: "refund" | "credit_note";
-  lastCreditId?: string;
-  lastCreditAmount?: number;
-  lastCreditCurrency?: string;
-  lastPlanTransitionEventId?: string;
-  lastPlanFromCode?: string;
-  lastPlanToCode?: string;
-  lastPlanTransitionedAt?: number;
-  lastTaxEventId?: string;
-  taxPolicyRef?: string;
-  taxJurisdiction?: string;
-  taxAutomaticStatus?: string;
-  /**
-   * Last cancellation context captured from `customer.subscription.deleted`.
-   * Used by support / churn analytics; not consulted for entitlement decisions.
-   */
-  lastCancellation?: BillingCancellationRecord;
-  /**
-   * Active chargeback / dispute context. Set when `charge.dispute.created`
-   * fires; cleared when `charge.dispute.closed` resolves the dispute and the
-   * pre-dispute status is restored.
-   */
-  activeDispute?: BillingDisputeRecord;
-  /**
-   * Status prior to entering `disputed`. Restored when the dispute closes in
-   * the merchant's favour (or `lost` is observed and we keep `disputed` if
-   * no other event has updated the subscription state since).
-   */
-  preDisputeStatus?: BillingAccountStatus;
-  status: BillingAccountStatus;
-  /**
-   * G15 fix: optimistic-concurrency token. Monotonically increasing with
-   * every persisted mutation. `saveBillingAccountIfVersion` only writes when
-   * the stored row still carries `expectedVersion`, which lets two concurrent
-   * Stripe webhook deliveries for the same customer (e.g.
-   * `subscription.updated` + `invoice.payment_failed`) serialize their
-   * read-modify-write instead of clobbering each other's field updates
-   * (lost update). A record persisted before this field existed reads back
-   * with `version` absent; treat absent as `0` for comparison purposes and
-   * `saveBillingAccount` initializes it to `1`.
-   */
-  version?: number;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface BillingCancellationRecord {
-  canceledAt?: number;
-  reason?: string;
-  feedback?: string;
-  comment?: string;
-}
-
-export interface BillingDisputeRecord {
-  disputeId: string;
-  chargeId?: string;
-  reason?: string;
-  status?: string;
-  openedAt: number;
-  closedAt?: number;
-}
-
-export type BillingWebhookEventStatus =
-  | "received"
-  | "processed"
-  | "skipped"
-  | "failed";
-
-export interface BillingWebhookEventRecord {
-  eventId: string;
-  eventType: string;
-  status: BillingWebhookEventStatus;
-  receivedAt: number;
-  updatedAt: number;
-  errorMessage?: string;
-}
-
-export type BillingWebhookEventClaimResult =
-  | { inserted: true }
-  | { inserted: false; existing: BillingWebhookEventRecord };
-
-export interface BillingUsageRecord {
-  usageReportId: string;
-  capsuleId: string;
-  billingAccountId: string;
-  meter: string;
-  quantity: number;
-  unit: string;
-  periodStart?: number;
-  periodEnd?: number;
-  idempotencyKey?: string;
-  requestDigest: string;
-  metadata: Record<string, unknown>;
-  reportedBySubject?: TakosumiSubject;
-  reportedAt: number;
-  billingExportProvider?: string;
-  billingExportId?: string;
-  billingExportReference?: string;
-  billingExportedAt?: number;
-}
-
-export interface BillingUsageExportMark {
-  billingAccountId: string;
-  usageReportIds: readonly string[];
-  provider: string;
-  exportId: string;
-  exportReference: string;
-  exportedAt: number;
 }
 
 export type PrivacyRequestKind = "export" | "delete";
@@ -380,7 +162,7 @@ export interface PrivacyRequestRecord {
   updatedAt: number;
 }
 
-export interface AccountsStore extends AppCapsuleLedgerStore {
+export interface AccountsStore {
   saveAccount(record: TakosumiAccountRecord): void | Promise<void>;
   findAccount(
     subject: TakosumiSubject,
@@ -423,83 +205,6 @@ export interface AccountsStore extends AppCapsuleLedgerStore {
     | undefined
     | Promise<AccountSessionRecord | undefined>;
   deleteAccountSession(sessionId: string): void | Promise<void>;
-  saveBillingAccount(record: BillingAccountRecord): void | Promise<void>;
-  /**
-   * G15 fix: conditional (compare-and-swap) billing-account write. Persists
-   * `record` only when the currently stored row's `version` equals
-   * `expectedVersion` (an absent stored version compares as `0`). On success
-   * the row is written with `version = expectedVersion + 1` and the method
-   * returns `true`. On a version mismatch (a concurrent writer advanced the
-   * row) nothing is written and the method returns `false`, signalling the
-   * caller to re-read and re-apply its mutation against the fresh record.
-   *
-   * Backends MUST implement this as a single conditional statement
-   * (Postgres `UPDATE ... WHERE version = $expected`, D1 / SQLite CAS on the
-   * stored document, in-memory compare-then-set inside one synchronous turn)
-   * so two concurrent webhook applies cannot both observe the same version
-   * and both write.
-   */
-  saveBillingAccountIfVersion(
-    record: BillingAccountRecord,
-    expectedVersion: number,
-  ): boolean | Promise<boolean>;
-  findBillingAccount(
-    billingAccountId: string,
-  ):
-    | BillingAccountRecord
-    | undefined
-    | Promise<BillingAccountRecord | undefined>;
-  findBillingAccountForSubject(
-    subject: TakosumiSubject,
-  ):
-    | BillingAccountRecord
-    | undefined
-    | Promise<BillingAccountRecord | undefined>;
-  findBillingAccountByStripeCustomerId(
-    stripeCustomerId: string,
-  ):
-    | BillingAccountRecord
-    | undefined
-    | Promise<BillingAccountRecord | undefined>;
-  saveBillingWebhookEvent(
-    record: BillingWebhookEventRecord,
-  ): void | Promise<void>;
-  findBillingWebhookEvent(
-    eventId: string,
-  ):
-    | BillingWebhookEventRecord
-    | undefined
-    | Promise<BillingWebhookEventRecord | undefined>;
-  /**
-   * Atomically reserve a Stripe webhook event id for processing.
-   *
-   * Returns `{ inserted: true }` if this caller is the first one to record
-   * the event id (the row is now persisted with the provided `received` state),
-   * or `{ inserted: false, existing }` if the id was already recorded.
-   *
-   * Backends MUST implement this with a single statement that does not allow
-   * a race window (Postgres `INSERT ... ON CONFLICT DO NOTHING RETURNING ...`,
-   * D1 / SQLite `INSERT OR IGNORE`, in-memory `Map.has`-then-set inside the
-   * same synchronous turn). A `findBillingWebhookEvent` + `saveBillingWebhookEvent`
-   * sequence is NOT a valid implementation because two concurrent webhook
-   * deliveries can both observe "not found" and double-process the event.
-   */
-  claimBillingWebhookEvent(
-    record: BillingWebhookEventRecord,
-  ): BillingWebhookEventClaimResult | Promise<BillingWebhookEventClaimResult>;
-  saveBillingUsageRecord(record: BillingUsageRecord): void | Promise<void>;
-  findBillingUsageRecord(
-    usageReportId: string,
-  ): BillingUsageRecord | undefined | Promise<BillingUsageRecord | undefined>;
-  listBillingUsageRecordsForCapsule(
-    capsuleId: string,
-  ): readonly BillingUsageRecord[] | Promise<readonly BillingUsageRecord[]>;
-  listBillingUsageRecordsForBillingAccount(
-    billingAccountId: string,
-  ): readonly BillingUsageRecord[] | Promise<readonly BillingUsageRecord[]>;
-  markBillingUsageRecordsExported(
-    mark: BillingUsageExportMark,
-  ): void | Promise<void>;
   savePrivacyRequest(record: PrivacyRequestRecord): void | Promise<void>;
   findPrivacyRequest(
     requestId: string,
@@ -556,20 +261,6 @@ export interface AccountsStore extends AppCapsuleLedgerStore {
     tokenId: string,
     lastUsedAt: number,
   ): void | Promise<void>;
-  consumeLaunchTokenJti(
-    record: LaunchTokenConsumptionRecord,
-  ): boolean | Promise<boolean>;
-  saveLaunchToken(record: LaunchTokenRecord): void | Promise<void>;
-  consumeLaunchToken(input: {
-    tokenHash: string;
-    capsuleId: string;
-    redirectUri: string;
-    consumedAt: number;
-  }): LaunchTokenConsumeResult | Promise<LaunchTokenConsumeResult>;
-  pruneLaunchTokens(input: {
-    expiredBefore: number;
-    usedBefore: number;
-  }): LaunchTokenPruneResult | Promise<LaunchTokenPruneResult>;
   saveOidcClient(record: OidcClientRecord): void | Promise<void>;
   findOidcClient(
     clientId: string,
@@ -683,9 +374,8 @@ export interface AccountsStore extends AppCapsuleLedgerStore {
    * by the lifecycle paths (the only chain deletes are the security-driven
    * cascade-revoke on reuse detection), so without this they grow forever.
    *
-   * Operators MUST run this on a schedule (the same scheduled path that runs
-   * {@link pruneLaunchTokens}) — see the operator cleanup task documented in
-   * migrations/019_refresh_chain.sql. `chainBefore` should be the
+   * Operators MUST run this on a schedule; see the operator cleanup task
+   * documented in migrations/019_refresh_chain.sql. `chainBefore` should be the
    * refresh-token lifetime cutoff (default 30 days ago) and
    * `consumedCodeBefore` the authorization-code lifetime cutoff (default 5
    * minutes ago); rows with `created_at <= cutoff` are removed.
@@ -736,23 +426,9 @@ export interface AccountsStore extends AppCapsuleLedgerStore {
 
 export class InMemoryAccountsStore implements AccountsStore {
   readonly #accounts = new Map<TakosumiSubject, TakosumiAccountRecord>();
-  readonly #ledgerAccounts = new Map<string, LedgerAccountRecord>();
-  readonly #spaces = new Map<string, WorkspaceRecord>();
-  readonly #installations = new Map<string, CapsuleRecord>();
-  readonly #runtimeBindings = new Map<string, RuntimeBindingRecord>();
-  readonly #serviceBindingMaterials = new Map<
-    string,
-    ServiceBindingMaterialRecord
-  >();
-  readonly #installationEvents = new Map<string, CapsuleEventRecord[]>();
   readonly #upstreamIdentities = new Map<string, UpstreamIdentityRecord>();
   readonly #passkeyCredentials = new Map<string, PasskeyCredentialRecord>();
   readonly #accountSessions = new Map<string, AccountSessionRecord>();
-  readonly #billingAccounts = new Map<string, BillingAccountRecord>();
-  readonly #billingAccountsBySubject = new Map<TakosumiSubject, string>();
-  readonly #billingAccountsByStripeCustomerId = new Map<string, string>();
-  readonly #billingWebhookEvents = new Map<string, BillingWebhookEventRecord>();
-  readonly #billingUsageRecords = new Map<string, BillingUsageRecord>();
   readonly #privacyRequests = new Map<string, PrivacyRequestRecord>();
   readonly #privacyRequestsBySubject = new Map<TakosumiSubject, Set<string>>();
   readonly #authorizationCodes = new Map<string, AuthorizationCodeRecord>();
@@ -760,11 +436,6 @@ export class InMemoryAccountsStore implements AccountsStore {
   readonly #refreshTokens = new Map<string, TokenRecord>();
   readonly #personalAccessTokens = new Map<string, PersonalAccessTokenRecord>();
   readonly #personalAccessTokenIdsBySecret = new Map<string, string>();
-  readonly #launchTokenConsumptions = new Map<
-    string,
-    LaunchTokenConsumptionRecord
-  >();
-  readonly #launchTokens = new Map<string, LaunchTokenRecord>();
   readonly #oidcClients = new Map<string, OidcClientRecord>();
   readonly #oidcClientsByCapsule = new Map<string, string>();
   // F30: persistent refresh-token rotation chain state. Each Map / Set
@@ -823,128 +494,6 @@ export class InMemoryAccountsStore implements AccountsStore {
     return undefined;
   }
 
-  saveLedgerAccount(record: LedgerAccountRecord): void {
-    // Defense-in-depth ownership guard, identical to the D1 and Postgres
-    // stores: refuse to re-bind an existing accountId to a different
-    // legalOwnerSubject. Previously the in-memory store overwrote
-    // unconditionally (the only one of the three with no guard), so a caller
-    // bypassing the route-layer check could silently steal an account here.
-    const existing = this.#ledgerAccounts.get(record.accountId);
-    if (existing && existing.legalOwnerSubject !== record.legalOwnerSubject) {
-      throw new LedgerAccountOwnershipConflictError(
-        record.accountId,
-        existing.legalOwnerSubject,
-        record.legalOwnerSubject,
-      );
-    }
-    this.#ledgerAccounts.set(record.accountId, record);
-  }
-
-  findLedgerAccount(accountId: string): LedgerAccountRecord | undefined {
-    return this.#ledgerAccounts.get(accountId);
-  }
-
-  saveWorkspace(record: WorkspaceRecord): void {
-    this.#spaces.set(record.workspaceId, record);
-  }
-
-  findWorkspace(workspaceId: string): WorkspaceRecord | undefined {
-    return this.#spaces.get(workspaceId);
-  }
-
-  listWorkspacesForAccount(accountId: string): readonly WorkspaceRecord[] {
-    return [...this.#spaces.values()].filter(
-      (space) => space.accountId === accountId,
-    );
-  }
-
-  listWorkspacesForOwner(subject: TakosumiSubject): readonly WorkspaceRecord[] {
-    const ownedAccountIds = new Set<string>();
-    for (const account of this.#ledgerAccounts.values()) {
-      if (account.legalOwnerSubject === subject) {
-        ownedAccountIds.add(account.accountId);
-      }
-    }
-    return [...this.#spaces.values()].filter((space) =>
-      ownedAccountIds.has(space.accountId),
-    );
-  }
-
-  saveAppCapsule(record: CapsuleRecord): void {
-    this.#installations.set(record.capsuleId, record);
-  }
-
-  findAppCapsule(capsuleId: string): CapsuleRecord | undefined {
-    return this.#installations.get(capsuleId);
-  }
-
-  listAppCapsulesForWorkspace(workspaceId: string): readonly CapsuleRecord[] {
-    return [...this.#installations.values()].filter(
-      (installation) => installation.workspaceId === workspaceId,
-    );
-  }
-
-  listAppCapsulesForBillingAccount(
-    billingAccountId: string,
-  ): readonly CapsuleRecord[] {
-    return [...this.#installations.values()].filter(
-      (installation) => installation.billingAccountId === billingAccountId,
-    );
-  }
-
-  saveRuntimeBinding(record: RuntimeBindingRecord): void {
-    this.#runtimeBindings.set(record.runtimeBindingId, record);
-  }
-
-  findRuntimeBinding(
-    runtimeBindingId: string,
-  ): RuntimeBindingRecord | undefined {
-    return this.#runtimeBindings.get(runtimeBindingId);
-  }
-
-  saveServiceBindingMaterial(record: ServiceBindingMaterialRecord): void {
-    assertValidServiceBindingMaterialRecord(record);
-    this.#serviceBindingMaterials.set(record.bindingId, record);
-  }
-
-  listServiceBindingMaterialsForCapsule(
-    capsuleId: string,
-  ): readonly ServiceBindingMaterialRecord[] {
-    return [...this.#serviceBindingMaterials.values()].filter(
-      (binding) => binding.capsuleId === capsuleId,
-    );
-  }
-
-  saveServiceGrantMaterial(record: ServiceGrantMaterialRecord): void {
-    assertValidServiceGrantMaterialRecord(record);
-    void record;
-  }
-
-  findServiceGrantMaterial(
-    grantId: string,
-  ): ServiceGrantMaterialRecord | undefined {
-    void grantId;
-    return undefined;
-  }
-
-  listServiceGrantMaterialsForCapsule(
-    capsuleId: string,
-  ): readonly ServiceGrantMaterialRecord[] {
-    void capsuleId;
-    return [];
-  }
-
-  appendCapsuleEvent(record: CapsuleEventRecord): void {
-    const events = this.#installationEvents.get(record.capsuleId) ?? [];
-    this.#installationEvents.set(record.capsuleId, [...events, record]);
-  }
-
-  listCapsuleEvents(
-    capsuleId: string,
-  ): readonly CapsuleEventRecord[] {
-    return this.#installationEvents.get(capsuleId) ?? [];
-  }
-
   linkUpstreamIdentity(record: UpstreamIdentityRecord): void {
     this.#upstreamIdentities.set(upstreamIdentityKey(record), record);
   }
@@ -985,145 +534,6 @@ export class InMemoryAccountsStore implements AccountsStore {
 
   deleteAccountSession(sessionId: string): void {
     this.#accountSessions.delete(sessionId);
-  }
-
-  saveBillingAccount(record: BillingAccountRecord): void {
-    this.#writeBillingAccount({
-      ...record,
-      version: record.version ?? 1,
-    });
-  }
-
-  saveBillingAccountIfVersion(
-    record: BillingAccountRecord,
-    expectedVersion: number,
-  ): boolean {
-    const current = this.#billingAccounts.get(record.billingAccountId);
-    const currentVersion = current?.version ?? 0;
-    if (currentVersion !== expectedVersion) return false;
-    this.#writeBillingAccount({ ...record, version: expectedVersion + 1 });
-    return true;
-  }
-
-  #writeBillingAccount(record: BillingAccountRecord): void {
-    const existing = this.#billingAccounts.get(record.billingAccountId);
-    if (existing?.stripeCustomerId) {
-      this.#billingAccountsByStripeCustomerId.delete(existing.stripeCustomerId);
-    }
-
-    this.#billingAccounts.set(record.billingAccountId, record);
-    this.#billingAccountsBySubject.set(record.subject, record.billingAccountId);
-    if (record.stripeCustomerId) {
-      this.#billingAccountsByStripeCustomerId.set(
-        record.stripeCustomerId,
-        record.billingAccountId,
-      );
-    }
-  }
-
-  findBillingAccount(
-    billingAccountId: string,
-  ): BillingAccountRecord | undefined {
-    return this.#billingAccounts.get(billingAccountId);
-  }
-
-  findBillingAccountForSubject(
-    subject: TakosumiSubject,
-  ): BillingAccountRecord | undefined {
-    const billingAccountId = this.#billingAccountsBySubject.get(subject);
-    return billingAccountId
-      ? this.#billingAccounts.get(billingAccountId)
-      : undefined;
-  }
-
-  findBillingAccountByStripeCustomerId(
-    stripeCustomerId: string,
-  ): BillingAccountRecord | undefined {
-    const billingAccountId =
-      this.#billingAccountsByStripeCustomerId.get(stripeCustomerId);
-    return billingAccountId
-      ? this.#billingAccounts.get(billingAccountId)
-      : undefined;
-  }
-
-  saveBillingWebhookEvent(record: BillingWebhookEventRecord): void {
-    this.#billingWebhookEvents.set(record.eventId, record);
-  }
-
-  findBillingWebhookEvent(
-    eventId: string,
-  ): BillingWebhookEventRecord | undefined {
-    return this.#billingWebhookEvents.get(eventId);
-  }
-
-  claimBillingWebhookEvent(
-    record: BillingWebhookEventRecord,
-  ): BillingWebhookEventClaimResult {
-    const existing = this.#billingWebhookEvents.get(record.eventId);
-    if (existing) {
-      return { inserted: false, existing };
-    }
-    this.#billingWebhookEvents.set(record.eventId, record);
-    return { inserted: true };
-  }
-
-  saveBillingUsageRecord(record: BillingUsageRecord): void {
-    this.#billingUsageRecords.set(record.usageReportId, record);
-  }
-
-  findBillingUsageRecord(
-    usageReportId: string,
-  ): BillingUsageRecord | undefined {
-    return this.#billingUsageRecords.get(usageReportId);
-  }
-
-  listBillingUsageRecordsForCapsule(
-    capsuleId: string,
-  ): readonly BillingUsageRecord[] {
-    return billingUsageRecordsSorted(
-      [...this.#billingUsageRecords.values()].filter(
-        (record) => record.capsuleId === capsuleId,
-      ),
-    );
-  }
-
-  listBillingUsageRecordsForBillingAccount(
-    billingAccountId: string,
-  ): readonly BillingUsageRecord[] {
-    return billingUsageRecordsSorted(
-      [...this.#billingUsageRecords.values()].filter(
-        (record) => record.billingAccountId === billingAccountId,
-      ),
-    );
-  }
-
-  markBillingUsageRecordsExported(mark: BillingUsageExportMark): void {
-    for (const usageReportId of mark.usageReportIds) {
-      const existing = this.#billingUsageRecords.get(usageReportId);
-      if (!existing) {
-        throw new TypeError("billing usage report was not found");
-      }
-      if (existing.billingAccountId !== mark.billingAccountId) {
-        throw new TypeError(
-          "billing usage report is owned by another billing account",
-        );
-      }
-      if (
-        existing.billingExportId &&
-        (existing.billingExportProvider !== mark.provider ||
-          existing.billingExportId !== mark.exportId ||
-          existing.billingExportReference !== mark.exportReference)
-      ) {
-        throw new TypeError("billing usage report was already exported");
-      }
-      this.#billingUsageRecords.set(usageReportId, {
-        ...existing,
-        billingExportProvider: mark.provider,
-        billingExportId: mark.exportId,
-        billingExportReference: mark.exportReference,
-        billingExportedAt: mark.exportedAt,
-      });
-    }
   }
 
   savePrivacyRequest(record: PrivacyRequestRecord): void {
@@ -1236,72 +646,6 @@ export class InMemoryAccountsStore implements AccountsStore {
     this.#personalAccessTokens.set(tokenId, { ...record, lastUsedAt });
   }
 
-  consumeLaunchTokenJti(record: LaunchTokenConsumptionRecord): boolean {
-    if (this.#launchTokenConsumptions.has(record.jti)) return false;
-    this.#launchTokenConsumptions.set(record.jti, record);
-    return true;
-  }
-
-  saveLaunchToken(record: LaunchTokenRecord): void {
-    for (const [tokenHash, existing] of this.#launchTokens) {
-      if (
-        existing.capsuleId === record.capsuleId &&
-        existing.usedAt === undefined &&
-        existing.expiresAt > record.createdAt
-      ) {
-        this.#launchTokens.set(tokenHash, {
-          ...existing,
-          usedAt: record.createdAt,
-        });
-      }
-    }
-    this.#launchTokens.set(record.tokenHash, { ...record });
-  }
-
-  consumeLaunchToken(input: {
-    tokenHash: string;
-    capsuleId: string;
-    redirectUri: string;
-    consumedAt: number;
-  }): LaunchTokenConsumeResult {
-    const record = this.#launchTokens.get(input.tokenHash);
-    if (!record || record.capsuleId !== input.capsuleId) {
-      return { ok: false, reason: "not_found" };
-    }
-    if (record.redirectUri !== input.redirectUri) {
-      return { ok: false, reason: "redirect_mismatch" };
-    }
-    if (record.expiresAt <= input.consumedAt) {
-      return { ok: false, reason: "expired" };
-    }
-    if (record.usedAt !== undefined) {
-      return { ok: false, reason: "used" };
-    }
-    const consumed = { ...record, usedAt: input.consumedAt };
-    this.#launchTokens.set(record.tokenHash, consumed);
-    return { ok: true, record: { ...consumed } };
-  }
-
-  pruneLaunchTokens(input: {
-    expiredBefore: number;
-    usedBefore: number;
-  }): LaunchTokenPruneResult {
-    let expired = 0;
-    let used = 0;
-    for (const [tokenHash, record] of this.#launchTokens) {
-      if (record.usedAt !== undefined && record.usedAt <= input.usedBefore) {
-        this.#launchTokens.delete(tokenHash);
-        used += 1;
-        continue;
-      }
-      if (record.expiresAt <= input.expiredBefore) {
-        this.#launchTokens.delete(tokenHash);
-        expired += 1;
-      }
-    }
-    return { deleted: expired + used, expired, used };
-  }
-
   saveOidcClient(record: OidcClientRecord): void {
     const existing = this.#oidcClients.get(record.clientId);
     if (existing) {
@@ -1315,9 +659,7 @@ export class InMemoryAccountsStore implements AccountsStore {
     return this.#oidcClients.get(clientId);
   }
 
-  findOidcClientForCapsule(
-    capsuleId: string,
-  ): OidcClientRecord | undefined {
+  findOidcClientForCapsule(capsuleId: string): OidcClientRecord | undefined {
     const clientId = this.#oidcClientsByCapsule.get(capsuleId);
     return clientId ? this.#oidcClients.get(clientId) : undefined;
   }
@@ -1526,14 +868,4 @@ function upstreamIdentityKey(input: {
 function normalizeAccountEmail(email: string | undefined): string | undefined {
   const trimmed = email?.trim().toLowerCase();
   return trimmed ? trimmed : undefined;
-}
-
-function billingUsageRecordsSorted(
-  records: readonly BillingUsageRecord[],
-): readonly BillingUsageRecord[] {
-  return [...records].sort(
-    (left, right) =>
-      left.reportedAt - right.reportedAt ||
-      left.usageReportId.localeCompare(right.usageReportId),
-  );
 }

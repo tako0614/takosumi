@@ -107,29 +107,49 @@ func TestGetCapabilities(t *testing.T) {
 }
 
 func TestPutResource_RoundTrip(t *testing.T) {
-	var gotBody Resource
+	var gotBody applyResourceBody
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut {
-			t.Errorf("expected PUT, got %s", r.Method)
-		}
-		if r.URL.Path != "/v1/resources/EdgeWorker/api" {
-			t.Errorf("unexpected path %q", r.URL.Path)
-		}
 		if auth := r.Header.Get("Authorization"); auth != "Bearer secret-token" {
 			t.Errorf("unexpected Authorization header %q", auth)
 		}
 		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
 			t.Errorf("unexpected Content-Type %q", ct)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Errorf("decode request: %v", err)
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/resources/preview":
+			var previewBody Resource
+			if err := json.NewDecoder(r.Body).Decode(&previewBody); err != nil {
+				t.Errorf("decode preview request: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(PreviewResourceResult{
+				Resource:              previewBody,
+				PlanDigest:            "sha256:plan",
+				SpecDigest:            "sha256:spec",
+				ResolutionFingerprint: "sha256:resolution",
+				Quote: &DeploymentQuote{
+					QuoteID:      "quote_1",
+					QuoteDigest:  "sha256:quote",
+					RatingStatus: "rated",
+					Currency:     "USD",
+					ExpiresAt:    "2026-07-14T01:00:00Z",
+				},
+			})
+			return
+		case r.Method == http.MethodPut && r.URL.Path == "/v1/resources/EdgeWorker/api":
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Errorf("decode apply request: %v", err)
+			}
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
 		}
 
 		resp := Resource{
 			APIVersion: APIVersion,
 			Kind:       KindEdgeWorker,
 			Metadata:   Metadata{Name: "api", Space: "prod"},
-			Spec:       gotBody.Spec,
+			Spec:       gotBody.Resource.Spec,
 			Status: &Status{
 				Phase:              "Ready",
 				ObservedGeneration: 3,
@@ -172,6 +192,9 @@ func TestPutResource_RoundTrip(t *testing.T) {
 	if gotBody.Spec["name"] != "api" {
 		t.Errorf("expected spec.name=api, got %v", gotBody.Spec["name"])
 	}
+	if gotBody.Review.PlanDigest != "sha256:plan" || gotBody.Review.QuoteID != "quote_1" || gotBody.Review.QuoteDigest != "sha256:quote" {
+		t.Errorf("unexpected deployment review %#v", gotBody.Review)
+	}
 
 	// Response mapped correctly.
 	if out.Status == nil {
@@ -205,6 +228,118 @@ func TestGetResource_NotFound(t *testing.T) {
 	_, err := c.GetResource(context.Background(), KindEdgeWorker, "missing", "prod")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestObserveResource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/resources/ObjectBucket/assets/observe" {
+			t.Errorf("unexpected observe path %q", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("space"); got != "prod" {
+			t.Errorf("expected space query prod, got %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(Resource{
+			APIVersion: APIVersion,
+			Kind:       KindObjectBucket,
+			Status: &Status{Conditions: []Condition{{
+				Type: "Drifted", Status: "false", Reason: "BackendInSync",
+			}}},
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "", srv.Client())
+	out, err := c.ObserveResource(context.Background(), KindObjectBucket, "assets", "prod")
+	if err != nil {
+		t.Fatalf("ObserveResource: %v", err)
+	}
+	if out.Status == nil || len(out.Status.Conditions) != 1 || out.Status.Conditions[0].Type != "Drifted" {
+		t.Fatalf("unexpected observed Resource %#v", out)
+	}
+}
+
+func TestRefreshResource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/resources/ObjectBucket/assets/refresh" {
+			t.Errorf("unexpected refresh path %q", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("space"); got != "prod" {
+			t.Errorf("expected space query prod, got %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(Resource{
+			APIVersion: APIVersion,
+			Kind:       KindObjectBucket,
+			Status: &Status{Outputs: map[string]any{
+				"bucket_name": "assets-refreshed",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "", srv.Client())
+	out, err := c.RefreshResource(context.Background(), KindObjectBucket, "assets", "prod")
+	if err != nil {
+		t.Fatalf("RefreshResource: %v", err)
+	}
+	if out.Status == nil || out.Status.Outputs["bucket_name"] != "assets-refreshed" {
+		t.Fatalf("unexpected refreshed Resource %#v", out)
+	}
+}
+
+func TestImportResource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/resources/ObjectBucket/assets/import" {
+			t.Errorf("unexpected import path %q", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode import body: %v", err)
+		}
+		if body["nativeId"] != "bucket-native-123" {
+			t.Errorf("unexpected nativeId %#v", body["nativeId"])
+		}
+		metadata, _ := body["metadata"].(map[string]any)
+		if metadata["space"] != "prod" {
+			t.Errorf("unexpected metadata %#v", metadata)
+		}
+		_ = json.NewEncoder(w).Encode(Resource{
+			APIVersion: APIVersion,
+			Kind:       KindObjectBucket,
+			Status: &Status{Outputs: map[string]any{
+				"bucket_name": "assets",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "", srv.Client())
+	out, err := c.ImportResource(
+		context.Background(),
+		KindObjectBucket,
+		"assets",
+		"bucket-native-123",
+		&Resource{
+			APIVersion: APIVersion,
+			Kind:       KindObjectBucket,
+			Metadata:   Metadata{Name: "assets", Space: "prod"},
+			Spec:       map[string]any{"name": "assets"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("ImportResource: %v", err)
+	}
+	if out.Status == nil || out.Status.Outputs["bucket_name"] != "assets" {
+		t.Fatalf("unexpected imported Resource %#v", out)
 	}
 }
 
@@ -336,10 +471,19 @@ func TestTargetPoolCRUD(t *testing.T) {
 		Type:     "kubernetes",
 		Ref:      "cluster-prod",
 		Priority: 90,
-		Implementations: []TargetPoolImplementation{{
+		Implementations: []TargetImplementationDescriptor{{
 			Shape:              KindContainerService,
 			Implementation:     "custom_container_runtime",
 			NativeResourceType: "custom.container_service",
+			ProviderSource:     "example/runtime",
+			ModuleTemplate:     "example-container-service",
+			ProviderConfig: map[string]any{
+				"endpoint": "https://runtime.example.test",
+			},
+			ModuleInputMappings: map[string]any{
+				"name": map[string]any{"source": "spec", "path": "/name"},
+			},
+			ModuleOutputs: []TargetModuleOutput{{Name: "url", Type: "url"}},
 			Interfaces: map[string]string{
 				"oci_container": "native",
 				"public_http":   "shim",
@@ -355,6 +499,13 @@ func TestTargetPoolCRUD(t *testing.T) {
 	}
 	if gotBody.Spec.Targets[0].Implementations[0].Implementation != "custom_container_runtime" {
 		t.Fatalf("custom container implementation did not pass through: %#v", gotBody.Spec)
+	}
+	gotImplementation := gotBody.Spec.Targets[0].Implementations[0]
+	if gotImplementation.ProviderSource != "example/runtime" || gotImplementation.ModuleTemplate != "example-container-service" {
+		t.Fatalf("explicit provider/module descriptor did not pass through: %#v", gotImplementation)
+	}
+	if gotImplementation.ModuleInputMappings["name"] == nil || len(gotImplementation.ModuleOutputs) != 1 {
+		t.Fatalf("module mappings/outputs did not pass through: %#v", gotImplementation)
 	}
 
 	got, err := c.GetTargetPool(context.Background(), "default", "prod")

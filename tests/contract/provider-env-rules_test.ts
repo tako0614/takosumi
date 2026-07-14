@@ -1,80 +1,61 @@
 import { expect, test } from "bun:test";
 
 import {
-  allowedEnvNamesForProvider,
   canonicalProviderSource,
-  cloudFamilyForProvider,
   isProviderEnvName,
   isReservedProviderEnvName,
-  PROVIDER_CREDENTIAL_ARG_MAP,
-  PROVIDER_CREDENTIAL_ENV_RULES,
-  providerCredentialArgs,
-  providerEnvRule,
-  requiredEnvGroupsForProvider,
-  requiredEnvGroupsSatisfied,
-  sameProviderFamily,
+  providerMatches,
+  sameProviderSource,
 } from "../../contract/provider-env-rules.ts";
 
-test("providerEnvRule resolves short name and registry-path forms", () => {
-  const byShort = providerEnvRule("cloudflare");
-  const byPath = providerEnvRule("registry.opentofu.org/cloudflare/cloudflare");
-  const byBarePath = providerEnvRule("cloudflare/cloudflare");
-  const google = providerEnvRule("google");
-  expect(byShort).toBeDefined();
-  expect(byShort).toBe(byPath!);
-  expect(byShort).toBe(byBarePath!);
-  expect(providerEnvRule("gcp")).toBe(google!);
-  expect(providerEnvRule("hashicorp/google-beta")).toBe(google!);
+test("sameProviderSource normalizes only explicit default-registry sources", () => {
   expect(
-    providerEnvRule("registry.opentofu.org/hetznercloud/hcloud")?.shortName,
-  ).toBe("hcloud");
-  expect(providerEnvRule("unknown-provider")).toBeUndefined();
-  expect(providerEnvRule("")).toBeUndefined();
-});
-
-test("sameProviderFamily matches arbitrary default-registry sources by registry identity", () => {
-  expect(
-    sameProviderFamily("registry.opentofu.org/vercel/vercel", "vercel/vercel"),
-  ).toBe(true);
-  expect(
-    sameProviderFamily(
+    sameProviderSource(
       "registry.opentofu.org/snowflake-labs/snowflake",
       "snowflake-labs/snowflake",
     ),
   ).toBe(true);
-  expect(sameProviderFamily("snowflake", "snowflake-labs/snowflake")).toBe(
+  expect(sameProviderSource("snowflake", "snowflake-labs/snowflake")).toBe(
     false,
   );
   expect(
-    sameProviderFamily(
+    sameProviderSource(
       "registry.terraform.io/hashicorp/random",
       "hashicorp/random",
     ),
   ).toBe(false);
+  expect(
+    sameProviderSource(
+      "providers.example.test/acme/service",
+      "registry.opentofu.org/acme/service",
+    ),
+  ).toBe(false);
 });
 
-test("canonicalProviderSource returns fully qualified OpenTofu provider sources", () => {
-  expect(canonicalProviderSource("cloudflare")).toBe(
-    "registry.opentofu.org/cloudflare/cloudflare",
-  );
-  expect(canonicalProviderSource("gcp")).toBe(
-    "registry.opentofu.org/hashicorp/google",
-  );
+test("canonicalProviderSource never expands vendor local names", () => {
+  expect(canonicalProviderSource("cloudflare")).toBe("cloudflare");
+  expect(canonicalProviderSource("gcp")).toBe("gcp");
   expect(canonicalProviderSource("cloudflare/cloudflare")).toBe(
     "registry.opentofu.org/cloudflare/cloudflare",
   );
   expect(canonicalProviderSource("snowflake-labs/snowflake")).toBe(
     "registry.opentofu.org/snowflake-labs/snowflake",
   );
-  expect(canonicalProviderSource("snowflake")).toBe("snowflake");
+  expect(canonicalProviderSource("providers.example.test/acme/service")).toBe(
+    "providers.example.test/acme/service",
+  );
 });
 
-test("allowedEnvNamesForProvider returns the sorted env-name set", () => {
-  const names = allowedEnvNamesForProvider("cloudflare");
-  expect(names).toContain("CLOUDFLARE_API_TOKEN");
-  expect(names).toContain("CF_API_TOKEN");
-  expect([...names]).toEqual([...names].sort());
-  expect(allowedEnvNamesForProvider("unknown")).toEqual([]);
+test("providerMatches does not widen a policy rule through provider tails", () => {
+  expect(
+    providerMatches("hashicorp/aws", "registry.opentofu.org/hashicorp/aws"),
+  ).toBe(true);
+  expect(providerMatches("registry.opentofu.org/hashicorp/aws", "aws")).toBe(
+    false,
+  );
+  expect(providerMatches("aws", "registry.opentofu.org/hashicorp/aws")).toBe(
+    false,
+  );
 });
 
 test("provider env name validation admits provider variables but rejects runner-reserved names", () => {
@@ -85,108 +66,4 @@ test("provider env name validation admits provider variables but rejects runner-
   expect(isReservedProviderEnvName("TAKOSUMI_RUN_ID")).toBe(true);
   expect(isReservedProviderEnvName("OPENTOFU_PROVIDER_MIRROR")).toBe(true);
   expect(isReservedProviderEnvName("TF_VAR_SECRET")).toBe(true);
-});
-
-test("cloudFamilyForProvider maps providers to partitions, falling back to local-adapters", () => {
-  expect(cloudFamilyForProvider("cloudflare")).toBe("cloudflare");
-  expect(cloudFamilyForProvider("aws")).toBe("aws");
-  expect(cloudFamilyForProvider("google")).toBe("gcp");
-  expect(cloudFamilyForProvider("gcp")).toBe("gcp");
-  expect(cloudFamilyForProvider("kubernetes")).toBe("k8s");
-  expect(cloudFamilyForProvider("github")).toBe("local-adapters");
-  expect(cloudFamilyForProvider("hcloud")).toBe("local-adapters");
-  expect(cloudFamilyForProvider("openstack")).toBe("local-adapters");
-  expect(cloudFamilyForProvider("totally-unknown")).toBe("local-adapters");
-});
-
-test("requiredEnvGroupsSatisfied honors the provider required groups", () => {
-  // cloudflare: any one of these single-name groups suffices.
-  expect(
-    requiredEnvGroupsSatisfied("cloudflare", ["CLOUDFLARE_API_TOKEN"]),
-  ).toBe(true);
-  expect(requiredEnvGroupsSatisfied("cloudflare", ["CF_API_TOKEN"])).toBe(true);
-  // ...but only an account id (no token) is NOT enough.
-  expect(
-    requiredEnvGroupsSatisfied("cloudflare", ["CLOUDFLARE_ACCOUNT_ID"]),
-  ).toBe(false);
-  // legacy key+email group must be complete.
-  expect(requiredEnvGroupsSatisfied("cloudflare", ["CLOUDFLARE_API_KEY"])).toBe(
-    false,
-  );
-  expect(
-    requiredEnvGroupsSatisfied("cloudflare", [
-      "CLOUDFLARE_API_KEY",
-      "CLOUDFLARE_EMAIL",
-    ]),
-  ).toBe(true);
-  // aws needs both halves of a key pair.
-  expect(requiredEnvGroupsSatisfied("aws", ["AWS_ACCESS_KEY_ID"])).toBe(false);
-  expect(
-    requiredEnvGroupsSatisfied("aws", [
-      "AWS_ACCESS_KEY_ID",
-      "AWS_SECRET_ACCESS_KEY",
-    ]),
-  ).toBe(true);
-  expect(requiredEnvGroupsSatisfied("hcloud", ["HCLOUD_TOKEN"])).toBe(true);
-  expect(requiredEnvGroupsSatisfied("vultr", ["VULTR_API_KEY"])).toBe(true);
-  expect(
-    requiredEnvGroupsSatisfied("scaleway", [
-      "SCW_ACCESS_KEY",
-      "SCW_SECRET_KEY",
-    ]),
-  ).toBe(true);
-  expect(requiredEnvGroupsSatisfied("openstack", ["OS_CLOUD"])).toBe(true);
-  // unknown providers are never satisfied.
-  expect(requiredEnvGroupsSatisfied("unknown", ["X"])).toBe(false);
-});
-
-test("requiredEnvGroupsForProvider exposes the groups for error messaging", () => {
-  const groups = requiredEnvGroupsForProvider("cloudflare");
-  expect(groups).toContainEqual(["CLOUDFLARE_API_TOKEN"]);
-  expect(requiredEnvGroupsForProvider("unknown")).toEqual([]);
-});
-
-test("every rule's envNames superset includes all required-group members", () => {
-  for (const rule of PROVIDER_CREDENTIAL_ENV_RULES) {
-    const allowed = new Set(rule.envNames);
-    for (const group of rule.requiredGroups) {
-      for (const name of group) {
-        expect(allowed.has(name)).toBe(true);
-      }
-    }
-  }
-});
-
-test("providerCredentialArgs maps cloudflare/aws/google and resolves by short or path form", () => {
-  expect(providerCredentialArgs("cloudflare")).toEqual([
-    { envName: "CLOUDFLARE_API_TOKEN", arg: "api_token" },
-  ]);
-  // Registry-path form resolves to the same rule -> same args.
-  expect(providerCredentialArgs("cloudflare/cloudflare")).toEqual(
-    providerCredentialArgs("cloudflare"),
-  );
-  expect(providerCredentialArgs("hashicorp/aws")).toEqual([
-    { envName: "AWS_ACCESS_KEY_ID", arg: "access_key" },
-    { envName: "AWS_SECRET_ACCESS_KEY", arg: "secret_key" },
-    { envName: "AWS_SESSION_TOKEN", arg: "token" },
-  ]);
-  expect(providerCredentialArgs("gcp")).toEqual([
-    { envName: "GOOGLE_CREDENTIALS", arg: "credentials" },
-    { envName: "GOOGLE_CLOUD_PROJECT", arg: "project" },
-  ]);
-  expect(providerCredentialArgs("hashicorp/google")).toEqual(
-    providerCredentialArgs("google"),
-  );
-  // A provider without an arg mapping (and an unknown provider) get no split.
-  expect(providerCredentialArgs("kubernetes")).toEqual([]);
-  expect(providerCredentialArgs("totally-unknown")).toEqual([]);
-});
-
-test("every credential arg env name is a declared env name for its provider", () => {
-  for (const [shortName, args] of Object.entries(PROVIDER_CREDENTIAL_ARG_MAP)) {
-    const allowed = new Set(allowedEnvNamesForProvider(shortName));
-    for (const { envName } of args) {
-      expect(allowed.has(envName)).toBe(true);
-    }
-  }
 });

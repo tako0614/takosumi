@@ -57,8 +57,6 @@ test("Cloudflare Worker keeps generic internal seams edge-closed by default", as
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
     createServiceApp: () => Promise.resolve(createdApp("service", calls)),
-    createRuntimeAgentApp: () =>
-      Promise.resolve(createdApp("runtime-agent", calls)),
   });
   const env = createEnv();
 
@@ -66,7 +64,7 @@ test("Cloudflare Worker keeps generic internal seams edge-closed by default", as
     "/internal/v1/probe",
     "/internal/v1/runner-profiles",
     "/internal/v1/plan-runs",
-    "/internal/v1/runtime/agents/enroll",
+    "/internal/v1/unknown",
   ]) {
     calls.length = 0;
     const response = await worker.fetch(
@@ -115,31 +113,13 @@ test("Cloudflare Worker dispatches internal seams only with local/private opt-in
   }
 });
 
-test("Cloudflare Worker dispatches runtime-agent routes to the runtime-agent app", async () => {
-  const calls: CapturedRequest[] = [];
-  const worker = createCloudflareWorker({
-    createServiceApp: () => Promise.resolve(createdApp("service", calls)),
-    createRuntimeAgentApp: () =>
-      Promise.resolve(createdApp("runtime-agent", calls)),
-  });
-
-  const response = await worker.fetch(
-    new Request("https://worker.example/internal/v1/runtime/agents/enroll"),
-    createEnv({ internalEdgeIngress: true }),
-  );
-
-  assert.equal(response.status, 200);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].app, "runtime-agent");
-});
-
 test("Cloudflare Worker preserves method, query, headers, and body", async () => {
   const calls: CapturedRequest[] = [];
   const worker = createCloudflareWorker({
     createServiceApp: () => Promise.resolve(createdApp("service", calls, 202)),
   });
   const body = JSON.stringify({
-    spaceId: "space_test",
+    workspaceId: "workspace_test",
     audit: { reason: "test" },
   });
   const response = await worker.fetch(
@@ -182,7 +162,7 @@ test("OpenTofu run queue consumer schedules a run owner and acks quickly", async
         kind: "takosumi.opentofu-run@v1",
         action: "plan",
         runId: "run_queue_1",
-        spaceId: "space_test",
+        workspaceId: "workspace_test",
       },
       { attempts: 1, onAck: () => acked.push("run") },
     ),
@@ -198,7 +178,7 @@ test("OpenTofu run queue consumer schedules a run owner and acks quickly", async
     kind: "takosumi.opentofu-run-owner.start@v1",
     action: "plan",
     runId: "run_queue_1",
-    spaceId: "space_test",
+    workspaceId: "workspace_test",
     queueAttempt: 1,
     messageId: "msg_1",
   });
@@ -221,7 +201,7 @@ test("OpenTofu run queue consumer acks and continues on the final attempt", asyn
             kind: "takosumi.opentofu-run@v1",
             action: "plan",
             runId: "run_queue_final",
-            spaceId: "space_test",
+            workspaceId: "workspace_test",
           },
           ack: () => acked.push("final"),
         },
@@ -231,7 +211,7 @@ test("OpenTofu run queue consumer acks and continues on the final attempt", asyn
             kind: "takosumi.opentofu-run@v1",
             action: "bogus",
             runId: "run_queue_invalid",
-            spaceId: "space_test",
+            workspaceId: "workspace_test",
           },
           ack: () => acked.push("invalid"),
         },
@@ -255,7 +235,7 @@ test("OpenTofu run queue consumer acks invalid message shapes", async () => {
             kind: "takosumi.opentofu-run@v1",
             action: "bogus",
             runId: "run_queue_invalid",
-            spaceId: "space_test",
+            workspaceId: "workspace_test",
           },
           ack: () => acked.push("invalid_action"),
         },
@@ -264,7 +244,7 @@ test("OpenTofu run queue consumer acks invalid message shapes", async () => {
           body: {
             kind: "takosumi.opentofu-run@v1",
             action: "plan",
-            spaceId: "space_test",
+            workspaceId: "workspace_test",
           },
           ack: () => acked.push("missing_run"),
         },
@@ -332,7 +312,7 @@ test("OpenTofu run DLQ consumer acks dead letters without rethrowing", async () 
             kind: "takosumi.opentofu-run@v1",
             action: "apply",
             runId: "run_dead",
-            spaceId: "space_test",
+            workspaceId: "workspace_test",
           },
           ack: () => (acked = true),
         },

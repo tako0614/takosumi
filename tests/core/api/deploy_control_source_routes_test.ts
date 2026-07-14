@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 
+import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import { createApiApp } from "../../../core/api/app.ts";
-import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
+import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import {
   SourcesService,
   type ReadCapsuleSourceFiles,
@@ -19,17 +20,18 @@ async function makeAppWithStore(
     readonly readCapsuleSourceFiles?: ReadCapsuleSourceFiles;
   } = {},
 ) {
-  const store = new InMemoryOpenTofuDeploymentStore();
+  const store = new InMemoryOpenTofuControlStore();
   let counter = 0;
   const sourcesService = new SourcesService({
     store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     readCapsuleSourceFiles: options.readCapsuleSourceFiles,
     now: () => new Date("2026-06-06T00:00:00.000Z"),
     newId: (prefix) =>
       `${prefix}_route${(counter += 1).toString().padStart(10, "0")}`,
     newHookSecret: () => "whk_route_secret",
   });
-  const controller = new OpenTofuDeploymentController({
+  const controller = new OpenTofuController({
     store,
     sourcesService,
   });
@@ -41,7 +43,7 @@ async function makeAppWithStore(
         token === "scoped-token"
           ? {
               actor: "acct_1",
-              spaceIds: ["space_1"],
+              workspaceIds: ["ws_001"],
               operations: "*",
               runnerProfileIds: "*",
             }
@@ -63,7 +65,7 @@ test("POST /internal/v1/sources requires a bearer (401)", async () => {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      spaceId: "space_1",
+      workspaceId: "ws_001",
       name: "r",
       url: "https://github.com/a/b",
     }),
@@ -77,7 +79,7 @@ test("POST /internal/v1/sources rejects an unknown field (400)", async () => {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: "space_1",
+      workspaceId: "ws_001",
       name: "r",
       url: "https://github.com/a/b",
       sneaky: 1,
@@ -87,13 +89,13 @@ test("POST /internal/v1/sources rejects an unknown field (400)", async () => {
   expect((await response.json()).error.code).toBe("invalid_argument");
 });
 
-test("POST /internal/v1/sources enforces space scope (403)", async () => {
+test("POST /internal/v1/sources enforces workspace scope (403)", async () => {
   const app = await makeApp();
   const response = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: "space_denied",
+      workspaceId: "ws_denied",
       name: "r",
       url: "https://github.com/a/b",
     }),
@@ -107,7 +109,7 @@ test("POST /internal/v1/sources rejects a forbidden URL (400)", async () => {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: "space_1",
+      workspaceId: "ws_001",
       name: "r",
       url: "git://github.com/a/b",
     }),
@@ -122,7 +124,7 @@ test("source register -> sync -> snapshots flow", async () => {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: "space_1",
+      workspaceId: "ws_001",
       name: "r",
       url: "https://github.com/acme/repo.git",
     }),
@@ -133,7 +135,7 @@ test("source register -> sync -> snapshots flow", async () => {
   expect(createdBody.hookSecret).toBe("whk_route_secret");
   const sourceId = createdBody.source.id;
 
-  const list = await app.request("/internal/v1/sources?spaceId=space_1", {
+  const list = await app.request("/internal/v1/sources?workspaceId=ws_001", {
     headers: { authorization: "Bearer scoped-token" },
   });
   expect((await list.json()).sources).toHaveLength(1);
@@ -168,7 +170,7 @@ test("source compatibility-check creates and reads a Capsule report", async () =
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: "space_1",
+      workspaceId: "ws_001",
       name: "r",
       url: "https://github.com/acme/repo.git",
     }),
@@ -177,12 +179,13 @@ test("source compatibility-check creates and reads a Capsule report", async () =
   const { source } = await created.json();
   const snapshot: SourceSnapshot = {
     id: "snap_route0000000001",
+    origin: "git",
     sourceId: source.id,
     url: source.url,
     ref: source.defaultRef,
     resolvedCommit: "abc123",
     path: source.defaultPath,
-    archiveObjectKey: `spaces/space_1/sources/${source.id}/snapshots/snap_route0000000001/source.tar.zst`,
+    archiveRef: `workspaces/ws_001/sources/${source.id}/snapshots/snap_route0000000001/source.tar.zst`,
     archiveDigest: "sha256:sourcearchive",
     archiveSizeBytes: 42,
     fetchedByRunId: "ssr_route0000000001",
@@ -208,14 +211,14 @@ test("source compatibility-check creates and reads a Capsule report", async () =
     resources: [],
     dataSources: [],
     provisioners: [],
-    normalizedObjectKey: snapshot.archiveObjectKey,
-    normalizedDigest: snapshot.archiveDigest,
   });
+  expect(checkedBody.report).not.toHaveProperty("normalizedObjectKey");
+  expect(checkedBody.report).not.toHaveProperty("normalizedDigest");
   const compatibilityRunId = checkedBody.run.id;
   expect(compatibilityRunId).toMatch(/^ccr_/);
   expect(checkedBody.run).toMatchObject({
     id: compatibilityRunId,
-    spaceId: "space_1",
+    workspaceId: "ws_001",
     sourceId: source.id,
     type: "compatibility_check",
     status: "succeeded",
@@ -288,11 +291,11 @@ test("source compatibility-check creates and reads a Capsule report", async () =
   expect((await cancel.json()).error.code).toBe("failed_precondition");
 });
 
-test("GET /internal/v1/compatibility-reports resolves owner from sourceSnapshot and enforces space scope", async () => {
+test("GET /internal/v1/compatibility-reports resolves owner from sourceSnapshot and enforces workspace scope", async () => {
   const { app, store } = await makeAppWithStore();
   await store.putSource({
     id: "src_denied00000001",
-    spaceId: "space_2",
+    workspaceId: "ws_002",
     name: "denied",
     url: "https://github.com/acme/denied.git",
     defaultRef: "main",
@@ -306,14 +309,13 @@ test("GET /internal/v1/compatibility-reports resolves owner from sourceSnapshot 
   const snapshot: SourceSnapshot = {
     id: "snap_denied00000001",
     origin: "git",
-    spaceId: "space_2",
     sourceId: "src_denied00000001",
     url: "https://github.com/acme/denied.git",
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveObjectKey:
-      "spaces/space_2/sources/src_denied00000001/snapshots/snap_denied00000001/source.tar.zst",
+    archiveRef:
+      "workspaces/ws_002/sources/src_denied00000001/snapshots/snap_denied00000001/source.tar.zst",
     archiveDigest: "sha256:sourcearchive",
     archiveSizeBytes: 42,
     fetchedByRunId: "ssr_denied00000001",
@@ -322,6 +324,7 @@ test("GET /internal/v1/compatibility-reports resolves owner from sourceSnapshot 
   await store.putSourceSnapshot(snapshot);
   const report: CapsuleCompatibilityReport = {
     id: "caprep_denied00000001",
+    sourceId: "src_denied00000001",
     sourceSnapshotId: snapshot.id,
     level: "ready",
     findings: [],
@@ -375,7 +378,7 @@ output "attachments_bucket" {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: "space_1",
+      workspaceId: "ws_001",
       name: "r",
       url: "https://github.com/acme/repo.git",
     }),
@@ -384,12 +387,13 @@ output "attachments_bucket" {
   const { source } = await created.json();
   const snapshot: SourceSnapshot = {
     id: "snap_route0000000001",
+    origin: "git",
     sourceId: source.id,
     url: source.url,
     ref: source.defaultRef,
     resolvedCommit: "abc123",
     path: source.defaultPath,
-    archiveObjectKey: `spaces/space_1/sources/${source.id}/snapshots/snap_route0000000001/source.tar.zst`,
+    archiveRef: `workspaces/ws_001/sources/${source.id}/snapshots/snap_route0000000001/source.tar.zst`,
     archiveDigest: "sha256:sourcearchive",
     archiveSizeBytes: 42,
     fetchedByRunId: "ssr_route0000000001",
@@ -418,12 +422,7 @@ output "attachments_bucket" {
   const checkedBody = await checked.json();
   expect(checkedBody.report).toMatchObject({
     level: "ready",
-    findings: [
-      {
-        code: "provider_connection_may_be_required",
-        severity: "info",
-      },
-    ],
+    findings: [],
     providers: [{ source: "hashicorp/aws", aliases: [], allowed: true }],
     resources: [{ type: "aws_s3_bucket", count: 1, allowed: true }],
   });
@@ -454,7 +453,7 @@ test("PATCH /internal/v1/sources updates fields", async () => {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
-      spaceId: "space_1",
+      workspaceId: "ws_001",
       name: "r",
       url: "https://github.com/acme/repo.git",
     }),
@@ -482,7 +481,7 @@ test("source id with an unsupported shape is rejected (400)", async () => {
   expect(response.status).toBe(400);
 });
 
-test("GET /internal/v1/sources requires spaceId (400)", async () => {
+test("GET /internal/v1/sources requires workspaceId (400)", async () => {
   const app = await makeApp();
   const response = await app.request("/internal/v1/sources", {
     headers: { authorization: "Bearer scoped-token" },

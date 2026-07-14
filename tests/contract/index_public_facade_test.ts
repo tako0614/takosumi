@@ -1,34 +1,27 @@
 /**
  * Root `takosumi-contract` exports the public contract facade. Internal ledger
- * fields such as InstallConfig.installType and templateBinding remain available
- * from the explicit `takosumi-contract/install-configs` subpath only.
+ * pointers remain available only from their explicit contract subpaths.
  */
 import { expect, test } from "bun:test";
 
 import type {
-  Deployment as RootDeployment,
   InstallConfig as RootInstallConfig,
-  Installation as RootInstallation,
-  OutputSnapshot as RootOutputSnapshot,
+  Capsule as RootCapsule,
+  Output as RootOutput,
+  PublicStateVersion as RootStateVersion,
 } from "../../contract/index.ts";
 
-test("root contract facade exports public Installation projections", async () => {
+test("root contract facade exports public Capsule projections", async () => {
   const source = await Bun.file(
     new URL("../../contract/index.ts", import.meta.url),
   ).text();
-  expect(source).not.toContain('export * from "../../contract/installations.ts"');
+  expect(source).not.toContain('export * from "./installations.ts"');
   const deployControlSource = await Bun.file(
     new URL("../../contract/deploy-control-api.ts", import.meta.url),
   ).text();
   expect(deployControlSource).not.toContain(
-    'export * from "../../contract/installations.ts"',
+    'export * from "./installations.ts"',
   );
-  expect(source).not.toContain("InstallationProviderEnvBindingSet");
-  expect(deployControlSource).not.toContain(
-    "InstallationProviderEnvBindingSet",
-  );
-  expect(source).not.toContain("ProviderEnvStatus");
-  expect(deployControlSource).not.toContain("ProviderEnvStatus");
   expect(source).not.toContain('export * from "../../contract/api-surface.ts"');
   expect(source).not.toContain("INTERNAL_V1_PREFIX");
   expect(source).not.toContain("DeployRequest");
@@ -37,21 +30,19 @@ test("root contract facade exports public Installation projections", async () =>
   const config = {
     id: "cfg_public",
     name: "public",
-    sourceKind: "generic_capsule",
-    trustLevel: "space",
     variableMapping: {},
     outputAllowlist: {},
     policy: {},
     createdAt: "2026-06-08T00:00:00.000Z",
     updatedAt: "2026-06-08T00:00:00.000Z",
   } satisfies RootInstallConfig;
-  expect("installType" in config).toBe(false);
-  expect("templateBinding" in config).toBe(false);
-  expect(config.sourceKind).toBe("generic_capsule");
+  expect("runnerId" in config).toBe(false);
+  expect("internal" in config).toBe(false);
 
-  const installation = {
-    id: "inst_public",
-    spaceId: "space_public",
+  const capsule = {
+    id: "cap_public",
+    workspaceId: "ws_public",
+    projectId: "prj_public",
     name: "public",
     slug: "public",
     sourceId: "src_public",
@@ -61,42 +52,38 @@ test("root contract facade exports public Installation projections", async () =>
     status: "pending",
     createdAt: "2026-06-08T00:00:00.000Z",
     updatedAt: "2026-06-08T00:00:00.000Z",
-  } satisfies RootInstallation;
-  expect("installType" in installation).toBe(false);
-  expect("currentOutputSnapshotId" in installation).toBe(false);
+  } satisfies RootCapsule;
+  expect("currentOutputId" in capsule).toBe(false);
+  expect("autoUpdateAttemptSourceSnapshotId" in capsule).toBe(false);
 
-  const deployment = {
-    id: "dep_public",
-    spaceId: "space_public",
-    installationId: "inst_public",
+  const stateVersion = {
+    id: "state_public",
+    workspaceId: "ws_public",
+    capsuleId: "cap_public",
     environment: "prod",
-    applyRunId: "run_apply",
-    sourceSnapshotId: "snap_public",
-    stateGeneration: 1,
-    outputsPublic: { launch_url: "https://example.test" },
-    status: "active",
+    generation: 1,
+    createdByRunId: "run_apply",
     createdAt: "2026-06-08T00:00:00.000Z",
-  } satisfies RootDeployment;
-  expect("outputSnapshotId" in deployment).toBe(false);
+  } satisfies RootStateVersion;
+  expect("stateRef" in stateVersion).toBe(false);
+  expect("digest" in stateVersion).toBe(false);
 
-  const outputSnapshot = {
+  const output = {
     id: "osnap_public",
-    spaceId: "space_public",
-    installationId: "inst_public",
+    workspaceId: "ws_public",
+    capsuleId: "cap_public",
     stateGeneration: 1,
     publicOutputs: { launch_url: "https://example.test" },
-    spaceOutputs: { endpoint: "https://internal.example.test" },
+    workspaceOutputs: { endpoint: "https://internal.example.test" },
     outputDigest: `sha256:${"a".repeat(64)}`,
     createdAt: "2026-06-08T00:00:00.000Z",
-  } satisfies RootOutputSnapshot;
-  expect("rawOutputArtifactKey" in outputSnapshot).toBe(false);
+  } satisfies RootOutput;
+  expect("rawArtifactRef" in output).toBe(false);
 });
 
 const publicConfig = {
   id: "cfg_public",
   name: "public",
-  sourceKind: "generic_capsule",
-  trustLevel: "space",
   variableMapping: {},
   outputAllowlist: {},
   policy: {},
@@ -104,15 +91,16 @@ const publicConfig = {
   updatedAt: "2026-06-08T00:00:00.000Z",
 } satisfies RootInstallConfig;
 
-// @ts-expect-error root public InstallConfig must not expose the internal ledger discriminator.
+// @ts-expect-error root public InstallConfig must not expose runner selection.
 ({
   ...publicConfig,
-  installType: "opentofu_module",
+  runnerId: "runner_private",
 }) satisfies RootInstallConfig;
 
-const publicInstallation = {
-  id: "inst_public",
-  spaceId: "space_public",
+const publicCapsule = {
+  id: "cap_public",
+  workspaceId: "ws_public",
+  projectId: "prj_public",
   name: "public",
   slug: "public",
   sourceId: "src_public",
@@ -122,53 +110,44 @@ const publicInstallation = {
   status: "pending",
   createdAt: "2026-06-08T00:00:00.000Z",
   updatedAt: "2026-06-08T00:00:00.000Z",
-} satisfies RootInstallation;
+} satisfies RootCapsule;
 
-// @ts-expect-error root public Installation must not expose the internal ledger discriminator.
+// @ts-expect-error root public Capsule must not expose raw Output pointers.
 ({
-  ...publicInstallation,
-  installType: "opentofu_module",
-}) satisfies RootInstallation;
+  ...publicCapsule,
+  currentOutputId: "osnap_secret_1",
+}) satisfies RootCapsule;
 
-// @ts-expect-error root public Installation must not expose raw OutputSnapshot pointers.
-({
-  ...publicInstallation,
-  currentOutputSnapshotId: "osnap_secret_1",
-}) satisfies RootInstallation;
-
-const publicDeployment = {
-  id: "dep_public",
-  spaceId: "space_public",
-  installationId: "inst_public",
+const publicStateVersion = {
+  id: "state_public",
+  workspaceId: "ws_public",
+  capsuleId: "cap_public",
   environment: "prod",
-  applyRunId: "run_apply",
-  sourceSnapshotId: "snap_public",
-  stateGeneration: 1,
-  outputsPublic: { launch_url: "https://example.test" },
-  status: "active",
+  generation: 1,
+  createdByRunId: "run_apply",
   createdAt: "2026-06-08T00:00:00.000Z",
-} satisfies RootDeployment;
+} satisfies RootStateVersion;
 
-// @ts-expect-error root public Deployment must not expose raw OutputSnapshot pointers.
+// @ts-expect-error root public StateVersion must not expose storage coordinates.
 ({
-  ...publicDeployment,
-  outputSnapshotId: "osnap_secret_1",
-}) satisfies RootDeployment;
+  ...publicStateVersion,
+  stateRef: "workspaces/ws_public/capsules/cap_public/state.tfstate.enc",
+}) satisfies RootStateVersion;
 
-const publicOutputSnapshot = {
+const publicOutput = {
   id: "osnap_public",
-  spaceId: "space_public",
-  installationId: "inst_public",
+  workspaceId: "ws_public",
+  capsuleId: "cap_public",
   stateGeneration: 1,
   publicOutputs: { launch_url: "https://example.test" },
-  spaceOutputs: { endpoint: "https://internal.example.test" },
+  workspaceOutputs: { endpoint: "https://internal.example.test" },
   outputDigest: `sha256:${"a".repeat(64)}`,
   createdAt: "2026-06-08T00:00:00.000Z",
-} satisfies RootOutputSnapshot;
+} satisfies RootOutput;
 
-// @ts-expect-error root public OutputSnapshot must not expose raw artifact handles.
+// @ts-expect-error root public Output must not expose raw artifact handles.
 ({
-  ...publicOutputSnapshot,
-  rawOutputArtifactKey:
-    "spaces/space_public/installations/inst_public/runs/run_apply/outputs.raw.json.enc",
-}) satisfies RootOutputSnapshot;
+  ...publicOutput,
+  rawArtifactRef:
+    "workspaces/ws_public/capsules/cap_public/runs/run_apply/outputs.raw.json.enc",
+}) satisfies RootOutput;

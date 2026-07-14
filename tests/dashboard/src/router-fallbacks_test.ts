@@ -72,7 +72,7 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     for (const p of [
       "/",
       "/home",
-      "/installations",
+      "/capsules",
       "/connections",
       "/billing",
       "/runs",

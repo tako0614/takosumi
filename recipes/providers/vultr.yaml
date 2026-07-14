@@ -1,6 +1,6 @@
 id: vultr
 display_name: Vultr
-provider_rule: vultr
+secret_partition: provider-credentials
 terraform_source:
   - vultr/vultr
   - registry.opentofu.org/vultr/vultr
@@ -10,6 +10,13 @@ required_env_groups:
   - [VULTR_API_KEY]
 auth_modes:
   api_key:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: API key, ja: API キー }
+    input_hints:
+      VULTR_API_KEY:
+        label: { en: API key, ja: API キー }
+        required: true
     env:
       VULTR_API_KEY:
         from: secret

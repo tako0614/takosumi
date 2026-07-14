@@ -1,6 +1,6 @@
 id: aws
 display_name: AWS
-provider_rule: aws
+secret_partition: provider-credentials
 terraform_source:
   - hashicorp/aws
   - registry.opentofu.org/hashicorp/aws
@@ -18,6 +18,37 @@ required_env_groups:
   - [AWS_WEB_IDENTITY_TOKEN_FILE, AWS_ROLE_ARN]
 auth_modes:
   static_keys:
+    presentation:
+      show_in_connection_setup: true
+      display_name:
+        en: Static access keys
+        ja: 静的アクセスキー
+      setup_guide:
+        url: https://console.aws.amazon.com/iam/home#/users
+        steps:
+          - en: Open IAM and select the user used for OpenTofu.
+            ja: IAM を開き、OpenTofu で使うユーザーを選びます。
+          - en: Create an access key with only the permissions this stack needs.
+            ja: この Stack に必要な権限だけを持つアクセスキーを作成します。
+          - en: Copy the access key ID and secret access key into this form.
+            ja: アクセスキー ID とシークレットアクセスキーをこのフォームへ入力します。
+    input_hints:
+      AWS_ACCESS_KEY_ID:
+        label: { en: Access key ID, ja: アクセスキー ID }
+        placeholder: AKIA...
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        label: { en: Secret access key, ja: シークレットアクセスキー }
+        required: true
+      AWS_SESSION_TOKEN:
+        label: { en: Session token, ja: セッショントークン }
+        required: false
+      AWS_REGION:
+        label: { en: Region, ja: リージョン }
+        placeholder: ap-northeast-1
+        required: false
+      AWS_DEFAULT_REGION:
+        hidden: true
     env:
       AWS_ACCESS_KEY_ID:
         from: secret

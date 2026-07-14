@@ -28,8 +28,8 @@ test("audit store appends once and queries in append order", async () => {
   ]);
   assert.deepEqual(
     (await store.list({
-      spaceId: "space_a",
-      groupId: "group_a",
+      workspaceId: "workspace_a",
+      runGroupId: "run_group_a",
       targetType: "runtime",
       since: "2026-04-27T00:05:00.000Z",
       until: "2026-04-27T00:15:00.000Z",
@@ -53,8 +53,8 @@ function event(
     eventClass: type.startsWith("resources") ? "compliance" : "security",
     type,
     severity: "info",
-    spaceId: "space_a",
-    groupId: "group_a",
+    workspaceId: "workspace_a",
+    runGroupId: "run_group_a",
     targetType: type.startsWith("runtime") ? "runtime" : "resource",
     targetId,
     payload: { targetId },

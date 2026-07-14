@@ -17,7 +17,7 @@
  *     secret is stored hashed and returned exactly once at creation.
  */
 
-import { API_V1_PREFIX, INTERNAL_V1_PREFIX } from "./api-surface.ts";
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
 /**
  * GitHub-agnostic Git coordinate. The only repository identity Takosumi core
@@ -42,8 +42,6 @@ export type SourceStatus = "active" | "disabled" | "error";
 export interface Source {
   readonly id: string;
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId: string;
   readonly name: string;
   readonly url: string;
   readonly defaultRef: string;
@@ -62,25 +60,12 @@ export interface Source {
 }
 
 /**
- * How a {@link SourceSnapshot} archive came to exist.
- *
- *   - `git`    — fetched from a registered {@link Source} by a `source_sync`
- *                run in the Runner Container (the historical default).
- *   - `upload` — retired public upload, retained for internal/operator
- *                compatibility with existing source-less Capsules. This is not
- *                the standard app-install product path.
- *   - `artifact` — legacy/operator HTTPS ingest of a prepared Capsule source
- *                  archive with digest verification. Despite the wire name, it
- *                  is not a deployable app artifact contract.
- */
-export type SourceSnapshotOrigin = "git" | "upload" | "artifact";
-
-/**
- * Bounded observation of the optional repository-owned install presentation
+ * Bounded observation of the optional repository-owned display presentation
  * document at `.well-known/tcs.json` from the same Git commit as a
  * {@link SourceSnapshot}. The selected OpenTofu module remains the executable
- * archive; this observation only keeps repository-root presentation metadata
- * immutable when the Source points at a nested module path.
+ * archive; this observation only keeps repository-root display metadata
+ * immutable when the Source points at a nested module path. It never selects
+ * that path or carries InstallConfig execution declarations.
  */
 export type RepositoryInstallMetadataSnapshot =
   | { readonly status: "absent" }
@@ -93,42 +78,28 @@ export type RepositoryInstallMetadataSnapshot =
 /**
  * Immutable archive snapshot of a Capsule pinned to a content digest.
  *
- * For `origin: "git"` it is produced by a `source_sync` run in the Runner
- * Container (the worker only records the result) and `sourceId` references the
- * registered {@link Source}. For `origin: "upload"` it was produced by the
- * retired public upload flow or the internal/operator compatibility seam:
- * `sourceId` is absent and `url`/`ref`/`resolvedCommit` carry self-describing
- * upload identity (`url` under the Takosumi upload namespace, `ref = "upload"`,
- * `resolvedCommit = archiveDigest`) so existing readers that treat these as
- * descriptive strings keep working unchanged. For `origin: "artifact"` the
- * snapshot was fetched from a supplied HTTPS prepared source archive URL;
- * `ref = "artifact"` and `resolvedCommit = archiveDigest`.
+ * A snapshot is produced only by a `source_sync` run for a registered
+ * {@link Source}. `sourceId` is therefore required and is the sole source
+ * authority. The checked-out bytes may be copied to object storage for
+ * immutable runner transport, but that archive is not an alternate Source.
  *
- * `archiveObjectKey` is the canonical R2_SOURCE pointer for the bytes. New git
- * syncs normally write to
- * `spaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst`,
- * uploads normally write to `spaces/{workspaceId}/uploads/{snapshotId}/source.tar.zst`,
- * and legacy externally prepared source archives normally write to
- * `spaces/{workspaceId}/artifact-snapshots/{snapshotId}/source.tar.zst`.
- * A later git SourceSnapshot for the same resolved commit may deliberately
- * point at an earlier snapshot's object key to reuse the immutable archive
- * bytes; consumers must trust `archiveObjectKey` rather than reconstructing it
- * from this snapshot's id.
+ * `archiveRef` is an opaque host-allocated reference for the bytes. A later git
+ * SourceSnapshot for the same resolved commit may deliberately reuse an earlier
+ * snapshot's reference; consumers must pass it back to the configured storage
+ * adapter and never reconstruct it from snapshot identity.
  */
 export interface SourceSnapshot {
   readonly id: string;
-  readonly origin: SourceSnapshotOrigin;
-  /** Owning Workspace. Always present (derived from the Source for `git`). */
+  readonly origin: "git";
+  /** Owning Workspace, derived from the registered Source. */
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId: string;
-  /** Registered Source. Present for `git`, absent for `upload`. */
-  readonly sourceId?: string;
+  /** Registered Git Source that produced this snapshot. */
+  readonly sourceId: string;
   readonly url: string;
   readonly ref: string;
   readonly resolvedCommit: string;
   readonly path: string;
-  readonly archiveObjectKey: string;
+  readonly archiveRef: string;
   readonly archiveDigest: string;
   readonly archiveSizeBytes: number;
   /**
@@ -150,15 +121,13 @@ export interface SourceSyncRun {
   readonly id: string;
   readonly kind: "source_sync";
   readonly workspaceId: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId: string;
   readonly sourceId: string;
   /** The {@link GitAddress} this run resolved (path included). */
   readonly url: string;
   readonly ref: string;
   readonly path: string;
-  /** Precomputed archive object key the runner uploads the archive to. */
-  readonly archiveObjectKey: string;
+  /** Host-allocated opaque reference the runner publishes the archive to. */
+  readonly archiveRef: string;
   /**
    * Why this sync was requested. `observe` is the default for webhook and
    * scheduled reconciliation. `manual_plan` refreshes an immutable snapshot
@@ -186,6 +155,8 @@ export interface SourceSyncRun {
    * phase names and durations, never source contents or credential values.
    */
   readonly phaseTimings?: readonly SourceSyncPhaseTiming[];
+  /** Stable machine-readable terminal reason; never inferred from `error`. */
+  readonly errorCode?: string;
   readonly error?: string;
 }
 
@@ -295,50 +266,11 @@ export const COMPATIBILITY_REPORT_PATH = (id: string): string =>
 export const SOURCE_HOOK_PATH = (id: string): string =>
   `/hooks/sources/${encodeURIComponent(id)}`;
 
-/**
- * Retired public direct-upload ingest path. The public accounts handler returns
- * `410 gone`; upload ingest remains available only on the internal/operator
- * compatibility seam.
- *
- * @deprecated Use a Git URL Source and Capsule plan/apply.
- */
-export const SPACE_UPLOADS_PATH = (workspaceId: string): string =>
-  `${API_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/uploads`;
-
-/** INTERNAL upload ingest seam path (`/internal/v1`, reached in-process). */
-export const INTERNAL_SPACE_UPLOADS_PATH = (workspaceId: string): string =>
-  `${INTERNAL_V1_PREFIX}/workspaces/${encodeURIComponent(workspaceId)}/uploads`;
-
-/**
- * Retired public ingest for a digest-pinned prepared Capsule source archive.
- * The public accounts handler returns `410 gone`; prepared-source ingest remains
- * available only on the internal/operator compatibility seam.
- *
- * Legacy/operator ingest body is JSON containing an HTTPS `url` plus the
- * expected `sha256:` digest; Takosumi fetches the archive, verifies the digest,
- * stores it as a SourceSnapshot archive, and records `origin = "artifact"`.
- * This is not a deployable app artifact fetch path.
- *
- * @deprecated Use a Git URL Source and Capsule plan/apply.
- */
-export const SPACE_ARTIFACT_SNAPSHOTS_PATH = (workspaceId: string): string =>
-  `${API_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/artifact-snapshots`;
-
-/** INTERNAL artifact ingest seam path (`/internal/v1`, reached in-process). */
-export const INTERNAL_SPACE_ARTIFACT_SNAPSHOTS_PATH = (
-  workspaceId: string,
-): string =>
-  `${INTERNAL_V1_PREFIX}/workspaces/${encodeURIComponent(
-    workspaceId,
-  )}/artifact-snapshots`;
-
 export interface CreateSourceRequest {
-  readonly workspaceId?: string;
-  /** @deprecated Use workspaceId. */
-  readonly spaceId?: string;
+  readonly workspaceId: string;
   readonly name: string;
   readonly url: string;
-  /** Defaults to `"main"` when omitted. */
+  /** Defaults to Git's symbolic `HEAD` when omitted. */
   readonly defaultRef?: string;
   /** Defaults to `"."` when omitted. */
   readonly defaultPath?: string;
@@ -391,38 +323,4 @@ export interface ListSourceSnapshotsResponse {
    * Additive: readers that ignore it are unaffected.
    */
   readonly nextCursor?: string;
-}
-
-/**
- * Optional metadata accepted alongside an upload. `path` is the Capsule path
- * within the uploaded tree (defaults to `"."`). The archive bytes themselves
- * are the request body; values here are advisory descriptors only.
- */
-export interface UploadSnapshotRequest {
-  readonly path?: string;
-}
-
-/** Response of `POST {@link SPACE_UPLOADS_PATH}`: the recorded upload snapshot. */
-export interface UploadSnapshotResponse {
-  readonly snapshot: SourceSnapshot;
-}
-
-export type ArtifactSnapshotFormat = "tar.zst";
-
-/**
- * Metadata for legacy digest-pinned prepared source archive ingest. `url` must
- * be an HTTPS source archive URL with no embedded credentials. `digest` must be
- * the expected SHA-256 digest (`sha256:<64 lowercase hex>` accepted
- * case-insensitively).
- */
-export interface ArtifactSnapshotRequest {
-  readonly url: string;
-  readonly digest: string;
-  readonly format?: ArtifactSnapshotFormat;
-  readonly path?: string;
-}
-
-/** Response of `POST {@link SPACE_ARTIFACT_SNAPSHOTS_PATH}`. */
-export interface ArtifactSnapshotResponse {
-  readonly snapshot: SourceSnapshot;
 }

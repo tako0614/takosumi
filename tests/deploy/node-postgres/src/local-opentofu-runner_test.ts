@@ -32,11 +32,11 @@ test("local OpenTofu runner executes generic release commands in restored source
     const result = await runner.release!({
       runId: "release_apply_1",
       applyRunId: "apply_1",
-      installationId: "inst_1",
-      deploymentId: "dep_1",
+      capsuleId: "inst_1",
+      stateVersionId: "state_1",
       sourceSnapshot: {
         id: "snap_1",
-        archiveObjectKey: "sources/snap_1/source.tar.zst",
+        archiveRef: "sources/snap_1/source.tar.zst",
         archiveDigest,
       } as never,
       nonSensitiveOutputs: {
@@ -45,6 +45,19 @@ test("local OpenTofu runner executes generic release commands in restored source
       credentials: {
         env: {
           CLOUDFLARE_API_TOKEN: "fixture-cloudflare-release-token",
+        },
+        manifest: {
+          bindings: [
+            {
+              providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+              connectionId: "conn_release_fixture",
+              recipeId: "cloudflare",
+              authMode: "api_token",
+              envNames: ["CLOUDFLARE_API_TOKEN"],
+              fileEnvNames: [],
+              requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
+            },
+          ],
         },
       },
       commands: [

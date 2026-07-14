@@ -28,13 +28,13 @@ test("deriveTakosumiSubject separates upstream issuers", async () => {
     upstreamIssuer: "https://github.com",
     upstreamSubject: "12345",
   });
-  const google = await deriveTakosumiSubject({
+  const secondIssuer = await deriveTakosumiSubject({
     secret: "dev-secret",
-    upstreamIssuer: "https://accounts.google.com",
+    upstreamIssuer: "https://idp-b.example.test",
     upstreamSubject: "12345",
   });
 
-  expect(github).not.toEqual(google);
+  expect(github).not.toEqual(secondIssuer);
 });
 
 test("derivePairwiseSubject separates OIDC clients", async () => {

@@ -20,6 +20,7 @@ import type {
   OpenTofuModuleSource,
   RunWorkspace,
   GeneratedRoot,
+  OperatorModule,
   CommandContext,
   PlanResponseOptions,
   SourceBuildConfig,
@@ -65,13 +66,17 @@ import {
 } from "./artifacts.ts";
 import {
   parseOperation,
+  parseRefreshOnly,
   parseSource,
   parseGeneratedRoot,
+  parseOperatorModule,
+  parseVariables,
   parseSourceBuild,
   assertNoLegacyArtifactDispatch,
   parseRunnerProfile,
   parseRequiredProviders,
   parseProviderInstallationPolicy,
+  parsePlanScopeSelectors,
   parseOutputAllowlist,
   parsePlanArtifact,
   verifyPlanArtifact,
@@ -99,39 +104,51 @@ export async function runPlan(
   if (generatedRoot) {
     return await runGeneratedRootPlan(runId, request, generatedRoot);
   }
-  throw new Error("generatedRoot is required for OpenTofu plan runs");
+  if (parseOperatorModule(request)) {
+    throw new Error("operatorModule requires a generated root");
+  }
+  return await runDirectRootPlan(runId, request);
 }
 
-// Generated-root path (§7): the OpenTofu surface is the generated root module.
-// Official catalog modules and normalized Capsules arrive as
-// generatedRoot.moduleFiles. Git-sourced Capsules without moduleFiles use the
-// restored SourceSnapshot module as the child module.
+// Generated-root path: used only when explicit provider alias/configuration
+// requires a child-module wrapper, or by an explicit Resource Shape operator
+// module. Ordinary Git Capsules execute their selected module as the root.
 export async function runGeneratedRootPlan(
   runId: string,
   request: unknown,
   generatedRoot: GeneratedRoot,
 ): Promise<JsonRecord> {
   const operation = parseOperation(request);
+  const refreshOnly = parseRefreshOnly(request);
   assertNoLegacyArtifactDispatch(request);
   const source = parseSource(request);
   const sourceBuild = parseSourceBuild(request);
   const runnerProfile = parseRunnerProfile(request);
   const outputAllowlist = parseOutputAllowlist(request);
+  const operatorModule = parseOperatorModule(request);
+  const scopeSelectors = parsePlanScopeSelectors(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
 
   const workspace = await prepareGeneratedRootWorkspace(runId);
   let sourceCommit: string | undefined;
   let buildLog: string | undefined;
 
-  if (generatedRoot.moduleFiles) {
+  if (operatorModule) {
     if (sourceBuild) {
       throw new Error(
-        "sourceBuild requires a Git, prepared, or local Source module",
+        "sourceBuild requires a restored Git SourceSnapshot module",
       );
     }
-    await materializeGeneratedRootFromFiles(workspace, generatedRoot);
+    await materializeGeneratedRootFromFiles(
+      workspace,
+      generatedRoot,
+      operatorModule,
+    );
   } else {
-    await ensureSourceAvailable(source, workspace.sourceRoot, commandContext);
+    if (source.kind === "operator_module") {
+      throw new Error("operator_module source requires operatorModule");
+    }
+    await ensureSourceAvailable(source, workspace.sourceRoot);
     buildLog = await runSourceBuild(sourceBuild, workspace.sourceRoot, {
       ...(commandContext.timeoutMs
         ? { timeoutMs: commandContext.timeoutMs }
@@ -185,9 +202,11 @@ export async function runGeneratedRootPlan(
       workspace.generatedRootDir,
       {
         operation,
+        ...(refreshOnly ? { refreshOnly: true } : {}),
         commandContext: preparedCredentials.context,
         requiredProviders,
         ...(outputAllowlist ? { outputAllowlist } : {}),
+        ...(scopeSelectors.length > 0 ? { scopeSelectors } : {}),
         ...(parseProviderInstallationPolicy(request)
           ? {
               providerInstallationPolicy:
@@ -205,6 +224,91 @@ export async function runGeneratedRootPlan(
   }
 }
 
+/** Execute the restored Git SourceSnapshot module as the OpenTofu root. */
+export async function runDirectRootPlan(
+  runId: string,
+  request: unknown,
+): Promise<JsonRecord> {
+  const operation = parseOperation(request);
+  const refreshOnly = parseRefreshOnly(request);
+  assertNoLegacyArtifactDispatch(request);
+  const source = parseSource(request);
+  if (source.kind === "operator_module") {
+    throw new Error("operator_module source requires a generated root");
+  }
+  const sourceBuild = parseSourceBuild(request);
+  const runnerProfile = parseRunnerProfile(request);
+  const outputAllowlist = parseOutputAllowlist(request);
+  const scopeSelectors = parsePlanScopeSelectors(request);
+  const commandContext = commandContextFromRequest(request, runnerProfile);
+  const workspace = workspaceForRun(runId);
+  await mkdir(workspace.root, { recursive: true });
+  await ensureSourceAvailable(source, workspace.sourceRoot);
+  const buildLog = await runSourceBuild(sourceBuild, workspace.sourceRoot, {
+    ...(commandContext.timeoutMs
+      ? { timeoutMs: commandContext.timeoutMs }
+      : {}),
+  });
+  const moduleDir = resolveModulePath(workspace.sourceRoot, source.modulePath);
+  await assertDirectory(moduleDir, "source module directory");
+  await assertRealPathInsideSourceRoot(
+    moduleDir,
+    workspace.sourceRoot,
+    "source module directory",
+  );
+  await restoreUploadedState(workspace, moduleDir);
+  await writeModuleInfo(workspace, moduleDir);
+  const variableFilePath = join(workspace.root, "run-inputs.tfvars.json");
+  await writeFile(
+    variableFilePath,
+    `${JSON.stringify(parseVariables(request))}\n`,
+  );
+  const preparedCredentials = await prepareProviderCredentialFiles(
+    commandContext,
+    workspace,
+  );
+  try {
+    const requiredProviders = await requiredProvidersForGeneratedRoot(
+      request,
+      moduleDir,
+    );
+    assertRunnerPolicyBeforeInit(
+      request,
+      runnerProfile,
+      preparedCredentials.context,
+      {
+        allowProviderFreeGeneratedRoot:
+          await generatedRootTreeHasNoProviderUsage(moduleDir),
+        requiredProviders,
+      },
+    );
+    const sourceCommit =
+      source.kind === "git"
+        ? (source.commit ??
+          (await gitRevParseHead(workspace.sourceRoot, commandContext)))
+        : undefined;
+    return await initPlanAndBuildResponse(runId, workspace, moduleDir, {
+      operation,
+      ...(refreshOnly ? { refreshOnly: true } : {}),
+      commandContext: preparedCredentials.context,
+      requiredProviders,
+      variableFilePath,
+      ...(outputAllowlist ? { outputAllowlist } : {}),
+      ...(scopeSelectors.length > 0 ? { scopeSelectors } : {}),
+      ...(parseProviderInstallationPolicy(request)
+        ? {
+            providerInstallationPolicy:
+              parseProviderInstallationPolicy(request),
+          }
+        : {}),
+      ...(buildLog ? { buildLog } : {}),
+      extra: { ...(sourceCommit ? { sourceCommit } : {}) },
+    });
+  } finally {
+    await preparedCredentials.cleanup();
+  }
+}
+
 // Shared init+plan+show pipeline for generated-root lanes. `moduleDir` is the
 // tofu root, normally /work/generated-root.
 export async function initPlanAndBuildResponse(
@@ -214,6 +318,9 @@ export async function initPlanAndBuildResponse(
   options: PlanResponseOptions,
 ): Promise<JsonRecord> {
   const { operation } = options;
+  if (options.refreshOnly && operation === "destroy") {
+    throw new Error("refreshOnly cannot be combined with destroy");
+  }
   const timer = new RunnerPhaseTimer();
   const strictMirrorInit = await prepareStrictProviderMirrorInit(
     workspace,
@@ -246,6 +353,10 @@ export async function initPlanAndBuildResponse(
         "tofu",
         "plan",
         ...(operation === "destroy" ? ["-destroy"] : []),
+        ...(options.refreshOnly ? ["-refresh-only"] : []),
+        ...(options.variableFilePath
+          ? [`-var-file=${options.variableFilePath}`]
+          : []),
         "-input=false",
         "-no-color",
         "-out",
@@ -305,7 +416,12 @@ export async function initPlanAndBuildResponse(
       providerInstallation,
       ...(planJson ? { summary: summaryFromPlanJson(planJson) } : {}),
       ...(planJson
-        ? { planResourceChanges: resourceChangesFromPlanJson(planJson) }
+        ? {
+            planResourceChanges: resourceChangesFromPlanJson(
+              planJson,
+              options.scopeSelectors,
+            ),
+          }
         : {}),
       ...(plannedOutputs ? { plannedOutputs } : {}),
       ...(planJsonArtifact
@@ -354,6 +470,7 @@ export async function runReviewedPlanApply(
   request: unknown,
 ): Promise<JsonRecord> {
   const generatedRoot = parseGeneratedRoot(request);
+  const operatorModule = parseOperatorModule(request);
   const sourceBuild = parseSourceBuild(request);
   const runnerProfile = parseRunnerProfile(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
@@ -361,17 +478,24 @@ export async function runReviewedPlanApply(
   const planArtifact = parsePlanArtifact(request);
   assertNoLegacyArtifactDispatch(request);
   await verifyPlanArtifact(workspace.planPath, planArtifact);
-  if (!generatedRoot) {
-    throw new Error("generatedRoot is required for OpenTofu apply runs");
+  if (!generatedRoot && operatorModule) {
+    throw new Error("operatorModule requires a generated root");
   }
-
-  const moduleDir = await restoreGeneratedRootApplyWorkspace(
-    runId,
-    parseSource(request),
-    commandContext,
-    generatedRoot,
-    sourceBuild,
-  );
+  const moduleDir = generatedRoot
+    ? await restoreGeneratedRootApplyWorkspace(
+        runId,
+        parseSource(request),
+        commandContext,
+        generatedRoot,
+        operatorModule,
+        sourceBuild,
+      )
+    : await restoreDirectRootApplyWorkspace(
+        runId,
+        parseSource(request),
+        commandContext,
+        sourceBuild,
+      );
   const timer = new RunnerPhaseTimer();
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
@@ -473,19 +597,27 @@ export async function restoreGeneratedRootApplyWorkspace(
   source: OpenTofuModuleSource,
   context: CommandContext,
   generatedRoot: GeneratedRoot,
+  operatorModule?: OperatorModule,
   sourceBuild?: SourceBuildConfig,
 ): Promise<string> {
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
-  if (generatedRoot.moduleFiles) {
+  if (operatorModule) {
     if (sourceBuild) {
       throw new Error(
-        "sourceBuild requires a Git, prepared, or local Source module",
+        "sourceBuild requires a restored Git SourceSnapshot module",
       );
     }
-    await materializeGeneratedRootFromFiles(workspace, generatedRoot);
+    await materializeGeneratedRootFromFiles(
+      workspace,
+      generatedRoot,
+      operatorModule,
+    );
   } else {
-    await ensureSourceAvailable(source, workspace.sourceRoot, context);
+    if (source.kind === "operator_module") {
+      throw new Error("operator_module source requires operatorModule");
+    }
+    await ensureSourceAvailable(source, workspace.sourceRoot);
     await runSourceBuild(sourceBuild, workspace.sourceRoot, {
       ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
     });
@@ -509,6 +641,33 @@ export async function restoreGeneratedRootApplyWorkspace(
   return workspace.generatedRootDir;
 }
 
+export async function restoreDirectRootApplyWorkspace(
+  runId: string,
+  source: OpenTofuModuleSource,
+  context: CommandContext,
+  sourceBuild?: SourceBuildConfig,
+): Promise<string> {
+  if (source.kind === "operator_module") {
+    throw new Error("operator_module source requires a generated root");
+  }
+  const workspace = workspaceForRun(runId);
+  await mkdir(workspace.root, { recursive: true });
+  await ensureSourceAvailable(source, workspace.sourceRoot);
+  await runSourceBuild(sourceBuild, workspace.sourceRoot, {
+    ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
+  });
+  const moduleDir = resolveModulePath(workspace.sourceRoot, source.modulePath);
+  await assertDirectory(moduleDir, "source module directory");
+  await assertRealPathInsideSourceRoot(
+    moduleDir,
+    workspace.sourceRoot,
+    "source module directory",
+  );
+  await restoreUploadedState(workspace, moduleDir);
+  await writeModuleInfo(workspace, moduleDir);
+  return moduleDir;
+}
+
 // Fresh per-run workspace for a generated-root plan. Preserve a SourceSnapshot
 // archive already restored by the DO under /work/source; only the
 // generated-root subtree is recreated.
@@ -524,7 +683,7 @@ export async function prepareGeneratedRootWorkspace(
 }
 
 // Writes the generated root module files and copies a child module into
-// ./template-module so the generated root's `source = "./template-module"`
+// ./module so the generated root's `source = "./module"`
 // resolves. For Git-sourced Capsules it is the restored SourceSnapshot module.
 export async function materializeGeneratedRootFromModule(
   workspace: RunWorkspace,
@@ -532,9 +691,9 @@ export async function materializeGeneratedRootFromModule(
   generatedRoot: GeneratedRoot,
 ): Promise<void> {
   await mkdir(workspace.generatedRootDir, { recursive: true });
-  await rm(workspace.templateModuleDir, { recursive: true, force: true });
+  await rm(workspace.childModuleDir, { recursive: true, force: true });
   await assertDirectory(moduleDir, "child module directory");
-  await cp(moduleDir, workspace.templateModuleDir, {
+  await cp(moduleDir, workspace.childModuleDir, {
     recursive: true,
   });
   for (const [name, content] of Object.entries(generatedRoot.files)) {
@@ -547,20 +706,21 @@ export async function materializeGeneratedRootFromModule(
 export async function materializeGeneratedRootFromFiles(
   workspace: RunWorkspace,
   generatedRoot: GeneratedRoot,
+  operatorModule: OperatorModule,
 ): Promise<void> {
-  if (!generatedRoot.moduleFiles || generatedRoot.moduleFiles.length === 0) {
-    throw new Error("generatedRoot.moduleFiles must be a non-empty array");
+  if (operatorModule.files.length === 0) {
+    throw new Error("operatorModule.files must be a non-empty array");
   }
   await mkdir(workspace.generatedRootDir, { recursive: true });
-  await rm(workspace.templateModuleDir, { recursive: true, force: true });
-  await mkdir(workspace.templateModuleDir, { recursive: true });
-  for (const file of generatedRoot.moduleFiles) {
-    assertSafeRelativePath(file.path, "generatedRoot.moduleFiles[].path");
-    const target = resolve(workspace.templateModuleDir, file.path);
+  await rm(workspace.childModuleDir, { recursive: true, force: true });
+  await mkdir(workspace.childModuleDir, { recursive: true });
+  for (const file of operatorModule.files) {
+    assertSafeRelativePath(file.path, "operatorModule.files[].path");
+    const target = resolve(workspace.childModuleDir, file.path);
     await mkdir(dirname(target), { recursive: true });
     await assertRealPathInsideSourceRoot(
       dirname(target),
-      workspace.templateModuleDir,
+      workspace.childModuleDir,
       "generated root child module file directory",
     );
     await writeFile(target, file.text);
@@ -701,8 +861,8 @@ export async function readCapsuleCompatibilityFiles(
   // presentation contract lives at this well-known path and must be read from
   // the same immutable SourceSnapshot as the OpenTofu module. Keep it separate
   // from executable authority: compatibility analysis ignores non-.tf files,
-  // while the control plane may consume this bounded JSON document to render
-  // generic setup inputs.
+  // while the control plane may consume this bounded JSON document only for
+  // display text and icons.
   const metadataRelativePath = ".well-known/tcs.json";
   const metadataPath = resolve(repository, metadataRelativePath);
   try {

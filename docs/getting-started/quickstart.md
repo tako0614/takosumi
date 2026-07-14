@@ -16,15 +16,17 @@ Software としての動きを確認する場合は、まず OSS / local runner 
 ## OSS / local runner
 
 Takosumi OSS は既存の OpenTofu/Terraform provider をそのまま実行します。いちばん短い
-確認の流れは、Cloudflare API token などの認証情報を ProviderConnection に登録し、
-既存 provider の定義をそのまま plan / apply することです。
+確認の流れは、provider と credential を必要としない
+`examples/opentofu-basic` を Git Source として登録し、
+通常の plan / apply / destroy と Output 記録を確認することです。provider を使う module
+では、その provider 自身が定める認証情報を ProviderConnection に登録します。
 
 ### Prerequisites
 
 - Bun
 - OpenTofu CLI (`tofu`)
 - Git
-- provider credential (例: Cloudflare API token)
+- 選んだ module が provider 認証を必要とする場合だけ、その credential
 
 ### 1. Start the service
 
@@ -60,23 +62,23 @@ plan result
 apply approval
 ```
 
-### 3. ProviderConnection
+### 3. ProviderConnection (provider 認証が必要な場合)
 
 Credential は `.env` や manifest に書かず、ProviderConnection に保存します。
 
-```yaml
-connections:
-  cloudflare-main:
-    provider: cloudflare
-    auth_type: api_token
-    secrets:
-      api_token: sec_cloudflare_token
-    values:
-      account_id: xxxxx
+```bash
+takosumi connections create \
+  --provider registry.opentofu.org/example/example \
+  --recipe generic-env \
+  --auth-mode env \
+  --secret-partition provider-credentials \
+  --values-file <path-to-provider-credential-env-json>
 ```
 
-Run の実行中だけ、`CLOUDFLARE_API_TOKEN` などの環境変数やファイルが実行環境
-(runner sandbox) に渡されます。
+`example/example` は説明用の placeholder です。実際には module の
+`required_providers` と provider 公式ドキュメントに従って source と env/file 名を
+指定します。値は Run の実行中だけ runner sandbox に渡されます。provider 名から
+credential schema や RunnerProfile を推測しません。
 
 ### 4. Result
 

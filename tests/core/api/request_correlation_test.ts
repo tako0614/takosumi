@@ -116,7 +116,7 @@ test("request correlation records API request duration metrics", async () => {
   const monotonicValues = [10_000, 12_500];
   registerRequestCorrelation(app, {
     metricSink: observability,
-    metricTags: { environment: "test", runtime_cell_id: "cell_test" },
+    metricTags: { environment: "test", runner_profile_id: "runner_test" },
     now: () => new Date("2026-05-07T00:00:00.000Z"),
     monotonicNow: () => monotonicValues.shift() ?? 12.5,
   });
@@ -137,7 +137,7 @@ test("request correlation records API request duration metrics", async () => {
     environment: "test",
     method: "GET",
     route: "/items/:id",
-    runtime_cell_id: "cell_test",
+    runner_profile_id: "runner_test",
     status: "200",
   });
 });

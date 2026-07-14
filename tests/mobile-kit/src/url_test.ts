@@ -14,6 +14,21 @@ test("normalizeHostUrl canonicalizes host origins", () => {
   );
 });
 
+test("normalizeHostUrl requires HTTPS outside loopback development", () => {
+  expect(() => normalizeHostUrl("http://workspace.example")).toThrow(
+    "must use https except for loopback development hosts",
+  );
+  expect(() => normalizeHostUrl("http://192.168.1.20:8787")).toThrow(
+    "must use https except for loopback development hosts",
+  );
+  expect(() => normalizeHostUrl("https://user:secret@host.example")).toThrow(
+    "must not include credentials",
+  );
+  expect(normalizeHostUrl("http://127.0.0.1:8787/path")).toBe(
+    "http://127.0.0.1:8787",
+  );
+});
+
 test("hostEndpoint rejects cross-origin absolute endpoints", () => {
   expect(hostEndpoint("https://host.example", "/api/auth/me")).toBe(
     "https://host.example/api/auth/me",
@@ -21,9 +36,9 @@ test("hostEndpoint rejects cross-origin absolute endpoints", () => {
   expect(
     hostEndpoint(
       "https://host.example/base",
-      "https://host.example/api/mobile/push-registrations",
+      "https://host.example/api/notifications/pushers",
     ),
-  ).toBe("https://host.example/api/mobile/push-registrations");
+  ).toBe("https://host.example/api/notifications/pushers");
   expect(() =>
     hostEndpoint("https://host.example", "https://evil.example/api"),
   ).toThrow("Host endpoint must stay on the connected host.");
@@ -32,6 +47,7 @@ test("hostEndpoint rejects cross-origin absolute endpoints", () => {
 test("createTakosumiHostCenterUrl points at Host Center entry", () => {
   expect(
     createTakosumiHostCenterUrl({
+      hostCenterUrl: "https://operator.example/install",
       product: "notes-app",
       source: {
         git: "https://github.com/acme/notes.git",
@@ -41,10 +57,11 @@ test("createTakosumiHostCenterUrl points at Host Center entry", () => {
       returnUri: "notesapp://connect",
     }),
   ).toBe(
-    "https://app.takosumi.com/install?product=notes-app&return_uri=notesapp%3A%2F%2Fconnect&git=https%3A%2F%2Fgithub.com%2Facme%2Fnotes.git&ref=main&path=deploy%2Fopentofu",
+    "https://operator.example/install?product=notes-app&return_uri=notesapp%3A%2F%2Fconnect&git=https%3A%2F%2Fgithub.com%2Facme%2Fnotes.git&ref=main&path=deploy%2Fopentofu",
   );
   expect(() =>
     createTakosumiHostCenterUrl({
+      hostCenterUrl: "https://operator.example/install",
       product: "bad/product",
       source: { git: "https://github.com/acme/notes.git" },
       returnUri: "notesapp://connect",

@@ -14,13 +14,14 @@ import type {
   OpenTofuPlanResult,
   OpenTofuRunner,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   fakeProviderVault,
   FIXTURE_ARCHIVE_DIGEST,
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
-  seedInstallationModel,
+  seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -188,21 +189,23 @@ async function controlJson<T>(
 test("account session control routes execute plan and apply through the real OpenTofu controller", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
-  const deployStore = new InMemoryOpenTofuDeploymentStore();
+  const deployStore = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const { operations } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
-    opentofuDeploymentStore: deployStore,
+    opentofuControlStore: deployStore,
     opentofuRunner: runner,
     opentofuConnectionVault: fakeProviderVault() as never,
-    startWorkerDaemon: false,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
   });
 
-  const seeded = await seedInstallationModel(deployStore, {
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_route_e2e",
+    capsuleId: "cap_route_e2e",
     environment: "preview",
   });
-  await seedProviderConnections(deployStore, seeded.installation);
+  await seedProviderConnections(deployStore, seeded.capsule);
 
   const planBody = await controlJson<{
     readonly run: {
@@ -216,7 +219,7 @@ test("account session control routes execute plan and apply through the real Ope
       store: accountStore,
       cookie,
       method: "POST",
-      path: `/api/v1/capsules/${seeded.installation.id}/plan`,
+      path: `/api/v1/capsules/${seeded.capsule.id}/plan`,
     },
     201,
   );
@@ -224,15 +227,14 @@ test("account session control routes execute plan and apply through the real Ope
   expect(planBody.run.planDigest).toEqual(PLAN_DIGEST);
   expect(runner.planJobs).toHaveLength(1);
   expect(runner.planJobs[0]!.sourceArchive).toEqual({
-    objectKey:
-      "spaces/space_test/sources/src_fixture/snapshots/snap_fixture/source.tar.zst",
+    ref: "workspaces/ws_route_e2e/sources/src_fixture/snapshots/snap_fixture/source.tar.zst",
     digest: FIXTURE_ARCHIVE_DIGEST,
   });
-  expect(runner.planJobs[0]!.stateScope).toEqual({
-    workspaceId: "space_test",
-    capsuleId: seeded.installation.id,
+  expect(runner.planJobs[0]!.stateScope).toMatchObject({
+    workspaceId: "ws_route_e2e",
     environment: "preview",
     generation: 0,
+    subject: { kind: "capsule", id: seeded.capsule.id },
   });
 
   const applyBody = await controlJson<{
@@ -241,11 +243,6 @@ test("account session control routes execute plan and apply through the real Ope
       readonly id: string;
       readonly status: string;
       readonly currentStateGeneration?: number;
-    };
-    readonly deployment?: {
-      readonly installationId: string;
-      readonly outputsPublic?: Record<string, unknown>;
-      readonly outputSnapshotId?: string;
     };
   }>(
     {
@@ -259,23 +256,20 @@ test("account session control routes execute plan and apply through the real Ope
   );
   expect(applyBody.run.status).toEqual("succeeded");
   expect(applyBody.capsule).toMatchObject({
-    id: seeded.installation.id,
+    id: seeded.capsule.id,
     status: "active",
     currentStateGeneration: 1,
   });
-  expect(applyBody.deployment?.installationId).toEqual(seeded.installation.id);
-  expect(applyBody.deployment?.outputsPublic).toEqual({
-    launch_url: "https://hello.takosumi.test",
-  });
-  expect(applyBody.deployment?.outputSnapshotId).toBeUndefined();
+  expect("stateVersion" in applyBody).toBe(false);
+  expect(JSON.stringify(applyBody)).not.toContain("launch_url");
   expect(JSON.stringify(applyBody)).not.toContain("secret-output-token");
   expect(runner.applyJobs).toHaveLength(1);
   expect(runner.applyJobs[0]!.planRun.id).toEqual(planBody.run.id);
-  expect(runner.applyJobs[0]!.stateScope).toEqual({
-    workspaceId: "space_test",
-    capsuleId: seeded.installation.id,
+  expect(runner.applyJobs[0]!.stateScope).toMatchObject({
+    workspaceId: "ws_route_e2e",
     environment: "preview",
     generation: 1,
+    subject: { kind: "capsule", id: seeded.capsule.id },
   });
 
   const runBody = await controlJson<{
@@ -296,7 +290,7 @@ test("account session control routes execute plan and apply through the real Ope
   );
   expect(runBody.run).toMatchObject({
     id: applyBody.run.id,
-    capsuleId: seeded.installation.id,
+    capsuleId: seeded.capsule.id,
     status: "succeeded",
   });
 });

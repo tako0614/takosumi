@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import type { ActorContext, TargetPoolEntry } from "takosumi-contract";
+import type {
+  ActorContext,
+  TargetImplementationDescriptor,
+  TargetPoolEntry,
+} from "takosumi-contract";
 import {
   PluginResourceShapeAdapter,
   StubResourceShapeAdapter,
@@ -23,6 +27,7 @@ const target: TargetPoolEntry = {
 
 const plan: ResourceShapePlan = {
   shape: "ObjectBucket",
+  validatedSpec: { name: "assets", interfaces: ["s3_api"] },
   templateId: "cloudflare-r2-bucket",
   moduleFiles: [
     { path: "main.tf", text: 'output "bucket_name" { value = "assets" }' },
@@ -34,13 +39,31 @@ const plan: ResourceShapePlan = {
   ],
 };
 
+const moduleDescriptor: TargetImplementationDescriptor = {
+  shape: "ObjectBucket",
+  implementation: "operator.bucket.module",
+  interfaces: { object_store: "native", s3_api: "native" },
+  providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+  moduleTemplate: "cloudflare-r2-bucket",
+};
+
+const pluginDescriptor: TargetImplementationDescriptor = {
+  shape: "ObjectBucket",
+  implementation: "operator.bucket.plugin",
+  interfaces: { object_store: "native", s3_api: "native" },
+  plugin: "cloud-managed",
+};
+
 function applyInput(
   overrides: Partial<AdapterApplyInput> = {},
 ): AdapterApplyInput {
   return {
     resourceId: "tkrn:space_1:ObjectBucket:assets",
+    environment: "default",
+    stateGeneration: 1,
     plan,
     target,
+    implementation: moduleDescriptor,
     actor,
     ...overrides,
   };
@@ -51,8 +74,11 @@ function deleteInput(
 ): AdapterDeleteInput {
   return {
     resourceId: "tkrn:space_1:ObjectBucket:assets",
+    environment: "default",
+    stateGeneration: 1,
     plan,
     target,
+    implementation: moduleDescriptor,
     nativeResources: [{ type: "cloudflare_r2_bucket", id: "assets" }],
     actor,
     ...overrides,
@@ -69,6 +95,9 @@ test("plugin adapter routes plugin-backed operations to the injected binding", a
           calls.push({ url: request.url, body: await request.json() });
           if (request.url.endsWith("/delete"))
             return new Response(null, { status: 204 });
+          if (request.url.endsWith("/observe")) {
+            return Response.json({ status: "current", summary: "in sync" });
+          }
           return Response.json({
             summary: "managed",
             nativeResources: [{ type: "cloudflare_r2_bucket", id: "assets" }],
@@ -92,32 +121,90 @@ test("plugin adapter routes plugin-backed operations to the injected binding", a
   };
   const preview = await adapter.preview(
     applyInput({
-      implementationPlugin: "cloud-managed",
+      implementation: pluginDescriptor,
       resolvedConnections,
     }),
   );
   const applied = await adapter.apply(
     applyInput({
-      implementationPlugin: "cloud-managed",
+      implementation: pluginDescriptor,
       resolvedConnections,
     }),
   );
-  await adapter.delete(deleteInput({ implementationPlugin: "cloud-managed" }));
+  const imported = await adapter.importResource({
+    ...applyInput({
+      implementation: pluginDescriptor,
+      resolvedConnections,
+    }),
+    nativeId: "bucket-native-123",
+  });
+  const observed = await adapter.observe(
+    applyInput({
+      implementation: pluginDescriptor,
+      resolvedConnections,
+    }),
+  );
+  const refreshed = await adapter.refresh(
+    applyInput({
+      implementation: pluginDescriptor,
+      resolvedConnections,
+    }),
+  );
+  await adapter.delete(deleteInput({ implementation: pluginDescriptor }));
 
   expect(preview.summary).toBe("managed");
   expect(applied.outputs).toEqual({ bucket_name: "assets" });
+  expect(imported).toMatchObject({
+    summary: "managed",
+    outputs: { bucket_name: "assets" },
+  });
+  expect(observed).toEqual({ status: "current", summary: "in sync" });
+  expect(refreshed).toMatchObject({
+    summary: "managed",
+    outputs: { bucket_name: "assets" },
+  });
   expect(calls.map((call) => call.url)).toEqual([
     "https://takosumi-resource-shape-plugin.local/cloud-managed/preview",
     "https://takosumi-resource-shape-plugin.local/cloud-managed/apply",
+    "https://takosumi-resource-shape-plugin.local/cloud-managed/import",
+    "https://takosumi-resource-shape-plugin.local/cloud-managed/observe",
+    "https://takosumi-resource-shape-plugin.local/cloud-managed/refresh",
     "https://takosumi-resource-shape-plugin.local/cloud-managed/delete",
   ]);
   expect(calls[0]?.body).toMatchObject({
     action: "preview",
+    resource: {
+      kind: "ObjectBucket",
+      spec: { name: "assets", interfaces: ["s3_api"] },
+    },
     input: {
       resourceId: "tkrn:space_1:ObjectBucket:assets",
       resolvedConnections,
     },
   });
+});
+
+test("plugin adapter rejects malformed import responses", async () => {
+  const adapter = new PluginResourceShapeAdapter(
+    new StubResourceShapeAdapter(),
+    {
+      "cloud-managed": {
+        fetch() {
+          return Response.json({
+            summary: "missing outputs",
+            nativeResources: [{ type: "cloudflare_r2_bucket", id: "assets" }],
+          });
+        },
+      },
+    },
+  );
+
+  await expect(
+    adapter.importResource({
+      ...applyInput({ implementation: pluginDescriptor }),
+      nativeId: "bucket-native-123",
+    }),
+  ).rejects.toThrow("import response must include outputs");
 });
 
 test("plugin adapter falls back when no implementation plugin is selected", async () => {
@@ -137,7 +224,11 @@ test("plugin adapter fails closed when a selected plugin is not installed", asyn
     {},
   );
   await expect(
-    adapter.apply(applyInput({ implementationPlugin: "missing" })),
+    adapter.apply(
+      applyInput({
+        implementation: { ...pluginDescriptor, plugin: "missing" },
+      }),
+    ),
   ).rejects.toThrow('Resource Shape adapter plugin "missing" is not installed');
 });
 
@@ -154,7 +245,7 @@ test("plugin adapter rejects malformed preview responses", async () => {
   );
 
   await expect(
-    adapter.preview(applyInput({ implementationPlugin: "cloud-managed" })),
+    adapter.preview(applyInput({ implementation: pluginDescriptor })),
   ).rejects.toThrow("preview response must include nativeResources");
 });
 
@@ -173,6 +264,45 @@ test("plugin adapter rejects malformed apply responses", async () => {
   );
 
   await expect(
-    adapter.apply(applyInput({ implementationPlugin: "cloud-managed" })),
+    adapter.apply(applyInput({ implementation: pluginDescriptor })),
   ).rejects.toThrow("apply response must include outputs");
+});
+
+test("plugin adapter rejects malformed observe responses", async () => {
+  const adapter = new PluginResourceShapeAdapter(
+    new StubResourceShapeAdapter(),
+    {
+      "cloud-managed": {
+        fetch() {
+          return Response.json({ status: "maybe", summary: "unknown" });
+        },
+      },
+    },
+  );
+
+  await expect(
+    adapter.observe(applyInput({ implementation: pluginDescriptor })),
+  ).rejects.toThrow(
+    "observe response status must be current, drifted, or missing",
+  );
+});
+
+test("plugin adapter rejects malformed refresh responses", async () => {
+  const adapter = new PluginResourceShapeAdapter(
+    new StubResourceShapeAdapter(),
+    {
+      "cloud-managed": {
+        fetch() {
+          return Response.json({
+            summary: "missing outputs",
+            nativeResources: [{ type: "cloudflare_r2_bucket", id: "assets" }],
+          });
+        },
+      },
+    },
+  );
+
+  await expect(
+    adapter.refresh(applyInput({ implementation: pluginDescriptor })),
+  ).rejects.toThrow("refresh response must include outputs");
 });

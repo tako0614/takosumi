@@ -1,6 +1,6 @@
 id: digitalocean
 display_name: DigitalOcean
-provider_rule: digitalocean
+secret_partition: provider-credentials
 terraform_source:
   - digitalocean/digitalocean
   - registry.opentofu.org/digitalocean/digitalocean
@@ -12,11 +12,33 @@ required_env_groups:
   - [DIGITALOCEAN_TOKEN]
 auth_modes:
   token:
+    presentation:
+      show_in_connection_setup: true
+      display_name: { en: API token, ja: API トークン }
+    input_hints:
+      DIGITALOCEAN_TOKEN:
+        label: { en: API token, ja: API トークン }
+        required: true
     env:
       DIGITALOCEAN_TOKEN:
         from: secret
         name: token
   spaces:
+    presentation:
+      show_in_connection_setup: true
+      display_name:
+        { en: API token and Spaces keys, ja: API トークンと Spaces キー }
+    input_hints:
+      DIGITALOCEAN_TOKEN:
+        label: { en: API token, ja: API トークン }
+        required: true
+      SPACES_ACCESS_KEY_ID:
+        label: { en: Spaces access key ID, ja: Spaces アクセスキー ID }
+        required: true
+      SPACES_SECRET_ACCESS_KEY:
+        label:
+          { en: Spaces secret access key, ja: Spaces シークレットアクセスキー }
+        required: true
     env:
       DIGITALOCEAN_TOKEN:
         from: secret

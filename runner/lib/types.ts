@@ -24,15 +24,9 @@ export type OpenTofuModuleSource =
       readonly modulePath?: string;
     }
   | {
-      readonly kind: "prepared";
-      readonly url: string;
+      /** Internal Resource Run identity; bytes arrive through operatorModule. */
+      readonly kind: "operator_module";
       readonly digest: string;
-      readonly modulePath?: string;
-    }
-  | {
-      readonly kind: "local";
-      readonly path: string;
-      readonly modulePath?: string;
     };
 
 export interface RunWorkspace {
@@ -43,10 +37,10 @@ export interface RunWorkspace {
   readonly restoredStatePath: string;
   readonly moduleInfoPath: string;
   // Generated-root workspace dirs. `generatedRootDir` is where tofu runs (it
-  // holds the generated root module + child `template-module`); `artifactDir`
+  // holds the generated root module + child module); `artifactDir`
   // receives runner-produced backup/provider-snapshot metadata artifacts.
   readonly generatedRootDir: string;
-  readonly templateModuleDir: string;
+  readonly childModuleDir: string;
   readonly artifactDir: string;
   // remote_state dependency states (spec §15): each producer state is written
   // read-only as <depsDir>/<name>.tfstate before init/plan/apply for the
@@ -57,10 +51,14 @@ export interface RunWorkspace {
 /** Generated root module HCL files (filename -> content). */
 export interface GeneratedRoot {
   readonly files: Record<string, string>;
-  readonly moduleFiles?: readonly GeneratedRootModuleFile[];
 }
 
-export interface GeneratedRootModuleFile {
+/** Operator-injected module used only by an explicit Resource Shape descriptor. */
+export interface OperatorModule {
+  readonly files: readonly OperatorModuleFile[];
+}
+
+export interface OperatorModuleFile {
   readonly path: string;
   readonly text: string;
 }
@@ -79,7 +77,8 @@ export interface BackupSpec {
   readonly mode: "provider_snapshot" | "custom_command";
   readonly command?: readonly string[];
   readonly outputPath: string;
-  readonly provider?: string;
+  /** Exact operator-installed adapter selected by BackupConfig. */
+  readonly adapterId?: string;
 }
 
 export interface ReleaseCommandSpec {
@@ -99,13 +98,13 @@ export interface ReleaseSpec {
 export interface ReleaseActivationSpec {
   readonly applyRunId?: string;
   readonly workspaceId?: string;
-  readonly spaceId?: string;
-  readonly installationId?: string;
-  readonly deploymentId?: string;
+  readonly capsuleId?: string;
+  readonly stateVersionId?: string;
 }
 
 export interface CommandContext {
   readonly env: Record<string, string>;
+  readonly credentialManifest?: import("../../contract/credential-recipes.ts").RunCredentialRecipeManifest;
   readonly credentialFiles?: readonly ProviderCredentialFile[];
   readonly redactionValues?: readonly string[];
   readonly timeoutMs?: number;
@@ -119,8 +118,17 @@ export interface ProviderCredentialFile {
   readonly content: string;
   readonly envName?: string;
 }
+
+/** Selector-only plan scope projection received from the control-plane policy. */
+export interface PlanScopeSelector {
+  readonly resourceTypePattern: string;
+  readonly dimensions: Readonly<Record<string, string>>;
+}
+
 export interface PlanResponseOptions {
   readonly operation: OpenTofuOperation;
+  /** Apply provider observations to state only; never mutate provider resources. */
+  readonly refreshOnly?: boolean;
   readonly commandContext: CommandContext;
   readonly requiredProviders: readonly string[];
   /**
@@ -140,7 +148,9 @@ export interface PlanResponseOptions {
   readonly providerInstallationPolicy?: {
     readonly requireMirror: boolean;
   };
+  readonly scopeSelectors?: readonly PlanScopeSelector[];
   readonly buildLog?: string;
+  readonly variableFilePath?: string;
   readonly extra?: JsonRecord;
 }
 export interface SourceSyncSource {

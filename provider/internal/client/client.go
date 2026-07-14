@@ -140,22 +140,33 @@ type TargetPoolSpec struct {
 }
 
 type TargetPoolEntry struct {
-	Name            string                     `json:"name"`
-	Type            string                     `json:"type"`
-	Ref             string                     `json:"ref,omitempty"`
-	CredentialRef   string                     `json:"credentialRef,omitempty"`
-	Region          string                     `json:"region,omitempty"`
-	Priority        int64                      `json:"priority"`
-	Implementations []TargetPoolImplementation `json:"implementations,omitempty"`
+	Name            string                           `json:"name"`
+	Type            string                           `json:"type"`
+	Ref             string                           `json:"ref,omitempty"`
+	CredentialRef   string                           `json:"credentialRef,omitempty"`
+	Region          string                           `json:"region,omitempty"`
+	Priority        int64                            `json:"priority"`
+	Implementations []TargetImplementationDescriptor `json:"implementations,omitempty"`
 }
 
-type TargetPoolImplementation struct {
-	Shape              string            `json:"shape"`
-	Implementation     string            `json:"implementation"`
-	Interfaces         map[string]string `json:"interfaces"`
-	NativeResourceType string            `json:"nativeResourceType,omitempty"`
-	Plugin             string            `json:"plugin,omitempty"`
-	Options            map[string]any    `json:"options,omitempty"`
+type TargetImplementationDescriptor struct {
+	Shape               string               `json:"shape"`
+	Implementation      string               `json:"implementation"`
+	Interfaces          map[string]string    `json:"interfaces"`
+	NativeResourceType  string               `json:"nativeResourceType,omitempty"`
+	Plugin              string               `json:"plugin,omitempty"`
+	ProviderSource      string               `json:"providerSource,omitempty"`
+	ProviderAlias       string               `json:"providerAlias,omitempty"`
+	ProviderConfig      map[string]any       `json:"providerConfig,omitempty"`
+	ModuleTemplate      string               `json:"moduleTemplate,omitempty"`
+	ModuleInputMappings map[string]any       `json:"moduleInputMappings,omitempty"`
+	ModuleOutputs       []TargetModuleOutput `json:"moduleOutputs,omitempty"`
+	Options             map[string]any       `json:"options,omitempty"`
+}
+
+type TargetModuleOutput struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 type TargetPoolRecord struct {
@@ -176,6 +187,34 @@ type PreviewResourceResult struct {
 	NativeResourcePlan     []NativeResourceRef `json:"nativeResourcePlan"`
 	RiskNotes              []string            `json:"riskNotes"`
 	Summary                string              `json:"summary"`
+	PlanDigest             string              `json:"planDigest"`
+	SpecDigest             string              `json:"specDigest"`
+	ResolutionFingerprint  string              `json:"resolutionFingerprint"`
+	Quote                  *DeploymentQuote    `json:"quote,omitempty"`
+}
+
+// DeploymentQuote is the immutable price snapshot attached to a Deploy API
+// preview by a commercial host. OSS endpoints can omit it.
+type DeploymentQuote struct {
+	QuoteID                 string `json:"quoteId"`
+	QuoteDigest             string `json:"quoteDigest"`
+	RatingStatus            string `json:"ratingStatus"`
+	Currency                string `json:"currency"`
+	EstimatedTotalUSDmicros int64  `json:"estimatedTotalUsdMicros"`
+	ExpiresAt               string `json:"expiresAt"`
+}
+
+// DeploymentReview presents the exact preview evidence accepted by apply.
+// Quote evidence is required only when the host returned a priced quote.
+type DeploymentReview struct {
+	PlanDigest  string `json:"planDigest"`
+	QuoteID     string `json:"quoteId,omitempty"`
+	QuoteDigest string `json:"quoteDigest,omitempty"`
+}
+
+type applyResourceBody struct {
+	Resource
+	Review DeploymentReview `json:"review"`
 }
 
 // ProductCapabilities is the parsed body of GET /v1/capabilities.
@@ -321,6 +360,26 @@ func (c *Client) putResourceURL(kind, name string) string {
 	return fmt.Sprintf("%s/v1/resources/%s/%s", c.endpoint, url.PathEscape(kind), url.PathEscape(name))
 }
 
+func (c *Client) importResourceURL(kind, name string) string {
+	return fmt.Sprintf("%s/v1/resources/%s/%s/import", c.endpoint, url.PathEscape(kind), url.PathEscape(name))
+}
+
+func (c *Client) observeResourceURL(kind, name, space string) string {
+	u := fmt.Sprintf("%s/v1/resources/%s/%s/observe", c.endpoint, url.PathEscape(kind), url.PathEscape(name))
+	if query := spaceQuery(space); len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	return u
+}
+
+func (c *Client) refreshResourceURL(kind, name, space string) string {
+	u := fmt.Sprintf("%s/v1/resources/%s/%s/refresh", c.endpoint, url.PathEscape(kind), url.PathEscape(name))
+	if query := spaceQuery(space); len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	return u
+}
+
 func (c *Client) previewURL() string {
 	return c.endpoint + "/v1/resources/preview"
 }
@@ -333,11 +392,47 @@ func (c *Client) targetPoolURL(name string, query url.Values) string {
 	return u
 }
 
-// PutResource creates or updates a resource:
-// PUT {endpoint}/v1/resources/{kind}/{name}. 200 => Resource with status.
+// PutResource creates or updates a resource through the canonical reviewed
+// Deploy API lifecycle. It previews the exact desired Resource, then presents
+// that plan and optional quote evidence to PUT. Backend selection and pricing
+// remain server-side concerns.
 func (c *Client) PutResource(ctx context.Context, kind, name string, body *Resource) (*Resource, error) {
+	preview, err := c.PreviewResource(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(preview.PlanDigest) == "" {
+		return nil, errors.New("takosumi: Deploy API preview omitted planDigest")
+	}
+	review := DeploymentReview{PlanDigest: preview.PlanDigest}
+	if preview.Quote != nil {
+		if strings.TrimSpace(preview.Quote.QuoteID) == "" || strings.TrimSpace(preview.Quote.QuoteDigest) == "" {
+			return nil, errors.New("takosumi: Deploy API preview returned incomplete quote evidence")
+		}
+		review.QuoteID = preview.Quote.QuoteID
+		review.QuoteDigest = preview.Quote.QuoteDigest
+	}
+
 	var out Resource
-	if err := c.doJSON(ctx, http.MethodPut, c.putResourceURL(kind, name), body, &out); err != nil {
+	request := applyResourceBody{Resource: *body, Review: review}
+	if err := c.doJSON(ctx, http.MethodPut, c.putResourceURL(kind, name), &request, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+type importResourceBody struct {
+	Resource
+	NativeID string `json:"nativeId"`
+}
+
+// ImportResource adopts one existing provider-native object using the full
+// desired Resource spec. The server plans and applies a read-only
+// config-driven import before publishing Resource-owned state and outputs.
+func (c *Client) ImportResource(ctx context.Context, kind, name, nativeID string, body *Resource) (*Resource, error) {
+	var out Resource
+	request := importResourceBody{Resource: *body, NativeID: nativeID}
+	if err := c.doJSON(ctx, http.MethodPost, c.importResourceURL(kind, name), &request, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -347,6 +442,34 @@ func (c *Client) PutResource(ctx context.Context, kind, name string, body *Resou
 func (c *Client) GetResource(ctx context.Context, kind, name, space string) (*Resource, error) {
 	var out Resource
 	if err := c.doJSON(ctx, http.MethodGet, c.resourceURL(kind, name, spaceQuery(space)), nil, &out); err != nil {
+		if code, ok := statusCode(err); ok && code == http.StatusNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ObserveResource performs a read-only backend drift check and returns the
+// Resource projection with updated conditions. A 404 is translated to
+// ErrNotFound, matching GetResource.
+func (c *Client) ObserveResource(ctx context.Context, kind, name, space string) (*Resource, error) {
+	var out Resource
+	if err := c.doJSON(ctx, http.MethodPost, c.observeResourceURL(kind, name, space), nil, &out); err != nil {
+		if code, ok := statusCode(err); ok && code == http.StatusNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RefreshResource updates the Resource-owned backend state and public outputs
+// without mutating native provider resources. A 404 is translated to
+// ErrNotFound, matching GetResource and ObserveResource.
+func (c *Client) RefreshResource(ctx context.Context, kind, name, space string) (*Resource, error) {
+	var out Resource
+	if err := c.doJSON(ctx, http.MethodPost, c.refreshResourceURL(kind, name, space), nil, &out); err != nil {
 		if code, ok := statusCode(err); ok && code == http.StatusNotFound {
 			return nil, ErrNotFound
 		}
