@@ -39,6 +39,13 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET?: string;
   /** Optional Operator/Cloud commercial billing extension (Seam B). */
   readonly TAKOSUMI_BILLING_EXTENSION_FACTORY?: import("takosumi-contract/billing").BillingExtensionFactory;
+  /**
+   * Optional host-code admission port for Resource deployment quotes and
+   * reserve/capture/release settlement. OSS contributes no pricing policy and
+   * therefore leaves this unset; an operator composition may inject a durable
+   * implementation without changing the canonical `/v1/resources` lifecycle.
+   */
+  readonly TAKOSUMI_RESOURCE_DEPLOYMENT_ADMISSION?: import("takosumi-contract/resource-deployment").ResourceDeploymentAdmission;
   readonly TAKOSUMI_ENVIRONMENT?: string;
   /**
    * Runner performance knobs forwarded to the OpenTofu runner container. These
