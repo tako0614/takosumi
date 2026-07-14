@@ -106,7 +106,10 @@ import {
   handleUpstreamCallbackRequest,
   upstreamOAuthNotConfigured,
 } from "./upstream-oauth-routes.ts";
-export { handleAuthProvidersRequest } from "./upstream-oauth-routes.ts";
+export {
+  authProviderConfigurationInvalidResponse,
+  handleAuthProvidersRequest,
+} from "./upstream-oauth-routes.ts";
 import { matchAccountTokenRevokeRoute } from "./route-matchers.ts";
 import {
   type ControlPlaneOperations,

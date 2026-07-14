@@ -51,13 +51,19 @@ applies or refreshes a Resource.
 Upstream sign-in providers are configured by the generic non-secret descriptor
 array `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`. Each descriptor contains its
 issuer/endpoints/client id/redirect URI/scopes and names the runtime secret via
-`clientSecretEnv`. There is no canonical provider-specific env family.
+`clientSecretEnv`. `label` and `protocol` are the non-secret presentation and
+protocol fields published by `GET /v1/auth/providers`; current workers also
+provide safe `Single sign-on` / `oidc` defaults for older descriptor config.
+Malformed descriptors fail the public discovery request closed with a generic
+`503` and never expose endpoints or credential references. There is no
+canonical provider-specific env family.
 
 ```json
 [
   {
     "providerId": "company-oidc",
     "label": "Company SSO",
+    "protocol": "oidc",
     "issuer": "https://issuer.example",
     "authorizationEndpoint": "https://issuer.example/authorize",
     "tokenEndpoint": "https://issuer.example/token",
