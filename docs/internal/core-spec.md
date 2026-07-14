@@ -223,6 +223,15 @@ Drift observation adds a `Drifted` condition without switching the pinned
 resolved inputs; a successful refresh/apply is required to publish a new
 revision.
 
+An operator may inject a host-neutral Interface projection sink for runtime
+indexes. Core sends the canonical Interface and Bindings and, for a coherent
+Ready Resource owner, the exact Resource generation plus ResolutionLock
+NativeResource references. Delivery is best-effort after the canonical write
+and repaired through a bounded keyset scan. The sink is never a Resource,
+Interface, hostname, or compatibility lifecycle authority. When the Resource is
+absent, NotReady, generation-inconsistent, or lacks a coherent lock, Core omits
+Resource evidence so the host can remove or disable its cache fail-closed.
+
 The shipped Capsule lifecycle integration covers successful apply, uncertain
 apply/restore failure fencing, destroy start/success, queued-plan observation,
 and drift-check completion. A queued plan adds `ObservationPending` without
@@ -1182,9 +1191,23 @@ import:
   ask the host admission port before adapter/backend lookup or lifecycle write
 
 normal delete:
-  notify the host only after the canonical Resource is gone
+  notify the host with reason canonical_delete only after the canonical
+  Resource is gone
   retry host retirement through an idempotent delete of the absent Resource
-  do not retire host capacity from a force tombstone
+
+force tombstone:
+  notify the host with reason force_tombstone before removing the canonical
+  Resource so backend-absence-unknown capacity becomes retained
+  if canonical CAS/finalization fails while the Resource remains, notify with
+  force_tombstone_cancelled and restore the prior active/reserved allocation
+  if compensation fails, keep retained capacity and fail as finalize-pending
+  never release retained capacity from a later normal absent-Resource delete
+
+retained capacity release:
+  require an explicit operator service-token/admin operation after independent
+  backend observation proves the native object absent
+  persist immutable absence-reference/reason/time evidence atomically with the
+  retained allocation release; retries return the same evidence
 
 period close:
   reconcile captured reservations + rated UsageEvents - releases/refunds
