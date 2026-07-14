@@ -1173,13 +1173,52 @@ export const ja = {
   "resources.editor.createTitle": "リソースを定義",
   "resources.editor.editTitle": "望ましい状態を変更",
   "resources.editor.subtitle":
-    "必ずプレビューで配置先と native plan を確認してから適用します。",
+    "サービスと必要な設定を選び、価格とプレビューを確認してからデプロイします。",
+  "resources.editor.serviceStep": "サービスを選ぶ",
+  "resources.editor.service": "サービス",
+  "resources.editor.serviceHint":
+    "provider や実装先ではなく、必要なサービスの形を選びます。",
+  "resources.editor.service.edgeWorker": "Edge Worker",
+  "resources.editor.service.objectBucket": "Object Bucket",
+  "resources.editor.service.custom": "Preview / カスタム Shape",
+  "resources.editor.customHint":
+    "Preview または operator 定義の Shape は、詳細設定で kind と Spec JSON を入力します。利用可否は接続先が判定します。",
+  "resources.editor.inputsStep": "必要な設定",
+  "resources.editor.inputsHint":
+    "認証情報や provider 固有の設定は入力しません。",
   "resources.editor.kind": "Shape kind",
   "resources.editor.kindHint":
     "組み込み shape のほか、operator が明示登録した token も指定できます。",
   "resources.editor.kindInvalid": "有効な Shape kind を入力してください。",
-  "resources.editor.name": "リソース名",
-  "resources.editor.nameRequired": "リソース名を入力してください。",
+  "resources.editor.name": "サービス名",
+  "resources.editor.nameRequired": "サービス名を入力してください。",
+  "resources.editor.artifactSource": "不変 artifact の参照方法",
+  "resources.editor.artifactSource.url": "HTTPS リリース URL",
+  "resources.editor.artifactSource.ref": "operator が発行した artifact ref",
+  "resources.editor.artifactUrl": "Artifact URL",
+  "resources.editor.artifactUrlHint":
+    "CI / release が公開した不変の HTTPS URL。Takosumi は bundle をビルドしません。",
+  "resources.editor.artifactRef": "Artifact ref",
+  "resources.editor.artifactRefHint":
+    "接続先が発行した opaque な不変参照です。provider 名や認証情報は含めません。",
+  "resources.editor.artifactSha": "Artifact SHA-256",
+  "resources.editor.artifactShaHint":
+    "取得した artifact と一致する digest を指定します。",
+  "resources.editor.artifactUrlRequired": "Artifact URL を入力してください。",
+  "resources.editor.artifactUrlHttps":
+    "Artifact URL は https:// で始まる必要があります。",
+  "resources.editor.artifactRefRequired": "Artifact ref を入力してください。",
+  "resources.editor.artifactShaRequired":
+    "不変 artifact を検証する SHA-256 を入力してください。",
+  "resources.editor.compatibilityDate": "Compatibility date（任意）",
+  "resources.editor.compatibilityFlags": "Compatibility flags（任意）",
+  "resources.editor.profiles": "必要な profile（任意）",
+  "resources.editor.profilesHint":
+    "profile token は接続先が公開・検証します。dashboard は固定リストを持ちません。",
+  "resources.editor.tokenListHint": "複数指定はカンマまたは空白で区切ります。",
+  "resources.editor.bucketInterfaces": "必要な object interface",
+  "resources.editor.bucketInterfacesHint":
+    "例: s3_api、signed_url。これは runtime Interface オブジェクトではなく、接続先が検証する capability token です。",
   "resources.editor.project": "Project（任意）",
   "resources.editor.environment": "Environment",
   "resources.editor.targetPool": "TargetPool",
@@ -1187,16 +1226,31 @@ export const ja = {
   "resources.editor.spec": "Spec JSON",
   "resources.editor.specHint":
     "選択した Shape の spec だけを JSON object で入力します。認証情報は含めません。",
-  "resources.editor.advanced": "ラベルなどの詳細設定",
+  "resources.editor.advanced": "詳細・operator 設定",
+  "resources.editor.advancedHint":
+    "Project、Environment、TargetPool、SpacePolicy、labels は必要な場合だけ指定します。通常のデプロイでは既定値を使えます。",
+  "resources.editor.rawOptInHint":
+    "connections、lifecycle policy、operator 拡張が必要な場合だけ raw Spec JSON に切り替えます。",
+  "resources.editor.useRawSpec": "Raw Spec JSON を使う",
+  "resources.editor.rawWarning":
+    "これは Preview / カスタム Shape と operator 向けの入力です。schema、提供状況、価格は Deploy API が判定します。",
+  "resources.editor.rawCannotGuide":
+    "Raw Spec JSON に guided form が扱わない設定があります。内容を失わないよう raw mode のままにしました。",
   "resources.editor.labels": "Labels JSON",
   "resources.editor.labelsHint": "値がすべて文字列の JSON object です。",
   "resources.editor.specInvalid": "Spec JSON が不正です — {message}",
   "resources.editor.labelsInvalid": "Labels JSON が不正です — {message}",
   "resources.editor.preview": "プレビュー",
+  "resources.editor.previewStep": "価格とプレビュー",
+  "resources.editor.previewHint":
+    "現在の入力を解決し、接続先が提供する価格、配置結果、実行内容を取得します。ここではまだデプロイしません。",
   "resources.editor.previewRequired":
     "現在の入力内容でもう一度プレビューしてください。",
-  "resources.editor.apply": "適用",
-  "resources.editor.applied": "リソースを適用しました。",
+  "resources.editor.deployStep": "確認してデプロイ",
+  "resources.editor.deployHint":
+    "プレビュー後に入力が変わっていないことを確認し、同じ plan と quote でデプロイします。",
+  "resources.editor.apply": "サービスをデプロイ",
+  "resources.editor.applied": "サービスの望ましい状態を適用しました。",
   "resources.editor.importExisting": "既存 native resource を取り込む",
   "resources.editor.nativeId": "Native resource ID",
   "resources.editor.nativeIdHint":
@@ -1205,10 +1259,10 @@ export const ja = {
     "Native resource ID を入力してください。",
   "resources.editor.import": "取り込む",
   "resources.editor.imported": "既存リソースを取り込みました。",
-  "resources.confirm.applyTitle": "リソースを適用しますか？",
+  "resources.confirm.applyTitle": "このサービスをデプロイしますか？",
   "resources.confirm.updateTitle": "望ましい状態を変更しますか？",
   "resources.confirm.applyMessage":
-    "{kind}/{name} を Target {target} に適用します。プレビュー済みの内容だけが実行されます。",
+    "{kind}/{name} を Target {target} にデプロイします。確認した価格: {price}。同じ plan と quote だけが実行されます。",
   "resources.confirm.importTitle": "既存リソースを取り込みますか？",
   "resources.confirm.importMessage":
     "Native ID {nativeId} を {kind}/{name} として検証し、Takosumi の管理対象にします。",
@@ -1219,7 +1273,17 @@ export const ja = {
   "resources.preview.implementation": "Implementation",
   "resources.preview.portability": "Portability",
   "resources.preview.price": "見積価格",
+  "resources.preview.noQuoteShort": "価格 quote なし",
+  "resources.preview.noQuote":
+    "このプレビューには価格 quote がありません。OSS Takosumi は Cloud の価格表を持たないため、operator の billing mode と案内を確認してください。無料とはみなしません。",
+  "resources.preview.unratedShort": "未レート",
+  "resources.preview.unrated":
+    "この quote は未レートです。OSS の disabled / showback 運用では適用できますが、価格や請求を意味しません。",
+  "resources.preview.ratedHint":
+    "接続先が返した versioned quote の見積合計です。デプロイ時に同じ quote を提示します。",
+  "resources.preview.quote": "Quote ID",
   "resources.preview.priceExpires": "見積の有効期限",
+  "resources.preview.technicalDetails": "配置・native plan の詳細",
   "resources.preview.nativePlan": "Native plan",
   "resources.preview.risks": "注意事項",
   "resources.preview.noRisks": "追加の注意事項はありません。",
