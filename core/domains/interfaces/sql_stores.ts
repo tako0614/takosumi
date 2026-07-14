@@ -80,6 +80,22 @@ class SqlInterfaceStore implements InterfaceStore {
     return result.rows.map((row) => decode<Interface>(row.record_json));
   }
 
+  async listProjectionPage(input: {
+    readonly cursor?: string;
+    readonly limit: number;
+  }): Promise<readonly Interface[]> {
+    const parameters: SqlValue[] = input.cursor
+      ? [input.cursor, input.limit]
+      : [input.limit];
+    const result = await this.client.query<InterfaceRow>(
+      `select record_json from ${this.#table}
+       ${input.cursor ? "where id > $1" : ""}
+       order by id asc limit $${parameters.length}`,
+      parameters,
+    );
+    return result.rows.map((row) => decode<Interface>(row.record_json));
+  }
+
   async compareAndSet(
     record: Interface,
     expected: InterfaceWriteGuard,

@@ -203,6 +203,40 @@ export async function claimPlatformManagedPublicHostname(
   ).claimManagedPublicHostname(input);
 }
 
+export interface PlatformInterfaceProjectionRepairResult {
+  readonly interfacesScanned: number;
+  readonly projected: number;
+  readonly failed: number;
+  readonly nextCursor?: string;
+}
+
+/**
+ * Composition-root repair bridge for operator-owned Interface projections.
+ * It reads the canonical Interface store and bounds projection calls per
+ * invocation. Cloud wrappers persist the opaque cursor in their own
+ * routing store; OSS owns neither that cursor nor the projected state.
+ */
+export async function repairPlatformInterfaceProjections(
+  input: {
+    readonly cursor?: string;
+    readonly limit?: number;
+  },
+  env: object,
+): Promise<PlatformInterfaceProjectionRepairResult> {
+  const limit = Math.min(100, Math.max(1, input.limit ?? 25));
+  const operations = await takosumiOperationsFor(env as PlatformEnv);
+  const result = await operations.interfaces.repairProjections({
+    ...(input.cursor ? { cursor: input.cursor } : {}),
+    limit,
+  });
+  return {
+    interfacesScanned: result.scanned,
+    projected: result.projected,
+    failed: result.failed,
+    ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+  };
+}
+
 const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
   // The session-authed `/api/v1/*` dashboard surface reads the canonical
   // in-process operations facade adapted to the `ControlPlaneOperations`
@@ -1629,8 +1663,11 @@ export interface PlatformCompatibilityReadyResourceInput {
 /** Immutable, read-only evidence returned to a data-plane profile. */
 export interface PlatformCompatibilityReadyResourceEvidence {
   readonly resource: ResourceObject;
+  /** Desired generation proven Ready by the canonical Resource store. */
+  readonly resourceGeneration: number;
   readonly nativeResources: readonly NativeResourceRef[];
   readonly interface?: Interface;
+  readonly interfaceBindings?: readonly import("takosumi-contract/interfaces").InterfaceBinding[];
 }
 
 /** The only authority given to a data-plane compatibility profile. */
@@ -1931,6 +1968,9 @@ async function resolvePlatformCompatibilityReadyResource(
   }
 
   let resolvedInterface: Interface | undefined;
+  let resolvedInterfaceBindings:
+    | readonly import("takosumi-contract/interfaces").InterfaceBinding[]
+    | undefined;
   if (input.interface) {
     const subject = safePlatformExtensionSubject(verified.session.subject);
     const interfaceId = safePlatformExtensionContextId(input.interface.id);
@@ -1952,6 +1992,12 @@ async function resolvePlatformCompatibilityReadyResource(
         return undefined;
       }
       resolvedInterface = candidate;
+      resolvedInterfaceBindings =
+        await operations.interfaces.listAuthorizedBindingsForPrincipal(
+          interfaceId,
+          subject,
+          permission,
+        );
     } catch {
       return undefined;
     }
@@ -1960,6 +2006,9 @@ async function resolvePlatformCompatibilityReadyResource(
   return structuredClone({
     ...evidence,
     ...(resolvedInterface ? { interface: resolvedInterface } : {}),
+    ...(resolvedInterfaceBindings
+      ? { interfaceBindings: resolvedInterfaceBindings }
+      : {}),
   });
 }
 
