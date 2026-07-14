@@ -16,9 +16,9 @@ type Provider = string;
 /**
  * Read which sign-in methods the operator configured on this worker. Public +
  * unauthenticated (the sign-in screen runs before any session exists), so it
- * goes through {@link apiFetch} with `auth: false`. The body carries provider
- * ids + enabled flags only — never any credential — so the panel can disable
- * buttons that would otherwise hit a 503 on click.
+ * goes through {@link apiFetch} with `auth: false`. The body carries only the
+ * non-secret id, enabled flag, display label, and protocol — never a client
+ * identifier, endpoint, redirect URI, scope, or credential.
  */
 export async function listAuthProviders(): Promise<TakosumiAccountsAuthProvidersResponse> {
   return await apiFetch<TakosumiAccountsAuthProvidersResponse>(

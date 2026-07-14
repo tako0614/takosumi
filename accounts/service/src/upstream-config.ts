@@ -9,6 +9,7 @@ export const UPSTREAM_PROVIDER_DESCRIPTORS_ENV =
 export const UPSTREAM_SUBJECT_SECRET_ENV = "TAKOSUMI_ACCOUNTS_SUBJECT_SECRET";
 export const UPSTREAM_SESSION_TTL_ENV =
   "TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS";
+const publicAuthProviderTokenPattern = /^[a-z][a-z0-9._-]{0,127}$/u;
 
 /**
  * Service-side, runtime-neutral registration for one upstream OAuth/OIDC
@@ -124,6 +125,19 @@ function parseDescriptor(
       `${label}.providerId must be a lowercase provider token`,
     );
   }
+  if (providerId === "passkey") {
+    throw new TypeError(
+      `${label}.providerId is reserved for the WebAuthn provider`,
+    );
+  }
+  const protocol = optionalString(value.protocol, `${label}.protocol`);
+  const normalizedProtocol = protocol?.toLowerCase();
+  if (
+    normalizedProtocol !== undefined &&
+    !publicAuthProviderTokenPattern.test(normalizedProtocol)
+  ) {
+    throw new TypeError(`${label}.protocol must be a lowercase provider token`);
+  }
   const clientSecretEnv = optionalString(
     value.clientSecretEnv,
     `${label}.clientSecretEnv`,
@@ -140,10 +154,7 @@ function parseDescriptor(
   return {
     providerId,
     ...optionalProperty("label", optionalString(value.label, `${label}.label`)),
-    ...optionalProperty(
-      "protocol",
-      optionalString(value.protocol, `${label}.protocol`),
-    ),
+    ...optionalProperty("protocol", normalizedProtocol),
     issuer: requiredHttpUrl(value.issuer, `${label}.issuer`),
     authorizationEndpoint: requiredHttpUrl(
       value.authorizationEndpoint,
