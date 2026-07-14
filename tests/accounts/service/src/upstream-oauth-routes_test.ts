@@ -74,6 +74,66 @@ test("handleAuthProvidersRequest enables passkey when passkeys configured", asyn
   ]);
 });
 
+test("handleAuthProvidersRequest publishes one exact contract for Google, generic OIDC, and passkey", async () => {
+  const upstreamOAuth: UpstreamOAuthOptions = {
+    subjectSecret: "secret",
+    providers: [
+      {
+        providerId: "google",
+        label: "Google",
+        protocol: "OIDC",
+        clientId: "google-client",
+        clientSecret: "google-secret",
+        redirectUri: "https://accounts.example.test/callback",
+        provider: testProvider("google"),
+      },
+      {
+        providerId: "company-oidc",
+        label: "Company SSO",
+        protocol: "oidc",
+        clientId: "company-client",
+        redirectUri: "https://accounts.example.test/callback",
+        provider: testProvider("company-oidc"),
+      },
+    ],
+  };
+  const response = handleAuthProvidersRequest({
+    upstreamOAuth,
+    passkeys: {
+      rpId: "example.test",
+      rpName: "Example",
+      origin: "https://app.example.test",
+    },
+  });
+  const body = await readProviders(response);
+  expect(body).toEqual({
+    providers: [
+      {
+        id: "google",
+        enabled: true,
+        label: "Google",
+        protocol: "oidc",
+      },
+      {
+        id: "company-oidc",
+        enabled: true,
+        label: "Company SSO",
+        protocol: "oidc",
+      },
+      {
+        id: "passkey",
+        enabled: true,
+        label: "Passkey",
+        protocol: "webauthn",
+      },
+    ],
+  });
+  const text = JSON.stringify(body);
+  expect(text).not.toContain("google-client");
+  expect(text).not.toContain("google-secret");
+  expect(text).not.toContain("accounts.example.test");
+});
+
 test("handleAuthProvidersRequest publishes generic OIDC descriptors", async () => {
   const upstreamOAuth: UpstreamOAuthOptions = {
     subjectSecret: "secret",
@@ -145,4 +205,60 @@ test("handleAuthProvidersRequest never leaks credentials in the body", async () 
   expect(text).not.toContain("gh-client-secret");
   expect(text).not.toContain("top-secret-subject-secret");
   expect(text).not.toContain("callback");
+});
+
+test("handleAuthProvidersRequest fails closed without partial descriptors or configuration detail", async () => {
+  const upstreamOAuth = {
+    subjectSecret: "top-secret-subject-secret",
+    providers: [
+      {
+        providerId: "valid-oidc",
+        label: "Valid OIDC",
+        protocol: "oidc",
+        clientId: "valid-client",
+        redirectUri: "https://accounts.example.test/callback",
+        provider: testProvider("valid-oidc"),
+      },
+      {
+        providerId: "broken-oidc",
+        label: "Broken OIDC",
+        protocol: "oidc/with-secret-detail",
+        clientId: "broken-client",
+        clientSecret: "broken-client-secret",
+        redirectUri: "https://private-idp.example.test/callback",
+        provider: testProvider("broken-oidc"),
+      },
+    ],
+  } as unknown as UpstreamOAuthOptions;
+
+  const response = handleAuthProvidersRequest({ upstreamOAuth });
+  expect(response.status).toBe(503);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toEqual({
+    error: "auth_provider_configuration_invalid",
+    error_description: "Sign-in provider configuration is invalid.",
+  });
+  const text = await handleAuthProvidersRequest({ upstreamOAuth }).text();
+  expect(text).not.toContain("valid-oidc");
+  expect(text).not.toContain("broken-oidc");
+  expect(text).not.toContain("broken-client-secret");
+  expect(text).not.toContain("private-idp.example.test");
+});
+
+test("handleAuthProvidersRequest reserves the passkey id for WebAuthn", async () => {
+  const upstreamOAuth: UpstreamOAuthOptions = {
+    subjectSecret: "secret",
+    providers: [
+      {
+        providerId: "passkey",
+        label: "Not WebAuthn",
+        protocol: "oidc",
+        clientId: "client",
+        redirectUri: "https://accounts.example.test/callback",
+        provider: testProvider("passkey"),
+      },
+    ],
+  };
+  const response = handleAuthProvidersRequest({ upstreamOAuth });
+  expect(response.status).toBe(503);
 });
