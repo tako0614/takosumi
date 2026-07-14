@@ -178,6 +178,7 @@ export async function createWorkerServiceApp(
   const managedProviderCredentialIssuer =
     managedProviderCredentialIssuerFromEnv(env);
   const billingExtensionFactory = billingExtensionFactoryFromEnv(env);
+  const resourceDeploymentAdmission = resourceDeploymentAdmissionFromEnv(env);
   const interfaceCredentialIssuer = env.TAKOSUMI_ACCOUNTS_DB
     ? interfaceCredentialIssuerFromAccountsStore(
         new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB),
@@ -244,6 +245,7 @@ export async function createWorkerServiceApp(
       ? { managedProviderCredentialIssuer }
       : {}),
     ...(billingExtensionFactory ? { billingExtensionFactory } : {}),
+    ...(resourceDeploymentAdmission ? { resourceDeploymentAdmission } : {}),
     // Async run lifecycle: when the run queue is bound, the create path persists
     // the run `queued` and returns immediately; the `queue()` consumer in this
     // same worker drives execution. Without the binding, the controller's
@@ -289,6 +291,29 @@ function billingExtensionFactoryFromEnv(
     );
   }
   return factory;
+}
+
+export function resourceDeploymentAdmissionFromEnv(
+  env: CloudflareWorkerEnv,
+):
+  | import("takosumi-contract/resource-deployment").ResourceDeploymentAdmission
+  | undefined {
+  const admission = env.TAKOSUMI_RESOURCE_DEPLOYMENT_ADMISSION;
+  if (admission === undefined) return undefined;
+  if (
+    typeof admission !== "object" ||
+    admission === null ||
+    typeof admission.quote !== "function" ||
+    typeof admission.reserve !== "function" ||
+    typeof admission.capture !== "function" ||
+    typeof admission.markSettlementPending !== "function" ||
+    typeof admission.release !== "function"
+  ) {
+    throw new TypeError(
+      "TAKOSUMI_RESOURCE_DEPLOYMENT_ADMISSION must implement quote(), reserve(), capture(), markSettlementPending(), and release()",
+    );
+  }
+  return admission;
 }
 
 function interfaceCredentialIssuerFromAccountsStore(
