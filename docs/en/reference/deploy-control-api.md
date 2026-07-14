@@ -148,8 +148,9 @@ and current Output fences plus available non-secret Output names. Known
 first-party Capsules use service-side Interface blueprints; unknown third-party
 Capsules use only the Output name and Interface type/version explicitly selected
 by the owner. Completion requires a Resolved Interface and durable Activity
-evidence, and legacy Output discovery is never fallback authority. See the
-[operation runbook](../../operations/output-interface-migration.md).
+evidence, and legacy Output discovery is never fallback authority. The concrete
+execution and rollback procedure belongs in operator runbooks, not the published
+client contract.
 
 ## Provider Connections
 
