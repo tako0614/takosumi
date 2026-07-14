@@ -217,6 +217,9 @@ export async function createWorkerServiceApp(
     ...(resourceShapeSchemaRegistry ? { resourceShapeSchemaRegistry } : {}),
     ...(resourceShapeModuleRegistry ? { resourceShapeModuleRegistry } : {}),
     interfaceStores: createD1InterfaceStores(env.TAKOSUMI_CONTROL_DB),
+    ...(env.TAKOSUMI_INTERFACE_PROJECTION_SINK
+      ? { interfaceProjectionSink: env.TAKOSUMI_INTERFACE_PROJECTION_SINK }
+      : {}),
     ...(interfaceCredentialIssuer ? { interfaceCredentialIssuer } : {}),
     resourceShapeAllowedProviderBaseUrls: providerBaseUrlAllowlist,
     resourceShapeAdapterFactory: ({ controller }) => {

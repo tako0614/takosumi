@@ -46,6 +46,11 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * implementation without changing the canonical `/v1/resources` lifecycle.
    */
   readonly TAKOSUMI_RESOURCE_DEPLOYMENT_ADMISSION?: import("takosumi-contract/resource-deployment").ResourceDeploymentAdmission;
+  /**
+   * Host-code projector for recoverable runtime routing/activation state.
+   * Canonical Interface and Binding rows remain authority.
+   */
+  readonly TAKOSUMI_INTERFACE_PROJECTION_SINK?: import("takosumi-contract/interfaces").InterfaceProjectionSink;
   readonly TAKOSUMI_ENVIRONMENT?: string;
   /**
    * Runner performance knobs forwarded to the OpenTofu runner container. These
