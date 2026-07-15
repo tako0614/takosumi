@@ -116,7 +116,7 @@ Published software docs and hosted Cloud docs exclude:
 
 ```text
 payment provider price id
-runtime price book storage
+realized versioned PriceCatalog storage
 cost estimate spreadsheet
 margin guard implementation
 invoice export or reconciliation procedure
