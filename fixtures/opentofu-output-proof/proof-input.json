@@ -1,5 +1,5 @@
 {
-  "kind": "takosumi.opentofu-output-snapshot-proof-input@v1",
+  "kind": "takosumi.opentofu-output-proof-input@v1",
   "live": false,
   "workspaceId": "ws_opentofu_fixture",
   "source": {
@@ -15,9 +15,9 @@
   },
   "outputs": {
     "file": "tofu-output.json",
-    "ref": "fixture://opentofu-output-snapshot-proof/tofu-output.json"
+    "ref": "fixture://opentofu-output-proof/tofu-output.json"
   },
   "operator": {
-    "opentofuApplyRef": "fixture://opentofu-output-snapshot-proof/apply"
+    "opentofuApplyRef": "fixture://opentofu-output-proof/apply"
   }
 }
