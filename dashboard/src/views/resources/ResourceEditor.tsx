@@ -55,6 +55,10 @@ const BUNDLED_KINDS = [
   "Queue",
   "SQLDatabase",
   "ContainerService",
+  "VectorIndex",
+  "DurableWorkflow",
+  "StatefulActorNamespace",
+  "Schedule",
 ] as const;
 
 type Props = {

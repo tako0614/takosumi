@@ -1684,16 +1684,24 @@ test("GET /v1/capabilities advertises enabled Resource Shapes", async () => {
   expect(body.resources.Queue).toBe(true);
   expect(body.resources.SQLDatabase).toBe(true);
   expect(body.resources.ContainerService).toBe(true);
+  expect(body.resources.VectorIndex).toBe(true);
+  expect(body.resources.DurableWorkflow).toBe(true);
+  expect(body.resources.StatefulActorNamespace).toBe(true);
+  expect(body.resources.Schedule).toBe(true);
   expect(body.adapters.opentofu).toBe(true);
   expect(body.adapters.cloudflare).toBeUndefined();
   expect(body.adapters.takosumi_native).toBeUndefined();
   expect(Object.keys(body.resources).sort()).toEqual([
     "ContainerService",
+    "DurableWorkflow",
     "EdgeWorker",
     "KVStore",
     "ObjectBucket",
     "Queue",
     "SQLDatabase",
+    "Schedule",
     "Stack",
+    "StatefulActorNamespace",
+    "VectorIndex",
   ]);
 });

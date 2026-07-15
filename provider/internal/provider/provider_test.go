@@ -33,12 +33,16 @@ func discoveryHandler(t *testing.T, resourceShapes bool) http.HandlerFunc {
 			body = map[string]any{
 				"apiVersion": "takosumi.dev/v1alpha1",
 				"resources": map[string]bool{
-					"EdgeWorker":       resourceShapes,
-					"ObjectBucket":     resourceShapes,
-					"KVStore":          resourceShapes,
-					"Queue":            resourceShapes,
-					"SQLDatabase":      resourceShapes,
-					"ContainerService": resourceShapes,
+					"EdgeWorker":             resourceShapes,
+					"ObjectBucket":           resourceShapes,
+					"KVStore":                resourceShapes,
+					"Queue":                  resourceShapes,
+					"SQLDatabase":            resourceShapes,
+					"ContainerService":       resourceShapes,
+					"VectorIndex":            resourceShapes,
+					"DurableWorkflow":        resourceShapes,
+					"StatefulActorNamespace": resourceShapes,
+					"Schedule":               resourceShapes,
 				},
 			}
 		default:
@@ -137,6 +141,10 @@ func currentProviderResourceTypeNames() []string {
 		"takosumi_queue",
 		"takosumi_sql_database",
 		"takosumi_container_service",
+		"takosumi_vector_index",
+		"takosumi_durable_workflow",
+		"takosumi_stateful_actor_namespace",
+		"takosumi_schedule",
 		"takosumi_target_pool",
 	}
 	sort.Strings(names)
