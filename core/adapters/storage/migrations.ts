@@ -4115,4 +4115,14 @@ alter table takosumi_runs
   add constraint takosumi_runs_kind_check
   check (kind in ('source_sync','compatibility_check','plan','apply','destroy_plan','destroy_apply','drift_check','backup','restore'));`,
     },
+    {
+      id: "resources.ready_kind_inventory_index.add",
+      version: 92,
+      domain: "resources",
+      description:
+        "Add the exact-kind Ready Resource keyset index used by bounded host composition inventory reconciliation.",
+      sql: `create index if not exists takosumi_resource_shapes_ready_kind_created_id_idx
+  on takosumi_resource_shapes (kind, phase, created_at, id);`,
+      down: "drop index if exists takosumi_resource_shapes_ready_kind_created_id_idx;",
+    },
   ]);

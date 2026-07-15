@@ -76,6 +76,7 @@ import {
   createInMemoryResourceShapeStores,
   formatResourceShapeId,
   LegacyResourceStateAdoptionService,
+  matchesApplyLock,
   ResourceShapeService,
   type ResourceAdapter,
   type ResourceObservationClaimInput,
@@ -801,6 +802,23 @@ export interface TakosumiOperations {
         }
       | undefined
     >;
+    /**
+     * Internal host inventory for bounded reconciliation jobs. This is not
+     * mounted as an HTTP route and exposes only coherent Ready evidence.
+     */
+    listReadyResourcesPage(input: {
+      readonly kind: ResourceShapeKind;
+      readonly cursor?: string;
+      readonly limit?: number;
+    }): Promise<{
+      readonly items: readonly {
+        readonly resourceId: string;
+        readonly resource: ResourceObject;
+        readonly resourceGeneration: number;
+        readonly nativeResources: readonly NativeResourceRef[];
+      }[];
+      readonly nextCursor?: string;
+    }>;
   };
   /**
    * Activity domain service (Core Specification §27 / §34): the Workspace-scoped
@@ -1970,6 +1988,91 @@ export async function createTakosumiService(
                 nativeResources: lock.nativeResources ?? [],
               });
             },
+            // --- Resource Shape host inventory
+            listReadyResourcesPage: async (input: {
+              readonly kind: ResourceShapeKind;
+              readonly cursor?: string;
+              readonly limit?: number;
+            }) => {
+              const page =
+                await resourceShapeStores.resources.listReadyByKindPage(
+                  input.kind,
+                  {
+                    ...(input.cursor ? { cursor: input.cursor } : {}),
+                    ...(input.limit !== undefined
+                      ? { limit: input.limit }
+                      : {}),
+                  },
+                );
+              const items = await Promise.all(
+                page.items.map(async (candidate) => {
+                  const currentBefore = await resourceShapeStores.resources.get(
+                    candidate.id,
+                  );
+                  const lockBefore = await resourceShapeStores.locks.get(
+                    candidate.id,
+                  );
+                  const projected = await resourceShapeService.get(
+                    candidate.spaceId,
+                    candidate.kind,
+                    candidate.name,
+                  );
+                  const lockAfter = await resourceShapeStores.locks.get(
+                    candidate.id,
+                  );
+                  const currentAfter = await resourceShapeStores.resources.get(
+                    candidate.id,
+                  );
+                  const unchanged =
+                    currentBefore &&
+                    currentAfter &&
+                    currentBefore.id === candidate.id &&
+                    currentAfter.id === candidate.id &&
+                    currentBefore.kind === input.kind &&
+                    currentAfter.kind === input.kind &&
+                    currentBefore.phase === "Ready" &&
+                    currentAfter.phase === "Ready" &&
+                    currentBefore.generation === candidate.generation &&
+                    currentAfter.generation === candidate.generation &&
+                    currentBefore.observedGeneration === candidate.generation &&
+                    currentAfter.observedGeneration === candidate.generation &&
+                    currentBefore.updatedAt === candidate.updatedAt &&
+                    currentAfter.updatedAt === candidate.updatedAt;
+                  if (
+                    !unchanged ||
+                    !projected.ok ||
+                    projected.value.status?.phase !== "Ready" ||
+                    projected.value.status.observedGeneration !==
+                      candidate.generation ||
+                    !lockBefore ||
+                    !lockAfter ||
+                    !matchesApplyLock(lockBefore, lockAfter) ||
+                    lockBefore.resourceId !== candidate.id ||
+                    lockBefore.locked !== true ||
+                    projected.value.status.resolution?.locked !== true ||
+                    projected.value.status.resolution.selectedImplementation !==
+                      lockBefore.selectedImplementation ||
+                    projected.value.status.resolution.target !==
+                      lockBefore.target
+                  ) {
+                    throw new Error(
+                      `canonical Ready Resource inventory conflict for ${candidate.id}`,
+                    );
+                  }
+                  return structuredClone({
+                    resourceId: candidate.id,
+                    resource: projected.value,
+                    resourceGeneration: candidate.generation,
+                    nativeResources: lockBefore.nativeResources ?? [],
+                  });
+                }),
+              );
+              return {
+                items,
+                ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+              };
+            },
+            // --- End Resource Shape host inventory
           },
         }
       : {}),

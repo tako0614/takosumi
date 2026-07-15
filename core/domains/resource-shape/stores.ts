@@ -165,6 +165,15 @@ export interface ResourceShapeStore {
     params: PageParams,
   ): Promise<Page<ResourceShapeRecord>>;
   /**
+   * Internal, global inventory page for host-operated reconciliation jobs.
+   * This is not a public Resource list route: callers select one exact shape
+   * kind and receive only fully observed Ready records in stable keyset order.
+   */
+  listReadyByKindPage(
+    kind: ResourceShapeKind,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>>;
+  /**
    * Claims the globally oldest due, fully-applied Ready Resource. The lease is
    * internal scheduler state, not Resource status or another lifecycle ledger.
    */
@@ -363,6 +372,21 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
   ): Promise<Page<ResourceShapeRecord>> {
     const records = [...this.#byId.values()]
       .filter((record) => record.spaceId === spaceId)
+      .sort(compareCreatedAtAndId);
+    return Promise.resolve(pageSorted(records, params));
+  }
+
+  listReadyByKindPage(
+    kind: ResourceShapeKind,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    const records = [...this.#byId.values()]
+      .filter(
+        (record) =>
+          record.kind === kind &&
+          record.phase === "Ready" &&
+          record.observedGeneration === record.generation,
+      )
       .sort(compareCreatedAtAndId);
     return Promise.resolve(pageSorted(records, params));
   }
