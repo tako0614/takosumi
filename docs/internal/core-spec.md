@@ -99,13 +99,16 @@ resource registry.
 
 Plan / Apply / Destroy are guarded Run operations, not separate ledgers.
 
-`Secret` here is the encrypted Stack-flow boundary, not a bundled Resource
-Shape. In the current v1alpha1 composition, ProviderConnection registration
-accepts write-only secret material, seals it at rest, and materializes it only
-inside an authorized Run. A standalone Secret API/resource contract is not yet
-defined. The candidate `Secret` Resource Shape in the Final Plan remains a
-future shape and must not be added without its own typed schema, planner,
-adapter, import/drift semantics, and tests.
+`Secret` here is the encrypted shared control-object boundary, not a bundled
+Resource Shape. The v1 contract provides write-only create/update/rotate/delete
+operations and metadata/version reads scoped to one Workspace. A read never
+returns secret material. ProviderConnection, an explicitly installed
+InterfaceBinding materializer, or an EdgeWorker secret binding can reference a
+Secret version; only the authorized run/invocation/backend boundary can open
+it. Secret values never enter Resource specs, Interface documents, Output,
+state, Run logs, audit payloads, or OpenTofu provider state. Selling a managed
+Secret Store would require a separate future `SecretStore` Shape; it is not
+implied by this object.
 
 #### OpenTofu Output Boundary
 
@@ -328,6 +331,28 @@ for Interface resolution.
 | ResolutionLock | Persisted selected implementation + target                              |
 | NativeResource | Concrete backend resource reference                                     |
 | Condition      | Ready / Reconciling / Drifted / Degraded / Blocked evidence             |
+
+The bundled v1alpha1 typed Shape set is:
+
+```text
+EdgeWorker
+ObjectBucket
+KVStore
+Queue
+SQLDatabase
+ContainerService
+VectorIndex
+DurableWorkflow
+StatefulActorNamespace
+Schedule
+```
+
+`VerifiedDomain` is a separate optional operator control object and capability,
+not a Resource Shape. It binds a user-owned hostname to an immutable owner
+account and Workspace, exposes non-secret challenge/status evidence, and
+requires current ownership plus certificate status before an authorized
+`http.route` Interface can become active. An OSS host may leave this capability
+disabled; Takosumi Cloud GA enables it through its managed domain backend.
 
 `Space` in this model is the Resource API namespace and policy scope. The public
 model uses Workspace / Project / Capsule / Run / StateVersion / Output /
@@ -950,7 +975,7 @@ targets:
           custom.mesh: native
 ```
 
-Operator-defined shape tokens are accepted by the API/plugin seam. The six
+Operator-defined shape tokens are accepted by the API/plugin seam. The ten
 bundled typed provider resources remain a convenience surface, not a global
 Resource Shape enum.
 
@@ -1178,6 +1203,13 @@ amount and `rated` evidence. Without that port, showback persists zero /
 `unrated`; `disabled` persists no automatic measurement. An `unrated` event
 must always have zero `usdMicros`, while `rated` zero remains distinguishable.
 
+New usage quantities are canonical non-negative decimal integer strings paired
+with an explicit smallest unit. Implementations aggregate with `BigInt` and
+apply a catalog's rounding rule only after its window closes; JavaScript
+floating point and per-event rounding are not billing authorities. Migration
+readers may accept legacy non-negative safe integer JSON numbers, but writers
+emit only the canonical string representation.
+
 An enforcing Cloud host extends preview/apply through a commercial port without
 adding Cloud fields to the Resource shape. Its required semantics are:
 
@@ -1265,10 +1297,14 @@ isolation, quota, network egress policy, admin audit, and usage metering.
    Workspace-wide Output reconcile paths.
 6. Resource object schema, Resource API preview/apply/status, ResolutionLock.
 7. EdgeWorker / ObjectBucket / KVStore / Queue / SQLDatabase /
-   ContainerService planner and provider schemas.
+   ContainerService / VectorIndex / DurableWorkflow /
+   StatefulActorNamespace / Schedule planner and provider schemas.
 8. TargetPool implementation plugin fields.
 9. Add scoped compatibility profiles only where existing providers are not
    enough for import, binding, policy, or metering.
-10. Add future shapes one service form at a time.
-11. Kubernetes / VM / agent-local credentials where they are needed as targets.
-12. Operator/Cloud commercial operation and official managed targets.
+10. Add the write-only Secret control API and optional VerifiedDomain framework.
+11. Keep Kubernetes / VM / Machine / Job / Function work specification-only for
+    this GA; add a manager later only after a separate prior-art and operation
+    review.
+12. Add future shapes one service form at a time.
+13. Operator/Cloud commercial operation and official managed targets.

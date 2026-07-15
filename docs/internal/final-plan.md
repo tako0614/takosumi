@@ -442,10 +442,18 @@ before runtime activation in managed target implementations. Generic
 ProviderConnection / non-managed providers may still receive these values as
 ordinary OpenTofu variables; Takosumi should not reject the module merely
 because it chooses to use its own provider-side routing.
-Takosumi Cloud does not yet implement that verification or certificate
-lifecycle. User-owned custom domains are therefore Planned, and non-empty
-custom-domain requests against Cloud-managed routes must fail closed before
-routing or activation state is written.
+Takosumi Cloud GA includes that verification and certificate lifecycle. A
+user-owned hostname is represented by a write-restricted `VerifiedDomain`
+control object owned by the immutable commercial owner account and attributed
+to one Workspace. It records only the hostname, verification method/status,
+certificate status, provider-native non-secret evidence, attached Resource,
+and lifecycle timestamps. Verification challenges are returned only to an
+authorized owner; they are never Interface inputs or OpenTofu Outputs. Runtime
+activation requires hostname ownership and certificate status to both be
+current, the target Resource to be Ready, and the owner/domain safety limits to
+pass. Pending, expired, detached, or failed verification removes routing before
+it can be presented as active. Generic ProviderConnection / non-managed
+providers remain free to implement their own provider-side domain lifecycle.
 
 Subdomain, password, and app-specific env are not universal Takosumi
 requirements. A Capsule that does not need a public endpoint should not show a
@@ -852,6 +860,10 @@ KVStore
 Queue
 SQLDatabase
 ContainerService
+VectorIndex
+DurableWorkflow
+StatefulActorNamespace
+Schedule
 ```
 
 ### 2.4 Deploy API And Optional OpenTofu Provider
@@ -1144,8 +1156,12 @@ Cloud system `url` output into a Resource-owned `http.route` / `v1alpha1`
 Interface plus an exact Principal `edge.request` Binding. Any runtime routing
 projection is a recoverable cache of that canonical state, not a compatibility
 lifecycle ledger. Route DELETE revokes the Binding and retires the Interface;
-it never releases a hostname. Arbitrary custom domains remain unsupported until
-the separate ownership/certificate lifecycle exists.
+it never releases a managed hostname. User-owned custom domains use the
+Operator/Cloud `VerifiedDomain` authority described below. A custom-domain
+route can become active only after that exact object proves current ownership
+and certificate state for the same owner account, Workspace, and EdgeWorker.
+Deleting the route detaches runtime traffic; deleting the VerifiedDomain is a
+separate reviewed lifecycle operation.
 
 From the user's perspective the service is an `EdgeWorker`, selected through
 the dashboard, CLI, direct Deploy API, a supported compatibility client, or the
@@ -1359,7 +1375,78 @@ proof command is:
 bun run opentofu:takos-shape-provider-proof
 ```
 
-### 4.4 AI Gateway Is Not A Resource Shape
+### 4.4 VectorIndex / DurableWorkflow / StatefulActorNamespace / Schedule
+
+These four shapes complete the Takosumi Cloud GA developer-platform service
+set. They pass the prior-art gate because Takosumi Cloud sells and operates
+their managed placement, binding projection, usage metering, import/drift, and
+recovery lifecycle. External equivalents remain valid through their ordinary
+OpenTofu providers.
+
+```hcl
+resource "takosumi_vector_index" "search" {
+  name       = "search"
+  dimensions = 768
+  metric     = "cosine"
+}
+
+resource "takosumi_durable_workflow" "release" {
+  name          = "release"
+  artifact_url  = "https://example.com/releases/workflow.js"
+  artifact_sha256 = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  entrypoint    = "ReleaseWorkflow"
+}
+
+resource "takosumi_stateful_actor_namespace" "rooms" {
+  name            = "rooms"
+  class_name      = "Room"
+  storage_profile = "durable_sqlite"
+}
+
+resource "takosumi_schedule" "nightly" {
+  name     = "nightly"
+  cron     = "0 3 * * *"
+  timezone = "UTC"
+  connections = [{
+    name        = "target"
+    resource    = takosumi_durable_workflow.release.id
+    permissions = ["invoke"]
+    projection  = "schedule_trigger"
+  }]
+}
+```
+
+Rules:
+
+```text
+VectorIndex:
+  owns one index lifecycle. Dimensions are positive and immutable after
+  materialization unless the selected implementation explicitly advertises a
+  reviewed migration. Metric names are open capability tokens.
+
+DurableWorkflow:
+  owns a versioned workflow definition and durable instance data. It is not an
+  operator maintenance job. Artifact integrity, invocation, steps, state
+  retention, observe/import, and recovery are first-class evidence.
+
+StatefulActorNamespace:
+  owns a namespace/class/storage contract. Individual actor instances are
+  runtime state and never become one Resource per object. EdgeWorker consumes
+  the namespace through an explicit connection/binding.
+
+Schedule:
+  owns an independent cron lifecycle and an explicit target connection. The
+  v1alpha1 expression is a five-field cron. UTC works everywhere; another
+  timezone is an open token that requires matching resolver capability.
+  Schedule creation itself is an explicitly rated-zero control operation;
+  target invocations are metered by the target service.
+```
+
+These shapes use the same preview/apply/delete/observe/refresh/import contract,
+ResolutionLock, Run ledger, public Outputs, dependency ordering, and no-secret
+spec invariant as the original six shapes.
+
+### 4.5 AI Gateway Is Not A Resource Shape
 
 AI Gateway remains a Takosumi Cloud / operator service endpoint, not a default
 `takosumi_*` resource.
@@ -1405,18 +1492,22 @@ Takosumi sells and operates the service. External infrastructure that Takosumi
 does not operate remains on its mature provider through the Stack flow.
 
 ```text
-Route
-Connection
-Secret
 RelationalDatabase
-DurableWorkflow
 Job
 Machine
 MachinePool
 KubernetesCluster
 Artifact
 ContainerImage
+Function
 ```
+
+`Route` remains an `http.route` Interface plus InterfaceBinding, not a Shape.
+Runtime credentials use the write-only Secret boundary and are never Resource
+spec fields. `Machine`, `MachinePool`, `KubernetesCluster`, `Job`, and
+`Function` are specification candidates only for this GA: their schemas and
+boundary notes may be written, but no bundled manager, compatibility surface,
+or Stable offering is required or advertised.
 
 Do not add a public shape until it has:
 
@@ -1791,8 +1882,11 @@ Database
 Queue
 AI Gateway
 Durable Workflow
+Vector Index
+Stateful Actor Namespace
+Schedule
 Pricing / Usage / Invoices
-Custom Domains (Planned)
+Custom Domains
 *.app.takos.jp names
 ```
 
@@ -1803,11 +1897,12 @@ operator-managed public base domain. Takosumi Cloud's base domain is
 vanity slot. The optional vanity form is `<label>.<managed-base-domain>` and
 consumes one finite slot owned by the immutable Workspace owner account. Names
 are first-come-first-served.
-Arbitrary user-owned custom domains are a separate lifecycle and must
-pass ownership verification, certificate provisioning, plan/quota, and abuse
-policy before runtime activation. That lifecycle is not implemented today, so
-all user-owned custom-domain activation is Planned and non-empty requests fail
-closed.
+Arbitrary user-owned custom domains are a separate `VerifiedDomain` lifecycle
+and must pass ownership verification, certificate provisioning, account
+attribution, quota, and abuse policy before runtime activation. Challenge,
+ownership, certificate, attach/detach, renewal, expiry, and delete transitions
+are all GA lifecycle evidence; a pending or degraded domain is never projected
+as an active route.
 This is a hard product boundary: operator-owned managed hostnames such as
 `<workspace-handle>-<label>.app.takos.jp` are the broad default namespace.
 Vanity operator-owned names use a finite owner slot, while arbitrary user-owned
@@ -1821,30 +1916,34 @@ Implementation can use Cloudflare primitives such as Workers for Platforms,
 Dynamic Workers, R2, D1, KV, Queues, Workflows, Containers, and AI Gateway.
 Those are implementation details behind official managed targets.
 
-Docs must publish a compatibility matrix:
+Docs must publish one compatibility matrix. The GA is the Cloudflare Developer
+Platform-like subset below, not Cloudflare account/API compatibility:
 
 ```text
 Stable:
-  EdgeWorker deploy
-  one explicit-path route per EdgeWorker canonical Cloud system hostname
-  ObjectBucket with S3-compatible data-plane surface
+  EdgeWorker modules + static assets + vars + write-only secrets
+  EdgeWorker service/resource bindings
+  EdgeWorker versions + reviewed deployments + routes + cron + logs
+  managed hostnames + verified custom domains
+  ObjectBucket with the documented R2/S3-compatible control/data subset
+  KVStore
+  SQLDatabase
+  Queue
+  VectorIndex
+  DurableWorkflow
+  ContainerService
+  StatefulActorNamespace
+  Schedule
   AI Gateway as an OpenAI-compatible env/endpoint surface
 
-Preview:
-  EdgeWorker runtime secrets / vars / service bindings through the Cloudflare
-  compatibility profile (ProviderConnection runner injection remains a stable
-  generic OpenTofu capability)
-  KV
-  Queue
-  SQLDatabase
-  ContainerService
-  DurableWorkflow
-
-Planned:
-  Database extensions
-  custom domains (verified ownership and certificate lifecycle)
-
 Unsupported:
+  Pages
+  Hyperdrive
+  Analytics Engine
+  Browser Rendering
+  Images
+  Stream
+  Pipelines
   DNS full management
   WAF
   Zero Trust
@@ -1854,6 +1953,15 @@ Unsupported:
   Email Routing
 ```
 
+Provider compatibility is pinned to the selected Cloudflare Terraform Provider
+`5.19.1` schemas, not to every provider resource and not to the moving REST API.
+The GA compatibility allowlist covers Workers script/deployment/route/
+cron/custom-domain/subdomain, Workers KV namespace/value, R2 bucket plus its
+documented CORS/event/lifecycle/lock/domain subset, D1 database, Queue and Queue
+consumer, Workflow, AI Gateway/dynamic routing, and their selected singular or
+plural data sources. WfP dispatch namespaces and fallback origins are operator
+implementation details and are never tenant compatibility resources.
+
 Current managed hostname support:
 
 ```text
@@ -1861,7 +1969,7 @@ Workspace-scoped names under the operator managed public base domain
 owner-slot vanity names under the same base domain
 ```
 
-Planned custom-domain support:
+Verified custom-domain support:
 
 ```text
 user-owned apex and subdomains
@@ -1873,8 +1981,9 @@ plan/quota/abuse policy
 The OSS hostname reservation authority is the source of truth for managed name
 ownership. Operator/Cloud configures the managed base domain, vanity-slot
 limits, reserved labels, and abuse policy. Cloud KV / Durable Object state is
-only routing / activation state. The separate verified custom-domain and
-certificate lifecycle will live in the Operator/Cloud layer when implemented.
+only routing / activation state. The verified custom-domain and certificate
+lifecycle lives in the Operator/Cloud layer; OSS exposes only the portable
+control contract and never Cloudflare account credentials or certificate keys.
 
 ## 12. Billing Boundary
 
@@ -1899,6 +2008,14 @@ plan and `runner_minute` measurements are recorded as zero / `unrated` and
 never block a Run. A host can install any explicit price policy; Cloud uses its
 versioned `PriceCatalog` and persists `rated` evidence. Legacy `credits` are only
 a historical storage/client compatibility concern.
+
+Usage quantity is never a JavaScript floating-point billing authority. New
+wire/storage writes use a canonical non-negative decimal integer string plus an
+explicit smallest unit, for example bytes-seconds, CPU microseconds, rows,
+64,000-byte message chunks, or vector dimensions. Rating and aggregation use
+`BigInt`; period/window aggregation happens before the declared billing-unit
+rounding rule. During migration, readers may accept a legacy non-negative safe
+integer JSON number, but emitters write only the canonical string form.
 
 Takosumi for Operator and Takosumi Cloud can turn those measurements into:
 
@@ -1936,6 +2053,106 @@ DeploymentQuote:
   fixed and estimated usage line items
   subtotal / tax treatment / estimated total micros / currency
 ```
+
+### Public plans and tax
+
+All public plans expose the same managed-service catalog. Resource counts are
+technical safety ceilings, not plan features.
+
+```text
+Lite:  USD 1/month  + usage, USD 0.50 monthly managed-usage grant
+Plus: USD 5/month  + usage, USD 3.00 monthly managed-usage grant
+Pro:  USD 10/month + usage, USD 7.00 monthly managed-usage grant
+```
+
+Prices are tax-exclusive and Stripe automatic tax is enabled. Takosumi Cloud
+supports individual and business customer profiles. Stripe products use
+`txcd_10102001` for personal-use PaaS and `txcd_10102000` for business-use
+PaaS; the selected customer profile, tax code, tax behavior, and address/tax-id
+evidence are pinned into quotes and invoice lines. Tax registrations and legal
+classification remain operator/legal approval gates.
+
+### Managed-service retail rule
+
+For Cloudflare-backed official capacity, the public usage rate is the current
+provider public overage/marginal rate multiplied by `1.5`. Shared provider free
+tiers, account subscriptions, and other fixed platform costs are absorbed by
+the Takosumi Cloud subscription and are not allocated as hidden per-tenant free
+tiers. A catalog update is versioned and effective-dated; it never re-rates old
+immutable usage.
+
+The initial USD catalog is:
+
+| Service                        | Meter                                |                                                                Retail rate |
+| ------------------------------ | ------------------------------------ | -------------------------------------------------------------------------: |
+| EdgeWorker                     | requests                             |                                                          `$0.45 / million` |
+| EdgeWorker                     | CPU                                  |                                                   `$0.03 / million CPU-ms` |
+| EdgeWorker                     | active script                        |                                                     `$0.03 / script-month` |
+| EdgeWorker                     | log events                           |                                                          `$0.90 / million` |
+| EdgeWorker                     | Logpush events                       |                                                         `$0.075 / million` |
+| VerifiedDomain                 | active hostname                      |                                                   `$0.15 / hostname-month` |
+| ObjectBucket Standard          | storage                              |                                                       `$0.0225 / GB-month` |
+| ObjectBucket Standard          | Class A / Class B                    |                                      `$6.75 / million` / `$0.54 / million` |
+| ObjectBucket Infrequent Access | storage                              |                                                        `$0.015 / GB-month` |
+| ObjectBucket Infrequent Access | Class A / Class B                    |                                     `$13.50 / million` / `$1.35 / million` |
+| ObjectBucket Infrequent Access | retrieval                            |                                                              `$0.015 / GB` |
+| KVStore                        | read                                 |                                                     `$0.75 / million keys` |
+| KVStore                        | write / delete / list                |                                                     `$7.50 / million keys` |
+| KVStore                        | storage                              |                                                         `$0.75 / GB-month` |
+| SQLDatabase                    | rows read                            |                                                        `$0.0015 / million` |
+| SQLDatabase                    | rows written                         |                                                          `$1.50 / million` |
+| SQLDatabase                    | storage                              |                                                        `$1.125 / GB-month` |
+| Queue                          | operation                            |                                             `$0.60 / million 64 KB chunks` |
+| VectorIndex                    | queried dimensions                   |                                                         `$0.015 / million` |
+| VectorIndex                    | stored dimensions                    |                                                     `$0.075 / 100 million` |
+| DurableWorkflow                | invocation / CPU                     |                               `$0.45 / million` / `$0.03 / million CPU-ms` |
+| DurableWorkflow                | state / steps                        |                               `$0.30 / GB-month` / `$1.20 / 100,000 steps` |
+| ContainerService               | memory                               |                                                 `$0.00000375 / GiB-second` |
+| ContainerService               | CPU                                  |                                                  `$0.000030 / vCPU-second` |
+| ContainerService               | disk                                 |                                                 `$0.000000105 / GB-second` |
+| ContainerService               | egress NA+EU / Oceania+KR+TW / other |                                     `$0.0375` / `$0.075` / `$0.060` per GB |
+| StatefulActorNamespace         | requests                             |                                                         `$0.225 / million` |
+| StatefulActorNamespace         | duration                             |                                              `$18.75 / million GB-seconds` |
+| StatefulActorNamespace         | rows read / written                  |                                            `$0.0015` / `$1.50` per million |
+| StatefulActorNamespace         | SQL storage                          |                                                         `$0.30 / GB-month` |
+| AI Gateway                     | upstream/model usage                 | exact approved upstream catalog rate `x 1.5`, plus EdgeWorker gateway cost |
+
+R2 delete/abort/egress and lifecycle/control operations that have no provider
+marginal charge are explicit rated-zero rows. Bindings, secrets, routes,
+schedules, static-asset control, preview, observe, refresh, and delete are also
+explicit zero rows unless they trigger a separately metered runtime/storage
+operation. Workflows has one catalog version with zero state/step prices before
+`2026-08-10`, and a second effective version with the rates above on or after
+that date; the operator must not activate the second version early.
+
+### Safety ceilings and spend caps
+
+All plans share one versioned abuse/safety policy per immutable owner account:
+
+```text
+all managed Resources:       250
+EdgeWorker:                  100
+ObjectBucket:                100
+KVStore:                     100
+Queue:                       100
+Schedule:                    100
+SQLDatabase:                  50
+DurableWorkflow:              50
+StatefulActorNamespace:       50
+VectorIndex:                  25
+ContainerService:             10
+active verified domains:      25
+
+operator hard spend caps:
+  USD 25 / single authorization
+  USD 100 / rolling day
+  USD 500 / billing period
+```
+
+Customers can set lower account, Workspace, or service budgets. Pending
+reservations and captured usage count atomically against the same period/rolling
+ledger. Raising an operator hard cap is a reviewed support/abuse operation, not
+a plan upgrade.
 
 Preview of a billable Cloud Resource returns a `DeploymentQuote`. Apply must
 present `quoteId + quoteDigest`; Cloud verifies that the desired-state digest,
@@ -2021,8 +2238,11 @@ clear OSS / Operator / Cloud boundaries
 
 ## 14. GA Contract
 
-Takosumi software GA and Takosumi Cloud managed-service GA are related but
-separately evidenced. OSS GA does not require Cloud billing; Cloud GA does.
+Takosumi software v1.0.0 and Takosumi Cloud managed-service GA are separately
+evidenced but released together for this scope. OSS does not contain Cloud
+billing or official capacity; nevertheless, the v1.0.0 tag is not cut until
+the full public typed contract below is conformant and the official Cloud
+deployment proves that every advertised Stable service can implement it.
 
 Takosumi software GA requires:
 
@@ -2050,10 +2270,28 @@ dashboard shows service -> inputs -> price -> preview -> deploy by default
 live tenant isolation, abuse/support, observability, backup/restore, and billing evidence
 ```
 
-EdgeWorker and ObjectBucket are the initial Stable candidates. KVStore, Queue,
-SQLDatabase, ContainerService, and DurableWorkflow remain Preview until each one
-passes the same lifecycle, price, billing, reconciliation, recovery, and live
-evidence contract. GA is not inferred from a self-test or from one green client.
+The GA set is all-or-nothing:
+
+```text
+EdgeWorker
+ObjectBucket
+KVStore
+SQLDatabase
+Queue
+VectorIndex
+DurableWorkflow
+ContainerService
+StatefulActorNamespace
+Schedule
+AI Gateway service endpoint
+Verified custom-domain lifecycle
+```
+
+Every item must pass lifecycle, provider/API compatibility where applicable,
+price coverage, immutable metering, spend enforcement, invoice reconciliation,
+recovery, tenant isolation, dashboard, and live operator evidence before any of
+them is advertised as the Takosumi Cloud GA set. GA is not inferred from a
+self-test, a descriptor, an unconfigured manager, or one green client.
 
 ## 15. Immediate Build Order
 
@@ -2067,21 +2305,27 @@ evidence contract. GA is not inferred from a self-test or from one green client.
 5. Make `/v1/resources` the single Deploy API authority for preview/apply/
    observe/refresh/import/delete; remove compatibility-owned lifecycle state.
 6. Finish provider-neutral Resource Shape schemas, planner, resolver, state,
-   and ResolutionLock for
-   EdgeWorker, ObjectBucket, KVStore, Queue, SQLDatabase, and ContainerService.
+   and ResolutionLock for EdgeWorker, ObjectBucket, KVStore, Queue,
+   SQLDatabase, ContainerService, VectorIndex, DurableWorkflow,
+   StatefulActorNamespace, and Schedule.
 7. Keep `takosumi/takosumi` as an optional typed client for those shapes.
 8. Put TargetPool/Policy/adapter/backend-manager selection behind Deploy API;
    expose it only in operator/advanced settings.
 9. Translate control-plane compatibility profiles into Deploy API calls and
    make data-plane profiles resolve canonical Ready Resources.
-10. Add versioned Cloud ServiceOffering / PriceCatalog / DeploymentQuote and
-    atomic reserve/capture/release.
-11. Reconcile immutable usage/reservations/refunds to payment-provider invoices.
-12. Add new shapes one provider-neutral service form at a time, not as a
-    catch-all resource or provider clone.
+10. Add one `ManagedServiceMeterCatalog`, canonical BigInt-safe quantities,
+    window aggregation, versioned ServiceOffering / PriceCatalog /
+    DeploymentQuote, and atomic reserve/capture/release/spend-cap accounting.
+11. Implement every selected backend manager and data plane, then reconcile
+    immutable usage/reservations/refunds to payment-provider invoices.
+12. Complete the EdgeWorker modules/assets/secrets/bindings/version/deployment/
+    route/schedule/domain/log surface and the selected Cloudflare provider
+    `5.19.1` compatibility subset without claiming full Cloudflare API support.
 13. Simplify the default UX to service -> configuration -> price -> preview ->
-    deploy; keep target, policy, and adapter details in advanced/operator views.
-14. Host Takosumi Cloud as the official Takosumi for Operator deployment.
+    deploy; keep target, policy, adapter, meter, and recovery details in
+    advanced/operator views.
+14. Require all GA-set services to pass the same Stable evidence matrix, then
+    host Takosumi Cloud as the official Takosumi for Operator deployment.
 
 ## 16. Final Sentence
 
