@@ -29,7 +29,7 @@ function resourceEvidence(
   };
 }
 
-test("control-plane compatibility handlers receive and invoke only the Resource Deploy API port", async () => {
+test("control-plane compatibility handlers receive only canonical Resource and route Interface ports", async () => {
   const translated: string[] = [];
   const response = await handlePlatformExtensionRouteRequest(
     new Request("https://operator.example/compat/example/v1/buckets", {
@@ -43,7 +43,10 @@ test("control-plane compatibility handlers receive and invoke only the Resource 
             ReturnType<typeof createPlatformCompatibilityAuthority>
           >,
         ) {
-          expect(Object.keys(authority.control ?? {})).toEqual(["resourceApi"]);
+          expect(Object.keys(authority.control ?? {})).toEqual([
+            "resourceApi",
+            "routeInterfaces",
+          ]);
           expect(Object.keys(authority.control?.resourceApi ?? {})).toEqual([
             "fetch",
           ]);
@@ -83,12 +86,67 @@ test("control-plane compatibility handlers receive and invoke only the Resource 
           translated.push(`${request.method} ${new URL(request.url).pathname}`);
           return Response.json({ translated: true });
         },
+        routeInterfaces: routeInterfaceStub(),
       }),
   );
 
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ translated: true });
   expect(translated).toEqual(["POST /v1/resources/preview"]);
+});
+
+test("route Interface compatibility port rejects a different Workspace before opening canonical services", async () => {
+  const authority = await createPlatformCompatibilityAuthority({
+    request: new Request("https://operator.example/compat/example/v1/routes"),
+    env: {} as never,
+    route: {
+      basePath: "/compat/example/v1",
+      handlerKey: "EXAMPLE_COMPAT",
+      compatibilityProfiles: [
+        { profile: "compat.example.v1", planes: ["control"] },
+      ],
+    },
+    session: {
+      authenticated: true,
+      authKind: "session",
+      subject: "account_example",
+      workspaceId: "space_example",
+    },
+  });
+
+  await expect(
+    authority.control!.routeInterfaces.list({ workspaceId: "space_foreign" }),
+  ).rejects.toMatchObject({ code: "forbidden" });
+});
+
+test("route Interface compatibility mutations reject read-only personal access scope", async () => {
+  const authority = await createPlatformCompatibilityAuthority({
+    request: new Request("https://operator.example/compat/example/v1/routes"),
+    env: {} as never,
+    route: {
+      basePath: "/compat/example/v1",
+      handlerKey: "EXAMPLE_COMPAT",
+      compatibilityProfiles: [
+        { profile: "compat.example.v1", planes: ["control"] },
+      ],
+    },
+    session: {
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "account_example",
+      workspaceId: "space_example",
+      scopes: ["read"],
+    },
+  });
+
+  await expect(
+    authority.control!.routeInterfaces.ensure({
+      workspaceId: "space_example",
+      resourceName: "api",
+      pathPattern: "/*",
+      expectedEndpoint: "https://api.system.example/",
+    }),
+  ).rejects.toMatchObject({ code: "forbidden" });
 });
 
 test("data-plane compatibility resolver rejects non-Ready evidence", async () => {
@@ -149,3 +207,23 @@ test("compatibility profiles never fall back to the generic raw fetch handler", 
   expect(response.status).toBe(503);
   expect(rawFetchCalled).toBe(false);
 });
+
+function routeInterfaceStub() {
+  return {
+    async ensure(): Promise<never> {
+      throw new Error("not used");
+    },
+    async list() {
+      return [];
+    },
+    async get() {
+      return undefined;
+    },
+    async update(): Promise<never> {
+      throw new Error("not used");
+    },
+    async retire() {
+      return undefined;
+    },
+  };
+}
