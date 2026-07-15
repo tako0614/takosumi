@@ -154,9 +154,9 @@ The Resource Shape API used by the `takosumi` provider (`/v1/resources`,
 import endpoint (`/compat/cloudflare/client/v4`) are not anonymous endpoints. A
 request must authenticate with an account session, personal access token, or
 service token, and the source Workspace plus owning user's billing account must
-be verified. Workers route and script-subdomain writes that create a managed
-hostname additionally require both an existing source Workspace and source
-Capsule context.
+be verified. A Workers route verifies a profile-owned Ready `EdgeWorker` in the
+same Workspace and the calling Principal before mutating its canonical
+Interface / InterfaceBinding. It does not create a Capsule hostname.
 
 Sessions and personal access tokens may select the source Workspace with
 `x-takosumi-cloud-billing-workspace-id`. The platform verifies that the token
@@ -180,14 +180,14 @@ The generated provider block contains only `base_url`; the secret does not land
 in HCL, plan output, or state. Targets that deploy to a real Cloudflare account
 continue to use the user's normal Cloudflare ProviderConnection.
 
-Billable writes are precharged against the owning user's account credits before forwarding. If the
-Workspace context is missing, the token does not match the Workspace, or the
-owning user has insufficient credits, the request fails closed and is not
-forwarded to the Cloud endpoint or apply path. Operations that do not mutate a
-managed hostname may omit Capsule context and record an owner-account usage
-event without a Capsule id. Route and script-subdomain writes that create a
-managed hostname cannot omit source Capsule context, and hostname policy and
-reservation preflight runs before usage precharge.
+For billable Resource writes, `/v1/resources` creates an immutable quote from a
+versioned offering and PriceCatalog, then reserves it during reviewed apply
+before calling a backend. A compatibility control request first translates to
+an `EdgeWorker` or `ObjectBucket` request and follows that same lifecycle. A
+missing Workspace, token/Workspace mismatch, expired or mismatched quote, or
+insufficient balance fails closed before reservation or backend access. Worker
+route CRUD is an Interface mutation on a Ready Resource, not Resource creation
+or hostname reservation.
 
 ## S3-compatible Object Storage endpoint
 
@@ -309,9 +309,10 @@ runtime dispatch.
 Pricing is owned by Takosumi Cloud, not by endpoint request bodies. Requests and
 client headers must not submit `usdMicros` or `credits`. Public prices and
 free-tier terms are shown in [Takosumi Cloud pricing](./pricing.md) and
-Dashboard billing views. The realized versioned PriceCatalog, sync procedure, and
-payment-provider operation details belong in operator notes, not in the public
-reference.
+Dashboard billing views. Every active offering publishes exact SKU, unit, unit
+price, minimum charge, tax policy, and catalog version in the public reference
+and quote. Only synchronization procedures, secrets, and payment-provider
+operation details stay in operator runbooks.
 
 Cleanup is intentionally different from expansion. Create, deploy, runtime, and
 data-plane write/query/message/instance operations are billable and fail closed
@@ -319,20 +320,19 @@ when credit is insufficient. DELETE cleanup should remain available so OpenTofu
 destroy and app removal can recover from a depleted balance without leaving
 resources stuck.
 
-The Takosumi Cloud managed resource backend can present a Cloudflare-shaped
-compatibility view to Cloudflare-oriented OpenTofu manifests:
-`cloudflare_workers_script`, routes, KV, R2, D1, Queues, and Workflows. UI,
-billing, usage ledgers, and public resource identity use service forms such as
-`EdgeWorker`, `ObjectBucket`, `KVStore`, `SQLDatabase`, and `Queue`. Internal
-backend names must not become the user-facing billing or usage-ledger family.
-Unsupported managed subpaths return 501 instead of proxying to Cloudflare for
-free.
+The Stable Cloudflare view contains only `cloudflare_workers_script`, a route on
+its system hostname, and an R2 bucket. KV, D1, Queue, and Workflow may be
+provider-neutral Preview service forms, but their Cloudflare-shaped routes
+return 501. UI, billing, usage ledgers, and public Resource identity use service
+forms such as `EdgeWorker` and `ObjectBucket` plus versioned SKUs. Internal
+backend names do not become public billing families, and unsupported routes are
+never proxied to Cloudflare.
 
 Takosumi can claim a customer has been billed only when the owner account usage
 ledger records a usage event and the billing projection reflects it. Upstream
 provider charges alone do not mean Takosumi customer billing is complete.
-Payment-provider export, reconciliation, and concrete PriceCatalog values are
-operator-runbook concerns, not customer APIs.
+Exact active PriceCatalog values are public; only payment-provider export and
+reconciliation procedures and secrets belong in operator runbooks.
 
 ## AI Gateway
 
@@ -373,61 +373,25 @@ Base URL:
 https://app.takosumi.com/compat/cloudflare/client/v4
 ```
 
-This is the Cloudflare v4-shaped subset for `compat.cloudflare.workers.v1`. It
-lets the `cloudflare/cloudflare` OpenTofu/Terraform provider point
-Workers-oriented resources at Takosumi Cloud `EdgeWorker` / managed bindings by
-changing provider `base_url`. It is an import and deploy path for existing
-manifests, not full Cloudflare API compatibility.
+This is the Cloudflare v4-shaped subset for `compat.cloudflare.workers.v1`.
+Existing `cloudflare/cloudflare` OpenTofu/Terraform provider configurations can
+use it by changing `base_url`, but it is a protocol adapter, not a Cloudflare
+account clone or Resource lifecycle authority.
 
-For official Takosumi Cloud managed targets, this endpoint is an
-operator-allowlisted compatibility URL. If EdgeWorker, R2/KV/D1, or
-Queue-equivalent managed bindings all use the same compatibility endpoint, each
-implementation carries the same `providerBaseUrl` plus an operator-installed
-`plugin`. Example:
+The Stable control-plane subset is deliberately limited:
 
-```json
-{
-  "plugin": "takosumi-cloud-managed",
-  "providerBaseUrl": "https://app.takosumi.com/compat/cloudflare/client/v4"
-}
-```
+| Cloudflare-shaped operation                    | Canonical authority                       |
+| ---------------------------------------------- | ----------------------------------------- |
+| Worker script upload / list / read / delete    | `EdgeWorker` `/v1/resources` lifecycle    |
+| Worker route CRUD on canonical system hostname | `http.route` Interface + InterfaceBinding |
+| R2 bucket create / list / read / delete        | `ObjectBucket` `/v1/resources` lifecycle  |
 
-For official managed targets, typed `takosumi_*` Resource Shapes that select
-this TargetPool implementation dispatch directly to the Takosumi Cloud
-managed-resource adapter. The entrypoint remains the Resource Shape API, passes
-through TargetPool / Policy / ResolutionLock, and then goes through the Cloud
-extension usage / credit guard. The Cloudflare implementation reuses this
-compatibility handler internally, so EdgeWorker deploys are backed by a Workers
-for Platforms dispatch namespace while ObjectBucket / KVStore / SQLDatabase /
-Queue map to the selected managed backend primitives.
-
-`takosumi_edge_worker` and the Cloudflare provider compatibility path share the
-same Cloud managed-resource operation boundary. The Resource Shape entrypoint
-uses TargetPool / Policy / ResolutionLock / Adapter dispatch. The compatibility
-entrypoint uses the Cloud extension catalog / auth / usage guard and the compat
-manager's virtual resource ledger. Both verify source Workspace context and the
-owning account's credits before a backend API call, and the manager chooses the backend implementation.
-Managed compatibility credentials are delivered through provider-native runner
-env, so the Cloudflare provider uses
-`CLOUDFLARE_API_TOKEN=<source-Workspace-attributed Takosumi token>` plus `base_url` to call
-Takosumi Cloud's compat endpoint. The initial Takosumi Cloud Worker
-implementation uses a Workers for Platforms dispatch namespace, but that is one
-`EdgeWorker` implementation option and is not fixed into the public API or
-provider schema.
-
-All Cloud managed resource entrypoints are peers: Compatibility APIs, existing
-OpenTofu providers, and the `takosumi/takosumi` Resource Shape API differ in
-request shape and ownership ledger. Auth, capability discovery, owner account
-usage / credit guard, Resource / NativeResource normalization, and manager dispatch
-are shared. Resource Shape entrypoints also apply TargetPool / Policy /
-ResolutionLock. The Cloudflare-compatible
-endpoint is an import / deploy path into this shared Cloud managed operation
-boundary, not a separate product stack.
-The canonical Cloud resource name is the service form such as `EdgeWorker` or
-`ObjectBucket` plus a Takosumi Cloud service family such as
-`takosumi.edge_worker`. Families such as `cloudflare.workers_script` and
-`cloudflare.r2` are public billing / compatibility meter families, while
-Workers for Platforms or R2 are selected managers / backend implementations.
+Script and bucket mutations invoke canonical preview plus reviewed apply or
+delete. Reads project the canonical Resource. The compatibility handler owns no
+virtual resource ledger, backend manager, or Resource store. Even though
+`KVStore`, `SQLDatabase`, `Queue`, and `DurableWorkflow` service forms are
+Preview in Takosumi Cloud, their Cloudflare-shaped control routes are outside
+the GA subset and return an explicit `501`.
 
 Response envelope:
 
@@ -440,129 +404,66 @@ Response envelope:
 }
 ```
 
-Read routes used by dashboard inventory:
+Principal Stable routes:
 
 ```http
 GET /compat/cloudflare/client/v4/user/tokens/verify
 GET /compat/cloudflare/client/v4/accounts
 GET /compat/cloudflare/client/v4/accounts/{accountId}/workers/scripts
-GET /compat/cloudflare/client/v4/accounts/{accountId}/workers/scripts/{scriptName}/subdomain
-GET /compat/cloudflare/client/v4/accounts/{accountId}/storage/kv/namespaces
+PUT /compat/cloudflare/client/v4/accounts/{accountId}/workers/scripts/{scriptName}
+GET /compat/cloudflare/client/v4/accounts/{accountId}/workers/scripts/{scriptName}
+DELETE /compat/cloudflare/client/v4/accounts/{accountId}/workers/scripts/{scriptName}
+GET|POST /compat/cloudflare/client/v4/zones/zone_takosumi_cloud/workers/routes
+GET|PUT|DELETE /compat/cloudflare/client/v4/zones/zone_takosumi_cloud/workers/routes/{interfaceId}
 GET /compat/cloudflare/client/v4/accounts/{accountId}/r2/buckets
-GET /compat/cloudflare/client/v4/accounts/{accountId}/d1/database
 ```
 
-Supported D1 database data and maintenance routes:
-
-```http
-POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/query
-POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/raw
-POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/import
-POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/export
-```
-
-`import` accepts the `init` / `ingest` / `poll` protocol used by
-`wrangler d1 execute --remote --file ...` and maps the tenant-visible database
-id to the selected SQLDatabase manager's backend id. `query`, `raw`, `import`,
-and `export` all pass through the same owner-account credit guard and usage
-ledger. D1 subpaths not listed here are outside the compatibility scope and
-return `501`.
-
-Initial target scope:
-
-- Workers scripts
-- Workers routes
-- Workers script subdomain compatibility mapped to `*.app.takos.jp`
-- default `*.app.takos.jp` hostname per HTTP route
-- KV namespaces
-- R2 buckets
-- D1 databases
-- Worker vars, secrets, and bindings
-
-Not in the initial target:
-
-- full DNS product
-- WAF / Rulesets
-- Zero Trust
-- account IAM
-- Cloudflare billing API
-- registrar
-- load balancer
-- email routing
-- Turnstile
-
-Planned:
-
-- user-owned custom domains (ownership verification and certificate lifecycle
-  are not implemented)
-
-Cloudflare billing API compatibility is out of scope. Takosumi Cloud managed
-resource usage must be recorded through the owner account usage ledger above, not by
-proxying Cloudflare's billing API.
-
-Workers route records carry hostname fields:
-
-Request:
+A Worker deploy/read result includes `system_url`, projected from the Resource's
+`url` Output. Clients discover this value instead of constructing it, then use a
+separate operation for an optional route.
 
 ```json
 {
-  "script": "api",
-  "app_subdomain": "my-app"
+  "result": {
+    "script_name": "api",
+    "phase": "Ready",
+    "etag": "...",
+    "system_url": "https://ew-abc.system.app.takos.jp/"
+  }
 }
 ```
 
-Response:
+A route pattern omits the scheme and combines the discovered system hostname
+with an explicit path:
 
 ```json
 {
-  "id": "route_xxx",
-  "pattern": "my-workspace-my-app.app.takos.jp/*",
-  "script": "api",
-  "default_hostname": "my-workspace-my-app.app.takos.jp"
+  "pattern": "ew-abc.system.app.takos.jp/api/*",
+  "script": "api"
 }
 ```
 
-`default_hostname` is the immediately usable Takosumi-managed URL. It can be
-requested with `app_subdomain`, `default_hostname`, or `hostname`; these values
-provide a requested label or managed hostname. The final hostname is determined
-by the source Capsule's stored `managedPublicHostname.mode`, whose default is
-`scoped`. The Takosumi Cloud default managed base domain is `app.takos.jp`;
-operators can configure another managed base domain under the same contract.
+On success, `id` is the canonical Interface id and `etag` is its strong ETag for
+update and delete CAS:
 
-```text
-scoped:
-  <workspace-handle>-<label>.<managed-base-domain>
-  consumes no vanity slot
-
-vanity:
-  <label>.<managed-base-domain>
-  consumes one finite slot owned by the unchangeable Workspace owner account
+```json
+{
+  "id": "if_route_xxx",
+  "pattern": "ew-abc.system.app.takos.jp/api/*",
+  "script": "api",
+  "etag": "..."
+}
 ```
 
-Both modes are reserved first-come-first-served through the same OSS hostname
-reservation authority. A duplicate returns 409, a vanity slot limit returns
-429, and neither response discloses the claimant Workspace or Capsule. The
-Cloud compatibility handler passes source Workspace+Capsule context to that
-authority. Cloud-side KV and Durable Object records hold routing and activation
-state only; they do not determine hostname ownership.
-
-Managed hostname reservations and vanity slots belong to the Capsule lifetime.
-A successful Capsule destroy releases the reservation. Deleting a compatibility
-route only removes Cloud-side routing or activation state and does not release
-OSS hostname ownership or vanity slots.
-
-`custom_domains` is a **Planned** field reserved for a future verified-domain
-lifecycle. DNS ownership verification and the certificate lifecycle are not
-implemented. A request containing non-empty `custom_domains`, `custom_domain`,
-or a route pattern or hostname outside the managed base domain currently fails
-closed with 501 and is not stored or activated as a usable custom domain.
-
-The `cloudflare_workers_script_subdomain` compatibility route is stored as a
-Takosumi-managed `*.app.takos.jp` public name, not as a Cloudflare
-`workers.dev` hostname. `POST /accounts/{accountId}/workers/scripts/{scriptName}/subdomain`
-with `{"enabled": true, "previews_enabled": false}` uses source
-Workspace+Capsule context and the same OSS reservation authority to create a
-virtual Workers route with the Capsule's scoped or vanity hostname.
+The Stable subset permits one route per Worker, an explicit path, and zero or
+one terminal wildcard. Host-only, multiple, overlapping, infix-wildcard,
+wildcard-hostname, custom-hostname, script-subdomain, Worker secret / vars /
+binding / assets, and multi-module upload requests fail before Interface or
+Resource mutation. Route DELETE revokes the Binding and retires the Interface;
+it does not release the system URL. Cloudflare billing API, DNS, WAF, Zero
+Trust, account IAM, Registrar, Load Balancer, and Email Routing are outside the
+compatibility scope. Custom domains remain Planned until ownership verification
+and certificate lifecycle exist.
 `previews_enabled: true` is outside the initial target scope.
 
 ## OpenTofu provider usage
@@ -590,20 +491,18 @@ secrets in manifests.
 
 ## Cloud resources inventory
 
-The Cloud screen resource inventory is an operational summary read through the
-Compatibility API. It should show at least:
+The Cloud screen resource inventory projects the canonical `/v1/resources`
+inventory. Stable offerings include at least:
 
-- KV
+- Edge Worker
 - Object Storage
-- Database
-- Workers
 
-This inventory is for operational inspection. Lifecycle entrypoints can be the
-Compatibility API, a Cloudflare-compatible OpenTofu provider, the
-`takosumi/takosumi` Resource Shape API, or a Dashboard action. They normalize
-into the same Cloud managed-resource operation boundary. The `resource_shapes`
-capability means typed Resource Shape APIs are available; it does not imply a
-separate managed-resource lifecycle.
+Preview service forms appear in the same inventory only when an active offering
+exists. There is no virtual compatibility inventory or separate Resource
+ledger. Dashboard, the `takosumi/takosumi` provider, direct Deploy API, and
+supported compatibility requests all converge on the same Resource. The
+`resource_shapes` capability means typed Resource Shape APIs are available; it
+does not imply a separate managed-resource lifecycle.
 
 ## Security contract
 
