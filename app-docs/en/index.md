@@ -142,14 +142,14 @@ Initial rollout:
 | ---------------- | ------------------ |
 | Edge Worker      | Production Preview |
 | Routes           | Production Preview |
-| Secrets / Vars   | Production Preview |
-| KV               | Production Preview |
 | Object Storage   | Production Preview |
-| Database         | Production Preview |
 | AI Gateway       | Production Preview |
+| Secrets / Vars   | Preview            |
+| KV               | Preview            |
+| Database         | Preview            |
 | Queue            | Preview            |
 | Durable Workflow | Preview            |
-| Containers       | Planned            |
+| Containers       | Preview            |
 | Stateful apps    | Planned            |
 | Custom Domains   | Planned            |
 
@@ -183,15 +183,14 @@ compatibility. AI Gateway is a separate OpenAI-compatible profile.
 
 ### `compat.cloudflare.workers.v1`
 
-| Status             | Scope                                                                  |
-| ------------------ | ---------------------------------------------------------------------- |
-| Production Preview | Worker script deploy, routes, secrets, vars                            |
-| Production Preview | KV namespace, R2 bucket / Object Storage, D1 database / App Database   |
-| Preview            | Queue, Durable Workflow, Dynamic Worker workflow support               |
-| Planned            | Containers, Durable Objects style stateful apps                        |
-| Planned            | User-owned custom domains                                              |
-| Unsupported        | DNS, WAF, Zero Trust, Registrar, Cloudflare account IAM, Load Balancer |
-| Unsupported        | Email Routing                                                          |
+| Status             | Scope                                                                                        |
+| ------------------ | -------------------------------------------------------------------------------------------- |
+| Production Preview | single-module Worker script deploy / list / read / delete → `EdgeWorker`                     |
+| Production Preview | one explicit-path route on the discovered canonical system hostname → `http.route` Interface |
+| Production Preview | R2 bucket create / list / read / delete → `ObjectBucket`                                     |
+| Outside GA subset  | KV, D1, Queue, Workflow, Worker binding / secret / vars / assets APIs (explicit `501`)       |
+| Unsupported        | custom hostnames, multi-module upload, DNS, WAF, Zero Trust, Registrar, account IAM          |
+| Unsupported        | Load Balancer and Email Routing                                                              |
 
 ### AI Gateway OpenAI-compatible profile
 
