@@ -156,13 +156,13 @@ Initial rollout:
 ## Billing and Spend Guard
 
 Takosumi Cloud runs on subscription plans and usage metering. Billable
-operations are priced by the Cloud price book and stop before execution when
+operations are priced by the active Cloud PriceCatalog and stop before execution when
 the plan, limits, or payment state do not allow the operation. Cleanup and
 destroy operations remain available after a spend-guard block so users can
 remove resources instead of leaving them stranded.
 
 Public prices, free-tier terms, usage rates, and spend-guard behavior are
-documented in [Takosumi Cloud pricing](./pricing.md). Runtime price books,
+documented in [Takosumi Cloud pricing](./pricing.md). Realized PriceCatalogs,
 payment-provider synchronization, margin guards, and reconciliation are
 operator operation details, not public contracts.
 

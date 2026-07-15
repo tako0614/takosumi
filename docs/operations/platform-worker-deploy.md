@@ -124,7 +124,7 @@ adapter without displaying them, verify remote secret names only, and never
 delete unknown remote secrets automatically. Rotation follows
 [Secret Rotation](secret-rotation.md).
 
-Payment-provider secrets, enforced billing, official price books, managed
+Payment-provider secrets, enforced billing, official PriceCatalogs, managed
 capacity credentials, and Cloud-specific smoke commands are not OSS deployment
 inputs. A commercial host supplies them through its extension ports.
 
