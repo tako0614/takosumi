@@ -412,6 +412,7 @@ test("platform control-plane smoke records Cloudflare account resource preflight
     mode: "account-resources",
     status: "passed",
     checks: [
+      "cloudflare.workers.script.list",
       "cloudflare.d1.database.list",
       "cloudflare.kv.namespace.list",
       "cloudflare.r2.bucket.list",
