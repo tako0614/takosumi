@@ -1,6 +1,9 @@
 import { test, expect } from "bun:test";
 import { createApiApp } from "../../../core/api/app.ts";
-import type { RegisterResourceShapeRoutesOptions } from "../../../core/api/resource_routes.ts";
+import {
+  type RegisterResourceShapeRoutesOptions,
+  TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
+} from "../../../core/api/resource_routes.ts";
 import { createInMemoryAppContext } from "../../../core/app_context.ts";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
 import {
@@ -244,6 +247,92 @@ test("PUT /v1/resources preserves the caller-declared Resource manager", async (
   expect(body.metadata.managedBy).toBe("compatibility:cloudflare-workers");
 });
 
+test("Resource API atomically rejects managedBy takeover and wrong-manager delete", async () => {
+  const { app } = await buildApp();
+  const path = "/v1/resources/KVStore/owned-cache";
+  const desired = {
+    metadata: { space: "space_1", managedBy: "takosumi.resource-api.v1" },
+    spec: { name: "owned-cache", consistency: "eventual" },
+  };
+  expect((await reviewedResourceApply(app, path, desired)).status).toBe(200);
+
+  const takeover = await reviewedResourceApply(app, path, {
+    ...desired,
+    metadata: {
+      space: "space_1",
+      managedBy: "compat.cloudflare.workers.v1",
+    },
+  });
+  expect(takeover.status).toBe(409);
+  expect(await takeover.json()).toMatchObject({
+    error: { code: "ownership_conflict" },
+  });
+
+  const wrongDelete = await app.request(
+    `${path}?space=space_1&managedBy=compat.cloudflare.workers.v1`,
+    { method: "DELETE" },
+  );
+  expect(wrongDelete.status).toBe(409);
+  expect(await wrongDelete.json()).toMatchObject({
+    error: { code: "ownership_conflict" },
+  });
+  expect(
+    (
+      await app.request(
+        `${path}?space=space_1&managedBy=takosumi.resource-api.v1`,
+        { method: "DELETE" },
+      )
+    ).status,
+  ).toBe(204);
+});
+
+test("trusted Resource authoring surface rejects caller-controlled managedBy spoofing", async () => {
+  const { app } = await buildApp();
+  const trustedHeaders = {
+    ...JSON_HEADERS,
+    [TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER]: "takosumi.resource-api.v1",
+  };
+  const spoofed = await reviewedResourceApply(
+    app,
+    "/v1/resources/KVStore/spoofed-cache",
+    {
+      metadata: {
+        space: "space_1",
+        managedBy: "compat.cloudflare.workers.v1",
+      },
+      spec: { name: "spoofed-cache", consistency: "eventual" },
+    },
+    trustedHeaders,
+  );
+  expect(spoofed.status).toBe(403);
+
+  const created = await reviewedResourceApply(
+    app,
+    "/v1/resources/KVStore/trusted-cache",
+    {
+      metadata: { space: "space_1" },
+      spec: { name: "trusted-cache", consistency: "eventual" },
+    },
+    trustedHeaders,
+  );
+  expect(created.status).toBe(200);
+  expect((await created.json()).metadata.managedBy).toBe(
+    "takosumi.resource-api.v1",
+  );
+
+  const spoofedDelete = await app.request(
+    "/v1/resources/KVStore/trusted-cache?space=space_1&managedBy=compat.cloudflare.workers.v1",
+    {
+      method: "DELETE",
+      headers: {
+        [TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER]:
+          "takosumi.resource-api.v1",
+      },
+    },
+  );
+  expect(spoofedDelete.status).toBe(403);
+});
+
 test("PUT /v1/resources/:kind/:name requires exact preview evidence", async () => {
   const { app } = await buildApp();
   const desired = {
@@ -335,6 +424,7 @@ test("POST /v1/resources/:kind/:name/import adopts an existing native resource w
   expect(imported.status).toBe(200);
   const body = await imported.json();
   expect(body.id).toBe("tkrn:space_1:ObjectBucket:assets");
+  expect(body.metadata.managedBy).toBe("opentofu");
   expect(body.import.summary).toContain("bucket-native-123");
   expect(body.status).toMatchObject({
     phase: "Ready",

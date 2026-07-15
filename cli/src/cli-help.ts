@@ -78,7 +78,7 @@ export function resourcesHelpText(): string {
       "  import <kind> <name> --file <resource-with-native-id.json>",
       "  observe <kind> <name> --space <id>",
       "  refresh <kind> <name> --space <id>",
-      "  delete <kind> <name> --space <id> [--force]",
+      "  delete <kind> <name> --space <id> [--managed-by <manager>] [--force]",
       "",
       "共通オプション:",
       "  --url <deploy-control-url>",
@@ -88,6 +88,7 @@ export function resourcesHelpText(): string {
       "",
       "write request は non-secret JSON object として file から読みます。",
       "--force は operator の break-glass 認可がある endpoint だけで成功します。",
+      "--managed-by を省略した delete は opentofu 所有 Resource だけを対象にします。",
     ].join("\n");
   }
   return [
@@ -102,7 +103,7 @@ export function resourcesHelpText(): string {
     "  import <kind> <name> --file <resource-with-native-id.json>",
     "  observe <kind> <name> --space <id>",
     "  refresh <kind> <name> --space <id>",
-    "  delete <kind> <name> --space <id> [--force]",
+    "  delete <kind> <name> --space <id> [--managed-by <manager>] [--force]",
     "",
     "Common options:",
     "  --url <deploy-control-url>",
@@ -112,6 +113,7 @@ export function resourcesHelpText(): string {
     "",
     "Write requests are read from non-secret JSON object files.",
     "--force succeeds only when the endpoint grants operator break-glass access.",
+    "Without --managed-by, delete targets only Resources owned by opentofu.",
   ].join("\n");
 }
 

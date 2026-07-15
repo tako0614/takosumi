@@ -405,12 +405,13 @@ class D1ResourceShapeStore implements ResourceShapeStore {
   async claimDelete(
     record: ResourceShapeRecord,
     expectedGeneration: number,
+    expectedManagedBy: ResourceManagedBy,
   ): Promise<ResourceDeleteClaimResult> {
     const result = await this.db
       .prepare(
         `update ${this.#table}
          set phase = ?, conditions_json = ?, updated_at = ?
-         where id = ? and generation = ? and phase != 'Deleting'`,
+         where id = ? and generation = ? and managed_by = ? and phase != 'Deleting'`,
       )
       .bind(
         record.phase,
@@ -418,6 +419,7 @@ class D1ResourceShapeStore implements ResourceShapeStore {
         record.updatedAt,
         record.id,
         expectedGeneration,
+        expectedManagedBy,
       )
       .run();
     if ((result.meta?.changes ?? 0) > 0) {
@@ -425,6 +427,9 @@ class D1ResourceShapeStore implements ResourceShapeStore {
     }
     const current = await this.get(record.id);
     if (!current) return { status: "not_found" };
+    if (current.managedBy !== expectedManagedBy) {
+      return { status: "ownership_conflict", record: current };
+    }
     if (current.phase === "Deleting") {
       return { status: "already_deleting", record: current };
     }
@@ -665,7 +670,12 @@ async function beginD1Apply(
   const statements = [
     input.expected === undefined
       ? createOnlyGuardStatement(db, input.applyingRecord.id)
-      : versionGuardStatement(db, input.applyingRecord.id, input.expected),
+      : versionGuardStatement(
+          db,
+          input.applyingRecord.id,
+          input.expected,
+          input.applyingRecord.managedBy,
+        ),
     input.expected === undefined
       ? db
           .prepare(resourceInsertSql(names.resourceShapes, ""))
@@ -678,9 +688,17 @@ async function beginD1Apply(
   } catch (error) {
     const current = await readD1Resource(db, input.applyingRecord.id);
     if (input.expected === undefined) {
-      if (current) return { status: "conflict", record: current };
+      if (current) {
+        if (current.managedBy !== input.applyingRecord.managedBy) {
+          return { status: "ownership_conflict", record: current };
+        }
+        return { status: "conflict", record: current };
+      }
     } else {
       if (!current) return { status: "not_found" };
+      if (current.managedBy !== input.applyingRecord.managedBy) {
+        return { status: "ownership_conflict", record: current };
+      }
       if (!matchesVersion(current, input.expected)) {
         return { status: "conflict", record: current };
       }
@@ -855,7 +873,9 @@ function versionGuardStatement(
     readonly phase: ResourcePhase;
     readonly updatedAt: string;
   },
+  expectedManagedBy?: ResourceManagedBy,
 ): D1LikePreparedStatement {
+  const managedByPredicate = expectedManagedBy ? " and managed_by = ?" : "";
   return db
     .prepare(
       `insert into ${names.resourceShapes} (
@@ -865,7 +885,7 @@ function versionGuardStatement(
       select ?, null, 'guard', 'guard', 'guard', '{}', 'Pending', 0, 0, '', ''
       where not exists (
         select 1 from ${names.resourceShapes}
-        where id = ? and generation = ? and phase = ? and updated_at = ?
+        where id = ? and generation = ? and phase = ? and updated_at = ?${managedByPredicate}
       )`,
     )
     .bind(
@@ -874,6 +894,7 @@ function versionGuardStatement(
       expected.generation,
       expected.phase,
       expected.updatedAt,
+      ...(expectedManagedBy ? [expectedManagedBy] : []),
     );
 }
 

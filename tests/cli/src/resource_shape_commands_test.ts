@@ -279,6 +279,8 @@ test("Resource Shape CLI pages Resources and events and handles an empty delete 
           "--space",
           "space_1",
           "--force",
+          "--managed-by",
+          "cli",
           ...base,
         ],
         io,
@@ -297,6 +299,7 @@ test("Resource Shape CLI pages Resources and events and handles an empty delete 
       "event cursor/+",
     );
     expect(new URL(captured[2]!.url).searchParams.get("force")).toBe("true");
+    expect(new URL(captured[2]!.url).searchParams.get("managedBy")).toBe("cli");
   } finally {
     globalThis.fetch = originalFetch;
   }

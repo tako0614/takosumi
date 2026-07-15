@@ -389,6 +389,9 @@ func TestDeleteResource(t *testing.T) {
 			if got := r.URL.Query().Get("space"); got != "prod" {
 				t.Errorf("expected space query prod, got %q", got)
 			}
+			if got := r.URL.Query().Get("managedBy"); got != ManagedByOpenTofu {
+				t.Errorf("expected managedBy query %q, got %q", ManagedByOpenTofu, got)
+			}
 			w.WriteHeader(http.StatusNoContent)
 		}))
 		defer srv.Close()
