@@ -5,7 +5,7 @@
 // deploy-control persistence plane; the in-memory stores here keep the service
 // runnable in tests through explicit injection without a database.
 
-import type { ResourceShapeKind } from "takosumi-contract";
+import type { ResourceManagedBy, ResourceShapeKind } from "takosumi-contract";
 import {
   pageSorted,
   type Page,
@@ -32,6 +32,10 @@ export type ResourceDeleteClaimResult =
   | { readonly status: "not_found" }
   | {
       readonly status: "conflict";
+      readonly record: ResourceShapeRecord;
+    }
+  | {
+      readonly status: "ownership_conflict";
       readonly record: ResourceShapeRecord;
     };
 
@@ -70,7 +74,11 @@ export type ResourceApplyBeginResult =
       readonly lock: ResolutionLockRecord;
     }
   | { readonly status: "not_found" }
-  | { readonly status: "conflict"; readonly record: ResourceShapeRecord };
+  | { readonly status: "conflict"; readonly record: ResourceShapeRecord }
+  | {
+      readonly status: "ownership_conflict";
+      readonly record: ResourceShapeRecord;
+    };
 
 export interface ResourceApplyCommitInput {
   readonly readyRecord: ResourceShapeRecord;
@@ -202,6 +210,7 @@ export interface ResourceShapeStore {
   claimDelete(
     record: ResourceShapeRecord,
     expectedGeneration: number,
+    expectedManagedBy: ResourceManagedBy,
   ): Promise<ResourceDeleteClaimResult>;
   delete(id: ResourceShapeRecordId): Promise<void>;
 }
@@ -485,9 +494,13 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
   claimDelete(
     record: ResourceShapeRecord,
     expectedGeneration: number,
+    expectedManagedBy: ResourceManagedBy,
   ): Promise<ResourceDeleteClaimResult> {
     const current = this.#byId.get(record.id);
     if (!current) return Promise.resolve({ status: "not_found" });
+    if (current.managedBy !== expectedManagedBy) {
+      return Promise.resolve({ status: "ownership_conflict", record: current });
+    }
     if (current.phase === "Deleting") {
       return Promise.resolve({ status: "already_deleting", record: current });
     }
@@ -648,10 +661,22 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
       const current = resources.getSync(input.applyingRecord.id);
       if (input.expected === undefined) {
         if (current) {
+          if (current.managedBy !== input.applyingRecord.managedBy) {
+            return Promise.resolve({
+              status: "ownership_conflict",
+              record: current,
+            });
+          }
           return Promise.resolve({ status: "conflict", record: current });
         }
       } else {
         if (!current) return Promise.resolve({ status: "not_found" });
+        if (current.managedBy !== input.applyingRecord.managedBy) {
+          return Promise.resolve({
+            status: "ownership_conflict",
+            record: current,
+          });
+        }
         if (!matchesVersion(current, input.expected)) {
           return Promise.resolve({ status: "conflict", record: current });
         }

@@ -10,6 +10,7 @@ import type { Context, Hono } from "hono";
 import type {
   ActorContext,
   JsonObject,
+  ResourceManagedBy,
   ResourceShapeKind,
   SpacePolicySpec,
   TargetPoolSpec,
@@ -26,6 +27,14 @@ import {
   type ResourceServiceErrorCode,
   type ResourceShapeService,
 } from "../domains/resource-shape/mod.ts";
+
+/**
+ * Trusted in-process authoring-surface identity. Public ingress must strip this
+ * header before setting its own value; a deploy-control bearer is operator
+ * authority and may instead declare `metadata.managedBy` explicitly.
+ */
+export const TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER =
+  "x-takosumi-resource-managed-by";
 
 export interface RegisterResourceShapeRoutesOptions {
   readonly service: ResourceShapeService;
@@ -97,7 +106,7 @@ export const RESOURCE_SHAPE_ENDPOINTS: readonly ApiEndpoint[] = [
     query: ["space", "limit", "cursor"],
   }),
   endpoint("DELETE", "/v1/resources/:kind/:name", "deleteResource", {
-    query: ["space", "force"],
+    query: ["space", "force", "managedBy"],
   }),
   endpoint("PUT", "/v1/target-pools/:name", "putTargetPool", {
     okSchema: "TargetPoolResponse",
@@ -304,6 +313,15 @@ export function registerResourceShapeRoutes(
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
     const force = isTruthyQuery(c.req.query("force"));
+    const trustedManagedBy = trustedResourceManagedBy(c);
+    const requestedManagedBy = c.req.query("managedBy");
+    if (
+      trustedManagedBy &&
+      requestedManagedBy &&
+      requestedManagedBy !== trustedManagedBy
+    ) {
+      return managedByMismatchResponse(c, requestedManagedBy, trustedManagedBy);
+    }
     if (force) {
       const allowed = await options.authorizeResourceShapeForceDelete?.({
         actor: auth.actor,
@@ -329,7 +347,10 @@ export function registerResourceShapeRoutes(
       kind.value,
       c.req.param("name"),
       auth.actor,
-      { force },
+      {
+        force,
+        expectedManagedBy: trustedManagedBy ?? requestedManagedBy ?? "opentofu",
+      },
     );
     if (!result.ok) return errorResponse(c, result.error);
     return c.body(null, 204);
@@ -478,6 +499,21 @@ export function registerResourceShapeRoutes(
     const kind = parseKindFromBodyOrParam(c, body, enabledKinds);
     if ("response" in kind) return kind;
     const metadata = (body.metadata ?? {}) as Record<string, unknown>;
+    const requestedManagedBy = stringValue(metadata.managedBy);
+    const trustedManagedBy = trustedResourceManagedBy(c);
+    if (
+      trustedManagedBy &&
+      requestedManagedBy &&
+      requestedManagedBy !== trustedManagedBy
+    ) {
+      return {
+        response: managedByMismatchResponse(
+          c,
+          requestedManagedBy,
+          trustedManagedBy,
+        ),
+      };
+    }
     const spec = (body.spec ?? {}) as JsonObject;
     const pathName = c.req.param("name");
     const metadataName = stringValue(metadata.name);
@@ -524,7 +560,7 @@ export function registerResourceShapeRoutes(
         kind: kind.value,
         name,
         spec,
-        managedBy: stringValue(metadata.managedBy),
+        managedBy: trustedManagedBy ?? requestedManagedBy,
         labels: metadata.labels as Record<string, string> | undefined,
         targetPoolName: stringField(body, "targetPoolName"),
         spacePolicyName: stringField(body, "spacePolicyName"),
@@ -726,6 +762,28 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function trustedResourceManagedBy(c: Context): ResourceManagedBy | undefined {
+  return stringValue(
+    c.req.header(TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER),
+  );
+}
+
+function managedByMismatchResponse(
+  c: Context,
+  requested: ResourceManagedBy,
+  trusted: ResourceManagedBy,
+): Response {
+  return c.json(
+    apiError(
+      "forbidden",
+      `managedBy ${requested} does not match the trusted authoring surface ${trusted}`,
+      undefined,
+      requestIdFromContext(c),
+    ),
+    403,
+  );
+}
+
 function isTruthyQuery(value: string | undefined): boolean {
   if (!value) return false;
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
@@ -793,6 +851,7 @@ function httpStatusForServiceError(
     case "observe_blocked":
     case "refresh_blocked":
     case "import_conflict":
+    case "ownership_conflict":
     case "reconcile_conflict":
     case "deployment_review_required":
     case "deployment_plan_changed":
