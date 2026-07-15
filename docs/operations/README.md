@@ -7,7 +7,7 @@ verification.
 These documents are not published product docs and are not customer-facing
 contracts. They cover the OSS/Operator deployment boundary and may mention
 operator-local paths and evidence classes. Official Cloud payment, managed
-capacity, price-book, and closed handler procedures live in
+capacity, PriceCatalog, and closed handler procedures live in
 `takosumi-cloud/docs/operations`, not this OSS repository.
 
 Use public docs for stable external contracts:

@@ -23,11 +23,11 @@
 公開ドキュメントはサイト自体を分けます。`takosumi.com/docs` はソフトウェア / Operator ドキュメント、
 `app.takosumi.com/docs` は hosted Cloud service ドキュメントです。
 
-| Surface                                     | 主語                                 | 書くこと                                                                                                                                    | 書かないこと                                                                                |
-| ------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Surface                                     | 主語                                 | 書くこと                                                                                                                         | 書かないこと                                                                                |
+| ------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Software docs (`takosumi.com/docs`)         | Takosumi OSS / Takosumi for Operator | 汎用 API、OpenTofu Stack flow、Resource Shape flow、ProviderConnection、Run 履歴、self-host / operator endpoint でも成立する動作 | `app.takosumi.com` 固有の価格、official managed resource の利用量、Cloud API key の日常操作 |
-| Hosted Cloud docs (`app.takosumi.com/docs`) | Takosumi Cloud                       | 公式 hosted service、managed resources、Cloud endpoint 群、pricing、spend guard、Cloud API key、利用量                               | Takosumi core の必須動作のような書き方、任意 endpoint でも必ず存在するような書き方    |
-| Operator docs / runbooks                    | operator                             | デプロイ、secret rotation、証跡、非公開の運用手順                                                                            | 公開契約の肩代わり                                                                  |
+| Hosted Cloud docs (`app.takosumi.com/docs`) | Takosumi Cloud                       | 公式 hosted service、managed resources、Cloud endpoint 群、pricing、spend guard、Cloud API key、利用量                           | Takosumi core の必須動作のような書き方、任意 endpoint でも必ず存在するような書き方          |
+| Operator docs / runbooks                    | operator                             | デプロイ、secret rotation、証跡、非公開の運用手順                                                                                | 公開契約の肩代わり                                                                          |
 
 ソフトウェアドキュメントで Cloud に触れる場合は、定義とリンクに留めます。Cloud ドキュメントで
 ソフトウェアモデルに触れる場合は、Cloud が同じ Takosumi モデルの hosted deployment である
@@ -42,7 +42,7 @@
 | --------------------------- | ---------------------------------------------------------------- | --------------------------------------------------- |
 | product / edition 境界      | Takosumi、Takosumi for Operator、Takosumi Cloud の外部定義       | 設計候補、迷った案、未確定ロードマップ              |
 | API / compatibility surface | endpoint、capability、認証、error、supported/preview/unsupported | handler の配線、closed repo path、private route     |
-| Resource Shape              | schema、lifecycle、state/import/drift の外部挙動                 | adapter 実装詳細、private target 一覧              |
+| Resource Shape              | schema、lifecycle、state/import/drift の外部挙動                 | adapter 実装詳細、private target 一覧               |
 | Cloud pricing / billing     | 利用者価格、無料枠、spend guard、auto charge の挙動              | price id、原価表、margin guard、reconciliation 手順 |
 | security / secret 管理      | secret 非再表示、ログ秘匿、Run 限定注入                          | secret file path、vault path、operator token        |
 
@@ -112,7 +112,7 @@ refund / cancellation surface
 
 ```text
 payment provider price id
-runtime price book storage
+realized versioned PriceCatalog storage
 cost estimate spreadsheet
 margin guard implementation
 invoice export or reconciliation procedure
