@@ -5,7 +5,7 @@
 
 | Field         | Value                                      |
 | ------------- | ------------------------------------------ |
-| Last reviewed | 2026-06-07                                 |
+| Last reviewed | 2026-07-15                                 |
 | Owner         | Takosumi release owner / platform operator |
 | Scope         | Takosumi platform worker artifacts         |
 

@@ -95,7 +95,7 @@ compat data request
 マネージャが未設定のサービス形態は、使用量の事前課金より前に安全側に停止します
 (fail closed)。つまり ContainerService などのバックエンドがまだ公式 Cloud に
 入っていない場合、クレジットだけ引かれたり、別の互換経路へ暗黙に迂回したりしません。
-Stable subset の Worker route は backend resource ではなく、Ready `EdgeWorker` が持つ
+初期 GA candidate の Worker route contract は backend resource ではなく、Ready `EdgeWorker` が持つ
 canonical system URL に対する `http.route` Interface と exact Principal Binding です。
 route CRUD はこの共有 Interface authority を呼び、compatibility KV や backend route
 API を持ちません。custom domain は Planned で、現在は所有確認と証明書の管理がないため
@@ -175,7 +175,7 @@ Cloud managed `EdgeWorker` は別に、不透明で再現不能な canonical sys
 この system URL は compat route が予約する vanity hostname ではなく、route DELETE でも
 解放されません。
 
-Stable な Cloudflare-compatible route は、取得済み `system_url` のホストと明示 path を
+GA candidate の Cloudflare-compatible route contract は、取得済み `system_url` のホストと明示 path を
 組み合わせた pattern だけを受理します。1 つの profile-owned `EdgeWorker` につき active
 route は 1 つだけで、path wildcard は無し、または末尾 `*` 1 個だけです。host-only、
 複数・重複 route、infix wildcard、wildcard hostname、custom hostname は Interface を
@@ -254,6 +254,7 @@ Use Cloudflare-compatible Terraform/OpenTofu resources when importing Workers-or
 ProviderConnection / ProviderBinding で切り替えます。マニフェストに生のシークレットを
 書いてはいけません。
 
-Takosumi Cloud では、このインポート経路はアプリインストール登録なしでも使えます。
+Takosumi Cloud では、このインポート経路を、事前に Dashboard で Capsule を作成せず
+直接 import 経路として使えます。
 ただし認証済みトークンと課金対象 Workspace は必須です。課金対象の書き込みは
 所有ユーザーのアカウントクレジットから引かれ、残高不足なら互換エンドポイントの実行前に止まります。
