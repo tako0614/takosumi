@@ -172,6 +172,12 @@ const ACTOR: ActorContext = {
   requestId: "req_1",
 };
 
+const RECOVERY_ACTOR: ActorContext = {
+  actorAccountId: "takosumi-cloud:system-reconcile",
+  roles: ["operator"],
+  requestId: "req_recovery_1",
+};
+
 const NOW = "2026-01-01T00:00:00.000Z";
 
 function directOperationLedger() {
@@ -2532,7 +2538,7 @@ test("direct-plugin apply response loss observes current and never creates a dup
   expect(run?.status).toBe("succeeded");
 });
 
-test("direct-plugin apply response loss observes missing and replays one stable-name create after restart", async () => {
+test("direct-plugin apply recovery pins adapter ownership to the original Run across actors", async () => {
   const stores = createInMemoryResourceShapeStores();
   const ledger = new InMemoryOpenTofuControlStore();
   const backend: StableApplyBackend = {
@@ -2571,6 +2577,9 @@ test("direct-plugin apply response loss observes missing and replays one stable-
   expect(firstAdapter.applyInputs).toHaveLength(1);
   expect(backend.exists).toBe(false);
   expect(backend.creations).toBe(0);
+  expect(firstAdapter.applyInputs[0]?.actor.actorAccountId).toBe(
+    ACTOR.actorAccountId,
+  );
 
   const recoveryAdapter = new StableNameApplyRecoveryAdapter(backend);
   const restarted = new ResourceShapeService({
@@ -2583,10 +2592,11 @@ test("direct-plugin apply response loss observes missing and replays one stable-
     }),
     now: () => NOW,
   });
-  const preview = await restarted.preview(request);
+  const recoveryRequest = { ...request, actor: RECOVERY_ACTOR };
+  const preview = await restarted.preview(recoveryRequest);
   expect(preview.ok).toBe(true);
   if (!preview.ok) return;
-  const recovered = await restarted.recoverApply(request, {
+  const recovered = await restarted.recoverApply(recoveryRequest, {
     planDigest: preview.value.planDigest,
   });
   expect(recovered.ok).toBe(true);
@@ -2596,12 +2606,43 @@ test("direct-plugin apply response loss observes missing and replays one stable-
   expect(recoveryAdapter.applyInputs[0]?.operationKey).toBe(
     firstAdapter.applyInputs[0]?.operationKey,
   );
+  for (const adapterInput of [
+    ...recoveryAdapter.observeInputs,
+    ...recoveryAdapter.applyInputs,
+  ]) {
+    expect(adapterInput.actor).toEqual({
+      ...RECOVERY_ACTOR,
+      actorAccountId: ACTOR.actorAccountId,
+    });
+  }
   expect(backend.operationKeys).toEqual([
     firstAdapter.applyInputs[0]?.operationKey,
     firstAdapter.applyInputs[0]?.operationKey,
   ]);
   expect(backend.exists).toBe(true);
   expect(backend.creations).toBe(1);
+
+  const updateAdapter = new PluginSpyAdapter();
+  const updater = new ResourceShapeService({
+    stores,
+    adapter: updateAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  const updated = await reviewedApply(updater, {
+    ...recoveryRequest,
+    spec: { ...recoveryRequest.spec, image: "ghcr.io/example/agent:2.0.0" },
+  });
+  expect(updated.ok).toBe(true);
+  expect(updateAdapter.applyInputs).toHaveLength(1);
+  expect(updateAdapter.applyInputs[0]?.actor).toEqual(RECOVERY_ACTOR);
+  expect(updateAdapter.applyInputs[0]?.operationKey).not.toBe(
+    firstAdapter.applyInputs[0]?.operationKey,
+  );
 });
 
 test("direct-plugin delete response loss converges from drifted or missing after restart", async () => {
