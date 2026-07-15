@@ -2710,6 +2710,27 @@ export async function verifyPlatformExtensionSession(
   env: CloudflareWorkerEnv,
   route?: PlatformExtensionRoute,
 ): Promise<PlatformExtensionSessionContext> {
+  const opaqueBearer = bearerValue(request.headers.get("authorization"));
+  const deployControlToken =
+    typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string" &&
+    env.TAKOSUMI_DEPLOY_CONTROL_TOKEN.length > 0
+      ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
+      : undefined;
+  if (
+    opaqueBearer &&
+    deployControlToken &&
+    constantTimeEqualsString(opaqueBearer, deployControlToken)
+  ) {
+    // The deploy-control bearer is the operator-owned service credential.
+    // Preserve that authority kind across the extension seam without ever
+    // forwarding the raw bearer to the extension handler.
+    return {
+      authenticated: true,
+      authKind: "service-token",
+      subject: "takosumi:deploy-control",
+      scopes: ["admin"],
+    };
+  }
   const managedProviderToken =
     platformExtensionManagedProviderRunToken(request);
   if (managedProviderToken) {
@@ -2722,7 +2743,6 @@ export async function verifyPlatformExtensionSession(
     return managedProviderSession;
   }
 
-  const opaqueBearer = bearerValue(request.headers.get("authorization"));
   if (opaqueBearer) {
     const tokenSession = await verifyPlatformExtensionBearerToken(
       request,
