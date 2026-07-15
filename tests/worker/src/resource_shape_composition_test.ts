@@ -20,10 +20,7 @@ test("custom Resource Shape tokens require a code-installed schema", () => {
     configuredResourceShapeKinds("EdgeWorker,CustomService"),
   ).toThrow("CustomService has no installed schema");
   expect(
-    configuredResourceShapeKinds(
-      "EdgeWorker,CustomService",
-      schemas,
-    ),
+    configuredResourceShapeKinds("EdgeWorker,CustomService", schemas),
   ).toEqual(["EdgeWorker", "CustomService"]);
 });
 
@@ -35,6 +32,10 @@ test("Resource Shape all means bundled plus actually registered schemas", () => 
     "Queue",
     "SQLDatabase",
     "ContainerService",
+    "VectorIndex",
+    "DurableWorkflow",
+    "StatefulActorNamespace",
+    "Schedule",
     "CustomService",
   ]);
 });

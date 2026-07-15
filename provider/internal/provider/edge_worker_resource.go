@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -38,6 +37,7 @@ type edgeWorkerModel struct {
 	Name                   types.String `tfsdk:"name"`
 	ArtifactPath           types.String `tfsdk:"artifact_path"`
 	ArtifactURL            types.String `tfsdk:"artifact_url"`
+	ArtifactRef            types.String `tfsdk:"artifact_ref"`
 	ArtifactSHA256         types.String `tfsdk:"artifact_sha256"`
 	CompatibilityDate      types.String `tfsdk:"compatibility_date"`
 	CompatibilityFlags     types.Set    `tfsdk:"compatibility_flags"`
@@ -74,6 +74,10 @@ func (r *edgeWorkerResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"artifact_url": schema.StringAttribute{
 				Optional:    true,
 				Description: "HTTPS URL to a CI/release-produced Worker artifact fetched by the generated OpenTofu module. Requires artifact_sha256.",
+			},
+			"artifact_ref": schema.StringAttribute{
+				Optional:    true,
+				Description: "Host-allocated opaque immutable Worker artifact reference. Requires artifact_sha256.",
 			},
 			"artifact_sha256": schema.StringAttribute{
 				Optional:    true,
@@ -300,57 +304,13 @@ func (m edgeWorkerModel) toResource(ctx context.Context, defaultSpace string) (*
 		return nil, "", diags
 	}
 	name := m.Name.ValueString()
-	source := map[string]any{}
-	artifactPath := ""
-	if !m.ArtifactPath.IsNull() && !m.ArtifactPath.IsUnknown() {
-		artifactPath = strings.TrimSpace(m.ArtifactPath.ValueString())
-	}
-	artifactURL := ""
-	if !m.ArtifactURL.IsNull() && !m.ArtifactURL.IsUnknown() {
-		artifactURL = strings.TrimSpace(m.ArtifactURL.ValueString())
-	}
-	artifactSHA256 := ""
-	if !m.ArtifactSHA256.IsNull() && !m.ArtifactSHA256.IsUnknown() {
-		artifactSHA256 = strings.TrimSpace(m.ArtifactSHA256.ValueString())
-	}
-	if artifactPath != "" && artifactURL != "" {
-		diags.AddAttributeError(
-			path.Root("artifact_url"),
-			"Ambiguous EdgeWorker artifact source",
-			"Set only one of artifact_path or artifact_url.",
-		)
+	source, sourceDiags := (artifactSourceValues{
+		Path: m.ArtifactPath, URL: m.ArtifactURL,
+		Ref: m.ArtifactRef, SHA256: m.ArtifactSHA256,
+	}).toSpec("EdgeWorker")
+	diags.Append(sourceDiags...)
+	if diags.HasError() {
 		return nil, "", diags
-	}
-	if artifactPath == "" && artifactURL == "" {
-		diags.AddAttributeError(
-			path.Root("artifact_path"),
-			"Missing EdgeWorker artifact source",
-			"Set artifact_path for a runner-local artifact or artifact_url with artifact_sha256 for a release artifact.",
-		)
-		return nil, "", diags
-	}
-	if artifactPath != "" {
-		source["artifactPath"] = artifactPath
-	}
-	if artifactURL != "" {
-		if !strings.HasPrefix(artifactURL, "https://") {
-			diags.AddAttributeError(
-				path.Root("artifact_url"),
-				"Invalid EdgeWorker artifact URL",
-				"artifact_url must be an https URL.",
-			)
-			return nil, "", diags
-		}
-		if artifactSHA256 == "" {
-			diags.AddAttributeError(
-				path.Root("artifact_sha256"),
-				"Missing EdgeWorker artifact digest",
-				"artifact_sha256 is required when artifact_url is set.",
-			)
-			return nil, "", diags
-		}
-		source["artifactUrl"] = artifactURL
-		source["artifactSha256"] = artifactSHA256
 	}
 	spec := map[string]any{
 		"name":   name,
@@ -431,27 +391,11 @@ func refreshEdgeWorkerSpec(res *client.Resource, m *edgeWorkerModel) diag.Diagno
 	if res.Spec == nil {
 		return diags
 	}
-	if raw, ok := res.Spec["source"].(map[string]any); ok {
-		if artifactPath, ok := raw["artifactPath"].(string); ok {
-			m.ArtifactPath = types.StringValue(artifactPath)
-		} else {
-			m.ArtifactPath = types.StringNull()
-		}
-		if artifactURL, ok := raw["artifactUrl"].(string); ok {
-			m.ArtifactURL = types.StringValue(artifactURL)
-		} else {
-			m.ArtifactURL = types.StringNull()
-		}
-		if artifactSHA256, ok := raw["artifactSha256"].(string); ok {
-			m.ArtifactSHA256 = types.StringValue(artifactSHA256)
-		} else {
-			m.ArtifactSHA256 = types.StringNull()
-		}
-	} else {
-		m.ArtifactPath = types.StringNull()
-		m.ArtifactURL = types.StringNull()
-		m.ArtifactSHA256 = types.StringNull()
-	}
+	source := artifactSourceValuesFromSpec(res.Spec["source"])
+	m.ArtifactPath = source.Path
+	m.ArtifactURL = source.URL
+	m.ArtifactRef = source.Ref
+	m.ArtifactSHA256 = source.SHA256
 	if compatibilityDate, ok := res.Spec["compatibilityDate"].(string); ok {
 		m.CompatibilityDate = types.StringValue(compatibilityDate)
 	} else {

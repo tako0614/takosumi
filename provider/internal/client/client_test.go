@@ -84,7 +84,7 @@ func TestGetCapabilities(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, `{
 			"apiVersion":"takosumi.dev/v1alpha1",
-				"resources":{"EdgeWorker":true,"ObjectBucket":true,"KVStore":true,"Queue":true,"SQLDatabase":true,"ContainerService":true},
+				"resources":{"EdgeWorker":true,"ObjectBucket":true,"KVStore":true,"Queue":true,"SQLDatabase":true,"ContainerService":true,"VectorIndex":true,"DurableWorkflow":true,"StatefulActorNamespace":true,"Schedule":true},
 			"adapters":{"opentofu":true}
 		}`)
 	}))
@@ -100,6 +100,11 @@ func TestGetCapabilities(t *testing.T) {
 	}
 	if !caps.SupportsResource(KindContainerService) {
 		t.Fatalf("expected ContainerService capability: %#v", caps.Resources)
+	}
+	for _, kind := range []string{KindVectorIndex, KindDurableWorkflow, KindStatefulActorNamespace, KindSchedule} {
+		if !caps.SupportsResource(kind) {
+			t.Fatalf("expected %s capability: %#v", kind, caps.Resources)
+		}
 	}
 	if !c.Capabilities.SupportsResource(KindEdgeWorker) {
 		t.Fatalf("expected capabilities cached on client")

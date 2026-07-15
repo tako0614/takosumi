@@ -8,6 +8,7 @@ import {
   TAKOSUMI_OPENAPI_VERSION,
 } from "../../../core/api/openapi.ts";
 import { DEPLOY_CONTROL_ACTIVITY_ENDPOINTS } from "../../../core/api/deploy_control_activity_routes.ts";
+import { RESOURCE_SHAPE_KINDS } from "../../../contract/resource-shape.ts";
 import {
   ALWAYS_MOUNTED_ENDPOINTS,
   type ApiEndpoint,
@@ -72,6 +73,21 @@ test("Resource Shape OpenAPI publishes fail-closed TargetPool deletion", () => {
     operation.parameters?.map((parameter) => parameter.name),
     ["name", "space"],
   );
+});
+
+test("Resource Shape OpenAPI publishes the canonical bundled shape set", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const resource = openapi.components.schemas.ResourceShapeResponse;
+  const capabilities = openapi.components.schemas.TakosumiResourceCapabilities;
+  assert.ok(resource);
+  assert.ok(capabilities);
+
+  assert.deepEqual(resource.properties.kind.examples, RESOURCE_SHAPE_KINDS);
+  assert.deepEqual(capabilities.required, ["Stack", ...RESOURCE_SHAPE_KINDS]);
+  assert.deepEqual(Object.keys(capabilities.properties), [
+    "Stack",
+    ...RESOURCE_SHAPE_KINDS,
+  ]);
 });
 
 test("public OpenAPI does not publish internal Resource Run recovery evidence", () => {
