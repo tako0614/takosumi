@@ -33,7 +33,7 @@
     "credential-recipes:assets": "bun scripts/build-credential-recipe-assets.ts",
     "credential-recipes:check": "bun scripts/build-credential-recipe-assets.ts --check",
     "operator:release-activator": "bun scripts/operator-release-activator.ts",
-    "opentofu:output-snapshot-proof": "bun tests/proofs/opentofu-output-snapshot.ts",
+    "opentofu:output-proof": "bun tests/proofs/opentofu-output-proof.ts",
     "opentofu:live-local-proof": "bun tests/proofs/live-opentofu-plan-apply.ts",
     "opentofu:resource-shape-provider-proof": "bun tests/proofs/resource-shape-opentofu-provider.ts",
     "opentofu:takos-shape-provider-proof": "bun tests/proofs/resource-shape-opentofu-provider.ts --profile takos-distribution",
