@@ -12,7 +12,7 @@
 
 | Field         | Value                                      |
 | ------------- | ------------------------------------------ |
-| Last reviewed | 2026-06-07                                 |
+| Last reviewed | 2026-07-15                                 |
 | Owner         | Release owner / on-call owner              |
 | Scope         | Takosumi platform and Capsule rollback SOP |
 
