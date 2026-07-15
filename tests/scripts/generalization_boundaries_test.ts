@@ -309,6 +309,14 @@ describe("generalization boundary scanner", () => {
           "async function resolveReadyCompatibilityEvidence() {}",
         ].join("\n"),
       },
+      {
+        path: "core/bootstrap.ts",
+        content: [
+          "// --- Resource Shape host inventory",
+          "const namespace = candidate.spaceId;",
+          "// --- End Resource Shape host inventory",
+        ].join("\n"),
+      },
     ]);
 
     expect(allowed).toEqual([]);
@@ -322,6 +330,10 @@ describe("generalization boundary scanner", () => {
         path: "deploy/platform/worker.ts",
         content:
           'const spaceId = url.searchParams.get(\"space\") ?? workspaceId;',
+      },
+      {
+        path: "core/bootstrap.ts",
+        content: "const namespace = candidate.spaceId;",
       },
     ]);
 

@@ -3632,6 +3632,8 @@ export async function ensureD1OpenTofuLedgerSchema(
       on resource_shapes (space_id)`,
     `create index if not exists resource_shapes_space_created_id_idx
       on resource_shapes (space_id, created_at, id)`,
+    `create index if not exists resource_shapes_ready_kind_created_id_idx
+      on resource_shapes (kind, phase, created_at, id)`,
     `create index if not exists resource_shapes_observation_due_idx
       on resource_shapes (
         phase, last_observation_attempt_at, observation_claimed_at, id
@@ -5201,6 +5203,23 @@ Abandoned claims expire and exact lease tokens fence completion
            on resource_shapes (
              phase, last_observation_attempt_at, observation_claimed_at, id
            )`,
+        )
+        .run();
+    },
+  },
+  {
+    version: 43,
+    name: "d1_resource_ready_kind_inventory_index",
+    checksumSource: `
+Host-operated reconciliation reads canonical fully observed Ready Resources by exact kind
+Kind plus phase plus created_at plus id bounds the global inventory keyset scan
+`,
+    async apply(db) {
+      if (!(await d1TableExists(db, "resource_shapes"))) return;
+      await db
+        .prepare(
+          `create index if not exists resource_shapes_ready_kind_created_id_idx
+           on resource_shapes (kind, phase, created_at, id)`,
         )
         .run();
     },

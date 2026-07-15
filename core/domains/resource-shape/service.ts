@@ -1212,6 +1212,7 @@ export class ResourceShapeService {
             ...context,
             review,
             ...(reservationId ? { reservationId } : {}),
+            resourceGeneration: generation,
             nativeResources: result.nativeResources,
           });
           await this.#recordResourceEvent({

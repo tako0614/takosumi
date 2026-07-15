@@ -1770,6 +1770,31 @@ export interface PlatformCanonicalResourceReadAuthority {
   ): Promise<Response>;
 }
 
+export interface PlatformCanonicalReadyResourceInventoryItem {
+  readonly resourceId: string;
+  readonly resource: ResourceObject;
+  readonly resourceGeneration: number;
+  readonly nativeResources: readonly NativeResourceRef[];
+}
+
+export interface PlatformCanonicalReadyResourceInventoryPage {
+  readonly items: readonly PlatformCanonicalReadyResourceInventoryItem[];
+  readonly nextCursor?: string;
+}
+
+/**
+ * Read-only global Resource inventory for host-operated reconciliation jobs.
+ * It is a composition port only: no public HTTP route exposes global
+ * enumeration, and every item is a coherent fully observed Ready Resource.
+ */
+export interface PlatformCanonicalReadyResourceInventory {
+  list(input: {
+    readonly kind: ResourceShapeKind;
+    readonly cursor?: string;
+    readonly limit?: number;
+  }): Promise<PlatformCanonicalReadyResourceInventoryPage>;
+}
+
 export interface PlatformCompatibilityReadyResourceInput {
   readonly space: string;
   readonly kind: ResourceShapeKind;
@@ -2076,6 +2101,31 @@ export function createPlatformCanonicalResourceReadAuthority(
         new Request(url, { method: "GET", headers }),
         env,
       );
+    },
+  });
+}
+
+export function createPlatformCanonicalReadyResourceInventory(
+  env: CloudflareWorkerEnv,
+): PlatformCanonicalReadyResourceInventory {
+  return Object.freeze({
+    list: async (
+      input: Parameters<PlatformCanonicalReadyResourceInventory["list"]>[0],
+    ): Promise<PlatformCanonicalReadyResourceInventoryPage> => {
+      if (!isResourceShapeKind(input.kind)) {
+        throw new TypeError("canonical Resource inventory kind is invalid");
+      }
+      const operations = await takosumiOperationsFor(env);
+      const inventory = operations.resourceCompatibility;
+      if (!inventory) {
+        throw new Error("canonical Ready Resource inventory is unavailable");
+      }
+      const page = await inventory.listReadyResourcesPage({
+        kind: input.kind,
+        ...(input.cursor ? { cursor: input.cursor } : {}),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      });
+      return structuredClone(page);
     },
   });
 }
