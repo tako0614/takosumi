@@ -54,6 +54,7 @@ import {
   summarizePrometheusMetrics,
   verifyPlatformExtensionBearerToken,
   withPlatformAssetCacheHeaders,
+  createPlatformCanonicalReadyResourceInventory,
   createPlatformCanonicalResourceReadAuthority,
   createPlatformCompatibilityAuthority,
   type OperatorBillingOperations,
@@ -61,9 +62,18 @@ import {
   type SourceWebhookOperations,
 } from "../../../deploy/platform/worker.ts";
 import { createManagedProviderRunToken } from "../../../core/shared/managed_provider_tokens.ts";
-import { MapResourceShapeSchemaRegistry } from "../../../core/domains/resource-shape/mod.ts";
+import {
+  createInMemoryResourceShapeStores,
+  MapResourceShapeSchemaRegistry,
+  StubResourceShapeAdapter,
+  type ResourceShapeStores,
+} from "../../../core/domains/resource-shape/mod.ts";
 import { createD1ResourceShapeStores } from "../../../core/domains/resource-shape/d1_stores.ts";
-import type { ResourceShapeRecord } from "../../../core/domains/resource-shape/records.ts";
+import { createTakosumiService } from "../../../core/bootstrap.ts";
+import type {
+  ResolutionLockRecord,
+  ResourceShapeRecord,
+} from "../../../core/domains/resource-shape/records.ts";
 
 test("platform Operator capabilities require both explicit config and live bindings", () => {
   const empty = platformOperatorCapabilities({} as never, true);
@@ -2000,6 +2010,172 @@ test("compatibility reads are profile-scoped while operator recovery reads every
       )
     ).status,
   ).toBe(403);
+});
+
+test("canonical Ready Resource inventory is bounded, global, and lock-coherent", async () => {
+  const database = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(database);
+  const stores = createD1ResourceShapeStores(database);
+  const resource = (
+    space: string,
+    name: string,
+    createdAt: string,
+  ): ResourceShapeRecord => ({
+    id: `tkrn:${space}:EdgeWorker:${name}`,
+    spaceId: space,
+    kind: "EdgeWorker",
+    name,
+    managedBy: "takosumi.resource-api.v1",
+    spec: { source: { artifactRef: `artifact:${name}` } },
+    phase: "Ready",
+    generation: 2,
+    observedGeneration: 2,
+    createdAt: createdAt as ResourceShapeRecord["createdAt"],
+    updatedAt: createdAt as ResourceShapeRecord["updatedAt"],
+  });
+  const lock = (record: ResourceShapeRecord): ResolutionLockRecord => ({
+    resourceId: record.id,
+    selectedImplementation: "cloudflare_workers",
+    target: "cloudflare-main",
+    locked: true,
+    reason: ["operator managed EdgeWorker"],
+    nativeResources: [
+      {
+        type: "cloudflare_workers_script",
+        id: `backend-${record.spaceId}-${record.name}`,
+      },
+    ],
+    lockedAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  });
+  const records = [
+    resource("workspace_inventory_b", "site", "2026-07-15T00:00:00.000Z"),
+    resource("workspace_inventory_a", "api", "2026-07-15T00:00:00.000Z"),
+  ];
+  for (const record of records) {
+    await stores.resources.upsert(record);
+    await stores.locks.put(lock(record));
+  }
+  const env = {
+    TAKOSUMI_CONTROL_DB: database,
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
+  } as never;
+  const inventory = createPlatformCanonicalReadyResourceInventory(env);
+
+  const first = await inventory.list({ kind: "EdgeWorker", limit: 1 });
+  expect(first.items).toHaveLength(1);
+  expect(first.nextCursor).toBeString();
+  const second = await inventory.list({
+    kind: "EdgeWorker",
+    limit: 1,
+    cursor: first.nextCursor,
+  });
+  expect(second.items).toHaveLength(1);
+  expect(second.nextCursor).toBeUndefined();
+  expect([...first.items, ...second.items]).toMatchObject(
+    records
+      .sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) ||
+          left.id.localeCompare(right.id),
+      )
+      .map((record) => ({
+        resourceId: record.id,
+        resourceGeneration: 2,
+        resource: {
+          kind: "EdgeWorker",
+          metadata: { space: record.spaceId, name: record.name },
+          status: { phase: "Ready", observedGeneration: 2 },
+        },
+        nativeResources: lock(record).nativeResources,
+      })),
+  );
+
+  const incoherent = resource(
+    "workspace_inventory_c",
+    "missing-lock",
+    "2026-07-15T00:00:01.000Z",
+  );
+  await stores.resources.upsert(incoherent);
+  await expect(
+    inventory.list({ kind: "EdgeWorker", limit: 100 }),
+  ).rejects.toThrow(
+    `canonical Ready Resource inventory conflict for ${incoherent.id}`,
+  );
+});
+
+test("canonical Ready inventory fails closed when ResolutionLock changes during projection", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const record: ResourceShapeRecord = {
+    id: "tkrn:workspace_lock_race:EdgeWorker:api",
+    spaceId: "workspace_lock_race",
+    kind: "EdgeWorker",
+    name: "api",
+    managedBy: "takosumi.resource-api.v1",
+    spec: {},
+    phase: "Ready",
+    generation: 1,
+    observedGeneration: 1,
+    createdAt: "2026-07-15T00:00:00.000Z",
+    updatedAt: "2026-07-15T00:00:00.000Z",
+  };
+  const stableLock: ResolutionLockRecord = {
+    resourceId: record.id,
+    selectedImplementation: "cloudflare_workers",
+    target: "cloudflare-main",
+    locked: true,
+    reason: ["initial"],
+    nativeResources: [
+      { type: "cloudflare_workers_script", id: "backend-initial" },
+    ],
+    lockedAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+  await stores.resources.upsert(record);
+  await stores.locks.put(stableLock);
+  const originalLocks = stores.locks;
+  let reads = 0;
+  const racingStores: ResourceShapeStores = {
+    ...stores,
+    locks: {
+      put: (lock) => originalLocks.put(lock),
+      async get(resourceId) {
+        const lock = await originalLocks.get(resourceId);
+        reads += 1;
+        return reads === 3 && lock
+          ? {
+              ...lock,
+              updatedAt: "2026-07-15T00:00:01.000Z",
+              nativeResources: [
+                {
+                  type: "cloudflare_workers_script",
+                  id: "backend-raced",
+                },
+              ],
+            }
+          : lock;
+      },
+      delete: (resourceId) => originalLocks.delete(resourceId),
+    },
+  };
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
+    resourceShapeStores: racingStores,
+    resourceShapeAdapter: new StubResourceShapeAdapter(),
+  });
+  await expect(
+    operations.resourceCompatibility?.listReadyResourcesPage({
+      kind: "EdgeWorker",
+      limit: 1,
+    }),
+  ).rejects.toThrow(
+    `canonical Ready Resource inventory conflict for ${record.id}`,
+  );
+  expect(reads).toBe(3);
 });
 
 test("a configured platform extension rejects an unverified bearer", async () => {

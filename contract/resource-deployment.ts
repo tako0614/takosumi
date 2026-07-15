@@ -141,6 +141,8 @@ export interface ResourceDeploymentReserveContext extends ResourceDeploymentQuot
 export interface ResourceDeploymentCaptureContext extends ResourceDeploymentQuoteContext {
   readonly review: ResourceDeploymentReview;
   readonly reservationId?: string;
+  /** Exact canonical generation whose backend evidence was captured. */
+  readonly resourceGeneration: number;
   readonly nativeResources: readonly NativeResourceRef[];
 }
 

@@ -1125,6 +1125,75 @@ for (const backend of backends) {
       ).not.toContain(a2.id);
     });
 
+    test("resource shape: Ready kind inventory is global, coherent, and keyset paged", async () => {
+      const records: readonly ResourceShapeRecord[] = [
+        readyShape(SPACE_B, "inventory-a", T0),
+        readyShape(SPACE_A, "inventory-b", T0),
+        readyShape(SPACE_A, "inventory-c", T1),
+        {
+          ...readyShape(SPACE_A, "inventory-unobserved", T0),
+          observedGeneration: 0,
+        },
+        {
+          ...readyShape(SPACE_A, "inventory-pending", T0),
+          phase: "Pending",
+          observedGeneration: 0,
+        },
+        {
+          ...fullShape(),
+          id: formatResourceShapeId(
+            SPACE_B,
+            "ObjectBucket",
+            "inventory-bucket",
+          ),
+          spaceId: SPACE_B,
+          name: "inventory-bucket",
+          generation: 2,
+          observedGeneration: 2,
+          createdAt: T0,
+          updatedAt: T0,
+        },
+      ];
+      for (const resource of records) await stores.resources.upsert(resource);
+
+      const expected = records
+        .filter(
+          (resource) =>
+            resource.kind === "EdgeWorker" &&
+            resource.phase === "Ready" &&
+            resource.observedGeneration === resource.generation,
+        )
+        .sort(
+          (left, right) =>
+            left.createdAt.localeCompare(right.createdAt) ||
+            left.id.localeCompare(right.id),
+        );
+      const observed: ResourceShapeRecord[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await stores.resources.listReadyByKindPage("EdgeWorker", {
+          limit: 1,
+          ...(cursor ? { cursor } : {}),
+        });
+        observed.push(...page.items);
+        cursor = page.nextCursor;
+      } while (cursor);
+
+      expect(
+        observed
+          .filter(({ name }) => name.startsWith("inventory-"))
+          .map(({ id }) => id),
+      ).toEqual(expected.map(({ id }) => id));
+      expect(
+        await stores.resources.listReadyByKindPage("InventoryAbsentKind", {
+          limit: 10,
+        }),
+      ).toEqual({ items: [] });
+
+      for (const resource of records)
+        await stores.resources.delete(resource.id);
+    });
+
     test("resource shape: get/getByName miss returns undefined", async () => {
       expect(
         await stores.resources.get("tkrn:nope:ObjectBucket:x"),
