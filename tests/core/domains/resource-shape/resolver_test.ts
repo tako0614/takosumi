@@ -10,6 +10,7 @@ import {
   type TargetPoolEntry,
 } from "takosumi-contract";
 import { resolve } from "../../../../core/domains/resource-shape/resolver.ts";
+import { parseResourceSpec } from "../../../../core/domains/resource-shape/planner.ts";
 
 const CONTAINER_DESCRIPTOR: TargetImplementationDescriptor = {
   shape: "ContainerService",
@@ -81,9 +82,7 @@ function expectOk(outcome: ReturnType<typeof resolve>) {
 test("Resolver selects only an explicit implementation descriptor", () => {
   const output = expectOk(resolve(input()));
   expect(output.selectedTarget).toBe("operator-primary");
-  expect(output.selectedImplementationDescriptor).toEqual(
-    CONTAINER_DESCRIPTOR,
-  );
+  expect(output.selectedImplementationDescriptor).toEqual(CONTAINER_DESCRIPTOR);
   expect(output.nativeResourcePlan).toEqual([
     { type: "operator.container", id: "agent", ownership: "planned" },
   ]);
@@ -120,6 +119,80 @@ test("an unregistered shape cannot resolve without an exact descriptor", () => {
   const outcome = resolve(input({ resource: unknownResource }));
   expect(outcome.ok).toBe(false);
   if (!outcome.ok) expect(outcome.error.code).toBe("capability_missing");
+});
+
+test("non-UTC Schedule fails closed without explicit resolver capability", () => {
+  const schedule = {
+    apiVersion: TAKOSUMI_API_VERSION,
+    kind: "Schedule",
+    metadata: { name: "morning", space: "prod", managedBy: "api" },
+    spec: {
+      name: "morning",
+      cron: "0 9 * * *",
+      timezone: "Asia/Tokyo",
+      connections: {
+        target: {
+          resource: "DurableWorkflow/digest",
+          permissions: ["invoke"],
+          projection: "schedule_trigger",
+        },
+      },
+    },
+  } as const satisfies ResourceObject;
+  const parsed = parseResourceSpec(schedule.kind, schedule.spec);
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  expect(parsed.parsed.interfaces).toContain("non_utc_timezone");
+
+  const descriptor: TargetImplementationDescriptor = {
+    shape: "Schedule",
+    implementation: "operator.schedule.v1",
+    plugin: "operator-schedule-plugin",
+    interfaces: {
+      schedule: "native",
+      cron: "native",
+      invoke: "native",
+      resource_connection: "native",
+      schedule_trigger: "native",
+      grant_invoke: "native",
+    },
+  };
+  const resolverInput: ResolverInput = {
+    resource: schedule,
+    interfaces: parsed.parsed.interfaces,
+    targetPool: pool([
+      {
+        name: "utc-only",
+        type: "operator.example/scheduler.v1",
+        priority: 10,
+        implementations: [descriptor],
+      },
+    ]),
+  };
+  const missing = resolve(resolverInput);
+  expect(missing.ok).toBe(false);
+  if (!missing.ok) expect(missing.error.code).toBe("capability_missing");
+
+  const supported = resolve({
+    ...resolverInput,
+    targetPool: pool([
+      {
+        name: "timezone-aware",
+        type: "operator.example/scheduler.v1",
+        priority: 10,
+        implementations: [
+          {
+            ...descriptor,
+            interfaces: {
+              ...descriptor.interfaces,
+              non_utc_timezone: "native",
+            },
+          },
+        ],
+      },
+    ]),
+  });
+  expect(supported.ok).toBe(true);
 });
 
 test("Resolver ranks eligible descriptors by target priority then name", () => {

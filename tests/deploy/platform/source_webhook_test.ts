@@ -1338,12 +1338,16 @@ test("platform worker exposes product discovery before accounts handler", async 
   expect(capabilitiesBody.resources.ObjectBucket).toBe(false);
   expect(Object.keys(capabilitiesBody.resources).sort()).toEqual([
     "ContainerService",
+    "DurableWorkflow",
     "EdgeWorker",
     "KVStore",
     "ObjectBucket",
     "Queue",
     "SQLDatabase",
+    "Schedule",
     "Stack",
+    "StatefulActorNamespace",
+    "VectorIndex",
   ]);
   expect(capabilitiesBody.adapters.cloudflare).toBeUndefined();
   expect(
@@ -1441,14 +1445,22 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
   expect(body.resources.Queue).toBe(false);
   expect(body.resources.SQLDatabase).toBe(false);
   expect(body.resources.ContainerService).toBe(false);
+  expect(body.resources.VectorIndex).toBe(false);
+  expect(body.resources.DurableWorkflow).toBe(false);
+  expect(body.resources.StatefulActorNamespace).toBe(false);
+  expect(body.resources.Schedule).toBe(false);
   expect(Object.keys(body.resources).sort()).toEqual([
     "ContainerService",
+    "DurableWorkflow",
     "EdgeWorker",
     "KVStore",
     "ObjectBucket",
     "Queue",
     "SQLDatabase",
+    "Schedule",
     "Stack",
+    "StatefulActorNamespace",
+    "VectorIndex",
   ]);
   expect(body.adapters.cloudflare).toBeUndefined();
   expect(body.adapters.takosumi_native).toBeUndefined();
@@ -1519,6 +1531,10 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   expect(body.resources.Queue).toBe(true);
   expect(body.resources.SQLDatabase).toBe(true);
   expect(body.resources.ContainerService).toBe(false);
+  expect(body.resources.VectorIndex).toBe(false);
+  expect(body.resources.DurableWorkflow).toBe(false);
+  expect(body.resources.StatefulActorNamespace).toBe(false);
+  expect(body.resources.Schedule).toBe(false);
   expect(body.resources.CustomService).toBe(true);
   expect(body.adapters.cloudflare).toBe(true);
   expect(body.adapters.takosumi_native).toBeUndefined();

@@ -28,11 +28,15 @@ const (
 	// KindEdgeWorker is the resource shape kind for HTTP services.
 	KindEdgeWorker = "EdgeWorker"
 
-	KindObjectBucket     = "ObjectBucket"
-	KindKVStore          = "KVStore"
-	KindQueue            = "Queue"
-	KindSQLDatabase      = "SQLDatabase"
-	KindContainerService = "ContainerService"
+	KindObjectBucket           = "ObjectBucket"
+	KindKVStore                = "KVStore"
+	KindQueue                  = "Queue"
+	KindSQLDatabase            = "SQLDatabase"
+	KindContainerService       = "ContainerService"
+	KindVectorIndex            = "VectorIndex"
+	KindDurableWorkflow        = "DurableWorkflow"
+	KindStatefulActorNamespace = "StatefulActorNamespace"
+	KindSchedule               = "Schedule"
 
 	// ManagedByOpenTofu is stamped into metadata.managedBy on every write.
 	ManagedByOpenTofu = "opentofu"

@@ -3,7 +3,7 @@
 // The Resource object mirrors the Kubernetes-style shape mandated by
 // `docs/internal/final-plan.md` §4 (Resource Object Model) and §5 (Resource Shapes):
 // a desired `spec`, an observed `status`, the `resolution` decision, and
-// `conditions`. Six typed schemas ship with the provider, while an operator may
+// `conditions`. Ten typed schemas ship with the provider, while an operator may
 // register additional shape tokens with an explicit schema and adapter/plugin.
 
 import type { Condition, JsonObject } from "./types.ts";
@@ -16,7 +16,11 @@ export type BundledResourceShapeKind =
   | "KVStore"
   | "Queue"
   | "SQLDatabase"
-  | "ContainerService";
+  | "ContainerService"
+  | "VectorIndex"
+  | "DurableWorkflow"
+  | "StatefulActorNamespace"
+  | "Schedule";
 
 /**
  * Open Resource Shape token carried by the API and plugin seam. The bundled
@@ -34,6 +38,10 @@ export const RESOURCE_SHAPE_KINDS: readonly BundledResourceShapeKind[] = [
   "Queue",
   "SQLDatabase",
   "ContainerService",
+  "VectorIndex",
+  "DurableWorkflow",
+  "StatefulActorNamespace",
+  "Schedule",
 ] as const;
 
 /** Runtime guard for a portable, path-safe Resource Shape token. */
@@ -45,7 +53,7 @@ export function isResourceShapeKind(
   );
 }
 
-/** True only for one of the six schemas compiled into this contract version. */
+/** True only for one of the ten schemas compiled into this contract version. */
 export function isBundledResourceShapeKind(
   value: unknown,
 ): value is BundledResourceShapeKind {
@@ -301,3 +309,73 @@ export type ContainerServiceResource = ResourceObject<
   "ContainerService",
   ContainerServiceSpec
 >;
+
+// --- Portable service shapes ------------------------------------------------
+
+export interface VectorIndexSpec {
+  readonly name: string;
+  readonly dimensions: number;
+  /** Open similarity metric token; the selected Target must advertise it. */
+  readonly metric?: string;
+  readonly connections?: Readonly<Record<string, ResourceConnectionSpec>>;
+  readonly lifecyclePolicy?: ResourceLifecyclePolicy;
+}
+
+export type VectorIndexResource = ResourceObject<
+  "VectorIndex",
+  VectorIndexSpec
+>;
+
+/** DurableWorkflow reuses the same immutable artifact contract as EdgeWorker. */
+export type DurableWorkflowSource = EdgeWorkerSource;
+
+export interface DurableWorkflowRetryPolicy {
+  readonly maxAttempts?: number;
+  readonly initialBackoffSeconds?: number;
+}
+
+export interface DurableWorkflowSpec {
+  readonly name: string;
+  readonly source: DurableWorkflowSource;
+  readonly entrypoint: string;
+  readonly retry?: DurableWorkflowRetryPolicy;
+  readonly connections?: Readonly<Record<string, ResourceConnectionSpec>>;
+  readonly lifecyclePolicy?: ResourceLifecyclePolicy;
+}
+
+export type DurableWorkflowResource = ResourceObject<
+  "DurableWorkflow",
+  DurableWorkflowSpec
+>;
+
+/**
+ * Namespace-level lifecycle for durable actors. Individual actor instances are
+ * runtime state addressed inside the namespace and are never Resource objects.
+ */
+export interface StatefulActorNamespaceSpec {
+  readonly name: string;
+  readonly className: string;
+  /** Open persistence capability token; defaults to `durable_sqlite`. */
+  readonly storageProfile?: string;
+  readonly migrationTag?: string;
+  readonly connections?: Readonly<Record<string, ResourceConnectionSpec>>;
+  readonly lifecyclePolicy?: ResourceLifecyclePolicy;
+}
+
+export type StatefulActorNamespaceResource = ResourceObject<
+  "StatefulActorNamespace",
+  StatefulActorNamespaceSpec
+>;
+
+export interface ScheduleSpec {
+  readonly name: string;
+  /** Five-field cron expression in the declared timezone. */
+  readonly cron: string;
+  /** Open timezone token; v1alpha1 defaults to `UTC`. */
+  readonly timezone?: string;
+  /** Exactly one `schedule_trigger` connection with `invoke` permission. */
+  readonly connections: Readonly<Record<string, ResourceConnectionSpec>>;
+  readonly lifecyclePolicy?: ResourceLifecyclePolicy;
+}
+
+export type ScheduleResource = ResourceObject<"Schedule", ScheduleSpec>;

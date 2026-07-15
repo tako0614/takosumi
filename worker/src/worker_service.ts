@@ -42,7 +42,11 @@ import {
   type ResourceShapePluginBinding,
   type ResourceShapePluginBindings,
 } from "../../core/domains/resource-shape/mod.ts";
-import { type ActorContext, type ResourceShapeKind } from "takosumi-contract";
+import {
+  type ActorContext,
+  RESOURCE_SHAPE_KINDS,
+  type ResourceShapeKind,
+} from "takosumi-contract";
 import { isPublicManagedProviderConnection } from "takosumi-contract/connections";
 import {
   decodeActorContext,
@@ -496,14 +500,9 @@ function resourceShapeCapabilitiesFromEnv(
     env.TAKOSUMI_RESOURCE_SHAPES,
     schemaRegistry,
   );
-  const resources: MutablePartial<TakosumiResourceCapabilities> = {
-    EdgeWorker: false,
-    ObjectBucket: false,
-    KVStore: false,
-    Queue: false,
-    SQLDatabase: false,
-    ContainerService: false,
-  };
+  const resources = Object.fromEntries(
+    RESOURCE_SHAPE_KINDS.map((kind) => [kind, false]),
+  ) as MutablePartial<TakosumiResourceCapabilities>;
   for (const kind of enabledKinds) resources[kind] = true;
 
   const adapters: MutablePartial<TakosumiAdapterCapabilities> = {

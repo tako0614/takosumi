@@ -240,7 +240,7 @@ test("compatibility profile discovery owns no lifecycle state", () => {
   }
 });
 
-test("v1alpha1 bundled Resource Shapes exclude future Secret", () => {
+test("v1alpha1 bundled Resource Shapes expose portable services but exclude Secret", () => {
   assert.deepEqual(RESOURCE_SHAPE_KINDS, [
     "EdgeWorker",
     "ObjectBucket",
@@ -248,6 +248,10 @@ test("v1alpha1 bundled Resource Shapes exclude future Secret", () => {
     "Queue",
     "SQLDatabase",
     "ContainerService",
+    "VectorIndex",
+    "DurableWorkflow",
+    "StatefulActorNamespace",
+    "Schedule",
   ]);
   assert.equal(RESOURCE_SHAPE_KINDS.includes("Secret" as never), false);
 });

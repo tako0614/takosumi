@@ -55,6 +55,31 @@ describe("Resource Shape dashboard surface", () => {
     expect(editor).toContain("buildObjectBucketServiceSpec");
   });
 
+  test("offers every bundled shape through raw authoring without expanding guided forms", () => {
+    const bundledKinds = editor.slice(
+      editor.indexOf("const BUNDLED_KINDS"),
+      editor.indexOf("] as const;", editor.indexOf("const BUNDLED_KINDS")),
+    );
+    for (const kind of [
+      "EdgeWorker",
+      "ObjectBucket",
+      "KVStore",
+      "Queue",
+      "SQLDatabase",
+      "ContainerService",
+      "VectorIndex",
+      "DurableWorkflow",
+      "StatefulActorNamespace",
+      "Schedule",
+    ]) {
+      expect(bundledKinds).toContain(`"${kind}"`);
+    }
+    expect(editor).toContain("<For each={BUNDLED_KINDS}>");
+    expect(editor).toContain(
+      'type ServiceSelection = "EdgeWorker" | "ObjectBucket" | "custom";',
+    );
+  });
+
   test("keeps raw/custom and placement controls in advanced disclosure", () => {
     const advanced = editor.indexOf('<details class="rs-advanced"');
     expect(advanced).toBeGreaterThan(-1);
