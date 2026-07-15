@@ -179,6 +179,8 @@ export async function createWorkerServiceApp(
     managedProviderCredentialIssuerFromEnv(env);
   const billingExtensionFactory = billingExtensionFactoryFromEnv(env);
   const resourceDeploymentAdmission = resourceDeploymentAdmissionFromEnv(env);
+  const resolveResourceInterfaceWorkspace =
+    resourceInterfaceWorkspaceResolverFromEnv(env);
   const interfaceCredentialIssuer = env.TAKOSUMI_ACCOUNTS_DB
     ? interfaceCredentialIssuerFromAccountsStore(
         new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB),
@@ -219,6 +221,9 @@ export async function createWorkerServiceApp(
     interfaceStores: createD1InterfaceStores(env.TAKOSUMI_CONTROL_DB),
     ...(env.TAKOSUMI_INTERFACE_PROJECTION_SINK
       ? { interfaceProjectionSink: env.TAKOSUMI_INTERFACE_PROJECTION_SINK }
+      : {}),
+    ...(resolveResourceInterfaceWorkspace
+      ? { resolveResourceInterfaceWorkspace }
       : {}),
     ...(interfaceCredentialIssuer ? { interfaceCredentialIssuer } : {}),
     resourceShapeAllowedProviderBaseUrls: providerBaseUrlAllowlist,
@@ -277,6 +282,25 @@ export async function createWorkerServiceApp(
         }
       : {}),
   });
+}
+
+/**
+ * Reads the host-installed Resource namespace -> Workspace bridge. This is a
+ * code-only composition seam: a serialized Worker var must never be accepted
+ * as namespace authority, and omission deliberately preserves Core's
+ * fail-closed behavior.
+ */
+export function resourceInterfaceWorkspaceResolverFromEnv(
+  env: CloudflareWorkerEnv,
+): CreateTakosumiServiceOptions["resolveResourceInterfaceWorkspace"] {
+  const resolver = env.TAKOSUMI_RESOURCE_INTERFACE_WORKSPACE_RESOLVER;
+  if (resolver === undefined) return undefined;
+  if (typeof resolver !== "function") {
+    throw new TypeError(
+      "TAKOSUMI_RESOURCE_INTERFACE_WORKSPACE_RESOLVER must be a host-code resolver function",
+    );
+  }
+  return resolver;
 }
 
 function billingExtensionFactoryFromEnv(
