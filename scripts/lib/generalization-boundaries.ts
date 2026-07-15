@@ -1120,6 +1120,18 @@ function isAllowedResourceShapeSpaceLocation(
     );
   }
 
+  if (
+    ruleId === "retired-stack-alias" &&
+    path === "core/bootstrap.ts"
+  ) {
+    return isBetweenMarkers(
+      content,
+      index,
+      "// --- Resource Shape host inventory",
+      "// --- End Resource Shape host inventory",
+    );
+  }
+
   if (path !== "deploy/platform/worker.ts") return false;
 
   if (

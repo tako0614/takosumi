@@ -571,6 +571,12 @@ export const resourceShapes = sqliteTable(
       table.createdAt,
       table.id,
     ),
+    index("resource_shapes_ready_kind_created_id_idx").on(
+      table.kind,
+      table.phase,
+      table.createdAt,
+      table.id,
+    ),
     index("resource_shapes_observation_due_idx").on(
       table.phase,
       table.lastObservationAttemptAt,

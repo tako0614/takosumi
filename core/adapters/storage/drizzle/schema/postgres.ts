@@ -602,6 +602,12 @@ export const resourceShapes = pgTable(
       table.createdAt,
       table.id,
     ),
+    index("takosumi_resource_shapes_ready_kind_created_id_idx").on(
+      table.kind,
+      table.phase,
+      table.createdAt,
+      table.id,
+    ),
     index("takosumi_resource_shapes_observation_due_idx").on(
       table.phase,
       table.lastObservationAttemptAt,
