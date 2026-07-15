@@ -163,6 +163,30 @@ test("Takosumi public docs are rebuilt around the current public surface", async
   }
 });
 
+test("hosted Cloud docs keep current usage identity provider neutral", async () => {
+  for (const path of ["app-docs/resources.md", "app-docs/en/resources.md"]) {
+    const doc = await readText(new URL(path, ROOT));
+    assert.match(doc, /`takosumi\.edge_worker`/);
+    assert.match(doc, /`takosumi:edge_worker:\*`/);
+    assert.match(doc, /`takosumi\.entrypoint=compat\.cloudflare\.workers\.v1`/);
+    assert.match(doc, /historical|過去/);
+  }
+});
+
+test("Takosumi source module exposes the documented hosted billing proxies", async () => {
+  const packageJson = JSON.parse(
+    await readText(new URL("package.json", ROOT)),
+  ) as { scripts?: Record<string, string> };
+  assert.equal(
+    packageJson.scripts?.["ga:billing-readiness"],
+    "bun ../scripts/check-takosumi-billing-readiness.mjs",
+  );
+  assert.equal(
+    packageJson.scripts?.["ga:billing-bootstrap"],
+    "bun ../scripts/bootstrap-takosumi-stripe-billing.mjs",
+  );
+});
+
 test("Takosumi internal authority docs stay outside the public docs surface", async () => {
   for (const path of REQUIRED_INTERNAL_DOCS) {
     const entry = await stat(new URL(path, ROOT));
