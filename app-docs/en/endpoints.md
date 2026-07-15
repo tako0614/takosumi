@@ -323,7 +323,8 @@ when credit is insufficient. DELETE cleanup should remain available so OpenTofu
 destroy and app removal can recover from a depleted balance without leaving
 resources stuck.
 
-The Stable Cloudflare view contains only `cloudflare_workers_script`, a route on
+The initial GA-candidate Cloudflare view contains only
+`cloudflare_workers_script`, a route on
 its system hostname, and an R2 bucket. KV, D1, Queue, and Workflow may be
 provider-neutral Preview service forms, but their Cloudflare-shaped routes
 return 501. UI, billing, usage ledgers, and public Resource identity use service
@@ -381,7 +382,7 @@ Existing `cloudflare/cloudflare` OpenTofu/Terraform provider configurations can
 use it by changing `base_url`, but it is a protocol adapter, not a Cloudflare
 account clone or Resource lifecycle authority.
 
-The Stable control-plane subset is deliberately limited:
+The initial GA-candidate control-plane subset is deliberately limited:
 
 | Cloudflare-shaped operation                    | Canonical authority                       |
 | ---------------------------------------------- | ----------------------------------------- |
@@ -407,7 +408,7 @@ Response envelope:
 }
 ```
 
-Principal Stable routes:
+Principal routes in the candidate subset:
 
 ```http
 GET /compat/cloudflare/client/v4/user/tokens/verify
@@ -458,8 +459,8 @@ update and delete CAS:
 }
 ```
 
-The Stable subset permits one route per Worker, an explicit path, and zero or
-one terminal wildcard. Host-only, multiple, overlapping, infix-wildcard,
+The GA-candidate contract permits one route per Worker, an explicit path, and
+zero or one terminal wildcard. Host-only, multiple, overlapping, infix-wildcard,
 wildcard-hostname, custom-hostname, script-subdomain, Worker secret / vars /
 binding / assets, and multi-module upload requests fail before Interface or
 Resource mutation. Route DELETE revokes the Binding and retires the Interface;
@@ -495,7 +496,7 @@ secrets in manifests.
 ## Cloud resources inventory
 
 The Cloud screen resource inventory projects the canonical `/v1/resources`
-inventory. Stable offerings include at least:
+inventory. When Stable offerings are activated, the initial candidates are:
 
 - Edge Worker
 - Object Storage

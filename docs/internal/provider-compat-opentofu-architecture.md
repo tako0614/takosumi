@@ -1,6 +1,6 @@
 # Provider Compatibility Profile Import Path Note
 
-Last updated: 2026-06-19
+Last updated: 2026-07-15
 
 This document is intentionally not a general OSS Compatibility API framework
 spec. It describes how the `compat.cloudflare.workers.v1` provider

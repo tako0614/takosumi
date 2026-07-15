@@ -1,6 +1,6 @@
 # Takosumi Core Conformance
 
-Last updated: 2026-07-14
+Last updated: 2026-07-15
 
 This document tracks conformance to [Core Spec](./core-spec.md) and
 [Final Plan](./final-plan.md). It is not the product direction source of truth.
