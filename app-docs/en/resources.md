@@ -14,14 +14,13 @@ Takosumi Cloud Resources =
   + Queue
   + AI Gateway
   + managed routes / URLs / secrets
-  + USD credits / usage metering
+  + USD-denominated billing / usage metering
   + OpenTofu deploys
 ```
 
 The Cloudflare-compatible API is not the product itself. It is an import path
-for existing Terraform/OpenTofu manifests that already target Cloudflare Workers
-resources and should be imported into Takosumi Cloud `EdgeWorker` plus managed
-bindings.
+for the supported `EdgeWorker` and `ObjectBucket` operations in existing
+Terraform/OpenTofu manifests, and remains only a limited protocol adapter.
 
 ## Product Vocabulary
 
@@ -71,43 +70,48 @@ Operator/internal jobs:
   Cloudflare Workflows
 ```
 
-Every Cloud managed resource passes through the shared Cloud extension layer
-before a backend API is called. Whether the entrypoint is a
-Cloudflare-compatible OpenTofu provider, the `takosumi/takosumi` provider, a
-Compatibility API, or a Dashboard action, the request passes through auth,
-source Workspace context, owner billing context, Resource / NativeResource
-normalization, a common managed operation descriptor, selected-manager
-availability checks, usage / credit guard, and then the selected manager
-chooses the backend. The API entrypoint only determines the user-facing
-protocol; backend selection is the responsibility of the manager descriptor /
-dispatch plan. When the entrypoint is a `takosumi_*` Resource Shape, TargetPool
-/ Policy / ResolutionLock are also part of the path before manager dispatch.
+Every Cloud managed-resource control operation converges on the canonical
+`/v1/resources` Deploy API before any backend API is called. The
+`takosumi/takosumi` provider, Dashboard, and direct API call that lifecycle
+directly. A Cloudflare-compatible control request first translates into the
+corresponding `EdgeWorker` or `ObjectBucket` request, then calls the same
+preview, reviewed apply, and delete operations. The compatibility handler owns
+neither a backend manager nor a parallel lifecycle store.
 
 ```text
-OpenTofu provider via compat / takosumi provider via Resource Shape API / Compatibility API / Dashboard action
-  -> auth + source Workspace + owner billing account
-  -> Resource / NativeResource normalization
-  -> TargetPool / Policy / ResolutionLock (Resource Shape entrypoints)
-  -> CloudManagedOperation
-  -> CloudManagedDispatchPlan
-  -> selected manager configured check
-  -> usage / credit guard
-  -> capability / manager dispatch
-  -> selected manager
+compat control request -> typed Resource request
+takosumi provider / direct API / Dashboard -> typed Resource request
+  -> /v1/resources preview + reviewed apply/delete
+  -> auth + Space/Workspace ownership
+  -> TargetPool + Policy + ResolutionLock
+  -> versioned offering/price quote + reserve
+  -> Cloud adapter + selected-manager configured check
   -> backend API
+  -> canonical Resource / NativeResource / Output / audit + capture/release
+
+compat data request
+  -> Ready canonical Resource + authorized Interface / NativeResource
+  -> usage guard + selected manager
+  -> backend data plane
 ```
 
 If a service form is known but its selected manager is not configured, the
 request fails closed before usage precharge and before any backend API call.
 That is, if a backend such as ContainerService is not yet part of the official
 Cloud, credits are not deducted and no implicit fallback to another
-compatibility path occurs.
+compatibility path occurs. Stable Worker route CRUD is not a backend Resource
+operation: it updates the Ready `EdgeWorker`'s `http.route` Interface and exact
+Principal Binding through the shared Interface authority. It owns no
+compatibility KV or backend route call. Custom hostnames fail before Interface
+mutation.
 
-The Cloudflare-compatible path is an import path into this pipeline. The current
-official manager for EdgeWorker uses a Workers for Platforms dispatch namespace,
-but the API contract is fixed to service forms: `EdgeWorker`, `ObjectBucket`,
-`KVStore`, `SQLDatabase`, `Queue`, and peers. WfP and Cloudflare-specific names
-are not the public resource identity.
+The Cloudflare-compatible path is a limited import path into this pipeline. The
+GA subset contains only `EdgeWorker` and `ObjectBucket`; Cloudflare-shaped KV,
+D1, Queue, and Workflow control routes return an explicit `501`. The current
+official EdgeWorker manager uses a Workers for Platforms dispatch namespace,
+but the public Resource identity remains `EdgeWorker`. A future manager change
+updates TargetPool, adapter, and manager-descriptor evidence rather than the
+compatibility handler.
 
 The shared manager descriptor keeps three names separate: the stable Takosumi
 Cloud service family such as `takosumi.edge_worker`, the public usage-meter
@@ -148,9 +152,11 @@ fixed.
 
 ## Domains And Routes
 
-Public HTTP resources can receive a Takosumi-managed URL. The Takosumi Cloud
-default base domain is `app.takos.jp`. The current allocation modes are
-`scoped` and `vanity`.
+Public HTTP surfaces use two URL forms with separate ownership and lifecycles.
+
+A Capsule install's `public_endpoint` projection is a managed URL owned by the
+OSS hostname reservation authority. The Takosumi Cloud default base domain is
+`app.takos.jp`. The current allocation modes are `scoped` and `vanity`.
 
 ```text
 scoped: https://<workspace-handle>-<label>.app.takos.jp
@@ -163,33 +169,44 @@ basis and consumes one finite slot owned by the Workspace's unchangeable owner
 account. Both modes are subject to global uniqueness through hostname
 reservation, reserved labels, and abuse policy.
 
-Cloudflare compatibility route and script-subdomain writes that create a
-hostname also require source Workspace and source Capsule context and pass
-through the same OSS hostname reservation authority. Cloud-side KV and Durable
-Object records hold routing and activation state only; they do not determine
-hostname ownership.
-
-The current Dashboard and OpenTofu route lifecycle carries:
-
-| Field              | Status  | Meaning                                       |
-| ------------------ | ------- | --------------------------------------------- |
-| `default_hostname` | Current | scoped or owner-slot managed hostname         |
-| `pattern`          | Current | route pattern used by compatibility imports   |
-| `target`           | Current | EdgeWorker / ContainerService target          |
-| `custom_domains`   | Planned | user-owned verified-domain lifecycle (unused) |
-
 `scoped` reserves `<workspace-handle>-<label>.<managed-base-domain>`;
 `vanity` reserves `<label>.<managed-base-domain>`. Conflict and slot-limit
 errors do not reveal the claimant Workspace or Capsule name.
 Managed hostname reservations and vanity slots belong to the Capsule lifetime,
-not to an individual route record. A successful Capsule destroy releases the
-reservation. A Cloud-side route DELETE only removes routing or activation state
-and does not release OSS hostname ownership.
+and a successful Capsule destroy releases the reservation.
+
+A Cloud-managed `EdgeWorker` separately receives an opaque, non-derivable
+canonical system URL. Compatibility responses discover it as `system_url` from
+the Resource's `url` Output. Clients must not construct or infer a value such as
+`ew-<hash>.<system-base-domain>`. This URL is not a vanity hostname claimed by a
+compatibility route and route DELETE does not release it.
+
+The Stable Cloudflare-compatible route accepts only the discovered `system_url`
+host followed by an explicit path. Each profile-owned `EdgeWorker` can have one
+active route. The path accepts no wildcard or one terminal `*`. Host-only,
+multiple, overlapping, infix-wildcard, wildcard-hostname, and custom-hostname
+patterns fail before Interface mutation.
+
+Current route evidence is:
+
+| Evidence         | Status  | Meaning                                                         |
+| ---------------- | ------- | --------------------------------------------------------------- |
+| `system_url`     | Current | opaque EdgeWorker URL discovered from the Resource `url` Output |
+| route pattern    | Current | canonical host + explicit path + optional terminal `*`          |
+| `http.route`     | Current | canonical Interface carrying the route id and strong ETag       |
+| InterfaceBinding | Current | Binding that grants `edge.request` to the exact Principal       |
+| `custom_domains` | Planned | user-owned verified-domain and certificate lifecycle (unused)   |
+
+Route CRUD calls the Interface and InterfaceBinding authority. There is no
+compatibility KV, backend route API, or separate hostname-ownership ledger.
+Updates use a strong-ETag CAS. DELETE revokes the Binding and retires the
+Interface, but releases neither the system URL nor Capsule managed-hostname
+ownership.
 
 User-owned custom domains have a separate verified lifecycle, but DNS ownership
 verification and the certificate lifecycle are not implemented. A non-empty
-`custom_domains` request or a route pattern outside the managed base domain
-currently fails closed and is not stored as an active custom domain.
+`custom_domains` request or a compatibility route pattern outside the canonical
+system URL currently fails closed and is not stored as an active custom domain.
 
 In app install and Store flows, this value is passed to ordinary OpenTofu
 variables through the `installExperience` `public_endpoint` projection. For
@@ -208,22 +225,14 @@ The Cloudflare import capability is `compat.cloudflare.workers.v1`. It exposes
 only the subset needed to import Workers-oriented resources into Takosumi Cloud
 resources. Unsupported Cloudflare products stay explicit.
 
-| Status             | Scope                                                                  |
-| ------------------ | ---------------------------------------------------------------------- |
-| Production Preview | Worker script deploy to `EdgeWorker`                                   |
-| Production Preview | Worker routes to Takosumi routes / default hostnames                   |
-| Production Preview | Worker secrets / vars                                                  |
-| Production Preview | KV namespace                                                           |
-| Production Preview | R2 bucket / Object Storage                                             |
-| Production Preview | D1 database / App Database                                             |
-| Preview            | Queue                                                                  |
-| Preview            | Durable Workflow                                                       |
-| Preview            | Dynamic Worker workflow support                                        |
-| Planned            | Containers                                                             |
-| Planned            | Durable Objects style stateful apps                                    |
-| Planned            | User-owned custom domains                                              |
-| Unsupported        | DNS, WAF, Zero Trust, Registrar, Cloudflare account IAM, Load Balancer |
-| Unsupported        | Email Routing                                                          |
+| Status             | Scope                                                                                    |
+| ------------------ | ---------------------------------------------------------------------------------------- |
+| Production Preview | single-module Worker script deploy / list / read / delete → `EdgeWorker`                 |
+| Production Preview | explicit-path route on the discovered canonical system hostname → `http.route` Interface |
+| Production Preview | R2 bucket create / list / read / delete → `ObjectBucket`                                 |
+| Outside GA subset  | KV, D1, Queue, Workflow, Worker binding / secret / vars / assets APIs (explicit `501`)   |
+| Unsupported        | custom hostnames, multi-module upload, DNS, WAF, Zero Trust, Registrar, account IAM      |
+| Unsupported        | Load Balancer and Email Routing                                                          |
 
 AI Gateway is not part of Workers compatibility. It is a separate
 OpenAI-compatible endpoint profile. See
