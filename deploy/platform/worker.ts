@@ -45,6 +45,11 @@ import {
   type ResourceObservationSweepOptions,
 } from "../../worker/src/scheduled/resource_observation.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
+import {
+  CompatibilityRouteControlService,
+  type CompatibilityRouteRecord,
+  type CompatibilityRouteRetireResult,
+} from "../../core/domains/interfaces/compatibility_route_control.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import { TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER } from "../../core/api/resource_routes.ts";
 import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
@@ -1758,6 +1763,53 @@ export interface PlatformCompatibilityResourceDeployApiPort {
 }
 
 /**
+ * Canonical http.route Interface control available to scoped compatibility
+ * profiles. The fixed service owns Interface/Binding validation and never
+ * exposes the generic Interface store or CRUD service to an extension.
+ */
+export interface PlatformCompatibilityRouteInterfaceControlPort {
+  ensure(
+    input: {
+      readonly workspaceId: string;
+      readonly resourceName: string;
+      readonly pathPattern: string;
+      readonly expectedEndpoint: string;
+    },
+    authorization?: PlatformCompatibilityAuthorization,
+  ): Promise<CompatibilityRouteRecord>;
+  list(
+    input: {
+      readonly workspaceId: string;
+      readonly resourceName?: string;
+    },
+    authorization?: PlatformCompatibilityAuthorization,
+  ): Promise<readonly CompatibilityRouteRecord[]>;
+  get(
+    input: { readonly workspaceId: string; readonly interfaceId: string },
+    authorization?: PlatformCompatibilityAuthorization,
+  ): Promise<CompatibilityRouteRecord | undefined>;
+  update(
+    input: {
+      readonly workspaceId: string;
+      readonly interfaceId: string;
+      readonly resourceName: string;
+      readonly pathPattern: string;
+      readonly expectedEndpoint: string;
+      readonly expectedEtag?: string;
+    },
+    authorization?: PlatformCompatibilityAuthorization,
+  ): Promise<CompatibilityRouteRecord>;
+  retire(
+    input: {
+      readonly workspaceId: string;
+      readonly interfaceId: string;
+      readonly expectedEtag?: string;
+    },
+    authorization?: PlatformCompatibilityAuthorization,
+  ): Promise<CompatibilityRouteRetireResult | undefined>;
+}
+
+/**
  * Manager-neutral, exact-GET-only canonical Resource reader for operator
  * recovery loops. This is deliberately separate from compatibility profile
  * authority: recovery must protect artifacts for every authoring surface,
@@ -1832,6 +1884,7 @@ export interface PlatformCompatibilityAuthority {
   readonly profiles: readonly PlatformCompatibilityProfile[];
   readonly control?: {
     readonly resourceApi: PlatformCompatibilityResourceDeployApiPort;
+    readonly routeInterfaces: PlatformCompatibilityRouteInterfaceControlPort;
   };
   readonly data?: PlatformCompatibilityDataReadResolver;
 }
@@ -1947,6 +2000,7 @@ export type PlatformExtensionSessionVerifier = (
 export interface PlatformCompatibilityAuthorityDependencies {
   readonly dispatchResourceRequest?: typeof dispatchPlatformCompatibilityResourceRequest;
   readonly resolveReadyResource?: typeof resolvePlatformCompatibilityReadyResource;
+  readonly routeInterfaces?: PlatformCompatibilityRouteInterfaceControlPort;
 }
 
 export async function createPlatformCompatibilityAuthority(
@@ -1985,6 +2039,9 @@ export async function createPlatformCompatibilityAuthority(
                   dispatchPlatformCompatibilityResourceRequest
                 )(request, authorization, input),
             }),
+            routeInterfaces:
+              dependencies.routeInterfaces ??
+              createPlatformCompatibilityRouteInterfaceControlPort(input),
           }),
         }
       : {}),
@@ -2006,6 +2063,172 @@ export async function createPlatformCompatibilityAuthority(
         }
       : {}),
   });
+}
+
+function createPlatformCompatibilityRouteInterfaceControlPort(context: {
+  readonly request: Request;
+  readonly env: CloudflareWorkerEnv;
+  readonly route: PlatformExtensionRoute;
+  readonly session?: PlatformExtensionSessionContext;
+}): PlatformCompatibilityRouteInterfaceControlPort {
+  return Object.freeze({
+    ensure: async (
+      input: Parameters<
+        PlatformCompatibilityRouteInterfaceControlPort["ensure"]
+      >[0],
+      authorization?: PlatformCompatibilityAuthorization,
+    ) => {
+      const scoped = await platformCompatibilityRouteInterfaceScope(
+        input.workspaceId,
+        authorization,
+        context,
+        "write",
+      );
+      return await scoped.service.ensure(scoped.scope, {
+        resourceName: input.resourceName,
+        pathPattern: input.pathPattern,
+        expectedEndpoint: input.expectedEndpoint,
+      });
+    },
+    list: async (
+      input: Parameters<
+        PlatformCompatibilityRouteInterfaceControlPort["list"]
+      >[0],
+      authorization?: PlatformCompatibilityAuthorization,
+    ) => {
+      const scoped = await platformCompatibilityRouteInterfaceScope(
+        input.workspaceId,
+        authorization,
+        context,
+        "read",
+      );
+      return await scoped.service.list(scoped.scope, {
+        ...(input.resourceName ? { resourceName: input.resourceName } : {}),
+      });
+    },
+    get: async (
+      input: Parameters<
+        PlatformCompatibilityRouteInterfaceControlPort["get"]
+      >[0],
+      authorization?: PlatformCompatibilityAuthorization,
+    ) => {
+      const scoped = await platformCompatibilityRouteInterfaceScope(
+        input.workspaceId,
+        authorization,
+        context,
+        "read",
+      );
+      return await scoped.service.get(scoped.scope, input.interfaceId);
+    },
+    update: async (
+      input: Parameters<
+        PlatformCompatibilityRouteInterfaceControlPort["update"]
+      >[0],
+      authorization?: PlatformCompatibilityAuthorization,
+    ) => {
+      const scoped = await platformCompatibilityRouteInterfaceScope(
+        input.workspaceId,
+        authorization,
+        context,
+        "write",
+      );
+      return await scoped.service.update(scoped.scope, {
+        interfaceId: input.interfaceId,
+        resourceName: input.resourceName,
+        pathPattern: input.pathPattern,
+        expectedEndpoint: input.expectedEndpoint,
+        ...(input.expectedEtag ? { expectedEtag: input.expectedEtag } : {}),
+      });
+    },
+    retire: async (
+      input: Parameters<
+        PlatformCompatibilityRouteInterfaceControlPort["retire"]
+      >[0],
+      authorization?: PlatformCompatibilityAuthorization,
+    ) => {
+      const scoped = await platformCompatibilityRouteInterfaceScope(
+        input.workspaceId,
+        authorization,
+        context,
+        "write",
+      );
+      return await scoped.service.retire(scoped.scope, {
+        interfaceId: input.interfaceId,
+        ...(input.expectedEtag ? { expectedEtag: input.expectedEtag } : {}),
+      });
+    },
+  });
+}
+
+async function platformCompatibilityRouteInterfaceScope(
+  requestedWorkspaceId: string,
+  authorization: PlatformCompatibilityAuthorization | undefined,
+  context: {
+    readonly request: Request;
+    readonly env: CloudflareWorkerEnv;
+    readonly route: PlatformExtensionRoute;
+    readonly session?: PlatformExtensionSessionContext;
+  },
+  access: "read" | "write",
+): Promise<{
+  readonly service: CompatibilityRouteControlService;
+  readonly scope: {
+    readonly profile: string;
+    readonly workspaceId: string;
+    readonly actor: ActorContext;
+  };
+}> {
+  const workspaceId = safePlatformExtensionContextId(requestedWorkspaceId);
+  const profile = compatibilityControlManagedBy(context.route);
+  const session = compatibilityAuthoritySession(context.session, authorization);
+  if (!workspaceId || !profile || !session) {
+    throw new TypeError(
+      "compatibility route Interface authority requires one profile and authenticated Workspace context",
+    );
+  }
+  if (
+    platformResourceShapeAccessFailure(
+      new Request(context.request, {
+        method: access === "read" ? "GET" : "POST",
+      }),
+      session,
+    )
+  ) {
+    const error = new Error(
+      `compatibility route ${access} scope is not authorized`,
+    );
+    (error as { code?: string }).code = "forbidden";
+    throw error;
+  }
+  const verified = await platformExtensionVerifiedWorkspaceSession(
+    context.request,
+    context.env,
+    session,
+    workspaceId,
+  );
+  if (!verified.ok) {
+    const error = new Error("compatibility route Workspace is not authorized");
+    (error as { code?: string }).code = "forbidden";
+    throw error;
+  }
+  const operations = await takosumiOperationsFor(context.env);
+  return {
+    service: new CompatibilityRouteControlService(operations.interfaces, {
+      resolveReadyEdgeWorker: async ({ workspaceId, resourceName }) =>
+        (
+          await operations.resourceCompatibility?.resolveReadyResource({
+            space: workspaceId,
+            kind: "EdgeWorker",
+            name: resourceName,
+          })
+        )?.resource,
+    }),
+    scope: {
+      profile,
+      workspaceId,
+      actor: platformResourceShapeActorContext(verified.session, workspaceId),
+    },
+  };
 }
 
 export function createPlatformCanonicalResourceReadAuthority(

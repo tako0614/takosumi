@@ -40,10 +40,17 @@ export interface InterfaceMetadata {
   readonly generation: number;
   readonly labels?: Readonly<Record<string, string>>;
   /** Immutable service-side materialization marker; never repository metadata. */
-  readonly materializedFrom?: {
-    readonly source: "capsule_blueprint";
-    readonly key: string;
-  };
+  readonly materializedFrom?:
+    | {
+        readonly source: "capsule_blueprint";
+        readonly key: string;
+      }
+    | {
+        /** Scoped compatibility control translated into this canonical Interface. */
+        readonly source: "compatibility_profile";
+        readonly profile: string;
+        readonly key: string;
+      };
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -187,11 +194,18 @@ export interface InterfaceBinding {
     readonly workspaceId: string;
     readonly generation: number;
     /** Immutable service-side one-shot materialization marker. */
-    readonly materializedFrom?: {
-      readonly source: "capsule_blueprint";
-      readonly interfaceKey: string;
-      readonly key: string;
-    };
+    readonly materializedFrom?:
+      | {
+          readonly source: "capsule_blueprint";
+          readonly interfaceKey: string;
+          readonly key: string;
+        }
+      | {
+          /** Scoped compatibility control translated into this canonical Binding. */
+          readonly source: "compatibility_profile";
+          readonly profile: string;
+          readonly key: string;
+        };
     readonly createdAt: string;
     readonly updatedAt: string;
   };
