@@ -875,9 +875,64 @@ export default function ResourceEditor(props: Props): JSX.Element {
                       <dd>
                         <code>{quote().quoteId}</code>
                       </dd>
+                      <Show when={quote().catalogId && quote().catalogVersion}>
+                        <dt>{t("resources.preview.catalog")}</dt>
+                        <dd>
+                          <code>
+                            {quote().catalogId}@{quote().catalogVersion}
+                          </code>
+                        </dd>
+                      </Show>
+                      <Show
+                        when={quote().offeringId && quote().offeringVersion}
+                      >
+                        <dt>{t("resources.preview.offering")}</dt>
+                        <dd>
+                          <code>
+                            {quote().offeringId}@{quote().offeringVersion}
+                          </code>
+                        </dd>
+                      </Show>
+                      <Show when={quote().region}>
+                        <dt>{t("resources.preview.region")}</dt>
+                        <dd>{quote().region}</dd>
+                      </Show>
                       <dt>{t("resources.preview.priceExpires")}</dt>
                       <dd>{quote().expiresAt}</dd>
                     </dl>
+                    <Show when={quote().lineItems.length > 0}>
+                      <div class="rs-quote-lines">
+                        <p class="rs-price-label">
+                          {t("resources.preview.lineItems")}
+                        </p>
+                        <ul class="rs-compact-list">
+                          <For each={quote().lineItems}>
+                            {(line) => (
+                              <li>
+                                <strong>
+                                  {line.invoiceDescription ??
+                                    line.description ??
+                                    line.meterId ??
+                                    line.sku}
+                                </strong>
+                                <span>
+                                  {line.sku}@{line.skuVersion} · {line.quantity}{" "}
+                                  {line.unit} ·{" "}
+                                  {t("resources.preview.unitPrice")}{" "}
+                                  {formatUsdMicros(line.unitPriceUsdMicros)} USD
+                                  /{line.billingUnit ?? 1} {line.unit} ·{" "}
+                                  {t("resources.preview.subtotal")}{" "}
+                                  {formatUsdMicros(line.amountUsdMicros)} USD
+                                  {line.taxTreatment
+                                    ? ` · ${t("resources.preview.tax")}: ${line.taxTreatment}`
+                                    : ""}
+                                </span>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                      </div>
+                    </Show>
                   </div>
                 )}
               </Show>
