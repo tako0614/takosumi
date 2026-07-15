@@ -22,7 +22,7 @@ import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage
 import { seedCapsuleModel } from "../helpers/deploy-control/model_fixture.ts";
 import { parseOpenTofuOutputs } from "./opentofu-output.ts";
 
-const FIXTURE_SOURCE = "fixtures/opentofu-output-snapshot-proof/source";
+const FIXTURE_SOURCE = "fixtures/opentofu-output-proof/source";
 const PROOF_KIND = "takosumi.live-local-opentofu-plan-apply-proof@v1";
 
 export interface LiveOpenTofuPlanApplyProof {

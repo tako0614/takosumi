@@ -75,7 +75,7 @@ const SOURCE_DOCS_WITH_PUBLIC_SURFACE_WORDING = [
   "website/src/components/Footer.tsx",
   "website/src/content/why.ts",
   "website/src/content/ecosystem.ts",
-  "tests/proofs/opentofu-output-snapshot.ts",
+  "tests/proofs/opentofu-output-proof.ts",
   "package.json",
 ] as const;
 
@@ -90,6 +90,9 @@ const RETIRED_SOURCE_DOC_TERMS: readonly (string | RegExp)[] = [
   "opentofu:deployment-output-proof",
   "opentofu-deployment-output-proof",
   "takosumi.opentofu-deployment-output-proof",
+  "opentofu:output-" + "snapshot-proof",
+  "opentofu-output-" + "snapshot-proof",
+  "takosumi.opentofu-output-" + "snapshot-proof",
   "/v1/installations/{installationId}/deployment-outputs",
   "public package surface",
   "deploy-control plane has no public routes",
