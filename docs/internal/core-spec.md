@@ -1029,11 +1029,19 @@ An installed profile declares its authority planes explicitly:
 
 The platform advertises the same plane metadata through
 `/v1/capabilities.compatibilityProfiles`. `control` dispatch receives only a
-Resource Deploy API port constrained to `/v1/resources`; `data` dispatch
-receives only a read resolver that rejects Resources that are not fully
-observed `Ready` and can return authorized resolved Interface/NativeResource
-evidence. The handler contract contains no environment, store, adapter,
-backend-manager, or compatibility lifecycle-state port. A `compat.*` capability
+Resource Deploy API port constrained to `/v1/resources` plus a fixed,
+profile-owned route Interface port. That route port can materialize only a
+Resource-owned `http.route` / `v1alpha1` Interface, its exact Principal
+`edge.request` Binding, and ETag-fenced update/retire; it never exposes generic
+Interface CRUD or stores. Its current Stable subset permits exactly one active
+route for each profile-owned `EdgeWorker`, requires an explicit path, accepts
+either no wildcard or one terminal `*`, and treats a different or overlapping
+second route as an explicit conflict/unsupported operation rather than applying
+specificity rules. `data` dispatch receives only a read resolver that
+rejects Resources that are not fully observed `Ready` and can return authorized
+resolved Interface/NativeResource evidence. The handler contract contains no
+environment, store, adapter, backend-manager, or compatibility lifecycle-state
+port. A `compat.*` capability
 without this declaration, a `/compat` raw extension route, or a handler that
 does not implement the restricted compatibility entrypoint fails closed and is
 not advertised. Core and Accounts route prefixes cannot be delegated to an

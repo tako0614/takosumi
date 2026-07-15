@@ -1093,7 +1093,10 @@ sourceBuild is argv-only, credential-free, output-checked, and policy-controlled
 When the provider is executed outside the Takosumi runner, use artifact_url +
 artifact_sha256 so the generated OpenTofu module fetches and verifies the
 declared CI/release artifact.
-Routes are separate resources.
+Public runtime routes are canonical `http.route` Interfaces with exact
+InterfaceBindings. A future custom-domain/certificate lifecycle may introduce
+a separate typed Resource only after that service form passes the prior-art
+gate.
 Bindings/connections are separate contracts.
 Secrets are Credential/Secret material, not spec fields.
 ```
@@ -1135,13 +1138,14 @@ token through the normal `CLOUDFLARE_API_TOKEN` env name while the provider bloc
 only contains the managed `base_url`.
 
 Managed hostname ownership has exactly one authority: the OSS control-plane
-hostname reservation store. A compatibility route or script-subdomain write
-that creates a managed hostname must provide source Workspace and source
-Capsule context and call the same authority used by Capsule Runs. Cloud-side KV
-or Durable Object records hold routing and activation state only; they must not
-become a second ownership ledger. A Cloud route DELETE removes only that state.
-The reservation remains attached to the Capsule lifetime until a successful
-Capsule destroy releases it.
+hostname reservation store. The Stable Cloudflare routes subset does not claim
+a hostname: it can only project an existing profile-owned EdgeWorker's canonical
+Cloud system `url` output into a Resource-owned `http.route` / `v1alpha1`
+Interface plus an exact Principal `edge.request` Binding. Any runtime routing
+projection is a recoverable cache of that canonical state, not a compatibility
+lifecycle ledger. Route DELETE revokes the Binding and retires the Interface;
+it never releases a hostname. Arbitrary custom domains remain unsupported until
+the separate ownership/certificate lifecycle exists.
 
 From the user's perspective the service is an `EdgeWorker`, selected through
 the dashboard, CLI, direct Deploy API, a supported compatibility client, or the
@@ -1198,8 +1202,15 @@ operator-installed manager for that service form.
 `/compat/cloudflare/client/v4` is therefore only a protocol adapter. Its
 supported create/update/delete operations translate to the same EdgeWorker
 Resource request and call the Deploy API. Reads project the canonical Resource;
-the handler owns no script/resource lifecycle database. Standard data-plane
-facades similarly resolve an already-Ready Resource before manager access.
+the handler owns no script/resource lifecycle database. Its scoped Workers
+routes operations use the capability-limited compatibility route port to
+create/read/update/retire the canonical `http.route` Interface and exact
+InterfaceBinding; the route id is the Interface id, and no compatibility KV or
+backend route call is made. The Stable subset has exactly one active route per
+profile-owned EdgeWorker, requires an explicit path, and permits at most one
+terminal `*`; multiple/overlapping routes and host-only patterns fail
+explicitly rather than inventing match precedence. Standard data-plane facades similarly resolve an
+already-Ready Resource before manager access.
 AI Gateway does not become a Resource Shape unless Takosumi later offers a
 durable provider-neutral AI service form; its request/token metering still uses
 the Cloud rating and invoice-reconciliation boundary. The official EdgeWorker
@@ -1610,7 +1621,9 @@ Examples:
 
 ```text
 Cloudflare Workers subset:
-  translate supported control operations into EdgeWorker Deploy API calls.
+  translate supported script control operations into EdgeWorker Deploy API
+  calls, and scoped system-hostname route operations into canonical
+  http.route Interface / InterfaceBinding operations.
 
 S3 API:
   resolve a Ready ObjectBucket for data-plane calls; supported control-plane
@@ -1813,7 +1826,7 @@ Docs must publish a compatibility matrix:
 ```text
 Stable:
   EdgeWorker deploy
-  routes
+  one explicit-path route per EdgeWorker canonical Cloud system hostname
   secrets / vars
   ObjectBucket with S3-compatible data-plane surface
   AI Gateway as an OpenAI-compatible env/endpoint surface
