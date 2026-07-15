@@ -1827,11 +1827,13 @@ Docs must publish a compatibility matrix:
 Stable:
   EdgeWorker deploy
   one explicit-path route per EdgeWorker canonical Cloud system hostname
-  secrets / vars
   ObjectBucket with S3-compatible data-plane surface
   AI Gateway as an OpenAI-compatible env/endpoint surface
 
 Preview:
+  EdgeWorker runtime secrets / vars / service bindings through the Cloudflare
+  compatibility profile (ProviderConnection runner injection remains a stable
+  generic OpenTofu capability)
   KV
   Queue
   SQLDatabase
