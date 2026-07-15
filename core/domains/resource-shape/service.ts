@@ -123,6 +123,7 @@ export type ResourceServiceErrorCode =
   | "refresh_blocked"
   | "invalid_import"
   | "import_conflict"
+  | "ownership_conflict"
   | "reconcile_conflict"
   | "deployment_review_required"
   | "deployment_plan_changed"
@@ -271,6 +272,12 @@ export interface DeleteResourceOptions {
    * native cleanup credentials or target no longer exist.
    */
   readonly force?: boolean;
+  /**
+   * Authoring surface that owns the canonical Resource. Normal deletes are
+   * fenced to this manager; only an explicitly authorized force tombstone may
+   * bypass the ownership fence.
+   */
+  readonly expectedManagedBy?: ResourceManagedBy;
 }
 
 export interface ResourceOperationRunRepairResult {
@@ -278,6 +285,12 @@ export interface ResourceOperationRunRepairResult {
   readonly completed: number;
   readonly auditsRepaired: number;
   readonly pending: number;
+}
+
+interface PluginOperationRunClaim {
+  readonly run: ResourceOperationRun;
+  /** Only the creator may fail a Run when the Resource claim never begins. */
+  readonly created: boolean;
 }
 
 export class ResourceShapeService {
@@ -700,6 +713,15 @@ export class ResourceShapeService {
     }
     const id = formatResourceShapeId(req.space, req.kind, req.name);
     const existing = await this.#stores.resources.get(id);
+    const incomingManagedBy = req.managedBy ?? "opentofu";
+    if (existing && existing.managedBy !== incomingManagedBy) {
+      return resourceOwnershipConflict(
+        id,
+        incomingManagedBy,
+        existing.managedBy,
+        "apply",
+      );
+    }
     if (existing?.phase === "Deleting") {
       return {
         ok: false,
@@ -769,30 +791,63 @@ export class ResourceShapeService {
       ? existing.generation
       : (existing?.generation ?? 0) + 1;
     let operationRun: ResourceOperationRun | undefined;
+    let operationRunCreated = false;
     if (output.selectedImplementationDescriptor.plugin) {
       try {
-        operationRun = await this.#beginPluginOperationRun({
-          operation: "apply",
-          resourceId: id,
-          actor: req.actor,
-          identity: {
-            generation,
-            planDigest: evidence.planDigest,
-            resolutionFingerprint: evidence.resolutionFingerprint,
-          },
-        });
-        if (
-          existing?.pendingOperation &&
-          (existing.pendingOperation.runId !== operationRun.id ||
-            existing.pendingOperation.operationKey !==
-              operationRun.resourceOperationKey ||
-            existing.pendingOperation.operation !== "apply")
-        ) {
-          throw new Error(
-            `resource ${id} is fenced by a different pending operation`,
+        if (recoveringApplying) {
+          const pendingOperation = existing?.pendingOperation;
+          if (!this.#operationRuns || pendingOperation?.operation !== "apply") {
+            throw new Error(
+              `resource ${id} has no canonical apply Run for recovery`,
+            );
+          }
+          operationRun = await this.#operationRuns.getResourceOperationRun(
+            pendingOperation.runId,
           );
+          if (
+            !operationRun ||
+            operationRun.resourceOperation !== "apply" ||
+            operationRun.resourceOperationKey !== pendingOperation.operationKey
+          ) {
+            throw new Error(
+              `resource ${id} canonical apply Run is missing or mismatched`,
+            );
+          }
+        } else {
+          const operationRunClaim = await this.#beginPluginOperationRunClaim({
+            operation: "apply",
+            resourceId: id,
+            actor: req.actor,
+            identity: {
+              generation,
+              managedBy: incomingManagedBy,
+              planDigest: evidence.planDigest,
+              resolutionFingerprint: evidence.resolutionFingerprint,
+            },
+          });
+          operationRun = operationRunClaim.run;
+          operationRunCreated = operationRunClaim.created;
+          if (
+            existing?.pendingOperation &&
+            (existing.pendingOperation.runId !== operationRun.id ||
+              existing.pendingOperation.operationKey !==
+                operationRun.resourceOperationKey ||
+              existing.pendingOperation.operation !== "apply")
+          ) {
+            throw new Error(
+              `resource ${id} is fenced by a different pending operation`,
+            );
+          }
         }
       } catch (error) {
+        const terminalized = await this.#failUnclaimedPluginOperationRun({
+          run: operationRun,
+          created: operationRunCreated,
+          error,
+        });
+        if (!terminalized) {
+          return pluginOperationRunFinalizationPending(id, "apply");
+        }
         return {
           ok: false,
           error: { code: "apply_failed", message: errorMessage(error) },
@@ -808,7 +863,7 @@ export class ResourceShapeService {
       environment: req.environment,
       kind: req.kind,
       name: req.name,
-      managedBy: req.managedBy ?? "opentofu",
+      managedBy: incomingManagedBy,
       spec: req.spec,
       phase: "Applying",
       generation,
@@ -863,14 +918,62 @@ export class ResourceShapeService {
         plannedLock: lockRecord,
         ...(existing ? { expected: versionOf(existing) } : {}),
       });
+      if (claim.status === "ownership_conflict") {
+        const terminalized = await this.#failUnclaimedPluginOperationRun({
+          run: operationRun,
+          created: operationRunCreated,
+          error: new Error(
+            `resource ${id} ownership changed before apply could be claimed`,
+          ),
+        });
+        if (!terminalized) {
+          return pluginOperationRunFinalizationPending(id, "apply");
+        }
+        return resourceOwnershipConflict(
+          id,
+          incomingManagedBy,
+          claim.record.managedBy,
+          "apply",
+        );
+      }
       claimSucceeded = claim.status === "begun";
     } catch (error) {
+      let current: ResourceShapeRecord | undefined;
+      try {
+        current = await this.#stores.resources.get(id);
+      } catch (observationError) {
+        return applyClaimAcknowledgementPending(id, error, observationError);
+      }
+      if (
+        applyingClaimMatchesRecord(current, applyingRecord) ||
+        resourcePendingOperationMatchesRun(current, operationRun, "apply")
+      ) {
+        return applyClaimAcknowledgementPending(id, error);
+      }
+      const terminalized = await this.#failUnclaimedPluginOperationRun({
+        run: operationRun,
+        created: operationRunCreated,
+        error,
+      });
+      if (!terminalized) {
+        return pluginOperationRunFinalizationPending(id, "apply");
+      }
       return {
         ok: false,
         error: { code: "apply_failed", message: errorMessage(error) },
       };
     }
     if (!claimSucceeded) {
+      const terminalized = await this.#failUnclaimedPluginOperationRun({
+        run: operationRun,
+        created: operationRunCreated,
+        error: new Error(
+          `resource ${id} changed before apply could be claimed`,
+        ),
+      });
+      if (!terminalized) {
+        return pluginOperationRunFinalizationPending(id, "apply");
+      }
       return {
         ok: false,
         error: {
@@ -1383,6 +1486,7 @@ export class ResourceShapeService {
     }
 
     const id = formatResourceShapeId(req.space, req.kind, req.name);
+    const importManagedBy = req.managedBy ?? "opentofu";
     const importRequestDigest = await resourceImportRequestDigest(req);
     const [existing, existingLock] = await Promise.all([
       this.#stores.resources.get(id),
@@ -1510,7 +1614,7 @@ export class ResourceShapeService {
       environment: req.environment,
       kind: req.kind,
       name: req.name,
-      managedBy: "import-pending",
+      managedBy: importManagedBy,
       spec: req.spec,
       phase: "Applying",
       generation: 1,
@@ -1738,7 +1842,7 @@ export class ResourceShapeService {
       applyingRecord;
     const readyRecord: ResourceShapeRecord = {
       ...importReadyBase,
-      managedBy: req.managedBy ?? "import",
+      managedBy: importManagedBy,
       phase: "Ready",
       observedGeneration: 1,
       outputs: result.outputs,
@@ -2974,6 +3078,15 @@ export class ResourceShapeService {
       });
       return { ok: true, value: undefined };
     }
+    const expectedManagedBy = options.expectedManagedBy ?? "opentofu";
+    if (record.managedBy !== expectedManagedBy) {
+      return resourceOwnershipConflict(
+        id,
+        expectedManagedBy,
+        record.managedBy,
+        "delete",
+      );
+    }
     if (record.phase === "Applying") {
       return {
         ok: false,
@@ -2985,8 +3098,10 @@ export class ResourceShapeService {
     }
     if (
       record.phase === "Failed" &&
-      record.managedBy === "import-pending" &&
-      record.observedGeneration === 0
+      record.observedGeneration === 0 &&
+      record.conditions?.some(
+        (condition) => condition.reason === "ImportFailed",
+      )
     ) {
       const lock = await this.#stores.locks.get(id);
       await this.#recordResourceEvent({
@@ -3204,6 +3319,7 @@ export class ResourceShapeService {
             actor,
             identity: {
               generation: record.generation,
+              managedBy: expectedManagedBy,
               resourceVersion: record.updatedAt,
               lockVersion: lock.updatedAt,
             },
@@ -3236,6 +3352,7 @@ export class ResourceShapeService {
           updatedAt: this.#now(),
         },
         record.generation,
+        expectedManagedBy,
       );
       if (deleteClaim.status === "already_deleting") {
         claimedRecord = deleteClaim.record;
@@ -3256,6 +3373,22 @@ export class ResourceShapeService {
             message: `resource ${id} changed while delete was being claimed`,
           },
         };
+      }
+      if (deleteClaim.status === "ownership_conflict") {
+        if (operationRun) {
+          operationRun = await this.#failPluginOperationRun(
+            operationRun,
+            new Error(
+              `resource ${id} ownership changed before delete could be claimed`,
+            ),
+          );
+        }
+        return resourceOwnershipConflict(
+          id,
+          expectedManagedBy,
+          deleteClaim.record.managedBy,
+          "delete",
+        );
       }
       if (deleteClaim.status === "claimed") {
         claimedRecord = deleteClaim.record;
@@ -3631,12 +3764,12 @@ export class ResourceShapeService {
     }
   }
 
-  async #beginPluginOperationRun(input: {
+  async #beginPluginOperationRunClaim(input: {
     readonly operation: ResourceOperation;
     readonly resourceId: string;
     readonly actor: ActorContext;
     readonly identity: unknown;
-  }): Promise<ResourceOperationRun> {
+  }): Promise<PluginOperationRunClaim> {
     if (!this.#operationRuns) {
       throw new Error(
         `canonical Run ledger is not configured for direct Resource ${input.operation}`,
@@ -3670,7 +3803,36 @@ export class ResourceShapeService {
         `canonical Resource Run id ${id} is already owned by a different operation`,
       );
     }
-    return begun.run;
+    return { run: begun.run, created: begun.status === "created" };
+  }
+
+  async #beginPluginOperationRun(input: {
+    readonly operation: ResourceOperation;
+    readonly resourceId: string;
+    readonly actor: ActorContext;
+    readonly identity: unknown;
+  }): Promise<ResourceOperationRun> {
+    return (await this.#beginPluginOperationRunClaim(input)).run;
+  }
+
+  async #failUnclaimedPluginOperationRun(input: {
+    readonly run: ResourceOperationRun | undefined;
+    readonly created: boolean;
+    readonly error: unknown;
+  }): Promise<boolean> {
+    if (!input.run || !input.created) return true;
+    try {
+      const failed = await this.#failPluginOperationRun(input.run, input.error);
+      return failed.status === "failed";
+    } catch (error) {
+      log.warn("service.resource_shape.unclaimed_operation_run_failure", {
+        runId: input.run.id,
+        resourceId: input.run.subject.id,
+        operation: input.run.resourceOperation,
+        error,
+      });
+      return false;
+    }
   }
 
   async #persistPluginOperationResult(
@@ -4436,6 +4598,74 @@ function applyClaimRollbackPending(
   };
 }
 
+function applyClaimAcknowledgementPending(
+  resourceId: string,
+  claimError: unknown,
+  observationError?: unknown,
+): ServiceResult<ResourceObject> {
+  return {
+    ok: false,
+    error: {
+      code: "deployment_finalize_pending",
+      message: observationError
+        ? `resource ${resourceId} apply claim outcome is unknown and could not be observed; host recovery is required: ${errorMessage(claimError)}; observation failed: ${errorMessage(observationError)}`
+        : `resource ${resourceId} apply claim committed but its acknowledgement was lost; host recovery is required: ${errorMessage(claimError)}`,
+    },
+  };
+}
+
+function pluginOperationRunFinalizationPending(
+  resourceId: string,
+  operation: ResourceOperation,
+): ServiceResult<ResourceObject> {
+  return {
+    ok: false,
+    error: {
+      code: "deployment_finalize_pending",
+      message: `resource ${resourceId} ${operation} Run could not be terminalized; host recovery is required`,
+    },
+  };
+}
+
+function applyingClaimMatchesRecord(
+  current: ResourceShapeRecord | undefined,
+  claimed: ResourceShapeRecord,
+): boolean {
+  return (
+    current?.phase === "Applying" &&
+    canonicalJson(current) === canonicalJson(claimed)
+  );
+}
+
+function resourcePendingOperationMatchesRun(
+  record: ResourceShapeRecord | undefined,
+  run: ResourceOperationRun | undefined,
+  operation: ResourceOperation,
+): boolean {
+  return Boolean(
+    record?.phase === "Applying" &&
+    run &&
+    record.pendingOperation?.operation === operation &&
+    record.pendingOperation.runId === run.id &&
+    record.pendingOperation.operationKey === run.resourceOperationKey,
+  );
+}
+
+function resourceOwnershipConflict<T>(
+  resourceId: string,
+  requestedManagedBy: ResourceManagedBy,
+  currentManagedBy: ResourceManagedBy,
+  operation: "apply" | "delete",
+): ServiceResult<T> {
+  return {
+    ok: false,
+    error: {
+      code: "ownership_conflict",
+      message: `resource ${resourceId} is managed by ${currentManagedBy}; ${operation} from ${requestedManagedBy} is not allowed`,
+    },
+  };
+}
+
 function nextApplyClaimTimestamp(now: string, previous?: string): IsoTimestamp {
   if (!previous) return now as IsoTimestamp;
   const nowMs = Date.parse(now);
@@ -4493,7 +4723,7 @@ async function resourceImportRequestDigest(
       kind: request.kind,
       name: request.name,
       spec: request.spec,
-      managedBy: request.managedBy ?? "import",
+      managedBy: request.managedBy ?? "opentofu",
       labels: request.labels ?? null,
       targetPoolName: request.targetPoolName ?? null,
       spacePolicyName: request.spacePolicyName ?? null,
@@ -4515,7 +4745,7 @@ function importRequestMatchesApplying(
   );
   return (
     record.phase === "Applying" &&
-    record.managedBy === "import-pending" &&
+    record.managedBy === (request.managedBy ?? "opentofu") &&
     record.generation === 1 &&
     record.observedGeneration === 0 &&
     request.space === record.spaceId &&
