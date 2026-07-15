@@ -156,10 +156,8 @@ test("Takosumi public docs are rebuilt around the current public surface", async
   assert.match(docs, /versioned subset|versioned capabilities/);
   assert.match(docs, /official\s+managed (?:capacity|target)/i);
   assert.match(docs, /same hosted Cloud origin|同じ hosted Cloud origin/);
-  assert.match(
-    docs,
-    /shared Cloud extension (?:layer|boundary)|Cloud extension 共通層/,
-  );
+  assert.match(docs, /Cloud extension boundary|Cloud extension の境界/);
+  assert.match(docs, /sole lifecycle authority|唯一の lifecycle authority/);
   for (const concept of FINAL_PUBLIC_CONCEPTS) {
     assert.match(docs, new RegExp(`\\b${concept}\\b`), `missing ${concept}`);
   }
