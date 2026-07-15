@@ -489,6 +489,76 @@ for (const backend of backends) {
       await stores.resources.delete(current.id);
     });
 
+    test("atomic apply: CAS begin rejects a managedBy takeover without changing Resource or lock", async () => {
+      const current = readyShape(SPACE_A, `atomic-owner-${backend.label}`, T0);
+      const currentLock = minimalLock(current.id);
+      await stores.resources.upsert(current);
+      await stores.locks.put(currentLock);
+      const takeover: ResourceShapeRecord = {
+        ...current,
+        managedBy: "compat.example.v1",
+        phase: "Applying",
+        generation: current.generation + 1,
+        updatedAt: T1,
+      };
+      const takeoverLock = {
+        ...currentLock,
+        selectedImplementation: "must_not_publish",
+        updatedAt: T1,
+      };
+
+      expect(
+        await stores.beginApply({
+          applyingRecord: takeover,
+          plannedLock: takeoverLock,
+          expected: {
+            generation: current.generation,
+            phase: current.phase,
+            updatedAt: current.updatedAt,
+          },
+        }),
+      ).toEqual({ status: "ownership_conflict", record: current });
+      expect(await stores.resources.get(current.id)).toEqual(current);
+      expect(await stores.locks.get(current.id)).toEqual(currentLock);
+
+      await stores.locks.delete(current.id);
+      await stores.resources.delete(current.id);
+    });
+
+    test("atomic apply: create-only race reports a managedBy takeover without changing the winner", async () => {
+      const winner = readyShape(
+        SPACE_A,
+        `atomic-create-owner-${backend.label}`,
+        T0,
+      );
+      const winnerLock = minimalLock(winner.id);
+      await stores.resources.upsert(winner);
+      await stores.locks.put(winnerLock);
+      const loser: ResourceShapeRecord = {
+        ...winner,
+        managedBy: "compat.example.v1",
+        phase: "Applying",
+        updatedAt: T1,
+      };
+      const loserLock = {
+        ...winnerLock,
+        selectedImplementation: "must_not_publish",
+        updatedAt: T1,
+      };
+
+      expect(
+        await stores.beginApply({
+          applyingRecord: loser,
+          plannedLock: loserLock,
+        }),
+      ).toEqual({ status: "ownership_conflict", record: winner });
+      expect(await stores.resources.get(winner.id)).toEqual(winner);
+      expect(await stores.locks.get(winner.id)).toEqual(winnerLock);
+
+      await stores.locks.delete(winner.id);
+      await stores.resources.delete(winner.id);
+    });
+
     test("atomic apply: abort restores prior Resource and lock or removes a create claim", async () => {
       const prior: ResourceShapeRecord = {
         ...readyShape(SPACE_A, `atomic-abort-${backend.label}`, T0),
@@ -761,6 +831,7 @@ for (const backend of backends) {
       const claimed = await stores.resources.claimDelete(
         deleting,
         record.generation,
+        record.managedBy,
       );
       expect(claimed).toEqual({ status: "claimed", record: deleting });
       expect(await stores.resources.get(record.id)).toEqual(deleting);
@@ -768,6 +839,7 @@ for (const backend of backends) {
       const duplicate = await stores.resources.claimDelete(
         deleting,
         record.generation,
+        record.managedBy,
       );
       expect(duplicate).toEqual({
         status: "already_deleting",
@@ -780,6 +852,7 @@ for (const backend of backends) {
           id: formatResourceShapeId(SPACE_A, "ObjectBucket", "missing"),
         },
         record.generation,
+        record.managedBy,
       );
       expect(missing).toEqual({ status: "not_found" });
       await stores.resources.delete(record.id);
@@ -797,8 +870,36 @@ for (const backend of backends) {
         phase: "Deleting",
         updatedAt: T2,
       };
-      const conflict = await stores.resources.claimDelete(deleting, 999);
+      const conflict = await stores.resources.claimDelete(
+        deleting,
+        999,
+        record.managedBy,
+      );
       expect(conflict).toEqual({ status: "conflict", record });
+      expect(await stores.resources.get(record.id)).toEqual(record);
+      await stores.resources.delete(record.id);
+    });
+
+    test("resource shape: claimDelete rejects a managedBy takeover atomically", async () => {
+      const record: ResourceShapeRecord = {
+        ...fullShape(),
+        id: formatResourceShapeId(SPACE_A, "ObjectBucket", "owner-delete"),
+        name: "owner-delete",
+      };
+      await stores.resources.upsert(record);
+      const deleting: ResourceShapeRecord = {
+        ...record,
+        phase: "Deleting",
+        updatedAt: T2,
+      };
+
+      expect(
+        await stores.resources.claimDelete(
+          deleting,
+          record.generation,
+          "compat.example.v1",
+        ),
+      ).toEqual({ status: "ownership_conflict", record });
       expect(await stores.resources.get(record.id)).toEqual(record);
       await stores.resources.delete(record.id);
     });

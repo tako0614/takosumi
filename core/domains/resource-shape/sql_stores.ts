@@ -355,22 +355,27 @@ class SqlResourceShapeStore implements ResourceShapeStore {
   async claimDelete(
     record: ResourceShapeRecord,
     expectedGeneration: number,
+    expectedManagedBy: ResourceManagedBy,
   ): Promise<ResourceDeleteClaimResult> {
     const result = await this.client.query(
       `update ${this.#table}
        set phase = $1, conditions_json = $2::jsonb, updated_at = $3
-       where id = $4 and generation = $5 and phase != 'Deleting'`,
+       where id = $4 and generation = $5 and managed_by = $6 and phase != 'Deleting'`,
       [
         record.phase,
         jsonOrNull(record.conditions),
         record.updatedAt,
         record.id,
         expectedGeneration,
+        expectedManagedBy,
       ],
     );
     if (result.rowCount > 0) return { status: "claimed", record };
     const current = await this.get(record.id);
     if (!current) return { status: "not_found" };
+    if (current.managedBy !== expectedManagedBy) {
+      return { status: "ownership_conflict", record: current };
+    }
     if (current.phase === "Deleting") {
       return { status: "already_deleting", record: current };
     }
@@ -585,6 +590,9 @@ async function beginSqlApply(
             `resource create conflict did not resolve ${input.applyingRecord.id}`,
           );
         }
+        if (current.managedBy !== input.applyingRecord.managedBy) {
+          return { status: "ownership_conflict", record: current };
+        }
         return { status: "conflict", record: current };
       }
     } else {
@@ -592,6 +600,7 @@ async function beginSqlApply(
         transaction,
         input.applyingRecord,
         input.expected,
+        input.applyingRecord.managedBy,
       );
       if (updated.rowCount === 0) {
         const current = await readSqlResource(
@@ -599,6 +608,9 @@ async function beginSqlApply(
           input.applyingRecord.id,
         );
         if (!current) return { status: "not_found" };
+        if (current.managedBy !== input.applyingRecord.managedBy) {
+          return { status: "ownership_conflict", record: current };
+        }
         return { status: "conflict", record: current };
       }
     }
@@ -756,7 +768,9 @@ function updateSqlResource(
     readonly phase: ResourcePhase;
     readonly updatedAt: string;
   },
+  expectedManagedBy?: ResourceManagedBy,
 ) {
+  const managedByPredicate = expectedManagedBy ? " and managed_by = $22" : "";
   return client.query(
     `update ${names.resourceShapes} set
       space_id = $1, project = $2, environment = $3, kind = $4, name = $5,
@@ -765,13 +779,14 @@ function updateSqlResource(
       execution_json = $12::jsonb, state_adoption_json = $13::jsonb,
       conditions_json = $14::jsonb, labels_json = $15::jsonb,
       created_at = $16, updated_at = $17
-    where id = $18 and generation = $19 and phase = $20 and updated_at = $21`,
+    where id = $18 and generation = $19 and phase = $20 and updated_at = $21${managedByPredicate}`,
     [
       ...resourceParameters(record).slice(1),
       record.id,
       expected.generation,
       expected.phase,
       expected.updatedAt,
+      ...(expectedManagedBy ? [expectedManagedBy] : []),
     ],
   );
 }

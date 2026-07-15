@@ -481,7 +481,12 @@ func (c *Client) RefreshResource(ctx context.Context, kind, name, space string) 
 // DeleteResource deletes a resource. 200/204 => done; a 404 is treated as
 // already-deleted (no error).
 func (c *Client) DeleteResource(ctx context.Context, kind, name, space string) error {
-	if err := c.doJSON(ctx, http.MethodDelete, c.resourceURL(kind, name, spaceQuery(space)), nil, nil); err != nil {
+	query := spaceQuery(space)
+	if query == nil {
+		query = url.Values{}
+	}
+	query.Set("managedBy", ManagedByOpenTofu)
+	if err := c.doJSON(ctx, http.MethodDelete, c.resourceURL(kind, name, query), nil, nil); err != nil {
 		if code, ok := statusCode(err); ok && code == http.StatusNotFound {
 			return nil
 		}

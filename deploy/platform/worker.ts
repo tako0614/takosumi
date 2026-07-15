@@ -46,6 +46,7 @@ import {
 } from "../../worker/src/scheduled/resource_observation.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
+import { TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER } from "../../core/api/resource_routes.ts";
 import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
 import {
   createTakosumiProductCapabilities,
@@ -509,6 +510,8 @@ export function platformResourceShapeApiEnabled(
   return Boolean(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN && env.TAKOSUMI_CONTROL_DB);
 }
 
+const PUBLIC_RESOURCE_API_MANAGED_BY = "takosumi.resource-api.v1";
+
 export function isPlatformResourceShapeApiPath(pathname: string): boolean {
   return (
     pathname === "/v1/interfaces" ||
@@ -590,6 +593,7 @@ async function platformResourceShapeExternalRequest(
     request,
     env,
     session,
+    PUBLIC_RESOURCE_API_MANAGED_BY,
   );
 }
 
@@ -598,6 +602,7 @@ async function platformResourceShapeAuthorizedRequest(
   workspaceVerificationRequest: Request,
   env: CloudflareWorkerEnv,
   session: PlatformExtensionSessionContext,
+  trustedManagedBy: string,
 ): Promise<
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
@@ -695,6 +700,10 @@ async function platformResourceShapeAuthorizedRequest(
         encodeActorContext(
           platformResourceShapeActorContext(verified.session, workspaceId),
         ),
+      );
+      headers.set(
+        TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
+        trustedManagedBy,
       );
       for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
         if (header !== "authorization") headers.delete(header);
@@ -1649,6 +1658,19 @@ export interface PlatformCompatibilityResourceDeployApiPort {
   ): Promise<Response>;
 }
 
+/**
+ * Manager-neutral, exact-GET-only canonical Resource reader for operator
+ * recovery loops. This is deliberately separate from compatibility profile
+ * authority: recovery must protect artifacts for every authoring surface,
+ * while compatibility reads are scoped to their declared profile.
+ */
+export interface PlatformCanonicalResourceReadAuthority {
+  fetch(
+    request: Request,
+    authorization?: PlatformCompatibilityAuthorization,
+  ): Promise<Response>;
+}
+
 export interface PlatformCompatibilityReadyResourceInput {
   readonly space: string;
   readonly kind: ResourceShapeKind;
@@ -1862,6 +1884,103 @@ export async function createPlatformCompatibilityAuthority(
   });
 }
 
+export function createPlatformCanonicalResourceReadAuthority(
+  env: CloudflareWorkerEnv,
+): PlatformCanonicalResourceReadAuthority {
+  return Object.freeze({
+    fetch: async (
+      request: Request,
+      authorization?: PlatformCompatibilityAuthorization,
+    ): Promise<Response> => {
+      const url = new URL(request.url);
+      const segments = url.pathname.split("/").filter(Boolean);
+      let resourceKind = "";
+      let resourceName = "";
+      try {
+        resourceKind = decodeURIComponent(segments[2] ?? "");
+        resourceName = decodeURIComponent(segments[3] ?? "");
+      } catch {
+        // Malformed paths are rejected by the exact-read check below.
+      }
+      const workspaceId = safePlatformExtensionContextId(
+        authorization?.workspaceId,
+      );
+      const subject = safePlatformExtensionSubject(authorization?.subject);
+      const requestedSpace = safePlatformExtensionContextId(
+        url.searchParams.get("space"),
+      );
+      const exactResourceRead =
+        request.method === "GET" &&
+        segments.length === 4 &&
+        segments[0] === "v1" &&
+        segments[1] === "resources" &&
+        isResourceShapeKind(resourceKind) &&
+        Boolean(safePlatformCompatibilityResourceName(resourceName)) &&
+        [...url.searchParams.keys()].every((key) => key === "space");
+      if (!exactResourceRead) {
+        return Response.json(
+          {
+            error: "invalid_resource_read",
+            error_description:
+              "canonical Resource recovery authority permits only exact GET reads",
+          },
+          { status: 400 },
+        );
+      }
+      if (
+        !workspaceId ||
+        !subject ||
+        requestedSpace !== workspaceId ||
+        !authorization?.scopes?.includes("admin")
+      ) {
+        return Response.json(
+          {
+            error: "forbidden",
+            error_description:
+              "canonical Resource recovery read requires matching Workspace admin authority",
+          },
+          { status: 403 },
+        );
+      }
+      if (!platformResourceShapeApiEnabled(env)) {
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
+      const headers = new Headers(request.headers);
+      for (const header of [
+        ...PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS,
+        ...PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS,
+        TAKOSUMI_INTERNAL_ACTOR_HEADER,
+      ]) {
+        headers.delete(header);
+      }
+      headers.set(
+        "authorization",
+        `Bearer ${String(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)}`,
+      );
+      headers.set(
+        TAKOSUMI_INTERNAL_ACTOR_HEADER,
+        encodeActorContext(
+          platformResourceShapeActorContext(
+            {
+              authenticated: true,
+              authKind: "service-token",
+              workspaceId,
+              subject,
+              scopes: ["admin"],
+            },
+            workspaceId,
+          ),
+        ),
+      );
+      headers.delete(TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER);
+      return await handlePlatformResourceShapeApiRequest(
+        new Request(url, { method: "GET", headers }),
+        env,
+      );
+    },
+  });
+}
+
 async function resolveReadyCompatibilityEvidence(
   resolver: typeof resolvePlatformCompatibilityReadyResource,
   input: PlatformCompatibilityReadyResourceInput,
@@ -1908,6 +2027,17 @@ async function dispatchPlatformCompatibilityResourceRequest(
       { status: 403 },
     );
   }
+  const trustedManagedBy = compatibilityControlManagedBy(context.route);
+  if (!trustedManagedBy) {
+    return Response.json(
+      {
+        error: "invalid_compatibility_translation",
+        error_description:
+          "compatibility Resource authority requires exactly one declared control profile",
+      },
+      { status: 503 },
+    );
+  }
   const session = compatibilityAuthoritySession(context.session, authorization);
   if (!session) {
     return Response.json(
@@ -1926,10 +2056,94 @@ async function dispatchPlatformCompatibilityResourceRequest(
     context.request,
     context.env,
     session,
+    trustedManagedBy,
   );
   if (!authorized.ok) return authorized.response;
   const service = await cachedDeployControlService(context.env);
-  return await service.app.fetch(authorized.request);
+  return await scopePlatformCompatibilityResourceResponse(
+    await service.app.fetch(authorized.request),
+    authorized.request,
+    trustedManagedBy,
+  );
+}
+
+async function scopePlatformCompatibilityResourceResponse(
+  response: Response,
+  request: Request,
+  trustedManagedBy: string,
+): Promise<Response> {
+  if (!response.ok || request.method !== "GET") return response;
+  const url = new URL(request.url);
+  const segments = url.pathname.split("/").filter(Boolean);
+  const isList = segments.length === 2 && url.pathname === "/v1/resources";
+  const isGet =
+    segments.length === 4 &&
+    segments[0] === "v1" &&
+    segments[1] === "resources";
+  if (!isList && !isGet) return response;
+  const body = objectRecord(await response.json().catch(() => undefined));
+  if (isGet) {
+    if (resourceObjectManagedBy(body) !== trustedManagedBy) {
+      return Response.json(
+        {
+          error: {
+            code: "not_found",
+            message: "resource was not found for this compatibility profile",
+          },
+        },
+        { status: 404 },
+      );
+    }
+    return jsonResponseWithHeaders(body, response);
+  }
+  if (!Array.isArray(body.resources)) {
+    return Response.json(
+      {
+        error: "invalid_resource_projection",
+        error_description:
+          "canonical Resource list returned an invalid projection",
+      },
+      { status: 502 },
+    );
+  }
+  return jsonResponseWithHeaders(
+    {
+      ...body,
+      resources: body.resources.filter(
+        (resource) =>
+          resourceObjectManagedBy(objectRecord(resource)) === trustedManagedBy,
+      ),
+    },
+    response,
+  );
+}
+
+function resourceObjectManagedBy(resource: Record<string, unknown>): string {
+  return valueString(objectRecord(resource.metadata).managedBy)?.trim() ?? "";
+}
+
+function jsonResponseWithHeaders(
+  body: Record<string, unknown>,
+  source: Response,
+): Response {
+  const headers = new Headers(source.headers);
+  headers.delete("content-length");
+  headers.set("content-type", "application/json; charset=UTF-8");
+  return Response.json(body, { status: source.status, headers });
+}
+
+function compatibilityControlManagedBy(
+  route: PlatformExtensionRoute,
+): string | undefined {
+  const profiles = [
+    ...new Set(
+      (route.compatibilityProfiles ?? [])
+        .filter(({ planes }) => planes.includes("control"))
+        .map(({ profile }) => profile.trim())
+        .filter(Boolean),
+    ),
+  ];
+  return profiles.length === 1 ? profiles[0] : undefined;
 }
 
 async function resolvePlatformCompatibilityReadyResource(
@@ -2112,6 +2326,7 @@ const PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
   PLATFORM_EXTENSION_INTERFACE_ID_HEADER,
   PLATFORM_EXTENSION_INTERFACE_BINDING_ID_HEADER,
   PLATFORM_EXTENSION_INTERFACE_REVISION_HEADER,
+  TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
 ] as const;
 
 async function platformExtensionAuthContext(

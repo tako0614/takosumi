@@ -316,6 +316,10 @@ async function runResourceAction(
 async function runResourceDelete(args: string[], io: CliIo): Promise<number> {
   const { kind, name, options } = resourceIdentity(args);
   const query = new URLSearchParams({ space: requiredSpace(options) });
+  query.set(
+    "managedBy",
+    optionalStringOption(options, "managedBy") ?? "opentofu",
+  );
   if (booleanOption(options, "force")) query.set("force", "true");
   await requestDeployControlApi({
     path: `${resourcePath(kind, name)}?${query.toString()}`,
