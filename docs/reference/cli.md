@@ -49,6 +49,10 @@ contribution 自身が定義した evidence type を既存の固定 class
 `live-probe-sync` / `operation-drill` / `release-provenance`) へ割り当てる
 `collectionClassHints` だけを使えます。hint を省略した extension evidence は validation
 上は有効なまま、collection planning では uncategorized になります。
+validate の `takosumi.platform-readiness-report@v2` は composed definition の
+`requiredDomainIds` / `requiredRehearsalStepIds` も返します。進捗集計側は OSS 固定 ID
+ではなくこの配列を使うため、Operator / Cloud contribution を含む total と complete
+件数を正確に計算できます。
 
 ## Connections
 
