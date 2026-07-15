@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
-import { CloudflareD1OpenTofuControlStore } from "../../../worker/src/d1_opentofu_store.ts";
+import {
+  CloudflareD1OpenTofuControlStore,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../../worker/src/d1_opentofu_store.ts";
 
 import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
 import {
@@ -51,12 +54,16 @@ import {
   summarizePrometheusMetrics,
   verifyPlatformExtensionBearerToken,
   withPlatformAssetCacheHeaders,
+  createPlatformCanonicalResourceReadAuthority,
+  createPlatformCompatibilityAuthority,
   type OperatorBillingOperations,
   type SourcePollOperations,
   type SourceWebhookOperations,
 } from "../../../deploy/platform/worker.ts";
 import { createManagedProviderRunToken } from "../../../core/shared/managed_provider_tokens.ts";
 import { MapResourceShapeSchemaRegistry } from "../../../core/domains/resource-shape/mod.ts";
+import { createD1ResourceShapeStores } from "../../../core/domains/resource-shape/d1_stores.ts";
+import type { ResourceShapeRecord } from "../../../core/domains/resource-shape/records.ts";
 
 test("platform Operator capabilities require both explicit config and live bindings", () => {
   const empty = platformOperatorCapabilities({} as never, true);
@@ -1671,6 +1678,188 @@ test("platform Resource Shape session auth rejects a Space outside the verified 
     verify,
   );
   expect(conflictingSelectors.status).toBe(403);
+});
+
+test("platform public Resource ingress cannot spoof a compatibility managedBy identity", async () => {
+  const response = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/resources/preview", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer takpat_write",
+        "content-type": "application/json",
+        "x-takosumi-resource-managed-by": "compat.cloudflare.workers.v1",
+      },
+      body: JSON.stringify({
+        workspaceId: "workspace_a",
+        kind: "ObjectBucket",
+        metadata: {
+          name: "assets",
+          space: "workspace_a",
+          managedBy: "compat.cloudflare.workers.v1",
+        },
+        spec: { name: "assets" },
+      }),
+    }),
+    {
+      TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+      TAKOSUMI_ENVIRONMENT: "test",
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+      TAKOSUMI_RESOURCE_SHAPES: "ObjectBucket",
+    } as never,
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "account_a",
+      workspaceId: "workspace_a",
+      scopes: ["write"],
+    }),
+  );
+
+  expect(response.status).toBe(403);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "forbidden",
+      message: expect.stringContaining("takosumi.resource-api.v1"),
+    },
+  });
+});
+
+test("compatibility reads are profile-scoped while operator recovery reads every manager", async () => {
+  const database = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(database);
+  const stores = createD1ResourceShapeStores(database);
+  const space = "workspace_manager_scope";
+  const record = (
+    name: string,
+    managedBy: string,
+    createdAt: string,
+  ): ResourceShapeRecord => ({
+    id: `tkrn:${space}:EdgeWorker:${name}`,
+    spaceId: space,
+    kind: "EdgeWorker",
+    name,
+    managedBy,
+    spec: {
+      name,
+      source: {
+        artifactRef: `cloud-edge-worker-artifact:v3:sha256:${name.padEnd(64, "a").slice(0, 64)}`,
+        artifactSha256: `sha256:${name.padEnd(64, "a").slice(0, 64)}`,
+      },
+    },
+    phase: "Ready",
+    generation: 1,
+    observedGeneration: 1,
+    createdAt: createdAt as ResourceShapeRecord["createdAt"],
+    updatedAt: createdAt as ResourceShapeRecord["updatedAt"],
+  });
+  await stores.resources.upsert(
+    record(
+      "public-api",
+      "takosumi.resource-api.v1",
+      "2026-07-15T00:00:00.000Z",
+    ),
+  );
+  await stores.resources.upsert(
+    record(
+      "compat-api",
+      "compat.cloudflare.workers.v1",
+      "2026-07-15T00:00:01.000Z",
+    ),
+  );
+  const env = {
+    TAKOSUMI_CONTROL_DB: database,
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
+  } as never;
+  const route = {
+    id: "cloudflare-workers-compatibility",
+    basePath: "/compat/cloudflare/client/v4",
+    handlerKey: "TEST_PROVIDER_EXTENSION",
+    authMode: "platform",
+    compatibilityProfiles: [
+      {
+        profile: "compat.cloudflare.workers.v1",
+        planes: ["control"],
+      },
+    ],
+  } as const;
+  const compatibility = await createPlatformCompatibilityAuthority({
+    request: new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4",
+    ),
+    env,
+    route,
+    session: {
+      authenticated: true,
+      authKind: "service-token",
+      workspaceId: space,
+      subject: "compat-handler",
+      scopes: ["admin"],
+    },
+  });
+  expect(compatibility.control).toBeDefined();
+
+  const foreign = await compatibility.control!.resourceApi.fetch(
+    new Request(
+      `https://app.takosumi.com/v1/resources/EdgeWorker/public-api?space=${space}`,
+    ),
+  );
+  expect(foreign.status).toBe(404);
+
+  const firstPage = await compatibility.control!.resourceApi.fetch(
+    new Request(`https://app.takosumi.com/v1/resources?space=${space}&limit=1`),
+  );
+  expect(firstPage.status).toBe(200);
+  const firstBody = await firstPage.json();
+  expect(firstBody.resources).toEqual([]);
+  expect(firstBody.nextCursor).toBeString();
+  const secondPage = await compatibility.control!.resourceApi.fetch(
+    new Request(
+      `https://app.takosumi.com/v1/resources?space=${space}&limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`,
+    ),
+  );
+  expect(secondPage.status).toBe(200);
+  expect((await secondPage.json()).resources).toMatchObject([
+    {
+      metadata: {
+        name: "compat-api",
+        managedBy: "compat.cloudflare.workers.v1",
+      },
+    },
+  ]);
+
+  const recovery = createPlatformCanonicalResourceReadAuthority(env);
+  for (const name of ["public-api", "compat-api"]) {
+    const response = await recovery.fetch(
+      new Request(
+        `https://artifact-recovery.invalid/v1/resources/EdgeWorker/${name}?space=${space}`,
+      ),
+      {
+        workspaceId: space,
+        subject: "takosumi-cloud:artifact-recovery",
+        scopes: ["admin"],
+      },
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).metadata.name).toBe(name);
+  }
+  expect(
+    (
+      await recovery.fetch(
+        new Request(
+          `https://artifact-recovery.invalid/v1/resources/EdgeWorker/public-api?space=other-space`,
+        ),
+        {
+          workspaceId: space,
+          subject: "takosumi-cloud:artifact-recovery",
+          scopes: ["admin"],
+        },
+      )
+    ).status,
+  ).toBe(403);
 });
 
 test("a configured platform extension rejects an unverified bearer", async () => {

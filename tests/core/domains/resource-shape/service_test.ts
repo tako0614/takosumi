@@ -868,6 +868,371 @@ test("apply resolves ObjectBucket to the highest-priority target and locks it", 
   expect(status?.outputs?.bucket_name).toContain("ObjectBucket:assets");
 });
 
+test("managedBy ownership blocks takeover and normal delete before admission or adapter work", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const admission = new RecordingDeploymentAdmission();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  const owned = { ...APPLY, managedBy: "takosumi.resource-api.v1" };
+  expect((await reviewedApply(service, owned)).ok).toBe(true);
+  const before = {
+    previews: adapter.previewInputs.length,
+    applies: adapter.applyInputs.length,
+    deletes: adapter.deleteInputs.length,
+    reserves: admission.reserveContexts.length,
+    retires: admission.retireContexts.length,
+  };
+
+  const takeover = await service.apply(
+    { ...APPLY, managedBy: "compat.cloudflare.workers.v1" },
+    { planDigest: `sha256:${"f".repeat(64)}` },
+  );
+  expect(takeover).toEqual({
+    ok: false,
+    error: {
+      code: "ownership_conflict",
+      message: `resource ${APPLY_ID} is managed by takosumi.resource-api.v1; apply from compat.cloudflare.workers.v1 is not allowed`,
+    },
+  });
+
+  const wrongDelete = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+    { expectedManagedBy: "compat.cloudflare.workers.v1" },
+  );
+  expect(wrongDelete.ok).toBe(false);
+  if (!wrongDelete.ok)
+    expect(wrongDelete.error.code).toBe("ownership_conflict");
+  expect({
+    previews: adapter.previewInputs.length,
+    applies: adapter.applyInputs.length,
+    deletes: adapter.deleteInputs.length,
+    reserves: admission.reserveContexts.length,
+    retires: admission.retireContexts.length,
+  }).toEqual(before);
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    managedBy: "takosumi.resource-api.v1",
+    phase: "Ready",
+  });
+
+  const forced = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+    {
+      force: true,
+      expectedManagedBy: "compat.cloudflare.workers.v1",
+    },
+  );
+  expect(forced.ok).toBe(true);
+  expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
+});
+
+test("late managedBy apply conflict terminalizes its distinct direct-plugin Run", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async beginApply(input) {
+      return {
+        status: "ownership_conflict",
+        record: {
+          ...input.applyingRecord,
+          managedBy: "takosumi.resource-api.v1",
+          phase: "Ready",
+        },
+      };
+    },
+  };
+  const adapter = new PluginSpyAdapter();
+  const admission = new RecordingDeploymentAdmission();
+  const ledger = new InMemoryOpenTofuControlStore();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    deploymentAdmission: admission,
+    operationRuns: ledger,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    now: () => NOW,
+  });
+  await seed(service);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-owner-race",
+    managedBy: "compat.cloudflare.workers.v1",
+    spec: {
+      name: "agent-owner-race",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+  const preview = await service.preview(request);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+
+  const applied = await service.apply(request, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(applied.ok).toBe(false);
+  if (!applied.ok) expect(applied.error.code).toBe("ownership_conflict");
+  expect(adapter.applyInputs).toHaveLength(0);
+  expect(admission.reserveContexts).toHaveLength(0);
+  expect(
+    (await ledger.listRunsByWorkspace("space_1")).filter(
+      (run) => "resourceOperation" in run && run.resourceOperation === "apply",
+    ),
+  ).toMatchObject([
+    {
+      resourceOperation: "apply",
+      status: "failed",
+      createdBy: ACTOR.actorAccountId,
+    },
+  ]);
+  expect(await ledger.listRecoverableResourceOperationRuns()).toEqual([]);
+});
+
+for (const claimStatus of ["conflict", "not_found"] as const) {
+  test(`direct-plugin ${claimStatus} apply claim terminalizes only its newly created Run`, async () => {
+    const baseStores = createInMemoryResourceShapeStores();
+    const stores: ResourceShapeStores = {
+      ...baseStores,
+      async beginApply(input): ReturnType<typeof baseStores.beginApply> {
+        return claimStatus === "conflict"
+          ? { status: "conflict", record: input.applyingRecord }
+          : { status: "not_found" };
+      },
+    };
+    const adapter = new PluginSpyAdapter();
+    const ledger = new InMemoryOpenTofuControlStore();
+    const service = new ResourceShapeService({
+      stores,
+      adapter,
+      operationRuns: ledger,
+      activity: new ActivityService({
+        store: ledger,
+        now: () => new Date(NOW),
+      }),
+      now: () => NOW,
+    });
+    await seed(service);
+    const request = {
+      actor: ACTOR,
+      space: "space_1",
+      kind: "ContainerService" as const,
+      name: `agent-${claimStatus}`,
+      spec: {
+        name: `agent-${claimStatus}`,
+        image: "ghcr.io/example/agent:1.0.0",
+      },
+    };
+
+    const applied = await reviewedApply(service, request);
+    expect(applied.ok).toBe(false);
+    if (!applied.ok) expect(applied.error.code).toBe("reconcile_conflict");
+    expect(adapter.applyInputs).toHaveLength(0);
+    const applyRuns = (await ledger.listRunsByWorkspace("space_1")).filter(
+      (run) => "resourceOperation" in run && run.resourceOperation === "apply",
+    );
+    expect(applyRuns).toMatchObject([
+      { resourceOperation: "apply", status: "failed" },
+    ]);
+    expect(await ledger.listRecoverableResourceOperationRuns()).toEqual([]);
+  });
+}
+
+test("a shared existing direct-plugin Run is not failed by a losing apply claim", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async beginApply(input) {
+      return { status: "conflict", record: input.applyingRecord };
+    },
+  };
+  const ledger = new InMemoryOpenTofuControlStore();
+  let failedApplyTransitions = 0;
+  const operationRuns = {
+    async beginResourceOperationRun(
+      run: Parameters<
+        InMemoryOpenTofuControlStore["beginResourceOperationRun"]
+      >[0],
+    ) {
+      if (run.resourceOperation !== "apply") {
+        return await ledger.beginResourceOperationRun(run);
+      }
+      const seeded = await ledger.beginResourceOperationRun(run);
+      if (seeded.status === "conflict") return seeded;
+      return { status: "existing" as const, run: seeded.run };
+    },
+    getResourceOperationRun: ledger.getResourceOperationRun.bind(ledger),
+    listRecoverableResourceOperationRuns:
+      ledger.listRecoverableResourceOperationRuns.bind(ledger),
+    async transitionResourceOperationRun(
+      input: Parameters<
+        InMemoryOpenTofuControlStore["transitionResourceOperationRun"]
+      >[0],
+    ) {
+      if (
+        input.run.resourceOperation === "apply" &&
+        input.run.status === "failed"
+      ) {
+        failedApplyTransitions += 1;
+      }
+      return await ledger.transitionResourceOperationRun(input);
+    },
+  };
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new PluginSpyAdapter(),
+    operationRuns,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    now: () => NOW,
+  });
+  await seed(service);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-shared-run",
+    spec: {
+      name: "agent-shared-run",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+
+  const applied = await reviewedApply(service, request);
+  expect(applied.ok).toBe(false);
+  if (!applied.ok) expect(applied.error.code).toBe("reconcile_conflict");
+  expect(failedApplyTransitions).toBe(0);
+  const applyRun = (await ledger.listRunsByWorkspace("space_1")).find(
+    (run) => "resourceOperation" in run && run.resourceOperation === "apply",
+  );
+  expect(applyRun?.status).toBe("running");
+});
+
+test("direct-plugin apply claim failure before mutation fails its new Run", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async beginApply() {
+      throw new Error("simulated direct apply claim outage");
+    },
+  };
+  const ledger = new InMemoryOpenTofuControlStore();
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new PluginSpyAdapter(),
+    operationRuns: ledger,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    now: () => NOW,
+  });
+  await seed(service);
+
+  const applied = await reviewedApply(service, {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService",
+    name: "agent-claim-failed",
+    spec: {
+      name: "agent-claim-failed",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  });
+  expect(applied.ok).toBe(false);
+  if (!applied.ok) expect(applied.error.code).toBe("apply_failed");
+  expect(
+    await baseStores.resources.get(
+      "tkrn:space_1:ContainerService:agent-claim-failed",
+    ),
+  ).toBeUndefined();
+  const applyRun = (await ledger.listRunsByWorkspace("space_1")).find(
+    (run) => "resourceOperation" in run && run.resourceOperation === "apply",
+  );
+  expect(applyRun?.status).toBe("failed");
+});
+
+test("direct-plugin apply claim acknowledgement loss preserves its Run for recovery", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async beginApply(input) {
+      await baseStores.beginApply(input);
+      throw new Error("simulated direct apply claim acknowledgement loss");
+    },
+  };
+  const ledger = new InMemoryOpenTofuControlStore();
+  const firstAdapter = new PluginSpyAdapter();
+  const first = new ResourceShapeService({
+    stores,
+    adapter: firstAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    now: () => NOW,
+  });
+  await seed(first);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-claim-ack-loss",
+    spec: {
+      name: "agent-claim-ack-loss",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+
+  const pending = await reviewedApply(first, request);
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("deployment_finalize_pending");
+  }
+  expect(firstAdapter.applyInputs).toHaveLength(0);
+  const applying = await baseStores.resources.get(
+    "tkrn:space_1:ContainerService:agent-claim-ack-loss",
+  );
+  expect(applying?.phase).toBe("Applying");
+  const pendingRun = await ledger.getResourceOperationRun(
+    applying?.pendingOperation?.runId ?? "missing",
+  );
+  expect(pendingRun?.status).toBe("running");
+
+  const recoveryAdapter = new DirectReadOnlyRecoveryAdapter();
+  const restarted = new ResourceShapeService({
+    stores: baseStores,
+    adapter: recoveryAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    now: () => NOW,
+  });
+  const preview = await restarted.preview(request);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+  const recovered = await restarted.recoverApply(request, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(recovered.ok).toBe(true);
+  expect(recoveryAdapter.applyInputs).toHaveLength(0);
+  expect(recoveryAdapter.observeInputs).toHaveLength(1);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(1);
+  const ready = await baseStores.resources.get(
+    "tkrn:space_1:ContainerService:agent-claim-ack-loss",
+  );
+  expect(ready?.phase).toBe("Ready");
+  const completedRun = await ledger.getResourceOperationRun(
+    ready?.lastOperationRunId ?? "missing",
+  );
+  expect(completedRun?.status).toBe("succeeded");
+});
+
 test("rated preview binds offering and catalog versions and captures only after Ready", async () => {
   const stores = createInMemoryResourceShapeStores();
   const admission = new RecordingDeploymentAdmission();
@@ -1458,7 +1823,7 @@ test("failed import remains a ledger-only removable record", async () => {
   });
   expect(await stores.resources.get(APPLY_ID)).toMatchObject({
     phase: "Failed",
-    managedBy: "import-pending",
+    managedBy: "opentofu",
     observedGeneration: 0,
   });
 
