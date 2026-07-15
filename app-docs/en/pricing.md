@@ -2,9 +2,9 @@
 
 This page is the public pricing and billing contract for Takosumi Cloud.
 It contains only customer-facing prices, free-tier terms, usage limits, and
-spend-guard behavior. Payment-provider synchronization, runtime price books,
-margin guards, cost estimates, and reconciliation belong in operator
-procedures, not in the public contract.
+spend-guard behavior. Payment-provider synchronization, versioned
+`PriceCatalog` operation, margin guards, cost estimates, and reconciliation
+belong in operator procedures, not in the public contract.
 
 ## Subscription Plans
 
@@ -43,29 +43,28 @@ or provider-compatible write path.
 
 ## Usage Prices
 
-Usage is recorded internally as `usdMicros`. The following rates are the
-customer-facing usage rates.
+Takosumi Cloud prices provider-neutral, versioned `ServiceOffering` and SKU
+records rather than provider API families. Whether an `EdgeWorker` uses Workers
+for Platforms internally, or an `ObjectBucket` uses R2, is not a public pricing
+noun. Before creation, Preview shows the offering version, SKU version,
+PriceCatalog version, tax treatment, unit price, estimated total, and expiry.
+Apply accepts only that exact reviewed quote.
 
-| Family               | Unit        | Customer price            |
-| -------------------- | ----------- | ------------------------- |
-| AI request           | request     | `$0.001` / request        |
-| AI input tokens      | token       | `$0.30` / 1M tokens       |
-| AI output tokens     | token       | `$1.00` / 1M tokens       |
-| Workers Script       | operation   | `$0.001` / operation      |
-| KV / D1 / R2 ops     | operation   | `$0.0005` / operation     |
-| KV / D1 / R2 storage | GB-hour     | `$0.10` / 1M GB-hours     |
-| Vector Index         | operation   | `$0.0005` / operation     |
-| Workflows            | operation   | `$0.001` / operation      |
-| Containers           | vCPU-second | `$1.00` / 1M vCPU-seconds |
-| Queues               | operation   | `$0.0005` / operation     |
-| Durable Objects      | operation   | `$0.0005` / operation     |
-| OpenTofu plan        | changed resource | `$0.002` / changed resource |
-| OpenTofu runner      | runner-minute | `$0.02` / runner-minute  |
+No GA Stable offering is active in the operator catalog yet. The former
+provider-family rate table is therefore withdrawn. Cloud Resource purchase and
+Apply remain fail closed until an approved version, effective time, and price
+are published both here and in Dashboard Preview. The minimum GA table will use
+this form:
 
-Preview and Planned resources are billed only for Workspaces where that service
-is actually enabled. This table is the pricing contract; it does not mean every
-service is enabled for every user. Check the rollout matrix in
-[Takosumi Cloud](./index.md) and the Dashboard endpoint status for availability.
+| Service form | Offering / SKU version | Effective at | Billable item / unit | Customer price | Availability |
+| ------------ | ---------------------- | ------------ | -------------------- | -------------- | ------------ |
+| EdgeWorker   | Not active             | —            | —                    | —              | Blocked      |
+| ObjectBucket | Not active             | —            | —                    | —              | Blocked      |
+
+AI Gateway is not a Resource lifecycle authority. If billing is enabled for
+it, the same PriceCatalog must contain a versioned SKU and request/token prices.
+An unpriced meter, an ambiguous match across SKUs, or a catalog that is not yet
+effective cannot proceed to billing or backend execution.
 
 ## Spend Guard
 
@@ -94,7 +93,7 @@ after a limit or payment-state block.
 ## Bring your own key is never billed
 
 Takosumi Cloud bills only Takosumi-provided managed resources (the subscription
-plus the metered families in Usage Prices above). An external provider you
+plus explicitly activated versioned prices above). An external provider you
 connect with your OWN Provider Connection (your own key) is billed by that
 provider directly — Takosumi never meters or spend-gates it. When your balance
 is exhausted, runs that use your own-key providers and the OSS OpenTofu run
