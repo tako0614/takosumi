@@ -1247,13 +1247,27 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
         generation: { type: "integer", minimum: 1 },
         labels,
         materializedFrom: {
-          type: "object",
-          required: ["source", "key"],
-          properties: {
-            source: { const: "capsule_blueprint" },
-            key: { type: "string", minLength: 1 },
-          },
-          additionalProperties: false,
+          oneOf: [
+            {
+              type: "object",
+              required: ["source", "key"],
+              properties: {
+                source: { const: "capsule_blueprint" },
+                key: { type: "string", minLength: 1 },
+              },
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              required: ["source", "profile", "key"],
+              properties: {
+                source: { const: "compatibility_profile" },
+                profile: { type: "string", minLength: 1 },
+                key: { type: "string", minLength: 1 },
+              },
+              additionalProperties: false,
+            },
+          ],
         },
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },
@@ -1396,14 +1410,28 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
             workspaceId: { type: "string" },
             generation: { type: "integer", minimum: 1 },
             materializedFrom: {
-              type: "object",
-              required: ["source", "interfaceKey", "key"],
-              properties: {
-                source: { const: "capsule_blueprint" },
-                interfaceKey: { type: "string", minLength: 1 },
-                key: { type: "string", minLength: 1 },
-              },
-              additionalProperties: false,
+              oneOf: [
+                {
+                  type: "object",
+                  required: ["source", "interfaceKey", "key"],
+                  properties: {
+                    source: { const: "capsule_blueprint" },
+                    interfaceKey: { type: "string", minLength: 1 },
+                    key: { type: "string", minLength: 1 },
+                  },
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  required: ["source", "profile", "key"],
+                  properties: {
+                    source: { const: "compatibility_profile" },
+                    profile: { type: "string", minLength: 1 },
+                    key: { type: "string", minLength: 1 },
+                  },
+                  additionalProperties: false,
+                },
+              ],
             },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },

@@ -221,6 +221,23 @@ export interface InterfaceServiceOptions {
   readonly projectionSink?: InterfaceProjectionSink;
 }
 
+export type InterfaceServiceMaterialization =
+  | { readonly capsuleBlueprintKey: string }
+  | {
+      readonly compatibilityProfile: string;
+      readonly compatibilityKey: string;
+    };
+
+export type InterfaceBindingServiceMaterialization =
+  | {
+      readonly capsuleBlueprintKey: string;
+      readonly bindingBlueprintKey: string;
+    }
+  | {
+      readonly compatibilityProfile: string;
+      readonly compatibilityKey: string;
+    };
+
 export class InterfaceService {
   readonly #stores: InterfaceStores;
   readonly #resolver: InterfaceInputResolver;
@@ -267,7 +284,7 @@ export class InterfaceService {
   async create(
     request: CreateInterfaceRequest,
     actor?: ActorContext,
-    materialization?: { readonly capsuleBlueprintKey: string },
+    materialization?: InterfaceServiceMaterialization,
   ): Promise<Interface> {
     validateCreate(request);
     const workspaceId = requireText(request.workspaceId, "workspaceId");
@@ -293,15 +310,7 @@ export class InterfaceService {
         generation: 1,
         ...(request.labels ? { labels: normalizeLabels(request.labels) } : {}),
         ...(materialization
-          ? {
-              materializedFrom: {
-                source: "capsule_blueprint" as const,
-                key: requireText(
-                  materialization.capsuleBlueprintKey,
-                  "capsuleBlueprintKey",
-                ),
-              },
-            }
+          ? { materializedFrom: interfaceMaterialization(materialization) }
           : {}),
         createdAt: now,
         updatedAt: now,
@@ -1537,10 +1546,7 @@ export class InterfaceService {
     interfaceId: string,
     request: CreateInterfaceBindingRequest,
     actor?: ActorContext,
-    materialization?: {
-      readonly capsuleBlueprintKey: string;
-      readonly bindingBlueprintKey: string;
-    },
+    materialization?: InterfaceBindingServiceMaterialization,
   ): Promise<InterfaceBinding> {
     validateBindingRequest(request);
     // Binding issuance is a runtime authority boundary too. Reconcile against
@@ -1571,17 +1577,8 @@ export class InterfaceService {
         generation: 1,
         ...(materialization
           ? {
-              materializedFrom: {
-                source: "capsule_blueprint" as const,
-                interfaceKey: requireText(
-                  materialization.capsuleBlueprintKey,
-                  "capsuleBlueprintKey",
-                ),
-                key: requireText(
-                  materialization.bindingBlueprintKey,
-                  "bindingBlueprintKey",
-                ),
-              },
+              materializedFrom:
+                interfaceBindingMaterialization(materialization),
             }
           : {}),
         createdAt: now,
@@ -2644,6 +2641,54 @@ function normalizeLabels(labels: unknown): Readonly<Record<string, string>> {
       requireBoundedText(value, `label ${key}`, 1024),
     ]),
   );
+}
+
+function interfaceMaterialization(
+  materialization: InterfaceServiceMaterialization,
+): NonNullable<Interface["metadata"]["materializedFrom"]> {
+  if ("capsuleBlueprintKey" in materialization) {
+    return {
+      source: "capsule_blueprint",
+      key: requireText(
+        materialization.capsuleBlueprintKey,
+        "capsuleBlueprintKey",
+      ),
+    };
+  }
+  return {
+    source: "compatibility_profile",
+    profile: requireText(
+      materialization.compatibilityProfile,
+      "compatibilityProfile",
+    ),
+    key: requireText(materialization.compatibilityKey, "compatibilityKey"),
+  };
+}
+
+function interfaceBindingMaterialization(
+  materialization: InterfaceBindingServiceMaterialization,
+): NonNullable<InterfaceBinding["metadata"]["materializedFrom"]> {
+  if ("capsuleBlueprintKey" in materialization) {
+    return {
+      source: "capsule_blueprint",
+      interfaceKey: requireText(
+        materialization.capsuleBlueprintKey,
+        "capsuleBlueprintKey",
+      ),
+      key: requireText(
+        materialization.bindingBlueprintKey,
+        "bindingBlueprintKey",
+      ),
+    };
+  }
+  return {
+    source: "compatibility_profile",
+    profile: requireText(
+      materialization.compatibilityProfile,
+      "compatibilityProfile",
+    ),
+    key: requireText(materialization.compatibilityKey, "compatibilityKey"),
+  };
 }
 
 function normalizeTokens(values: unknown, field: string): readonly string[] {
