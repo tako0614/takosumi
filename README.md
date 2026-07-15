@@ -123,12 +123,16 @@ Cloud のものが何もなくてもそのまま動きます。
 ## コマンド
 
 ```bash
+# OSS / source regression
 bun run check
 bun test
 bun run test:scripts
 bun run docs:build
 bun run app-docs:build
 bun run website:build
+
+# hosted / operator readiness status (ecosystem checkout)
+bun run ga:status -- --json
 ```
 
 ## Docs と website

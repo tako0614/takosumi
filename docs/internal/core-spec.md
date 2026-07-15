@@ -1,6 +1,6 @@
 # Takosumi Core Spec
 
-Last updated: 2026-07-14
+Last updated: 2026-07-15
 
 This document describes the OSS core specification. Product direction is fixed
 by [Takosumi Final Plan](./final-plan.md).
