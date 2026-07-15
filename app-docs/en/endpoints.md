@@ -210,10 +210,13 @@ DELETE /compat/s3/v1/{bucket}/{key}
 Normal Cloud API keys (Takosumi Accounts personal access tokens) are not S3 SDK
 credentials. The S3-compatible endpoint verifies AWS SigV4 access key / secret
 access key credentials. Each access key maps to an explicit Workspace Principal
-and optional bucket allowlist. A bucket descriptor points to one canonical
-`ObjectBucket`, resolved `Interface`, and matching `NativeResource`. Every data
-request fails closed unless the Resource is `Ready` and the Principal has the
-required Interface permission.
+and non-empty bucket allowlist. A bucket name resolves the canonical
+`ObjectBucket`, the only authorized Resource-owned `storage.object/v1`
+`Interface`, and exactly one matching `NativeResource`; it is not a static
+Worker binding. Every data request fails closed unless the Resource is `Ready`,
+the Principal has the exact read/write/list Interface permission, and the Cloud
+data-plane adapter can re-sign the request for that NativeResource. The tenant
+signature and secret are never forwarded to the storage provider.
 
 Create, update, import, and delete the bucket through the normal
 `/v1/resources` preview/review/apply lifecycle. Bucket-level S3 mutation methods

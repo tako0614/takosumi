@@ -634,8 +634,7 @@ async function platformResourceShapeAuthorizedRequest(
     ? objectRecord(JSON.parse(materialized.bodyText))
     : {};
   const effectiveManagedBy =
-    trustedManagedBy ??
-    platformPublicResourceManagedBy(url, body, session);
+    trustedManagedBy ?? platformPublicResourceManagedBy(url, body, session);
   const requestedWorkspaceId = platformResourceShapeRequestWorkspaceId(
     request,
     url,
@@ -808,9 +807,7 @@ function platformResourceShapeSessionMayWrite(
   ) {
     const scopes = new Set(session.scopes ?? []);
     return (
-      scopes.has("admin") ||
-      scopes.has("write") ||
-      scopes.has("capsules:write")
+      scopes.has("admin") || scopes.has("write") || scopes.has("capsules:write")
     );
   }
   return false;
@@ -1853,7 +1850,13 @@ export interface PlatformCompatibilityReadyResourceInput {
   readonly name: string;
   /** Optional Interface grant to resolve alongside the Resource evidence. */
   readonly interface?: {
-    readonly id: string;
+    /** Resolve one exact Interface by id. Mutually exclusive with `type`. */
+    readonly id?: string;
+    /**
+     * Resolve the only authorized Interface of this type owned by the exact
+     * Resource. Multiple matches fail closed instead of selecting by order.
+     */
+    readonly type?: string;
     readonly permission: string;
   };
 }
@@ -1874,6 +1877,33 @@ export interface PlatformCompatibilityDataReadResolver {
     input: PlatformCompatibilityReadyResourceInput,
     authorization?: PlatformCompatibilityAuthorization,
   ): Promise<PlatformCompatibilityReadyResourceEvidence | undefined>;
+}
+
+/**
+ * Selects one already-authorized Interface for compatibility data access.
+ * This is deliberately exact: a duplicate type on the same Resource is an
+ * operator/configuration ambiguity and must not be resolved by list order.
+ */
+export function selectUniquePlatformCompatibilityInterface(
+  candidates: readonly Interface[],
+  input: {
+    readonly workspaceId: string;
+    readonly resourceId: string;
+    readonly selector: { readonly id?: string; readonly type?: string };
+  },
+): Interface | undefined {
+  const matches = candidates.filter(
+    (candidate) =>
+      candidate.metadata.workspaceId === input.workspaceId &&
+      candidate.metadata.ownerRef.kind === "Resource" &&
+      candidate.metadata.ownerRef.id === input.resourceId &&
+      candidate.status.phase === "Resolved" &&
+      (input.selector.id === undefined ||
+        candidate.metadata.id === input.selector.id) &&
+      (input.selector.type === undefined ||
+        candidate.spec.type === input.selector.type),
+  );
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /**
@@ -2560,27 +2590,43 @@ async function resolvePlatformCompatibilityReadyResource(
   if (input.interface) {
     const subject = safePlatformExtensionSubject(verified.session.subject);
     const interfaceId = safePlatformExtensionContextId(input.interface.id);
+    const interfaceType = safePlatformExtensionContextId(input.interface.type);
     const permission = input.interface.permission.trim();
-    if (!subject || !interfaceId || !permission) return undefined;
+    if (
+      !subject ||
+      !permission ||
+      (interfaceId === undefined) === (interfaceType === undefined)
+    ) {
+      return undefined;
+    }
     try {
-      const candidate = await operations.interfaces.getAuthorizedForPrincipal(
-        interfaceId,
-        subject,
-        permission,
-      );
       const resourceId = `tkrn:${space}:${input.kind}:${name}`;
-      if (
-        candidate.metadata.workspaceId !== space ||
-        candidate.metadata.ownerRef.kind !== "Resource" ||
-        candidate.metadata.ownerRef.id !== resourceId ||
-        candidate.status.phase !== "Resolved"
-      ) {
-        return undefined;
-      }
+      const candidates = interfaceId
+        ? [
+            await operations.interfaces.getAuthorizedForPrincipal(
+              interfaceId,
+              subject,
+              permission,
+            ),
+          ]
+        : await operations.interfaces.listAuthorizedForPrincipal(
+            { workspaceId: space },
+            subject,
+            permission,
+          );
+      const candidate = selectUniquePlatformCompatibilityInterface(candidates, {
+        workspaceId: space,
+        resourceId,
+        selector: {
+          ...(interfaceId ? { id: interfaceId } : {}),
+          ...(interfaceType ? { type: interfaceType } : {}),
+        },
+      });
+      if (!candidate) return undefined;
       resolvedInterface = candidate;
       resolvedInterfaceBindings =
         await operations.interfaces.listAuthorizedBindingsForPrincipal(
-          interfaceId,
+          candidate.metadata.id,
           subject,
           permission,
         );

@@ -196,9 +196,11 @@ DELETE /compat/s3/v1/{bucket}/{key}
 通常の Cloud API key (Takosumi Accounts パーソナルアクセストークン) は S3 SDK の
 クレデンシャルではありません。S3-compatible エンドポイントは AWS SigV4 形式のアクセスキー
 / シークレットアクセスキーを検証します。各アクセスキーは明示的な Workspace Principal と
-許可バケットに紐づきます。バケット記述子は canonical `ObjectBucket`、解決済み `Interface`、
-一致する `NativeResource` を指し、Resource が `Ready` かつ Principal に必要な Interface 権限が
-ある場合だけ data request を処理します。
+空でない許可バケット一覧に紐づきます。バケット名から canonical `ObjectBucket`、その Resource が
+所有する一意な認可済み `storage.object/v1` `Interface`、一致する一意な `NativeResource` を解決し、
+静的な Worker binding は使いません。Resource が `Ready`、Principal に正確な read / write / list
+Interface 権限があり、Cloud data-plane adapter がその NativeResource 向けに request を再署名できる
+場合だけ data request を処理します。tenant の署名と secret を storage provider へ転送しません。
 
 bucket の作成・更新・import・削除は通常の `/v1/resources` preview / review / apply lifecycle で
 行います。bucket-level の S3 mutation method は `405 MethodNotAllowed` を返し、backend bucket や
