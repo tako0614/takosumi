@@ -1725,6 +1725,112 @@ test("platform public Resource ingress cannot spoof a compatibility managedBy id
   });
 });
 
+test("platform bearer ingress preserves the provider's opentofu authoring surface", async () => {
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    TAKOSUMI_RESOURCE_SHAPES: "ObjectBucket",
+    TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
+  } as never;
+  const verify = async () => ({
+    authenticated: true as const,
+    authKind: "personal-access-token" as const,
+    subject: "provider-user",
+    workspaceId: "workspace_provider",
+    scopes: ["write"],
+  });
+  const pool = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/target-pools/default", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workspaceId: "workspace_provider",
+        space: "workspace_provider",
+        spec: {
+          targets: [
+            {
+              name: "cf-main",
+              type: "cloudflare",
+              ref: "account_test",
+              priority: 100,
+            },
+          ],
+        },
+      }),
+    }),
+    env,
+    verify,
+  );
+  expect(pool.status).toBe(200);
+
+  const preview = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/resources/preview", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workspaceId: "workspace_provider",
+        kind: "ObjectBucket",
+        metadata: {
+          name: "assets",
+          space: "workspace_provider",
+          managedBy: "opentofu",
+        },
+        spec: { name: "assets", interfaces: ["s3_api"] },
+      }),
+    }),
+    env,
+    verify,
+  );
+  // This minimal fixture has no SpacePolicy, so resolution may stop at its
+  // normal review gate. The provider authoring identity itself must get past
+  // ingress instead of being rejected as a managedBy spoof.
+  expect(preview.status).not.toBe(403);
+  expect(await preview.clone().text()).not.toContain("managedBy");
+
+  const missingDelete = await handlePlatformResourceShapeApiRequest(
+    new Request(
+      "https://app.takosumi.com/v1/resources/ObjectBucket/missing?space=workspace_provider&managedBy=opentofu",
+      { method: "DELETE" },
+    ),
+    env,
+    verify,
+  );
+  expect(missingDelete.status).toBe(204);
+});
+
+test("platform Resource ingress enforces personal token read/write scopes", async () => {
+  const response = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/target-pools/default", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workspaceId: "workspace_read_only",
+        space: "workspace_read_only",
+        spec: { targets: [] },
+      }),
+    }),
+    {
+      TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+      TAKOSUMI_ENVIRONMENT: "test",
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    } as never,
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "read-only-user",
+      workspaceId: "workspace_read_only",
+      scopes: ["read"],
+    }),
+  );
+  expect(response.status).toBe(403);
+  expect(await response.json()).toMatchObject({
+    error: "insufficient_scope",
+  });
+});
+
 test("compatibility reads are profile-scoped while operator recovery reads every manager", async () => {
   const database = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(database);
