@@ -1,107 +1,109 @@
 # Takosumi Cloud pricing
 
-このページは Takosumi Cloud の公開価格と billing contract です。
-ここに書くのはユーザー向けの価格、無料枠、上限到達時の挙動だけです。
-payment-provider 同期、versioned PriceCatalog、原価見積もり、
-reconciliation は公開 contract ではなく運用手順で管理します。
+Takosumi Cloud は月額 subscription と従量課金を組み合わせた、税別 USD
+価格の managed developer platform です。すべての plan で同じサービスを利用でき、
+Resource 数は plan 特典ではなく共通の安全上限です。
 
-## Subscription Plans
+## Subscription plans
 
-Takosumi Cloud は月額 subscription と従量課金を組み合わせます。ユーザー向けには
-「何ドル分使える」という credit grant を plan 表示に出しません。AI サービスの
-ように、プラン名、月額、従量課金の有無、利用上限、支払い設定を見せます。
+| Plan |  月額 | 毎月の managed usage grant | 超過分   |
+| ---- | ----: | -------------------------: | -------- |
+| Lite |  `$1` |                    `$0.50` | 従量課金 |
+| Plus |  `$5` |                    `$3.00` | 従量課金 |
+| Pro  | `$10` |                    `$7.00` | 従量課金 |
 
-| Plan | Customer pays | Public billing model      |
-| ---- | ------------- | ------------------------- |
-| Lite | `$1` / month  | Base subscription + usage |
-| Plus | `$5` / month  | Subscription with usage   |
-| Pro  | `$10` / month | Subscription with usage   |
+grant は billing period ごとに付与され、現金化・翌月繰越はできません。自分の
+Provider Connection を使う外部 provider は grant の対象外で、その provider から
+直接請求されます。
 
-Checkout と Dashboard の billing 表示は、この公開価格と一致している必要があります。
-表示が食い違う場合は、購入やプラン変更を進めず support に連絡してください。
+## Usage prices
 
-## Usage and Limits
+Cloudflare-backed capacity は、その provider の公開 overage / marginal rate の
+`1.5x` を retail price とします。共有 free tier と platform 固定費は subscription
+側で吸収し、tenant ごとの隠れた free tier にはしません。価格変更は version と
+effective date を持ち、過去の usage を再計算しません。
 
-Takosumi Cloud の内部 ledger は USD micro-unit で usage を記録します。ただし、
-subscription plan の内部 allowance や原価計算用の値は public plan display には
-出しません。Dashboard では必要に応じて利用量、請求対象 operation、支払い状態、
-上限、履歴を表示します。
+| Service                          | Billable item                         |                                                              Price |
+| -------------------------------- | ------------------------------------- | -----------------------------------------------------------------: |
+| Edge Worker                      | requests                              |                                                  `$0.45 / million` |
+| Edge Worker                      | CPU                                   |                                           `$0.03 / million CPU-ms` |
+| Edge Worker                      | active script                         |                                             `$0.03 / script-month` |
+| Edge Worker                      | log events                            |                                                  `$0.90 / million` |
+| Edge Worker                      | Logpush events                        |                                                 `$0.075 / million` |
+| Custom Domain                    | active verified hostname              |                                           `$0.15 / hostname-month` |
+| Object Storage Standard          | storage                               |                                               `$0.0225 / GB-month` |
+| Object Storage Standard          | Class A / Class B                     |                              `$6.75 / million` / `$0.54 / million` |
+| Object Storage Infrequent Access | storage                               |                                                `$0.015 / GB-month` |
+| Object Storage Infrequent Access | Class A / Class B                     |                             `$13.50 / million` / `$1.35 / million` |
+| Object Storage Infrequent Access | retrieval                             |                                                      `$0.015 / GB` |
+| KV                               | reads                                 |                                             `$0.75 / million keys` |
+| KV                               | writes / deletes / lists              |                                             `$7.50 / million keys` |
+| KV                               | storage                               |                                                 `$0.75 / GB-month` |
+| Database                         | rows read / written                   |                                    `$0.0015` / `$1.50` per million |
+| Database                         | storage                               |                                                `$1.125 / GB-month` |
+| Queue                            | operations                            |                                     `$0.60 / million 64 KB chunks` |
+| Vector Index                     | queried dimensions                    |                                                 `$0.015 / million` |
+| Vector Index                     | stored dimensions                     |                                             `$0.075 / 100 million` |
+| Durable Workflow                 | invocation / CPU                      |                       `$0.45 / million` / `$0.03 / million CPU-ms` |
+| Durable Workflow                 | state / steps                         |                       `$0.30 / GB-month` / `$1.20 / 100,000 steps` |
+| Container                        | memory / CPU / disk                   | `$0.00000375 / GiB-s`, `$0.000030 / vCPU-s`, `$0.000000105 / GB-s` |
+| Container                        | egress: NA+EU / Oceania+KR+TW / other |                             `$0.0375` / `$0.075` / `$0.060` per GB |
+| Stateful Actor                   | requests / duration                   |                       `$0.225 / million` / `$18.75 / million GB-s` |
+| Stateful Actor                   | rows read / written                   |                                    `$0.0015` / `$1.50` per million |
+| Stateful Actor                   | SQL storage                           |                                                 `$0.30 / GB-month` |
+| AI Gateway                       | model/upstream usage                  |        approved upstream price `x 1.5` + Edge Worker gateway usage |
 
-```text
-subscription:
-  public: plan name + monthly price + usage billing
-  internal: allowance / usage ledger / spend guard
-```
+Object Storage の delete / abort / internet egress、preview、binding、secret設定、
+route、schedule、static asset control、observe、refresh、delete は明示的な `$0`
+meter です。ただし、それらが起動した runtime / storage usage は該当サービスの
+meter で課金されます。Workflow の state / step 価格は `2026-08-10` より前は
+`$0` catalog を使い、それ以降だけ上の価格を使います。
 
-有料の作成・deploy・runtime・data-plane write/query/message/instance operation は
-実行前に spend guard を通ります。支払い設定、上限、内部 allowance のいずれかで
-利用できる枠が足りない場合、下流の Cloud endpoint / AI upstream / runtime dispatch /
-provider 互換 write へ進む前に安全側に停止します (fail closed)。
+基準原価は Cloudflare の現行公式価格です:
+[Workers for Platforms](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/reference/pricing/)、
+[R2](https://developers.cloudflare.com/r2/pricing/)、
+[KV](https://developers.cloudflare.com/kv/platform/pricing/)、
+[D1](https://developers.cloudflare.com/d1/platform/pricing/)、
+[Queues](https://developers.cloudflare.com/queues/platform/pricing/)、
+[Vectorize](https://developers.cloudflare.com/vectorize/platform/pricing/)、
+[Workflows](https://developers.cloudflare.com/workflows/reference/pricing/)、
+[Containers](https://developers.cloudflare.com/containers/pricing/)、
+[Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/)、
+[Cloudflare for SaaS](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/plans/)。
 
-## Usage Prices
+## Preview and invoice contract
 
-Takosumi Cloud の価格単位は provider API family ではなく、versioned
-`ServiceOffering` / SKU です。`EdgeWorker` が内部で Workers for Platforms を使うか、
-`ObjectBucket` が R2 を使うかは価格表の public noun ではありません。作成前の Preview
-には offering version、SKU version、PriceCatalog version、税区分、単価、見積合計、
-有効期限が表示され、Apply はその exact quote を再確認します。
+作成前の Preview は offering / SKU / PriceCatalog version、税区分、単価、見積、
+有効期限を返します。Apply はその exact quote だけを受け付けます。価格がない
+meter、未発効 catalog、未設定 manager、期限切れ quote は backend 実行前に
+fail closed します。
 
-現在、GA 用の Stable offering はまだ operator catalog に activate されていません。
-そのため旧 provider-family 単価表は撤回し、正式な version / effective-at / price が
-Dashboard Preview とこのページの両方に反映されるまで、Cloud Resource の購入と Apply
-は fail closed のままです。GA 時に公開する最小表は次の形式です。
+使用量は最小単位の整数で集計してから billing unit に丸めます。小数を event
+ごとに切り上げることはありません。請求期間は immutable usage、reservation、
+refund / credit と Stripe invoice line が一致するまで close しません。
 
-| Service form | Offering / SKU version | Effective at | Billable item / unit | Customer price | Availability |
-| ------------ | ---------------------- | ------------ | -------------------- | -------------- | ------------ |
-| EdgeWorker   | 未 activate            | —            | —                    | —              | Blocked      |
-| ObjectBucket | 未 activate            | —            | —                    | —              | Blocked      |
+## Tax
 
-AI Gateway は Resource lifecycle authority ではありませんが、課金を有効にする場合は同じ
-PriceCatalog に versioned SKU と request/token price を持ちます。価格のない meter、複数
-SKU に曖昧に一致する meter、未発効 catalog は課金や backend 実行へ進みません。
+表示価格は税別です。Checkout と invoice は Stripe automatic tax を使います。
+personal-use PaaS は `txcd_10102001`、business-use PaaS は `txcd_10102000` を
+使い、customer type と所在地・tax ID を quote / invoice evidence に固定します。
+適用税率は customer location と登録状況で変わります。
 
-## Spend Guard
+## Safety and spend limits
 
-Takosumi Cloud は、課金対象の write / deploy / runtime dispatch / data-plane operation
-を実行する前に、事前承認 (precharge) を行います。
+共通の owner-account safety ceiling は total 250 Resources、Edge/Object/KV/Queue/
+Schedule 各100、Database/Workflow/Stateful Actor 各50、Vector 25、Container 10、
+active verified domains 25 です。これは plan feature ではありません。
 
-```text
-allowed by plan / spending limit:
-  record usage event
-  execute the operation
+operator hard cap は `$25 / single authorization`、`$100 / rolling day`、
+`$500 / billing period` です。ユーザーは account / Workspace / service ごとに
+これより低い budget を設定できます。上限の引き上げは support review が必要です。
+Destroy / DELETE cleanup は、残高不足で既存 Resource を消せなくならないよう、
+原則として追加 precharge なしで実行できます。
 
-not allowed:
-  fail closed before downstream execution
-```
+## Bring your own key
 
-支払い設定や上限の都合で利用できない場合は、Cloud endpoint、AI upstream、
-runtime dispatch、provider 互換 write へ進みません。成功した課金対象 operation は
-所有アカウントの使用履歴に usage event として記録され、発生元の Workspace も
-記録に残り、請求の集計に反映されます。
-
-Destroy / DELETE cleanup は例外です。上限到達で作成済み resource を消せなくなる
-状態を避けるため、cleanup は原則として追加 precharge なしで実行できるようにします。
-
-## 自分のカギ (bring your own key) は課金しません
-
-Takosumi Cloud が課金するのは Takosumi 提供の managed リソース (subscription と上の
-Usage Prices の meter) だけです。あなたが自分の Provider Connection (自分のカギ) で
-接続する外部 provider は、その provider から直接課金され、Takosumi は metering も
-spend guard もしません。残高が尽きても、自分のカギで動かす provider の run と OSS の
-OpenTofu run ledger は止まりません。provider の選択に allowlist / 承認はありません。
-
-## Secret and Billing Safety
-
-Usage event、billing projection、catalog、status、model metadata に secret value を
-入れてはいけません。
-
-次の値は usage ledger に保存しません。
-
-- provider credential
-- API key / bearer token
-- database URL / DSN / password
-- upstream AI key
-- payment provider secret
-
-Cloud endpoint が usage を記録できない、価格が見つからない、Workspace context が
-不正、scope が不足、または支払い状態 / 上限が足りない場合は、安全側に停止します。
+自分の Provider Connection で接続した外部 provider は Takosumi Cloud が
+metering / spend-gate しません。請求と provider free tier はその provider との
+契約に従います。Takosumi の usage event、invoice projection、catalog、status に
+provider credential、API key、DSN、AI upstream key、payment secret は保存しません。
