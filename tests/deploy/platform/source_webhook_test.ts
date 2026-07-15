@@ -57,6 +57,7 @@ import {
   createPlatformCanonicalReadyResourceInventory,
   createPlatformCanonicalResourceReadAuthority,
   createPlatformCompatibilityAuthority,
+  selectUniquePlatformCompatibilityInterface,
   type OperatorBillingOperations,
   type SourcePollOperations,
   type SourceWebhookOperations,
@@ -74,6 +75,45 @@ import type {
   ResolutionLockRecord,
   ResourceShapeRecord,
 } from "../../../core/domains/resource-shape/records.ts";
+
+test("compatibility data authority selects one exact Resource-owned Interface", () => {
+  const resourceId = "tkrn:workspace_1:ObjectBucket:assets";
+  const candidate = (id: string, type = "storage.object") =>
+    ({
+      kind: "Interface",
+      metadata: {
+        id,
+        workspaceId: "workspace_1",
+        ownerRef: { kind: "Resource", id: resourceId },
+      },
+      spec: { type, version: "v1" },
+      status: { phase: "Resolved" },
+    }) as never;
+  const selector = {
+    workspaceId: "workspace_1",
+    resourceId,
+    selector: { type: "storage.object" },
+  };
+
+  expect(
+    selectUniquePlatformCompatibilityInterface(
+      [candidate("if_storage")],
+      selector,
+    )?.metadata.id,
+  ).toBe("if_storage");
+  expect(
+    selectUniquePlatformCompatibilityInterface(
+      [candidate("if_a"), candidate("if_b")],
+      selector,
+    ),
+  ).toBeUndefined();
+  expect(
+    selectUniquePlatformCompatibilityInterface(
+      [candidate("if_other", "storage.other")],
+      selector,
+    ),
+  ).toBeUndefined();
+});
 
 test("platform Operator capabilities require both explicit config and live bindings", () => {
   const empty = platformOperatorCapabilities({} as never, true);
