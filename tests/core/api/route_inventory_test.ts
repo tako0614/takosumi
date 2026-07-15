@@ -300,6 +300,39 @@ test("openapi component schema refs are resolved", () => {
   }
 });
 
+test("deployment quote OpenAPI preserves exact versioned price evidence", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const quote = openapi.components.schemas.ResourceDeploymentQuote;
+  const line = quote.properties.lineItems.items;
+
+  for (const field of [
+    "catalogId",
+    "catalogVersion",
+    "offeringId",
+    "offeringVersion",
+    "region",
+  ]) {
+    assert.ok(quote.properties[field], `quote ${field} missing`);
+  }
+  for (const field of [
+    "sku",
+    "skuVersion",
+    "taxTreatment",
+    "invoiceDescription",
+    "meterId",
+    "meterIdPrefix",
+    "meterKind",
+    "unit",
+    "billingUnit",
+    "minimumChargeUsdMicros",
+    "unitPriceUsdMicros",
+    "amountUsdMicros",
+  ]) {
+    assert.ok(line.properties[field], `quote line ${field} missing`);
+  }
+  assert.equal(line.additionalProperties, false);
+});
+
 test("customer-safe process openapi schemas are concrete", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   for (const schemaName of [
