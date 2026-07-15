@@ -109,7 +109,8 @@ type SmokeCheckStatus = "passed" | "denied" | "not_reached";
 type SmokeVerificationMode = "cloudflare-worker" | "opentofu";
 type SmokeProviderConnectionMode = "guided" | "generic-env" | "none";
 type SmokeAuthTokenKind = "session" | "pat";
-type CloudflareResourcePreflightMode = "none" | "d1" | "account-resources";
+type CloudflareResourcePreflightMode =
+  "none" | "workers" | "d1" | "account-resources";
 type ReleaseActivationRequirement = "any" | "pending" | "succeeded" | "failed";
 type SecretInputSource = "env" | "file" | "not_required";
 type NonSecretInputSource = "env" | "file" | "arg" | "not_required";
@@ -536,6 +537,12 @@ interface CloudflareResourcePreflightResult {
 }
 
 const CLOUDFLARE_ACCOUNT_RESOURCE_PREFLIGHT_CHECKS = [
+  {
+    id: "cloudflare.workers.script.list",
+    label: "Worker scripts",
+    path: (accountId: string): string =>
+      `/client/v4/accounts/${encodeURIComponent(accountId)}/workers/scripts?per_page=1`,
+  },
   {
     id: "cloudflare.d1.database.list",
     label: "D1 databases",
@@ -1852,8 +1859,11 @@ async function assertCloudflareResourcePreflight(
 function cloudflareResourcePreflightDefinitions(
   mode: Exclude<CloudflareResourcePreflightMode, "none">,
 ): readonly (typeof CLOUDFLARE_ACCOUNT_RESOURCE_PREFLIGHT_CHECKS)[number][] {
-  if (mode === "d1") {
+  if (mode === "workers") {
     return [CLOUDFLARE_ACCOUNT_RESOURCE_PREFLIGHT_CHECKS[0]!];
+  }
+  if (mode === "d1") {
+    return [CLOUDFLARE_ACCOUNT_RESOURCE_PREFLIGHT_CHECKS[1]!];
   }
   if (mode === "account-resources") {
     return CLOUDFLARE_ACCOUNT_RESOURCE_PREFLIGHT_CHECKS;
@@ -3657,9 +3667,10 @@ function parseCloudflareResourcePreflight(
     return "none";
   }
   if (value === "d1") return "d1";
+  if (value === "workers") return "workers";
   if (value === "account-resources") return "account-resources";
   throw new Error(
-    "--cloudflare-resource-preflight must be account-resources, d1, or none",
+    "--cloudflare-resource-preflight must be workers, account-resources, d1, or none",
   );
 }
 
@@ -4367,10 +4378,7 @@ function requiredSteps(
 }
 
 function shouldVerifyCloudflareWorker(
-  options?: Pick<
-    PlatformControlPlaneSmokeOptions,
-    "verificationMode"
-  >,
+  options?: Pick<PlatformControlPlaneSmokeOptions, "verificationMode">,
 ): boolean {
   return options?.verificationMode === "cloudflare-worker";
 }
@@ -4446,6 +4454,7 @@ async function runSelfTest(): Promise<void> {
       sessionTokenFile: "/private/account-session-token",
       cloudflareApiTokenFile: "/private/cloudflare-token",
       cloudflareConnectionMode: "guided",
+      cloudflareResourcePreflight: "workers",
       verificationMode: "cloudflare-worker",
     },
     {},
@@ -4539,6 +4548,13 @@ async function runSelfTest(): Promise<void> {
   }
   if (result.providerConnectionMode !== "guided") {
     throw new Error("self-test default Provider Connection mode is not guided");
+  }
+  if (
+    result.cloudflareResourcePreflight?.mode !== "workers" ||
+    result.cloudflareResourcePreflight.checks.join(",") !==
+      "cloudflare.workers.script.list"
+  ) {
+    throw new Error("self-test Stable Worker preflight scope is wrong");
   }
   if (!result.steps.includes("destroy")) {
     throw new Error("self-test result is missing destroy step");
@@ -4708,8 +4724,7 @@ async function runSelfTest(): Promise<void> {
     ...configuredWorkerOptions
   } = managedCompatOptions;
   if (
-    cloudflareWorkerName(configuredWorkerOptions) !==
-    "takos-managed-selftest"
+    cloudflareWorkerName(configuredWorkerOptions) !== "takos-managed-selftest"
   ) {
     throw new Error("self-test did not use the explicit app name fallback");
   }
@@ -5163,8 +5178,8 @@ Options:
   --ensure-workspace                              create @handle scratch Workspace when missing; validates existing workspace ids
   --workspace-display-name <name>                 display name used with --ensure-workspace
   --cloudflare-connection-mode <guided|generic-env|none> default none; guided/generic-env explicitly enable the Cloudflare reference contribution
-  --cloudflare-resource-preflight <account-resources|d1|none>
-                                                   verify the Cloudflare token can read account resources before resource-creating applies; account-resources checks D1, KV, R2, Queues, Workflows, and Vectorize
+  --cloudflare-resource-preflight <workers|account-resources|d1|none>
+                                                   verify only the capabilities needed by the selected smoke before apply; workers is the Stable EdgeWorker gate, account-resources is the explicit Preview suite
   --runner-profile-id <id>                         request an enabled runner profile for Capsule plans; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID; providerless OpenTofu defaults to ${DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID}
   --auth-token-kind <session|pat>                 evidence/source label; inferred from --pat-token-file when omitted and never inferred from token prefixes
   --source-git-url <url>                          Git Source URL to sync; required outside dry-run (or TAKOSUMI_SMOKE_SOURCE_GIT_URL)
