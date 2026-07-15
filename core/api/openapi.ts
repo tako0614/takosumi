@@ -1,4 +1,5 @@
 import { PUBLIC_PROVIDER_RESOLUTION_STATUSES } from "takosumi-contract/provider-resolution";
+import { RESOURCE_SHAPE_KINDS } from "takosumi-contract";
 import { SOURCE_GIT_CONNECTION_KINDS } from "takosumi-contract/sources";
 import {
   type ApiEndpoint,
@@ -667,14 +668,7 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
       kind: {
         type: "string",
         pattern: "^[A-Za-z][A-Za-z0-9._-]{0,127}$",
-        examples: [
-          "EdgeWorker",
-          "ObjectBucket",
-          "KVStore",
-          "Queue",
-          "SQLDatabase",
-          "ContainerService",
-        ],
+        examples: [...RESOURCE_SHAPE_KINDS],
         description:
           "Bundled kinds have typed provider schemas. Additional tokens require an explicitly installed host schema and adapter/plugin.",
       },
@@ -1785,23 +1779,12 @@ function processSchemas(): Record<string, Record<string, unknown>> {
     },
     TakosumiResourceCapabilities: {
       type: "object",
-      required: [
-        "Stack",
-        "EdgeWorker",
-        "ObjectBucket",
-        "KVStore",
-        "Queue",
-        "SQLDatabase",
-        "ContainerService",
-      ],
+      required: ["Stack", ...RESOURCE_SHAPE_KINDS],
       properties: {
         Stack: { type: "boolean" },
-        EdgeWorker: { type: "boolean" },
-        ObjectBucket: { type: "boolean" },
-        KVStore: { type: "boolean" },
-        Queue: { type: "boolean" },
-        SQLDatabase: { type: "boolean" },
-        ContainerService: { type: "boolean" },
+        ...Object.fromEntries(
+          RESOURCE_SHAPE_KINDS.map((kind) => [kind, { type: "boolean" }]),
+        ),
       },
       additionalProperties: { type: "boolean" },
     },

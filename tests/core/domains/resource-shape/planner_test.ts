@@ -2,12 +2,16 @@ import { expect, test } from "bun:test";
 import type { TargetImplementationDescriptor } from "takosumi-contract";
 import {
   parseContainerServiceSpec,
+  parseDurableWorkflowSpec,
   parseEdgeWorkerSpec,
   parseKVStoreSpec,
   parseObjectBucketSpec,
   parseQueueSpec,
   parseResourceSpec,
+  parseScheduleSpec,
   parseSQLDatabaseSpec,
+  parseStatefulActorNamespaceSpec,
+  parseVectorIndexSpec,
   planResourceShape,
   MapResourceShapeSchemaRegistry,
 } from "../../../../core/domains/resource-shape/planner.ts";
@@ -41,7 +45,7 @@ const bucketDescriptor: TargetImplementationDescriptor = {
   ],
 };
 
-test("bundled parsers keep six typed Resource Shape schemas", () => {
+test("bundled parsers keep ten typed Resource Shape schemas", () => {
   expect(
     parseEdgeWorkerSpec({
       name: "api",
@@ -71,6 +75,143 @@ test("bundled parsers keep six typed Resource Shape schemas", () => {
       publicHttp: true,
     }).ok,
   ).toBe(true);
+  expect(
+    parseVectorIndexSpec({ name: "embeddings", dimensions: 1536 }).ok,
+  ).toBe(true);
+  expect(
+    parseDurableWorkflowSpec({
+      name: "ingest",
+      source: { artifactPath: "/work/dist/workflow.js" },
+      entrypoint: "IngestWorkflow",
+    }).ok,
+  ).toBe(true);
+  expect(
+    parseStatefulActorNamespaceSpec({
+      name: "rooms",
+      className: "RoomActor",
+    }).ok,
+  ).toBe(true);
+  expect(
+    parseScheduleSpec({
+      name: "nightly",
+      cron: "0 0 * * *",
+      connections: {
+        workflow: {
+          resource: "DurableWorkflow/ingest",
+          permissions: ["invoke"],
+          projection: "schedule_trigger",
+        },
+      },
+    }).ok,
+  ).toBe(true);
+});
+
+test("new service shapes enforce shape-specific portable validation", () => {
+  expect(parseVectorIndexSpec({ name: "bad", dimensions: 0 }).ok).toBe(false);
+  expect(
+    parseVectorIndexSpec({ name: "bad", dimensions: 384, metric: "bad metric" })
+      .ok,
+  ).toBe(false);
+
+  const workflow = parseDurableWorkflowSpec({
+    name: "ingest",
+    source: { artifactUrl: "https://example.test/workflow.js" },
+    entrypoint: "IngestWorkflow",
+  });
+  expect(workflow.ok).toBe(false);
+  if (!workflow.ok) expect(workflow.error.message).toContain("artifactSha256");
+  expect(
+    parseDurableWorkflowSpec({
+      name: "ingest",
+      source: {
+        artifactUrl: "https://example.test/workflow.js",
+        artifactSha256: "not-a-digest",
+      },
+      entrypoint: "IngestWorkflow",
+    }).ok,
+  ).toBe(false);
+  expect(
+    parseDurableWorkflowSpec({
+      name: "ingest",
+      source: { artifactPath: "/work/workflow.js" },
+      entrypoint: "IngestWorkflow",
+      retry: { maxAttempts: 0 },
+    }).ok,
+  ).toBe(false);
+
+  expect(
+    parseStatefulActorNamespaceSpec({
+      name: "rooms",
+      className: "Room Actor",
+    }).ok,
+  ).toBe(false);
+  expect(
+    parseScheduleSpec({
+      name: "quartz-only",
+      cron: "0 0 0 * * *",
+      connections: {},
+    }).ok,
+  ).toBe(false);
+  expect(
+    parseScheduleSpec({
+      name: "out-of-range",
+      cron: "60 0 * * *",
+      connections: {
+        workflow: {
+          resource: "DurableWorkflow/ingest",
+          permissions: ["invoke"],
+          projection: "schedule_trigger",
+        },
+      },
+    }).ok,
+  ).toBe(false);
+});
+
+test("StatefulActorNamespace owns namespaces, never actor instances", () => {
+  const namespace = parseResourceSpec("StatefulActorNamespace", {
+    name: "rooms",
+    className: "RoomActor",
+    actorInstanceId: "room-123",
+  });
+  expect(namespace.ok).toBe(true);
+  if (!namespace.ok) return;
+  expect("actorInstanceId" in namespace.parsed.spec).toBe(false);
+  expect(
+    parseResourceSpec("StatefulActor", {
+      name: "room-123",
+      namespace: "rooms",
+    }).ok,
+  ).toBe(false);
+});
+
+test("new typed shapes preserve descriptor public outputs", () => {
+  const parsed = parseResourceSpec("VectorIndex", {
+    name: "embeddings",
+    dimensions: 1536,
+  });
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  const descriptor: TargetImplementationDescriptor = {
+    shape: "VectorIndex",
+    implementation: "operator.vector.v1",
+    interfaces: {
+      vector_index: "native",
+      vector_query: "native",
+      runtime_binding: "native",
+      cosine: "native",
+    },
+    plugin: "operator-vector-plugin",
+    moduleOutputs: [
+      { name: "index_id", type: "string" },
+      { name: "endpoint", type: "url" },
+    ],
+  };
+  const plan = planResourceShape(descriptor, parsed.parsed, target);
+  expect(plan.publicOutputs).toEqual(descriptor.moduleOutputs);
+  expect(plan.validatedSpec).toEqual({
+    name: "embeddings",
+    dimensions: 1536,
+  });
 });
 
 test("EdgeWorker parser rejects ambiguous and unverifiable artifacts", () => {

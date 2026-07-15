@@ -5338,7 +5338,14 @@ function connectionsForParsedResource(
   parsed: ParsedResourceSpec,
 ): Readonly<Record<string, ResourceConnectionSpec>> | undefined {
   if (parsed.schema === "registered") return parsed.connections;
-  if (parsed.kind === "EdgeWorker" || parsed.kind === "ContainerService") {
+  if (
+    parsed.kind === "EdgeWorker" ||
+    parsed.kind === "ContainerService" ||
+    parsed.kind === "VectorIndex" ||
+    parsed.kind === "DurableWorkflow" ||
+    parsed.kind === "StatefulActorNamespace" ||
+    parsed.kind === "Schedule"
+  ) {
     return parsed.spec.connections;
   }
   return undefined;

@@ -10,6 +10,7 @@
 
 import type {
   ContainerServiceSpec,
+  DurableWorkflowSpec,
   EdgeWorkerSpec,
   JsonObject,
   JsonValue,
@@ -22,10 +23,13 @@ import type {
   ResourceDeletePolicy,
   ResourceProjectionKind,
   ResourceShapeKind,
+  ScheduleSpec,
   SQLDatabaseSpec,
+  StatefulActorNamespaceSpec,
   TargetImplementationDescriptor,
   TargetModuleInputMapping,
   TargetPoolEntry,
+  VectorIndexSpec,
 } from "takosumi-contract";
 import {
   isBundledResourceShapeKind,
@@ -210,6 +214,34 @@ export type ParsedResourceSpec =
       readonly lifecyclePolicy?: ContainerServiceSpec["lifecyclePolicy"];
     }
   | {
+      readonly schema: "bundled";
+      readonly kind: "VectorIndex";
+      readonly spec: VectorIndexSpec;
+      readonly interfaces: readonly string[];
+      readonly lifecyclePolicy?: VectorIndexSpec["lifecyclePolicy"];
+    }
+  | {
+      readonly schema: "bundled";
+      readonly kind: "DurableWorkflow";
+      readonly spec: DurableWorkflowSpec;
+      readonly interfaces: readonly string[];
+      readonly lifecyclePolicy?: DurableWorkflowSpec["lifecyclePolicy"];
+    }
+  | {
+      readonly schema: "bundled";
+      readonly kind: "StatefulActorNamespace";
+      readonly spec: StatefulActorNamespaceSpec;
+      readonly interfaces: readonly string[];
+      readonly lifecyclePolicy?: StatefulActorNamespaceSpec["lifecyclePolicy"];
+    }
+  | {
+      readonly schema: "bundled";
+      readonly kind: "Schedule";
+      readonly spec: ScheduleSpec;
+      readonly interfaces: readonly string[];
+      readonly lifecyclePolicy?: ScheduleSpec["lifecyclePolicy"];
+    }
+  | {
       readonly schema: "registered";
       readonly kind: ResourceShapeKind;
       readonly spec: JsonObject;
@@ -267,6 +299,34 @@ export type ParseContainerServiceSpecResult =
       readonly error: { readonly code: string; readonly message: string };
     };
 
+export type ParseVectorIndexSpecResult =
+  | { readonly ok: true; readonly spec: VectorIndexSpec }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    };
+
+export type ParseDurableWorkflowSpecResult =
+  | { readonly ok: true; readonly spec: DurableWorkflowSpec }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    };
+
+export type ParseStatefulActorNamespaceSpecResult =
+  | { readonly ok: true; readonly spec: StatefulActorNamespaceSpec }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    };
+
+export type ParseScheduleSpecResult =
+  | { readonly ok: true; readonly spec: ScheduleSpec }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    };
+
 const RESOURCE_DELETE_POLICIES: readonly ResourceDeletePolicy[] = [
   "delete",
   "retain",
@@ -274,6 +334,14 @@ const RESOURCE_DELETE_POLICIES: readonly ResourceDeletePolicy[] = [
   "block",
 ];
 const RESOURCE_CAPABILITY_TOKEN_RE = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u;
+const ARTIFACT_SHA256_RE = /^(?:sha256:)?[A-Fa-f0-9]{64}$/u;
+const CRON_FIELD_RANGES = [
+  [0, 59],
+  [0, 23],
+  [1, 31],
+  [1, 12],
+  [0, 7],
+] as const;
 export function parseResourceSpec(
   kind: ResourceShapeKind,
   spec: unknown,
@@ -365,6 +433,66 @@ export function parseResourceSpec(
               kind: "ContainerService",
               spec: r.spec,
               interfaces: requiredContainerServiceInterfaces(r.spec),
+              lifecyclePolicy: r.spec.lifecyclePolicy,
+            },
+          }
+        : r;
+    }
+    case "VectorIndex": {
+      const r = parseVectorIndexSpec(spec);
+      return r.ok
+        ? {
+            ok: true,
+            parsed: {
+              schema: "bundled",
+              kind: "VectorIndex",
+              spec: r.spec,
+              interfaces: requiredVectorIndexInterfaces(r.spec),
+              lifecyclePolicy: r.spec.lifecyclePolicy,
+            },
+          }
+        : r;
+    }
+    case "DurableWorkflow": {
+      const r = parseDurableWorkflowSpec(spec);
+      return r.ok
+        ? {
+            ok: true,
+            parsed: {
+              schema: "bundled",
+              kind: "DurableWorkflow",
+              spec: r.spec,
+              interfaces: requiredDurableWorkflowInterfaces(r.spec),
+              lifecyclePolicy: r.spec.lifecyclePolicy,
+            },
+          }
+        : r;
+    }
+    case "StatefulActorNamespace": {
+      const r = parseStatefulActorNamespaceSpec(spec);
+      return r.ok
+        ? {
+            ok: true,
+            parsed: {
+              schema: "bundled",
+              kind: "StatefulActorNamespace",
+              spec: r.spec,
+              interfaces: requiredStatefulActorNamespaceInterfaces(r.spec),
+              lifecyclePolicy: r.spec.lifecyclePolicy,
+            },
+          }
+        : r;
+    }
+    case "Schedule": {
+      const r = parseScheduleSpec(spec);
+      return r.ok
+        ? {
+            ok: true,
+            parsed: {
+              schema: "bundled",
+              kind: "Schedule",
+              spec: r.spec,
+              interfaces: requiredScheduleInterfaces(r.spec),
               lifecyclePolicy: r.spec.lifecyclePolicy,
             },
           }
@@ -639,7 +767,7 @@ export function parseEdgeWorkerSpec(spec: unknown): ParseEdgeWorkerSpecResult {
   const name = parseName(candidate);
   if (!name.ok) return name;
 
-  const source = parseEdgeWorkerSource(candidate.source);
+  const source = parseArtifactSource(candidate.source, "EdgeWorker");
   if (!source.ok) return source;
 
   const profiles =
@@ -696,6 +824,288 @@ export function parseEdgeWorkerSpec(spec: unknown): ParseEdgeWorkerSpecResult {
         : {}),
     },
   };
+}
+
+export function parseVectorIndexSpec(
+  spec: unknown,
+): ParseVectorIndexSpecResult {
+  const base = objectCandidate(spec);
+  if (!base.ok) return base;
+  const candidate = base.value;
+  const name = parseName(candidate);
+  if (!name.ok) return name;
+  if (
+    typeof candidate.dimensions !== "number" ||
+    !Number.isInteger(candidate.dimensions) ||
+    candidate.dimensions <= 0
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_dimensions",
+        message: "spec.dimensions must be a positive integer",
+      },
+    };
+  }
+  const metric = candidate.metric;
+  if (
+    metric !== undefined &&
+    (typeof metric !== "string" || !RESOURCE_CAPABILITY_TOKEN_RE.test(metric))
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_metric",
+        message: "spec.metric must be a valid capability token",
+      },
+    };
+  }
+  const connections = parseConnectionsMap(candidate.connections);
+  if (!connections.ok) return connections;
+  const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+  return {
+    ok: true,
+    spec: {
+      name: name.value,
+      dimensions: candidate.dimensions,
+      ...(typeof metric === "string" ? { metric } : {}),
+      ...(connections.value ? { connections: connections.value } : {}),
+      ...(lifecyclePolicy.value
+        ? { lifecyclePolicy: lifecyclePolicy.value }
+        : {}),
+    },
+  };
+}
+
+export function parseDurableWorkflowSpec(
+  spec: unknown,
+): ParseDurableWorkflowSpecResult {
+  const base = objectCandidate(spec);
+  if (!base.ok) return base;
+  const candidate = base.value;
+  const name = parseName(candidate);
+  if (!name.ok) return name;
+  const source = parseArtifactSource(candidate.source, "DurableWorkflow");
+  if (!source.ok) return source;
+  const entrypoint = candidate.entrypoint;
+  if (
+    typeof entrypoint !== "string" ||
+    entrypoint.trim().length === 0 ||
+    entrypoint.length > 256 ||
+    /[\u0000-\u001f\u007f]/u.test(entrypoint)
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_entrypoint",
+        message:
+          "spec.entrypoint must be a non-empty printable string of at most 256 characters",
+      },
+    };
+  }
+  const retry = parseDurableWorkflowRetry(candidate.retry);
+  if (!retry.ok) return retry;
+  const connections = parseConnectionsMap(candidate.connections);
+  if (!connections.ok) return connections;
+  const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+  return {
+    ok: true,
+    spec: {
+      name: name.value,
+      source: source.value,
+      entrypoint: entrypoint.trim(),
+      ...(retry.value ? { retry: retry.value } : {}),
+      ...(connections.value ? { connections: connections.value } : {}),
+      ...(lifecyclePolicy.value
+        ? { lifecyclePolicy: lifecyclePolicy.value }
+        : {}),
+    },
+  };
+}
+
+export function parseStatefulActorNamespaceSpec(
+  spec: unknown,
+): ParseStatefulActorNamespaceSpecResult {
+  const base = objectCandidate(spec);
+  if (!base.ok) return base;
+  const candidate = base.value;
+  const name = parseName(candidate);
+  if (!name.ok) return name;
+  if (
+    typeof candidate.className !== "string" ||
+    !/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(candidate.className)
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_class_name",
+        message: "spec.className must be a valid runtime class identifier",
+      },
+    };
+  }
+  const storageProfile = candidate.storageProfile;
+  if (
+    storageProfile !== undefined &&
+    (typeof storageProfile !== "string" ||
+      !RESOURCE_CAPABILITY_TOKEN_RE.test(storageProfile))
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_storage_profile",
+        message: "spec.storageProfile must be a valid capability token",
+      },
+    };
+  }
+  const migrationTag = candidate.migrationTag;
+  if (
+    migrationTag !== undefined &&
+    (typeof migrationTag !== "string" ||
+      migrationTag.trim().length === 0 ||
+      migrationTag.length > 128 ||
+      /[\u0000-\u001f\u007f]/u.test(migrationTag))
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_migration_tag",
+        message:
+          "spec.migrationTag must be a non-empty printable string of at most 128 characters",
+      },
+    };
+  }
+  const connections = parseConnectionsMap(candidate.connections);
+  if (!connections.ok) return connections;
+  const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+  return {
+    ok: true,
+    spec: {
+      name: name.value,
+      className: candidate.className,
+      ...(typeof storageProfile === "string" ? { storageProfile } : {}),
+      ...(typeof migrationTag === "string"
+        ? { migrationTag: migrationTag.trim() }
+        : {}),
+      ...(connections.value ? { connections: connections.value } : {}),
+      ...(lifecyclePolicy.value
+        ? { lifecyclePolicy: lifecyclePolicy.value }
+        : {}),
+    },
+  };
+}
+
+export function parseScheduleSpec(spec: unknown): ParseScheduleSpecResult {
+  const base = objectCandidate(spec);
+  if (!base.ok) return base;
+  const candidate = base.value;
+  const name = parseName(candidate);
+  if (!name.ok) return name;
+  const cron = candidate.cron;
+  const cronFields = typeof cron === "string" ? cron.trim().split(/\s+/u) : [];
+  if (
+    typeof cron !== "string" ||
+    cronFields.length !== 5 ||
+    cronFields.some((field, index) => {
+      const range = CRON_FIELD_RANGES[index]!;
+      return !isPortableCronField(field, range[0], range[1]);
+    })
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_cron",
+        message:
+          "spec.cron must be a portable five-field cron expression using numbers, *, comma, range, or step syntax",
+      },
+    };
+  }
+  const timezone = candidate.timezone;
+  if (
+    timezone !== undefined &&
+    (typeof timezone !== "string" ||
+      timezone.trim().length === 0 ||
+      timezone.length > 128 ||
+      /\s|[\u0000-\u001f\u007f]/u.test(timezone))
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_timezone",
+        message:
+          "spec.timezone must be a non-empty timezone token without whitespace",
+      },
+    };
+  }
+  const connections = parseConnectionsMap(candidate.connections);
+  if (!connections.ok) return connections;
+  const connectionEntries = Object.entries(connections.value ?? {});
+  if (connectionEntries.length !== 1) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_schedule_target",
+        message: "spec.connections must contain exactly one schedule target",
+      },
+    };
+  }
+  const [, target] = connectionEntries[0]!;
+  if (
+    target.projection !== "schedule_trigger" ||
+    !target.permissions.includes("invoke")
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_schedule_target",
+        message:
+          "the schedule target connection must use schedule_trigger projection and include invoke permission",
+      },
+    };
+  }
+  const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+  return {
+    ok: true,
+    spec: {
+      name: name.value,
+      cron: cronFields.join(" "),
+      ...(typeof timezone === "string" ? { timezone: timezone.trim() } : {}),
+      connections: connections.value!,
+      ...(lifecyclePolicy.value
+        ? { lifecyclePolicy: lifecyclePolicy.value }
+        : {}),
+    },
+  };
+}
+
+function isPortableCronField(field: string, min: number, max: number): boolean {
+  if (!/^[0-9*,/-]+$/u.test(field)) return false;
+  return field.split(",").every((item) => {
+    const stepParts = item.split("/");
+    if (stepParts.length > 2) return false;
+    const [base, step] = stepParts;
+    if (!base) return false;
+    if (
+      step !== undefined &&
+      (!/^[1-9][0-9]*$/u.test(step) || Number(step) < 1)
+    ) {
+      return false;
+    }
+    if (base === "*") return true;
+    const rangeParts = base.split("-");
+    if (
+      rangeParts.length > 2 ||
+      rangeParts.some((part) => !/^[0-9]+$/u.test(part))
+    ) {
+      return false;
+    }
+    const start = Number(rangeParts[0]);
+    const end = Number(rangeParts[1] ?? rangeParts[0]);
+    return start >= min && end <= max && start <= end;
+  });
 }
 
 export function planResourceShape(
@@ -868,6 +1278,50 @@ function requiredContainerServiceInterfaces(
       ? ["env_projection"]
       : []),
   ];
+  appendConnectionInterfaces(interfaces, spec.connections);
+  return interfaces;
+}
+
+function requiredVectorIndexInterfaces(
+  spec: VectorIndexSpec,
+): readonly string[] {
+  const interfaces = [
+    "vector_index",
+    "vector_query",
+    "runtime_binding",
+    spec.metric ?? "cosine",
+  ];
+  appendConnectionInterfaces(interfaces, spec.connections);
+  return interfaces;
+}
+
+function requiredDurableWorkflowInterfaces(
+  spec: DurableWorkflowSpec,
+): readonly string[] {
+  const interfaces = ["durable_workflow", "invoke", "signal"];
+  appendConnectionInterfaces(interfaces, spec.connections);
+  return interfaces;
+}
+
+function requiredStatefulActorNamespaceInterfaces(
+  spec: StatefulActorNamespaceSpec,
+): readonly string[] {
+  const interfaces = [
+    "stateful_actor_namespace",
+    "runtime_binding",
+    spec.storageProfile ?? "durable_sqlite",
+  ];
+  appendConnectionInterfaces(interfaces, spec.connections);
+  return interfaces;
+}
+
+function requiredScheduleInterfaces(spec: ScheduleSpec): readonly string[] {
+  const interfaces = ["schedule", "cron", "invoke"];
+  if ((spec.timezone ?? "UTC") !== "UTC") {
+    // Non-UTC support is target/backend dependent. Requiring explicit Resolver
+    // evidence keeps v1alpha1 fail closed instead of silently shifting time.
+    interfaces.push("non_utc_timezone");
+  }
   appendConnectionInterfaces(interfaces, spec.connections);
   return interfaces;
 }
@@ -1210,6 +1664,73 @@ function parseQueueDelivery(value: unknown):
   };
 }
 
+function parseDurableWorkflowRetry(value: unknown):
+  | {
+      readonly ok: true;
+      readonly value:
+        | {
+            readonly maxAttempts?: number;
+            readonly initialBackoffSeconds?: number;
+          }
+        | undefined;
+    }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    } {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_retry",
+        message: "spec.retry must be an object",
+      },
+    };
+  }
+  const retry = value as Record<string, unknown>;
+  const maxAttempts = retry.maxAttempts;
+  if (
+    maxAttempts !== undefined &&
+    (typeof maxAttempts !== "number" ||
+      !Number.isInteger(maxAttempts) ||
+      maxAttempts < 1)
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_retry",
+        message: "spec.retry.maxAttempts must be a positive integer",
+      },
+    };
+  }
+  const initialBackoffSeconds = retry.initialBackoffSeconds;
+  if (
+    initialBackoffSeconds !== undefined &&
+    (typeof initialBackoffSeconds !== "number" ||
+      !Number.isInteger(initialBackoffSeconds) ||
+      initialBackoffSeconds < 0)
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_retry",
+        message:
+          "spec.retry.initialBackoffSeconds must be a non-negative integer",
+      },
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      ...(typeof maxAttempts === "number" ? { maxAttempts } : {}),
+      ...(typeof initialBackoffSeconds === "number"
+        ? { initialBackoffSeconds }
+        : {}),
+    },
+  };
+}
+
 function parseLifecyclePolicy(value: unknown):
   | {
       readonly ok: true;
@@ -1245,7 +1766,10 @@ function parseLifecyclePolicy(value: unknown):
   return { ok: true, value: { delete: del as ResourceDeletePolicy } };
 }
 
-function parseEdgeWorkerSource(value: unknown):
+function parseArtifactSource(
+  value: unknown,
+  owner: "EdgeWorker" | "DurableWorkflow",
+):
   | { readonly ok: true; readonly value: EdgeWorkerSpec["source"] }
   | {
       readonly ok: false;
@@ -1256,8 +1780,7 @@ function parseEdgeWorkerSource(value: unknown):
       ok: false,
       error: {
         code: "invalid_source",
-        message:
-          "spec.source.artifactPath, spec.source.artifactUrl, or spec.source.artifactRef is required for EdgeWorker",
+        message: `spec.source.artifactPath, spec.source.artifactUrl, or spec.source.artifactRef is required for ${owner}`,
       },
     };
   }
@@ -1276,8 +1799,7 @@ function parseEdgeWorkerSource(value: unknown):
       ok: false,
       error: {
         code: "invalid_source",
-        message:
-          "EdgeWorker supports source.artifactPath, source.artifactUrl, or source.artifactRef only",
+        message: `${owner} supports source.artifactPath, source.artifactUrl, or source.artifactRef only`,
       },
     };
   }
@@ -1304,8 +1826,7 @@ function parseEdgeWorkerSource(value: unknown):
       ok: false,
       error: {
         code: "invalid_source",
-        message:
-          "spec.source must set only one of artifactPath, artifactUrl, or artifactRef for EdgeWorker",
+        message: `spec.source must set only one of artifactPath, artifactUrl, or artifactRef for ${owner}`,
       },
     };
   }
@@ -1328,6 +1849,16 @@ function parseEdgeWorkerSource(value: unknown):
         },
       };
     }
+    if (!ARTIFACT_SHA256_RE.test(artifactSha256)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_source",
+          message:
+            "spec.source.artifactSha256 must be a 64-character SHA-256 hex digest",
+        },
+      };
+    }
     return { ok: true, value: { artifactRef, artifactSha256 } };
   }
   if (artifactUrl) {
@@ -1343,7 +1874,7 @@ function parseEdgeWorkerSource(value: unknown):
     const artifactSha256 =
       typeof source.artifactSha256 === "string" &&
       source.artifactSha256.trim().length > 0
-        ? source.artifactSha256
+        ? source.artifactSha256.trim()
         : undefined;
     if (!artifactSha256) {
       return {
@@ -1352,6 +1883,16 @@ function parseEdgeWorkerSource(value: unknown):
           code: "invalid_source",
           message:
             "spec.source.artifactSha256 is required when artifactUrl is set",
+        },
+      };
+    }
+    if (!ARTIFACT_SHA256_RE.test(artifactSha256)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_source",
+          message:
+            "spec.source.artifactSha256 must be a 64-character SHA-256 hex digest",
         },
       };
     }
