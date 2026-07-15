@@ -26,8 +26,17 @@ type resourceConnectionModel struct {
 }
 
 func resourceConnectionAttribute() schema.ListNestedAttribute {
+	return resourceConnectionAttributeWithRequired(false)
+}
+
+func requiredResourceConnectionAttribute() schema.ListNestedAttribute {
+	return resourceConnectionAttributeWithRequired(true)
+}
+
+func resourceConnectionAttributeWithRequired(required bool) schema.ListNestedAttribute {
 	return schema.ListNestedAttribute{
-		Optional:    true,
+		Optional:    !required,
+		Required:    required,
 		Description: "Non-secret Resource Shape connection metadata. The selected adapter materializes concrete grants and projections.",
 		NestedObject: schema.NestedAttributeObject{
 			Attributes: map[string]schema.Attribute{

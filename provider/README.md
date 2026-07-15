@@ -34,14 +34,18 @@ managed-target placement, policy, metering, or migration value.
 
 Current v1alpha1 Resource Shape resources:
 
-| Resource                     | Shape              | Purpose                                             |
-| ---------------------------- | ------------------ | --------------------------------------------------- |
-| `takosumi_edge_worker`       | `EdgeWorker`       | Worker-compatible JavaScript/TypeScript app runtime |
-| `takosumi_object_bucket`     | `ObjectBucket`     | Object storage when Takosumi owns projection/policy |
-| `takosumi_kv_store`          | `KVStore`          | Key-value runtime binding/state                     |
-| `takosumi_queue`             | `Queue`            | Async delivery and event fan-out                    |
-| `takosumi_sql_database`      | `SQLDatabase`      | D1-like sqlite, or operator-supported SQL targets   |
-| `takosumi_container_service` | `ContainerService` | OCI container service, separate from EdgeWorker     |
+| Resource                            | Shape                    | Purpose                                             |
+| ----------------------------------- | ------------------------ | --------------------------------------------------- |
+| `takosumi_edge_worker`              | `EdgeWorker`             | Worker-compatible JavaScript/TypeScript app runtime |
+| `takosumi_object_bucket`            | `ObjectBucket`           | Object storage when Takosumi owns projection/policy |
+| `takosumi_kv_store`                 | `KVStore`                | Key-value runtime binding/state                     |
+| `takosumi_queue`                    | `Queue`                  | Async delivery and event fan-out                    |
+| `takosumi_sql_database`             | `SQLDatabase`            | D1-like sqlite, or operator-supported SQL targets   |
+| `takosumi_container_service`        | `ContainerService`       | OCI container service, separate from EdgeWorker     |
+| `takosumi_vector_index`             | `VectorIndex`            | Vector search index with typed dimensions/metric    |
+| `takosumi_durable_workflow`         | `DurableWorkflow`        | Retryable durable workflow from immutable artifact  |
+| `takosumi_stateful_actor_namespace` | `StatefulActorNamespace` | Namespace lifecycle for runtime-addressed actors    |
+| `takosumi_schedule`                 | `Schedule`               | Five-field cron trigger for one Resource connection |
 
 Current operator/admin resources:
 
@@ -65,7 +69,9 @@ Takos itself is not a reason to add a product-specific provider resource. The
 Takos distribution should be expressed as a composition of generic service
 forms such as `takosumi_edge_worker`, `takosumi_sql_database`,
 `takosumi_kv_store`, `takosumi_object_bucket`, `takosumi_queue`, and
-`takosumi_container_service`. Consumer shapes use the typed `connections`
+`takosumi_container_service`, `takosumi_vector_index`,
+`takosumi_durable_workflow`, `takosumi_stateful_actor_namespace`, and
+`takosumi_schedule`. Consumer shapes use the typed `connections`
 attribute to declare non-secret resource references, requested permissions, and
 projection kind; the selected adapter owns concrete grant/binding
 materialization. Before adapter execution, the Takosumi endpoint resolves every
@@ -322,19 +328,35 @@ Common computed fields:
 
 Shape-specific fields:
 
-| Resource                     | Required fields                                  | Optional fields                                                                           |
-| ---------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `takosumi_edge_worker`       | `name`, one of `artifact_path` or `artifact_url` | `artifact_sha256`, `target_pool`, `compatibility_date`, `compatibility_flags`, `profiles` |
-| `takosumi_object_bucket`     | `name`                                           | `target_pool`, `interfaces`                                                               |
-| `takosumi_kv_store`          | `name`                                           | `target_pool`, `consistency`                                                              |
-| `takosumi_queue`             | `name`                                           | `target_pool`, `max_retries`, `max_batch_size`                                            |
-| `takosumi_sql_database`      | `name`                                           | `target_pool`, `engine`, `migrations_path`                                                |
-| `takosumi_container_service` | `name`, `image`                                  | `target_pool`, `ports`, `public_http`, `environment`                                      |
+| Resource                            | Required fields                                 | Optional fields                                                                           |
+| ----------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `takosumi_edge_worker`              | `name`, one artifact source                     | `artifact_sha256`, `target_pool`, `compatibility_date`, `compatibility_flags`, `profiles` |
+| `takosumi_object_bucket`            | `name`                                          | `target_pool`, `interfaces`                                                               |
+| `takosumi_kv_store`                 | `name`                                          | `target_pool`, `consistency`                                                              |
+| `takosumi_queue`                    | `name`                                          | `target_pool`, `max_retries`, `max_batch_size`                                            |
+| `takosumi_sql_database`             | `name`                                          | `target_pool`, `engine`, `migrations_path`                                                |
+| `takosumi_container_service`        | `name`, `image`                                 | `target_pool`, `ports`, `public_http`, `environment`                                      |
+| `takosumi_vector_index`             | `name`, `dimensions`                            | `target_pool`, `metric`, `connections`                                                    |
+| `takosumi_durable_workflow`         | `name`, one artifact source, `entrypoint`       | `target_pool`, `artifact_sha256`, retry fields, `connections`                             |
+| `takosumi_stateful_actor_namespace` | `name`, `class_name`                            | `target_pool`, `storage_profile`, `migration_tag`, `connections`                          |
+| `takosumi_schedule`                 | `name`, `cron`, exactly one `connections` entry | `target_pool`, `timezone`                                                                 |
 
 `artifact_path` is a runner-local path for Takosumi-run OpenTofu stacks.
 `artifact_url` is for CI/release artifacts consumed by the generated OpenTofu
 module through `hashicorp/http`; it requires `artifact_sha256` so the runner
-fails closed if the bytes change.
+fails closed if the bytes change. `artifact_ref` is an operator-owned opaque
+immutable reference and also requires `artifact_sha256`. Exactly one of
+`artifact_path`, `artifact_url`, or `artifact_ref` is allowed for EdgeWorker and
+DurableWorkflow.
+
+`takosumi_schedule.cron` accepts portable five-field cron syntax. Its sole
+connection must request `invoke` with the `schedule_trigger` projection.
+`timezone` defaults to `UTC`; a non-UTC token is executable only when the
+selected Target advertises `non_utc_timezone` capability evidence.
+
+`takosumi_stateful_actor_namespace` owns namespace creation, migration, and
+deletion. Individual actor instances are runtime state addressed inside that
+namespace and are deliberately not Resource objects.
 
 `profiles`, `compatibility_flags`, and shape `interfaces` such as
 `takosumi_object_bucket.interfaces` are endpoint-defined tokens. The provider

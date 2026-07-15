@@ -281,6 +281,10 @@ function mergeResourceCapabilities(
     Queue: resources?.Queue ?? false,
     SQLDatabase: resources?.SQLDatabase ?? false,
     ContainerService: resources?.ContainerService ?? false,
+    VectorIndex: resources?.VectorIndex ?? false,
+    DurableWorkflow: resources?.DurableWorkflow ?? false,
+    StatefulActorNamespace: resources?.StatefulActorNamespace ?? false,
+    Schedule: resources?.Schedule ?? false,
     ...(resources ?? {}),
   };
 }

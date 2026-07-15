@@ -25,6 +25,10 @@ const SHAPES = [
   "Queue",
   "SQLDatabase",
   "ContainerService",
+  "VectorIndex",
+  "DurableWorkflow",
+  "StatefulActorNamespace",
+  "Schedule",
 ] as const;
 
 type ShapeKind = (typeof SHAPES)[number];
@@ -597,7 +601,22 @@ class ResourceShapeProofServer {
         nativeResourcePlan: [],
         riskNotes: [],
         summary: "local Resource Shape provider proof preview",
+        planDigest: `sha256:${"a".repeat(64)}`,
+        specDigest: `sha256:${"b".repeat(64)}`,
+        resolutionFingerprint: `sha256:${"c".repeat(64)}`,
       });
+    }
+
+    const readOperationMatch = url.pathname.match(
+      /^\/v1\/resources\/([^/]+)\/([^/]+)\/(observe|refresh)$/,
+    );
+    if (request.method === "POST" && readOperationMatch) {
+      const kind = decodeURIComponent(readOperationMatch[1]!) as ShapeKind;
+      const name = decodeURIComponent(readOperationMatch[2]!);
+      if (!SHAPES.includes(kind)) return notFound(`unsupported kind ${kind}`);
+      const space = url.searchParams.get("space") || SPACE;
+      const record = this.resources.get(resourceKey(kind, name, space));
+      return record ? json(record) : notFound(`${kind}/${name} not found`);
     }
 
     const resourceMatch = url.pathname.match(
@@ -834,6 +853,10 @@ function expectedCountsForProfile(
       Queue: 2,
       SQLDatabase: 1,
       ContainerService: 2,
+      VectorIndex: 0,
+      DurableWorkflow: 0,
+      StatefulActorNamespace: 0,
+      Schedule: 0,
     };
   }
   if (profile === "yurucommu-worker-app") {
@@ -844,6 +867,10 @@ function expectedCountsForProfile(
       Queue: 2,
       SQLDatabase: 1,
       ContainerService: 0,
+      VectorIndex: 0,
+      DurableWorkflow: 0,
+      StatefulActorNamespace: 0,
+      Schedule: 0,
     };
   }
   return {
@@ -853,6 +880,25 @@ function expectedCountsForProfile(
     Queue: 1,
     SQLDatabase: 1,
     ContainerService: 1,
+    VectorIndex: 1,
+    DurableWorkflow: 1,
+    StatefulActorNamespace: 1,
+    Schedule: 1,
+  };
+}
+
+function expectedLiveCountsForProfile(
+  profile: ProofProfile,
+): Record<ShapeKind, number> {
+  return {
+    ...expectedCountsForProfile(profile),
+    // These schemas are proven end-to-end against the local Resource API mock.
+    // Live materialization needs target-specific implementation evidence and is
+    // deliberately not inferred from the process-wide shape capability map.
+    VectorIndex: 0,
+    DurableWorkflow: 0,
+    StatefulActorNamespace: 0,
+    Schedule: 0,
   };
 }
 
@@ -978,6 +1024,50 @@ resource "takosumi_target_pool" "default" {
           oci_container = "native"
           public_http   = "shim"
         }
+      },
+      {
+        shape                = "VectorIndex"
+        implementation       = "proof_vector_index"
+        native_resource_type = "proof.vector_index"
+        interfaces = {
+          vector_index    = "native"
+          vector_query    = "native"
+          runtime_binding = "native"
+          cosine          = "native"
+        }
+      },
+      {
+        shape                = "DurableWorkflow"
+        implementation       = "proof_durable_workflow"
+        native_resource_type = "proof.durable_workflow"
+        interfaces = {
+          durable_workflow = "native"
+          invoke           = "native"
+          signal           = "native"
+        }
+      },
+      {
+        shape                = "StatefulActorNamespace"
+        implementation       = "proof_stateful_actor_namespace"
+        native_resource_type = "proof.stateful_actor_namespace"
+        interfaces = {
+          stateful_actor_namespace = "native"
+          runtime_binding          = "native"
+          durable_sqlite           = "native"
+        }
+      },
+      {
+        shape                = "Schedule"
+        implementation       = "proof_schedule"
+        native_resource_type = "proof.schedule"
+        interfaces = {
+          schedule            = "native"
+          cron                = "native"
+          invoke              = "native"
+          resource_connection = "native"
+          schedule_trigger    = "native"
+          grant_invoke        = "native"
+        }
       }
     ]
   }]
@@ -1029,6 +1119,44 @@ resource "takosumi_container_service" "agent" {
   }
 }
 
+resource "takosumi_vector_index" "embeddings" {
+  name        = "embeddings"
+  dimensions  = 1536
+  metric      = "cosine"
+  target_pool = takosumi_target_pool.default.name
+}
+
+resource "takosumi_durable_workflow" "ingest" {
+  name                    = "ingest"
+  artifact_path           = "/work/dist/ingest-workflow.js"
+  entrypoint              = "IngestWorkflow"
+  max_attempts            = 5
+  initial_backoff_seconds = 2
+  target_pool             = takosumi_target_pool.default.name
+}
+
+resource "takosumi_stateful_actor_namespace" "rooms" {
+  name            = "rooms"
+  class_name      = "RoomActor"
+  storage_profile = "durable_sqlite"
+  migration_tag   = "v1"
+  target_pool     = takosumi_target_pool.default.name
+}
+
+resource "takosumi_schedule" "nightly" {
+  name        = "nightly"
+  cron        = "0 2 * * *"
+  timezone    = "UTC"
+  target_pool = takosumi_target_pool.default.name
+
+  connections = [{
+    name        = "workflow"
+    resource    = takosumi_durable_workflow.ingest.id
+    permissions = ["invoke"]
+    projection  = "schedule_trigger"
+  }]
+}
+
 output "shape_ids" {
   value = {
     edge_worker       = takosumi_edge_worker.api.id
@@ -1037,6 +1165,10 @@ output "shape_ids" {
     queue             = takosumi_queue.delivery.id
     sql_database      = takosumi_sql_database.main.id
     container_service = takosumi_container_service.agent.id
+    vector_index      = takosumi_vector_index.embeddings.id
+    durable_workflow  = takosumi_durable_workflow.ingest.id
+    actor_namespace   = takosumi_stateful_actor_namespace.rooms.id
+    schedule          = takosumi_schedule.nightly.id
     target_pool       = takosumi_target_pool.default.id
   }
 }
@@ -1049,6 +1181,10 @@ output "shape_urls" {
     queue             = takosumi_queue.delivery.outputs["url"]
     sql_database      = takosumi_sql_database.main.outputs["url"]
     container_service = takosumi_container_service.agent.outputs["url"]
+    vector_index      = takosumi_vector_index.embeddings.outputs["url"]
+    durable_workflow  = takosumi_durable_workflow.ingest.outputs["url"]
+    actor_namespace   = takosumi_stateful_actor_namespace.rooms.outputs["url"]
+    schedule          = takosumi_schedule.nightly.outputs["url"]
   }
 }
 `;
@@ -1419,7 +1555,7 @@ function liveMaterializableShapes(
     readonly reason: string;
   }[];
 } {
-  const expectedResourceCountsByKind = expectedCountsForProfile(
+  const expectedResourceCountsByKind = expectedLiveCountsForProfile(
     options.profile ?? "generic",
   );
   const resourceCountsByKind = Object.fromEntries(

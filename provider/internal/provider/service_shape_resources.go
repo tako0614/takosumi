@@ -35,11 +35,15 @@ type serviceShapeConfig struct {
 type serviceShapeSpecKind string
 
 const (
-	specObjectBucket     serviceShapeSpecKind = "object_bucket"
-	specKVStore          serviceShapeSpecKind = "kv_store"
-	specQueue            serviceShapeSpecKind = "queue"
-	specSQLDatabase      serviceShapeSpecKind = "sql_database"
-	specContainerService serviceShapeSpecKind = "container_service"
+	specObjectBucket           serviceShapeSpecKind = "object_bucket"
+	specKVStore                serviceShapeSpecKind = "kv_store"
+	specQueue                  serviceShapeSpecKind = "queue"
+	specSQLDatabase            serviceShapeSpecKind = "sql_database"
+	specContainerService       serviceShapeSpecKind = "container_service"
+	specVectorIndex            serviceShapeSpecKind = "vector_index"
+	specDurableWorkflow        serviceShapeSpecKind = "durable_workflow"
+	specStatefulActorNamespace serviceShapeSpecKind = "stateful_actor_namespace"
+	specSchedule               serviceShapeSpecKind = "schedule"
 )
 
 type serviceShapeResource struct {
@@ -61,6 +65,20 @@ type serviceShapeModel struct {
 	PublicHTTP             types.Bool   `tfsdk:"public_http"`
 	Environment            types.Map    `tfsdk:"environment"`
 	Connections            types.List   `tfsdk:"connections"`
+	Dimensions             types.Int64  `tfsdk:"dimensions"`
+	Metric                 types.String `tfsdk:"metric"`
+	ArtifactPath           types.String `tfsdk:"artifact_path"`
+	ArtifactURL            types.String `tfsdk:"artifact_url"`
+	ArtifactRef            types.String `tfsdk:"artifact_ref"`
+	ArtifactSHA256         types.String `tfsdk:"artifact_sha256"`
+	Entrypoint             types.String `tfsdk:"entrypoint"`
+	MaxAttempts            types.Int64  `tfsdk:"max_attempts"`
+	InitialBackoffSeconds  types.Int64  `tfsdk:"initial_backoff_seconds"`
+	ClassName              types.String `tfsdk:"class_name"`
+	StorageProfile         types.String `tfsdk:"storage_profile"`
+	MigrationTag           types.String `tfsdk:"migration_tag"`
+	Cron                   types.String `tfsdk:"cron"`
+	Timezone               types.String `tfsdk:"timezone"`
 	Space                  types.String `tfsdk:"space"`
 	TargetPool             types.String `tfsdk:"target_pool"`
 	SelectedImplementation types.String `tfsdk:"selected_implementation"`
@@ -131,6 +149,72 @@ type containerServiceModel struct {
 	Ports                  types.Set    `tfsdk:"ports"`
 	PublicHTTP             types.Bool   `tfsdk:"public_http"`
 	Environment            types.Map    `tfsdk:"environment"`
+	Connections            types.List   `tfsdk:"connections"`
+	Space                  types.String `tfsdk:"space"`
+	TargetPool             types.String `tfsdk:"target_pool"`
+	SelectedImplementation types.String `tfsdk:"selected_implementation"`
+	Target                 types.String `tfsdk:"target"`
+	Locked                 types.Bool   `tfsdk:"locked"`
+	Portability            types.String `tfsdk:"portability"`
+	Outputs                types.Map    `tfsdk:"outputs"`
+}
+
+type vectorIndexModel struct {
+	ID                     types.String `tfsdk:"id"`
+	Name                   types.String `tfsdk:"name"`
+	Dimensions             types.Int64  `tfsdk:"dimensions"`
+	Metric                 types.String `tfsdk:"metric"`
+	Connections            types.List   `tfsdk:"connections"`
+	Space                  types.String `tfsdk:"space"`
+	TargetPool             types.String `tfsdk:"target_pool"`
+	SelectedImplementation types.String `tfsdk:"selected_implementation"`
+	Target                 types.String `tfsdk:"target"`
+	Locked                 types.Bool   `tfsdk:"locked"`
+	Portability            types.String `tfsdk:"portability"`
+	Outputs                types.Map    `tfsdk:"outputs"`
+}
+
+type durableWorkflowModel struct {
+	ID                     types.String `tfsdk:"id"`
+	Name                   types.String `tfsdk:"name"`
+	ArtifactPath           types.String `tfsdk:"artifact_path"`
+	ArtifactURL            types.String `tfsdk:"artifact_url"`
+	ArtifactRef            types.String `tfsdk:"artifact_ref"`
+	ArtifactSHA256         types.String `tfsdk:"artifact_sha256"`
+	Entrypoint             types.String `tfsdk:"entrypoint"`
+	MaxAttempts            types.Int64  `tfsdk:"max_attempts"`
+	InitialBackoffSeconds  types.Int64  `tfsdk:"initial_backoff_seconds"`
+	Connections            types.List   `tfsdk:"connections"`
+	Space                  types.String `tfsdk:"space"`
+	TargetPool             types.String `tfsdk:"target_pool"`
+	SelectedImplementation types.String `tfsdk:"selected_implementation"`
+	Target                 types.String `tfsdk:"target"`
+	Locked                 types.Bool   `tfsdk:"locked"`
+	Portability            types.String `tfsdk:"portability"`
+	Outputs                types.Map    `tfsdk:"outputs"`
+}
+
+type statefulActorNamespaceModel struct {
+	ID                     types.String `tfsdk:"id"`
+	Name                   types.String `tfsdk:"name"`
+	ClassName              types.String `tfsdk:"class_name"`
+	StorageProfile         types.String `tfsdk:"storage_profile"`
+	MigrationTag           types.String `tfsdk:"migration_tag"`
+	Connections            types.List   `tfsdk:"connections"`
+	Space                  types.String `tfsdk:"space"`
+	TargetPool             types.String `tfsdk:"target_pool"`
+	SelectedImplementation types.String `tfsdk:"selected_implementation"`
+	Target                 types.String `tfsdk:"target"`
+	Locked                 types.Bool   `tfsdk:"locked"`
+	Portability            types.String `tfsdk:"portability"`
+	Outputs                types.Map    `tfsdk:"outputs"`
+}
+
+type scheduleModel struct {
+	ID                     types.String `tfsdk:"id"`
+	Name                   types.String `tfsdk:"name"`
+	Cron                   types.String `tfsdk:"cron"`
+	Timezone               types.String `tfsdk:"timezone"`
 	Connections            types.List   `tfsdk:"connections"`
 	Space                  types.String `tfsdk:"space"`
 	TargetPool             types.String `tfsdk:"target_pool"`
@@ -273,6 +357,96 @@ func containerServiceModelFromServiceShape(m serviceShapeModel) containerService
 	}
 }
 
+func (m vectorIndexModel) toServiceShapeModel() serviceShapeModel {
+	base := serviceShapeModelFromCommon(
+		m.ID, m.Name, m.Space, m.TargetPool, m.SelectedImplementation,
+		m.Target, m.Locked, m.Portability, m.Outputs,
+	)
+	base.Dimensions = m.Dimensions
+	base.Metric = m.Metric
+	base.Connections = m.Connections
+	return base
+}
+
+func vectorIndexModelFromServiceShape(m serviceShapeModel) vectorIndexModel {
+	return vectorIndexModel{
+		ID: m.ID, Name: m.Name, Dimensions: m.Dimensions, Metric: m.Metric,
+		Connections: m.Connections, Space: m.Space, TargetPool: m.TargetPool,
+		SelectedImplementation: m.SelectedImplementation, Target: m.Target,
+		Locked: m.Locked, Portability: m.Portability, Outputs: m.Outputs,
+	}
+}
+
+func (m durableWorkflowModel) toServiceShapeModel() serviceShapeModel {
+	base := serviceShapeModelFromCommon(
+		m.ID, m.Name, m.Space, m.TargetPool, m.SelectedImplementation,
+		m.Target, m.Locked, m.Portability, m.Outputs,
+	)
+	base.ArtifactPath = m.ArtifactPath
+	base.ArtifactURL = m.ArtifactURL
+	base.ArtifactRef = m.ArtifactRef
+	base.ArtifactSHA256 = m.ArtifactSHA256
+	base.Entrypoint = m.Entrypoint
+	base.MaxAttempts = m.MaxAttempts
+	base.InitialBackoffSeconds = m.InitialBackoffSeconds
+	base.Connections = m.Connections
+	return base
+}
+
+func durableWorkflowModelFromServiceShape(m serviceShapeModel) durableWorkflowModel {
+	return durableWorkflowModel{
+		ID: m.ID, Name: m.Name, ArtifactPath: m.ArtifactPath,
+		ArtifactURL: m.ArtifactURL, ArtifactRef: m.ArtifactRef,
+		ArtifactSHA256: m.ArtifactSHA256, Entrypoint: m.Entrypoint,
+		MaxAttempts: m.MaxAttempts, InitialBackoffSeconds: m.InitialBackoffSeconds,
+		Connections: m.Connections, Space: m.Space, TargetPool: m.TargetPool,
+		SelectedImplementation: m.SelectedImplementation, Target: m.Target,
+		Locked: m.Locked, Portability: m.Portability, Outputs: m.Outputs,
+	}
+}
+
+func (m statefulActorNamespaceModel) toServiceShapeModel() serviceShapeModel {
+	base := serviceShapeModelFromCommon(
+		m.ID, m.Name, m.Space, m.TargetPool, m.SelectedImplementation,
+		m.Target, m.Locked, m.Portability, m.Outputs,
+	)
+	base.ClassName = m.ClassName
+	base.StorageProfile = m.StorageProfile
+	base.MigrationTag = m.MigrationTag
+	base.Connections = m.Connections
+	return base
+}
+
+func statefulActorNamespaceModelFromServiceShape(m serviceShapeModel) statefulActorNamespaceModel {
+	return statefulActorNamespaceModel{
+		ID: m.ID, Name: m.Name, ClassName: m.ClassName,
+		StorageProfile: m.StorageProfile, MigrationTag: m.MigrationTag,
+		Connections: m.Connections, Space: m.Space, TargetPool: m.TargetPool,
+		SelectedImplementation: m.SelectedImplementation, Target: m.Target,
+		Locked: m.Locked, Portability: m.Portability, Outputs: m.Outputs,
+	}
+}
+
+func (m scheduleModel) toServiceShapeModel() serviceShapeModel {
+	base := serviceShapeModelFromCommon(
+		m.ID, m.Name, m.Space, m.TargetPool, m.SelectedImplementation,
+		m.Target, m.Locked, m.Portability, m.Outputs,
+	)
+	base.Cron = m.Cron
+	base.Timezone = m.Timezone
+	base.Connections = m.Connections
+	return base
+}
+
+func scheduleModelFromServiceShape(m serviceShapeModel) scheduleModel {
+	return scheduleModel{
+		ID: m.ID, Name: m.Name, Cron: m.Cron, Timezone: m.Timezone,
+		Connections: m.Connections, Space: m.Space, TargetPool: m.TargetPool,
+		SelectedImplementation: m.SelectedImplementation, Target: m.Target,
+		Locked: m.Locked, Portability: m.Portability, Outputs: m.Outputs,
+	}
+}
+
 func serviceShapeModelFromCommon(
 	id types.String,
 	name types.String,
@@ -342,6 +516,38 @@ func NewContainerServiceResource() resource.Resource {
 	}}
 }
 
+func NewVectorIndexResource() resource.Resource {
+	return &serviceShapeResource{cfg: serviceShapeConfig{
+		typeSuffix: "vector_index", kind: client.KindVectorIndex,
+		description: "Provider-neutral vector index with explicit dimensions and similarity metric capability.",
+		spec:        specVectorIndex,
+	}}
+}
+
+func NewDurableWorkflowResource() resource.Resource {
+	return &serviceShapeResource{cfg: serviceShapeConfig{
+		typeSuffix: "durable_workflow", kind: client.KindDurableWorkflow,
+		description: "Provider-neutral durable workflow backed by an immutable prebuilt artifact.",
+		spec:        specDurableWorkflow,
+	}}
+}
+
+func NewStatefulActorNamespaceResource() resource.Resource {
+	return &serviceShapeResource{cfg: serviceShapeConfig{
+		typeSuffix: "stateful_actor_namespace", kind: client.KindStatefulActorNamespace,
+		description: "Namespace-level lifecycle for stateful actors. Individual actor instances are runtime state and never Resource objects.",
+		spec:        specStatefulActorNamespace,
+	}}
+}
+
+func NewScheduleResource() resource.Resource {
+	return &serviceShapeResource{cfg: serviceShapeConfig{
+		typeSuffix: "schedule", kind: client.KindSchedule,
+		description: "Portable five-field cron schedule targeting exactly one invokable Resource connection.",
+		spec:        specSchedule,
+	}}
+}
+
 func (r *serviceShapeResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_" + r.cfg.typeSuffix
 }
@@ -401,6 +607,73 @@ func (r *serviceShapeResource) Schema(_ context.Context, _ resource.SchemaReques
 			Description: "Non-secret environment variables. Secrets and AI keys must come from ProviderConnection/Secret projection, not this map.",
 		}
 		attrs["connections"] = resourceConnectionAttribute()
+	case specVectorIndex:
+		attrs["dimensions"] = schema.Int64Attribute{
+			Required:    true,
+			Description: "Positive vector dimensions fixed for the index lifecycle.",
+		}
+		attrs["metric"] = schema.StringAttribute{
+			Optional:    true,
+			Description: "Open similarity metric capability token. Defaults to cosine and requires explicit Target support.",
+			Validators:  []validator.String{StringToken()},
+		}
+		attrs["connections"] = resourceConnectionAttribute()
+	case specDurableWorkflow:
+		attrs["artifact_path"] = schema.StringAttribute{
+			Optional:    true,
+			Description: "OpenTofu-runner-local path to a prebuilt workflow artifact.",
+		}
+		attrs["artifact_url"] = schema.StringAttribute{
+			Optional:    true,
+			Description: "HTTPS URL to an immutable workflow artifact. Requires artifact_sha256.",
+		}
+		attrs["artifact_ref"] = schema.StringAttribute{
+			Optional:    true,
+			Description: "Host-allocated opaque immutable artifact reference. Requires artifact_sha256.",
+		}
+		attrs["artifact_sha256"] = schema.StringAttribute{
+			Optional:    true,
+			Description: "Expected artifact SHA-256 digest for artifact_url or artifact_ref.",
+		}
+		attrs["entrypoint"] = schema.StringAttribute{
+			Required:    true,
+			Description: "Workflow runtime entrypoint.",
+		}
+		attrs["max_attempts"] = schema.Int64Attribute{
+			Optional:    true,
+			Description: "Optional positive maximum workflow attempts.",
+		}
+		attrs["initial_backoff_seconds"] = schema.Int64Attribute{
+			Optional:    true,
+			Description: "Optional non-negative initial retry backoff in seconds.",
+		}
+		attrs["connections"] = resourceConnectionAttribute()
+	case specStatefulActorNamespace:
+		attrs["class_name"] = schema.StringAttribute{
+			Required:    true,
+			Description: "Runtime class identifier owning actor behavior inside this namespace.",
+		}
+		attrs["storage_profile"] = schema.StringAttribute{
+			Optional:    true,
+			Description: "Open namespace storage capability token. Defaults to durable_sqlite.",
+			Validators:  []validator.String{StringToken()},
+		}
+		attrs["migration_tag"] = schema.StringAttribute{
+			Optional:    true,
+			Description: "Optional namespace migration tag; this never identifies an actor instance.",
+		}
+		attrs["connections"] = resourceConnectionAttribute()
+	case specSchedule:
+		attrs["cron"] = schema.StringAttribute{
+			Required:    true,
+			Description: "Portable five-field cron expression.",
+		}
+		attrs["timezone"] = schema.StringAttribute{
+			Optional:    true,
+			Description: "Open timezone token. Defaults to UTC; non-UTC requires explicit Resolver capability evidence.",
+			Validators:  []validator.String{StringToken()},
+		}
+		attrs["connections"] = requiredResourceConnectionAttribute()
 	}
 	resp.Schema = schema.Schema{
 		Description: r.cfg.description,
@@ -588,6 +861,22 @@ func (r *serviceShapeResource) modelFromPlan(ctx context.Context, plan tfsdk.Pla
 		var m containerServiceModel
 		diags := plan.Get(ctx, &m)
 		return m.toServiceShapeModel(), diags
+	case specVectorIndex:
+		var m vectorIndexModel
+		diags := plan.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specDurableWorkflow:
+		var m durableWorkflowModel
+		diags := plan.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specStatefulActorNamespace:
+		var m statefulActorNamespaceModel
+		diags := plan.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specSchedule:
+		var m scheduleModel
+		diags := plan.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
 	default:
 		var diags diag.Diagnostics
 		diags.AddError("Unsupported service shape", "The provider cannot decode this service shape plan.")
@@ -617,6 +906,22 @@ func (r *serviceShapeResource) modelFromState(ctx context.Context, state tfsdk.S
 		var m containerServiceModel
 		diags := state.Get(ctx, &m)
 		return m.toServiceShapeModel(), diags
+	case specVectorIndex:
+		var m vectorIndexModel
+		diags := state.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specDurableWorkflow:
+		var m durableWorkflowModel
+		diags := state.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specStatefulActorNamespace:
+		var m statefulActorNamespaceModel
+		diags := state.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specSchedule:
+		var m scheduleModel
+		diags := state.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
 	default:
 		var diags diag.Diagnostics
 		diags.AddError("Unsupported service shape", "The provider cannot decode this service shape state.")
@@ -636,6 +941,14 @@ func (r *serviceShapeResource) setState(ctx context.Context, state *tfsdk.State,
 		return state.Set(ctx, sqlDatabaseModelFromServiceShape(m))
 	case specContainerService:
 		return state.Set(ctx, containerServiceModelFromServiceShape(m))
+	case specVectorIndex:
+		return state.Set(ctx, vectorIndexModelFromServiceShape(m))
+	case specDurableWorkflow:
+		return state.Set(ctx, durableWorkflowModelFromServiceShape(m))
+	case specStatefulActorNamespace:
+		return state.Set(ctx, statefulActorNamespaceModelFromServiceShape(m))
+	case specSchedule:
+		return state.Set(ctx, scheduleModelFromServiceShape(m))
 	default:
 		var diags diag.Diagnostics
 		diags.AddError("Unsupported service shape", "The provider cannot encode this service shape state.")
@@ -757,6 +1070,105 @@ func (m serviceShapeModel) toResource(ctx context.Context, defaultSpace, kind st
 		if connections := resourceConnectionsToSpec(ctx, m.Connections, &diags); len(connections) > 0 {
 			spec["connections"] = connections
 		}
+	case specVectorIndex:
+		if m.Dimensions.IsNull() || m.Dimensions.IsUnknown() || m.Dimensions.ValueInt64() <= 0 {
+			diags.AddAttributeError(path.Root("dimensions"), "Invalid vector dimensions", "dimensions must be a positive integer.")
+			return nil, "", diags
+		}
+		spec["dimensions"] = m.Dimensions.ValueInt64()
+		if metric := knownTrimmedString(m.Metric); metric != "" {
+			spec["metric"] = metric
+		}
+		if connections := resourceConnectionsToSpec(ctx, m.Connections, &diags); len(connections) > 0 {
+			spec["connections"] = connections
+		}
+	case specDurableWorkflow:
+		source, sourceDiags := (artifactSourceValues{
+			Path: m.ArtifactPath, URL: m.ArtifactURL,
+			Ref: m.ArtifactRef, SHA256: m.ArtifactSHA256,
+		}).toSpec("DurableWorkflow")
+		diags.Append(sourceDiags...)
+		if diags.HasError() {
+			return nil, "", diags
+		}
+		entrypoint := m.Entrypoint.ValueString()
+		if m.Entrypoint.IsNull() || m.Entrypoint.IsUnknown() || !printableBoundedString(entrypoint, 256) {
+			diags.AddAttributeError(path.Root("entrypoint"), "Invalid workflow entrypoint", "entrypoint must be a non-empty printable string of at most 256 characters.")
+			return nil, "", diags
+		}
+		spec["source"] = source
+		spec["entrypoint"] = knownTrimmedString(m.Entrypoint)
+		retry := map[string]any{}
+		if !m.MaxAttempts.IsNull() && !m.MaxAttempts.IsUnknown() {
+			if m.MaxAttempts.ValueInt64() < 1 {
+				diags.AddAttributeError(path.Root("max_attempts"), "Invalid workflow retry limit", "max_attempts must be a positive integer.")
+				return nil, "", diags
+			}
+			retry["maxAttempts"] = m.MaxAttempts.ValueInt64()
+		}
+		if !m.InitialBackoffSeconds.IsNull() && !m.InitialBackoffSeconds.IsUnknown() {
+			if m.InitialBackoffSeconds.ValueInt64() < 0 {
+				diags.AddAttributeError(path.Root("initial_backoff_seconds"), "Invalid workflow retry backoff", "initial_backoff_seconds must be a non-negative integer.")
+				return nil, "", diags
+			}
+			retry["initialBackoffSeconds"] = m.InitialBackoffSeconds.ValueInt64()
+		}
+		if len(retry) > 0 {
+			spec["retry"] = retry
+		}
+		if connections := resourceConnectionsToSpec(ctx, m.Connections, &diags); len(connections) > 0 {
+			spec["connections"] = connections
+		}
+	case specStatefulActorNamespace:
+		className := m.ClassName.ValueString()
+		if m.ClassName.IsNull() || m.ClassName.IsUnknown() || !validRuntimeClassName(className) {
+			diags.AddAttributeError(path.Root("class_name"), "Invalid actor class name", "class_name must be a valid runtime class identifier.")
+			return nil, "", diags
+		}
+		spec["className"] = className
+		if storageProfile := knownTrimmedString(m.StorageProfile); storageProfile != "" {
+			spec["storageProfile"] = storageProfile
+		}
+		if migrationTag := m.MigrationTag.ValueString(); !m.MigrationTag.IsNull() && !m.MigrationTag.IsUnknown() {
+			if !printableBoundedString(migrationTag, 128) {
+				diags.AddAttributeError(path.Root("migration_tag"), "Invalid namespace migration tag", "migration_tag must be a non-empty printable string of at most 128 characters.")
+				return nil, "", diags
+			}
+			spec["migrationTag"] = knownTrimmedString(m.MigrationTag)
+		}
+		if connections := resourceConnectionsToSpec(ctx, m.Connections, &diags); len(connections) > 0 {
+			spec["connections"] = connections
+		}
+	case specSchedule:
+		cron, ok := normalizedPortableCron(m.Cron.ValueString())
+		if m.Cron.IsNull() || m.Cron.IsUnknown() || !ok {
+			diags.AddAttributeError(path.Root("cron"), "Invalid schedule cron", "cron must be a portable five-field expression using numbers, *, comma, range, or step syntax.")
+			return nil, "", diags
+		}
+		spec["cron"] = cron
+		if timezone := knownTrimmedString(m.Timezone); timezone != "" {
+			spec["timezone"] = timezone
+		}
+		if m.Connections.IsNull() || m.Connections.IsUnknown() || len(m.Connections.Elements()) != 1 {
+			diags.AddAttributeError(path.Root("connections"), "Invalid schedule target", "connections must contain exactly one schedule target.")
+			return nil, "", diags
+		}
+		connections := resourceConnectionsToSpec(ctx, m.Connections, &diags)
+		if diags.HasError() {
+			return nil, "", diags
+		}
+		if len(connections) != 1 {
+			diags.AddAttributeError(path.Root("connections"), "Invalid schedule target", "connections must contain exactly one schedule target.")
+			return nil, "", diags
+		}
+		for _, raw := range connections {
+			connection, ok := raw.(map[string]any)
+			if !ok || connection["projection"] != "schedule_trigger" || !stringSliceContains(connection["permissions"], "invoke") {
+				diags.AddAttributeError(path.Root("connections"), "Invalid schedule target", "the schedule target must use schedule_trigger projection and include invoke permission.")
+				return nil, "", diags
+			}
+		}
+		spec["connections"] = connections
 	}
 	targetPool := ""
 	if !m.TargetPool.IsNull() && !m.TargetPool.IsUnknown() {
@@ -877,8 +1289,45 @@ func refreshServiceShapeSpec(ctx context.Context, res *client.Resource, specKind
 		} else {
 			m.Connections = types.ListNull(types.ObjectType{AttrTypes: resourceConnectionAttrTypes})
 		}
+	case specVectorIndex:
+		m.Dimensions = int64FromSpec(res.Spec["dimensions"])
+		m.Metric = optionalStringFromAny(res.Spec["metric"])
+		m.Connections = refreshResourceConnections(ctx, res.Spec["connections"], &diags)
+	case specDurableWorkflow:
+		source := artifactSourceValuesFromSpec(res.Spec["source"])
+		m.ArtifactPath = source.Path
+		m.ArtifactURL = source.URL
+		m.ArtifactRef = source.Ref
+		m.ArtifactSHA256 = source.SHA256
+		m.Entrypoint = optionalStringFromAny(res.Spec["entrypoint"])
+		if raw, ok := res.Spec["retry"].(map[string]any); ok {
+			m.MaxAttempts = int64FromSpec(raw["maxAttempts"])
+			m.InitialBackoffSeconds = int64FromSpec(raw["initialBackoffSeconds"])
+		} else {
+			m.MaxAttempts = types.Int64Null()
+			m.InitialBackoffSeconds = types.Int64Null()
+		}
+		m.Connections = refreshResourceConnections(ctx, res.Spec["connections"], &diags)
+	case specStatefulActorNamespace:
+		m.ClassName = optionalStringFromAny(res.Spec["className"])
+		m.StorageProfile = optionalStringFromAny(res.Spec["storageProfile"])
+		m.MigrationTag = optionalStringFromAny(res.Spec["migrationTag"])
+		m.Connections = refreshResourceConnections(ctx, res.Spec["connections"], &diags)
+	case specSchedule:
+		m.Cron = optionalStringFromAny(res.Spec["cron"])
+		m.Timezone = optionalStringFromAny(res.Spec["timezone"])
+		m.Connections = refreshResourceConnections(ctx, res.Spec["connections"], &diags)
 	}
 	return diags
+}
+
+func refreshResourceConnections(ctx context.Context, raw any, diags *diag.Diagnostics) types.List {
+	if raw == nil {
+		return types.ListNull(types.ObjectType{AttrTypes: resourceConnectionAttrTypes})
+	}
+	connections, d := resourceConnectionsFromSpec(ctx, raw)
+	diags.Append(d...)
+	return connections
 }
 
 func int64FromSpec(value any) types.Int64 {

@@ -21,6 +21,10 @@ func TestServiceShapePlansDoNotStartRemotePreviews(t *testing.T) {
 		NewQueueResource(),
 		NewSQLDatabaseResource(),
 		NewContainerServiceResource(),
+		NewVectorIndexResource(),
+		NewDurableWorkflowResource(),
+		NewStatefulActorNamespaceResource(),
+		NewScheduleResource(),
 	}
 	for _, candidate := range resources {
 		if _, ok := candidate.(frameworkresource.ResourceWithModifyPlan); ok {
@@ -148,6 +152,62 @@ func TestServiceShapeCreatePutsEachResourceOnce(t *testing.T) {
 				Locked:                 types.BoolUnknown(),
 				Portability:            types.StringUnknown(),
 				Outputs:                types.MapUnknown(types.StringType),
+			},
+		},
+		{
+			name: "vector index",
+			kind: client.KindVectorIndex,
+			spec: specVectorIndex,
+			resource: vectorIndexModel{
+				ID: types.StringUnknown(), Name: types.StringValue("embeddings"),
+				Dimensions: types.Int64Value(1536), Metric: types.StringNull(),
+				Connections: types.ListNull(types.ObjectType{AttrTypes: resourceConnectionAttrTypes}),
+				Space:       types.StringNull(), TargetPool: types.StringNull(),
+				SelectedImplementation: types.StringUnknown(), Target: types.StringUnknown(),
+				Locked: types.BoolUnknown(), Portability: types.StringUnknown(), Outputs: types.MapUnknown(types.StringType),
+			},
+		},
+		{
+			name: "durable workflow",
+			kind: client.KindDurableWorkflow,
+			spec: specDurableWorkflow,
+			resource: durableWorkflowModel{
+				ID: types.StringUnknown(), Name: types.StringValue("ingest"),
+				ArtifactPath: types.StringValue("/work/workflow.js"), ArtifactURL: types.StringNull(),
+				ArtifactRef: types.StringNull(), ArtifactSHA256: types.StringNull(),
+				Entrypoint: types.StringValue("IngestWorkflow"), MaxAttempts: types.Int64Null(),
+				InitialBackoffSeconds: types.Int64Null(),
+				Connections:           types.ListNull(types.ObjectType{AttrTypes: resourceConnectionAttrTypes}),
+				Space:                 types.StringNull(), TargetPool: types.StringNull(),
+				SelectedImplementation: types.StringUnknown(), Target: types.StringUnknown(),
+				Locked: types.BoolUnknown(), Portability: types.StringUnknown(), Outputs: types.MapUnknown(types.StringType),
+			},
+		},
+		{
+			name: "stateful actor namespace",
+			kind: client.KindStatefulActorNamespace,
+			spec: specStatefulActorNamespace,
+			resource: statefulActorNamespaceModel{
+				ID: types.StringUnknown(), Name: types.StringValue("rooms"),
+				ClassName: types.StringValue("RoomActor"), StorageProfile: types.StringNull(),
+				MigrationTag: types.StringNull(),
+				Connections:  types.ListNull(types.ObjectType{AttrTypes: resourceConnectionAttrTypes}),
+				Space:        types.StringNull(), TargetPool: types.StringNull(),
+				SelectedImplementation: types.StringUnknown(), Target: types.StringUnknown(),
+				Locked: types.BoolUnknown(), Portability: types.StringUnknown(), Outputs: types.MapUnknown(types.StringType),
+			},
+		},
+		{
+			name: "schedule",
+			kind: client.KindSchedule,
+			spec: specSchedule,
+			resource: scheduleModel{
+				ID: types.StringUnknown(), Name: types.StringValue("nightly"),
+				Cron: types.StringValue("0 0 * * *"), Timezone: types.StringNull(),
+				Connections: testConnectionList(t, "workflow", "DurableWorkflow/ingest", []string{"invoke"}, "schedule_trigger"),
+				Space:       types.StringNull(), TargetPool: types.StringNull(),
+				SelectedImplementation: types.StringUnknown(), Target: types.StringUnknown(),
+				Locked: types.BoolUnknown(), Portability: types.StringUnknown(), Outputs: types.MapUnknown(types.StringType),
 			},
 		},
 	}
@@ -286,5 +346,203 @@ func TestContainerServiceToResourceCarriesConnections(t *testing.T) {
 	jobs, ok := connections["JOBS"].(map[string]any)
 	if !ok || jobs["resource"] != "Queue/jobs" || jobs["projection"] != "env" {
 		t.Fatalf("expected JOBS connection to be carried, got %#v", connections)
+	}
+}
+
+func TestNewServiceShapesRejectInvalidSpecsBeforeRemoteCalls(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		model serviceShapeModel
+		kind  string
+		spec  serviceShapeSpecKind
+	}{
+		{
+			name: "vector dimensions", kind: client.KindVectorIndex, spec: specVectorIndex,
+			model: serviceShapeModel{Name: types.StringValue("bad"), Dimensions: types.Int64Value(0)},
+		},
+		{
+			name: "workflow digest", kind: client.KindDurableWorkflow, spec: specDurableWorkflow,
+			model: serviceShapeModel{
+				Name: types.StringValue("bad"), ArtifactURL: types.StringValue("https://example.test/workflow.js"),
+				ArtifactPath: types.StringNull(), ArtifactRef: types.StringNull(), ArtifactSHA256: types.StringValue("not-a-digest"),
+				Entrypoint: types.StringValue("Workflow"),
+			},
+		},
+		{
+			name: "actor class", kind: client.KindStatefulActorNamespace, spec: specStatefulActorNamespace,
+			model: serviceShapeModel{Name: types.StringValue("bad"), ClassName: types.StringValue("Room Actor")},
+		},
+		{
+			name: "schedule target", kind: client.KindSchedule, spec: specSchedule,
+			model: serviceShapeModel{
+				Name: types.StringValue("bad"), Cron: types.StringValue("60 0 * * *"),
+				Connections: testConnectionList(t, "workflow", "DurableWorkflow/ingest", []string{"invoke"}, "schedule_trigger"),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, diags := tt.model.toResource(ctx, "prod", tt.kind, tt.spec)
+			if !diags.HasError() {
+				t.Fatalf("expected local shape validation diagnostics")
+			}
+		})
+	}
+}
+
+func TestNewServiceShapeImportObserveRefreshesTypedStateAndOutputs(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name     string
+		kind     string
+		specKind serviceShapeSpecKind
+		spec     map[string]any
+		assert   func(*testing.T, serviceShapeModel)
+	}{
+		{
+			name: "vector", kind: client.KindVectorIndex, specKind: specVectorIndex,
+			spec: map[string]any{"name": "embeddings", "dimensions": float64(1536), "metric": "cosine"},
+			assert: func(t *testing.T, m serviceShapeModel) {
+				if m.Dimensions.ValueInt64() != 1536 || m.Metric.ValueString() != "cosine" {
+					t.Fatalf("vector spec not refreshed: %#v", m)
+				}
+			},
+		},
+		{
+			name: "workflow", kind: client.KindDurableWorkflow, specKind: specDurableWorkflow,
+			spec: map[string]any{
+				"name": "ingest", "source": map[string]any{"artifactRef": "artifact:v1", "artifactSha256": "sha256:abc"},
+				"entrypoint": "IngestWorkflow", "retry": map[string]any{"maxAttempts": float64(5), "initialBackoffSeconds": float64(10)},
+			},
+			assert: func(t *testing.T, m serviceShapeModel) {
+				if m.ArtifactRef.ValueString() != "artifact:v1" || m.MaxAttempts.ValueInt64() != 5 || m.InitialBackoffSeconds.ValueInt64() != 10 {
+					t.Fatalf("workflow spec not refreshed: %#v", m)
+				}
+			},
+		},
+		{
+			name: "actor namespace", kind: client.KindStatefulActorNamespace, specKind: specStatefulActorNamespace,
+			spec: map[string]any{"name": "rooms", "className": "RoomActor", "storageProfile": "durable_sqlite", "migrationTag": "v1"},
+			assert: func(t *testing.T, m serviceShapeModel) {
+				if m.ClassName.ValueString() != "RoomActor" || m.StorageProfile.ValueString() != "durable_sqlite" || m.MigrationTag.ValueString() != "v1" {
+					t.Fatalf("actor namespace spec not refreshed: %#v", m)
+				}
+			},
+		},
+		{
+			name: "schedule", kind: client.KindSchedule, specKind: specSchedule,
+			spec: map[string]any{
+				"name": "nightly", "cron": "0 0 * * *", "timezone": "UTC",
+				"connections": map[string]any{"workflow": map[string]any{
+					"resource": "DurableWorkflow/ingest", "permissions": []any{"invoke"}, "projection": "schedule_trigger",
+				}},
+			},
+			assert: func(t *testing.T, m serviceShapeModel) {
+				if m.Cron.ValueString() != "0 0 * * *" || m.Timezone.ValueString() != "UTC" || m.Connections.IsNull() {
+					t.Fatalf("schedule spec not refreshed: %#v", m)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					t.Errorf("expected observe POST, got %s", r.Method)
+				}
+				_ = json.NewEncoder(w).Encode(client.Resource{
+					APIVersion: client.APIVersion, Kind: tt.kind,
+					Metadata: client.Metadata{Name: tt.spec["name"].(string), Space: "prod"},
+					Spec:     tt.spec,
+					Status: &client.Status{Resolution: client.Resolution{
+						SelectedImplementation: "operator.test", Target: "target-a", Locked: true, Portability: "portable",
+					}, Outputs: map[string]any{"endpoint": "https://service.example.test"}},
+				})
+			}))
+			defer srv.Close()
+
+			shape := &serviceShapeResource{
+				data: &providerData{
+					client: client.New(srv.URL, "", srv.Client()), defaultSpace: "prod",
+					capabilities: client.ProductCapabilities{Resources: map[string]bool{tt.kind: true}},
+				},
+				cfg: serviceShapeConfig{kind: tt.kind, spec: tt.specKind},
+			}
+			var schemaResp frameworkresource.SchemaResponse
+			shape.Schema(ctx, frameworkresource.SchemaRequest{}, &schemaResp)
+			importState := tfsdk.State{Schema: schemaResp.Schema}
+			if diags := importState.Set(ctx, nullServiceShapeImportModel(tt.specKind)); diags.HasError() {
+				t.Fatalf("initialize import state: %v", diags)
+			}
+			importResp := frameworkresource.ImportStateResponse{State: importState}
+			shape.ImportState(ctx, frameworkresource.ImportStateRequest{ID: "prod/" + tt.spec["name"].(string)}, &importResp)
+			if importResp.Diagnostics.HasError() {
+				t.Fatalf("import diagnostics: %v", importResp.Diagnostics)
+			}
+			readResp := frameworkresource.ReadResponse{State: importResp.State}
+			shape.Read(ctx, frameworkresource.ReadRequest{State: importResp.State}, &readResp)
+			if readResp.Diagnostics.HasError() {
+				t.Fatalf("read diagnostics: %v", readResp.Diagnostics)
+			}
+			model, diags := shape.modelFromState(ctx, readResp.State)
+			if diags.HasError() {
+				t.Fatalf("state diagnostics: %v", diags)
+			}
+			tt.assert(t, model)
+			outputs := map[string]string{}
+			if d := model.Outputs.ElementsAs(ctx, &outputs, false); d.HasError() {
+				t.Fatalf("outputs diagnostics: %v", d)
+			}
+			if outputs["endpoint"] != "https://service.example.test" {
+				t.Fatalf("public outputs not refreshed: %#v", outputs)
+			}
+		})
+	}
+}
+
+func nullServiceShapeImportModel(spec serviceShapeSpecKind) any {
+	commonID := types.StringNull()
+	commonName := types.StringNull()
+	commonSpace := types.StringNull()
+	commonTargetPool := types.StringNull()
+	commonSelected := types.StringNull()
+	commonTarget := types.StringNull()
+	commonLocked := types.BoolNull()
+	commonPortability := types.StringNull()
+	commonOutputs := types.MapNull(types.StringType)
+	nullConnections := types.ListNull(types.ObjectType{AttrTypes: resourceConnectionAttrTypes})
+	switch spec {
+	case specVectorIndex:
+		return vectorIndexModel{
+			ID: commonID, Name: commonName, Dimensions: types.Int64Null(), Metric: types.StringNull(), Connections: nullConnections,
+			Space: commonSpace, TargetPool: commonTargetPool, SelectedImplementation: commonSelected,
+			Target: commonTarget, Locked: commonLocked, Portability: commonPortability, Outputs: commonOutputs,
+		}
+	case specDurableWorkflow:
+		return durableWorkflowModel{
+			ID: commonID, Name: commonName, ArtifactPath: types.StringNull(), ArtifactURL: types.StringNull(),
+			ArtifactRef: types.StringNull(), ArtifactSHA256: types.StringNull(), Entrypoint: types.StringNull(),
+			MaxAttempts: types.Int64Null(), InitialBackoffSeconds: types.Int64Null(), Connections: nullConnections,
+			Space: commonSpace, TargetPool: commonTargetPool, SelectedImplementation: commonSelected,
+			Target: commonTarget, Locked: commonLocked, Portability: commonPortability, Outputs: commonOutputs,
+		}
+	case specStatefulActorNamespace:
+		return statefulActorNamespaceModel{
+			ID: commonID, Name: commonName, ClassName: types.StringNull(), StorageProfile: types.StringNull(),
+			MigrationTag: types.StringNull(), Connections: nullConnections, Space: commonSpace,
+			TargetPool: commonTargetPool, SelectedImplementation: commonSelected, Target: commonTarget,
+			Locked: commonLocked, Portability: commonPortability, Outputs: commonOutputs,
+		}
+	case specSchedule:
+		return scheduleModel{
+			ID: commonID, Name: commonName, Cron: types.StringNull(), Timezone: types.StringNull(),
+			Connections: nullConnections, Space: commonSpace, TargetPool: commonTargetPool,
+			SelectedImplementation: commonSelected, Target: commonTarget, Locked: commonLocked,
+			Portability: commonPortability, Outputs: commonOutputs,
+		}
+	default:
+		panic("unsupported import test shape")
 	}
 }

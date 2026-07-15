@@ -24,6 +24,7 @@ import {
   type AdapterApplyResult,
   type AdapterImportInput,
   type AdapterImportResult,
+  type ImportResourceRequest,
   type ResourceShapeLifecycleEvent,
   type ResourceShapeLifecycleObserver,
   ResourceAdapterApplyError,
@@ -162,6 +163,58 @@ const CLOUDFLARE_IMPLEMENTATIONS: NonNullable<
       oci_container: "native",
       public_http: "native",
       env_projection: "native",
+    },
+  },
+  {
+    shape: "VectorIndex",
+    implementation: "operator_vector_index",
+    nativeResourceType: "operator.vector_index",
+    plugin: "operator-vector-plugin",
+    moduleOutputs: [{ name: "index_id", type: "string" }],
+    interfaces: {
+      vector_index: "native",
+      vector_query: "native",
+      runtime_binding: "native",
+      cosine: "native",
+    },
+  },
+  {
+    shape: "DurableWorkflow",
+    implementation: "operator_durable_workflow",
+    nativeResourceType: "operator.durable_workflow",
+    plugin: "operator-workflow-plugin",
+    moduleOutputs: [{ name: "workflow_id", type: "string" }],
+    interfaces: {
+      durable_workflow: "native",
+      invoke: "native",
+      signal: "native",
+    },
+  },
+  {
+    shape: "StatefulActorNamespace",
+    implementation: "operator_actor_namespace",
+    nativeResourceType: "operator.actor_namespace",
+    plugin: "operator-actor-plugin",
+    moduleOutputs: [{ name: "namespace_id", type: "string" }],
+    interfaces: {
+      stateful_actor_namespace: "native",
+      runtime_binding: "native",
+      durable_sqlite: "native",
+    },
+  },
+  {
+    shape: "Schedule",
+    implementation: "operator_schedule",
+    nativeResourceType: "operator.schedule",
+    plugin: "operator-schedule-plugin",
+    moduleOutputs: [{ name: "schedule_id", type: "string" }],
+    interfaces: {
+      schedule: "native",
+      cron: "native",
+      invoke: "native",
+      resource_connection: "native",
+      schedule_trigger: "native",
+      grant_invoke: "native",
     },
   },
 ];
@@ -408,6 +461,25 @@ class ImportingAdapter extends PluginSpyAdapter {
         stateDigest: `sha256:${"a".repeat(64)}`,
         updatedAt: NOW,
       },
+    };
+  }
+}
+
+class PortableServiceLifecycleAdapter extends PluginSpyAdapter {
+  override async importResource(
+    input: AdapterImportInput,
+  ): Promise<AdapterImportResult> {
+    this.importInputs.push(input);
+    const applied = await super.apply(input);
+    return {
+      ...applied,
+      nativeResources:
+        applied.nativeResources.length > 0
+          ? applied.nativeResources.map((resource, index) =>
+              index === 0 ? { ...resource, id: input.nativeId } : resource,
+            )
+          : [{ type: input.plan.shape, id: input.nativeId }],
+      summary: `imported ${input.nativeId}`,
     };
   }
 }
@@ -2291,6 +2363,170 @@ test("apply resolves EdgeWorker as a first-class shape", async () => {
     "cloudflare_workers",
   );
   expect(result.value.status?.resolution?.target).toBe("cloudflare-main");
+});
+
+test("portable service shapes resolve, apply, and carry Schedule connections", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    ...directOperationLedger(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const vector = await reviewedApply(service, {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "VectorIndex",
+    name: "embeddings",
+    spec: { name: "embeddings", dimensions: 1536 },
+  });
+  if (!vector.ok) throw new Error(JSON.stringify(vector.error));
+  expect(
+    (
+      await reviewedApply(service, {
+        actor: ACTOR,
+        space: "space_1",
+        kind: "StatefulActorNamespace",
+        name: "rooms",
+        spec: { name: "rooms", className: "RoomActor" },
+      })
+    ).ok,
+  ).toBe(true);
+  expect(
+    (
+      await reviewedApply(service, {
+        actor: ACTOR,
+        space: "space_1",
+        kind: "DurableWorkflow",
+        name: "ingest",
+        spec: {
+          name: "ingest",
+          source: { artifactPath: "/work/dist/workflow.js" },
+          entrypoint: "IngestWorkflow",
+        },
+      })
+    ).ok,
+  ).toBe(true);
+
+  const scheduleRequest = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "Schedule" as const,
+    name: "nightly",
+    spec: {
+      name: "nightly",
+      cron: "0 0 * * *",
+      connections: {
+        workflow: {
+          resource: "tkrn:space_1:DurableWorkflow:ingest",
+          permissions: ["invoke"] as const,
+          projection: "schedule_trigger" as const,
+        },
+      },
+    },
+  };
+  const preview = await service.preview(scheduleRequest);
+  expect(preview.ok).toBe(true);
+  expect(
+    adapter.previewInputs.at(-1)?.resolvedConnections?.workflow,
+  ).toMatchObject({
+    resourceId: "tkrn:space_1:DurableWorkflow:ingest",
+    kind: "DurableWorkflow",
+    permissions: ["invoke"],
+    projection: "schedule_trigger",
+  });
+  expect((await reviewedApply(service, scheduleRequest)).ok).toBe(true);
+});
+
+test("portable service shapes share import, observe, refresh, and public-output lifecycle", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PortableServiceLifecycleAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    ...directOperationLedger(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const requests: ImportResourceRequest[] = [
+    {
+      actor: ACTOR,
+      space: "space_1",
+      kind: "VectorIndex",
+      name: "embeddings-import",
+      nativeId: "native-vector",
+      spec: { name: "embeddings-import", dimensions: 1536 },
+    },
+    {
+      actor: ACTOR,
+      space: "space_1",
+      kind: "StatefulActorNamespace",
+      name: "rooms-import",
+      nativeId: "native-namespace",
+      spec: { name: "rooms-import", className: "RoomActor" },
+    },
+    {
+      actor: ACTOR,
+      space: "space_1",
+      kind: "DurableWorkflow",
+      name: "ingest-import",
+      nativeId: "native-workflow",
+      spec: {
+        name: "ingest-import",
+        source: { artifactPath: "/work/dist/workflow.js" },
+        entrypoint: "IngestWorkflow",
+      },
+    },
+    {
+      actor: ACTOR,
+      space: "space_1",
+      kind: "Schedule",
+      name: "nightly-import",
+      nativeId: "native-schedule",
+      spec: {
+        name: "nightly-import",
+        cron: "0 0 * * *",
+        connections: {
+          workflow: {
+            resource: "tkrn:space_1:DurableWorkflow:ingest-import",
+            permissions: ["invoke"],
+            projection: "schedule_trigger",
+          },
+        },
+      },
+    },
+  ];
+
+  for (const request of requests) {
+    const imported = await service.importResource(request);
+    if (!imported.ok) throw new Error(JSON.stringify(imported.error));
+    expect(imported.value.resource.status?.phase).toBe("Ready");
+    expect(
+      Object.keys(imported.value.resource.status?.outputs ?? {}).length,
+    ).toBeGreaterThan(0);
+    expect(
+      (await service.observe(request.space, request.kind, request.name, ACTOR))
+        .ok,
+    ).toBe(true);
+    const refreshed = await service.refresh(
+      request.space,
+      request.kind,
+      request.name,
+      ACTOR,
+    );
+    expect(refreshed.ok).toBe(true);
+    if (refreshed.ok) {
+      expect(
+        Object.keys(refreshed.value.resource.status?.outputs ?? {}).length,
+      ).toBeGreaterThan(0);
+    }
+  }
 });
 
 test("EdgeWorker connections resolve Ready resources before preview and apply", async () => {
