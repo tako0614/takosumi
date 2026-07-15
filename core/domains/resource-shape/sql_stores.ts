@@ -226,6 +226,31 @@ class SqlResourceShapeStore implements ResourceShapeStore {
     return pageFromProbe(result.rows.map(resourceShapeFromRow), limit);
   }
 
+  async listReadyByKindPage(
+    kind: ResourceShapeKind,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const result = cursor
+      ? await this.client.query<ResourceShapeRow>(
+          `select * from ${this.#table}
+           where kind = $1 and phase = 'Ready'
+             and observed_generation = generation
+             and (created_at > $2 or (created_at = $2 and id > $3))
+           order by created_at asc, id asc limit $4`,
+          [kind, cursor.createdAt, cursor.id, limit + 1],
+        )
+      : await this.client.query<ResourceShapeRow>(
+          `select * from ${this.#table}
+           where kind = $1 and phase = 'Ready'
+             and observed_generation = generation
+           order by created_at asc, id asc limit $2`,
+          [kind, limit + 1],
+        );
+    return pageFromProbe(result.rows.map(resourceShapeFromRow), limit);
+  }
+
   async claimObservationCandidate(
     input: ResourceObservationClaimInput,
   ): Promise<ResourceShapeRecord | undefined> {
