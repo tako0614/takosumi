@@ -593,7 +593,10 @@ export class ResourceShapeService {
               : {}),
           };
         } else {
-          adapterPreview = await this.#adapter.preview(adapterInput);
+          adapterPreview = await this.#adapter.preview({
+            ...adapterInput,
+            actor: actorForResourceOperationRun(req.actor, run),
+          });
           run = await this.#persistPluginOperationResult(run, {
             summary: adapterPreview.summary,
             nativeResources: adapterPreview.nativeResources,
@@ -968,7 +971,7 @@ export class ResourceShapeService {
         ...(Object.keys(resolvedConnections.value).length > 0
           ? { resolvedConnections: resolvedConnections.value }
           : {}),
-        actor: req.actor,
+        actor: actorForResourceOperationRun(req.actor, operationRun),
       };
       let result: AdapterApplyResult;
       if (operationRun?.resourceOperationResult) {
@@ -1609,7 +1612,7 @@ export class ResourceShapeService {
           ...(Object.keys(resolvedConnections.value).length > 0
             ? { resolvedConnections: resolvedConnections.value }
             : {}),
-          actor: req.actor,
+          actor: actorForResourceOperationRun(req.actor, operationRun),
           nativeId: req.nativeId,
         });
       }
@@ -2113,7 +2116,7 @@ export class ResourceShapeService {
           ...(Object.keys(resolvedConnections.value).length > 0
             ? { resolvedConnections: resolvedConnections.value }
             : {}),
-          actor,
+          actor: actorForResourceOperationRun(actor, operationRun),
         });
       }
       if (operationRun && !operationRun.resourceOperationResult) {
@@ -2662,7 +2665,7 @@ export class ResourceShapeService {
           ...(Object.keys(resolvedConnections.value).length > 0
             ? { resolvedConnections: resolvedConnections.value }
             : {}),
-          actor,
+          actor: actorForResourceOperationRun(actor, operationRun),
         });
       }
       if (operationRun && result.execution) {
@@ -3300,7 +3303,7 @@ export class ResourceShapeService {
             ...(Object.keys(resolvedConnections.value).length > 0
               ? { resolvedConnections: resolvedConnections.value }
               : {}),
-            actor,
+            actor: actorForResourceOperationRun(actor, operationRun),
           });
           if (observation.status === "missing") {
             operationRun = await this.#persistPluginOperationResult(
@@ -3336,7 +3339,7 @@ export class ResourceShapeService {
                 implementation,
                 credentialRef: entry.credentialRef,
                 deletePolicy,
-                actor,
+                actor: actorForResourceOperationRun(actor, operationRun),
               }),
               this.#deleteTimeoutMs,
               `delete ${id}`,
@@ -3373,7 +3376,7 @@ export class ResourceShapeService {
               implementation,
               credentialRef: entry.credentialRef,
               deletePolicy,
-              actor,
+              actor: actorForResourceOperationRun(actor, operationRun),
             }),
             this.#deleteTimeoutMs,
             `delete ${id}`,
@@ -3598,9 +3601,7 @@ export class ResourceShapeService {
     kind: ResourceShapeKind,
     name: string,
     reason:
-      | "canonical_delete"
-      | "force_tombstone"
-      | "force_tombstone_cancelled",
+      "canonical_delete" | "force_tombstone" | "force_tombstone_cancelled",
   ): Promise<ServiceResult<void>> {
     const resourceId = formatResourceShapeId(space, kind, name);
     try {
@@ -4445,6 +4446,22 @@ function nextApplyClaimTimestamp(now: string, previous?: string): IsoTimestamp {
   return new Date(
     Math.max(nowMs, previousMs + 1),
   ).toISOString() as IsoTimestamp;
+}
+
+/**
+ * A direct plugin Run is the immutable owner of every backend retry for that
+ * operation. Recovery may be invoked by an operator/system principal, but the
+ * adapter must keep the original Run owner for tenant-scoped artifacts and
+ * quota evidence while retaining the current caller's roles and request id.
+ */
+function actorForResourceOperationRun(
+  actor: ActorContext,
+  operationRun: ResourceOperationRun | undefined,
+): ActorContext {
+  if (!operationRun || operationRun.createdBy === actor.actorAccountId) {
+    return actor;
+  }
+  return { ...actor, actorAccountId: operationRun.createdBy };
 }
 
 function applyingRequestMatchesRecord(
