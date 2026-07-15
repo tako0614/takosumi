@@ -277,6 +277,27 @@
   margin-top: var(--tg-s-4);
 }
 
+.rs-quote-lines {
+  margin-top: var(--tg-s-4);
+  padding-top: var(--tg-s-3);
+  border-top: 1px solid var(--tg-line);
+}
+
+.rs-quote-lines li + li {
+  margin-top: var(--tg-s-2);
+}
+
+.rs-quote-lines strong,
+.rs-quote-lines span {
+  display: block;
+}
+
+.rs-quote-lines span {
+  margin-top: var(--tg-s-1);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+
 .rs-preview-details {
   margin-top: 0;
 }
