@@ -12,6 +12,10 @@ Takosumi Cloud Resources =
   + KVStore
   + SQLDatabase
   + Queue
+  + VectorIndex
+  + DurableWorkflow
+  + StatefulActorNamespace
+  + Schedule
   + AI Gateway
   + managed routes / URLs / secrets
   + USD-denominated billing / usage metering
@@ -32,7 +36,7 @@ Use these terms in landing pages and the main app screen:
 - Bindings
 - Routes
 - Default URL
-- Custom Domain (Planned)
+- Custom Domain
 - Secrets
 - KV
 - Object Storage
@@ -40,6 +44,9 @@ Use these terms in landing pages and the main app screen:
 - Queue
 - AI Gateway
 - Durable Workflow
+- Vector Index
+- Stateful Actor Namespace
+- Schedule
 
 Keep `compat.cloudflare.workers.v1` as the architecture and compatibility
 docs capability name. Use Takosumi Cloud resources and services as the main
@@ -99,15 +106,19 @@ If a service form is known but its selected manager is not configured, the
 request fails closed before usage precharge and before any backend API call.
 That is, if a backend such as ContainerService is not yet part of the official
 Cloud, credits are not deducted and no implicit fallback to another
-compatibility path occurs. The initial GA-candidate Worker route contract is
+compatibility path occurs. The Worker route contract is
 not a backend Resource operation: it updates the Ready `EdgeWorker`'s
 `http.route` Interface and exact Principal Binding through the shared Interface
 authority. It owns no compatibility KV or backend route call. Custom hostnames
-fail before Interface mutation.
+use an owner-account and Workspace-scoped `VerifiedDomain`; the route becomes
+active only while both ownership and certificate status are current.
 
 The Cloudflare-compatible path is a limited import path into this pipeline. The
-GA subset contains only `EdgeWorker` and `ObjectBucket`; Cloudflare-shaped KV,
-D1, Queue, and Workflow control routes return an explicit `501`. The current
+GA subset pins selected Workers, R2, KV, D1, Queue, Workflow, and AI Gateway
+resources and data sources from Cloudflare Terraform Provider `5.19.1`.
+Vector, Container, Stateful Actor, and Schedule use typed `takosumi_*`
+Resources and official APIs because that provider has no matching independent
+resources. The current
 official EdgeWorker manager uses a Workers for Platforms dispatch namespace,
 but the public Resource identity remains `EdgeWorker`. A future manager change
 updates TargetPool, adapter, and manager-descriptor evidence rather than the
@@ -191,13 +202,13 @@ wildcard-hostname, and custom-hostname patterns fail before Interface mutation.
 
 Current route evidence is:
 
-| Evidence         | Status  | Meaning                                                         |
-| ---------------- | ------- | --------------------------------------------------------------- |
-| `system_url`     | Current | opaque EdgeWorker URL discovered from the Resource `url` Output |
-| route pattern    | Current | canonical host + explicit path + optional terminal `*`          |
-| `http.route`     | Current | canonical Interface carrying the route id and strong ETag       |
-| InterfaceBinding | Current | Binding that grants `edge.request` to the exact Principal       |
-| `custom_domains` | Planned | user-owned verified-domain and certificate lifecycle (unused)   |
+| Evidence         | Status   | Meaning                                                           |
+| ---------------- | -------- | ----------------------------------------------------------------- |
+| `system_url`     | Current  | opaque EdgeWorker URL discovered from the Resource `url` Output   |
+| route pattern    | Current  | canonical host + explicit path + optional terminal `*`            |
+| `http.route`     | Current  | canonical Interface carrying the route id and strong ETag         |
+| InterfaceBinding | Current  | Binding that grants `edge.request` to the exact Principal         |
+| `custom_domains` | GA scope | active VerifiedDomain, certificate, and exact Resource attachment |
 
 Route CRUD calls the Interface and InterfaceBinding authority. There is no
 compatibility KV, backend route API, or separate hostname-ownership ledger.
@@ -205,18 +216,18 @@ Updates use a strong-ETag CAS. DELETE revokes the Binding and retires the
 Interface, but releases neither the system URL nor Capsule managed-hostname
 ownership.
 
-User-owned custom domains have a separate verified lifecycle, but DNS ownership
-verification and the certificate lifecycle are not implemented. A non-empty
-`custom_domains` request or a compatibility route pattern outside the canonical
-system URL currently fails closed and is not stored as an active custom domain.
+User-owned custom domains have a separate verified lifecycle. Ownership
+challenge, certificate issue/renewal, attach/detach, and expiry are recorded
+separately. Pending, failed, or expired state is never stored or displayed as
+an active custom domain.
 
 In app install and Store flows, this value is passed to ordinary OpenTofu
 variables through the `installExperience` `public_endpoint` projection. For
 example, `subdomain` is the label for a managed URL, `url` is a managed URL or
 an ordinary OpenTofu variable, and `routePattern` is the route pattern used by
 compatibility imports. A user-owned URL can still be passed to a BYOC provider,
-but Takosumi Cloud does not automatically activate it as a managed custom
-domain. Takosumi does not infer meaning from
+but Takosumi Cloud requires a VerifiedDomain rather than activating it
+implicitly. Takosumi does not infer meaning from
 variable names such as `worker_name` or `app_url` by themselves. Only the
 store-declared projection and input `format` drive Dashboard input UX and
 hostname reservation.
@@ -227,14 +238,17 @@ The Cloudflare import capability is `compat.cloudflare.workers.v1`. It exposes
 only the subset needed to import Workers-oriented resources into Takosumi Cloud
 resources. Unsupported Cloudflare products stay explicit.
 
-| Status             | Scope                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------- |
-| Production Preview | single-module Worker script deploy / list / read / delete → `EdgeWorker`                 |
-| Production Preview | explicit-path route on the discovered canonical system hostname → `http.route` Interface |
-| Production Preview | R2 bucket create / list / read / delete → `ObjectBucket`                                 |
-| Outside GA subset  | KV, D1, Queue, Workflow, Worker binding / secret / vars / assets APIs (explicit `501`)   |
-| Unsupported        | custom hostnames, multi-module upload, DNS, WAF, Zero Trust, Registrar, account IAM      |
-| Unsupported        | Load Balancer and Email Routing                                                          |
+| Status      | Scope                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------- |
+| GA contract | EdgeWorker modules, assets, vars, write-only secrets, bindings, versions, deployments, routes, cron, and logs |
+| GA contract | managed URL and verified-custom-domain `http.route` Interfaces                                                |
+| GA contract | ObjectBucket plus the documented R2/S3 control and data subset                                                |
+| GA contract | provider `5.19.1` selected subset for KVStore, SQLDatabase, Queue, and DurableWorkflow                        |
+| GA contract | typed Resource API for VectorIndex, ContainerService, StatefulActorNamespace, and Schedule                    |
+| GA contract | AI Gateway OpenAI-compatible endpoint                                                                         |
+| Pre-GA      | public GA stays closed until every item passes the same Stable evidence matrix                                |
+| Unsupported | Pages, Hyperdrive, Analytics Engine, Browser Rendering, Images, Stream, and Pipelines                         |
+| Unsupported | DNS, WAF, Zero Trust, Registrar, account IAM, Load Balancer, and Email Routing                                |
 
 AI Gateway is not part of Workers compatibility. It is a separate
 OpenAI-compatible endpoint profile. See
