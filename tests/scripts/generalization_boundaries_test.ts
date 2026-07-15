@@ -303,6 +303,10 @@ describe("generalization boundary scanner", () => {
           '  return url.searchParams.get(\"space\");',
           "}",
           "function platformResourceShapeActorContext() {}",
+          "export function createPlatformCanonicalResourceReadAuthority() {",
+          '  return url.searchParams.get(\"space\");',
+          "}",
+          "async function resolveReadyCompatibilityEvidence() {}",
         ].join("\n"),
       },
     ]);
