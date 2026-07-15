@@ -33,10 +33,9 @@ import {
   seedProviderConnections,
 } from "../helpers/deploy-control/model_fixture.ts";
 
-const DEFAULT_INPUT =
-  "fixtures/opentofu-output-snapshot-proof/proof-input.json";
-const PROOF_KIND = "takosumi.opentofu-output-snapshot-proof@v1";
-const INPUT_KIND = "takosumi.opentofu-output-snapshot-proof-input@v1";
+const DEFAULT_INPUT = "fixtures/opentofu-output-proof/proof-input.json";
+const PROOF_KIND = "takosumi.opentofu-output-proof@v1";
+const INPUT_KIND = "takosumi.opentofu-output-proof-input@v1";
 const ACCEPTED_LIVE_REF_PREFIXES = [
   "artifact://",
   "vault://",
@@ -629,7 +628,7 @@ function requireNext(
 }
 
 function printHelp(): void {
-  console.log(`Usage: bun tests/proofs/opentofu-output-snapshot.ts [--input proof-input.json] [--output proof.json]
+  console.log(`Usage: bun tests/proofs/opentofu-output-proof.ts [--input proof-input.json] [--output proof.json]
 
 Verifies operator-supplied tofu output -json can be recorded as an Output
 projection through the OpenTofu Run ledger.`);
