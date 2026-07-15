@@ -101,6 +101,40 @@ test("platform Operator capabilities require both explicit config and live bindi
   );
 });
 
+test("platform extensions recognize only the exact deploy-control bearer as operator service authority", async () => {
+  const env = {
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-control-secret",
+  } as never;
+
+  await expect(
+    verifyPlatformExtensionSession(
+      new Request("https://app.takosumi.com/v1/cloud/operator/example", {
+        headers: { authorization: "Bearer operator-control-secret" },
+      }),
+      env,
+    ),
+  ).resolves.toEqual({
+    authenticated: true,
+    authKind: "service-token",
+    subject: "takosumi:deploy-control",
+    scopes: ["admin"],
+  });
+
+  await expect(
+    verifyPlatformExtensionSession(
+      new Request("https://app.takosumi.com/v1/cloud/operator/example", {
+        headers: {
+          authorization: "Bearer operator-control-secret-wrong",
+          "x-takosumi-platform-authenticated": "1",
+          "x-takosumi-platform-auth-kind": "service-token",
+          "x-takosumi-platform-scopes": "admin",
+        },
+      }),
+      env,
+    ),
+  ).resolves.toEqual({ authenticated: false });
+});
+
 function runRecord(overrides: Record<string, unknown>): never {
   return {
     id: "run_1",
