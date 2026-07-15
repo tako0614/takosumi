@@ -593,7 +593,6 @@ async function platformResourceShapeExternalRequest(
     request,
     env,
     session,
-    PUBLIC_RESOURCE_API_MANAGED_BY,
   );
 }
 
@@ -602,7 +601,7 @@ async function platformResourceShapeAuthorizedRequest(
   workspaceVerificationRequest: Request,
   env: CloudflareWorkerEnv,
   session: PlatformExtensionSessionContext,
-  trustedManagedBy: string,
+  trustedManagedBy?: string,
 ): Promise<
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
@@ -614,21 +613,14 @@ async function platformResourceShapeAuthorizedRequest(
   if (interfaceAccessFailure) {
     return { ok: false, response: interfaceAccessFailure };
   }
-  if (
-    !isPlatformInterfaceApiPath(url.pathname) &&
-    session.authKind === "oauth-access-token" &&
-    !platformOAuthAccessTokenAllowsControlRequest(request, session.scopes)
-  ) {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "insufficient_scope",
-          error_description: "delegated token lacks Capsule access scope",
-        },
-        { status: 403 },
-      ),
-    };
+  if (!isPlatformInterfaceApiPath(url.pathname)) {
+    const resourceAccessFailure = platformResourceShapeAccessFailure(
+      request,
+      session,
+    );
+    if (resourceAccessFailure) {
+      return { ok: false, response: resourceAccessFailure };
+    }
   }
 
   const materialized = await materializeRequestBody(request);
@@ -636,6 +628,9 @@ async function platformResourceShapeAuthorizedRequest(
   const body = materialized.bodyText
     ? objectRecord(JSON.parse(materialized.bodyText))
     : {};
+  const effectiveManagedBy =
+    trustedManagedBy ??
+    platformPublicResourceManagedBy(url, body, session);
   const requestedWorkspaceId = platformResourceShapeRequestWorkspaceId(
     request,
     url,
@@ -703,13 +698,117 @@ async function platformResourceShapeAuthorizedRequest(
       );
       headers.set(
         TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
-        trustedManagedBy,
+        effectiveManagedBy,
       );
       for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
         if (header !== "authorization") headers.delete(header);
       }
     }),
   };
+}
+
+function platformPublicResourceManagedBy(
+  url: URL,
+  body: Record<string, unknown>,
+  session: PlatformExtensionSessionContext,
+): string {
+  const requestedManagedBy =
+    safePlatformResourceManagedBy(url.searchParams.get("managedBy")) ??
+    safePlatformResourceManagedBy(
+      valueString(objectRecord(body.metadata).managedBy),
+    );
+  // `opentofu` is the one public first-party authoring surface carried by the
+  // provider contract. A bearer that already has Resource write authority may
+  // deliberately act through that surface; arbitrary compatibility/operator
+  // manager identities remain impossible to select at public ingress.
+  return requestedManagedBy === "opentofu" &&
+    platformResourceShapeSessionMayWrite(session)
+    ? "opentofu"
+    : PUBLIC_RESOURCE_API_MANAGED_BY;
+}
+
+function safePlatformResourceManagedBy(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+function platformResourceShapeAccessFailure(
+  request: Request,
+  session: PlatformExtensionSessionContext,
+): Response | undefined {
+  const readOnly = request.method === "GET" || request.method === "HEAD";
+  if (session.authKind === "session") return undefined;
+  if (session.authKind === "oauth-access-token") {
+    if (platformOAuthAccessTokenAllowsControlRequest(request, session.scopes)) {
+      return undefined;
+    }
+    return Response.json(
+      {
+        error: "insufficient_scope",
+        error_description: "delegated token lacks Capsule access scope",
+      },
+      { status: 403 },
+    );
+  }
+  const scopes = new Set(session.scopes ?? []);
+  if (session.authKind === "personal-access-token") {
+    const allowed = readOnly
+      ? scopes.has("admin") || scopes.has("read") || scopes.has("write")
+      : scopes.has("admin") || scopes.has("write");
+    if (allowed) return undefined;
+    return Response.json(
+      {
+        error: "insufficient_scope",
+        error_description: readOnly
+          ? "personal access token lacks read scope"
+          : "personal access token lacks write scope",
+      },
+      { status: 403 },
+    );
+  }
+  if (session.authKind === "service-token") {
+    const allowed = readOnly
+      ? scopes.has("admin") ||
+        scopes.has("read") ||
+        scopes.has("write") ||
+        scopes.has("capsules:read") ||
+        scopes.has("capsules:write")
+      : scopes.has("admin") ||
+        scopes.has("write") ||
+        scopes.has("capsules:write");
+    if (allowed) return undefined;
+  }
+  return Response.json(
+    {
+      error: "access_denied",
+      error_description: "credential type cannot access Resource control APIs",
+    },
+    { status: 403 },
+  );
+}
+
+function platformResourceShapeSessionMayWrite(
+  session: PlatformExtensionSessionContext,
+): boolean {
+  if (session.authKind === "personal-access-token") {
+    const scopes = new Set(session.scopes ?? []);
+    return scopes.has("admin") || scopes.has("write");
+  }
+  if (
+    session.authKind === "oauth-access-token" ||
+    session.authKind === "service-token"
+  ) {
+    const scopes = new Set(session.scopes ?? []);
+    return (
+      scopes.has("admin") ||
+      scopes.has("write") ||
+      scopes.has("capsules:write")
+    );
+  }
+  return false;
 }
 
 function platformInterfaceAccessFailure(
