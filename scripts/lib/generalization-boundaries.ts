@@ -1134,6 +1134,18 @@ function isAllowedResourceShapeSpaceLocation(
     return true;
   }
 
+  if (
+    ruleId === "retired-stack-request-alias" &&
+    isBetweenMarkers(
+      content,
+      index,
+      "export function createPlatformCanonicalResourceReadAuthority(",
+      "async function resolveReadyCompatibilityEvidence(",
+    )
+  ) {
+    return true;
+  }
+
   return isBetweenMarkers(
     content,
     index,
