@@ -981,6 +981,8 @@ export interface PlatformReadinessReport {
     capability: string;
   }>;
   collectionClassHints: Record<string, string[]>;
+  requiredDomainIds: string[];
+  requiredRehearsalStepIds: string[];
   evidenceDigest?: string;
   missingDomains: string[];
   incompleteDomains: string[];
