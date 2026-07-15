@@ -54,6 +54,10 @@ export function validatePlatformReadinessDocument(
       ready: false,
       contributions: [],
       collectionClassHints: {},
+      requiredDomainIds: [...OSS_PLATFORM_READINESS_DEFINITION.domainIds],
+      requiredRehearsalStepIds: [
+        ...OSS_PLATFORM_READINESS_DEFINITION.rehearsalStepIds,
+      ],
       missingDomains: [...OSS_PLATFORM_READINESS_DEFINITION.domainIds],
       incompleteDomains: [],
       missingRehearsalSteps: [
@@ -129,6 +133,8 @@ export function validatePlatformReadinessDocument(
         [...types],
       ]),
     ),
+    requiredDomainIds: [...definition.domainIds],
+    requiredRehearsalStepIds: [...definition.rehearsalStepIds],
     missingDomains: domainResult.missing,
     incompleteDomains: domainResult.incomplete,
     missingRehearsalSteps: rehearsalResult.missing,
