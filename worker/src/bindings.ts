@@ -51,6 +51,15 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * Canonical Interface and Binding rows remain authority.
    */
   readonly TAKOSUMI_INTERFACE_PROJECTION_SINK?: import("takosumi-contract/interfaces").InterfaceProjectionSink;
+  /**
+   * Explicit host-code bridge from a Resource Shape namespace to the Workspace
+   * allowed to own that Resource's runtime Interfaces. Resource and Workspace
+   * ids are independent namespaces in OSS; absence therefore keeps
+   * Resource-owned and `resource_output` Interfaces fail-closed. A composing
+   * host may inject a policy-backed resolver, but this is never a text var or
+   * an implicit equal-id fallback.
+   */
+  readonly TAKOSUMI_RESOURCE_INTERFACE_WORKSPACE_RESOLVER?: import("../../core/domains/interfaces/mod.ts").ResourceInterfaceWorkspaceResolver;
   readonly TAKOSUMI_ENVIRONMENT?: string;
   /**
    * Runner performance knobs forwarded to the OpenTofu runner container. These
