@@ -2,10 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runOpenTofuOutputProof } from "../proofs/opentofu-output-snapshot.ts";
+import { runOpenTofuOutputProof } from "../proofs/opentofu-output-proof.ts";
 
-const FIXTURE_INPUT =
-  "fixtures/opentofu-output-snapshot-proof/proof-input.json";
+const FIXTURE_INPUT = "fixtures/opentofu-output-proof/proof-input.json";
 
 test("fixture proof imports explicitly mapped ordinary OpenTofu outputs", async () => {
   const proof = await runOpenTofuOutputProof({
@@ -13,13 +12,11 @@ test("fixture proof imports explicitly mapped ordinary OpenTofu outputs", async 
     now: () => "2026-06-02T00:00:00.000Z",
   });
 
-  expect(proof.kind).toBe("takosumi.opentofu-output-snapshot-proof@v1");
+  expect(proof.kind).toBe("takosumi.opentofu-output-proof@v1");
   expect(proof.status).toBe("passed");
   expect(proof.live).toBe(false);
   expect(proof.evidence.outputsDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(proof.evidence.applyRunOutputsDigest).toMatch(
-    /^sha256:[0-9a-f]{64}$/,
-  );
+  expect(proof.evidence.applyRunOutputsDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(proof.evidence.outputDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(proof.evidence.applyAuditEventCount).toBeGreaterThan(0);
   expect(proof.evidence.stateLockStatus).toBe("recorded");
