@@ -173,6 +173,20 @@ test("hosted Cloud docs keep current usage identity provider neutral", async () 
   }
 });
 
+test("hosted Cloud docs do not promote GA candidates before catalog activation", async () => {
+  const index = await readText(new URL("app-docs/en/index.md", ROOT));
+  const pricing = await readText(new URL("app-docs/en/pricing.md", ROOT));
+  const resources = await readText(new URL("app-docs/en/resources.md", ROOT));
+  const endpoints = await readText(new URL("app-docs/en/endpoints.md", ROOT));
+
+  assert.match(index, /Edge Worker\s+\| Production Preview/);
+  assert.match(pricing, /No GA Stable offering is active/);
+  assert.match(resources, /GA-candidate Worker route contract/);
+  assert.match(endpoints, /GA-candidate control-plane subset/);
+  assert.doesNotMatch(resources, /Stable Cloudflare-compatible route/);
+  assert.doesNotMatch(endpoints, /Stable offerings include/);
+});
+
 test("Takosumi source module exposes the documented hosted billing proxies", async () => {
   const packageJson = JSON.parse(
     await readText(new URL("package.json", ROOT)),
@@ -185,6 +199,8 @@ test("Takosumi source module exposes the documented hosted billing proxies", asy
     packageJson.scripts?.["ga:billing-bootstrap"],
     "bun ../scripts/bootstrap-takosumi-stripe-billing.mjs",
   );
+  const readme = await readText(new URL("README.md", ROOT));
+  assert.match(readme, /bun run ga:status -- --json/);
 });
 
 test("Takosumi internal authority docs stay outside the public docs surface", async () => {

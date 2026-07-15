@@ -99,11 +99,11 @@ If a service form is known but its selected manager is not configured, the
 request fails closed before usage precharge and before any backend API call.
 That is, if a backend such as ContainerService is not yet part of the official
 Cloud, credits are not deducted and no implicit fallback to another
-compatibility path occurs. Stable Worker route CRUD is not a backend Resource
-operation: it updates the Ready `EdgeWorker`'s `http.route` Interface and exact
-Principal Binding through the shared Interface authority. It owns no
-compatibility KV or backend route call. Custom hostnames fail before Interface
-mutation.
+compatibility path occurs. The initial GA-candidate Worker route contract is
+not a backend Resource operation: it updates the Ready `EdgeWorker`'s
+`http.route` Interface and exact Principal Binding through the shared Interface
+authority. It owns no compatibility KV or backend route call. Custom hostnames
+fail before Interface mutation.
 
 The Cloudflare-compatible path is a limited import path into this pipeline. The
 GA subset contains only `EdgeWorker` and `ObjectBucket`; Cloudflare-shaped KV,
@@ -183,11 +183,11 @@ the Resource's `url` Output. Clients must not construct or infer a value such as
 `ew-<hash>.<system-base-domain>`. This URL is not a vanity hostname claimed by a
 compatibility route and route DELETE does not release it.
 
-The Stable Cloudflare-compatible route accepts only the discovered `system_url`
-host followed by an explicit path. Each profile-owned `EdgeWorker` can have one
-active route. The path accepts no wildcard or one terminal `*`. Host-only,
-multiple, overlapping, infix-wildcard, wildcard-hostname, and custom-hostname
-patterns fail before Interface mutation.
+The GA-candidate Cloudflare-compatible route contract accepts only the
+discovered `system_url` host followed by an explicit path. Each profile-owned
+`EdgeWorker` can have one active route. The path accepts no wildcard or one
+terminal `*`. Host-only, multiple, overlapping, infix-wildcard,
+wildcard-hostname, and custom-hostname patterns fail before Interface mutation.
 
 Current route evidence is:
 
@@ -263,8 +263,8 @@ Use Cloudflare-compatible Terraform/OpenTofu resources when importing Workers-or
 Switching between real Cloudflare and Takosumi Cloud belongs in Provider
 Binding / Provider Connection. Do not put raw secrets in the manifest.
 
-On Takosumi Cloud, this import path can be used without creating an app
-installation first. It still requires an authenticated token and a billable
-source Workspace. Billable writes spend the owning user's account credits and
-are not forwarded to the compatibility endpoint when the owner account has
-insufficient balance.
+On Takosumi Cloud, this import path can be used without first creating a Capsule
+through the Dashboard app flow. It still requires an authenticated token and a
+billable source Workspace. Billable writes spend the owning user's account
+credits and are not forwarded to the compatibility endpoint when the owner
+account has insufficient balance.
