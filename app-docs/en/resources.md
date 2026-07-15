@@ -113,13 +113,15 @@ but the public Resource identity remains `EdgeWorker`. A future manager change
 updates TargetPool, adapter, and manager-descriptor evidence rather than the
 compatibility handler.
 
-The shared manager descriptor keeps three names separate: the stable Takosumi
-Cloud service family such as `takosumi.edge_worker`, the public usage-meter
-family used by billing and compatibility such as `cloudflare.workers_script`,
-and the replaceable backend manager such as a Workers for Platforms dispatch
-namespace. Changing the manager must not change the user-facing Resource Shape
-API or compatibility entrypoint. WfP is an implementation token, not a
-user-facing resource name or billing unit.
+The shared manager descriptor keeps the provider-neutral customer contract and
+the replaceable backend manager separate. `EdgeWorker` uses
+`takosumi.edge_worker` as both its service and billing family, with meter ids
+under `takosumi:edge_worker:*`. A Cloudflare-compatible import records
+`takosumi.entrypoint=compat.cloudflare.workers.v1` as metadata; it does not
+change the billing identity. The Workers for Platforms dispatch namespace is
+an implementation token, not a user-facing resource name or billing unit.
+The historical `cloudflare.workers_script` family is read only when reconciling
+immutable old usage and invoices and is never written for new usage.
 
 For the same reason, Cloud's normalized resource kind is service-form-oriented,
 such as `object_bucket`, `sql_database`, and `durable_workflow`. Tokens such as
