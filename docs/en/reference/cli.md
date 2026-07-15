@@ -56,6 +56,10 @@ classes (`browser-user-e2e`, `external-provider`, `operator-review`,
 `live-probe-sync`, `operation-drill`, `release-provenance`) through
 `collectionClassHints`. Extension evidence that omits a hint remains valid for
 validation but is uncategorized for collection planning.
+The `takosumi.platform-readiness-report@v2` validation result also returns the
+composed definition's `requiredDomainIds` and `requiredRehearsalStepIds`.
+Progress consumers use those arrays instead of OSS-only fixed IDs, so totals and
+completed counts remain exact when Operator or Cloud contributions are present.
 
 ## Connections
 

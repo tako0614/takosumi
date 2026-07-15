@@ -986,6 +986,12 @@ test("launch-readiness validate accepts complete platform readiness evidence", a
     expect(report.kind).toEqual("takosumi.platform-readiness-report@v2");
     expect(report.ready).toEqual(true);
     expect(report.evidenceDigest).toEqual(await testSha256HexDigest(document));
+    expect(report.requiredDomainIds).toEqual(
+      document.domains.map((entry) => entry.id),
+    );
+    expect(report.requiredRehearsalStepIds).toEqual(
+      document.rehearsal.map((entry) => entry.id),
+    );
     expect(report.missingDomains).toEqual([]);
     expect(report.missingRehearsalSteps).toEqual([]);
     expect(report.gapDetails).toEqual([]);
@@ -2067,6 +2073,13 @@ test("launch-readiness composes an extension contribution through template, vali
     expect(report.collectionClassHints).toEqual({
       "external-provider": ["external-system-proof"],
     });
+    expect(report.requiredDomainIds).toContain("external-system-operation");
+    expect(report.requiredDomainIds).toEqual(
+      document.domains.map((entry: Record<string, unknown>) => entry.id),
+    );
+    expect(report.requiredRehearsalStepIds).toEqual(
+      document.rehearsal.map((entry: Record<string, unknown>) => entry.id),
+    );
 
     const summaryStdout: string[] = [];
     const summaryCode = await main(
