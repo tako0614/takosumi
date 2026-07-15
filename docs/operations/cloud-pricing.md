@@ -12,7 +12,7 @@ commercial plan catalogs, margin guards, or enforced quota/payment decisions.
 Rating, enforcement, and quota are injected through generic host composition
 ports. OSS itself contains no default price or plan-action weight.
 
-Takosumi Cloud owns its runtime price book, payment-provider integration,
+Takosumi Cloud owns its versioned PriceCatalog, payment-provider integration,
 official managed-resource meters, enforced balance gate, and reconciliation in
 the closed delta. The operator procedure is maintained in
 `takosumi-cloud/docs/operations/cloud-pricing.md`; public prices and free-tier

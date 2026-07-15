@@ -49,7 +49,7 @@ Promotion checklist:
 ```
 
 Do not copy operator-private paths, secret file paths, private evidence refs,
-Stripe sync routes, price-book env, or closed handler wiring into public docs.
+Stripe sync routes, realized PriceCatalog env, or closed handler wiring into public docs.
 Public docs may describe the external contract and fail-closed behavior; the
 implementation procedure belongs in `docs/operations/` or private operator
 evidence.

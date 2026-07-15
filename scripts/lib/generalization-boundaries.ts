@@ -773,7 +773,7 @@ const RULES: readonly BoundaryRule[] = [
   {
     id: "commercial-billing-in-oss",
     message:
-      "OSS owns disabled/showback and extension ports only; payment processors, price books, and managed-capacity implementation belong to the Cloud extension",
+      "OSS owns disabled/showback and extension ports only; payment processors, versioned pricing catalogs, and managed-capacity implementation belong to the Cloud extension",
     appliesTo: isImplementationPath,
     patterns: [
       /(?:\bstripe(?:\b|_)|stripe[A-Z]|_stripe_)/i,

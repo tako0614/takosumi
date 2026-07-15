@@ -151,12 +151,12 @@ Stable に上げます。
 ## Billing and Spend Guard
 
 Takosumi Cloud は、サブスクリプションプランと使用量の記録で動きます。課金対象の
-操作は price book で価格が決まり、プラン / 上限 / 支払い状態で許可されない場合は
+操作は active な PriceCatalog で価格が決まり、プラン / 上限 / 支払い状態で許可されない場合は
 実行前に止まります。cleanup / destroy は上限に達した後でも実行できるようにし、
 作った resource が消せなくなる状態を避けます。
 
 公開価格、無料枠、使用量の単価、spend guard の契約は
-[Takosumi Cloud pricing](./pricing.md) にまとめています。runtime price book、
+[Takosumi Cloud pricing](./pricing.md) にまとめています。realized PriceCatalog、
 決済事業者との同期、margin guard、突合処理は公開 contract ではなく
 operator 運用の範囲です。
 

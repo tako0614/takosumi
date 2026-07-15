@@ -211,7 +211,7 @@ export interface UsageShowbackRatingContext {
  * Open host composition port that rates provider-neutral measurements.
  *
  * OSS does not ship prices. A self-host or Operator may install any explicit
- * policy, while Cloud installs its own price-book-backed implementation.
+ * policy, while Cloud installs its own versioned-PriceCatalog implementation.
  */
 export interface ShowbackRater {
   ratePlan(ctx: PlanShowbackRatingContext): Promise<ShowbackRating>;
