@@ -33,9 +33,10 @@ through an additive migration.
 The accepted target contract is:
 
 ```text
-portable Service Form project (working name only: Takoform):
+Takoform portable Service Form project (takoform.com, github.com/takosjp/takoform):
   Service Form / FormRef / data-only Form Package
-  portable form-host interoperability / typed form provider / conformance
+  forms.takoform.com/v1alpha1 interoperability
+  registry.opentofu.org/takosjp/takoform typed provider / conformance
 
 Takosumi OSS:
   zero-form-capable host
@@ -48,9 +49,11 @@ Takosumi Cloud closed:
   price / rating / billing / quota / abuse / SLA / support
 ```
 
-`Takoform`, an owned API domain/group, package/registry namespace, and provider
-FQN are provisional and MUST NOT be published before identity/ownership gates
-close. The current `takosumi.dev/v1alpha1`, `ResourceShape`,
+The approved public identities are `Takoform`, `takoform.com`,
+`github.com/takosjp/takoform`, `forms.takoform.com/v1alpha1`, and
+`registry.opentofu.org/takosjp/takoform` with the `takoform_` prefix. Source
+publication is authorized; provider/package releases still require signing and
+real-install evidence. The current `takosumi.dev/v1alpha1`, `ResourceShape`,
 `takosumi_*` form resources, `/v1/resources`, IDs, kinds, imports, database
 columns, and provider state remain compatibility surfaces. No current code is
 conformant merely because this target is documented.
