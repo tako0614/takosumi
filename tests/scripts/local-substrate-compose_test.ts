@@ -122,9 +122,36 @@ test("local-substrate static builders use read-only sources and isolated outputs
   expect(compose).toContain("takosumi-local-static-builder:node22");
   expect(compose).toContain("apt-get install -y --no-install-recommends git");
   expect(compose).toContain("takosumi-app-docs-build:");
-  expect(upScript).toContain(
-    "wait_for_completed_service takosumi-app-docs-build",
-  );
+
+  const appDocsBuild = compose.match(
+    /takosumi-app-docs-build:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,
+  )?.[0];
+  expect(appDocsBuild).toContain("takosumi-dashboard-build:");
+  expect(appDocsBuild).not.toContain("--exclude=dashboard/dist");
+  expect(appDocsBuild).toContain("cp -a dashboard/dist/. /dashboard-output/");
+});
+
+test("local-substrate waits only for builders active in the selected profile", () => {
+  const staticWaitBlock = upScript.match(
+    /static_build_services=\(\)[\s\S]*?for service in "\$\{static_build_services\[@\]\}"; do[\s\S]*?done/,
+  )?.[0];
+  expect(staticWaitBlock).toBeDefined();
+  const postgres = staticWaitBlock?.match(
+    /postgres\)[\s\S]*?static_build_services=\((?<services>[\s\S]*?)\)[\s\S]*?;;/,
+  )?.groups?.services;
+  const workers = staticWaitBlock?.match(
+    /workers\)[\s\S]*?static_build_services=\((?<services>[\s\S]*?)\)[\s\S]*?;;/,
+  )?.groups?.services;
+
+  expect(postgres).toContain("takosumi-website-build");
+  expect(postgres).toContain("takosumi-docs-build");
+  expect(postgres).toContain("takosumi-dashboard-build");
+  expect(postgres).toContain("takosumi-app-docs-build");
+  expect(workers).not.toContain("takosumi-website-build");
+  expect(workers).not.toContain("takosumi-docs-build");
+  expect(workers).toContain("takosumi-dashboard-build");
+  expect(workers).toContain("takosumi-app-docs-build");
+  expect(staticWaitBlock).toContain('wait_for_completed_service "$service"');
 });
 
 test("local-substrate waits for regular completed containers fail-closed", () => {
