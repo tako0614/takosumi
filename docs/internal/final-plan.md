@@ -155,7 +155,12 @@ FormRef persistence uses the additive D1 v46 / Postgres v94 migrations after
 the D1 v45 / Postgres v93 Service Form Registry heads; released migration
 history is not rewritten. Legacy Resource and ResolutionLock rows retain a
 null/null exact identity until an installed exact package is explicitly
-selected and backfilled.
+selected and backfilled. The Core operator operation is bounded,
+cursor-resumable, dry-run capable, and fail-closed over explicit durable
+FormActivation ids; Resource and ResolutionLock are pinned atomically. Control
+backup carries a redacted exact-pin sidecar, and restore re-verifies retained
+package bytes before replaying the same pair without resolution. Package
+revocation does not delete the retained package or definition evidence.
 
 ## 1. The Key Rule
 

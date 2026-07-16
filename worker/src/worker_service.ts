@@ -243,6 +243,9 @@ export async function createWorkerServiceApp(
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     resourceShapeStores: createD1ResourceShapeStores(env.TAKOSUMI_CONTROL_DB),
     formRegistryStore: createD1FormRegistryStore(env.TAKOSUMI_CONTROL_DB),
+    // Stock multi-tenant routes use the verified Workspace id as the Resource
+    // authorization scope. Keep that host mapping explicit for backup.
+    resolveResourceBackupScope: (workspaceId) => workspaceId,
     ...(options.formPackageArtifactReader
       ? { formPackageArtifactReader: options.formPackageArtifactReader }
       : {}),

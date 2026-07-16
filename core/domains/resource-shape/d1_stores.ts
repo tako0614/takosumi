@@ -40,7 +40,10 @@ import type {
   TargetPoolRecord,
   TargetPoolRecordId,
 } from "./records.ts";
-import { assertResourceFormIdentity } from "./records.ts";
+import {
+  assertResourceFormIdentity,
+  resourceFormIdentitiesEqual,
+} from "./records.ts";
 import type {
   ResourceApplyAbortInput,
   ResourceApplyAbortResult,
@@ -52,6 +55,8 @@ import type {
   ResourceAtomicRemoveResult,
   ResourceCreateResult,
   ResourceDeleteClaimResult,
+  ResourceFormIdentityPinInput,
+  ResourceFormIdentityPinResult,
   ResourceObservationClaimInput,
   ResolutionLockStore,
   ResourceShapeStore,
@@ -67,6 +72,7 @@ import {
   matchesApplyLock,
   matchesExpectedLock,
   matchesVersion,
+  assertResourceFormIdentityPinInput,
 } from "./stores.ts";
 
 export interface D1Like {
@@ -304,6 +310,43 @@ class D1ResourceShapeStore implements ResourceShapeStore {
              order by created_at asc, id asc limit ?`,
           )
           .bind(kind, limit + 1)
+          .all<ResourceShapeRow>();
+    return pageFromProbe((rows.results ?? []).map(resourceShapeFromRow), limit);
+  }
+
+  async listUnpinnedBySpaceKindPage(
+    spaceId: SpaceId,
+    kind: ResourceShapeKind,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const rows = cursor
+      ? await this.db
+          .prepare(
+            `select * from ${this.#table}
+             where space_id = ? and kind = ?
+               and form_ref_json is null and package_digest is null
+               and (created_at > ? or (created_at = ? and id > ?))
+             order by created_at asc, id asc limit ?`,
+          )
+          .bind(
+            spaceId,
+            kind,
+            cursor.createdAt,
+            cursor.createdAt,
+            cursor.id,
+            limit + 1,
+          )
+          .all<ResourceShapeRow>()
+      : await this.db
+          .prepare(
+            `select * from ${this.#table}
+             where space_id = ? and kind = ?
+               and form_ref_json is null and package_digest is null
+             order by created_at asc, id asc limit ?`,
+          )
+          .bind(spaceId, kind, limit + 1)
           .all<ResourceShapeRow>();
     return pageFromProbe((rows.results ?? []).map(resourceShapeFromRow), limit);
   }
@@ -717,7 +760,85 @@ export function createD1ResourceShapeStores(db: D1Like): ResourceShapeStores {
     commitApply: (input) => commitD1Apply(db, input),
     abortApply: (input) => abortD1Apply(db, input),
     removeResource: (input) => removeD1Resource(db, input),
+    pinExactFormIdentity: (input) => pinD1ExactFormIdentity(db, input),
   };
+}
+
+async function pinD1ExactFormIdentity(
+  db: D1Like,
+  input: ResourceFormIdentityPinInput,
+): Promise<ResourceFormIdentityPinResult> {
+  assertResourceFormIdentityPinInput(input);
+  const batch = requireD1Batch(db);
+  try {
+    await batch([
+      exactFormPinGuardStatement(db, input),
+      db
+        .prepare(
+          `update ${names.resourceShapes}
+           set form_ref_json = ?, package_digest = ?
+           where id = ? and form_ref_json is null and package_digest is null`,
+        )
+        .bind(
+          JSON.stringify(input.form.formRef),
+          input.form.packageDigest,
+          input.resourceId,
+        ),
+      db
+        .prepare(
+          `update ${names.resolutionLocks}
+           set form_ref_json = ?, package_digest = ?
+           where resource_id = ? and form_ref_json is null and package_digest is null`,
+        )
+        .bind(
+          JSON.stringify(input.form.formRef),
+          input.form.packageDigest,
+          input.resourceId,
+        ),
+    ]);
+  } catch (error) {
+    const [current, currentLock] = await Promise.all([
+      readD1Resource(db, input.resourceId),
+      readD1Lock(db, input.resourceId),
+    ]);
+    if (!current || !currentLock) return { status: "not_found" };
+    if (
+      resourceFormIdentitiesEqual(current.form, input.form) &&
+      resourceFormIdentitiesEqual(currentLock.form, input.form)
+    ) {
+      return {
+        status: "already_pinned",
+        record: current,
+        lock: currentLock,
+      };
+    }
+    if (
+      current.form !== undefined ||
+      currentLock.form !== undefined ||
+      current.kind !== input.form.formRef.kind ||
+      !matchesVersion(current, input.expectedResource) ||
+      !matchesApplyLock(currentLock, input.expectedLock)
+    ) {
+      return {
+        status: "conflict",
+        record: current,
+        lock: currentLock,
+      };
+    }
+    throw error;
+  }
+  const [record, lock] = await Promise.all([
+    readD1Resource(db, input.resourceId),
+    readD1Lock(db, input.resourceId),
+  ]);
+  if (!record || !lock) return { status: "not_found" };
+  if (
+    resourceFormIdentitiesEqual(record.form, input.form) &&
+    resourceFormIdentitiesEqual(lock.form, input.form)
+  ) {
+    return { status: "pinned", record, lock };
+  }
+  return { status: "conflict", record, lock };
 }
 
 async function beginD1Apply(
@@ -954,6 +1075,71 @@ function versionGuardStatement(
       expected.phase,
       expected.updatedAt,
       ...(expectedManagedBy ? [expectedManagedBy] : []),
+    );
+}
+
+function exactFormPinGuardStatement(
+  db: D1Like,
+  input: ResourceFormIdentityPinInput,
+): D1LikePreparedStatement {
+  return db
+    .prepare(
+      `insert into ${names.resourceShapes} (
+        id, space_id, kind, name, managed_by, spec_json, phase,
+        generation, observed_generation, created_at, updated_at
+      )
+      select ?, null, 'guard', 'guard', 'guard', '{}', 'Pending', 0, 0, '', ''
+      where not exists (
+        select 1
+        from ${names.resourceShapes} resource
+        join ${names.resolutionLocks} resolution
+          on resolution.resource_id = resource.id
+        where resource.id = ?
+          and resource.kind = ?
+          and resource.form_ref_json is null
+          and resource.package_digest is null
+          and resource.generation = ?
+          and resource.phase = ?
+          and resource.updated_at = ?
+          and resolution.form_ref_json is null
+          and resolution.package_digest is null
+          and resolution.selected_implementation = ?
+          and resolution.target_pool is ?
+          and resolution.target = ?
+          and resolution.target_snapshot_json is ?
+          and resolution.implementation_snapshot_json is ?
+          and resolution.implementation_plugin is ?
+          and resolution.implementation_options_json is ?
+          and resolution.implementation_fingerprint is ?
+          and resolution.locked = ?
+          and resolution.reason_json = ?
+          and resolution.portability is ?
+          and resolution.native_resources_json is ?
+          and resolution.locked_at = ?
+          and resolution.updated_at = ?
+      )`,
+    )
+    .bind(
+      input.resourceId,
+      input.resourceId,
+      input.form.formRef.kind,
+      input.expectedResource.generation,
+      input.expectedResource.phase,
+      input.expectedResource.updatedAt,
+      input.expectedLock.selectedImplementation,
+      input.expectedLock.targetPool ?? null,
+      input.expectedLock.target,
+      jsonOrNull(input.expectedLock.targetSnapshot),
+      jsonOrNull(input.expectedLock.implementationSnapshot),
+      input.expectedLock.selectedImplementationPlugin ?? null,
+      jsonOrNull(input.expectedLock.selectedImplementationOptions),
+      input.expectedLock.implementationFingerprint ?? null,
+      input.expectedLock.locked ? 1 : 0,
+      JSON.stringify(input.expectedLock.reason),
+      input.expectedLock.portability ?? null,
+      jsonOrNull(input.expectedLock.nativeResources),
+      input.expectedLock.lockedAt,
+      input.expectedLock.updatedAt,
     );
 }
 

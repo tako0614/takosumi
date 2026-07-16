@@ -5,7 +5,11 @@
 // deploy-control persistence plane; the in-memory stores here keep the service
 // runnable in tests through explicit injection without a database.
 
-import type { ResourceManagedBy, ResourceShapeKind } from "takosumi-contract";
+import type {
+  InstalledFormReference,
+  ResourceManagedBy,
+  ResourceShapeKind,
+} from "takosumi-contract";
 import {
   pageSorted,
   type Page,
@@ -152,6 +156,26 @@ export interface ResourceObservationClaimInput {
   readonly staleClaimBefore: string;
 }
 
+export interface ResourceFormIdentityPinInput {
+  readonly resourceId: ResourceShapeRecordId;
+  readonly form: InstalledFormReference;
+  readonly expectedResource: ResourceRecordVersion;
+  readonly expectedLock: ResolutionLockRecord;
+}
+
+export type ResourceFormIdentityPinResult =
+  | {
+      readonly status: "pinned" | "already_pinned";
+      readonly record: ResourceShapeRecord;
+      readonly lock: ResolutionLockRecord;
+    }
+  | { readonly status: "not_found" }
+  | {
+      readonly status: "conflict";
+      readonly record?: ResourceShapeRecord;
+      readonly lock?: ResolutionLockRecord;
+    };
+
 export interface ResourceShapeStore {
   /** Atomically inserts a new Resource without replacing an existing owner. */
   create(record: ResourceShapeRecord): Promise<ResourceCreateResult>;
@@ -174,6 +198,15 @@ export interface ResourceShapeStore {
    * kind and receive only fully observed Ready records in stable keyset order.
    */
   listReadyByKindPage(
+    kind: ResourceShapeKind,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>>;
+  /**
+   * Internal bounded inventory for the explicit legacy exact-Form backfill.
+   * This is not a customer list surface and returns only null-pin rows.
+   */
+  listUnpinnedBySpaceKindPage(
+    spaceId: SpaceId,
     kind: ResourceShapeKind,
     params: PageParams,
   ): Promise<Page<ResourceShapeRecord>>;
@@ -310,6 +343,13 @@ export interface ResourceShapeStores {
   removeResource(
     input: ResourceAtomicRemoveInput,
   ): Promise<ResourceAtomicRemoveResult>;
+  /**
+   * Atomically fills the legacy null/null exact identity on both Resource and
+   * ResolutionLock. Existing exact pins are immutable and never rebound.
+   */
+  pinExactFormIdentity(
+    input: ResourceFormIdentityPinInput,
+  ): Promise<ResourceFormIdentityPinResult>;
 }
 
 // --- In-memory implementations -----------------------------------------------
@@ -396,6 +436,22 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
           record.kind === kind &&
           record.phase === "Ready" &&
           record.observedGeneration === record.generation,
+      )
+      .sort(compareCreatedAtAndId);
+    return Promise.resolve(pageSorted(records, params));
+  }
+
+  listUnpinnedBySpaceKindPage(
+    spaceId: SpaceId,
+    kind: ResourceShapeKind,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    const records = [...this.#byId.values()]
+      .filter(
+        (record) =>
+          record.spaceId === spaceId &&
+          record.kind === kind &&
+          record.form === undefined,
       )
       .sort(compareCreatedAtAndId);
     return Promise.resolve(pageSorted(records, params));
@@ -816,6 +872,42 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
       resources.deleteSync(input.resourceId);
       return Promise.resolve({ status: "removed" });
     },
+    pinExactFormIdentity(input) {
+      assertResourceFormIdentityPinInput(input);
+      const current = resources.getSync(input.resourceId);
+      const currentLock = locks.getSync(input.resourceId);
+      if (!current || !currentLock) {
+        return Promise.resolve({ status: "not_found" });
+      }
+      if (
+        resourceFormIdentitiesEqual(current.form, input.form) &&
+        resourceFormIdentitiesEqual(currentLock.form, input.form)
+      ) {
+        return Promise.resolve({
+          status: "already_pinned",
+          record: current,
+          lock: currentLock,
+        });
+      }
+      if (
+        current.form !== undefined ||
+        currentLock.form !== undefined ||
+        current.kind !== input.form.formRef.kind ||
+        !matchesVersion(current, input.expectedResource) ||
+        !matchesApplyLock(currentLock, input.expectedLock)
+      ) {
+        return Promise.resolve({
+          status: "conflict",
+          record: current,
+          lock: currentLock,
+        });
+      }
+      const record = { ...current, form: input.form };
+      const lock = { ...currentLock, form: input.form };
+      resources.replaceSync(record);
+      locks.putSync(lock);
+      return Promise.resolve({ status: "pinned", record, lock });
+    },
   };
 }
 
@@ -836,6 +928,20 @@ export function assertApplyPair(
   if (!resourceFormIdentitiesEqual(record.form, lock.form)) {
     throw new Error(
       `ResolutionLock ${lock.resourceId} does not pin the Resource form identity`,
+    );
+  }
+}
+
+export function assertResourceFormIdentityPinInput(
+  input: ResourceFormIdentityPinInput,
+): void {
+  assertResourceFormIdentity(
+    input.form,
+    input.form.formRef.kind as ResourceShapeKind,
+  );
+  if (input.expectedLock.resourceId !== input.resourceId) {
+    throw new Error(
+      "expected ResolutionLock does not match exact Form pin Resource",
     );
   }
 }
