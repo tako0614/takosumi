@@ -44,6 +44,10 @@ jobs:
           tofu_version: 1.12.1
           tofu_wrapper: false
 
+      - name: Prime hermetic provider module cache
+        working-directory: provider
+        run: go mod download all
+
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
