@@ -3,8 +3,11 @@
 Takosumi is software that deploys and manages OpenTofu/Terraform modules from
 Git through a plan → review → apply flow. It can run ordinary
 OpenTofu/Terraform modules as-is, and it can resolve `takosumi_*` Resource
-Shapes to Targets and Adapters when that typed service form is useful (see the
-[glossary](./reference/glossary.md) for one-line explanations of the terms).
+Shapes through the current compatibility surface when a typed service form is
+useful. In the adopted target, the portable definition is a Service Form, its
+exact identity is a FormRef, and Takosumi is an optional host that still works
+with zero Form Packages installed (see the [glossary](./reference/glossary.md)
+for one-line explanations of the terms).
 
 This page is for Takosumi software and Takosumi for Operator docs. The official
 hosted Takosumi Cloud service that we operate is documented separately at
@@ -12,13 +15,13 @@ hosted Takosumi Cloud service that we operate is documented separately at
 
 ## Which Docs To Read
 
-| Need                                                                  | Read                                                                                                                                                                                        |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Takosumi model, API, Runs, StateVersions, and Outputs                 | these software docs                                                                                                                                                                         |
-| self-host or operator OpenTofu Stack flow                             | [Quickstart](./getting-started/quickstart.md) and [Model reference](./reference/model.md)                                                                                                   |
-| Resource Shape API, Compatibility API framework, and Adapter system   | [Takosumi API](./reference/api.md) and [Model reference](./reference/model.md)                                                                                                              |
-| `app.takosumi.com` managed resources, pricing, API keys, and usage    | [Takosumi Cloud docs](https://app.takosumi.com/docs/en/)                                                                                                                                    |
-| Cloud endpoint families, compatibility matrices, and billing contract | [Cloud resources](https://app.takosumi.com/docs/en/resources), [Cloud endpoints](https://app.takosumi.com/docs/en/endpoints), and [Cloud pricing](https://app.takosumi.com/docs/en/pricing) |
+| Need                                                                                                          | Read                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Takosumi model, API, Runs, StateVersions, and Outputs                                                         | these software docs                                                                                                                                                                         |
+| self-host or operator OpenTofu Stack flow                                                                     | [Quickstart](./getting-started/quickstart.md) and [Model reference](./reference/model.md)                                                                                                   |
+| Service Form host (current Resource Shape compatibility API), Compatibility API framework, and Adapter system | [Takosumi API](./reference/api.md) and [Model reference](./reference/model.md)                                                                                                              |
+| `app.takosumi.com` managed resources, pricing, API keys, and usage                                            | [Takosumi Cloud docs](https://app.takosumi.com/docs/en/)                                                                                                                                    |
+| Cloud endpoint families, compatibility matrices, and billing contract                                         | [Cloud resources](https://app.takosumi.com/docs/en/resources), [Cloud endpoints](https://app.takosumi.com/docs/en/endpoints), and [Cloud pricing](https://app.takosumi.com/docs/en/pricing) |
 
 ## Product Split
 
@@ -26,7 +29,8 @@ hosted Takosumi Cloud service that we operate is documented separately at
 Takosumi OSS:
   Git-based OpenTofu control plane
   + plain OpenTofu stack execution
-  + Resource Shape API
+  + optional zero-form Service Form host
+  + current Resource Shape compatibility API
   + Resolver / Planner / Reconciler
   + Target / Credential / OIDC / Secret / Policy
   + Compatibility API framework
@@ -50,7 +54,8 @@ Takosumi Cloud:
 The boundary is:
 
 ```text
-OSS owns the portable framework and APIs.
+The portable project owns Service Forms, FormRefs, Form Packages, and typed-client conformance.
+Takosumi OSS owns the generic host lifecycle and APIs.
 Operator / Cloud own commercial operation and managed capacity.
 ```
 
@@ -70,19 +75,20 @@ inject env/files only for a Run through CredentialRecipes
 run OpenTofu/Terraform in a runner sandbox
 record plan / apply / destroy as Run ledger entries
 store StateVersions, Outputs, logs, and AuditEvents
-resolve Resource Shapes through TargetPool / Policy / Adapter
+resolve exact Service Form-backed Resources through TargetPool / Policy / Adapter
 ```
 
 The core value is:
 
 ```text
 Same manifest, different connection.
-Same shape, different target.
+Same form, different target.
 ```
 
 The same `.tf` can move between dev/prod, accounts, and provider aliases by
-changing ProviderBindings. The same Resource Shape can resolve to any
-operator-enabled Target through TargetPool, Policy, and Adapter evidence.
+changing ProviderBindings. The same exact Service Form can resolve to any
+operator-enabled Target through TargetPool, Policy, and Adapter evidence. The
+current wire/provider/state compatibility surface calls this a Resource Shape.
 
 ## What Takosumi Does Not Rebuild
 
@@ -94,15 +100,17 @@ Standard API / protocol / OpenTofu provider exists:
   use that surface through the Stack flow or a scoped compatibility profile.
 
 No standard surface exists, and the service form is repeated:
-  define a typed Takosumi Resource Shape.
+  admit a typed Service Form through portable governance.
 
 One-off gap:
   use generic-env ProviderConnection and an ordinary OpenTofu module.
 ```
 
 The `takosumi/takosumi` provider is not required to use Takosumi. If an existing
-provider is enough, run it through the Stack flow. Use the Takosumi provider
-only for Takosumi-owned typed Resource Shapes or operator/admin objects.
+provider is enough, run it through the Stack flow. The current Takosumi provider
+retains supported Resource Shape compatibility state and operator/admin objects.
+New typed Service Form client authority moves to an independent provider only
+after the state-migration gates pass.
 
 ## Compatibility API
 

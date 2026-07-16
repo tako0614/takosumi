@@ -99,17 +99,21 @@ Bun + Postgres の実行基盤です (`deploy/local-substrate/` の cloud wrappe
 残ることはあっても、現在の公開モデルではありません。
 
 Takosumi は OpenTofu / Terraform provider を置き換えません。既存 provider はそのまま動き、Takosumi はその外側で
-確認・記録できる管理層を提供します。OSS は Resource Shape API、Compatibility API framework、Adapter system を
-持ちます。公式 managed target pool、Takosumi 自社リソースの内部実装、強制課金、support / SLA、公式 resource
-backend は Takosumi for Operator / Takosumi Cloud 側にあります。
+確認・記録できる管理層を提供します。OSS は現在の Resource Shape 互換 API と、その唯一の Resource / Run / state /
+audit 台帳、Resolver / Planner / Reconciler、Target / Policy / credential、Compatibility API framework、Adapter system、
+generic FormActivation を持つ optional host です。portable な Service Form / exact FormRef / data-only Form Package /
+conformance / typed form provider は独立 release の OSS project が所有する target であり、Takosumi Core は Form Package が
+0 個でも plain OpenTofu Stack を実行できます。公式 managed target pool、Takosumi 自社リソースの内部実装、exact
+ServiceOffering、強制課金、support / SLA、公式 resource backend は Takosumi for Operator / Takosumi Cloud 側にあります。
+`Resource Shape` は FormRef の additive persistence と互換移行の証跡が揃うまで current API/provider/state 名として残ります。
 
 ## エディション
 
-| Edition                   | 内容                                                                                                                                                                                                                      |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Takosumi OSS**          | この repo。Git を起点にした OpenTofu/Terraform control plane、Resource Shape API、Compatibility API framework、Adapter system、接続管理、runner、状態 / 出力 / 監査。課金は disabled / showback のみで apply を止めません |
-| **Takosumi for Operator** | Takosumi を顧客向けにホストする operator 向けエディション。マルチテナントの顧客管理、quota / metering / プラン、DB 管理の operator 設定、CLI / API / runbook 運用、managed target catalog、サポート、商用監査             |
-| **Takosumi Cloud**        | `app.takosumi.com` で私たちが運営する公式ホスティング。公式 managed targets、Takosumi 自社リソース、AI Gateway、Stripe による課金、quota、usage、support、abuse controls、SLA                                             |
+| Edition                   | 内容                                                                                                                                                                                                                                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Takosumi OSS**          | この repo。Git を起点にした OpenTofu/Terraform control plane、zero-form 対応の optional Service Form host（現在の Resource Shape 互換 API）、Compatibility API framework、Adapter system、接続管理、runner、状態 / 出力 / 監査。課金は disabled / showback のみで apply を止めません |
+| **Takosumi for Operator** | Takosumi を顧客向けにホストする operator 向けエディション。マルチテナントの顧客管理、quota / metering / プラン、DB 管理の operator 設定、CLI / API / runbook 運用、managed target catalog、サポート、商用監査                                                                        |
+| **Takosumi Cloud**        | `app.takosumi.com` で私たちが運営する公式ホスティング。公式 managed targets、Takosumi 自社リソース、AI Gateway、Stripe による課金、quota、usage、support、abuse controls、SLA                                                                                                        |
 
 依存方向は **Cloud -> OSS の一方向**です。hosted Cloud は OSS の contract と組み込み口だけを使い、OSS は
 Cloud のものが何もなくてもそのまま動きます。
