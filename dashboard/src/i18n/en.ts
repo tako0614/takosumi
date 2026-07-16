@@ -1171,9 +1171,20 @@ export const en: Record<keyof typeof ja, string> = {
     "Choose the service form you need, not a provider or backend implementation.",
   "resources.editor.service.edgeWorker": "Edge Worker",
   "resources.editor.service.objectBucket": "Object Bucket",
-  "resources.editor.service.custom": "Preview / custom Shape",
+  "resources.editor.service.kvStore": "KV Store",
+  "resources.editor.service.sqlDatabase": "SQL Database",
+  "resources.editor.service.queue": "Queue",
+  "resources.editor.service.vectorIndex": "Vector Index",
+  "resources.editor.service.durableWorkflow": "Durable Workflow",
+  "resources.editor.service.containerService": "Container",
+  "resources.editor.service.statefulActorNamespace": "Stateful Actor Namespace",
+  "resources.editor.service.schedule": "Schedule",
+  "resources.editor.service.custom": "Operator / custom Shape",
+  "resources.editor.stable": "Stable",
+  "resources.editor.stableHint":
+    "All ten bundled Resource Shapes use the same Stable Deploy API. AI Gateway and Custom Domains keep their separate Cloud control lifecycles.",
   "resources.editor.customHint":
-    "Preview and operator-defined Shapes use a kind and raw Spec JSON under advanced settings. The endpoint decides availability.",
+    "Operator-defined Shapes use a kind and raw Spec JSON under advanced settings. The endpoint decides availability.",
   "resources.editor.inputsStep": "Required inputs",
   "resources.editor.inputsHint":
     "Do not enter credentials or provider-specific configuration here.",
@@ -1211,6 +1222,69 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.editor.bucketInterfaces": "Required object interfaces",
   "resources.editor.bucketInterfacesHint":
     "For example: s3_api, signed_url. These are endpoint-validated capability tokens, not runtime Interface objects.",
+  "resources.editor.operatorDefault": "Operator default",
+  "resources.editor.capabilityTokenHint":
+    "Optional capability token advertised and validated by the endpoint.",
+  "resources.editor.kvConsistency": "Consistency (optional)",
+  "resources.editor.kvConsistency.eventual": "Eventual",
+  "resources.editor.kvConsistency.strong": "Strong",
+  "resources.editor.sqlEngine": "Engine capability (optional)",
+  "resources.editor.sqlMigrationsPath": "Migrations path (optional)",
+  "resources.editor.queueMaxRetries": "Maximum retries (optional)",
+  "resources.editor.queueMaxBatchSize": "Maximum batch size (optional)",
+  "resources.editor.queueMaxRetriesInvalid":
+    "Maximum retries must be a non-negative integer.",
+  "resources.editor.queueMaxBatchSizeInvalid":
+    "Maximum batch size must be a non-negative integer.",
+  "resources.editor.vectorDimensions": "Dimensions",
+  "resources.editor.vectorMetric": "Similarity metric (optional)",
+  "resources.editor.vectorDimensionsInvalid":
+    "Dimensions must be a positive integer.",
+  "resources.editor.workflowEntrypoint": "Entrypoint",
+  "resources.editor.workflowMaxAttempts": "Maximum attempts (optional)",
+  "resources.editor.workflowBackoff": "Initial backoff in seconds (optional)",
+  "resources.editor.workflowEntrypointRequired":
+    "Enter the workflow entrypoint.",
+  "resources.editor.workflowMaxAttemptsInvalid":
+    "Maximum attempts must be a positive integer.",
+  "resources.editor.workflowBackoffInvalid":
+    "Initial backoff must be a non-negative integer.",
+  "resources.editor.containerImage": "OCI image",
+  "resources.editor.containerPorts": "Ports (optional)",
+  "resources.editor.integerListHint":
+    "Separate positive integers with commas or whitespace.",
+  "resources.editor.containerPublicHttp": "Public HTTP (optional)",
+  "resources.editor.containerPublicHttp.enabled": "Enabled",
+  "resources.editor.containerPublicHttp.disabled": "Disabled",
+  "resources.editor.containerEnvironment": "Environment JSON (optional)",
+  "resources.editor.containerEnvironmentHint":
+    "A JSON object whose values are non-secret strings. Use Secret or Credential for sensitive values.",
+  "resources.editor.containerImageRequired": "Enter an OCI image reference.",
+  "resources.editor.containerPortsInvalid":
+    "Ports must be positive integers separated by commas or whitespace.",
+  "resources.editor.containerEnvironmentInvalid":
+    "Environment must be a JSON object whose values are strings.",
+  "resources.editor.actorClass": "Runtime class",
+  "resources.editor.actorStorageProfile": "Storage profile (optional)",
+  "resources.editor.actorMigrationTag": "Migration tag (optional)",
+  "resources.editor.actorClassRequired": "Enter the runtime class name.",
+  "resources.editor.actorClassInvalid":
+    "Runtime class must be a valid class identifier.",
+  "resources.editor.scheduleCron": "Cron expression",
+  "resources.editor.scheduleCronHint":
+    "Use a portable five-field cron expression.",
+  "resources.editor.scheduleTimezone": "Timezone (optional)",
+  "resources.editor.scheduleConnection": "Connection name",
+  "resources.editor.scheduleTarget": "Target resource",
+  "resources.editor.scheduleTargetHint":
+    "Resource reference invoked through the schedule_trigger projection.",
+  "resources.editor.scheduleCronRequired": "Enter a cron expression.",
+  "resources.editor.scheduleCronInvalid":
+    "Cron must contain exactly five fields.",
+  "resources.editor.scheduleConnectionInvalid":
+    "Connection name must be a non-empty token without whitespace.",
+  "resources.editor.scheduleTargetRequired":
+    "Enter a target Resource reference without whitespace.",
   "resources.editor.project": "Project (optional)",
   "resources.editor.environment": "Environment",
   "resources.editor.targetPool": "TargetPool",
@@ -1225,7 +1299,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Switch to raw Spec JSON only for connections, lifecycle policy, or operator extensions.",
   "resources.editor.useRawSpec": "Use raw Spec JSON",
   "resources.editor.rawWarning":
-    "This is the Preview/custom Shape and operator path. The Deploy API decides schema, availability, and price.",
+    "This is the custom Shape and operator path. The Deploy API decides schema, availability, and price.",
   "resources.editor.rawCannotGuide":
     "The raw Spec JSON contains settings the guided form does not handle. It stayed in raw mode to avoid losing them.",
   "resources.editor.labels": "Labels JSON",
