@@ -36,6 +36,29 @@ export interface RunEnvResolverDependencies {
   readonly resolveRunProviderBindings: (
     planRun: PlanRun,
   ) => Promise<readonly ResolvedCapsuleProviderBinding[] | undefined>;
+  /**
+   * Optional ambient run-identity issuer for the shared Interface layer.
+   * When configured, a Capsule run's sandbox receives TAKOSUMI_ENDPOINT /
+   * TAKOSUMI_TOKEN / TAKOSUMI_WORKSPACE_ID / TAKOSUMI_CAPSULE_ID so the
+   * module's optional `takosumi_interface` resources can declare that
+   * Capsule's own Interfaces through the public API
+   * (`materializedFrom: capsule_resource`). The minted token is
+   * Capsule-scoped and never carries binding authority; explicit
+   * provider-declared env values always win over the ambient names.
+   */
+  readonly capsuleRunIdentity?: CapsuleRunIdentityIssuer;
+}
+
+export interface CapsuleRunIdentityIssuer {
+  /** Public control-plane base URL the runner-side provider should call. */
+  readonly endpoint: string;
+  mintRunToken(input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly runId: string;
+    /** apply/destroy → true (may mutate its Interfaces); plan → false. */
+    readonly mutable: boolean;
+  }): Promise<string>;
 }
 
 export interface ResolveRunEnvironmentInput {
@@ -69,10 +92,12 @@ export class RunEnvResolver {
   readonly #resolveRunProviderBindings: (
     planRun: PlanRun,
   ) => Promise<readonly ResolvedCapsuleProviderBinding[] | undefined>;
+  readonly #capsuleRunIdentity: CapsuleRunIdentityIssuer | undefined;
 
   constructor(dependencies: RunEnvResolverDependencies) {
     this.#credentials = dependencies.credentials;
     this.#resolveRunProviderBindings = dependencies.resolveRunProviderBindings;
+    this.#capsuleRunIdentity = dependencies.capsuleRunIdentity;
   }
 
   async resolveRunEnvironment(
@@ -109,8 +134,39 @@ export class RunEnvResolver {
     return await this.#buildRunEnvironmentEvidence(
       input,
       providerResolutions,
-      credentials,
+      withCapsuleRunAmbientEnv(
+        credentials,
+        await this.#capsuleRunAmbientEnv(input),
+      ),
     );
+  }
+
+  async #capsuleRunAmbientEnv(
+    input: ResolveRunEnvironmentInput,
+  ): Promise<Readonly<Record<string, string>> | undefined> {
+    const issuer = this.#capsuleRunIdentity;
+    const context = input.planRun.capsuleContext;
+    // Ambient identity is a Capsule-run concern only; Resource runs and
+    // context-free internal plan runs never receive it.
+    if (!issuer || !context || input.credentialContext === "release_command") {
+      return undefined;
+    }
+    // Only an apply/destroy dispatch may mutate the Capsule's Interfaces. A
+    // plan dispatch (including drift-check and refresh, which OpenTofu runs as
+    // read-only plans) mints a read-only token, so a nominally read-only run
+    // can never create/update/retire specs — it can still read and self-report.
+    const token = await issuer.mintRunToken({
+      workspaceId: context.workspaceId,
+      capsuleId: context.capsuleId,
+      runId: input.auditRunId,
+      mutable: input.phase === "apply" || input.phase === "destroy",
+    });
+    return {
+      TAKOSUMI_ENDPOINT: issuer.endpoint,
+      TAKOSUMI_TOKEN: token,
+      TAKOSUMI_WORKSPACE_ID: context.workspaceId,
+      TAKOSUMI_CAPSULE_ID: context.capsuleId,
+    };
   }
 
   async #buildRunEnvironmentEvidence(
@@ -194,6 +250,18 @@ export class RunEnvResolver {
     }
     return resolutions;
   }
+}
+
+function withCapsuleRunAmbientEnv(
+  credentials: RunCredentials | undefined,
+  ambient: Readonly<Record<string, string>> | undefined,
+): RunCredentials | undefined {
+  if (!ambient) return credentials;
+  if (!credentials) {
+    return { env: ambient, manifest: { bindings: [] } };
+  }
+  // Explicit provider-declared values always win over the ambient names.
+  return { ...credentials, env: { ...ambient, ...credentials.env } };
 }
 
 function releaseCommandCredentialPhase(

@@ -29,8 +29,7 @@ function requestWithCredentials(
       manifest: {
         bindings: [
           {
-            providerSource:
-              "registry.opentofu.org/cloudflare/cloudflare",
+            providerSource: "registry.opentofu.org/cloudflare/cloudflare",
             connectionId: "conn_fixture",
             recipeId: "generic-env",
             authMode: "env",
@@ -89,11 +88,11 @@ test("generic-env provider payload admits upper-snake env and rejects invalid na
   try {
     const context = commandContextFromRequest(
       requestWithCredentials({
-          CLOUDFLARE_API_TOKEN: "payload-token",
-          // Another declared provider env supplied by the control plane payload.
-          AWS_SECRET_ACCESS_KEY: "payload-aws-secret",
-          // Invalid env-name shape; must be ignored.
-          "lower-case": "nope",
+        CLOUDFLARE_API_TOKEN: "payload-token",
+        // Another declared provider env supplied by the control plane payload.
+        AWS_SECRET_ACCESS_KEY: "payload-aws-secret",
+        // Invalid env-name shape; must be ignored.
+        "lower-case": "nope",
       }),
       CLOUDFLARE_PROFILE,
     );
@@ -108,9 +107,9 @@ test("generic-env provider payload admits upper-snake env and rejects invalid na
 test("TF_VAR credentials are rejected even when supplied by the payload", () => {
   const context = commandContextFromRequest(
     requestWithCredentials({
-        CLOUDFLARE_API_TOKEN: "shared-token",
-        TF_VAR_cloudflare_main_api_token: "per-alias-compute-token",
-        TF_VAR_cloudflare_dns_api_token: "per-alias-dns-token",
+      CLOUDFLARE_API_TOKEN: "shared-token",
+      TF_VAR_cloudflare_main_api_token: "per-alias-compute-token",
+      TF_VAR_cloudflare_dns_api_token: "per-alias-dns-token",
     }),
     CLOUDFLARE_PROFILE,
   );
@@ -124,8 +123,8 @@ test("payload credential values are exact-redaction values even when printed bar
   const gatewayRunKey = "run-key.2000000000.deadbeefcafebabefeedface";
   const context = commandContextFromRequest(
     requestWithCredentials({
-        CLOUDFLARE_API_TOKEN: runScopedToken,
-        CLOUDFLARE_API_KEY: gatewayRunKey,
+      CLOUDFLARE_API_TOKEN: runScopedToken,
+      CLOUDFLARE_API_KEY: gatewayRunKey,
     }),
     CLOUDFLARE_PROFILE,
   );
@@ -157,14 +156,79 @@ test("TF_VAR credentials are never sourced from ambient env", () => {
 test("a non-TF_VAR lowercase payload name is still rejected", () => {
   const context = commandContextFromRequest(
     requestWithCredentials({
-        // Not TF_VAR-prefixed and not upper-snake -> ignored.
-        tf_var_sneaky: "nope",
-        TF_VARsneaky: "nope-too",
+      // Not TF_VAR-prefixed and not upper-snake -> ignored.
+      tf_var_sneaky: "nope",
+      TF_VARsneaky: "nope-too",
     }),
     CLOUDFLARE_PROFILE,
   );
   expect(context.env.tf_var_sneaky).toBeUndefined();
   expect(context.env.TF_VARsneaky).toBeUndefined();
+});
+
+test("ambient Capsule run identity env is admitted without a recipe binding", () => {
+  const context = commandContextFromRequest(
+    {
+      ...REQUEST,
+      credentials: {
+        env: {
+          TAKOSUMI_ENDPOINT: "https://app.takosumi.test/api",
+          TAKOSUMI_TOKEN: "takrun_v1.payload.signature",
+          TAKOSUMI_WORKSPACE_ID: "ws_1",
+          TAKOSUMI_CAPSULE_ID: "cap_1",
+        },
+        // No manifest: ambient identity is not Credential Recipe material.
+      },
+    },
+    CLOUDFLARE_PROFILE,
+  );
+  expect(context.env.TAKOSUMI_ENDPOINT).toEqual(
+    "https://app.takosumi.test/api",
+  );
+  expect(context.env.TAKOSUMI_TOKEN).toEqual("takrun_v1.payload.signature");
+  expect(context.env.TAKOSUMI_WORKSPACE_ID).toEqual("ws_1");
+  expect(context.env.TAKOSUMI_CAPSULE_ID).toEqual("cap_1");
+});
+
+test("only the ambient run token is a redaction value; identity metadata is not", () => {
+  const context = commandContextFromRequest(
+    {
+      ...REQUEST,
+      credentials: {
+        env: {
+          TAKOSUMI_ENDPOINT: "https://app.takosumi.test/api",
+          TAKOSUMI_TOKEN: "takrun_v1.secret.signature",
+          TAKOSUMI_WORKSPACE_ID: "ws_1",
+          TAKOSUMI_CAPSULE_ID: "cap_1",
+        },
+      },
+    },
+    CLOUDFLARE_PROFILE,
+  );
+  expect(context.redactionValues ?? []).toContain("takrun_v1.secret.signature");
+  // Non-secret identity values (endpoint URL, workspace/capsule ids) legitimately
+  // appear in plan output and must not be blanket-redacted.
+  expect(context.redactionValues ?? []).not.toContain(
+    "https://app.takosumi.test/api",
+  );
+  expect(context.redactionValues ?? []).not.toContain("ws_1");
+});
+
+test("a bare payload env without a manifest still rejects non-identity names", () => {
+  expect(() =>
+    commandContextFromRequest(
+      {
+        ...REQUEST,
+        credentials: {
+          env: {
+            TAKOSUMI_TOKEN: "takrun_v1.a.b",
+            CLOUDFLARE_API_TOKEN: "smuggled-without-manifest",
+          },
+        },
+      },
+      CLOUDFLARE_PROFILE,
+    ),
+  ).toThrow(/require an explicit run credential manifest/u);
 });
 
 function restoreEnv(name: string, prev: string | undefined): void {

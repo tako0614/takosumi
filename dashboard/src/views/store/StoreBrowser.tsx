@@ -133,17 +133,25 @@ function monogramInitials(name: string): string {
 }
 
 function listingIcon(listing: TcsListing, locale: TcsLocale) {
+  const [failed, setFailed] = createSignal(false);
   return (
     <span class="tcs-app-icon" aria-hidden="true">
       <Show
-        when={listing.iconUrl}
+        when={listing.iconUrl && !failed() ? listing.iconUrl : undefined}
         fallback={
           <span class="tcs-app-mono">
             {monogramInitials(pick(listing.name, locale))}
           </span>
         }
       >
-        {(src) => <img src={src()} alt="" loading="lazy" />}
+        {(src) => (
+          <img
+            src={src()}
+            alt=""
+            loading="lazy"
+            onError={() => setFailed(true)}
+          />
+        )}
       </Show>
     </span>
   );

@@ -132,6 +132,35 @@ test("reference interfaces match each app's audited runtime contract", () => {
   ).toEqual(["source.git.hosting.read"]);
 });
 
+test("first-party launcher blueprints publish contract-safe runtime icon paths", () => {
+  const byName = new Map(
+    REFERENCE_APP_INSTALL_CONFIGS.map((config) => [config.name, config]),
+  );
+  const icon = (configName: string, interfaceName?: string) => {
+    const blueprint = byName
+      .get(configName)!
+      .interfaceBlueprints!.find(
+        (item) =>
+          item.spec.type === "interface.ui.surface" &&
+          (interfaceName === undefined || item.name === interfaceName),
+      )!;
+    return (blueprint.spec.document as { display?: { icon?: string } }).display
+      ?.icon;
+  };
+  expect(icon("yurucommu-main")).toBe("/icons/yurucommu.svg");
+  expect(icon("takos-storage-main")).toBe("/icons/takos-storage.svg");
+  expect(icon("takos-git-main")).toBe("/icons/takos-git.svg");
+  expect(icon("takos-office-main", "takos-office.docs")).toBe(
+    "/docs/icons/docs.svg",
+  );
+  expect(icon("takos-office-main", "takos-office.slide")).toBe(
+    "/slide/icons/slide.svg",
+  );
+  expect(icon("takos-office-main", "takos-office.sheet")).toBe(
+    "/sheet/icons/excel.svg",
+  );
+});
+
 test("stateful R2 services use reviewed runner pre-destroy cleanup", () => {
   const expectedAction = (script: string) => [
     {
