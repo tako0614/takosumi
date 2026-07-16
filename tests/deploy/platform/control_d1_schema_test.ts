@@ -193,8 +193,8 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(45);
-  expect(plan.migrations).toHaveLength(42);
+  expect(plan.migrations.at(-1)?.version).toBe(46);
+  expect(plan.migrations).toHaveLength(43);
   expect(plan.tables.some((table) => table.name === "target_pools")).toBe(true);
   expect(
     plan.tables.some((table) => table.name === "takosumi_target_pools"),
@@ -235,7 +235,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(45);
+    expect(verification.latestMigrationVersion).toBe(46);
   } finally {
     database.close();
   }
@@ -522,6 +522,15 @@ for (const fixture of [
           .filter((entry) => entry.version >= 25)
           .map((entry) => entry.version),
       );
+      for (const table of ["resource_shapes", "resolution_locks"] as const) {
+        expect(
+          await database
+            .prepare(
+              `select form_ref_json, package_digest from ${table} limit 1`,
+            )
+            .first(),
+        ).toEqual({ form_ref_json: null, package_digest: null });
+      }
       expect(await readLiveV24ConvergenceRows(database)).toEqual(before);
       await expect(
         database
@@ -857,7 +866,7 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 45 },
+      verification: { latestMigrationVersion: 46 },
     });
   } finally {
     database.close();

@@ -921,13 +921,13 @@ Resource pins one exact immutable reference. Existing rows backfill by kind to
 the matching package in the content-addressed ten-package legacy compatibility
 set without changing Resource IDs, `tkrn`, kind, import ID, or backend object.
 The old Resource wire-to-FormRef mapping remains host-owned; package content
-does not rewrite that wire or own the canonical Resource identity. This is a
-new additive migration no earlier than D1 v45 / Postgres v93 after the currently
-verified D1 v44 / Postgres v92 heads; implementation MUST recheck both heads
-and MUST NOT fold it into or rewrite the current pre-GA schema-convergence
-migration. A missing or mismatched package blocks mutation and never falls
-through to `latest`. Deprecated or revoked definition bytes are retained for
-safe observe/delete or an explicit operator recovery path.
+does not rewrite that wire or own the canonical Resource identity. This uses
+additive D1 v46 / Postgres v94 migrations after the D1 v45 / Postgres v93
+Service Form Registry heads; neither registry nor pre-GA schema-convergence
+migration is rewritten. A missing or mismatched package blocks exact-form
+mutation and never falls through to `latest`. Deprecated or revoked definition
+bytes are retained for safe observe/delete or an explicit operator recovery
+path.
 
 Resource interface requirements and Profile values are capability tokens. They
 are not runtime `Interface` objects. The examples in this spec are the built-in

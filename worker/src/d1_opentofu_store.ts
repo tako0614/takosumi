@@ -3687,6 +3687,8 @@ export async function ensureD1OpenTofuLedgerSchema(
       project text,
       environment text,
       kind text not null,
+      form_ref_json text,
+      package_digest text,
       name text not null,
       managed_by text not null,
       spec_json text not null,
@@ -3716,8 +3718,12 @@ export async function ensureD1OpenTofuLedgerSchema(
       on resource_shapes (
         phase, last_observation_attempt_at, observation_claimed_at, id
       )`,
+    `create index if not exists resource_shapes_unpinned_form_kind_id_idx
+      on resource_shapes (kind, id) where form_ref_json is null`,
     `create table if not exists resolution_locks (
       resource_id text primary key,
+      form_ref_json text,
+      package_digest text,
       selected_implementation text not null,
       target_pool text,
       target text not null,
@@ -3733,6 +3739,8 @@ export async function ensureD1OpenTofuLedgerSchema(
       locked_at text not null,
       updated_at text not null
     )`,
+    `create index if not exists resolution_locks_unpinned_form_resource_idx
+      on resolution_locks (resource_id) where form_ref_json is null`,
     `create table if not exists target_pools (
       id text primary key,
       space_id text not null,
@@ -5530,6 +5538,21 @@ ${D1_SERVICE_FORM_REGISTRY_STATEMENTS.join("\n---\n")}
       }
     },
   },
+  {
+    version: 46,
+    name: "d1_resource_exact_form_identity_add",
+    checksumSource: `
+Resource and ResolutionLock store the exact installed FormRef and package digest pair
+legacy null/null rows remain readable and discoverable for bounded explicit backfill
+partial or invalid exact identities fail closed in durable Resource stores
+`,
+    async atomicStatements(db) {
+      return await d1ResourceExactFormIdentityStatements(db);
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, await d1ResourceExactFormIdentityStatements(db));
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -5984,6 +6007,71 @@ async function d1ResourceObservationScheduleLeaseStatements(
        phase, last_observation_attempt_at, observation_claimed_at, id
      )`,
   );
+  return statements;
+}
+
+async function d1ResourceExactFormIdentityStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  const statements: string[] = [];
+  if (await d1TableExists(db, "resource_shapes")) {
+    const columns = await d1ColumnNames(db, "resource_shapes");
+    if (!columns.has("form_ref_json")) {
+      statements.push(
+        `alter table resource_shapes add column form_ref_json text`,
+      );
+    }
+    if (!columns.has("package_digest")) {
+      statements.push(
+        `alter table resource_shapes add column package_digest text`,
+      );
+    }
+    statements.push(
+      `create index if not exists resource_shapes_unpinned_form_kind_id_idx
+       on resource_shapes (kind, id) where form_ref_json is null`,
+      `create trigger if not exists resource_shapes_form_identity_pair_insert
+       before insert on resource_shapes
+       when (new.form_ref_json is null) <> (new.package_digest is null)
+       begin
+         select raise(abort, 'Resource form identity must be a complete pair');
+       end`,
+      `create trigger if not exists resource_shapes_form_identity_pair_update
+       before update of form_ref_json, package_digest on resource_shapes
+       when (new.form_ref_json is null) <> (new.package_digest is null)
+       begin
+         select raise(abort, 'Resource form identity must be a complete pair');
+       end`,
+    );
+  }
+  if (await d1TableExists(db, "resolution_locks")) {
+    const columns = await d1ColumnNames(db, "resolution_locks");
+    if (!columns.has("form_ref_json")) {
+      statements.push(
+        `alter table resolution_locks add column form_ref_json text`,
+      );
+    }
+    if (!columns.has("package_digest")) {
+      statements.push(
+        `alter table resolution_locks add column package_digest text`,
+      );
+    }
+    statements.push(
+      `create index if not exists resolution_locks_unpinned_form_resource_idx
+       on resolution_locks (resource_id) where form_ref_json is null`,
+      `create trigger if not exists resolution_locks_form_identity_pair_insert
+       before insert on resolution_locks
+       when (new.form_ref_json is null) <> (new.package_digest is null)
+       begin
+         select raise(abort, 'ResolutionLock form identity must be a complete pair');
+       end`,
+      `create trigger if not exists resolution_locks_form_identity_pair_update
+       before update of form_ref_json, package_digest on resolution_locks
+       when (new.form_ref_json is null) <> (new.package_digest is null)
+       begin
+         select raise(abort, 'ResolutionLock form identity must be a complete pair');
+       end`,
+    );
+  }
   return statements;
 }
 

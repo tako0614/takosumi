@@ -4,6 +4,8 @@
 
 import type {
   Condition,
+  FormRef,
+  InstalledFormReference,
   JsonObject,
   NativeResourceRef,
   ResourceManagedBy,
@@ -13,7 +15,10 @@ import type {
   TargetImplementationDescriptor,
   TargetPoolEntry,
 } from "takosumi-contract";
-import { parseResourceShapeKind } from "takosumi-contract";
+import {
+  isInstalledFormReference,
+  parseResourceShapeKind,
+} from "takosumi-contract";
 import {
   clampPageLimit,
   decodeCursor,
@@ -35,6 +40,7 @@ import type {
   TargetPoolRecord,
   TargetPoolRecordId,
 } from "./records.ts";
+import { assertResourceFormIdentity } from "./records.ts";
 import type {
   ResourceApplyAbortInput,
   ResourceApplyAbortResult,
@@ -89,6 +95,8 @@ interface ResourceShapeRow {
   readonly project: string | null;
   readonly environment: string | null;
   readonly kind: string;
+  readonly form_ref_json: string | null;
+  readonly package_digest: string | null;
   readonly name: string;
   readonly managed_by: string;
   readonly spec_json: string;
@@ -106,6 +114,8 @@ interface ResourceShapeRow {
 
 interface ResolutionLockRow {
   readonly resource_id: string;
+  readonly form_ref_json: string | null;
+  readonly package_digest: string | null;
   readonly selected_implementation: string;
   readonly target_pool: string | null;
   readonly target: string;
@@ -161,6 +171,8 @@ class D1ResourceShapeStore implements ResourceShapeStore {
             project = excluded.project,
             environment = excluded.environment,
             kind = excluded.kind,
+            form_ref_json = excluded.form_ref_json,
+            package_digest = excluded.package_digest,
             name = excluded.name,
             managed_by = excluded.managed_by,
             spec_json = excluded.spec_json,
@@ -408,11 +420,11 @@ class D1ResourceShapeStore implements ResourceShapeStore {
     const result = await this.db
       .prepare(
         `update ${this.#table} set
-          space_id = ?, project = ?, environment = ?, kind = ?, name = ?,
-          managed_by = ?, spec_json = ?, phase = ?, generation = ?,
-          observed_generation = ?, outputs_json = ?, execution_json = ?,
-          state_adoption_json = ?, conditions_json = ?, labels_json = ?,
-          created_at = ?, updated_at = ?
+          space_id = ?, project = ?, environment = ?, kind = ?,
+          form_ref_json = ?, package_digest = ?, name = ?, managed_by = ?,
+          spec_json = ?, phase = ?, generation = ?, observed_generation = ?,
+          outputs_json = ?, execution_json = ?, state_adoption_json = ?,
+          conditions_json = ?, labels_json = ?, created_at = ?, updated_at = ?
          where id = ? and generation = ? and phase = ? and updated_at = ?`,
       )
       .bind(
@@ -1085,11 +1097,11 @@ function resourceUpdateStatement(
   return db
     .prepare(
       `update ${names.resourceShapes} set
-        space_id = ?, project = ?, environment = ?, kind = ?, name = ?,
-        managed_by = ?, spec_json = ?, phase = ?, generation = ?,
-        observed_generation = ?, outputs_json = ?, execution_json = ?,
-        state_adoption_json = ?, conditions_json = ?, labels_json = ?,
-        created_at = ?, updated_at = ?
+        space_id = ?, project = ?, environment = ?, kind = ?,
+        form_ref_json = ?, package_digest = ?, name = ?, managed_by = ?,
+        spec_json = ?, phase = ?, generation = ?, observed_generation = ?,
+        outputs_json = ?, execution_json = ?, state_adoption_json = ?,
+        conditions_json = ?, labels_json = ?, created_at = ?, updated_at = ?
       where id = ?`,
     )
     .bind(...resourceParameters(record).slice(1), record.id);
@@ -1130,20 +1142,24 @@ async function readD1Lock(
 
 function resourceInsertSql(table: string, conflict: string): string {
   return `insert into ${table} (
-    id, space_id, project, environment, kind, name, managed_by,
+    id, space_id, project, environment, kind, form_ref_json, package_digest,
+    name, managed_by,
     spec_json, phase, generation, observed_generation,
     outputs_json, execution_json, state_adoption_json,
     conditions_json, labels_json, created_at, updated_at
-  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${conflict}`;
+  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${conflict}`;
 }
 
 function resourceParameters(record: ResourceShapeRecord): readonly unknown[] {
+  assertResourceFormIdentity(record.form, record.kind);
   return [
     record.id,
     record.spaceId,
     record.project ?? null,
     record.environment ?? null,
     record.kind,
+    jsonOrNull(record.form?.formRef),
+    record.form?.packageDigest ?? null,
     record.name,
     record.managedBy,
     JSON.stringify(record.spec),
@@ -1161,8 +1177,14 @@ function resourceParameters(record: ResourceShapeRecord): readonly unknown[] {
 }
 
 function lockParameters(lock: ResolutionLockRecord): readonly unknown[] {
+  const form = exactFormIdentity(
+    jsonOrNull(lock.form?.formRef),
+    lock.form?.packageDigest ?? null,
+  );
   return [
     lock.resourceId,
+    jsonOrNull(form?.formRef),
+    form?.packageDigest ?? null,
     lock.selectedImplementation,
     lock.targetPool ?? null,
     lock.target,
@@ -1182,13 +1204,16 @@ function lockParameters(lock: ResolutionLockRecord): readonly unknown[] {
 
 function lockUpsertSql(table: string): string {
   return `insert into ${table} (
-    resource_id, selected_implementation, target_pool, target,
+    resource_id, form_ref_json, package_digest,
+    selected_implementation, target_pool, target,
     target_snapshot_json, implementation_snapshot_json,
     implementation_plugin, implementation_options_json,
     implementation_fingerprint, locked, reason_json, portability,
     native_resources_json, locked_at, updated_at
-  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   on conflict (resource_id) do update set
+    form_ref_json = excluded.form_ref_json,
+    package_digest = excluded.package_digest,
     selected_implementation = excluded.selected_implementation,
     target_pool = excluded.target_pool,
     target = excluded.target,
@@ -1238,6 +1263,9 @@ function namedSpecParameters(
 }
 
 function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
+  const kind = parseResourceShapeKind(row.kind);
+  const form = exactFormIdentity(row.form_ref_json, row.package_digest);
+  assertResourceFormIdentity(form, kind);
   const outputs = parseJson<JsonObject>(row.outputs_json);
   const execution = parseJson<ResourceShapeExecutionRecord>(row.execution_json);
   const stateAdoption = parseJson<ResourceShapeStateAdoptionDescriptor>(
@@ -1250,7 +1278,8 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
     spaceId: row.space_id as SpaceId,
     ...(row.project === null ? {} : { project: row.project }),
     ...(row.environment === null ? {} : { environment: row.environment }),
-    kind: parseResourceShapeKind(row.kind),
+    kind,
+    ...(form === undefined ? {} : { form }),
     name: row.name,
     managedBy: row.managed_by as ResourceManagedBy,
     spec: parseJson<JsonObject>(row.spec_json) ?? {},
@@ -1268,6 +1297,7 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
 }
 
 function resolutionLockFromRow(row: ResolutionLockRow): ResolutionLockRecord {
+  const form = exactFormIdentity(row.form_ref_json, row.package_digest);
   const targetSnapshot = parseJson<TargetPoolEntry>(row.target_snapshot_json);
   const implementationSnapshot = parseJson<TargetImplementationDescriptor>(
     row.implementation_snapshot_json,
@@ -1280,6 +1310,7 @@ function resolutionLockFromRow(row: ResolutionLockRow): ResolutionLockRecord {
   );
   return {
     resourceId: row.resource_id,
+    ...(form === undefined ? {} : { form }),
     selectedImplementation: row.selected_implementation,
     ...(row.target_pool === null ? {} : { targetPool: row.target_pool }),
     target: row.target,
@@ -1334,4 +1365,24 @@ function jsonOrNull(value: unknown): string | null {
 function parseJson<T>(value: unknown): T | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
+}
+
+function exactFormIdentity(
+  formRefJson: unknown,
+  packageDigest: string | null,
+): InstalledFormReference | undefined {
+  if (
+    (formRefJson === undefined || formRefJson === null || formRefJson === "") &&
+    packageDigest === null
+  ) {
+    return undefined;
+  }
+  const identity = {
+    formRef: parseJson<FormRef>(formRefJson),
+    packageDigest,
+  };
+  if (!isInstalledFormReference(identity)) {
+    throw new Error("durable Resource form identity is partial or invalid");
+  }
+  return identity;
 }

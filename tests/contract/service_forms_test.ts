@@ -3,6 +3,7 @@ import {
   formRefKey,
   installedFormReferenceKey,
   isFormRef,
+  isInstalledFormReference,
   isSha256Digest,
   type FormRef,
 } from "../../contract/service-forms.ts";
@@ -33,4 +34,22 @@ test("packageDigest remains a sibling of FormRef", () => {
   expect(
     installedFormReferenceKey({ formRef: exactRef, packageDigest }),
   ).toEndWith(packageDigest);
+});
+
+test("InstalledFormReference rejects partial, extra, and malformed identities", () => {
+  const identity = { formRef: exactRef, packageDigest };
+  expect(isInstalledFormReference(identity)).toBe(true);
+  expect(isInstalledFormReference({ formRef: exactRef })).toBe(false);
+  expect(isInstalledFormReference({ ...identity, channel: "stable" })).toBe(
+    false,
+  );
+  expect(
+    isInstalledFormReference({ ...identity, packageDigest: "sha256:latest" }),
+  ).toBe(false);
+  expect(() =>
+    installedFormReferenceKey({
+      ...identity,
+      packageDigest: "sha256:latest",
+    }),
+  ).toThrow("invalid exact installed Form reference");
 });
