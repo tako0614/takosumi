@@ -12,8 +12,9 @@ provider "takosumi" {
 }
 
 resource "takosumi_object_bucket" "assets" {
-  name       = "assets"
-  interfaces = ["s3_api", "signed_url"]
+  name          = "assets"
+  storage_class = "standard"
+  interfaces    = ["s3_api", "signed_url"]
 }
 
 output "bucket_selected_implementation" {

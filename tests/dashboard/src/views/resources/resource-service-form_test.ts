@@ -116,12 +116,14 @@ describe("provider-neutral Resource service forms", () => {
     expect(
       buildObjectBucketServiceSpec({
         name: "assets",
+        storageClass: "infrequent_access",
         interfaces: "s3_api, signed_url\ns3_api",
       }),
     ).toEqual({
       ok: true,
       value: {
         name: "assets",
+        storageClass: "infrequent_access",
         interfaces: ["s3_api", "signed_url"],
       },
     });
@@ -144,7 +146,11 @@ describe("provider-neutral Resource service forms", () => {
       },
       {
         kind: "ObjectBucket",
-        form: { name: "objects", interfaces: "s3_api" },
+        form: {
+          name: "objects",
+          storageClass: "standard",
+          interfaces: "s3_api",
+        },
       },
       {
         kind: "KVStore",
@@ -304,14 +310,29 @@ describe("provider-neutral Resource service forms", () => {
     ).toBeUndefined();
     expect(
       readObjectBucketServiceForm(
-        { name: "assets", interfaces: ["s3_api"] },
+        {
+          name: "assets",
+          storageClass: "infrequent_access",
+          interfaces: ["s3_api"],
+        },
         "assets",
       ),
-    ).toEqual({ name: "assets", interfaces: "s3_api" });
+    ).toEqual({
+      name: "assets",
+      storageClass: "infrequent_access",
+      interfaces: "s3_api",
+    });
     expect(readObjectBucketServiceForm({ name: "assets" }, "assets")).toEqual({
       name: "assets",
+      storageClass: "standard",
       interfaces: "",
     });
+    expect(
+      readObjectBucketServiceForm(
+        { name: "assets", storageClass: "provider-cold-tier" },
+        "assets",
+      ),
+    ).toBeUndefined();
     expect(
       readGuidedResourceServiceForm(
         "KVStore",

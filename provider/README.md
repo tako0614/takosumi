@@ -279,9 +279,10 @@ resource "takosumi_edge_worker" "api" {
 }
 
 resource "takosumi_object_bucket" "assets" {
-  name        = "assets"
-  target_pool = "default"
-  interfaces  = ["s3_api", "signed_url"]
+  name          = "assets"
+  target_pool   = "default"
+  storage_class = "standard"
+  interfaces    = ["s3_api", "signed_url"]
 }
 
 resource "takosumi_kv_store" "cache" {
@@ -331,7 +332,7 @@ Shape-specific fields:
 | Resource                            | Required fields                                 | Optional fields                                                                           |
 | ----------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `takosumi_edge_worker`              | `name`, one artifact source                     | `artifact_sha256`, `target_pool`, `compatibility_date`, `compatibility_flags`, `profiles` |
-| `takosumi_object_bucket`            | `name`                                          | `target_pool`, `interfaces`                                                               |
+| `takosumi_object_bucket`            | `name`                                          | `target_pool`, `storage_class`, `interfaces`                                              |
 | `takosumi_kv_store`                 | `name`                                          | `target_pool`, `consistency`                                                              |
 | `takosumi_queue`                    | `name`                                          | `target_pool`, `max_retries`, `max_batch_size`                                            |
 | `takosumi_sql_database`             | `name`                                          | `target_pool`, `engine`, `migrations_path`                                                |
@@ -348,6 +349,14 @@ fails closed if the bytes change. `artifact_ref` is an operator-owned opaque
 immutable reference and also requires `artifact_sha256`. Exactly one of
 `artifact_path`, `artifact_url`, or `artifact_ref` is allowed for EdgeWorker and
 DurableWorkflow.
+
+`takosumi_object_bucket.storage_class` is the provider-neutral default for newly
+written objects. Its exact values are `standard` and `infrequent_access`; omission
+defaults to `standard`. Selecting `infrequent_access` requires TargetPool
+capability evidence for `storage_class_infrequent_access`, so the resolver fails
+before backend calls when the selected pool cannot provide it. This selector is
+not a provider product or tier name and does not move objects written before a
+class change.
 
 `takosumi_schedule.cron` accepts portable five-field cron syntax. Its sole
 connection must request `invoke` with the `schedule_trigger` projection.

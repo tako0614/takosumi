@@ -55,6 +55,15 @@ type Identity = {
   readonly name: string;
 };
 
+function objectBucketStorageClass(
+  resource: ResourceShapeResult,
+): "standard" | "infrequent_access" | undefined {
+  if (resource.kind !== "ObjectBucket") return undefined;
+  const value = resource.spec.storageClass;
+  if (value === undefined || value === "standard") return "standard";
+  return value === "infrequent_access" ? value : undefined;
+}
+
 export default function ResourceDetailView(): JSX.Element {
   const params = useParams<{ kind: string; name: string }>();
   return (
@@ -330,6 +339,20 @@ function Inner(): JSX.Element {
                   }
                 />
                 <CardSection>
+                  <Show when={objectBucketStorageClass(item())}>
+                    {(storageClass) => (
+                      <dl class="tg-kv">
+                        <dt>{t("resources.editor.bucketStorageClass")}</dt>
+                        <dd>
+                          {storageClass() === "infrequent_access"
+                            ? t(
+                                "resources.editor.bucketStorageClass.infrequentAccess",
+                              )
+                            : t("resources.editor.bucketStorageClass.standard")}
+                        </dd>
+                      </dl>
+                    )}
+                  </Show>
                   <details class="rs-json-disclosure">
                     <summary>{t("resources.detail.showSpec")}</summary>
                     <pre class="rs-code-block">{prettyJson(item().spec)}</pre>
