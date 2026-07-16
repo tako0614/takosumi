@@ -122,8 +122,8 @@ User-owned custom domains are part of the GA contract. An owner-account and
 Workspace-scoped `VerifiedDomain` manages ownership challenge, certificate,
 attach/detach, renewal, expiry, and delete. A route is active only while both
 ownership and certificate state are current. The lifecycle remains Pre-GA with
-the rest of Takosumi Cloud until live operator evidence exists; unverified,
-expired, or degraded domains fail closed.
+the rest of Takosumi Cloud until that lifecycle has been verified in production;
+unverified, expired, or degraded domains fail closed.
 
 ## GA Contract And Launch Gate
 
@@ -144,8 +144,8 @@ Stable or GA.
 
 Stable evidence includes lifecycle, price coverage, immutable metering, spend
 enforcement, invoice reconciliation, recovery, tenant isolation, Dashboard,
-and live operator evidence. A self-test, descriptor, unconfigured manager, or
-one green client does not establish GA.
+and production behavior and operations validation. A self-test, descriptor,
+unconfigured manager, or one green client does not establish GA.
 
 ## Billing and Spend Guard
 
@@ -156,9 +156,9 @@ destroy operations remain available after a spend-guard block so users can
 remove resources instead of leaving them stranded.
 
 Public prices, free-tier terms, usage rates, and spend-guard behavior are
-documented in [Takosumi Cloud pricing](./pricing.md). Realized PriceCatalogs,
-payment-provider synchronization, margin guards, and reconciliation are
-operator operation details, not public contracts.
+documented in [Takosumi Cloud pricing](./pricing.md). Payment-provider
+synchronization, margin guards, and reconciliation implementation details are
+service operations rather than public contracts.
 
 The Dashboard shows:
 
