@@ -56,10 +56,10 @@ is part of this Final Plan. The detailed source plan is
 The target has three independently released authorities:
 
 ```text
-Takoform portable Service Form project (takoform.com, github.com/takosjp/takoform):
+Takoform portable Service Form project (takoform.com, github.com/takosjp/terraform-provider-takoform):
   Service Form / FormRef / data-only Form Package
   forms.takoform.com/v1alpha1 form-host interoperability contract
-  standard definitions, registry.opentofu.org/takosjp/takoform typed provider,
+  standard definitions, registry.terraform.io/takosjp/takoform typed provider,
   SDK, fixtures, conformance
 
 Takosumi OSS:
@@ -82,12 +82,21 @@ realized offering/capacity, billing enforcement, and operations remain
 UNLICENSED. A deployable reference integration requires its own license review.
 
 `Service Form` is the accepted target concept and `Takoform` is the independent
-project name. The owner has approved `takoform.com`, `github.com/takosjp/takoform`,
-`forms.takoform.com/v1alpha1`, `registry.opentofu.org/takosjp/takoform`, and the
-`takoform_` resource prefix. The current
+project name. The owner has approved `takoform.com`, public source repository
+`github.com/takosjp/terraform-provider-takoform`, `forms.takoform.com/v1alpha1`,
+`registry.terraform.io/takosjp/takoform`, and the
+`takoform_` resource prefix. The HCP Terraform organization is `takoform`; it manages the
+Public Registry namespace derived from linked GitHub account `takosjp`. The current
 `takosumi.dev/v1alpha1`, `ResourceShape`, `takosumi_*` form resources,
 `/v1/resources`, Resource IDs, kind tokens, import IDs, database fields, and
 provider state remain compatibility surfaces during the additive migration.
+
+Takosumi remains provider-neutral beyond Takoform. Any runner-installable OpenTofu/Terraform
+provider may be used by a plain Stack through ProviderConnection, CredentialRecipe, and
+ProviderBinding without a Form Package or proprietary manifest. A versioned Compatibility API or
+Adapter may optionally project supported provider/vendor operations onto an exact Takoform
+FormRef, but both paths converge on the same Resource/Run/state/output/audit authority. A
+provider-native resource with no approved Form remains ordinary Stack state.
 
 Current implementation must be described honestly:
 
@@ -2534,7 +2543,7 @@ self-test, a descriptor, an unconfigured manager, or one green client.
 2. Freeze and inventory every current mixed-provider schema, state identity,
    mirror byte, checksum, and live archive. Never overwrite `1.0.0`; publish a
    corrected immutable legacy release under a new version.
-3. Establish `github.com/takosjp/takoform` without TargetPool, Resource, Run,
+3. Establish `github.com/takosjp/terraform-provider-takoform` without TargetPool, Resource, Run,
    credentials, Interface, or Cloud code; keep provider/package release blocked
    until signing/provenance and real install gates pass.
 4. Extract exact FormRef, data-only Form Package, standard-form semantics,
