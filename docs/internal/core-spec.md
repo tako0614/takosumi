@@ -33,10 +33,10 @@ through an additive migration.
 The accepted target contract is:
 
 ```text
-Takoform portable Service Form project (takoform.com, github.com/takosjp/takoform):
+Takoform portable Service Form project (takoform.com, github.com/takosjp/terraform-provider-takoform):
   Service Form / FormRef / data-only Form Package
   forms.takoform.com/v1alpha1 interoperability
-  registry.opentofu.org/takosjp/takoform typed provider / conformance
+  registry.terraform.io/takosjp/takoform typed provider / conformance
 
 Takosumi OSS:
   zero-form-capable host
@@ -50,13 +50,20 @@ Takosumi Cloud closed:
 ```
 
 The approved public identities are `Takoform`, `takoform.com`,
-`github.com/takosjp/takoform`, `forms.takoform.com/v1alpha1`, and
-`registry.opentofu.org/takosjp/takoform` with the `takoform_` prefix. Source
+`github.com/takosjp/terraform-provider-takoform`, `forms.takoform.com/v1alpha1`, and
+`registry.terraform.io/takosjp/takoform` with the `takoform_` prefix. The HCP Terraform
+organization `takoform` manages the GitHub-account-derived `takosjp` Public Registry namespace. Source
 publication is authorized; provider/package releases still require signing and
 real-install evidence. The current `takosumi.dev/v1alpha1`, `ResourceShape`,
 `takosumi_*` form resources, `/v1/resources`, IDs, kinds, imports, database
 columns, and provider state remain compatibility surfaces. No current code is
 conformant merely because this target is documented.
+
+Takosumi Core is provider-neutral beyond Takoform. Plain Stack execution accepts any
+runner-installable OpenTofu/Terraform provider configured through ProviderConnection,
+CredentialRecipe, and ProviderBinding. Optional Compatibility API/Adapter translation to an exact
+Takoform FormRef MUST converge on this Core's one Resource ledger and MUST NOT be required for
+provider-native Stack resources.
 
 `FormRef` is exact: `apiVersion`, `kind`, `definitionVersion`, and
 `schemaDigest`. Form Packages are signed, content-addressed, immutable,
