@@ -39,6 +39,9 @@ test("shipped Worker projects Resource Interfaces and repairs their lifecycle th
     { operatorInstallConfigs: [] },
   );
 
+  expect(operations.forms).toBeDefined();
+  expect((await operations.forms!.listDefinitions()).items).toEqual([]);
+
   const iface = await operations.interfaces.create({
     workspaceId: WORKSPACE_ID,
     name: "runtime-route",
