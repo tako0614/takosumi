@@ -122,7 +122,7 @@ User-owned custom domains are part of the GA contract. An owner-account and
 Workspace-scoped `VerifiedDomain` manages ownership challenge, certificate,
 attach/detach, renewal, expiry, and delete. A route is active only while both
 ownership and certificate state are current. The lifecycle remains Pre-GA with
-the rest of Takosumi Cloud until live operator evidence exists; unverified,
+the rest of Takosumi Cloud until reviewed live launch evidence exists; unverified,
 expired, or degraded domains fail closed.
 
 ## GA Contract And Launch Gate
@@ -133,18 +133,18 @@ Takosumi Cloud stays Pre-GA until every item passes the same readiness matrix.
 An API or runtime becoming usable early does not make that item independently
 Stable or GA.
 
-| Status      | Scope                                                                                           |
-| ----------- | ----------------------------------------------------------------------------------------------- |
-| GA contract | Edge Worker modules, assets, vars, write-only secrets, bindings, versions, and deployments    |
-| GA contract | managed URLs, routes, cron, logs, and verified custom domains                                  |
-| GA contract | Object Storage, KV, Database, Queue, and Vector Index                                           |
-| GA contract | Durable Workflow, Container, Stateful Actor Namespace, and Schedule                            |
-| GA contract | OpenAI-compatible AI Gateway endpoint                                                           |
-| Pre-GA      | public GA stays closed until every item passes the same Stable evidence matrix                 |
+| Status      | Scope                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------ |
+| GA contract | Edge Worker modules, assets, vars, write-only secrets, bindings, versions, and deployments |
+| GA contract | managed URLs, routes, cron, logs, and verified custom domains                              |
+| GA contract | Object Storage, KV, Database, Queue, and Vector Index                                      |
+| GA contract | Durable Workflow, Container, Stateful Actor Namespace, and Schedule                        |
+| GA contract | OpenAI-compatible AI Gateway endpoint                                                      |
+| Pre-GA      | public GA stays closed until every item passes the same Stable evidence matrix             |
 
 Stable evidence includes lifecycle, price coverage, immutable metering, spend
 enforcement, invoice reconciliation, recovery, tenant isolation, Dashboard,
-and live operator evidence. A self-test, descriptor, unconfigured manager, or
+and reviewed live launch evidence. A self-test, descriptor, unconfigured manager, or
 one green client does not establish GA.
 
 ## Billing and Spend Guard
@@ -156,9 +156,9 @@ destroy operations remain available after a spend-guard block so users can
 remove resources instead of leaving them stranded.
 
 Public prices, free-tier terms, usage rates, and spend-guard behavior are
-documented in [Takosumi Cloud pricing](./pricing.md). Realized PriceCatalogs,
+documented in [Takosumi Cloud pricing](./pricing.md). PriceCatalog publication,
 payment-provider synchronization, margin guards, and reconciliation are
-operator operation details, not public contracts.
+operational details, not public contracts.
 
 The Dashboard shows:
 
