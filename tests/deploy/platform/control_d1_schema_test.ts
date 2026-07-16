@@ -193,8 +193,8 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(44);
-  expect(plan.migrations).toHaveLength(41);
+  expect(plan.migrations.at(-1)?.version).toBe(45);
+  expect(plan.migrations).toHaveLength(42);
   expect(plan.tables.some((table) => table.name === "target_pools")).toBe(true);
   expect(
     plan.tables.some((table) => table.name === "takosumi_target_pools"),
@@ -235,7 +235,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(44);
+    expect(verification.latestMigrationVersion).toBe(45);
   } finally {
     database.close();
   }
@@ -470,14 +470,12 @@ for (const fixture of [
   {
     environment: "staging",
     file: "staging-schema.sql",
-    sha256:
-      "1fa2455c3d880f99f727be07404190439a5588e492116df8c4dff6fd64e5c86e",
+    sha256: "1fa2455c3d880f99f727be07404190439a5588e492116df8c4dff6fd64e5c86e",
   },
   {
     environment: "production",
     file: "production-schema.sql",
-    sha256:
-      "76b930c0fde893d49ef9b9bf2738f9882103d5de0da18f134593e52f2f349848",
+    sha256: "76b930c0fde893d49ef9b9bf2738f9882103d5de0da18f134593e52f2f349848",
   },
 ] as const) {
   test(`control D1 candidate converges the ${fixture.environment} live v24 schema export`, async () => {
@@ -859,7 +857,7 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 44 },
+      verification: { latestMigrationVersion: 45 },
     });
   } finally {
     database.close();
