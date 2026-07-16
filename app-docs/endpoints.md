@@ -287,6 +287,13 @@ Workspace を帰属メタデータとして残します。レジャー
 scope 不一致では、下流のプロバイダ、AI アップストリーム、ランタイムディスパッチへ進まず安全側に
 停止します。
 
+Edge runtime は canonical Ready `EdgeWorker` と InterfaceBinding を確認した後、Resource / Workspace
+それぞれの秒・日・請求期間 quota と credit reservation を先に確保します。durable
+`gateway_request` capture の成功が accepted dispatch です。この時点より後の tenant error や
+dispatch failure は課金対象で、前の失敗は tenant code を実行しません。dispatch には
+`10 CPU-ms` と `5 subrequests` の hard limit が付き、Workers Logs / Logpush は Stable では
+無効です。
+
 価格は Cloud エンドポイントのリクエストボディではなく Takosumi Cloud 側で決めます。リクエスト
 ボディやクライアントヘッダに `usdMicros` / `credits` を書かせません。公開価格と無料枠は
 [Takosumi Cloud pricing](./pricing.md) と Dashboard の請求表示に出します。
