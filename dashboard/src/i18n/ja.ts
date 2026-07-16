@@ -1180,9 +1180,20 @@ export const ja = {
     "provider や実装先ではなく、必要なサービスの形を選びます。",
   "resources.editor.service.edgeWorker": "Edge Worker",
   "resources.editor.service.objectBucket": "Object Bucket",
-  "resources.editor.service.custom": "Preview / カスタム Shape",
+  "resources.editor.service.kvStore": "KV Store",
+  "resources.editor.service.sqlDatabase": "SQL Database",
+  "resources.editor.service.queue": "Queue",
+  "resources.editor.service.vectorIndex": "Vector Index",
+  "resources.editor.service.durableWorkflow": "Durable Workflow",
+  "resources.editor.service.containerService": "Container",
+  "resources.editor.service.statefulActorNamespace": "Stateful Actor Namespace",
+  "resources.editor.service.schedule": "Schedule",
+  "resources.editor.service.custom": "Operator / カスタム Shape",
+  "resources.editor.stable": "Stable",
+  "resources.editor.stableHint":
+    "10 個の組み込み Resource Shape はすべて同じ Stable Deploy API を使います。AI Gateway と Custom Domains は別の Cloud control lifecycle を維持します。",
   "resources.editor.customHint":
-    "Preview または operator 定義の Shape は、詳細設定で kind と Spec JSON を入力します。利用可否は接続先が判定します。",
+    "Operator 定義の Shape は、詳細設定で kind と Spec JSON を入力します。利用可否は接続先が判定します。",
   "resources.editor.inputsStep": "必要な設定",
   "resources.editor.inputsHint":
     "認証情報や provider 固有の設定は入力しません。",
@@ -1219,6 +1230,71 @@ export const ja = {
   "resources.editor.bucketInterfaces": "必要な object interface",
   "resources.editor.bucketInterfacesHint":
     "例: s3_api、signed_url。これは runtime Interface オブジェクトではなく、接続先が検証する capability token です。",
+  "resources.editor.operatorDefault": "Operator 既定値",
+  "resources.editor.capabilityTokenHint":
+    "接続先が公開・検証する任意の capability token です。",
+  "resources.editor.kvConsistency": "Consistency（任意）",
+  "resources.editor.kvConsistency.eventual": "Eventual",
+  "resources.editor.kvConsistency.strong": "Strong",
+  "resources.editor.sqlEngine": "Engine capability（任意）",
+  "resources.editor.sqlMigrationsPath": "Migrations path（任意）",
+  "resources.editor.queueMaxRetries": "最大 retry 回数（任意）",
+  "resources.editor.queueMaxBatchSize": "最大 batch size（任意）",
+  "resources.editor.queueMaxRetriesInvalid":
+    "最大 retry 回数は 0 以上の整数で指定してください。",
+  "resources.editor.queueMaxBatchSizeInvalid":
+    "最大 batch size は 0 以上の整数で指定してください。",
+  "resources.editor.vectorDimensions": "Dimensions",
+  "resources.editor.vectorMetric": "Similarity metric（任意）",
+  "resources.editor.vectorDimensionsInvalid":
+    "Dimensions は正の整数で指定してください。",
+  "resources.editor.workflowEntrypoint": "Entrypoint",
+  "resources.editor.workflowMaxAttempts": "最大 attempt 回数（任意）",
+  "resources.editor.workflowBackoff": "初回 backoff 秒数（任意）",
+  "resources.editor.workflowEntrypointRequired":
+    "Workflow entrypoint を入力してください。",
+  "resources.editor.workflowMaxAttemptsInvalid":
+    "最大 attempt 回数は正の整数で指定してください。",
+  "resources.editor.workflowBackoffInvalid":
+    "初回 backoff は 0 以上の整数で指定してください。",
+  "resources.editor.containerImage": "OCI image",
+  "resources.editor.containerPorts": "Ports（任意）",
+  "resources.editor.integerListHint":
+    "正の整数をカンマまたは空白で区切ります。",
+  "resources.editor.containerPublicHttp": "Public HTTP（任意）",
+  "resources.editor.containerPublicHttp.enabled": "有効",
+  "resources.editor.containerPublicHttp.disabled": "無効",
+  "resources.editor.containerEnvironment": "Environment JSON（任意）",
+  "resources.editor.containerEnvironmentHint":
+    "値が非 secret 文字列の JSON object です。機密値には Secret または Credential を使います。",
+  "resources.editor.containerImageRequired":
+    "OCI image 参照を入力してください。",
+  "resources.editor.containerPortsInvalid":
+    "Port は正の整数をカンマまたは空白で区切って指定してください。",
+  "resources.editor.containerEnvironmentInvalid":
+    "Environment は値が文字列の JSON object で指定してください。",
+  "resources.editor.actorClass": "Runtime class",
+  "resources.editor.actorStorageProfile": "Storage profile（任意）",
+  "resources.editor.actorMigrationTag": "Migration tag（任意）",
+  "resources.editor.actorClassRequired": "Runtime class 名を入力してください。",
+  "resources.editor.actorClassInvalid":
+    "Runtime class は有効な class identifier で指定してください。",
+  "resources.editor.scheduleCron": "Cron expression",
+  "resources.editor.scheduleCronHint":
+    "portable な 5 field cron expression を指定します。",
+  "resources.editor.scheduleTimezone": "Timezone（任意）",
+  "resources.editor.scheduleConnection": "Connection name",
+  "resources.editor.scheduleTarget": "Target resource",
+  "resources.editor.scheduleTargetHint":
+    "schedule_trigger projection で呼び出す Resource reference です。",
+  "resources.editor.scheduleCronRequired":
+    "Cron expression を入力してください。",
+  "resources.editor.scheduleCronInvalid":
+    "Cron は 5 field で指定してください。",
+  "resources.editor.scheduleConnectionInvalid":
+    "Connection name は空白を含まない token で指定してください。",
+  "resources.editor.scheduleTargetRequired":
+    "空白を含まない target Resource reference を入力してください。",
   "resources.editor.project": "Project（任意）",
   "resources.editor.environment": "Environment",
   "resources.editor.targetPool": "TargetPool",
@@ -1233,7 +1309,7 @@ export const ja = {
     "connections、lifecycle policy、operator 拡張が必要な場合だけ raw Spec JSON に切り替えます。",
   "resources.editor.useRawSpec": "Raw Spec JSON を使う",
   "resources.editor.rawWarning":
-    "これは Preview / カスタム Shape と operator 向けの入力です。schema、提供状況、価格は Deploy API が判定します。",
+    "これはカスタム Shape と operator 向けの入力です。schema、提供状況、価格は Deploy API が判定します。",
   "resources.editor.rawCannotGuide":
     "Raw Spec JSON に guided form が扱わない設定があります。内容を失わないよう raw mode のままにしました。",
   "resources.editor.labels": "Labels JSON",
