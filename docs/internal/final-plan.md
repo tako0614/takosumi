@@ -56,10 +56,11 @@ is part of this Final Plan. The detailed source plan is
 The target has three independently released authorities:
 
 ```text
-portable Service Form project (working project name: Takoform):
+Takoform portable Service Form project (takoform.com, github.com/takosjp/takoform):
   Service Form / FormRef / data-only Form Package
-  portable form-host interoperability contract
-  standard definitions, typed form provider, SDK, fixtures, conformance
+  forms.takoform.com/v1alpha1 form-host interoperability contract
+  standard definitions, registry.opentofu.org/takosjp/takoform typed provider,
+  SDK, fixtures, conformance
 
 Takosumi OSS:
   optional zero-form host
@@ -80,10 +81,10 @@ deployable OSS network services remain AGPL-3.0-only; closed Cloud managers,
 realized offering/capacity, billing enforcement, and operations remain
 UNLICENSED. A deployable reference integration requires its own license review.
 
-`Service Form` is the accepted target concept. `Takoform` remains only a
-working project name until trademark, domain, repository, package namespace,
-registry identity, and security ownership are approved. No public API group or
-provider FQN is selected by this document. The current
+`Service Form` is the accepted target concept and `Takoform` is the independent
+project name. The owner has approved `takoform.com`, `github.com/takosjp/takoform`,
+`forms.takoform.com/v1alpha1`, `registry.opentofu.org/takosjp/takoform`, and the
+`takoform_` resource prefix. The current
 `takosumi.dev/v1alpha1`, `ResourceShape`, `takosumi_*` form resources,
 `/v1/resources`, Resource IDs, kind tokens, import IDs, database fields, and
 provider state remain compatibility surfaces during the additive migration.
@@ -2533,9 +2534,9 @@ self-test, a descriptor, an unconfigured manager, or one green client.
 2. Freeze and inventory every current mixed-provider schema, state identity,
    mirror byte, checksum, and live archive. Never overwrite `1.0.0`; publish a
    corrected immutable legacy release under a new version.
-3. Close the working project-name/domain/package/API-group/provider-FQN gates,
-   then establish one portable project repository without TargetPool, Resource,
-   Run, credentials, Interface, or Cloud code.
+3. Establish `github.com/takosjp/takoform` without TargetPool, Resource, Run,
+   credentials, Interface, or Cloud code; keep provider/package release blocked
+   until signing/provenance and real install gates pass.
 4. Extract exact FormRef, data-only Form Package, standard-form semantics,
    typed provider inputs, and host/provider conformance while preserving current
    Resource Shape compatibility exports and routes.

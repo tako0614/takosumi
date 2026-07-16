@@ -17,9 +17,10 @@ be specific when it is:
 
 Takosumi Core **is** required to contain zero implicit Form Packages. Portable
 definition/provider/interoperability authority belongs to the independent
-Service Form project; Takosumi remains the optional one-ledger host. The
-working project name `Takoform` and public API/provider identities remain
-provisional. The current Resource Shape code/wire/provider/state is an explicit
+Takoform project; Takosumi remains the optional one-ledger host. The approved
+identities are `takoform.com`, `github.com/takosjp/takoform`,
+`forms.takoform.com/v1alpha1`, and `registry.opentofu.org/takosjp/takoform`.
+The current Resource Shape code/wire/provider/state is an explicit
 migration compatibility surface, not proof that the target separation exists.
 
 The following are forbidden in the OSS core:
