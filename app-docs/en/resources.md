@@ -63,6 +63,13 @@ to `EdgeWorker`. OCI-image services are `ContainerService`, object storage is
 `ObjectBucket`, app databases are `SQLDatabase`, and persistent workflows are a
 separate shape.
 
+When creating Object Storage, choose either the `standard` or
+`infrequent_access` storage class. Omission defaults to `standard`. The choice is
+the default for newly written objects and does not implicitly move existing
+objects. `infrequent_access` passes preview only when a supporting official
+target is available, and the pre-apply quote shows the price difference and any
+retrieval charging terms.
+
 ```text
 Edge JS app:
   EdgeWorker -> Cloudflare Workers for Platforms dispatch namespace
@@ -143,6 +150,7 @@ References:
 
 - [How Workers for Platforms works](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/how-workers-for-platforms-works/)
 - [Dynamic Workflows](https://developers.cloudflare.com/dynamic-workers/usage/dynamic-workflows/)
+- [R2 storage classes](https://developers.cloudflare.com/r2/buckets/storage-classes/)
 
 ## Delete And Cleanup
 

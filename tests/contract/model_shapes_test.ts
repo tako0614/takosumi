@@ -39,10 +39,20 @@ import type {
   SecurityFinding,
 } from "../../contract/security.ts";
 import type { TargetPool } from "../../contract/target.ts";
+import type { ObjectBucketSpec } from "../../contract/resource-shape.ts";
 import {
   formatCapsuleFullName,
   type Workspace,
 } from "../../contract/workspaces.ts";
+
+test("ObjectBucket portable storage class shape", () => {
+  const bucket: ObjectBucketSpec = {
+    name: "assets",
+    storageClass: "infrequent_access",
+    interfaces: ["s3_api"],
+  };
+  expect(bucket.storageClass).toBe("infrequent_access");
+});
 
 test("Workspace shape", () => {
   const space: Workspace = {

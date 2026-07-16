@@ -810,6 +810,14 @@ tokens Takosumi ships with; they are not closed enums in the provider binary.
 Operators can advertise additional tokens through TargetPool capability
 evidence and adapters.
 
+`ObjectBucket.spec.storageClass` is a closed portable selector rather than an
+endpoint-defined token. Core accepts exactly `standard` and
+`infrequent_access`, canonicalizes omission to `standard`, and treats it as the
+default for newly written objects. `infrequent_access` requires
+`storage_class_infrequent_access` capability evidence during resolution. Core
+does not encode provider storage-tier names or imply mutation of existing
+objects.
+
 ```json
 {
   "apiVersion": "takosumi.dev/v1alpha1",

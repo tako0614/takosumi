@@ -583,6 +583,17 @@ export function parseObjectBucketSpec(
   const name = parseName(candidate);
   if (!name.ok) return name;
 
+  const storageClass = candidate.storageClass ?? "standard";
+  if (storageClass !== "standard" && storageClass !== "infrequent_access") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_storage_class",
+        message: "spec.storageClass must be standard or infrequent_access",
+      },
+    };
+  }
+
   const interfaces =
     candidate.interfaces === undefined
       ? undefined
@@ -596,6 +607,7 @@ export function parseObjectBucketSpec(
     ok: true,
     spec: {
       name: name.value,
+      storageClass,
       ...(interfaces?.value ? { interfaces: interfaces.value } : {}),
       ...(lifecyclePolicy.value
         ? { lifecyclePolicy: lifecyclePolicy.value }
@@ -1250,7 +1262,13 @@ function requiredEdgeWorkerInterfaces(spec: EdgeWorkerSpec): readonly string[] {
 function requiredObjectBucketInterfaces(
   spec: ObjectBucketSpec,
 ): readonly string[] {
-  return ["object_store", ...(spec.interfaces ?? ["s3_api"])];
+  return [
+    "object_store",
+    ...((spec.storageClass ?? "standard") === "infrequent_access"
+      ? ["storage_class_infrequent_access"]
+      : []),
+    ...(spec.interfaces ?? ["s3_api"]),
+  ];
 }
 
 function requiredKVStoreInterfaces(_spec: KVStoreSpec): readonly string[] {

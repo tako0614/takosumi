@@ -34,6 +34,11 @@ const bucketDescriptor: TargetImplementationDescriptor = {
   moduleTemplate: "cloudflare-r2-bucket",
   moduleInputMappings: {
     bucketName: { source: "spec", path: "/name", required: true },
+    storageClass: {
+      source: "spec",
+      path: "/storageClass",
+      required: true,
+    },
     accountId: { source: "target", path: "/ref", required: true },
     region: { source: "target", path: "/region", default: "default" },
     immutableMode: { source: "literal", value: true },
@@ -53,9 +58,15 @@ test("bundled parsers keep ten typed Resource Shape schemas", () => {
       compatibilityFlags: ["nodejs_compat"],
     }).ok,
   ).toBe(true);
-  expect(
-    parseObjectBucketSpec({ name: "assets", interfaces: ["s3_api"] }).ok,
-  ).toBe(true);
+  const bucket = parseObjectBucketSpec({
+    name: "assets",
+    storageClass: "infrequent_access",
+    interfaces: ["s3_api"],
+  });
+  expect(bucket.ok).toBe(true);
+  if (bucket.ok) {
+    expect(bucket.spec.storageClass).toBe("infrequent_access");
+  }
   expect(parseKVStoreSpec({ name: "cache", consistency: "eventual" }).ok).toBe(
     true,
   );
@@ -104,6 +115,30 @@ test("bundled parsers keep ten typed Resource Shape schemas", () => {
       },
     }).ok,
   ).toBe(true);
+});
+
+test("ObjectBucket defaults storageClass and rejects non-portable values", () => {
+  const legacy = parseObjectBucketSpec({ name: "legacy-assets" });
+  expect(legacy.ok).toBe(true);
+  if (legacy.ok) expect(legacy.spec.storageClass).toBe("standard");
+
+  const invalid = parseObjectBucketSpec({
+    name: "assets",
+    storageClass: "provider-cold-tier",
+  });
+  expect(invalid.ok).toBe(false);
+  if (!invalid.ok) expect(invalid.error.code).toBe("invalid_storage_class");
+
+  const infrequent = parseResourceSpec("ObjectBucket", {
+    name: "archive",
+    storageClass: "infrequent_access",
+  });
+  expect(infrequent.ok).toBe(true);
+  if (infrequent.ok) {
+    expect(infrequent.parsed.interfaces).toContain(
+      "storage_class_infrequent_access",
+    );
+  }
 });
 
 test("new service shapes enforce shape-specific portable validation", () => {
@@ -382,6 +417,7 @@ test("registered schemas cannot shadow bundled typed shapes", () => {
 test("planner projects only explicit descriptor mappings", () => {
   const parsed = parseResourceSpec("ObjectBucket", {
     name: "assets",
+    storageClass: "infrequent_access",
     interfaces: ["s3_api"],
   });
   expect(parsed.ok).toBe(true);
@@ -396,6 +432,7 @@ test("planner projects only explicit descriptor mappings", () => {
   expect(plan.moduleTemplate).toBe("cloudflare-r2-bucket");
   expect(plan.inputs).toEqual({
     bucketName: "assets",
+    storageClass: "infrequent_access",
     accountId: "target-account",
     region: "region-a",
     immutableMode: true,

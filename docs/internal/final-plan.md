@@ -1240,6 +1240,15 @@ profile.
 Takosumi owns binding projection, policy, metering, managed-target placement,
 or compatibility import/data paths.
 
+Its portable service selector is `spec.storageClass`. The only v1 values are
+`standard` and `infrequent_access`; omission is canonicalized to `standard`.
+The selector is the default for newly written objects, not a provider SKU name
+and not an implicit rewrite of existing objects. `infrequent_access` adds the
+required interface/capability token `storage_class_infrequent_access`, so a
+Target without that evidence is rejected by resolution before adapter or manager
+execution. The typed provider surface is `storage_class`, and Dashboard/API
+details must expose the same two-value contract.
+
 It does not replace ordinary object-storage providers.
 
 Why it exists:
