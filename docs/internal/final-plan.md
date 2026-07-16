@@ -2298,22 +2298,21 @@ classification remain operator/legal approval gates.
 
 ### Managed-service retail rule
 
-For Cloudflare-backed official capacity, the public usage rate is the current
-provider public overage/marginal rate multiplied by `1.5`. Shared provider free
-tiers, account subscriptions, and other fixed platform costs are absorbed by
-the Takosumi Cloud subscription and are not allocated as hidden per-tenant free
-tiers. A catalog update is versioned and effective-dated; it never re-rates old
-immutable usage.
+The versioned Takosumi Cloud PriceCatalog is the authority for official managed
+capacity. Current provider public overage/marginal rates remain reviewed cost
+comparison inputs, but provider invoices do not define tenant usage or public
+retail prices. Shared provider free tiers, account subscriptions, and other
+fixed platform costs are absorbed by the Takosumi Cloud subscription and are
+not allocated as hidden per-tenant free tiers. A catalog update is versioned
+and effective-dated; it never re-rates old immutable usage.
 
 The initial USD catalog is:
 
 | Service                        | Meter                                |                                                                Retail rate |
 | ------------------------------ | ------------------------------------ | -------------------------------------------------------------------------: |
-| EdgeWorker                     | requests                             |                                                          `$0.45 / million` |
-| EdgeWorker                     | CPU                                  |                                                   `$0.03 / million CPU-ms` |
-| EdgeWorker                     | active script                        |                                                     `$0.03 / script-month` |
-| EdgeWorker                     | log events                           |                                                          `$0.90 / million` |
-| EdgeWorker                     | Logpush events                       |                                                         `$0.075 / million` |
+| EdgeWorker                     | accepted gateway requests            |                                                          `$1.00 / million` |
+| EdgeWorker                     | active Ready Resource                |                                                   `$0.09 / Resource-month` |
+| EdgeWorker                     | CPU / subrequests                    |                         included (`10 CPU-ms`, `5` subrequests / dispatch) |
 | VerifiedDomain                 | active hostname                      |                                                   `$0.15 / hostname-month` |
 | ObjectBucket Standard          | storage                              |                                                       `$0.0225 / GB-month` |
 | ObjectBucket Standard          | Class A / Class B                    |                                      `$6.75 / million` / `$0.54 / million` |
