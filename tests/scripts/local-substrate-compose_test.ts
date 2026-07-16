@@ -22,6 +22,34 @@ const cliSmokePath = resolve(
   "../../deploy/local-substrate/scripts/cli-smoke.sh",
 );
 const cliSmoke = readFileSync(cliSmokePath, "utf8");
+const workersCliSmoke = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../deploy/local-substrate/scripts/workers-cli-smoke.sh",
+  ),
+  "utf8",
+);
+const routeRegistrarSmoke = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../deploy/local-substrate/scripts/route-registrar-smoke.sh",
+  ),
+  "utf8",
+);
+const k6Baseline = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../deploy/local-substrate/scripts/k6-baseline.js",
+  ),
+  "utf8",
+);
+const k6BaselineWrapper = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../deploy/local-substrate/scripts/k6-baseline.sh",
+  ),
+  "utf8",
+);
 const tenantIsolationPath = resolve(
   import.meta.dir,
   "../../deploy/local-substrate/scripts/tenant-isolation.sh",
@@ -67,6 +95,34 @@ const smokePath = resolve(
   "../../deploy/local-substrate/scripts/smoke.sh",
 );
 const smoke = readFileSync(smokePath, "utf8");
+const migrationIdempotency = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../deploy/local-substrate/scripts/migration-idempotency.sh",
+  ),
+  "utf8",
+);
+const composeHelpers = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../deploy/local-substrate/scripts/compose-helpers.sh",
+  ),
+  "utf8",
+);
+const otelSmoke = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../deploy/local-substrate/scripts/otel-smoke.sh",
+  ),
+  "utf8",
+);
+const mailpitSmoke = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../deploy/local-substrate/scripts/mailpit-smoke.sh",
+  ),
+  "utf8",
+);
 const workerdTlsNegativePath = resolve(
   import.meta.dir,
   "../../deploy/local-substrate/scripts/workerd-tls-negative.sh",
@@ -107,6 +163,7 @@ test("local-substrate builds the single composed platform worker", () => {
   );
   expect(block).toContain("--format esm");
   expect(block).toContain("--external cloudflare:workers");
+  expect(block).toContain("--external @cloudflare/containers");
   // No stale scaffold output path survives.
   expect(compose).not.toContain("deploy/cloudflare/.wrangler/dist");
   expect(compose).not.toContain("worker/src/index.ts");
@@ -176,11 +233,104 @@ test("local-substrate waits only for builders active in the selected profile", (
   expect(postgres).toContain("takosumi-docs-build");
   expect(postgres).toContain("takosumi-dashboard-build");
   expect(postgres).toContain("takosumi-app-docs-build");
-  expect(workers).not.toContain("takosumi-website-build");
-  expect(workers).not.toContain("takosumi-docs-build");
+  expect(workers).toContain("takosumi-website-build");
+  expect(workers).toContain("takosumi-docs-build");
   expect(workers).toContain("takosumi-dashboard-build");
   expect(workers).toContain("takosumi-app-docs-build");
   expect(staticWaitBlock).toContain('wait_for_completed_service "$service"');
+});
+
+test("local-substrate smoke defaults to the canonical workers profile", () => {
+  expect(composeHelpers).toContain(
+    'local profile="${TAKOSUMI_LOCAL_SUBSTRATE_PROFILE:-workers}"',
+  );
+  expect(composeHelpers).toMatch(/postgres\|workers\)/);
+  expect(composeHelpers).toContain(
+    "TAKOSUMI_LOCAL_SUBSTRATE_PROFILE must be postgres or workers",
+  );
+  expect(smoke).toContain('PROFILE="$(local_substrate_profile)"');
+  expect(smoke).toContain('export TAKOSUMI_LOCAL_SUBSTRATE_PROFILE="$PROFILE"');
+  expect(smoke).not.toContain("--profile postgres");
+  expect(smoke).toContain(
+    'TAKOSUMI_SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://service.takosumi.test}"',
+  );
+  expect(smoke).toContain("export TAKOSUMI_SERVICE_URL");
+  expect(migrationIdempotency).toContain(
+    'PROFILE="$(local_substrate_profile)"',
+  );
+  expect(migrationIdempotency).toContain('--profile "$PROFILE"');
+  expect(migrationIdempotency).not.toContain("--profile postgres");
+});
+
+test("workers smoke uses the private probe host without opening the public app seam", () => {
+  expect(serviceWorkerEnv).toContain("TAKOSUMI_EXPOSE_INTERNAL_EDGE=1");
+  expect(caddyfile).toContain("respond @private 404");
+  expect(cliSmoke).toContain(
+    'workers) DEFAULT_SERVICE_URL="https://service.takosumi.test"',
+  );
+  expect(cliSmoke).toContain('--resolve "${BASH_REMATCH[1]}:443:127.0.0.1"');
+  expect(workersCliSmoke).toContain(
+    '"https://${SERVICE_HOST}/internal/v1/runner-profiles"',
+  );
+  expect(workersCliSmoke).not.toContain(
+    '"https://app.takosumi.test/internal/v1/runner-profiles"',
+  );
+  expect(k6Baseline).toContain(
+    '__ENV.TAKOSUMI_SERVICE_URL || "https://service.takosumi.test"',
+  );
+  expect(k6BaselineWrapper).toContain(
+    "--add-host service.takosumi.test:host-gateway",
+  );
+});
+
+test("workers k6 baseline stays below local Miniflare saturation", () => {
+  expect(k6BaselineWrapper).toContain('PROFILE="$(local_substrate_profile)"');
+  expect(k6BaselineWrapper).toContain(
+    'K6_REQUEST_RATE="${TAKOSUMI_K6_REQUEST_RATE:-1}"',
+  );
+  expect(k6BaselineWrapper).toContain(
+    '-e TAKOSUMI_K6_REQUEST_RATE="$K6_REQUEST_RATE"',
+  );
+  expect(k6Baseline).toContain('__ENV.TAKOSUMI_K6_REQUEST_RATE || "10"');
+  expect(k6Baseline).toContain("rate: REQUEST_RATE");
+});
+
+test("route registrar smoke follows the active local-substrate profile", () => {
+  expect(routeRegistrarSmoke).toContain('PROFILE="$(local_substrate_profile)"');
+  expect(routeRegistrarSmoke).toContain(
+    'workers) REGISTRAR_CONTAINER="local-substrate-route-registrar-workers-1"',
+  );
+  expect(routeRegistrarSmoke).toContain(
+    'postgres) REGISTRAR_CONTAINER="local-substrate-route-registrar-1"',
+  );
+  expect(routeRegistrarSmoke).toContain(
+    "docker inspect -f '{{.State.Status}}' \"$REGISTRAR_CONTAINER\"",
+  );
+});
+
+test("workers smoke starts every profile-specific production mirror dependency", () => {
+  for (const service of [
+    "takosumi-website-build",
+    "takosumi-docs-build",
+    "jaeger",
+    "otel-collector",
+    "mailpit",
+  ]) {
+    const block = compose.match(
+      new RegExp(`(?:^|\\n)  ${service}:[\\s\\S]*?(?=\\n  [a-zA-Z0-9_-]+:|$)`),
+    )?.[0];
+    expect(block, service).toBeDefined();
+    expect(block).toContain('profiles: ["postgres", "workers"]');
+  }
+});
+
+test("host-side observability probes resolve the local ingress explicitly", () => {
+  expect(
+    otelSmoke.match(/--resolve "jaeger\.takosumi\.test:443:127\.0\.0\.1"/g),
+  ).toHaveLength(2);
+  expect(
+    mailpitSmoke.match(/--resolve "mailpit\.takosumi\.test:443:127\.0\.0\.1"/g),
+  ).toHaveLength(3);
 });
 
 test("local-substrate waits for regular completed containers fail-closed", () => {
@@ -273,6 +423,9 @@ test("local-substrate AppArmor override removes docker-healthcheck dependency", 
 
   expect(appArmorCompose).toContain("condition: service_started");
   expect(appArmorCompose).not.toContain("condition: service_healthy");
+  expect(appArmorCompose).toMatch(
+    /takosumi-service-worker:[\s\S]*?opentofu-runner:[\s\S]*?condition: service_started/,
+  );
   expect(appArmorCompose).toContain("substrate-postgres-init:");
   expect(appArmorCompose).toContain("substrate-minio-init:");
   expect(appArmorCompose).toContain('- "true"');
@@ -310,6 +463,23 @@ test("local-substrate postgres profile runs OpenTofu through the mirrored runner
   );
 });
 
+test("workers profile relays the RUNNER durable object to the local runner", () => {
+  const runnerBlock = compose.match(
+    /opentofu-runner:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,
+  )?.[0];
+  const workerBlock = compose.match(
+    /takosumi-service-worker:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,
+  )?.[0];
+  expect(runnerBlock).toContain('profiles: ["postgres", "workers"]');
+  expect(workerBlock).toContain("opentofu-runner:");
+  expect(serviceWorkerEnv).toContain(
+    "TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL=http://opentofu-runner:8080",
+  );
+  expect(platformWorkerRunner).toContain(
+    'className: "LocalSubstrateOpenTofuRunnerProxyObject"',
+  );
+});
+
 test("local-substrate cloud service is an unprivileged Bun control plane", () => {
   const cloudBlock = compose.match(
     /cloud:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,
@@ -332,6 +502,8 @@ test("local-substrate cli smoke exercises Git Source Capsule plan/apply", () => 
     'post_json "/internal/v1/capsules/$CAPSULE_ID/plan"',
   );
   expect(cliSmoke).toContain('post_json "/internal/v1/apply-runs"');
+  expect(cliSmoke).toContain('wait_for_run "$PLAN_ID" "plan"');
+  expect(cliSmoke).toContain('wait_for_run "$APPLY_ID" "apply"');
   expect(cliSmoke).not.toContain(
     "/internal/v1/workspaces/$WORKSPACE_ID/uploads",
   );

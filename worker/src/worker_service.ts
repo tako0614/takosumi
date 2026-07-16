@@ -108,6 +108,8 @@ export async function createWorkerServiceApp(
     readonly resourceShapeSchemaRegistry?: CreateTakosumiServiceOptions["resourceShapeSchemaRegistry"];
     /** Host-owned lookup for explicit Resource Shape moduleTemplate ids. */
     readonly resourceShapeModuleRegistry?: CreateTakosumiServiceOptions["resourceShapeModuleRegistry"];
+    /** Local/private compatibility ingress; production platform edges omit it. */
+    readonly mountInternalLedgerRoutes?: boolean;
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
@@ -287,6 +289,9 @@ export async function createWorkerServiceApp(
       : {}),
     ...(options.defaultRunnerProfileId
       ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
+      : {}),
+    ...(options.mountInternalLedgerRoutes === true
+      ? { mountInternalLedgerRoutes: true }
       : {}),
     ...(backupArtifactStore ? { backupArtifactStore } : {}),
     ...(backupStateObjectReader ? { backupStateObjectReader } : {}),

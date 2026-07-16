@@ -15,7 +15,8 @@ SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 
 # 1. Jaeger UI reachable through Caddy.
-CODE=$(curl -sk --cacert "$CA" -o /dev/null -w "%{http_code}" https://jaeger.takosumi.test/)
+CODE=$(curl -sk --cacert "$CA" --resolve "jaeger.takosumi.test:443:127.0.0.1" \
+	-o /dev/null -w "%{http_code}" https://jaeger.takosumi.test/)
 [[ "$CODE" == "200" ]] || { echo "FAIL: jaeger UI not reachable ($CODE)" >&2; exit 1; }
 
 # 2. Generate a synthetic OTLP/HTTP trace with deterministic IDs.
@@ -61,7 +62,8 @@ curl -sS --max-time 10 -X POST \
 # 3. Poll Jaeger /api/services for the new service name (Jaeger ingests
 #    asynchronously; give it a few seconds).
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-	if curl -sk --cacert "$CA" "https://jaeger.takosumi.test/api/services" \
+	if curl -sk --cacert "$CA" --resolve "jaeger.takosumi.test:443:127.0.0.1" \
+		"https://jaeger.takosumi.test/api/services" \
 			| python3 -c "import json, sys; d=json.load(sys.stdin); sys.exit(0 if '$SVC' in (d.get('data') or []) else 1)" 2>/dev/null; then
 		echo "OK otel collector → jaeger pipeline alive (service=$SVC)"
 		exit 0

@@ -185,6 +185,64 @@ test("apply with a Resource stateScope persists under the Resource R2_STATE pref
   assert.equal(stateField.digest, current.digest);
 });
 
+test("apply validates rawOutputRef against the Apply Run when the plan container is reused", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const applyRawOutputRef = RESOURCE_RAW_OUTPUT_REF.replace(
+    "/runs/plan_1/",
+    "/runs/apply_1/",
+  );
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await artifacts.put(
+    "opentofu-plan-runs/plan_1/tfplan.enc",
+    sealedPlan.ciphertext,
+  );
+  const runner = runnerWithContainer(artifacts, state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        return Response.json({ status: "succeeded", outputs: {} });
+      }
+      if (request.method === "GET" && path.endsWith("/artifacts/tfstate")) {
+        return new Response(NEW_STATE_BYTES);
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId: "plan_1",
+        request: {
+          applyRun: { id: "apply_1" },
+          stateScope: RESOURCE_SCOPE,
+          rawOutputRef: applyRawOutputRef,
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+            digest: PLAN_DIGEST,
+          },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    ((await response.json()) as Record<string, unknown>).rawOutputRef,
+    applyRawOutputRef,
+  );
+});
+
 test("confirmed adoption restores only the exact legacy state and writes the next state under the Resource prefix", async () => {
   const calls: string[] = [];
   const artifacts = new FakeR2Bucket();

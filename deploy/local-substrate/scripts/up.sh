@@ -235,6 +235,8 @@ if [[ -n "$PROFILE" ]]; then
 			;;
 		workers)
 			static_build_services=(
+				takosumi-website-build
+				takosumi-docs-build
 				takosumi-dashboard-build
 				takosumi-app-docs-build
 			)

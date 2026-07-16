@@ -20,9 +20,9 @@
  * COPIED to a production runner. The LOCAL_SUBSTRATE_TEST_BED=1 guard below
  * fails fast if someone tries.
  *
- * The container-backed OpenTofu RUNNER durable object is intentionally NOT bound
- * here: Miniflare cannot run Cloudflare Containers, and the substrate dispatches
- * OpenTofu execution to the standalone `opentofu-runner` service instead.
+ * Miniflare cannot run Cloudflare Containers. The local-only RUNNER durable
+ * object therefore preserves the production artifact relay while proxying the
+ * container transport to the standalone `opentofu-runner` service.
  * ============================================================================
  */
 import { Miniflare } from "miniflare";
@@ -134,6 +134,10 @@ const mf = new Miniflare({
     },
     RUN_OWNER: {
       className: "OpenTofuRunOwnerObject",
+      useSQLite: true,
+    },
+    RUNNER: {
+      className: "LocalSubstrateOpenTofuRunnerProxyObject",
       useSQLite: true,
     },
   },

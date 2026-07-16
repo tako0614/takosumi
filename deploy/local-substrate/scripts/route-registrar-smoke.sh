@@ -17,18 +17,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/compose-helpers.sh"
 
+PROFILE="$(local_substrate_profile)"
+case "$PROFILE" in
+	workers) REGISTRAR_CONTAINER="local-substrate-route-registrar-workers-1" ;;
+	postgres) REGISTRAR_CONTAINER="local-substrate-route-registrar-1" ;;
+esac
+
 # 1. Container running
-state=$(docker inspect -f '{{.State.Status}}' local-substrate-route-registrar-1 2>/dev/null || echo "missing")
+state=$(docker inspect -f '{{.State.Status}}' "$REGISTRAR_CONTAINER" 2>/dev/null || echo "missing")
 if [[ "$state" != "running" ]]; then
 	echo "FAIL: route-registrar container is not running (state=$state)" >&2
 	exit 1
 fi
 
 # 2. Recent tick log
-if ! docker logs --since 30s local-substrate-route-registrar-1 2>&1 \
+if ! docker logs --since 30s "$REGISTRAR_CONTAINER" 2>&1 \
 		| grep -q "synced .* dynamic route"; then
 	echo "FAIL: no 'synced N dynamic' log line in the last 30s" >&2
-	docker logs --tail 5 local-substrate-route-registrar-1 >&2
+	docker logs --tail 5 "$REGISTRAR_CONTAINER" >&2
 	exit 1
 fi
 

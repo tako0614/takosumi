@@ -108,14 +108,14 @@ SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.
 	exit 1
 }
 
-# 3. deploy control internal seam auth + handler init. The service Worker
-#    probe intentionally does not expose `/internal/v1`; in the postgres
-#    profile that seam is mounted only on the composed app host.
+# 3. Deploy-control internal seam auth + handler init. Production keeps this
+#    edge-closed. local-substrate opts it in only on the local/private Worker
+#    probe host; app.takosumi.test remains protected by Caddy's 404 guard.
 RUNNER_PROFILES=$(curl -sk --cacert "$CA" \
-	--resolve "app.takosumi.test:443:127.0.0.1" \
+	--resolve "${SERVICE_HOST}:443:127.0.0.1" \
 	-H "Authorization: Bearer $DEPLOY_CONTROL_TOKEN" \
 	-H "Content-Type: application/json" \
-	"https://app.takosumi.test/internal/v1/runner-profiles")
+	"https://${SERVICE_HOST}/internal/v1/runner-profiles")
 PROFILE_COUNT=$(echo "$RUNNER_PROFILES" | python3 -c "import json,sys;print(len(json.loads(sys.stdin.read()).get('runnerProfiles') or []))")
 [[ "$PROFILE_COUNT" -gt 0 ]] || { echo "FAIL: /internal/v1/runner-profiles returned no profiles: $RUNNER_PROFILES" >&2; exit 1; }
 
