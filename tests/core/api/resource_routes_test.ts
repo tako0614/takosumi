@@ -12,6 +12,7 @@ import {
   LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
   MapResourceShapeModuleRegistry,
   MapResourceShapeSchemaRegistry,
+  type ResourceShapeServiceDeps,
   ResourceShapeService,
   StubResourceShapeAdapter,
 } from "../../../core/domains/resource-shape/mod.ts";
@@ -20,6 +21,9 @@ import type { AdapterDeleteInput } from "../../../core/domains/resource-shape/mo
 import { ActivityService } from "../../../core/domains/activity/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import {
+  type FormDefinition,
+  type FormPackage,
+  type InstalledFormReference,
   RESOURCE_SHAPE_KINDS,
   type SpacePolicySpec,
   type TargetPoolSpec,
@@ -142,6 +146,7 @@ function testOperatorModule() {
 
 async function buildApp(
   routeOptions?: Partial<RegisterResourceShapeRoutesOptions>,
+  formRegistry?: ResourceShapeServiceDeps["formRegistry"],
 ) {
   const stores = createInMemoryResourceShapeStores();
   const activityStore = new InMemoryOpenTofuControlStore();
@@ -156,6 +161,7 @@ async function buildApp(
     operationRuns: activityStore,
     moduleRegistry: ROUTE_MODULE_REGISTRY,
     schemaRegistry: LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    formRegistry,
     now: () => "2026-01-01T00:00:00.000Z",
   });
   await service.putTargetPool("space_1", "default", POOL);
@@ -178,6 +184,48 @@ async function buildApp(
     requestCorrelation: false,
   });
   return { app, service, activityStore };
+}
+
+const EXACT_OBJECT_BUCKET_FORM: InstalledFormReference = {
+  formRef: {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    definitionVersion: "1.0.0",
+    schemaDigest: `sha256:${"1".repeat(64)}`,
+  },
+  packageDigest: `sha256:${"2".repeat(64)}`,
+};
+
+function exactObjectBucketFormRegistry(): NonNullable<
+  ResourceShapeServiceDeps["formRegistry"]
+> {
+  const definition: FormDefinition = {
+    identity: EXACT_OBJECT_BUCKET_FORM,
+    displayName: "Object bucket",
+    operations: ["create", "read", "update", "delete", "import", "refresh"],
+    installedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const formPackage: FormPackage = {
+    packageDigest: EXACT_OBJECT_BUCKET_FORM.packageDigest,
+    artifactRef: "oci://forms.example/object-bucket@sha256:exact",
+    verifierId: "test-verifier",
+    status: "installed",
+    definitionRefs: [EXACT_OBJECT_BUCKET_FORM.formRef],
+    installedAt: "2026-01-01T00:00:00.000Z",
+    installedBy: "test",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  return {
+    getDefinition: async (formRef) =>
+      JSON.stringify(formRef) ===
+      JSON.stringify(EXACT_OBJECT_BUCKET_FORM.formRef)
+        ? definition
+        : undefined,
+    getPackage: async (packageDigest) =>
+      packageDigest === EXACT_OBJECT_BUCKET_FORM.packageDigest
+        ? formPackage
+        : undefined,
+  };
 }
 
 const JSON_HEADERS = { "content-type": "application/json" };
@@ -248,6 +296,77 @@ test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", as
   );
   expect(body.status.resolution.target).toBe("cloudflare-main");
   expect(body.status.phase).toBe("Ready");
+});
+
+test("public Resource API validates, applies, and returns one exact installed Form identity", async () => {
+  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
+  const path = "/v1/resources/ObjectBucket/form-assets";
+  const desired = {
+    metadata: { space: "space_1" },
+    form: EXACT_OBJECT_BUCKET_FORM,
+    spec: { name: "form-assets", interfaces: ["s3_api"] },
+  };
+
+  const preview = await app.request("/v1/resources/preview", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ ...desired, kind: "ObjectBucket" }),
+  });
+  expect(preview.status).toBe(200);
+  expect((await preview.json()).resource.form).toEqual(
+    EXACT_OBJECT_BUCKET_FORM,
+  );
+
+  const applied = await reviewedResourceApply(app, path, desired);
+  expect(applied.status).toBe(200);
+  expect((await applied.json()).form).toEqual(EXACT_OBJECT_BUCKET_FORM);
+
+  const read = await app.request(`${path}?space=space_1`);
+  expect(read.status).toBe(200);
+  expect((await read.json()).form).toEqual(EXACT_OBJECT_BUCKET_FORM);
+
+  const omitted = await app.request("/v1/resources/preview", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ ...desired, kind: "ObjectBucket", form: undefined }),
+  });
+  expect(omitted.status).toBe(409);
+  expect((await omitted.json()).error.code).toBe("form_identity_conflict");
+});
+
+test("public Resource API rejects malformed or kind-mismatched exact Form identity", async () => {
+  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
+  const base = {
+    kind: "ObjectBucket",
+    metadata: { space: "space_1" },
+    spec: { name: "invalid-form-assets", interfaces: ["s3_api"] },
+  };
+  const malformed = await app.request("/v1/resources/preview", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      ...base,
+      form: { ...EXACT_OBJECT_BUCKET_FORM, packageDigest: "latest" },
+    }),
+  });
+  expect(malformed.status).toBe(400);
+  expect((await malformed.json()).error.message).toContain(
+    "exact InstalledFormReference",
+  );
+
+  const mismatch = await app.request("/v1/resources/preview", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      ...base,
+      form: {
+        ...EXACT_OBJECT_BUCKET_FORM,
+        formRef: { ...EXACT_OBJECT_BUCKET_FORM.formRef, kind: "Queue" },
+      },
+    }),
+  });
+  expect(mismatch.status).toBe(400);
+  expect((await mismatch.json()).error.code).toBe("invalid_form_ref");
 });
 
 test("PUT /v1/resources preserves the caller-declared Resource manager", async () => {
