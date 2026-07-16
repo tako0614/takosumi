@@ -1227,6 +1227,11 @@ export const ja = {
   "resources.editor.profilesHint":
     "profile token は接続先が公開・検証します。dashboard は固定リストを持ちません。",
   "resources.editor.tokenListHint": "複数指定はカンマまたは空白で区切ります。",
+  "resources.editor.bucketStorageClass": "Storage class",
+  "resources.editor.bucketStorageClass.standard": "Standard",
+  "resources.editor.bucketStorageClass.infrequentAccess": "Infrequent access",
+  "resources.editor.bucketStorageClassHint":
+    "新規 object の portable な既定 class です。Infrequent access は対応 capability を公開する target が必要です。",
   "resources.editor.bucketInterfaces": "必要な object interface",
   "resources.editor.bucketInterfacesHint":
     "例: s3_api、signed_url。これは runtime Interface オブジェクトではなく、接続先が検証する capability token です。",

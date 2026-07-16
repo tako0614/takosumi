@@ -32,6 +32,7 @@ import {
   type GuidedSpecErrorCode,
   type GuidedSpecResult,
   type KVStoreConsistency,
+  type ObjectBucketStorageClass,
   type OptionalBooleanChoice,
 } from "../../lib/resource-service-form.ts";
 import {
@@ -86,6 +87,8 @@ export default function ResourceEditor(props: Props): JSX.Element {
   const [compatibilityDate, setCompatibilityDate] = createSignal("");
   const [compatibilityFlags, setCompatibilityFlags] = createSignal("");
   const [profiles, setProfiles] = createSignal("");
+  const [bucketStorageClass, setBucketStorageClass] =
+    createSignal<ObjectBucketStorageClass>("standard");
   const [bucketInterfaces, setBucketInterfaces] = createSignal("s3_api");
   const [kvConsistency, setKvConsistency] =
     createSignal<KVStoreConsistency>("");
@@ -137,7 +140,11 @@ export default function ResourceEditor(props: Props): JSX.Element {
       case "ObjectBucket":
         return {
           kind: "ObjectBucket",
-          form: { name: name(), interfaces: bucketInterfaces() },
+          form: {
+            name: name(),
+            storageClass: bucketStorageClass(),
+            interfaces: bucketInterfaces(),
+          },
         };
       case "KVStore":
         return {
@@ -363,6 +370,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
         return;
       }
       case "ObjectBucket":
+        setBucketStorageClass(input.form.storageClass);
         setBucketInterfaces(input.form.interfaces);
         return;
       case "KVStore":
@@ -435,6 +443,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
         setProfiles("");
         return;
       case "ObjectBucket":
+        setBucketStorageClass("standard");
         setBucketInterfaces("s3_api");
         return;
       case "KVStore":
@@ -920,23 +929,49 @@ export default function ResourceEditor(props: Props): JSX.Element {
           </Show>
 
           <Show when={guidedMode() && kind() === "ObjectBucket"}>
-            <label class="tg-field rs-guided-fields">
-              <span class="tg-field-label">
-                {t("resources.editor.bucketInterfaces")}
-              </span>
-              <input
-                class="tg-input"
-                value={bucketInterfaces()}
-                onInput={(event) =>
-                  setBucketInterfaces(event.currentTarget.value)
-                }
-                autocomplete="off"
-                placeholder="s3_api, signed_url"
-              />
-              <span class="tg-field-hint">
-                {t("resources.editor.bucketInterfacesHint")}
-              </span>
-            </label>
+            <div class="rs-form-grid rs-guided-fields">
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.bucketStorageClass")}
+                </span>
+                <select
+                  class="tg-select"
+                  value={bucketStorageClass()}
+                  onChange={(event) =>
+                    setBucketStorageClass(
+                      event.currentTarget.value as ObjectBucketStorageClass,
+                    )
+                  }
+                >
+                  <option value="standard">
+                    {t("resources.editor.bucketStorageClass.standard")}
+                  </option>
+                  <option value="infrequent_access">
+                    {t("resources.editor.bucketStorageClass.infrequentAccess")}
+                  </option>
+                </select>
+                <span class="tg-field-hint">
+                  {t("resources.editor.bucketStorageClassHint")}
+                </span>
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.bucketInterfaces")}
+                </span>
+                <input
+                  class="tg-input"
+                  value={bucketInterfaces()}
+                  onInput={(event) =>
+                    setBucketInterfaces(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="s3_api, signed_url"
+                />
+                <span class="tg-field-hint">
+                  {t("resources.editor.bucketInterfacesHint")}
+                </span>
+              </label>
+            </div>
           </Show>
 
           <Show when={guidedMode() && kind() === "KVStore"}>
