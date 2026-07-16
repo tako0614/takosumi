@@ -240,6 +240,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       runId: job.runId,
       source: job.source,
       archiveRef: job.archiveRef,
+      ...(job.reuseSnapshot ? { reuseSnapshot: job.reuseSnapshot } : {}),
       ...(job.credentials ? { credentials: job.credentials } : {}),
     });
     const archive = recordValue(result, "sourceArchive");
@@ -249,6 +250,11 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     const archiveSizeBytes =
       numberValue(result, "archiveSizeBytes") ??
       (archive ? numberValue(archive, "sizeBytes") : undefined);
+    const archiveRef =
+      stringValue(result, "archiveRef") ??
+      (archive ? stringValue(archive, "ref") : undefined);
+    const repositoryInstallMetadata =
+      repositoryInstallMetadataFromRunnerResult(result);
     const resolvedCommit = requiredString(result, "resolvedCommit");
     if (!archiveDigest || archiveSizeBytes === undefined) {
       throw new Error(`source_sync ${job.runId} returned no archive metadata`);
@@ -260,7 +266,15 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     );
     await assertDigest(bytes, archiveDigest, "source_sync archive");
     await this.archiveStore.write(job.archiveRef, bytes);
-    return { resolvedCommit, archiveDigest, archiveSizeBytes };
+    const phaseTimings = phaseTimingsFromRunnerResult(result);
+    return {
+      resolvedCommit,
+      archiveDigest,
+      archiveSizeBytes,
+      ...(repositoryInstallMetadata ? { repositoryInstallMetadata } : {}),
+      ...(archiveRef ? { archiveRef } : {}),
+      ...(phaseTimings ? { phaseTimings } : {}),
+    };
   }
 
   async readCapsuleSourceFiles(
@@ -546,6 +560,46 @@ function diagnostics(
   return stderr && stderr.trim().length > 0
     ? [{ severity: "warning", message: stderr }]
     : [];
+}
+
+function repositoryInstallMetadataFromRunnerResult(
+  result: Record<string, unknown>,
+): OpenTofuSourceSyncResult["repositoryInstallMetadata"] | undefined {
+  const value = recordValue(result, "repositoryInstallMetadata");
+  if (!value) return undefined;
+  const status = stringValue(value, "status");
+  if (status === "absent") return { status };
+  if (status === "present") {
+    const text = stringValue(value, "text");
+    return text === undefined ? undefined : { status, text };
+  }
+  if (status === "invalid") {
+    const reason = stringValue(value, "reason");
+    if (reason === "not_regular_file" || reason === "too_large") {
+      return { status, reason };
+    }
+  }
+  return undefined;
+}
+
+function phaseTimingsFromRunnerResult(
+  result: Record<string, unknown>,
+): NonNullable<OpenTofuSourceSyncResult["phaseTimings"]> | undefined {
+  const value = result.phaseTimings;
+  if (!Array.isArray(value)) return undefined;
+  const timings = value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const phase = stringValue(entry, "phase");
+    const startedAt = stringValue(entry, "startedAt");
+    const finishedAt = stringValue(entry, "finishedAt");
+    const durationMs = numberValue(entry, "durationMs");
+    if (!phase || !/^[a-z][a-z0-9_]{0,63}$/u.test(phase)) return [];
+    if (!startedAt || !Number.isFinite(Date.parse(startedAt))) return [];
+    if (!finishedAt || !Number.isFinite(Date.parse(finishedAt))) return [];
+    if (durationMs === undefined || durationMs < 0) return [];
+    return [{ phase, startedAt, finishedAt, durationMs }];
+  });
+  return timings.length > 0 ? timings : undefined;
 }
 
 async function assertDigest(

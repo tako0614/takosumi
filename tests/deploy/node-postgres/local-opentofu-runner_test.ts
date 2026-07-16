@@ -56,6 +56,111 @@ test("local OpenTofu runner passes modulePath to compatibility_check", async () 
   }
 });
 
+test("HTTP OpenTofu runner preserves source sync reuse and repository metadata", async () => {
+  const archiveBytes = new TextEncoder().encode("source archive");
+  const archiveDigest = await sha256(archiveBytes);
+  const requests: unknown[] = [];
+  const writes: Array<{ key: string; bytes: Uint8Array }> = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (request.method === "POST" && url.pathname === "/runs/sync_1") {
+        requests.push(await request.json());
+        return Response.json({
+          resolvedCommit: "fedcba9876543210fedcba9876543210fedcba98",
+          sourceArchive: {
+            ref: "workspaces/workspace_1/sources/source_1/archive.tar.zst",
+            digest: archiveDigest,
+            sizeBytes: archiveBytes.byteLength,
+          },
+          repositoryInstallMetadata: {
+            status: "present",
+            text: '{"name":"Capsule"}',
+          },
+          phaseTimings: [
+            {
+              phase: "archive",
+              startedAt: "2026-07-16T00:00:00.000Z",
+              finishedAt: "2026-07-16T00:00:00.010Z",
+              durationMs: 10,
+            },
+          ],
+        });
+      }
+      if (
+        request.method === "GET" &&
+        url.pathname === "/runs/sync_1/artifacts/source-archive"
+      ) {
+        return new Response(archiveBytes);
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: {
+        write: async (key, bytes) => writes.push({ key, bytes }),
+        read: async () => {
+          throw new Error("not used");
+        },
+      },
+      baseUrl: server.url.href,
+    });
+    const reuseSnapshot = {
+      id: "snapshot_0",
+      resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
+      archiveRef: "workspaces/workspace_1/sources/source_1/old.tar.zst",
+      archiveDigest,
+      archiveSizeBytes: archiveBytes.byteLength,
+    };
+
+    const result = await runner.sourceSync({
+      runId: "sync_1",
+      workspaceId: "workspace_1",
+      sourceId: "source_1",
+      source: {
+        url: "https://example.test/capsule.git",
+        ref: "main",
+        path: ".",
+      },
+      archiveRef: "workspaces/workspace_1/sources/source_1/archive.tar.zst",
+      reuseSnapshot,
+    });
+
+    expect(requests[0]).toMatchObject({
+      action: "source_sync",
+      request: { reuseSnapshot },
+    });
+    expect(result).toEqual({
+      resolvedCommit: "fedcba9876543210fedcba9876543210fedcba98",
+      archiveDigest,
+      archiveSizeBytes: archiveBytes.byteLength,
+      archiveRef: "workspaces/workspace_1/sources/source_1/archive.tar.zst",
+      repositoryInstallMetadata: {
+        status: "present",
+        text: '{"name":"Capsule"}',
+      },
+      phaseTimings: [
+        {
+          phase: "archive",
+          startedAt: "2026-07-16T00:00:00.000Z",
+          finishedAt: "2026-07-16T00:00:00.010Z",
+          durationMs: 10,
+        },
+      ],
+    });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.key).toBe(
+      "workspaces/workspace_1/sources/source_1/archive.tar.zst",
+    );
+    expect(writes[0]?.bytes).toEqual(archiveBytes);
+  } finally {
+    server.stop(true);
+  }
+});
+
 function sourceSnapshot(archiveDigest: string): SourceSnapshot {
   return {
     id: "snap_1",

@@ -201,9 +201,18 @@ PLAN_BODY="$(response_body "$PLAN_RESPONSE")"
 APPLY_REQUEST="$(printf '%s' "$PLAN_BODY" | python3 -c '
 import json, sys
 run = json.load(sys.stdin)["run"]
-expected = run.get("applyExpected")
-if not expected:
+public_expected = run.get("applyExpected")
+if not public_expected:
   raise SystemExit("plan Run response did not include applyExpected")
+expected = dict(public_expected)
+plan_run_id = expected.pop("planId", None)
+runner_profile_id = expected.pop("runnerId", None)
+if plan_run_id != run["id"]:
+  raise SystemExit("plan Run applyExpected.planId did not match run.id")
+if not runner_profile_id:
+  raise SystemExit("plan Run applyExpected did not include runnerId")
+expected["planRunId"] = plan_run_id
+expected["runnerProfileId"] = runner_profile_id
 print(json.dumps({"planRunId": run["id"], "expected": expected}))
 ')"
 APPLY_RESPONSE="$(post_json "/internal/v1/apply-runs" "$APPLY_REQUEST")"

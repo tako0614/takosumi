@@ -128,9 +128,7 @@ export {
 } from "./platform_extensions.ts";
 export {
   evaluateProductionHardeningGates,
-  OSS_PLATFORM_HARDENING_CONTRIBUTION,
   platformHardeningContributions,
-  TAKOSUMI_PRODUCTION_HARDENING_GATE_RESULT_KIND,
   type ProductionHardeningCheck,
   type ProductionHardeningContributionResult,
   type ProductionHardeningGateResult,
