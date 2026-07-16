@@ -7,6 +7,17 @@ SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
 source "$SCRIPT_DIR/compose-helpers.sh"
 
+PROFILE="$(local_substrate_profile)"
+export TAKOSUMI_LOCAL_SUBSTRATE_PROFILE="$PROFILE"
+case "$PROFILE" in
+	workers)
+		TAKOSUMI_SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://service.takosumi.test}"
+		;;
+	postgres)
+		TAKOSUMI_SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://app.takosumi.test}"
+		;;
+esac
+export TAKOSUMI_SERVICE_URL
 CA="caddy/runtime/pebble-issuance-root.pem"
 LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
 PASS=0
@@ -60,12 +71,12 @@ bundle_freshness_gate() {
 		if [[ -n "$service_newer" ]]; then
 			echo "==> [bundle-gate] platform worker source newer than bundle, auto-rebuilding..."
 			echo "$service_newer" | sed 's/^/                   /'
-			compose_substrate --profile postgres \
+			compose_substrate --profile "$PROFILE" \
 				run --rm takosumi-service-worker-build >"$SMOKE_LOG_DIR/bundle-gate-service-worker.log" 2>&1 || {
 				echo "==> [bundle-gate] platform worker rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-service-worker.log" >&2
 				exit 1
 			}
-			compose_substrate --profile postgres \
+			compose_substrate --profile "$PROFILE" \
 				up -d --force-recreate --no-deps takosumi-service-worker >/dev/null 2>&1
 			sleep 3
 			echo "==> [bundle-gate] platform worker rebuilt + restarted"
@@ -81,7 +92,7 @@ bundle_freshness_gate() {
 		if [[ -n "$newer" ]]; then
 			echo "==> [bundle-gate] SPA source newer than bundle, auto-rebuilding..."
 			echo "$newer" | sed 's/^/                   /'
-			compose_substrate --profile postgres \
+			compose_substrate --profile "$PROFILE" \
 				run --rm takosumi-dashboard-build >"$SMOKE_LOG_DIR/bundle-gate-spa.log" 2>&1 || {
 				echo "==> [bundle-gate] SPA rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-spa.log" >&2
 				exit 1
@@ -334,7 +345,12 @@ else
 fi
 
 echo
-echo "==> k6 load baseline via Caddy + TLS (20 RPS x 20s — regression watch only, NOT SLO)"
+case "$PROFILE" in
+	workers) DEFAULT_K6_RATE=1 ;;
+	postgres) DEFAULT_K6_RATE=10 ;;
+esac
+K6_RATE="${TAKOSUMI_K6_REQUEST_RATE:-$DEFAULT_K6_RATE}"
+echo "==> k6 load baseline via Caddy + TLS ($((K6_RATE * 2)) total RPS x 20s — regression watch only, NOT SLO)"
 if run_script "k6.baseline" "bash $SCRIPT_DIR/k6-baseline.sh"; then
 	echo "    PASS [k6.baseline] deploy control read + oidc both within p95 + error-rate thresholds"
 	PASS=$((PASS + 1))

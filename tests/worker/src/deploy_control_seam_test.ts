@@ -53,3 +53,20 @@ test("Worker composition rejects a text RunnerProfile catalog", () => {
     } as unknown as CloudflareWorkerEnv),
   ).toThrow("must be a host-code runtime object");
 });
+
+test("Worker composition mounts ledger HTTP routes only for explicit private ingress", () => {
+  expect(
+    deployControlServiceOptions({} as unknown as CloudflareWorkerEnv)
+      .mountInternalLedgerRoutes,
+  ).toBeUndefined();
+  expect(
+    deployControlServiceOptions({
+      LOCAL_SUBSTRATE_TEST_BED: "1",
+    } as unknown as CloudflareWorkerEnv).mountInternalLedgerRoutes,
+  ).toBe(true);
+  expect(
+    deployControlServiceOptions({
+      TAKOSUMI_EXPOSE_INTERNAL_EDGE: "1",
+    } as unknown as CloudflareWorkerEnv).mountInternalLedgerRoutes,
+  ).toBe(true);
+});

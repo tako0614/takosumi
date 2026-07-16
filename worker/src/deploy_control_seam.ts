@@ -38,6 +38,7 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
   readonly defaultRunnerProfileId?: string;
   readonly managedVanityHostnameSlotsPerOwner?: number;
   readonly resourceShapeSchemaRegistry: ResourceShapeSchemaRegistry;
+  readonly mountInternalLedgerRoutes?: boolean;
 } {
   const hostComposition = runnerHostCompositionFromEnv(env);
   const managedVanityHostnameSlotsPerOwner = nonNegativeInteger(
@@ -49,6 +50,10 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
     // compatibility schemas. Core and the generic Worker factory remain empty.
     resourceShapeSchemaRegistry:
       LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    ...(env.LOCAL_SUBSTRATE_TEST_BED === "1" ||
+    env.TAKOSUMI_EXPOSE_INTERNAL_EDGE === "1"
+      ? { mountInternalLedgerRoutes: true }
+      : {}),
     ...(hostComposition?.executors
       ? { runnerExecutors: hostComposition.executors }
       : {}),
