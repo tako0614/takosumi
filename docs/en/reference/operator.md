@@ -2,8 +2,12 @@
 
 An operator runs Takosumi for Operator for their own users.
 
-Takosumi OSS provides the Git-based OpenTofu control plane, Resource Shape API,
-Compatibility API framework, and Adapter system. Takosumi for Operator adds
+Takosumi OSS provides the Git-based OpenTofu control plane, an optional
+zero-form-capable Service Form host (current Resource Shape compatibility API),
+Compatibility API framework, and Adapter system. The portable project owns
+Service Forms, FormRefs, data-only Form Packages, and typed-client conformance;
+the Takosumi operator owns package pins, trusted implementations, Target /
+Policy / credentials, and generic FormActivation. Takosumi for Operator adds
 customer management, billing / metering / quota, DB-backed operator
 configuration, CLI/API/runbook operations, a managed target catalog, and
 commercial operation. Takosumi Cloud is the official hosted operation run by us.
@@ -14,7 +18,7 @@ commercial operation. Takosumi Cloud is the official hosted operation run by us.
 - define runner substrate, runner image, resource limits, and provider allowlist seed
 - manage CredentialRecipe seeds, provider allowlists, and ProviderConnection policy
 - manage sealed backing material and secret delivery for ProviderConnections
-- manage Resource Shape, TargetPool, Adapter, and compatibility profile availability
+- manage Form Registry, implementation, FormActivation, TargetPool, Adapter, and compatibility profile availability
 - tune scheduled Resource observation cadence, batch, and concurrency to runner capacity
 - manage state and lock backends
 - in production/staging, do not infer encryption at rest from the database URL
@@ -44,8 +48,9 @@ ProviderConnection
   -> temporary env/file injection
   -> OpenTofu/Terraform provider
 
-Resource Shape:
-Resource
+Service Form host (current Resource Shape API):
+exact FormRef + Resource
+  -> installed definition / implementation / FormActivation
   -> TargetPool / Policy / Credential
   -> Adapter capability
   -> ResolutionLock
@@ -91,10 +96,10 @@ official billing / quota / usage / support / SLA
 Official managed capacity implementations, tests, secrets, and deployment
 config belong in the closed Cloud repo.
 
-## Scheduled Resource Shape observation
+## Scheduled Service Form-backed Resource observation
 
 The platform worker runs read-only scheduled observation by default when the
-host enables at least one Resource Shape kind. Only `Ready` Resources at their
+host enables at least one current Resource Shape compatibility kind. Only `Ready` Resources at their
 current generation are eligible. Observation runs against the pinned Target and
 implementation as a non-applyable `drift_check`; it never applies or refreshes.
 A durable lease deduplicates candidates across all Spaces and isolates one
