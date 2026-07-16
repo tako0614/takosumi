@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "kind": "takosumi.provider-candidate-delta-policy@v1",
+  "baseline": {
+    "version": "1.0.0",
+    "identity": "1.0.0-state-identity.json",
+    "identitySha256": "6c94da2e1094545ae679fecc00bb8809fe4b287bee0218ff63e80be29b202136"
+  },
+  "candidate": {
+    "version": "1.0.1",
+    "semverChange": "patch",
+    "classification": "correction-plus-additive-features"
+  },
+  "additiveResources": [
+    "takosumi_durable_workflow",
+    "takosumi_schedule",
+    "takosumi_stateful_actor_namespace",
+    "takosumi_vector_index"
+  ],
+  "additiveAttributes": [
+    "takosumi_edge_worker.artifact_ref",
+    "takosumi_object_bucket.storage_class",
+    "takosumi_target_pool.target.implementation.module_input_mappings_json",
+    "takosumi_target_pool.target.implementation.module_outputs_json",
+    "takosumi_target_pool.target.implementation.module_template",
+    "takosumi_target_pool.target.implementation.provider_alias",
+    "takosumi_target_pool.target.implementation.provider_config_json",
+    "takosumi_target_pool.target.implementation.provider_source"
+  ],
+  "patchFeatureDecision": {
+    "status": "blocked-review",
+    "admitted": false,
+    "requiredOutcome": "Choose correction-only 1.0.1, move additive features to a minor release, or explicitly approve the additive patch before the signing trust root is pinned."
+  },
+  "stateCompatibility": {
+    "oldStateNoOpRequired": true,
+    "observeRequired": true,
+    "rollbackRequired": true,
+    "status": "proof-complete",
+    "evidence": {
+      "command": "bun run provider:compatibility:state-proof",
+      "coveredResources": [
+        "takosumi_container_service",
+        "takosumi_edge_worker",
+        "takosumi_kv_store",
+        "takosumi_object_bucket",
+        "takosumi_queue",
+        "takosumi_sql_database",
+        "takosumi_target_pool"
+      ],
+      "remainingResources": []
+    }
+  },
+  "releaseEligibility": "blocked"
+}
