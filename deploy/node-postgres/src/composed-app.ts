@@ -47,6 +47,11 @@ import {
   REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
 } from "@takosumi/providers";
 import { createConnectionOAuthHelpers } from "../../../core/api/connection_oauth_helpers.ts";
+import {
+  capsuleRunTokenSecret,
+  isCapsuleRunToken,
+  verifyCapsuleRunToken,
+} from "../../../core/shared/capsule_run_tokens.ts";
 import { REFERENCE_APP_INSTALL_CONFIGS } from "../../reference-app-install-configs.ts";
 
 export interface ComposedAppInput {
@@ -218,7 +223,27 @@ export async function buildComposedApp(
         };
       },
     },
-    authorizeInterfaceBearer: async ({ request }) => {
+    authorizeInterfaceBearer: async ({ token, request }) => {
+      // Capsule-scoped run token: the ambient credential a Run's sandbox uses
+      // to declare its own Capsule's Interfaces and self-report status. The
+      // route layer confines it (own Capsule only, never bindings).
+      if (isCapsuleRunToken(token)) {
+        const secret = capsuleRunTokenSecret(
+          process.env as Record<string, unknown>,
+        );
+        if (!secret) return undefined;
+        const verified = await verifyCapsuleRunToken(token, { secret });
+        if (!verified.ok) return undefined;
+        return {
+          actorAccountId: verified.payload.sub,
+          workspaceId: verified.payload.workspaceId,
+          capsuleId: verified.payload.capsuleId,
+          capsuleRunMutable: verified.payload.mutable,
+          roles: ["capsule-runtime"],
+          requestId: request.headers.get("x-request-id") ?? crypto.randomUUID(),
+          principalKind: "service",
+        };
+      }
       const isInterfaceTokenIssue =
         request.method === "POST" &&
         /^\/v1\/interfaces\/[^/]+\/token$/u.test(new URL(request.url).pathname);
@@ -258,6 +283,10 @@ export async function buildComposedApp(
       // the access token. Its actorAccountId is pairwise and cannot be compared
       // to the account-plane legal owner.
       if (actor.roles.includes("runtime-principal")) {
+        return actor.workspaceId === workspaceId;
+      }
+      // A Capsule run token is signed over its exact Workspace/Capsule scope.
+      if (actor.roles.includes("capsule-runtime")) {
         return actor.workspaceId === workspaceId;
       }
       const operations = controlPlaneOperations;

@@ -1414,6 +1414,14 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
             },
             {
               type: "object",
+              required: ["source"],
+              properties: {
+                source: { const: "capsule_resource" },
+              },
+              additionalProperties: false,
+            },
+            {
+              type: "object",
               required: ["source", "profile", "key"],
               properties: {
                 source: { const: "compatibility_profile" },
@@ -1482,6 +1490,19 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
         name: { type: "string", minLength: 1 },
         labels,
         spec: ref("InterfaceSpec"),
+      },
+      additionalProperties: false,
+    },
+    ReportInterfaceStatusRequest: {
+      type: "object",
+      required: ["conditions"],
+      properties: {
+        conditions: {
+          type: "array",
+          minItems: 1,
+          maxItems: 16,
+          items: interfaceCondition,
+        },
       },
       additionalProperties: false,
     },

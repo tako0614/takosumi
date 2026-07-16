@@ -224,6 +224,7 @@ import { RunCredentialBroker } from "./run_credential_broker.ts";
 import {
   RunEnvironmentResolutionError,
   RunEnvResolver,
+  type CapsuleRunIdentityIssuer,
   type ResolvedRunEnvironment,
 } from "./run_env_resolver.ts";
 import {
@@ -775,6 +776,12 @@ export interface OpenTofuControllerDependencies {
    */
   readonly vault?: ConnectionVault;
   /**
+   * Optional ambient run-identity issuer for module-declared Interfaces.
+   * The token is Capsule-scoped and injected only in the per-run credential
+   * payload, never persisted in Run/state/output evidence.
+   */
+  readonly capsuleRunIdentity?: CapsuleRunIdentityIssuer;
+  /**
    * Complete service-installed Credential Recipe catalog exposed through
    * discovery and used for connection validation. Omitted means that no
    * recipes are installed; Core never imports a reference catalog or infers
@@ -1218,6 +1225,9 @@ export class OpenTofuController {
       credentials: this.#credentials,
       resolveRunProviderBindings: (planRun) =>
         this.#runEngine.resolveRunProviderBindings(planRun),
+      ...(dependencies.capsuleRunIdentity
+        ? { capsuleRunIdentity: dependencies.capsuleRunIdentity }
+        : {}),
     });
     this.#dependencies = new DependencyResolutionService({
       store: this.#store,

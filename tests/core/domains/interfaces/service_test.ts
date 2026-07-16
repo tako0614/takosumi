@@ -1288,3 +1288,120 @@ test("Interface activity records actor identity without resolved values", async 
   );
   expect(JSON.stringify(activities)).not.toContain("private.example.test");
 });
+
+test("status self-report is idempotent: a no-op re-report writes no activity", async () => {
+  const stores = createInMemoryInterfaceStores();
+  const activities: Array<Record<string, unknown>> = [];
+  let id = 0;
+  const service = new InterfaceService({
+    stores,
+    now: () => NOW,
+    newId: (prefix) => `${prefix}_${++id}`,
+    activity: {
+      record: (event) => {
+        activities.push(event as unknown as Record<string, unknown>);
+        return Promise.resolve();
+      },
+    },
+  });
+  const iface = await service.create({
+    workspaceId: "workspace_1",
+    name: "status-app",
+    ownerRef: { kind: "Capsule", id: "capsule_status" },
+    spec: {
+      type: "mcp.server",
+      version: "2025-11-25",
+      document: { transport: "streamable-http" },
+      inputs: {
+        endpoint: {
+          source: "literal",
+          value: "https://status.example.test/mcp",
+        },
+      },
+      access: { visibility: "workspace" },
+    },
+  });
+  activities.length = 0;
+
+  const conditions = [{ type: "Healthy", status: "true" as const }];
+  await service.reportStatusConditions(iface.metadata.id, conditions);
+  await service.reportStatusConditions(iface.metadata.id, conditions);
+  await service.reportStatusConditions(iface.metadata.id, conditions);
+
+  // Only the first (real) transition is audited; identical re-reports are no-ops.
+  expect(
+    activities.filter((event) => event.action === "interface.status_reported"),
+  ).toHaveLength(1);
+});
+
+test("status self-report rejects observer condition types case-insensitively", async () => {
+  const stores = createInMemoryInterfaceStores();
+  let id = 0;
+  const service = new InterfaceService({
+    stores,
+    now: () => NOW,
+    newId: (prefix) => `${prefix}_${++id}`,
+  });
+  const iface = await service.create({
+    workspaceId: "workspace_1",
+    name: "reserved-app",
+    ownerRef: { kind: "Capsule", id: "capsule_reserved" },
+    spec: {
+      type: "mcp.server",
+      version: "2025-11-25",
+      document: { transport: "streamable-http" },
+      inputs: {
+        endpoint: {
+          source: "literal",
+          value: "https://reserved.example.test/mcp",
+        },
+      },
+      access: { visibility: "workspace" },
+    },
+  });
+  for (const type of ["drifted", "READY", "ObservationPending"]) {
+    await expect(
+      service.reportStatusConditions(iface.metadata.id, [
+        { type, status: "true" as const },
+      ]),
+    ).rejects.toThrow(/observer-owned/u);
+  }
+});
+
+test("status self-report replaces condition types case-insensitively", async () => {
+  const service = new InterfaceService({
+    stores: createInMemoryInterfaceStores(),
+    now: () => NOW,
+  });
+  const iface = await service.create({
+    workspaceId: "workspace_1",
+    name: "case-status-app",
+    ownerRef: { kind: "Capsule", id: "capsule_case_status" },
+    spec: {
+      type: "mcp.server",
+      version: "2025-11-25",
+      document: {},
+      access: { visibility: "workspace" },
+    },
+  });
+
+  await service.reportStatusConditions(iface.metadata.id, [
+    { type: "Healthy", status: "true" },
+  ]);
+  const reported = await service.reportStatusConditions(iface.metadata.id, [
+    { type: "healthy", status: "false" },
+  ]);
+
+  expect(
+    reported.status.conditions?.filter(
+      (condition) => condition.type.toLowerCase() === "healthy",
+    ),
+  ).toEqual([
+    {
+      type: "healthy",
+      status: "false",
+      observedGeneration: 1,
+      lastTransitionAt: NOW,
+    },
+  ]);
+});

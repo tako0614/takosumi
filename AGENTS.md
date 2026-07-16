@@ -124,8 +124,11 @@ Three principles are load-bearing for new work:
   (`githubInstallationId`, `githubRepoId`, `githubOwner`, `githubWebhookPayload`) must never enter core types; forge
   integrations are optional adapters outside core.
 - **No in-repo manifest**: user repos stay plain git repos with no required Takosumi metadata file. All Capsule
-  configuration is service-side DB config. Interface declarations and Output-name mappings are also service-side DB
-  config; they are not inferred from Output names.
+  configuration is service-side DB config. Interface declarations materialize into service-side DB state from exactly
+  two Capsule sources: service-side config (`InstallConfig.interfaceBlueprints`) or an optional module-declared
+  `takosumi_interface` resource written through the authorized public API during that Capsule's own Run
+  (`materializedFrom: capsule_blueprint | capsule_resource`, with exclusive ownership). They are never inferred from
+  Output names, no manifest is required, and a plain module with no `takosumi_*` resources remains fully valid.
 - **Service Form host API**: Service Form authoring is not repository metadata. Takosumi Core has zero implicit Form
   Packages and plain OpenTofu repos remain valid. `/v1/resources` is the current compatibility Deploy API and sole
   lifecycle authority for managed Resources; a future portable route must delegate to the same row/ledger.
@@ -139,6 +142,11 @@ Three principles are load-bearing for new work:
 - **Shared Interface layer**: Workspace, Capsule, and Resource owners use the same Interface API. Core resolves only literal,
   `capsule_output`, and `resource_output` inputs; type-specific JSON is validated by consumers. Interface changes do
   not schedule Workspace-wide reconciliation, and Resource `connections` remain adapter materialization contracts.
+  The two Capsule declaration sources converge on the same Interface object; InterfaceBinding authorization never
+  becomes module authority. A Run's Capsule-scoped credential can manage only that Capsule's own
+  `capsule_resource` Interfaces. Freshness beyond apply time is a status-plane channel (self-report / probe / refresh
+  Run) that may update conditions only, never spec. The `document.display` consumer profile is defined once in the
+  Final Plan / Core Spec and parsed through the shared contract-layer parser.
 - **No secrets in Interface state**: Interface documents and resolved inputs never contain runtime credentials, and
   the Interface layer never writes them to Output, state, Run, logs, or audit. InterfaceBinding authorizes
   invocation-time OAuth, workload tokens, or an explicitly supported Secret materialization path; ordinary

@@ -21,6 +21,7 @@ import type {
   PublicPlanRun,
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
+import { hasCredentialQueryParams } from "takosumi-contract";
 import type {
   Source,
   CreateSourceRequest,
@@ -184,7 +185,7 @@ export function installConfigStoreValue(
   const iconUrl =
     record.iconUrl === undefined
       ? undefined
-      : boundedStringValue(record.iconUrl, 2048);
+      : storeIconUrlValue(record.iconUrl);
   if (
     order === undefined ||
     !surface ||
@@ -217,6 +218,33 @@ export function installConfigStoreValue(
     description,
     ...(iconUrl ? { iconUrl } : {}),
   };
+}
+
+/**
+ * Store icon values are either a credential-free absolute HTTPS URL or a
+ * repository-relative source path (resolved and re-hosted by a Store
+ * indexer). Every other scheme-bearing or traversal-shaped value is rejected
+ * at write time instead of being stored for a consumer to drop later.
+ */
+function storeIconUrlValue(value: unknown): string | undefined {
+  const raw = boundedStringValue(value, 2048);
+  if (!raw) return undefined;
+  if (/\s/u.test(raw) || raw.includes("\\")) return undefined;
+  if (raw.startsWith("//")) return undefined;
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(raw)) {
+    try {
+      const url = new URL(raw);
+      if (url.protocol !== "https:") return undefined;
+      if (url.username || url.password || url.hash) return undefined;
+      if (hasCredentialQueryParams(url.searchParams)) return undefined;
+      return raw;
+    } catch {
+      return undefined;
+    }
+  }
+  if (raw.includes("?") || raw.includes("#")) return undefined;
+  if (raw.split("/").some((segment) => segment === "..")) return undefined;
+  return raw;
 }
 
 function numberValue(value: unknown): number | undefined {
