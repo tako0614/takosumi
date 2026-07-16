@@ -191,9 +191,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   #stateCryptoInstance: StateArtifactCrypto | undefined;
   #lastStartupSeconds: number | undefined;
+  readonly #localRunnerProxyUrl: URL | undefined;
 
   constructor(ctx: ContainerHostContext, env: CloudflareWorkerEnv) {
     super(ctx, env);
+    this.#localRunnerProxyUrl = localOpenTofuRunnerProxyUrl(env);
+    if (env.LOCAL_SUBSTRATE_TEST_BED === "1") {
+      console.log("OpenTofu runner local proxy composition", {
+        configured: Boolean(this.#localRunnerProxyUrl),
+        target: this.#localRunnerProxyUrl?.origin,
+      });
+    }
     const keepaliveSeconds = runnerKeepaliveSeconds(env);
     this.sleepAfter = `${runnerActivityGraceSeconds(keepaliveSeconds)}s`;
     this.envVars = {
@@ -208,6 +216,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           env.TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL,
       }),
     };
+  }
+
+  override async containerFetch(
+    request: Request,
+    port?: number,
+  ): Promise<Response> {
+    if (this.#localRunnerProxyUrl) {
+      return await proxyLocalOpenTofuRunnerRequest(
+        request,
+        this.#localRunnerProxyUrl,
+      );
+    }
+    return await super.containerFetch(request, port);
   }
 
   onError(error: unknown): unknown {
@@ -299,6 +320,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   async #startContainerIfSupported(): Promise<void> {
+    if (this.#localRunnerProxyUrl) return;
     const startAndWaitForPorts = (
       this as unknown as Partial<ContainerStartWaiter>
     ).startAndWaitForPorts;
@@ -324,6 +346,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   async #shutdownContainerIfSupported(): Promise<void> {
+    if (this.#localRunnerProxyUrl) return;
     const destroy = (this as unknown as Partial<ContainerDestroyer>).destroy;
     if (typeof destroy === "function") {
       try {
@@ -449,7 +472,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       if (!rawOutputRef) {
         throw new Error("apply with stateScope requires rawOutputRef");
       }
-      assertRawOutputRefForScope(stateScope, runId, rawOutputRef);
+      assertRawOutputRefForScope(
+        stateScope,
+        parseApplyRunId(envelope.request) ?? runId,
+        rawOutputRef,
+      );
       const adopted = await this.#adoptCompletedApplyFromR2State(
         runId,
         stateScope,
@@ -1300,6 +1327,65 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 }
 
+/**
+ * Miniflare must not bind the Container-derived class directly: it interprets
+ * that binding as a Cloudflare Container and rejects it before the local proxy
+ * can run. This plain Durable Object delegates to the same artifact-relay class
+ * and exists only for the local-substrate wrapper.
+ */
+export class LocalSubstrateOpenTofuRunnerProxyObject {
+  readonly #delegate: OpenTofuRunnerObject;
+
+  constructor(ctx: ContainerHostContext, env: CloudflareWorkerEnv) {
+    if (
+      env.LOCAL_SUBSTRATE_TEST_BED !== "1" ||
+      !env.TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL?.trim()
+    ) {
+      throw new Error(
+        "LocalSubstrateOpenTofuRunnerProxyObject is local-substrate-only",
+      );
+    }
+    this.#delegate = new OpenTofuRunnerObject(ctx, env);
+  }
+
+  fetch(request: Request): Promise<Response> {
+    return this.#delegate.fetch(request);
+  }
+}
+
+export function localOpenTofuRunnerProxyUrl(
+  env: Pick<
+    CloudflareWorkerEnv,
+    "LOCAL_SUBSTRATE_TEST_BED" | "TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL"
+  >,
+): URL | undefined {
+  const raw = env.TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL?.trim();
+  if (!raw) return undefined;
+  if (env.LOCAL_SUBSTRATE_TEST_BED !== "1") {
+    throw new Error(
+      "TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL requires LOCAL_SUBSTRATE_TEST_BED=1",
+    );
+  }
+  const url = new URL(raw);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      "TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL must use http or https",
+    );
+  }
+  if (!url.pathname.endsWith("/")) url.pathname = `${url.pathname}/`;
+  return url;
+}
+
+export async function proxyLocalOpenTofuRunnerRequest(
+  request: Request,
+  baseUrl: URL,
+  fetcher: typeof fetch = fetch,
+): Promise<Response> {
+  const source = new URL(request.url);
+  const target = new URL(`${source.pathname}${source.search}`, baseUrl);
+  return await fetcher(new Request(target, request));
+}
+
 async function putR2ObjectWithRetry(
   bucket: R2Bucket,
   key: string,
@@ -1763,6 +1849,11 @@ function parseRawOutputRef(requestPayload: unknown): string | undefined {
   if (!ref) return undefined;
   assertSafeArtifactObjectKey(ref, "raw output");
   return ref;
+}
+
+function parseApplyRunId(requestPayload: unknown): string | undefined {
+  const applyRun = recordField(requestPayload, "applyRun");
+  return applyRun ? stringField(applyRun, "id") : undefined;
 }
 
 function parseStateAdoption(

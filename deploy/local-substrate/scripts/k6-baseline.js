@@ -14,11 +14,19 @@
 import http from "k6/http";
 import { check } from "k6";
 
+const REQUEST_RATE = Number.parseInt(
+  __ENV.TAKOSUMI_K6_REQUEST_RATE || "10",
+  10,
+);
+if (!Number.isSafeInteger(REQUEST_RATE) || REQUEST_RATE < 1) {
+  throw new Error("TAKOSUMI_K6_REQUEST_RATE must be a positive integer");
+}
+
 export const options = {
   scenarios: {
     deploy_control_read: {
       executor: "constant-arrival-rate",
-      rate: 10,
+      rate: REQUEST_RATE,
       timeUnit: "1s",
       duration: "20s",
       preAllocatedVUs: 5,
@@ -27,7 +35,7 @@ export const options = {
     },
     oidc_discovery: {
       executor: "constant-arrival-rate",
-      rate: 10,
+      rate: REQUEST_RATE,
       timeUnit: "1s",
       duration: "20s",
       preAllocatedVUs: 5,
@@ -47,8 +55,7 @@ export const options = {
   },
 };
 
-const RUNNER_PROFILES_URL =
-  "https://app.takosumi.test/internal/v1/runner-profiles";
+const RUNNER_PROFILES_URL = `${__ENV.TAKOSUMI_SERVICE_URL || "https://service.takosumi.test"}/internal/v1/runner-profiles`;
 const OIDC_URL = "https://app.takosumi.test/.well-known/openid-configuration";
 const DEPLOY_CONTROL_TOKEN =
   __ENV.TAKOSUMI_DEPLOY_CONTROL_TOKEN || "local-substrate-deploy-control-token";

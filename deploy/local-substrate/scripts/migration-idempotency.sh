@@ -19,6 +19,8 @@ SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
 source "$SCRIPT_DIR/compose-helpers.sh"
 
+PROFILE="$(local_substrate_profile)"
+
 materialize_d1() {
 	local host
 	for host in service-worker.takosumi.test service.takosumi.test; do
@@ -72,7 +74,7 @@ if [[ "$SIZE_BEFORE" -lt 100 ]]; then
 fi
 
 # 2. Recreate the service worker (forces initialize() to re-run against the same D1).
-compose_substrate --profile postgres up -d --force-recreate \
+compose_substrate --profile "$PROFILE" up -d --force-recreate \
 	takosumi-service-worker-build takosumi-service-worker >/dev/null 2>&1
 # Give miniflare a moment to come up + run init.
 sleep 5

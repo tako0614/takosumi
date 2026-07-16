@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 
+local_substrate_profile() {
+	local profile="${TAKOSUMI_LOCAL_SUBSTRATE_PROFILE:-workers}"
+	case "$profile" in
+		postgres|workers)
+			printf '%s\n' "$profile"
+			;;
+		*)
+			echo "TAKOSUMI_LOCAL_SUBSTRATE_PROFILE must be postgres or workers (got: $profile)" >&2
+			return 1
+			;;
+	esac
+}
+
 local_substrate_disable_apparmor() {
 	[[ "${TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR:-0}" == "1" ]]
 }
