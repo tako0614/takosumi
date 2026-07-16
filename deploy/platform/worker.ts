@@ -113,6 +113,10 @@ import {
   configuredResourceShapeKinds,
   resourceShapeHostContributionsFromEnv,
 } from "../../worker/src/resource_shape_composition.ts";
+import {
+  composeResourceShapeSchemaRegistries,
+  LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+} from "../../core/domains/resource-shape/mod.ts";
 import { evaluateProductionHardeningGates } from "./production_hardening.ts";
 export {
   isPlatformExtensionCatalogPath,
@@ -441,7 +445,7 @@ function platformResourceCapabilities(
   if (!apiEnabled) return base;
   for (const key of resourceShapeCapabilityTokens(
     env.TAKOSUMI_RESOURCE_SHAPES,
-    resourceShapeHostContributionsFromEnv(env).schemaRegistry,
+    platformResourceShapeSchemaRegistry(env),
   )) {
     base[key] = true;
   }
@@ -4067,8 +4071,15 @@ export function resourceObservationEnabled(env: CloudflareWorkerEnv): boolean {
   return (
     resourceShapeCapabilityTokens(
       env.TAKOSUMI_RESOURCE_SHAPES,
-      resourceShapeHostContributionsFromEnv(env).schemaRegistry,
+      platformResourceShapeSchemaRegistry(env),
     ).length > 0
+  );
+}
+
+function platformResourceShapeSchemaRegistry(env: CloudflareWorkerEnv) {
+  return composeResourceShapeSchemaRegistries(
+    LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    resourceShapeHostContributionsFromEnv(env).schemaRegistry,
   );
 }
 

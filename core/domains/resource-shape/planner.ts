@@ -34,6 +34,7 @@ import type {
 import {
   isBundledResourceShapeKind,
   isResourceShapeKind,
+  RESOURCE_SHAPE_KINDS,
 } from "takosumi-contract";
 import { secretLikeJsonPath } from "./secret_guard.ts";
 
@@ -95,9 +96,11 @@ export type ResourceShapeSchemaParser = (
 ) => RegisteredResourceShapeSpecResult;
 
 /**
- * Explicit schema registry for operator-defined shapes. A registry entry is
- * validation authority only; execution still requires an exact TargetPool
- * descriptor and installed adapter plugin/module.
+ * Explicit schema authority installed by a host composition. The ten compiled
+ * v1alpha1 compatibility parsers are inert unless their kinds occur in
+ * `kinds()`; custom kinds additionally require a parser from `get()`. This is
+ * deliberately not a Form Package or Form Registry contract: those identities
+ * remain blocked on the portable-project trust decision.
  */
 export interface ResourceShapeSchemaRegistry {
   get(kind: ResourceShapeKind): ResourceShapeSchemaParser | undefined;
@@ -109,6 +112,45 @@ export const EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY: ResourceShapeSchemaRegistry =
     get: () => undefined,
     kinds: () => [],
   };
+
+/**
+ * Explicit install marker for the ten frozen Resource Shape compatibility
+ * schemas. Core does not select this registry itself; current Worker/platform
+ * compositions must inject it while legacy provider/API state is supported.
+ */
+export const LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY: ResourceShapeSchemaRegistry =
+  Object.freeze({
+    get: () => undefined,
+    kinds: () => [...RESOURCE_SHAPE_KINDS],
+  });
+
+/** Combine independently reviewed host contributions without hidden fallback. */
+export function composeResourceShapeSchemaRegistries(
+  ...registries: readonly (ResourceShapeSchemaRegistry | undefined)[]
+): ResourceShapeSchemaRegistry {
+  const installed = registries.filter(
+    (registry): registry is ResourceShapeSchemaRegistry =>
+      registry !== undefined,
+  );
+  if (installed.length === 0) return EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY;
+  if (installed.length === 1) return installed[0]!;
+
+  const owners = new Map<ResourceShapeKind, ResourceShapeSchemaRegistry>();
+  for (const registry of installed) {
+    for (const kind of registry.kinds()) {
+      if (owners.has(kind)) {
+        throw new TypeError(
+          `duplicate Resource Shape schema authority for ${kind}`,
+        );
+      }
+      owners.set(kind, registry);
+    }
+  }
+  return {
+    get: (kind) => owners.get(kind)?.get(kind),
+    kinds: () => [...owners.keys()],
+  };
+}
 
 export class MapResourceShapeSchemaRegistry implements ResourceShapeSchemaRegistry {
   readonly #schemas: ReadonlyMap<ResourceShapeKind, ResourceShapeSchemaParser>;
@@ -347,6 +389,15 @@ export function parseResourceSpec(
   spec: unknown,
   schemaRegistry: ResourceShapeSchemaRegistry = EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY,
 ): ParseResourceSpecResult {
+  if (!schemaRegistry.kinds().includes(kind)) {
+    return {
+      ok: false,
+      error: {
+        code: "unsupported_shape",
+        message: `Resource Shape compatibility schema is not installed: ${String(kind)}`,
+      },
+    };
+  }
   switch (kind) {
     case "EdgeWorker": {
       const r = parseEdgeWorkerSpec(spec);

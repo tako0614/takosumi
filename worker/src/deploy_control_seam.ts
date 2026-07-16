@@ -9,6 +9,10 @@ import {
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import type { CloudflareWorkerEnv, RunnerHostComposition } from "./bindings.ts";
 import type { OpenTofuRunnerExecutorRegistry } from "../../core/domains/deploy-control/mod.ts";
+import {
+  LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+  type ResourceShapeSchemaRegistry,
+} from "../../core/domains/resource-shape/mod.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
 
 /**
@@ -33,6 +37,7 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
   readonly runnerExecutors?: OpenTofuRunnerExecutorRegistry;
   readonly defaultRunnerProfileId?: string;
   readonly managedVanityHostnameSlotsPerOwner?: number;
+  readonly resourceShapeSchemaRegistry: ResourceShapeSchemaRegistry;
 } {
   const hostComposition = runnerHostCompositionFromEnv(env);
   const managedVanityHostnameSlotsPerOwner = nonNegativeInteger(
@@ -40,6 +45,10 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
   );
   return {
     runnerProfiles: resolveEnabledRunnerProfilesFromEnv(env, hostComposition),
+    // The shipped Takos/Takosumi host explicitly installs the frozen v1alpha1
+    // compatibility schemas. Core and the generic Worker factory remain empty.
+    resourceShapeSchemaRegistry:
+      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
     ...(hostComposition?.executors
       ? { runnerExecutors: hostComposition.executors }
       : {}),

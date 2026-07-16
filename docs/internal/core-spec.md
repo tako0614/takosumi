@@ -416,8 +416,18 @@ Schedule
 ```
 
 It is not a Core default. Until the Form Package/registry migration lands, the
-current code still bundles schemas/parsers for these names; conformance records
-that as migration debt rather than target ownership.
+current code retains parsers for these names only behind the explicit
+`LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY` host contribution. Core,
+the lower-level Resource service, route admission, and discovery all start with
+zero installed/enabled kinds. The shipped Takos/Takosumi composition explicitly
+installs that frozen compatibility contribution; `TAKOSUMI_RESOURCE_SHAPES`
+then enables only a selected subset for new desired state. Removing a kind from
+that write allowlist does not hide retained state: an installed compatibility
+schema remains sufficient for GET/event reads, explicit observe, and delete.
+Refresh and every create/update/import path still require the enabled-kind
+allowlist. This compatibility install is not a Form Package, FormRef, Form
+Registry, or FormActivation and assigns no portable-definition authority before
+D-08 and the additive exact-reference work land.
 
 `VerifiedDomain` is a separate optional operator control object and capability,
 not a Service Form. It binds a user-owned hostname to an immutable owner

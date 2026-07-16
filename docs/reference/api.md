@@ -285,6 +285,15 @@ control-plane Compatibility API は、対応範囲の request を typed Resource
 selection を持ちません。data-plane Compatibility API は Ready な canonical Resource と
 認可済み Interface / NativeResource evidence を解決してから backend へ到達します。
 
+Core は既定では Resource kind を1つも広告・受理しません。host composition が code
+として schema authority を install し、その上で desired state の作成・変更を許可する
+kind を明示的に enable します。現在の Takos / Takosumi composition は凍結した10種の
+v1alpha1 compatibility setを明示的にinstallし、operatorの
+`TAKOSUMI_RESOURCE_SHAPES`がwrite-enabled subsetを選びます。install済みでも
+write-disabledになったkindは、retained Resourceのstate/event read、明示observe、
+deleteを継続できます。このmigration compatibilityも同じcanonical Resource / Run
+ledgerを使い、Form PackageやFormActivationを代用しません。
+
 ```http
 POST   /v1/resources/preview
 PUT    /v1/resources/{kind}/{name}

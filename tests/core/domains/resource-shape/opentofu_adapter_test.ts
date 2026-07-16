@@ -25,7 +25,8 @@ import { resourceImportPolicyReasons } from "../../../../core/domains/deploy-con
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
-  parseResourceSpec,
+  LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+  parseResourceSpec as parseCoreResourceSpec,
   planResourceShape,
   type ResourceShapePlan,
 } from "../../../../core/domains/resource-shape/planner.ts";
@@ -41,6 +42,12 @@ import {
   providerLocalNameForSource,
 } from "../../../../core/domains/resource-shape/opentofu_adapter.ts";
 import { TEST_RESOURCE_SHAPE_MODULE_REGISTRY } from "../../../helpers/resource-shape/operator-module-registry.ts";
+
+const parseResourceSpec: typeof parseCoreResourceSpec = (
+  kind,
+  spec,
+  registry = LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+) => parseCoreResourceSpec(kind, spec, registry);
 
 const actor: ActorContext = {
   actorAccountId: "acct_1",
