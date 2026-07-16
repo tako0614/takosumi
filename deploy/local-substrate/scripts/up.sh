@@ -213,10 +213,26 @@ if [[ -n "$PROFILE" ]]; then
 	compose_substrate --profile "$PROFILE" "${substrate_up_args[@]}"
 
 	echo "==> Waiting for static build outputs"
-	wait_for_completed_service takosumi-website-build
-	wait_for_completed_service takosumi-docs-build
-	wait_for_completed_service takosumi-dashboard-build
-	wait_for_completed_service takosumi-app-docs-build
+	static_build_services=()
+	case "$PROFILE" in
+		postgres)
+			static_build_services=(
+				takosumi-website-build
+				takosumi-docs-build
+				takosumi-dashboard-build
+				takosumi-app-docs-build
+			)
+			;;
+		workers)
+			static_build_services=(
+				takosumi-dashboard-build
+				takosumi-app-docs-build
+			)
+			;;
+	esac
+	for service in "${static_build_services[@]}"; do
+		wait_for_completed_service "$service"
+	done
 
 	# The static builders can replace .output/public after Caddy has already
 	# bind-mounted it. Recreate Caddy so it sees the final directories.
