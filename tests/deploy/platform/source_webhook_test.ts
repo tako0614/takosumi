@@ -16,6 +16,7 @@ import {
   driftCheckEnabled,
   evaluateProductionHardeningGates,
   handleOperatorBillingRequest,
+  handlePlatformInternalEdgeRequest,
   handlePlatformExtensionRequest,
   handlePlatformExtensionCatalogRequest,
   handlePlatformExtensionContributionsRequest,
@@ -35,6 +36,7 @@ import {
   platformExtensionContributionCatalog,
   platformExtensionRoutes,
   platformOperatorCapabilities,
+  platformInternalEdgeIngressEnabled,
   platformExtensionSessionCanAccessCapsule,
   platformExtensionVerifiedWorkspaceSession,
   verifyPlatformExtensionSession,
@@ -75,6 +77,69 @@ import type {
   ResolutionLockRecord,
   ResourceShapeRecord,
 } from "../../../core/domains/resource-shape/records.ts";
+
+test("platform internal edge ingress is explicit and disabled by default", () => {
+  expect(platformInternalEdgeIngressEnabled({} as never)).toBe(false);
+  expect(
+    platformInternalEdgeIngressEnabled({
+      LOCAL_SUBSTRATE_TEST_BED: "1",
+    } as never),
+  ).toBe(true);
+  expect(
+    platformInternalEdgeIngressEnabled({
+      TAKOSUMI_EXPOSE_INTERNAL_EDGE: "1",
+    } as never),
+  ).toBe(true);
+});
+
+test("platform internal edge dispatch is local-only and never exposes coordination", async () => {
+  const forwarded: string[] = [];
+  const seamForEnv = () => ({
+    fetch: async (request: Request) => {
+      forwarded.push(`${request.method} ${request.url}`);
+      return Response.json({ ok: true });
+    },
+  });
+  const internalRequest = new Request(
+    "https://service.takosumi.test/internal/v1/runner-profiles",
+  );
+
+  const disabled = await handlePlatformInternalEdgeRequest(
+    internalRequest,
+    {} as never,
+    seamForEnv,
+  );
+  expect(disabled?.status).toBe(404);
+  expect(forwarded).toEqual([]);
+
+  const enabled = await handlePlatformInternalEdgeRequest(
+    internalRequest,
+    { LOCAL_SUBSTRATE_TEST_BED: "1" } as never,
+    seamForEnv,
+  );
+  expect(enabled?.status).toBe(200);
+  expect(forwarded).toEqual([
+    "GET https://service.takosumi.test/internal/v1/runner-profiles",
+  ]);
+
+  const coordination = await handlePlatformInternalEdgeRequest(
+    new Request(
+      "https://service.takosumi.test/internal/v1/coordination/list-alarms",
+    ),
+    { TAKOSUMI_EXPOSE_INTERNAL_EDGE: "1" } as never,
+    seamForEnv,
+  );
+  expect(coordination?.status).toBe(404);
+  expect(forwarded).toHaveLength(1);
+
+  expect(
+    await handlePlatformInternalEdgeRequest(
+      new Request("https://service.takosumi.test/api/v1/workspaces"),
+      { LOCAL_SUBSTRATE_TEST_BED: "1" } as never,
+      seamForEnv,
+    ),
+  ).toBeUndefined();
+});
 
 test("compatibility data authority selects one exact Resource-owned Interface", () => {
   const resourceId = "tkrn:workspace_1:ObjectBucket:assets";

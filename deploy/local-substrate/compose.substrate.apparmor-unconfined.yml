@@ -60,6 +60,9 @@ services:
     security_opt:
       - apparmor=unconfined
   takosumi-service-worker:
+    depends_on:
+      opentofu-runner:
+        condition: service_started
     security_opt:
       - apparmor=unconfined
     healthcheck:

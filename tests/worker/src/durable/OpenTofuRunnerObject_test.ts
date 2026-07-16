@@ -11,7 +11,10 @@ import type {
 } from "../../../../worker/src/bindings.ts";
 import {
   type ContainerRequestFetcher,
+  localOpenTofuRunnerProxyUrl,
+  LocalSubstrateOpenTofuRunnerProxyObject,
   OpenTofuRunnerObject,
+  proxyLocalOpenTofuRunnerRequest,
 } from "../../../../worker/src/durable/OpenTofuRunnerObject.ts";
 import {
   digestBytes,
@@ -23,6 +26,53 @@ const PLAN_DIGEST =
   "sha256:0fd9817656d95201f5c8073b9b4b4c2d5bfe8468b69e7bf771e5311b122a90e7";
 const STATE_BYTES = new TextEncoder().encode('{"serial":1}');
 const UPDATED_STATE_BYTES = new TextEncoder().encode('{"serial":2}');
+
+test("local runner proxy Durable Object refuses non-local composition", () => {
+  assert.throws(
+    () =>
+      new LocalSubstrateOpenTofuRunnerProxyObject(
+        { storage: new FakeDoStorage() },
+        {} as CloudflareWorkerEnv,
+      ),
+    /local-substrate-only/,
+  );
+});
+
+test("local runner proxy is test-bed gated and preserves the runner path", async () => {
+  assert.equal(localOpenTofuRunnerProxyUrl({}), undefined);
+  assert.throws(
+    () =>
+      localOpenTofuRunnerProxyUrl({
+        TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL: "http://opentofu-runner:8080",
+      }),
+    /requires LOCAL_SUBSTRATE_TEST_BED=1/,
+  );
+  const baseUrl = localOpenTofuRunnerProxyUrl({
+    LOCAL_SUBSTRATE_TEST_BED: "1",
+    TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL: "http://opentofu-runner:8080",
+  });
+  assert.equal(baseUrl?.href, "http://opentofu-runner:8080/");
+
+  const calls: string[] = [];
+  const response = await proxyLocalOpenTofuRunnerRequest(
+    new Request("https://opentofu-runner.internal/runs/run_1?mode=plan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }),
+    baseUrl!,
+    async (request) => {
+      calls.push(
+        `${request.method} ${request.url} ${await request.clone().text()}`,
+      );
+      return Response.json({ ok: true });
+    },
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [
+    "POST http://opentofu-runner:8080/runs/run_1?mode=plan {}",
+  ]);
+});
 
 test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2", async () => {
   const calls: string[] = [];

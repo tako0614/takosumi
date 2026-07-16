@@ -12,12 +12,14 @@ CA="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../caddy/runtime/pebble-issuan
 
 # 1. Web UI / API reachable through Caddy.
 CODE=$(curl -sk --cacert "$CA" -o /dev/null -w "%{http_code}" \
+	--resolve "mailpit.takosumi.test:443:127.0.0.1" \
 	https://mailpit.takosumi.test/api/v1/messages)
 [[ "$CODE" == "200" ]] || { echo "FAIL: mailpit API not reachable ($CODE)" >&2; exit 1; }
 
 # 2. Send a probe email via mailpit's built-in API (no extra container).
 PROBE_SUBJECT="local-substrate-smoke-$(date +%s%N)"
 curl -sk --cacert "$CA" -X POST \
+	--resolve "mailpit.takosumi.test:443:127.0.0.1" \
 	-H "Content-Type: application/json" \
 	-d "{\"From\":{\"Email\":\"smoke@local-substrate.test\"},\"To\":[{\"Email\":\"smoke-recipient@local-substrate.test\"}],\"Subject\":\"$PROBE_SUBJECT\",\"Text\":\"local-substrate mailpit smoke probe.\"}" \
 	https://mailpit.takosumi.test/api/v1/send >/dev/null
@@ -25,6 +27,7 @@ curl -sk --cacert "$CA" -X POST \
 # 3. Poll API up to 3s for the new message.
 for _ in 1 2 3 4 5 6; do
 	HITS=$(curl -sk --cacert "$CA" \
+		--resolve "mailpit.takosumi.test:443:127.0.0.1" \
 		"https://mailpit.takosumi.test/api/v1/search?query=subject:$PROBE_SUBJECT" \
 		| python3 -c "import json,sys;print(json.load(sys.stdin).get('total',0))")
 	if [[ "$HITS" -ge 1 ]]; then
