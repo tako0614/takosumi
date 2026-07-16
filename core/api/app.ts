@@ -9,7 +9,6 @@ import {
   type TakosumiOperatorCapabilities,
   type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
-import { RESOURCE_SHAPE_KINDS } from "takosumi-contract";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
@@ -302,7 +301,7 @@ function createProductDiscoveryOptions(input: {
     Stack: stacks,
     ...Object.fromEntries(
       (
-        input.enabledResourceShapeKinds ?? RESOURCE_SHAPE_KINDS
+        input.enabledResourceShapeKinds ?? []
       ).map((kind) => [kind, resourceShapes]),
     ),
     ...(input.resourceCapabilities ?? {}),

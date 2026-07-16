@@ -7,15 +7,22 @@ import {
   parseKVStoreSpec,
   parseObjectBucketSpec,
   parseQueueSpec,
-  parseResourceSpec,
+  parseResourceSpec as parseCoreResourceSpec,
   parseScheduleSpec,
   parseSQLDatabaseSpec,
   parseStatefulActorNamespaceSpec,
   parseVectorIndexSpec,
   planResourceShape,
   MapResourceShapeSchemaRegistry,
+  LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
 } from "../../../../core/domains/resource-shape/planner.ts";
 import { TEST_RESOURCE_SHAPE_MODULE_REGISTRY } from "../../../helpers/resource-shape/operator-module-registry.ts";
+
+const parseResourceSpec: typeof parseCoreResourceSpec = (
+  kind,
+  spec,
+  registry = LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+) => parseCoreResourceSpec(kind, spec, registry);
 
 const target = {
   name: "operator-primary",
@@ -115,6 +122,22 @@ test("bundled parsers keep ten typed Resource Shape schemas", () => {
       },
     }).ok,
   ).toBe(true);
+});
+
+test("Core parser has zero implicit Resource Shape compatibility schemas", () => {
+  const desired = {
+    name: "api",
+    source: { artifactPath: "/work/dist/worker.js" },
+  };
+  const absent = parseCoreResourceSpec("EdgeWorker", desired);
+  expect(absent.ok).toBe(false);
+  if (!absent.ok) {
+    expect(absent.error.code).toBe("unsupported_shape");
+    expect(absent.error.message).toContain("is not installed");
+  }
+
+  const explicitlyInstalled = parseResourceSpec("EdgeWorker", desired);
+  expect(explicitlyInstalled.ok).toBe(true);
 });
 
 test("ObjectBucket defaults storageClass and rejects non-portable values", () => {

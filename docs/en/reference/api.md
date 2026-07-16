@@ -283,6 +283,15 @@ resolver decisions, or backend selection. Data-plane profiles resolve a Ready
 canonical Resource and authorized Interface/NativeResource evidence before
 accessing a backend.
 
+Core advertises and accepts no Resource kind by default. A host composition
+must install schema authority in code, then explicitly enable the kinds that
+may create or change desired state. The shipped Takos/Takosumi composition
+installs the frozen ten-kind v1alpha1 compatibility set; the operator's
+`TAKOSUMI_RESOURCE_SHAPES` value selects its write-enabled subset. An installed
+kind that is no longer write-enabled can still read events/state, run explicit
+observe, and delete retained resources. This migration behavior uses the same
+canonical Resource and Run ledger and is not a Form Package or FormActivation.
+
 ```http
 POST   /v1/resources/preview
 PUT    /v1/resources/{kind}/{name}

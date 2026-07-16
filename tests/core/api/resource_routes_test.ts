@@ -8,6 +8,8 @@ import { createInMemoryAppContext } from "../../../core/app_context.ts";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
 import {
   createInMemoryResourceShapeStores,
+  EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY,
+  LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
   MapResourceShapeModuleRegistry,
   MapResourceShapeSchemaRegistry,
   ResourceShapeService,
@@ -17,7 +19,11 @@ import { createInMemoryInterfaceStores } from "../../../core/domains/interfaces/
 import type { AdapterDeleteInput } from "../../../core/domains/resource-shape/mod.ts";
 import { ActivityService } from "../../../core/domains/activity/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
-import type { SpacePolicySpec, TargetPoolSpec } from "takosumi-contract";
+import {
+  RESOURCE_SHAPE_KINDS,
+  type SpacePolicySpec,
+  type TargetPoolSpec,
+} from "takosumi-contract";
 
 const CLOUDFLARE_PROVIDER = "registry.opentofu.org/cloudflare/cloudflare";
 
@@ -149,15 +155,26 @@ async function buildApp(
     activity,
     operationRuns: activityStore,
     moduleRegistry: ROUTE_MODULE_REGISTRY,
+    schemaRegistry: LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
     now: () => "2026-01-01T00:00:00.000Z",
   });
   await service.putTargetPool("space_1", "default", POOL);
   await service.putSpacePolicy("space_1", "default", POLICY);
+  const enabledResourceShapeKinds =
+    routeOptions?.enabledResourceShapeKinds ?? RESOURCE_SHAPE_KINDS;
+  const installedResourceShapeKinds =
+    routeOptions?.installedResourceShapeKinds ??
+    LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY.kinds();
   const app = await createApiApp({
     role: "takosumi-api",
     registerOpenApiRoute: false,
     registerDeployControlInternalRoutes: false,
-    resourceShapeRouteOptions: { service, ...routeOptions },
+    resourceShapeRouteOptions: {
+      service,
+      ...routeOptions,
+      enabledResourceShapeKinds,
+      installedResourceShapeKinds,
+    },
     requestCorrelation: false,
   });
   return { app, service, activityStore };
@@ -915,6 +932,157 @@ test("Resource Shape routes reject shape kinds outside the host allowlist", asyn
   );
 });
 
+test("disabled creation retains installed state read, events, observe, and delete compatibility", async () => {
+  const { app: enabledApp, service } = await buildApp();
+  const path = "/v1/resources/ObjectBucket/retained";
+  const applied = await reviewedResourceApply(enabledApp, path, {
+    metadata: { space: "space_1" },
+    spec: { name: "retained", interfaces: ["s3_api"] },
+  });
+  expect(applied.status).toBe(200);
+
+  const retainedApp = await createApiApp({
+    role: "takosumi-api",
+    registerOpenApiRoute: false,
+    registerDeployControlInternalRoutes: false,
+    resourceShapeRouteOptions: {
+      service,
+      enabledResourceShapeKinds: [],
+      installedResourceShapeKinds:
+        LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY.kinds(),
+    },
+    requestCorrelation: false,
+  });
+
+  const rejectedCreate = await retainedApp.request(path, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: { name: "retained", interfaces: ["s3_api"] },
+    }),
+  });
+  expect(rejectedCreate.status).toBe(400);
+  expect((await rejectedCreate.json()).error.message).toContain(
+    "resource kind is not enabled",
+  );
+
+  for (const [requestPath, body] of [
+    [
+      "/v1/resources/preview",
+      {
+        kind: "ObjectBucket",
+        metadata: { space: "space_1", name: "retained" },
+        spec: { name: "retained", interfaces: ["s3_api"] },
+      },
+    ],
+    [
+      `${path}/import`,
+      {
+        metadata: { space: "space_1" },
+        nativeId: "retained-native-id",
+        spec: { name: "retained", interfaces: ["s3_api"] },
+      },
+    ],
+  ] as const) {
+    const rejectedWrite = await retainedApp.request(requestPath, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    });
+    expect(rejectedWrite.status).toBe(400);
+    expect((await rejectedWrite.json()).error.message).toContain(
+      "resource kind is not enabled",
+    );
+  }
+
+  const rejectedRefresh = await retainedApp.request(
+    `${path}/refresh?space=space_1`,
+    { method: "POST" },
+  );
+  expect(rejectedRefresh.status).toBe(400);
+  expect((await rejectedRefresh.json()).error.message).toContain(
+    "resource kind is not enabled",
+  );
+
+  expect(
+    (
+      await retainedApp.request(`${path}?space=space_1`)
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await retainedApp.request(`${path}/events?space=space_1`)
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await retainedApp.request(`${path}/observe?space=space_1`, {
+        method: "POST",
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await retainedApp.request(`${path}?space=space_1`, {
+        method: "DELETE",
+      })
+    ).status,
+  ).toBe(204);
+});
+
+test("Resource API defaults to zero-form discovery and desired-state authority", async () => {
+  const { app } = await buildApp({
+    enabledResourceShapeKinds: [],
+    installedResourceShapeKinds: [],
+  });
+  const capabilities = await app.request("/v1/capabilities");
+  expect(capabilities.status).toBe(200);
+  expect((await capabilities.json()).resources.EdgeWorker).toBe(false);
+
+  const rejected = await app.request("/v1/resources/EdgeWorker/api", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+      },
+    }),
+  });
+  expect(rejected.status).toBe(400);
+  expect((await rejected.json()).error.message).toContain(
+    "resource kind is not enabled",
+  );
+});
+
+test("Resource API rejects enabled kinds without installed schema authority", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new StubResourceShapeAdapter(),
+    schemaRegistry: EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY,
+    moduleRegistry: ROUTE_MODULE_REGISTRY,
+  });
+
+  await expect(
+    createApiApp({
+      role: "takosumi-api",
+      registerOpenApiRoute: false,
+      registerDeployControlInternalRoutes: false,
+      resourceShapeRouteOptions: {
+        service,
+        enabledResourceShapeKinds: ["EdgeWorker"],
+        installedResourceShapeKinds: [],
+      },
+      requestCorrelation: false,
+    }),
+  ).rejects.toThrow(
+    "enabled Resource Shape kind is not backed by an installed compatibility schema: EdgeWorker",
+  );
+});
+
 test("registered operator shape tokens traverse the API, resolver, and plugin plan", async () => {
   const schemas = new MapResourceShapeSchemaRegistry({
     CacheCluster: (raw) => {
@@ -978,6 +1146,7 @@ test("registered operator shape tokens traverse the API, resolver, and plugin pl
     resourceShapeRouteOptions: {
       service,
       enabledResourceShapeKinds: schemas.kinds(),
+      installedResourceShapeKinds: schemas.kinds(),
     },
     requestCorrelation: false,
   });
@@ -1025,6 +1194,9 @@ test("bootstrap wires Resource Shape API bearer from deploy-control token", asyn
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
     },
     resourceShapeAdapter: new StubResourceShapeAdapter(),
+    resourceShapeSchemaRegistry:
+      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
   });
 
   const rejected = await app.request("/v1/resources?space=space_1");
@@ -1040,6 +1212,9 @@ test("bootstrap passes Resource Shape delete timeout to the service", async () =
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
     resourceShapeAdapter: new SlowDeleteAdapter(),
+    resourceShapeSchemaRegistry:
+      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
     resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
     resourceShapeDeleteTimeoutMs: 100,
   });
@@ -1084,6 +1259,9 @@ test("bootstrap projects Resource apply and delete lifecycle into Interfaces", a
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
     resourceShapeAdapter: new StubResourceShapeAdapter(),
+    resourceShapeSchemaRegistry:
+      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
     resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
     resolveResourceInterfaceWorkspace: async ({
       resourceSpaceId,
@@ -1195,6 +1373,9 @@ test("runtime discovery repairs a missed Resource lifecycle observer from the du
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
     resourceShapeAdapter: new StubResourceShapeAdapter(),
+    resourceShapeSchemaRegistry:
+      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
     resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
     interfaceStores,
     resolveResourceInterfaceWorkspace: async ({ resourceSpaceId }) =>

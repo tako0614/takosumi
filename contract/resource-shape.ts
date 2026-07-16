@@ -3,13 +3,14 @@
 // The Resource object mirrors the Kubernetes-style shape mandated by
 // `docs/internal/final-plan.md` §4 (Resource Object Model) and §5 (Resource Shapes):
 // a desired `spec`, an observed `status`, the `resolution` decision, and
-// `conditions`. Ten typed schemas ship with the provider, while an operator may
-// register additional shape tokens with an explicit schema and adapter/plugin.
+// `conditions`. Ten typed compatibility schemas ship with the legacy provider,
+// but Core activates none of them unless a host composition explicitly installs
+// the compatibility schema authority and enables the desired-state kind.
 
 import type { Condition, JsonObject } from "./types.ts";
 import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
 
-/** Resource shapes bundled with this Takosumi build and its typed provider. */
+/** Frozen kind tokens compiled for current provider/API/state compatibility. */
 export type BundledResourceShapeKind =
   | "EdgeWorker"
   | "ObjectBucket"
@@ -30,7 +31,7 @@ export type BundledResourceShapeKind =
  */
 export type ResourceShapeKind = string;
 
-/** Complete typed shape set implemented by this API version. */
+/** Complete frozen compatibility shape set understood by this API version. */
 export const RESOURCE_SHAPE_KINDS: readonly BundledResourceShapeKind[] = [
   "EdgeWorker",
   "ObjectBucket",
