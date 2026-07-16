@@ -1,6 +1,6 @@
 -- Wave 6 / v1 contract reset: drop the removed binding, grant, and runtime
 -- binding tables. These three concepts have been removed from the public
--- Takosumi Accounts contract; runtime projection service binding
+-- Takosumi Accounts contract; service graph service binding
 -- selections and account-plane permission checks declare the equivalent intent
 -- at install time.
 --

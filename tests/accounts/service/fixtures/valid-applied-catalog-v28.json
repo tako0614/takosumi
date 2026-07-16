@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "description": "Immutable checksums from a valid applied Accounts migration catalog through version 28.",
+  "migrations": [
+    {
+      "version": 1,
+      "name": "001_app_installation_ledger.sql",
+      "checksum": "sha256:4020f41318e2548bd670710d3249471c61c58f44d8b83aed0bb7e98d46d0fe0a"
+    },
+    {
+      "version": 2,
+      "name": "002_service_import_binding_kind.sql",
+      "checksum": "sha256:bb64aaebd0b66c275d190ae50abf29b271ba83b1355dac1877f8f7dd9f0b21bd"
+    },
+    {
+      "version": 3,
+      "name": "003_public_material_binding_secret_refs.sql",
+      "checksum": "sha256:b7e299872befc909ea4c05a31d91632ca79f5021cacde39d5a13db10a2168ccc"
+    },
+    {
+      "version": 4,
+      "name": "004_service_descriptors.sql",
+      "checksum": "sha256:829d005b27b5235d78e24b9d64846902564dfd3f704732f87747407c4fb7255b"
+    },
+    {
+      "version": 5,
+      "name": "005_app_installation_service_imports.sql",
+      "checksum": "sha256:f0e8a0ce707ea14d2c5106153b85a9fcd497c82aee054bd93ea50d876757235c"
+    },
+    {
+      "version": 6,
+      "name": "006_oidc_client_binding_metadata.sql",
+      "checksum": "sha256:8b5ed53e6f758aec756ea53ffa6059536acb12c72ddc9e9278a4da98ca0210c7"
+    },
+    {
+      "version": 7,
+      "name": "007_reject_service_import_app_bindings.sql",
+      "checksum": "sha256:11c70adc54c3a40a65f9c640f6703af773e42bc18f62939b2de40e6fb4833c41"
+    },
+    {
+      "version": 8,
+      "name": "008_accounts_identity_billing_store.sql",
+      "checksum": "sha256:2b8979d06a3713635666cff5e23ff8bc7608412c69f42b17e354e2bada7f2e44"
+    },
+    {
+      "version": 9,
+      "name": "009_app_grant_capability_catalog.sql",
+      "checksum": "sha256:88a7c4d215d719dab2df190e770460bef06066b65bff90ded3ac23caf89d46ff"
+    },
+    {
+      "version": 10,
+      "name": "010_accounts_boundary_cleanup.sql",
+      "checksum": "sha256:e5e7548d8a2f85d1ec1364ada69993d2cfbfcbefd5aa970d8ae194fe76150360"
+    },
+    {
+      "version": 11,
+      "name": "011_app_installation_billing_account.sql",
+      "checksum": "sha256:85fe5f8ae76bfa0200fbe9329cb1d76939a780c8861dc186b8a2c8d770db8f69"
+    },
+    {
+      "version": 12,
+      "name": "012_personal_access_tokens.sql",
+      "checksum": "sha256:0c767968bdf6e8358859f7b593dab0ca7837fb5c84e96e9138de7d9ad4043702"
+    },
+    {
+      "version": 13,
+      "name": "013_authorization_code_nonce.sql",
+      "checksum": "sha256:d26843e1ea2593805aaf260e0675032751ec79505eb0d4de3936e65dd9e88727"
+    },
+    {
+      "version": 14,
+      "name": "014_opaque_launch_tokens.sql",
+      "checksum": "sha256:55f811edc58283498e4173efb11ecd13860f4dc83a41e3c7c482aed97a24ea2c"
+    },
+    {
+      "version": 15,
+      "name": "015_billing_usage_records.sql",
+      "checksum": "sha256:95d47752c39576d6776251c0f417235babd77d17611312be2e7a548bceb46191"
+    },
+    {
+      "version": 16,
+      "name": "016_launch_token_retention_index.sql",
+      "checksum": "sha256:8c1469a9551eacb66e0b01d4c8f70abd41b6144b6e3748c722a6bda3b587e52e"
+    },
+    {
+      "version": 17,
+      "name": "017_drop_binding_grant_runtime_binding.sql",
+      "checksum": "sha256:a2bf5f20b7e3ebd9f698b75ee2d61b08f9c8a30681f15bd31c2bd89cb4d98069"
+    },
+    {
+      "version": 18,
+      "name": "018_event_chain_lock.sql",
+      "checksum": "sha256:0539b1f0751546d4cde5d47d9789911f73723a2ef8db7b917e7749775c5c4618"
+    },
+    {
+      "version": 19,
+      "name": "019_refresh_chain.sql",
+      "checksum": "sha256:95b1a1a5aa7b4af1de2f2c963c6f0bf7166a101103cc54d1018bde81b56615bd"
+    },
+    {
+      "version": 20,
+      "name": "020_billing_version.sql",
+      "checksum": "sha256:b743a360d34c0a273ad7f0a4f1fd869cf1bf1d10a591128b4c73c5543bb57abb"
+    },
+    {
+      "version": 21,
+      "name": "021_auth_code_token_links_sentinel.sql",
+      "checksum": "sha256:d7ae6066006049893d0a0a3965eaca019f5ab90ea7d814d0c033d75a5291bdd2"
+    },
+    {
+      "version": 22,
+      "name": "022_passkey_challenges.sql",
+      "checksum": "sha256:228a11c596aba3d514444504c163f2b004a322667ed62e7d5e1f9020d614f8c4"
+    },
+    {
+      "version": 23,
+      "name": "023_account_email_verified.sql",
+      "checksum": "sha256:4a7bb4876eb09db494a7b60e8fa4846708e8d896ae1d3f4f27941b4708539299"
+    },
+    {
+      "version": 24,
+      "name": "024_service_binding_materials.sql",
+      "checksum": "sha256:48f70d89b8610a50e1e3f6fdf90f8317aa74573f9c2be4246b83603a8c290a02"
+    },
+    {
+      "version": 25,
+      "name": "025_privacy_requests.sql",
+      "checksum": "sha256:d22a54ff4fcc253436f9d7bbb634bbb9de412620c2dfc2770431d312b9eeb538"
+    },
+    {
+      "version": 26,
+      "name": "026_app_installation_source_path.sql",
+      "checksum": "sha256:19e72bd7a0ae8f893b568c42c40b9e4d755d5c39faa830513c33427ba45ed662"
+    },
+    {
+      "version": 27,
+      "name": "027_billing_usage_export_status.sql",
+      "checksum": "sha256:bd25eb8b5491dbe62da9afc83b142ed6dab2419b80520769017ffa27499fc8dc"
+    },
+    {
+      "version": 28,
+      "name": "028_billing_default_payment_method.sql",
+      "checksum": "sha256:aa8f45d1dc8df74d49b3d1bf35dbfd725f5b6030cbd1ecb6095114513052f4e8"
+    }
+  ]
+}
