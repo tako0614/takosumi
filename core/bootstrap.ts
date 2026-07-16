@@ -102,6 +102,13 @@ import {
 } from "./domains/interfaces/mod.ts";
 import { createSqlInterfaceStores } from "./domains/interfaces/sql_stores.ts";
 import {
+  FormRegistryService,
+  createSqlFormRegistryStore,
+  type FormPackageArtifactReader,
+  type FormPackageVerifier,
+  type FormRegistryStore,
+} from "./domains/service-forms/mod.ts";
+import {
   type BackupArtifactStore,
   type BackupObjectReader,
   BackupsService,
@@ -447,6 +454,16 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   /** Optional SQL client used by the durable OpenTofu and Resource APIs. */
   readonly sqlClient?: SqlClient;
   /**
+   * Host-local exact FormRef/package/activation registry. When omitted,
+   * `sqlClient` supplies the durable Postgres implementation; a zero-form host
+   * with neither dependency simply leaves the registry operation seam absent.
+   */
+  readonly formRegistryStore?: FormRegistryStore;
+  /** Opaque package bytes reader installed by the host trust policy. */
+  readonly formPackageArtifactReader?: FormPackageArtifactReader;
+  /** Trusted data-only package verifier installed by the host trust policy. */
+  readonly formPackageVerifier?: FormPackageVerifier;
+  /**
    * Pre-built durable store for the public OpenTofu run ledger. When omitted,
    * a configured `sqlClient` backs it with SQL; when neither is present the
    * controller falls back to an in-memory dev/test store (gated for
@@ -698,6 +715,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
 export interface TakosumiOperations {
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuController;
+  /** Optional zero-form-capable portable Service Form host registry. */
+  readonly forms?: FormRegistryService;
   claimManagedPublicHostname(
     input: ManagedPublicHostnameClaimRequest,
   ): Promise<ManagedPublicHostnameClaimResult>;
@@ -1074,6 +1093,22 @@ export async function createTakosumiService(
   // the SourcesService backed by a different instance).
   const sharedOpenTofuStore =
     opentofuStore.store ?? new InMemoryOpenTofuControlStore();
+  const formRegistryStore =
+    options.formRegistryStore ??
+    (options.sqlClient
+      ? createSqlFormRegistryStore(options.sqlClient)
+      : undefined);
+  const formRegistryService = formRegistryStore
+    ? new FormRegistryService({
+        store: formRegistryStore,
+        ...(options.formPackageArtifactReader
+          ? { artifactReader: options.formPackageArtifactReader }
+          : {}),
+        ...(options.formPackageVerifier
+          ? { verifier: options.formPackageVerifier }
+          : {}),
+      })
+    : undefined;
   const billingExtension = options.billingExtensionFactory
     ? await options.billingExtensionFactory.create()
     : undefined;
@@ -1937,6 +1972,7 @@ export async function createTakosumiService(
   };
   const operations: TakosumiOperations = {
     controller: opentofuController,
+    ...(formRegistryService ? { forms: formRegistryService } : {}),
     claimManagedPublicHostname: (input) =>
       opentofuController.claimManagedPublicHostname(input),
     workspaces: workspacesService,
