@@ -5,7 +5,9 @@ import {
   isSha256Digest,
   type FormActivation,
   type FormPackageLifecycleStatus,
+  type FormRef,
   type IsoTimestamp,
+  type PageParams,
 } from "takosumi-contract";
 import type {
   CreateFormActivationRequest,
@@ -23,6 +25,7 @@ export class FormRegistryError extends Error {
     readonly code:
       | "invalid_request"
       | "verification_failed"
+      | "verification_unavailable"
       | "package_conflict"
       | "definition_not_installed"
       | "package_unavailable"
@@ -37,18 +40,23 @@ export class FormRegistryError extends Error {
 
 export interface FormRegistryServiceOptions {
   readonly store: FormRegistryStore;
-  readonly artifactReader: FormPackageArtifactReader;
-  readonly verifier: FormPackageVerifier;
+  readonly artifactReader?: FormPackageArtifactReader;
+  readonly verifier?: FormPackageVerifier;
   readonly now?: () => IsoTimestamp;
 }
 
 export class FormRegistryService {
   readonly #store: FormRegistryStore;
-  readonly #artifactReader: FormPackageArtifactReader;
-  readonly #verifier: FormPackageVerifier;
+  readonly #artifactReader?: FormPackageArtifactReader;
+  readonly #verifier?: FormPackageVerifier;
   readonly #now: () => IsoTimestamp;
 
   constructor(options: FormRegistryServiceOptions) {
+    if (Boolean(options.artifactReader) !== Boolean(options.verifier)) {
+      throw new TypeError(
+        "Form package artifact reader and verifier must be configured together",
+      );
+    }
     this.#store = options.store;
     this.#artifactReader = options.artifactReader;
     this.#verifier = options.verifier;
@@ -64,6 +72,12 @@ export class FormRegistryService {
       throw new FormRegistryError(
         "invalid_request",
         "artifactRef, actorId, and an exact sha256 package digest are required",
+      );
+    }
+    if (!this.#artifactReader || !this.#verifier) {
+      throw new FormRegistryError(
+        "verification_unavailable",
+        "this host has no trusted Form Package reader/verifier installed",
       );
     }
 
@@ -158,6 +172,30 @@ export class FormRegistryService {
       throw new FormRegistryError("package_conflict", result.reason);
     }
     return result.package;
+  }
+
+  getPackage(packageDigest: string) {
+    return this.#store.getPackage(packageDigest);
+  }
+
+  listPackages(params: PageParams = {}) {
+    return this.#store.listPackages(params);
+  }
+
+  getDefinition(formRef: FormRef) {
+    return this.#store.getDefinition(formRef);
+  }
+
+  listDefinitions(params: PageParams = {}) {
+    return this.#store.listDefinitions(params);
+  }
+
+  getActivation(id: string) {
+    return this.#store.getActivation(id);
+  }
+
+  listActivations(params: PageParams = {}) {
+    return this.#store.listActivations(params);
   }
 
   async setPackageStatus(

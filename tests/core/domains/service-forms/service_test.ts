@@ -73,9 +73,23 @@ async function install(
 
 test("zero-form Core starts with an empty registry", async () => {
   const store = new InMemoryFormRegistryStore();
-  expect((await store.listPackages({})).items).toEqual([]);
-  expect((await store.listDefinitions({})).items).toEqual([]);
-  expect((await store.listActivations({})).items).toEqual([]);
+  const registry = new FormRegistryService({ store });
+  expect((await registry.listPackages()).items).toEqual([]);
+  expect((await registry.listDefinitions()).items).toEqual([]);
+  expect((await registry.listActivations()).items).toEqual([]);
+  await expect(install(registry)).rejects.toMatchObject({
+    code: "verification_unavailable",
+  });
+});
+
+test("package reader and verifier are one fail-closed trust contribution", () => {
+  expect(
+    () =>
+      new FormRegistryService({
+        store: new InMemoryFormRegistryStore(),
+        artifactReader: new Reader(),
+      }),
+  ).toThrow("must be configured together");
 });
 
 test("verified packages install exact definitions idempotently", async () => {
