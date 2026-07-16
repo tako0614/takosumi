@@ -1150,7 +1150,6 @@ export async function verifyProviderReleaseSource({
       "reviewed signer fingerprint and key custody",
       "artifact signature and transparency log",
       "public version-path nonexistence or exact-byte readback",
-      "patch feature decision",
       "OpenTofu/Terraform provider address proof",
     ],
     compatibilityPolicy: {

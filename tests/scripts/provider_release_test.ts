@@ -46,7 +46,7 @@ afterEach(async () => {
 });
 
 describe("provider release source", () => {
-  test("uses an independent 1.0.1 candidate lane and immutable historical quarantine", async () => {
+  test("uses an independent 1.1.0 candidate lane and immutable historical quarantine", async () => {
     const packageJson = await readJson(
       join(PROVIDER_RELEASE_ROOT, "package.json"),
     );
@@ -57,9 +57,9 @@ describe("provider release source", () => {
       await readJson(PROVIDER_QUARANTINE_PATH),
     );
 
-    expect(descriptor.version).toBe("1.0.1");
+    expect(descriptor.version).toBe("1.1.0");
     expect(descriptor.version).not.toBe(packageJson.version);
-    expect(descriptor.tag).toBe("provider/v1.0.1");
+    expect(descriptor.tag).toBe("provider/v1.1.0");
     expect(descriptor.publishable).toBe(false);
     expect(quarantine.version).toBe("1.0.0");
     expect(quarantine.publishable).toBe(false);
@@ -87,7 +87,7 @@ describe("provider release source", () => {
       "2d7313612f827336b6bb2d0e4155c4af04f4717f18760f87ee18cd5f4c2dcad3",
     );
     const result = await verifyProviderReleaseSource();
-    expect(result.providerVersion).toBe("1.0.1");
+    expect(result.providerVersion).toBe("1.1.0");
     expect(result.quarantineVersion).toBe("1.0.0");
     expect(
       result.localAssets.every(
@@ -139,7 +139,7 @@ describe("provider release source", () => {
         repoRoot: PROVIDER_RELEASE_ROOT,
         outputRoot: join(PROVIDER_RELEASE_ROOT, ".forbidden-provider-release"),
         sourceCommit: "a".repeat(40),
-        tag: "provider/v1.0.1",
+        tag: "provider/v1.1.0",
       }),
     ).rejects.toThrow("outside the tracked source repository");
   });
@@ -152,7 +152,7 @@ describe("provider release source", () => {
         repoRoot: PROVIDER_RELEASE_ROOT,
         outputRoot: root,
         sourceCommit: "a".repeat(40),
-        tag: "provider/v1.0.1",
+        tag: "provider/v1.1.0",
       }),
     ).rejects.toThrow("provider release output already exists");
   });
@@ -164,7 +164,7 @@ describe("provider release source", () => {
         repoRoot: fixture.repoRoot,
         outputRoot: fixture.outputRoot,
         sourceCommit: fixture.sourceCommit,
-        tag: "provider/v1.0.1",
+        tag: "provider/v1.1.0",
       }),
     ).rejects.toThrow("must be annotated and signed");
   });
@@ -180,7 +180,7 @@ describe("provider release source", () => {
           repoRoot: fixture.repoRoot,
           outputRoot: fixture.outputRoot,
           sourceCommit: fixture.sourceCommit,
-          tag: "provider/v1.0.1",
+          tag: "provider/v1.1.0",
           testOnlyAllowUnsignedTag: true,
         }),
       ).rejects.toThrow("go toolchain digest mismatch");
@@ -204,7 +204,7 @@ describe("provider release source", () => {
         repoRoot: fixture.repoRoot,
         outputRoot: fixture.outputRoot,
         sourceCommit: fixture.sourceCommit,
-        tag: "provider/v1.0.1",
+        tag: "provider/v1.1.0",
         testOnlyAllowUnsignedTag: true,
       });
       expect(result.bundleVerification.releaseEligibility).toBe("test-only");
@@ -220,7 +220,7 @@ describe("provider release source", () => {
         testOnlyAllowUnsignedManifest: true,
         fetchImpl: async (url) => {
           expect(String(url)).toBe(
-            "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/1.0.1.json",
+            "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/1.1.0.json",
           );
           return new Response("not found", { status: 404 });
         },
@@ -343,7 +343,7 @@ describe("immutable mirror materializer", () => {
 
   test("deterministically merges a new version without changing old immutable assets", async () => {
     const oldRelease = await makeReleaseFixture("1.0.0");
-    const newRelease = await makeReleaseFixture("1.0.1");
+    const newRelease = await makeReleaseFixture("1.1.0");
     const singleOutput = join(oldRelease.root, "single-mirror");
     await materializeUnapproved({
       outputRoot: singleOutput,
@@ -373,11 +373,11 @@ describe("immutable mirror materializer", () => {
     const index = await readJson(
       join(mergedOutput, oldRelease.manifest.providerAddress, "index.json"),
     );
-    expect(Object.keys(index.versions)).toEqual(["1.0.0", "1.0.1"]);
+    expect(Object.keys(index.versions)).toEqual(["1.0.0", "1.1.0"]);
   });
 
   test("rejects duplicate provider versions while merging", async () => {
-    const fixture = await makeReleaseFixture("1.0.1");
+    const fixture = await makeReleaseFixture("1.1.0");
     await expect(
       materializeUnapproved({
         outputRoot: fixture.outputRoot,
@@ -385,7 +385,7 @@ describe("immutable mirror materializer", () => {
         cacheRoot: fixture.cacheRoot,
         fetchImpl: fixture.fetchImpl,
       }),
-    ).rejects.toThrow("duplicate provider version 1.0.1");
+    ).rejects.toThrow("duplicate provider version 1.1.0");
   });
 
   test("rejects extra files from a materialized provider inventory", async () => {
@@ -454,7 +454,7 @@ describe("immutable mirror materializer", () => {
   });
 });
 
-async function makeReleaseFixture(version = "1.0.1") {
+async function makeReleaseFixture(version = "1.1.0") {
   const root = await mkdtemp(join(tmpdir(), "provider-release-test-"));
   temporaryRoots.push(root);
   const providerAddress = "registry.opentofu.org/takosjp/takosumi";
@@ -659,7 +659,7 @@ async function makeTaggedSourceFixture({ wrongGoDigest = false } = {}) {
   runGit(repoRoot, ["config", "user.name", "Provider Release Test"]);
   runGit(repoRoot, ["add", "."]);
   runGit(repoRoot, ["commit", "-q", "-m", "provider fixture"]);
-  runGit(repoRoot, ["tag", "provider/v1.0.1"]);
+  runGit(repoRoot, ["tag", "provider/v1.1.0"]);
   return {
     repoRoot,
     outputRoot: join(root, "output"),
@@ -684,7 +684,7 @@ async function makeCompleteTaggedSourceFixture() {
   runGit(repoRoot, ["config", "user.name", "Provider Release Test"]);
   runGit(repoRoot, ["add", "."]);
   runGit(repoRoot, ["commit", "-q", "-m", "complete provider fixture"]);
-  runGit(repoRoot, ["tag", "provider/v1.0.1"]);
+  runGit(repoRoot, ["tag", "provider/v1.1.0"]);
   return {
     repoRoot,
     outputRoot: join(root, "output"),

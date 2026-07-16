@@ -11,19 +11,24 @@ provider credentials, runtime values, or release signing material.
   public bytes. Structural hashes are SHA-256 over compact JSON after recursively
   sorting object keys and removing `description`, `description_kind`, and
   `validators`; boolean/type/nesting/state semantics remain included.
-- `1.0.1-delta-policy.json` classifies the current candidate delta. The four new
+- `1.1.0-delta-policy.json` classifies the current candidate delta. The four new
   resource types and eight optional field additions are additive schema changes,
-  but their inclusion in a patch correction is **not approved**. Publication
-  stays blocked until the release owner chooses a correction-only patch, moves
-  the features to a minor release, or explicitly approves that additive patch
-  before pinning the signing trust root.
+  so the feature-bearing `1.0.1` patch lane is rejected. They remain together
+  only in the unpublished `1.1.0` minor candidate. Publication stays blocked by
+  the independent compatibility and external release gates.
 
 `bun run provider:compatibility:check` builds the current candidate outside the
 repository, asks OpenTofu for its machine schema, removes only the declared
 additive paths, and requires the remaining schema to match this exact historical
-identity. It also reports the OpenTofu/Terraform address and CLI prerequisite
-matrix. A missing Terraform CLI is recorded as a release-blocking prerequisite,
-never as a skipped test.
+identity. The complete machine schema of every declared new resource and field
+is separately pinned, including required/sensitive/type/nesting flags. Exact
+provider implementation source pins make default and validator drift fail
+closed even though OpenTofu does not expose those semantics in schema JSON. The
+check also reports the OpenTofu/Terraform address and CLI prerequisites. A
+missing Terraform CLI is recorded as a release-blocking prerequisite, never as
+a skipped test; finding the CLI clears only that prerequisite. The separate
+state-proof command must still run the explicit Terraform schema/state/FQN
+matrix.
 
 `bun run provider:compatibility:state-proof` is the connected proof. It installs
 the exact quarantined provider from the public mirror, creates only disposable
@@ -37,4 +42,13 @@ apply, current refresh-free no-op, current read-only observe/refresh,
 old-provider rollback no-op, and destroy. It detected and drove removal of the
 ObjectBucket plan-time schema default that had forced old state to update;
 wire/state refresh still canonicalizes omission to `standard`. Publication
-remains blocked by the separate feature-in-patch and FQN/tool prerequisites.
+remains blocked by the explicit dual-FQN proof and external release gates.
+
+Every proof subprocess receives an explicit environment allowlist rooted in a
+temporary HOME. Provider tokens, cloud credentials, secret/password variables,
+and credential-bearing proxies are not forwarded; `credentialsUsed` is derived
+from the retained-key scan. Phase evidence requires exact per-resource request
+deltas for historical apply, current refresh-free no-op, current observe,
+TargetPool read/write, and historical rollback. A second real current-provider
+`tofu apply` proves an omitted ObjectBucket `storage_class` persists as known
+`standard` without regressing the old-state no-op.

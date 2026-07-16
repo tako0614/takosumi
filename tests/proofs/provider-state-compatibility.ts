@@ -2,20 +2,42 @@
 
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCompatibilityAuthorities } from "../../scripts/lib/provider-release-compatibility.mjs";
+import { buildSanitizedProviderProofEnvironment } from "../../scripts/lib/provider-proof-environment.mjs";
 
 const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const authorities = await loadCompatibilityAuthorities();
 const descriptor = JSON.parse(
   await Bun.file(join(repoRoot, "provider/release/version.json")).text(),
 );
+const historicalResourceRoutes = [
+  ["ContainerService", "agent"],
+  ["EdgeWorker", "api"],
+  ["KVStore", "cache"],
+  ["ObjectBucket", "assets"],
+  ["Queue", "events"],
+  ["SQLDatabase", "main"],
+] as const;
 const root = await mkdtemp(join(tmpdir(), "takosumi-provider-state-proof-"));
+const proofHome = join(root, "home");
+await mkdir(proofHome, { recursive: true });
+const goModuleCache =
+  process.env.GOMODCACHE ?? join(homedir(), "go", "pkg", "mod");
+const sanitized = buildSanitizedProviderProofEnvironment(process.env, {
+  home: proofHome,
+  overrides: {
+    CHECKPOINT_DISABLE: "1",
+    GOMODCACHE: goModuleCache,
+    TF_IN_AUTOMATION: "1",
+  },
+});
+const terraformPath = findCommand("terraform", sanitized.environment);
 const server = Bun.spawn(
   ["bun", join(repoRoot, "tests/proofs/fixtures/provider-compatibility-server.ts")],
-  { stdout: "pipe", stderr: "inherit" },
+  { env: sanitized.environment, stdout: "pipe", stderr: "inherit" },
 );
 
 try {
@@ -110,7 +132,17 @@ resource "takosumi_target_pool" "legacy" {
       binary,
       ".",
     ],
-    { cwd: join(repoRoot, "provider"), env: { ...process.env, CGO_ENABLED: "0", GOCACHE: join(root, "gocache") } },
+    {
+      cwd: join(repoRoot, "provider"),
+      env: {
+        ...sanitized.environment,
+        CGO_ENABLED: "0",
+        GOCACHE: join(root, "gocache"),
+        GOENV: "off",
+        GOPROXY: "off",
+        GOSUMDB: "off",
+      },
+    },
   );
   await chmod(binary, 0o755);
   const currentConfig = join(root, "current.tofurc");
@@ -125,10 +157,8 @@ resource "takosumi_target_pool" "legacy" {
 `,
   );
   const baseEnv = {
-    ...process.env,
+    ...sanitized.environment,
     TF_DATA_DIR: join(root, "tofu-data"),
-    TF_IN_AUTOMATION: "1",
-    CHECKPOINT_DISABLE: "1",
   };
   const oldEnv = { ...baseEnv, TF_CLI_CONFIG_FILE: oldConfig };
   const currentEnv = { ...baseEnv, TF_CLI_CONFIG_FILE: currentConfig };
@@ -145,11 +175,13 @@ resource "takosumi_target_pool" "legacy" {
   ) {
     throw new Error("old-state proof lockfile did not bind the exact public 1.0.0 archive");
   }
+  const beforeOldApply = await requestCounts(origin);
   run("tofu", ["apply", "-auto-approve", "-input=false", "-no-color"], {
     cwd: moduleDir,
     env: oldEnv,
   });
   const afterOldApply = await requestCounts(origin);
+  assertOldApplyPhase(beforeOldApply, afterOldApply);
 
   expectNoChange(
     runDetailed(
@@ -159,24 +191,18 @@ resource "takosumi_target_pool" "legacy" {
     ),
     "current candidate refresh-free plan against old state",
   );
+  const afterCurrentNoOp = await requestCounts(origin);
+  assertNoManagedRouteDelta(
+    afterOldApply,
+    afterCurrentNoOp,
+    "current refresh-free no-op",
+  );
   run("tofu", ["apply", "-refresh-only", "-auto-approve", "-input=false", "-no-color"], {
     cwd: moduleDir,
     env: currentEnv,
   });
   const afterCurrentRefresh = await requestCounts(origin);
-  const observeCount = countMatching(
-    afterCurrentRefresh,
-    /^POST \/v1\/resources\/[^/]+\/[^/]+\/observe$/,
-  );
-  if (observeCount !== 6) {
-    throw new Error(`current candidate used ${observeCount}/6 read-only observe paths`);
-  }
-  if (
-    countMatching(afterCurrentRefresh, /^PUT \/v1\/resources\/[^/]+\/[^/]+$/) !== 6 ||
-    count(afterCurrentRefresh, "PUT /v1/target-pools/default") !== 1
-  ) {
-    throw new Error("current refresh proof unexpectedly mutated the resource");
-  }
+  assertCurrentObservePhase(afterCurrentNoOp, afterCurrentRefresh);
 
   expectNoChange(
     runDetailed(
@@ -187,16 +213,33 @@ resource "takosumi_target_pool" "legacy" {
     "old provider rollback plan against state refreshed by current candidate",
   );
   const afterRollback = await requestCounts(origin);
-  const rollbackReads =
-    countMatching(afterRollback, /^GET \/v1\/resources\/[^/]+\/[^/]+$/) -
-    countMatching(afterCurrentRefresh, /^GET \/v1\/resources\/[^/]+\/[^/]+$/);
-  if (rollbackReads !== 6) {
-    throw new Error("rollback proof did not execute the historical GET read path");
-  }
+  assertRollbackPhase(afterCurrentRefresh, afterRollback);
   run("tofu", ["destroy", "-auto-approve", "-input=false", "-no-color"], {
     cwd: moduleDir,
     env: oldEnv,
   });
+  const currentCreateCanonicalized = await proveCurrentOmittedBucketCreate({
+    root,
+    origin,
+    providerAddress: authorities.identity.provider.openTofuAddress,
+    currentConfig,
+    baseEnvironment: sanitized.environment,
+  });
+  const terraformEvidence = terraformPath
+    ? await proveTerraformAddressState({
+        root,
+        origin,
+        terraformPath,
+        terraformAddress: authorities.identity.provider.terraformServeAddress,
+        openTofuAddress: authorities.identity.provider.openTofuAddress,
+        binaryDir,
+        baseEnvironment: sanitized.environment,
+      })
+    : {
+        status: "blocked-prerequisite",
+        reason: "terraform-cli-unavailable",
+        addressesTreatedAsInterchangeable: false,
+      };
 
   process.stdout.write(
     `${JSON.stringify(
@@ -214,11 +257,20 @@ resource "takosumi_target_pool" "legacy" {
           "takosumi_target_pool",
         ],
         stateValuesRecorded: false,
-        credentialsUsed: false,
+        environmentEvidence: sanitized.evidence,
+        credentialsUsed: sanitized.evidence.credentialsUsed,
         oldStateRefreshFreeNoOp: true,
         currentObserveRefresh: true,
         currentMutationDuringRefresh: false,
         oldProviderRollbackNoOp: true,
+        currentOmittedBucketCreateCanonicalized: currentCreateCanonicalized,
+        terraformEvidence,
+        phaseEvidence: {
+          oldApply: "six-resource-put-and-target-pool-put-exact",
+          currentRefreshFreePlan: "zero-managed-route-requests",
+          currentRefresh: "six-resource-observe-and-target-pool-get-exact",
+          oldRollback: "six-resource-get-and-target-pool-get-exact",
+        },
         exactHistoricalNetworkMirror: true,
         devOverrideUsedOnlyForCandidate: true,
       },
@@ -230,6 +282,230 @@ resource "takosumi_target_pool" "legacy" {
   server.kill();
   await server.exited;
   await rm(root, { recursive: true, force: true });
+}
+
+async function proveTerraformAddressState({
+  root,
+  origin,
+  terraformPath,
+  terraformAddress,
+  openTofuAddress,
+  binaryDir,
+  baseEnvironment,
+}: {
+  root: string;
+  origin: string;
+  terraformPath: string;
+  terraformAddress: string;
+  openTofuAddress: string;
+  binaryDir: string;
+  baseEnvironment: NodeJS.ProcessEnv;
+}) {
+  const moduleDir = join(root, "terraform-state-module");
+  const config = join(root, "terraformrc");
+  await mkdir(moduleDir, { recursive: true });
+  await Bun.write(
+    config,
+    `provider_installation {
+  dev_overrides {
+    "${terraformAddress}" = "${binaryDir}"
+  }
+  direct {}
+}
+`,
+  );
+  await Bun.write(
+    join(moduleDir, "main.tf"),
+    `terraform {
+  required_providers {
+    takosumi = {
+      source = "${terraformAddress}"
+    }
+  }
+}
+
+provider "takosumi" {
+  endpoint = "${origin}"
+  space    = "compat"
+}
+
+resource "takosumi_object_bucket" "terraform" {
+  name       = "terraform-default"
+  interfaces = ["s3_api"]
+}
+`,
+  );
+  const environment = {
+    ...baseEnvironment,
+    TF_CLI_CONFIG_FILE: config,
+    TF_DATA_DIR: join(root, "terraform-state-data"),
+  };
+  const schemaDocument = JSON.parse(
+    run(terraformPath, ["providers", "schema", "-json"], {
+      cwd: moduleDir,
+      env: environment,
+    }).stdout,
+  );
+  if (!schemaDocument.provider_schemas?.[terraformAddress]) {
+    throw new Error("Terraform schema proof omitted the Terraform provider FQN");
+  }
+  if (schemaDocument.provider_schemas?.[openTofuAddress]) {
+    throw new Error("Terraform schema proof treated the OpenTofu FQN as interchangeable");
+  }
+
+  const beforeApply = await requestCounts(origin);
+  run(terraformPath, ["apply", "-auto-approve", "-input=false", "-no-color"], {
+    cwd: moduleDir,
+    env: environment,
+  });
+  const afterApply = await requestCounts(origin);
+  assertRouteDelta(
+    beforeApply,
+    afterApply,
+    "PUT /v1/resources/ObjectBucket/terraform-default",
+    1,
+    "Terraform explicit-FQN apply",
+  );
+  const state = JSON.parse(
+    run(terraformPath, ["show", "-json", "-no-color"], {
+      cwd: moduleDir,
+      env: environment,
+    }).stdout,
+  );
+  const resource = state.values?.root_module?.resources?.find(
+    (entry: { address?: string }) =>
+      entry.address === "takosumi_object_bucket.terraform",
+  );
+  if (
+    resource?.provider_name !== terraformAddress ||
+    resource?.values?.storage_class !== "standard"
+  ) {
+    throw new Error(
+      "Terraform state proof did not retain its explicit FQN and canonical state",
+    );
+  }
+
+  expectNoChange(
+    runDetailed(
+      terraformPath,
+      ["plan", "-detailed-exitcode", "-input=false", "-no-color"],
+      { cwd: moduleDir, env: environment },
+    ),
+    "Terraform explicit-FQN refresh plan",
+  );
+  const afterPlan = await requestCounts(origin);
+  assertRouteDelta(
+    afterApply,
+    afterPlan,
+    "POST /v1/resources/ObjectBucket/terraform-default/observe",
+    1,
+    "Terraform explicit-FQN refresh",
+  );
+  assertRouteDelta(
+    afterApply,
+    afterPlan,
+    "PUT /v1/resources/ObjectBucket/terraform-default",
+    0,
+    "Terraform explicit-FQN refresh",
+  );
+  run(terraformPath, ["destroy", "-auto-approve", "-input=false", "-no-color"], {
+    cwd: moduleDir,
+    env: environment,
+  });
+  return {
+    status: "proof-complete",
+    cliPath: terraformPath,
+    terraformAddress,
+    openTofuAddress,
+    schemaLoadedAtTerraformAddress: true,
+    stateProviderAddressExact: true,
+    refreshPlanNoOp: true,
+    addressesTreatedAsInterchangeable: false,
+    stateValuesRecorded: false,
+  };
+}
+
+async function proveCurrentOmittedBucketCreate({
+  root,
+  origin,
+  providerAddress,
+  currentConfig,
+  baseEnvironment,
+}: {
+  root: string;
+  origin: string;
+  providerAddress: string;
+  currentConfig: string;
+  baseEnvironment: NodeJS.ProcessEnv;
+}) {
+  const moduleDir = join(root, "current-create-module");
+  await mkdir(moduleDir, { recursive: true });
+  await Bun.write(
+    join(moduleDir, "main.tf"),
+    `terraform {
+  required_providers {
+    takosumi = {
+      source = "${providerAddress}"
+    }
+  }
+}
+
+provider "takosumi" {
+  endpoint = "${origin}"
+  space    = "compat"
+}
+
+resource "takosumi_object_bucket" "omitted" {
+  name       = "current-default"
+  interfaces = ["s3_api"]
+}
+`,
+  );
+  const environment = {
+    ...baseEnvironment,
+    TF_CLI_CONFIG_FILE: currentConfig,
+    TF_DATA_DIR: join(root, "current-create-tofu-data"),
+  };
+  const before = await requestCounts(origin);
+  run("tofu", ["apply", "-auto-approve", "-input=false", "-no-color"], {
+    cwd: moduleDir,
+    env: environment,
+  });
+  const after = await requestCounts(origin);
+  assertRouteDelta(
+    before,
+    after,
+    "PUT /v1/resources/ObjectBucket/current-default",
+    1,
+    "current omitted ObjectBucket create",
+  );
+  assertRouteDelta(
+    before,
+    after,
+    "POST /v1/resources/preview",
+    1,
+    "current omitted ObjectBucket preview",
+  );
+  const show = JSON.parse(
+    run("tofu", ["show", "-json", "-no-color"], {
+      cwd: moduleDir,
+      env: environment,
+    }).stdout,
+  );
+  const resource = show.values?.root_module?.resources?.find(
+    (entry: { address?: string }) =>
+      entry.address === "takosumi_object_bucket.omitted",
+  );
+  if (resource?.values?.storage_class !== "standard") {
+    throw new Error(
+      "current ObjectBucket create did not persist the known standard storage class",
+    );
+  }
+  run("tofu", ["destroy", "-auto-approve", "-input=false", "-no-color"], {
+    cwd: moduleDir,
+    env: environment,
+  });
+  return true;
 }
 
 async function readReadyOrigin(stream: ReadableStream<Uint8Array>) {
@@ -257,10 +533,180 @@ function count(counts: Record<string, number>, key: string) {
   return counts[key] ?? 0;
 }
 
-function countMatching(counts: Record<string, number>, pattern: RegExp) {
-  return Object.entries(counts).reduce(
-    (total, [key, value]) => total + (pattern.test(key) ? value : 0),
+function findCommand(command: string, environment: NodeJS.ProcessEnv) {
+  const result = spawnSync("sh", ["-c", `command -v ${command}`], {
+    env: environment,
+    encoding: "utf8",
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function assertRouteDelta(
+  before: Record<string, number>,
+  after: Record<string, number>,
+  route: string,
+  expected: number,
+  phase: string,
+) {
+  const actual = count(after, route) - count(before, route);
+  if (actual !== expected) {
+    throw new Error(
+      `${phase} expected ${route} delta ${expected}, observed ${actual}`,
+    );
+  }
+}
+
+function managedRoutes() {
+  const routes = historicalResourceRoutes.flatMap(([kind, name]) => [
+    `GET /v1/resources/${kind}/${name}`,
+    `PUT /v1/resources/${kind}/${name}`,
+    `DELETE /v1/resources/${kind}/${name}`,
+    `POST /v1/resources/${kind}/${name}/observe`,
+  ]);
+  return routes.concat([
+    "POST /v1/resources/preview",
+    "GET /v1/target-pools/default",
+    "PUT /v1/target-pools/default",
+    "DELETE /v1/target-pools/default",
+  ]);
+}
+
+function assertNoManagedRouteDelta(
+  before: Record<string, number>,
+  after: Record<string, number>,
+  phase: string,
+) {
+  for (const route of managedRoutes()) {
+    assertRouteDelta(before, after, route, 0, phase);
+  }
+}
+
+function assertOldApplyPhase(
+  before: Record<string, number>,
+  after: Record<string, number>,
+) {
+  for (const [kind, name] of historicalResourceRoutes) {
+    assertRouteDelta(
+      before,
+      after,
+      `PUT /v1/resources/${kind}/${name}`,
+      1,
+      "historical apply",
+    );
+    assertRouteDelta(
+      before,
+      after,
+      `GET /v1/resources/${kind}/${name}`,
+      0,
+      "historical apply",
+    );
+    assertRouteDelta(
+      before,
+      after,
+      `POST /v1/resources/${kind}/${name}/observe`,
+      0,
+      "historical apply",
+    );
+  }
+  assertRouteDelta(
+    before,
+    after,
+    "PUT /v1/target-pools/default",
+    1,
+    "historical apply",
+  );
+  assertRouteDelta(
+    before,
+    after,
+    "GET /v1/target-pools/default",
     0,
+    "historical apply",
+  );
+}
+
+function assertCurrentObservePhase(
+  before: Record<string, number>,
+  after: Record<string, number>,
+) {
+  for (const [kind, name] of historicalResourceRoutes) {
+    assertRouteDelta(
+      before,
+      after,
+      `POST /v1/resources/${kind}/${name}/observe`,
+      1,
+      "current refresh",
+    );
+    assertRouteDelta(
+      before,
+      after,
+      `PUT /v1/resources/${kind}/${name}`,
+      0,
+      "current refresh",
+    );
+    assertRouteDelta(
+      before,
+      after,
+      `GET /v1/resources/${kind}/${name}`,
+      0,
+      "current refresh",
+    );
+  }
+  assertRouteDelta(
+    before,
+    after,
+    "GET /v1/target-pools/default",
+    1,
+    "current refresh",
+  );
+  assertRouteDelta(
+    before,
+    after,
+    "PUT /v1/target-pools/default",
+    0,
+    "current refresh",
+  );
+}
+
+function assertRollbackPhase(
+  before: Record<string, number>,
+  after: Record<string, number>,
+) {
+  for (const [kind, name] of historicalResourceRoutes) {
+    assertRouteDelta(
+      before,
+      after,
+      `GET /v1/resources/${kind}/${name}`,
+      1,
+      "historical rollback",
+    );
+    assertRouteDelta(
+      before,
+      after,
+      `POST /v1/resources/${kind}/${name}/observe`,
+      0,
+      "historical rollback",
+    );
+    assertRouteDelta(
+      before,
+      after,
+      `PUT /v1/resources/${kind}/${name}`,
+      0,
+      "historical rollback",
+    );
+  }
+  assertRouteDelta(
+    before,
+    after,
+    "GET /v1/target-pools/default",
+    1,
+    "historical rollback",
+  );
+  assertRouteDelta(
+    before,
+    after,
+    "PUT /v1/target-pools/default",
+    0,
+    "historical rollback",
   );
 }
 

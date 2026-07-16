@@ -23,7 +23,7 @@
     "hostedMirrorAddresses": [
       "registry.opentofu.org/takosjp/takosumi"
     ],
-    "status": "split-unproven"
+    "status": "explicit-dual-address"
   },
   "stateIdentity": {
     "importIdFormat": "<space>/<name>",

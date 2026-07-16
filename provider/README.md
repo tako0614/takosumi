@@ -223,10 +223,10 @@ provider bytes fail before dev/build and are never release authority.
 Public `1.0.0` is historical quarantine: its version metadata and four
 archives are retained byte-for-byte, but its binary reports `dev` and dirty,
 unknown provenance. It must never be overwritten or described as reproducible.
-The corrected provider version is the unpublished `1.0.1` candidate in
+The corrected provider version is the unpublished `1.1.0` candidate in
 `provider/release/version.json`.
 
-The exact public `1.0.0` structural schema identity and the classified `1.0.1`
+The exact public `1.0.0` structural schema identity and the classified `1.1.0`
 delta are digest-pinned under `provider/release/compatibility`. Check them with:
 
 ```bash
@@ -236,20 +236,21 @@ bun run provider:compatibility:state-proof
 
 The first command proves that the current machine schema differs only by the
 declared four resources and eight optional attributes. It still reports
-`releaseReady: false`: adding those features in a patch is unapproved,
-Terraform CLI is not available in the pinned release environment, and the
-OpenTofu mirror FQN (`registry.opentofu.org/takosjp/takosumi`) differs from the
-binary's Terraform serve FQN (`registry.terraform.io/takosjp/takosumi`). None
-is treated as a skipped check.
+`releaseReady: false`: the feature-bearing `1.0.1` patch was rejected and moved
+to this `1.1.0` candidate, while the Terraform install/FQN matrix is not yet
+proven. OpenTofu uses `registry.opentofu.org/takosjp/takosumi`; Terraform uses
+`registry.terraform.io/takosjp/takosumi`. A Terraform CLI found on `PATH` clears
+only its CLI prerequisite; it does not claim the matrix. None is treated as a
+skipped check.
 
 An actual release build requires the exact clean provider tag and source
 commit and writes to a new directory outside this repository:
 
 ```bash
 bun run provider:release:build -- \
-  --tag provider/v1.0.1 \
+  --tag provider/v1.1.0 \
   --source-commit <40-character-commit> \
-  --output /absolute/new/provider-1.0.1
+  --output /absolute/new/provider-1.1.0
 ```
 
 The builder pins Go/zip/unzip/Git/gpgv versions, absolute canonical executable
@@ -264,7 +265,7 @@ Bundle verification first snapshots the complete input into a private
 `0700` authority directory with `0600` files so later path replacement cannot
 change the reviewed bytes.
 Production requires a signed annotated tag from a reviewed fingerprint; no
-fingerprint is configured yet, so `1.0.1` remains a candidate-only lane.
+fingerprint is configured yet, so `1.1.0` remains a candidate-only lane.
 It does not publish anything.
 
 Network mirror base URL:
