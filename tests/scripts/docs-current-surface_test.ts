@@ -173,18 +173,24 @@ test("hosted Cloud docs keep current usage identity provider neutral", async () 
   }
 });
 
-test("hosted Cloud docs do not promote GA candidates before catalog activation", async () => {
+test("hosted Cloud docs keep the all-or-nothing GA contract Pre-GA before evidence activation", async () => {
   const index = await readText(new URL("app-docs/en/index.md", ROOT));
   const pricing = await readText(new URL("app-docs/en/pricing.md", ROOT));
   const resources = await readText(new URL("app-docs/en/resources.md", ROOT));
   const endpoints = await readText(new URL("app-docs/en/endpoints.md", ROOT));
 
-  assert.match(index, /Edge Worker\s+\| Production Preview/);
-  assert.match(pricing, /No GA Stable offering is active/);
-  assert.match(resources, /GA-candidate Worker route contract/);
-  assert.match(endpoints, /GA-candidate control-plane subset/);
-  assert.doesNotMatch(resources, /Stable Cloudflare-compatible route/);
-  assert.doesNotMatch(endpoints, /Stable offerings include/);
+  assert.match(index, /one Stable contract/);
+  assert.match(index, /Takosumi Cloud stays Pre-GA until every item passes/);
+  assert.match(pricing, /unpriced meter, inactive catalog, missing manager/);
+  assert.match(resources, /GA contract \| EdgeWorker modules/);
+  assert.match(
+    resources,
+    /Pre-GA\s+\| public GA stays closed until every item passes/,
+  );
+  assert.match(endpoints, /The whole set remains Pre-GA/);
+  for (const doc of [index, resources, endpoints]) {
+    assert.doesNotMatch(doc, /\|\s*Stable\s*\|/);
+  }
 });
 
 test("Takosumi source module exposes the documented hosted billing proxies", async () => {

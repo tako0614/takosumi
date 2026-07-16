@@ -91,7 +91,7 @@
     "@types/pg": "^8.11.0",
     "drizzle-kit": "^0.31.10",
     "typescript": "^5.7.0",
-    "wrangler": "^4.101.0"
+    "wrangler": "^4.111.0"
   },
   "overrides": {
     "esbuild": "0.28.1",
