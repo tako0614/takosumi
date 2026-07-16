@@ -191,6 +191,7 @@ services:
       TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL: http://opentofu-runner:8080
       TAKOSUMI_ENABLED_RUNNER_PROFILES: opentofu-default
       TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID: opentofu-default
+      NODE_EXTRA_CA_CERTS: /local-substrate-runtime/pebble-issuance-root.pem
     volumes:
       - ../../../takosumi:/workspace
       - ../../../takosumi:/takosumi:ro
@@ -251,13 +252,14 @@ services:
         condition: service_started
     working_dir: /app
     command: ["node", "/app/runner.mjs"]
-    ports:
-      - "18788:8788"
     env_file:
       - ./env/takosumi-service-worker.env
+    environment:
+      NODE_EXTRA_CA_CERTS: /local-substrate-runtime/pebble-issuance-root.pem
     volumes:
       - ../../../takosumi/deploy/platform/.wrangler/dist:/worker:ro
       - ./wrappers/takosumi-platform-worker-runner.mjs:/app/runner.mjs:ro
+      - ./caddy/runtime:/local-substrate-runtime:ro
       - takosumi-service-worker-data:/data
     healthcheck:
       test:
@@ -280,44 +282,45 @@ services:
     profiles: ["postgres"]
     image: node:22-slim
     restart: "no"
-    working_dir: /website
+    working_dir: /build/website
     command:
       - sh
       - -c
       - |
-        if [ ! -d node_modules ]; then
-          npm install --no-fund --no-audit
-        fi
+        set -eu
+        mkdir -p /build/website
+        tar -C /source --exclude=node_modules --exclude=.output -cf - . \
+          | tar -C /build/website -xf -
+        npm ci --no-fund --no-audit
         npm run build
+        find /output -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        cp -a .output/. /output/
     volumes:
-      - ../../../takosumi/website:/website
+      - ../../../takosumi/website:/source:ro
+      - ../../../takosumi/website/.output:/output
 
   # ---- takosumi docs (VitePress, mirrors takosumi.com/docs/) ----
   takosumi-docs-build:
     profiles: ["postgres"]
-    # Debian-based (not alpine) — vitepress / rollup pull glibc-flavored
-    # native binaries; alpine + musl breaks the install.
-    image: node:22-slim
+    image: takosumi-local-static-builder:node22
     restart: "no"
-    working_dir: /docs
+    working_dir: /build/docs
     command:
       - sh
       - -c
       - |
-        # vitepress needs git for lastUpdated metadata, and may need
-        # rebuilt native modules if the host's node_modules were from a
-        # different libc.
-        apt-get update -qq && apt-get install -y --no-install-recommends git ca-certificates >/dev/null
-        if [ -f node_modules/rollup/dist/native.js ] && \
-           ! ldd node_modules/rollup/dist/native.js >/dev/null 2>&1; then
-          rm -rf node_modules
-        fi
-        if [ ! -d node_modules ]; then
-          npm install --no-fund --no-audit
-        fi
+        set -eu
+        mkdir -p /build/docs
+        tar -C /source --exclude=node_modules --exclude=.vitepress/dist -cf - . \
+          | tar -C /build/docs -xf -
+        npm ci --no-fund --no-audit
         npm run build
+        mkdir -p /output
+        find /output -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        cp -a .vitepress/dist/. /output/
     volumes:
-      - ../../../takosumi/docs:/docs
+      - ../../../takosumi/docs:/source:ro
+      - ../../../takosumi/docs/.vitepress/dist:/output
 
   # ---- OpenTelemetry collector + Jaeger (trace + metric sink) ----
   # No service emits OTel today, but the collector + UI are sitting here so
@@ -331,9 +334,6 @@ services:
     profiles: ["postgres"]
     image: jaegertracing/jaeger:2.4.0
     restart: unless-stopped
-    ports:
-      - "16686:16686"
-      - "14317:4317"
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     networks:
@@ -398,18 +398,73 @@ services:
     profiles: ["postgres", "workers"]
     image: oven/bun:1
     restart: "no"
-    working_dir: /work/dashboard
+    working_dir: /build/dashboard
     command:
       - sh
       - -c
       - |
-        if [ ! -d node_modules ]; then
-          bun install --frozen-lockfile
-        fi
+        set -eu
+        mkdir -p /build
+        tar -C /source \
+          --exclude=.git \
+          --exclude=node_modules \
+          --exclude='*/node_modules' \
+          --exclude=dashboard/dist \
+          --exclude=docs/.vitepress/dist \
+          --exclude=app-docs/.vitepress/dist \
+          --exclude=website/.output \
+          -cf - . | tar -C /build -xf -
+        bun install --frozen-lockfile
         bun run build
-        cd /work && bash scripts/build-app-docs.sh
+        find /output -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        cp -a dist/. /output/
     volumes:
-      - ../../../takosumi:/work
+      - ../../../takosumi:/source:ro
+      - ../../../takosumi/dashboard/dist:/output
+
+  # Build hosted Cloud docs only after the dashboard artifact exists. The
+  # source tree stays read-only; only the two declared build outputs cross the
+  # container boundary.
+  takosumi-app-docs-build:
+    profiles: ["postgres", "workers"]
+    image: takosumi-local-static-builder:node22
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM node:22-slim
+        RUN apt-get update \
+          && apt-get install -y --no-install-recommends git ca-certificates \
+          && rm -rf /var/lib/apt/lists/*
+    restart: "no"
+    depends_on:
+      takosumi-dashboard-build:
+        condition: service_completed_successfully
+    working_dir: /build
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        tar -C /source \
+          --exclude=.git \
+          --exclude=node_modules \
+          --exclude='*/node_modules' \
+          --exclude=docs/.vitepress/dist \
+          --exclude=app-docs/.vitepress/dist \
+          --exclude=website/.output \
+          -cf - . | tar -C /build -xf -
+        cd /build/docs
+        npm ci --no-fund --no-audit
+        cd /build
+        bash scripts/build-app-docs.sh
+        find /dashboard-output -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        cp -a dashboard/dist/. /dashboard-output/
+        find /app-docs-output -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        cp -a app-docs/.vitepress/dist/. /app-docs-output/
+    volumes:
+      - ../../../takosumi:/source:ro
+      - ../../../takosumi/dashboard/dist:/dashboard-output
+      - ../../../takosumi/app-docs/.vitepress/dist:/app-docs-output
 
   # ---- Phase 3 route registrar ----
   # Maintains the dynamic route partition in Caddy admin. The v1 public

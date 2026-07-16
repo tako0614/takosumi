@@ -22,6 +22,11 @@ const cliSmokePath = resolve(
   "../../deploy/local-substrate/scripts/cli-smoke.sh",
 );
 const cliSmoke = readFileSync(cliSmokePath, "utf8");
+const tenantIsolationPath = resolve(
+  import.meta.dir,
+  "../../deploy/local-substrate/scripts/tenant-isolation.sh",
+);
+const tenantIsolation = readFileSync(tenantIsolationPath, "utf8");
 const coreMigratePath = resolve(
   import.meta.dir,
   "../../core/scripts/db-migrate.ts",
@@ -47,6 +52,11 @@ const cloudEnvPath = resolve(
   "../../deploy/local-substrate/env/cloud.env",
 );
 const cloudEnv = readFileSync(cloudEnvPath, "utf8");
+const serviceWorkerEnvPath = resolve(
+  import.meta.dir,
+  "../../deploy/local-substrate/env/takosumi-service-worker.env",
+);
+const serviceWorkerEnv = readFileSync(serviceWorkerEnvPath, "utf8");
 const otelConfigPath = resolve(
   import.meta.dir,
   "../../deploy/local-substrate/otel/config.yaml",
@@ -79,17 +89,62 @@ test("local-substrate builds the single composed platform worker", () => {
   expect(compose).not.toContain("worker/src/index.ts");
 });
 
-test("local-substrate dashboard build sees the whole Takosumi workspace", () => {
+test("local-substrate static builders use read-only sources and isolated outputs", () => {
   const dashboardBuild = compose.match(
     /takosumi-dashboard-build:[\s\S]*?volumes:\n(?<block>(?:      - .+\n)+)/,
   )?.[0];
 
   expect(dashboardBuild).toBeDefined();
-  expect(dashboardBuild).toContain("working_dir: /work/dashboard");
-  expect(dashboardBuild).toContain("- ../../../takosumi:/work");
-  expect(dashboardBuild).not.toContain(
-    "- ../../../takosumi/dashboard:/dashboard",
+  expect(dashboardBuild).toContain("working_dir: /build/dashboard");
+  expect(dashboardBuild).toContain("- ../../../takosumi:/source:ro");
+  expect(dashboardBuild).toContain(
+    "- ../../../takosumi/dashboard/dist:/output",
   );
+
+  for (const service of [
+    "takosumi-website-build",
+    "takosumi-docs-build",
+    "takosumi-dashboard-build",
+    "takosumi-app-docs-build",
+  ]) {
+    const block = compose.match(
+      new RegExp(`${service}:[\\s\\S]*?(?=\\n  [a-zA-Z0-9_-]+:|\\n?$)`),
+    )?.[0];
+    expect(block, service).toBeDefined();
+    expect(block).toContain("/source:ro");
+    expect(block).toContain("--exclude=node_modules");
+  }
+
+  expect(compose).toContain("npm ci --no-fund --no-audit");
+  expect(compose).toContain("bun install --frozen-lockfile");
+  expect(compose).not.toContain("npm install --no-fund --no-audit");
+  expect(dashboardBuild).not.toContain("../../../takosumi:/work");
+  expect(compose).toContain("takosumi-local-static-builder:node22");
+  expect(compose).toContain("apt-get install -y --no-install-recommends git");
+  expect(compose).toContain("takosumi-app-docs-build:");
+  expect(upScript).toContain(
+    "wait_for_completed_service takosumi-app-docs-build",
+  );
+});
+
+test("local-substrate waits for regular completed containers fail-closed", () => {
+  const waitFunction = upScript.match(
+    /wait_for_completed_service\(\) \{[\s\S]*?\n\}/,
+  )?.[0];
+  expect(waitFunction).toBeDefined();
+  expect(waitFunction).toContain('ps --all -q "$service"');
+  expect(waitFunction).toContain('"com.docker.compose.oneoff"');
+  expect(waitFunction).toContain('if [[ "$oneoff" != "True" ]]');
+  expect(waitFunction).toContain('echo "$service was not created"');
+  expect(upScript).toContain(
+    'LOCAL_WAIT_TIMEOUT_SECONDS="${TAKOSUMI_LOCAL_WAIT_TIMEOUT_SECONDS:-600}"',
+  );
+  expect(upScript).toContain("=~ ^[1-9][0-9]*$");
+  expect(waitFunction).toContain(
+    "deadline=$((SECONDS + LOCAL_WAIT_TIMEOUT_SECONDS))",
+  );
+  expect(waitFunction).toContain("while (( SECONDS < deadline )); do");
+  expect(waitFunction).not.toContain("seq 1 120");
 });
 
 test("local-substrate cloud migration prepares core and accounts tables", () => {
@@ -168,6 +223,9 @@ test("local-substrate AppArmor override removes docker-healthcheck dependency", 
 });
 
 test("local-substrate up rebuilds runtime images before starting", () => {
+  expect(upScript).toContain(
+    'compose_substrate --profile "$PROFILE" up -d --force-recreate',
+  );
   expect(upScript).toContain("substrate_up_args=(up -d --build)");
   expect(upScript).toContain("substrate_up_args+=(--force-recreate)");
   expect(upScript).toContain(
@@ -223,6 +281,17 @@ test("local-substrate cli smoke exercises Git Source Capsule plan/apply", () => 
   );
   expect(cliSmoke).not.toContain('post_json "/internal/v1/deploy"');
   expect(cliSmoke).not.toContain("/internal/v1/plan-runs");
+  expect(cliSmoke).toContain('expected.pop("planId", None)');
+  expect(cliSmoke).toContain('expected.pop("runnerId", None)');
+  expect(cliSmoke).toContain('expected["planRunId"] = plan_run_id');
+  expect(cliSmoke).toContain('expected["runnerProfileId"] = runner_profile_id');
+});
+
+test("local-substrate tenant isolation follows the final Workspace response", () => {
+  expect(tenantIsolation).toContain(
+    "print((d.get('workspace') or {}).get('id', ''))",
+  );
+  expect(tenantIsolation).not.toContain("d.get('space')");
 });
 
 test("local-substrate internal bridge explicitly allows container communication", () => {
@@ -235,12 +304,19 @@ test("local-substrate internal bridge explicitly allows container communication"
 });
 
 test("local-substrate platform worker is reachable through the ingress proxy", () => {
-  expect(compose).toContain('"18788:8788"');
+  expect(compose).not.toContain('"18788:8788"');
   expect(miniflareDockerfile).toContain("EXPOSE 8788");
   expect(caddyfile).toContain(
     "service.takosumi.test, service-worker.takosumi.test",
   );
-  expect(caddyfile).toContain("reverse_proxy host.docker.internal:18788");
+  expect(caddyfile).toContain("reverse_proxy takosumi-service-worker:8788");
+});
+
+test("local-substrate ingress blocks private and retired control seams", () => {
+  expect(caddyfile).toContain(
+    "@private path /internal/* /api/spaces /api/spaces/* /api/connections /api/connections/*",
+  );
+  expect(caddyfile).toContain("respond @private 404");
 });
 
 test("local-substrate cloud env uses explicit upstream descriptors and a real dev session", () => {
@@ -262,12 +338,34 @@ test("local-substrate cloud env uses explicit upstream descriptors and a real de
   );
   expect(cloudEnv).not.toContain("TAKOSUMI_ACCOUNTS_STRIPE");
   expect(cloudEnv).not.toContain("UPSTREAM_GITHUB");
+  for (const env of [cloudEnv, serviceWorkerEnv]) {
+    expect(env).not.toContain("http://oauth-mock:8789");
+    expect(env).toContain(
+      '\"tokenEndpoint\":\"https://oauth-mock.test/local-oidc/token\"',
+    );
+    expect(env).toContain(
+      '\"userInfoEndpoint\":\"https://oauth-mock.test/local-oidc/userinfo\"',
+    );
+  }
+
+  const cloudBlock = compose.match(
+    /cloud:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,
+  )?.[0];
+  const workerBlock = compose.match(
+    /takosumi-service-worker:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,
+  )?.[0];
+  for (const block of [cloudBlock, workerBlock]) {
+    expect(block).toContain(
+      "NODE_EXTRA_CA_CERTS: /local-substrate-runtime/pebble-issuance-root.pem",
+    );
+  }
+  expect(workerBlock).toContain("./caddy/runtime:/local-substrate-runtime:ro");
 });
 
 test("local-substrate OTel collector forwards to the reachable Jaeger OTLP port", () => {
-  expect(compose).toContain('"14317:4317"');
+  expect(compose).not.toContain('"14317:4317"');
+  expect(compose).not.toContain('"16686:16686"');
   expect(compose).toContain('"127.0.0.1:14318:4318"');
   expect(compose).toContain("host.docker.internal:host-gateway");
-  expect(otelConfig).toContain("endpoint: host.docker.internal:14317");
-  expect(otelConfig).not.toContain("endpoint: jaeger:4317");
+  expect(otelConfig).toContain("endpoint: jaeger:4317");
 });

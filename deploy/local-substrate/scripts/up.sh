@@ -42,15 +42,31 @@ docker compose version >/dev/null 2>&1 || {
 	echo "docker compose implementation is required" >&2; exit 1;
 }
 
+LOCAL_WAIT_TIMEOUT_SECONDS="${TAKOSUMI_LOCAL_WAIT_TIMEOUT_SECONDS:-600}"
+if [[ ! "$LOCAL_WAIT_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+	echo "TAKOSUMI_LOCAL_WAIT_TIMEOUT_SECONDS must be a positive integer (got: $LOCAL_WAIT_TIMEOUT_SECONDS)" >&2
+	exit 1
+fi
+
 wait_for_completed_service() {
 	local service=$1
 	local id=""
-	id=$(compose_substrate --profile "$PROFILE" ps -q "$service" 2>/dev/null || true)
+	local candidate oneoff deadline
+	while IFS= read -r candidate; do
+		[[ -n "$candidate" ]] || continue
+		oneoff=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.oneoff" }}' "$candidate")
+		if [[ "$oneoff" != "True" ]]; then
+			id="$candidate"
+			break
+		fi
+	done < <(compose_substrate --profile "$PROFILE" ps --all -q "$service" 2>/dev/null || true)
 	if [[ -z "$id" ]]; then
-		return 0
+		echo "$service was not created" >&2
+		return 1
 	fi
 
-	for _ in $(seq 1 120); do
+	deadline=$((SECONDS + LOCAL_WAIT_TIMEOUT_SECONDS))
+	while (( SECONDS < deadline )); do
 		local status exit_code
 		status=$(docker inspect -f '{{.State.Status}}' "$id")
 		exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$id")
@@ -67,7 +83,7 @@ wait_for_completed_service() {
 		sleep 1
 	done
 
-	echo "$service did not complete within 120s" >&2
+	echo "$service did not complete within ${LOCAL_WAIT_TIMEOUT_SECONDS}s" >&2
 	docker logs "$id" | tail -80 >&2
 	return 1
 }
@@ -78,7 +94,11 @@ prepare_app_armor_substrate_prereqs() {
 	fi
 
 	echo "==> Preparing substrate storage outside compose healthchecks (AppArmor override)"
-	compose_substrate --profile "$PROFILE" up -d substrate-postgres substrate-minio
+	# Containers created before the override (or surviving a daemon restart) can
+	# fail before Docker reapplies the unconfined profile. Recreate these two
+	# prerequisites just like the full substrate stack below.
+	compose_substrate --profile "$PROFILE" up -d --force-recreate \
+		substrate-postgres substrate-minio
 
 	docker run --rm \
 		--security-opt apparmor=unconfined \
@@ -196,6 +216,7 @@ if [[ -n "$PROFILE" ]]; then
 	wait_for_completed_service takosumi-website-build
 	wait_for_completed_service takosumi-docs-build
 	wait_for_completed_service takosumi-dashboard-build
+	wait_for_completed_service takosumi-app-docs-build
 
 	# The static builders can replace .output/public after Caddy has already
 	# bind-mounted it. Recreate Caddy so it sees the final directories.
