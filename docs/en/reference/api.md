@@ -355,7 +355,10 @@ the Resource record is deleted. Metadata is limited to phases, generations,
 identifiers, and counts; credentials, raw errors, specs, state, and Output
 values are never exposed.
 
-The Resource Shape API is typed. Takosumi does not expose a catch-all
+The Resource Shape API is the current Service Form host compatibility surface
+and remains typed. The adopted exact FormRef / Form Package / FormActivation
+target will still resolve into this one Resource / Run / state / audit ledger
+after additive migration; it does not create another API authority. Takosumi does not expose a catch-all
 `takosumi_resource { type, spec }` as the normal interface.
 
 Current v1alpha1 public shapes:
