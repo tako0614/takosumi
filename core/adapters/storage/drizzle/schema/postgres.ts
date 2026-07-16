@@ -732,3 +732,78 @@ export const interfaceBindings = pgTable(
     ),
   ],
 );
+
+export const serviceFormPackages = pgTable(
+  names.serviceFormPackages,
+  {
+    packageDigest: text("package_digest").primaryKey(),
+    status: text("status").notNull(),
+    recordJson: json("record_json").notNull(),
+    installedAt: text("installed_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("takosumi_service_form_packages_status_updated_digest_idx").on(
+      table.status,
+      table.updatedAt,
+      table.packageDigest,
+    ),
+  ],
+);
+
+export const serviceFormDefinitions = pgTable(
+  names.serviceFormDefinitions,
+  {
+    formRefKey: text("form_ref_key").primaryKey(),
+    packageDigest: text("package_digest").notNull(),
+    apiVersion: text("api_version").notNull(),
+    kind: text("kind").notNull(),
+    definitionVersion: text("definition_version").notNull(),
+    schemaDigest: text("schema_digest").notNull(),
+    recordJson: json("record_json").notNull(),
+    installedAt: text("installed_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("takosumi_service_form_definitions_ref_package_unique").on(
+      table.formRefKey,
+      table.packageDigest,
+    ),
+    index("takosumi_service_form_definitions_package_idx").on(
+      table.packageDigest,
+    ),
+    index("takosumi_service_form_definitions_kind_installed_ref_idx").on(
+      table.kind,
+      table.installedAt,
+      table.formRefKey,
+    ),
+  ],
+);
+
+export const serviceFormActivations = pgTable(
+  names.serviceFormActivations,
+  {
+    id: text("id").primaryKey(),
+    formRefKey: text("form_ref_key").notNull(),
+    packageDigest: text("package_digest").notNull(),
+    scopeType: text("scope_type").notNull(),
+    scopeId: text("scope_id"),
+    status: text("status").notNull(),
+    revision: integer("revision").notNull(),
+    recordJson: json("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("takosumi_service_form_activations_scope_status_updated_id_idx").on(
+      table.scopeType,
+      table.scopeId,
+      table.status,
+      table.updatedAt,
+      table.id,
+    ),
+    index("takosumi_service_form_activations_identity_idx").on(
+      table.formRefKey,
+      table.packageDigest,
+    ),
+  ],
+);

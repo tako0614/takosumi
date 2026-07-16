@@ -36,6 +36,11 @@ export const deployControlLogicalTables = [
   // Runtime declaration layer shared by Capsule and Resource authoring flows.
   "interfaces",
   "interfaceBindings",
+  // Portable Service Form host registry. Takosumi may start with all three
+  // tables empty; installed packages are optional host contributions.
+  "serviceFormPackages",
+  "serviceFormDefinitions",
+  "serviceFormActivations",
 ] as const;
 
 export type DeployControlLogicalTable =
@@ -75,6 +80,9 @@ export const deployControlD1TableNames = {
   spacePolicies: "space_policies",
   interfaces: "interfaces",
   interfaceBindings: "interface_bindings",
+  serviceFormPackages: "service_form_packages",
+  serviceFormDefinitions: "service_form_definitions",
+  serviceFormActivations: "service_form_activations",
 } as const satisfies Record<DeployControlLogicalTable, string>;
 
 export const deployControlPostgresTableNames = {
@@ -111,4 +119,7 @@ export const deployControlPostgresTableNames = {
   spacePolicies: "takosumi_space_policies",
   interfaces: "takosumi_interfaces",
   interfaceBindings: "takosumi_interface_bindings",
+  serviceFormPackages: "takosumi_service_form_packages",
+  serviceFormDefinitions: "takosumi_service_form_definitions",
+  serviceFormActivations: "takosumi_service_form_activations",
 } as const satisfies Record<DeployControlLogicalTable, string>;
