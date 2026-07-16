@@ -1259,6 +1259,25 @@ for (const backend of backends) {
       expect(await stores.targetPools.get(p1.id)).toBeUndefined();
     });
 
+    test("target pool: create is atomic and preserves the durable winner", async () => {
+      const winner = targetPool(`create-only-${backend.label}`);
+      expect(await stores.targetPools.create(winner)).toEqual({
+        status: "created",
+        record: winner,
+      });
+      const contender: TargetPoolRecord = {
+        ...winner,
+        spec: { targets: [{ target: "must-not-win", rank: 999 }] },
+        updatedAt: T2,
+      };
+      expect(await stores.targetPools.create(contender)).toEqual({
+        status: "conflict",
+        record: winner,
+      });
+      expect(await stores.targetPools.get(winner.id)).toEqual(winner);
+      await stores.targetPools.delete(winner.id);
+    });
+
     test("space policy: round-trip, getByName, space scope, delete", async () => {
       const s1 = spacePolicy("default");
       const s2 = spacePolicy("strict");

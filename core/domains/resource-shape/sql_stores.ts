@@ -51,6 +51,7 @@ import type {
   ResourceShapeStore,
   ResourceShapeStores,
   SpacePolicyStore,
+  TargetPoolCreateResult,
   TargetPoolStore,
 } from "./stores.ts";
 import {
@@ -444,6 +445,21 @@ class SqlTargetPoolStore implements TargetPoolStore {
   readonly #table = names.targetPools;
 
   constructor(private readonly client: SqlClient) {}
+
+  async create(record: TargetPoolRecord): Promise<TargetPoolCreateResult> {
+    const result = await this.client.query(
+      namedSpecCreateSql(this.#table),
+      namedSpecParameters(record),
+    );
+    if (result.rowCount > 0) return { status: "created", record };
+    const existing =
+      (await this.getByName(record.spaceId, record.name)) ??
+      (await this.get(record.id));
+    if (!existing) {
+      throw new Error("TargetPool create conflict has no durable winner");
+    }
+    return { status: "conflict", record: existing };
+  }
 
   async upsert(record: TargetPoolRecord): Promise<TargetPoolRecord> {
     await this.client.query(
@@ -935,6 +951,13 @@ function namedSpecUpsertSql(table: string): string {
     spec_json = excluded.spec_json,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at`;
+}
+
+function namedSpecCreateSql(table: string): string {
+  return `insert into ${table} (
+    id, space_id, name, spec_json, created_at, updated_at
+  ) values ($1, $2, $3, $4::jsonb, $5, $6)
+  on conflict do nothing`;
 }
 
 function namedSpecParameters(
