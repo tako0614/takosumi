@@ -323,14 +323,13 @@ when credit is insufficient. DELETE cleanup should remain available so OpenTofu
 destroy and app removal can recover from a depleted balance without leaving
 resources stuck.
 
-The initial GA-candidate Cloudflare view contains only
-`cloudflare_workers_script`, a route on
-its system hostname, and an R2 bucket. KV, D1, Queue, and Workflow may be
-provider-neutral Preview service forms, but their Cloudflare-shaped routes
-return 501. UI, billing, usage ledgers, and public Resource identity use service
-forms such as `EdgeWorker` and `ObjectBucket` plus versioned SKUs. Internal
-backend names do not become public billing families, and unsupported routes are
-never proxied to Cloudflare.
+The Cloudflare view translates selected Workers, R2, KV, D1, Queue, and
+Workflow schemas from provider `5.19.1` into the same provider-neutral Resource
+lifecycle. UI, billing, usage ledgers, and public Resource identity use service
+forms such as `EdgeWorker`, `ObjectBucket`, `KVStore`, `SQLDatabase`, `Queue`,
+and `DurableWorkflow` plus versioned SKUs. Internal backend names do not become
+public billing families. Routes outside the Stable contract or without an
+exact meter are never proxied to Cloudflare.
 
 Takosumi can claim a customer has been billed only when the owner account usage
 ledger records a usage event and the billing projection reflects it. Upstream
@@ -382,20 +381,27 @@ Existing `cloudflare/cloudflare` OpenTofu/Terraform provider configurations can
 use it by changing `base_url`, but it is a protocol adapter, not a Cloudflare
 account clone or Resource lifecycle authority.
 
-The initial GA-candidate control-plane subset is deliberately limited:
+The GA contract is pinned to selected resource and data-source schemas from
+Cloudflare provider `5.19.1` and translates them to these canonical authorities:
 
-| Cloudflare-shaped operation                    | Canonical authority                       |
-| ---------------------------------------------- | ----------------------------------------- |
-| Worker script upload / list / read / delete    | `EdgeWorker` `/v1/resources` lifecycle    |
-| Worker route CRUD on canonical system hostname | `http.route` Interface + InterfaceBinding |
-| R2 bucket create / list / read / delete        | `ObjectBucket` `/v1/resources` lifecycle  |
+| Cloudflare-shaped operation                                 | Canonical authority                       |
+| ----------------------------------------------------------- | ----------------------------------------- |
+| Worker modules/assets/vars/secrets/bindings/version/deploy  | `EdgeWorker` `/v1/resources` lifecycle    |
+| managed URL / route / cron / logs / verified custom domain | Interface + edge release/domain authority |
+| R2 control/data subset                                      | `ObjectBucket` plus `compat.s3.v1`         |
+| KV namespace/data subset                                    | `KVStore` Resource plus authorized data plane |
+| D1 database/query/raw subset                                | `SQLDatabase` Resource plus authorized data plane |
+| Queue lifecycle/messages/batch subset                       | `Queue` Resource plus authorized data plane |
+| Workflow lifecycle subset                                   | `DurableWorkflow` `/v1/resources` lifecycle |
 
-Script and bucket mutations invoke canonical preview plus reviewed apply or
-delete. Reads project the canonical Resource. The compatibility handler owns no
-virtual resource ledger, backend manager, or Resource store. Even though
-`KVStore`, `SQLDatabase`, `Queue`, and `DurableWorkflow` service forms are
-Preview in Takosumi Cloud, their Cloudflare-shaped control routes are outside
-the GA subset and return an explicit `501`.
+Every mutation invokes canonical preview plus reviewed apply/delete, and reads
+project a canonical Ready Resource. The compatibility handler owns no virtual
+resource ledger, backend manager, Resource store, or provider credential.
+Vector, Container, Stateful Actor, and Schedule use typed `takosumi_*`
+Resources and official APIs because the provider has no independent resource
+schema for them. The whole set remains Pre-GA until it passes one Stable
+evidence matrix; an operation with no manager, price, or exact meter fails
+closed before backend I/O and precharge.
 
 Response envelope:
 
@@ -408,7 +414,7 @@ Response envelope:
 }
 ```
 
-Principal routes in the candidate subset:
+Principal Cloudflare-shaped route families:
 
 ```http
 GET /compat/cloudflare/client/v4/user/tokens/verify
@@ -420,6 +426,10 @@ DELETE /compat/cloudflare/client/v4/accounts/{accountId}/workers/scripts/{script
 GET|POST /compat/cloudflare/client/v4/zones/zone_takosumi_cloud/workers/routes
 GET|PUT|DELETE /compat/cloudflare/client/v4/zones/zone_takosumi_cloud/workers/routes/{interfaceId}
 GET /compat/cloudflare/client/v4/accounts/{accountId}/r2/buckets
+GET|POST|PUT|DELETE /compat/cloudflare/client/v4/accounts/{accountId}/storage/kv/namespaces/...
+GET|POST|PUT|DELETE /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/...
+GET|POST|PUT|DELETE /compat/cloudflare/client/v4/accounts/{accountId}/queues/...
+GET|POST|PUT|DELETE /compat/cloudflare/client/v4/accounts/{accountId}/workflows/...
 ```
 
 A Worker deploy/read result includes `system_url`, projected from the Resource's
@@ -459,16 +469,16 @@ update and delete CAS:
 }
 ```
 
-The GA-candidate contract permits one route per Worker, an explicit path, and
-zero or one terminal wildcard. Host-only, multiple, overlapping, infix-wildcard,
-wildcard-hostname, custom-hostname, script-subdomain, Worker secret / vars /
-binding / assets, and multi-module upload requests fail before Interface or
-Resource mutation. Route DELETE revokes the Binding and retires the Interface;
-it does not release the system URL. Cloudflare billing API, DNS, WAF, Zero
+The system-host route contract permits one active route per Worker, an explicit
+path, and zero or one terminal wildcard. Host-only, multiple, overlapping,
+infix-wildcard, and wildcard-hostname patterns fail before Interface mutation.
+A custom hostname is not appended implicitly to that route: it goes through a
+separate `VerifiedDomain` ownership and certificate lifecycle. Route DELETE
+revokes the Binding and retires the Interface; it releases neither the system
+URL nor VerifiedDomain ownership. Cloudflare billing API, Pages, Hyperdrive,
+Analytics Engine, Browser Rendering, Images, Stream, Pipelines, DNS, WAF, Zero
 Trust, account IAM, Registrar, Load Balancer, and Email Routing are outside the
-compatibility scope. Custom domains remain Planned until ownership verification
-and certificate lifecycle exist.
-`previews_enabled: true` is outside the initial target scope.
+compatibility scope.
 
 ## OpenTofu provider usage
 
