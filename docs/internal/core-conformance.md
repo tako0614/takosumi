@@ -1,6 +1,6 @@
 # Takosumi Core Conformance
 
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 This document tracks conformance to [Core Spec](./core-spec.md) and
 [Final Plan](./final-plan.md). It is not the product direction source of truth.
@@ -14,6 +14,32 @@ This document tracks conformance to [Core Spec](./core-spec.md) and
   by the current v1alpha1 software GA contract.
 - **operator/cloud**: belongs to Takosumi for Operator / Takosumi Cloud
   commercial or official-hosting operation.
+
+## Service Form Separation Target
+
+The existing matrix below records current Resource Shape compatibility
+implementation. It must not be read as proof of the newly adopted portable
+Service Form target.
+
+| Target area                                 | Status     | Evidence / remaining work                                                                                                                                                                                                                                                                 |
+| ------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Definition / host / offering authority docs | conformant | Final Plan, root authority docs, Core Spec, this conformance record, and the generalization audit adopt portable definition authority, Takosumi one-ledger host authority, and closed exact-offering authority.                                                                           |
+| Public concept                              | conformant | `Service Form` is the target concept; `Resource Shape` is explicitly a current migration alias.                                                                                                                                                                                           |
+| Public project identity                     | gap        | `Takoform` is a working name only. Trademark/domain/repository/package/API-group/provider-FQN ownership is unapproved; registry/domain 404 results are not reservation or clearance. No public identity may be created yet.                                                               |
+| Immutable current provider release          | gap        | Confirmed 2026-07-16: live and local `1.0.0` differ on all four archives; live linux_amd64 reports module `(devel)`, modified VCS, and `main.version=dev` while index/archive say `1.0.0`. Preserve served bytes and release any correction under a new version.                          |
+| Portable FormRef / Form Package contracts   | gap        | No independently owned exact FormRef schema, signed data-only package format, package retention/revocation implementation, or conformance release exists.                                                                                                                                 |
+| Zero-form Core                              | gap        | Current lower-level Resource Shape bootstrap/parser has bundled-kind authority. Target requires an empty Form Registry unless composition explicitly installs package/extension pins. Plain Stack flow itself remains conformant.                                                         |
+| Exact FormRef persistence                   | gap        | Current Resource/ResolutionLock records do not pin definitionVersion/schemaDigest. Verified heads are D1 v44 / Postgres v92, so add no earlier than D1 v45 / Postgres v93 after rechecking heads; do not modify released/current migrations. Shadow/backfill/restore evidence is missing. |
+| FormActivation                              | gap        | No generic exact-FormRef audience/policy activation contract/store/API exists. It must contain no commercial fields.                                                                                                                                                                      |
+| Structured availability                     | gap        | Current capability discovery cannot separately prove definition known/installed/executable/activated/available-to-principal. A legacy boolean view may remain only as derived compatibility.                                                                                              |
+| Portable interoperability                   | gap        | No neutral discovery/CRUD/observe/import/error/idempotency contract and no host conformance runner exist. Future route must delegate to the same canonical Resource row/Run/audit ledger.                                                                                                 |
+| Typed form vs Takosumi admin provider split | gap        | Current mixed provider remains compatibility/admin custody. No independently released typed form provider, real registry/mirror install, supported-state no-op migration, or rollback proof exists.                                                                                       |
+| Cloud exact ServiceOffering                 | partial    | Closed catalog/admission/billing exists for current Shape/API strings, implementation/manager evidence, SKU, and price. Exact FormRef + generic FormActivation backfill/cutover and live evidence remain.                                                                                 |
+| Compatibility migration/removal             | gap        | Current ResourceShape/API/provider/state aliases remain authoritative implementation. Removal needs external-state inventory, usage evidence, minimum support window, no-op fixtures, and rollback artifacts.                                                                             |
+
+Architecture-doc conformance is complete only for the decision slice. Takosumi
+software/Cloud GA remains blocked on the gap rows plus the existing repository
+and live/operator evidence in the matrix below.
 
 ## Conformance Matrix
 
@@ -75,16 +101,16 @@ Do not promote a new hosted staging cell until these Final Plan contract gates
 pass. This cutline exists so real-cloud deploy work does not freeze a mixed
 pre-v1/public-v1 surface.
 
-| Gate                        | Required state                                                                                                                                                                                                            |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public Stack API vocabulary | Session control routes expose `workspaces`, `capsules`, `state-versions`, and `capsule-configs`; retired `/api/v1/spaces`, `/api/v1/installations`, `/api/v1/deployments`, and `/api/v1/install-configs` are rejected.    |
-| Capability-driven discovery | `/.well-known/takosumi` and `/v1/capabilities` are sufficient for clients; provider/client behavior must not branch on `edition`.                                                                                         |
-| Runtime Interface boundary  | Capsule/Resource Interfaces resolve explicit public inputs with provenance; InterfaceBindings authorize consumers; reserved Output conventions and Workspace-wide Output reconcile are absent.                            |
-| Deploy authority            | `/v1/resources` is the only managed Resource lifecycle authority; control-plane compat calls translate into it, data-plane profiles resolve Ready Resources, and adapters/managers never use compat handlers as backends. |
-| Cloud quote/billing         | Every Stable Cloud offering has versioned offering/prices, quote-bound apply, idempotent reserve/capture/release, immutable usage rating, and reconciled payment-provider invoice evidence.                               |
-| Provider mirror assets      | `bun run provider:assets` succeeds before dashboard/platform build so `/opentofu/providers/registry.opentofu.org/takosjp/takosumi/` is present in Worker assets.                                                          |
-| Cloud extension inventory   | Detailed Cloud extension catalog routes are operator-gated; public discovery exposes only non-secret capabilities.                                                                                                        |
-| OSS/Cloud boundary          | Official managed targets, native runtime internals, Stripe enforcement, SLA/support, and abuse controls remain Operator/Cloud operation layers, not OSS Core contracts.                                                   |
+| Gate                        | Required state                                                                                                                                                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public Stack API vocabulary | Session control routes expose `workspaces`, `capsules`, `state-versions`, and `capsule-configs`; retired `/api/v1/spaces`, `/api/v1/installations`, `/api/v1/deployments`, and `/api/v1/install-configs` are rejected.      |
+| Capability-driven discovery | `/.well-known/takosumi` and `/v1/capabilities` are sufficient for clients; provider/client behavior must not branch on `edition`.                                                                                           |
+| Runtime Interface boundary  | Capsule/Resource Interfaces resolve explicit public inputs with provenance; InterfaceBindings authorize consumers; reserved Output conventions and Workspace-wide Output reconcile are absent.                              |
+| Deploy authority            | `/v1/resources` is the only managed Resource lifecycle authority; control-plane compat calls translate into it, data-plane profiles resolve Ready Resources, and adapters/managers never use compat handlers as backends.   |
+| Cloud quote/billing         | Every Stable Cloud offering has versioned offering/prices, quote-bound apply, idempotent reserve/capture/release, immutable usage rating, and reconciled payment-provider invoice evidence.                                 |
+| Provider mirror assets      | The mirror consumes immutable provider release bytes by exact version/digest, verifies binary/tag/index/manifest equality, and refuses overwrite/drift. The current live `1.0.0` mismatch means this gate is not satisfied. |
+| Cloud extension inventory   | Detailed Cloud extension catalog routes are operator-gated; public discovery exposes only non-secret capabilities.                                                                                                          |
+| OSS/Cloud boundary          | Official managed targets, native runtime internals, Stripe enforcement, SLA/support, and abuse controls remain Operator/Cloud operation layers, not OSS Core contracts.                                                     |
 
 ## Current Verification
 
@@ -117,9 +143,16 @@ no Workspace-wide reconcile from Interface/Output revision changes
 validated fail-closed at apply
 SourceSnapshot reuse
 discovery and capability documents
-Resource Shape contract types
+current Resource Shape compatibility contract types
 adapter capability matching
 compatibility profile enable/disable behavior
+zero-form plain OpenTofu host
+Form Package signature/digest/retention and no-executable-code validation
+exact FormRef Resource/ResolutionLock backfill and D1/Postgres parity
+definition-installed-executable-activated structured discovery
+FormActivation authorization without price/payment/capacity fields
+portable/current routes address one canonical Resource row
+legacy/form/admin provider state no-op migration and rollback
 ```
 
 ## Remaining Cleanup
