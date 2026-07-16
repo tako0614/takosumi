@@ -4585,6 +4585,7 @@ export class ResourceShapeService {
     return {
       apiVersion: TAKOSUMI_API_VERSION,
       kind: req.kind,
+      ...(req.form === undefined ? {} : { form: req.form }),
       metadata: {
         name: req.name,
         space: req.space,
@@ -4619,6 +4620,7 @@ export class ResourceShapeService {
     return {
       apiVersion: TAKOSUMI_API_VERSION,
       kind: record.kind,
+      ...(record.form === undefined ? {} : { form: record.form }),
       metadata: {
         name: record.name,
         space: record.spaceId,

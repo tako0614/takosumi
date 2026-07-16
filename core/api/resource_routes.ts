@@ -9,13 +9,17 @@
 import type { Context, Hono } from "hono";
 import type {
   ActorContext,
+  InstalledFormReference,
   JsonObject,
   ResourceManagedBy,
   ResourceShapeKind,
   SpacePolicySpec,
   TargetPoolSpec,
 } from "takosumi-contract";
-import { isResourceShapeKind } from "takosumi-contract";
+import {
+  isInstalledFormReference,
+  isResourceShapeKind,
+} from "takosumi-contract";
 import type { PageParams } from "takosumi-contract/pagination";
 import { apiError, readJsonObject, requestIdFromContext } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
@@ -548,6 +552,16 @@ export function registerResourceShapeRoutes(
       };
     }
     const spec = (body.spec ?? {}) as JsonObject;
+    const rawForm = body.form;
+    if (rawForm !== undefined && !isInstalledFormReference(rawForm)) {
+      return {
+        response: badRequest(
+          c,
+          "form must be an exact InstalledFormReference with formRef and packageDigest",
+        ),
+      };
+    }
+    const form = rawForm as InstalledFormReference | undefined;
     const pathName = c.req.param("name");
     const metadataName = stringValue(metadata.name);
     const specName = stringValue((spec as Record<string, unknown>).name);
@@ -591,6 +605,7 @@ export function registerResourceShapeRoutes(
         project: stringValue(metadata.project),
         environment: stringValue(metadata.environment),
         kind: kind.value,
+        form,
         name,
         spec,
         managedBy: trustedManagedBy ?? requestedManagedBy,
