@@ -299,11 +299,11 @@ operator runbook 側で管理します。
 一方で DELETE の後処理は、残高切れでユーザーデータやマネージドリソースが取り残されない
 よう、原則として代替使用量を持たせません。
 
-Takosumi Cloud の初期 GA candidate Cloudflare view は `cloudflare_workers_script`、system-host route、
-R2 bucket だけです。KV / D1 / Queue / Workflow は provider-neutral service form として Preview
-でも、Cloudflare-shaped route は 501 で閉じます。画面、請求、使用量レジャー、公開 Resource
-identity は `EdgeWorker` / `ObjectBucket` などの service form と versioned SKU を使い、内部
-backend 名を公開課金 family にしません。未対応 route を Cloudflare upstream へ素通ししません。
+Cloudflare view は provider `5.19.1` の選択した Workers / R2 / KV / D1 / Queue /
+Workflow schema を、同じ provider-neutral Resource lifecycle へ変換します。画面、請求、使用量レジャー、
+公開 Resource identity は `EdgeWorker` / `ObjectBucket` / `KVStore` / `SQLDatabase` / `Queue` /
+`DurableWorkflow` などの service form と versioned SKU を使い、内部 backend 名を公開課金 family に
+しません。Stable contract 外または exact meter を持たない route を Cloudflare upstream へ素通ししません。
 
 Takosumi 側で請求できていると言える条件は、所有者アカウントの使用量レジャーに使用量イベント
 が記録され、billing projection へ反映されることです。上流プロバイダの請求だけでは
@@ -354,19 +354,25 @@ https://app.takosumi.com/compat/cloudflare/client/v4
 これは protocol adapter であり、Cloudflare account の複製でも Resource lifecycle authority
 でもありません。
 
-初期 GA candidate control-plane subset は次に限定します。
+GA contract は Cloudflare provider `5.19.1` の選択した resource / data-source schema に固定し、
+次の canonical authority へ変換します。
 
-| Cloudflare-shaped operation                      | Canonical authority                       |
-| ------------------------------------------------ | ----------------------------------------- |
-| Worker script upload / list / read / delete      | `EdgeWorker` `/v1/resources` lifecycle    |
-| canonical system hostname 上の Worker route CRUD | `http.route` Interface + InterfaceBinding |
-| R2 bucket create / list / read / delete          | `ObjectBucket` `/v1/resources` lifecycle  |
+| Cloudflare-shaped operation                                      | Canonical authority                       |
+| ---------------------------------------------------------------- | ----------------------------------------- |
+| Worker modules/assets/vars/secrets/bindings/version/deploy       | `EdgeWorker` `/v1/resources` lifecycle    |
+| managed URL / route / cron / logs / verified custom domain      | Interface + Edge release/domain authority |
+| R2 control/data subset                                           | `ObjectBucket` + `compat.s3.v1`            |
+| KV namespace/data subset                                         | `KVStore` Resource + authorized data plane |
+| D1 database/query/raw subset                                     | `SQLDatabase` Resource + authorized data plane |
+| Queue lifecycle/messages/batch subset                            | `Queue` Resource + authorized data plane  |
+| Workflow lifecycle subset                                        | `DurableWorkflow` `/v1/resources` lifecycle |
 
-script と bucket の mutation は canonical preview + reviewed apply/delete を呼びます。read は
-canonical Resource を投影し、compat handler は virtual resource ledger、backend manager、
-Resource store を持ちません。`KVStore` / `SQLDatabase` / `Queue` / `DurableWorkflow` は
-Takosumi Cloud の service form として Preview でも、Cloudflare-shaped control route は GA
-subset 外なので明示 `501` を返します。
+すべての mutation は canonical preview + reviewed apply/delete を呼び、read は canonical Ready
+Resource を投影します。compat handler は virtual resource ledger、backend manager、Resource store、
+provider credential を所有しません。provider schema に独立 resource がない Vector / Container /
+Stateful Actor / Schedule は typed `takosumi_*` Resource と公式 API を使います。全項目が同じ
+Stable evidence matrix を通るまでは Pre-GA で、manager / price / exact meter が欠ける操作は backend
+I/O と precharge の前に安全側に停止します。
 
 レスポンスエンベロープ:
 
@@ -379,7 +385,7 @@ subset 外なので明示 `501` を返します。
 }
 ```
 
-candidate subset の主要 route:
+主要な Cloudflare-shaped route family:
 
 ```http
 GET /compat/cloudflare/client/v4/user/tokens/verify
@@ -391,6 +397,10 @@ DELETE /compat/cloudflare/client/v4/accounts/{accountId}/workers/scripts/{script
 GET|POST /compat/cloudflare/client/v4/zones/zone_takosumi_cloud/workers/routes
 GET|PUT|DELETE /compat/cloudflare/client/v4/zones/zone_takosumi_cloud/workers/routes/{interfaceId}
 GET /compat/cloudflare/client/v4/accounts/{accountId}/r2/buckets
+GET|POST|PUT|DELETE /compat/cloudflare/client/v4/accounts/{accountId}/storage/kv/namespaces/...
+GET|POST|PUT|DELETE /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/...
+GET|POST|PUT|DELETE /compat/cloudflare/client/v4/accounts/{accountId}/queues/...
+GET|POST|PUT|DELETE /compat/cloudflare/client/v4/accounts/{accountId}/workflows/...
 ```
 
 Worker deploy/read の結果には Resource `url` Output から投影した `system_url` が含まれます。
@@ -427,14 +437,13 @@ route pattern は scheme を含めず、発見した system hostname と明示 p
 }
 ```
 
-GA candidate contract は 1 Worker 1 route、明示 path、末尾 wildcard 0/1 個だけです。host-only、複数・
-重複 route、infix wildcard、wildcard hostname、custom hostname、script subdomain、
-Worker secrets / vars / bindings / assets、multi-module upload は Interface/Resource mutation
-より前に拒否します。route DELETE は Binding を revoke して Interface を retire しますが、
-system URL を解放しません。Cloudflare billing API、DNS、WAF、Zero Trust、account IAM、
-Registrar、Load Balancer、Email Routing は互換対象外です。custom domain は ownership
-verification と certificate lifecycle が実装されるまで Planned です。
-`previews_enabled: true` は初期ターゲット外です。
+system-host route は 1 Worker 1 active route、明示 path、末尾 wildcard 0/1 個です。host-only、複数・
+重複 route、infix wildcard、wildcard hostname は Interface mutation より前に拒否します。custom
+hostname は同じ route 文字列へ暗黙追加せず、別の `VerifiedDomain` ownership / certificate lifecycle
+を通します。route DELETE は Binding を revoke して Interface を retire しますが、system URL や
+VerifiedDomain ownership を解放しません。Cloudflare billing API、Pages、Hyperdrive、Analytics
+Engine、Browser Rendering、Images、Stream、Pipelines、DNS、WAF、Zero Trust、account IAM、
+Registrar、Load Balancer、Email Routing は互換対象外です。
 
 ## OpenTofu provider usage
 
