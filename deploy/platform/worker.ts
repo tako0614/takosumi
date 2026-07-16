@@ -27,6 +27,7 @@ import {
   createInProcessDeployControlSeam,
   type QueueBatch,
   CoordinationObject,
+  LocalSubstrateOpenTofuRunnerProxyObject,
   OpenTofuRunOwnerObject,
   OpenTofuRunnerObject,
 } from "../../worker/src/handler.ts";
@@ -58,8 +59,10 @@ import {
   createTakosumiWellKnownDocument,
 } from "takosumi-contract/capabilities";
 import {
+  INTERNAL_V1_PREFIX,
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
+  isInternalV1Path,
 } from "takosumi-contract/api-surface";
 import type {
   ActorContext,
@@ -134,7 +137,12 @@ export {
   type ProductionHardeningGateResult,
 } from "./production_hardening.ts";
 
-export { CoordinationObject, OpenTofuRunOwnerObject, OpenTofuRunnerObject };
+export {
+  CoordinationObject,
+  LocalSubstrateOpenTofuRunnerProxyObject,
+  OpenTofuRunOwnerObject,
+  OpenTofuRunnerObject,
+};
 
 // In-process deploy-control seam, one cached service per env, shared with the
 // unified Takos worker. The accounts deploy-control facade calls the typed
@@ -172,6 +180,57 @@ function deployControlSeam(env: DeployControlEnv) {
     seams.set(env, seam);
   }
   return seam;
+}
+
+type PlatformDeployControlSeam = Pick<
+  ReturnType<typeof createInProcessDeployControlSeam>,
+  "fetch"
+>;
+
+export function platformInternalEdgeIngressEnabled(
+  env: Pick<
+    CloudflareWorkerEnv,
+    "LOCAL_SUBSTRATE_TEST_BED" | "TAKOSUMI_EXPOSE_INTERNAL_EDGE"
+  >,
+): boolean {
+  return (
+    env.LOCAL_SUBSTRATE_TEST_BED === "1" ||
+    env.TAKOSUMI_EXPOSE_INTERNAL_EDGE === "1"
+  );
+}
+
+function isPlatformCoordinationEdgePath(pathname: string): boolean {
+  const prefix = `${INTERNAL_V1_PREFIX}/`;
+  if (!pathname.startsWith(prefix)) return false;
+  const [segment] = pathname
+    .slice(prefix.length)
+    .replace(/^\/+/, "")
+    .split("/");
+  return segment === "coordination";
+}
+
+/**
+ * Route the local-substrate service host into the embedded deploy-control
+ * service without making the internal API part of the public platform edge.
+ * Caddy separately denies `/internal/*` on the public app host; this guard also
+ * keeps production-safe defaults if the Worker is reached directly.
+ */
+export async function handlePlatformInternalEdgeRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  seamForEnv: (
+    env: CloudflareWorkerEnv,
+  ) => PlatformDeployControlSeam = deployControlSeam,
+): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  if (!isInternalV1Path(url.pathname)) return undefined;
+  if (
+    isPlatformCoordinationEdgePath(url.pathname) ||
+    !platformInternalEdgeIngressEnabled(env)
+  ) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  return await seamForEnv(env).fetch(request);
 }
 
 async function controlPlaneOperationsFor(
@@ -266,6 +325,11 @@ export default {
   ): Promise<Response> {
     const metricsResponse = await handlePlatformMetricsRequest(request, env);
     if (metricsResponse) return metricsResponse;
+    const internalEdgeResponse = await handlePlatformInternalEdgeRequest(
+      request,
+      env,
+    );
+    if (internalEdgeResponse) return internalEdgeResponse;
     const url = new URL(request.url);
     if (url.pathname === TAKOSUMI_WELL_KNOWN_PATH) {
       return Response.json(
@@ -1248,11 +1312,6 @@ export function oidcMetricRoute(pathname: string): string {
   if (pathname.startsWith("/v1/auth/upstream")) return "/v1/auth/upstream/*";
   return pathname;
 }
-
-type PlatformDeployControlSeam = Pick<
-  ReturnType<typeof createInProcessDeployControlSeam>,
-  "fetch"
->;
 
 export function isPlatformMetricsPath(pathname: string): boolean {
   return pathname === TAKOSUMI_METRICS_PATH;

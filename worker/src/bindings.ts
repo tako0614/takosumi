@@ -103,6 +103,7 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_EXPOSE_INTERNAL_EDGE?: string;
   readonly LOCAL_SUBSTRATE_TEST_BED?: string;
+  readonly TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL?: string;
   /**
    * Operator-curated execution profiles. The built-in value is the
    * provider-neutral `opentofu-default`; extra ids represent execution

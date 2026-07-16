@@ -135,14 +135,14 @@ services:
     networks:
       - takos-local-internal
 
-  # ---- OpenTofu runner container (postgres profile) ----
+  # ---- OpenTofu runner container (postgres + workers profiles) ----
   #
   # Runs the same HTTP envelope as the production Cloudflare Container runner,
   # including the baked provider mirror from runner/Dockerfile. The Bun/Postgres
   # cloud process remains the control plane; this service is only the execution
   # sandbox for source sync / plan / apply / destroy.
   opentofu-runner:
-    profiles: ["postgres"]
+    profiles: ["postgres", "workers"]
     build:
       context: ../../../takosumi
       dockerfile: runner/Dockerfile
@@ -234,6 +234,7 @@ services:
           --target browser \
           --format esm \
           --external cloudflare:workers \
+          --external @cloudflare/containers \
           deploy/platform/worker.ts \
           --outfile deploy/platform/.wrangler/dist/takosumi-platform-worker.mjs
         bun deploy/local-substrate/scripts/render-accounts-d1-migrations.ts \
@@ -252,6 +253,8 @@ services:
         condition: service_completed_successfully
       oauth-mock:
         condition: service_started
+      opentofu-runner:
+        condition: service_healthy
     working_dir: /app
     command: ["node", "/app/runner.mjs"]
     env_file:
@@ -279,7 +282,7 @@ services:
 
   # ---- takosumi landing (SolidStart, mirrors takosumi.com root) ----
   takosumi-website-build:
-    profiles: ["postgres"]
+    profiles: ["postgres", "workers"]
     image: node:22-slim
     restart: "no"
     working_dir: /build/website
@@ -301,7 +304,7 @@ services:
 
   # ---- takosumi docs (VitePress, mirrors takosumi.com/docs/) ----
   takosumi-docs-build:
-    profiles: ["postgres"]
+    profiles: ["postgres", "workers"]
     image: takosumi-local-static-builder:node22
     restart: "no"
     working_dir: /build/docs
@@ -331,7 +334,7 @@ services:
   #   2. collector forwards to Jaeger at jaeger:4317 (OTLP) / 14250 (jaeger)
   #   3. Jaeger UI at https://jaeger.takosumi.test/ shows the spans
   jaeger:
-    profiles: ["postgres"]
+    profiles: ["postgres", "workers"]
     image: jaegertracing/jaeger:2.4.0
     restart: unless-stopped
     environment:
@@ -342,7 +345,7 @@ services:
           - jaeger
 
   otel-collector:
-    profiles: ["postgres"]
+    profiles: ["postgres", "workers"]
     image: otel/opentelemetry-collector-contrib:0.118.0
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yaml"]
@@ -366,7 +369,7 @@ services:
   # the smoke can assert the bytes arrived. Web UI at
   # https://mailpit.takosumi.test/, SMTP at mailpit:1025 (in-network).
   mailpit:
-    profiles: ["postgres"]
+    profiles: ["postgres", "workers"]
     image: axllent/mailpit:latest
     restart: unless-stopped
     environment:

@@ -13,6 +13,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/compose-helpers.sh"
 
+PROFILE="$(local_substrate_profile)"
+case "$PROFILE" in
+	workers)
+		# Miniflare runs one local workerd isolate and is evidence for routing and
+		# correctness, not Cloudflare edge capacity. Keep the offered load below
+		# emulator saturation so the 5s stuck-handler guard remains meaningful.
+		K6_REQUEST_RATE="${TAKOSUMI_K6_REQUEST_RATE:-1}"
+		;;
+	postgres)
+		K6_REQUEST_RATE="${TAKOSUMI_K6_REQUEST_RATE:-10}"
+		;;
+esac
+
 ARGS=(run --quiet /scripts/k6-baseline.js)
 [[ "${1:-}" == "--verbose" ]] && ARGS=(run /scripts/k6-baseline.js)
 
@@ -21,7 +34,10 @@ local_substrate_docker_run --rm \
 	-v "$SCRIPT_DIR:/scripts:ro" \
 	-v "$SUBSTRATE_DIR/caddy/runtime:/ca:ro" \
 	--add-host app.takosumi.test:host-gateway \
+	--add-host service.takosumi.test:host-gateway \
 	-e SSL_CERT_FILE=/ca/pebble-issuance-root.pem \
 	-e K6_CA_CERT_FILE=/ca/pebble-issuance-root.pem \
+	-e TAKOSUMI_K6_REQUEST_RATE="$K6_REQUEST_RATE" \
+	-e TAKOSUMI_SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://service.takosumi.test}" \
 	grafana/k6:0.55.0 \
 	"${ARGS[@]}"

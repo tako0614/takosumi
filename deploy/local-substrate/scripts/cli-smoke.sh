@@ -24,10 +24,16 @@ SOURCE_GIT="${TAKOSUMI_DEPLOY_CONTROL_SOURCE_GIT:-https://github.com/tako0614/ta
 SOURCE_REF="${TAKOSUMI_DEPLOY_CONTROL_SOURCE_REF:-main}"
 SOURCE_MODULE_PATH="${TAKOSUMI_DEPLOY_CONTROL_SOURCE_PATH:-opentofu-modules/core/module}"
 INSTALL_CONFIG_ID="${TAKOSUMI_DEPLOY_CONTROL_INSTALL_CONFIG_ID:-cfg-default-opentofu-capsule}"
-SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://app.takosumi.test}"
+source "$SCRIPT_DIR/compose-helpers.sh"
+PROFILE="$(local_substrate_profile)"
+case "$PROFILE" in
+	workers) DEFAULT_SERVICE_URL="https://service.takosumi.test" ;;
+	postgres) DEFAULT_SERVICE_URL="https://app.takosumi.test" ;;
+esac
+SERVICE_URL="${TAKOSUMI_SERVICE_URL:-$DEFAULT_SERVICE_URL}"
 CURL_RESOLVE=()
-if [[ "$SERVICE_URL" == https://app.takosumi.test* ]]; then
-	CURL_RESOLVE=(--resolve "app.takosumi.test:443:127.0.0.1")
+if [[ "$SERVICE_URL" =~ ^https://([a-z0-9.-]+\.takosumi\.test)(/|$) ]]; then
+	CURL_RESOLVE=(--resolve "${BASH_REMATCH[1]}:443:127.0.0.1")
 fi
 RUN_SUFFIX="$(date +%s%N)"
 APP_NAME="cli-smoke-$RUN_SUFFIX"
@@ -182,6 +188,11 @@ PLAN_BODY="$(response_body "$PLAN_RESPONSE")"
 PLAN_ID="$(printf '%s' "$PLAN_BODY" | json_field "data['run']['id']")"
 PLAN_STATUS="$(printf '%s' "$PLAN_BODY" | json_field "data['run']['status']")"
 
+if [[ "$PLAN_STATUS" == "queued" || "$PLAN_STATUS" == "running" ]]; then
+	PLAN_BODY="$(wait_for_run "$PLAN_ID" "plan")"
+	PLAN_STATUS="$(printf '%s' "$PLAN_BODY" | json_field "data['run']['status']")"
+fi
+
 if [[ "$PLAN_STATUS" == "waiting_approval" ]]; then
 	APPROVE_RESPONSE="$(post_json "/internal/v1/runs/$PLAN_ID/approve" '{"reason":"local-substrate cli smoke"}')"
 	require_code "approve plan run" "$APPROVE_RESPONSE" "200"
@@ -220,6 +231,11 @@ require_code "apply run create" "$APPLY_RESPONSE" "201"
 APPLY_BODY="$(response_body "$APPLY_RESPONSE")"
 APPLY_ID="$(printf '%s' "$APPLY_BODY" | json_field "data['applyRun']['id']")"
 APPLY_STATUS="$(printf '%s' "$APPLY_BODY" | json_field "data['applyRun']['status']")"
+
+if [[ "$APPLY_STATUS" == "queued" || "$APPLY_STATUS" == "running" ]]; then
+	APPLY_BODY="$(wait_for_run "$APPLY_ID" "apply")"
+	APPLY_STATUS="$(printf '%s' "$APPLY_BODY" | json_field "data['run']['status']")"
+fi
 
 if [[ "$APPLY_STATUS" != "succeeded" ]]; then
 	echo "FAIL: apply run status=$APPLY_STATUS (expected succeeded)" >&2
