@@ -42,7 +42,11 @@ Secrets / patching:
 State / migrations:
   resource-state-adoption.md
   output-interface-migration.md
+  control-d1-schema-predeploy.md
   online-db-migrations.md
+
+Release supply chain:
+  provider-release-and-mirror.md
 
 Incident / recovery / on-call:
   incident-response.md

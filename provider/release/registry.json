@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "takosumi.provider-release-registry@v1",
+  "providerAddress": "registry.opentofu.org/takosjp/takosumi",
+  "retentionPolicy": "all-known-versions-required",
+  "versions": [
+    {
+      "version": "1.0.0",
+      "classification": "historical-quarantine",
+      "manifest": "quarantine/1.0.0.json",
+      "sha256": "2d7313612f827336b6bb2d0e4155c4af04f4717f18760f87ee18cd5f4c2dcad3"
+    }
+  ]
+}

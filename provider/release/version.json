@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "providerAddress": "registry.opentofu.org/takosjp/takosumi",
+  "modulePath": "github.com/takosjp/terraform-provider-takosumi",
+  "version": "1.0.1",
+  "tag": "provider/v1.0.1",
+  "status": "candidate",
+  "publishable": false,
+  "protocols": ["5.0"],
+  "platforms": [
+    { "os": "linux", "arch": "amd64" },
+    { "os": "linux", "arch": "arm64" },
+    { "os": "darwin", "arch": "amd64" },
+    { "os": "darwin", "arch": "arm64" }
+  ],
+  "toolchain": {
+    "go": {
+      "version": "go1.26.0",
+      "path": "/usr/lib/go-1.26/bin/go",
+      "sha256": "170f0aeacbfecf200f42cfa837034239860b50dc8f62f664258b887a1f0776d1",
+      "distributionRoot": "/usr/lib/go-1.26",
+      "distributionSha256": "fbd2b717c7ca4223047e0dfb149fda783348aadfbd9d0d06eebe7846127d166a"
+    },
+    "zip": {
+      "version": "Info-ZIP 3.0",
+      "path": "/usr/bin/zip",
+      "sha256": "4497470bb70f9ecb837817cc9de0d479951a3f25ef252c0bbcc9667af8c4a8c6"
+    },
+    "unzip": {
+      "version": "Info-ZIP UnZip 6.00",
+      "path": "/usr/bin/unzip",
+      "sha256": "908a7d41dfe105c724737cb7f355f474186f51d645829af522265f01492a0cc7"
+    },
+    "git": {
+      "version": "git version 2.53.0",
+      "path": "/usr/bin/git",
+      "sha256": "5516c9f362c29376ab9a499a33082f9f611941d8c75930c880e30ad109e39c9a"
+    },
+    "gpgv": {
+      "version": "gpgv (GnuPG) 2.4.8",
+      "path": "/usr/bin/gpgv",
+      "sha256": "eecb5abc574311e2de4d9183eaa4cfbe794d0674f4939e02b255f2a826834212"
+    }
+  },
+  "runtimeTrust": {
+    "files": [
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "sha256": "223b94a42758f2434da331cc0aa62db1af5b456481762c5caceefa1a2d1eb8fb"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libbz2.so.1.0.4",
+        "sha256": "4427719530606773e846e443d0288b32ee7fbdcf0a6f80638c5eda4c810e92eb"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "sha256": "d763925433ff9b757390549e1b20c085f5e6de27ae700fe89194178d96a8a2b0"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libgcrypt.so.20.7.0",
+        "sha256": "0f13a440aae59ca3750f550ac029af6d282e43cccfa623d139a9b256f8b25174"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libgpg-error.so.0.41.1",
+        "sha256": "406246f1b22422bac96081fcf655ce2746e6ebcd72268497083eab9f57ddafa0"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libpcre2-8.so.0.14.0",
+        "sha256": "4a6b6b2078685b074869d75cb068664d7da6b3036df7bca0442b1bbbd4ac7e65"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+        "sha256": "fbf56b0e59287033b6579bbbeae2f9de2fe86ad5bf2bd44d44aad67a15109318"
+      }
+    ]
+  },
+  "publicationPolicy": {
+    "mode": "candidate-only",
+    "status": "blocked-external-review",
+    "reviewedSignerFingerprints": [],
+    "signerKeyring": {
+      "path": "provider/release/keys/provider-signers.gpg",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "format": "openpgp-keyring"
+    },
+    "publicExistingVersionReadbackRequired": true,
+    "artifactSignatureRequired": true,
+    "transparencyLogRequired": true
+  },
+  "releasePolicy": {
+    "sourceMustBeClean": true,
+    "tagAndCommitMustMatch": true,
+    "signedAnnotatedTagRequired": true,
+    "oldVersionOverwrite": "forbidden",
+    "deterministicBuilds": 2,
+    "buildFlags": ["-trimpath", "-buildvcs=false", "-mod=readonly"],
+    "ldflags": "-buildid= -X main.version=${version}",
+    "archiveTimestampUtc": "1980-01-01T00:00:00Z"
+  }
+}

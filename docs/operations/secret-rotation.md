@@ -86,7 +86,7 @@ test -f "$TAKOSUMI_WRANGLER_CONFIG"
 test -d "$TAKOSUMI_SECRETS"
 find "$TAKOSUMI_SECRETS" -maxdepth 1 -type f \
   -exec sh -c 'test "$(stat -c %a "$1")" = 600' sh {} \;
-bunx wrangler@latest secret list --config "$TAKOSUMI_WRANGLER_CONFIG"
+bun run wrangler -- secret list --config "$TAKOSUMI_WRANGLER_CONFIG"
 ```
 
 Push one approved value through standard input. Do not echo it, infer missing
