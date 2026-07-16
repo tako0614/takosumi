@@ -419,7 +419,7 @@ DELETE /v1/space-policies/{name}?space={spaceId}
 operator が既定 pool を bootstrap するときは、同じ PUT に
 `If-None-Match: *` を付けると atomic create-only になります。作成は `201`、同じ
 Space/name が既にあれば `412 target_pool_exists` で、既存の capability evidence を
-上書きしません。header なしの PUT は従来どおり明示的な create/update です。
+上書きしません。header なしの PUT は明示的な create/update です。
 
 Targetは独立した未実装の`/v1/targets` resourceではなく、現在はTargetPoolの
 `spec.targets[]`にoperatorが完全なcapability evidenceとして宣言します。Resource

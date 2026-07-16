@@ -1,6 +1,6 @@
 # Takosumi Final Plan
 
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 This document is the authoritative Takosumi product direction.
 
@@ -12,7 +12,7 @@ Takosumi is an open, Git-based OpenTofu control plane.
 Takosumi =
   Git-based OpenTofu control plane
   + plain OpenTofu stack execution
-  + Resource Shape Deploy API (`/v1/resources` lifecycle authority)
+  + optional Service Form host (`/v1/resources` is the current lifecycle API)
   + Interface / InterfaceBinding API
   + Resolver / Planner / Reconciler
   + Target / Credential / OIDC / Secret / Policy
@@ -21,10 +21,12 @@ Takosumi =
 ```
 
 Takosumi is not a cloud clone. It runs plain OpenTofu stacks as-is with
-existing OpenTofu/Terraform providers, and its managed-service path resolves a
-provider-neutral service form (`ResourceShape`) to operator-enabled targets.
-The lifecycle authority for that path is the `/v1/resources` Deploy API, not an
-OpenTofu provider, compatibility handler, adapter, or backend manager.
+existing OpenTofu/Terraform providers and may host independently defined,
+provider-neutral Service Forms. Takosumi resolves an exact `FormRef` to
+operator-enabled implementations and targets. The canonical lifecycle remains
+one Takosumi Resource/Run/state/audit ledger behind the Deploy API; a portable
+provider, compatibility handler, Form Package, adapter, or backend manager is
+never a second authority.
 
 The product split is:
 
@@ -44,22 +46,121 @@ Takosumi Cloud:
 Takosumi Cloud is an official deployment of Takosumi for Operator. It is not a
 separate product core.
 
+### 0.1 Adopted Service Form separation
+
+The architecture decision in
+[`../../../docs/platform/decisions/0001-service-form-host-offering-separation.md`](../../../docs/platform/decisions/0001-service-form-host-offering-separation.md)
+is part of this Final Plan. The detailed source plan is
+[`../../../docs/platform/service-form-platform-separation-plan.md`](../../../docs/platform/service-form-platform-separation-plan.md).
+
+The target has three independently released authorities:
+
+```text
+portable Service Form project (working project name: Takoform):
+  Service Form / FormRef / data-only Form Package
+  portable form-host interoperability contract
+  standard definitions, typed form provider, SDK, fixtures, conformance
+
+Takosumi OSS:
+  optional zero-form host
+  Resource lifecycle, Resolver / Planner / Reconciler
+  Run / StateVersion / Output / audit
+  Target / TargetPool / Policy / Adapter / credentials / Interface
+  generic noncommercial FormActivation
+
+Takosumi Cloud closed layer:
+  exact official ServiceOffering
+  official targets, capacity, managers, native implementations, credentials
+  price / rating / billing / quota / abuse / SLA / support
+```
+
+License ownership follows the same split: portable spec/protocol/provider/SDK/
+schemas/codegen/conformance are MIT; the Takosumi host/control-plane and
+deployable OSS network services remain AGPL-3.0-only; closed Cloud managers,
+realized offering/capacity, billing enforcement, and operations remain
+UNLICENSED. A deployable reference integration requires its own license review.
+
+`Service Form` is the accepted target concept. `Takoform` remains only a
+working project name until trademark, domain, repository, package namespace,
+registry identity, and security ownership are approved. No public API group or
+provider FQN is selected by this document. The current
+`takosumi.dev/v1alpha1`, `ResourceShape`, `takosumi_*` form resources,
+`/v1/resources`, Resource IDs, kind tokens, import IDs, database fields, and
+provider state remain compatibility surfaces during the additive migration.
+
+Current implementation must be described honestly:
+
+```text
+current:
+  Takosumi owns ResourceShape TypeScript schemas, bundled parser behavior,
+  current Resource API/wire contract, and the mixed Takosumi provider.
+
+target:
+  the portable project owns definition/provider/interoperability authority;
+  Takosumi consumes exact definitions and hosts one canonical lifecycle.
+```
+
+The 2026-07-16 Phase 0 artifact recheck is a confirmed release blocker. The
+live `app.takosumi.com` mirror index digest matches the local index, but its
+`1.0.0.json` and every served archive differ from a current local `1.0.0`
+rebuild. The live archive SHA-256 prefixes are `9de3e6e5`, `82cf0196`,
+`3433cb34`, and `9eca4738`; the corresponding local prefixes are `54732315`,
+`cb62cafb`, `cf72e6b6`, and `d42c4435`. The current build uses
+`go build -trimpath` without injecting `main.version` and writes the same
+version paths. Therefore every live `1.0.0` byte sequence is retained as
+historical immutable evidence, never overwritten. A corrected legacy provider
+must use a new version, an injected/asserted binary version, one immutable
+manifest, and byte-for-byte mirror verification before provider extraction or
+state migration.
+
+The downloaded public `linux_amd64` binary confirms the metadata mismatch:
+`go version -m` reports module `(devel)`, revision `06319f127353...`, and
+`vcs.modified=true`; ELF inspection resolves `main.version` to `dev` although
+the archive and index call it `1.0.0`. This served artifact is not a valid
+reproducible `1.0.0` release and must not be silently replaced at that path.
+
+Takosumi Core has zero implicit Form Packages. Plain Git/OpenTofu Stack
+execution, ProviderConnection, CredentialRecipe, ProviderBinding, Run,
+StateVersion, Output, AuditEvent, Interface, and InterfaceBinding work with no
+forms installed. A composition may explicitly pin a trusted Form Package,
+Host Extension/Adapter, target implementation, and FormActivation.
+
+Definition publication, host installation, executable implementation,
+FormActivation, and closed ServiceOffering are independent states. Structured
+discovery reports each state and a bounded reason without exposing private
+manager, credential, or capacity data. A provider knowing a static schema does
+not imply that the selected host offers it.
+
+`FormRef` contains `apiVersion`, `kind`, `definitionVersion`, and
+`schemaDigest`. Stored Resources resolve to an exact immutable FormRef;
+ResolutionLock, FormActivation, and ServiceOffering pin its digest. Referenced
+package bytes remain available for observe/delete and lifecycle replay.
+FormRef persistence starts in a new additive migration after the current D1
+schema-convergence work and Postgres head; released migration history is never
+rewritten. The 2026-07-16 heads are D1 v44 and Postgres v92, so FormRef starts no
+earlier than D1 v45 / Postgres v93, with both heads rechecked when implementation
+begins.
+
 ## 1. The Key Rule
 
 Keep external infrastructure on industry-standard providers when those
-providers already work. Define every Takosumi-managed service offering as a
-provider-neutral Resource Shape and keep its lifecycle in the Deploy API.
-Standard and vendor-compatible protocols are entrances or data planes for that
-service; they are not competing lifecycle authorities.
+providers already work. Define a durable provider-neutral Service Form only
+when its semantics pass the portability and conformance gate. A Takosumi host
+may install, realize, and activate that exact form; Takosumi Cloud may attach a
+closed exact ServiceOffering. Standard and vendor-compatible protocols are
+entrances or data planes for the same host-owned Resource; they are not
+definition authorities, backend implementations, or competing ledgers.
 
 ```text
 External resource already has an adequate OpenTofu provider/API:
   use it through the plain OpenTofu Stack flow.
 
-Takosumi/operator offers the service as managed capacity:
-  define a provider-neutral typed Resource Shape with schema, validation,
-  planner, lifecycle/state/import/drift behavior, and capability evidence.
-  Expose standard or compatible protocols around that same Resource when useful.
+portable managed-service definition is justified:
+  define a versioned Service Form with desired/observed/output schemas,
+  lifecycle/state/import/drift semantics, compatibility requirements, and
+  conformance evidence. A Takosumi operator separately installs an
+  implementation and activates it. Expose scoped standard/compatible protocols
+  around the same canonical Resource when useful.
 
 One-off implementation gap with no managed-service contract:
   keep it in an ordinary module plus ProviderConnection; do not invent a shape.
@@ -83,20 +184,21 @@ standard surface does not exist, but the need is one-off:
   use a declared-env-capable ProviderConnection and a normal OpenTofu
   provider/module.
 
-Takosumi/operator offers a durable managed service form:
-  add a typed Takosumi shape with schema, validation, planner, adapter,
-  import/drift/state story, and capability evidence.
+portable project admits a durable managed service form:
+  add a versioned definition and typed form-provider resource with schema,
+  lifecycle, import/drift/state, security, and conformance evidence.
 
 provider schema does not correspond to a provider-neutral Takosumi-managed
 service form or an operator/admin object:
   do not add it. It has no reason to exist in the Takosumi provider.
 ```
 
-The `takosumi/takosumi` provider is therefore not the preferred or required
-path just because Takosumi is involved. It is an optional typed HCL facade for
-provider-neutral Resource Shapes owned by the Deploy API. A standard protocol
-may be a better client or data plane, but it never makes the provider or compat
-handler the lifecycle authority.
+The current mixed `takosumi/takosumi` provider is therefore not the preferred
+or required path just because Takosumi is involved. During migration it remains
+the frozen compatibility/admin provider for supported state. The target typed
+form provider is independently released from portable Service Form definitions
+and calls the portable interoperability boundary. Neither provider owns host
+availability, backend selection, price, Resource state, or lifecycle.
 
 Before adding any `takosumi_*` resource, the design must pass a prior-art gate:
 
@@ -105,15 +207,16 @@ Before adding any `takosumi_*` resource, the design must pass a prior-art gate:
    own through the Stack flow?
 2. Does Takosumi/operator actually offer and operate this capacity?
 3. Is there one durable provider-neutral service form rather than a vendor API
-   resource clone?
-4. Does its lifecycle require Takosumi-owned resolution, binding projection,
-   policy, metering, import/drift, or managed-target placement?
+   resource clone, with an exact versioned definition and conformance fixtures?
+4. Does a host implementation need resolution, binding projection, policy,
+   import/drift, or managed-target placement?
 ```
 
-If answer 1 is yes and answers 2-4 are no, do not add a Takosumi Resource. If
-answers 2-4 are yes, define the managed service as a Resource Shape even when a
-standard control/data protocol exists. `takosumi/takosumi` remains optional:
-the Deploy API is canonical, and provider/CLI/dashboard/compatibility are clients.
+If answer 1 is yes and answers 2-4 are no, do not add a managed Resource. If
+answers 2-4 are yes, admit a Service Form through portable governance even when
+a standard control/data protocol exists. Takosumi's Deploy API remains the
+canonical Resource lifecycle, and provider/CLI/dashboard/compatibility routes
+are clients or projections of it.
 
 The client surface is intentionally replaceable. If a better universal provider
 or protocol appears, new clients may use it, but supported control operations
@@ -143,13 +246,13 @@ Provider-neutral edge JavaScript app hosting:
   product identity.
 
 AI Gateway or OpenAI-compatible upstream access:
-  do not create a Takosumi Resource Shape by default.
+  do not create a Service Form by default.
   publish the endpoint/model as an Interface when runtime discovery is needed;
   deliver the API key through InterfaceBinding, Secret, ProviderConnection, or
   generic env according to whether it is runtime or provider authentication.
 
 Push notification delivery:
-  do not create a Takosumi Resource Shape or takosumi_provider resource.
+  do not create a Service Form or typed form-provider resource.
   APNs, FCM, Web Push, email, webhook, Matrix-compatible push gateways, and
   product-native notification delivery stay in the product host, a normal
   OpenTofu module/provider, a client-owned gateway, or generic env. Takosumi may
@@ -160,10 +263,10 @@ Push notification delivery:
   resource.
 ```
 
-Do not add a Takosumi-owned resource just because another cloud already has a
-provider. Add one only when Takosumi needs to own a portable service form,
-resolution lock, binding projection, policy surface, or compatibility import
-path.
+Do not add a Service Form just because another cloud already has a provider.
+The portable project owns service-definition semantics; Takosumi owns only the
+host lifecycle, ResolutionLock, binding projection, policy, activation, and
+compatibility translation around an installed exact form.
 
 ## 2. Two Authoring Flows And One Shared Interface Layer
 
@@ -513,7 +616,7 @@ a consumer can use the resulting runtime. `Interface` does not create resources,
 select providers, run templates, or replace OpenTofu.
 
 ```text
-OpenTofu Stack or Resource Shape
+OpenTofu Stack or Service Form-backed Resource
   -> ordinary public output
   -> service-side Interface input mapping
   -> resolved Interface revision
@@ -824,13 +927,16 @@ the legacy record is never fallback authority. After consumers read only the
 Interface API, remove the Output Sync capability, projection/grant code, old
 schemas/routes, and legacy documentation.
 
-### 2.3 Resource Shape Flow
+### 2.3 Service Form Host Flow (`Resource Shape` compatibility surface)
 
-Users can also declare provider-neutral Takosumi shapes when they want
-Takosumi-managed service semantics.
+Users can also request a Resource backed by an exact provider-neutral Service
+Form when they want host-managed service semantics. `Resource Shape` is the
+current API/type/provider compatibility name, not the target definition owner.
 
 ```text
-Resource Shape
+exact FormRef from an installed Form Package
+  -> compatible Host Extension / Adapter
+  -> generic FormActivation for the caller's audience
   -> TargetPool / Policy / Credential
   -> Adapter capability evidence
   -> Resolver
@@ -838,8 +944,10 @@ Resource Shape
   -> NativeResource
 ```
 
-The shape names the service form. The operator decides which targets and
-adapters can satisfy it.
+The Service Form defines deterministic portable semantics. The Takosumi
+operator decides which package is trusted, which implementations and targets
+can satisfy it, and whether a generic FormActivation exposes it to an
+authorized audience. None of those facts creates a Cloud ServiceOffering.
 
 Resource materialization uses the same OpenTofu runner and `Run` ledger as a
 plain Stack, but the Run subject is the Resource itself. A module-backed Adapter
@@ -851,7 +959,8 @@ successful Run/encrypted-state pointer; `ResolutionLock` owns the pinned Target
 and implementation evidence. This keeps execution/audit generic while keeping
 the two ownership models explicit.
 
-The v1alpha1 default public shapes are:
+The current v1alpha1 compatibility distribution can explicitly install these
+form definitions:
 
 ```text
 EdgeWorker
@@ -866,19 +975,27 @@ StatefulActorNamespace
 Schedule
 ```
 
+They are not an implicit Core default. They remain current wire kind tokens and
+compatibility schemas until Form Package conformance, additive FormRef
+persistence, and client/state migration prove the target representation.
+
 ### 2.4 Deploy API And Optional OpenTofu Provider
 
-`/v1/resources` is the Deploy API for provider-neutral service forms. It is the
-only lifecycle authority for a managed Resource. All clients use the same
+`/v1/resources` is the current Takosumi Deploy API for form-backed Resources.
+It is the only lifecycle authority for a managed Resource. The future portable
+interoperability route and all current clients delegate to the same
 preview/apply/observe/refresh/import/delete behavior, and the canonical
 `Resource`, `ResolutionLock`, `NativeResource`, Run, status, Output, and audit
 evidence live behind this API. The retired `Deployment` ledger is not restored.
 
-`takosumi/takosumi` is an optional typed HCL client of the Deploy API. All
-`takosumi_*` resources are Takosumi-owned Resource Shape or operator/admin
-objects. They are not wrappers around AWS, Cloudflare, Kubernetes, S3, OpenAI,
-or any other vendor provider, and the provider does not define service
-availability, select a backend, own lifecycle state, or price an operation.
+The current mixed `takosumi/takosumi` provider is an optional typed HCL client
+of the Deploy API. It owns `takosumi_target_pool` and future justified
+operator/admin resources, and retains frozen form resource types for supported
+legacy state. New Service Form definition/client authority moves to the
+independently released portable provider only after the identity, immutable
+release, conformance, and state-migration gates pass. Neither provider wraps
+vendor resources or defines availability, selects a private backend, owns
+lifecycle state, or prices an operation.
 
 ```text
 Deploy API:
@@ -888,12 +1005,18 @@ Deploy API:
   ResolutionLock and NativeResource evidence
   adapter/backend-manager dispatch after resolution
 
-takosumi/takosumi provider (optional client):
-  typed HCL schema for Takosumi-owned Resource Shapes
+current takosumi/takosumi provider (compatibility/admin client):
+  frozen typed HCL schema for supported current Resource Shape state
+  Takosumi TargetPool/operator-admin resources
   Deploy API client
   capability discovery
   preview/apply/status polling
   minimal OpenTofu state mapping
+
+target portable form provider:
+  statically typed resources generated/verified from standard Form Packages
+  portable form-host interoperability client only
+  exact FormRef availability and digest checks
 
 not:
   a generic cloud abstraction provider
@@ -902,20 +1025,20 @@ not:
   a catch-all takosumi_resource { type, spec } provider
 ```
 
-When this document says a shape is provider-neutral, it means
-vendor-independent as a Takosumi-owned service contract. It does not mean the
-`takosumi` provider is a generic third-party provider directory. Ordinary
+When this document says a Service Form is provider-neutral, it means
+vendor-independent under portable form governance. It does not mean either
+provider is a generic third-party provider directory. Ordinary
 provider resources remain in the plain Stack flow. Industry-standard surfaces
 such as S3-compatible APIs, OCI registry APIs, Kubernetes CRDs, CloudEvents, or
 OpenAI-compatible endpoints stay the external protocol when they fit. When the
-service is Takosumi-managed, those surfaces translate into or resolve a
-provider-neutral Resource Shape rather than replacing its lifecycle.
+service is host-managed, those surfaces translate into or resolve the same
+canonical form-backed Resource rather than replacing its lifecycle.
 
 There are two extension layers:
 
 ```text
-HCL shape layer:
-  new takosumi_* resource types require a schema/API/provider release.
+typed Service Form client layer:
+  standard forms require an immutable definition/provider release.
   This preserves OpenTofu plan diffs, validation, import, state upgrades, and
   completion.
 
@@ -926,7 +1049,7 @@ implementation layer:
   Policy, Adapter, and ResolutionLock.
 ```
 
-This means a provider-neutral service form such as `ContainerService` can land
+This means a provider-neutral Service Form such as `ContainerService` can land
 on Kubernetes, Cloudflare Containers, VM fleet, Takosumi Native, or an
 operator-defined runtime plugin while the user's HCL stays the same. It does
 not mean a live Takosumi endpoint can invent arbitrary new OpenTofu resource
@@ -967,9 +1090,10 @@ data-plane handler resolves a Ready canonical Resource plus authorized
 Interface/NativeResource evidence. Unsupported operations fail closed; the
 profile is not a promise of full vendor API compatibility.
 
-Future shapes are added only when they have a real schema, planner, adapter
-path, and user value. Do not expose `takosumi_resource { type, spec }` as the
-normal interface.
+Future forms enter the standard typed provider only when they have a real
+versioned schema, lifecycle semantics, planner/adapter path, security review,
+portable governance, conformance fixtures, and user value. Do not expose an
+untyped catch-all Resource as the normal HCL interface.
 
 ## 3. Product Split
 
@@ -986,7 +1110,8 @@ ProviderConnection
 CredentialRecipe
 ProviderBinding
 generic env provider support
-Resource Shape API
+Service Form host framework (current `Resource Shape` compatibility API)
+Form Registry / FormActivation
 Resolver / Planner / Reconciler
 Target / TargetPool
 Credential / OIDC / Workload Identity
@@ -994,7 +1119,7 @@ Secret / Policy / RBAC basics
 Adapter framework
 Compatibility API framework
 usage event emission
-Takosumi Resource API clients such as provider / CLI / dashboard
+Takosumi Resource API clients such as CLI / dashboard
 scoped compatibility API surfaces
 ```
 
@@ -1029,8 +1154,9 @@ support and abuse tooling
 commercial audit export
 ```
 
-It still uses the same Takosumi engine, Resource API, provider, adapters, and
-capability discovery.
+It still uses the same Takosumi engine, Resource API, adapters, and capability
+discovery. A typed form provider is a portable client; it is not edition
+authority.
 
 ### 3.3 Takosumi Cloud
 
@@ -1060,12 +1186,12 @@ prices, usage metering, invoices, and OpenTofu deploys.
 
 Cloudflare-compatible APIs are import/deploy paths, not the product identity.
 
-## 4. Resource Shapes
+## 4. Service Forms (current `Resource Shape` compatibility names)
 
 ### 4.1 EdgeWorker
 
-`EdgeWorker` is the provider-neutral service form for Worker-compatible
-JavaScript/TypeScript edge applications.
+`EdgeWorker` is the proposed provider-neutral Service Form for
+Worker-compatible JavaScript/TypeScript edge applications.
 
 It is not a generic container service and it is not a generic HTTP service. A
 container is a different service form. A VM is a different service form.
@@ -1089,11 +1215,13 @@ OpenTofu provider must not freeze this list in the provider binary; support is
 advertised and enforced by the Takosumi endpoint through capabilities,
 TargetPool policy, adapter evidence, and the Resolver.
 
-The same rule applies to Resource Shape `interfaces` such as ObjectBucket
-interface requirements. These lower-case capability tokens are not runtime
-`Interface` objects. Takosumi owns the typed service form (`ObjectBucket`,
-`EdgeWorker`, `Queue`, etc.); the concrete interface/profile tokens are
-capability evidence that an endpoint or operator can extend.
+The same rule applies to current Resource Shape `interfaces` compatibility
+fields such as ObjectBucket interface requirements. These lower-case
+capability tokens are not runtime `Interface` objects. The portable Service
+Form definition owns typed service semantics (`ObjectBucket`, `EdgeWorker`,
+`Queue`, etc.); Takosumi owns the host lifecycle and Interface records. The
+concrete interface/profile tokens remain capability evidence that an endpoint
+or operator can extend.
 
 Important rules:
 
@@ -1125,11 +1253,11 @@ Takosumi Cloud may implement `EdgeWorker` with Cloudflare Workers for Platforms
 and a Takosumi-managed dispatch layer. That is an implementation detail for one
 shape. Object storage, KV, database, queue, container, workflow, and AI surfaces
 are peer Cloud-provided services in Takosumi Cloud. AI Gateway remains a service
-endpoint rather than a Resource Shape, but billable AI requests still enter the
+endpoint rather than a Service Form, but billable AI requests still enter the
 same Cloud managed-operation boundary before upstream model execution.
 
 Managed provider-compatible paths use the same TargetPool / Adapter decision as
-Resource Shapes. A managed Target can either declare a complete module-backed
+form-backed Resources. A managed Target can either declare a complete module-backed
 descriptor (`providerSource`, `providerConfig`, `moduleTemplate`, explicit
 input/output mappings), or select an operator-installed adapter plugin for
 direct materialization. Core never derives these fields from Target or shape
@@ -1168,7 +1296,7 @@ the dashboard, CLI, direct Deploy API, a supported compatibility client, or the
 optional `takosumi_edge_worker` HCL resource. No OpenTofu provider is required.
 Behind the Deploy API, the selected Target/Adapter decides whether the
 implementation is Workers for Platforms, Takosumi native runtime, or an
-operator-provided plugin. Do not hard-code WfP into a client or Resource Shape.
+operator-provided plugin. Do not hard-code WfP into a client or Service Form.
 
 For Takosumi Cloud official managed targets, typed Resources use an installed
 adapter/backend manager behind the Deploy API instead of nesting an OpenTofu
@@ -1187,7 +1315,7 @@ OpenTofu provider / control-plane Compatibility API / Dashboard / CLI
   -> auth + source Workspace + owner billing account
   -> provider-neutral Resource desired state
   -> Deploy API preview
-  -> ResourceShape + ServiceOffering resolution
+  -> exact FormRef + FormActivation + ServiceOffering resolution
   -> versioned PriceCatalog + DeploymentQuote
   -> apply with quote id + quote digest
   -> billing reservation
@@ -1199,8 +1327,8 @@ OpenTofu provider / control-plane Compatibility API / Dashboard / CLI
 ```
 
 The versioned `ServiceOffering` catalog is the Cloud source of truth for which
-Resource Shapes, regions, implementation versions, managers, and SKUs can be
-sold. The versioned `PriceCatalog` is the source of truth for fixed, minimum,
+exact FormRefs, generic activations, regions, implementation fingerprints,
+managers, and SKUs can be sold. The versioned `PriceCatalog` is the source of truth for fixed, minimum,
 and usage prices. A service form with no active offering, a billable SKU with no
 price, an unconfigured manager, or an expired/mismatched quote fails before a
 billing reservation and before any backend API call. A free SKU is an explicit
@@ -1227,11 +1355,11 @@ profile-owned EdgeWorker, requires an explicit path, and permits at most one
 terminal `*`; multiple/overlapping routes and host-only patterns fail
 explicitly rather than inventing match precedence. Standard data-plane facades similarly resolve an
 already-Ready Resource before manager access.
-AI Gateway does not become a Resource Shape unless Takosumi later offers a
-durable provider-neutral AI service form; its request/token metering still uses
+AI Gateway does not become a Service Form unless portable governance later
+admits a durable provider-neutral AI service contract; its request/token metering still uses
 the Cloud rating and invoice-reconciliation boundary. The official EdgeWorker
 manager can use Workers for Platforms today and be replaced later without
-changing the Resource Shape, Deploy API, provider schema, or compatibility
+changing the Service Form, Deploy API, provider schema, or compatibility
 profile.
 
 ### 4.2 ObjectBucket And S3-Compatible Object Storage
@@ -1259,7 +1387,7 @@ Apps, SDKs, and existing OpenTofu providers need a standard way to consume it.
 The correct standard surface is S3-compatible API.
 ```
 
-Ordinary object storage remains outside Takosumi Resource Shapes:
+Ordinary object storage remains outside the Service Form host flow:
 
 ```text
 AWS S3:
@@ -1451,11 +1579,11 @@ Schedule:
   target invocations are metered by the target service.
 ```
 
-These shapes use the same preview/apply/delete/observe/refresh/import contract,
+These forms use the same preview/apply/delete/observe/refresh/import contract,
 ResolutionLock, Run ledger, public Outputs, dependency ordering, and no-secret
 spec invariant as the original six shapes.
 
-### 4.5 AI Gateway Is Not A Resource Shape
+### 4.5 AI Gateway Is Not A Service Form
 
 AI Gateway remains a Takosumi Cloud / operator service endpoint, not a default
 `takosumi_*` resource.
@@ -1486,19 +1614,21 @@ OPENAI_API_KEY
 
 Public endpoint/model values can be resolved through an Interface. API keys
 come from InterfaceBinding, Secret, ProviderConnection, or generic env according
-to the authentication boundary. They must not be stored in Resource Shape
-specs, Interface documents/resolved inputs, or OpenTofu state.
+to the authentication boundary. They must not be stored in Service Form
+definitions, Resource specs, Interface documents/resolved inputs, or OpenTofu state.
 
-## 5. Future Shape Families
+## 5. Future Service Form Families
 
-Future shapes are introduced one provider-neutral service form at a time. This
+Future forms are introduced one provider-neutral service contract at a time. This
 list is a candidate vocabulary, not a commitment to recreate vendor provider
-resources. Add a shape when Takosumi/operator actually offers that managed
-capacity and therefore must own its lifecycle, bindings, resolution, policy,
-metering, import, and drift semantics. A standard API may remain its compat or
-data-plane surface; it does not remove the need for a canonical shape when
-Takosumi sells and operates the service. External infrastructure that Takosumi
-does not operate remains on its mature provider through the Stack flow.
+resources. Admit a form only when portable governance defines its lifecycle,
+import/drift, security, and conformance semantics and at least one real host
+implementation exists. Takosumi owns each hosted Resource's lifecycle,
+bindings, resolution, policy, and audit; a Cloud ServiceOffering separately
+owns official metering and sale. A standard API may remain its compatibility or
+data-plane surface without creating another lifecycle authority. External
+infrastructure that an operator does not offer as a managed service remains on
+its mature provider through the Stack flow.
 
 ```text
 RelationalDatabase
@@ -1518,27 +1648,47 @@ spec fields. `Machine`, `MachinePool`, `KubernetesCluster`, `Job`, and
 boundary notes may be written, but no bundled manager, compatibility surface,
 or Stable offering is required or advertised.
 
-Do not add a public shape until it has:
+Do not add a standard public FormRef until it has:
 
 ```text
-clear user-facing service form
-shape-specific HCL schema
+clear provider-neutral service semantics
+versioned desired/observed/output schemas and immutable digest
+typed HCL schema or documented API/CLI path
 validation
 planner
 adapter path
 import/drift/state story
 capability story
+security review and conformance fixtures
 tests
 ```
 
 Do not merge unlike service forms. Edge Worker, container service, machine,
-workflow, and job are different shapes even if some backend can implement more
+workflow, and job are different forms even if some backend can implement more
 than one.
 
 ## 6. Target, Adapter, And Plugin Model
 
 Backend selection belongs to TargetPool, Policy, capability evidence, and the
 Resolver. It should not normally be embedded in the user resource.
+
+Hosting availability has four explicit portable/OSS observations before any
+commercial offer:
+
+```text
+definition published
+definition installed and digest-verified by this host
+compatible implementation executable on an eligible target
+exact FormActivation exposes it to the authorized audience
+```
+
+`FormActivation` is a Takosumi OSS operator policy/record. It pins exact
+FormRef, audience or policy scope, eligible TargetPool/class constraint, status,
+optimistic concurrency, and audit metadata. It never contains price, payment,
+invoice/rating rules, official SKU/region, SLA, private capacity, manager
+identity, implementation credentials, or other Cloud-only fields. Activation
+requires an installed definition and executable implementation, but neither
+fact creates activation automatically.
 
 TargetPool, Policy, adapter/plugin configuration, target credentials, and
 implementation overrides are operator/advanced surfaces. The default user flow
@@ -1769,6 +1919,12 @@ Resolver decisions must be locked.
 ```json
 {
   "resourceId": "tkrn:prod:EdgeWorker:api",
+  "formRef": {
+    "apiVersion": "takosumi.dev/v1alpha1",
+    "kind": "EdgeWorker",
+    "definitionVersion": "legacy-v1",
+    "schemaDigest": "sha256:<exact-definition-digest>"
+  },
   "selectedImplementation": "cloudflare_workers",
   "target": "cloudflare-main",
   "locked": true,
@@ -1781,7 +1937,10 @@ Resolver decisions must be locked.
 ```
 
 Takosumi must not silently migrate a resource to another backend. Migration is
-an explicit operation.
+an explicit operation. It also must not reinterpret an existing Resource through
+a newer definition merely because the installed package set changed. Missing
+or mismatched pinned package bytes fail closed; retained/deprecated definitions
+remain available for observe and delete.
 
 State is split into:
 
@@ -1804,9 +1963,39 @@ GET /.well-known/takosumi
 GET /v1/capabilities
 ```
 
+During migration these are Takosumi compatibility discovery endpoints. A
+portable neutral discovery contract is added beside them only after the public
+identity/API-group decision. Both discovery identities report the same
+canonical Resource IDs and delegate mutations to the same ledger.
+
+Target discovery is structured per exact FormRef:
+
+```text
+formRef
+definitionKnown
+installed
+executable
+executableReason
+activated
+availableToPrincipal
+availabilityReason
+supportedOperations
+compatibleAdapterIds
+eligibleTargetPoolClasses
+deprecation
+```
+
+Definition known, installed, executable, activated, and Cloud-offered are not
+synonyms. Public discovery omits manager identity, credentials, private target
+configuration, and raw capacity. The existing `resources: Record<string,
+boolean>` document below is a current compatibility view. Keep it only while
+supported clients require it, derive it from structured state, and remove it
+only after measured usage and migration evidence.
+
 Providers and tools branch on capabilities, not edition names.
 Adapter/target capabilities report what the operator has enabled; they do not
-create implicit Resource Shape mappings. Object storage remains a standard
+create implicit Form Package, implementation, activation, or offering mappings.
+Object storage remains a standard
 endpoint/provider concern unless `compat.s3.v1` is explicitly enabled by an
 operator for an import/data path, binding projection, policy, metering, or
 managed target control.
@@ -2043,8 +2232,9 @@ Takosumi Cloud pricing is explicit and versioned:
 ```text
 ServiceOffering:
   offering id / version
-  ResourceShape kind + supported API version
-  region / implementation version / manager id
+  exact FormRef (apiVersion / kind / definitionVersion / schemaDigest)
+  generic FormActivation reference
+  region / profile / implementation fingerprint / manager id
   enabled capabilities and lifecycle actions
   referenced SKU ids
 
@@ -2057,11 +2247,18 @@ PriceCatalog:
 DeploymentQuote:
   quote id / issued at / expiry / quote digest
   Resource desired-state digest
-  resolution fingerprint / ServiceOffering version
+  exact FormRef / resolution fingerprint / ServiceOffering version
   PriceCatalog id / version
   fixed and estimated usage line items
   subtotal / tax treatment / estimated total micros / currency
 ```
+
+`ServiceOffering` is a closed operator/Cloud record, not a portable Form
+Package field. A definition may remain installed after an offering is disabled;
+an implementation may remain executable without being commercially offered.
+Cloud admission fails before reserve/backend work unless the exact definition,
+generic FormActivation, implementation fingerprint, target/manager readiness,
+SKU, and price version all match.
 
 ### Public plans and tax
 
@@ -2226,7 +2423,7 @@ Takosumi runtime schemas inside reserved OpenTofu Outputs
 Workspace-wide reconcile triggered by ordinary Output changes
 backend selection as normal user HCL
 Cloud-only branches in the takosumi provider
-secret material inside Resource Shape specs
+secret material inside Service Form definitions or Resource specs
 secret material inside Interface documents or resolved inputs
 commercial billing enforcement inside OSS core
 ```
@@ -2237,8 +2434,9 @@ Do build:
 plain OpenTofu Stack execution
 declared-env-capable ProviderConnection escape hatch
 shared Interface / InterfaceBinding API for Capsule and Resource runtimes
-first-class typed shapes only after the prior-art gate proves generic
-providers/standards are not enough
+first-class typed Service Forms only after portability, security, and
+conformance gates prove generic providers/standards are not enough
+zero-form Takosumi Core and explicit Form Package / Host Extension activation
 capability-driven provider behavior
 TargetPool adapter plugin system
 scoped compatibility import paths
@@ -2257,19 +2455,29 @@ Takosumi software GA requires:
 
 ```text
 plain OpenTofu Stack flow remains conformant
+zero-form Core can run a plain OpenTofu Capsule without any portable project or Cloud dependency
+installed Form Packages are signed, exact, retained, and independently versioned
+every form-backed Resource and ResolutionLock resolves to an exact immutable FormRef
+definition / installed / executable / activated discovery states and reason codes are truthful
 /v1/resources is the only Resource lifecycle authority
-provider/CLI/dashboard/compat control requests converge on that API
+portable and compatibility provider/CLI/dashboard/compat control requests converge on that API
 compat data planes resolve Ready canonical Resources
 no adapter or backend manager calls a compat handler as its implementation
-provider remains an optional client
+portable typed provider and Takosumi legacy/admin provider have immutable independent release lanes
+supported old provider state has no-op migration and rollback proof
 TargetPool/Policy/Adapter remain usable but live in operator/advanced UX
+FormActivation is generic OSS policy with no price/payment/capacity fields
+D1/Postgres additive FormRef migration, backup, restore, and retained-definition delete proof exists
 Resource/Run/state/output/audit recovery and migration evidence is complete
+OSS-to-Cloud dependency and package/provider secret-leakage gates pass
 ```
 
-Takosumi Cloud may call a service shape Stable only when it additionally proves:
+Takosumi Cloud may call a Service Form Stable only when it additionally proves:
 
 ```text
-an active versioned ServiceOffering and PriceCatalog
+an active versioned ServiceOffering pins exact FormRef + generic FormActivation
+installed definition + executable implementation + target/manager readiness
+immutable implementation fingerprint and PriceCatalog/SKU versions
 preview -> DeploymentQuote with immutable request/resolution/price binding
 apply -> idempotent reserve -> backend -> capture/release
 immutable usage rating against the bound SKU/price version
@@ -2304,48 +2512,51 @@ self-test, a descriptor, an unconfigured manager, or one green client.
 
 ## 15. Immediate Build Order
 
-1. Keep plain OpenTofu Stack execution reliable.
-2. Keep arbitrary provider support through declared-env-capable
-   ProviderConnections.
-3. Add Interface storage/API, generic input resolution, lifecycle, provenance,
-   and InterfaceBinding authorization without an Output convention.
-4. Move first-party runtime consumers to Interface reads and invocation-time
-   Principal OAuth credentials; remove Output Sync and legacy projection paths.
-5. Make `/v1/resources` the single Deploy API authority for preview/apply/
-   observe/refresh/import/delete; remove compatibility-owned lifecycle state.
-6. Finish provider-neutral Resource Shape schemas, planner, resolver, state,
-   and ResolutionLock for EdgeWorker, ObjectBucket, KVStore, Queue,
-   SQLDatabase, ContainerService, VectorIndex, DurableWorkflow,
-   StatefulActorNamespace, and Schedule.
-7. Keep `takosumi/takosumi` as an optional typed client for those shapes.
-8. Put TargetPool/Policy/adapter/backend-manager selection behind Deploy API;
-   expose it only in operator/advanced settings.
-9. Translate control-plane compatibility profiles into Deploy API calls and
-   make data-plane profiles resolve canonical Ready Resources.
-10. Add one `ManagedServiceMeterCatalog`, canonical BigInt-safe quantities,
-    window aggregation, versioned ServiceOffering / PriceCatalog /
-    DeploymentQuote, and atomic reserve/capture/release/spend-cap accounting.
-11. Implement every selected backend manager and data plane, then reconcile
-    immutable usage/reservations/refunds to payment-provider invoices.
-12. Complete the EdgeWorker modules/assets/secrets/bindings/version/deployment/
-    route/schedule/domain/log surface and the selected Cloudflare provider
-    `5.19.1` compatibility subset without claiming full Cloudflare API support.
-13. Simplify the default UX to service -> configuration -> price -> preview ->
-    deploy; keep target, policy, adapter, meter, and recovery details in
-    advanced/operator views.
-14. Require all GA-set services to pass the same Stable evidence matrix, then
-    host Takosumi Cloud as the official Takosumi for Operator deployment.
+1. Keep plain OpenTofu Stack execution, arbitrary ProviderConnections, and the
+   Interface/InterfaceBinding boundary reliable and independent of forms.
+2. Freeze and inventory every current mixed-provider schema, state identity,
+   mirror byte, checksum, and live archive. Never overwrite `1.0.0`; publish a
+   corrected immutable legacy release under a new version.
+3. Close the working project-name/domain/package/API-group/provider-FQN gates,
+   then establish one portable project repository without TargetPool, Resource,
+   Run, credentials, Interface, or Cloud code.
+4. Extract exact FormRef, data-only Form Package, standard-form semantics,
+   typed provider inputs, and host/provider conformance while preserving current
+   Resource Shape compatibility exports and routes.
+5. Add FormRef to Resource/ResolutionLock/evidence with a new additive
+   migration after the current schema head. Shadow, bounded-backfill, dual-read,
+   retain old packages, and prove D1/Postgres backup/restore.
+6. Replace bundled parser/default authority with an installed Form Registry;
+   make Core zero-form and add generic noncommercial FormActivation.
+7. Implement neutral interoperability and structured availability as a second
+   client route over the same Resource service. Dual-advertise current aliases
+   until semantic/state migration evidence permits removal.
+8. Release the portable typed form provider independently. Keep the current
+   mixed Takosumi provider frozen for supported form state and evolving only as
+   the Takosumi admin provider where safe.
+9. Make dashboard/CLI render exact definition, installed, executable,
+   activated, and Cloud-offered states without hard-coded form ownership.
+10. Migrate Cloud ServiceOffering, quote, admission, and evidence from a loose
+    form string to exact FormRef + FormActivation + implementation fingerprint.
+11. Keep every compatibility control profile translating into the Deploy API
+    and every data-plane profile resolving canonical Ready Resources.
+12. Complete one canonical meter/price/quote/reserve/capture/release/invoice
+    ledger and every selected Cloud manager/data plane, including the scoped
+    Cloudflare `5.19.1` compatibility subset without claiming full compatibility.
+13. Prototype and rehearse provider address/type state migration, import,
+    no-op refresh, rollback, registry/mirror, and air-gap paths before changing
+    public vocabulary or removing an alias.
+14. Simplify default UX to service -> inputs -> price -> preview -> deploy while
+    keeping targets, policy, adapters, meters, and recovery in advanced/operator
+    views. Require the full OSS and Cloud evidence matrices before GA.
 
 ## 16. Final Sentence
 
-Takosumi is an open Git + OpenTofu control plane whose managed-service contract
-is a provider-neutral Resource Shape deployed through one `/v1/resources`
-lifecycle authority. Existing providers remain the Stack-flow path for external
-infrastructure; the optional Takosumi provider, dashboard, CLI, and
-control-plane compatibility profiles are clients of the same Deploy API, while
-data-plane profiles resolve its canonical Ready Resources. Adapters and backend
-managers stay behind resolution, and Takosumi Cloud adds explicit versioned
-offerings, prices, quotes, reservations, usage rating, and invoice
-reconciliation around that lifecycle. Capsule and Resource runtimes are exposed
-through one non-secret Interface/InterfaceBinding layer, while OpenTofu Outputs
-remain ordinary module return values.
+The portable project defines exact versioned Service Forms and typed client
+interoperability; Takosumi remains an optional zero-form Git + OpenTofu host and
+the sole Resource lifecycle authority; Takosumi Cloud privately decides which
+exact FormRefs it implements, activates as official ServiceOfferings, prices,
+bills, and supports. Existing providers remain the Stack-flow path, all
+compatibility entrances converge on the same canonical Resource, and Capsule /
+Resource runtimes use the non-secret Interface/InterfaceBinding layer while
+OpenTofu Outputs remain ordinary module return values.
