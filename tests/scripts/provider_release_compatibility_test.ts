@@ -7,6 +7,8 @@ import {
   verifyProviderCompatibility,
 } from "../../scripts/lib/provider-release-compatibility.mjs";
 import { buildSanitizedProviderProofEnvironment } from "../../scripts/lib/provider-proof-environment.mjs";
+import { assertExactRequestDeltas } from "../../scripts/lib/provider-proof-requests.mjs";
+import { assertProviderStateIdentity } from "../../scripts/lib/provider-proof-state.mjs";
 
 describe("provider release compatibility", () => {
   test("pins historical identity and rejects the feature-bearing patch in favor of 1.1.0", async () => {
@@ -64,8 +66,12 @@ describe("provider release compatibility", () => {
   });
 
   test("rejects an unclassified structural change", () => {
-    const providerBlock = { attributes: { endpoint: { type: "string", optional: true } } };
-    const resourceBlock = { attributes: { name: { type: "string", required: true } } };
+    const providerBlock = {
+      attributes: { endpoint: { type: "string", optional: true } },
+    };
+    const resourceBlock = {
+      attributes: { name: { type: "string", required: true } },
+    };
     const identity = {
       stateIdentity: {
         providerSchemaVersion: 0,
@@ -101,11 +107,12 @@ describe("provider release compatibility", () => {
       compareCandidateSchema(providerSchema, identity, policy).compatible,
     ).toBe(true);
     const mutated = structuredClone(providerSchema);
-    mutated.resource_schemas.takosumi_edge_worker.block.attributes.artifact_ref = {
-      type: "string",
-      required: true,
-      sensitive: true,
-    };
+    mutated.resource_schemas.takosumi_edge_worker.block.attributes.artifact_ref =
+      {
+        type: "string",
+        required: true,
+        sensitive: true,
+      };
     const result = compareCandidateSchema(mutated, identity, policy);
     expect(result.compatible).toBe(false);
     expect(result.failures).toContain(
@@ -116,11 +123,12 @@ describe("provider release compatibility", () => {
   test("rejects a required and sensitive field added inside vector_index", () => {
     const { providerSchema, identity, policy } = additiveSchemaFixture();
     const mutated = structuredClone(providerSchema);
-    mutated.resource_schemas.takosumi_vector_index.block.attributes.credential = {
-      type: "string",
-      required: true,
-      sensitive: true,
-    };
+    mutated.resource_schemas.takosumi_vector_index.block.attributes.credential =
+      {
+        type: "string",
+        required: true,
+        sensitive: true,
+      };
     const result = compareCandidateSchema(mutated, identity, policy);
     expect(result.compatible).toBe(false);
     expect(result.failures).toContain(
@@ -176,26 +184,114 @@ describe("provider release compatibility", () => {
     expect(JSON.stringify(result.environment)).not.toContain("must-not-pass");
   });
 
-  test(
-    "matches the current provider machine schema only after declared additions are removed",
-    async () => {
-      const result = await verifyProviderCompatibility();
-      expect(result.schemaCompatibility.compatible).toBe(true);
-      expect(result.schemaCompatibility.additiveResources).toEqual([
-        "takosumi_durable_workflow",
-        "takosumi_schedule",
-        "takosumi_stateful_actor_namespace",
-        "takosumi_vector_index",
-      ]);
-      expect(result.releaseReady).toBe(false);
-      expect(result.blockers).not.toContain("patch-feature-decision-unapproved");
-      expect(result.blockers).not.toContain("provider-address-split-unproven");
-      expect(result.blockers).toContain(
-        "terraform-schema-state-and-fqn-proof-command-required",
-      );
-    },
-    30_000,
-  );
+  test("rejects every unexpected managed request in exact phase evidence", () => {
+    const managedRoutes = [
+      "PUT /v1/resources/ObjectBucket/assets",
+      "DELETE /v1/resources/ObjectBucket/assets",
+      "POST /v1/resources/preview",
+      "DELETE /v1/target-pools/default",
+    ];
+    const expected = { "PUT /v1/resources/ObjectBucket/assets": 1 };
+    expect(() =>
+      assertExactRequestDeltas({
+        before: {},
+        after: {
+          "PUT /v1/resources/ObjectBucket/assets": 1,
+          "DELETE /v1/resources/ObjectBucket/assets": 1,
+        },
+        managedRoutes,
+        expected,
+        phase: "test phase",
+      }),
+    ).toThrow(
+      "test phase expected DELETE /v1/resources/ObjectBucket/assets delta 0, observed 1",
+    );
+    expect(() =>
+      assertExactRequestDeltas({
+        before: {},
+        after: { "POST /v1/resources/preview": 1 },
+        managedRoutes,
+        expected: {},
+        phase: "test phase",
+      }),
+    ).toThrow(
+      "test phase expected POST /v1/resources/preview delta 0, observed 1",
+    );
+    expect(() =>
+      assertExactRequestDeltas({
+        before: {},
+        after: { "DELETE /v1/target-pools/default": 1 },
+        managedRoutes,
+        expected: {},
+        phase: "test phase",
+      }),
+    ).toThrow(
+      "test phase expected DELETE /v1/target-pools/default delta 0, observed 1",
+    );
+    expect(() =>
+      assertExactRequestDeltas({
+        before: {},
+        after: {},
+        managedRoutes,
+        expected: { "GET /unmanaged": 1 },
+        phase: "test phase",
+      }),
+    ).toThrow("test phase declared unmanaged expected route GET /unmanaged");
+  });
+
+  test("rejects an interchangeable or missing provider FQN in CLI state evidence", () => {
+    const state = {
+      values: {
+        root_module: {
+          resources: [
+            {
+              address: "takosumi_object_bucket.current",
+              provider_name: "registry.terraform.io/takosjp/takosumi",
+              values: { storage_class: "standard" },
+            },
+          ],
+        },
+      },
+    };
+    expect(() =>
+      assertProviderStateIdentity({
+        state,
+        resourceAddress: "takosumi_object_bucket.current",
+        providerAddress: "registry.opentofu.org/takosjp/takosumi",
+        expectedValues: { storage_class: "standard" },
+        label: "OpenTofu state proof",
+      }),
+    ).toThrow(
+      "OpenTofu state proof did not retain provider FQN registry.opentofu.org/takosjp/takosumi",
+    );
+    expect(() =>
+      assertProviderStateIdentity({
+        state,
+        resourceAddress: "takosumi_object_bucket.missing",
+        providerAddress: "registry.opentofu.org/takosjp/takosumi",
+        label: "OpenTofu state proof",
+      }),
+    ).toThrow(
+      "OpenTofu state proof did not retain provider FQN registry.opentofu.org/takosjp/takosumi",
+    );
+  });
+
+  test("matches the current provider machine schema only after declared additions are removed", async () => {
+    const result = await verifyProviderCompatibility();
+    expect(result.schemaCompatibility.compatible).toBe(true);
+    expect(result.schemaCompatibility.additiveResources).toEqual([
+      "takosumi_durable_workflow",
+      "takosumi_schedule",
+      "takosumi_stateful_actor_namespace",
+      "takosumi_vector_index",
+    ]);
+    expect(result.releaseReady).toBe(false);
+    expect(result.blockers).not.toContain("patch-feature-decision-unapproved");
+    expect(result.blockers).not.toContain("provider-address-split-unproven");
+    expect(result.blockers).toContain(
+      "terraform-schema-state-and-fqn-proof-command-required",
+    );
+  }, 30_000);
 });
 
 function additiveSchemaFixture() {
@@ -244,13 +340,13 @@ function additiveSchemaFixture() {
     },
   };
   const providerSchema: any = {
-      provider: { version: 0, block: providerBlock },
-      resource_schemas: {
-        takosumi_edge_worker: { version: 0, block: edge },
-        takosumi_vector_index: { version: 0, block: vector },
-      },
-      _takosumiImplementationSources: [],
-    };
+    provider: { version: 0, block: providerBlock },
+    resource_schemas: {
+      takosumi_edge_worker: { version: 0, block: edge },
+      takosumi_vector_index: { version: 0, block: vector },
+    },
+    _takosumiImplementationSources: [],
+  };
   return {
     providerSchema,
     identity,
