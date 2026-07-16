@@ -140,7 +140,13 @@ import {
   usageEventFromRow,
 } from "../../core/domains/deploy-control/store_row_mappers.ts";
 import * as schema from "../../core/adapters/storage/drizzle/schema/d1.ts";
-import type { D1Database, D1Result } from "./bindings.ts";
+import type { D1Database, D1PreparedStatement, D1Result } from "./bindings.ts";
+import {
+  activeControlD1MaintenanceFence,
+  assertControlD1MaintenanceInactive,
+  repairControlD1MaintenanceGuards,
+  wrapControlD1MaintenanceMigrationBatch,
+} from "./d1_schema_maintenance.ts";
 
 /**
  * Discriminator stored in the single §27 `runs.type` column. PlanRun rows use
@@ -325,13 +331,22 @@ function d1KeysetWhereDesc(
   return filter === undefined ? keyset : and(filter, keyset);
 }
 
+export type D1OpenTofuControlSchemaMode = "bootstrap" | "predeployed";
+
 export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   readonly persistence = "durable" as const;
   readonly #orm: DrizzleD1Database<typeof schema>;
+  readonly #schemaMode: D1OpenTofuControlSchemaMode;
   #initialized?: Promise<void>;
 
-  constructor(private readonly db: D1Database) {
+  constructor(
+    private readonly db: D1Database,
+    options: {
+      readonly schemaMode?: D1OpenTofuControlSchemaMode;
+    } = {},
+  ) {
     this.#orm = drizzle(db, { schema });
+    this.#schemaMode = options.schemaMode ?? "bootstrap";
   }
 
   // -- RunnerProfile ----------------------------------------------------------
@@ -2896,18 +2911,25 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async #ensureSchema(): Promise<void> {
+    // This is deliberately outside the memoized schema check: an operator can
+    // acquire the maintenance fence after an isolate has warmed. Every store
+    // operation must therefore re-check the durable fence before it issues a
+    // read or write, so no request can race a destructive predeploy rebuild.
+    await assertControlD1MaintenanceInactive(this.db);
     // Serialize concurrent callers onto the one in-flight bootstrap, but never
     // cache a REJECTED promise: a transient failure (e.g. a contended DDL) would
     // otherwise poison the isolate so every later method rejects forever. On
     // failure, clear the memo so the next call retries; on success, the resolved
     // promise stays cached and bootstrap runs exactly once.
     if (this.#initialized === undefined) {
-      const attempt = ensureD1OpenTofuLedgerSchema(this.db).catch(
-        (error: unknown) => {
-          if (this.#initialized === attempt) this.#initialized = undefined;
-          throw error;
-        },
-      );
+      const attempt = (
+        this.#schemaMode === "predeployed"
+          ? verifyD1OpenTofuLedgerSchemaPredeployed(this.db)
+          : ensureD1OpenTofuLedgerSchema(this.db)
+      ).catch((error: unknown) => {
+        if (this.#initialized === attempt) this.#initialized = undefined;
+        throw error;
+      });
       this.#initialized = attempt;
     }
     await this.#initialized;
@@ -2916,8 +2938,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
 export function createCloudflareD1OpenTofuControlStore(
   db: D1Database,
+  options: {
+    readonly schemaMode?: D1OpenTofuControlSchemaMode;
+  } = {},
 ): OpenTofuControlStore {
-  return new CloudflareD1OpenTofuControlStore(db);
+  return new CloudflareD1OpenTofuControlStore(db, options);
 }
 
 // -- atomic-commit statement builders ------------------------------------------
@@ -3187,8 +3212,10 @@ function changes(result: D1Result): number {
 }
 
 /**
- * Lazily create the §27 control-plane tables. Idempotent (`IF NOT EXISTS`);
- * called once per store instance via the memoized init promise. Rich internal
+ * Bootstrap the §27 control-plane tables for the default self-host mode.
+ * Idempotent (`IF NOT EXISTS`) and called once per store instance via the
+ * memoized init promise. Hosts using `predeployed` mode call the strict
+ * read-only ledger verifier instead. Rich internal
  * records (runner profiles, runs, install configs, connections, sources,
  * snapshots, Provider Binding sets, Workspaces, and provider resolution
  * records) keep a `record_json` / `run_json` TEXT column carrying the full
@@ -3783,6 +3810,9 @@ export async function applyD1GuardedTableRenames(
 
 async function migrateD1OpenTofuLedgerSchema(db: D1Database): Promise<void> {
   await ensureD1SchemaMigrationLedger(db);
+  // A legacy/empty database can acquire the fence before this ledger exists.
+  // Cover the newly created table before the migration chain yields.
+  await repairControlD1MaintenanceGuards(db);
   await prepareRetiredD1WorkspaceOutputSyncMigration(db);
   for (const migration of D1_OPEN_TOFU_SCHEMA_MIGRATIONS) {
     await applyD1OpenTofuSchemaMigration(db, migration);
@@ -3805,9 +3835,8 @@ async function prepareRetiredD1WorkspaceOutputSyncMigration(
   if (applied || (await d1TableExists(db, "workspace_output_sync"))) {
     return;
   }
-  await db
-    .prepare(
-      `create table workspace_output_sync (
+  const create = db.prepare(
+    `create table workspace_output_sync (
         workspace_id text primary key,
         enabled integer not null default 1,
         output_revision integer not null default 0,
@@ -3816,8 +3845,18 @@ async function prepareRetiredD1WorkspaceOutputSyncMigration(
         consecutive_passes integer not null default 0,
         updated_at text not null
       )`,
-    )
-    .run();
+  );
+  const fence = await activeControlD1MaintenanceFence(db);
+  if (!fence) {
+    await create.run();
+    return;
+  }
+  await runD1AtomicStatements(
+    db,
+    await wrapControlD1MaintenanceMigrationBatch(db, fence, [create], {
+      newlyCreatedTables: new Set(["workspace_output_sync"]),
+    }),
+  );
 }
 
 function isD1IndexStatement(sql: string): boolean {
@@ -3833,6 +3872,16 @@ type D1OpenTofuSchemaMigration = {
   readonly name: string;
   readonly checksumSource: string | (() => string);
   readonly apply: (db: D1Database) => Promise<void>;
+  /**
+   * Destructive migrations expose their complete statement set before any
+   * write. The migration runner appends the ledger INSERT and submits the
+   * whole set through one D1 batch transaction.
+   */
+  readonly atomicStatements?: (db: D1Database) => Promise<readonly string[]>;
+  readonly atomicPreparedStatements?: (
+    db: D1Database,
+  ) => Promise<readonly D1PreparedStatement[]>;
+  readonly permanentlyDroppedTables?: readonly string[];
 };
 
 const D1_OPEN_TOFU_SCHEMA_MIGRATIONS = [
@@ -4686,6 +4735,13 @@ existing rows classified from the Workspace handle and attributed to ownerUserId
 pre-owner-slot public host reservations are grandfathered as scoped
 only reservations created after this migration can consume vanity slots
 `,
+    async atomicStatements() {
+      return [
+        `update public_host_reservations
+           set allocation_kind = 'scoped'
+           where allocation_kind != 'scoped'`,
+      ];
+    },
     async apply(db) {
       await db
         .prepare(
@@ -4704,6 +4760,31 @@ current install_configs runnerId values converge from retired provider-specific 
 opentofu-default is the only built-in provider-neutral runner profile
 custom runner profiles and historical runs remain unchanged
 `,
+    async atomicStatements() {
+      return [
+        `update install_configs
+           set record_json = json_set(
+             record_json,
+             '$.runnerId',
+             'opentofu-default'
+           )
+           where json_extract(record_json, '$.runnerId') in (
+             'cloudflare-default',
+             'aws-provider-env-candidate',
+             'gcp-provider-env-candidate',
+             'azure-provider-env-candidate',
+             'kubernetes-provider-env-candidate',
+             'github-provider-env-candidate',
+             'digitalocean-provider-env-candidate',
+             'hcloud-provider-env-candidate',
+             'vultr-provider-env-candidate',
+             'scaleway-provider-env-candidate',
+             'openstack-provider-env-candidate',
+             'docker-custom-example',
+             'generic-opentofu-provider'
+           )`,
+      ];
+    },
     async apply(db) {
       await db
         .prepare(
@@ -4740,6 +4821,32 @@ workspace_output_sync tracks Takosumi-specific Workspace reconciliation state
 existing Workspaces default enabled and start at revision 1 when a Capsule has a current Output
 OpenTofu outputs remain authoritative in the outputs table
 `,
+    async atomicStatements() {
+      return [
+        `insert into workspace_output_sync (
+             workspace_id, enabled, output_revision, reconciled_revision,
+             active_run_group_id, consecutive_passes, updated_at
+           )
+           select w.id,
+                  1,
+                  case when exists (
+                    select 1 from capsules c
+                    where c.space_id = w.id
+                      and coalesce(
+                        json_extract(c.record_json, '$.currentOutputId'),
+                        c.current_output_snapshot_id,
+                        json_extract(c.record_json, '$.currentOutputId')
+                      ) is not null
+                  ) then 1 else 0 end,
+                  0,
+                  null,
+                  0,
+                  w.updated_at
+           from workspaces w
+           where true
+           on conflict(workspace_id) do nothing`,
+      ];
+    },
     async apply(db) {
       await db
         .prepare(
@@ -4777,6 +4884,13 @@ workspace_output_sync execution state is retired
 ordinary OpenTofu outputs remain in the outputs table
 historical migration 26 remains immutable
 `,
+    async atomicStatements() {
+      return [
+        `drop index if exists workspace_output_sync_pending_idx`,
+        `drop table if exists workspace_output_sync`,
+      ];
+    },
+    permanentlyDroppedTables: ["workspace_output_sync"],
     async apply(db) {
       await db
         .prepare(`drop index if exists workspace_output_sync_pending_idx`)
@@ -4795,6 +4909,9 @@ resolution_locks.implementation_plugin nullable pinned adapter plugin
 resolution_locks.implementation_options_json nullable pinned non-secret plugin options
 resolution_locks.implementation_fingerprint nullable canonical selected implementation identity
 `,
+    async atomicStatements(db) {
+      return await d1ResolutionLockIdentityStatements(db);
+    },
     async apply(db) {
       await ensureD1Column(db, "resolution_locks", "target_pool", "text");
       await ensureD1Column(
@@ -4838,6 +4955,9 @@ legacy Capsule compatibilityStatus normalizes to ready
 normalized module artifact pointers are retired
 current Runs always dispatch the immutable SourceSnapshot archive
 `,
+    async atomicStatements(db) {
+      return await d1CompatibilityAutoRewriteRetireStatements(db);
+    },
     async apply(db) {
       const columns = await d1ColumnNames(db, "capsule_compatibility_reports");
       if (columns.size === 0) return;
@@ -4881,6 +5001,9 @@ workspace_members is the canonical Workspace membership ledger
 every Workspace namespace owner is backfilled as an active owner member
 the separate membership snapshot and no-op outbox are retired
 `,
+    async atomicStatements() {
+      return D1_WORKSPACE_MEMBERS_CREATE_STATEMENTS;
+    },
     async apply(db) {
       await db
         .prepare(
@@ -4950,9 +5073,17 @@ capsules.install_type physical discriminator removed
 legacy installType/sourceKind/templateBinding JSON keys removed
 Git Source plus DB InstallConfig are the only Capsule execution authority
 `,
+    async atomicStatements(db) {
+      return [
+        ...(await d1InstallConfigsWithoutInstallTypeStatements(db)),
+        ...(await d1CapsulesWithoutInstallTypeStatements(db)),
+      ];
+    },
     async apply(db) {
-      await rebuildD1InstallConfigsWithoutInstallType(db);
-      await rebuildD1CapsulesWithoutInstallType(db);
+      await runD1AtomicSql(db, [
+        ...(await d1InstallConfigsWithoutInstallTypeStatements(db)),
+        ...(await d1CapsulesWithoutInstallTypeStatements(db)),
+      ]);
     },
   },
   {
@@ -4964,8 +5095,14 @@ existing null project_id values point to the Workspace default Project
 active Capsule name uniqueness is scoped to project_id/name/environment
 source_id remains nullable only for historical pre-Git-only operator migration rows
 `,
+    async atomicStatements(db) {
+      return await d1CapsulesWithRequiredProjectStatements(db);
+    },
     async apply(db) {
-      await rebuildD1CapsulesWithRequiredProject(db);
+      await runD1AtomicSql(
+        db,
+        await d1CapsulesWithRequiredProjectStatements(db),
+      );
     },
   },
   {
@@ -4975,6 +5112,14 @@ source_id remains nullable only for historical pre-Git-only operator migration r
 resource_shapes.execution_json stores the latest Resource-owned run and state pointer
 no backing Capsule, Capsule StateVersion, or Capsule Output is created
 `,
+    async atomicStatements(db) {
+      return await d1EnsureColumnStatements(
+        db,
+        "resource_shapes",
+        "execution_json",
+        "text",
+      );
+    },
     async apply(db) {
       if (!(await d1TableExists(db, "resource_shapes"))) return;
       const columns = await d1ColumnNames(db, "resource_shapes");
@@ -4993,6 +5138,9 @@ historical Connection rows receive their explicit encryption partition once
 provider-family inference is confined to this migration and absent current partitions fail closed
 secret blob kind metadata is normalized to the explicit partition token
 `,
+    async atomicStatements(db) {
+      return await d1ConnectionSecretPartitionBackfillStatements(db);
+    },
     async apply(db) {
       if (!(await d1TableExists(db, "connections"))) return;
       await db
@@ -5058,6 +5206,14 @@ secret blob kind metadata is normalized to the explicit partition token
 resource_shapes.state_adoption_json stores only an operator-confirmed one-shot descriptor
 candidate reporting is read-only and Resource execution never scans for a legacy Capsule
 `,
+    async atomicStatements(db) {
+      return await d1EnsureColumnStatements(
+        db,
+        "resource_shapes",
+        "state_adoption_json",
+        "text",
+      );
+    },
     async apply(db) {
       if (!(await d1TableExists(db, "resource_shapes"))) return;
       const columns = await d1ColumnNames(db, "resource_shapes");
@@ -5078,8 +5234,14 @@ install_configs no longer stores trust_level
 InstallConfig record_json no longer carries trustLevel
 Store discovery requires an explicit store.source and trust labels never grant execution authority
 `,
+    async atomicStatements(db) {
+      return await d1InstallConfigsWithoutTrustLevelStatements(db);
+    },
     async apply(db) {
-      await rebuildD1InstallConfigsWithoutTrustLevel(db);
+      await runD1AtomicSql(
+        db,
+        await d1InstallConfigsWithoutTrustLevelStatements(db),
+      );
     },
   },
   {
@@ -5090,18 +5252,39 @@ usage_events uses canonical workspace_id and capsule_id columns
 usage_events.usd_micros is required and no commercial balance fields remain
 OSS commercial account plan subscription balance reservation and recharge tables are retired
 `,
+    async atomicStatements(db) {
+      return [
+        ...(await d1UsageEventsCanonicalStatements(db)),
+        ...[
+          "billing_accounts",
+          "plans",
+          "space_subscriptions",
+          "credit_balances",
+          "billing_auto_recharge_attempts",
+          "credit_reservations",
+        ].map((table) => `drop table if exists ${table}`),
+      ];
+    },
+    permanentlyDroppedTables: [
+      "billing_accounts",
+      "plans",
+      "space_subscriptions",
+      "credit_balances",
+      "billing_auto_recharge_attempts",
+      "credit_reservations",
+    ],
     async apply(db) {
-      await rebuildD1UsageEventsCanonical(db);
-      for (const table of [
-        "billing_accounts",
-        "plans",
-        "space_subscriptions",
-        "credit_balances",
-        "billing_auto_recharge_attempts",
-        "credit_reservations",
-      ]) {
-        await db.prepare(`drop table if exists ${table}`).run();
-      }
+      await runD1AtomicSql(db, [
+        ...(await d1UsageEventsCanonicalStatements(db)),
+        ...[
+          "billing_accounts",
+          "plans",
+          "space_subscriptions",
+          "credit_balances",
+          "billing_auto_recharge_attempts",
+          "credit_reservations",
+        ].map((table) => `drop table if exists ${table}`),
+      ]);
     },
   },
   {
@@ -5112,6 +5295,9 @@ pre-v1 InstallConfig variablePresentation string defaults are normalized once
 reserved service-name strings become explicit Capsule-derived default descriptors
 all other strings become literal descriptors and current reads perform no compatibility interpretation
 `,
+    async atomicPreparedStatements(db) {
+      return await d1InstallConfigVariableDefaultStatements(db);
+    },
     async apply(db) {
       await normalizeD1InstallConfigVariableDefaults(db);
     },
@@ -5123,8 +5309,14 @@ all other strings become literal descriptors and current reads perform no compat
 usage_events.rating_status is explicit rated or unrated evidence
 pre-migration amounts had no explicit host rating authority and are reset to zero/unrated
 `,
+    async atomicStatements(db) {
+      return await d1UsageEventsWithRatingStatusStatements(db);
+    },
     async apply(db) {
-      await rebuildD1UsageEventsWithRatingStatus(db);
+      await runD1AtomicSql(
+        db,
+        await d1UsageEventsWithRatingStatusStatements(db),
+      );
     },
   },
   {
@@ -5134,6 +5326,14 @@ pre-migration amounts had no explicit host rating authority and are reset to zer
 Resource and TargetPool public lists use bounded keyset pagination
 Space plus created_at plus id indexes serve both first and cursor pages
 `,
+    async atomicStatements() {
+      return [
+        `create index if not exists resource_shapes_space_created_id_idx
+         on resource_shapes (space_id, created_at, id)`,
+        `create index if not exists target_pools_space_created_id_idx
+         on target_pools (space_id, created_at, id)`,
+      ];
+    },
     async apply(db) {
       await db
         .prepare(
@@ -5156,6 +5356,12 @@ Space plus created_at plus id indexes serve both first and cursor pages
 Resource event reads project one target from the shared Activity ledger
 Space plus target_type plus target_id plus created_at plus id serves newest-first keyset pages
 `,
+    async atomicStatements() {
+      return [
+        `create index if not exists audit_events_space_target_created_id_idx
+         on audit_events (space_id, target_type, target_id, created_at, id)`,
+      ];
+    },
     async apply(db) {
       await db
         .prepare(
@@ -5173,6 +5379,9 @@ Scheduled Resource observation uses a durable internal lease and last-attempt ti
 Ready current-generation candidates are ordered globally without creating another Resource ledger
 Abandoned claims expire and exact lease tokens fence completion
 `,
+    async atomicStatements(db) {
+      return await d1ResourceObservationScheduleLeaseStatements(db);
+    },
     async apply(db) {
       if (!(await d1TableExists(db, "resource_shapes"))) return;
       const columns = await d1ColumnNames(db, "resource_shapes");
@@ -5214,6 +5423,13 @@ Abandoned claims expire and exact lease tokens fence completion
 Host-operated reconciliation reads canonical fully observed Ready Resources by exact kind
 Kind plus phase plus created_at plus id bounds the global inventory keyset scan
 `,
+    async atomicStatements(db) {
+      if (!(await d1TableExists(db, "resource_shapes"))) return [];
+      return [
+        `create index if not exists resource_shapes_ready_kind_created_id_idx
+         on resource_shapes (kind, phase, created_at, id)`,
+      ];
+    },
     async apply(db) {
       if (!(await d1TableExists(db, "resource_shapes"))) return;
       await db
@@ -5224,7 +5440,481 @@ Kind plus phase plus created_at plus id bounds the global inventory keyset scan
         .run();
     },
   },
+  {
+    version: 44,
+    name: "d1_pre_ga_canonical_schema_convergence",
+    checksumSource: `
+historical request-time bootstrap and ALTER order are converged to one canonical table shape
+capsule compatibility normalized artifact pointers are physically removed
+resolution lock Resource execution Run StateVersion and Workspace rows and constraints are preserved
+named indexes replace equivalent historical inline unique constraints
+`,
+    async atomicStatements() {
+      return D1_PRE_GA_CANONICAL_SCHEMA_CONVERGENCE_STATEMENTS;
+    },
+    async apply(db) {
+      await runD1AtomicSql(
+        db,
+        D1_PRE_GA_CANONICAL_SCHEMA_CONVERGENCE_STATEMENTS,
+      );
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
+
+/**
+ * v1..v24 were historically executed from request-time bootstrap code. Two
+ * live databases therefore have an identical immutable migration ledger but
+ * different physical CREATE TABLE shapes (ALTER-appended columns and inline
+ * UNIQUE constraints). Candidate migration must converge the physical schema,
+ * not merely advance the ledger. Every rebuild is data preserving and the
+ * complete set, including the v44 ledger insert, is one D1 batch transaction.
+ */
+const D1_PRE_GA_CANONICAL_SCHEMA_CONVERGENCE_STATEMENTS = [
+  `drop table if exists capsule_compatibility_reports__takosumi_v44`,
+  `create table capsule_compatibility_reports__takosumi_v44 (
+    id text primary key,
+    source_id text,
+    installation_id text,
+    source_snapshot_id text not null,
+    level text not null,
+    findings_json text not null,
+    providers_json text not null,
+    resources_json text not null,
+    data_sources_json text not null,
+    provisioners_json text not null,
+    root_module_variables_json text not null default '[]',
+    root_module_outputs_json text not null default '[]',
+    created_at text not null
+  )`,
+  `insert into capsule_compatibility_reports__takosumi_v44 (
+     id, source_id, installation_id, source_snapshot_id, level,
+     findings_json, providers_json, resources_json, data_sources_json,
+     provisioners_json, root_module_variables_json, root_module_outputs_json,
+     created_at
+   ) select id, source_id, installation_id, source_snapshot_id, level,
+            findings_json, providers_json, resources_json, data_sources_json,
+            provisioners_json, root_module_variables_json,
+            root_module_outputs_json, created_at
+     from capsule_compatibility_reports`,
+  `drop table capsule_compatibility_reports`,
+  `alter table capsule_compatibility_reports__takosumi_v44
+   rename to capsule_compatibility_reports`,
+  `create index capsule_compatibility_reports_source_snapshot_idx
+   on capsule_compatibility_reports (source_snapshot_id)`,
+  `create index capsule_compatibility_reports_source_idx
+   on capsule_compatibility_reports (source_id)`,
+  `create index capsule_compatibility_reports_installation_idx
+   on capsule_compatibility_reports (installation_id)`,
+  `create index capsule_compatibility_reports_level_idx
+   on capsule_compatibility_reports (level)`,
+
+  `drop table if exists resolution_locks__takosumi_v44`,
+  `create table resolution_locks__takosumi_v44 (
+    resource_id text primary key,
+    selected_implementation text not null,
+    target_pool text,
+    target text not null,
+    target_snapshot_json text,
+    implementation_snapshot_json text,
+    implementation_plugin text,
+    implementation_options_json text,
+    implementation_fingerprint text,
+    locked integer not null,
+    reason_json text not null,
+    portability text,
+    native_resources_json text,
+    locked_at text not null,
+    updated_at text not null
+  )`,
+  `insert into resolution_locks__takosumi_v44 (
+     resource_id, selected_implementation, target_pool, target,
+     target_snapshot_json, implementation_snapshot_json,
+     implementation_plugin, implementation_options_json,
+     implementation_fingerprint, locked, reason_json, portability,
+     native_resources_json, locked_at, updated_at
+   ) select resource_id, selected_implementation, target_pool, target,
+            target_snapshot_json, implementation_snapshot_json,
+            implementation_plugin, implementation_options_json,
+            implementation_fingerprint, locked, reason_json, portability,
+            native_resources_json, locked_at, updated_at
+     from resolution_locks`,
+  `drop table resolution_locks`,
+  `alter table resolution_locks__takosumi_v44 rename to resolution_locks`,
+
+  `drop table if exists resource_shapes__takosumi_v44`,
+  `create table resource_shapes__takosumi_v44 (
+    id text primary key,
+    space_id text not null,
+    project text,
+    environment text,
+    kind text not null,
+    name text not null,
+    managed_by text not null,
+    spec_json text not null,
+    phase text not null,
+    generation integer not null,
+    observed_generation integer not null,
+    outputs_json text,
+    execution_json text,
+    state_adoption_json text,
+    conditions_json text,
+    labels_json text,
+    created_at text not null,
+    updated_at text not null,
+    observation_lease_id text,
+    observation_claimed_at text,
+    last_observation_attempt_at text
+  )`,
+  `insert into resource_shapes__takosumi_v44 (
+     id, space_id, project, environment, kind, name, managed_by, spec_json,
+     phase, generation, observed_generation, outputs_json, execution_json,
+     state_adoption_json, conditions_json, labels_json, created_at, updated_at,
+     observation_lease_id, observation_claimed_at,
+     last_observation_attempt_at
+   ) select id, space_id, project, environment, kind, name, managed_by,
+            spec_json, phase, generation, observed_generation, outputs_json,
+            execution_json, state_adoption_json, conditions_json, labels_json,
+            created_at, updated_at, observation_lease_id,
+            observation_claimed_at, last_observation_attempt_at
+     from resource_shapes`,
+  `drop table resource_shapes`,
+  `alter table resource_shapes__takosumi_v44 rename to resource_shapes`,
+  `create unique index resource_shapes_space_kind_name_unique
+   on resource_shapes (space_id, kind, name)`,
+  `create index resource_shapes_space_idx on resource_shapes (space_id)`,
+  `create index resource_shapes_space_created_id_idx
+   on resource_shapes (space_id, created_at, id)`,
+  `create index resource_shapes_ready_kind_created_id_idx
+   on resource_shapes (kind, phase, created_at, id)`,
+  `create index resource_shapes_observation_due_idx
+   on resource_shapes (
+     phase, last_observation_attempt_at, observation_claimed_at, id
+   )`,
+
+  `drop table if exists runs__takosumi_v44`,
+  `create table runs__takosumi_v44 (
+    id text primary key,
+    run_group_id text,
+    space_id text not null,
+    source_id text,
+    installation_id text,
+    environment text,
+    type text not null,
+    status text not null,
+    lease_token text,
+    heartbeat_at integer,
+    run_json text not null,
+    created_at text not null default ""
+  )`,
+  `insert into runs__takosumi_v44 (
+     id, run_group_id, space_id, source_id, installation_id, environment,
+     type, status, lease_token, heartbeat_at, run_json, created_at
+   ) select id, run_group_id, space_id, source_id, installation_id,
+            environment, type, status, lease_token, heartbeat_at, run_json,
+            created_at
+     from runs`,
+  `drop table runs`,
+  `alter table runs__takosumi_v44 rename to runs`,
+  `create index runs_space_idx on runs (space_id)`,
+  `create index runs_source_idx on runs (source_id)`,
+  `create index runs_installation_idx on runs (installation_id)`,
+  `create index runs_installation_created_at_idx
+   on runs (installation_id, created_at)`,
+  `create index runs_type_idx on runs (type)`,
+  `create index runs_created_at_idx on runs (created_at)`,
+
+  `drop table if exists state_versions__takosumi_v44`,
+  `create table state_versions__takosumi_v44 (
+    id text primary key,
+    space_id text not null,
+    installation_id text not null,
+    environment text not null,
+    generation integer not null,
+    object_key text not null,
+    digest text not null,
+    created_by_run_id text not null,
+    created_at text not null
+  )`,
+  `insert into state_versions__takosumi_v44 (
+     id, space_id, installation_id, environment, generation, object_key,
+     digest, created_by_run_id, created_at
+   ) select id, space_id, installation_id, environment, generation,
+            object_key, digest, created_by_run_id, created_at
+     from state_versions`,
+  `drop table state_versions`,
+  `alter table state_versions__takosumi_v44 rename to state_versions`,
+  `create unique index state_versions_installation_environment_generation_unique
+   on state_versions (installation_id, environment, generation)`,
+  `create index state_versions_installation_idx
+   on state_versions (installation_id)`,
+
+  `drop table if exists workspaces__takosumi_v44`,
+  `create table workspaces__takosumi_v44 (
+    id text primary key,
+    handle text not null,
+    record_json text not null,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `insert into workspaces__takosumi_v44 (
+     id, handle, record_json, created_at, updated_at
+   ) select id, handle, record_json, created_at, updated_at from workspaces`,
+  `drop table workspaces`,
+  `alter table workspaces__takosumi_v44 rename to workspaces`,
+  `create unique index workspaces_handle_unique on workspaces (handle)`,
+] as const;
+
+const D1_WORKSPACE_MEMBERS_CREATE_STATEMENTS = [
+  `create table if not exists workspace_members (
+    id text primary key,
+    workspace_id text not null,
+    account_id text not null,
+    status text not null,
+    record_json text not null,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `create unique index if not exists workspace_members_workspace_account_unique
+   on workspace_members (workspace_id, account_id)`,
+  `create index if not exists workspace_members_workspace_status_idx
+   on workspace_members (workspace_id, status)`,
+  `create index if not exists workspace_members_account_status_idx
+   on workspace_members (account_id, status)`,
+  `insert into workspace_members (
+     id, workspace_id, account_id, status, record_json, created_at, updated_at
+   )
+   select
+     'wsm_' || id || '_' || json_extract(record_json, '$.ownerUserId'),
+     id,
+     json_extract(record_json, '$.ownerUserId'),
+     'active',
+     json_object(
+       'id', 'wsm_' || id || '_' || json_extract(record_json, '$.ownerUserId'),
+       'workspaceId', id,
+       'accountId', json_extract(record_json, '$.ownerUserId'),
+       'roles', json_array('owner'),
+       'status', 'active',
+       'createdAt', created_at,
+       'updatedAt', updated_at
+     ),
+     created_at,
+     updated_at
+   from workspaces
+   where nullif(json_extract(record_json, '$.ownerUserId'), '') is not null
+   on conflict(workspace_id, account_id) do nothing`,
+] as const;
+
+async function d1EnsureColumnStatements(
+  db: D1Database,
+  table: string,
+  column: string,
+  definition: string,
+): Promise<readonly string[]> {
+  if (!(await d1TableExists(db, table))) return [];
+  const columns = await d1ColumnNames(db, table);
+  return columns.has(column)
+    ? []
+    : [`alter table ${table} add column ${column} ${definition}`];
+}
+
+async function d1ResolutionLockIdentityStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  const definitions = [
+    ["target_pool", "text"],
+    ["target_snapshot_json", "text"],
+    ["implementation_snapshot_json", "text"],
+    ["implementation_plugin", "text"],
+    ["implementation_options_json", "text"],
+    ["implementation_fingerprint", "text"],
+  ] as const;
+  const statements: string[] = [];
+  for (const [column, definition] of definitions) {
+    statements.push(
+      ...(await d1EnsureColumnStatements(
+        db,
+        "resolution_locks",
+        column,
+        definition,
+      )),
+    );
+  }
+  return statements;
+}
+
+async function d1CompatibilityAutoRewriteRetireStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  const columns = await d1ColumnNames(db, "capsule_compatibility_reports");
+  if (columns.size === 0) return [];
+  const clearsLegacyPointers =
+    columns.has("normalized_object_key") && columns.has("normalized_digest");
+  return [
+    clearsLegacyPointers
+      ? `update capsule_compatibility_reports
+         set level = 'ready',
+             normalized_object_key = null,
+             normalized_digest = null
+         where level = 'auto_capsulized'`
+      : `update capsule_compatibility_reports
+         set level = 'ready'
+         where level = 'auto_capsulized'`,
+    `update capsules
+     set record_json = json_set(
+       record_json,
+       '$.compatibilityStatus',
+       'ready'
+     )
+     where json_extract(record_json, '$.compatibilityStatus') = 'auto_capsulized'`,
+  ];
+}
+
+async function d1ConnectionSecretPartitionBackfillStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  if (!(await d1TableExists(db, "connections"))) return [];
+  const statements = [
+    `update connections
+     set connection_json = json_set(
+       connection_json,
+       '$.secretPartition',
+       case
+         when json_extract(connection_json, '$.kind') in ('source_git_https_token', 'source_git_ssh_key')
+           then 'source:git'
+         when lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) = 'cloudflare'
+           or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/cloudflare/cloudflare'
+           then 'cloudflare'
+         when lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) = 'aws'
+           or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/hashicorp/aws'
+           then 'aws'
+         when lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) in ('google', 'gcp')
+           or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/hashicorp/google'
+           or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/hashicorp/google-beta'
+           then 'gcp'
+         when lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) in ('kubernetes', 'helm')
+           or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/hashicorp/kubernetes'
+           or lower(coalesce(json_extract(connection_json, '$.providerSource'), json_extract(connection_json, '$.provider'), provider)) like '%/hashicorp/helm'
+           then 'k8s'
+         else 'local-adapters'
+       end
+     )
+     where nullif(json_extract(connection_json, '$.secretPartition'), '') is null`,
+  ];
+  if (await d1TableExists(db, "secret_blobs")) {
+    statements.push(
+      `update secret_blobs
+       set kind = (
+             select json_extract(connection_json, '$.secretPartition')
+             from connections
+             where connections.id = secret_blobs.connection_id
+           ),
+           blob_json = json_set(
+             blob_json,
+             '$.kind',
+             (
+               select json_extract(connection_json, '$.secretPartition')
+               from connections
+               where connections.id = secret_blobs.connection_id
+             )
+           )
+       where exists (
+         select 1 from connections
+         where connections.id = secret_blobs.connection_id
+           and nullif(json_extract(connection_json, '$.secretPartition'), '') is not null
+       )`,
+    );
+  }
+  return statements;
+}
+
+async function d1InstallConfigVariableDefaultStatements(
+  db: D1Database,
+): Promise<readonly D1PreparedStatement[]> {
+  if (!(await d1TableExists(db, "install_configs"))) return [];
+  const rows = await db
+    .prepare(`select id, record_json from install_configs`)
+    .all<{ readonly id: string; readonly record_json: string }>();
+  const statements: D1PreparedStatement[] = [];
+  for (const row of rows.results ?? []) {
+    const normalized = normalizedInstallConfigVariableDefaults(row);
+    if (normalized === null) continue;
+    statements.push(
+      db
+        .prepare(`update install_configs set record_json = ? where id = ?`)
+        .bind(normalized, row.id),
+    );
+  }
+  return statements;
+}
+
+function normalizedInstallConfigVariableDefaults(row: {
+  readonly id: string;
+  readonly record_json: string;
+}): string | null {
+  let record: Record<string, unknown>;
+  try {
+    record = JSON.parse(row.record_json) as Record<string, unknown>;
+  } catch {
+    throw new Error(`InstallConfig ${row.id} contains invalid JSON`);
+  }
+  const presentation = record.variablePresentation;
+  if (!Array.isArray(presentation)) return null;
+  let changed = false;
+  const normalized = presentation.map((entry) => {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      Array.isArray(entry) ||
+      typeof (entry as { readonly defaultValue?: unknown }).defaultValue !==
+        "string"
+    ) {
+      return entry;
+    }
+    changed = true;
+    const value = (entry as { readonly defaultValue: string }).defaultValue;
+    const defaultValue =
+      value === "service-name"
+        ? { source: "capsule_name" }
+        : value === "service-name-with-workspace" ||
+            value === "service-name-with-space"
+          ? { source: "workspace_scoped_capsule_name" }
+          : { source: "literal", value };
+    return { ...entry, defaultValue };
+  });
+  return changed
+    ? JSON.stringify({ ...record, variablePresentation: normalized })
+    : null;
+}
+
+async function d1ResourceObservationScheduleLeaseStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  if (!(await d1TableExists(db, "resource_shapes"))) return [];
+  const columns = await d1ColumnNames(db, "resource_shapes");
+  const statements: string[] = [];
+  if (!columns.has("observation_lease_id")) {
+    statements.push(
+      `alter table resource_shapes add column observation_lease_id text`,
+    );
+  }
+  if (!columns.has("observation_claimed_at")) {
+    statements.push(
+      `alter table resource_shapes add column observation_claimed_at text`,
+    );
+  }
+  if (!columns.has("last_observation_attempt_at")) {
+    statements.push(
+      `alter table resource_shapes add column last_observation_attempt_at text`,
+    );
+  }
+  statements.push(
+    `create index if not exists resource_shapes_observation_due_idx
+     on resource_shapes (
+       phase, last_observation_attempt_at, observation_claimed_at, id
+     )`,
+  );
+  return statements;
+}
 
 async function normalizeD1InstallConfigVariableDefaults(
   db: D1Database,
@@ -5332,9 +6022,16 @@ async function ensureD1SchemaMigrationLedger(db: D1Database): Promise<void> {
     )`,
     )
     .run();
-  const info = new Map(
-    (await d1ColumnInfo(db, "schema_migrations")).map((row) => [row.name, row]),
+  assertD1SchemaMigrationLedgerShape(
+    await d1ColumnInfo(db, "schema_migrations"),
   );
+  await validateD1SchemaMigrationLedgerRows(db);
+}
+
+function assertD1SchemaMigrationLedgerShape(
+  rows: readonly D1TableInfoRow[],
+): void {
+  const info = new Map(rows.map((row) => [row.name, row]));
   const version = info.get("version");
   const name = info.get("name");
   const checksum = info.get("checksum");
@@ -5357,7 +6054,6 @@ async function ensureD1SchemaMigrationLedger(db: D1Database): Promise<void> {
       "D1 OpenTofu schema_migrations table does not match the canonical ledger shape",
     );
   }
-  await validateD1SchemaMigrationLedgerRows(db);
 }
 
 type D1SchemaMigrationRow = {
@@ -5366,6 +6062,54 @@ type D1SchemaMigrationRow = {
   readonly checksum: string;
   readonly applied_at: string;
 };
+
+/**
+ * Strict read-only readiness check for hosts that predeploy the OSS control
+ * schema. Unlike {@link ensureD1OpenTofuLedgerSchema}, this function never
+ * executes DDL or data migration. It requires the complete current migration
+ * catalog with exact names/checksums before any store query is allowed.
+ */
+export async function verifyD1OpenTofuLedgerSchemaPredeployed(
+  db: D1Database,
+): Promise<void> {
+  let rows: readonly D1SchemaMigrationRow[];
+  try {
+    assertD1SchemaMigrationLedgerShape(
+      await d1ColumnInfo(db, "schema_migrations"),
+    );
+    const result = await db
+      .prepare(
+        `select version, name, checksum, applied_at
+         from schema_migrations
+         order by version`,
+      )
+      .all<D1SchemaMigrationRow>();
+    rows = result.results ?? [];
+  } catch {
+    throw new Error("D1 OpenTofu predeployed schema verification failed");
+  }
+
+  if (rows.length !== D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length) {
+    throw new Error("D1 OpenTofu predeployed schema verification failed");
+  }
+  for (
+    let index = 0;
+    index < D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length;
+    index += 1
+  ) {
+    const migration = D1_OPEN_TOFU_SCHEMA_MIGRATIONS[index];
+    const row = rows[index];
+    if (
+      !migration ||
+      !row ||
+      row.version !== migration.version ||
+      row.name !== migration.name ||
+      row.checksum !== (await d1OpenTofuSchemaMigrationChecksum(migration))
+    ) {
+      throw new Error("D1 OpenTofu predeployed schema verification failed");
+    }
+  }
+}
 
 async function validateD1SchemaMigrationLedgerRows(
   db: D1Database,
@@ -5426,14 +6170,84 @@ async function applyD1OpenTofuSchemaMigration(
     return;
   }
 
-  await migration.apply(db);
-  await db
+  const ledgerInsert = db
     .prepare(
       `insert into schema_migrations (version, name, checksum, applied_at)
       values (?, ?, ?, ?)`,
     )
-    .bind(migration.version, migration.name, checksum, new Date().toISOString())
-    .run();
+    .bind(
+      migration.version,
+      migration.name,
+      checksum,
+      new Date().toISOString(),
+  );
+  if (migration.atomicStatements || migration.atomicPreparedStatements) {
+    const atomicSql = migration.atomicStatements
+      ? await migration.atomicStatements(db)
+      : undefined;
+    const migrationStatements = migration.atomicPreparedStatements
+      ? await migration.atomicPreparedStatements(db)
+      : atomicSql!.map((statement) => db.prepare(statement));
+    let batch: readonly D1PreparedStatement[] = [
+      ...migrationStatements,
+      ledgerInsert,
+    ];
+    const fence = await activeControlD1MaintenanceFence(db);
+    if (fence) {
+      batch = await wrapControlD1MaintenanceMigrationBatch(
+        db,
+        fence,
+        batch,
+        {
+          permanentlyDroppedTables: new Set(
+            migration.permanentlyDroppedTables ?? [],
+          ),
+          newlyCreatedTables: atomicSql
+            ? d1TablesCreatedByAtomicSql(atomicSql)
+            : new Set(),
+        },
+      );
+    }
+    await runD1AtomicStatements(db, batch);
+    return;
+  }
+
+  if (migration.version >= 24 && (await activeControlD1MaintenanceFence(db))) {
+    throw new Error(
+      `D1 OpenTofu schema migration ${migration.version} is not atomic under the maintenance fence`,
+    );
+  }
+
+  await migration.apply(db);
+  await ledgerInsert.run();
+}
+
+function d1TablesCreatedByAtomicSql(
+  statements: readonly string[],
+): ReadonlySet<string> {
+  const created = new Set<string>();
+  for (const statement of statements) {
+    for (const match of statement.matchAll(
+      /\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))/giu,
+    )) {
+      const table = (match[1] ?? match[2])?.toLowerCase();
+      if (table) created.add(table);
+    }
+    for (const match of statement.matchAll(
+      /\balter\s+table\s+(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))\s+rename\s+to\s+(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))/giu,
+    )) {
+      const from = (match[1] ?? match[2])?.toLowerCase();
+      const to = (match[3] ?? match[4])?.toLowerCase();
+      if (from && to && created.delete(from)) created.add(to);
+    }
+    for (const match of statement.matchAll(
+      /\bdrop\s+table\s+(?:if\s+exists\s+)?(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))/giu,
+    )) {
+      const table = (match[1] ?? match[2])?.toLowerCase();
+      if (table) created.delete(table);
+    }
+  }
+  return created;
 }
 
 async function d1OpenTofuSchemaMigrationChecksum(
@@ -5952,21 +6766,55 @@ async function d1ColumnInfo(
   return result.results ?? [];
 }
 
-async function rebuildD1UsageEventsCanonical(db: D1Database): Promise<void> {
+/**
+ * D1 `batch()` executes the statements as one transaction. Destructive table
+ * rebuilds must use this helper so a transport failure cannot strand the
+ * database between copy/drop/rename steps or expose a partial schema to a
+ * concurrent request.
+ */
+async function runD1AtomicSql(
+  db: D1Database,
+  statements: readonly string[],
+): Promise<void> {
+  await runD1AtomicStatements(
+    db,
+    statements.map((statement) => db.prepare(statement)),
+  );
+}
+
+async function runD1AtomicStatements(
+  db: D1Database,
+  statements: readonly D1PreparedStatement[],
+): Promise<void> {
+  if (statements.length === 0) return;
+  if (!db.batch) {
+    throw new Error("D1 atomic schema migration requires batch support");
+  }
+  const results = await db.batch(statements);
+  if (
+    results.length !== statements.length ||
+    results.some((result) => result.success === false)
+  ) {
+    throw new Error("D1 atomic schema rebuild failed");
+  }
+}
+
+async function d1UsageEventsCanonicalStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
   const columns = await d1ColumnNames(db, "usage_events");
-  if (columns.size === 0) return;
+  if (columns.size === 0) return [];
   if (
     columns.has("workspace_id") &&
     columns.has("capsule_id") &&
     !columns.has("space_id") &&
     !columns.has("installation_id")
   ) {
-    return;
+    return [];
   }
-  await db.prepare(`drop table if exists usage_events__current`).run();
-  await db
-    .prepare(
-      `create table usage_events__current (
+  return [
+    `drop table if exists usage_events__current`,
+    `create table usage_events__current (
         id text primary key,
         workspace_id text not null,
         capsule_id text,
@@ -5983,11 +6831,7 @@ async function rebuildD1UsageEventsCanonical(db: D1Database): Promise<void> {
         idempotency_key text not null,
         created_at text not null
       )`,
-    )
-    .run();
-  await db
-    .prepare(
-      `insert into usage_events__current (
+    `insert into usage_events__current (
         id, workspace_id, capsule_id, run_id, meter_id, resource_family,
         resource_id, operation, resource_metadata_json, kind, quantity,
         usd_micros, source, idempotency_key, created_at
@@ -5997,40 +6841,26 @@ async function rebuildD1UsageEventsCanonical(db: D1Database): Promise<void> {
              usd_micros, source, idempotency_key, created_at
       from usage_events
       where usd_micros is not null`,
-    )
-    .run();
-  await db.prepare(`drop table usage_events`).run();
-  await db
-    .prepare(`alter table usage_events__current rename to usage_events`)
-    .run();
-  await db
-    .prepare(
-      `create index if not exists usage_events_workspace_idx
+    `drop table usage_events`,
+    `alter table usage_events__current rename to usage_events`,
+    `create index if not exists usage_events_workspace_idx
        on usage_events (workspace_id)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists usage_events_run_idx
+    `create index if not exists usage_events_run_idx
        on usage_events (run_id)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create unique index if not exists usage_events_idempotency_key_unique
+    `create unique index if not exists usage_events_idempotency_key_unique
        on usage_events (idempotency_key)`,
-    )
-    .run();
+  ];
 }
 
-async function rebuildD1UsageEventsWithRatingStatus(
+async function d1UsageEventsWithRatingStatusStatements(
   db: D1Database,
-): Promise<void> {
-  if (!(await d1TableExists(db, "usage_events"))) return;
-  await db.prepare(`drop table if exists usage_events__rated`).run();
-  await db
-    .prepare(
-      `create table usage_events__rated (
+): Promise<readonly string[]> {
+  if (!(await d1TableExists(db, "usage_events"))) return [];
+  const columns = await d1ColumnNames(db, "usage_events");
+  if (columns.has("rating_status")) return [];
+  return [
+    `drop table if exists usage_events__rated`,
+    `create table usage_events__rated (
         id text primary key,
         workspace_id text not null,
         capsule_id text,
@@ -6052,11 +6882,7 @@ async function rebuildD1UsageEventsWithRatingStatus(
         idempotency_key text not null,
         created_at text not null
       )`,
-    )
-    .run();
-  await db
-    .prepare(
-      `insert into usage_events__rated (
+    `insert into usage_events__rated (
         id, workspace_id, capsule_id, run_id, meter_id, resource_family,
         resource_id, operation, resource_metadata_json, kind, quantity,
         usd_micros, rating_status, source, idempotency_key, created_at
@@ -6065,41 +6891,25 @@ async function rebuildD1UsageEventsWithRatingStatus(
              resource_id, operation, resource_metadata_json, kind, quantity,
              0, 'unrated', source, idempotency_key, created_at
       from usage_events`,
-    )
-    .run();
-  await db.prepare(`drop table usage_events`).run();
-  await db
-    .prepare(`alter table usage_events__rated rename to usage_events`)
-    .run();
-  await db
-    .prepare(
-      `create index if not exists usage_events_workspace_idx
+    `drop table usage_events`,
+    `alter table usage_events__rated rename to usage_events`,
+    `create index if not exists usage_events_workspace_idx
        on usage_events (workspace_id)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists usage_events_run_idx
+    `create index if not exists usage_events_run_idx
        on usage_events (run_id)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create unique index if not exists usage_events_idempotency_key_unique
+    `create unique index if not exists usage_events_idempotency_key_unique
        on usage_events (idempotency_key)`,
-    )
-    .run();
+  ];
 }
 
-async function rebuildD1InstallConfigsWithoutInstallType(
+async function d1InstallConfigsWithoutInstallTypeStatements(
   db: D1Database,
-): Promise<void> {
+): Promise<readonly string[]> {
   const columns = await d1ColumnNames(db, "install_configs");
-  if (!columns.has("install_type")) return;
-  await db.prepare(`drop table if exists install_configs__current`).run();
-  await db
-    .prepare(
-      `create table install_configs__current (
+  if (!columns.has("install_type")) return [];
+  return [
+    `drop table if exists install_configs__current`,
+    `create table install_configs__current (
         id text primary key,
         space_id text,
         trust_level text not null,
@@ -6107,11 +6917,7 @@ async function rebuildD1InstallConfigsWithoutInstallType(
         created_at text not null,
         updated_at text not null
       )`,
-    )
-    .run();
-  await db
-    .prepare(
-      `insert into install_configs__current
+    `insert into install_configs__current
         (id, space_id, trust_level, record_json, created_at, updated_at)
        select id,
               space_id,
@@ -6120,40 +6926,28 @@ async function rebuildD1InstallConfigsWithoutInstallType(
               created_at,
               updated_at
        from install_configs`,
-    )
-    .run();
-  await db.prepare(`drop table install_configs`).run();
-  await db
-    .prepare(`alter table install_configs__current rename to install_configs`)
-    .run();
-  await db
-    .prepare(
-      `create index if not exists install_configs_space_idx
+    `drop table install_configs`,
+    `alter table install_configs__current rename to install_configs`,
+    `create index if not exists install_configs_space_idx
        on install_configs (space_id)`,
-    )
-    .run();
+  ];
 }
 
-async function rebuildD1InstallConfigsWithoutTrustLevel(
+async function d1InstallConfigsWithoutTrustLevelStatements(
   db: D1Database,
-): Promise<void> {
+): Promise<readonly string[]> {
   const columns = await d1ColumnNames(db, "install_configs");
-  if (!columns.has("trust_level")) return;
-  await db.prepare(`drop table if exists install_configs__current`).run();
-  await db
-    .prepare(
-      `create table install_configs__current (
+  if (!columns.has("trust_level")) return [];
+  return [
+    `drop table if exists install_configs__current`,
+    `create table install_configs__current (
         id text primary key,
         space_id text,
         record_json text not null,
         created_at text not null,
         updated_at text not null
       )`,
-    )
-    .run();
-  await db
-    .prepare(
-      `insert into install_configs__current
+    `insert into install_configs__current
         (id, space_id, record_json, created_at, updated_at)
        select id,
               space_id,
@@ -6161,29 +6955,21 @@ async function rebuildD1InstallConfigsWithoutTrustLevel(
               created_at,
               updated_at
        from install_configs`,
-    )
-    .run();
-  await db.prepare(`drop table install_configs`).run();
-  await db
-    .prepare(`alter table install_configs__current rename to install_configs`)
-    .run();
-  await db
-    .prepare(
-      `create index if not exists install_configs_space_idx
+    `drop table install_configs`,
+    `alter table install_configs__current rename to install_configs`,
+    `create index if not exists install_configs_space_idx
        on install_configs (space_id)`,
-    )
-    .run();
+  ];
 }
 
-async function rebuildD1CapsulesWithoutInstallType(
+async function d1CapsulesWithoutInstallTypeStatements(
   db: D1Database,
-): Promise<void> {
+): Promise<readonly string[]> {
   const columns = await d1ColumnNames(db, "capsules");
-  if (!columns.has("install_type")) return;
-  await db.prepare(`drop table if exists capsules__current`).run();
-  await db
-    .prepare(
-      `create table capsules__current (
+  if (!columns.has("install_type")) return [];
+  return [
+    `drop table if exists capsules__current`,
+    `create table capsules__current (
         id text primary key,
         space_id text not null,
         project_id text,
@@ -6200,11 +6986,7 @@ async function rebuildD1CapsulesWithoutInstallType(
         created_at text not null,
         updated_at text not null
       )`,
-    )
-    .run();
-  await db
-    .prepare(
-      `insert into capsules__current
+    `insert into capsules__current
         (id, space_id, project_id, name, slug, source_id, install_config_id,
          environment, current_state_version_id, current_state_generation,
          current_output_snapshot_id, status, record_json, created_at, updated_at)
@@ -6224,39 +7006,22 @@ async function rebuildD1CapsulesWithoutInstallType(
               created_at,
               updated_at
        from capsules`,
-    )
-    .run();
-  await db.prepare(`drop table capsules`).run();
-  await db.prepare(`alter table capsules__current rename to capsules`).run();
-  await db
-    .prepare(
-      `create unique index if not exists capsules_space_name_environment_active_unique
+    `drop table capsules`,
+    `alter table capsules__current rename to capsules`,
+    `create unique index if not exists capsules_space_name_environment_active_unique
        on capsules (space_id, name, environment)
        where status != 'destroyed'`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists capsules_space_idx on capsules (space_id)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists capsules_project_idx on capsules (project_id)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists capsules_current_state_version_idx
+    `create index if not exists capsules_space_idx on capsules (space_id)`,
+    `create index if not exists capsules_project_idx on capsules (project_id)`,
+    `create index if not exists capsules_current_state_version_idx
        on capsules (current_state_version_id)`,
-    )
-    .run();
+  ];
 }
 
-async function rebuildD1CapsulesWithRequiredProject(
+async function d1CapsulesWithRequiredProjectStatements(
   db: D1Database,
-): Promise<void> {
-  if (!(await d1TableExists(db, "capsules"))) return;
+): Promise<readonly string[]> {
+  if (!(await d1TableExists(db, "capsules"))) return [];
   const info = await d1ColumnInfo(db, "capsules");
   const projectId = info.find((column) => column.name === "project_id");
   if (!projectId) {
@@ -6265,46 +7030,28 @@ async function rebuildD1CapsulesWithRequiredProject(
     );
   }
 
-  await db
-    .prepare(
-      `update capsules
+  const backfill = `update capsules
        set project_id = 'prj_default_' || space_id
        where project_id is null
          and exists (
            select 1 from projects p
            where p.id = 'prj_default_' || capsules.space_id
-         )`,
-    )
-    .run();
-  const unowned = await db
-    .prepare(`select count(*) as count from capsules where project_id is null`)
-    .first<{ count: number | string }>();
-  if (Number(unowned?.count ?? 0) > 0) {
-    throw new Error(
-      "cannot enforce Capsule Project boundary: a Capsule has no Project",
-    );
-  }
+         )`;
 
   if (projectId.notnull === 1) {
-    await db
-      .prepare(
-        `drop index if exists capsules_space_name_environment_active_unique`,
-      )
-      .run();
-    await db
-      .prepare(
-        `create unique index if not exists capsules_project_name_environment_active_unique
+    return [
+      backfill,
+      `drop index if exists capsules_space_name_environment_active_unique`,
+      `create unique index if not exists capsules_project_name_environment_active_unique
          on capsules (project_id, name, environment)
          where status != 'destroyed'`,
-      )
-      .run();
-    return;
+    ];
   }
 
-  await db.prepare(`drop table if exists capsules__project_current`).run();
-  await db
-    .prepare(
-      `create table capsules__project_current (
+  return [
+    backfill,
+    `drop table if exists capsules__project_current`,
+    `create table capsules__project_current (
         id text primary key,
         space_id text not null,
         project_id text not null,
@@ -6321,11 +7068,7 @@ async function rebuildD1CapsulesWithRequiredProject(
         created_at text not null,
         updated_at text not null
       )`,
-    )
-    .run();
-  await db
-    .prepare(
-      `insert into capsules__project_current
+    `insert into capsules__project_current
         (id, space_id, project_id, name, slug, source_id, install_config_id,
          environment, current_state_version_id, current_state_generation,
          current_output_snapshot_id, status, record_json, created_at, updated_at)
@@ -6345,35 +7088,16 @@ async function rebuildD1CapsulesWithRequiredProject(
               created_at,
               updated_at
        from capsules`,
-    )
-    .run();
-  await db.prepare(`drop table capsules`).run();
-  await db
-    .prepare(`alter table capsules__project_current rename to capsules`)
-    .run();
-  await db
-    .prepare(
-      `create unique index if not exists capsules_project_name_environment_active_unique
+    `drop table capsules`,
+    `alter table capsules__project_current rename to capsules`,
+    `create unique index if not exists capsules_project_name_environment_active_unique
        on capsules (project_id, name, environment)
        where status != 'destroyed'`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists capsules_space_idx on capsules (space_id)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists capsules_project_idx on capsules (project_id)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists capsules_current_state_version_idx
+    `create index if not exists capsules_space_idx on capsules (space_id)`,
+    `create index if not exists capsules_project_idx on capsules (project_id)`,
+    `create index if not exists capsules_current_state_version_idx
        on capsules (current_state_version_id)`,
-    )
-    .run();
+  ];
 }
 
 async function rebuildConnectionsTableIfNeeded(db: D1Database): Promise<void> {

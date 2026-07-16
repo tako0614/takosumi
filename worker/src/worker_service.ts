@@ -110,8 +110,21 @@ export async function createWorkerServiceApp(
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
+  const controlD1SchemaMode = env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE;
+  if (
+    controlD1SchemaMode !== undefined &&
+    controlD1SchemaMode !== "bootstrap" &&
+    controlD1SchemaMode !== "predeployed"
+  ) {
+    throw new TypeError(
+      "TAKOSUMI_CONTROL_D1_SCHEMA_MODE must be bootstrap or predeployed",
+    );
+  }
   const opentofuControlStore = createCloudflareD1OpenTofuControlStore(
     env.TAKOSUMI_CONTROL_DB,
+    {
+      schemaMode: controlD1SchemaMode ?? "bootstrap",
+    },
   );
   const adapters = createWorkerAdapters(env);
   const enqueueRun =

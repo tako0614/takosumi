@@ -10,8 +10,12 @@ import { expect, test } from "bun:test";
 
 import {
   applyD1GuardedTableRenames,
+  createCloudflareD1OpenTofuControlStore,
   ensureD1OpenTofuLedgerSchema,
+  verifyD1OpenTofuLedgerSchemaPredeployed,
 } from "../../../worker/src/d1_opentofu_store.ts";
+import type { D1Database } from "../../../worker/src/bindings.ts";
+import { acquireControlD1MaintenanceFence } from "../../../worker/src/d1_schema_maintenance.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 async function tableNames(db: SqliteFakeD1): Promise<Set<string>> {
@@ -58,6 +62,178 @@ test("ensureD1OpenTofuLedgerSchema is idempotent across reboots", async () => {
   const tables = await tableNames(db);
   expect(tables.has("capsules")).toBe(true);
 });
+
+test("predeployed verification is strictly read-only", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const queries: string[] = [];
+  const readOnlyDb: D1Database = {
+    prepare(query) {
+      queries.push(query.trim());
+      if (!/^(?:select|pragma)\b/iu.test(query.trim())) {
+        throw new Error("predeployed verification attempted a write");
+      }
+      return db.prepare(query);
+    },
+    async batch() {
+      throw new Error("predeployed verification attempted a batch");
+    },
+  };
+
+  await verifyD1OpenTofuLedgerSchemaPredeployed(readOnlyDb);
+  expect(queries.length).toBeGreaterThan(0);
+  expect(queries.every((query) => /^(?:select|pragma)\b/iu.test(query))).toBe(
+    true,
+  );
+});
+
+test("predeployed store fails closed without request-time bootstrap", async () => {
+  const db = new SqliteFakeD1();
+  const store = createCloudflareD1OpenTofuControlStore(db, {
+    schemaMode: "predeployed",
+  });
+
+  await expect(store.listWorkspaces()).rejects.toThrow(
+    "D1 OpenTofu predeployed schema verification failed",
+  );
+  expect((await tableNames(db)).has("workspaces")).toBe(false);
+  expect((await tableNames(db)).has("schema_migrations")).toBe(false);
+});
+
+test("a warmed store observes a newly acquired maintenance fence", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const store = createCloudflareD1OpenTofuControlStore(db, {
+    schemaMode: "predeployed",
+  });
+  expect(await store.listWorkspaces()).toEqual([]);
+
+  await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+    },
+    "2026-07-16T00:00:00.000Z",
+  );
+
+  await expect(store.listWorkspaces()).rejects.toThrow(
+    "maintenance_fence_active",
+  );
+});
+
+test("predeployed verification rejects checksum drift", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await db
+    .prepare(`update schema_migrations set checksum = ? where version = 43`)
+    .bind(`sha256:${"0".repeat(64)}`)
+    .run();
+
+  await expect(verifyD1OpenTofuLedgerSchemaPredeployed(db)).rejects.toThrow(
+    "D1 OpenTofu predeployed schema verification failed",
+  );
+});
+
+test("destructive usage migration and ledger insert roll back and retry atomically", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await db.prepare(`drop table usage_events`).run();
+  await db
+    .prepare(
+      `create table usage_events (
+        id text primary key,
+        workspace_id text not null,
+        capsule_id text,
+        run_id text,
+        meter_id text,
+        resource_family text,
+        resource_id text,
+        operation text,
+        resource_metadata_json text,
+        kind text not null,
+        quantity real not null,
+        usd_micros integer not null,
+        source text not null,
+        idempotency_key text not null,
+        created_at text not null
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into usage_events (
+         id, workspace_id, kind, quantity, usd_micros, source,
+         idempotency_key, created_at
+       ) values ('usage_retry', 'ws_retry', 'request', 1, 123, 'legacy',
+                 'usage-retry', '2026-07-16T00:00:00.000Z')`,
+    )
+    .run();
+  await db.prepare(`delete from schema_migrations where version = 39`).run();
+
+  let injected = false;
+  const failingDb: D1Database = {
+    prepare(query) {
+      return db.prepare(query);
+    },
+    async batch(statements) {
+      if (!injected && statements.length > 2) {
+        injected = true;
+        return await db.batch([
+          ...statements.slice(0, -1),
+          db.prepare(`insert into table_that_does_not_exist values (1)`),
+          statements.at(-1)!,
+        ]);
+      }
+      return await db.batch(statements);
+    },
+  };
+
+  await expect(ensureD1OpenTofuLedgerSchema(failingDb)).rejects.toThrow();
+  expect(injected).toBe(true);
+  expect(await d1ColumnNamesForTest(db, "usage_events")).not.toContain(
+    "rating_status",
+  );
+  expect(
+    await db
+      .prepare(`select usd_micros from usage_events where id = 'usage_retry'`)
+      .first(),
+  ).toEqual({ usd_micros: 123 });
+  expect(
+    await db
+      .prepare(`select version from schema_migrations where version = 39`)
+      .first(),
+  ).toBeNull();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+  expect(await d1ColumnNamesForTest(db, "usage_events")).toContain(
+    "rating_status",
+  );
+  expect(
+    await db
+      .prepare(
+        `select usd_micros, rating_status
+         from usage_events where id = 'usage_retry'`,
+      )
+      .first(),
+  ).toEqual({ usd_micros: 0, rating_status: "unrated" });
+  expect(
+    await db
+      .prepare(`select version from schema_migrations where version = 39`)
+      .first(),
+  ).toEqual({ version: 39 });
+});
+
+async function d1ColumnNamesForTest(
+  db: SqliteFakeD1,
+  table: string,
+): Promise<readonly string[]> {
+  const result = await db
+    .prepare(`pragma table_info(${table})`)
+    .all<{ readonly name: string }>();
+  return (result.results ?? []).map((row) => row.name);
+}
 
 test("install config metadata converges to the canonical store key", async () => {
   const db = new SqliteFakeD1();

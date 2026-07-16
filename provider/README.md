@@ -1,6 +1,14 @@
 # terraform-provider-takosumi
 
-A thin OpenTofu/Terraform provider for the **Takosumi Resource Shape API**.
+A thin OpenTofu/Terraform compatibility/admin provider for the current
+**Takosumi Resource Shape API**.
+
+The accepted target separates portable Service Form definitions and their
+typed provider from Takosumi host/admin ownership. Until that extraction and
+state migration are proven, this mixed provider retains supported
+`takosumi_*` form state and `takosumi_target_pool`; it is frozen for new form
+families. It does not own availability, backend selection, pricing, or the
+canonical Resource lifecycle.
 
 Every resource in this provider is Takosumi-owned. It exposes typed
 `takosumi_*` resources only for Resource Shapes and operator/admin objects that
@@ -187,16 +195,61 @@ provider_installation {
 }
 ```
 
-## Worker Assets Mirror
+## Immutable Release And Worker Mirror
 
-Takosumi-hosted deployments serve the provider from the platform Worker's
-static assets. Generate the mirror assets before building/deploying the
-dashboard:
+Takosumi-hosted deployments serve reviewed provider release bytes from the
+platform Worker's static assets. Normal checks and dashboard/Worker builds are
+consumers: they never run a provider compiler for an already versioned mirror
+path.
 
 ```bash
-TAKOSUMI_PROVIDER_VERSION=0.1.0 bun run provider:assets
+bun run provider:assets
 cd dashboard && bun run build
 ```
+
+`provider:assets` verifies the independent provider version source, its digest
+sidecar, and `provider/release/registry.json`. The registry is the only normal
+mirror-admission authority and retains every known version; a candidate
+manifest cannot be passed directly except through an explicit test-only seam.
+Dashboard build materializes exact
+digest-pinned bytes into generated `dashboard/dist/opentofu/providers`; it
+copies immutable version/archive assets unchanged and fails closed when the
+exact historical bytes are unavailable. The mutable aggregate `index.json` is
+then derived by deterministically merging all reviewed version entries.
+Local dev may place exact generated mirror bytes under the ignored
+`dashboard/public/opentofu/providers` path, but wrong, unreviewed, or tracked
+provider bytes fail before dev/build and are never release authority.
+
+Public `1.0.0` is historical quarantine: its version metadata and four
+archives are retained byte-for-byte, but its binary reports `dev` and dirty,
+unknown provenance. It must never be overwritten or described as reproducible.
+The corrected provider version is the unpublished `1.0.1` candidate in
+`provider/release/version.json`.
+
+An actual release build requires the exact clean provider tag and source
+commit and writes to a new directory outside this repository:
+
+```bash
+bun run provider:release:build -- \
+  --tag provider/v1.0.1 \
+  --source-commit <40-character-commit> \
+  --output /absolute/new/provider-1.0.1
+```
+
+The builder pins Go/zip/unzip/Git/gpgv versions, absolute canonical executable
+paths, executable digests, the complete Go distribution digest, and the
+runtime shared-library digests. Git runs without repository/system/global
+configuration, and signed tags are checked directly with gpgv and a
+digest-pinned keyring. It injects `main.version`, uses deterministic
+flags and archive metadata, builds all four platforms twice, compares every
+byte, and emits checksums, an exact Go-module SBOM, input/artifact-bound
+provenance, per-binary Go build-info digests, and an immutable manifest seam.
+Bundle verification first snapshots the complete input into a private
+`0700` authority directory with `0600` files so later path replacement cannot
+change the reviewed bytes.
+Production requires a signed annotated tag from a reviewed fingerprint; no
+fingerprint is configured yet, so `1.0.1` remains a candidate-only lane.
+It does not publish anything.
 
 Network mirror base URL:
 
