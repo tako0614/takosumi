@@ -672,6 +672,7 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
         description:
           "Bundled kinds have typed provider schemas. Additional tokens require an explicitly installed host schema and adapter/plugin.",
       },
+      form: ref("InstalledFormReference"),
       metadata: {
         type: "object",
         required: ["name", "space", "managedBy"],
@@ -721,6 +722,39 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
     additionalProperties: false,
   };
   return {
+    FormRef: {
+      type: "object",
+      required: ["apiVersion", "kind", "definitionVersion", "schemaDigest"],
+      properties: {
+        apiVersion: {
+          type: "string",
+          pattern: "^[A-Za-z][A-Za-z0-9._/-]{0,127}$",
+        },
+        kind: {
+          type: "string",
+          pattern: "^[A-Za-z][A-Za-z0-9._-]{0,127}$",
+        },
+        definitionVersion: {
+          type: "string",
+          pattern:
+            "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
+        },
+        schemaDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+      },
+      additionalProperties: false,
+    },
+    InstalledFormReference: {
+      type: "object",
+      required: ["formRef", "packageDigest"],
+      properties: {
+        formRef: ref("FormRef"),
+        packageDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+      },
+      additionalProperties: false,
+    },
     ResourceShapeResponse: resourceShape,
     ResourceDeploymentReview: {
       type: "object",
@@ -805,6 +839,7 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         apiVersion: { const: "takosumi.dev/v1alpha1" },
         kind: resourceShape.properties.kind,
+        form: ref("InstalledFormReference"),
         metadata: {
           type: "object",
           required: ["space"],
@@ -824,6 +859,7 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         apiVersion: { const: "takosumi.dev/v1alpha1" },
         kind: resourceShape.properties.kind,
+        form: ref("InstalledFormReference"),
         metadata: {
           type: "object",
           required: ["space"],

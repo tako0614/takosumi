@@ -8,6 +8,7 @@
 // the compatibility schema authority and enables the desired-state kind.
 
 import type { Condition, JsonObject } from "./types.ts";
+import type { InstalledFormReference } from "./service-forms.ts";
 import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
 
 /** Frozen kind tokens compiled for current provider/API/state compatibility. */
@@ -140,6 +141,8 @@ export interface ResourceObject<
 > {
   readonly apiVersion: typeof TAKOSUMI_API_VERSION;
   readonly kind: TKind;
+  /** Exact immutable portable definition selected for Form-backed execution. */
+  readonly form?: InstalledFormReference;
   readonly metadata: ResourceMetadata;
   readonly spec: TSpec;
   readonly status?: ResourceStatus;
