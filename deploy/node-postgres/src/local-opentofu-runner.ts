@@ -259,13 +259,22 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     if (!archiveDigest || archiveSizeBytes === undefined) {
       throw new Error(`source_sync ${job.runId} returned no archive metadata`);
     }
-    const bytes = await fetchRunnerArtifact(
-      this.transport,
-      job.runId,
-      `/runs/${encodeURIComponent(job.runId)}/artifacts/source-archive`,
-    );
-    await assertDigest(bytes, archiveDigest, "source_sync archive");
-    await this.archiveStore.write(job.archiveRef, bytes);
+    if (archive && stringValue(archive, "kind") === "object-storage") {
+      assertMatchingReusedSourceArchive(
+        result,
+        archive,
+        job.reuseSnapshot,
+        resolvedCommit,
+      );
+    } else {
+      const bytes = await fetchRunnerArtifact(
+        this.transport,
+        job.runId,
+        `/runs/${encodeURIComponent(job.runId)}/artifacts/source-archive`,
+      );
+      await assertDigest(bytes, archiveDigest, "source_sync archive");
+      await this.archiveStore.write(job.archiveRef, bytes);
+    }
     const phaseTimings = phaseTimingsFromRunnerResult(result);
     return {
       resolvedCommit,
@@ -580,6 +589,26 @@ function repositoryInstallMetadataFromRunnerResult(
     }
   }
   return undefined;
+}
+
+function assertMatchingReusedSourceArchive(
+  result: Record<string, unknown>,
+  archive: Record<string, unknown>,
+  reuseSnapshot: OpenTofuSourceSyncJob["reuseSnapshot"],
+  resolvedCommit: string,
+): void {
+  if (
+    !reuseSnapshot ||
+    resolvedCommit !== reuseSnapshot.resolvedCommit ||
+    stringValue(archive, "reusedFromSnapshotId") !== reuseSnapshot.id ||
+    stringValue(archive, "ref") !== reuseSnapshot.archiveRef ||
+    stringValue(archive, "digest") !== reuseSnapshot.archiveDigest ||
+    numberValue(archive, "sizeBytes") !== reuseSnapshot.archiveSizeBytes ||
+    stringValue(result, "archiveDigest") !== reuseSnapshot.archiveDigest ||
+    numberValue(result, "archiveSizeBytes") !== reuseSnapshot.archiveSizeBytes
+  ) {
+    throw new Error("source archive reuse does not match reuseSnapshot");
+  }
 }
 
 function phaseTimingsFromRunnerResult(
