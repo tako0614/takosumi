@@ -48,6 +48,9 @@ const config: UserConfig = {
   title: "Takosumi Cloud",
   description: "Hosted Takosumi Cloud service documentation",
   lang: "ja",
+  // Local-search indexing mutates MiniSearch as pages finish. A single worker
+  // keeps document ids and content-hashed chunks reproducible for release pins.
+  buildConcurrency: 1,
   base: process.env.VITEPRESS_BASE ?? "/docs/",
   cleanUrls: true,
   lastUpdated: true,

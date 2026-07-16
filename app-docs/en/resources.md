@@ -248,7 +248,7 @@ resources. Unsupported Cloudflare products stay explicit.
 
 | Status      | Scope                                                                                                         |
 | ----------- | ------------------------------------------------------------------------------------------------------------- |
-| GA contract | EdgeWorker modules, assets, vars, write-only secrets, bindings, versions, deployments, routes, cron, and logs |
+| GA contract | EdgeWorker modules, assets, vars, write-only secrets, bindings, versions, deployments, routes, and cron (Workers Logs / Logpush are not Stable) |
 | GA contract | managed URL and verified-custom-domain `http.route` Interfaces                                                |
 | GA contract | ObjectBucket plus the documented R2/S3 control and data subset                                                |
 | GA contract | provider `5.19.1` selected subset for KVStore, SQLDatabase, Queue, and DurableWorkflow                        |

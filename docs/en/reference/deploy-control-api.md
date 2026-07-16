@@ -75,7 +75,8 @@ v1alpha1 surface, provider secret material is write-only during
 ProviderConnection registration and is materialized only for a Run. Takosumi
 does not yet publish a standalone `POST /secrets` API or a `Secret` Resource
 Shape. The latter is a future shape that requires its own schema, planner,
-adapter, import, and drift contract; it is not one of the six bundled shapes.
+adapter, import, and drift contract; it is not one of the ten current bundled
+compatibility shapes.
 
 ## Outputs and Runtime Interfaces
 
