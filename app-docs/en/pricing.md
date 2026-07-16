@@ -4,7 +4,7 @@ Takosumi Cloud combines a monthly subscription with metered usage. Prices are
 tax-exclusive USD. Every plan can use the same managed-service catalog;
 Resource counts are common safety ceilings, not plan features.
 
-## Subscription plans
+## Subscription Plans
 
 | Plan | Monthly price | Monthly managed-usage grant | Overage       |
 | ---- | ------------: | --------------------------: | ------------- |
@@ -16,7 +16,7 @@ The grant is issued per billing period, cannot be redeemed for cash, and does
 not roll over. External providers connected with your own Provider Connection
 are billed directly by that provider and do not consume the grant.
 
-## Usage prices
+## Usage Prices
 
 Cloudflare-backed capacity is sold at `1.5x` the provider's current public
 overage or marginal rate. Shared free tiers and fixed platform costs are
@@ -91,12 +91,14 @@ Personal-use PaaS uses `txcd_10102001`; business-use PaaS uses
 quote and invoice. The actual tax depends on customer location and our tax
 registrations.
 
-## Safety and spend limits
+## Usage and Limits
 
 The owner-account safety ceiling is 250 total Resources; 100 each for Edge,
 Object, KV, Queue and Schedule; 50 each for Database, Workflow and Stateful
 Actor; 25 Vector indexes; 10 Containers; and 25 active verified domains. These
 are not plan features.
+
+## Spend Guard
 
 Operator hard caps are `$25 / single authorization`, `$100 / rolling day`, and
 `$500 / billing period`. Customers can set lower account, Workspace or service
