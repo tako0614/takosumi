@@ -11,10 +11,10 @@ import {
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "../../../contract/api-surface.ts";
 import { TAKOSUMI_PLATFORM_HARDENING_GATE_EVIDENCE_KIND } from "../../../contract/platform-hardening.ts";
+import { OSS_PLATFORM_HARDENING_CONTRIBUTION } from "../../../deploy/platform/production_hardening.ts";
 import {
   driftCheckEnabled,
   evaluateProductionHardeningGates,
-  OSS_PLATFORM_HARDENING_CONTRIBUTION,
   handleOperatorBillingRequest,
   handlePlatformExtensionRequest,
   handlePlatformExtensionCatalogRequest,
