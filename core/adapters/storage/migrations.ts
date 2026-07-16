@@ -10,6 +10,7 @@ type StorageDomain =
   // dead union members: immutable, already-applied migration-ledger rows still carry them.
   // Migration history is frozen and append-only, so these tags must stay even though no
   // new code emits those product surfaces.
+  | "service-graph"
   | "runtime-projection"
   | "custom-domain"
   | "internal-auth";
@@ -2027,7 +2028,7 @@ drop table if exists takosumi_output_shares;`,
       version: 39,
       domain: "deploy",
       description:
-        "Create the control-backup ledger: one opaque pointer row per sealed control-backup bundle. backup_json carries the public BackupRecord pointer (ref / digest / sizeBytes / optional createdByRunId); bundle bytes live in host artifact storage, never the DB, and never contain secret material. The space_id column drives the newest-first per-Space listing. No data migration: additive new table.",
+        "Create the control-backup ledger (Core Specification §33 layer 1 / §26 R2_BACKUPS): one pointer row per sealed control-backup bundle written to the R2_BACKUPS bucket. backup_json carries the public BackupRecord pointer (objectKey / digest / sizeBytes / optional createdByRunId) — the bundle bytes (zstd-compressed, sealed JSON export of the Space's control ledger) live in object storage, never the DB, and the bundle never contains secret material. The space_id column drives the newest-first per-Space listing. No data migration: additive new table.",
       sql: `create table if not exists takosumi_backups (
   id                text   primary key,
   space_id          text   not null,
@@ -2049,7 +2050,7 @@ drop table if exists takosumi_backups;`,
       version: 40,
       domain: "deploy",
       description:
-        "Create additive Capsule compatibility, billing, credential mint audit, and security finding ledgers for the OpenTofu Module Capsule DAG model. OSS billing configuration is disabled or showback; the legacy enforce enum value is persisted only for Cloud-injected enforcement ports.",
+        "Create additive Capsule compatibility, billing, credential mint audit, and security finding ledgers for the OpenTofu Module Capsule DAG model. Billing is mode-selectable by operator/self-host configuration: disabled, showback, or enforce.",
       sql: `create table if not exists takosumi_capsule_compatibility_reports (
   id                 text   primary key,
   source_id          text,
@@ -2062,8 +2063,6 @@ drop table if exists takosumi_backups;`,
   resources_json     jsonb  not null,
   data_sources_json  jsonb  not null,
   provisioners_json  jsonb  not null,
-  root_module_variables_json jsonb not null default '[]'::jsonb,
-  root_module_outputs_json   jsonb not null default '[]'::jsonb,
   normalized_object_key text,
   normalized_digest  text,
   created_at         text   not null
@@ -2439,9 +2438,9 @@ alter table takosumi_runs drop column if exists status;`,
     {
       id: "service_graph.records.create",
       version: 47,
-      domain: "runtime-projection",
+      domain: "service-graph",
       description:
-        "Create first-class Runtime Projection record tables for ServiceExport, ServiceBinding, and ServiceGrant. Runtime service publication and authority are stored as Takosumi-owned rows instead of being hidden inside a generic snapshot blob.",
+        "Create first-class Service Graph record tables for ServiceExport, ServiceBinding, and ServiceGrant. Runtime service publication and authority are stored as Takosumi-owned rows instead of being hidden inside a generic snapshot blob.",
       sql: `create table if not exists service_graph_exports (
   id                       text  primary key,
   space_id                 text  not null,
@@ -2974,7 +2973,7 @@ alter table takosumi_plans
       version: 54,
       domain: "deploy",
       description:
-        "Create the commercial billing auto-recharge attempt ledger. The table enforces one attempt per idempotency key and lets an injected enforcement port count pending, pending_unknown, and succeeded attempts against a monthly USD micros cap before its provider adapter creates an off-session charge. OSS core stores opaque transaction ids and status metadata only, never payment data or secrets, and never calls a payment provider directly.",
+        "Create the Takosumi Cloud billing auto-recharge attempt ledger. The table enforces one attempt per idempotency key and lets the worker count pending, pending_unknown, and succeeded attempts against a monthly USD micros cap before it creates an off-session Stripe PaymentIntent. It stores Stripe object ids and status metadata only, never card data or secrets.",
       sql: `create table if not exists takosumi_billing_auto_recharge_attempts (
   id                       text   primary key,
   space_id                 text   not null,
@@ -3009,9 +3008,9 @@ drop table if exists takosumi_billing_auto_recharge_attempts;`,
     {
       id: "service_graph.records.rename_aside",
       version: 55,
-      domain: "runtime-projection",
+      domain: "service-graph",
       description:
-        "Retire the OSS Runtime Projection ledger (deploy decision D3): the ServiceExport / ServiceBinding / ServiceGrant records are no longer part of the OSS noun model and are projected from Capsule Outputs instead. The tables are renamed aside to `*_retired` (recoverable) rather than dropped, and are no longer created or read. `down` restores the original names.",
+        "Retire the OSS Service Graph ledger (deploy decision D3): the ServiceExport / ServiceBinding / ServiceGrant records are no longer part of the OSS noun model and are projected from Capsule Outputs instead. The tables are renamed aside to `*_retired` (recoverable) rather than dropped, and are no longer created or read. `down` restores the original names.",
       sql: `alter table if exists service_graph_exports rename to service_graph_exports_retired;
 alter table if exists service_graph_bindings rename to service_graph_bindings_retired;
 alter table if exists service_graph_grants rename to service_graph_grants_retired;`,
@@ -3859,8 +3858,31 @@ alter table takosumi_capsules
       version: 80,
       domain: "deploy",
       description:
-        "Make Project the required Capsule ownership boundary and scope active Capsule name uniqueness to (project_id, name, environment). Existing rows are pointed at the already-created Workspace default Project before the NOT NULL constraint is enforced.",
-      sql: `update takosumi_capsules c
+        "Make Project the required Capsule ownership boundary and scope active Capsule name uniqueness to (project_id, name, environment). Reconcile the canonical default Project for Workspaces created after the original v58 backfill, then point every remaining pre-Project Capsule at it before the NOT NULL constraint is enforced.",
+      sql: `insert into takosumi_projects (id, workspace_id, name, slug, project_json, created_at, updated_at)
+select
+  'prj_default_' || w.id,
+  w.id,
+  'Default',
+  'default',
+  jsonb_build_object(
+    'id', 'prj_default_' || w.id,
+    'workspaceId', w.id,
+    'name', 'Default',
+    'slug', 'default',
+    'projectJson', jsonb_build_object(),
+    'createdAt', w.created_at,
+    'updatedAt', w.updated_at
+  ),
+  w.created_at,
+  w.updated_at
+from takosumi_workspaces w
+where exists (
+  select 1 from takosumi_capsules c
+  where c.space_id = w.id and c.project_id is null
+)
+on conflict do nothing;
+update takosumi_capsules c
 set project_id = 'prj_default_' || c.space_id
 where c.project_id is null
   and exists (

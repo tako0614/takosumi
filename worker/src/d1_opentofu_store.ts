@@ -5091,6 +5091,7 @@ Git Source plus DB InstallConfig are the only Capsule execution authority
     name: "d1_capsule_project_boundary_enforce",
     checksumSource: `
 capsules.project_id is required for every current Capsule
+Workspace default Projects missing after the original rename backfill are reconciled
 existing null project_id values point to the Workspace default Project
 active Capsule name uniqueness is scoped to project_id/name/environment
 source_id remains nullable only for historical pre-Git-only operator migration rows
@@ -6180,7 +6181,7 @@ async function applyD1OpenTofuSchemaMigration(
       migration.name,
       checksum,
       new Date().toISOString(),
-  );
+    );
   if (migration.atomicStatements || migration.atomicPreparedStatements) {
     const atomicSql = migration.atomicStatements
       ? await migration.atomicStatements(db)
@@ -6194,19 +6195,14 @@ async function applyD1OpenTofuSchemaMigration(
     ];
     const fence = await activeControlD1MaintenanceFence(db);
     if (fence) {
-      batch = await wrapControlD1MaintenanceMigrationBatch(
-        db,
-        fence,
-        batch,
-        {
-          permanentlyDroppedTables: new Set(
-            migration.permanentlyDroppedTables ?? [],
-          ),
-          newlyCreatedTables: atomicSql
-            ? d1TablesCreatedByAtomicSql(atomicSql)
-            : new Set(),
-        },
-      );
+      batch = await wrapControlD1MaintenanceMigrationBatch(db, fence, batch, {
+        permanentlyDroppedTables: new Set(
+          migration.permanentlyDroppedTables ?? [],
+        ),
+        newlyCreatedTables: atomicSql
+          ? d1TablesCreatedByAtomicSql(atomicSql)
+          : new Set(),
+      });
     }
     await runD1AtomicStatements(db, batch);
     return;
@@ -7022,6 +7018,14 @@ async function d1CapsulesWithRequiredProjectStatements(
   db: D1Database,
 ): Promise<readonly string[]> {
   if (!(await d1TableExists(db, "capsules"))) return [];
+  if (
+    !(await d1TableExists(db, "projects")) ||
+    !(await d1TableExists(db, "workspaces"))
+  ) {
+    throw new Error(
+      "cannot enforce Capsule Project boundary: Project or Workspace storage is absent",
+    );
+  }
   const info = await d1ColumnInfo(db, "capsules");
   const projectId = info.find((column) => column.name === "project_id");
   if (!projectId) {
@@ -7030,6 +7034,33 @@ async function d1CapsulesWithRequiredProjectStatements(
     );
   }
 
+  const ensureDefaultProjects = `insert into projects
+       (id, workspace_id, name, slug, record_json, created_at, updated_at)
+       select
+         'prj_default_' || w.id,
+         w.id,
+         'Default',
+         'default',
+         json_object(
+           'id', 'prj_default_' || w.id,
+           'workspaceId', w.id,
+           'name', 'Default',
+           'slug', 'default',
+           'projectJson', json_object(),
+           'createdAt', w.created_at,
+           'updatedAt', w.updated_at
+         ),
+         w.created_at,
+         w.updated_at
+       from workspaces w
+       where exists (
+         select 1 from capsules c
+         where c.space_id = w.id and c.project_id is null
+       )
+         and not exists (
+           select 1 from projects p
+           where p.id = 'prj_default_' || w.id
+         )`;
   const backfill = `update capsules
        set project_id = 'prj_default_' || space_id
        where project_id is null
@@ -7040,6 +7071,7 @@ async function d1CapsulesWithRequiredProjectStatements(
 
   if (projectId.notnull === 1) {
     return [
+      ensureDefaultProjects,
       backfill,
       `drop index if exists capsules_space_name_environment_active_unique`,
       `create unique index if not exists capsules_project_name_environment_active_unique
@@ -7049,6 +7081,7 @@ async function d1CapsulesWithRequiredProjectStatements(
   }
 
   return [
+    ensureDefaultProjects,
     backfill,
     `drop table if exists capsules__project_current`,
     `create table capsules__project_current (
