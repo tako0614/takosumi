@@ -4147,4 +4147,62 @@ alter table takosumi_runs
   on takosumi_resource_shapes (kind, phase, created_at, id);`,
       down: "drop index if exists takosumi_resource_shapes_ready_kind_created_id_idx;",
     },
+    {
+      id: "registry.service_forms.create",
+      version: 93,
+      domain: "registry",
+      description:
+        "Create the optional zero-form-capable Service Form package, exact definition, and scoped activation registry without adding offering, price, or managed-capacity state to OSS.",
+      sql: `create table if not exists takosumi_service_form_packages (
+  package_digest text primary key,
+  status         text not null check (status in ('installed','deprecated','revoked')),
+  record_json    jsonb not null,
+  installed_at   text not null,
+  updated_at     text not null
+);
+create index if not exists takosumi_service_form_packages_status_updated_digest_idx
+  on takosumi_service_form_packages (status, updated_at, package_digest);
+create table if not exists takosumi_service_form_definitions (
+  form_ref_key       text primary key,
+  package_digest     text not null,
+  api_version        text not null,
+  kind               text not null,
+  definition_version text not null,
+  schema_digest      text not null,
+  record_json        jsonb not null,
+  installed_at       text not null,
+  foreign key (package_digest) references takosumi_service_form_packages(package_digest)
+);
+create index if not exists takosumi_service_form_definitions_package_idx
+  on takosumi_service_form_definitions (package_digest);
+create unique index if not exists takosumi_service_form_definitions_ref_package_unique
+  on takosumi_service_form_definitions (form_ref_key, package_digest);
+create index if not exists takosumi_service_form_definitions_kind_installed_ref_idx
+  on takosumi_service_form_definitions (kind, installed_at, form_ref_key);
+create table if not exists takosumi_service_form_activations (
+  id             text primary key,
+  form_ref_key   text not null,
+  package_digest text not null,
+  scope_type     text not null check (scope_type in ('operator','workspace','space')),
+  scope_id       text,
+  status         text not null check (status in ('active','inactive')),
+  revision       integer not null check (revision >= 1),
+  record_json    jsonb not null,
+  created_at     text not null,
+  updated_at     text not null,
+  foreign key (form_ref_key, package_digest)
+    references takosumi_service_form_definitions(form_ref_key, package_digest),
+  check (
+    (scope_type = 'operator' and scope_id is null)
+    or (scope_type in ('workspace','space') and nullif(trim(scope_id), '') is not null)
+  )
+);
+create index if not exists takosumi_service_form_activations_scope_status_updated_id_idx
+  on takosumi_service_form_activations (scope_type, scope_id, status, updated_at, id);
+create index if not exists takosumi_service_form_activations_identity_idx
+  on takosumi_service_form_activations (form_ref_key, package_digest);`,
+      down: `drop table if exists takosumi_service_form_activations;
+drop table if exists takosumi_service_form_definitions;
+drop table if exists takosumi_service_form_packages;`,
+    },
   ]);

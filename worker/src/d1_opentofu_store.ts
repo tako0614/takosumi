@@ -3211,6 +3211,57 @@ function changes(result: D1Result): number {
   return result.meta?.changes ?? 0;
 }
 
+const D1_SERVICE_FORM_REGISTRY_STATEMENTS = [
+  `create table if not exists service_form_packages (
+    package_digest text primary key,
+    status text not null check (status in ('installed','deprecated','revoked')),
+    record_json text not null,
+    installed_at text not null,
+    updated_at text not null
+  )`,
+  `create index if not exists service_form_packages_status_updated_digest_idx
+    on service_form_packages (status, updated_at, package_digest)`,
+  `create table if not exists service_form_definitions (
+    form_ref_key text primary key,
+    package_digest text not null,
+    api_version text not null,
+    kind text not null,
+    definition_version text not null,
+    schema_digest text not null,
+    record_json text not null,
+    installed_at text not null,
+    foreign key (package_digest) references service_form_packages(package_digest)
+  )`,
+  `create index if not exists service_form_definitions_package_idx
+    on service_form_definitions (package_digest)`,
+  `create unique index if not exists service_form_definitions_ref_package_unique
+    on service_form_definitions (form_ref_key, package_digest)`,
+  `create index if not exists service_form_definitions_kind_installed_ref_idx
+    on service_form_definitions (kind, installed_at, form_ref_key)`,
+  `create table if not exists service_form_activations (
+    id text primary key,
+    form_ref_key text not null,
+    package_digest text not null,
+    scope_type text not null check (scope_type in ('operator','workspace','space')),
+    scope_id text,
+    status text not null check (status in ('active','inactive')),
+    revision integer not null check (revision >= 1),
+    record_json text not null,
+    created_at text not null,
+    updated_at text not null,
+    foreign key (form_ref_key, package_digest)
+      references service_form_definitions(form_ref_key, package_digest),
+    check (
+      (scope_type = 'operator' and scope_id is null)
+      or (scope_type in ('workspace','space') and length(trim(scope_id)) > 0)
+    )
+  )`,
+  `create index if not exists service_form_activations_scope_status_updated_id_idx
+    on service_form_activations (scope_type, scope_id, status, updated_at, id)`,
+  `create index if not exists service_form_activations_identity_idx
+    on service_form_activations (form_ref_key, package_digest)`,
+] as const;
+
 /**
  * Bootstrap the §27 control-plane tables for the default self-host mode.
  * Idempotent (`IF NOT EXISTS`) and called once per store instance via the
@@ -3748,6 +3799,7 @@ export async function ensureD1OpenTofuLedgerSchema(
       on interface_bindings (interface_id)`,
     `create index if not exists interface_bindings_workspace_subject_idx
       on interface_bindings (workspace_id, subject_kind, subject_id)`,
+    ...D1_SERVICE_FORM_REGISTRY_STATEMENTS,
   ];
   const tableStatements = statements.filter((sql) => !isD1IndexStatement(sql));
   const indexStatements = statements.filter((sql) => isD1IndexStatement(sql));
@@ -5458,6 +5510,24 @@ named indexes replace equivalent historical inline unique constraints
         db,
         D1_PRE_GA_CANONICAL_SCHEMA_CONVERGENCE_STATEMENTS,
       );
+    },
+  },
+  {
+    version: 45,
+    name: "d1_service_form_registry",
+    checksumSource: () => `
+optional zero-form-capable Service Form registry
+exact package and FormRef identities persist separately from activations
+no offering price managed-capacity or Cloud commercial state
+${D1_SERVICE_FORM_REGISTRY_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements() {
+      return D1_SERVICE_FORM_REGISTRY_STATEMENTS;
+    },
+    async apply(db) {
+      for (const statement of D1_SERVICE_FORM_REGISTRY_STATEMENTS) {
+        await db.prepare(statement).run();
+      }
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
