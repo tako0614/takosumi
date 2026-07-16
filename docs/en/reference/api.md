@@ -418,6 +418,11 @@ GET    /v1/space-policies?space={spaceId}&limit={1..100}&cursor={opaque}
 DELETE /v1/space-policies/{name}?space={spaceId}
 ```
 
+An operator bootstrapping a default pool can add `If-None-Match: *` to the
+same PUT for an atomic create-only request. Creation returns `201`; an existing
+Space/name returns `412 target_pool_exists` without replacing its capability
+evidence. PUT without that header keeps the explicit create/update behavior.
+
 Targets are currently complete operator-authored capability entries in
 `TargetPool.spec.targets[]`, not a separate unwired `/v1/targets` resource.
 Resource Shape SpacePolicy records are created, read, listed, and deleted

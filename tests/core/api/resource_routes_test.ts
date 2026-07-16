@@ -1427,6 +1427,67 @@ test("TargetPool API persists admin-defined capability evidence", async () => {
   expect(missing.status).toBe(404);
 });
 
+test("TargetPool PUT If-None-Match star atomically creates and never overwrites", async () => {
+  const { app } = await buildApp();
+  const url = "/v1/target-pools/create-only";
+  const original = {
+    space: "space_1",
+    spec: {
+      targets: [
+        {
+          name: "operator-main",
+          type: "operator",
+          priority: 100,
+          implementations: [ROUTE_IMPLEMENTATIONS[1]],
+        },
+      ],
+    },
+  };
+  const created = await app.request(url, {
+    method: "PUT",
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
+    body: JSON.stringify(original),
+  });
+  expect(created.status).toBe(201);
+
+  const conflict = await app.request(url, {
+    method: "PUT",
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
+    body: JSON.stringify({
+      ...original,
+      spec: {
+        targets: original.spec.targets.map((target) => ({
+          ...target,
+          priority: 1,
+        })),
+      },
+    }),
+  });
+  expect(conflict.status).toBe(412);
+  expect((await conflict.json()).error.code).toBe("target_pool_exists");
+
+  const saved = await app.request(`${url}?space=space_1`);
+  expect(saved.status).toBe(200);
+  expect((await saved.json()).spec).toEqual(original.spec);
+
+  // No header keeps the existing unconditional, reviewed update behavior.
+  const updated = await app.request(url, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      ...original,
+      spec: {
+        targets: original.spec.targets.map((target) => ({
+          ...target,
+          priority: 90,
+        })),
+      },
+    }),
+  });
+  expect(updated.status).toBe(200);
+  expect((await updated.json()).spec.targets[0].priority).toBe(90);
+});
+
 test("TargetPool API rejects invalid capability evidence and secret-looking options", async () => {
   const { app } = await buildApp();
   const badShape = await app.request("/v1/target-pools/bad-shape", {
