@@ -2497,7 +2497,7 @@ dashboard shows service -> inputs -> price -> preview -> deploy by default
 live tenant isolation, abuse/support, observability, backup/restore, and billing evidence
 ```
 
-The GA set is all-or-nothing:
+The ten-form Service Form Stable set is all-or-nothing:
 
 ```text
 EdgeWorker
@@ -2510,11 +2510,17 @@ DurableWorkflow
 ContainerService
 StatefulActorNamespace
 Schedule
+```
+
+The wider Takosumi Cloud GA service-surface set additionally includes non-form services:
+
+```text
 AI Gateway service endpoint
 Verified custom-domain lifecycle
 ```
 
-Every item must pass lifecycle, provider/API compatibility where applicable,
+The two non-form services do not require FormRef or FormActivation. Every item in the wider Cloud
+GA service-surface set must pass lifecycle, provider/API compatibility where applicable,
 price coverage, immutable metering, spend enforcement, invoice reconciliation,
 recovery, tenant isolation, dashboard, and live operator evidence before any of
 them is advertised as the Takosumi Cloud GA set. GA is not inferred from a
