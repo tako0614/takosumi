@@ -24,12 +24,22 @@ import type {
 } from "../../../../core/domains/resource-shape/records.ts";
 import type { SpaceId } from "../../../../core/shared/ids.ts";
 import type { IsoTimestamp } from "../../../../core/shared/time.ts";
+import type { InstalledFormReference } from "takosumi-contract";
 
 const SPACE_A = "sp_alpha" as SpaceId;
 const SPACE_B = "sp_beta" as SpaceId;
 const T0 = "2026-06-29T00:00:00.000Z" as IsoTimestamp;
 const T1 = "2026-06-29T01:00:00.000Z" as IsoTimestamp;
 const T2 = "2026-06-29T02:00:00.000Z" as IsoTimestamp;
+const EXACT_FORM: InstalledFormReference = {
+  formRef: {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    definitionVersion: "1.0.0",
+    schemaDigest: `sha256:${"1".repeat(64)}`,
+  },
+  packageDigest: `sha256:${"2".repeat(64)}`,
+};
 
 function readyShape(
   spaceId: SpaceId,
@@ -219,6 +229,14 @@ const backends: readonly Backend[] = [
     async setup() {
       const db = new SqliteFakeD1();
       await ensureD1OpenTofuLedgerSchema(db);
+      await db
+        .prepare(
+          `insert into service_form_packages
+             (package_digest, status, record_json, installed_at, updated_at)
+           values (?, 'installed', '{}', ?, ?)`,
+        )
+        .bind(EXACT_FORM.packageDigest, T0, T0)
+        .run();
       return {
         stores: createD1ResourceShapeStores(db),
         teardown: () => Promise.resolve(),
@@ -229,6 +247,12 @@ const backends: readonly Backend[] = [
     label: "postgres",
     async setup() {
       const client = await PGliteSqlClient.create();
+      await client.query(
+        `insert into takosumi_service_form_packages
+           (package_digest, status, record_json, installed_at, updated_at)
+         values ($1, 'installed', '{}'::jsonb, $2, $2)`,
+        [EXACT_FORM.packageDigest, T0],
+      );
       return {
         stores: createSqlResourceShapeStores(client),
         teardown: () => client.close(),
@@ -259,6 +283,64 @@ for (const backend of backends) {
       expect(
         await stores.resources.getByName(SPACE_A, "ObjectBucket", "assets"),
       ).toEqual(record);
+    });
+
+    test("exact Form identity round-trips with its matching ResolutionLock", async () => {
+      const record: ResourceShapeRecord = {
+        ...fullShape(),
+        id: formatResourceShapeId(
+          SPACE_A,
+          "ObjectBucket",
+          `exact-form-${backend.label}`,
+        ),
+        name: `exact-form-${backend.label}`,
+        form: EXACT_FORM,
+        phase: "Applying",
+        updatedAt: T2,
+      };
+      const lock: ResolutionLockRecord = {
+        ...fullLock(record.id),
+        form: EXACT_FORM,
+        updatedAt: T2,
+      };
+      expect(
+        await stores.beginApply({ applyingRecord: record, plannedLock: lock }),
+      ).toEqual({ status: "begun", record, lock });
+      expect(await stores.resources.get(record.id)).toEqual(record);
+      expect(await stores.locks.get(record.id)).toEqual(lock);
+
+      let mismatchError: unknown;
+      try {
+        await stores.beginApply({
+          applyingRecord: {
+            ...record,
+            id: `${record.id}-mismatch`,
+            name: `${record.name}-mismatch`,
+          },
+          plannedLock: {
+            ...lock,
+            resourceId: `${record.id}-mismatch`,
+            form: {
+              ...EXACT_FORM,
+              packageDigest: `sha256:${"3".repeat(64)}`,
+            },
+          },
+        });
+      } catch (error) {
+        mismatchError = error;
+      }
+      expect(String(mismatchError)).toContain(
+        "does not pin the Resource form identity",
+      );
+      await stores.removeResource({
+        resourceId: record.id,
+        expected: {
+          generation: record.generation,
+          phase: record.phase,
+          updatedAt: record.updatedAt,
+        },
+        expectedLock: lock,
+      });
     });
 
     test("resource shape: minimal record omits absent optionals", async () => {
