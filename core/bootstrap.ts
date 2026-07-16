@@ -74,9 +74,11 @@ import { RunGroupsService } from "./domains/run-groups/mod.ts";
 import { ActivityService } from "./domains/activity/mod.ts";
 import {
   createInMemoryResourceShapeStores,
+  collectResourceFormPinBackupEntries,
   formatResourceShapeId,
   LegacyResourceStateAdoptionService,
   matchesApplyLock,
+  ResourceFormPinOperations,
   ResourceShapeService,
   type ResourceAdapter,
   type ResourceObservationClaimInput,
@@ -493,6 +495,13 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly resolveResourceInterfaceWorkspace?: ResourceInterfaceWorkspaceResolver;
   /**
+   * Explicit host-owned Workspace -> Resource authorization-scope mapping used
+   * only for the redacted exact-Form backup sidecar.
+   */
+  readonly resolveResourceBackupScope?: (
+    workspaceId: string,
+  ) => string | undefined | Promise<string | undefined>;
+  /**
    * Host-owned issuer for invocation-time Principal OAuth credentials. Core
    * authorizes the exact InterfaceBinding and never persists the returned raw
    * token. When omitted, oauth2 delivery remains NotReady.
@@ -717,6 +726,8 @@ export interface TakosumiOperations {
   readonly controller: OpenTofuController;
   /** Optional zero-form-capable portable Service Form host registry. */
   readonly forms?: FormRegistryService;
+  /** Internal-only bounded exact-Form backfill and backup replay operation. */
+  readonly resourceFormPins?: ResourceFormPinOperations;
   claimManagedPublicHostname(
     input: ManagedPublicHostnameClaimRequest,
   ): Promise<ManagedPublicHostnameClaimResult>;
@@ -1291,26 +1302,6 @@ export async function createTakosumiService(
     controller: opentofuController,
     activity: activityService,
   });
-  // Control-backups domain: exports a Workspace's control ledger as a sealed
-  // bundle. The seal + artifact-storage seam is
-  // host-injected (`backupArtifactStore`); when absent the service is disabled
-  // and the routes report not_implemented.
-  const backupsService = new BackupsService({
-    store: sharedOpenTofuStore,
-    activity: activityService,
-    ...(options.backupArtifactStore
-      ? { artifactStore: options.backupArtifactStore }
-      : {}),
-    ...(options.artifactReferenceAllocator
-      ? { artifactReferenceAllocator: options.artifactReferenceAllocator }
-      : {}),
-    ...(options.backupStateObjectReader
-      ? { stateObjectReader: options.backupStateObjectReader }
-      : {}),
-    ...(options.serviceDataBackupRunner
-      ? { serviceDataRunner: options.serviceDataBackupRunner }
-      : {}),
-  });
   const injectedResourceShapeAdapter =
     options.resourceShapeAdapter ??
     (options.resourceShapeAdapterFactory
@@ -1326,6 +1317,46 @@ export async function createTakosumiService(
     (options.sqlClient
       ? createSqlResourceShapeStores(options.sqlClient)
       : createInMemoryResourceShapeStores());
+  // Control-backups domain: exports a Workspace's control ledger as a sealed
+  // bundle. Resource exact pins require an explicit host-owned scope mapping;
+  // Core never infers matching ids.
+  const backupsService = new BackupsService({
+    store: sharedOpenTofuStore,
+    activity: activityService,
+    ...(options.backupArtifactStore
+      ? { artifactStore: options.backupArtifactStore }
+      : {}),
+    ...(options.artifactReferenceAllocator
+      ? { artifactReferenceAllocator: options.artifactReferenceAllocator }
+      : {}),
+    ...(options.backupStateObjectReader
+      ? { stateObjectReader: options.backupStateObjectReader }
+      : {}),
+    ...(options.serviceDataBackupRunner
+      ? { serviceDataRunner: options.serviceDataBackupRunner }
+      : {}),
+    ...(options.resolveResourceBackupScope
+      ? {
+          collectResourceFormPins: async (workspaceId: string) => {
+            const resourceScopeId =
+              await options.resolveResourceBackupScope!(workspaceId);
+            return resourceScopeId
+              ? await collectResourceFormPinBackupEntries(
+                  resourceShapeStores,
+                  resourceScopeId,
+                )
+              : { status: "ready" as const, entries: [] };
+          },
+        }
+      : {}),
+  });
+  const resourceFormPinOperations = formRegistryService
+    ? new ResourceFormPinOperations({
+        stores: resourceShapeStores,
+        forms: formRegistryService,
+        activity: activityService,
+      })
+    : undefined;
   const legacyResourceStateAdoptionService =
     new LegacyResourceStateAdoptionService(
       resourceShapeStores,
@@ -1974,6 +2005,9 @@ export async function createTakosumiService(
   const operations: TakosumiOperations = {
     controller: opentofuController,
     ...(formRegistryService ? { forms: formRegistryService } : {}),
+    ...(resourceFormPinOperations
+      ? { resourceFormPins: resourceFormPinOperations }
+      : {}),
     claimManagedPublicHostname: (input) =>
       opentofuController.claimManagedPublicHostname(input),
     workspaces: workspacesService,

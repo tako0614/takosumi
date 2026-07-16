@@ -23,6 +23,7 @@
  */
 
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
+import type { InstalledFormReference } from "./service-forms.ts";
 import type { Run } from "./runs.ts";
 
 /** Content type of the sealed control-backup object. */
@@ -72,6 +73,20 @@ export interface BackupRecord {
   readonly serviceData?: ServiceDataBackupPointer;
   readonly createdByRunId?: string;
   readonly createdAt: string;
+}
+
+/**
+ * Redacted exact-definition sidecar captured for one form-backed Resource.
+ * It deliberately excludes desired spec, outputs, NativeResource values, and
+ * implementation/target details. Restore uses it only to replay the immutable
+ * identity onto the existing Resource + ResolutionLock pair.
+ */
+export interface ResourceFormPinBackupEntry {
+  readonly resourceId: string;
+  /** Host-mapped Resource authorization scope; never inferred from Workspace. */
+  readonly resourceScopeId: string;
+  readonly kind: string;
+  readonly identity: InstalledFormReference;
 }
 
 /** Public pointer to the state generation this backup can restore. */

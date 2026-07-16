@@ -15,7 +15,10 @@ import { createD1ResourceShapeStores } from "../../../../core/domains/resource-s
 import { createSqlResourceShapeStores } from "../../../../core/domains/resource-shape/sql_stores.ts";
 import { createInMemoryResourceShapeStores } from "../../../../core/domains/resource-shape/stores.ts";
 import type { ResourceShapeStores } from "../../../../core/domains/resource-shape/stores.ts";
-import { formatResourceShapeId } from "../../../../core/domains/resource-shape/records.ts";
+import {
+  collectResourceFormPinBackupEntries,
+  formatResourceShapeId,
+} from "../../../../core/domains/resource-shape/mod.ts";
 import type {
   ResolutionLockRecord,
   ResourceShapeRecord,
@@ -341,6 +344,109 @@ for (const backend of backends) {
         },
         expectedLock: lock,
       });
+    });
+
+    test("legacy exact Form pinning is bounded, atomic, and immutable", async () => {
+      const record: ResourceShapeRecord = {
+        ...fullShape(),
+        id: formatResourceShapeId(
+          SPACE_A,
+          "ObjectBucket",
+          `legacy-pin-${backend.label}`,
+        ),
+        name: `legacy-pin-${backend.label}`,
+      };
+      const lock: ResolutionLockRecord = {
+        ...fullLock(record.id),
+        updatedAt: record.updatedAt,
+      };
+      await stores.resources.upsert(record);
+      await stores.locks.put(lock);
+
+      const page = await stores.resources.listUnpinnedBySpaceKindPage(
+        SPACE_A,
+        "ObjectBucket",
+        { limit: 100 },
+      );
+      expect(page.items.map((item) => item.id)).toContain(record.id);
+      expect(
+        await stores.pinExactFormIdentity({
+          resourceId: record.id,
+          form: EXACT_FORM,
+          expectedResource: {
+            generation: record.generation,
+            phase: record.phase,
+            updatedAt: record.updatedAt,
+          },
+          expectedLock: lock,
+        }),
+      ).toMatchObject({ status: "pinned" });
+      expect((await stores.resources.get(record.id))?.form).toEqual(EXACT_FORM);
+      expect((await stores.locks.get(record.id))?.form).toEqual(EXACT_FORM);
+
+      expect(
+        await stores.pinExactFormIdentity({
+          resourceId: record.id,
+          form: EXACT_FORM,
+          expectedResource: {
+            generation: record.generation,
+            phase: record.phase,
+            updatedAt: record.updatedAt,
+          },
+          expectedLock: lock,
+        }),
+      ).toMatchObject({ status: "already_pinned" });
+      expect(
+        await stores.pinExactFormIdentity({
+          resourceId: record.id,
+          form: {
+            ...EXACT_FORM,
+            packageDigest: `sha256:${"9".repeat(64)}`,
+          },
+          expectedResource: {
+            generation: record.generation,
+            phase: record.phase,
+            updatedAt: record.updatedAt,
+          },
+          expectedLock: lock,
+        }),
+      ).toMatchObject({ status: "conflict" });
+
+      const collection = await collectResourceFormPinBackupEntries(
+        stores,
+        SPACE_A,
+      );
+      expect(collection.status).toBe("ready");
+      if (collection.status !== "ready") throw new Error("unexpected pin tear");
+      const backupEntry = collection.entries.find(
+        (entry) => entry.resourceId === record.id,
+      );
+      expect(backupEntry).toEqual({
+        resourceId: record.id,
+        resourceScopeId: SPACE_A,
+        kind: record.kind,
+        identity: EXACT_FORM,
+      });
+      expect(JSON.stringify(backupEntry)).not.toContain("s3.example");
+
+      // Restore replay starts from an existing legacy pair and reuses only the
+      // exact redacted identity; it never asks a resolver for another value.
+      await stores.resources.upsert(record);
+      await stores.locks.put(lock);
+      expect(
+        await stores.pinExactFormIdentity({
+          resourceId: record.id,
+          form: backupEntry!.identity,
+          expectedResource: {
+            generation: record.generation,
+            phase: record.phase,
+            updatedAt: record.updatedAt,
+          },
+          expectedLock: lock,
+        }),
+      ).toMatchObject({ status: "pinned" });
+      await stores.locks.delete(record.id);
+      await stores.resources.delete(record.id);
     });
 
     test("resource shape: minimal record omits absent optionals", async () => {
@@ -1538,6 +1644,100 @@ test("Postgres atomic apply transaction rolls back both Resource and ResolutionL
     ).rejects.toThrow("force_atomic_lock_failure");
     expect(await stores.resources.get(applying.id)).toEqual(applying);
     expect(await stores.locks.get(applying.id)).toEqual(plannedLock);
+  } finally {
+    await client.close();
+  }
+});
+
+test("D1 exact Form pin batch rolls back both Resource and ResolutionLock writes", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await db
+    .prepare(
+      `insert into service_form_packages
+         (package_digest, status, record_json, installed_at, updated_at)
+       values (?, 'installed', '{}', ?, ?)`,
+    )
+    .bind(EXACT_FORM.packageDigest, T0, T0)
+    .run();
+  const stores = createD1ResourceShapeStores(db);
+  const record: ResourceShapeRecord = {
+    ...fullShape(),
+    id: formatResourceShapeId(SPACE_A, "ObjectBucket", "form-pin-rollback-d1"),
+    name: "form-pin-rollback-d1",
+  };
+  const lock = { ...fullLock(record.id), updatedAt: record.updatedAt };
+  await stores.resources.upsert(record);
+  await stores.locks.put(lock);
+  await db
+    .prepare(
+      `create trigger force_form_pin_lock_failure
+       before update on resolution_locks
+       when new.package_digest = '${EXACT_FORM.packageDigest}'
+       begin
+         select raise(abort, 'forced exact Form pin failure');
+       end`,
+    )
+    .run();
+
+  await expect(
+    stores.pinExactFormIdentity({
+      resourceId: record.id,
+      form: EXACT_FORM,
+      expectedResource: {
+        generation: record.generation,
+        phase: record.phase,
+        updatedAt: record.updatedAt,
+      },
+      expectedLock: lock,
+    }),
+  ).rejects.toThrow("forced exact Form pin failure");
+  expect(await stores.resources.get(record.id)).toEqual(record);
+  expect(await stores.locks.get(record.id)).toEqual(lock);
+});
+
+test("Postgres exact Form pin transaction rolls back both Resource and ResolutionLock writes", async () => {
+  const client = await PGliteSqlClient.create();
+  try {
+    await client.query(
+      `insert into takosumi_service_form_packages
+         (package_digest, status, record_json, installed_at, updated_at)
+       values ($1, 'installed', '{}'::jsonb, $2, $2)`,
+      [EXACT_FORM.packageDigest, T0],
+    );
+    const stores = createSqlResourceShapeStores(client);
+    const record: ResourceShapeRecord = {
+      ...fullShape(),
+      id: formatResourceShapeId(
+        SPACE_A,
+        "ObjectBucket",
+        "form-pin-rollback-postgres",
+      ),
+      name: "form-pin-rollback-postgres",
+    };
+    const lock = { ...fullLock(record.id), updatedAt: record.updatedAt };
+    await stores.resources.upsert(record);
+    await stores.locks.put(lock);
+    await client.exec(
+      `alter table takosumi_resolution_locks
+       add constraint force_form_pin_lock_failure
+       check (package_digest <> '${EXACT_FORM.packageDigest}')`,
+    );
+
+    await expect(
+      stores.pinExactFormIdentity({
+        resourceId: record.id,
+        form: EXACT_FORM,
+        expectedResource: {
+          generation: record.generation,
+          phase: record.phase,
+          updatedAt: record.updatedAt,
+        },
+        expectedLock: lock,
+      }),
+    ).rejects.toThrow("force_form_pin_lock_failure");
+    expect(await stores.resources.get(record.id)).toEqual(record);
+    expect(await stores.locks.get(record.id)).toEqual(lock);
   } finally {
     await client.close();
   }
