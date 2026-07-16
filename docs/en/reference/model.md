@@ -1,13 +1,22 @@
 # Model Reference
 
-Last updated: 2026-07-14
+Last updated: 2026-07-16
 
 Takosumi OSS has two public authoring flows and one shared runtime interaction
-layer: run plain OpenTofu from Git, or deploy provider-neutral Takosumi Resource
-Shapes through `/v1/resources`, then expose either result through Interface and
-authorize consumers through InterfaceBinding. Control-plane compatibility
+layer: run plain OpenTofu from Git, or let the host resolve an exact Service
+Form-backed Resource. The current wire/provider/state calls the latter a
+Resource Shape and exposes it through `/v1/resources`. Either result is exposed through Interface and
+consumers are authorized through InterfaceBinding. Control-plane compatibility
 profiles translate into the Deploy API; data-plane profiles resolve Ready
 canonical Resources.
+
+Takosumi is the sole Resource / Run / state / audit lifecycle authority. The
+portable project owns Service Forms, exact FormRefs, data-only Form Packages,
+and typed-client conformance. Takosumi is an optional host that owns the Form
+Registry, implementations, Target / Policy / credentials, and generic
+FormActivation. Takosumi Core still runs the plain Stack flow with zero Form
+Packages installed. Takosumi Cloud exact ServiceOfferings, price, billing, and
+official capacity sit outside this OSS host model.
 
 ## OpenTofu Stack Concepts
 
@@ -27,22 +36,27 @@ canonical Resources.
 | Runner             | Local/docker/remote/operator/cloud execution worker                        |
 | AuditEvent         | Actor/action/target/result evidence                                        |
 
-## Resource Shape Concepts
+## Service Form Host Concepts
 
-| Concept        | Meaning                                                                   |
-| -------------- | ------------------------------------------------------------------------- |
-| Space          | Resource API namespace and policy scope                                   |
-| Environment    | Deployment environment inside a Space                                     |
-| Stack          | A group of Resource Shape objects and operations                          |
-| Resource       | Desired service-form resource, such as EdgeWorker, ObjectBucket, or Queue |
-| Target         | Concrete implementation destination, such as AWS, Cloudflare, Kubernetes  |
-| TargetPool     | Operator-controlled set of available Targets and capabilities             |
-| Credential     | Runtime authority used by a Target or Adapter                             |
-| Policy         | Rules for placement, cost, region, action, network, and access            |
-| Adapter        | Implementation bridge that can preview, apply, observe, and delete        |
-| ResolutionLock | Recorded resolver decision for a Resource                                 |
-| NativeResource | Concrete provider/platform resource created by an Adapter                 |
-| Condition      | Status and readiness evidence                                             |
+| Concept        | Meaning                                                                     |
+| -------------- | --------------------------------------------------------------------------- |
+| Service Form   | Versioned provider-neutral service definition owned by the portable project |
+| FormRef        | Exact apiVersion / kind / definitionVersion / schemaDigest identity         |
+| Form Package   | Data-only bundle of schema, metadata, mappings, and fixtures                |
+| Form Registry  | Inventory of trusted Form Package pins installed on one host                |
+| FormActivation | Generic OSS record exposing an exact FormRef to an audience/policy scope    |
+| Space          | Resource API namespace and policy scope                                     |
+| Environment    | Deployment environment inside a Space                                       |
+| Stack          | A group of Service Form-backed Resource objects and operations              |
+| Resource       | Desired service-form resource, such as EdgeWorker, ObjectBucket, or Queue   |
+| Target         | Concrete implementation destination, such as AWS, Cloudflare, Kubernetes    |
+| TargetPool     | Operator-controlled set of available Targets and capabilities               |
+| Credential     | Runtime authority used by a Target or Adapter                               |
+| Policy         | Rules for placement, cost, region, action, network, and access              |
+| Adapter        | Implementation bridge that can preview, apply, observe, and delete          |
+| ResolutionLock | Recorded resolver decision for a Resource                                   |
+| NativeResource | Concrete provider/platform resource created by an Adapter                   |
+| Condition      | Status and readiness evidence                                               |
 
 `Space` here is the Resource API namespace and policy scope.
 
@@ -221,14 +235,19 @@ immediately. Operators can also pass `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR`,
 `TAKOSUMI_SOURCE_BUILD_CACHE_DIR`, `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`, and runner capacity retry knobs as
 non-secret speed settings. This is not a cross-run source-sync cache.
 
-## Resource Shape Resolution
+## Service Form Host Resolution (`Resource Shape` compatibility)
 
-The Resource Shape flow starts from typed Resource objects and resolves them to
-Targets. Those objects can be submitted through the `/v1/resources` Deploy API,
+The Service Form host flow starts from typed Resource objects with an exact
+FormRef and resolves them to Targets. The current API/provider/state has not yet
+added FormRef persistence and uses the Resource Shape kind as its compatibility
+identity. Existing Resource IDs, kinds, ResolutionLocks, Runs, and state remain
+stable throughout migration; no second ledger is created. Objects can be
+submitted through the `/v1/resources` Deploy API,
 `takosumi_*` provider resources, CLI, dashboard, or Kubernetes CRDs:
 
 ```text
-Resource Shape
+exact FormRef + Resource
+  -> installed definition + executable implementation + FormActivation
   -> TargetPool / Policy / Credential
   -> Adapter capability
   -> ResolutionLock
@@ -240,12 +259,13 @@ which Targets are available, which Adapters are enabled, and which policies
 control placement. Resolver decisions are recorded as ResolutionLocks and do
 not move without an explicit migration.
 TargetPool, Policy, and Adapter are operator/advanced surfaces; the default UX
-shows the service form, required inputs, price, preview, and deploy.
+shows the Service Form, required inputs, price, preview, and deploy.
 
-Resource Shapes do not replace existing providers for external infrastructure;
+Service Forms do not replace existing providers for external infrastructure;
 use those providers through the plain Stack flow. Capacity sold and operated by
-Takosumi/operator is nevertheless defined as a provider-neutral Resource Shape,
-whether or not it exposes a standard protocol. Standard/compatible surfaces are
+an operator uses a portable exact Service Form plus an explicit implementation
+and generic FormActivation. Cloud adds an exact ServiceOffering when it sells or
+officially operates that capacity. Standard/compatible surfaces are
 control-plane translations or data planes for that Resource, not lifecycle
 authorities.
 
@@ -257,18 +277,21 @@ selection are operator/advanced machinery behind that API.
 The absence of a standard surface does not justify a catch-all provider.
 One-off gaps and external infrastructure stay in generic-env
 ProviderConnections and normal OpenTofu modules. A new `takosumi_*` schema is
-justified only for a repeated provider-neutral service form offered as managed
-capacity and backed by typed schema, planner, adapter, import/drift/state
-behavior, and capability evidence. A provider resource that does not map to either a
-Takosumi-owned service form or an operator/admin object has no reason to exist.
+justified only for a repeated provider-neutral Service Form backed by typed
+schema, planner, adapter, import/drift/state
+behavior, and capability evidence. Current `takosumi_*` form resources remain
+compatibility state; new typed form-client authority moves to the independent
+provider. A provider resource that maps to neither a portable Service Form nor
+a Takosumi operator/admin object has no reason to exist.
 
-`takosumi/takosumi` is an optional typed Deploy API client, not the authority for
-shapes, service offerings, prices, backend selection, or lifecycle state. Direct
+`takosumi/takosumi` is the typed Deploy API client retaining current compatibility
+state and operator/admin objects, not the authority for Service Forms,
+ServiceOfferings, prices, backend selection, or lifecycle state. Direct
 API, CLI, dashboard, and compatibility clients can deploy the same service.
 
 Takos is a representative consumer of this rule. Takos should be described as
-the composition of generic Resource Shapes it actually needs, not as a
-product-specific catch-all shape:
+the composition of generic Service Form-backed Resources it actually needs,
+not as a product-specific catch-all shape:
 
 ```text
 Takos distribution:
@@ -320,7 +343,7 @@ extra keys are endpoint-specific and must be backed by TargetPool evidence and a
 plugin-aware adapter.
 
 Secrets remain Credential/ProviderConnection material and are never placed in
-the Resource Shape spec or OpenTofu state. AI Gateway configuration follows the
+the Service Form / Resource spec or OpenTofu state. AI Gateway configuration follows the
 same secret/env projection rule; it is not a default Resource Shape.
 
 ## Compatibility Capabilities
