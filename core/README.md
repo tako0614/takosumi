@@ -92,9 +92,15 @@ const server = Bun.serve({ port: 8788, fetch: app.fetch });
 `createTakosumiService` builds the Hono app, wires adapter ports, mounts route modules for the configured process role,
 and passes internal runner/profile and store configuration to the deploy control pipeline.
 It does not install a Credential Recipe catalog, runtime driver registry,
-guided provider setup helpers, or OAuth helper registry by default. A host must
+guided provider setup helpers, OAuth helper registry, or Resource Shape schema
+authority by default. A host must
 pass those contributions explicitly; the shipped Worker and Bun/Postgres
-composition roots select the reference provider contribution.
+composition roots select the reference provider contribution, while the
+current Takos/Takosumi host composition explicitly installs the frozen
+v1alpha1 Resource Shape compatibility parser set. Type exports and compiled
+parsers alone grant no Resource creation authority; the operator must also pass
+an enabled-kind allowlist. Installed retained state remains readable,
+observable, and deletable when creation is disabled.
 Static recipes without a runtime driver use Core's structural material check
 and pass-through mint. Pre-run recipes require an explicit mint driver and must
 be filtered out of the host's installed catalog when that driver is absent.

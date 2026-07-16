@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import {
+  composeResourceShapeSchemaRegistries,
+  LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
   MapResourceShapeModuleRegistry,
   MapResourceShapeSchemaRegistry,
 } from "../../../core/domains/resource-shape/mod.ts";
@@ -18,14 +20,22 @@ const schemas = new MapResourceShapeSchemaRegistry({
 test("custom Resource Shape tokens require a code-installed schema", () => {
   expect(() =>
     configuredResourceShapeKinds("EdgeWorker,CustomService"),
-  ).toThrow("CustomService has no installed schema");
+  ).toThrow("EdgeWorker has no installed schema");
+  const installed = composeResourceShapeSchemaRegistries(
+    LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    schemas,
+  );
   expect(
-    configuredResourceShapeKinds("EdgeWorker,CustomService", schemas),
+    configuredResourceShapeKinds("EdgeWorker,CustomService", installed),
   ).toEqual(["EdgeWorker", "CustomService"]);
 });
 
-test("Resource Shape all means bundled plus actually registered schemas", () => {
-  expect(configuredResourceShapeKinds("all", schemas)).toEqual([
+test("Resource Shape all means only explicitly installed compatibility schemas", () => {
+  const installed = composeResourceShapeSchemaRegistries(
+    LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    schemas,
+  );
+  expect(configuredResourceShapeKinds("all", installed)).toEqual([
     "EdgeWorker",
     "ObjectBucket",
     "KVStore",
@@ -38,6 +48,7 @@ test("Resource Shape all means bundled plus actually registered schemas", () => 
     "Schedule",
     "CustomService",
   ]);
+  expect(configuredResourceShapeKinds("all")).toEqual([]);
 });
 
 test("host composition carries schema and module registries as runtime objects", () => {
