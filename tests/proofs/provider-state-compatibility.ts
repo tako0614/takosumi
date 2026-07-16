@@ -7,6 +7,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCompatibilityAuthorities } from "../../scripts/lib/provider-release-compatibility.mjs";
 import { buildSanitizedProviderProofEnvironment } from "../../scripts/lib/provider-proof-environment.mjs";
+import { assertExactRequestDeltas } from "../../scripts/lib/provider-proof-requests.mjs";
+import { assertProviderStateIdentity } from "../../scripts/lib/provider-proof-state.mjs";
 
 const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const authorities = await loadCompatibilityAuthorities();
@@ -34,9 +36,15 @@ const sanitized = buildSanitizedProviderProofEnvironment(process.env, {
     TF_IN_AUTOMATION: "1",
   },
 });
+const openTofuPath = findCommand("tofu", sanitized.environment);
+if (!openTofuPath)
+  throw new Error("OpenTofu CLI is required for provider state proof");
 const terraformPath = findCommand("terraform", sanitized.environment);
 const server = Bun.spawn(
-  ["bun", join(repoRoot, "tests/proofs/fixtures/provider-compatibility-server.ts")],
+  [
+    "bun",
+    join(repoRoot, "tests/proofs/fixtures/provider-compatibility-server.ts"),
+  ],
   { env: sanitized.environment, stdout: "pipe", stderr: "inherit" },
 );
 
@@ -118,7 +126,10 @@ resource "takosumi_target_pool" "legacy" {
 }
 `,
   );
-  const binary = join(binaryDir, `terraform-provider-takosumi_v${descriptor.version}`);
+  const binary = join(
+    binaryDir,
+    `terraform-provider-takosumi_v${descriptor.version}`,
+  );
   run(
     descriptor.toolchain.go.path,
     [
@@ -163,20 +174,28 @@ resource "takosumi_target_pool" "legacy" {
   const oldEnv = { ...baseEnv, TF_CLI_CONFIG_FILE: oldConfig };
   const currentEnv = { ...baseEnv, TF_CLI_CONFIG_FILE: currentConfig };
 
-  run("tofu", ["init", "-backend=false", "-input=false", "-no-color"], {
+  run(openTofuPath, ["init", "-backend=false", "-input=false", "-no-color"], {
     cwd: moduleDir,
     env: oldEnv,
   });
   const lock = await readFile(join(moduleDir, ".terraform.lock.hcl"), "utf8");
   if (
-    !lock.includes(`provider "${authorities.identity.provider.openTofuAddress}"`) ||
-    !lock.includes(`version     = "${authorities.identity.provider.version}"`) ||
-    !lock.includes(`"zh:${authorities.identity.provider.linuxAmd64ArchiveSha256}"`)
+    !lock.includes(
+      `provider "${authorities.identity.provider.openTofuAddress}"`,
+    ) ||
+    !lock.includes(
+      `version     = "${authorities.identity.provider.version}"`,
+    ) ||
+    !lock.includes(
+      `"zh:${authorities.identity.provider.linuxAmd64ArchiveSha256}"`,
+    )
   ) {
-    throw new Error("old-state proof lockfile did not bind the exact public 1.0.0 archive");
+    throw new Error(
+      "old-state proof lockfile did not bind the exact public 1.0.0 archive",
+    );
   }
   const beforeOldApply = await requestCounts(origin);
-  run("tofu", ["apply", "-auto-approve", "-input=false", "-no-color"], {
+  run(openTofuPath, ["apply", "-auto-approve", "-input=false", "-no-color"], {
     cwd: moduleDir,
     env: oldEnv,
   });
@@ -185,8 +204,14 @@ resource "takosumi_target_pool" "legacy" {
 
   expectNoChange(
     runDetailed(
-      "tofu",
-      ["plan", "-refresh=false", "-detailed-exitcode", "-input=false", "-no-color"],
+      openTofuPath,
+      [
+        "plan",
+        "-refresh=false",
+        "-detailed-exitcode",
+        "-input=false",
+        "-no-color",
+      ],
       { cwd: moduleDir, env: currentEnv },
     ),
     "current candidate refresh-free plan against old state",
@@ -197,16 +222,20 @@ resource "takosumi_target_pool" "legacy" {
     afterCurrentNoOp,
     "current refresh-free no-op",
   );
-  run("tofu", ["apply", "-refresh-only", "-auto-approve", "-input=false", "-no-color"], {
-    cwd: moduleDir,
-    env: currentEnv,
-  });
+  run(
+    openTofuPath,
+    ["apply", "-refresh-only", "-auto-approve", "-input=false", "-no-color"],
+    {
+      cwd: moduleDir,
+      env: currentEnv,
+    },
+  );
   const afterCurrentRefresh = await requestCounts(origin);
   assertCurrentObservePhase(afterCurrentNoOp, afterCurrentRefresh);
 
   expectNoChange(
     runDetailed(
-      "tofu",
+      openTofuPath,
       ["plan", "-detailed-exitcode", "-input=false", "-no-color"],
       { cwd: moduleDir, env: oldEnv },
     ),
@@ -214,7 +243,7 @@ resource "takosumi_target_pool" "legacy" {
   );
   const afterRollback = await requestCounts(origin);
   assertRollbackPhase(afterCurrentRefresh, afterRollback);
-  run("tofu", ["destroy", "-auto-approve", "-input=false", "-no-color"], {
+  run(openTofuPath, ["destroy", "-auto-approve", "-input=false", "-no-color"], {
     cwd: moduleDir,
     env: oldEnv,
   });
@@ -222,6 +251,7 @@ resource "takosumi_target_pool" "legacy" {
     root,
     origin,
     providerAddress: authorities.identity.provider.openTofuAddress,
+    openTofuPath,
     currentConfig,
     baseEnvironment: sanitized.environment,
   });
@@ -263,7 +293,9 @@ resource "takosumi_target_pool" "legacy" {
         currentObserveRefresh: true,
         currentMutationDuringRefresh: false,
         oldProviderRollbackNoOp: true,
-        currentOmittedBucketCreateCanonicalized: currentCreateCanonicalized,
+        currentOmittedBucketCreateCanonicalized:
+          currentCreateCanonicalized.storageClassKnownStandard,
+        openTofuEvidence: currentCreateCanonicalized,
         terraformEvidence,
         phaseEvidence: {
           oldApply: "six-resource-put-and-target-pool-put-exact",
@@ -347,10 +379,14 @@ resource "takosumi_object_bucket" "terraform" {
     }).stdout,
   );
   if (!schemaDocument.provider_schemas?.[terraformAddress]) {
-    throw new Error("Terraform schema proof omitted the Terraform provider FQN");
+    throw new Error(
+      "Terraform schema proof omitted the Terraform provider FQN",
+    );
   }
   if (schemaDocument.provider_schemas?.[openTofuAddress]) {
-    throw new Error("Terraform schema proof treated the OpenTofu FQN as interchangeable");
+    throw new Error(
+      "Terraform schema proof treated the OpenTofu FQN as interchangeable",
+    );
   }
 
   const beforeApply = await requestCounts(origin);
@@ -372,18 +408,13 @@ resource "takosumi_object_bucket" "terraform" {
       env: environment,
     }).stdout,
   );
-  const resource = state.values?.root_module?.resources?.find(
-    (entry: { address?: string }) =>
-      entry.address === "takosumi_object_bucket.terraform",
-  );
-  if (
-    resource?.provider_name !== terraformAddress ||
-    resource?.values?.storage_class !== "standard"
-  ) {
-    throw new Error(
-      "Terraform state proof did not retain its explicit FQN and canonical state",
-    );
-  }
+  assertProviderStateIdentity({
+    state,
+    resourceAddress: "takosumi_object_bucket.terraform",
+    providerAddress: terraformAddress,
+    expectedValues: { storage_class: "standard" },
+    label: "Terraform state proof",
+  });
 
   expectNoChange(
     runDetailed(
@@ -408,10 +439,14 @@ resource "takosumi_object_bucket" "terraform" {
     0,
     "Terraform explicit-FQN refresh",
   );
-  run(terraformPath, ["destroy", "-auto-approve", "-input=false", "-no-color"], {
-    cwd: moduleDir,
-    env: environment,
-  });
+  run(
+    terraformPath,
+    ["destroy", "-auto-approve", "-input=false", "-no-color"],
+    {
+      cwd: moduleDir,
+      env: environment,
+    },
+  );
   return {
     status: "proof-complete",
     cliPath: terraformPath,
@@ -429,12 +464,14 @@ async function proveCurrentOmittedBucketCreate({
   root,
   origin,
   providerAddress,
+  openTofuPath,
   currentConfig,
   baseEnvironment,
 }: {
   root: string;
   origin: string;
   providerAddress: string;
+  openTofuPath: string;
   currentConfig: string;
   baseEnvironment: NodeJS.ProcessEnv;
 }) {
@@ -467,7 +504,7 @@ resource "takosumi_object_bucket" "omitted" {
     TF_DATA_DIR: join(root, "current-create-tofu-data"),
   };
   const before = await requestCounts(origin);
-  run("tofu", ["apply", "-auto-approve", "-input=false", "-no-color"], {
+  run(openTofuPath, ["apply", "-auto-approve", "-input=false", "-no-color"], {
     cwd: moduleDir,
     env: environment,
   });
@@ -487,25 +524,31 @@ resource "takosumi_object_bucket" "omitted" {
     "current omitted ObjectBucket preview",
   );
   const show = JSON.parse(
-    run("tofu", ["show", "-json", "-no-color"], {
+    run(openTofuPath, ["show", "-json", "-no-color"], {
       cwd: moduleDir,
       env: environment,
     }).stdout,
   );
-  const resource = show.values?.root_module?.resources?.find(
-    (entry: { address?: string }) =>
-      entry.address === "takosumi_object_bucket.omitted",
-  );
-  if (resource?.values?.storage_class !== "standard") {
-    throw new Error(
-      "current ObjectBucket create did not persist the known standard storage class",
-    );
-  }
-  run("tofu", ["destroy", "-auto-approve", "-input=false", "-no-color"], {
+  assertProviderStateIdentity({
+    state: show,
+    resourceAddress: "takosumi_object_bucket.omitted",
+    providerAddress,
+    expectedValues: { storage_class: "standard" },
+    label: "current OpenTofu ObjectBucket state",
+  });
+  run(openTofuPath, ["destroy", "-auto-approve", "-input=false", "-no-color"], {
     cwd: moduleDir,
     env: environment,
   });
-  return true;
+  return {
+    status: "proof-complete",
+    cliPath: openTofuPath,
+    providerAddress,
+    stateProviderAddressExact: true,
+    storageClassKnownStandard: true,
+    addressesTreatedAsInterchangeable: false,
+    stateValuesRecorded: false,
+  };
 }
 
 async function readReadyOrigin(stream: ReadableStream<Uint8Array>) {
@@ -514,23 +557,22 @@ async function readReadyOrigin(stream: ReadableStream<Uint8Array>) {
   let output = "";
   while (!output.includes("\n")) {
     const next = await reader.read();
-    if (next.done) throw new Error("compatibility server exited before readiness");
+    if (next.done)
+      throw new Error("compatibility server exited before readiness");
     output += decoder.decode(next.value, { stream: true });
   }
   const match = /^READY (http:\/\/[^\n]+)\n/.exec(output);
-  if (!match) throw new Error(`invalid compatibility server readiness: ${output.trim()}`);
+  if (!match)
+    throw new Error(`invalid compatibility server readiness: ${output.trim()}`);
   reader.releaseLock();
   return match[1];
 }
 
 async function requestCounts(origin: string) {
   const response = await fetch(`${origin}/__proof/counts`);
-  if (!response.ok) throw new Error("failed to read compatibility server request counters");
+  if (!response.ok)
+    throw new Error("failed to read compatibility server request counters");
   return (await response.json()) as Record<string, number>;
-}
-
-function count(counts: Record<string, number>, key: string) {
-  return counts[key] ?? 0;
 }
 
 function findCommand(command: string, environment: NodeJS.ProcessEnv) {
@@ -548,12 +590,13 @@ function assertRouteDelta(
   expected: number,
   phase: string,
 ) {
-  const actual = count(after, route) - count(before, route);
-  if (actual !== expected) {
-    throw new Error(
-      `${phase} expected ${route} delta ${expected}, observed ${actual}`,
-    );
-  }
+  assertExactRequestDeltas({
+    before,
+    after,
+    managedRoutes: [route],
+    expected: { [route]: expected },
+    phase,
+  });
 }
 
 function managedRoutes() {
@@ -576,147 +619,87 @@ function assertNoManagedRouteDelta(
   after: Record<string, number>,
   phase: string,
 ) {
-  for (const route of managedRoutes()) {
-    assertRouteDelta(before, after, route, 0, phase);
-  }
+  assertExactRequestDeltas({
+    before,
+    after,
+    managedRoutes: managedRoutes(),
+    expected: {},
+    phase,
+  });
 }
 
 function assertOldApplyPhase(
   before: Record<string, number>,
   after: Record<string, number>,
 ) {
+  const expected: Record<string, number> = {
+    "PUT /v1/target-pools/default": 1,
+  };
   for (const [kind, name] of historicalResourceRoutes) {
-    assertRouteDelta(
-      before,
-      after,
-      `PUT /v1/resources/${kind}/${name}`,
-      1,
-      "historical apply",
-    );
-    assertRouteDelta(
-      before,
-      after,
-      `GET /v1/resources/${kind}/${name}`,
-      0,
-      "historical apply",
-    );
-    assertRouteDelta(
-      before,
-      after,
-      `POST /v1/resources/${kind}/${name}/observe`,
-      0,
-      "historical apply",
-    );
+    expected[`PUT /v1/resources/${kind}/${name}`] = 1;
   }
-  assertRouteDelta(
+  assertExactRequestDeltas({
     before,
     after,
-    "PUT /v1/target-pools/default",
-    1,
-    "historical apply",
-  );
-  assertRouteDelta(
-    before,
-    after,
-    "GET /v1/target-pools/default",
-    0,
-    "historical apply",
-  );
+    managedRoutes: managedRoutes(),
+    expected,
+    phase: "historical apply",
+  });
 }
 
 function assertCurrentObservePhase(
   before: Record<string, number>,
   after: Record<string, number>,
 ) {
+  const expected: Record<string, number> = {
+    "GET /v1/target-pools/default": 1,
+  };
   for (const [kind, name] of historicalResourceRoutes) {
-    assertRouteDelta(
-      before,
-      after,
-      `POST /v1/resources/${kind}/${name}/observe`,
-      1,
-      "current refresh",
-    );
-    assertRouteDelta(
-      before,
-      after,
-      `PUT /v1/resources/${kind}/${name}`,
-      0,
-      "current refresh",
-    );
-    assertRouteDelta(
-      before,
-      after,
-      `GET /v1/resources/${kind}/${name}`,
-      0,
-      "current refresh",
-    );
+    expected[`POST /v1/resources/${kind}/${name}/observe`] = 1;
   }
-  assertRouteDelta(
+  assertExactRequestDeltas({
     before,
     after,
-    "GET /v1/target-pools/default",
-    1,
-    "current refresh",
-  );
-  assertRouteDelta(
-    before,
-    after,
-    "PUT /v1/target-pools/default",
-    0,
-    "current refresh",
-  );
+    managedRoutes: managedRoutes(),
+    expected,
+    phase: "current refresh",
+  });
 }
 
 function assertRollbackPhase(
   before: Record<string, number>,
   after: Record<string, number>,
 ) {
+  const expected: Record<string, number> = {
+    "GET /v1/target-pools/default": 1,
+  };
   for (const [kind, name] of historicalResourceRoutes) {
-    assertRouteDelta(
-      before,
-      after,
-      `GET /v1/resources/${kind}/${name}`,
-      1,
-      "historical rollback",
-    );
-    assertRouteDelta(
-      before,
-      after,
-      `POST /v1/resources/${kind}/${name}/observe`,
-      0,
-      "historical rollback",
-    );
-    assertRouteDelta(
-      before,
-      after,
-      `PUT /v1/resources/${kind}/${name}`,
-      0,
-      "historical rollback",
-    );
+    expected[`GET /v1/resources/${kind}/${name}`] = 1;
   }
-  assertRouteDelta(
+  assertExactRequestDeltas({
     before,
     after,
-    "GET /v1/target-pools/default",
-    1,
-    "historical rollback",
-  );
-  assertRouteDelta(
-    before,
-    after,
-    "PUT /v1/target-pools/default",
-    0,
-    "historical rollback",
-  );
+    managedRoutes: managedRoutes(),
+    expected,
+    phase: "historical rollback",
+  });
 }
 
-function run(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) {
+function run(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+) {
   const result = runDetailed(command, args, options);
   if (result.status !== 0) throw commandError(command, args, result);
   return result;
 }
 
-function runDetailed(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) {
+function runDetailed(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+) {
   const result = spawnSync(command, args, {
     ...options,
     encoding: "utf8",
@@ -726,10 +709,7 @@ function runDetailed(command: string, args: string[], options: { cwd: string; en
   return result;
 }
 
-function expectNoChange(
-  result: ReturnType<typeof spawnSync>,
-  label: string,
-) {
+function expectNoChange(result: ReturnType<typeof spawnSync>, label: string) {
   if (result.status !== 0) {
     throw new Error(`${label} was not no-op: ${commandOutput(result)}`);
   }
@@ -740,7 +720,9 @@ function commandError(
   args: string[],
   result: ReturnType<typeof spawnSync>,
 ) {
-  return new Error(`${command} ${args.join(" ")} failed (${result.status}): ${commandOutput(result)}`);
+  return new Error(
+    `${command} ${args.join(" ")} failed (${result.status}): ${commandOutput(result)}`,
+  );
 }
 
 function commandOutput(result: ReturnType<typeof spawnSync>) {
