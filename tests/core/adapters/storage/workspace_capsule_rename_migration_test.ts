@@ -257,6 +257,63 @@ test("Postgres P4 rename migrations rename, backfill, value-translate and rewrit
   }
 });
 
+test("Postgres Project boundary reconciles Capsules created after the original backfill", async () => {
+  const db = new PGlite();
+  try {
+    await db.exec(`create table takosumi_workspaces (
+      id text primary key,
+      created_at text not null,
+      updated_at text not null
+    )`);
+    await db.exec(`create table takosumi_projects (
+      id text primary key,
+      workspace_id text not null,
+      name text not null,
+      slug text not null,
+      project_json jsonb not null,
+      created_at text not null,
+      updated_at text not null,
+      unique (workspace_id, slug)
+    )`);
+    await db.exec(`create table takosumi_capsules (
+      id text primary key,
+      space_id text not null,
+      project_id text,
+      name text not null,
+      environment text not null,
+      status text not null
+    )`);
+    await db.exec(`insert into takosumi_workspaces values
+      ('ws_after_v58', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z')`);
+    await db.exec(`insert into takosumi_capsules values
+      ('cap_after_v58', 'ws_after_v58', null, 'web', 'production', 'active')`);
+
+    await applyPg(
+      db,
+      pgMigration("deploy.capsule_project_boundary.enforce").sql,
+    );
+
+    const project = await db.query<{ workspace_id: string; slug: string }>(
+      `select workspace_id, slug from takosumi_projects
+       where id = 'prj_default_ws_after_v58'`,
+    );
+    expect(project.rows[0]).toEqual({
+      workspace_id: "ws_after_v58",
+      slug: "default",
+    });
+    const capsule = await db.query<{ project_id: string }>(
+      `select project_id from takosumi_capsules where id = 'cap_after_v58'`,
+    );
+    expect(capsule.rows[0]?.project_id).toBe("prj_default_ws_after_v58");
+    expect(
+      db.exec(`insert into takosumi_capsules values
+        ('cap_invalid', 'ws_after_v58', null, 'invalid', 'production', 'active')`),
+    ).rejects.toThrow();
+  } finally {
+    await db.close();
+  }
+});
+
 async function seedD1Legacy(db: SqliteFakeD1): Promise<void> {
   await db
     .prepare(
@@ -427,9 +484,7 @@ test("D1 P4 rename boot path renames, backfills, value-translates and rewrites b
   // Idempotent across reboots.
   await ensureD1OpenTofuLedgerSchema(db);
   const reCapsule = await db
-    .prepare(
-      `select current_state_version_id from capsules where id = 'cap_1'`,
-    )
+    .prepare(`select current_state_version_id from capsules where id = 'cap_1'`)
     .first<{ current_state_version_id: string }>();
   expect(reCapsule?.current_state_version_id).toBe("sv_2");
 });
