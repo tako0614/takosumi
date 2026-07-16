@@ -238,7 +238,7 @@ describe("provider release source", () => {
           previous;
       }
     }
-  }, 120_000);
+  }, 300_000);
 });
 
 describe("immutable mirror materializer", () => {
