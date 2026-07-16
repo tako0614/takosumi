@@ -156,6 +156,12 @@
   max-width: 560px;
 }
 
+.rs-service-maturity {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+}
+
 .rs-guided-fields {
   margin-top: var(--tg-s-1);
 }

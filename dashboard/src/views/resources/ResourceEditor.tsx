@@ -21,15 +21,18 @@ import {
 import { formatUsdMicros } from "../../lib/billing-format.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import {
-  buildEdgeWorkerServiceSpec,
-  buildObjectBucketServiceSpec,
-  draftEdgeWorkerServiceSpec,
-  readEdgeWorkerServiceForm,
-  readObjectBucketServiceForm,
+  buildGuidedResourceServiceSpec,
+  draftGuidedResourceServiceSpec,
+  GUIDED_RESOURCE_SERVICE_KINDS,
+  isGuidedResourceServiceKind,
+  readGuidedResourceServiceForm,
   type EdgeWorkerArtifactSource,
-  type EdgeWorkerServiceForm,
+  type GuidedResourceServiceForm,
+  type GuidedResourceServiceKind,
   type GuidedSpecErrorCode,
   type GuidedSpecResult,
+  type KVStoreConsistency,
+  type OptionalBooleanChoice,
 } from "../../lib/resource-service-form.ts";
 import {
   parseJsonObjectText,
@@ -48,18 +51,7 @@ import {
   Toast,
 } from "../../components/ui/index.ts";
 
-const BUNDLED_KINDS = [
-  "EdgeWorker",
-  "ObjectBucket",
-  "KVStore",
-  "Queue",
-  "SQLDatabase",
-  "ContainerService",
-  "VectorIndex",
-  "DurableWorkflow",
-  "StatefulActorNamespace",
-  "Schedule",
-] as const;
+const BUNDLED_KINDS = GUIDED_RESOURCE_SERVICE_KINDS;
 
 type Props = {
   readonly workspaceId: string;
@@ -73,7 +65,7 @@ type ParsedInput =
   | { readonly ok: true; readonly value: ResourceShapeWriteInput }
   | { readonly ok: false; readonly message: string };
 
-type ServiceSelection = "EdgeWorker" | "ObjectBucket" | "custom";
+type ServiceSelection = GuidedResourceServiceKind | "custom";
 
 export default function ResourceEditor(props: Props): JSX.Element {
   const { confirm } = useConfirmDialog();
@@ -95,6 +87,30 @@ export default function ResourceEditor(props: Props): JSX.Element {
   const [compatibilityFlags, setCompatibilityFlags] = createSignal("");
   const [profiles, setProfiles] = createSignal("");
   const [bucketInterfaces, setBucketInterfaces] = createSignal("s3_api");
+  const [kvConsistency, setKvConsistency] =
+    createSignal<KVStoreConsistency>("");
+  const [sqlEngine, setSqlEngine] = createSignal("");
+  const [sqlMigrationsPath, setSqlMigrationsPath] = createSignal("");
+  const [queueMaxRetries, setQueueMaxRetries] = createSignal("");
+  const [queueMaxBatchSize, setQueueMaxBatchSize] = createSignal("");
+  const [vectorDimensions, setVectorDimensions] = createSignal("");
+  const [vectorMetric, setVectorMetric] = createSignal("");
+  const [workflowEntrypoint, setWorkflowEntrypoint] = createSignal("");
+  const [workflowMaxAttempts, setWorkflowMaxAttempts] = createSignal("");
+  const [workflowBackoff, setWorkflowBackoff] = createSignal("");
+  const [containerImage, setContainerImage] = createSignal("");
+  const [containerPorts, setContainerPorts] = createSignal("");
+  const [containerPublicHttp, setContainerPublicHttp] =
+    createSignal<OptionalBooleanChoice>("");
+  const [containerEnvironment, setContainerEnvironment] = createSignal("");
+  const [actorClassName, setActorClassName] = createSignal("");
+  const [actorStorageProfile, setActorStorageProfile] = createSignal("");
+  const [actorMigrationTag, setActorMigrationTag] = createSignal("");
+  const [scheduleCron, setScheduleCron] = createSignal("");
+  const [scheduleTimezone, setScheduleTimezone] = createSignal("UTC");
+  const [scheduleConnectionName, setScheduleConnectionName] =
+    createSignal("target");
+  const [scheduleTargetResource, setScheduleTargetResource] = createSignal("");
   const [nativeId, setNativeId] = createSignal("");
   const [preview, setPreview] = createSignal<ResourceShapePreview>();
   const [previewFingerprint, setPreviewFingerprint] = createSignal<string>();
@@ -102,38 +118,122 @@ export default function ResourceEditor(props: Props): JSX.Element {
   const [error, setError] = createSignal<string>();
   const [success, setSuccess] = createSignal<string>();
 
-  const edgeWorkerForm = (): EdgeWorkerServiceForm => ({
-    name: name(),
-    artifactSource: artifactSource(),
-    artifactUrl: artifactUrl(),
-    artifactRef: artifactRef(),
-    artifactSha256: artifactSha256(),
-    compatibilityDate: compatibilityDate(),
-    compatibilityFlags: compatibilityFlags(),
-    profiles: profiles(),
-  });
+  const guidedForm = (): GuidedResourceServiceForm | undefined => {
+    switch (kind()) {
+      case "EdgeWorker":
+        return {
+          kind: "EdgeWorker",
+          form: {
+            name: name(),
+            artifactSource: artifactSource(),
+            artifactUrl: artifactUrl(),
+            artifactRef: artifactRef(),
+            artifactSha256: artifactSha256(),
+            compatibilityDate: compatibilityDate(),
+            compatibilityFlags: compatibilityFlags(),
+            profiles: profiles(),
+          },
+        };
+      case "ObjectBucket":
+        return {
+          kind: "ObjectBucket",
+          form: { name: name(), interfaces: bucketInterfaces() },
+        };
+      case "KVStore":
+        return {
+          kind: "KVStore",
+          form: { name: name(), consistency: kvConsistency() },
+        };
+      case "SQLDatabase":
+        return {
+          kind: "SQLDatabase",
+          form: {
+            name: name(),
+            engine: sqlEngine(),
+            migrationsPath: sqlMigrationsPath(),
+          },
+        };
+      case "Queue":
+        return {
+          kind: "Queue",
+          form: {
+            name: name(),
+            maxRetries: queueMaxRetries(),
+            maxBatchSize: queueMaxBatchSize(),
+          },
+        };
+      case "VectorIndex":
+        return {
+          kind: "VectorIndex",
+          form: {
+            name: name(),
+            dimensions: vectorDimensions(),
+            metric: vectorMetric(),
+          },
+        };
+      case "DurableWorkflow":
+        return {
+          kind: "DurableWorkflow",
+          form: {
+            name: name(),
+            artifactSource: artifactSource(),
+            artifactUrl: artifactUrl(),
+            artifactRef: artifactRef(),
+            artifactSha256: artifactSha256(),
+            entrypoint: workflowEntrypoint(),
+            maxAttempts: workflowMaxAttempts(),
+            initialBackoffSeconds: workflowBackoff(),
+          },
+        };
+      case "ContainerService":
+        return {
+          kind: "ContainerService",
+          form: {
+            name: name(),
+            image: containerImage(),
+            ports: containerPorts(),
+            publicHttp: containerPublicHttp(),
+            environment: containerEnvironment(),
+          },
+        };
+      case "StatefulActorNamespace":
+        return {
+          kind: "StatefulActorNamespace",
+          form: {
+            name: name(),
+            className: actorClassName(),
+            storageProfile: actorStorageProfile(),
+            migrationTag: actorMigrationTag(),
+          },
+        };
+      case "Schedule":
+        return {
+          kind: "Schedule",
+          form: {
+            name: name(),
+            cron: scheduleCron(),
+            timezone: scheduleTimezone(),
+            connectionName: scheduleConnectionName(),
+            targetResource: scheduleTargetResource(),
+          },
+        };
+      default:
+        return undefined;
+    }
+  };
 
   const serviceSelection = createMemo<ServiceSelection>(() => {
-    if (guidedMode() && kind() === "EdgeWorker") return "EdgeWorker";
-    if (guidedMode() && kind() === "ObjectBucket") return "ObjectBucket";
+    const currentKind = kind();
+    if (guidedMode() && isGuidedResourceServiceKind(currentKind)) {
+      return currentKind;
+    }
     return "custom";
   });
 
   const guidedSpec = createMemo<GuidedSpecResult | undefined>(() => {
     if (!guidedMode()) return undefined;
-    if (kind() === "EdgeWorker") {
-      return buildEdgeWorkerServiceSpec(edgeWorkerForm());
-    }
-    if (kind() === "ObjectBucket") {
-      return {
-        ok: true,
-        value: buildObjectBucketServiceSpec({
-          name: name(),
-          interfaces: bucketInterfaces(),
-        }),
-      };
-    }
-    return undefined;
+    const form = guidedForm();
+    return form ? buildGuidedResourceServiceSpec(form) : undefined;
   });
 
   createEffect(
@@ -149,19 +249,15 @@ export default function ResourceEditor(props: Props): JSX.Element {
         setLabelsText(prettyJson(resource.metadata.labels ?? {}));
         setNativeId("");
 
-        const edge =
-          resource.kind === "EdgeWorker"
-            ? readEdgeWorkerServiceForm(resource.spec, resource.metadata.name)
-            : undefined;
-        const bucket =
-          resource.kind === "ObjectBucket"
-            ? readObjectBucketServiceForm(resource.spec, resource.metadata.name)
-            : undefined;
-        if (edge) {
-          loadEdgeWorkerForm(edge);
-          setGuidedMode(true);
-        } else if (bucket) {
-          setBucketInterfaces(bucket.interfaces);
+        const guided = isGuidedResourceServiceKind(resource.kind)
+          ? readGuidedResourceServiceForm(
+              resource.kind,
+              resource.spec,
+              resource.metadata.name,
+            )
+          : undefined;
+        if (guided) {
+          loadGuidedForm(guided);
           setGuidedMode(true);
         } else {
           // Extra/unknown fields stay lossless: operator-defined and advanced
@@ -253,39 +349,141 @@ export default function ResourceEditor(props: Props): JSX.Element {
     );
   });
 
-  function loadEdgeWorkerForm(form: EdgeWorkerServiceForm): void {
-    setArtifactSource(form.artifactSource);
-    setArtifactUrl(form.artifactUrl);
-    setArtifactRef(form.artifactRef);
-    setArtifactSha256(form.artifactSha256);
-    setCompatibilityDate(form.compatibilityDate);
-    setCompatibilityFlags(form.compatibilityFlags);
-    setProfiles(form.profiles);
+  function loadGuidedForm(input: GuidedResourceServiceForm): void {
+    switch (input.kind) {
+      case "EdgeWorker": {
+        const form = input.form;
+        setArtifactSource(form.artifactSource);
+        setArtifactUrl(form.artifactUrl);
+        setArtifactRef(form.artifactRef);
+        setArtifactSha256(form.artifactSha256);
+        setCompatibilityDate(form.compatibilityDate);
+        setCompatibilityFlags(form.compatibilityFlags);
+        setProfiles(form.profiles);
+        return;
+      }
+      case "ObjectBucket":
+        setBucketInterfaces(input.form.interfaces);
+        return;
+      case "KVStore":
+        setKvConsistency(input.form.consistency);
+        return;
+      case "SQLDatabase": {
+        const form = input.form;
+        setSqlEngine(form.engine);
+        setSqlMigrationsPath(form.migrationsPath);
+        return;
+      }
+      case "Queue": {
+        const form = input.form;
+        setQueueMaxRetries(form.maxRetries);
+        setQueueMaxBatchSize(form.maxBatchSize);
+        return;
+      }
+      case "VectorIndex": {
+        const form = input.form;
+        setVectorDimensions(form.dimensions);
+        setVectorMetric(form.metric);
+        return;
+      }
+      case "DurableWorkflow": {
+        const form = input.form;
+        setArtifactSource(form.artifactSource);
+        setArtifactUrl(form.artifactUrl);
+        setArtifactRef(form.artifactRef);
+        setArtifactSha256(form.artifactSha256);
+        setWorkflowEntrypoint(form.entrypoint);
+        setWorkflowMaxAttempts(form.maxAttempts);
+        setWorkflowBackoff(form.initialBackoffSeconds);
+        return;
+      }
+      case "ContainerService": {
+        const form = input.form;
+        setContainerImage(form.image);
+        setContainerPorts(form.ports);
+        setContainerPublicHttp(form.publicHttp);
+        setContainerEnvironment(form.environment);
+        return;
+      }
+      case "StatefulActorNamespace": {
+        const form = input.form;
+        setActorClassName(form.className);
+        setActorStorageProfile(form.storageProfile);
+        setActorMigrationTag(form.migrationTag);
+        return;
+      }
+      case "Schedule": {
+        const form = input.form;
+        setScheduleCron(form.cron);
+        setScheduleTimezone(form.timezone);
+        setScheduleConnectionName(form.connectionName);
+        setScheduleTargetResource(form.targetResource);
+        return;
+      }
+    }
   }
 
-  function resetEdgeWorkerForm(): void {
-    setArtifactSource("url");
-    setArtifactUrl("");
-    setArtifactRef("");
-    setArtifactSha256("");
-    setCompatibilityDate("");
-    setCompatibilityFlags("");
-    setProfiles("");
+  function resetGuidedForm(next: GuidedResourceServiceKind): void {
+    switch (next) {
+      case "EdgeWorker":
+        setArtifactSource("url");
+        setArtifactUrl("");
+        setArtifactRef("");
+        setArtifactSha256("");
+        setCompatibilityDate("");
+        setCompatibilityFlags("");
+        setProfiles("");
+        return;
+      case "ObjectBucket":
+        setBucketInterfaces("s3_api");
+        return;
+      case "KVStore":
+        setKvConsistency("");
+        return;
+      case "SQLDatabase":
+        setSqlEngine("");
+        setSqlMigrationsPath("");
+        return;
+      case "Queue":
+        setQueueMaxRetries("");
+        setQueueMaxBatchSize("");
+        return;
+      case "VectorIndex":
+        setVectorDimensions("");
+        setVectorMetric("");
+        return;
+      case "DurableWorkflow":
+        setArtifactSource("url");
+        setArtifactUrl("");
+        setArtifactRef("");
+        setArtifactSha256("");
+        setWorkflowEntrypoint("");
+        setWorkflowMaxAttempts("");
+        setWorkflowBackoff("");
+        return;
+      case "ContainerService":
+        setContainerImage("");
+        setContainerPorts("");
+        setContainerPublicHttp("");
+        setContainerEnvironment("");
+        return;
+      case "StatefulActorNamespace":
+        setActorClassName("");
+        setActorStorageProfile("");
+        setActorMigrationTag("");
+        return;
+      case "Schedule":
+        setScheduleCron("");
+        setScheduleTimezone("UTC");
+        setScheduleConnectionName("target");
+        setScheduleTargetResource("");
+        return;
+    }
   }
 
   function switchToRawAuthoring(): void {
-    if (kind() === "EdgeWorker") {
-      setSpecText(prettyJson(draftEdgeWorkerServiceSpec(edgeWorkerForm())));
-    } else if (kind() === "ObjectBucket") {
-      setSpecText(
-        prettyJson(
-          buildObjectBucketServiceSpec({
-            name: name(),
-            interfaces: bucketInterfaces(),
-          }),
-        ),
-      );
-    }
+    const form = guidedForm();
+    if (form) setSpecText(prettyJson(draftGuidedResourceServiceSpec(form)));
     setGuidedMode(false);
   }
 
@@ -298,17 +496,13 @@ export default function ResourceEditor(props: Props): JSX.Element {
     if (!guidedMode() && previousKind === next) {
       const parsed = parseJsonObjectText(specText());
       if (parsed.ok) {
-        const existing =
-          next === "EdgeWorker"
-            ? readEdgeWorkerServiceForm(parsed.value, name().trim())
-            : readObjectBucketServiceForm(parsed.value, name().trim());
-        if (next === "EdgeWorker" && existing && "artifactSource" in existing) {
-          loadEdgeWorkerForm(existing);
-          setGuidedMode(true);
-          return;
-        }
-        if (next === "ObjectBucket" && existing && "interfaces" in existing) {
-          setBucketInterfaces(existing.interfaces);
+        const existing = readGuidedResourceServiceForm(
+          next,
+          parsed.value,
+          name().trim(),
+        );
+        if (existing) {
+          loadGuidedForm(existing);
           setGuidedMode(true);
           return;
         }
@@ -317,12 +511,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
       return;
     }
     setKind(next);
-    if (next === "EdgeWorker" && previousKind !== "EdgeWorker") {
-      resetEdgeWorkerForm();
-    }
-    if (next === "ObjectBucket" && previousKind !== "ObjectBucket") {
-      setBucketInterfaces("s3_api");
-    }
+    if (previousKind !== next) resetGuidedForm(next);
     setGuidedMode(true);
   }
 
@@ -449,6 +638,36 @@ export default function ResourceEditor(props: Props): JSX.Element {
         return t("resources.editor.artifactRefRequired");
       case "artifact_sha256_required":
         return t("resources.editor.artifactShaRequired");
+      case "queue_max_retries_invalid":
+        return t("resources.editor.queueMaxRetriesInvalid");
+      case "queue_max_batch_size_invalid":
+        return t("resources.editor.queueMaxBatchSizeInvalid");
+      case "container_image_required":
+        return t("resources.editor.containerImageRequired");
+      case "container_ports_invalid":
+        return t("resources.editor.containerPortsInvalid");
+      case "container_environment_invalid":
+        return t("resources.editor.containerEnvironmentInvalid");
+      case "vector_dimensions_invalid":
+        return t("resources.editor.vectorDimensionsInvalid");
+      case "workflow_entrypoint_required":
+        return t("resources.editor.workflowEntrypointRequired");
+      case "workflow_max_attempts_invalid":
+        return t("resources.editor.workflowMaxAttemptsInvalid");
+      case "workflow_backoff_invalid":
+        return t("resources.editor.workflowBackoffInvalid");
+      case "actor_class_required":
+        return t("resources.editor.actorClassRequired");
+      case "actor_class_invalid":
+        return t("resources.editor.actorClassInvalid");
+      case "schedule_cron_required":
+        return t("resources.editor.scheduleCronRequired");
+      case "schedule_cron_invalid":
+        return t("resources.editor.scheduleCronInvalid");
+      case "schedule_connection_invalid":
+        return t("resources.editor.scheduleConnectionInvalid");
+      case "schedule_target_required":
+        return t("resources.editor.scheduleTargetRequired");
     }
   }
 
@@ -508,13 +727,47 @@ export default function ResourceEditor(props: Props): JSX.Element {
               <option value="ObjectBucket">
                 {t("resources.editor.service.objectBucket")}
               </option>
+              <option value="KVStore">
+                {t("resources.editor.service.kvStore")}
+              </option>
+              <option value="SQLDatabase">
+                {t("resources.editor.service.sqlDatabase")}
+              </option>
+              <option value="Queue">
+                {t("resources.editor.service.queue")}
+              </option>
+              <option value="VectorIndex">
+                {t("resources.editor.service.vectorIndex")}
+              </option>
+              <option value="DurableWorkflow">
+                {t("resources.editor.service.durableWorkflow")}
+              </option>
+              <option value="ContainerService">
+                {t("resources.editor.service.containerService")}
+              </option>
+              <option value="StatefulActorNamespace">
+                {t("resources.editor.service.statefulActorNamespace")}
+              </option>
+              <option value="Schedule">
+                {t("resources.editor.service.schedule")}
+              </option>
               <option value="custom">
                 {t("resources.editor.service.custom")}
               </option>
             </select>
-            <Show when={serviceSelection() === "custom"}>
-              <span class="tg-field-hint">
-                {t("resources.editor.customHint")}
+            <Show
+              when={serviceSelection() !== "custom"}
+              fallback={
+                <span class="tg-field-hint">
+                  {t("resources.editor.customHint")}
+                </span>
+              }
+            >
+              <span class="rs-service-maturity">
+                <Badge tone="ok">{t("resources.editor.stable")}</Badge>
+                <span class="tg-field-hint">
+                  {t("resources.editor.stableHint")}
+                </span>
               </span>
             </Show>
           </label>
@@ -684,6 +937,458 @@ export default function ResourceEditor(props: Props): JSX.Element {
                 {t("resources.editor.bucketInterfacesHint")}
               </span>
             </label>
+          </Show>
+
+          <Show when={guidedMode() && kind() === "KVStore"}>
+            <label class="tg-field rs-guided-fields">
+              <span class="tg-field-label">
+                {t("resources.editor.kvConsistency")}
+              </span>
+              <select
+                class="tg-select"
+                value={kvConsistency()}
+                onChange={(event) =>
+                  setKvConsistency(
+                    event.currentTarget.value as KVStoreConsistency,
+                  )
+                }
+              >
+                <option value="">
+                  {t("resources.editor.operatorDefault")}
+                </option>
+                <option value="eventual">
+                  {t("resources.editor.kvConsistency.eventual")}
+                </option>
+                <option value="strong">
+                  {t("resources.editor.kvConsistency.strong")}
+                </option>
+              </select>
+            </label>
+          </Show>
+
+          <Show when={guidedMode() && kind() === "SQLDatabase"}>
+            <div class="rs-form-grid rs-guided-fields">
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.sqlEngine")}
+                </span>
+                <input
+                  class="tg-input"
+                  value={sqlEngine()}
+                  onInput={(event) => setSqlEngine(event.currentTarget.value)}
+                  autocomplete="off"
+                  placeholder="sqlite"
+                />
+                <span class="tg-field-hint">
+                  {t("resources.editor.capabilityTokenHint")}
+                </span>
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.sqlMigrationsPath")}
+                </span>
+                <input
+                  class="tg-input rs-mono-input"
+                  value={sqlMigrationsPath()}
+                  onInput={(event) =>
+                    setSqlMigrationsPath(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="migrations"
+                />
+              </label>
+            </div>
+          </Show>
+
+          <Show when={guidedMode() && kind() === "Queue"}>
+            <div class="rs-form-grid rs-guided-fields">
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.queueMaxRetries")}
+                </span>
+                <input
+                  class="tg-input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={queueMaxRetries()}
+                  onInput={(event) =>
+                    setQueueMaxRetries(event.currentTarget.value)
+                  }
+                />
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.queueMaxBatchSize")}
+                </span>
+                <input
+                  class="tg-input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={queueMaxBatchSize()}
+                  onInput={(event) =>
+                    setQueueMaxBatchSize(event.currentTarget.value)
+                  }
+                />
+              </label>
+            </div>
+          </Show>
+
+          <Show when={guidedMode() && kind() === "VectorIndex"}>
+            <div class="rs-form-grid rs-guided-fields">
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.vectorDimensions")}
+                </span>
+                <input
+                  class="tg-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={vectorDimensions()}
+                  onInput={(event) =>
+                    setVectorDimensions(event.currentTarget.value)
+                  }
+                />
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.vectorMetric")}
+                </span>
+                <input
+                  class="tg-input"
+                  value={vectorMetric()}
+                  onInput={(event) =>
+                    setVectorMetric(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="cosine"
+                />
+                <span class="tg-field-hint">
+                  {t("resources.editor.capabilityTokenHint")}
+                </span>
+              </label>
+            </div>
+          </Show>
+
+          <Show when={guidedMode() && kind() === "DurableWorkflow"}>
+            <div class="rs-form-grid rs-guided-fields">
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.artifactSource")}
+                </span>
+                <select
+                  class="tg-select"
+                  value={artifactSource()}
+                  onChange={(event) =>
+                    setArtifactSource(
+                      event.currentTarget.value as EdgeWorkerArtifactSource,
+                    )
+                  }
+                >
+                  <option value="url">
+                    {t("resources.editor.artifactSource.url")}
+                  </option>
+                  <option value="ref">
+                    {t("resources.editor.artifactSource.ref")}
+                  </option>
+                </select>
+              </label>
+              <Show
+                when={artifactSource() === "url"}
+                fallback={
+                  <label class="tg-field">
+                    <span class="tg-field-label">
+                      {t("resources.editor.artifactRef")}
+                    </span>
+                    <input
+                      class="tg-input"
+                      value={artifactRef()}
+                      onInput={(event) =>
+                        setArtifactRef(event.currentTarget.value)
+                      }
+                      autocomplete="off"
+                    />
+                    <span class="tg-field-hint">
+                      {t("resources.editor.artifactRefHint")}
+                    </span>
+                  </label>
+                }
+              >
+                <label class="tg-field">
+                  <span class="tg-field-label">
+                    {t("resources.editor.artifactUrl")}
+                  </span>
+                  <input
+                    class="tg-input"
+                    type="url"
+                    value={artifactUrl()}
+                    onInput={(event) =>
+                      setArtifactUrl(event.currentTarget.value)
+                    }
+                    autocomplete="off"
+                    placeholder="https://example.com/releases/workflow.js"
+                  />
+                  <span class="tg-field-hint">
+                    {t("resources.editor.artifactUrlHint")}
+                  </span>
+                </label>
+              </Show>
+              <label class="tg-field rs-field-wide">
+                <span class="tg-field-label">
+                  {t("resources.editor.artifactSha")}
+                </span>
+                <input
+                  class="tg-input rs-mono-input"
+                  value={artifactSha256()}
+                  onInput={(event) =>
+                    setArtifactSha256(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="sha256:…"
+                />
+                <span class="tg-field-hint">
+                  {t("resources.editor.artifactShaHint")}
+                </span>
+              </label>
+              <label class="tg-field rs-field-wide">
+                <span class="tg-field-label">
+                  {t("resources.editor.workflowEntrypoint")}
+                </span>
+                <input
+                  class="tg-input rs-mono-input"
+                  value={workflowEntrypoint()}
+                  onInput={(event) =>
+                    setWorkflowEntrypoint(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="run"
+                />
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.workflowMaxAttempts")}
+                </span>
+                <input
+                  class="tg-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={workflowMaxAttempts()}
+                  onInput={(event) =>
+                    setWorkflowMaxAttempts(event.currentTarget.value)
+                  }
+                />
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.workflowBackoff")}
+                </span>
+                <input
+                  class="tg-input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={workflowBackoff()}
+                  onInput={(event) =>
+                    setWorkflowBackoff(event.currentTarget.value)
+                  }
+                />
+              </label>
+            </div>
+          </Show>
+
+          <Show when={guidedMode() && kind() === "ContainerService"}>
+            <div class="rs-form-grid rs-guided-fields">
+              <label class="tg-field rs-field-wide">
+                <span class="tg-field-label">
+                  {t("resources.editor.containerImage")}
+                </span>
+                <input
+                  class="tg-input rs-mono-input"
+                  value={containerImage()}
+                  onInput={(event) =>
+                    setContainerImage(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="registry.example.com/team/app@sha256:…"
+                />
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.containerPorts")}
+                </span>
+                <input
+                  class="tg-input"
+                  value={containerPorts()}
+                  onInput={(event) =>
+                    setContainerPorts(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="8080, 9090"
+                />
+                <span class="tg-field-hint">
+                  {t("resources.editor.integerListHint")}
+                </span>
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.containerPublicHttp")}
+                </span>
+                <select
+                  class="tg-select"
+                  value={containerPublicHttp()}
+                  onChange={(event) =>
+                    setContainerPublicHttp(
+                      event.currentTarget.value as OptionalBooleanChoice,
+                    )
+                  }
+                >
+                  <option value="">
+                    {t("resources.editor.operatorDefault")}
+                  </option>
+                  <option value="true">
+                    {t("resources.editor.containerPublicHttp.enabled")}
+                  </option>
+                  <option value="false">
+                    {t("resources.editor.containerPublicHttp.disabled")}
+                  </option>
+                </select>
+              </label>
+              <label class="tg-field rs-field-wide">
+                <span class="tg-field-label">
+                  {t("resources.editor.containerEnvironment")}
+                </span>
+                <textarea
+                  class="tg-textarea rs-code-editor"
+                  value={containerEnvironment()}
+                  rows={5}
+                  spellcheck={false}
+                  onInput={(event) =>
+                    setContainerEnvironment(event.currentTarget.value)
+                  }
+                />
+                <span class="tg-field-hint">
+                  {t("resources.editor.containerEnvironmentHint")}
+                </span>
+              </label>
+            </div>
+          </Show>
+
+          <Show when={guidedMode() && kind() === "StatefulActorNamespace"}>
+            <div class="rs-form-grid rs-guided-fields">
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.actorClass")}
+                </span>
+                <input
+                  class="tg-input rs-mono-input"
+                  value={actorClassName()}
+                  onInput={(event) =>
+                    setActorClassName(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="ChatRoom"
+                />
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.actorStorageProfile")}
+                </span>
+                <input
+                  class="tg-input"
+                  value={actorStorageProfile()}
+                  onInput={(event) =>
+                    setActorStorageProfile(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="durable_sqlite"
+                />
+                <span class="tg-field-hint">
+                  {t("resources.editor.capabilityTokenHint")}
+                </span>
+              </label>
+              <label class="tg-field rs-field-wide">
+                <span class="tg-field-label">
+                  {t("resources.editor.actorMigrationTag")}
+                </span>
+                <input
+                  class="tg-input"
+                  value={actorMigrationTag()}
+                  onInput={(event) =>
+                    setActorMigrationTag(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                />
+              </label>
+            </div>
+          </Show>
+
+          <Show when={guidedMode() && kind() === "Schedule"}>
+            <div class="rs-form-grid rs-guided-fields">
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.scheduleCron")}
+                </span>
+                <input
+                  class="tg-input rs-mono-input"
+                  value={scheduleCron()}
+                  onInput={(event) =>
+                    setScheduleCron(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="0 * * * *"
+                />
+                <span class="tg-field-hint">
+                  {t("resources.editor.scheduleCronHint")}
+                </span>
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.scheduleTimezone")}
+                </span>
+                <input
+                  class="tg-input"
+                  value={scheduleTimezone()}
+                  onInput={(event) =>
+                    setScheduleTimezone(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="UTC"
+                />
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.scheduleConnection")}
+                </span>
+                <input
+                  class="tg-input"
+                  value={scheduleConnectionName()}
+                  onInput={(event) =>
+                    setScheduleConnectionName(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                />
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">
+                  {t("resources.editor.scheduleTarget")}
+                </span>
+                <input
+                  class="tg-input rs-mono-input"
+                  value={scheduleTargetResource()}
+                  onInput={(event) =>
+                    setScheduleTargetResource(event.currentTarget.value)
+                  }
+                  autocomplete="off"
+                  placeholder="EdgeWorker/api"
+                />
+                <span class="tg-field-hint">
+                  {t("resources.editor.scheduleTargetHint")}
+                </span>
+              </label>
+            </div>
           </Show>
         </section>
 
