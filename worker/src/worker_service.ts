@@ -32,6 +32,7 @@ import {
 import { CloudflareD1ObservabilitySink } from "./d1_observability.ts";
 import { createD1ResourceShapeStores } from "../../core/domains/resource-shape/d1_stores.ts";
 import { createD1InterfaceStores } from "../../core/domains/interfaces/d1_stores.ts";
+import { createD1FormRegistryStore } from "../../core/domains/service-forms/mod.ts";
 import {
   ControllerOpentofuRunPort,
   OpentofuResourceShapeAdapter,
@@ -110,6 +111,10 @@ export async function createWorkerServiceApp(
     readonly resourceShapeModuleRegistry?: CreateTakosumiServiceOptions["resourceShapeModuleRegistry"];
     /** Local/private compatibility ingress; production platform edges omit it. */
     readonly mountInternalLedgerRoutes?: boolean;
+    /** Opaque package reader selected by the host trust policy. */
+    readonly formPackageArtifactReader?: CreateTakosumiServiceOptions["formPackageArtifactReader"];
+    /** Trusted data-only package verifier selected by the host trust policy. */
+    readonly formPackageVerifier?: CreateTakosumiServiceOptions["formPackageVerifier"];
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
@@ -237,6 +242,13 @@ export async function createWorkerServiceApp(
     opentofuControlStore,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     resourceShapeStores: createD1ResourceShapeStores(env.TAKOSUMI_CONTROL_DB),
+    formRegistryStore: createD1FormRegistryStore(env.TAKOSUMI_CONTROL_DB),
+    ...(options.formPackageArtifactReader
+      ? { formPackageArtifactReader: options.formPackageArtifactReader }
+      : {}),
+    ...(options.formPackageVerifier
+      ? { formPackageVerifier: options.formPackageVerifier }
+      : {}),
     resourceShapeSchemaRegistry,
     ...(resourceShapeModuleRegistry ? { resourceShapeModuleRegistry } : {}),
     interfaceStores: createD1InterfaceStores(env.TAKOSUMI_CONTROL_DB),
