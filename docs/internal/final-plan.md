@@ -146,9 +146,11 @@ private manager, credential, or raw capacity. A provider knowing a static
 schema does not imply that the selected host offers it.
 
 `FormRef` contains `apiVersion`, `kind`, `definitionVersion`, and
-`schemaDigest`. Stored Resources resolve to an exact immutable FormRef;
-ResolutionLock, FormActivation, and ServiceOffering pin its digest. Referenced
-package bytes remain available for observe/delete and lifecycle replay.
+`schemaDigest`. `packageDigest` identifies the immutable package envelope and
+is stored beside the FormRef, never inside it. Stored Resources resolve to an
+exact immutable FormRef; ResolutionLock, FormActivation, and ServiceOffering
+pin that identity. Referenced package bytes remain available for
+observe/delete and lifecycle replay.
 FormRef persistence starts in a new additive migration after the current D1
 schema-convergence work and Postgres head; released migration history is never
 rewritten. The 2026-07-16 heads are D1 v44 and Postgres v92, so FormRef starts no
@@ -1934,11 +1936,12 @@ Resolver decisions must be locked.
 {
   "resourceId": "tkrn:prod:EdgeWorker:api",
   "formRef": {
-    "apiVersion": "takosumi.dev/v1alpha1",
+    "apiVersion": "forms.takoform.com/v1alpha1",
     "kind": "EdgeWorker",
-    "definitionVersion": "legacy-v1",
+    "definitionVersion": "0.0.0-legacy.1",
     "schemaDigest": "sha256:<exact-definition-digest>"
   },
+  "packageDigest": "sha256:<exact-package-digest>",
   "selectedImplementation": "cloudflare_workers",
   "target": "cloudflare-main",
   "locked": true,
@@ -1949,6 +1952,12 @@ Resolver decisions must be locked.
   ]
 }
 ```
+
+The existing Resource wire remains host-owned
+`apiVersion: takosumi.dev/v1alpha1`. During migration, Takosumi maps that old
+wire plus kind to the pinned portable FormRef shown above without changing the
+Resource id, `tkrn`, import id, or backend object. The Form Package does not own
+or rewrite this compatibility mapping.
 
 Takosumi must not silently migrate a resource to another backend. Migration is
 an explicit operation. It also must not reinterpret an existing Resource through
@@ -2474,7 +2483,7 @@ Takosumi software GA requires:
 plain OpenTofu Stack flow remains conformant
 zero-form Core can run a plain OpenTofu Capsule without any portable project or Cloud dependency
 installed Form Packages are signed, exact, retained, and independently versioned
-every GA Service Form exact FormRef passes its provider-neutral semantic audit and canonical positive/negative host/provider conformance; the legacy compatibility package alone does not qualify it as a standard form
+every GA Service Form exact FormRef passes its provider-neutral semantic audit and canonical positive/negative host/provider conformance; the ten-package legacy compatibility set alone does not qualify any kind as a standard form
 every form-backed Resource and ResolutionLock resolves to an exact immutable FormRef
 definition / installed / executable / activated discovery states and reason codes are truthful
 /v1/resources is the only Resource lifecycle authority
@@ -2545,8 +2554,9 @@ self-test, a descriptor, an unconfigured manager, or one green client.
 3. Establish `github.com/tako0614/terraform-provider-takoform` without TargetPool, Resource, Run,
    credentials, Interface, or Cloud code; keep provider/package release blocked
    until signing/provenance and real install gates pass.
-4. Extract exact FormRef, data-only Form Package, standard-form semantics,
-   typed provider inputs, and host/provider conformance while preserving current
+4. Extract exact FormRef and one data-only legacy compatibility package per
+   current kind (ten packages total), then standard-form semantics, typed
+   provider inputs, and host/provider conformance while preserving current
    Resource Shape compatibility exports and routes.
 5. Add FormRef to Resource/ResolutionLock/evidence with a new additive
    migration after the current schema head. Shadow, bounded-backfill, dual-read,
