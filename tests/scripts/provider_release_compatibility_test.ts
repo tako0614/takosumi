@@ -3,6 +3,7 @@ import {
   compareCandidateSchema,
   loadCompatibilityAuthorities,
   providerCliPrerequisites,
+  resolveCompatibilityGoCommand,
   structuralSha256,
   verifyProviderCompatibility,
 } from "../../scripts/lib/provider-release-compatibility.mjs";
@@ -11,6 +12,94 @@ import { assertExactRequestDeltas } from "../../scripts/lib/provider-proof-reque
 import { assertProviderStateIdentity } from "../../scripts/lib/provider-proof-state.mjs";
 
 describe("provider release compatibility", () => {
+  test("uses the executable pinned Go toolchain after exact version verification", async () => {
+    const commands: string[] = [];
+    const command = await resolveCompatibilityGoCommand(
+      { path: "/usr/lib/go-1.26/bin/go", version: "go1.26.0" },
+      {
+        accessCommand: async (path: string) => commands.push(`access:${path}`),
+        findOnPath: () => "/opt/hostedtoolcache/go/1.26.0/x64/bin/go",
+        runCommand: (path: string, args: string[]) => {
+          commands.push(`${path} ${args.join(" ")}`);
+          return "go version go1.26.0 linux/amd64\n";
+        },
+      },
+    );
+    expect(command).toBe("/usr/lib/go-1.26/bin/go");
+    expect(commands).toEqual([
+      "access:/usr/lib/go-1.26/bin/go",
+      "/usr/lib/go-1.26/bin/go version",
+    ]);
+  });
+
+  test("falls back to PATH only when the pinned Go path is missing", async () => {
+    const command = await resolveCompatibilityGoCommand(
+      { path: "/usr/lib/go-1.26/bin/go", version: "go1.26.0" },
+      {
+        accessCommand: async () => {
+          throw Object.assign(new Error("missing"), { code: "ENOENT" });
+        },
+        findOnPath: (name: string) =>
+          name === "go" ? "/opt/hostedtoolcache/go/1.26.0/x64/bin/go" : null,
+        runCommand: (path: string) => {
+          expect(path).toBe("/opt/hostedtoolcache/go/1.26.0/x64/bin/go");
+          return "go version go1.26.0 linux/amd64\n";
+        },
+      },
+    );
+    expect(command).toBe("/opt/hostedtoolcache/go/1.26.0/x64/bin/go");
+  });
+
+  test("fails closed when the selected Go version does not exactly match", async () => {
+    await expect(
+      resolveCompatibilityGoCommand(
+        { path: "/missing/go", version: "go1.26.0" },
+        {
+          accessCommand: async () => {
+            throw Object.assign(new Error("missing"), { code: "ENOENT" });
+          },
+          findOnPath: () => "/usr/bin/go",
+          runCommand: () => "go version go1.26.1 linux/amd64\n",
+        },
+      ),
+    ).rejects.toThrow("version mismatch: expected go1.26.0, observed go1.26.1");
+  });
+
+  test("does not fall back for a non-missing pinned Go failure", async () => {
+    let searchedPath = false;
+    await expect(
+      resolveCompatibilityGoCommand(
+        { path: "/usr/lib/go-1.26/bin/go", version: "go1.26.0" },
+        {
+          accessCommand: async () => {
+            throw Object.assign(new Error("permission denied"), {
+              code: "EACCES",
+            });
+          },
+          findOnPath: () => {
+            searchedPath = true;
+            return "/usr/bin/go";
+          },
+        },
+      ),
+    ).rejects.toThrow("cannot execute pinned Go toolchain");
+    expect(searchedPath).toBe(false);
+  });
+
+  test("fails when neither pinned nor PATH Go is available", async () => {
+    await expect(
+      resolveCompatibilityGoCommand(
+        { path: "/missing/go", version: "go1.26.0" },
+        {
+          accessCommand: async () => {
+            throw Object.assign(new Error("missing"), { code: "ENOENT" });
+          },
+          findOnPath: () => null,
+        },
+      ),
+    ).rejects.toThrow("go is unavailable on PATH");
+  });
+
   test("pins historical identity and rejects the feature-bearing patch in favor of 1.1.0", async () => {
     const { identity, policy } = await loadCompatibilityAuthorities();
     expect(identity.capture.containsStateValues).toBe(false);
