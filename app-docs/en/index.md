@@ -118,40 +118,34 @@ claimant Workspace or Capsule.
 The reservation and vanity slot belong to the Capsule lifetime and are released
 by a successful Capsule destroy, not by deleting an individual route.
 
-User-owned custom domains are **Planned**. DNS ownership verification and the
-certificate lifecycle are not implemented yet, so a request that supplies a
-custom domain to a Cloud-managed route fails closed and is not activated as a
-usable route.
+User-owned custom domains are part of the GA contract. An owner-account and
+Workspace-scoped `VerifiedDomain` manages ownership challenge, certificate,
+attach/detach, renewal, expiry, and delete. A route is active only while both
+ownership and certificate state are current. The lifecycle remains Pre-GA with
+the rest of Takosumi Cloud until live operator evidence exists; unverified,
+expired, or degraded domains fail closed.
 
-## Service Rollout
+## GA Contract And Launch Gate
 
-Takosumi Cloud services are not all GA at once. We publish services gradually
-and promote them to Stable only when Dashboard, docs, billing, destroy proof,
-usage ledger, and runtime guard evidence are in place.
+Takosumi Cloud does not promote this release one service at a time. The
+Cloudflare Developer Platform-like set below is one Stable contract, and
+Takosumi Cloud stays Pre-GA until every item passes the same readiness matrix.
+An API or runtime becoming usable early does not make that item independently
+Stable or GA.
 
-| Stage              | Meaning                                                                          |
-| ------------------ | -------------------------------------------------------------------------------- |
-| Stable             | publicly GA, with billing, deletion, usage ledger, docs, and smoke ready         |
-| Production Preview | available on the production runtime before GA readiness / live billing promotion |
-| Preview            | usable, but limits and expected changes are documented                           |
-| Planned            | public product direction, not yet available                                      |
+| Status      | Scope                                                                                           |
+| ----------- | ----------------------------------------------------------------------------------------------- |
+| GA contract | Edge Worker modules, assets, vars, write-only secrets, bindings, versions, and deployments    |
+| GA contract | managed URLs, routes, cron, logs, and verified custom domains                                  |
+| GA contract | Object Storage, KV, Database, Queue, and Vector Index                                           |
+| GA contract | Durable Workflow, Container, Stateful Actor Namespace, and Schedule                            |
+| GA contract | OpenAI-compatible AI Gateway endpoint                                                           |
+| Pre-GA      | public GA stays closed until every item passes the same Stable evidence matrix                 |
 
-Initial rollout:
-
-| Service          | Stage              |
-| ---------------- | ------------------ |
-| Edge Worker      | Production Preview |
-| Routes           | Production Preview |
-| Object Storage   | Production Preview |
-| AI Gateway       | Production Preview |
-| Secrets / Vars   | Preview            |
-| KV               | Preview            |
-| Database         | Preview            |
-| Queue            | Preview            |
-| Durable Workflow | Preview            |
-| Containers       | Preview            |
-| Stateful apps    | Planned            |
-| Custom Domains   | Planned            |
+Stable evidence includes lifecycle, price coverage, immutable metering, spend
+enforcement, invoice reconciliation, recovery, tenant isolation, Dashboard,
+and live operator evidence. A self-test, descriptor, unconfigured manager, or
+one green client does not establish GA.
 
 ## Billing and Spend Guard
 
@@ -183,14 +177,21 @@ compatibility. AI Gateway is a separate OpenAI-compatible profile.
 
 ### `compat.cloudflare.workers.v1`
 
-| Status             | Scope                                                                                        |
-| ------------------ | -------------------------------------------------------------------------------------------- |
-| Production Preview | single-module Worker script deploy / list / read / delete → `EdgeWorker`                     |
-| Production Preview | one explicit-path route on the discovered canonical system hostname → `http.route` Interface |
-| Production Preview | R2 bucket create / list / read / delete → `ObjectBucket`                                     |
-| Outside GA subset  | KV, D1, Queue, Workflow, Worker binding / secret / vars / assets APIs (explicit `501`)       |
-| Unsupported        | custom hostnames, multi-module upload, DNS, WAF, Zero Trust, Registrar, account IAM          |
-| Unsupported        | Load Balancer and Email Routing                                                              |
+The compatibility contract is pinned to selected Cloudflare provider `5.19.1`
+schemas. It is an entry point into Takosumi Cloud Resources, not a clone of the
+whole Cloudflare account or API.
+
+| Status      | Scope                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------- |
+| GA contract | EdgeWorker modules, assets, vars, write-only secrets, bindings, versions, deployments, routes, cron, and logs |
+| GA contract | managed URL and verified-custom-domain `http.route` Interfaces                                                |
+| GA contract | ObjectBucket plus the documented R2/S3 control and data subset                                                |
+| GA contract | provider `5.19.1` selected subset for KVStore, SQLDatabase, Queue, and DurableWorkflow                        |
+| GA contract | typed Resource API for VectorIndex, ContainerService, StatefulActorNamespace, and Schedule                    |
+| GA contract | AI Gateway OpenAI-compatible endpoint                                                                         |
+| Pre-GA      | public GA stays closed until every item passes the same Stable evidence matrix                                |
+| Unsupported | Pages, Hyperdrive, Analytics Engine, Browser Rendering, Images, Stream, and Pipelines                         |
+| Unsupported | DNS, WAF, Zero Trust, Registrar, account IAM, Load Balancer, and Email Routing                                |
 
 ### AI Gateway OpenAI-compatible profile
 

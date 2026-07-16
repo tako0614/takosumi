@@ -114,39 +114,30 @@ vanity:
 取得済みの名前と vanity 枠は Capsule と同じ寿命を持ち、Capsule の destroy が成功すると
 解放されます。個別 route の削除だけでは解放されません。
 
-ユーザー所有の custom domain は **Planned** です。DNS の所有確認と証明書の管理が
-まだ実装されていないため、現在の Cloud managed route に custom domain を指定した
-要求は安全側に停止し、有効化されません。
+ユーザー所有の custom domain は GA contract に含まれます。owner account / Workspace に属する
+`VerifiedDomain` が ownership challenge、証明書、attach/detach、renewal、expiry、delete を管理し、
+ownership と certificate が current の間だけ route を有効にします。live operator evidence が揃うまでは
+Takosumi Cloud 全体と同じく Pre-GA で、未確認・期限切れ・degraded な domain は安全側に停止します。
 
-## Service Rollout
+## GA Contract と Launch Gate
 
-Takosumi Cloud のサービスは、一度に全部 GA 扱いにしません。使えるものから公開し、
-Dashboard / docs / 課金 / 削除の確認 / runtime guard が揃った段階で
-Stable に上げます。
+Takosumi Cloud の GA はサービスごとの段階公開ではありません。次の Cloudflare Developer
+Platform-like set を 1 つの Stable 契約として扱い、全項目が同じ readiness matrix を通るまで
+Takosumi Cloud 全体を Pre-GA のままにします。一部の runtime や API が先に利用できても、その項目だけを
+Stable / GA とは表示しません。
 
-| Stage              | Meaning                                                           |
-| ------------------ | ----------------------------------------------------------------- |
-| Stable             | GA 公開済みで、課金、削除、使用量の記録、docs、smoke が揃っている |
-| Production Preview | 本番 runtime で使えるが、GA readiness / live billing 証跡の昇格前 |
-| Preview            | 使えるが、制限や変更可能性を docs に明示する                      |
-| Planned            | product 方向性として公開するが、まだ利用不可                      |
+| Status      | Scope                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| GA contract | Edge Worker の modules / assets / vars / write-only secrets / bindings / versions / deployments |
+| GA contract | managed URL / routes / cron / logs / verified custom domains                                    |
+| GA contract | Object Storage / KV / Database / Queue / Vector Index                                            |
+| GA contract | Durable Workflow / Container / Stateful Actor Namespace / Schedule                               |
+| GA contract | OpenAI-compatible AI Gateway endpoint                                                             |
+| Pre-GA      | 上の全項目が同じ Stable evidence matrix を通るまで public GA は開かない                           |
 
-初期 rollout:
-
-| Service          | Stage              |
-| ---------------- | ------------------ |
-| Edge Worker      | Production Preview |
-| Routes           | Production Preview |
-| Object Storage   | Production Preview |
-| AI Gateway       | Production Preview |
-| Secrets / Vars   | Preview            |
-| KV               | Preview            |
-| Database         | Preview            |
-| Queue            | Preview            |
-| Durable Workflow | Preview            |
-| Containers       | Preview            |
-| Stateful apps    | Planned            |
-| Custom Domains   | Planned            |
+Stable evidence には lifecycle、価格、immutable metering、spend enforcement、invoice reconciliation、
+recovery、tenant isolation、Dashboard、live operator evidence が含まれます。self-test、descriptor、
+未設定 manager、1 つの green client だけでは GA になりません。
 
 ## Billing and Spend Guard
 
@@ -177,14 +168,20 @@ Takosumi Cloud は profile ごとに互換範囲を分けます。Cloudflare 互
 
 ### `compat.cloudflare.workers.v1`
 
-| Status             | Scope                                                                                        |
-| ------------------ | -------------------------------------------------------------------------------------------- |
-| Production Preview | single-module Worker script deploy / list / read / delete → `EdgeWorker`                     |
-| Production Preview | one explicit-path route on the discovered canonical system hostname → `http.route` Interface |
-| Production Preview | R2 bucket create / list / read / delete → `ObjectBucket`                                     |
-| Outside GA subset  | KV, D1, Queue, Workflow, Worker binding / secret / vars / assets API (明示 `501`)            |
-| Unsupported        | custom hostname、multi-module upload、DNS、WAF、Zero Trust、Registrar、account IAM           |
-| Unsupported        | Load Balancer、Email Routing                                                                 |
+互換 contract は Cloudflare provider `5.19.1` の選択した schema に固定します。これは
+Takosumi Cloud Resource への入口であり、Cloudflare account/API 全体の再実装ではありません。
+
+| Status      | Scope                                                                                                              |
+| ----------- | ------------------------------------------------------------------------------------------------------------------ |
+| GA contract | EdgeWorker modules / assets / vars / write-only secrets / bindings / versions / deployments / routes / cron / logs |
+| GA contract | managed URL と verified custom domain の `http.route` Interface                                                    |
+| GA contract | ObjectBucket + documented R2/S3 control/data subset                                                                |
+| GA contract | KVStore / SQLDatabase / Queue / DurableWorkflow の provider `5.19.1` selected subset                               |
+| GA contract | VectorIndex / ContainerService / StatefulActorNamespace / Schedule typed Resource API                              |
+| GA contract | AI Gateway OpenAI-compatible endpoint                                                                              |
+| Pre-GA      | 上の全項目が同じ Stable evidence matrix を通るまで public GA は開かない                                            |
+| Unsupported | Pages、Hyperdrive、Analytics Engine、Browser Rendering、Images、Stream、Pipelines                                  |
+| Unsupported | DNS、WAF、Zero Trust、Registrar、account IAM、Load Balancer、Email Routing                                         |
 
 ### AI Gateway OpenAI-compatible profile
 
