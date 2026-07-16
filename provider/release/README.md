@@ -15,6 +15,10 @@ version.
   the mutable aggregate catalog seen at the same time, not a frozen `1.0.0`
   asset. The served binary reports `dev` and dirty provenance, so `1.0.0` is
   retained for compatibility but is never reproducible release evidence.
+- `compatibility/1.0.0-state-identity.json` pins the non-secret structural
+  schema identity read from those exact public bytes. The adjacent `1.0.1`
+  delta policy classifies four new resources and eight optional attributes,
+  but fails their inclusion in a patch release closed until an owner decision.
 - Release builds are explicit: a clean `provider/v<version>` tag and its exact
   commit are required. Production also requires an annotated signature from a
   reviewed signer fingerprint. No signer fingerprint is configured yet, so
@@ -33,6 +37,13 @@ version.
 The current mixed provider keeps the supported `takosumi_*` form state and
 `takosumi_target_pool` ownership. Future portable Service Form resources move
 only after the independent provider identity and state-migration gates pass.
+
+Run `bun run provider:compatibility:check` for the hermetic current-schema
+comparison and prerequisite matrix. Run
+`bun run provider:compatibility:state-proof` separately for the connected
+old-state proof. `provider:compatibility:release-check` is intentionally red
+while feature-in-patch approval, Terraform CLI/FQN installation, and the
+address split remain unresolved.
 
 See [provider-release-and-mirror.md](../../docs/operations/provider-release-and-mirror.md)
 for commands and incident handling.

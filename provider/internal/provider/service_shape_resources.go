@@ -11,7 +11,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -564,8 +563,7 @@ func (r *serviceShapeResource) Schema(_ context.Context, _ resource.SchemaReques
 		attrs["storage_class"] = schema.StringAttribute{
 			Optional:    true,
 			Computed:    true,
-			Default:     stringdefault.StaticString("standard"),
-			Description: "Portable default storage class for newly written objects: standard or infrequent_access. Defaults to standard.",
+			Description: "Portable storage class for newly written objects: standard or infrequent_access. Omission materializes as standard without forcing a plan diff for pre-field state.",
 			Validators:  []validator.String{StringOneOf("standard", "infrequent_access")},
 		}
 		attrs["interfaces"] = schema.SetAttribute{
