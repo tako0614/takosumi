@@ -62,10 +62,20 @@ separately trusted Host Extensions/Adapters. Resources, ResolutionLocks,
 FormActivations, and Cloud ServiceOfferings eventually pin exact references;
 old definition bytes remain retained for observe/delete.
 
-Core has zero implicit Form Packages. Definition known, installed, executable,
-activated, and Cloud-offered are independent states. The portable project owns
-no Resource ID, lifecycle ledger, Run, StateVersion, Output, Target, credential,
-Policy, Adapter, Interface, or InterfaceBinding.
+Core has zero implicit Form Packages. Portable host discovery reports definition
+known, installed, executable, activated, and available-to-principal as
+independent states. Cloud-offered is a separate closed catalog projection keyed
+by exact FormRef and FormActivation, not a field in portable FormAvailability.
+The portable project owns no Resource ID, lifecycle ledger, Run, StateVersion,
+Output, Target, credential, Policy, Adapter, Interface, or InterfaceBinding.
+
+An immutable legacy compatibility package may freeze the ten current
+Resource Shape behaviors for migration, but that does not admit those FormRefs
+as portable standards. Every FormRef included in the standard typed provider or
+an official Cloud Stable offering must independently pass provider-neutral
+lifecycle, immutable-field, import/observe/drift, security, Interface, and
+governance review plus canonical positive and negative host/provider
+conformance for its exact schema digest.
 
 ## Core Responsibilities
 
