@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
@@ -12,36 +12,7 @@
     <meta name="theme-color" content="#f6f7f9" />
     <link rel="icon" type="image/png" href="/tako.png" />
     <link rel="apple-touch-icon" href="/tako.png" />
-    <script>
-      (() => {
-        try {
-          const stored = localStorage.getItem("tg_theme");
-          const preference =
-            stored === "light" || stored === "dark" || stored === "system"
-              ? stored
-              : "system";
-          const resolved =
-            preference === "dark" ||
-            (preference === "system" &&
-              matchMedia("(prefers-color-scheme: dark)").matches)
-              ? "dark"
-              : "light";
-          document.documentElement.dataset.theme = resolved;
-          document.documentElement.dataset.themePreference = preference;
-          document.documentElement.style.colorScheme = resolved;
-          const themeColor = document.querySelector('meta[name="theme-color"]');
-          if (themeColor) {
-            themeColor.setAttribute(
-              "content",
-              resolved === "dark" ? "#101316" : "#f6f7f9",
-            );
-          }
-        } catch {
-          document.documentElement.dataset.theme = "light";
-          document.documentElement.dataset.themePreference = "system";
-        }
-      })();
-    </script>
+    <script src="/assets/theme-init.js"></script>
     <style>
       /* Pre-hydration flash guard — must match tokens.css --tg-bg / --tg-fg
          exactly (light + dark) so there is no color jump when the stylesheet
