@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -55,6 +56,7 @@ type serviceShapeModel struct {
 	ID                     types.String `tfsdk:"id"`
 	Name                   types.String `tfsdk:"name"`
 	Interfaces             types.Set    `tfsdk:"interfaces"`
+	StorageClass           types.String `tfsdk:"storage_class"`
 	Consistency            types.String `tfsdk:"consistency"`
 	MaxRetries             types.Int64  `tfsdk:"max_retries"`
 	MaxBatchSize           types.Int64  `tfsdk:"max_batch_size"`
@@ -92,6 +94,7 @@ type objectBucketModel struct {
 	ID                     types.String `tfsdk:"id"`
 	Name                   types.String `tfsdk:"name"`
 	Interfaces             types.Set    `tfsdk:"interfaces"`
+	StorageClass           types.String `tfsdk:"storage_class"`
 	Space                  types.String `tfsdk:"space"`
 	TargetPool             types.String `tfsdk:"target_pool"`
 	SelectedImplementation types.String `tfsdk:"selected_implementation"`
@@ -231,6 +234,7 @@ func (m objectBucketModel) toServiceShapeModel() serviceShapeModel {
 		m.Target, m.Locked, m.Portability, m.Outputs,
 	)
 	base.Interfaces = m.Interfaces
+	base.StorageClass = m.StorageClass
 	return base
 }
 
@@ -239,6 +243,7 @@ func objectBucketModelFromServiceShape(m serviceShapeModel) objectBucketModel {
 		ID:                     m.ID,
 		Name:                   m.Name,
 		Interfaces:             m.Interfaces,
+		StorageClass:           m.StorageClass,
 		Space:                  m.Space,
 		TargetPool:             m.TargetPool,
 		SelectedImplementation: m.SelectedImplementation,
@@ -556,6 +561,13 @@ func (r *serviceShapeResource) Schema(_ context.Context, _ resource.SchemaReques
 	attrs := commonServiceShapeAttributes()
 	switch r.cfg.spec {
 	case specObjectBucket:
+		attrs["storage_class"] = schema.StringAttribute{
+			Optional:    true,
+			Computed:    true,
+			Default:     stringdefault.StaticString("standard"),
+			Description: "Portable default storage class for newly written objects: standard or infrequent_access. Defaults to standard.",
+			Validators:  []validator.String{StringOneOf("standard", "infrequent_access")},
+		}
 		attrs["interfaces"] = schema.SetAttribute{
 			Optional:    true,
 			ElementType: types.StringType,
@@ -1010,6 +1022,19 @@ func (m serviceShapeModel) toResource(ctx context.Context, defaultSpace, kind st
 	spec := map[string]any{"name": name}
 	switch specKind {
 	case specObjectBucket:
+		storageClass := "standard"
+		if !m.StorageClass.IsNull() && !m.StorageClass.IsUnknown() && m.StorageClass.ValueString() != "" {
+			storageClass = m.StorageClass.ValueString()
+		}
+		if storageClass != "standard" && storageClass != "infrequent_access" {
+			diags.AddAttributeError(
+				path.Root("storage_class"),
+				"Invalid storage class",
+				"ObjectBucket storage_class must be standard or infrequent_access.",
+			)
+			return nil, "", diags
+		}
+		spec["storageClass"] = storageClass
 		if !m.Interfaces.IsNull() && !m.Interfaces.IsUnknown() {
 			var interfaces []string
 			diags.Append(m.Interfaces.ElementsAs(ctx, &interfaces, false)...)
@@ -1221,6 +1246,11 @@ func refreshServiceShapeSpec(ctx context.Context, res *client.Resource, specKind
 	}
 	switch specKind {
 	case specObjectBucket:
+		if v, ok := res.Spec["storageClass"].(string); ok && v != "" {
+			m.StorageClass = types.StringValue(v)
+		} else {
+			m.StorageClass = types.StringValue("standard")
+		}
 		if raw, ok := res.Spec["interfaces"]; ok {
 			set, d := types.SetValueFrom(ctx, types.StringType, toStringSlice(raw))
 			diags.Append(d...)

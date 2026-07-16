@@ -71,6 +71,7 @@ func TestServiceShapeCreatePutsEachResourceOnce(t *testing.T) {
 				ID:                     types.StringUnknown(),
 				Name:                   types.StringValue("assets"),
 				Interfaces:             types.SetNull(types.StringType),
+				StorageClass:           types.StringValue("standard"),
 				Space:                  types.StringNull(),
 				TargetPool:             types.StringNull(),
 				SelectedImplementation: types.StringUnknown(),
@@ -315,6 +316,58 @@ func TestServiceShapeCreatePutsEachResourceOnce(t *testing.T) {
 	}
 }
 
+func TestObjectBucketStorageClassDefaultsAndMapsToWireSpec(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		value types.String
+		want  string
+	}{
+		{name: "omitted", value: types.StringNull(), want: "standard"},
+		{name: "standard", value: types.StringValue("standard"), want: "standard"},
+		{name: "infrequent access", value: types.StringValue("infrequent_access"), want: "infrequent_access"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			model := serviceShapeModel{
+				Name:         types.StringValue("assets"),
+				StorageClass: tt.value,
+				Interfaces:   types.SetNull(types.StringType),
+			}
+			resource, _, diags := model.toResource(
+				context.Background(),
+				"prod",
+				client.KindObjectBucket,
+				specObjectBucket,
+			)
+			if diags.HasError() {
+				t.Fatalf("toResource diagnostics: %v", diags)
+			}
+			if got := resource.Spec["storageClass"]; got != tt.want {
+				t.Fatalf("expected storageClass %q, got %#v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestRefreshObjectBucketSpecDefaultsLegacyStorageClass(t *testing.T) {
+	m := serviceShapeModel{StorageClass: types.StringValue("infrequent_access")}
+	res := &client.Resource{
+		Metadata: client.Metadata{Name: "assets", Space: "prod"},
+		Spec:     map[string]any{"name": "assets"},
+	}
+	diags := refreshServiceShapeSpec(
+		context.Background(),
+		res,
+		specObjectBucket,
+		&m,
+	)
+	if diags.HasError() {
+		t.Fatalf("refresh diagnostics: %v", diags)
+	}
+	if got := m.StorageClass.ValueString(); got != "standard" {
+		t.Fatalf("expected legacy ObjectBucket to refresh as standard, got %q", got)
+	}
+}
+
 func TestContainerServiceToResourceCarriesConnections(t *testing.T) {
 	model := containerServiceModel{
 		Name:        types.StringValue("agent"),
@@ -357,6 +410,10 @@ func TestNewServiceShapesRejectInvalidSpecsBeforeRemoteCalls(t *testing.T) {
 		kind  string
 		spec  serviceShapeSpecKind
 	}{
+		{
+			name: "object bucket storage class", kind: client.KindObjectBucket, spec: specObjectBucket,
+			model: serviceShapeModel{Name: types.StringValue("bad"), StorageClass: types.StringValue("provider-tier")},
+		},
 		{
 			name: "vector dimensions", kind: client.KindVectorIndex, spec: specVectorIndex,
 			model: serviceShapeModel{Name: types.StringValue("bad"), Dimensions: types.Int64Value(0)},

@@ -1219,6 +1219,11 @@ export const en: Record<keyof typeof ja, string> = {
     "Profile tokens are advertised and validated by the endpoint; the dashboard does not own a fixed list.",
   "resources.editor.tokenListHint":
     "Separate multiple tokens with commas or whitespace.",
+  "resources.editor.bucketStorageClass": "Storage class",
+  "resources.editor.bucketStorageClass.standard": "Standard",
+  "resources.editor.bucketStorageClass.infrequentAccess": "Infrequent access",
+  "resources.editor.bucketStorageClassHint":
+    "Portable default for newly written objects. Infrequent access requires a target that advertises support.",
   "resources.editor.bucketInterfaces": "Required object interfaces",
   "resources.editor.bucketInterfacesHint":
     "For example: s3_api, signed_url. These are endpoint-validated capability tokens, not runtime Interface objects.",

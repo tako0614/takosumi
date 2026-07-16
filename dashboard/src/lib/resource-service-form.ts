@@ -18,6 +18,7 @@ export type GuidedResourceServiceKind =
 export type EdgeWorkerArtifactSource = "url" | "ref";
 export type OptionalBooleanChoice = "" | "true" | "false";
 export type KVStoreConsistency = "" | "eventual" | "strong";
+export type ObjectBucketStorageClass = "standard" | "infrequent_access";
 
 export type GuidedSpecErrorCode =
   | "artifact_url_required"
@@ -57,6 +58,7 @@ export interface EdgeWorkerServiceForm {
 
 export interface ObjectBucketServiceForm {
   readonly name: string;
+  readonly storageClass: ObjectBucketStorageClass;
   readonly interfaces: string;
 }
 
@@ -481,8 +483,11 @@ export function readObjectBucketServiceForm(
   resourceName: string,
 ): ObjectBucketServiceForm | undefined {
   if (
-    !hasOnlyKeys(spec, ["name", "interfaces"]) ||
-    spec.name !== resourceName
+    !hasOnlyKeys(spec, ["name", "storageClass", "interfaces"]) ||
+    spec.name !== resourceName ||
+    (spec.storageClass !== undefined &&
+      spec.storageClass !== "standard" &&
+      spec.storageClass !== "infrequent_access")
   ) {
     return undefined;
   }
@@ -490,7 +495,8 @@ export function readObjectBucketServiceForm(
   if (interfaces === null) return undefined;
   return {
     name: resourceName,
-    // Omission is meaningful. Do not materialize a server-side default on edit.
+    // The Deploy API canonicalizes legacy omission to the portable default.
+    storageClass: (spec.storageClass ?? "standard") as ObjectBucketStorageClass,
     interfaces: (interfaces ?? []).join("\n"),
   };
 }
@@ -834,6 +840,7 @@ function objectBucketSpec(
   const interfaces = parseResourceServiceTokens(form.interfaces);
   return {
     name: form.name.trim(),
+    storageClass: form.storageClass,
     ...(interfaces.length > 0 ? { interfaces: [...interfaces] } : {}),
   };
 }

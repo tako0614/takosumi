@@ -61,6 +61,11 @@ Cloud では Cloudflare Workers for Platforms と Takosumi が管理するディ
 OCI イメージで動くサービスは `ContainerService`、オブジェクトストレージは `ObjectBucket`、
 アプリデータベースは `SQLDatabase`、永続ワークフローは別のシェイプとして扱います。
 
+Object Storage の作成時には `standard` と `infrequent_access` の 2 つから storage class を
+選べます。省略時は `standard` です。この選択は新規 object の既定 class で、既存 object を
+暗黙に移動しません。`infrequent_access` は対応する公式 target が利用可能な場合だけ preview
+を通過し、価格差と retrieval を含む課金条件は apply 前の quote に表示します。
+
 ```text
 Edge JS app:
   EdgeWorker -> Cloudflare Workers for Platforms dispatch namespace
@@ -140,6 +145,7 @@ Workers for Platforms dispatch namespace でも、公開 Resource identity は
 
 - [How Workers for Platforms works](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/how-workers-for-platforms-works/)
 - [Dynamic Workflows](https://developers.cloudflare.com/dynamic-workers/usage/dynamic-workflows/)
+- [R2 storage classes](https://developers.cloudflare.com/r2/buckets/storage-classes/)
 
 ## Delete And Cleanup
 

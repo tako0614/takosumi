@@ -55,6 +55,8 @@ describe("Resource Shape dashboard surface", () => {
     expect(editor).toContain('value="custom"');
     expect(editor).toContain("buildGuidedResourceServiceSpec");
     expect(editor).toContain("readGuidedResourceServiceForm");
+    expect(editor).toContain('value="infrequent_access"');
+    expect(detail).toContain("objectBucketStorageClass(item())");
   });
 
   test("offers every bundled shape through the same guided and raw authoring paths", () => {

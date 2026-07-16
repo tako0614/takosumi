@@ -362,6 +362,10 @@ KVStore
 Queue
 SQLDatabase
 ContainerService
+VectorIndex
+DurableWorkflow
+StatefulActorNamespace
+Schedule
 ```
 
 Takos のような複合 product も、専用の `takosumi_takos` resource ではなく、
@@ -379,6 +383,12 @@ HCL では `connection` は予約語なので、provider surface は `connection
 です。
 
 `ObjectBucket` があっても、data-plane は S3-compatible API を使います。
+`spec.storageClass` は新規 object の provider-neutral な既定 class で、exact value は
+`standard` / `infrequent_access` です。省略時は `standard` に正規化します。
+`infrequent_access` は TargetPool が `storage_class_infrequent_access` capability を
+公開するときだけ解決でき、未対応時は backend 呼び出し前に失敗します。既存 object の
+class を暗黙に変更する selector ではありません。Takosumi provider では同じ入力を
+`storage_class` として公開します。
 `AI Gateway` は provider resource ではなく OpenAI-compatible endpoint と env/secret
 projection として扱います。
 

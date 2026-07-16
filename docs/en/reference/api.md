@@ -367,6 +367,10 @@ KVStore
 Queue
 SQLDatabase
 ContainerService
+VectorIndex
+DurableWorkflow
+StatefulActorNamespace
+Schedule
 ```
 
 Composite products such as Takos are still expressed as this set of generic
@@ -380,7 +384,13 @@ that missing typed shape only after the same prior-art gate passes.
 
 Even when `ObjectBucket` exists, the data plane remains S3-compatible. AI
 Gateway is not a provider resource; apps consume it as an OpenAI-compatible
-endpoint through env/secret projection.
+endpoint through env/secret projection. `spec.storageClass` is the
+provider-neutral default for newly written objects. Its exact values are
+`standard` and `infrequent_access`, and omission is normalized to `standard`.
+`infrequent_access` resolves only when the TargetPool advertises
+`storage_class_infrequent_access`; unsupported placement fails before backend
+calls. The selector does not implicitly change objects written earlier. The
+Takosumi provider exposes the same input as `storage_class`.
 
 ## Target / Credential / Policy API
 

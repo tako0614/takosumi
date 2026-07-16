@@ -252,8 +252,19 @@ export type EdgeWorkerResource = ResourceObject<"EdgeWorker", EdgeWorkerSpec>;
  */
 export type ObjectBucketInterface = string;
 
+/**
+ * Portable default storage behavior for newly written objects.
+ *
+ * This is a service-form property rather than a provider/backend token. The
+ * omitted v1alpha1 value is interpreted as `standard` for compatibility with
+ * ObjectBucket records created before storage-class selection was exposed.
+ */
+export type ObjectBucketStorageClass = "standard" | "infrequent_access";
+
 export interface ObjectBucketSpec {
   readonly name: string;
+  /** Defaults to `standard` when omitted. */
+  readonly storageClass?: ObjectBucketStorageClass;
   readonly interfaces?: readonly ObjectBucketInterface[];
   readonly lifecyclePolicy?: ResourceLifecyclePolicy;
 }
