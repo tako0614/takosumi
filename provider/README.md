@@ -226,6 +226,22 @@ unknown provenance. It must never be overwritten or described as reproducible.
 The corrected provider version is the unpublished `1.0.1` candidate in
 `provider/release/version.json`.
 
+The exact public `1.0.0` structural schema identity and the classified `1.0.1`
+delta are digest-pinned under `provider/release/compatibility`. Check them with:
+
+```bash
+bun run provider:compatibility:check
+bun run provider:compatibility:state-proof
+```
+
+The first command proves that the current machine schema differs only by the
+declared four resources and eight optional attributes. It still reports
+`releaseReady: false`: adding those features in a patch is unapproved,
+Terraform CLI is not available in the pinned release environment, and the
+OpenTofu mirror FQN (`registry.opentofu.org/takosjp/takosumi`) differs from the
+binary's Terraform serve FQN (`registry.terraform.io/takosjp/takosumi`). None
+is treated as a skipped check.
+
 An actual release build requires the exact clean provider tag and source
 commit and writes to a new directory outside this repository:
 
