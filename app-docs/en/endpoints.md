@@ -309,6 +309,14 @@ credits are insufficient, pricing is unavailable, or scopes do not match, the
 request fails closed before it reaches the downstream provider, AI upstream, or
 runtime dispatch.
 
+After resolving the canonical Ready `EdgeWorker` and InterfaceBinding, the Edge
+runtime first reserves per-Resource and per-Workspace second, day, and billing
+period quota plus credit. Successful durable `gateway_request` capture is the
+accepted-dispatch point. Tenant errors and dispatch failures after that point
+remain charged; a failure before it never invokes tenant code. Dispatch has
+hard limits of `10 CPU-ms` and `5 subrequests`, and Stable disables Workers Logs
+and Logpush.
+
 Pricing is owned by Takosumi Cloud, not by endpoint request bodies. Requests and
 client headers must not submit `usdMicros` or `credits`. Public prices and
 free-tier terms are shown in [Takosumi Cloud pricing](./pricing.md) and
