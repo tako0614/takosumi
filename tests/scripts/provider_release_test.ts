@@ -1,16 +1,19 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
+  chmod,
   cp,
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import {
   PROVIDER_QUARANTINE_PATH,
   PROVIDER_REGISTRY_PATH,
@@ -644,6 +647,7 @@ async function makeTaggedSourceFixture({ wrongGoDigest = false } = {}) {
   const repoRoot = join(root, "repo");
   await mkdir(join(repoRoot, "provider", "release"), { recursive: true });
   const descriptor = await readJson(PROVIDER_VERSION_PATH);
+  await pinFixtureToolchain(repoRoot, descriptor);
   if (wrongGoDigest) descriptor.toolchain.go.sha256 = "0".repeat(64);
   await writeManifest(
     join(repoRoot, "provider", "release", "version.json"),
@@ -679,6 +683,10 @@ async function makeCompleteTaggedSourceFixture() {
       recursive: true,
     },
   );
+  const descriptorPath = join(repoRoot, "provider", "release", "version.json");
+  const descriptor = await readJson(descriptorPath);
+  await pinFixtureToolchain(repoRoot, descriptor);
+  await writeManifest(descriptorPath, descriptor);
   runGit(repoRoot, ["init", "-q"]);
   runGit(repoRoot, ["config", "user.email", "provider-test@takosumi.invalid"]);
   runGit(repoRoot, ["config", "user.name", "Provider Release Test"]);
@@ -690,6 +698,103 @@ async function makeCompleteTaggedSourceFixture() {
     outputRoot: join(root, "output"),
     sourceCommit: runGit(repoRoot, ["rev-parse", "HEAD"]),
   };
+}
+
+async function pinFixtureToolchain(repoRoot: string, descriptor: any) {
+  const toolchainRoot = join(repoRoot, ".fixture-toolchain");
+  const actualGo = await executablePath("go");
+  const actualGit = await executablePath("git");
+  const actualGpgv = await executablePath("gpgv");
+  const actualZip = await executablePath("zip");
+  const actualUnzip = await executablePath("unzip");
+
+  const goWrapper = await writeToolWrapper(
+    join(toolchainRoot, "go", "bin", "go"),
+    actualGo,
+  );
+  const gitWrapper = await writeVersionedToolWrapper(
+    join(toolchainRoot, "bin", "git"),
+    actualGit,
+    "git version 2.53.0",
+  );
+  const gpgvWrapper = await writeVersionedToolWrapper(
+    join(toolchainRoot, "bin", "gpgv"),
+    actualGpgv,
+    "gpgv (GnuPG) 2.4.8",
+  );
+  const goDistributionRoot = await realpath(join(toolchainRoot, "go"));
+
+  descriptor.toolchain.go.path = goWrapper.path;
+  descriptor.toolchain.go.sha256 = sha256(goWrapper.bytes);
+  descriptor.toolchain.go.distributionRoot = goDistributionRoot;
+  descriptor.toolchain.go.distributionSha256 = createHash("sha256")
+    .update("F\0bin/go\0")
+    .update(goWrapper.bytes)
+    .update("\0")
+    .digest("hex");
+  descriptor.toolchain.git.path = gitWrapper.path;
+  descriptor.toolchain.git.sha256 = sha256(gitWrapper.bytes);
+  descriptor.toolchain.gpgv.path = gpgvWrapper.path;
+  descriptor.toolchain.gpgv.sha256 = sha256(gpgvWrapper.bytes);
+  descriptor.toolchain.zip.path = actualZip;
+  descriptor.toolchain.zip.sha256 = sha256(await readFile(actualZip));
+  descriptor.toolchain.unzip.path = actualUnzip;
+  descriptor.toolchain.unzip.sha256 = sha256(await readFile(actualUnzip));
+  descriptor.runtimeTrust = {
+    files: await Promise.all(
+      [
+        goWrapper.path,
+        gitWrapper.path,
+        gpgvWrapper.path,
+        actualZip,
+        actualUnzip,
+      ]
+        .sort()
+        .map(async (path) => ({ path, sha256: sha256(await readFile(path)) })),
+    ),
+  };
+}
+
+async function executablePath(name: string) {
+  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+    if (!directory) continue;
+    try {
+      return await realpath(join(directory, name));
+    } catch {
+      // Continue searching PATH.
+    }
+  }
+  throw new Error(`fixture tool ${name} is unavailable on PATH`);
+}
+
+async function writeToolWrapper(path: string, target: string) {
+  const bytes = Buffer.from(`#!/bin/sh\nexec ${JSON.stringify(target)} "$@"\n`);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, bytes);
+  await chmod(path, 0o755);
+  return { path: await realpath(path), bytes };
+}
+
+async function writeVersionedToolWrapper(
+  path: string,
+  target: string,
+  version: string,
+) {
+  const bytes = Buffer.from(
+    [
+      "#!/bin/sh",
+      'if [ "${1:-}" = "--version" ]; then',
+      `  printf '%s\\n' ${JSON.stringify(version)}`,
+      "  exit 0",
+      "fi",
+      `exec ${JSON.stringify(target)} "$@"`,
+      "",
+    ].join("\n"),
+  );
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, bytes);
+  await chmod(path, 0o755);
+  return { path: await realpath(path), bytes };
 }
 
 function runGit(cwd: string, args: string[]) {
