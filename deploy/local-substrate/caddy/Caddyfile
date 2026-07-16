@@ -49,7 +49,7 @@ mailpit.takosumi.test {
 	import proxy_site mailpit:8025
 }
 jaeger.takosumi.test {
-	import proxy_site host.docker.internal:16686
+	import proxy_site jaeger:16686
 }
 
 # ===== app.takosumi.com mirror — the ONE composed control plane ==========
@@ -63,6 +63,8 @@ jaeger.takosumi.test {
 # exactly like the worker mirror below.
 app.takosumi.test {
 	route {
+		@private path /internal/* /api/spaces /api/spaces/* /api/connections /api/connections/*
+		respond @private 404
 		@api path /api/* /v1/* /oauth/* /.well-known/* /hooks/* /gateway/ai/v1* /internal/* /healthz /readyz
 		handle @api {
 			reverse_proxy cloud:8787
@@ -90,7 +92,7 @@ app.takosumi.test {
 # composed platform worker directly so smoke tests can exercise the Worker code
 # path.
 service.takosumi.test, service-worker.takosumi.test {
-	reverse_proxy host.docker.internal:18788
+	reverse_proxy takosumi-service-worker:8788
 }
 
 # Phase 3 で route-registrar が *.app.takosumi.test に動的 route を追加する。

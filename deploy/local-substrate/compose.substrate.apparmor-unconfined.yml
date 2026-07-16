@@ -89,6 +89,9 @@ services:
   takosumi-dashboard-build:
     security_opt:
       - apparmor=unconfined
+  takosumi-app-docs-build:
+    security_opt:
+      - apparmor=unconfined
   route-registrar:
     depends_on:
       cloud:
