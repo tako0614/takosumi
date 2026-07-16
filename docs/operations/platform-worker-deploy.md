@@ -28,11 +28,19 @@ bun run check
 bun run docs:build
 ```
 
+Before deploying code that requires a newer control-ledger D1 shape, run the
+[Control D1 schema predeploy](control-d1-schema-predeploy.md) gate against the
+same exact source commit. Back up, apply, and read-only verify staging before
+production. A platform Worker deployment must not depend on its first request
+to create or repair the required schema.
+
 Then use the operator-owned Wrangler config:
 
 ```bash
-bunx wrangler@latest deploy --dry-run --config "$TAKOSUMI_WRANGLER_CONFIG"
-bunx wrangler@latest deploy --config "$TAKOSUMI_WRANGLER_CONFIG"
+bun run wrangler -- deploy --dry-run --latest=false \
+  --config "$TAKOSUMI_WRANGLER_CONFIG"
+bun run wrangler -- deploy --latest=false \
+  --config "$TAKOSUMI_WRANGLER_CONFIG"
 ```
 
 Container image reuse, capacity, keepalive, cache, egress, and timeout settings
