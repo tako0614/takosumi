@@ -52,7 +52,7 @@ The dashboard build removes the generated `dist/opentofu/providers` overlay,
 downloads or reuses a content-addressed cache entry for each exact reviewed
 version/archive asset, verifies it, and copies the bytes unchanged. It then
 derives `index.json` by deterministically merging the version entries from all
-reviewed manifests. Adding `1.0.1` can change that aggregate catalog but cannot
+reviewed manifests. Adding `1.1.0` can change that aggregate catalog but cannot
 change any `1.0.0` byte. Missing, conflicting, or mismatched bytes fail the
 build. Files under ignored
 `dashboard/public/.../registry.opentofu.org` are generated only by the
@@ -81,14 +81,16 @@ bun run provider:compatibility:state-proof
 bun run provider:compatibility:release-check
 ```
 
-The first command builds `1.0.1` in a temporary directory and compares the
+The first command builds `1.1.0` in a temporary directory and compares the
 OpenTofu machine schema to the digest-pinned, value-free identity captured from
 the exact public `1.0.0` archive. After removing only the policy-declared delta,
 the historical provider schema and seven historical resource schemas must
 match. The declared delta is four resources (`durable_workflow`, `schedule`,
 `stateful_actor_namespace`, and `vector_index`) and eight optional attributes
-on EdgeWorker, ObjectBucket, and TargetPool. Any removal, required/type change,
-or undeclared addition fails.
+on EdgeWorker, ObjectBucket, and TargetPool. Their complete machine schemas are
+also pinned, and implementation-source digests cover defaults and validators
+that OpenTofu schema JSON omits. Any removal, required/sensitive/type/nesting,
+default/validator change, or undeclared addition fails.
 
 The state proof uses only a temporary directory and a local fake endpoint. It
 installs exact public `1.0.0`, applies disposable state for all seven historical
@@ -97,19 +99,23 @@ no-op and read-only observe refresh, then switches back and requires an
 old-provider no-op before destroy. It prints no state values and uses no
 credential. It also guards the ObjectBucket compatibility correction that
 keeps omission materialized as `standard` without a plan-time default forcing
-pre-field state to update.
+pre-field state to update. A second real current-provider apply proves the
+omitted create value is known `standard`. All proof subprocesses use an
+explicit, credential-free environment allowlist, and every phase asserts exact
+per-resource plus TargetPool request-count deltas.
 
 `release-check` remains intentionally failing until all release blockers are
-resolved. In particular, the owner must decide whether `1.0.1` is
-correction-only, whether features move to a minor version, or whether the
-feature-bearing patch is explicitly approved. The supported Terraform CLI
-install matrix must also be executable, and the current OpenTofu mirror FQN /
-Terraform serve FQN split must be resolved and proven. A missing Terraform CLI
-is `blocked-prerequisite`, never `skipped`.
+resolved. The feature-bearing `1.0.1` patch is rejected; the classified four
+resources and eight fields stay only in the `1.1.0` minor candidate. The
+supported Terraform install matrix must be run with its reviewed CLI, with
+OpenTofu proved under `registry.opentofu.org/takosjp/takosumi` and Terraform
+proved under `registry.terraform.io/takosjp/takosumi`. A missing
+Terraform CLI is `blocked-prerequisite`, never `skipped`; a CLI found on `PATH`
+clears only that prerequisite and does not claim matrix evidence.
 
 ## Build a corrected candidate
 
-The current corrected version is `1.0.1` and remains unpublished. After the
+The current corrected version is `1.1.0` and remains unpublished. After the
 release change is committed, create the exact clean provider tag according to
 the release approval process. A production build accepts only an annotated tag
 whose signature matches a reviewed fingerprint in `version.json`. That signer
@@ -118,11 +124,11 @@ below is currently blocked rather than publication-ready. The output path must
 not exist and must be outside the repository:
 
 ```bash
-commit=$(git rev-parse 'refs/tags/provider/v1.0.1^{commit}')
+commit=$(git rev-parse 'refs/tags/provider/v1.1.0^{commit}')
 bun run provider:release:build -- \
-  --tag provider/v1.0.1 \
+  --tag provider/v1.1.0 \
   --source-commit "$commit" \
-  --output /srv/takosumi-provider-candidates/1.0.1
+  --output /srv/takosumi-provider-candidates/1.1.0
 ```
 
 The command fails when the caller checkout or detached tagged worktree is
@@ -154,7 +160,7 @@ Re-verify a reviewed release bundle before it can be considered for
 publication:
 
 ```bash
-bun run provider:release:verify -- --root /srv/takosumi-provider-candidates/1.0.1
+bun run provider:release:verify -- --root /srv/takosumi-provider-candidates/1.1.0
 ```
 
 This gate captures each input file once into a private `0700` snapshot with
@@ -168,7 +174,7 @@ public-path gate are still required.
 Before an approved external publication, run the read-only public-path gate:
 
 ```bash
-bun run provider:release:prepublish -- --root /srv/takosumi-provider-candidates/1.0.1
+bun run provider:release:prepublish -- --root /srv/takosumi-provider-candidates/1.1.0
 ```
 
 It permits only the fixed `https://app.takosumi.com/opentofu/providers/`
