@@ -236,6 +236,8 @@ services:
           --external cloudflare:workers \
           deploy/platform/worker.ts \
           --outfile deploy/platform/.wrangler/dist/takosumi-platform-worker.mjs
+        bun deploy/local-substrate/scripts/render-accounts-d1-migrations.ts \
+          deploy/platform/.wrangler/dist/takosumi-accounts-d1-migrations.json
     volumes:
       - ../../../takosumi:/work
 
@@ -254,8 +256,6 @@ services:
     command: ["node", "/app/runner.mjs"]
     env_file:
       - ./env/takosumi-service-worker.env
-    environment:
-      NODE_EXTRA_CA_CERTS: /local-substrate-runtime/pebble-issuance-root.pem
     volumes:
       - ../../../takosumi/deploy/platform/.wrangler/dist:/worker:ro
       - ./wrappers/takosumi-platform-worker-runner.mjs:/app/runner.mjs:ro
