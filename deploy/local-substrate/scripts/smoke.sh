@@ -231,6 +231,14 @@ else
 	FAIL=$((FAIL + 1))
 fi
 
+if run_script "oauth.workerd-untrusted-ca" "bash $SCRIPT_DIR/workerd-tls-negative.sh"; then
+	echo "    PASS [oauth.workerd-untrusted-ca] workerd rejects the Pebble chain when its root is not configured"
+	PASS=$((PASS + 1))
+else
+	echo "    FAIL [oauth.workerd-untrusted-ca] see scripts/workerd-tls-negative.sh"
+	FAIL=$((FAIL + 1))
+fi
+
 echo
 echo "==> OAuth CSRF / replay defenses — code reuse + state mismatch + unknown code"
 if run_script "oauth.csrf-replay" "bash $SCRIPT_DIR/oauth-csrf-replay.sh"; then
