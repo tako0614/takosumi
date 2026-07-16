@@ -6,7 +6,7 @@ version.
 
 - `version.json` is the exact candidate version, tag, address, platform, and
   hermetic toolchain/runtime contract. Its SHA-256 sidecar is required.
-  `1.0.1` is a candidate only; it has not been published.
+  `1.1.0` is a candidate only; it has not been published.
 - `registry.json` plus its sidecar is the only normal mirror-admission
   authority. It retains all known versions. Direct candidate-manifest
   materialization is restricted to the explicit test-only seam.
@@ -16,9 +16,10 @@ version.
   asset. The served binary reports `dev` and dirty provenance, so `1.0.0` is
   retained for compatibility but is never reproducible release evidence.
 - `compatibility/1.0.0-state-identity.json` pins the non-secret structural
-  schema identity read from those exact public bytes. The adjacent `1.0.1`
+  schema identity read from those exact public bytes. The adjacent `1.1.0`
   delta policy classifies four new resources and eight optional attributes,
-  but fails their inclusion in a patch release closed until an owner decision.
+  rejects their inclusion in the `1.0.1` patch lane, and keeps them together
+  only in the unpublished minor candidate.
 - Release builds are explicit: a clean `provider/v<version>` tag and its exact
   commit are required. Production also requires an annotated signature from a
   reviewed signer fingerprint. No signer fingerprint is configured yet, so
@@ -42,8 +43,9 @@ Run `bun run provider:compatibility:check` for the hermetic current-schema
 comparison and prerequisite matrix. Run
 `bun run provider:compatibility:state-proof` separately for the connected
 old-state proof. `provider:compatibility:release-check` is intentionally red
-while feature-in-patch approval, Terraform CLI/FQN installation, and the
-address split remain unresolved.
+while the explicit OpenTofu/Terraform install, schema, state, and FQN matrix
+remains unproven. The feature-bearing patch lane is already rejected in favor
+of the `1.1.0` minor candidate; CLI discovery alone never claims the matrix.
 
 See [provider-release-and-mirror.md](../../docs/operations/provider-release-and-mirror.md)
 for commands and incident handling.

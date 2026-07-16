@@ -998,6 +998,14 @@ func (r *serviceShapeResource) put(ctx context.Context, plan *serviceShapeModel,
 		return
 	}
 	plan.Space = types.StringValue(space)
+	// OpenTofu represents an omitted Optional+Computed field as unknown during
+	// create. Materialize the wire default only after a successful apply so new
+	// state is known, while historical state can remain null during refresh-free
+	// planning and therefore stays no-op compatible with the pre-field schema.
+	if r.cfg.spec == specObjectBucket &&
+		(plan.StorageClass.IsNull() || plan.StorageClass.IsUnknown() || plan.StorageClass.ValueString() == "") {
+		plan.StorageClass = types.StringValue("standard")
+	}
 	diags.Append(applyServiceShapeStatus(ctx, res, r.cfg.kind, space, plan)...)
 }
 
