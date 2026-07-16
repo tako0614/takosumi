@@ -573,6 +573,8 @@ export const resourceShapes = pgTable(
     project: text("project"),
     environment: text("environment"),
     kind: text("kind").notNull(),
+    formRefJson: json("form_ref_json"),
+    packageDigest: text("package_digest"),
     name: text("name").notNull(),
     managedBy: text("managed_by").notNull(),
     specJson: json("spec_json").notNull(),
@@ -614,26 +616,39 @@ export const resourceShapes = pgTable(
       table.observationClaimedAt,
       table.id,
     ),
+    index("takosumi_resource_shapes_unpinned_form_kind_id_idx")
+      .on(table.kind, table.id)
+      .where(sql`${table.formRefJson} is null`),
   ],
 );
 
-export const resolutionLocks = pgTable(names.resolutionLocks, {
-  resourceId: text("resource_id").primaryKey(),
-  selectedImplementation: text("selected_implementation").notNull(),
-  targetPool: text("target_pool"),
-  target: text("target").notNull(),
-  targetSnapshotJson: json("target_snapshot_json"),
-  implementationSnapshotJson: json("implementation_snapshot_json"),
-  implementationPlugin: text("implementation_plugin"),
-  implementationOptionsJson: json("implementation_options_json"),
-  implementationFingerprint: text("implementation_fingerprint"),
-  locked: boolean("locked").notNull(),
-  reasonJson: json("reason_json").notNull(),
-  portability: text("portability"),
-  nativeResourcesJson: json("native_resources_json"),
-  lockedAt: text("locked_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
+export const resolutionLocks = pgTable(
+  names.resolutionLocks,
+  {
+    resourceId: text("resource_id").primaryKey(),
+    formRefJson: json("form_ref_json"),
+    packageDigest: text("package_digest"),
+    selectedImplementation: text("selected_implementation").notNull(),
+    targetPool: text("target_pool"),
+    target: text("target").notNull(),
+    targetSnapshotJson: json("target_snapshot_json"),
+    implementationSnapshotJson: json("implementation_snapshot_json"),
+    implementationPlugin: text("implementation_plugin"),
+    implementationOptionsJson: json("implementation_options_json"),
+    implementationFingerprint: text("implementation_fingerprint"),
+    locked: boolean("locked").notNull(),
+    reasonJson: json("reason_json").notNull(),
+    portability: text("portability"),
+    nativeResourcesJson: json("native_resources_json"),
+    lockedAt: text("locked_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("takosumi_resolution_locks_unpinned_form_resource_idx")
+      .on(table.resourceId)
+      .where(sql`${table.formRefJson} is null`),
+  ],
+);
 
 export const targetPools = pgTable(
   names.targetPools,

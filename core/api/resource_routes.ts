@@ -843,6 +843,7 @@ function httpStatusForServiceError(
   code: ResourceServiceErrorCode,
 ): 400 | 402 | 404 | 409 | 502 {
   switch (code) {
+    case "invalid_form_ref":
     case "invalid_spec":
     case "invalid_name":
     case "invalid_interfaces":
@@ -875,6 +876,9 @@ function httpStatusForServiceError(
     case "not_found":
       return 404;
     case "policy_denied":
+    case "form_registry_unavailable":
+    case "form_not_installed":
+    case "form_identity_conflict":
     case "target_pool_exists":
     case "target_pool_in_use":
     case "capability_missing":

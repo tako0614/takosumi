@@ -1347,6 +1347,7 @@ export async function createTakosumiService(
         ...(options.resourceShapeSchemaRegistry
           ? { schemaRegistry: options.resourceShapeSchemaRegistry }
           : {}),
+        ...(formRegistryService ? { formRegistry: formRegistryService } : {}),
         now: () => new Date().toISOString(),
         ...(options.resourceShapeDeleteTimeoutMs !== undefined
           ? { deleteTimeoutMs: options.resourceShapeDeleteTimeoutMs }
