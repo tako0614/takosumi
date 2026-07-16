@@ -110,6 +110,7 @@ export const RESOURCE_SHAPE_ENDPOINTS: readonly ApiEndpoint[] = [
   }),
   endpoint("PUT", "/v1/target-pools/:name", "putTargetPool", {
     okSchema: "TargetPoolResponse",
+    alternateOkStatuses: ["201"],
   }),
   endpoint("GET", "/v1/target-pools/:name", "getTargetPool", {
     okSchema: "TargetPoolResponse",
@@ -365,13 +366,30 @@ export function registerResourceShapeRoutes(
     const spec = (body.spec ?? {
       targets: body.targets ?? [],
     }) as TargetPoolSpec;
-    const result = await service.putTargetPool(
-      space,
-      c.req.param("name"),
-      spec,
-    );
+    const ifNoneMatch = c.req.header("if-none-match")?.trim();
+    if (ifNoneMatch !== undefined && ifNoneMatch !== "*") {
+      return badRequest(
+        c,
+        "If-None-Match on TargetPool PUT supports only the create-only '*' precondition",
+      );
+    }
+    const result =
+      ifNoneMatch === "*"
+        ? await service.createTargetPool(space, c.req.param("name"), spec)
+        : await service.putTargetPool(space, c.req.param("name"), spec);
+    if (!result.ok && result.error.code === "target_pool_exists") {
+      return c.json(
+        apiError(
+          result.error.code,
+          result.error.message,
+          undefined,
+          requestIdFromContext(c),
+        ),
+        412,
+      );
+    }
     if (!result.ok) return errorResponse(c, result.error);
-    return c.json(result.value, 200);
+    return c.json(result.value, ifNoneMatch === "*" ? 201 : 200);
   });
 
   app.get("/v1/target-pools", async (c) => {
@@ -842,6 +860,7 @@ function httpStatusForServiceError(
     case "not_found":
       return 404;
     case "policy_denied":
+    case "target_pool_exists":
     case "target_pool_in_use":
     case "capability_missing":
     case "selected_target_missing":

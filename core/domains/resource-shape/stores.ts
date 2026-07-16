@@ -232,7 +232,13 @@ export interface ResolutionLockStore {
   delete(resourceId: ResourceShapeRecordId): Promise<void>;
 }
 
+export type TargetPoolCreateResult =
+  | { readonly status: "created"; readonly record: TargetPoolRecord }
+  | { readonly status: "conflict"; readonly record: TargetPoolRecord };
+
 export interface TargetPoolStore {
+  /** Atomically inserts a TargetPool without replacing any existing id/name. */
+  create(record: TargetPoolRecord): Promise<TargetPoolCreateResult>;
   upsert(record: TargetPoolRecord): Promise<TargetPoolRecord>;
   get(id: TargetPoolRecordId): Promise<TargetPoolRecord | undefined>;
   getByName(
@@ -580,6 +586,23 @@ export class InMemoryResolutionLockStore implements ResolutionLockStore {
 
 export class InMemoryTargetPoolStore implements TargetPoolStore {
   readonly #byId = new Map<TargetPoolRecordId, TargetPoolRecord>();
+
+  create(record: TargetPoolRecord): Promise<TargetPoolCreateResult> {
+    const existingById = this.#byId.get(record.id);
+    if (existingById) {
+      return Promise.resolve({ status: "conflict", record: existingById });
+    }
+    for (const existing of this.#byId.values()) {
+      if (
+        existing.spaceId === record.spaceId &&
+        existing.name === record.name
+      ) {
+        return Promise.resolve({ status: "conflict", record: existing });
+      }
+    }
+    this.#byId.set(record.id, record);
+    return Promise.resolve({ status: "created", record });
+  }
 
   upsert(record: TargetPoolRecord): Promise<TargetPoolRecord> {
     this.#byId.set(record.id, record);

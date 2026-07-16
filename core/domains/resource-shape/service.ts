@@ -108,6 +108,7 @@ export type ResourceServiceErrorCode =
   | "invalid_lifecycle_policy"
   | "invalid_delete_policy"
   | "invalid_target_pool"
+  | "target_pool_exists"
   | "target_pool_in_use"
   | "target_pool_not_found"
   | "policy_denied"
@@ -421,6 +422,38 @@ export class ResourceShapeService {
   }
 
   // --- Configuration: TargetPool / SpacePolicy --------------------------------
+
+  async createTargetPool(
+    space: SpaceId,
+    name: string,
+    spec: TargetPoolSpec,
+  ): Promise<ServiceResult<TargetPoolRecord>> {
+    const validation = validateTargetPoolSpec(
+      name,
+      spec,
+      this.#allowedProviderConfigUrls,
+    );
+    if (validation) return { ok: false, error: validation };
+    const now = this.#now();
+    const record: TargetPoolRecord = {
+      id: `tkrn:${space}:TargetPool:${name}`,
+      spaceId: space,
+      name,
+      spec: spec as unknown as JsonObject,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const result = await this.#stores.targetPools.create(record);
+    return result.status === "created"
+      ? { ok: true, value: result.record }
+      : {
+          ok: false,
+          error: {
+            code: "target_pool_exists",
+            message: `TargetPool ${name} already exists in ${space}`,
+          },
+        };
+  }
 
   async putTargetPool(
     space: SpaceId,
