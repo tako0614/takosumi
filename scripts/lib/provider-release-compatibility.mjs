@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -411,6 +412,54 @@ function run(command, args, options) {
   return result.stdout ?? "";
 }
 
+export async function resolveCompatibilityGoCommand(
+  toolchain,
+  {
+    accessCommand = (path) => access(path, constants.X_OK),
+    findOnPath = commandAvailable,
+    runCommand = run,
+  } = {},
+) {
+  if (
+    !toolchain ||
+    typeof toolchain.path !== "string" ||
+    typeof toolchain.version !== "string"
+  ) {
+    throw new Error("candidate descriptor requires a Go path and version");
+  }
+
+  let command = toolchain.path;
+  try {
+    await accessCommand(command);
+  } catch (error) {
+    if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+      throw new Error(
+        `cannot execute pinned Go toolchain ${command}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    command = findOnPath("go");
+    if (!command) {
+      throw new Error(
+        `pinned Go toolchain ${toolchain.path} is missing and go is unavailable on PATH`,
+      );
+    }
+  }
+
+  const versionOutput = runCommand(command, ["version"], {}).trim();
+  const match = /^go version (\S+) \S+\/\S+$/.exec(versionOutput);
+  if (!match) {
+    throw new Error(
+      `Go toolchain ${command} returned an invalid go version response: ${versionOutput}`,
+    );
+  }
+  if (match[1] !== toolchain.version) {
+    throw new Error(
+      `Go toolchain ${command} version mismatch: expected ${toolchain.version}, observed ${match[1]}`,
+    );
+  }
+  return command;
+}
+
 export async function captureCandidateSchema({ repoRoot = REPO_ROOT } = {}) {
   const authorities = await loadCompatibilityAuthorities();
   const descriptor = JSON.parse(
@@ -419,6 +468,7 @@ export async function captureCandidateSchema({ repoRoot = REPO_ROOT } = {}) {
   if (descriptor.version !== authorities.policy.candidate.version) {
     throw new Error("candidate descriptor version drifted from compatibility policy");
   }
+  const go = await resolveCompatibilityGoCommand(descriptor.toolchain.go);
   const tofu = commandAvailable("tofu");
   if (!tofu) throw new Error("OpenTofu CLI is required for provider schema compatibility");
   const root = await mkdtemp(join(tmpdir(), "takosumi-provider-compatibility-"));
@@ -429,7 +479,7 @@ export async function captureCandidateSchema({ repoRoot = REPO_ROOT } = {}) {
     await mkdir(moduleDir, { recursive: true });
     const binary = join(binaryDir, `terraform-provider-takosumi_v${descriptor.version}`);
     run(
-      descriptor.toolchain.go.path,
+      go,
       [
         "build",
         "-trimpath",
