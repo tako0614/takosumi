@@ -1,9 +1,19 @@
 import type { Interface, InterfaceBinding } from "takosumi-contract";
-import { isValidInterfaceName, TAKOSUMI_API_VERSION } from "takosumi-contract";
+import {
+  hasCredentialQueryParams,
+  isValidInterfaceName,
+  parseInterfaceDisplay,
+  TAKOSUMI_API_VERSION,
+  UI_SURFACE_INTERFACE_TYPE,
+  UI_SURFACE_INTERFACE_VERSION,
+  UI_SURFACE_OPEN_PERMISSION,
+} from "takosumi-contract";
 
-export const UI_SURFACE_INTERFACE_TYPE = "interface.ui.surface" as const;
-export const UI_SURFACE_INTERFACE_VERSION = "1" as const;
-export const UI_SURFACE_PERMISSION = "ui.open" as const;
+// Contract-owned wire tokens (`takosumi-contract/interface-types`); this
+// module stays the dashboard's type/version consumer but no longer redefines
+// the literals.
+export { UI_SURFACE_INTERFACE_TYPE, UI_SURFACE_INTERFACE_VERSION };
+export const UI_SURFACE_PERMISSION = UI_SURFACE_OPEN_PERMISSION;
 
 /**
  * Strict dashboard consumer view of a Capsule-owned launcher Interface.
@@ -143,22 +153,27 @@ export function parseUiSurfaceInterface(
 
   const url = safeRuntimeUrl(resolvedInputs.url);
   if (!url) return null;
-  const display = isRecord(document.display) ? document.display : null;
-  const name = boundedText(display?.title, 256);
-  const description = boundedText(display?.description, 1_024);
-  const icon = safeUiIcon(display?.icon, url);
-  const category = boundedText(display?.category, 64);
-  const sortOrder = finiteNumber(display?.sortOrder);
+  const display = parseInterfaceDisplay(document.display, { surfaceUrl: url });
+  const icon =
+    display.icon === undefined
+      ? undefined
+      : display.icon.kind === "image"
+        ? display.icon.url
+        : display.icon.glyph;
   return {
     interface: value as Interface,
     interfaceId,
     capsuleId,
     resolvedRevision,
-    ...(name ? { name } : {}),
-    ...(description ? { description } : {}),
-    ...(icon ? { icon } : {}),
-    ...(category ? { category } : {}),
-    ...(sortOrder !== null ? { sortOrder } : {}),
+    ...(display.title !== undefined ? { name: display.title } : {}),
+    ...(display.description !== undefined
+      ? { description: display.description }
+      : {}),
+    ...(icon !== undefined ? { icon } : {}),
+    ...(display.category !== undefined ? { category: display.category } : {}),
+    ...(display.sortOrder !== undefined
+      ? { sortOrder: display.sortOrder }
+      : {}),
     url,
   };
 }
@@ -236,11 +251,6 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function boundedText(value: unknown, maxLength: number): string | undefined {
-  const normalized = text(value);
-  return normalized && normalized.length <= maxLength ? normalized : undefined;
-}
-
 function requiredId(value: string, field: string): string {
   const normalized = value.trim();
   if (!normalized) throw new Error(`${field} is required`);
@@ -251,10 +261,6 @@ function nonNegativeInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : null;
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function isSupportedInputSource(value: unknown): boolean {
@@ -287,62 +293,9 @@ function safeRuntimeUrl(value: unknown): string | null {
     const url = new URL(raw);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     if (url.username || url.password || url.hash) return null;
-    if (hasCredentialQuery(url.searchParams)) return null;
+    if (hasCredentialQueryParams(url.searchParams)) return null;
     return url.toString();
   } catch {
     return null;
   }
-}
-
-function safeUiIcon(value: unknown, runtimeUrl: string): string | undefined {
-  const raw = boundedText(value, 2_048);
-  if (!raw) return undefined;
-  // A short non-path token is presentation text (typically an emoji/glyph).
-  if (![...raw].some((char) => "/.:".includes(char))) {
-    return [...raw].length <= 16 ? raw : undefined;
-  }
-  try {
-    const url = new URL(raw, runtimeUrl);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-    if (url.username || url.password || url.hash) return undefined;
-    if (hasCredentialQuery(url.searchParams)) return undefined;
-    return raw.startsWith("/") ? raw : url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
-const CREDENTIAL_QUERY_NAMES = new Set([
-  "accesskey",
-  "accesstoken",
-  "apikey",
-  "auth",
-  "authorization",
-  "bearertoken",
-  "credential",
-  "credentials",
-  "jwt",
-  "password",
-  "refreshtoken",
-  "secret",
-  "session",
-  "sessionid",
-  "sessiontoken",
-  "sig",
-  "signature",
-  "token",
-  "xamzcredential",
-  "xamzsecuritytoken",
-  "xamzsignature",
-  "xgoogcredential",
-  "xgoogsignature",
-  "xapikey",
-]);
-
-function hasCredentialQuery(parameters: URLSearchParams): boolean {
-  for (const [name, value] of parameters) {
-    const normalizedName = name.toLowerCase().replace(/[^a-z0-9]/gu, "");
-    if (value.trim() && CREDENTIAL_QUERY_NAMES.has(normalizedName)) return true;
-  }
-  return false;
 }

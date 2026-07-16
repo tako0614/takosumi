@@ -5,6 +5,20 @@ export { TAKOSUMI_INTERFACES_CAPABILITY } from "./capabilities.ts";
 
 export type InterfaceOwnerKind = "Workspace" | "Capsule" | "Resource";
 
+/**
+ * Immutable declaration/materialization owner. Capsule declarations converge
+ * from exactly two authoring sources; compatibility profiles retain their
+ * separately scoped canonical http.route ownership.
+ */
+export type InterfaceMaterializedFrom =
+  | { readonly source: "capsule_blueprint"; readonly key: string }
+  | { readonly source: "capsule_resource" }
+  | {
+      readonly source: "compatibility_profile";
+      readonly profile: string;
+      readonly key: string;
+    };
+
 /** Stable lexical contract shared by Interface producers and consumers. */
 export const INTERFACE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u;
 /** RFC 6749 scope-token (`NQCHAR`): printable ASCII except `"` and `\\`. */
@@ -39,18 +53,11 @@ export interface InterfaceMetadata {
   readonly ownerRef: InterfaceOwnerRef;
   readonly generation: number;
   readonly labels?: Readonly<Record<string, string>>;
-  /** Immutable service-side materialization marker; never repository metadata. */
-  readonly materializedFrom?:
-    | {
-        readonly source: "capsule_blueprint";
-        readonly key: string;
-      }
-    | {
-        /** Scoped compatibility control translated into this canonical Interface. */
-        readonly source: "compatibility_profile";
-        readonly profile: string;
-        readonly key: string;
-      };
+  /**
+   * Immutable declaration-source marker. A Capsule blueprint and a module
+   * resource never adopt or rewrite each other's record.
+   */
+  readonly materializedFrom?: InterfaceMaterializedFrom;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -356,6 +363,14 @@ export interface UpdateInterfaceRequest {
   readonly name?: string;
   readonly labels?: Readonly<Record<string, string>>;
   readonly spec?: InterfaceSpec;
+}
+
+/**
+ * Status-plane self-report body. Conditions merge by type while desired spec,
+ * phase, resolved inputs, provenance, and resolved revision remain fenced.
+ */
+export interface ReportInterfaceStatusRequest {
+  readonly conditions: readonly Condition[];
 }
 
 export interface ListInterfacesResponse {

@@ -61,6 +61,20 @@ Current operator/admin resources:
 | ---------------------- | ------------ | ----------------------------------------- |
 | `takosumi_target_pool` | `TargetPool` | Operator/admin target capability evidence |
 
+Current runtime declaration surfaces:
+
+| Resource / Data Source    | Object      | Purpose                                                        |
+| ------------------------- | ----------- | -------------------------------------------------------------- |
+| `takosumi_interface`      | `Interface` | In-run author path for the declaring Capsule's runtime surface |
+| `data.takosumi_interface` | `Interface` | Read one Interface by id or name in the ambient Workspace      |
+
+`takosumi_interface` is optional authoring convenience, not a Service Form
+definition and never an install requirement. During a Capsule Run it uses the
+runner-injected `TAKOSUMI_ENDPOINT` / `TAKOSUMI_TOKEN` credential and
+`TAKOSUMI_WORKSPACE_ID` / `TAKOSUMI_CAPSULE_ID` identity to declare only that
+Capsule's own Interface. It never grants consumer access:
+`InterfaceBinding` authorization stays service-side and user/operator owned.
+
 AI Gateway is intentionally not a provider resource. Use ProviderConnection,
 Secret, output projection, or generic env to pass values such as
 `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and model names into an app.

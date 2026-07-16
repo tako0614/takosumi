@@ -133,7 +133,8 @@ const RULES: readonly BoundaryRule[] = [
     // module Output names, not runtime inference or a reserved schema.
     appliesTo: (path) =>
       isImplementationPath(path) &&
-      path !== "deploy/reference-app-install-configs.ts",
+      path !== "deploy/reference-app-install-configs.ts" &&
+      !isExplicitInterfaceMappingPath(path),
     patterns: [
       /["'`](?:mcp_url|file_handler_url|service_graph|runtime_service)["'`]/,
       /\.endsWith\(\s*["'`](?:_url|_endpoint|_token)["'`]\s*\)/,
@@ -1020,6 +1021,14 @@ const RULES: readonly BoundaryRule[] = [
   },
 ];
 
+function isExplicitInterfaceMappingPath(path: string): boolean {
+  return (
+    path.startsWith("provider/examples/resources/takosumi_interface/") ||
+    path === "provider/internal/client/interface_test.go" ||
+    path === "provider/internal/provider/interface_resource_test.go"
+  );
+}
+
 export function findGeneralizationBoundaryViolations(
   sources: readonly GeneralizationBoundarySource[],
 ): readonly GeneralizationBoundaryViolation[] {
@@ -1120,10 +1129,7 @@ function isAllowedResourceShapeSpaceLocation(
     );
   }
 
-  if (
-    ruleId === "retired-stack-alias" &&
-    path === "core/bootstrap.ts"
-  ) {
+  if (ruleId === "retired-stack-alias" && path === "core/bootstrap.ts") {
     return isBetweenMarkers(
       content,
       index,
