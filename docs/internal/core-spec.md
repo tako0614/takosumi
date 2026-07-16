@@ -70,7 +70,9 @@ provider-native Stack resources.
 data-only definitions and fixtures. Executable validators/realizers are
 separately trusted Host Extensions/Adapters. Resources, ResolutionLocks,
 FormActivations, and Cloud ServiceOfferings eventually pin exact references;
-old definition bytes remain retained for observe/delete.
+`packageDigest` identifies the immutable package envelope beside the FormRef
+and is never one of its fields. Old definition bytes remain retained for
+observe/delete.
 
 Core has zero implicit Form Packages. Portable host discovery reports definition
 known, installed, executable, activated, and available-to-principal as
@@ -79,13 +81,13 @@ by exact FormRef and FormActivation, not a field in portable FormAvailability.
 The portable project owns no Resource ID, lifecycle ledger, Run, StateVersion,
 Output, Target, credential, Policy, Adapter, Interface, or InterfaceBinding.
 
-An immutable legacy compatibility package may freeze the ten current
-Resource Shape behaviors for migration, but that does not admit those FormRefs
-as portable standards. Every FormRef included in the standard typed provider or
-an official Cloud Stable offering must independently pass provider-neutral
-lifecycle, immutable-field, import/observe/drift, security, Interface, and
-governance review plus canonical positive and negative host/provider
-conformance for its exact schema digest.
+An immutable ten-package legacy compatibility set, with one package per current
+Resource Shape kind, may freeze current behavior for migration. That does not
+admit those FormRefs as portable standards. Every FormRef included in the
+standard typed provider or an official Cloud Stable offering must independently
+pass provider-neutral lifecycle, immutable-field, import/observe/drift,
+security, Interface, and governance review plus canonical positive and negative
+host/provider conformance for its exact schema digest.
 
 ## Core Responsibilities
 
@@ -907,22 +909,25 @@ extraction. Target persistence adds an exact resolved FormRef to Resource,
 ResolutionLock, Run/evidence, and NativeResource where replay requires it:
 
 ```text
-apiVersion
-kind
-definitionVersion
-schemaDigest
+formRef.apiVersion = forms.takoform.com/v1alpha1
+formRef.kind = <current compatibility kind>
+formRef.definitionVersion = 0.0.0-legacy.1
+formRef.schemaDigest = sha256:<exact-definition-digest>
+packageDigest = sha256:<exact-package-digest>
 ```
 
 A create request may ask for a compatible definition range, but the stored
-Resource pins one exact immutable reference. Existing rows backfill to a
-content-addressed legacy compatibility package without changing Resource IDs,
-`tkrn`, kind, import ID, or backend object. This is a new additive migration no
-earlier than D1 v45 / Postgres v93 after the currently verified D1 v44 /
-Postgres v92 heads; implementation MUST recheck both heads and MUST NOT fold it
-into or rewrite the current pre-GA schema-convergence migration. A missing or mismatched
-package blocks mutation and never falls through to `latest`. Deprecated or
-revoked definition bytes are retained for safe observe/delete or an explicit
-operator recovery path.
+Resource pins one exact immutable reference. Existing rows backfill by kind to
+the matching package in the content-addressed ten-package legacy compatibility
+set without changing Resource IDs, `tkrn`, kind, import ID, or backend object.
+The old Resource wire-to-FormRef mapping remains host-owned; package content
+does not rewrite that wire or own the canonical Resource identity. This is a
+new additive migration no earlier than D1 v45 / Postgres v93 after the currently
+verified D1 v44 / Postgres v92 heads; implementation MUST recheck both heads
+and MUST NOT fold it into or rewrite the current pre-GA schema-convergence
+migration. A missing or mismatched package blocks mutation and never falls
+through to `latest`. Deprecated or revoked definition bytes are retained for
+safe observe/delete or an explicit operator recovery path.
 
 Resource interface requirements and Profile values are capability tokens. They
 are not runtime `Interface` objects. The examples in this spec are the built-in
@@ -1444,9 +1449,10 @@ isolation, quota, network egress policy, admin audit, and usage metering.
    Workspace-wide Output reconcile paths.
 6. Characterize and freeze the current Resource/provider state and publish a
    corrected immutable legacy provider version without overwriting `1.0.0`.
-7. After public identity gates, extract FormRef, data-only Form Package,
-   standard definitions, portable interoperability, typed provider, and
-   conformance without moving Takosumi lifecycle entities.
+7. After public identity gates, extract FormRef and the data-only ten-package
+   legacy compatibility set, then standard definitions, portable
+   interoperability, typed provider, and conformance without moving Takosumi
+   lifecycle entities.
 8. Add exact FormRef persistence in a new additive D1/Postgres migration with
    shadow comparison, bounded backfill, retention, backup, and rollback.
 9. Replace bundled parser/default authority with an explicit Form Registry;
