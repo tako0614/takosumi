@@ -10,7 +10,16 @@ import {
   type TargetPoolEntry,
 } from "takosumi-contract";
 import { resolve } from "../../../../core/domains/resource-shape/resolver.ts";
-import { parseResourceSpec } from "../../../../core/domains/resource-shape/planner.ts";
+import {
+  LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+  parseResourceSpec as parseCoreResourceSpec,
+} from "../../../../core/domains/resource-shape/planner.ts";
+
+const parseResourceSpec: typeof parseCoreResourceSpec = (
+  kind,
+  spec,
+  registry = LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+) => parseCoreResourceSpec(kind, spec, registry);
 
 const CONTAINER_DESCRIPTOR: TargetImplementationDescriptor = {
   shape: "ContainerService",

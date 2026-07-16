@@ -29,13 +29,24 @@ import {
   type ResourceShapeLifecycleObserver,
   ResourceAdapterApplyError,
   type ResourceShapeStores,
-  ResourceShapeService,
+  LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+  ResourceShapeService as CoreResourceShapeService,
+  type ResourceShapeServiceDeps,
   StubResourceShapeAdapter,
 } from "../../../../core/domains/resource-shape/mod.ts";
 import type { SpacePolicySpec, TargetPoolSpec } from "takosumi-contract";
 import { TEST_RESOURCE_SHAPE_MODULE_REGISTRY } from "../../../helpers/resource-shape/operator-module-registry.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
+
+class ResourceShapeService extends CoreResourceShapeService {
+  constructor(deps: ResourceShapeServiceDeps) {
+    super({
+      schemaRegistry: LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+      ...deps,
+    });
+  }
+}
 
 const CLOUDFLARE_PROVIDER = "registry.opentofu.org/cloudflare/cloudflare";
 

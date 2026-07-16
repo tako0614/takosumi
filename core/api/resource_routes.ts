@@ -15,7 +15,7 @@ import type {
   SpacePolicySpec,
   TargetPoolSpec,
 } from "takosumi-contract";
-import { isResourceShapeKind, RESOURCE_SHAPE_KINDS } from "takosumi-contract";
+import { isResourceShapeKind } from "takosumi-contract";
 import type { PageParams } from "takosumi-contract/pagination";
 import { apiError, readJsonObject, requestIdFromContext } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
@@ -39,11 +39,16 @@ export const TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER =
 export interface RegisterResourceShapeRoutesOptions {
   readonly service: ResourceShapeService;
   /**
-   * Public Resource Shape kinds this host exposes. Omitted keeps the dev/test
-   * default of the bundled shape kinds. Operator/plugin composition enables
-   * additional opaque kind tokens explicitly; the API has no closed enum.
+   * Public Resource Shape kinds this host exposes for preview/apply/import and
+   * refresh. Omitted means no new desired-state authority.
    */
   readonly enabledResourceShapeKinds?: readonly ResourceShapeKind[];
+  /**
+   * Installed compatibility schemas that may read, observe, or delete retained
+   * state even when new desired state for that kind is disabled. Omitted means
+   * none. This preserves supported state without making it creation authority.
+   */
+  readonly installedResourceShapeKinds?: readonly ResourceShapeKind[];
   /**
    * Resolves the acting principal for a request. Defaults to a single-tenant
    * self-host owner actor; operator/Cloud composition injects real auth.
@@ -145,8 +150,18 @@ export function registerResourceShapeRoutes(
 ): void {
   const { service } = options;
   const enabledKinds = new Set<ResourceShapeKind>(
-    options.enabledResourceShapeKinds ?? RESOURCE_SHAPE_KINDS,
+    options.enabledResourceShapeKinds ?? [],
   );
+  const installedKinds = new Set<ResourceShapeKind>(
+    options.installedResourceShapeKinds ?? [],
+  );
+  for (const kind of enabledKinds) {
+    if (!installedKinds.has(kind)) {
+      throw new TypeError(
+        `enabled Resource Shape kind is not backed by an installed compatibility schema: ${kind}`,
+      );
+    }
+  }
 
   app.post("/v1/resources/preview", async (c) => {
     const auth = await authorizeResourceShape(c, options);
@@ -194,7 +209,7 @@ export function registerResourceShapeRoutes(
   app.get("/v1/resources/:kind/:name", async (c) => {
     const auth = await authorizeResourceShape(c, options);
     if (!auth.ok) return auth.response;
-    const kind = parseKind(c, enabledKinds);
+    const kind = parseKind(c, installedKinds);
     if ("response" in kind) return kind.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
@@ -216,7 +231,7 @@ export function registerResourceShapeRoutes(
   app.get("/v1/resources/:kind/:name/events", async (c) => {
     const auth = await authorizeResourceShape(c, options);
     if (!auth.ok) return auth.response;
-    const kind = parseKind(c, enabledKinds);
+    const kind = parseKind(c, installedKinds);
     if ("response" in kind) return kind.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
@@ -242,7 +257,7 @@ export function registerResourceShapeRoutes(
   app.post("/v1/resources/:kind/:name/observe", async (c) => {
     const auth = await authorizeResourceShape(c, options);
     if (!auth.ok) return auth.response;
-    const kind = parseKind(c, enabledKinds);
+    const kind = parseKind(c, installedKinds);
     if ("response" in kind) return kind.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
@@ -309,7 +324,7 @@ export function registerResourceShapeRoutes(
   app.delete("/v1/resources/:kind/:name", async (c) => {
     const auth = await authorizeResourceShape(c, options);
     if (!auth.ok) return auth.response;
-    const kind = parseKind(c, enabledKinds);
+    const kind = parseKind(c, installedKinds);
     if ("response" in kind) return kind.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;

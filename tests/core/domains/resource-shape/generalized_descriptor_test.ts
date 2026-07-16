@@ -9,17 +9,34 @@ import {
 } from "takosumi-contract";
 import {
   createInMemoryResourceShapeStores,
-  ResourceShapeService,
+  LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+  ResourceShapeService as CoreResourceShapeService,
+  type ResourceShapeServiceDeps,
   StubResourceShapeAdapter,
 } from "../../../../core/domains/resource-shape/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import {
-  parseResourceSpec,
+  parseResourceSpec as parseCoreResourceSpec,
   planResourceShape,
 } from "../../../../core/domains/resource-shape/planner.ts";
 import { resolve } from "../../../../core/domains/resource-shape/resolver.ts";
 import { TEST_RESOURCE_SHAPE_MODULE_REGISTRY } from "../../../helpers/resource-shape/operator-module-registry.ts";
+
+const parseResourceSpec: typeof parseCoreResourceSpec = (
+  kind,
+  spec,
+  registry = LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+) => parseCoreResourceSpec(kind, spec, registry);
+
+class ResourceShapeService extends CoreResourceShapeService {
+  constructor(deps: ResourceShapeServiceDeps) {
+    super({
+      schemaRegistry: LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+      ...deps,
+    });
+  }
+}
 
 const actor: ActorContext = {
   actorAccountId: "acct_test",

@@ -181,7 +181,6 @@ import type {
   ResourceObject,
   ResourceShapeKind,
 } from "takosumi-contract";
-import { RESOURCE_SHAPE_KINDS } from "takosumi-contract";
 import { type CredentialRecipeDriverRegistry } from "@takosumi/providers";
 
 interface ResolvedOpenTofuStore {
@@ -539,9 +538,9 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly resourceShapeAllowedProviderBaseUrls?: readonly string[];
   /**
-   * Public Resource Shape kinds this service instance exposes. Omitted keeps
-   * the compiled dev/test default; operator hosts should pass an explicit
-   * capability-derived allowlist.
+   * Public Resource Shape kinds this service instance exposes for new desired
+   * state. Omitted means none. Every kind must also be installed through the
+   * explicit schema registry contribution.
    */
   readonly enabledResourceShapeKinds?: readonly ResourceShapeKind[];
   readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
@@ -1786,10 +1785,16 @@ export async function createTakosumiService(
     durable: interfaceStores.persistence === "durable",
   });
   const connectionOAuthHelpers = options.connectionOAuthHelpers;
-  const enabledResourceShapeKinds = options.enabledResourceShapeKinds ?? [
-    ...RESOURCE_SHAPE_KINDS,
-    ...(options.resourceShapeSchemaRegistry?.kinds() ?? []),
-  ];
+  const installedResourceShapeKinds =
+    options.resourceShapeSchemaRegistry?.kinds() ?? [];
+  const enabledResourceShapeKinds = options.enabledResourceShapeKinds ?? [];
+  for (const kind of enabledResourceShapeKinds) {
+    if (!installedResourceShapeKinds.includes(kind)) {
+      throw new TypeError(
+        `enabled Resource Shape kind has no installed schema authority: ${kind}`,
+      );
+    }
+  }
   const resourceCapabilities: Partial<TakosumiResourceCapabilities> = {
     ...Object.fromEntries(
       enabledResourceShapeKinds.map((kind) => [
@@ -1831,6 +1836,7 @@ export async function createTakosumiService(
       ? {
           service: resourceShapeService,
           enabledResourceShapeKinds,
+          installedResourceShapeKinds,
           ...(deployControlToken
             ? { getResourceShapeBearerToken: () => deployControlToken }
             : {}),
