@@ -18,8 +18,8 @@ be specific when it is:
 Takosumi Core **is** required to contain zero implicit Form Packages. Portable
 definition/provider/interoperability authority belongs to the independent
 Takoform project; Takosumi remains the optional one-ledger host. The approved
-identities are `takoform.com`, `github.com/takosjp/terraform-provider-takoform`,
-`forms.takoform.com/v1alpha1`, and `registry.terraform.io/takosjp/takoform`.
+identities are `takoform.com`, `github.com/tako0614/terraform-provider-takoform`,
+`forms.takoform.com/v1alpha1`, and `registry.terraform.io/tako0614/takoform`.
 The current Resource Shape code/wire/provider/state is an explicit
 migration compatibility surface, not proof that the target separation exists.
 
