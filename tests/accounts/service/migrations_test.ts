@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 
 const migrationsDir = new URL(
@@ -17,6 +18,29 @@ test("Takosumi Accounts migrations keep a unique numeric order", async () => {
   const prefixes = names.map((name) => Number(name.slice(0, 3)));
   expect(new Set(prefixes).size).toBe(prefixes.length);
   expect(prefixes).toEqual(prefixes.map((_, index) => index + 1));
+});
+
+test("Takosumi Accounts migrations preserve checksums accepted by existing databases", async () => {
+  const fixture = (await Bun.file(
+    new URL("./fixtures/valid-applied-catalog-v28.json", import.meta.url),
+  ).json()) as AppliedCatalogFixture;
+  const names = (await readdir(migrationsDir))
+    .filter((name) => name.endsWith(".sql"))
+    .sort()
+    .slice(0, fixture.migrations.length);
+
+  expect(fixture.schemaVersion).toBe(1);
+  expect(names).toEqual(fixture.migrations.map((migration) => migration.name));
+  for (const migration of fixture.migrations) {
+    const sql = await readMigration(migration.name);
+    expect({
+      version: Number(migration.name.slice(0, 3)),
+      checksum: `sha256:${createHash("sha256").update(sql).digest("hex")}`,
+    }).toEqual({
+      version: migration.version,
+      checksum: migration.checksum,
+    });
+  }
 });
 
 test("projection-ledger retirement moves OIDC registration to the Accounts schema", async () => {
@@ -99,3 +123,12 @@ test("current Accounts schema persists the optional UserInfo picture", async () 
   const migration = await readMigration("035_account_picture.sql");
   expect(migration).toContain("ADD COLUMN IF NOT EXISTS picture text");
 });
+
+interface AppliedCatalogFixture {
+  readonly schemaVersion: number;
+  readonly migrations: readonly {
+    readonly version: number;
+    readonly name: string;
+    readonly checksum: string;
+  }[];
+}
