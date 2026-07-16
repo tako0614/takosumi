@@ -73,7 +73,7 @@ GET    /audit
 ProviderConnection 登録時の write-only material として保存・Run 時だけ
 materialize します。独立した `POST /secrets` API や Resource Shape の
 `Secret` はまだ公開しません。後者は schema / planner / adapter / import / drift
-契約が揃ってから追加する future shape で、現在 bundled される 6 shape とは別です。
+契約が揃ってから追加する future shape で、現在 bundled される ten compatibility kinds とは別です。
 
 ## Output と Runtime Interface
 
