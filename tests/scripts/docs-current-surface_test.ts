@@ -305,6 +305,40 @@ test("core spec names the final OSS model and excludes official managed capacity
   assert.match(coreSpec, /official SLA \/ support \/ abuse tooling/);
 });
 
+test("Service Form migration docs keep portable identity separate from the old Resource wire", async () => {
+  const finalPlan = await readText(
+    new URL("docs/internal/final-plan.md", ROOT),
+  );
+  const coreSpec = await readText(new URL("docs/internal/core-spec.md", ROOT));
+  const conformance = await readText(
+    new URL("docs/internal/core-conformance.md", ROOT),
+  );
+  const deployControl = await readText(
+    new URL("docs/reference/deploy-control-api.md", ROOT),
+  );
+
+  for (const doc of [finalPlan, coreSpec]) {
+    assert.match(doc, /forms\.takoform\.com\/v1alpha1/);
+    assert.match(doc, /0\.0\.0-legacy\.1/);
+    assert.match(doc, /packageDigest/);
+    assert.match(doc, /ten-package legacy compatibility set/);
+  }
+
+  assert.match(finalPlan, /"packageDigest": "sha256:<exact-package-digest>"/);
+  assert.match(
+    finalPlan,
+    /Form Package does not own\s+or rewrite this compatibility mapping/,
+  );
+  assert.match(
+    coreSpec,
+    /old Resource wire-to-FormRef mapping remains host-owned/,
+  );
+  assert.match(conformance, /claimed its `tako0614` Public Registry namespace/);
+  assert.match(conformance, /registered GPG key `34FC18AC897FB709`/);
+  assert.match(deployControl, /ten compatibility kinds/);
+  assert.doesNotMatch(deployControl, /bundled.*6 shape/);
+});
+
 test("workspace packages stay private source modules", async () => {
   for (const path of [
     "package.json",
