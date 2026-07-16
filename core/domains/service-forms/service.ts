@@ -29,6 +29,7 @@ export class FormRegistryError extends Error {
       | "package_conflict"
       | "definition_not_installed"
       | "package_unavailable"
+      | "package_retained"
       | "activation_conflict"
       | "activation_not_found",
     message: string,
@@ -188,6 +189,102 @@ export class FormRegistryService {
 
   listDefinitions(params: PageParams = {}) {
     return this.#store.listDefinitions(params);
+  }
+
+  /**
+   * Reads one retained exact identity without weakening revocation. This is
+   * used by observe/delete/backup replay paths, never by new admission.
+   */
+  async getRetainedIdentity(identity: {
+    readonly formRef: FormRef;
+    readonly packageDigest: string;
+  }) {
+    if (
+      !isFormRef(identity.formRef) ||
+      !isSha256Digest(identity.packageDigest)
+    ) {
+      throw new FormRegistryError(
+        "invalid_request",
+        "retained identity must be an exact FormRef and package digest",
+      );
+    }
+    const [definition, packageRecord] = await Promise.all([
+      this.#store.getDefinition(identity.formRef),
+      this.#store.getPackage(identity.packageDigest),
+    ]);
+    if (
+      definition === undefined ||
+      definition.identity.packageDigest !== identity.packageDigest ||
+      packageRecord === undefined ||
+      packageRecord.packageDigest !== identity.packageDigest
+    ) {
+      throw new FormRegistryError(
+        "definition_not_installed",
+        "the retained exact FormRef/package pair is missing or mismatched",
+      );
+    }
+    return { definition, package: packageRecord };
+  }
+
+  /**
+   * Re-verifies retained package bytes before an operator restore/replay. A
+   * host without the original reader/verifier fails closed rather than
+   * treating a database row as proof that immutable bytes still exist.
+   */
+  async verifyRetainedIdentity(identity: {
+    readonly formRef: FormRef;
+    readonly packageDigest: string;
+  }) {
+    const retained = await this.getRetainedIdentity(identity);
+    if (!this.#artifactReader || !this.#verifier) {
+      throw new FormRegistryError(
+        "verification_unavailable",
+        "retained Form Package bytes cannot be re-verified on this host",
+      );
+    }
+    let verified;
+    try {
+      const bytes = await this.#artifactReader.read(
+        retained.package.artifactRef,
+      );
+      verified = await this.#verifier.verify(bytes, identity.packageDigest);
+    } catch (error) {
+      throw new FormRegistryError(
+        "verification_failed",
+        error instanceof Error
+          ? error.message
+          : "retained package verification failed",
+      );
+    }
+    if (
+      verified.packageDigest !== identity.packageDigest ||
+      !verified.definitions.some(
+        (definition) =>
+          formRefKey(definition.formRef) === formRefKey(identity.formRef),
+      )
+    ) {
+      throw new FormRegistryError(
+        "verification_failed",
+        "retained package bytes do not contain the pinned exact FormRef",
+      );
+    }
+    return retained;
+  }
+
+  /**
+   * Installed Form Packages are append-only retained evidence. Operators may
+   * deprecate/revoke them, but Core deliberately provides no destructive path.
+   */
+  async deletePackage(packageDigest: string): Promise<undefined> {
+    if (!isSha256Digest(packageDigest)) {
+      throw new FormRegistryError("invalid_request", "invalid package digest");
+    }
+    const current = await this.#store.getPackage(packageDigest);
+    if (current === undefined) return undefined;
+    throw new FormRegistryError(
+      "package_retained",
+      "installed Form Packages are retained for exact Resource lifecycle replay",
+    );
   }
 
   getActivation(id: string) {
