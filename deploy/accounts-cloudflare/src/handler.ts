@@ -757,7 +757,7 @@ function isDashboardAssetPath(pathname: string): boolean {
 
 const DASHBOARD_CSP =
   "default-src 'self'; " +
-  "script-src 'self'; " +
+  "script-src 'self' https://static.cloudflareinsights.com; " +
   "style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' data: https:; " +
   "font-src 'self' data:; " +

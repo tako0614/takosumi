@@ -51,6 +51,29 @@ test("Cloudflare readiness checks canonical platform bindings only", async () =>
   expect(ready.status).toBe(200);
 });
 
+test("dashboard documents keep inline scripts blocked while allowing the configured Cloudflare beacon", async () => {
+  const response = await createCloudflareWorker().fetch(
+    new Request("https://app.example.test/new"),
+    env({
+      ASSETS: {
+        fetch: () =>
+          Promise.resolve(
+            new Response("<!doctype html><html><body></body></html>", {
+              headers: { "content-type": "text/html; charset=utf-8" },
+            }),
+          ),
+      },
+    }),
+  );
+
+  expect(response.status).toBe(200);
+  const csp = response.headers.get("content-security-policy") ?? "";
+  expect(csp).toContain(
+    "script-src 'self' https://static.cloudflareinsights.com",
+  );
+  expect(csp.match(/script-src[^;]*/u)?.[0]).not.toContain("'unsafe-inline'");
+});
+
 test("login allowlist and upstream discovery stay provider-neutral", () => {
   expect(
     parseLoginEmailAllowlist(
