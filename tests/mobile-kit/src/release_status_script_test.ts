@@ -17,6 +17,11 @@ const scriptPath = path.join(
   "mobile-kit/scripts/report-mobile-release-status.mjs",
 );
 const ecosystemRoot = path.resolve(rootDir, "..");
+const hasRootMobileReleaseAggregate =
+  existsSync(path.join(ecosystemRoot, "package.json")) &&
+  existsSync(
+    path.join(ecosystemRoot, "scripts/report-mobile-release-status.mjs"),
+  );
 
 test("mobile release status reports blockers without failing by default", () => {
   const appDir = mkdtempSync(path.join(tmpdir(), "takos-mobile-status-"));
@@ -157,71 +162,81 @@ test("mobile release status rejects CI-only or malformed Firebase configuration"
   }
 });
 
-test("root mobile release status emits one JSON aggregate", () => {
-  const result = spawnSync(
-    "bun",
-    ["run", "status:mobile-apps:release", "--", "--json"],
-    {
-      cwd: ecosystemRoot,
-      encoding: "utf8",
-    },
-  );
-
-  expect(result.status).toBe(0);
-  const report = JSON.parse(result.stdout);
-  expect(report.schema).toBe("takos.mobile-release-status-aggregate.v1");
-  expect(report.products).toHaveLength(2);
-  expect(report.summary.productCount).toBe(2);
-  expect(report.summary.blockerCount).toBe(
-    report.products.reduce(
-      (count: number, product: { blockers: unknown[] }) =>
-        count + product.blockers.length,
-      0,
-    ),
-  );
-
-  for (const product of report.products) {
-    for (const blocker of product.blockers) {
-      expect(typeof blocker.actionability).toBe("string");
-      expect(typeof blocker.owner).toBe("string");
-    }
-  }
-
-  const yurucommu = report.products.find(
-    (product: { product: string }) => product.product === "yurucommu",
-  );
-  expect(yurucommu).toBeDefined();
-  if (!existsSync(path.join(ecosystemRoot, "yurucommu-mobile/package.json"))) {
-    expect(yurucommu).toMatchObject({
-      present: false,
-      skipped: true,
-      status: "skipped",
-      ready: null,
-      blockers: [],
-    });
-    expect(yurucommu.skipReason).toContain(
-      "yurucommu-mobile/package.json is not present",
+test.skipIf(!hasRootMobileReleaseAggregate)(
+  "root mobile release status emits one JSON aggregate",
+  () => {
+    const result = spawnSync(
+      "bun",
+      ["run", "status:mobile-apps:release", "--", "--json"],
+      {
+        cwd: ecosystemRoot,
+        encoding: "utf8",
+      },
     );
-  }
-  const takos = report.products.find(
-    (product: { product: string }) => product.product === "takos",
-  );
-  expect(takos).toBeDefined();
-  expect(takos.facts.remotePush).toMatchObject({
-    enabled: true,
-    providers: ["apns", "fcm"],
-    deliveryBackend: "takos.notification-pusher-gateway.v1",
-  });
-  expect(blockerIds(takos)).not.toContain(
-    "remote_push.native_implementation_missing",
-  );
-  expect(blockerIds(takos)).not.toContain(
-    "remote_push.delivery_backend_missing",
-  );
-  expect(blockerIds(takos)).not.toContain(
-    "remote_push.delivery_backend_incomplete",
-  );
-});
+
+    expect(result.status).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(report.schema).toBe("takos.mobile-release-status-aggregate.v1");
+    expect(report.products).toHaveLength(3);
+    expect(report.summary.productCount).toBe(3);
+    expect(report.summary.blockerCount).toBe(
+      report.products.reduce(
+        (count: number, product: { blockers: unknown[] }) =>
+          count + product.blockers.length,
+        0,
+      ),
+    );
+
+    for (const product of report.products) {
+      for (const blocker of product.blockers) {
+        expect(typeof blocker.actionability).toBe("string");
+        expect(typeof blocker.owner).toBe("string");
+      }
+    }
+
+    const yurucommu = report.products.find(
+      (product: { product: string }) => product.product === "yurucommu",
+    );
+    expect(yurucommu).toBeDefined();
+    if (
+      !existsSync(path.join(ecosystemRoot, "yurucommu-mobile/package.json"))
+    ) {
+      expect(yurucommu).toMatchObject({
+        present: false,
+        skipped: true,
+        status: "skipped",
+        ready: null,
+        blockers: [],
+      });
+      expect(yurucommu.skipReason).toContain(
+        "yurucommu-mobile/package.json is not present",
+      );
+    }
+    const takos = report.products.find(
+      (product: { product: string }) => product.product === "takos",
+    );
+    expect(takos).toBeDefined();
+    expect(
+      report.products.find(
+        (product: { product: string }) => product.product === "yurume",
+      ),
+    ).toBeDefined();
+    expect(takos.facts.remotePush).toMatchObject({
+      enabled: true,
+      providers: ["apns", "fcm"],
+      deliveryBackend: "takos.notification-pusher-gateway.v1",
+    });
+    expect(blockerIds(takos)).not.toContain(
+      "remote_push.native_implementation_missing",
+    );
+    expect(blockerIds(takos)).not.toContain(
+      "remote_push.delivery_backend_missing",
+    );
+    expect(blockerIds(takos)).not.toContain(
+      "remote_push.delivery_backend_incomplete",
+    );
+  },
+);
 
 test("mobile release status can fail when blockers are requested as fatal", () => {
   const appDir = mkdtempSync(path.join(tmpdir(), "takos-mobile-status-"));
