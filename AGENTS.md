@@ -2,10 +2,14 @@
 
 This repository is **Takosumi**, an OSS Git-based OpenTofu control plane.
 Takosumi can run existing OpenTofu/Terraform provider ecosystems as-is, and it
-also owns the Resource Shape API, Resolver / Planner / Runner / Reconciler,
+is an optional Service Form host. It owns the canonical Resource lifecycle,
+Resolver / Planner / Runner / Reconciler,
 Target / Credential / OIDC / Secret / Policy, the shared Interface /
 InterfaceBinding API, Compatibility API framework, and Adapter system described
-in `docs/internal/final-plan.md`.
+in `docs/internal/final-plan.md`. The current Resource Shape API/provider/state
+is a migration compatibility surface. Portable Service Form / FormRef /
+data-only Form Package / typed form-provider / interoperability/conformance
+authority moves to an independent OSS project after its public identity gates.
 
 The authoritative product direction is [`docs/internal/final-plan.md`](docs/internal/final-plan.md). It supersedes older designs that made
 all compatibility APIs Cloud-only. The new boundary is:
@@ -19,7 +23,7 @@ Operator / Cloud:
 ```
 
 Takosumi OSS can define compatibility API framework, compatibility profiles,
-resource shapes, adapter contracts, target capability model, OIDC/workload
+Form Registry/FormActivation host contracts, adapter contracts, target capability model, OIDC/workload
 identity, and usage-event emission. Takosumi for Operator / Cloud owns
 commercial customer management, rated billing, payment enforcement, invoices,
 official managed target pools, official Takosumi native resource internals,
@@ -64,11 +68,13 @@ ProviderBinding / Secret / Run / Plan / Apply / Destroy / StateVersion / Output
 ledgers or entities: they are guarded `RunType` operations recorded as `Run`
 ledger entries.
 
-The Resource Shape flow adds Space / Environment / Stack / Resource /
-ResourceShape / Profile / Implementation / Target / TargetPool / Credential /
+The Service Form host flow adds ServiceForm / FormRef / FormPackage / Space /
+Environment / Stack / Resource / FormRegistry / FormActivation / Profile /
+Implementation / Target / TargetPool / Credential /
 Policy / Adapter / ResolutionLock / NativeResource / Condition / Agent /
 AgentPool. The shared layer adds Interface / InterfaceBinding / Principal /
-Role / RoleBinding / ServiceAccount. `Space` is
+Role / RoleBinding / ServiceAccount. `ResourceShape` remains the current
+wire/API/provider/state alias. `Space` is
 valid as a `takosumi.dev/v1alpha1` namespace/policy scope; it is not the old
 pre-v1 Space / Installation ledger model. The old Installation /
 OutputSnapshot / StateSnapshot / Deployment / Provider Catalog / `own_key` /
@@ -120,10 +126,11 @@ Three principles are load-bearing for new work:
 - **No in-repo manifest**: user repos stay plain git repos with no required Takosumi metadata file. All Capsule
   configuration is service-side DB config. Interface declarations and Output-name mappings are also service-side DB
   config; they are not inferred from Output names.
-- **Resource Shape API**: resource-shape authoring is a Takosumi API surface, not a repo metadata requirement. Plain
-  OpenTofu repos remain valid. `/v1/resources` is the Deploy API and the sole lifecycle authority for managed Resources.
-  `takosumi/takosumi` is an optional typed HCL client; it does not own service definitions, backend selection, state,
-  or pricing. Existing providers remain the Stack-flow path for external infrastructure.
+- **Service Form host API**: Service Form authoring is not repository metadata. Takosumi Core has zero implicit Form
+  Packages and plain OpenTofu repos remain valid. `/v1/resources` is the current compatibility Deploy API and sole
+  lifecycle authority for managed Resources; a future portable route must delegate to the same row/ledger.
+  The mixed `takosumi/takosumi` provider remains frozen compatibility/admin custody, while the target typed form
+  provider is independently released. Neither owns host availability, backend selection, state, or pricing.
 - **Compatibility profiles by capability**: S3 / OCI / CloudEvents / Kubernetes CRD / Cloudflare subset surfaces are
   capability-versioned protocol surfaces for Takosumi-managed capabilities. Control-plane profiles translate into
   the Deploy API and own no lifecycle state; data-plane profiles resolve canonical Ready Resources. Resource adapters
