@@ -22,6 +22,10 @@ import type {
   TargetPoolRecord,
   TargetPoolRecordId,
 } from "./records.ts";
+import {
+  assertResourceFormIdentity,
+  resourceFormIdentitiesEqual,
+} from "./records.ts";
 
 export type ResourceDeleteClaimResult =
   | { readonly status: "claimed"; readonly record: ResourceShapeRecord }
@@ -828,6 +832,12 @@ export function assertApplyPair(
       `ResolutionLock ${lock.resourceId} does not belong to Resource ${record.id}`,
     );
   }
+  assertResourceFormIdentity(record.form, record.kind);
+  if (!resourceFormIdentitiesEqual(record.form, lock.form)) {
+    throw new Error(
+      `ResolutionLock ${lock.resourceId} does not pin the Resource form identity`,
+    );
+  }
 }
 
 export function matchesVersion(
@@ -864,6 +874,7 @@ export function matchesApplyLock(
     lock.portability === expected.portability &&
     canonicalJson(lock.nativeResources) ===
       canonicalJson(expected.nativeResources) &&
+    resourceFormIdentitiesEqual(lock.form, expected.form) &&
     lock.lockedAt === expected.lockedAt &&
     lock.updatedAt === expected.updatedAt
   );

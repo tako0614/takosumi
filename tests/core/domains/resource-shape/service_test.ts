@@ -1,6 +1,9 @@
 import { test, expect } from "bun:test";
 import type {
   ActorContext,
+  FormDefinition,
+  FormPackage,
+  InstalledFormReference,
   ResourceDeploymentAdmission,
   ResourceDeploymentAdmissionDecision,
   ResourceDeploymentCaptureContext,
@@ -255,7 +258,7 @@ function directOperationLedger() {
   };
 }
 
-function makeService() {
+function makeService(formRegistry?: ResourceShapeServiceDeps["formRegistry"]) {
   const stores = createInMemoryResourceShapeStores();
   const service = new ResourceShapeService({
     stores,
@@ -263,6 +266,7 @@ function makeService() {
     ...directOperationLedger(),
     now: () => NOW,
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+    ...(formRegistry ? { formRegistry } : {}),
   });
   return { stores, service };
 }
@@ -931,6 +935,102 @@ const APPLY = {
   },
 };
 const APPLY_ID = "tkrn:space_1:ObjectBucket:assets";
+
+const EXACT_FORM: InstalledFormReference = {
+  formRef: {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    definitionVersion: "1.0.0",
+    schemaDigest: `sha256:${"1".repeat(64)}`,
+  },
+  packageDigest: `sha256:${"2".repeat(64)}`,
+};
+
+function exactFormRegistry(): NonNullable<
+  ResourceShapeServiceDeps["formRegistry"]
+> {
+  const definition: FormDefinition = {
+    identity: EXACT_FORM,
+    displayName: "Object bucket",
+    operations: ["create", "read", "update", "delete", "import", "refresh"],
+    installedAt: NOW,
+  };
+  const formPackage: FormPackage = {
+    packageDigest: EXACT_FORM.packageDigest,
+    artifactRef: "oci://forms.example/object-bucket@sha256:exact",
+    verifierId: "test-verifier",
+    status: "installed",
+    definitionRefs: [EXACT_FORM.formRef],
+    installedAt: NOW,
+    installedBy: "test",
+    updatedAt: NOW,
+  };
+  return {
+    getDefinition: async (formRef) =>
+      JSON.stringify(formRef) === JSON.stringify(EXACT_FORM.formRef)
+        ? definition
+        : undefined,
+    getPackage: async (packageDigest) =>
+      packageDigest === EXACT_FORM.packageDigest ? formPackage : undefined,
+  };
+}
+
+test("exact Form path requires installed authority and explicitly backfills legacy rows", async () => {
+  const unavailable = makeService();
+  await seed(unavailable.service);
+  const rejected = await unavailable.service.preview({
+    ...APPLY,
+    form: EXACT_FORM,
+  });
+  expect(rejected).toEqual({
+    ok: false,
+    error: {
+      code: "form_registry_unavailable",
+      message: "this host has no exact Form registry authority",
+    },
+  });
+
+  const { service, stores } = makeService(exactFormRegistry());
+  await seed(service);
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+  expect((await stores.resources.get(APPLY_ID))?.form).toBeUndefined();
+  expect((await stores.locks.get(APPLY_ID))?.form).toBeUndefined();
+
+  const exactPreview = await service.preview({ ...APPLY, form: EXACT_FORM });
+  expect(exactPreview.ok).toBe(true);
+  if (!exactPreview.ok) throw new Error(exactPreview.error.message);
+  const legacyComparison = makeService();
+  await seed(legacyComparison.service);
+  const legacyPreview = await legacyComparison.service.preview(APPLY);
+  expect(legacyPreview.ok).toBe(true);
+  // The exact definition is part of immutable review evidence.
+  expect(exactPreview.value.planDigest).not.toBe(
+    legacyPreview.ok ? legacyPreview.value.planDigest : "",
+  );
+  expect(
+    (
+      await service.apply(
+        { ...APPLY, form: EXACT_FORM },
+        { planDigest: exactPreview.value.planDigest },
+      )
+    ).ok,
+  ).toBe(true);
+  expect((await stores.resources.get(APPLY_ID))?.form).toEqual(EXACT_FORM);
+  expect((await stores.locks.get(APPLY_ID))?.form).toEqual(EXACT_FORM);
+
+  const omitted = await service.preview(APPLY);
+  expect(omitted.ok).toBe(false);
+  if (!omitted.ok) expect(omitted.error.code).toBe("form_identity_conflict");
+  const changed = await service.preview({
+    ...APPLY,
+    form: {
+      ...EXACT_FORM,
+      packageDigest: `sha256:${"3".repeat(64)}`,
+    },
+  });
+  expect(changed.ok).toBe(false);
+  if (!changed.ok) expect(changed.error.code).toBe("form_identity_conflict");
+});
 
 test("apply resolves ObjectBucket to the highest-priority target and locks it", async () => {
   const { service } = makeService();

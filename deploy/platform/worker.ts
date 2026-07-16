@@ -63,12 +63,18 @@ import {
 } from "takosumi-contract/api-surface";
 import type {
   ActorContext,
+  FormActivation,
+  InstalledFormReference,
   Interface,
   NativeResourceRef,
   ResourceObject,
   ResourceShapeKind,
 } from "takosumi-contract";
-import { isResourceShapeKind } from "takosumi-contract";
+import {
+  installedFormReferenceKey,
+  isInstalledFormReference,
+  isResourceShapeKind,
+} from "takosumi-contract";
 import type {
   ManagedPublicHostnameClaimRequest,
   ManagedPublicHostnameClaimResult,
@@ -195,6 +201,68 @@ export async function initializePlatformControlPlane(
   env: object,
 ): Promise<void> {
   await takosumiOperationsFor(env as PlatformEnv);
+}
+
+export type PlatformFormActivationResolution =
+  | { readonly status: "active"; readonly activation: FormActivation }
+  | {
+      readonly status: "unavailable";
+      readonly reason:
+        | "registry_unavailable"
+        | "activation_not_found"
+        | "activation_inactive"
+        | "identity_mismatch"
+        | "definition_not_installed"
+        | "package_not_installed";
+    };
+
+/**
+ * Narrow read-only composition authority for hosted offering layers. It never
+ * exposes Form Registry mutation or an HTTP route, and returns an activation
+ * only while the caller's exact package identity is still installed.
+ */
+export async function resolvePlatformFormActivation(
+  input: {
+    readonly activationId: string;
+    readonly expectedIdentity: InstalledFormReference;
+  },
+  env: object,
+): Promise<PlatformFormActivationResolution> {
+  if (!isInstalledFormReference(input.expectedIdentity)) {
+    return { status: "unavailable", reason: "identity_mismatch" };
+  }
+  const forms = (await takosumiOperationsFor(env as PlatformEnv)).forms;
+  if (!forms) {
+    return { status: "unavailable", reason: "registry_unavailable" };
+  }
+  const activation = await forms.getActivation(input.activationId);
+  if (!activation) {
+    return { status: "unavailable", reason: "activation_not_found" };
+  }
+  if (activation.status !== "active") {
+    return { status: "unavailable", reason: "activation_inactive" };
+  }
+  if (
+    installedFormReferenceKey(activation.identity) !==
+    installedFormReferenceKey(input.expectedIdentity)
+  ) {
+    return { status: "unavailable", reason: "identity_mismatch" };
+  }
+  const [definition, formPackage] = await Promise.all([
+    forms.getDefinition(input.expectedIdentity.formRef),
+    forms.getPackage(input.expectedIdentity.packageDigest),
+  ]);
+  if (
+    !definition ||
+    installedFormReferenceKey(definition.identity) !==
+      installedFormReferenceKey(input.expectedIdentity)
+  ) {
+    return { status: "unavailable", reason: "definition_not_installed" };
+  }
+  if (!formPackage || formPackage.status !== "installed") {
+    return { status: "unavailable", reason: "package_not_installed" };
+  }
+  return { status: "active", activation };
 }
 
 /**

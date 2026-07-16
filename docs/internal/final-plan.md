@@ -151,11 +151,11 @@ is stored beside the FormRef, never inside it. Stored Resources resolve to an
 exact immutable FormRef; ResolutionLock, FormActivation, and ServiceOffering
 pin that identity. Referenced package bytes remain available for
 observe/delete and lifecycle replay.
-FormRef persistence starts in a new additive migration after the current D1
-schema-convergence work and Postgres head; released migration history is never
-rewritten. The 2026-07-16 heads are D1 v44 and Postgres v92, so FormRef starts no
-earlier than D1 v45 / Postgres v93, with both heads rechecked when implementation
-begins.
+FormRef persistence uses the additive D1 v46 / Postgres v94 migrations after
+the D1 v45 / Postgres v93 Service Form Registry heads; released migration
+history is not rewritten. Legacy Resource and ResolutionLock rows retain a
+null/null exact identity until an installed exact package is explicitly
+selected and backfilled.
 
 ## 1. The Key Rule
 

@@ -19,6 +19,28 @@ export interface InstalledFormReference {
   readonly packageDigest: string;
 }
 
+export function isInstalledFormReference(
+  value: unknown,
+): value is InstalledFormReference {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  if (
+    keys.length !== 2 ||
+    !keys.includes("formRef") ||
+    !keys.includes("packageDigest")
+  ) {
+    return false;
+  }
+  const candidate = value as Partial<
+    Record<keyof InstalledFormReference, unknown>
+  >;
+  return (
+    isFormRef(candidate.formRef) && isSha256Digest(candidate.packageDigest)
+  );
+}
+
 export type FormOperation =
   "create" | "read" | "update" | "delete" | "import" | "refresh";
 
@@ -155,8 +177,8 @@ export function formRefKey(ref: FormRef): string {
 export function installedFormReferenceKey(
   identity: InstalledFormReference,
 ): string {
-  if (!isSha256Digest(identity.packageDigest)) {
-    throw new TypeError("invalid Form Package digest");
+  if (!isInstalledFormReference(identity)) {
+    throw new TypeError("invalid exact installed Form reference");
   }
   return `${formRefKey(identity.formRef)}|${identity.packageDigest}`;
 }
