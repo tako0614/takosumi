@@ -37,6 +37,7 @@ import {
   OpentofuResourceShapeAdapter,
 } from "../../core/domains/resource-shape/opentofu_adapter.ts";
 import {
+  composeResourceShapeSchemaRegistries,
   PluginResourceShapeAdapter,
   type ResourceAdapter,
   type ResourceShapePluginBinding,
@@ -103,7 +104,7 @@ export async function createWorkerServiceApp(
     readonly buildConnectionSetupRequest?: CreateTakosumiServiceOptions["buildConnectionSetupRequest"];
     /** Complete host-installed OAuth helper registry. */
     readonly connectionOAuthHelpers?: CreateTakosumiServiceOptions["connectionOAuthHelpers"];
-    /** Host-installed schemas for operator-defined Resource Shape tokens. */
+    /** Complete host-installed Resource Shape compatibility schema authority. */
     readonly resourceShapeSchemaRegistry?: CreateTakosumiServiceOptions["resourceShapeSchemaRegistry"];
     /** Host-owned lookup for explicit Resource Shape moduleTemplate ids. */
     readonly resourceShapeModuleRegistry?: CreateTakosumiServiceOptions["resourceShapeModuleRegistry"];
@@ -181,9 +182,10 @@ export async function createWorkerServiceApp(
     });
   const envResourceShapeContributions =
     resourceShapeHostContributionsFromEnv(env);
-  const resourceShapeSchemaRegistry =
-    options.resourceShapeSchemaRegistry ??
-    envResourceShapeContributions.schemaRegistry;
+  const resourceShapeSchemaRegistry = composeResourceShapeSchemaRegistries(
+    options.resourceShapeSchemaRegistry,
+    envResourceShapeContributions.schemaRegistry,
+  );
   const resourceShapeModuleRegistry =
     options.resourceShapeModuleRegistry ??
     envResourceShapeContributions.moduleRegistry;
@@ -233,7 +235,7 @@ export async function createWorkerServiceApp(
     opentofuControlStore,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     resourceShapeStores: createD1ResourceShapeStores(env.TAKOSUMI_CONTROL_DB),
-    ...(resourceShapeSchemaRegistry ? { resourceShapeSchemaRegistry } : {}),
+    resourceShapeSchemaRegistry,
     ...(resourceShapeModuleRegistry ? { resourceShapeModuleRegistry } : {}),
     interfaceStores: createD1InterfaceStores(env.TAKOSUMI_CONTROL_DB),
     ...(env.TAKOSUMI_INTERFACE_PROJECTION_SINK

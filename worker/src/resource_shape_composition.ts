@@ -1,5 +1,4 @@
 import {
-  RESOURCE_SHAPE_KINDS,
   isBundledResourceShapeKind,
   isResourceShapeKind,
   type ResourceShapeKind,
@@ -57,7 +56,7 @@ export function configuredResourceShapeKinds(
   if (!raw) return [];
 
   const registeredKinds = validateSchemaRegistry(schemaRegistry)?.kinds() ?? [];
-  const available = [...RESOURCE_SHAPE_KINDS, ...registeredKinds];
+  const available = [...registeredKinds];
   const tokens = raw === "all" ? available : parseConfiguredTokens(raw);
   const out: ResourceShapeKind[] = [];
   const seen = new Set<ResourceShapeKind>();
@@ -68,10 +67,7 @@ export function configuredResourceShapeKinds(
         `TAKOSUMI_RESOURCE_SHAPES contains invalid kind token: ${token}`,
       );
     }
-    if (
-      !isBundledResourceShapeKind(token) &&
-      !schemaRegistry?.get(token)
-    ) {
+    if (!registeredKinds.includes(token)) {
       throw new TypeError(
         `TAKOSUMI_RESOURCE_SHAPES kind ${token} has no installed schema`,
       );
@@ -104,12 +100,12 @@ function validateSchemaRegistry(
     );
   }
   for (const kind of kinds) {
-    if (!isResourceShapeKind(kind) || isBundledResourceShapeKind(kind)) {
+    if (!isResourceShapeKind(kind)) {
       throw new TypeError(
         `invalid operator-defined Resource Shape schema token: ${String(kind)}`,
       );
     }
-    if (typeof value.get(kind) !== "function") {
+    if (!isBundledResourceShapeKind(kind) && typeof value.get(kind) !== "function") {
       throw new TypeError(
         `Resource Shape schema registry has no parser for ${kind}`,
       );
