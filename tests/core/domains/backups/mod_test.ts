@@ -14,6 +14,13 @@ import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
+import type { InstalledFormReference } from "takosumi-contract";
+import {
+  collectResourceFormPinBackupEntries,
+  createInMemoryResourceShapeStores,
+  formatResourceShapeId,
+} from "../../../../core/domains/resource-shape/mod.ts";
+import type { SpaceId } from "../../../../core/shared/ids.ts";
 
 const TS = "2026-06-06T00:00:00.000Z";
 
@@ -23,6 +30,12 @@ function makeService(
     readonly artifactStore?: InMemoryBackupArtifactStore | null;
     readonly serviceDataRunner?: ServiceDataBackupRunner;
     readonly stateObjects?: Readonly<Record<string, Uint8Array>>;
+    readonly resourceShapeStores?: ReturnType<
+      typeof createInMemoryResourceShapeStores
+    >;
+    readonly resolveResourceBackupScope?: (
+      workspaceId: string,
+    ) => string | undefined;
   } = {},
 ): {
   readonly service: BackupsService;
@@ -44,6 +57,20 @@ function makeService(
     },
     ...(options.serviceDataRunner
       ? { serviceDataRunner: options.serviceDataRunner }
+      : {}),
+    ...(options.resourceShapeStores && options.resolveResourceBackupScope
+      ? {
+          collectResourceFormPins: async (workspaceId: string) => {
+            const resourceScopeId =
+              options.resolveResourceBackupScope!(workspaceId);
+            return resourceScopeId
+              ? await collectResourceFormPinBackupEntries(
+                  options.resourceShapeStores!,
+                  resourceScopeId,
+                )
+              : { status: "ready" as const, entries: [] };
+          },
+        }
       : {}),
     activity: new ActivityService({ store, now: () => new Date(TS) }),
     now: () => new Date(TS),
@@ -222,6 +249,119 @@ test("control bundle captures the Workspace ledger as public projections", async
   const second = await service.createBackup({ workspaceId: "ws_backup1" });
   const bundle2 = await readBundle(artifactStore!, second.ref);
   expect(bundle2.installConfigs.length).toBe(1);
+});
+
+test("Workspace and Capsule backups carry only coherent exact Resource Form pins", async () => {
+  const workspaceId = "ws_form_backup";
+  const spaceId = workspaceId as SpaceId;
+  const resourceShapeStores = createInMemoryResourceShapeStores();
+  const identity: InstalledFormReference = {
+    formRef: {
+      apiVersion: "forms.takoform.com/v1alpha1",
+      kind: "ObjectBucket",
+      definitionVersion: "1.0.0",
+      schemaDigest: `sha256:${"a".repeat(64)}`,
+    },
+    packageDigest: `sha256:${"b".repeat(64)}`,
+  };
+  const resourceId = formatResourceShapeId(spaceId, "ObjectBucket", "backup");
+  await resourceShapeStores.resources.upsert({
+    id: resourceId,
+    spaceId,
+    kind: "ObjectBucket",
+    form: identity,
+    name: "backup",
+    managedBy: "opentofu",
+    spec: { secretLookingMarker: "DO-NOT-LEAK-RESOURCE-SPEC" },
+    phase: "Ready",
+    generation: 1,
+    observedGeneration: 1,
+    outputs: { marker: "DO-NOT-LEAK-RESOURCE-OUTPUT" },
+    createdAt: TS,
+    updatedAt: TS,
+  });
+  await resourceShapeStores.locks.put({
+    resourceId,
+    form: identity,
+    selectedImplementation: "DO-NOT-LEAK-IMPLEMENTATION",
+    target: "DO-NOT-LEAK-TARGET",
+    nativeResources: [
+      {
+        type: "example_object",
+        id: "DO-NOT-LEAK-NATIVE-ID",
+      },
+    ],
+    locked: true,
+    reason: ["DO-NOT-LEAK-REASON"],
+    lockedAt: TS,
+    updatedAt: TS,
+  });
+  const { service, store, artifactStore } = makeService({
+    resourceShapeStores,
+    resolveResourceBackupScope: (candidate) =>
+      candidate === workspaceId ? candidate : undefined,
+  });
+  const seeded = await seedCapsuleModel(store, { workspaceId });
+
+  const workspaceBackup = await service.createBackup({ workspaceId });
+  const workspaceBundle = await readBundle(artifactStore!, workspaceBackup.ref);
+  expect(workspaceBundle.resourceFormPins).toEqual([
+    {
+      resourceId,
+      resourceScopeId: spaceId,
+      kind: "ObjectBucket",
+      identity,
+    },
+  ]);
+  expect(JSON.stringify(workspaceBundle.resourceFormPins)).not.toContain(
+    "DO-NOT-LEAK",
+  );
+
+  const capsuleBackup = await service.createBackup({
+    workspaceId,
+    capsuleId: seeded.capsule.id,
+  });
+  const capsuleBundle = await readBundle(artifactStore!, capsuleBackup.ref);
+  expect(capsuleBundle.resourceFormPins).toEqual(
+    workspaceBundle.resourceFormPins,
+  );
+});
+
+test("control backup refuses a torn Resource and ResolutionLock Form identity", async () => {
+  const workspaceId = "ws_form_backup_torn";
+  const spaceId = workspaceId as SpaceId;
+  const resourceShapeStores = createInMemoryResourceShapeStores();
+  await resourceShapeStores.resources.upsert({
+    id: formatResourceShapeId(spaceId, "ObjectBucket", "torn"),
+    spaceId,
+    kind: "ObjectBucket",
+    form: {
+      formRef: {
+        apiVersion: "forms.takoform.com/v1alpha1",
+        kind: "ObjectBucket",
+        definitionVersion: "1.0.0",
+        schemaDigest: `sha256:${"c".repeat(64)}`,
+      },
+      packageDigest: `sha256:${"d".repeat(64)}`,
+    },
+    name: "torn",
+    managedBy: "opentofu",
+    spec: {},
+    phase: "Ready",
+    generation: 1,
+    observedGeneration: 1,
+    createdAt: TS,
+    updatedAt: TS,
+  });
+  const { service, store } = makeService({
+    resourceShapeStores,
+    resolveResourceBackupScope: () => spaceId,
+  });
+  await seedCapsuleModel(store, { workspaceId });
+
+  await expect(service.createBackup({ workspaceId })).rejects.toMatchObject({
+    code: "failed_precondition",
+  });
 });
 
 test("control bundle strips the Source internal hook-secret + sync fields", async () => {

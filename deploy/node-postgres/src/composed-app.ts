@@ -166,6 +166,9 @@ export async function buildComposedApp(
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
     ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
     ...(input.sqlClient ? { sqlClient: input.sqlClient } : {}),
+    // The reference platform maps the verified Workspace id to the matching
+    // Resource authorization scope; custom hosts own this mapping.
+    resolveResourceBackupScope: (workspaceId) => workspaceId,
     ...(input.formPackageArtifactReader
       ? { formPackageArtifactReader: input.formPackageArtifactReader }
       : {}),

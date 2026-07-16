@@ -12,3 +12,4 @@ export * from "./resolver.ts";
 export * from "./planner.ts";
 export * from "./service.ts";
 export * from "./legacy_state_adoption.ts";
+export * from "./form_pin_operations.ts";

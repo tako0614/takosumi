@@ -40,7 +40,10 @@ import type {
   TargetPoolRecord,
   TargetPoolRecordId,
 } from "./records.ts";
-import { assertResourceFormIdentity } from "./records.ts";
+import {
+  assertResourceFormIdentity,
+  resourceFormIdentitiesEqual,
+} from "./records.ts";
 import type {
   ResourceApplyAbortInput,
   ResourceApplyAbortResult,
@@ -52,6 +55,8 @@ import type {
   ResourceAtomicRemoveResult,
   ResourceCreateResult,
   ResourceDeleteClaimResult,
+  ResourceFormIdentityPinInput,
+  ResourceFormIdentityPinResult,
   ResourceObservationClaimInput,
   ResolutionLockStore,
   ResourceShapeStore,
@@ -67,6 +72,7 @@ import {
   matchesApplyLock,
   matchesExpectedLock,
   matchesVersion,
+  assertResourceFormIdentityPinInput,
 } from "./stores.ts";
 
 type ResourceShapeRow = {
@@ -260,6 +266,32 @@ class SqlResourceShapeStore implements ResourceShapeStore {
              and observed_generation = generation
            order by created_at asc, id asc limit $2`,
           [kind, limit + 1],
+        );
+    return pageFromProbe(result.rows.map(resourceShapeFromRow), limit);
+  }
+
+  async listUnpinnedBySpaceKindPage(
+    spaceId: SpaceId,
+    kind: ResourceShapeKind,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const result = cursor
+      ? await this.client.query<ResourceShapeRow>(
+          `select * from ${this.#table}
+           where space_id = $1 and kind = $2
+             and form_ref_json is null and package_digest is null
+             and (created_at > $3 or (created_at = $3 and id > $4))
+           order by created_at asc, id asc limit $5`,
+          [spaceId, kind, cursor.createdAt, cursor.id, limit + 1],
+        )
+      : await this.client.query<ResourceShapeRow>(
+          `select * from ${this.#table}
+           where space_id = $1 and kind = $2
+             and form_ref_json is null and package_digest is null
+           order by created_at asc, id asc limit $3`,
+          [spaceId, kind, limit + 1],
         );
     return pageFromProbe(result.rows.map(resourceShapeFromRow), limit);
   }
@@ -620,7 +652,72 @@ export function createSqlResourceShapeStores(
     commitApply: (input) => commitSqlApply(client, input),
     abortApply: (input) => abortSqlApply(client, input),
     removeResource: (input) => removeSqlResource(client, input),
+    pinExactFormIdentity: (input) => pinSqlExactFormIdentity(client, input),
   };
+}
+
+async function pinSqlExactFormIdentity(
+  client: SqlClient,
+  input: ResourceFormIdentityPinInput,
+): Promise<ResourceFormIdentityPinResult> {
+  assertResourceFormIdentityPinInput(input);
+  return await client.transaction(async (transaction) => {
+    const current = await readSqlResource(transaction, input.resourceId, true);
+    const currentLock = await readSqlLock(transaction, input.resourceId, true);
+    if (!current || !currentLock) return { status: "not_found" };
+    if (
+      resourceFormIdentitiesEqual(current.form, input.form) &&
+      resourceFormIdentitiesEqual(currentLock.form, input.form)
+    ) {
+      return {
+        status: "already_pinned",
+        record: current,
+        lock: currentLock,
+      };
+    }
+    if (
+      current.form !== undefined ||
+      currentLock.form !== undefined ||
+      current.kind !== input.form.formRef.kind ||
+      !matchesVersion(current, input.expectedResource) ||
+      !matchesApplyLock(currentLock, input.expectedLock)
+    ) {
+      return {
+        status: "conflict",
+        record: current,
+        lock: currentLock,
+      };
+    }
+    const resourceUpdate = await transaction.query(
+      `update ${names.resourceShapes}
+       set form_ref_json = $1::jsonb, package_digest = $2
+       where id = $3 and form_ref_json is null and package_digest is null`,
+      [
+        JSON.stringify(input.form.formRef),
+        input.form.packageDigest,
+        input.resourceId,
+      ],
+    );
+    if (resourceUpdate.rowCount !== 1) {
+      throw new Error("exact Form pin lost the locked Resource row");
+    }
+    const lockUpdate = await transaction.query(
+      `update ${names.resolutionLocks}
+       set form_ref_json = $1::jsonb, package_digest = $2
+       where resource_id = $3 and form_ref_json is null and package_digest is null`,
+      [
+        JSON.stringify(input.form.formRef),
+        input.form.packageDigest,
+        input.resourceId,
+      ],
+    );
+    if (lockUpdate.rowCount !== 1) {
+      throw new Error("exact Form pin lost the locked ResolutionLock row");
+    }
+    const record = { ...current, form: input.form };
+    const lock = { ...currentLock, form: input.form };
+    return { status: "pinned", record, lock };
+  });
 }
 
 async function beginSqlApply(
