@@ -8,7 +8,7 @@
 # the SAME `takosumi.opentofu-run@v1` request envelope the production Durable
 # Object (worker/src/durable/OpenTofuRunnerObject.ts) sends.
 #
-# It uses the baked-in provider-free `core` template (no cloud credentials):
+# It uses a self-contained provider-free generated root (no cloud credentials):
 #   - POST /runs/{runId} with a PLAN envelope  -> expect status=succeeded + planDigest
 #   - POST /runs/{runId} with an APPLY envelope referencing the plan's
 #     runner-local artifact -> expect outputs base_domain/public_origin/
@@ -177,7 +177,7 @@ fi
 
 # --------------------------------------------------------------------------
 # 5) APPLY: POST the apply envelope referencing the plan's runner-local
-#    artifact (by digest); assert the 4 core outputs.
+#    artifact (by digest); assert the 4 proof outputs.
 # --------------------------------------------------------------------------
 echo "==================================================================="
 echo "STEP 5: POST apply envelope -> /runs/${RUN_ID} (references plan digest)"
