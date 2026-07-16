@@ -11,6 +11,8 @@ const index = src("index.tsx");
 const nav = src("views/account/components/shell/nav.ts");
 const editor = src("views/resources/ResourceEditor.tsx");
 const serviceForm = src("lib/resource-service-form.ts");
+const en = src("i18n/en.ts");
+const ja = src("i18n/ja.ts");
 const detail = src("views/resources/ResourceDetailView.tsx");
 const inventory = src("views/resources/ResourcesView.tsx");
 
@@ -51,33 +53,42 @@ describe("Resource Shape dashboard surface", () => {
     expect(editor).toContain('<option value="EdgeWorker">');
     expect(editor).toContain('<option value="ObjectBucket">');
     expect(editor).toContain('value="custom"');
-    expect(editor).toContain("buildEdgeWorkerServiceSpec");
-    expect(editor).toContain("buildObjectBucketServiceSpec");
+    expect(editor).toContain("buildGuidedResourceServiceSpec");
+    expect(editor).toContain("readGuidedResourceServiceForm");
   });
 
-  test("offers every bundled shape through raw authoring without expanding guided forms", () => {
-    const bundledKinds = editor.slice(
-      editor.indexOf("const BUNDLED_KINDS"),
-      editor.indexOf("] as const;", editor.indexOf("const BUNDLED_KINDS")),
-    );
+  test("offers every bundled shape through the same guided and raw authoring paths", () => {
     for (const kind of [
       "EdgeWorker",
       "ObjectBucket",
       "KVStore",
-      "Queue",
       "SQLDatabase",
-      "ContainerService",
+      "Queue",
       "VectorIndex",
       "DurableWorkflow",
+      "ContainerService",
       "StatefulActorNamespace",
       "Schedule",
     ]) {
-      expect(bundledKinds).toContain(`"${kind}"`);
+      expect(serviceForm).toContain(`"${kind}"`);
+      expect(editor).toContain(`<option value="${kind}">`);
+      expect(editor).toContain(`case "${kind}":`);
     }
     expect(editor).toContain("<For each={BUNDLED_KINDS}>");
     expect(editor).toContain(
-      'type ServiceSelection = "EdgeWorker" | "ObjectBucket" | "custom";',
+      'type ServiceSelection = GuidedResourceServiceKind | "custom";',
     );
+    expect(serviceForm).toContain("draftGuidedResourceServiceSpec");
+  });
+
+  test("labels the bundled set Stable without inventing AI or domain Resource kinds", () => {
+    expect(editor).toContain('t("resources.editor.stable")');
+    expect(en).toContain("All ten bundled Resource Shapes");
+    expect(ja).toContain("10 個の組み込み Resource Shape");
+    expect(serviceForm).not.toContain('"AIGateway"');
+    expect(serviceForm).not.toContain('"VerifiedDomain"');
+    expect(editor).not.toContain('<option value="AIGateway">');
+    expect(editor).not.toContain('<option value="VerifiedDomain">');
   });
 
   test("keeps raw/custom and placement controls in advanced disclosure", () => {
