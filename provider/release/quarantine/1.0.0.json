@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "kind": "takosumi.provider-release-quarantine@v1",
+  "providerAddress": "registry.opentofu.org/takosjp/takosumi",
+  "version": "1.0.0",
+  "state": "historical-quarantine",
+  "publishable": false,
+  "reproducible": false,
+  "observedAt": "2026-07-16T08:46:00Z",
+  "reason": "The immutable public 1.0.0 version metadata and all four archives differ from the former local package-version rebuild. The served binary reports dev and dirty source provenance. These exact public bytes are retained for existing lock/state compatibility and must never be overwritten or described as reproducible.",
+  "source": {
+    "modulePath": "github.com/takosjp/terraform-provider-takosumi",
+    "sourceCommit": "06319f127353410d97f7966fb82f579f3e6245b6",
+    "sourceCommitTime": "2026-07-12T09:49:36Z",
+    "goVersion": "go1.26.0",
+    "vcsModified": true,
+    "providerReportedVersion": "dev",
+    "archiveClaimedVersion": "1.0.0",
+    "provenance": "unknown-dirty",
+    "provenanceVerified": false
+  },
+  "mirror": {
+    "baseUrl": "https://app.takosumi.com/opentofu/providers/",
+    "providerPath": "registry.opentofu.org/takosjp/takosumi",
+    "indexEntry": {
+      "protocols": ["5.0"],
+      "platforms": [
+        { "os": "linux", "arch": "amd64" },
+        { "os": "linux", "arch": "arm64" },
+        { "os": "darwin", "arch": "amd64" },
+        { "os": "darwin", "arch": "arm64" }
+      ]
+    },
+    "indexObservation": {
+      "kind": "derived-index-observation",
+      "immutableAuthority": false,
+      "path": "registry.opentofu.org/takosjp/takosumi/index.json",
+      "url": "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/index.json",
+      "size": 407,
+      "sha256": "4c2a21c6842c489e9e30a7c9ead1d89e6ea579c99a3374de315e4dbadc650c5b",
+      "etag": "\"e761c87ed67819bc02684a2b68da0586\"",
+      "cacheControl": "no-cache",
+      "observedAt": "2026-07-16T08:45:40Z"
+    },
+    "assets": [
+      {
+        "kind": "version",
+        "path": "registry.opentofu.org/takosjp/takosumi/1.0.0.json",
+        "url": "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/1.0.0.json",
+        "size": 819,
+        "sha256": "472aa48cb59814ec1727e2b415870a232362941f6c291b187bda02d0c75bea0d",
+        "etag": "\"373991af1ad5df96c56be7e453b6d4d3\"",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "observedAt": "2026-07-16T08:45:40Z"
+      },
+      {
+        "kind": "archive",
+        "platform": "darwin_amd64",
+        "path": "registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_darwin_amd64.zip",
+        "url": "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_darwin_amd64.zip",
+        "size": 12321839,
+        "sha256": "9de3e6e582a01bd497c15f1c32a8e6ffc777bf8d9c01da6947f79de1bdc0f412",
+        "etag": "\"53253384ca18183e763a33c101731aea\"",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "observedAt": "2026-07-16T08:45:41Z"
+      },
+      {
+        "kind": "archive",
+        "platform": "darwin_arm64",
+        "path": "registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_darwin_arm64.zip",
+        "url": "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_darwin_arm64.zip",
+        "size": 11572657,
+        "sha256": "82cf01961f8fc6f2e9dfd36cfecc733033231a2809472cbdc99f98b09faed209",
+        "etag": "\"ded56c7475d6a26ef5f1d481b3c2babe\"",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "observedAt": "2026-07-16T08:45:42Z"
+      },
+      {
+        "kind": "archive",
+        "platform": "linux_amd64",
+        "path": "registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_linux_amd64.zip",
+        "url": "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_linux_amd64.zip",
+        "size": 11815565,
+        "sha256": "3433cb34ec1bb79f1d9757e97806554e3c4384ae3dca4e282610b1e853330f5d",
+        "etag": "\"8215325eb302b6bbc8c47052beed58e8\"",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "observedAt": "2026-07-16T08:45:43Z"
+      },
+      {
+        "kind": "archive",
+        "platform": "linux_arm64",
+        "path": "registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_linux_arm64.zip",
+        "url": "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_linux_arm64.zip",
+        "size": 10838624,
+        "sha256": "9eca47380699751e41bc71cc585daeeba2c2fd5c72f50a847b7f4aea08ab33cc",
+        "etag": "\"5e9bc602490c7af750f7295ce944553b\"",
+        "cacheControl": "public, max-age=31536000, immutable",
+        "observedAt": "2026-07-16T08:45:45Z"
+      }
+    ]
+  },
+  "rejectedLocalRebuild": {
+    "description": "Ignored dashboard/public bytes produced by the retired package-version builder. They are quarantine evidence only and are never a mirror source.",
+    "assets": {
+      "registry.opentofu.org/takosjp/takosumi/index.json": "4c2a21c6842c489e9e30a7c9ead1d89e6ea579c99a3374de315e4dbadc650c5b",
+      "registry.opentofu.org/takosjp/takosumi/1.0.0.json": "b8d4d9e4cf380c7b71bace596781dd25b83c614a3caa73e6b11e3e9a68db5c20",
+      "registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_darwin_amd64.zip": "5473231565f6cf47310e4c5168a73e8dceff9f63e52a837a20bceb2fff45feb0",
+      "registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_darwin_arm64.zip": "cb62cafb0f82528cea207f59f448c0f15c5f4b511a85e93f3f60b730cd9abc31",
+      "registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_linux_amd64.zip": "cf72e6b6be717ecda8a884bbbda58334503403ddb28e2025a699a59c7753c4f2",
+      "registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_1.0.0_linux_arm64.zip": "d42c4435b20506e40ef4ca2a923c3e5deffb865328553f0145d74a3de087c7cf"
+    }
+  }
+}

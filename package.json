@@ -15,7 +15,8 @@
     "mobile-kit"
   ],
   "scripts": {
-    "check": "bun run credential-recipes:assets && bun run provider:assets && bun run test:provider && bun run check:test-source-boundary && bun run check:generalization-boundaries && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "wrangler": "wrangler",
+    "check": "bun run credential-recipes:assets && bun run provider:assets && bun run test:provider && bun run test:control-d1-schema && bun run check:test-source-boundary && bun run check:generalization-boundaries && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
     "check:generalization-boundaries": "bun scripts/check-generalization-boundaries.ts",
     "check:test-source-boundary": "bun scripts/check-test-source-boundary.ts",
     "check:dashboard": "(cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build) && bash scripts/build-app-docs.sh",
@@ -26,10 +27,16 @@
     "test:service": "bun test ./tests/core",
     "test:accounts": "bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare",
     "test:cli": "bun test ./tests/cli",
+    "test:control-d1-schema": "bun test tests/deploy/platform/control_d1_schema_test.ts tests/worker/src/d1_opentofu_store_schema_boot_test.ts tests/core/adapters/storage/drizzle/schema/schema_mirror_test.ts",
     "test:dashboard-new-flow": "bun test tests/dashboard/src/views/new/provider-connections-return_test.ts tests/dashboard/src/views/new/new-flow-guidance_test.ts",
     "test:provider": "cd provider && go test ./...",
     "test:scripts": "bun test ./tests/scripts",
-    "provider:assets": "bun scripts/build-provider-assets.mjs",
+    "provider:assets": "bun scripts/provider-release.mjs verify-source",
+    "provider:release:build": "bun scripts/provider-release.mjs build",
+    "provider:release:verify": "bun scripts/provider-release.mjs verify-bundle",
+    "provider:release:prepublish": "bun scripts/provider-release.mjs prepublish-check",
+    "provider:mirror:materialize": "bun scripts/provider-release.mjs materialize",
+    "provider:mirror:proof": "bun tests/proofs/provider-mirror-install.ts",
     "credential-recipes:assets": "bun scripts/build-credential-recipe-assets.ts",
     "credential-recipes:check": "bun scripts/build-credential-recipe-assets.ts --check",
     "operator:release-activator": "bun scripts/operator-release-activator.ts",
@@ -44,6 +51,10 @@
     "release-activation:evidence": "bun scripts/validate-release-activation-evidence.ts",
     "production-hardening:evidence": "bun scripts/validate-production-hardening-evidence.ts",
     "production-hardening:gates": "bun scripts/verify-production-hardening-gates.ts",
+    "control-d1-schema:plan": "bun scripts/control-d1-schema.ts plan",
+    "control-d1-schema:apply": "bun scripts/control-d1-schema.ts apply",
+    "control-d1-schema:fence": "bun scripts/control-d1-schema.ts fence",
+    "control-d1-schema:verify": "bun scripts/control-d1-schema.ts verify",
     "ga:status": "bun ../scripts/report-takosumi-completion-status.mjs",
     "ga:live-prereqs": "bun ../scripts/check-takosumi-live-evidence-prereqs.mjs",
     "ga:billing-readiness": "bun ../scripts/check-takosumi-billing-readiness.mjs",
@@ -73,7 +84,7 @@
     "docs:dev": "cd docs && bun run dev",
     "website:build": "bash website/build.sh",
     "website:preview": "cd website && bun run preview",
-    "website:deploy": "bash website/build.sh && bunx wrangler@latest pages deploy website/.output/public --project-name=takosumi-website --branch main"
+    "website:deploy": "bash website/build.sh && bun run wrangler -- pages deploy website/.output/public --project-name=takosumi-website --branch main"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.6",
@@ -91,7 +102,7 @@
     "@types/pg": "^8.11.0",
     "drizzle-kit": "^0.31.10",
     "typescript": "^5.7.0",
-    "wrangler": "^4.111.0"
+    "wrangler": "4.111.0"
   },
   "overrides": {
     "esbuild": "0.28.1",
