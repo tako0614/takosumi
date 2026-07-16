@@ -54,6 +54,8 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    environment:
+      TAKOSUMI_LOCAL_APP_UPSTREAM: ${TAKOSUMI_LOCAL_APP_UPSTREAM:-cloud:8787}
     depends_on:
       pebble:
         condition: service_started

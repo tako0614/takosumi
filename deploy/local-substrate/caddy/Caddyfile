@@ -67,7 +67,7 @@ app.takosumi.test {
 		respond @private 404
 		@api path /api/* /v1/* /oauth/* /.well-known/* /hooks/* /gateway/ai/v1* /internal/* /healthz /readyz
 		handle @api {
-			reverse_proxy cloud:8787
+			reverse_proxy {$TAKOSUMI_LOCAL_APP_UPSTREAM}
 		}
 		handle {
 			encode gzip

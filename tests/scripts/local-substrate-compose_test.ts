@@ -57,6 +57,29 @@ const serviceWorkerEnvPath = resolve(
   "../../deploy/local-substrate/env/takosumi-service-worker.env",
 );
 const serviceWorkerEnv = readFileSync(serviceWorkerEnvPath, "utf8");
+const platformWorkerRunnerPath = resolve(
+  import.meta.dir,
+  "../../deploy/local-substrate/wrappers/takosumi-platform-worker-runner.mjs",
+);
+const platformWorkerRunner = readFileSync(platformWorkerRunnerPath, "utf8");
+const smokePath = resolve(
+  import.meta.dir,
+  "../../deploy/local-substrate/scripts/smoke.sh",
+);
+const smoke = readFileSync(smokePath, "utf8");
+const workerdTlsNegativePath = resolve(
+  import.meta.dir,
+  "../../deploy/local-substrate/scripts/workerd-tls-negative.sh",
+);
+const workerdTlsNegative = readFileSync(workerdTlsNegativePath, "utf8");
+const renderAccountsD1MigrationsPath = resolve(
+  import.meta.dir,
+  "../../deploy/local-substrate/scripts/render-accounts-d1-migrations.ts",
+);
+const renderAccountsD1Migrations = readFileSync(
+  renderAccountsD1MigrationsPath,
+  "utf8",
+);
 const otelConfigPath = resolve(
   import.meta.dir,
   "../../deploy/local-substrate/otel/config.yaml",
@@ -87,6 +110,12 @@ test("local-substrate builds the single composed platform worker", () => {
   // No stale scaffold output path survives.
   expect(compose).not.toContain("deploy/cloudflare/.wrangler/dist");
   expect(compose).not.toContain("worker/src/index.ts");
+  expect(compose).toContain(
+    "bun deploy/local-substrate/scripts/render-accounts-d1-migrations.ts",
+  );
+  expect(compose).toContain(
+    "deploy/platform/.wrangler/dist/takosumi-accounts-d1-migrations.json",
+  );
 });
 
 test("local-substrate static builders use read-only sources and isolated outputs", () => {
@@ -339,6 +368,20 @@ test("local-substrate platform worker is reachable through the ingress proxy", (
   expect(caddyfile).toContain("reverse_proxy takosumi-service-worker:8788");
 });
 
+test("local-substrate routes the canonical app host to the active profile", () => {
+  expect(ingressCompose).toContain(
+    "TAKOSUMI_LOCAL_APP_UPSTREAM: ${TAKOSUMI_LOCAL_APP_UPSTREAM:-cloud:8787}",
+  );
+  expect(caddyfile).toContain("reverse_proxy {$TAKOSUMI_LOCAL_APP_UPSTREAM}");
+  expect(upScript).toMatch(
+    /workers\)\s+TAKOSUMI_LOCAL_APP_UPSTREAM="takosumi-service-worker:8788"/,
+  );
+  expect(upScript).toMatch(
+    /""\|postgres\)\s+TAKOSUMI_LOCAL_APP_UPSTREAM="cloud:8787"/,
+  );
+  expect(upScript).toContain("export TAKOSUMI_LOCAL_APP_UPSTREAM");
+});
+
 test("local-substrate ingress blocks private and retired control seams", () => {
   expect(caddyfile).toContain(
     "@private path /internal/* /api/spaces /api/spaces/* /api/connections /api/connections/*",
@@ -381,12 +424,84 @@ test("local-substrate cloud env uses explicit upstream descriptors and a real de
   const workerBlock = compose.match(
     /takosumi-service-worker:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,
   )?.[0];
-  for (const block of [cloudBlock, workerBlock]) {
-    expect(block).toContain(
-      "NODE_EXTRA_CA_CERTS: /local-substrate-runtime/pebble-issuance-root.pem",
-    );
-  }
+  expect(cloudBlock).toContain(
+    "NODE_EXTRA_CA_CERTS: /local-substrate-runtime/pebble-issuance-root.pem",
+  );
+  expect(workerBlock).not.toContain("NODE_EXTRA_CA_CERTS");
   expect(workerBlock).toContain("./caddy/runtime:/local-substrate-runtime:ro");
+  expect(serviceWorkerEnv).toContain(
+    "WORKER_OUTBOUND_CA_CERT_PATH=/local-substrate-runtime/pebble-issuance-root.pem",
+  );
+});
+
+test("local-substrate configures workerd outbound TLS with the explicit Pebble root", () => {
+  expect(platformWorkerRunner).toContain(
+    "process.env.WORKER_OUTBOUND_CA_CERT_PATH",
+  );
+  expect(platformWorkerRunner).toContain(
+    '"/local-substrate-runtime/pebble-issuance-root.pem"',
+  );
+  expect(platformWorkerRunner).toContain(
+    'readFileSync(outboundCaCertPath, "utf8")',
+  );
+  expect(platformWorkerRunner).toContain(
+    "outbound CA certificate is missing or unreadable",
+  );
+  expect(platformWorkerRunner).toContain(
+    "outbound CA certificate is not PEM encoded",
+  );
+  expect(platformWorkerRunner).toContain("outboundService:");
+  expect(platformWorkerRunner).toContain(
+    'allow: ["public", "private", "240.0.0.0/4"]',
+  );
+  expect(platformWorkerRunner).toContain("trustBrowserCas: true");
+  expect(platformWorkerRunner).toContain(
+    "trustedCertificates: [outboundCaCert]",
+  );
+  expect(platformWorkerRunner).not.toContain("NODE_TLS_REJECT_UNAUTHORIZED");
+  expect(platformWorkerRunner).not.toContain("rejectUnauthorized");
+  expect(platformWorkerRunner).not.toContain("http://oauth-mock");
+});
+
+test("local-substrate migrates the local accounts D1 before serving traffic", () => {
+  expect(renderAccountsD1Migrations).toContain("listD1AccountsMigrations()");
+  expect(renderAccountsD1Migrations).toContain(
+    'kind: "takosumi.accounts.local-d1-migrations@v1"',
+  );
+  expect(serviceWorkerEnv).toContain(
+    "WORKER_ACCOUNTS_D1_MIGRATIONS_PATH=/worker/takosumi-accounts-d1-migrations.json",
+  );
+  expect(serviceWorkerEnv).toContain("TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK=");
+  expect(serviceWorkerEnv).toContain(
+    "TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET=local-substrate-oidc-pairwise-subject-secret-fixture",
+  );
+  expect(platformWorkerRunner).toContain(
+    "await applyLocalAccountsD1Migrations(mf, accountsD1MigrationsPath)",
+  );
+  expect(platformWorkerRunner).toContain(
+    'miniflare.getD1Database("TAKOSUMI_ACCOUNTS_DB")',
+  );
+  expect(platformWorkerRunner).toContain(
+    "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations",
+  );
+  expect(platformWorkerRunner).toContain("await database.exec(migration.sql)");
+  expect(platformWorkerRunner).toContain(
+    "INSERT INTO takosumi_accounts_schema_migrations",
+  );
+});
+
+test("local-substrate proves workerd rejects the same TLS chain without the explicit root", () => {
+  expect(smoke).toContain("workerd-tls-negative.sh");
+  expect(smoke).toContain("oauth.workerd-untrusted-ca");
+  expect(workerdTlsNegative).toContain("outboundService:");
+  expect(workerdTlsNegative).toContain(
+    'allow: ["public", "private", "240.0.0.0/4"]',
+  );
+  expect(workerdTlsNegative).toContain("trustBrowserCas: true");
+  expect(workerdTlsNegative).not.toContain("trustedCertificates:");
+  expect(workerdTlsNegative).not.toContain("NODE_TLS_REJECT_UNAUTHORIZED");
+  expect(workerdTlsNegative).not.toContain("rejectUnauthorized");
+  expect(workerdTlsNegative).not.toContain("http://oauth-mock");
 });
 
 test("local-substrate OTel collector forwards to the reachable Jaeger OTLP port", () => {

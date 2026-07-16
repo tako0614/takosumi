@@ -37,6 +37,16 @@ case "$PROFILE" in
 		;;
 esac
 
+case "$PROFILE" in
+	workers)
+		TAKOSUMI_LOCAL_APP_UPSTREAM="takosumi-service-worker:8788"
+		;;
+	""|postgres)
+		TAKOSUMI_LOCAL_APP_UPSTREAM="cloud:8787"
+		;;
+esac
+export TAKOSUMI_LOCAL_APP_UPSTREAM
+
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 docker compose version >/dev/null 2>&1 || {
 	echo "docker compose implementation is required" >&2; exit 1;
@@ -255,7 +265,7 @@ fi
 cat <<EOF
 
 ==> local-substrate is up (profile: ${PROFILE:-none/ingress-only}).
-==> INGRESS_IP=$INGRESS_IP, DNS_HOST_BIND=$DNS_HOST_BIND
+==> INGRESS_IP=$INGRESS_IP, DNS_HOST_BIND=$DNS_HOST_BIND, APP_UPSTREAM=$TAKOSUMI_LOCAL_APP_UPSTREAM
 
 Next steps (one-time per host):
    sudo bash scripts/ca-install.sh         # trust Pebble issuance root
