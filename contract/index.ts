@@ -14,6 +14,8 @@ export * from "./service-forms.ts";
 export * from "./resource-deployment.ts";
 export * from "./plan-scope.ts";
 export * from "./interfaces.ts";
+export * from "./interface-types.ts";
+export * from "./interface-display.ts";
 export * from "./target.ts";
 export * from "./resolution.ts";
 export * from "./sources.ts";

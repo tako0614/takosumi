@@ -223,6 +223,7 @@ export interface InterfaceServiceOptions {
 
 export type InterfaceServiceMaterialization =
   | { readonly capsuleBlueprintKey: string }
+  | { readonly capsuleResource: true }
   | {
       readonly compatibilityProfile: string;
       readonly compatibilityKey: string;
@@ -370,6 +371,26 @@ export class InterfaceService {
           record.metadata.materializedFrom?.source === "capsule_blueprint" &&
           record.metadata.materializedFrom.key === key,
       );
+      // Exclusive declaration ownership: a module-declared Interface owns its
+      // name and spec. A matching blueprint contributes only its service-side
+      // binding proposals and never adopts or rewrites that record.
+      if (!existing) {
+        const resourceOwned = history.find(
+          (record) =>
+            record.metadata.materializedFrom?.source === "capsule_resource" &&
+            record.metadata.name === name &&
+            record.status.phase !== "Retired",
+        );
+        if (resourceOwned) {
+          records.push(resourceOwned);
+          await this.#ensureCapsuleBlueprintBindings(
+            resourceOwned,
+            key,
+            blueprint.bindings ?? [],
+          );
+          continue;
+        }
+      }
       let materialized: Interface;
       if (existing) {
         // Once accepted, the Interface is authoritative and independent from
@@ -1208,6 +1229,49 @@ export class InterfaceService {
   }
 
   /**
+   * Status-plane self-report: merge workload/probe conditions without
+   * changing desired spec, lifecycle phase, resolved inputs, provenance, or
+   * the pinned resolved revision. Observer-owned condition types are fenced.
+   */
+  async reportStatusConditions(
+    id: string,
+    reported: readonly Condition[],
+    actor?: ActorContext,
+  ): Promise<Interface> {
+    validateReportedConditions(reported);
+    const wrote = await this.#updateStatusConditions(id, (current, now) => {
+      const reportedTypes = new Set(
+        reported.map((item) => item.type.toLowerCase()),
+      );
+      return [
+        ...(current.status.conditions ?? []).filter(
+          (item) => !reportedTypes.has(item.type.toLowerCase()),
+        ),
+        ...reported.map((item) => ({
+          type: item.type,
+          status: item.status,
+          ...(item.reason ? { reason: item.reason } : {}),
+          ...(item.message ? { message: item.message } : {}),
+          observedGeneration: current.metadata.generation,
+          lastTransitionAt: item.lastTransitionAt ?? now,
+        })),
+      ];
+    });
+    const record = await this.get(id);
+    if (wrote) {
+      await this.#recordActivity({
+        actor,
+        workspaceId: record.metadata.workspaceId,
+        action: "interface.status_reported",
+        targetType: "interface",
+        targetId: record.metadata.id,
+        metadata: { conditionTypes: reported.map((item) => item.type) },
+      });
+    }
+    return record;
+  }
+
+  /**
    * Replays Resource lifecycle state from its durable ledger for one Workspace.
    * This is the crash-repair path for a best-effort observer failure; callers
    * provide a Workspace-bounded snapshot instead of triggering a global scan.
@@ -1748,19 +1812,22 @@ export class InterfaceService {
     });
   }
 
+  /** Returns whether a durable status write occurred (false for a no-op). */
   async #updateStatusConditions(
     id: string,
     update: (current: Interface, now: string) => readonly Condition[],
-  ): Promise<void> {
+  ): Promise<boolean> {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const current = await this.get(id);
-      if (current.status.phase === "Retired") return;
+      if (current.status.phase === "Retired") return false;
       const now = this.#now();
       const nextStatus: Interface["status"] = {
         ...current.status,
         conditions: update(current, now),
       };
-      if (await statusSemanticallyEqual(current.status, nextStatus)) return;
+      if (await statusSemanticallyEqual(current.status, nextStatus)) {
+        return false;
+      }
       const next: Interface = {
         ...current,
         metadata: { ...current.metadata, updatedAt: now },
@@ -1768,7 +1835,7 @@ export class InterfaceService {
       };
       if (await this.#stores.interfaces.compareAndSet(next, guard(current))) {
         await this.#projectInterface(next);
-        return;
+        return true;
       }
     }
     throw new InterfaceServiceError(
@@ -2093,6 +2160,85 @@ function interfaceReferencesCapsule(
 
 function planObservationMessage(runId: string): string {
   return `OpenTofu plan ${runId} is observing desired and provider state`;
+}
+
+const RESERVED_REPORTED_CONDITION_TYPES = new Set([
+  "ready",
+  "drifted",
+  "observationpending",
+  "unsupportedpolicy",
+]);
+const REPORTED_CONDITION_TYPE_PATTERN = /^[A-Za-z][A-Za-z0-9]{0,63}$/u;
+
+function validateReportedConditions(conditions: readonly Condition[]): void {
+  if (
+    !Array.isArray(conditions) ||
+    conditions.length === 0 ||
+    conditions.length > 16
+  ) {
+    throw new InterfaceServiceError(
+      "invalid_argument",
+      "conditions must be a non-empty array of at most 16 entries",
+    );
+  }
+  const seen = new Set<string>();
+  for (const item of conditions) {
+    const raw = requireRecord(item, "condition");
+    assertOnlyKeys(
+      raw,
+      ["type", "status", "reason", "message", "lastTransitionAt"],
+      "condition",
+    );
+    const type = requireText(raw.type, "condition.type");
+    if (!REPORTED_CONDITION_TYPE_PATTERN.test(type)) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "condition.type must be an alphanumeric token",
+      );
+    }
+    const normalizedType = type.toLowerCase();
+    if (RESERVED_REPORTED_CONDITION_TYPES.has(normalizedType)) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        `condition type ${type} is observer-owned and cannot be self-reported`,
+      );
+    }
+    if (seen.has(normalizedType)) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "condition types must be distinct (case-insensitive)",
+      );
+    }
+    seen.add(normalizedType);
+    if (
+      raw.status !== "true" &&
+      raw.status !== "false" &&
+      raw.status !== "unknown"
+    ) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "condition.status must be true, false, or unknown",
+      );
+    }
+    if (
+      raw.reason !== undefined &&
+      requireText(raw.reason, "condition.reason").length > 128
+    ) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "condition.reason must be at most 128 characters",
+      );
+    }
+    if (
+      raw.message !== undefined &&
+      requireText(raw.message, "condition.message").length > 1024
+    ) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "condition.message must be at most 1024 characters",
+      );
+    }
+  }
 }
 
 function validateCreate(request: CreateInterfaceRequest): void {
@@ -2654,6 +2800,9 @@ function interfaceMaterialization(
         "capsuleBlueprintKey",
       ),
     };
+  }
+  if ("capsuleResource" in materialization) {
+    return { source: "capsule_resource" };
   }
   return {
     source: "compatibility_profile",

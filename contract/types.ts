@@ -22,6 +22,17 @@ export interface ActorContext {
   sessionId?: string;
   scopes?: string[];
   traceId?: string;
+  /**
+   * Capsule scope of a run-ambient credential. This is set only after a host
+   * verifies a Capsule-scoped run token and is carried inside the trusted
+   * internal actor context, never a client-forgeable scope header.
+   */
+  capsuleId?: string;
+  /**
+   * Whether the Capsule run may mutate its own module-declared Interfaces.
+   * Apply/destroy runs set true; plan/drift/refresh runs are read-only.
+   */
+  capsuleRunMutable?: boolean;
 }
 
 export interface DomainEvent<TPayload extends JsonObject = JsonObject> {

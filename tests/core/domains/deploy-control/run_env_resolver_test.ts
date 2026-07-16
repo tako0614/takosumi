@@ -7,6 +7,7 @@ import type {
 import type { ResolvedCapsuleProviderBinding } from "../../../../core/domains/connections/mod.ts";
 import type { RunCredentials } from "../../../../core/domains/deploy-control/mod.ts";
 import {
+  type CapsuleRunIdentityIssuer,
   RUN_ENV_REDACTION_PROFILE_ID,
   RunEnvironmentResolutionError,
   RunEnvResolver,
@@ -46,7 +47,9 @@ function planRun(over: Partial<PlanRun> = {}): PlanRun {
   };
 }
 
-function connection(over: Partial<ProviderConnection> = {}): ProviderConnection {
+function connection(
+  over: Partial<ProviderConnection> = {},
+): ProviderConnection {
   return {
     id: "conn_1",
     workspaceId: "workspace_1",
@@ -93,10 +96,10 @@ function runCredentials(env: Readonly<Record<string, string>>): RunCredentials {
 }
 
 function resolver(input: {
-  readonly resolved:
-    readonly ResolvedCapsuleProviderBinding[] | undefined;
+  readonly resolved: readonly ResolvedCapsuleProviderBinding[] | undefined;
   readonly credentials: () => RunCredentials | undefined;
   readonly releaseCredentials?: () => RunCredentials | undefined;
+  readonly capsuleRunIdentity?: CapsuleRunIdentityIssuer;
   readonly calls?: Array<{
     phase: string;
     auditRunId: string;
@@ -115,8 +118,71 @@ function resolver(input: {
       },
     },
     resolveRunProviderBindings: async () => input.resolved,
+    ...(input.capsuleRunIdentity
+      ? { capsuleRunIdentity: input.capsuleRunIdentity }
+      : {}),
   });
 }
+
+test("RunEnvResolver injects least-privilege Capsule run identity only for OpenTofu runs", async () => {
+  const minted: Array<{
+    workspaceId: string;
+    capsuleId: string;
+    runId: string;
+    mutable: boolean;
+  }> = [];
+  const subject = resolver({
+    resolved: [],
+    credentials: () => undefined,
+    capsuleRunIdentity: {
+      endpoint: "https://operator.example/api",
+      mintRunToken: async (input) => {
+        minted.push(input);
+        return `token-${input.runId}`;
+      },
+    },
+  });
+
+  const planned = await subject.resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "plan",
+    auditRunId: "plan_1",
+  });
+  const applied = await subject.resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "apply",
+    auditRunId: "apply_1",
+  });
+  const release = await subject.resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "apply",
+    auditRunId: "release_1",
+    credentialContext: "release_command",
+  });
+
+  expect(minted).toEqual([
+    {
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      runId: "plan_1",
+      mutable: false,
+    },
+    {
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      runId: "apply_1",
+      mutable: true,
+    },
+  ]);
+  expect(planned.credentials?.env).toEqual({
+    TAKOSUMI_ENDPOINT: "https://operator.example/api",
+    TAKOSUMI_TOKEN: "token-plan_1",
+    TAKOSUMI_WORKSPACE_ID: "workspace_1",
+    TAKOSUMI_CAPSULE_ID: "capsule_1",
+  });
+  expect(applied.credentials?.env.TAKOSUMI_TOKEN).toBe("token-apply_1");
+  expect(release.credentials).toBeUndefined();
+});
 
 test("RunEnvResolver resolves secret Provider Connections without hashing secret values", async () => {
   let secret = "first-secret";

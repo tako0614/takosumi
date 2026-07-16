@@ -173,7 +173,12 @@ commit、SourceSnapshot、update policy は Source / Run flow に留まります
 モデルは変わりません。
 
 Repository は、表示テキスト・icon・`modulePath` を含む `.well-known/tcs.json`
-presentation metadata を任意で公開できます。この文書は `git`、`source`、refs/commits、
+presentation metadata を任意で公開できます。icon URL は credential 情報を含まない
+絶対 HTTPS URL か、repository 内の相対パスを指定できます。相対パスの解決と再ホストは
+listing を公開する Store indexer の責務で、listing には絶対 HTTPS URL が載ります。
+listing や repo metadata の consumer は forge 固有の raw URL を合成せず、絶対 HTTPS
+以外の icon 値は破棄します(icon なしの表示 fallback になるだけで、discovery や
+install は止まりません)。この文書は `git`、`source`、refs/commits、
 `installConfigId`、variable presentation/defaults、`installExperience`、output
 allowlist、release artifact、domain defaults、OIDC wiring、lifecycle action、
 Interface blueprint を宣言してはいけません。これらは `variablePresentation`、

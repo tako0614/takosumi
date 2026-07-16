@@ -28,6 +28,10 @@ import {
 import type { SqlClient } from "./adapters/storage/sql.ts";
 import type { ArtifactReferenceAllocator } from "./adapters/storage/artifact-references.ts";
 import { currentRuntime } from "./shared/runtime/index.ts";
+import {
+  capsuleRunTokenSecret,
+  createCapsuleRunToken,
+} from "./shared/capsule_run_tokens.ts";
 import { createRoleReadinessProbes } from "./bootstrap/readiness.ts";
 import {
   type DependencyValueSealer,
@@ -1247,9 +1251,36 @@ export async function createTakosumiService(
     capsulesService,
     options.operatorInstallConfigs,
   );
+  // Ambient run identity for the shared Interface layer: both knobs must be
+  // set (public API base URL + signing secret) or no ambient env is injected.
+  const capsuleRunIdentityEndpoint =
+    typeof runtimeEnv.TAKOSUMI_RUN_INTERFACE_API_URL === "string" &&
+    runtimeEnv.TAKOSUMI_RUN_INTERFACE_API_URL.trim()
+      ? runtimeEnv.TAKOSUMI_RUN_INTERFACE_API_URL.trim()
+      : undefined;
+  const capsuleRunIdentitySecret = capsuleRunTokenSecret(runtimeEnv);
+  const capsuleRunIdentity =
+    capsuleRunIdentityEndpoint && capsuleRunIdentitySecret
+      ? {
+          endpoint: capsuleRunIdentityEndpoint,
+          mintRunToken: async (input: {
+            readonly workspaceId: string;
+            readonly capsuleId: string;
+            readonly runId: string;
+            readonly mutable: boolean;
+          }) =>
+            (
+              await createCapsuleRunToken({
+                secret: capsuleRunIdentitySecret,
+                ...input,
+              })
+            ).token,
+        }
+      : undefined;
   opentofuController = new OpenTofuController({
     store: sharedOpenTofuStore,
     activity: activityService,
+    ...(capsuleRunIdentity ? { capsuleRunIdentity } : {}),
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
     ...(options.opentofuRunnerExecutors
       ? { runnerExecutors: options.opentofuRunnerExecutors }

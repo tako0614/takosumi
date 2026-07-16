@@ -146,6 +146,7 @@ func currentProviderResourceTypeNames() []string {
 		"takosumi_stateful_actor_namespace",
 		"takosumi_schedule",
 		"takosumi_target_pool",
+		"takosumi_interface",
 	}
 	sort.Strings(names)
 	return names

@@ -274,6 +274,25 @@ describe("generalization boundary scanner", () => {
     expect(violations).toEqual([]);
   });
 
+  test("allows ordinary Output names inside explicit provider Interface input mappings", () => {
+    const violations = findGeneralizationBoundaryViolations([
+      {
+        path: "provider/examples/resources/takosumi_interface/resource.tf",
+        content: 'source = "capsule_output"\noutput_name = "mcp_url"',
+      },
+      {
+        path: "provider/internal/provider/interface_resource_test.go",
+        content: '"output_name": types.StringValue("mcp_url")',
+      },
+      {
+        path: "provider/internal/client/interface_test.go",
+        content: '"outputName": "mcp_url"',
+      },
+    ]);
+
+    expect(violations).toEqual([]);
+  });
+
   test("allows Resource Shape Space only inside explicit mixed-file regions", () => {
     const allowed = findGeneralizationBoundaryViolations([
       {

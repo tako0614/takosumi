@@ -456,6 +456,13 @@ or Interface blueprints. Unknown authority-like fields are ignored. Public
 values come from the module's typed OpenTofu outputs after service-side policy
 is applied. Do not use source comments as the metadata schema.
 
+The repo-owned icon may be a credential-free absolute HTTPS URL or a
+repository-relative source path. A Store indexer that publishes a listing owns
+resolving the relative file from the pinned SourceSnapshot and re-hosting it as
+a credential-free absolute HTTPS URL. Listing consumers never synthesize
+forge-specific raw-file URLs; an unresolved relative icon degrades to the
+no-icon fallback and never blocks discovery, install, or planning.
+
 `source_sync` records a bounded observation of the repository-root document on
 the immutable `SourceSnapshot`, separately from the selected module archive.
 This preserves one Git/commit authority even when `Source.defaultPath` points at
@@ -799,6 +806,7 @@ POST /v1/interfaces
 GET /v1/interfaces/:id
 PATCH /v1/interfaces/:id
 DELETE /v1/interfaces/:id
+POST /v1/interfaces/:id/status
 GET /v1/interfaces/:id/bindings
 POST /v1/interfaces/:id/bindings
 GET /v1/interfaces/:id/bindings/:bindingId
@@ -806,11 +814,12 @@ DELETE /v1/interfaces/:id/bindings/:bindingId
 POST /v1/interfaces/:id/token
 ```
 
-The Interface spec is Takosumi service-side DB configuration. Dashboard,
-Takos, or Store UX may propose a spec, but after acceptance the Takosumi record
-is authoritative and independent of the Store node. v1alpha1 does not require
-a `takosumi_interface` OpenTofu resource, Takosumi provider, repository
-manifest, well-known Output name, or Output convention.
+The Interface record is Takosumi service-side DB state. Dashboard, Takos, or
+Store UX may propose a spec, but after acceptance the Takosumi record is
+authoritative and independent of the Store node. A repository manifest,
+well-known Output name, or Output convention is never required. A module may
+optionally declare its own Interfaces with `takosumi_interface`; a plain module
+without any `takosumi_*` resource remains fully supported.
 
 `visibility` is discovery policy, not authorization: runtime use still requires
 an exact `InterfaceBinding`. `policyRef` is an optional host extension point.
@@ -948,6 +957,83 @@ the legacy record is never fallback authority. After consumers read only the
 Interface API, remove the Output Sync capability, projection/grant code, old
 schemas/routes, and legacy documentation.
 
+#### Interface Declaration Sources
+
+Capsule-owned Interface specs materialize from exactly two sources:
+
+```text
+capsule_blueprint:
+  service-side InstallConfig.interfaceBlueprints materialized once after the
+  first successful apply; works for every plain module
+
+capsule_resource:
+  optional takosumi_interface declared in the Capsule's OpenTofu module and
+  written through the public Interface API during that Capsule's Run
+```
+
+Both converge on one Interface object and the same resolution/lifecycle rules.
+`metadata.materializedFrom` is immutable and ownership is exclusive: a
+blueprint never rewrites a module-declared spec, and a module resource never
+adopts a blueprint record. A blueprint with the same name contributes only its
+service-side binding proposals, so authorization defaults compose without
+giving repository code binding authority. Separately, a scoped compatibility
+profile may retain `compatibility_profile` provenance for the canonical
+Resource-owned `http.route` it controls; that route-specific control is not a
+third Capsule declaration source.
+
+The module author path uses a short-lived Capsule-scoped run credential minted
+inside the runner boundary. It may read only that Capsule's Interfaces, may
+mutate only its own `capsule_resource` records during apply/destroy, may
+self-report status, and never carries InterfaceBinding or Secret authority.
+Plan, drift, and refresh credentials are read-only. The HMAC signature includes
+a token-family domain tag, so sharing the host secret fallback with another
+token family cannot make signatures interchangeable.
+
+Neither source is inferred. `takosumi_interface` is an authoring convenience,
+not an install requirement.
+
+#### Interface Status And Freshness
+
+`spec` is desired declaration state. Apply/refresh resolves the explicit
+inputs; application-runtime facts stay in their own protocol instead of being
+mirrored into the Interface document.
+
+```text
+runtime self-report:
+  POST /v1/interfaces/:id/status merges non-reserved liveness conditions only
+
+control-plane probe:
+  an optional host prober may check an explicitly declared health input and
+  write conditions only
+
+scheduled refresh Run:
+  re-resolves Outputs and surfaces infrastructure drift through the normal Run
+  and Interface lifecycle
+```
+
+No status channel may change spec, bindings, phase, resolved inputs,
+provenance, or the pinned resolved revision.
+
+#### Display Metadata Contract
+
+Core keeps `document` opaque. First-party consumers share this optional
+presentation profile:
+
+```text
+document.display:
+  title / description / icon / category / sortOrder
+
+interface.ui.surface:
+  document.launcher = true enables launcher presentation
+```
+
+`display.icon` is exactly one of: a credential-free absolute HTTPS URL (no
+userinfo, credential-named query, or fragment), a leading-`/` path resolved
+against the runtime surface origin, or a short textual glyph of at most 16
+characters containing none of `/`, `.`, or `:`. Every first-party consumer
+uses the shared contract parser. Store-listing `iconUrl` remains the separate
+Store presentation plane described in section 2.1.
+
 ### 2.3 Service Form Host Flow (`Resource Shape` compatibility surface)
 
 Users can also request a Resource backed by an exact provider-neutral Service
@@ -1010,7 +1096,9 @@ preview/apply/observe/refresh/import/delete behavior, and the canonical
 evidence live behind this API. The retired `Deployment` ledger is not restored.
 
 The current mixed `takosumi/takosumi` provider is an optional typed HCL client
-of the Deploy API. It owns `takosumi_target_pool` and future justified
+of the Deploy API and shared Interface layer. It owns `takosumi_target_pool`,
+the optional in-run `takosumi_interface` resource and
+`data.takosumi_interface`, and future justified
 operator/admin resources, and retains frozen form resource types for supported
 legacy state. New Service Form definition/client authority moves to the
 independently released portable provider only after the identity, immutable
@@ -1029,7 +1117,9 @@ Deploy API:
 current takosumi/takosumi provider (compatibility/admin client):
   frozen typed HCL schema for supported current Resource Shape state
   Takosumi TargetPool/operator-admin resources
+  takosumi_interface in-run declaration + data.takosumi_interface read
   Deploy API client
+  /v1/interfaces typed client with ETag/If-Match concurrency
   capability discovery
   preview/apply/status polling
   minimal OpenTofu state mapping
@@ -1045,6 +1135,12 @@ not:
   a place to call vendor APIs directly
   a catch-all takosumi_resource { type, spec } provider
 ```
+
+During a Takosumi Run the provider reads the ambient endpoint, Capsule-scoped
+token, Workspace id, and Capsule id injected by the runner. That credential
+fences `takosumi_interface` to the running Capsule and never authorizes
+bindings. The provider does not branch by edition and this shared-layer client
+does not move portable Service Form definition authority back into Takosumi.
 
 When this document says a Service Form is provider-neutral, it means
 vendor-independent under portable form governance. It does not mean either
@@ -2496,6 +2592,7 @@ portable and compatibility provider/CLI/dashboard/compat control requests conver
 compat data planes resolve Ready canonical Resources
 no adapter or backend manager calls a compat handler as its implementation
 portable typed provider and Takosumi legacy/admin provider have immutable independent release lanes
+Capsule Interface blueprint/module declaration ownership, run-token fencing, shared display parsing, and status self-report are conformant
 supported old provider state has no-op migration and rollback proof
 TargetPool/Policy/Adapter remain usable but live in operator/advanced UX
 FormActivation is generic OSS policy with no price/payment/capacity fields

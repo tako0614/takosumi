@@ -183,7 +183,14 @@ in the Source / Run flow. Switching Store nodes changes the read source for
 listings and presentation metadata, not the Capsule execution model.
 
 Repositories may optionally publish `.well-known/tcs.json` presentation
-metadata containing display text, icon, and `modulePath`. It must not declare
+metadata containing display text, icon, and `modulePath`. The icon URL may be
+a credential-free absolute HTTPS URL or a repository-relative source path;
+resolving and re-hosting a relative path is the responsibility of the Store
+indexer that publishes the listing, so listings carry absolute HTTPS URLs.
+Listing consumers and repo-metadata readers never synthesize forge-specific
+raw-file URLs and drop any icon value that is not credential-free absolute
+HTTPS. An unresolved relative path only degrades to the no-icon fallback and
+never blocks discovery or install. The document must not declare
 `git`, `source`, refs/commits, `installConfigId`, variable presentation/defaults,
 `installExperience`, output allowlists, release artifacts, domain defaults, OIDC
 wiring, lifecycle actions, or Interface blueprints. Those declarations live in

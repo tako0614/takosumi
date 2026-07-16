@@ -549,18 +549,26 @@ func (c *Client) DeleteTargetPool(ctx context.Context, name, space string) error
 // doJSON marshals body (if any), sends the request, and decodes a 2xx response
 // into out (if any). Non-2xx responses are parsed into *APIError.
 func (c *Client) doJSON(ctx context.Context, method, fullURL string, body, out any) error {
+	_, err := c.doJSONHeaders(ctx, method, fullURL, nil, body, out)
+	return err
+}
+
+// doJSONHeaders is doJSON plus request headers in and response headers out. It
+// exists for surfaces such as /v1/interfaces that carry optimistic-concurrency
+// evidence in ETag / If-Match headers.
+func (c *Client) doJSONHeaders(ctx context.Context, method, fullURL string, reqHeaders map[string]string, body, out any) (http.Header, error) {
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("takosumi: encoding request body: %w", err)
+			return nil, fmt.Errorf("takosumi: encoding request body: %w", err)
 		}
 		reader = bytes.NewReader(raw)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, reader)
 	if err != nil {
-		return fmt.Errorf("takosumi: building request: %w", err)
+		return nil, fmt.Errorf("takosumi: building request: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -570,26 +578,232 @@ func (c *Client) doJSON(ctx context.Context, method, fullURL string, body, out a
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
+	for key, value := range reqHeaders {
+		req.Header.Set(key, value)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("takosumi: request to %s failed: %w", fullURL, err)
+		return nil, fmt.Errorf("takosumi: request to %s failed: %w", fullURL, err)
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("takosumi: reading response body: %w", err)
+		return nil, fmt.Errorf("takosumi: reading response body: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return parseAPIError(resp.StatusCode, data)
+		return resp.Header, parseAPIError(resp.StatusCode, data)
 	}
 
 	if out != nil && len(bytes.TrimSpace(data)) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
-			return fmt.Errorf("takosumi: decoding response from %s: %w", fullURL, err)
+			return resp.Header, fmt.Errorf("takosumi: decoding response from %s: %w", fullURL, err)
 		}
+	}
+	return resp.Header, nil
+}
+
+// KindInterface is the object kind for runtime Interface declarations.
+const KindInterface = "Interface"
+
+// InterfaceOwnerRef identifies the Workspace, Capsule, or Resource that owns
+// an Interface. The provider's in-run author path always writes a Capsule
+// owner taken from the ambient run identity.
+type InterfaceOwnerRef struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+// InterfaceMaterializedFrom is the immutable declaration-source marker. A
+// module-declared takosumi_interface materializes as "capsule_resource".
+type InterfaceMaterializedFrom struct {
+	Source string `json:"source"`
+	Key    string `json:"key,omitempty"`
+}
+
+// InterfaceMetadata is the Interface metadata block.
+type InterfaceMetadata struct {
+	ID               string                     `json:"id"`
+	WorkspaceID      string                     `json:"workspaceId"`
+	Name             string                     `json:"name"`
+	OwnerRef         InterfaceOwnerRef          `json:"ownerRef"`
+	Generation       int64                      `json:"generation"`
+	Labels           map[string]string          `json:"labels,omitempty"`
+	MaterializedFrom *InterfaceMaterializedFrom `json:"materializedFrom,omitempty"`
+	CreatedAt        string                     `json:"createdAt,omitempty"`
+	UpdatedAt        string                     `json:"updatedAt,omitempty"`
+}
+
+// InterfaceInput is one named public input. Source selects the variant:
+// "literal" carries Value, "capsule_output" carries CapsuleID + OutputName
+// (+ optional Pointer), and "resource_output" carries ResourceID + OutputName
+// (+ optional Pointer).
+type InterfaceInput struct {
+	Source     string          `json:"source"`
+	Value      json.RawMessage `json:"value,omitempty"`
+	CapsuleID  string          `json:"capsuleId,omitempty"`
+	ResourceID string          `json:"resourceId,omitempty"`
+	OutputName string          `json:"outputName,omitempty"`
+	Pointer    string          `json:"pointer,omitempty"`
+}
+
+// InterfaceAccess is the Interface access policy block.
+type InterfaceAccess struct {
+	Visibility       string `json:"visibility"`
+	PolicyRef        string `json:"policyRef,omitempty"`
+	ResourceURIInput string `json:"resourceUriInput,omitempty"`
+}
+
+// InterfaceSpec is the desired runtime declaration. Document is deliberately
+// opaque, non-secret JSON that protocol consumers interpret together with
+// status.resolvedInputs. It is carried as a raw JSON value because the server
+// contract types it as an arbitrary JsonValue (object, array, string, number,
+// boolean, or null); the resource layer separately constrains the module-author
+// document_json to a JSON object. Keeping the transport permissive means a
+// single non-object document authored via another surface (for example a
+// service-side interfaceBlueprint) never breaks reads or list projections.
+type InterfaceSpec struct {
+	Type     string                    `json:"type"`
+	Version  string                    `json:"version"`
+	Document json.RawMessage           `json:"document"`
+	Inputs   map[string]InterfaceInput `json:"inputs,omitempty"`
+	Access   InterfaceAccess           `json:"access"`
+}
+
+// InterfaceStatus is the observed Interface state.
+type InterfaceStatus struct {
+	Phase              string         `json:"phase,omitempty"`
+	ObservedGeneration int64          `json:"observedGeneration,omitempty"`
+	ResolvedRevision   int64          `json:"resolvedRevision,omitempty"`
+	ResolvedInputs     map[string]any `json:"resolvedInputs,omitempty"`
+	Conditions         []Condition    `json:"conditions,omitempty"`
+}
+
+// InterfaceRecord is the Interface object envelope returned by /v1/interfaces.
+type InterfaceRecord struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Metadata   InterfaceMetadata `json:"metadata"`
+	Spec       InterfaceSpec     `json:"spec"`
+	Status     InterfaceStatus   `json:"status"`
+}
+
+// CreateInterfaceRequest is the POST /v1/interfaces body.
+type CreateInterfaceRequest struct {
+	WorkspaceID string            `json:"workspaceId"`
+	Name        string            `json:"name"`
+	OwnerRef    InterfaceOwnerRef `json:"ownerRef"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Spec        InterfaceSpec     `json:"spec"`
+}
+
+// UpdateInterfaceRequest is the PATCH /v1/interfaces/{id} body. Labels is a
+// pointer so callers can distinguish "leave labels alone" (nil) from "replace
+// with this exact map" (non-nil, possibly empty).
+type UpdateInterfaceRequest struct {
+	Name   string             `json:"name,omitempty"`
+	Labels *map[string]string `json:"labels,omitempty"`
+	Spec   *InterfaceSpec     `json:"spec,omitempty"`
+}
+
+// InterfaceListFilter is the supported GET /v1/interfaces query surface.
+// WorkspaceID is required by the endpoint. The endpoint has no name query
+// parameter, so name matching stays client-side.
+type InterfaceListFilter struct {
+	WorkspaceID string
+	Type        string
+	OwnerKind   string
+	OwnerID     string
+}
+
+type listInterfacesResponse struct {
+	Interfaces []InterfaceRecord `json:"interfaces"`
+}
+
+func (c *Client) interfacesURL(query url.Values) string {
+	u := c.endpoint + "/v1/interfaces"
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	return u
+}
+
+func (c *Client) interfaceURL(id string) string {
+	return c.endpoint + "/v1/interfaces/" + url.PathEscape(id)
+}
+
+// CreateInterface performs POST /v1/interfaces and returns the created record
+// plus the response ETag used later as If-Match evidence.
+func (c *Client) CreateInterface(ctx context.Context, body *CreateInterfaceRequest) (*InterfaceRecord, string, error) {
+	var out InterfaceRecord
+	headers, err := c.doJSONHeaders(ctx, http.MethodPost, c.interfacesURL(nil), nil, body, &out)
+	if err != nil {
+		return nil, "", err
+	}
+	return &out, headers.Get("ETag"), nil
+}
+
+// GetInterface reads one Interface by id and returns the record plus the
+// response ETag. A 404 is translated to ErrNotFound.
+func (c *Client) GetInterface(ctx context.Context, id string) (*InterfaceRecord, string, error) {
+	var out InterfaceRecord
+	headers, err := c.doJSONHeaders(ctx, http.MethodGet, c.interfaceURL(id), nil, nil, &out)
+	if err != nil {
+		if code, ok := statusCode(err); ok && code == http.StatusNotFound {
+			return nil, "", ErrNotFound
+		}
+		return nil, "", err
+	}
+	return &out, headers.Get("ETag"), nil
+}
+
+// ListInterfaces performs GET /v1/interfaces with the endpoint's supported
+// query filters and returns the interfaces array.
+func (c *Client) ListInterfaces(ctx context.Context, filter InterfaceListFilter) ([]InterfaceRecord, error) {
+	if strings.TrimSpace(filter.WorkspaceID) == "" {
+		return nil, errors.New("takosumi: ListInterfaces requires a workspaceId")
+	}
+	query := url.Values{}
+	query.Set("workspaceId", filter.WorkspaceID)
+	if filter.Type != "" {
+		query.Set("type", filter.Type)
+	}
+	if filter.OwnerKind != "" {
+		query.Set("ownerKind", filter.OwnerKind)
+	}
+	if filter.OwnerID != "" {
+		query.Set("ownerId", filter.OwnerID)
+	}
+	var out listInterfacesResponse
+	if _, err := c.doJSONHeaders(ctx, http.MethodGet, c.interfacesURL(query), nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Interfaces, nil
+}
+
+// UpdateInterface performs PATCH /v1/interfaces/{id}. The endpoint requires
+// If-Match to exactly equal the current Interface ETag; pass the ETag from a
+// fresh GetInterface. It returns the updated record plus its new ETag.
+func (c *Client) UpdateInterface(ctx context.Context, id, ifMatch string, body *UpdateInterfaceRequest) (*InterfaceRecord, string, error) {
+	var out InterfaceRecord
+	headers, err := c.doJSONHeaders(ctx, http.MethodPatch, c.interfaceURL(id), map[string]string{"If-Match": ifMatch}, body, &out)
+	if err != nil {
+		return nil, "", err
+	}
+	return &out, headers.Get("ETag"), nil
+}
+
+// DeleteInterface performs DELETE /v1/interfaces/{id}, which retires the
+// Interface. The endpoint requires If-Match to exactly equal the current
+// Interface ETag. A 404 is treated as already-retired (no error).
+func (c *Client) DeleteInterface(ctx context.Context, id, ifMatch string) error {
+	if _, err := c.doJSONHeaders(ctx, http.MethodDelete, c.interfaceURL(id), map[string]string{"If-Match": ifMatch}, nil, nil); err != nil {
+		if code, ok := statusCode(err); ok && code == http.StatusNotFound {
+			return nil
+		}
+		return err
 	}
 	return nil
 }

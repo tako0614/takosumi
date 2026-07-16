@@ -9,6 +9,7 @@ import {
   createEffect,
   createMemo,
   createResource,
+  createSignal,
   For,
   Match,
   onMount,
@@ -409,7 +410,9 @@ function AppTileView(props: { readonly tile: AppTile }) {
   const attention = () => needsAttention(props.tile.inst);
   const name = () => surface().name ?? props.tile.inst.name;
   const openUrl = () => surface().url;
+  const [imageFailed, setImageFailed] = createSignal(false);
   const imageSrc = () => {
+    if (imageFailed()) return undefined;
     const icon = surface().icon;
     if (!icon) return undefined;
     if (isUrlString(icon)) return icon;
@@ -452,7 +455,13 @@ function AppTileView(props: { readonly tile: AppTile }) {
         >
           <Match when={imageSrc()}>
             {(src) => (
-              <img class="av-tile-image" src={src()} alt="" loading="lazy" />
+              <img
+                class="av-tile-image"
+                src={src()}
+                alt=""
+                loading="lazy"
+                onError={() => setImageFailed(true)}
+              />
             )}
           </Match>
           <Match when={emojiIcon()}>

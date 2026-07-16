@@ -260,6 +260,13 @@ For `mcp.server`, persisted documents contain transport/discovery metadata, not
 a tool catalog. Takos obtains current server capabilities and tools through MCP
 `initialize` and `tools/list` when it connects.
 
+For well-known first-party Interface types, every consumer parses optional
+`document.display` through the contract-layer shared parser. Its fields are
+`title`, `description`, `icon`, `category`, and `sortOrder`. An icon is a
+credential-free absolute HTTPS URL, a leading-`/` path resolved against the
+runtime surface origin, or a short glyph of at most 16 characters containing
+none of `/`, `.`, or `:`. Core still treats the document as opaque.
+
 The only v1alpha1 input sources are:
 
 ```text
@@ -278,6 +285,22 @@ resource_output:
 Each service-side Capsule Interface blueprint has an explicit immutable `key`
 for one-shot materialization provenance. The editable Interface `name` is not a
 fallback identity, and an unkeyed blueprint is invalid.
+
+Capsule declarations converge from exactly two sources:
+`InstallConfig.interfaceBlueprints` (`capsule_blueprint`) and an optional
+module-declared `takosumi_interface` written during the Capsule's Run
+(`capsule_resource`). `metadata.materializedFrom` is immutable and the two
+owners cannot adopt or rewrite each other's spec. If their names match, the
+module keeps spec authority and the blueprint contributes only its service-side
+binding proposals. Scoped compatibility control may separately retain
+`compatibility_profile` provenance for its canonical Resource-owned
+`http.route`; it is not a Capsule declaration source.
+
+The module author credential is minted inside the runner boundary, signed with
+a token-family domain tag, and scoped to one Workspace, Capsule, Run, and
+operation. Apply/destroy may mutate only that Capsule's `capsule_resource`
+Interfaces. Plan/drift/refresh may read and self-report only. No Capsule run
+credential can read another owner, manage bindings, or read Secrets.
 
 One resolution pass pins each referenced StateVersion or Resource generation.
 Missing, null, sensitive, invalid-pointer, unavailable-generation, or cross-Workspace
@@ -325,6 +348,13 @@ invocation credential from `POST /v1/interfaces/:id/token` with one exact
 `permission`. Spec writes and resolver status writes have separate
 authorization. ETag/generation protects desired updates, while
 resolvedRevision identifies observed input changes.
+
+`POST /v1/interfaces/:id/status` is the status-plane self-report route. It
+merges bounded non-reserved conditions by type without changing phase, spec,
+resolved inputs, provenance, or resolved revision. Observer-owned lifecycle
+condition types are rejected case-insensitively. A no-op report performs no
+durable write or activity amplification. Optional host probes and scheduled
+refresh Runs may also publish conditions, but remain status-only.
 
 InterfaceBinding carries the Interface id, a Principal/ServiceAccount/Capsule/
 Resource subjectRef, permissions, and an extensible delivery object. An exact
@@ -525,6 +555,12 @@ refs/commits, `installConfigId`, variable presentation/defaults,
 OIDC wiring, lifecycle actions, or Interface blueprints. Public values come
 from the module's typed OpenTofu outputs after service-side policy is applied.
 Do not use source comments as the metadata schema.
+
+The repo-owned icon value may be a credential-free absolute HTTPS URL or a
+repository-relative source path. A Store indexer resolves and re-hosts a
+relative file from the pinned SourceSnapshot before publishing an absolute
+listing URL. Consumers never synthesize forge raw-file URLs; unresolved icons
+degrade to the no-icon fallback.
 
 For a Git Source, `source_sync` MUST record a bounded observation of the
 repository-root document on the same immutable `SourceSnapshot`, separately
@@ -825,11 +861,20 @@ whether those tokens are supported by the endpoint.
 
 ## Portable Form Provider, Takosumi Admin Provider, And API Contract
 
-The current mixed `takosumi/takosumi` provider is an optional Deploy API client.
-It remains Takosumi-owned, retains frozen form types for supported state, and
-owns `takosumi_target_pool` plus future justified operator/admin types. It is
+The current mixed `takosumi/takosumi` provider is an optional Deploy API and
+shared Interface client. It remains Takosumi-owned, retains frozen form types
+for supported state, and owns `takosumi_target_pool` plus future justified
+operator/admin types. It also exposes the optional in-run
+`takosumi_interface` resource and `data.takosumi_interface` without acquiring
+portable Service Form definition authority. It is
 not rebuilt under an old version or silently changed to admin-only while state
 still refers to its form types.
+
+The runner injects `TAKOSUMI_ENDPOINT`, a Capsule-scoped `TAKOSUMI_TOKEN`,
+`TAKOSUMI_WORKSPACE_ID`, and `TAKOSUMI_CAPSULE_ID`. The provider uses the
+public Interface CRUD API with ETag/If-Match concurrency, treats Retired as
+absent, preserves out-of-band `policyRef`, retries bounded 409/412 conflicts,
+and supports import recovery. It never creates InterfaceBindings.
 
 The target portable form provider is independently versioned from exact Form
 Packages, exposes statically typed standard form resources, and calls only the
@@ -1445,6 +1490,7 @@ destroy protection is supported
 audit log is required
 Interface documents and resolved inputs contain no secret values
 InterfaceBinding credentials are short-lived or invocation-materialized
+Capsule run tokens are operation-scoped, domain-separated, and never authorize bindings
 ```
 
 Operator/Cloud deployments additionally require tenant isolation, runner pool
@@ -1456,8 +1502,9 @@ isolation, quota, network egress policy, admin audit, and usage metering.
    `/v1/capabilities`.
 2. OpenTofu Stack controller: Git, runner, state, logs, approval, credentials.
 3. ProviderConnection / CredentialRecipe / generic env / OIDC federation.
-4. Interface storage/API, generic input resolution, provenance, lifecycle, and
-   InterfaceBinding authorization.
+4. Interface storage/API, blueprint/module declaration ownership, generic
+   input resolution, provenance, lifecycle/status channels, run-token fencing,
+   and InterfaceBinding authorization.
 5. Move first-party runtime consumers to Interface reads and invocation-time
    Principal OAuth credentials; remove legacy Output convention and
    Workspace-wide Output reconcile paths.
