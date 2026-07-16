@@ -71,6 +71,42 @@ without a dev override or direct fallback, and verifies the lock/install
 evidence. Repository checks do not substitute for this live distribution
 proof.
 
+## Candidate schema and old-state compatibility
+
+Before building or approving the correction candidate, run:
+
+```bash
+bun run provider:compatibility:check
+bun run provider:compatibility:state-proof
+bun run provider:compatibility:release-check
+```
+
+The first command builds `1.0.1` in a temporary directory and compares the
+OpenTofu machine schema to the digest-pinned, value-free identity captured from
+the exact public `1.0.0` archive. After removing only the policy-declared delta,
+the historical provider schema and seven historical resource schemas must
+match. The declared delta is four resources (`durable_workflow`, `schedule`,
+`stateful_actor_namespace`, and `vector_index`) and eight optional attributes
+on EdgeWorker, ObjectBucket, and TargetPool. Any removal, required/type change,
+or undeclared addition fails.
+
+The state proof uses only a temporary directory and a local fake endpoint. It
+installs exact public `1.0.0`, applies disposable state for all seven historical
+resource types, switches to the current candidate, requires a refresh-free
+no-op and read-only observe refresh, then switches back and requires an
+old-provider no-op before destroy. It prints no state values and uses no
+credential. It also guards the ObjectBucket compatibility correction that
+keeps omission materialized as `standard` without a plan-time default forcing
+pre-field state to update.
+
+`release-check` remains intentionally failing until all release blockers are
+resolved. In particular, the owner must decide whether `1.0.1` is
+correction-only, whether features move to a minor version, or whether the
+feature-bearing patch is explicitly approved. The supported Terraform CLI
+install matrix must also be executable, and the current OpenTofu mirror FQN /
+Terraform serve FQN split must be resolved and proven. A missing Terraform CLI
+is `blocked-prerequisite`, never `skipped`.
+
 ## Build a corrected candidate
 
 The current corrected version is `1.0.1` and remains unpublished. After the
@@ -146,9 +182,10 @@ is represented by the approved registry workflow.
 Publishing, signing, transparency-log submission, registry creation, and
 production mirror activation are separate reviewed external operations. The
 builder performs none of them. Before approval, verify signature/provenance,
-run OpenTofu and supported Terraform installation matrices, record external
-provider state/FQNs, and confirm that the final aggregate network-mirror index
-contains both historical and new immutable versions.
+pass `provider:compatibility:release-check`, run OpenTofu and supported
+Terraform installation matrices, record external provider state/FQNs, and
+confirm that the final aggregate network-mirror index contains both historical
+and new immutable versions.
 
 ## Incident response
 
