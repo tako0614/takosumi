@@ -918,8 +918,14 @@ packageDigest = sha256:<exact-package-digest>
 
 A create request may ask for a compatible definition range, but the stored
 Resource pins one exact immutable reference. Existing rows backfill by kind to
-the matching package in the content-addressed ten-package legacy compatibility
-set without changing Resource IDs, `tkrn`, kind, import ID, or backend object.
+one explicitly selected installed package without changing Resource IDs,
+`tkrn`, kind, import ID, or backend object. The internal operator operation is
+bounded by keyset cursor/limit, supports dry-run, and accepts an explicit set of
+durable FormActivation ids. It refuses missing, inactive, wrong-kind,
+wrong-scope, unauthorized, ambiguous, deprecated, revoked, or mismatched
+candidates; it never resolves `latest` or invents a Cloud-local reference. A
+successful write atomically fills the same exact FormRef/packageDigest pair on
+the Resource and ResolutionLock and records redacted idempotent activity.
 The old Resource wire-to-FormRef mapping remains host-owned; package content
 does not rewrite that wire or own the canonical Resource identity. This uses
 additive D1 v46 / Postgres v94 migrations after the D1 v45 / Postgres v93
@@ -928,6 +934,14 @@ migration is rewritten. A missing or mismatched package blocks exact-form
 mutation and never falls through to `latest`. Deprecated or revoked definition
 bytes are retained for safe observe/delete or an explicit operator recovery
 path.
+
+Workspace and Capsule control backups include a redacted exact-pin sidecar for
+coherent Resource/ResolutionLock pairs. The sidecar excludes Resource spec,
+outputs, target/implementation details, and NativeResource values. Internal
+restore replay re-verifies the retained immutable package bytes and atomically
+replays only the exact pair onto an existing Resource/ResolutionLock; it does
+not invoke resolution. Installed package and definition rows have no
+destructive delete path, so revocation cannot erase lifecycle replay evidence.
 
 Resource interface requirements and Profile values are capability tokens. They
 are not runtime `Interface` objects. The examples in this spec are the built-in

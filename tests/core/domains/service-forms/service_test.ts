@@ -197,6 +197,41 @@ test("revoked package cannot activate or return to deprecated", async () => {
   ).rejects.toMatchObject({ code: "package_unavailable" });
 });
 
+test("revoked exact definitions stay retained, verifiable, and undeletable", async () => {
+  const store = new InMemoryFormRegistryStore();
+  const registry = service(store);
+  await install(registry);
+  await registry.setPackageStatus(packageA, "revoked");
+  const identity = { formRef, packageDigest: packageA };
+
+  expect(await registry.getRetainedIdentity(identity)).toMatchObject({
+    definition: { identity },
+    package: { packageDigest: packageA, status: "revoked" },
+  });
+  expect(await registry.verifyRetainedIdentity(identity)).toMatchObject({
+    definition: { identity },
+    package: { packageDigest: packageA, status: "revoked" },
+  });
+  await expect(registry.deletePackage(packageA)).rejects.toMatchObject({
+    code: "package_retained",
+  });
+  expect((await store.getDefinition(formRef))?.identity).toEqual(identity);
+  expect((await store.getPackage(packageA))?.status).toBe("revoked");
+});
+
+test("retained replay fails closed when package bytes cannot be re-verified", async () => {
+  const store = new InMemoryFormRegistryStore();
+  await install(service(store));
+  const registryWithoutVerifier = new FormRegistryService({ store });
+
+  await expect(
+    registryWithoutVerifier.verifyRetainedIdentity({
+      formRef,
+      packageDigest: packageA,
+    }),
+  ).rejects.toMatchObject({ code: "verification_unavailable" });
+});
+
 test("the store atomically prevents a stale status writer from weakening revocation", async () => {
   const store = new InMemoryFormRegistryStore();
   const registry = service(store);
