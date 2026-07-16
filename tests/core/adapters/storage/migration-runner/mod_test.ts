@@ -5,8 +5,15 @@ import {
   type StorageMigrationLock,
   StorageMigrationRunner,
 } from "../../../../../core/adapters/storage/migration-runner/mod.ts";
-import type { StorageMigrationStatement } from "../../../../../core/adapters/storage/migrations.ts";
-import type { SqlClient, SqlParameters, SqlQueryResult } from "../../../../../core/adapters/storage/sql.ts";
+import {
+  postgresStorageMigrationStatements,
+  type StorageMigrationStatement,
+} from "../../../../../core/adapters/storage/migrations.ts";
+import type {
+  SqlClient,
+  SqlParameters,
+  SqlQueryResult,
+} from "../../../../../core/adapters/storage/sql.ts";
 
 const migrations: readonly StorageMigrationStatement[] = [
   {
@@ -31,14 +38,14 @@ test("StorageMigrationRunner applies pending migrations in version order", async
 
   const result = await runner.applyPending();
 
-  assertEquals(result.appliedNow.map((entry) => entry.migration.id), [
-    "system.001",
-    "space.002",
-  ]);
-  assertEquals((await runner.listAppliedMigrations()).map((row) => row.id), [
-    "system.001",
-    "space.002",
-  ]);
+  assertEquals(
+    result.appliedNow.map((entry) => entry.migration.id),
+    ["system.001", "space.002"],
+  );
+  assertEquals(
+    (await runner.listAppliedMigrations()).map((row) => row.id),
+    ["system.001", "space.002"],
+  );
   assertEquals(sql.statementsMatching("begin"), 2);
   assertEquals(sql.statementsMatching("commit"), 2);
   assert(sql.calls.some((call) => call.sql === migrations[0].sql));
@@ -52,10 +59,10 @@ test("StorageMigrationRunner dry-run reports pending without writes", async () =
   const result = await runner.applyPending({ dryRun: true });
 
   assertEquals(result.dryRun, true);
-  assertEquals(result.pending.map((entry) => entry.migration.id), [
-    "system.001",
-    "space.002",
-  ]);
+  assertEquals(
+    result.pending.map((entry) => entry.migration.id),
+    ["system.001", "space.002"],
+  );
   assertEquals(result.appliedNow, []);
   assert(!sql.calls.some((call) => call.sql === migrations[0].sql));
   assert(!sql.calls.some((call) => call.sql.startsWith("insert into")));
@@ -126,6 +133,40 @@ test("StorageMigrationRunner checksums include down/forward-only state", async (
   );
 });
 
+test("Postgres migrations preserve checksums accepted by existing databases", async () => {
+  const fixture = (await Bun.file(
+    new URL("./fixtures/valid-applied-catalog-v61.json", import.meta.url),
+  ).json()) as AppliedCatalogFixture;
+  const sql = new FakeSqlClient();
+  const runner = new StorageMigrationRunner(sql, {
+    migrations: postgresStorageMigrationStatements,
+  });
+  const plan = await runner.plan();
+  const current = new Map(
+    plan.pending.map((entry) => [
+      entry.migration.id,
+      {
+        version: entry.migration.version,
+        checksum: entry.checksum,
+      },
+    ]),
+  );
+
+  assertEquals(fixture.schemaVersion, 1);
+  assertEquals(
+    postgresStorageMigrationStatements
+      .filter((migration) => migration.version <= 61)
+      .map((migration) => migration.id),
+    fixture.migrations.map((migration) => migration.id),
+  );
+  for (const applied of fixture.migrations) {
+    assertEquals(current.get(applied.id), {
+      version: applied.version,
+      checksum: applied.checksum,
+    });
+  }
+});
+
 test("StorageMigrationRunner uses one runner-wide lock while applying", async () => {
   const sql = new FakeSqlClient();
   const lock = new RecordingLock();
@@ -141,6 +182,15 @@ test("StorageMigrationRunner uses one runner-wide lock while applying", async ()
 interface SqlCall {
   readonly sql: string;
   readonly parameters?: SqlParameters;
+}
+
+interface AppliedCatalogFixture {
+  readonly schemaVersion: number;
+  readonly migrations: readonly {
+    readonly id: string;
+    readonly version: number;
+    readonly checksum: string;
+  }[];
 }
 
 class FakeSqlClient implements SqlClient {
@@ -195,7 +245,7 @@ class FakeSqlClient implements SqlClient {
       const rows = [...this.#applied.values()].sort((left, right) =>
         Number(left.version) === Number(right.version)
           ? String(left.id).localeCompare(String(right.id))
-          : Number(left.version) - Number(right.version)
+          : Number(left.version) - Number(right.version),
       );
       return { rows: rows as Row[], rowCount: rows.length };
     }
@@ -271,9 +321,9 @@ function assert(value: unknown, message = "assertion failed"): asserts value {
 function assertEquals(actual: unknown, expected: unknown): void {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
-      `assertEquals failed: ${JSON.stringify(actual)} !== ${
-        JSON.stringify(expected)
-      }`,
+      `assertEquals failed: ${JSON.stringify(actual)} !== ${JSON.stringify(
+        expected,
+      )}`,
     );
   }
 }

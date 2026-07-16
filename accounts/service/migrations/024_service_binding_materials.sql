@@ -1,4 +1,4 @@
--- Runtime Projection reset follow-up: keep account-plane materialized binding
+-- Service Graph reset follow-up: keep account-plane materialized binding
 -- records durable without restoring the retired public app_bindings table.
 -- These rows are an internal continuity ledger for materialize/export/OIDC
 -- helper flows. The public contract remains ServiceExport / ServiceBinding /

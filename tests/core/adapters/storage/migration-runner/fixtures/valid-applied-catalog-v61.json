@@ -1,0 +1,251 @@
+{
+  "schemaVersion": 1,
+  "description": "Immutable checksums from a valid applied Postgres migration catalog through version 61.",
+  "migrations": [
+    {
+      "id": "storage_migrations.create",
+      "version": 1,
+      "checksum": "sha256:7c3e134d080f35d8874c159bacc1f3ac160b9e7fc8820836bebaa35f09d78ef4"
+    },
+    {
+      "id": "core.tables.create",
+      "version": 2,
+      "checksum": "sha256:dbf049cb1b643708af39811ef13cfa484dc78c0b3c9da9dec65a4703ed3b6af9"
+    },
+    {
+      "id": "resources.tables.create",
+      "version": 4,
+      "checksum": "sha256:f2b0e1b7ecf73da5740ac89435add25d5e58c4a097fceac49442cbfa23cdeeb3"
+    },
+    {
+      "id": "registry.tables.create",
+      "version": 5,
+      "checksum": "sha256:a3fd337707ae4441df805d43a8bc2339fedf9f565eacbab36fa70029edb4af4b"
+    },
+    {
+      "id": "audit.tables.create",
+      "version": 6,
+      "checksum": "sha256:f22b384094c4e60724538b58827ebe725197e43dea8ae0867fd1766734e416c8"
+    },
+    {
+      "id": "resources.bindings.claim_index.create",
+      "version": 8,
+      "checksum": "sha256:a5f0a085a02d49371d37e6c2f54c0d1cefe5b662be8f6fa8644d4f10ea2db704"
+    },
+    {
+      "id": "runtime.agent_work_ledger.create",
+      "version": 11,
+      "checksum": "sha256:7bfac2180110556eaa7cddcadf9fc208c1cbae1360554bdeb7fb5e727238ae62"
+    },
+    {
+      "id": "audit.hash_chain_and_retention.add",
+      "version": 12,
+      "checksum": "sha256:0cd4987a3adf022f994309ffa95f2ea5ad19a698da04ff434ee53e457bf8e253"
+    },
+    {
+      "id": "runtime.materialization_state.create",
+      "version": 13,
+      "checksum": "sha256:3703c546f3a2fa2a4221b5a77f10a653e8082a0b4048c9c9a4a266cb9dd7731b"
+    },
+    {
+      "id": "service_endpoints.tables.create",
+      "version": 15,
+      "checksum": "sha256:facec7708c3665307291a08a437d55dee4be66fc408e0a14b86841137d96e46c"
+    },
+    {
+      "id": "custom_domain.reservations.create",
+      "version": 16,
+      "checksum": "sha256:adb17572edf4d39997a0dff02daf7e798205585400d195842d1b822e9945735a"
+    },
+    {
+      "id": "internal_auth.replay_protection_log.create",
+      "version": 19,
+      "checksum": "sha256:8a8efe1e41acada2b62ffdf57749ffd28b0ccad1dd815f887026d34df21434fb"
+    },
+    {
+      "id": "deploy.takosumi_deployment_records.create",
+      "version": 20,
+      "checksum": "sha256:95128f0eaa2f23a328857cb5eb9d637c9a98189937c39228735c36ac6fe7a7c5"
+    },
+    {
+      "id": "deploy.takosumi_deployment_record_locks.create",
+      "version": 22,
+      "checksum": "sha256:2d9acaca25377fcaf8fea172e9c464286e414d230d2ff6c957964f1f673c24fa"
+    },
+    {
+      "id": "deploy.takosumi_revoke_debts.create",
+      "version": 24,
+      "checksum": "sha256:1ea165e4ea86ab6a49f73c3024ec86a1ed7bed295bb5a96f510d749165c4f0f2"
+    },
+    {
+      "id": "registry.catalog_releases.create",
+      "version": 25,
+      "checksum": "sha256:423c10050329a07b77d52982e2de9e24ec226e6440bf9e5457cfb7603f12812c"
+    },
+    {
+      "id": "deploy.opentofu_run_ledger.create",
+      "version": 29,
+      "checksum": "sha256:9d6ef0c6834a70353ff4e2421d090c4e78bfd7259e8b46bf52af9fe0cb61a12a"
+    },
+    {
+      "id": "deploy.takosumi_connections.create",
+      "version": 30,
+      "checksum": "sha256:9e2aeb4edfc05115e6de1a4d76ba6bc708a31a801507a22c07e5f11c25e224a3"
+    },
+    {
+      "id": "deploy.takosumi_plan_run_inputs.create",
+      "version": 31,
+      "checksum": "sha256:369c1f5abb589ea8d320bdf997463aee7a8e5dc34b3157657ac61f2b1f856b60"
+    },
+    {
+      "id": "deploy.takosumi_sources.create",
+      "version": 32,
+      "checksum": "sha256:fda3b0bc929a331d1c4b3d4341a035040ae5709e37376adb990744630e8ee768"
+    },
+    {
+      "id": "deploy.takosumi_lanes.create",
+      "version": 33,
+      "checksum": "sha256:70c0c395cae5b4575308295c0efec109ac81256e3b197c79f2c8504d71800886"
+    },
+    {
+      "id": "deploy.takosumi_state_snapshots.create",
+      "version": 34,
+      "checksum": "sha256:f0c8a14f5655e0819c9b75ed30659e92be21acf8972b5885945318f3bdfd4a8f"
+    },
+    {
+      "id": "deploy.takosumi_space_direct_model.create",
+      "version": 35,
+      "checksum": "sha256:d67731d76a68f26950f0bdd3f3da6129b9ccbc8917bab985a6b9e1f1decd9937"
+    },
+    {
+      "id": "deploy.takosumi_dependency_dag.create",
+      "version": 36,
+      "checksum": "sha256:e73bdba9ded9741ed7b500b7822092d2bfeef22cf75d68ec3c0a9b205b56e2e2"
+    },
+    {
+      "id": "deploy.takosumi_audit_events.create",
+      "version": 37,
+      "checksum": "sha256:1f592a11130e58628683e166c928e3eec837b13e975c1f20cdf76858a3ec5fbb"
+    },
+    {
+      "id": "deploy.takosumi_output_shares.create",
+      "version": 38,
+      "checksum": "sha256:c21223c358c4a18ee00ba1844ff58e2bd4f16d37aea546c0103c4bb3edf257fd"
+    },
+    {
+      "id": "deploy.takosumi_backups.create",
+      "version": 39,
+      "checksum": "sha256:06f31c2d86e3b4d9ff66dcac033fcf8fa7626a3a7b11a9d11083af41c914adba"
+    },
+    {
+      "id": "deploy.takosumi_capsule_billing_security_ledgers.create",
+      "version": 40,
+      "checksum": "sha256:c5f42d01bc5c5b0a2c0c611099c69d6326e6a1ba8b3102d7998a22bc95dad22f"
+    },
+    {
+      "id": "deploy.takosumi_connections.space_id_nullable",
+      "version": 41,
+      "checksum": "sha256:16c57ccf74a468e1d76e7e95525cb4593eed1ab4ba5301396db50cd6c530f5a4"
+    },
+    {
+      "id": "deploy.takosumi_d1_schema_projection_columns.create",
+      "version": 42,
+      "checksum": "sha256:3c11dae1082347350358e0aee704459efef50645353010aaefde8a292b3a90a9"
+    },
+    {
+      "id": "deploy.takosumi_provider_templates.create",
+      "version": 43,
+      "checksum": "sha256:e6b8325c0284dc8309e9faff20d40804464614baa654ff873afb62d4e788ce71"
+    },
+    {
+      "id": "deploy.takosumi_runs_kind_constraint.expand",
+      "version": 44,
+      "checksum": "sha256:d301569758a32e58c2796ebfcdd1ed366f917e912405aa8671ba54142e170d61"
+    },
+    {
+      "id": "deploy.takosumi_provider_template_dead_tables.drop",
+      "version": 45,
+      "checksum": "sha256:fc9b86ae6473117f5b1d2028ced837328c11bae911127fb547e5c6d52d5ffc9a"
+    },
+    {
+      "id": "deploy.takosumi_runs_lease_columns.add",
+      "version": 46,
+      "checksum": "sha256:21c18d7b82ac26acec23b282cb2d9e6c4286e2223e22a92c0866810b46c89588"
+    },
+    {
+      "id": "service_graph.records.create",
+      "version": 47,
+      "checksum": "sha256:e5245826b7eddf3e9395c345a3395dd243d6cdf71a62fb6a2d3eeb30e19b5cfb"
+    },
+    {
+      "id": "deploy.provider_catalog_table.rename",
+      "version": 48,
+      "checksum": "sha256:c135e6025d002c19767ff9ba6e3f8a81b178d2cdac45dfe062056bb4aa0217f3"
+    },
+    {
+      "id": "deploy.provider_envs.current_shape",
+      "version": 49,
+      "checksum": "sha256:2967f6a5e97b541a4bcc4b2aae531a2d24f619fc2a58b3531153ceaa37f5ad10"
+    },
+    {
+      "id": "deploy.provider_materialization_values.canonicalize",
+      "version": 50,
+      "checksum": "sha256:9c0597edf935597483d28a527670b2f13df5cdf8aec6e156557d7839cc647173"
+    },
+    {
+      "id": "deploy.postgres_named_index_parity.normalize",
+      "version": 51,
+      "checksum": "sha256:91e6e17ec58614b8eaff975b4f99f162d16d4220ed820dde690d48afca3eb6f6"
+    },
+    {
+      "id": "deploy.usage_event_meter_metadata",
+      "version": 52,
+      "checksum": "sha256:1503942aa3e4a6f9c699463c05fd77ad73a28fd26d6f26cbb29c708082c3ff04"
+    },
+    {
+      "id": "deploy.billing_usd_micros_columns.add",
+      "version": 53,
+      "checksum": "sha256:8bf88ffe937345405edd1d084c5e38c3a4c3d5a6add87ec38bd6692fd1566c66"
+    },
+    {
+      "id": "deploy.billing_auto_recharge_attempts.create",
+      "version": 54,
+      "checksum": "sha256:060487adc524e5efb73b820ef2a8e539e33622fd975973363c8b906c32b776ef"
+    },
+    {
+      "id": "service_graph.records.rename_aside",
+      "version": 55,
+      "checksum": "sha256:a91f33982e0ee16b2511837032a0257f0c83c8f81fd7c8a1fe83f04a9fd2c22a"
+    },
+    {
+      "id": "deploy.provider_credential_collapse.rename_aside",
+      "version": 56,
+      "checksum": "sha256:ef74f1dbabfdd074c53be1042cb2a80adafa8bc3786449edc6c18b84ac4ff923"
+    },
+    {
+      "id": "deploy.workspace_capsule_rename",
+      "version": 57,
+      "checksum": "sha256:3421469166f14ac62b6506109287d35b647dae204595eda05153c29bc13578f0"
+    },
+    {
+      "id": "deploy.projects_default_backfill",
+      "version": 58,
+      "checksum": "sha256:8b9f29b5dd88c401b012a6439d337b127f043080dca2bb2f6ca5f7171ec364d3"
+    },
+    {
+      "id": "deploy.workspace_capsule_blob_key_rewrite",
+      "version": 59,
+      "checksum": "sha256:dc3d82ae588c86819e53976e9428cf2e61ba2c36f7f20b3e39dd0f6eb5668988"
+    },
+    {
+      "id": "deploy.retire_deployment_tracking",
+      "version": 60,
+      "checksum": "sha256:9b7e6b2b8579df6d8ddfb71c075f60b048ac6fd048b4e81645218bc826edcc33"
+    },
+    {
+      "id": "resources.resource_shape_flow.create",
+      "version": 61,
+      "checksum": "sha256:1a4ba6ddcbf6c24bcf826b322eb35e949e4f70e57879c669b9384366a404a8f7"
+    }
+  ]
+}
