@@ -77,6 +77,10 @@ export interface ComposedAppInput {
    * service falls back to its in-memory ledger (fine for dev / local-substrate).
    */
   readonly sqlClient?: CreateTakosumiServiceArg["sqlClient"];
+  /** Opaque package reader selected by the operator trust policy. */
+  readonly formPackageArtifactReader?: CreateTakosumiServiceArg["formPackageArtifactReader"];
+  /** Trusted data-only package verifier selected by the operator trust policy. */
+  readonly formPackageVerifier?: CreateTakosumiServiceArg["formPackageVerifier"];
   /**
    * Optional OpenTofu runner injected by an operator composition. The generic
    * reference server leaves this absent; local-substrate wires a local runner
@@ -162,6 +166,12 @@ export async function buildComposedApp(
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
     ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
     ...(input.sqlClient ? { sqlClient: input.sqlClient } : {}),
+    ...(input.formPackageArtifactReader
+      ? { formPackageArtifactReader: input.formPackageArtifactReader }
+      : {}),
+    ...(input.formPackageVerifier
+      ? { formPackageVerifier: input.formPackageVerifier }
+      : {}),
     ...(input.opentofuRunner ? { opentofuRunner: input.opentofuRunner } : {}),
     ...(input.opentofuRunnerExecutors
       ? { opentofuRunnerExecutors: input.opentofuRunnerExecutors }
