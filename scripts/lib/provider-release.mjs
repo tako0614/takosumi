@@ -2447,12 +2447,16 @@ async function buildReleaseOnce({
     });
   }
 
+  const indexEntry = {
+    protocols: [...descriptor.protocols],
+    platforms: descriptor.platforms.map((platform) => ({
+      os: platform.os,
+      arch: platform.arch,
+    })),
+  };
   const index = {
     versions: {
-      [descriptor.version]: {
-        protocols: descriptor.protocols,
-        platforms: descriptor.platforms,
-      },
+      [descriptor.version]: indexEntry,
     },
   };
   const versionMetadata = { archives };
@@ -2561,10 +2565,7 @@ async function buildReleaseOnce({
       archiveTimestampUtc: descriptor.releasePolicy.archiveTimestampUtc,
     },
     mirror: {
-      indexEntry: {
-        protocols: descriptor.protocols,
-        platforms: descriptor.platforms,
-      },
+      indexEntry,
       derivedIndex: {
         kind: "derived-index",
         immutableAuthority: false,
