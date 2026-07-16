@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "kind": "takosumi.provider-state-identity@v1",
+  "provider": {
+    "openTofuAddress": "registry.opentofu.org/takosjp/takosumi",
+    "terraformServeAddress": "registry.terraform.io/takosjp/takosumi",
+    "version": "1.0.0",
+    "reportedBinaryVersion": "dev",
+    "sourceCommit": "06319f127353410d97f7966fb82f579f3e6245b6",
+    "quarantineManifestSha256": "2d7313612f827336b6bb2d0e4155c4af04f4717f18760f87ee18cd5f4c2dcad3",
+    "linuxAmd64ArchiveSha256": "3433cb34ec1bb79f1d9757e97806554e3c4384ae3dca4e282610b1e853330f5d"
+  },
+  "capture": {
+    "observedAt": "2026-07-16T08:45:45Z",
+    "tool": "OpenTofu providers schema -json",
+    "containsStateValues": false,
+    "containsSecrets": false,
+    "normalization": "descriptions-validators-and-order-removed-structural-v1"
+  },
+  "addressMatrix": {
+    "openTofuSource": "registry.opentofu.org/takosjp/takosumi",
+    "terraformSource": "registry.terraform.io/takosjp/takosumi",
+    "hostedMirrorAddresses": [
+      "registry.opentofu.org/takosjp/takosumi"
+    ],
+    "status": "split-unproven"
+  },
+  "stateIdentity": {
+    "importIdFormat": "<space>/<name>",
+    "providerSchemaVersion": 0,
+    "providerStructuralSha256": "400b7275781d69dc1add937b2f3dc606786d66c60156880510acc1137d992e54",
+    "providerAttributes": [
+      "endpoint",
+      "space",
+      "token"
+    ],
+    "resources": {
+      "takosumi_container_service": {
+        "schemaVersion": 0,
+        "structuralSha256": "ceee2ce701a5dc17912cc2e801c7b4fa1bdd96a4ef360b66bb40dc338d508958",
+        "attributes": [
+          "connections",
+          "environment",
+          "id",
+          "image",
+          "locked",
+          "name",
+          "outputs",
+          "portability",
+          "ports",
+          "public_http",
+          "selected_implementation",
+          "space",
+          "target",
+          "target_pool"
+        ]
+      },
+      "takosumi_edge_worker": {
+        "schemaVersion": 0,
+        "structuralSha256": "049455c2ac77dfe1202200a18c4e974ddfe87f49ec1b1d60de55acde35af1526",
+        "attributes": [
+          "artifact_path",
+          "artifact_sha256",
+          "artifact_url",
+          "compatibility_date",
+          "compatibility_flags",
+          "connections",
+          "id",
+          "locked",
+          "name",
+          "outputs",
+          "portability",
+          "profiles",
+          "selected_implementation",
+          "space",
+          "target",
+          "target_pool"
+        ]
+      },
+      "takosumi_kv_store": {
+        "schemaVersion": 0,
+        "structuralSha256": "5fb18e62827f3487411d314615f209af3d93cdf97a6625ffaebf981db9995a03",
+        "attributes": [
+          "consistency",
+          "id",
+          "locked",
+          "name",
+          "outputs",
+          "portability",
+          "selected_implementation",
+          "space",
+          "target",
+          "target_pool"
+        ]
+      },
+      "takosumi_object_bucket": {
+        "schemaVersion": 0,
+        "structuralSha256": "f9d0fec82b251808f0969b91cd58dd12c4b9a743e8bcf550e8ebdf50b8456dd6",
+        "attributes": [
+          "id",
+          "interfaces",
+          "locked",
+          "name",
+          "outputs",
+          "portability",
+          "selected_implementation",
+          "space",
+          "target",
+          "target_pool"
+        ]
+      },
+      "takosumi_queue": {
+        "schemaVersion": 0,
+        "structuralSha256": "5bfef21417b6b7306157c8df827a7bcd9246a4ce51738a92a50812b83cfffe9b",
+        "attributes": [
+          "id",
+          "locked",
+          "max_batch_size",
+          "max_retries",
+          "name",
+          "outputs",
+          "portability",
+          "selected_implementation",
+          "space",
+          "target",
+          "target_pool"
+        ]
+      },
+      "takosumi_sql_database": {
+        "schemaVersion": 0,
+        "structuralSha256": "4cc2176864c6090d4d431adc2fdfd0d671cb49a11404883524287cff1bd5515b",
+        "attributes": [
+          "engine",
+          "id",
+          "locked",
+          "migrations_path",
+          "name",
+          "outputs",
+          "portability",
+          "selected_implementation",
+          "space",
+          "target",
+          "target_pool"
+        ]
+      },
+      "takosumi_target_pool": {
+        "schemaVersion": 0,
+        "structuralSha256": "437519a658050b3d9bc423add86bdee339549c17ac69c0d5d7f633fe2cf36bac",
+        "attributes": [
+          "id",
+          "name",
+          "space",
+          "target"
+        ]
+      }
+    }
+  }
+}

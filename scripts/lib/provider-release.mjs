@@ -39,6 +39,7 @@ import {
   sep,
 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadCompatibilityAuthorities } from "./provider-release-compatibility.mjs";
 
 export const PROVIDER_RELEASE_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -1088,6 +1089,12 @@ export async function verifyProviderReleaseSource({
     "provider release descriptor",
   );
   const descriptor = validateVersionDescriptor(descriptorSnapshot.value);
+  const compatibility = await loadCompatibilityAuthorities();
+  if (compatibility.policy.candidate.version !== descriptor.version) {
+    throw new Error(
+      "provider compatibility policy candidate does not match release descriptor",
+    );
+  }
   const loadedRegistry = await loadProviderReleaseRegistry(registryPath);
   const quarantineIndex = loadedRegistry.manifestPaths.indexOf(
     resolve(quarantinePath),
@@ -1143,7 +1150,15 @@ export async function verifyProviderReleaseSource({
       "reviewed signer fingerprint and key custody",
       "artifact signature and transparency log",
       "public version-path nonexistence or exact-byte readback",
+      "patch feature decision",
+      "OpenTofu/Terraform provider address proof",
     ],
+    compatibilityPolicy: {
+      identityDigest: compatibility.identityDigest,
+      policyDigest: compatibility.policyDigest,
+      patchFeatureDecision: compatibility.policy.patchFeatureDecision.status,
+      releaseEligibility: compatibility.policy.releaseEligibility,
+    },
     localAssets,
   };
 }
