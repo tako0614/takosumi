@@ -134,10 +134,10 @@ fi
 WORKSPACE_ID=$(echo "$WORKSPACE_BODY" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
-print((d.get('space') or {}).get('id', ''))
+print((d.get('workspace') or {}).get('id', ''))
 ")
 if [[ -z "$WORKSPACE_ID" ]]; then
-	echo "FAIL: Workspace create response did not include space.id: $WORKSPACE_BODY" >&2
+	echo "FAIL: Workspace create response did not include workspace.id: $WORKSPACE_BODY" >&2
 	exit 1
 fi
 
