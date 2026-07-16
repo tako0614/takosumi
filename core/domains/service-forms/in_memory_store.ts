@@ -18,6 +18,7 @@ import type {
   UpdateFormPackageStatusResult,
   UpdateFormActivationResult,
 } from "./stores.ts";
+import { packageInstallEquivalent } from "./record_equivalence.ts";
 
 export class InMemoryFormRegistryStore implements FormRegistryStore {
   readonly #packages = new Map<string, FormPackageRecord>();
@@ -30,8 +31,15 @@ export class InMemoryFormRegistryStore implements FormRegistryStore {
   ): Promise<InstallFormPackageResult> {
     const existingPackage = this.#packages.get(packageRecord.packageDigest);
     if (existingPackage !== undefined) {
-      return packageEquivalent(existingPackage, packageRecord) &&
-        definitionsEquivalent(existingPackage, definitions, this.#definitions)
+      return packageInstallEquivalent(
+        existingPackage,
+        packageRecord,
+        existingPackage.definitionRefs.flatMap((ref) => {
+          const definition = this.#definitions.get(formRefKey(ref));
+          return definition === undefined ? [] : [definition];
+        }),
+        definitions,
+      )
         ? { status: "already_installed", package: clone(existingPackage) }
         : { status: "conflict", reason: "package_digest_conflict" };
     }
@@ -181,63 +189,6 @@ function compareUpdatedId(
     : (left.id ?? left.packageDigest ?? "").localeCompare(
         right.id ?? right.packageDigest ?? "",
       );
-}
-
-function packageEquivalent(
-  left: FormPackageRecord,
-  right: FormPackageRecord,
-): boolean {
-  return (
-    left.artifactRef === right.artifactRef &&
-    left.verifierId === right.verifierId &&
-    JSON.stringify(left.definitionRefs) === JSON.stringify(right.definitionRefs)
-  );
-}
-
-function definitionsEquivalent(
-  existingPackage: FormPackageRecord,
-  incoming: readonly FormDefinitionRecord[],
-  existingDefinitions: ReadonlyMap<string, FormDefinitionRecord>,
-): boolean {
-  if (existingPackage.definitionRefs.length !== incoming.length) return false;
-  const incomingByKey = new Map(
-    incoming.map((definition) => [
-      formRefKey(definition.identity.formRef),
-      definition,
-    ]),
-  );
-  if (incomingByKey.size !== incoming.length) return false;
-  for (const ref of existingPackage.definitionRefs) {
-    const key = formRefKey(ref);
-    const left = existingDefinitions.get(key);
-    const right = incomingByKey.get(key);
-    if (
-      left === undefined ||
-      right === undefined ||
-      left.identity.packageDigest !== right.identity.packageDigest ||
-      left.displayName !== right.displayName ||
-      left.description !== right.description ||
-      canonicalJson(left.operations) !== canonicalJson(right.operations) ||
-      canonicalJson(left.metadata ?? null) !==
-        canonicalJson(right.metadata ?? null)
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`;
-  }
-  if (value !== null && typeof value === "object") {
-    return `{${Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function clone<T>(value: T): T {
