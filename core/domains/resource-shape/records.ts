@@ -12,6 +12,7 @@
 
 import type {
   Condition,
+  InstalledFormReference,
   JsonObject,
   NativeResourceRef,
   ResourceManagedBy,
@@ -20,6 +21,10 @@ import type {
   ResourceShapeKind,
   TargetImplementationDescriptor,
   TargetPoolEntry,
+} from "takosumi-contract";
+import {
+  installedFormReferenceKey,
+  isInstalledFormReference,
 } from "takosumi-contract";
 import type { ResourceOperation } from "takosumi-contract/runs";
 import type { IsoTimestamp } from "../../shared/time.ts";
@@ -37,6 +42,11 @@ export interface ResourceShapeRecord {
   readonly project?: string;
   readonly environment?: string;
   readonly kind: ResourceShapeKind;
+  /**
+   * Exact immutable portable definition selected for this Resource.
+   * Missing only on pre-FormRef compatibility rows awaiting explicit backfill.
+   */
+  readonly form?: InstalledFormReference;
   readonly name: string;
   readonly managedBy: ResourceManagedBy;
   /** Desired state (`spec`) as authored. */
@@ -100,6 +110,11 @@ export interface ResourceShapeStateAdoptionDescriptor {
 /** The pinned resolution decision for one resource (`final-plan.md` §3.5). */
 export interface ResolutionLockRecord {
   readonly resourceId: ResourceShapeRecordId;
+  /**
+   * Exact form identity used to produce this resolution evidence.
+   * Missing only on pre-FormRef compatibility locks awaiting explicit backfill.
+   */
+  readonly form?: InstalledFormReference;
   readonly selectedImplementation: string;
   /** Missing only on pre-fingerprint legacy records. */
   readonly targetPool?: string;
@@ -151,4 +166,28 @@ export function formatResourceShapeId(
   name: string,
 ): ResourceShapeRecordId {
   return `tkrn:${spaceId}:${kind}:${name}`;
+}
+
+/** Validate one optional exact identity against the compatibility kind token. */
+export function assertResourceFormIdentity(
+  form: InstalledFormReference | undefined,
+  kind: ResourceShapeKind,
+): void {
+  if (form === undefined) return;
+  if (!isInstalledFormReference(form)) {
+    throw new Error("Resource form identity is not an exact installed FormRef");
+  }
+  if (form.formRef.kind !== kind) {
+    throw new Error(
+      `Resource kind ${kind} does not match FormRef kind ${form.formRef.kind}`,
+    );
+  }
+}
+
+export function resourceFormIdentitiesEqual(
+  left: InstalledFormReference | undefined,
+  right: InstalledFormReference | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return installedFormReferenceKey(left) === installedFormReferenceKey(right);
 }

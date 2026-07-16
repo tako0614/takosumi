@@ -898,6 +898,8 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "project",
         "environment",
         "kind",
+        "form_ref_json",
+        "package_digest",
         "name",
         "managed_by",
         "spec_json",
@@ -914,13 +916,15 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       ],
       primaryKey: ["id"],
       uniqueConstraints: [["space_id", "kind", "name"]],
-      indexes: [["space_id"]],
+      indexes: [["space_id"], ["kind", "id"]],
     },
     {
       name: "takosumi_resolution_locks",
       domain: "resources",
       columns: [
         "resource_id",
+        "form_ref_json",
+        "package_digest",
         "selected_implementation",
         "target_pool",
         "target",
@@ -937,6 +941,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "updated_at",
       ],
       primaryKey: ["resource_id"],
+      indexes: [["resource_id"]],
     },
     {
       name: "takosumi_target_pools",
@@ -4204,5 +4209,44 @@ create index if not exists takosumi_service_form_activations_identity_idx
       down: `drop table if exists takosumi_service_form_activations;
 drop table if exists takosumi_service_form_definitions;
 drop table if exists takosumi_service_form_packages;`,
+    },
+    {
+      id: "resources.exact_form_identity.add",
+      version: 94,
+      domain: "resources",
+      description:
+        "Add nullable exact installed FormRef identity pairs to Resource and ResolutionLock projections so legacy rows remain readable and can be explicitly backfilled without reinterpretation.",
+      sql: `alter table takosumi_resource_shapes
+  add column if not exists form_ref_json jsonb,
+  add column if not exists package_digest text;
+alter table takosumi_resolution_locks
+  add column if not exists form_ref_json jsonb,
+  add column if not exists package_digest text;
+alter table takosumi_resource_shapes
+  add constraint takosumi_resource_shapes_form_identity_pair_check
+  check ((form_ref_json is null) = (package_digest is null)),
+  add constraint takosumi_resource_shapes_form_package_fk
+  foreign key (package_digest) references takosumi_service_form_packages(package_digest);
+alter table takosumi_resolution_locks
+  add constraint takosumi_resolution_locks_form_identity_pair_check
+  check ((form_ref_json is null) = (package_digest is null)),
+  add constraint takosumi_resolution_locks_form_package_fk
+  foreign key (package_digest) references takosumi_service_form_packages(package_digest);
+create index if not exists takosumi_resource_shapes_unpinned_form_kind_id_idx
+  on takosumi_resource_shapes (kind, id) where form_ref_json is null;
+create index if not exists takosumi_resolution_locks_unpinned_form_resource_idx
+  on takosumi_resolution_locks (resource_id) where form_ref_json is null;`,
+      down: `drop index if exists takosumi_resolution_locks_unpinned_form_resource_idx;
+drop index if exists takosumi_resource_shapes_unpinned_form_kind_id_idx;
+alter table takosumi_resolution_locks
+  drop constraint if exists takosumi_resolution_locks_form_package_fk,
+  drop constraint if exists takosumi_resolution_locks_form_identity_pair_check,
+  drop column if exists package_digest,
+  drop column if exists form_ref_json;
+alter table takosumi_resource_shapes
+  drop constraint if exists takosumi_resource_shapes_form_package_fk,
+  drop constraint if exists takosumi_resource_shapes_form_identity_pair_check,
+  drop column if exists package_digest,
+  drop column if exists form_ref_json;`,
     },
   ]);

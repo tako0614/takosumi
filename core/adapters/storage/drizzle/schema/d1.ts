@@ -558,6 +558,9 @@ export const resourceShapes = sqliteTable(
     observationLeaseId: text("observation_lease_id"),
     observationClaimedAt: text("observation_claimed_at"),
     lastObservationAttemptAt: text("last_observation_attempt_at"),
+    // v46 is additive; keep append order aligned with upgraded databases.
+    formRefJson: jsonText("form_ref_json"),
+    packageDigest: text("package_digest"),
   },
   (table) => [
     uniqueIndex("resource_shapes_space_kind_name_unique").on(
@@ -583,26 +586,40 @@ export const resourceShapes = sqliteTable(
       table.observationClaimedAt,
       table.id,
     ),
+    index("resource_shapes_unpinned_form_kind_id_idx")
+      .on(table.kind, table.id)
+      .where(sql`${table.formRefJson} is null`),
   ],
 );
 
-export const resolutionLocks = sqliteTable(names.resolutionLocks, {
-  resourceId: text("resource_id").primaryKey(),
-  selectedImplementation: text("selected_implementation").notNull(),
-  targetPool: text("target_pool"),
-  target: text("target").notNull(),
-  targetSnapshotJson: jsonText("target_snapshot_json"),
-  implementationSnapshotJson: jsonText("implementation_snapshot_json"),
-  implementationPlugin: text("implementation_plugin"),
-  implementationOptionsJson: jsonText("implementation_options_json"),
-  implementationFingerprint: text("implementation_fingerprint"),
-  locked: integer("locked").notNull(),
-  reasonJson: jsonText("reason_json").notNull(),
-  portability: text("portability"),
-  nativeResourcesJson: jsonText("native_resources_json"),
-  lockedAt: text("locked_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
+export const resolutionLocks = sqliteTable(
+  names.resolutionLocks,
+  {
+    resourceId: text("resource_id").primaryKey(),
+    selectedImplementation: text("selected_implementation").notNull(),
+    targetPool: text("target_pool"),
+    target: text("target").notNull(),
+    targetSnapshotJson: jsonText("target_snapshot_json"),
+    implementationSnapshotJson: jsonText("implementation_snapshot_json"),
+    implementationPlugin: text("implementation_plugin"),
+    implementationOptionsJson: jsonText("implementation_options_json"),
+    implementationFingerprint: text("implementation_fingerprint"),
+    locked: integer("locked").notNull(),
+    reasonJson: jsonText("reason_json").notNull(),
+    portability: text("portability"),
+    nativeResourcesJson: jsonText("native_resources_json"),
+    lockedAt: text("locked_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    // v46 is additive; keep append order aligned with upgraded databases.
+    formRefJson: jsonText("form_ref_json"),
+    packageDigest: text("package_digest"),
+  },
+  (table) => [
+    index("resolution_locks_unpinned_form_resource_idx")
+      .on(table.resourceId)
+      .where(sql`${table.formRefJson} is null`),
+  ],
+);
 
 export const targetPools = sqliteTable(
   names.targetPools,

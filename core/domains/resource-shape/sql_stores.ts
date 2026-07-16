@@ -3,6 +3,8 @@
 
 import type {
   Condition,
+  FormRef,
+  InstalledFormReference,
   JsonObject,
   NativeResourceRef,
   ResourceManagedBy,
@@ -12,7 +14,10 @@ import type {
   TargetImplementationDescriptor,
   TargetPoolEntry,
 } from "takosumi-contract";
-import { parseResourceShapeKind } from "takosumi-contract";
+import {
+  isInstalledFormReference,
+  parseResourceShapeKind,
+} from "takosumi-contract";
 import {
   clampPageLimit,
   decodeCursor,
@@ -35,6 +40,7 @@ import type {
   TargetPoolRecord,
   TargetPoolRecordId,
 } from "./records.ts";
+import { assertResourceFormIdentity } from "./records.ts";
 import type {
   ResourceApplyAbortInput,
   ResourceApplyAbortResult,
@@ -69,6 +75,8 @@ type ResourceShapeRow = {
   readonly project: string | null;
   readonly environment: string | null;
   readonly kind: string;
+  readonly form_ref_json: unknown;
+  readonly package_digest: string | null;
   readonly name: string;
   readonly managed_by: string;
   readonly spec_json: unknown;
@@ -86,6 +94,8 @@ type ResourceShapeRow = {
 
 type ResolutionLockRow = {
   readonly resource_id: string;
+  readonly form_ref_json: unknown;
+  readonly package_digest: string | null;
   readonly selected_implementation: string;
   readonly target_pool: string | null;
   readonly target: string;
@@ -138,6 +148,8 @@ class SqlResourceShapeStore implements ResourceShapeStore {
           project = excluded.project,
           environment = excluded.environment,
           kind = excluded.kind,
+          form_ref_json = excluded.form_ref_json,
+          package_digest = excluded.package_digest,
           name = excluded.name,
           managed_by = excluded.managed_by,
           spec_json = excluded.spec_json,
@@ -356,13 +368,14 @@ class SqlResourceShapeStore implements ResourceShapeStore {
   > {
     const result = await this.client.query(
       `update ${this.#table} set
-        space_id = $1, project = $2, environment = $3, kind = $4, name = $5,
-        managed_by = $6, spec_json = $7::jsonb, phase = $8, generation = $9,
-        observed_generation = $10, outputs_json = $11::jsonb,
-        execution_json = $12::jsonb, state_adoption_json = $13::jsonb,
-        conditions_json = $14::jsonb, labels_json = $15::jsonb,
-        created_at = $16, updated_at = $17
-       where id = $18 and generation = $19 and phase = $20 and updated_at = $21`,
+        space_id = $1, project = $2, environment = $3, kind = $4,
+        form_ref_json = $5::jsonb, package_digest = $6, name = $7,
+        managed_by = $8, spec_json = $9::jsonb, phase = $10,
+        generation = $11, observed_generation = $12,
+        outputs_json = $13::jsonb, execution_json = $14::jsonb,
+        state_adoption_json = $15::jsonb, conditions_json = $16::jsonb,
+        labels_json = $17::jsonb, created_at = $18, updated_at = $19
+       where id = $20 and generation = $21 and phase = $22 and updated_at = $23`,
       [
         ...resourceParameters(record).slice(1),
         record.id,
@@ -811,16 +824,17 @@ function updateSqlResource(
   },
   expectedManagedBy?: ResourceManagedBy,
 ) {
-  const managedByPredicate = expectedManagedBy ? " and managed_by = $22" : "";
+  const managedByPredicate = expectedManagedBy ? " and managed_by = $24" : "";
   return client.query(
     `update ${names.resourceShapes} set
-      space_id = $1, project = $2, environment = $3, kind = $4, name = $5,
-      managed_by = $6, spec_json = $7::jsonb, phase = $8, generation = $9,
-      observed_generation = $10, outputs_json = $11::jsonb,
-      execution_json = $12::jsonb, state_adoption_json = $13::jsonb,
-      conditions_json = $14::jsonb, labels_json = $15::jsonb,
-      created_at = $16, updated_at = $17
-    where id = $18 and generation = $19 and phase = $20 and updated_at = $21${managedByPredicate}`,
+      space_id = $1, project = $2, environment = $3, kind = $4,
+      form_ref_json = $5::jsonb, package_digest = $6, name = $7,
+      managed_by = $8, spec_json = $9::jsonb, phase = $10, generation = $11,
+      observed_generation = $12, outputs_json = $13::jsonb,
+      execution_json = $14::jsonb, state_adoption_json = $15::jsonb,
+      conditions_json = $16::jsonb, labels_json = $17::jsonb,
+      created_at = $18, updated_at = $19
+    where id = $20 and generation = $21 and phase = $22 and updated_at = $23${managedByPredicate}`,
     [
       ...resourceParameters(record).slice(1),
       record.id,
@@ -862,23 +876,28 @@ async function readSqlLock(
 
 function resourceInsertSql(table: string, conflict: string): string {
   return `insert into ${table} (
-    id, space_id, project, environment, kind, name, managed_by,
+    id, space_id, project, environment, kind, form_ref_json, package_digest,
+    name, managed_by,
     spec_json, phase, generation, observed_generation,
     outputs_json, execution_json, state_adoption_json,
     conditions_json, labels_json, created_at, updated_at
   ) values (
-    $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11,
-    $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18
+    $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb,
+    $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb,
+    $17::jsonb, $18::jsonb, $19, $20
   ) ${conflict}`;
 }
 
 function resourceParameters(record: ResourceShapeRecord): readonly SqlValue[] {
+  assertResourceFormIdentity(record.form, record.kind);
   return [
     record.id,
     record.spaceId,
     record.project ?? null,
     record.environment ?? null,
     record.kind,
+    jsonOrNull(record.form?.formRef),
+    record.form?.packageDigest ?? null,
     record.name,
     record.managedBy,
     JSON.stringify(record.spec),
@@ -896,8 +915,14 @@ function resourceParameters(record: ResourceShapeRecord): readonly SqlValue[] {
 }
 
 function lockParameters(lock: ResolutionLockRecord): readonly SqlValue[] {
+  const form = exactFormIdentity(
+    jsonOrNull(lock.form?.formRef),
+    lock.form?.packageDigest ?? null,
+  );
   return [
     lock.resourceId,
+    jsonOrNull(form?.formRef),
+    form?.packageDigest ?? null,
     lock.selectedImplementation,
     lock.targetPool ?? null,
     lock.target,
@@ -917,14 +942,17 @@ function lockParameters(lock: ResolutionLockRecord): readonly SqlValue[] {
 
 function lockUpsertSql(table: string): string {
   return `insert into ${table} (
-    resource_id, selected_implementation, target_pool, target,
+    resource_id, form_ref_json, package_digest,
+    selected_implementation, target_pool, target,
     target_snapshot_json, implementation_snapshot_json,
     implementation_plugin, implementation_options_json,
     implementation_fingerprint, locked, reason_json, portability,
     native_resources_json, locked_at, updated_at
-  ) values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8::jsonb,
-    $9, $10, $11::jsonb, $12, $13::jsonb, $14, $15)
+  ) values ($1, $2::jsonb, $3, $4, $5, $6, $7::jsonb, $8::jsonb,
+    $9, $10::jsonb, $11, $12, $13::jsonb, $14, $15::jsonb, $16, $17)
   on conflict (resource_id) do update set
+    form_ref_json = excluded.form_ref_json,
+    package_digest = excluded.package_digest,
     selected_implementation = excluded.selected_implementation,
     target_pool = excluded.target_pool,
     target = excluded.target,
@@ -974,6 +1002,9 @@ function namedSpecParameters(
 }
 
 function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
+  const kind = parseResourceShapeKind(row.kind);
+  const form = exactFormIdentity(row.form_ref_json, row.package_digest);
+  assertResourceFormIdentity(form, kind);
   const outputs = parseJson<JsonObject>(row.outputs_json);
   const execution = parseJson<ResourceShapeExecutionRecord>(row.execution_json);
   const stateAdoption = parseJson<ResourceShapeStateAdoptionDescriptor>(
@@ -986,7 +1017,8 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
     spaceId: row.space_id as SpaceId,
     ...(row.project === null ? {} : { project: row.project }),
     ...(row.environment === null ? {} : { environment: row.environment }),
-    kind: parseResourceShapeKind(row.kind),
+    kind,
+    ...(form === undefined ? {} : { form }),
     name: row.name,
     managedBy: row.managed_by as ResourceManagedBy,
     spec: parseJson<JsonObject>(row.spec_json) ?? {},
@@ -1004,6 +1036,7 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
 }
 
 function resolutionLockFromRow(row: ResolutionLockRow): ResolutionLockRecord {
+  const form = exactFormIdentity(row.form_ref_json, row.package_digest);
   const targetSnapshot = parseJson<TargetPoolEntry>(row.target_snapshot_json);
   const implementationSnapshot = parseJson<TargetImplementationDescriptor>(
     row.implementation_snapshot_json,
@@ -1016,6 +1049,7 @@ function resolutionLockFromRow(row: ResolutionLockRow): ResolutionLockRecord {
   );
   return {
     resourceId: row.resource_id,
+    ...(form === undefined ? {} : { form }),
     selectedImplementation: row.selected_implementation,
     ...(row.target_pool === null ? {} : { targetPool: row.target_pool }),
     target: row.target,
@@ -1070,4 +1104,24 @@ function jsonOrNull(value: unknown): string | null {
 function parseJson<T>(value: unknown): T | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
+}
+
+function exactFormIdentity(
+  formRefJson: unknown,
+  packageDigest: string | null,
+): InstalledFormReference | undefined {
+  if (
+    (formRefJson === undefined || formRefJson === null || formRefJson === "") &&
+    packageDigest === null
+  ) {
+    return undefined;
+  }
+  const identity = {
+    formRef: parseJson<FormRef>(formRefJson),
+    packageDigest,
+  };
+  if (!isInstalledFormReference(identity)) {
+    throw new Error("durable Resource form identity is partial or invalid");
+  }
+  return identity;
 }

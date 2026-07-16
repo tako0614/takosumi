@@ -9,6 +9,9 @@
 import type {
   ActorContext,
   Condition,
+  FormDefinition,
+  FormPackage,
+  InstalledFormReference,
   JsonObject,
   JsonValue,
   NativeResourceRef,
@@ -35,6 +38,8 @@ import type {
   TargetPoolSpec,
 } from "takosumi-contract";
 import {
+  installedFormReferenceKey,
+  isInstalledFormReference,
   isResourceShapeKind,
   NOOP_RESOURCE_DEPLOYMENT_ADMISSION,
   TAKOSUMI_API_VERSION,
@@ -45,6 +50,7 @@ import type { SpaceId } from "../../shared/ids.ts";
 import { log } from "../../shared/log.ts";
 import {
   formatResourceShapeId,
+  resourceFormIdentitiesEqual,
   type ResolutionLockRecord,
   type ResourceShapeRecord,
   type SpacePolicyRecord,
@@ -85,6 +91,10 @@ import type {
 } from "../deploy-control/store.ts";
 
 export type ResourceServiceErrorCode =
+  | "invalid_form_ref"
+  | "form_registry_unavailable"
+  | "form_not_installed"
+  | "form_identity_conflict"
   | "invalid_spec"
   | "invalid_name"
   | "invalid_interfaces"
@@ -153,6 +163,8 @@ export interface ApplyResourceRequest {
   readonly project?: string;
   readonly environment?: string;
   readonly kind: ResourceShapeKind;
+  /** Exact installed portable definition for Form-backed execution. */
+  readonly form?: InstalledFormReference;
   readonly name: string;
   readonly spec: JsonObject;
   readonly managedBy?: ResourceManagedBy;
@@ -233,6 +245,13 @@ export interface ResourceShapeServiceDeps {
   readonly moduleRegistry?: ResourceShapeModuleRegistry;
   /** Explicit schemas for operator-defined Resource Shape tokens. */
   readonly schemaRegistry?: ResourceShapeSchemaRegistry;
+  /** Read-only exact package authority; mutation remains in FormRegistryService. */
+  readonly formRegistry?: {
+    getDefinition(
+      formRef: InstalledFormReference["formRef"],
+    ): Promise<FormDefinition | undefined>;
+    getPackage(packageDigest: string): Promise<FormPackage | undefined>;
+  };
   /** Absolute providerConfig URL values trusted by this operator. */
   readonly allowedProviderConfigUrls?: readonly string[];
   /** @deprecated Use allowedProviderConfigUrls. */
@@ -302,6 +321,7 @@ export class ResourceShapeService {
   readonly #allowedProviderConfigUrls: ReadonlySet<string>;
   readonly #moduleRegistry: ResourceShapeModuleRegistry;
   readonly #schemaRegistry: ResourceShapeSchemaRegistry;
+  readonly #formRegistry: ResourceShapeServiceDeps["formRegistry"];
   readonly #activity: ActivityLedger | undefined;
   readonly #operationRuns: ResourceShapeServiceDeps["operationRuns"];
   readonly #deploymentAdmission: ResourceDeploymentAdmission;
@@ -321,6 +341,7 @@ export class ResourceShapeService {
       deps.moduleRegistry ?? EMPTY_RESOURCE_SHAPE_MODULE_REGISTRY;
     this.#schemaRegistry =
       deps.schemaRegistry ?? EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY;
+    this.#formRegistry = deps.formRegistry;
     this.#allowedProviderConfigUrls = new Set(
       (
         deps.allowedProviderConfigUrls ??
@@ -581,6 +602,8 @@ export class ResourceShapeService {
     const resourceId = formatResourceShapeId(req.space, req.kind, req.name);
     const existing = await this.#stores.resources.get(resourceId);
     const existingLock = await this.#stores.locks.get(resourceId);
+    const form = await this.#resolveExactForm(req, existing, existingLock);
+    if (!form.ok) return form;
     const prepared = await this.#resolveAndPlan(req, existingLock);
     if (!prepared.ok) return prepared;
     const { resource, output, plan, entry, parsed } = prepared.value;
@@ -745,7 +768,14 @@ export class ResourceShapeService {
       };
     }
     const id = formatResourceShapeId(req.space, req.kind, req.name);
-    const existing = await this.#stores.resources.get(id);
+    const [existing, existingLock] = await Promise.all([
+      this.#stores.resources.get(id),
+      this.#stores.locks.get(id),
+    ]);
+    const form = await this.#resolveExactForm(req, existing, existingLock, {
+      allowRetainedPackage: recoveryRequested,
+    });
+    if (!form.ok) return form;
     const incomingManagedBy = req.managedBy ?? "opentofu";
     if (existing && existing.managedBy !== incomingManagedBy) {
       return resourceOwnershipConflict(
@@ -792,8 +822,6 @@ export class ResourceShapeService {
         },
       };
     }
-    const existingLock = await this.#stores.locks.get(id);
-
     const prepared = await this.#resolveAndPlan(req, existingLock);
     if (!prepared.ok) return prepared;
     const { output, plan, entry, parsed } = prepared.value;
@@ -895,6 +923,7 @@ export class ResourceShapeService {
       project: req.project,
       environment: req.environment,
       kind: req.kind,
+      ...(form.value === undefined ? {} : { form: form.value }),
       name: req.name,
       managedBy: incomingManagedBy,
       spec: req.spec,
@@ -926,6 +955,7 @@ export class ResourceShapeService {
     // Pin the resolution. Reuse the prior lockedAt when the lock was preserved.
     const lockRecord: ResolutionLockRecord = {
       resourceId: id,
+      ...(form.value === undefined ? {} : { form: form.value }),
       selectedImplementation: output.resolutionLock.selectedImplementation,
       targetPool: output.resolutionLock.targetPool,
       target: output.resolutionLock.target,
@@ -1521,15 +1551,19 @@ export class ResourceShapeService {
 
     const id = formatResourceShapeId(req.space, req.kind, req.name);
     const importManagedBy = req.managedBy ?? "opentofu";
-    const importRequestDigest = await resourceImportRequestDigest(req);
     const [existing, existingLock] = await Promise.all([
       this.#stores.resources.get(id),
       this.#stores.locks.get(id),
     ]);
+    const importRequestDigest = await resourceImportRequestDigest(req);
     const recoveringImport =
       existing !== undefined &&
       existingLock !== undefined &&
       importRequestMatchesApplying(req, existing, importRequestDigest);
+    const form = await this.#resolveExactForm(req, existing, existingLock, {
+      allowRetainedPackage: recoveringImport,
+    });
+    if (!form.ok) return form;
     if (existing && !recoveringImport) {
       return {
         ok: false,
@@ -1647,6 +1681,7 @@ export class ResourceShapeService {
       project: req.project,
       environment: req.environment,
       kind: req.kind,
+      ...(form.value === undefined ? {} : { form: form.value }),
       name: req.name,
       managedBy: importManagedBy,
       spec: req.spec,
@@ -1669,6 +1704,7 @@ export class ResourceShapeService {
     };
     const lockRecord: ResolutionLockRecord = {
       resourceId: id,
+      ...(form.value === undefined ? {} : { form: form.value }),
       selectedImplementation: output.resolutionLock.selectedImplementation,
       targetPool: output.resolutionLock.targetPool,
       target: output.resolutionLock.target,
@@ -4312,6 +4348,83 @@ export class ResourceShapeService {
     return { ok: true, value: { resource, output, plan, entry, parsed } };
   }
 
+  async #resolveExactForm(
+    request: ApplyResourceRequest,
+    existing: ResourceShapeRecord | undefined,
+    existingLock: ResolutionLockRecord | undefined,
+    options: { readonly allowRetainedPackage?: boolean } = {},
+  ): Promise<ServiceResult<InstalledFormReference | undefined>> {
+    if (
+      existing &&
+      existingLock &&
+      !resourceFormIdentitiesEqual(existing.form, existingLock.form)
+    ) {
+      return formIdentityConflict(
+        `Resource ${existing.id} and its ResolutionLock disagree on exact Form identity`,
+      );
+    }
+    if (request.form === undefined) {
+      if (existing?.form !== undefined || existingLock?.form !== undefined) {
+        return formIdentityConflict(
+          `Resource ${existing?.id ?? existingLock?.resourceId} is pinned; its exact Form identity is required`,
+        );
+      }
+      return { ok: true, value: undefined };
+    }
+    if (
+      !isInstalledFormReference(request.form) ||
+      request.form.formRef.kind !== request.kind
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_form_ref",
+          message: `Resource kind ${request.kind} requires a structurally exact matching InstalledFormReference`,
+        },
+      };
+    }
+    if (
+      (existing?.form !== undefined &&
+        !resourceFormIdentitiesEqual(existing.form, request.form)) ||
+      (existingLock?.form !== undefined &&
+        !resourceFormIdentitiesEqual(existingLock.form, request.form))
+    ) {
+      return formIdentityConflict(
+        `Resource ${existing?.id ?? existingLock?.resourceId} cannot change its exact Form identity`,
+      );
+    }
+    if (!this.#formRegistry) {
+      return {
+        ok: false,
+        error: {
+          code: "form_registry_unavailable",
+          message: "this host has no exact Form registry authority",
+        },
+      };
+    }
+    const [definition, formPackage] = await Promise.all([
+      this.#formRegistry.getDefinition(request.form.formRef),
+      this.#formRegistry.getPackage(request.form.packageDigest),
+    ]);
+    if (
+      !definition ||
+      !resourceFormIdentitiesEqual(definition.identity, request.form) ||
+      !formPackage ||
+      formPackage.packageDigest !== request.form.packageDigest ||
+      (formPackage.status !== "installed" &&
+        options.allowRetainedPackage !== true)
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "form_not_installed",
+          message: `exact Form ${installedFormReferenceKey(request.form)} is not installed and executable`,
+        },
+      };
+    }
+    return { ok: true, value: definition.identity };
+  }
+
   async #resolveConnections(
     space: SpaceId,
     consumerResourceId: string,
@@ -4700,6 +4813,13 @@ function resourceOwnershipConflict<T>(
   };
 }
 
+function formIdentityConflict<T>(message: string): ServiceResult<T> {
+  return {
+    ok: false,
+    error: { code: "form_identity_conflict", message },
+  };
+}
+
 function nextApplyClaimTimestamp(now: string, previous?: string): IsoTimestamp {
   if (!previous) return now as IsoTimestamp;
   const nowMs = Date.parse(now);
@@ -4735,6 +4855,7 @@ function applyingRequestMatchesRecord(
   return (
     request.space === record.spaceId &&
     request.kind === record.kind &&
+    resourceFormIdentitiesEqual(request.form, record.form) &&
     request.name === record.name &&
     (request.project ?? null) === (record.project ?? null) &&
     (request.environment ?? null) === (record.environment ?? null) &&
@@ -4755,6 +4876,7 @@ async function resourceImportRequestDigest(
       project: request.project ?? null,
       environment: request.environment ?? null,
       kind: request.kind,
+      form: request.form ?? null,
       name: request.name,
       spec: request.spec,
       managedBy: request.managedBy ?? "opentofu",
@@ -4784,6 +4906,7 @@ function importRequestMatchesApplying(
     record.observedGeneration === 0 &&
     request.space === record.spaceId &&
     request.kind === record.kind &&
+    resourceFormIdentitiesEqual(request.form, record.form) &&
     request.name === record.name &&
     (request.project ?? null) === (record.project ?? null) &&
     (request.environment ?? null) === (record.environment ?? null) &&
@@ -4836,6 +4959,7 @@ async function resourceDeploymentEvidence(
   const resolutionFingerprint = await canonicalSha256({
     apiVersion: "takosumi.resource-resolution/v1",
     shape: request.kind,
+    form: request.form ?? null,
     targetPool: output.resolutionLock.targetPool,
     target: output.selectedTarget,
     targetSnapshot: output.resolutionLock.targetSnapshot,
@@ -4849,6 +4973,7 @@ async function resourceDeploymentEvidence(
     apiVersion: "takosumi.resource-spec/v1",
     space: request.space,
     kind: request.kind,
+    form: request.form ?? null,
     name: request.name,
     spec: request.spec,
   });
@@ -4859,6 +4984,7 @@ async function resourceDeploymentEvidence(
       project: request.project,
       environment: request.environment,
       kind: request.kind,
+      form: request.form ?? null,
       name: request.name,
       spec: request.spec,
       labels: request.labels,
