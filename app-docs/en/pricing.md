@@ -4,7 +4,7 @@ Takosumi Cloud combines a monthly subscription with metered usage. Prices are
 tax-exclusive USD. Every plan can use the same managed-service catalog;
 Resource counts are common safety ceilings, not plan features.
 
-## Subscription Plans
+## Subscription plans
 
 | Plan | Monthly price | Monthly managed-usage grant | Overage       |
 | ---- | ------------: | --------------------------: | ------------- |
@@ -16,21 +16,20 @@ The grant is issued per billing period, cannot be redeemed for cash, and does
 not roll over. External providers connected with your own Provider Connection
 are billed directly by that provider and do not consume the grant.
 
-## Usage Prices
+## Usage prices
 
-Cloudflare-backed capacity is sold at `1.5x` the provider's current public
-overage or marginal rate. Shared free tiers and fixed platform costs are
-absorbed by the subscription rather than allocated as hidden per-tenant free
-tiers. Catalog changes are versioned and effective-dated and never re-rate old
-usage.
+Takosumi Cloud's versioned PriceCatalog is the authority for managed-capacity
+prices. Provider public prices remain cost-comparison inputs, but provider
+invoices do not define tenant usage. Shared free tiers and fixed platform costs
+are absorbed by the subscription rather than allocated as hidden per-tenant
+free tiers. Catalog changes are versioned and effective-dated and never re-rate
+old usage.
 
 | Service                          | Billable item                         |                                                              Price |
 | -------------------------------- | ------------------------------------- | -----------------------------------------------------------------: |
-| Edge Worker                      | requests                              |                                                  `$0.45 / million` |
-| Edge Worker                      | CPU                                   |                                           `$0.03 / million CPU-ms` |
-| Edge Worker                      | active script                         |                                             `$0.03 / script-month` |
-| Edge Worker                      | log events                            |                                                  `$0.90 / million` |
-| Edge Worker                      | Logpush events                        |                                                 `$0.075 / million` |
+| Edge Worker                      | accepted gateway requests             |                                                  `$1.00 / million` |
+| Edge Worker                      | active Ready Resource                 |                                           `$0.09 / Resource-month` |
+| Edge Worker                      | CPU / subrequests                     |                 included (`10 CPU-ms`, `5` subrequests / dispatch) |
 | Custom Domain                    | active verified hostname              |                                           `$0.15 / hostname-month` |
 | Object Storage Standard          | storage                               |                                               `$0.0225 / GB-month` |
 | Object Storage Standard          | Class A / Class B                     |                              `$6.75 / million` / `$0.54 / million` |
@@ -59,6 +58,14 @@ secret configuration, route, schedule, static-asset control, observe, refresh,
 and delete have explicit `$0` meters. Runtime or storage work they trigger is
 still charged by the target service. Workflow state and step meters use a zero
 catalog before `2026-08-10` and the rates above only on or after that date.
+
+An Edge request is accepted after quota and credit reservation and successful
+durable Takosumi usage capture. Tenant errors, CPU/subrequest limit failures,
+and dispatch failures after that point remain one charged accepted request. A
+failure before capture does not invoke tenant code and is not charged. Workers
+Logs, invocation logs, and Logpush are disabled in Stable. Legacy `request`,
+`cpu_time_us`, `subrequest`, `active_script_millisecond`, and log meters remain
+explicit `$0` history rows and cannot authorize a new charge.
 
 Provider cost references: [Workers for Platforms](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/reference/pricing/),
 [R2](https://developers.cloudflare.com/r2/pricing/),
@@ -91,14 +98,12 @@ Personal-use PaaS uses `txcd_10102001`; business-use PaaS uses
 quote and invoice. The actual tax depends on customer location and our tax
 registrations.
 
-## Usage and Limits
+## Safety and spend limits
 
 The owner-account safety ceiling is 250 total Resources; 100 each for Edge,
 Object, KV, Queue and Schedule; 50 each for Database, Workflow and Stateful
 Actor; 25 Vector indexes; 10 Containers; and 25 active verified domains. These
 are not plan features.
-
-## Spend Guard
 
 Operator hard caps are `$25 / single authorization`, `$100 / rolling day`, and
 `$500 / billing period`. Customers can set lower account, Workspace or service

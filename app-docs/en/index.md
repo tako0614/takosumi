@@ -122,7 +122,7 @@ User-owned custom domains are part of the GA contract. An owner-account and
 Workspace-scoped `VerifiedDomain` manages ownership challenge, certificate,
 attach/detach, renewal, expiry, and delete. A route is active only while both
 ownership and certificate state are current. The lifecycle remains Pre-GA with
-the rest of Takosumi Cloud until reviewed live launch evidence exists; unverified,
+the rest of Takosumi Cloud until live operator evidence exists; unverified,
 expired, or degraded domains fail closed.
 
 ## GA Contract And Launch Gate
@@ -144,7 +144,7 @@ Stable or GA.
 
 Stable evidence includes lifecycle, price coverage, immutable metering, spend
 enforcement, invoice reconciliation, recovery, tenant isolation, Dashboard,
-and reviewed live launch evidence. A self-test, descriptor, unconfigured manager, or
+and live operator evidence. A self-test, descriptor, unconfigured manager, or
 one green client does not establish GA.
 
 ## Billing and Spend Guard
@@ -156,9 +156,9 @@ destroy operations remain available after a spend-guard block so users can
 remove resources instead of leaving them stranded.
 
 Public prices, free-tier terms, usage rates, and spend-guard behavior are
-documented in [Takosumi Cloud pricing](./pricing.md). PriceCatalog publication,
+documented in [Takosumi Cloud pricing](./pricing.md). Realized PriceCatalogs,
 payment-provider synchronization, margin guards, and reconciliation are
-operational details, not public contracts.
+operator operation details, not public contracts.
 
 The Dashboard shows:
 
@@ -183,7 +183,7 @@ whole Cloudflare account or API.
 
 | Status      | Scope                                                                                                         |
 | ----------- | ------------------------------------------------------------------------------------------------------------- |
-| GA contract | EdgeWorker modules, assets, vars, write-only secrets, bindings, versions, deployments, routes, cron, and logs |
+| GA contract | EdgeWorker modules, assets, vars, write-only secrets, bindings, versions, deployments, routes, and cron (Workers Logs / Logpush are not Stable) |
 | GA contract | managed URL and verified-custom-domain `http.route` Interfaces                                                |
 | GA contract | ObjectBucket plus the documented R2/S3 control and data subset                                                |
 | GA contract | provider `5.19.1` selected subset for KVStore, SQLDatabase, Queue, and DurableWorkflow                        |
