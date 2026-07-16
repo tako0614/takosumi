@@ -51,6 +51,7 @@ import type {
   ResourceShapeStore,
   ResourceShapeStores,
   SpacePolicyStore,
+  TargetPoolCreateResult,
   TargetPoolStore,
 } from "./stores.ts";
 import {
@@ -508,6 +509,23 @@ class D1TargetPoolStore implements TargetPoolStore {
   readonly #table = names.targetPools;
 
   constructor(private readonly db: D1Like) {}
+
+  async create(record: TargetPoolRecord): Promise<TargetPoolCreateResult> {
+    const result = await this.db
+      .prepare(namedSpecCreateSql(this.#table, "?"))
+      .bind(...namedSpecParameters(record))
+      .run();
+    if ((result.meta?.changes ?? 0) > 0) {
+      return { status: "created", record };
+    }
+    const existing =
+      (await this.getByName(record.spaceId, record.name)) ??
+      (await this.get(record.id));
+    if (!existing) {
+      throw new Error("TargetPool create conflict has no durable winner");
+    }
+    return { status: "conflict", record: existing };
+  }
 
   async upsert(record: TargetPoolRecord): Promise<TargetPoolRecord> {
     await this.db
@@ -1197,6 +1215,13 @@ function namedSpecUpsertSql(table: string): string {
     spec_json = excluded.spec_json,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at`;
+}
+
+function namedSpecCreateSql(table: string, placeholder: "?"): string {
+  return `insert into ${table} (
+    id, space_id, name, spec_json, created_at, updated_at
+  ) values (${[placeholder, placeholder, placeholder, placeholder, placeholder, placeholder].join(", ")})
+  on conflict do nothing`;
 }
 
 function namedSpecParameters(
