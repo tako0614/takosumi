@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -345,6 +346,62 @@ func TestObjectBucketStorageClassDefaultsAndMapsToWireSpec(t *testing.T) {
 				t.Fatalf("expected storageClass %q, got %#v", tt.want, got)
 			}
 		})
+	}
+}
+
+func TestObjectBucketCreateCanonicalizesUnknownStorageClassAfterApply(t *testing.T) {
+	var desired client.Resource
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/resources/preview" {
+			if err := json.NewDecoder(r.Body).Decode(&desired); err != nil {
+				t.Fatalf("decode preview: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(client.PreviewResourceResult{
+				Resource:   desired,
+				PlanDigest: "sha256:plan",
+				SpecDigest: "sha256:spec",
+			})
+			return
+		}
+		if r.Method != http.MethodPut || r.URL.Path != "/v1/resources/ObjectBucket/assets" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&desired); err != nil {
+			t.Fatalf("decode apply: %v", err)
+		}
+		desired.Status = &client.Status{
+			Phase: "Ready",
+			Resolution: client.Resolution{
+				SelectedImplementation: "fixture",
+				Target:                 "fixture-target",
+				Portability:            "portable",
+			},
+		}
+		_ = json.NewEncoder(w).Encode(desired)
+	}))
+	defer server.Close()
+
+	resource := &serviceShapeResource{
+		data: &providerData{client: client.New(server.URL, "", server.Client())},
+		cfg:  serviceShapeConfig{kind: client.KindObjectBucket, spec: specObjectBucket},
+	}
+	plan := serviceShapeModel{
+		Name:         types.StringValue("assets"),
+		Space:        types.StringValue("compat"),
+		StorageClass: types.StringUnknown(),
+		Interfaces:   types.SetNull(types.StringType),
+	}
+	var diagnostics diag.Diagnostics
+	resource.put(context.Background(), &plan, &diagnostics)
+	if diagnostics.HasError() {
+		t.Fatalf("put diagnostics: %v", diagnostics)
+	}
+	if plan.StorageClass.IsUnknown() || plan.StorageClass.ValueString() != "standard" {
+		t.Fatalf("expected known standard state after apply, got %#v", plan.StorageClass)
+	}
+	if got := desired.Spec["storageClass"]; got != "standard" {
+		t.Fatalf("expected standard wire default, got %#v", got)
 	}
 }
 

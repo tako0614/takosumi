@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "kind": "takosumi.provider-candidate-delta-policy@v1",
+  "baseline": {
+    "version": "1.0.0",
+    "identity": "1.0.0-state-identity.json",
+    "identitySha256": "568ca5b286c646c0308dd0837274458aba8dea2f5018bdb32fb12c6093d2bf4a"
+  },
+  "candidate": {
+    "version": "1.1.0",
+    "semverChange": "minor",
+    "classification": "correction-plus-additive-features"
+  },
+  "additiveResources": [
+    "takosumi_durable_workflow",
+    "takosumi_schedule",
+    "takosumi_stateful_actor_namespace",
+    "takosumi_vector_index"
+  ],
+  "additiveAttributes": [
+    "takosumi_edge_worker.artifact_ref",
+    "takosumi_object_bucket.storage_class",
+    "takosumi_target_pool.target.implementation.module_input_mappings_json",
+    "takosumi_target_pool.target.implementation.module_outputs_json",
+    "takosumi_target_pool.target.implementation.module_template",
+    "takosumi_target_pool.target.implementation.provider_alias",
+    "takosumi_target_pool.target.implementation.provider_config_json",
+    "takosumi_target_pool.target.implementation.provider_source"
+  ],
+  "additiveSchemaIdentity": {
+    "normalization": "opentofu-structural-v1-plus-provider-source-v1",
+    "resources": {
+      "takosumi_durable_workflow": {
+        "schemaVersion": 0,
+        "structuralSha256": "3863abdde64e8497d2bbb9d307f8b854f6dc66dbd5dae360c29902a2c78a7201"
+      },
+      "takosumi_schedule": {
+        "schemaVersion": 0,
+        "structuralSha256": "2774880fa203e632a8e7d6acacaebfd345718917eeda52c90938e9da179a09c3"
+      },
+      "takosumi_stateful_actor_namespace": {
+        "schemaVersion": 0,
+        "structuralSha256": "06b9f2c4d2889b38b2681d4b81a3ea23643faf67aa094e016aa9f8033e4cbeff"
+      },
+      "takosumi_vector_index": {
+        "schemaVersion": 0,
+        "structuralSha256": "ad7685fc52be5e4ea706c6674481cb6e868721c7a2d0af319cc4a57b71c34974"
+      }
+    },
+    "attributes": {
+      "takosumi_edge_worker.artifact_ref": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612",
+      "takosumi_object_bucket.storage_class": "dfd8da8b7deef3ec0105ec347d365ece72c196b206b2fbd1bc4aab99e04e999c",
+      "takosumi_target_pool.target.implementation.module_input_mappings_json": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612",
+      "takosumi_target_pool.target.implementation.module_outputs_json": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612",
+      "takosumi_target_pool.target.implementation.module_template": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612",
+      "takosumi_target_pool.target.implementation.provider_alias": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612",
+      "takosumi_target_pool.target.implementation.provider_config_json": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612",
+      "takosumi_target_pool.target.implementation.provider_source": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612"
+    },
+    "implementationSources": [
+      { "path": "provider/internal/provider/artifact_source.go", "sha256": "b990e156772b9397d1198653c618847a3508b8dbc9691967e959a6c69551c09e" },
+      { "path": "provider/internal/provider/edge_worker_resource.go", "sha256": "7ea4d23f24527cfd2c1f94bc50cead199ec3cfc83688caa651dc29777e3d1e48" },
+      { "path": "provider/internal/provider/provider.go", "sha256": "5f27fdf08850fbce5f582c02d4ed841f9e4c8c371bacb6c95ef5d9004d38fe88" },
+      { "path": "provider/internal/provider/resource_connection.go", "sha256": "760f2e7e2b1dbde8180df7a4d82a348661fa90be3fd01f981d013e0ccea9f997" },
+      { "path": "provider/internal/provider/resource_helpers.go", "sha256": "5dea2445416c4d1b0d16223d8a448485f96c8d401fff2e5e2152184d9a02fe39" },
+      { "path": "provider/internal/provider/service_shape_resources.go", "sha256": "de473886497eaf1d7ab8b827b4a4ce80886588b7f21629366bae9b3b83378e88" },
+      { "path": "provider/internal/provider/service_shape_validation.go", "sha256": "435d48dbc29134572b6d5eabf6e3102788e96451d0d055b085b25f1a87c9992f" },
+      { "path": "provider/internal/provider/target_pool_resource.go", "sha256": "539f8d4945f7c266a04b53c34c4bb6e49b1f034380a51d555389a6d077a45c76" },
+      { "path": "provider/internal/provider/validators.go", "sha256": "8e385911dbad76786e34dfce127bef91e8a6aad73437c97ff51db36bfe10b9aa" }
+    ]
+  },
+  "patchFeatureDecision": {
+    "status": "resolved-move-to-minor",
+    "admitted": false,
+    "requiredOutcome": "The feature-bearing 1.0.1 patch is rejected; ship the additive candidate only as 1.1.0 after all remaining release gates pass."
+  },
+  "stateCompatibility": {
+    "oldStateNoOpRequired": true,
+    "observeRequired": true,
+    "rollbackRequired": true,
+    "status": "proof-complete",
+    "evidence": {
+      "command": "bun run provider:compatibility:state-proof",
+      "credentialEnvironment": "explicit-allowlist-derived-empty",
+      "exactPhaseRequestDeltas": true,
+      "currentOmittedObjectBucketCreateCanonicalized": true,
+      "coveredResources": [
+        "takosumi_container_service",
+        "takosumi_edge_worker",
+        "takosumi_kv_store",
+        "takosumi_object_bucket",
+        "takosumi_queue",
+        "takosumi_sql_database",
+        "takosumi_target_pool"
+      ],
+      "remainingResources": []
+    }
+  },
+  "terraformCompatibility": {
+    "status": "proof-command-implemented",
+    "command": "PATH=<terraform-directory>:$PATH bun run provider:compatibility:state-proof",
+    "openTofuAddress": "registry.opentofu.org/takosjp/takosumi",
+    "terraformAddress": "registry.terraform.io/takosjp/takosumi",
+    "addressesTreatedAsInterchangeable": false,
+    "releaseEvidenceStatus": "proof-run-required"
+  },
+  "releaseEligibility": "blocked"
+}
