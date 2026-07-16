@@ -126,10 +126,14 @@ forms installed. A composition may explicitly pin a trusted Form Package,
 Host Extension/Adapter, target implementation, and FormActivation.
 
 Definition publication, host installation, executable implementation,
-FormActivation, and closed ServiceOffering are independent states. Structured
-discovery reports each state and a bounded reason without exposing private
-manager, credential, or capacity data. A provider knowing a static schema does
-not imply that the selected host offers it.
+FormActivation, and closed ServiceOffering are independent states. Portable
+host discovery reports definition known, installed, executable, activated, and
+available-to-principal with bounded reasons. A separate closed Cloud catalog
+projection reports customer-visible ServiceOffering/version, region, SKU,
+price, and availability keyed by the same exact FormRef and FormActivation.
+The portable wire contains no commercial field, and neither response exposes a
+private manager, credential, or raw capacity. A provider knowing a static
+schema does not imply that the selected host offers it.
 
 `FormRef` contains `apiVersion`, `kind`, `definitionVersion`, and
 `schemaDigest`. Stored Resources resolve to an exact immutable FormRef;
@@ -1985,12 +1989,16 @@ eligibleTargetPoolClasses
 deprecation
 ```
 
-Definition known, installed, executable, activated, and Cloud-offered are not
-synonyms. Public discovery omits manager identity, credentials, private target
-configuration, and raw capacity. The existing `resources: Record<string,
-boolean>` document below is a current compatibility view. Keep it only while
-supported clients require it, derive it from structured state, and remove it
-only after measured usage and migration evidence.
+Definition known, installed, executable, and activated are not synonyms.
+Portable/public host discovery also computes available-to-principal, but does
+not contain `cloudOffered`, SKU, price, or other commercial fields. A separate
+closed Cloud catalog projection can report the customer-visible offering and
+commercial availability for the same exact FormRef and FormActivation. Both
+surfaces omit manager identity, credentials, private target configuration, and
+raw capacity. The existing `resources: Record<string, boolean>` document below
+is a current compatibility view. Keep it only while supported clients require
+it, derive it from structured host state, and remove it only after measured
+usage and migration evidence.
 
 Providers and tools branch on capabilities, not edition names.
 Adapter/target capabilities report what the operator has enabled; they do not
@@ -2457,6 +2465,7 @@ Takosumi software GA requires:
 plain OpenTofu Stack flow remains conformant
 zero-form Core can run a plain OpenTofu Capsule without any portable project or Cloud dependency
 installed Form Packages are signed, exact, retained, and independently versioned
+every GA Service Form exact FormRef passes its provider-neutral semantic audit and canonical positive/negative host/provider conformance; the legacy compatibility package alone does not qualify it as a standard form
 every form-backed Resource and ResolutionLock resolves to an exact immutable FormRef
 definition / installed / executable / activated discovery states and reason codes are truthful
 /v1/resources is the only Resource lifecycle authority
@@ -2476,6 +2485,7 @@ Takosumi Cloud may call a Service Form Stable only when it additionally proves:
 
 ```text
 an active versioned ServiceOffering pins exact FormRef + generic FormActivation
+the offered exact FormRef is an approved standard definition with portable semantic and conformance evidence, not only a legacy compatibility definition
 installed definition + executable implementation + target/manager readiness
 immutable implementation fingerprint and PriceCatalog/SKU versions
 preview -> DeploymentQuote with immutable request/resolution/price binding
