@@ -108,7 +108,7 @@ describe("provider release compatibility", () => {
       version: "1.1.0",
       semverChange: "minor",
     });
-    expect(policy.additiveResources).toHaveLength(4);
+    expect(policy.additiveResources).toHaveLength(5);
     expect(policy.additiveAttributes).toHaveLength(8);
     expect(policy.patchFeatureDecision).toMatchObject({
       status: "resolved-move-to-minor",
@@ -370,6 +370,7 @@ describe("provider release compatibility", () => {
     expect(result.schemaCompatibility.compatible).toBe(true);
     expect(result.schemaCompatibility.additiveResources).toEqual([
       "takosumi_durable_workflow",
+      "takosumi_interface",
       "takosumi_schedule",
       "takosumi_stateful_actor_namespace",
       "takosumi_vector_index",

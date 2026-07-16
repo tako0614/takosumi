@@ -14,6 +14,17 @@ import type {
   CapsuleInterfaceBindingProposal,
   CapsuleInterfaceBlueprint,
 } from "takosumi-contract/interfaces";
+import {
+  FILE_HANDLER_INTERFACE_TYPE,
+  FILE_HANDLER_INTERFACE_VERSION,
+  FILE_HANDLER_OPEN_PERMISSION,
+  MCP_SERVER_INTERFACE_TYPE,
+  MCP_SERVER_INTERFACE_VERSION,
+  MCP_SERVER_INVOKE_PERMISSION,
+  UI_SURFACE_INTERFACE_TYPE,
+  UI_SURFACE_INTERFACE_VERSION,
+  UI_SURFACE_OPEN_PERMISSION,
+} from "takosumi-contract";
 import type {
   InstallConfig,
   InstallConfigVariablePresentation,
@@ -64,6 +75,8 @@ function uiBlueprint(input: {
   readonly name?: string;
   readonly title: string;
   readonly outputName: string;
+  /** `document.display.icon`: root-relative runtime path or short glyph. */
+  readonly icon?: string;
 }): CapsuleInterfaceBlueprint {
   const key = input.key ?? "launcher";
   return {
@@ -71,11 +84,14 @@ function uiBlueprint(input: {
     name: input.name ?? `${input.app}.launcher`,
     labels: { app: input.app },
     spec: {
-      type: "interface.ui.surface",
-      version: "1",
+      type: UI_SURFACE_INTERFACE_TYPE,
+      version: UI_SURFACE_INTERFACE_VERSION,
       document: {
         launcher: true,
-        display: { title: input.title },
+        display: {
+          title: input.title,
+          ...(input.icon !== undefined ? { icon: input.icon } : {}),
+        },
       },
       inputs: {
         url: { source: "capsule_output", outputName: input.outputName },
@@ -83,7 +99,11 @@ function uiBlueprint(input: {
       access: { visibility: "workspace" },
     },
     bindings: [
-      installingPrincipalBinding(`${key}.installer`, ["ui.open"], "none"),
+      installingPrincipalBinding(
+        `${key}.installer`,
+        [UI_SURFACE_OPEN_PERMISSION],
+        "none",
+      ),
     ],
   };
 }
@@ -98,8 +118,8 @@ function mcpBlueprint(input: {
     name: `${input.app}.mcp`,
     labels: { app: input.app },
     spec: {
-      type: "mcp.server",
-      version: "2025-11-25",
+      type: MCP_SERVER_INTERFACE_TYPE,
+      version: MCP_SERVER_INTERFACE_VERSION,
       document: {
         transport: "streamable-http",
         display: { title: input.title },
@@ -116,7 +136,11 @@ function mcpBlueprint(input: {
       },
     },
     bindings: [
-      installingPrincipalBinding("mcp.installer", ["mcp.invoke"], "oauth2"),
+      installingPrincipalBinding(
+        "mcp.installer",
+        [MCP_SERVER_INVOKE_PERMISSION],
+        "oauth2",
+      ),
     ],
   };
 }
@@ -176,8 +200,8 @@ function fileHandlerBlueprint(input: {
     name: input.name,
     labels: { app: "takos-office" },
     spec: {
-      type: "interface.file.handler",
-      version: "1",
+      type: FILE_HANDLER_INTERFACE_TYPE,
+      version: FILE_HANDLER_INTERFACE_VERSION,
       document: {
         display: { title: input.title },
         mimeTypes: [input.mimeType],
@@ -194,7 +218,7 @@ function fileHandlerBlueprint(input: {
     bindings: [
       installingPrincipalBinding(
         `${input.key}.installer`,
-        ["file.open"],
+        [FILE_HANDLER_OPEN_PERMISSION],
         "none",
       ),
     ],
@@ -418,6 +442,7 @@ const officeConfig = {
       name: "takos-office.docs",
       title: "Takos Docs",
       outputName: "docs_url",
+      icon: "/docs/icons/docs.svg",
     }),
     uiBlueprint({
       app: "takos-office",
@@ -425,6 +450,7 @@ const officeConfig = {
       name: "takos-office.slide",
       title: "Takos Slide",
       outputName: "slide_url",
+      icon: "/slide/icons/slide.svg",
     }),
     uiBlueprint({
       app: "takos-office",
@@ -432,6 +458,7 @@ const officeConfig = {
       name: "takos-office.sheet",
       title: "Takos Sheet",
       outputName: "sheet_url",
+      icon: "/sheet/icons/excel.svg",
     }),
     fileHandlerBlueprint({
       key: "docs-file",
@@ -534,6 +561,10 @@ function yuruConfig(input: {
         app: input.app,
         title: input.title,
         outputName: "launch_url",
+        icon:
+          input.app === "yurucommu"
+            ? "/icons/yurucommu.svg"
+            : "/yurumeet-logo.png",
       }),
     ],
     createdAt: REFERENCE_CONFIG_TIMESTAMP,
@@ -613,6 +644,7 @@ const storageConfig = {
       app: "takos-storage",
       title: "Takos Storage",
       outputName: "launch_url",
+      icon: "/icons/takos-storage.svg",
     }),
     capabilityBlueprint({
       app: "takos-storage",
@@ -723,6 +755,7 @@ const gitConfig = {
       app: "takos-git",
       title: "Takos Git",
       outputName: "launch_url",
+      icon: "/icons/takos-git.svg",
     }),
     capabilityBlueprint({
       app: "takos-git",

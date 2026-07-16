@@ -162,11 +162,14 @@ func (p *takosumiProvider) Resources(_ context.Context) []func() resource.Resour
 		NewStatefulActorNamespaceResource,
 		NewScheduleResource,
 		NewTargetPoolResource,
+		NewInterfaceResource,
 	}
 }
 
 func (p *takosumiProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return nil
+	return []func() datasource.DataSource{
+		NewInterfaceDataSource,
+	}
 }
 
 // configureClient builds the client, discovers capabilities, and enforces the

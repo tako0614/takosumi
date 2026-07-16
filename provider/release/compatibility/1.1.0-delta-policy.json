@@ -13,6 +13,7 @@
   },
   "additiveResources": [
     "takosumi_durable_workflow",
+    "takosumi_interface",
     "takosumi_schedule",
     "takosumi_stateful_actor_namespace",
     "takosumi_vector_index"
@@ -33,6 +34,10 @@
       "takosumi_durable_workflow": {
         "schemaVersion": 0,
         "structuralSha256": "3863abdde64e8497d2bbb9d307f8b854f6dc66dbd5dae360c29902a2c78a7201"
+      },
+      "takosumi_interface": {
+        "schemaVersion": 0,
+        "structuralSha256": "c191aee41bf37c546133213fa7c133b5b3865a7d2bca09eee4000cc9e94258c6"
       },
       "takosumi_schedule": {
         "schemaVersion": 0,
@@ -60,13 +65,15 @@
     "implementationSources": [
       { "path": "provider/internal/provider/artifact_source.go", "sha256": "b990e156772b9397d1198653c618847a3508b8dbc9691967e959a6c69551c09e" },
       { "path": "provider/internal/provider/edge_worker_resource.go", "sha256": "7ea4d23f24527cfd2c1f94bc50cead199ec3cfc83688caa651dc29777e3d1e48" },
-      { "path": "provider/internal/provider/provider.go", "sha256": "5f27fdf08850fbce5f582c02d4ed841f9e4c8c371bacb6c95ef5d9004d38fe88" },
+      { "path": "provider/internal/provider/interface_data_source.go", "sha256": "dd3ec243301750f6ea64dad17419edeab47db303821629713258381ab1b3bc7f" },
+      { "path": "provider/internal/provider/interface_resource.go", "sha256": "739e17c2a485e20a09b55b60768dffb3d671150a4d3841fcc861b44173c1155d" },
+      { "path": "provider/internal/provider/provider.go", "sha256": "9802e83ec76fa9af99d94f1a8fbcf6c1b2099d050a181233337896d85212114b" },
       { "path": "provider/internal/provider/resource_connection.go", "sha256": "760f2e7e2b1dbde8180df7a4d82a348661fa90be3fd01f981d013e0ccea9f997" },
       { "path": "provider/internal/provider/resource_helpers.go", "sha256": "5dea2445416c4d1b0d16223d8a448485f96c8d401fff2e5e2152184d9a02fe39" },
       { "path": "provider/internal/provider/service_shape_resources.go", "sha256": "de473886497eaf1d7ab8b827b4a4ce80886588b7f21629366bae9b3b83378e88" },
       { "path": "provider/internal/provider/service_shape_validation.go", "sha256": "435d48dbc29134572b6d5eabf6e3102788e96451d0d055b085b25f1a87c9992f" },
       { "path": "provider/internal/provider/target_pool_resource.go", "sha256": "539f8d4945f7c266a04b53c34c4bb6e49b1f034380a51d555389a6d077a45c76" },
-      { "path": "provider/internal/provider/validators.go", "sha256": "8e385911dbad76786e34dfce127bef91e8a6aad73437c97ff51db36bfe10b9aa" }
+      { "path": "provider/internal/provider/validators.go", "sha256": "5aeb85025842f7aa5aeeb5cc3b65fdfea3d3c7d9dca83ca4923b636fe5e55971" }
     ]
   },
   "patchFeatureDecision": {

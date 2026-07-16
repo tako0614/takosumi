@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"unicode"
@@ -77,6 +78,58 @@ func (v stringTokenValidator) ValidateString(_ context.Context, req validator.St
 	}
 	if strings.ContainsFunc(val, unicode.IsSpace) {
 		resp.Diagnostics.AddAttributeError(req.Path, "Invalid value", fmt.Sprintf("%q contains whitespace", val))
+	}
+}
+
+// stringJSONValidator validates that a configured string parses as JSON. When
+// requireObject is true the top-level value must be a JSON object.
+type stringJSONValidator struct {
+	requireObject bool
+}
+
+// StringJSON returns a validator.String accepting any valid JSON value.
+func StringJSON() validator.String {
+	return stringJSONValidator{}
+}
+
+// StringJSONObject returns a validator.String requiring a JSON object.
+func StringJSONObject() validator.String {
+	return stringJSONValidator{requireObject: true}
+}
+
+func (v stringJSONValidator) Description(_ context.Context) string {
+	if v.requireObject {
+		return "value must be a JSON object"
+	}
+	return "value must be valid JSON"
+}
+
+func (v stringJSONValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v stringJSONValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	raw := []byte(req.ConfigValue.ValueString())
+	if v.requireObject {
+		var decoded map[string]any
+		if err := json.Unmarshal(raw, &decoded); err != nil || decoded == nil {
+			resp.Diagnostics.AddAttributeError(
+				req.Path,
+				"Invalid JSON object",
+				"value must be a JSON object, e.g. \"{}\" or jsonencode({...}).",
+			)
+		}
+		return
+	}
+	if !json.Valid(raw) {
+		resp.Diagnostics.AddAttributeError(
+			req.Path,
+			"Invalid JSON",
+			"value must be valid JSON, e.g. produced by jsonencode(...).",
+		)
 	}
 }
 

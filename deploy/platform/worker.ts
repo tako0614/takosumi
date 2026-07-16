@@ -92,6 +92,11 @@ import {
   managedProviderRunTokenSecret,
   verifyManagedProviderRunToken,
 } from "../../core/shared/managed_provider_tokens.ts";
+import {
+  capsuleRunTokenSecret,
+  isCapsuleRunToken,
+  verifyCapsuleRunToken,
+} from "../../core/shared/capsule_run_tokens.ts";
 import type { TakosumiOperations } from "../../core/bootstrap.ts";
 import {
   OpenTofuControllerError,
@@ -752,6 +757,22 @@ async function platformResourceShapeAuthorizedRequest(
   if (interfaceAccessFailure) {
     return { ok: false, response: interfaceAccessFailure };
   }
+  if (
+    session.authKind === "capsule-run-token" &&
+    !isPlatformInterfaceApiPath(url.pathname)
+  ) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "access_denied",
+          error_description:
+            "a Capsule run credential can access only the Interface API",
+        },
+        { status: 403 },
+      ),
+    };
+  }
   if (!isPlatformInterfaceApiPath(url.pathname)) {
     const resourceAccessFailure = platformResourceShapeAccessFailure(
       request,
@@ -955,6 +976,10 @@ function platformInterfaceAccessFailure(
   const scopes = new Set(session.scopes ?? []);
 
   if (session.authKind === "session") return undefined;
+
+  // Capsule run tokens reach the shared Interface API only. Core then fences
+  // them to their own Capsule and denies all binding authority.
+  if (session.authKind === "capsule-run-token") return undefined;
 
   if (session.authKind === "oauth-access-token") {
     const mayRead =
@@ -1165,18 +1190,27 @@ function platformResourceShapeActorContext(
   workspaceId: string,
 ): ActorContext {
   const runtimePrincipal = session.authKind === "oauth-access-token";
+  const capsuleRun = session.authKind === "capsule-run-token";
   return {
     actorAccountId:
       safePlatformExtensionContextId(session.subject) ??
       `${session.authKind ?? "session"}:resource-shape`,
     roles: runtimePrincipal
       ? ["runtime-principal"]
-      : session.scopes?.includes("admin")
-        ? ["owner"]
-        : ["operator"],
+      : capsuleRun
+        ? ["capsule-runtime"]
+        : session.scopes?.includes("admin")
+          ? ["owner"]
+          : ["operator"],
     requestId: crypto.randomUUID(),
     workspaceId,
-    ...(session.authKind === "service-token"
+    ...(capsuleRun && session.capsuleId
+      ? {
+          capsuleId: session.capsuleId,
+          capsuleRunMutable: session.capsuleRunMutable === true,
+        }
+      : {}),
+    ...(session.authKind === "service-token" || capsuleRun
       ? { principalKind: "service", serviceId: session.subject }
       : { principalKind: "account" }),
     ...(session.scopes && session.scopes.length > 0
@@ -2139,9 +2173,11 @@ export interface PlatformExtensionSessionContext {
     | "interface-oauth-token"
     | "oauth-access-token"
     | "personal-access-token"
+    | "capsule-run-token"
     | "session";
   readonly subject?: string;
   readonly capsuleId?: string;
+  readonly capsuleRunMutable?: boolean;
   readonly workspaceId?: string;
   readonly audience?: string;
   readonly interfaceId?: string;
@@ -3191,6 +3227,16 @@ export async function verifyPlatformExtensionSession(
     return managedProviderSession;
   }
 
+  // A Capsule run credential is accepted only on the routeless control-plane
+  // path. A platform extension route (compatibility/AI/managed profile) must
+  // reject it before its generic scope handling can run.
+  const capsuleRunToken = platformExtensionCapsuleRunToken(request);
+  if (capsuleRunToken) {
+    return route
+      ? { authenticated: false }
+      : await verifyPlatformCapsuleRunSession(env, capsuleRunToken);
+  }
+
   if (opaqueBearer) {
     const tokenSession = await verifyPlatformExtensionBearerToken(
       request,
@@ -3465,6 +3511,31 @@ function platformExtensionManagedProviderRunToken(
 ): string | undefined {
   const token = bearerValue(request.headers.get("authorization"));
   return token && isManagedProviderRunToken(token) ? token : undefined;
+}
+
+function platformExtensionCapsuleRunToken(
+  request: Request,
+): string | undefined {
+  const token = bearerValue(request.headers.get("authorization"));
+  return token && isCapsuleRunToken(token) ? token : undefined;
+}
+
+async function verifyPlatformCapsuleRunSession(
+  env: CloudflareWorkerEnv,
+  token: string,
+): Promise<PlatformExtensionSessionContext> {
+  const secret = capsuleRunTokenSecret(env as Record<string, unknown>);
+  if (!secret) return { authenticated: false };
+  const verified = await verifyCapsuleRunToken(token, { secret });
+  if (!verified.ok) return { authenticated: false };
+  return {
+    authenticated: true,
+    authKind: "capsule-run-token",
+    subject: verified.payload.sub,
+    workspaceId: verified.payload.workspaceId,
+    capsuleId: verified.payload.capsuleId,
+    capsuleRunMutable: verified.payload.mutable,
+  };
 }
 
 function platformExtensionRouteBaseUrl(
