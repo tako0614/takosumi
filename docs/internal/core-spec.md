@@ -33,10 +33,10 @@ through an additive migration.
 The accepted target contract is:
 
 ```text
-Takoform portable Service Form project (takoform.com, github.com/takosjp/terraform-provider-takoform):
+Takoform portable Service Form project (takoform.com, github.com/tako0614/terraform-provider-takoform):
   Service Form / FormRef / data-only Form Package
   forms.takoform.com/v1alpha1 interoperability
-  registry.terraform.io/takosjp/takoform typed provider / conformance
+  registry.terraform.io/tako0614/takoform typed provider / conformance
 
 Takosumi OSS:
   zero-form-capable host
@@ -50,9 +50,9 @@ Takosumi Cloud closed:
 ```
 
 The approved public identities are `Takoform`, `takoform.com`,
-`github.com/takosjp/terraform-provider-takoform`, `forms.takoform.com/v1alpha1`, and
-`registry.terraform.io/takosjp/takoform` with the `takoform_` prefix. The HCP Terraform
-organization `takoform` manages the GitHub-account-derived `takosjp` Public Registry namespace. Source
+`github.com/tako0614/terraform-provider-takoform`, `forms.takoform.com/v1alpha1`, and
+`registry.terraform.io/tako0614/takoform` with the `takoform_` prefix. The HCP Terraform
+organization `takoform` manages the GitHub-account-derived `tako0614` Public Registry namespace. Source
 publication is authorized; provider/package releases still require signing and
 real-install evidence. The current `takosumi.dev/v1alpha1`, `ResourceShape`,
 `takosumi_*` form resources, `/v1/resources`, IDs, kinds, imports, database
