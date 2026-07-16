@@ -161,6 +161,80 @@ test("HTTP OpenTofu runner preserves source sync reuse and repository metadata",
   }
 });
 
+test("HTTP OpenTofu runner keeps an unchanged object-storage source archive without refetching it", async () => {
+  const archiveBytes = new TextEncoder().encode("reused source archive");
+  const archiveDigest = await sha256(archiveBytes);
+  const resolvedCommit = "0123456789abcdef0123456789abcdef01234567";
+  const archiveRef = "workspaces/workspace_1/sources/source_1/previous.tar.zst";
+  const reuseSnapshot = {
+    id: "snapshot_previous",
+    resolvedCommit,
+    archiveRef,
+    archiveDigest,
+    archiveSizeBytes: archiveBytes.byteLength,
+  };
+  const requests: string[] = [];
+  const writes: Array<{ key: string; bytes: Uint8Array }> = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      requests.push(`${request.method} ${url.pathname}`);
+      if (request.method === "POST" && url.pathname === "/runs/sync_reuse") {
+        return Response.json({
+          resolvedCommit,
+          archiveDigest,
+          archiveSizeBytes: archiveBytes.byteLength,
+          sourceArchive: {
+            kind: "object-storage",
+            ref: archiveRef,
+            digest: archiveDigest,
+            sizeBytes: archiveBytes.byteLength,
+            reusedFromSnapshotId: reuseSnapshot.id,
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: {
+        write: async (key, bytes) => writes.push({ key, bytes }),
+        read: async () => {
+          throw new Error("not used");
+        },
+      },
+      baseUrl: server.url.href,
+    });
+
+    const result = await runner.sourceSync({
+      runId: "sync_reuse",
+      workspaceId: "workspace_1",
+      sourceId: "source_1",
+      source: {
+        url: "https://example.test/capsule.git",
+        ref: "main",
+        path: ".",
+      },
+      archiveRef: "workspaces/workspace_1/sources/source_1/replacement.tar.zst",
+      reuseSnapshot,
+    });
+
+    expect(result).toEqual({
+      resolvedCommit,
+      archiveDigest,
+      archiveSizeBytes: archiveBytes.byteLength,
+      archiveRef,
+    });
+    expect(requests).toEqual(["POST /runs/sync_reuse"]);
+    expect(writes).toHaveLength(0);
+  } finally {
+    server.stop(true);
+  }
+});
+
 function sourceSnapshot(archiveDigest: string): SourceSnapshot {
   return {
     id: "snap_1",
