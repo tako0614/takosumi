@@ -73,17 +73,23 @@ pre-v1 provider endpoint wording may still appear in migration notes or
 internal implementation names, but it is not the current public surface.
 
 Takosumi does not replace OpenTofu or Terraform providers. Existing providers run as-is; Takosumi records the reviewable
-and auditable control-plane layer around those operations. OSS Takosumi owns the Resource Shape API, Compatibility API
-framework, and Adapter system. Official managed target pools, Takosumi-owned native resource internals, enforced
-billing, support/SLA, and official resource backends belong to Takosumi for Operator / Takosumi Cloud.
+and auditable control-plane layer around those operations. OSS Takosumi is an optional host that owns the current
+Resource Shape compatibility API, its sole Resource / Run / state / audit ledger, Resolver / Planner / Reconciler,
+Target / Policy / credential authority, Compatibility API framework, Adapter system, and generic FormActivation.
+The adopted target assigns portable Service Forms, exact FormRefs, data-only Form Packages, conformance, and the typed
+form provider to an independently released OSS project. Takosumi Core still runs plain OpenTofu Stacks with zero Form
+Packages installed. Official managed target pools, Takosumi-owned native resource internals, exact ServiceOfferings,
+enforced billing, support/SLA, and official resource backends belong to Takosumi for Operator / Takosumi Cloud.
+`Resource Shape` remains the current API/provider/state name until additive FormRef persistence and compatibility
+migration evidence exist.
 
 ## Editions
 
-| Edition                   | What it is                                                                                                                                                                                                                                                        |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Takosumi OSS**          | This repository: Git-based OpenTofu/Terraform control plane, Resource Shape API, Compatibility API framework, Adapter system, ProviderConnections, runner pool, state/output/audit, and disabled/showback billing that never blocks apply.                        |
-| **Takosumi for Operator** | OSS/commercial operator edition for hosting Takosumi for users or customers: multi-tenant customer management, quota/metering/plans, DB-backed operator configuration, CLI/API/runbook operations, managed target catalog, support tooling, and commercial audit. |
-| **Takosumi Cloud**        | The official hosted Takosumi for Operator at `app.takosumi.com`, with official managed targets, Takosumi-owned native resource internals, AI Gateway, Stripe-enforced billing, quota, usage, support, abuse controls, and SLA.                                    |
+| Edition                   | What it is                                                                                                                                                                                                                                                                                                      |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Takosumi OSS**          | This repository: Git-based OpenTofu/Terraform control plane, optional zero-form-capable Service Form host (current Resource Shape compatibility API), Compatibility API framework, Adapter system, ProviderConnections, runner pool, state/output/audit, and disabled/showback billing that never blocks apply. |
+| **Takosumi for Operator** | OSS/commercial operator edition for hosting Takosumi for users or customers: multi-tenant customer management, quota/metering/plans, DB-backed operator configuration, CLI/API/runbook operations, managed target catalog, support tooling, and commercial audit.                                               |
+| **Takosumi Cloud**        | The official hosted Takosumi for Operator at `app.takosumi.com`, with official managed targets, Takosumi-owned native resource internals, AI Gateway, Stripe-enforced billing, quota, usage, support, abuse controls, and SLA.                                                                                  |
 
 The dependency direction is **one-way Cloud -> OSS**: the hosted Cloud operation consumes OSS contracts and composition
 points. OSS ships and runs with nothing from the hosted Cloud operation present.

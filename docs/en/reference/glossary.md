@@ -7,54 +7,63 @@ See the [Model reference](./model.md) for details.
 
 Normal screens do not expose the internal model directly; they use these words instead.
 
-| UI word | Internal term | Meaning |
-| --- | --- | --- |
-| Service / App | Capsule | An app, worker, API, site, storage, etc. that you host |
-| Connection | ProviderConnection / ProviderBinding | An account link to Cloudflare / AWS / GCP and others |
-| Changes | plan (Run) | The list of changes you review before applying |
-| History | Run records / AuditEvent | Who changed what, and when |
-| Restore point | StateVersion | A saved state you can go back to |
+| UI word       | Internal term                        | Meaning                                                |
+| ------------- | ------------------------------------ | ------------------------------------------------------ |
+| Service / App | Capsule                              | An app, worker, API, site, storage, etc. that you host |
+| Connection    | ProviderConnection / ProviderBinding | An account link to Cloudflare / AWS / GCP and others   |
+| Changes       | plan (Run)                           | The list of changes you review before applying         |
+| History       | Run records / AuditEvent             | Who changed what, and when                             |
+| Restore point | StateVersion                         | A saved state you can go back to                       |
 
 ## Core words
 
-| Term | Meaning |
-| --- | --- |
-| Takosumi | Software that deploys and manages OpenTofu/Terraform modules from Git through a plan → review → apply flow. |
-| OpenTofu | An open-source tool (Terraform-compatible) for defining infrastructure as code. Takosumi is the side that runs it. |
-| Workspace | The boundary for a user or team. Projects, connections, secrets, and history are isolated inside it. |
-| Project | One product, service, or infrastructure group inside a Workspace. |
-| Capsule | One OpenTofu/Terraform module execution unit, usually sourced from a Git URL + ref + path. |
-| Source | Where a Capsule comes from: Git URL / branch / commit / directory. |
-| Run | The record of one execution. Operations such as plan / apply / destroy are stored with logs, results, and the actor. |
-| plan / apply / destroy | plan computes and shows what will change, apply makes the change, destroy removes resources. Each is recorded as a Run. |
-| StateVersion | The state version saved on every apply. Usable as a restore point. |
-| Output | An ordinary root-module return value captured via `tofu output -json`. It may feed another Capsule's OpenTofu input or an explicit Interface input mapping. |
-| Interface | A versioned, non-secret declaration of a deployed runtime. Service-side configuration explicitly maps any required public Output name. |
-| InterfaceBinding | Runtime authorization that gives a Principal, ServiceAccount, Capsule, or Resource permissions and a credential-delivery method. |
-| Secret | An encrypted stored value. Write-only through the API and redacted from logs. |
-| Runner | The isolated execution environment (sandbox) that actually runs OpenTofu. |
-| AuditEvent | The audit record of who did what to which target. |
-| Operator | The organization or person running Takosumi for themselves or their own users. |
+| Term                   | Meaning                                                                                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Takosumi               | Software that deploys and manages OpenTofu/Terraform modules from Git through a plan → review → apply flow.                                                 |
+| OpenTofu               | An open-source tool (Terraform-compatible) for defining infrastructure as code. Takosumi is the side that runs it.                                          |
+| Workspace              | The boundary for a user or team. Projects, connections, secrets, and history are isolated inside it.                                                        |
+| Project                | One product, service, or infrastructure group inside a Workspace.                                                                                           |
+| Capsule                | One OpenTofu/Terraform module execution unit, usually sourced from a Git URL + ref + path.                                                                  |
+| Source                 | Where a Capsule comes from: Git URL / branch / commit / directory.                                                                                          |
+| Run                    | The record of one execution. Operations such as plan / apply / destroy are stored with logs, results, and the actor.                                        |
+| plan / apply / destroy | plan computes and shows what will change, apply makes the change, destroy removes resources. Each is recorded as a Run.                                     |
+| StateVersion           | The state version saved on every apply. Usable as a restore point.                                                                                          |
+| Output                 | An ordinary root-module return value captured via `tofu output -json`. It may feed another Capsule's OpenTofu input or an explicit Interface input mapping. |
+| Interface              | A versioned, non-secret declaration of a deployed runtime. Service-side configuration explicitly maps any required public Output name.                      |
+| InterfaceBinding       | Runtime authorization that gives a Principal, ServiceAccount, Capsule, or Resource permissions and a credential-delivery method.                            |
+| Secret                 | An encrypted stored value. Write-only through the API and redacted from logs.                                                                               |
+| Runner                 | The isolated execution environment (sandbox) that actually runs OpenTofu.                                                                                   |
+| AuditEvent             | The audit record of who did what to which target.                                                                                                           |
+| Operator               | The organization or person running Takosumi for themselves or their own users.                                                                              |
 
 ## Connection and credential words
 
-| Term | Meaning |
-| --- | --- |
-| ProviderConnection | Safely stored credentials for a provider such as Cloudflare or AWS. Passed as env vars or files only while a Run executes. |
-| CredentialRecipe | The definition of env vars, files, and pre-run actions needed to run that provider. |
-| ProviderBinding | The mapping "this provider in this Capsule uses this connection". Unbound providers are never silently filled in; they stop safely. |
+| Term               | Meaning                                                                                                                             |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| ProviderConnection | Safely stored credentials for a provider such as Cloudflare or AWS. Passed as env vars or files only while a Run executes.          |
+| CredentialRecipe   | The definition of env vars, files, and pre-run actions needed to run that provider.                                                 |
+| ProviderBinding    | The mapping "this provider in this Capsule uses this connection". Unbound providers are never silently filled in; they stop safely. |
 
-## Resource Shape words
+## Service Form host words
 
-These only appear when you use `takosumi_*` resources. If you only run plain OpenTofu modules, you can skip them.
+These only appear when you use the typed service lifecycle. If you only run
+plain OpenTofu modules, you can skip them. `Service Form` is the adopted target
+concept. The current `/v1/resources`, `takosumi_*` provider, and state retain the
+`Resource Shape` compatibility name until additive FormRef migration and
+compatibility evidence exist.
 
-| Term | Meaning |
-| --- | --- |
-| Resource Shape | An implementation-independent resource type, like "I want one object storage". |
-| Target / TargetPool | Where a Shape resolves to: the operator-enabled candidates and their pools. |
-| Policy | The rules for which Shape may resolve where. |
-| Adapter | The implementation that turns a Shape into a real resource. |
-| ResolutionLock | The record that pins a resolved Shape → Target mapping. |
-| NativeResource | The record of the real resource created by a resolution. |
-| Space / Environment / Stack | The namespace, environment (dev/prod, etc.), and grouping units for Shapes. |
-| Compatibility API | A compatibility API with an explicit scope and version, like `compat.s3.v1`. Not full AWS or Cloudflare compatibility. |
+| Term                         | Meaning                                                                                                                                                                 |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Service Form                 | A portable, implementation-independent service definition, such as "I want one object store".                                                                           |
+| FormRef                      | The exact immutable identity: `apiVersion`, `kind`, `definitionVersion`, and `schemaDigest`. It is a target contract and still needs an additive persistence migration. |
+| Form Package / Form Registry | A signed data-only definition bundle and the trusted package pins installed on one host. Packages contain no executable code, credentials, price, or capacity.          |
+| Resource Shape               | The compatibility name used by the current API/provider/state for a Service Form-backed Resource.                                                                       |
+| FormActivation               | A generic OSS operator record exposing an exact FormRef to an audience/policy scope. It contains no price, payment, official capacity, or SLA.                          |
+| ServiceOffering              | A closed Cloud/operator record officially binding an exact FormRef, activation, implementation, target/region, SKU, price, quota, and support.                          |
+| Target / TargetPool          | Where a Resource resolves: the operator-enabled candidates and their pools.                                                                                             |
+| Policy                       | The rules for which Resource may resolve where.                                                                                                                         |
+| Adapter                      | The trusted host implementation that turns a Resource into a real resource.                                                                                             |
+| ResolutionLock               | The record that pins an exact form / implementation / Target decision.                                                                                                  |
+| NativeResource               | The record of the real resource created by a resolution.                                                                                                                |
+| Space / Environment / Stack  | The Resource API namespace, environment (dev/prod, etc.), and grouping units.                                                                                           |
+| Compatibility API            | A compatibility API with an explicit scope and version, like `compat.s3.v1`. Not full AWS or Cloudflare compatibility.                                                  |
