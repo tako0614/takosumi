@@ -227,9 +227,15 @@ export class RunEnvResolver {
     input: ResolveRunEnvironmentInput,
   ): Promise<ProviderResolutionContext> {
     const planRun = input.planRun;
+    // A subject-bound Plan pins the complete resolved binding set even when
+    // OpenTofu reported no required providers. Apply/destroy must re-resolve
+    // that set so an empty reviewed set stays valid while a binding added
+    // after review is still detected by the digest fence.
     const resolveBindings =
       planRun.requiredProviders.length > 0 ||
-      input.credentialContext === "release_command";
+      input.credentialContext === "release_command" ||
+      (input.phase !== "plan" &&
+        planRun.resolvedProviderBindingsDigest !== undefined);
     if (!resolveBindings) {
       return {
         providerResolutions: [],

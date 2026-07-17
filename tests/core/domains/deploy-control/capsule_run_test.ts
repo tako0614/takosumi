@@ -2454,6 +2454,64 @@ test("generic Capsule plan allows provider-free modules without ProviderConnecti
   expect(planRun.policy.status).toBe("passed");
   expect(runner.planJobs).toHaveLength(1);
   expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([]);
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(runner.applyJobs).toHaveLength(1);
+  expect(runner.applyJobs[0]?.planRun.requiredProviders).toEqual([]);
+});
+
+test("provider-free Capsule apply rejects a ProviderBinding added after Plan review", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({
+    requiredProviders: [],
+    providerInstallation: [],
+  });
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "ws_test001",
+    capsuleId: "cap_fixture1",
+    environment: "preview",
+  });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.requiredProviders).toEqual([]);
+  expect(planRun.resolvedProviderBindingsDigest).toMatch(/^sha256:/);
+
+  await putConnectionWithProviderEnv(
+    store,
+    cloudflareConnection("conn_added_after_plan"),
+  );
+  await store.putProviderBindingSet({
+    id: "bindings_added_after_plan",
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    environment: seeded.capsule.environment,
+    bindings: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        connectionId: "conn_added_after_plan",
+      },
+    ],
+    createdAt: "2026-07-17T00:00:00.000Z",
+    updatedAt: "2026-07-17T00:00:00.000Z",
+  });
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("failed");
+  expect(applyRun.diagnostics).toContainEqual(
+    expect.objectContaining({ code: "provider_connection_changed" }),
+  );
+  expect(runner.applyJobs).toHaveLength(0);
 });
 
 test("low-level plan does not infer requiredProviders from ProviderBinding alone", async () => {
