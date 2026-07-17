@@ -70,7 +70,9 @@ optional `StandardFormNegativeFixture[]`; bearer and native import identities
 are read only from named environment variables. Unsupported negative fixture
 stages fail closed. The emitted proof derives its fixture names only from the
 fixtures this runner actually executed; callers cannot attach unexecuted names
-after the run.
+after the run. The digest-bound report also includes each positive and negative
+fixture's canonical input digest and the exact portable HTTP status/error code,
+so a successful proof cannot be relabeled onto different fixture bytes.
 
 The runner emits a digest-bound report suitable for the host half of standard
 Form admission evidence. Provider conformance remains separate evidence.

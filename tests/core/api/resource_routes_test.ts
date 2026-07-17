@@ -736,16 +736,24 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
   expect(report.checks).toContain("canonical-audit-parity");
   expect(report.checks).toContain("import-idempotency");
   expect(report.checks).toContain("negative-fixtures");
-  expect(report.fixtures).toEqual({
-    positive: ["basic"],
-    negative: [
-      {
-        name: "invalid-interfaces",
-        stage: "desired",
-        errorCode: "invalid_argument",
-      },
-    ],
-  });
+  expect(report.fixtures.positive).toEqual([
+    {
+      name: "basic",
+      inputDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    },
+  ]);
+  expect(report.fixtures.negative).toEqual([
+    {
+      name: "invalid-interfaces",
+      stage: "desired",
+      inputDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      httpStatus: 400,
+      errorCode: "invalid_argument",
+    },
+  ]);
+  expect(report.fixtures.positive[0]?.inputDigest).not.toBe(
+    report.fixtures.negative[0]?.inputDigest,
+  );
   expect(report.evidenceDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
   expect(portableHostConformanceProof(report)).toMatchObject({
     subject: "host:https://host.example.test",
