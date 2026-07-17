@@ -96,6 +96,20 @@ async function applyAndroidFirebaseWiring() {
     "app/build.gradle.kts",
     "app/build.gradle",
   ]);
+  const settingsGradle = findByRelative(androidFiles, androidDir, [
+    "settings.gradle.kts",
+    "settings.gradle",
+  ]);
+
+  if (settingsGradle) {
+    writeIfChanged(
+      settingsGradle,
+      patchSettingsGradle(readText(settingsGradle)),
+      "Android Google plugin repository",
+    );
+  } else {
+    warn("Android settings Gradle file is missing");
+  }
 
   if (projectGradle) {
     writeIfChanged(
@@ -119,6 +133,50 @@ async function applyAndroidFirebaseWiring() {
   } else {
     warn("Android app Gradle file is missing");
   }
+}
+
+function patchSettingsGradle(text) {
+  const pluginManagement = findNamedBlock(text, "pluginManagement");
+  const repositories = [
+    "    repositories {",
+    "        google()",
+    "        mavenCentral()",
+    "        gradlePluginPortal()",
+    "    }",
+  ].join("\n");
+
+  if (!pluginManagement) {
+    return `pluginManagement {\n${repositories}\n}\n\n${text}`;
+  }
+
+  const block = text.slice(pluginManagement.open + 1, pluginManagement.close);
+  if (/\bgoogle\s*\(\s*\)/u.test(block)) return text;
+
+  const repositoriesMatch = /\brepositories\s*\{/u.exec(block);
+  if (repositoriesMatch) {
+    const repositoriesOpen =
+      pluginManagement.open +
+      1 +
+      repositoriesMatch.index +
+      repositoriesMatch[0].lastIndexOf("{");
+    return `${text.slice(0, repositoriesOpen + 1)}\n        google()${text.slice(repositoriesOpen + 1)}`;
+  }
+
+  return `${text.slice(0, pluginManagement.open + 1)}\n${repositories}${text.slice(pluginManagement.open + 1)}`;
+}
+
+function findNamedBlock(text, name) {
+  const header = new RegExp(`\\b${name}\\s*\\{`, "u").exec(text);
+  if (!header) return null;
+  const open = text.indexOf("{", header.index);
+  let depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    if (text[index] === "{") depth += 1;
+    if (text[index] !== "}") continue;
+    depth -= 1;
+    if (depth === 0) return { open, close: index };
+  }
+  return null;
 }
 
 function upsertApsEnvironment(xml, environment) {
