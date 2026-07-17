@@ -202,6 +202,40 @@ audit evidence
 
 Secrets are redacted before logs or diagnostics are persisted.
 
+## Versioned InstallConfig patch
+
+An operator can update service-side configuration by explicitly selecting an
+InstallConfig id and a versioned JSON file.
+
+```text
+PATCH /internal/v1/install-configs/:installConfigId
+kind: takosumi.install-config-patch@v1
+```
+
+The CLI uses the same boundary:
+
+```sh
+takosumi install-configs patch cfg-example \
+  --file install-config-patch.json \
+  --url https://takosumi.example.com \
+  --token "$TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+```
+
+The patch can replace only `variableMapping`, `variablePresentation`,
+`installExperience`, `outputAllowlist`, `interfaceBlueprints`,
+`lifecycleActions`, and `lifecycleActionPolicy`. The InstallConfig id,
+ownership, source, Store metadata, runner selection, and all other policy are
+preserved. Unknown versions, fields, and invalid declarations fail before the
+write.
+
+The API and CLI never search a repository or release and never select
+`latest`. They apply only the exact file and target id chosen by the operator.
+This surface also does not mutate Takosumi Cloud reference configuration,
+offerings, or billing data.
+An Interface binding proposal with `subject.source = installing_principal` can
+be applied only to a shared pre-install InstallConfig. A Workspace-scoped
+config fails closed instead of guessing the installer identity after creation.
+
 ## Release Activation Seam
 
 Takosumi OSS treats provider infrastructure/state materialization and declared,

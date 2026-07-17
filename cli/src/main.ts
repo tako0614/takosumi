@@ -27,6 +27,7 @@ import {
   runLaunchReadinessValidate,
 } from "./cli-launch-readiness-commands.ts";
 import { runDeployLogs, runDeployStatus } from "./cli-deploy-commands.ts";
+import { runInstallConfigs } from "./cli-install-config-commands.ts";
 import type { CliIo } from "./cli-io.ts";
 
 export type { CliIo };
@@ -97,6 +98,9 @@ export async function main(
   }
   if (domain === "connections") {
     return await runConnections([command, ...rest].filter(Boolean), io);
+  }
+  if (domain === "install-configs") {
+    return await runInstallConfigs([command, ...rest].filter(Boolean), io);
   }
   if (domain === "form-activations") {
     return await runFormActivations([command, ...rest].filter(Boolean), io);
