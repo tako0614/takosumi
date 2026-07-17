@@ -27,6 +27,7 @@ export function helpText(): string {
       "",
       "Operator:",
       "  connections             operator connection と internal resolver を管理",
+      "  form-activations        exact FormRef の公開ポリシーを管理",
       "  target-pools            TargetPool 宣言を管理",
       "  space-policies          SpacePolicy 宣言を管理",
       "",
@@ -52,6 +53,7 @@ export function helpText(): string {
     "",
     "Operator:",
     "  connections             Manage operator connections and internal resolvers",
+    "  form-activations        Manage exact FormRef audience policy",
     "  target-pools            Manage TargetPool declarations",
     "  space-policies          Manage SpacePolicy declarations",
     "",
@@ -61,6 +63,35 @@ export function helpText(): string {
     "  open 'https://takosumi.example.com/install?git=https://git.example.com/example/app.git&path=deploy/opentofu'",
     "",
     "Internal/development commands are intentionally hidden from this help.",
+  ].join("\n");
+}
+
+export function formActivationsHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi form-activations <command>",
+      "",
+      "コマンド:",
+      "  list [--limit <n> --cursor <opaque>]",
+      "  get <id>",
+      "  create --file <activation.json>",
+      "  update <id> --file <activation-update.json>",
+      "",
+      "operator bearer のみが利用できます。価格、SKU、請求、容量、SLA は FormActivation に含めません。",
+      "共通オプション: --url、--token、--json",
+    ].join("\n");
+  }
+  return [
+    "takosumi form-activations <command>",
+    "",
+    "Commands:",
+    "  list [--limit <n> --cursor <opaque>]",
+    "  get <id>",
+    "  create --file <activation.json>",
+    "  update <id> --file <activation-update.json>",
+    "",
+    "Only the operator bearer may use this API. FormActivation contains no price, SKU, billing, capacity, or SLA.",
+    "Common options: --url, --token, --json",
   ].join("\n");
 }
 

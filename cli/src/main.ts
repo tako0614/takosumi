@@ -9,6 +9,7 @@ import {
   runAccountsTokens,
 } from "./cli-accounts-commands.ts";
 import { runConnections } from "./cli-connections-commands.ts";
+import { runFormActivations } from "./cli-form-activation-commands.ts";
 import {
   runResources,
   runSpacePolicies,
@@ -95,6 +96,9 @@ export async function main(
   }
   if (domain === "connections") {
     return await runConnections([command, ...rest].filter(Boolean), io);
+  }
+  if (domain === "form-activations") {
+    return await runFormActivations([command, ...rest].filter(Boolean), io);
   }
   if (domain === "resources") {
     return await runResources([command, ...rest].filter(Boolean), io);

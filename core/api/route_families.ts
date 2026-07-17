@@ -10,6 +10,7 @@ import { METRICS_ENDPOINTS } from "./metrics_routes.ts";
 import { OPENAPI_ENDPOINTS } from "./openapi_endpoint.ts";
 import { RESOURCE_SHAPE_ENDPOINTS } from "./resource_routes.ts";
 import { INTERFACE_ENDPOINTS } from "./interface_routes.ts";
+import { FORM_ACTIVATION_ENDPOINTS } from "./form_activation_routes.ts";
 
 /**
  * Single source of truth for the API route inventory mounted by
@@ -52,12 +53,7 @@ export type ApiEndpointAuth =
   | "metrics-scrape";
 
 export type ApiEndpointMethod =
-  | "GET"
-  | "HEAD"
-  | "POST"
-  | "PUT"
-  | "PATCH"
-  | "DELETE";
+  "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /**
  * OpenAPI-specific wiring for an endpoint. Lives next to the shared fields so
@@ -124,6 +120,7 @@ export type RouteFamilyId =
   | "deployControl-internal"
   | "metrics"
   | "resource-shape"
+  | "form-activations"
   | "interfaces";
 
 export type RouteFamilyFlag =
@@ -132,6 +129,7 @@ export type RouteFamilyFlag =
   | "deployControlInternalRoutesMounted"
   | "metricsRoutesMounted"
   | "resourceShapeRoutesMounted"
+  | "formActivationRoutesMounted"
   | "interfaceRoutesMounted";
 
 export type RouteFamilyMountedFlags = Record<RouteFamilyFlag, boolean>;
@@ -218,6 +216,14 @@ export const ROUTE_FAMILIES: readonly RouteFamilyDescriptor[] = [
     defaultMounted: ({ role, hasOptions }) =>
       role === "takosumi-api" && hasOptions,
     endpoints: RESOURCE_SHAPE_ENDPOINTS,
+  },
+  {
+    id: "form-activations",
+    flag: "formActivationRoutesMounted",
+    openapiTags: ["form-activations"],
+    defaultMounted: ({ role, hasOptions }) =>
+      role === "takosumi-api" && hasOptions,
+    endpoints: FORM_ACTIVATION_ENDPOINTS,
   },
   {
     id: "interfaces",
