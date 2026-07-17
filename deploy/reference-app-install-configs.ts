@@ -541,7 +541,6 @@ function yuruConfig(input: {
     }),
     outputAllowlist: {
       launch_url: urlOutput("launch_url"),
-      api_url: urlOutput("api_url"),
     },
     policy: {},
     store: store({
@@ -604,7 +603,7 @@ const storageConfig = {
     mcp_url: urlOutput("mcp_url"),
     // pre_destroy receives only public-safe allowlisted outputs.
     object_bucket_name: output("string")("object_bucket_name"),
-    actions_logs_bucket_name: output("string")("actions_logs_bucket_name"),
+    cloudflare_account_id: output("string")("cloudflare_account_id"),
   },
   lifecycleActions: [
     {
@@ -716,6 +715,8 @@ const gitConfig = {
     mcp_url: urlOutput("mcp_url"),
     // pre_destroy receives only public-safe allowlisted outputs.
     object_bucket_name: output("string")("object_bucket_name"),
+    cloudflare_account_id: output("string")("cloudflare_account_id"),
+    actions_logs_bucket_name: output("string")("actions_logs_bucket_name"),
   },
   lifecycleActions: [
     {
