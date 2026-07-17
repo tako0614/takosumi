@@ -8,6 +8,7 @@
 
 import type { IsoTimestamp } from "./types.ts";
 import type { ResourceObject, ResourcePortability } from "./resource-shape.ts";
+import type { InstalledFormReference } from "./service-forms.ts";
 import type {
   SpacePolicy,
   TargetImplementationDescriptor,
@@ -36,6 +37,12 @@ export interface NativeResourceRef {
   readonly type: string;
   readonly id: string;
   readonly ownership?: NativeResourceOwnership;
+  /**
+   * Exact immutable Service Form identity whose lifecycle owns this native
+   * evidence. Missing only on pre-FormRef compatibility evidence; once the
+   * parent Resource is pinned, omission or substitution is not replayable.
+   */
+  readonly form?: InstalledFormReference;
 }
 
 /** Per-interface capability score for the selected implementation. */

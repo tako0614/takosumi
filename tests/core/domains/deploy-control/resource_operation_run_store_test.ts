@@ -5,6 +5,7 @@ import {
   type OpenTofuControlStore,
   type ResourceOperationRun,
 } from "../../../../core/domains/deploy-control/store.ts";
+import type { InstalledFormReference } from "takosumi-contract";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { RunQueryService } from "../../../../core/domains/deploy-control/run_query.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
@@ -15,6 +16,15 @@ setDefaultTimeout(20_000);
 
 const clients: PGliteSqlClient[] = [];
 const CREATED_AT = "2026-07-14T00:00:00.000Z";
+const EXACT_FORM: InstalledFormReference = {
+  formRef: {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    definitionVersion: "1.0.0",
+    schemaDigest: `sha256:${"1".repeat(64)}`,
+  },
+  packageDigest: `sha256:${"2".repeat(64)}`,
+};
 
 afterAll(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
@@ -232,6 +242,65 @@ test("terminal Resource Run outcomes cannot be overwritten; only audit acknowled
       ).won,
     ).toBe(true);
     expect(await store.listRecoverableResourceOperationRuns()).toEqual([]);
+  }
+});
+
+test("exact Resource Run and NativeResource evidence round trip without permitting Form substitution", async () => {
+  for (const [, store] of await stores()) {
+    const initial = resourceRun({ resourceForm: EXACT_FORM });
+    expect(await store.beginResourceOperationRun(initial)).toMatchObject({
+      status: "created",
+      run: { resourceForm: EXACT_FORM },
+    });
+    const withResult: ResourceOperationRun = {
+      ...initial,
+      resourceOperationVersion: 2,
+      resourceOperationResult: {
+        summary: "created exact bucket",
+        resourceForm: EXACT_FORM,
+        nativeResources: [
+          {
+            type: "r2_bucket",
+            id: "bucket-assets",
+            form: EXACT_FORM,
+          },
+        ],
+        outputs: { bucket_name: "assets" },
+      },
+    };
+    expect(
+      (
+        await store.transitionResourceOperationRun({
+          id: initial.id,
+          operationKey: initial.resourceOperationKey,
+          expectedVersion: 1,
+          expectFrom: ["running"],
+          run: withResult,
+        })
+      ).won,
+    ).toBe(true);
+    expect(await store.getResourceOperationRun(initial.id)).toEqual(withResult);
+
+    const substituted: ResourceOperationRun = {
+      ...withResult,
+      resourceOperationVersion: 3,
+      resourceForm: {
+        ...EXACT_FORM,
+        packageDigest: `sha256:${"9".repeat(64)}`,
+      },
+    };
+    expect(
+      (
+        await store.transitionResourceOperationRun({
+          id: initial.id,
+          operationKey: initial.resourceOperationKey,
+          expectedVersion: 2,
+          expectFrom: ["running"],
+          run: substituted,
+        })
+      ).won,
+    ).toBe(false);
+    expect(await store.getResourceOperationRun(initial.id)).toEqual(withResult);
   }
 });
 

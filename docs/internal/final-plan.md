@@ -162,6 +162,17 @@ backup carries a redacted exact-pin sidecar, and restore re-verifies retained
 package bytes before replaying the same pair without resolution. Package
 revocation does not delete the retained package or definition evidence.
 
+Every direct Resource operation snapshots the same exact
+`FormRef`/`packageDigest` pair on its canonical `Run` and result evidence.
+Every `NativeResource` reference produced by preview, apply, import, observe,
+refresh, or delete/recovery replay carries that pair as well. The adapter input
+receives the already-pinned identity; it does not resolve or substitute a
+definition. Once a Resource is exact-form-backed, missing or mismatched
+Run/result/NativeResource identity fails closed before backend replay. Recovery
+and rollback re-verify the retained package and definition bytes for the pinned
+pair without consulting `latest`, while evidence remains redacted and never
+contains credentials or native values.
+
 ## 1. The Key Rule
 
 Keep external infrastructure on industry-standard providers when those
@@ -2660,7 +2671,7 @@ self-test, a descriptor, an unconfigured manager, or one green client.
    current kind (ten packages total), then standard-form semantics, typed
    provider inputs, and host/provider conformance while preserving current
    Resource Shape compatibility exports and routes.
-5. Add FormRef to Resource/ResolutionLock/evidence with a new additive
+5. Add FormRef to Resource/ResolutionLock/Run/NativeResource evidence with a new additive
    migration after the current schema head. Shadow, bounded-backfill, dual-read,
    retain old packages, and prove D1/Postgres backup/restore.
 6. Replace bundled parser/default authority with an installed Form Registry;

@@ -27,7 +27,9 @@ import type {
   TargetPoolRecordId,
 } from "./records.ts";
 import {
+  assertNativeResourceFormIdentity,
   assertResourceFormIdentity,
+  bindNativeResourceFormIdentity,
   resourceFormIdentitiesEqual,
 } from "./records.ts";
 
@@ -883,6 +885,10 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
         resourceFormIdentitiesEqual(current.form, input.form) &&
         resourceFormIdentitiesEqual(currentLock.form, input.form)
       ) {
+        assertNativeResourceFormIdentity(
+          currentLock.nativeResources,
+          input.form,
+        );
         return Promise.resolve({
           status: "already_pinned",
           record: current,
@@ -903,7 +909,14 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
         });
       }
       const record = { ...current, form: input.form };
-      const lock = { ...currentLock, form: input.form };
+      const lock = {
+        ...currentLock,
+        form: input.form,
+        nativeResources: bindNativeResourceFormIdentity(
+          currentLock.nativeResources,
+          input.form,
+        ),
+      };
       resources.replaceSync(record);
       locks.putSync(lock);
       return Promise.resolve({ status: "pinned", record, lock });
@@ -930,6 +943,7 @@ export function assertApplyPair(
       `ResolutionLock ${lock.resourceId} does not pin the Resource form identity`,
     );
   }
+  assertNativeResourceFormIdentity(lock.nativeResources, record.form);
 }
 
 export function assertResourceFormIdentityPinInput(
