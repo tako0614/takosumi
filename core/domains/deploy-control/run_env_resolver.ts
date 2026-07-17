@@ -77,8 +77,9 @@ export interface ResolveRunEnvironmentInput {
   readonly credentialContext?: "opentofu" | "release_command";
   /**
    * A lifecycle command without `useProviderCredentials` still needs the
-   * reviewed, non-secret provider configuration. Set false to resolve and
-   * fence that configuration without minting credential material.
+   * reviewed ProviderBinding projection, including explicit empty provider
+   * configuration. Set false to resolve and fence that projection without
+   * minting credential material.
    */
   readonly mintCredentials?: boolean;
 }
@@ -350,18 +351,11 @@ function providerConfigurationsFromResolved(
     return emptyProviderConfigurationsEnvelope();
   }
   return providerConfigurationsEnvelope(
-    resolved.flatMap((entry) => {
-      const configuration = entry.connection.scopeHints?.providerConfig;
-      return configuration && Object.keys(configuration).length > 0
-        ? [
-            {
-              provider: entry.provider,
-              alias: entry.alias ?? null,
-              configuration,
-            },
-          ]
-        : [];
-    }),
+    resolved.map((entry) => ({
+      provider: entry.provider,
+      alias: entry.alias ?? null,
+      configuration: entry.connection.scopeHints?.providerConfig ?? {},
+    })),
   );
 }
 

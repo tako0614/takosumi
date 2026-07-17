@@ -56,3 +56,26 @@ test("provider configuration envelope rejects duplicate provider and alias ident
     }),
   ).toThrow("duplicate provider/alias");
 });
+
+test("provider configuration envelope preserves an explicit provider-default entry", () => {
+  const envelope = providerConfigurationsEnvelope([
+    {
+      provider: "cloudflare/cloudflare",
+      configuration: {},
+    },
+  ]);
+
+  expect(envelope).toEqual({
+    format: "takosumi.provider-configurations@v1",
+    providers: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: null,
+        configuration: {},
+      },
+    ],
+  });
+  expect(providerConfigurationsJson(envelope)).toBe(
+    '{"format":"takosumi.provider-configurations@v1","providers":[{"provider":"registry.opentofu.org/cloudflare/cloudflare","alias":null,"configuration":{}}]}',
+  );
+});
