@@ -1,0 +1,10 @@
+{
+  "sourceRepository": "github.com/tako0614/terraform-provider-takoform",
+  "sourceCommit": "99c63161e5a321105a489f3ec19b47827dfe53b0",
+  "sourceDirectory": "formpackage/schemas",
+  "canonicalDigests": {
+    "form-definition.schema.json": "sha256:70b2910758f3c751d3ba4c6aef4cddb66aaf9d533476c3d186c87e8f3418a4bd",
+    "form-ref.schema.json": "sha256:6621f399e69aa9459f6515b200af2e6b00e3fcbd71f64af46e02487548203fcb",
+    "package-index.schema.json": "sha256:862669568e745edf60e470df10303b1e37cd8c83086edad969b033df2234158c"
+  }
+}

@@ -15,6 +15,21 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_ACCOUNTS_DB?: import("@takosjp/takosumi-accounts-service").D1Database;
   readonly R2_ARTIFACTS: R2Bucket;
   /**
+   * Operator-owned immutable Takoform package envelopes and digest-pinned
+   * Sigstore TrustedRoot. This binding has no implicit package or publisher.
+   */
+  readonly R2_FORM_PACKAGES?: R2Bucket;
+  /**
+   * Non-secret host trust-policy JSON for R2 Form Package verification.
+   * Presence requires R2_FORM_PACKAGES and installs no package by itself.
+   */
+  readonly TAKOSUMI_FORM_PACKAGE_TRUST_POLICY?: string;
+  /**
+   * Host-code override for custom readers/verifiers. This is a runtime object,
+   * not a text var and not portable Form definition authority.
+   */
+  readonly TAKOSUMI_FORM_PACKAGE_HOST_COMPOSITION?: import("../../core/adapters/takoform/mod.ts").TakoformPackageHostComposition;
+  /**
    * Source-archive bucket (`takosumi-source`). The OpenTofu runner DO persists
    * the deterministic source archive produced by a `source_sync` run here, under
    * the agreed key layout

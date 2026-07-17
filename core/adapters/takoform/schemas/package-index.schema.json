@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forms.takoform.com/schemas/v1alpha1/package-index.schema.json",
+  "title": "Takoform Form Package index v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "packageVersion",
+    "formRef",
+    "definitionPath",
+    "files"
+  ],
+  "properties": {
+    "apiVersion": { "const": "packages.forms.takoform.com/v1alpha1" },
+    "kind": { "const": "FormPackage" },
+    "packageVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "formRef": { "$ref": "form-ref.schema.json" },
+    "definitionPath": { "$ref": "#/$defs/packagePath" },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "contains": {
+        "type": "object",
+        "required": ["mediaType"],
+        "properties": {
+          "mediaType": {
+            "const": "application/vnd.takoform.form-definition.v1+json"
+          }
+        }
+      },
+      "minContains": 1,
+      "maxContains": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "mediaType", "size", "digest"],
+        "properties": {
+          "path": { "$ref": "#/$defs/packagePath" },
+          "mediaType": {
+            "enum": [
+              "application/vnd.takoform.form-definition.v1+json",
+              "application/schema+json",
+              "application/json",
+              "text/markdown",
+              "text/plain"
+            ]
+          },
+          "size": { "type": "integer", "minimum": 0, "maximum": 67108864 },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "packagePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
+      "not": { "pattern": "(^|/)\\.\\.?($|/)" }
+    }
+  }
+}

@@ -78,6 +78,10 @@ import {
   resourceShapeHostContributionsFromEnv,
 } from "./resource_shape_composition.ts";
 import { REFERENCE_APP_INSTALL_CONFIGS } from "../../deploy/reference-app-install-configs.ts";
+import {
+  createR2TakoformPackageHostComposition,
+  type TakoformPackageHostComposition,
+} from "../../core/adapters/takoform/mod.ts";
 
 const RESOURCE_SHAPE_RUN_WAIT_TIMEOUT_MS = 300_000;
 const RESOURCE_SHAPE_DELETE_TIMEOUT_MS =
@@ -222,6 +226,7 @@ export async function createWorkerServiceApp(
     options.operatorInstallConfigs ??
     env.TAKOSUMI_INSTALL_CONFIG_COMPOSITION ??
     REFERENCE_APP_INSTALL_CONFIGS;
+  const formPackageHost = resolveFormPackageHostComposition(env, options);
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -246,11 +251,11 @@ export async function createWorkerServiceApp(
     // Stock multi-tenant routes use the verified Workspace id as the Resource
     // authorization scope. Keep that host mapping explicit for backup.
     resolveResourceBackupScope: (workspaceId) => workspaceId,
-    ...(options.formPackageArtifactReader
-      ? { formPackageArtifactReader: options.formPackageArtifactReader }
+    ...(formPackageHost
+      ? { formPackageArtifactReader: formPackageHost.artifactReader }
       : {}),
-    ...(options.formPackageVerifier
-      ? { formPackageVerifier: options.formPackageVerifier }
+    ...(formPackageHost
+      ? { formPackageVerifier: formPackageHost.verifier }
       : {}),
     resourceShapeSchemaRegistry,
     ...(resourceShapeModuleRegistry ? { resourceShapeModuleRegistry } : {}),
@@ -321,6 +326,52 @@ export async function createWorkerServiceApp(
         }
       : {}),
   });
+}
+
+function resolveFormPackageHostComposition(
+  env: CloudflareWorkerEnv,
+  options: {
+    readonly formPackageArtifactReader?: CreateTakosumiServiceOptions["formPackageArtifactReader"];
+    readonly formPackageVerifier?: CreateTakosumiServiceOptions["formPackageVerifier"];
+  },
+): TakoformPackageHostComposition | undefined {
+  if (
+    Boolean(options.formPackageArtifactReader) !==
+    Boolean(options.formPackageVerifier)
+  ) {
+    throw new TypeError(
+      "Form Package reader and verifier must be injected together",
+    );
+  }
+  if (options.formPackageArtifactReader && options.formPackageVerifier) {
+    return {
+      artifactReader: options.formPackageArtifactReader,
+      verifier: options.formPackageVerifier,
+    };
+  }
+  const hostComposition = env.TAKOSUMI_FORM_PACKAGE_HOST_COMPOSITION;
+  if (hostComposition !== undefined) {
+    if (
+      typeof hostComposition !== "object" ||
+      hostComposition === null ||
+      typeof hostComposition.artifactReader?.read !== "function" ||
+      typeof hostComposition.verifier?.verify !== "function"
+    ) {
+      throw new TypeError(
+        "TAKOSUMI_FORM_PACKAGE_HOST_COMPOSITION must be a host-code reader/verifier object",
+      );
+    }
+    return hostComposition;
+  }
+  const bucket = env.R2_FORM_PACKAGES;
+  const trustPolicy = env.TAKOSUMI_FORM_PACKAGE_TRUST_POLICY;
+  if (Boolean(bucket) !== Boolean(trustPolicy)) {
+    throw new TypeError(
+      "R2_FORM_PACKAGES and TAKOSUMI_FORM_PACKAGE_TRUST_POLICY must be configured together",
+    );
+  }
+  if (!bucket || !trustPolicy) return undefined;
+  return createR2TakoformPackageHostComposition({ bucket, trustPolicy });
 }
 
 /**

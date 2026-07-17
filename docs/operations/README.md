@@ -42,6 +42,7 @@ Secrets / patching:
 State / migrations:
   resource-state-adoption.md
   output-interface-migration.md
+  form-package-installation.md
   service-form-compatibility-inventory.md
   control-d1-schema-predeploy.md
   online-db-migrations.md

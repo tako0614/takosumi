@@ -53,6 +53,10 @@ import {
   verifyCapsuleRunToken,
 } from "../../../core/shared/capsule_run_tokens.ts";
 import { REFERENCE_APP_INSTALL_CONFIGS } from "../../reference-app-install-configs.ts";
+import {
+  createNodeTakoformPackageHostComposition,
+  type NodeTakoformPackageTrustPolicy,
+} from "./takoform-package-composition.ts";
 
 export interface ComposedAppInput {
   readonly config: NodeAccountsServerConfig;
@@ -86,6 +90,11 @@ export interface ComposedAppInput {
   readonly formPackageArtifactReader?: CreateTakosumiServiceArg["formPackageArtifactReader"];
   /** Trusted data-only package verifier selected by the operator trust policy. */
   readonly formPackageVerifier?: CreateTakosumiServiceArg["formPackageVerifier"];
+  /**
+   * Standard private-file Takoform composition. Explicit reader/verifier ports
+   * above take precedence for custom hosts.
+   */
+  readonly takoformPackageTrustPolicy?: NodeTakoformPackageTrustPolicy;
   /**
    * Optional OpenTofu runner injected by an operator composition. The generic
    * reference server leaves this absent; local-substrate wires a local runner
@@ -151,6 +160,20 @@ export async function buildComposedApp(
       stateSecret: runtimeEnv.TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET,
       descriptors: connectionOAuthDescriptorsFromEnv(runtimeEnv),
     });
+  if (
+    Boolean(input.formPackageArtifactReader) !==
+    Boolean(input.formPackageVerifier)
+  ) {
+    throw new TypeError(
+      "Form Package reader and verifier must be injected together",
+    );
+  }
+  const takoformPackageHost =
+    !input.formPackageArtifactReader && input.takoformPackageTrustPolicy
+      ? await createNodeTakoformPackageHostComposition(
+          input.takoformPackageTrustPolicy,
+        )
+      : undefined;
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
   const created = await createTakosumiService({
     runtimeEnv,
@@ -174,11 +197,18 @@ export async function buildComposedApp(
     // The reference platform maps the verified Workspace id to the matching
     // Resource authorization scope; custom hosts own this mapping.
     resolveResourceBackupScope: (workspaceId) => workspaceId,
-    ...(input.formPackageArtifactReader
-      ? { formPackageArtifactReader: input.formPackageArtifactReader }
+    ...((input.formPackageArtifactReader ?? takoformPackageHost?.artifactReader)
+      ? {
+          formPackageArtifactReader:
+            input.formPackageArtifactReader ??
+            takoformPackageHost!.artifactReader,
+        }
       : {}),
-    ...(input.formPackageVerifier
-      ? { formPackageVerifier: input.formPackageVerifier }
+    ...((input.formPackageVerifier ?? takoformPackageHost?.verifier)
+      ? {
+          formPackageVerifier:
+            input.formPackageVerifier ?? takoformPackageHost!.verifier,
+        }
       : {}),
     ...(input.opentofuRunner ? { opentofuRunner: input.opentofuRunner } : {}),
     ...(input.opentofuRunnerExecutors

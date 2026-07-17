@@ -16,6 +16,9 @@ Run queue, coordination/run-owner Durable Objects, and an OpenTofu runner.
 origins, IDs, and secrets belong to operator state outside the repository.
 Operators may wrap this composition through the documented generic extension
 and port seams; the OSS config must not name a closed handler as a dependency.
+An optional signed Takoform Form Registry uses the separate
+[`form-package-installation.md`](form-package-installation.md) procedure; no
+package, trust root, publisher, or activation is implicit in this worker.
 
 ## Build and deploy
 

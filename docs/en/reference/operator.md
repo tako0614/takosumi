@@ -22,6 +22,7 @@ commercial operation. Takosumi Cloud is the official hosted operation run by us.
 - operate FormActivation through the operator-bearer `/v1/form-activations`
   API or `takosumi form-activations`; never put price, payment, capacity, or SLA
   into the activation policy
+- when signed Form Packages are enabled, follow the operator runbook and explicitly configure the artifact store, digest-pinned Sigstore TrustedRoot, and publisher policy
 - tune scheduled Resource observation cadence, batch, and concurrency to runner capacity
 - manage state and lock backends
 - in production/staging, do not infer encryption at rest from the database URL
