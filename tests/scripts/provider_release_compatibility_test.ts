@@ -1,11 +1,19 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  captureCandidateSchema,
   compareCandidateSchema,
+  createProviderCompatibilityProofArtifact,
+  loadProviderCompatibilityProofArtifact,
   loadCompatibilityAuthorities,
   providerCliPrerequisites,
   resolveCompatibilityGoCommand,
   structuralSha256,
+  validateProviderCompatibilityProofArtifact,
   verifyProviderCompatibility,
+  writeProviderCompatibilityProofArtifact,
 } from "../../scripts/lib/provider-release-compatibility.mjs";
 import { buildSanitizedProviderProofEnvironment } from "../../scripts/lib/provider-proof-environment.mjs";
 import { assertExactRequestDeltas } from "../../scripts/lib/provider-proof-requests.mjs";
@@ -365,8 +373,38 @@ describe("provider release compatibility", () => {
     );
   });
 
+  test("writes digest-bound proof evidence and rejects a tampered sidecar", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-proof-artifact-test-"));
+    try {
+      const authorities = await loadCompatibilityAuthorities();
+      const artifact = await createProviderCompatibilityProofArtifact({
+        proof: completeStateProof(authorities),
+        toolchains: completeProofToolchains(),
+      });
+      const path = join(root, "proof.json");
+      await writeProviderCompatibilityProofArtifact(artifact, { path });
+      expect(
+        (await loadProviderCompatibilityProofArtifact({ path })).status,
+      ).toBe("proof-complete");
+      const bytes = await readFile(path);
+      await writeFile(`${path}.sha256`, `${"0".repeat(64)}  proof.json\n`);
+      const tampered = await loadProviderCompatibilityProofArtifact({ path });
+      expect(tampered).toMatchObject({
+        status: "invalid-evidence",
+        reason: "provider compatibility proof artifact digest sidecar mismatch",
+      });
+      expect(bytes.length).toBeGreaterThan(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("matches the current provider machine schema only after declared additions are removed", async () => {
-    const result = await verifyProviderCompatibility();
+    const providerSchema = await captureCandidateSchema();
+    const result = await verifyProviderCompatibility({
+      providerSchema,
+      proofArtifact: null,
+    });
     expect(result.schemaCompatibility.compatible).toBe(true);
     expect(result.schemaCompatibility.additiveResources).toEqual([
       "takosumi_durable_workflow",
@@ -381,8 +419,118 @@ describe("provider release compatibility", () => {
     expect(result.blockers).toContain(
       "terraform-schema-state-and-fqn-proof-command-required",
     );
+
+    const authorities = await loadCompatibilityAuthorities();
+    const proofArtifact = await createProviderCompatibilityProofArtifact({
+      proof: completeStateProof(authorities),
+      toolchains: completeProofToolchains(),
+    });
+    const serializedProof = JSON.stringify(proofArtifact);
+    expect(serializedProof).not.toContain("cliPath");
+    expect(serializedProof).not.toContain("forwardedKeys");
+    expect(serializedProof).not.toContain("environmentEvidence");
+    expect(serializedProof).not.toContain("TOKEN");
+    const ready = await verifyProviderCompatibility({
+      providerSchema,
+      proofArtifact,
+    });
+    expect(ready.releaseReady).toBe(true);
+    expect(ready.blockers).toEqual([]);
+    expect(ready.prerequisites.terraformMatrix).toMatchObject({
+      status: "proof-complete",
+      releaseBlocking: false,
+    });
+    expect(ready.prerequisites.addressMatrix).toMatchObject({
+      status: "explicit-dual-address-proof-complete",
+      releaseBlocking: false,
+      addressesTreatedAsInterchangeable: false,
+    });
+    expect(ready.terraformCompatibility.releaseEvidenceStatus).toBe(
+      "proof-complete",
+    );
+
+    const stale = structuredClone(proofArtifact);
+    stale.bindings.proofSourceSha256 = "f".repeat(64);
+    await expect(
+      validateProviderCompatibilityProofArtifact(stale),
+    ).rejects.toThrow("stale for the current source");
   }, 30_000);
 });
+
+function completeProofToolchains() {
+  return {
+    openTofu: {
+      version: "1.12.3",
+      platform: "linux_amd64",
+      executableSha256: "a".repeat(64),
+    },
+    terraform: {
+      version: "1.15.8",
+      platform: "linux_amd64",
+      executableSha256: "b".repeat(64),
+    },
+  };
+}
+
+function completeStateProof(
+  authorities: Awaited<ReturnType<typeof loadCompatibilityAuthorities>>,
+) {
+  return {
+    kind: "takosumi.provider-old-state-compatibility-proof@v1",
+    baselineVersion: authorities.identity.provider.version,
+    candidateVersion: authorities.policy.candidate.version,
+    resourceTypes: [
+      "takosumi_container_service",
+      "takosumi_edge_worker",
+      "takosumi_kv_store",
+      "takosumi_object_bucket",
+      "takosumi_queue",
+      "takosumi_sql_database",
+      "takosumi_target_pool",
+    ],
+    stateValuesRecorded: false,
+    environmentEvidence: {
+      mode: "explicit-allowlist",
+      forwardedKeys: ["HOME", "PATH"],
+      credentialEnvironmentKeys: [],
+      credentialsUsed: false,
+    },
+    credentialsUsed: false,
+    oldStateRefreshFreeNoOp: true,
+    currentObserveRefresh: true,
+    currentMutationDuringRefresh: false,
+    oldProviderRollbackNoOp: true,
+    currentOmittedBucketCreateCanonicalized: true,
+    openTofuEvidence: {
+      status: "proof-complete",
+      providerAddress: authorities.identity.provider.openTofuAddress,
+      schemaStructuralSha256: "c".repeat(64),
+      stateProviderAddressExact: true,
+      storageClassKnownStandard: true,
+      addressesTreatedAsInterchangeable: false,
+      stateValuesRecorded: false,
+    },
+    terraformEvidence: {
+      status: "proof-complete",
+      terraformAddress: authorities.identity.provider.terraformServeAddress,
+      openTofuAddress: authorities.identity.provider.openTofuAddress,
+      schemaLoadedAtTerraformAddress: true,
+      schemaStructuralSha256: "c".repeat(64),
+      stateProviderAddressExact: true,
+      refreshPlanNoOp: true,
+      addressesTreatedAsInterchangeable: false,
+      stateValuesRecorded: false,
+    },
+    phaseEvidence: {
+      oldApply: "six-resource-put-and-target-pool-put-exact",
+      currentRefreshFreePlan: "zero-managed-route-requests",
+      currentRefresh: "six-resource-observe-and-target-pool-get-exact",
+      oldRollback: "six-resource-get-and-target-pool-get-exact",
+    },
+    exactHistoricalNetworkMirror: true,
+    devOverrideUsedOnlyForCandidate: true,
+  };
+}
 
 function additiveSchemaFixture() {
   const providerBlock = {
