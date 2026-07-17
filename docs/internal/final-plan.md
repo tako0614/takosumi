@@ -935,12 +935,13 @@ Introspection always authenticates a registered client. Interface OAuth
 introspection additionally requires the caller to send the exact resource URI,
 and an invocation route accepts the result only when it is active and `aud`,
 the single permission scope, Workspace/Capsule, and subject match. Interface,
-Binding, and resolved-revision fields remain inspectable evidence but are not
-static target pins: authenticated `active: true` means Core has just validated
-their current values. Ordinary OAuth and personal access credentials use explicit
-`token_use = oauth_access` and `token_use = personal_access` claims. Token
-prefixes remain an opaque generation format and never select an authorization
-path or principal kind.
+Binding, and resolved-revision fields remain required, well-formed evidence but
+are not static target pins: authenticated `active: true` means Core has just
+validated their current values. This avoids requiring post-apply Interface
+identities as pre-apply module inputs. Ordinary OAuth and personal access
+credentials use explicit `token_use = oauth_access` and
+`token_use = personal_access` claims. Token prefixes remain an opaque generation
+format and never select an authorization path or principal kind.
 
 `delivery.type = workload_token` remains `NotReady` in v1alpha1 even when the
 Principal OAuth issuer is configured. A future workload implementation must

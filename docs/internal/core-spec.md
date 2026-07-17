@@ -418,9 +418,12 @@ Interface OAuth introspection also requires the exact resource URI. Platform
 composition derives ordinary OAuth, personal access, and Interface OAuth
 identity from explicit `token_use` claims, rejects unknown claims, and verifies
 the active result's audience, scope, Workspace/Capsule, and subject against the
-selected resource route. The returned Interface identifiers are evidence, not
-static target configuration: authenticated `active: true` is authoritative
-because Core just revalidated them. Opaque token prefixes are not routing or
+selected resource route. The returned Interface id, Binding id, and positive
+resolved revision are required evidence fields, not static target configuration:
+authenticated `active: true` is authoritative because Core just revalidated
+their current values. The target validates that evidence shape together with
+the exact audience/scope/Workspace/Capsule/subject, without pre-pinning values
+that exist only after apply. Opaque token prefixes are not routing or
 authorization authority.
 
 `delivery.type = workload_token` remains NotReady even when the Principal
