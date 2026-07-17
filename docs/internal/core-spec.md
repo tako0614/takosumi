@@ -919,10 +919,26 @@ TargetPool or operator/admin authority
 ```
 
 The current Takosumi discovery/routes/provider resource names remain bounded
-compatibility. A neutral protocol is dual-advertised only after conformance and
-maps to the same canonical Resource ID/row. Changing provider address does not
-rename resource types; every supported state migration requires no-op and
-rollback fixtures.
+compatibility. `/.well-known/takoform` now dual-advertises the exact
+`/apis/forms.takoform.com/v1alpha1` facade and the retained `/v1` compatibility
+lane. The exact facade requires the complete installed FormRef, principal-safe
+availability, ETag preconditions, mutation idempotency keys, and stable neutral
+errors, but delegates every operation to `ResourceShapeService`; it owns no
+second Resource, Run, audit, or idempotency state. Its response projection omits
+Target/implementation/manager/credential/capacity/commercial evidence and raw
+canonical Outputs. Changing provider address does not rename resource types;
+every supported state migration requires no-op and rollback fixtures. The
+current Takoform provider still uses `/v1` and therefore remains compatibility
+evidence until a release consumes the exact facade.
+
+Standard status is independently fail-closed. Admission consumes retained rows
+produced by the injected Takoform data-only package verifier plus exact semantic
+evidence; it does not parse a second package or infer status from a kind name.
+The exact schema digest, complete lifecycle/immutability/import/observe/drift/
+security/Interface audits, canonical desired/observed/output and negative
+fixtures, and full host/provider proof coverage must all pass. The legacy ten
+kinds remain compatibility candidates unless each exact definition supplies
+that evidence.
 
 The Resource API is Takosumi-native, but the wire model follows standard
 control-plane conventions:
