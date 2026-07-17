@@ -15,7 +15,11 @@
  *   - `projection.ts`      — output / diagnostic projection and redaction
  */
 
-import type { JsonValue, PlanScopeSelector } from "takosumi-contract";
+import type {
+  JsonValue,
+  PlanScopeSelector,
+  ProviderConfigurationsEnvelope,
+} from "takosumi-contract";
 import type {
   ApplyExpectedGuard,
   ApplyRun,
@@ -478,6 +482,7 @@ export interface ReleaseCommandRunJob {
   readonly commands: readonly ReleaseActivationCommand[];
   readonly sourceSnapshot: SourceSnapshot;
   readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
+  readonly providerConfigurations: ProviderConfigurationsEnvelope;
   readonly credentials?: RunCredentials;
   readonly applyRunId: string;
   readonly workspaceId?: string;
@@ -506,6 +511,12 @@ export interface ReleaseActivationInput {
    * secret-shaped names/values are filtered before this seam.
    */
   readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
+  /**
+   * Exact, Plan-fenced non-secret provider-block configuration resolved from
+   * ProviderBindings. Lifecycle commands receive this separately from the
+   * dispatch-only credential bundle.
+   */
+  readonly providerConfigurations: ProviderConfigurationsEnvelope;
   /**
    * Dispatch-only provider credentials for release commands.
    * Minted immediately before activation from the same reviewed ProviderBinding

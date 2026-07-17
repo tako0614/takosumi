@@ -556,6 +556,18 @@ MUST terminal-succeed before provider destroy is dispatched. Core MUST use the
 generic Run/Capsule status and audit vocabulary and MUST NOT introduce an
 app-specific receipt/schema for these actions.
 
+Lifecycle dispatch MUST also resolve the Plan-fenced ProviderBinding set even
+when no command opts into provider credentials. Validated non-secret
+`ProviderConnection.scopeHints.providerConfig` values are carried in the
+canonical `takosumi.provider-configurations@v1` envelope, with a sorted
+`providers` array of `{ provider, alias, configuration }` entries. The binding
+digest and RunEnvironment evidence digest MUST cover the envelope. Runner
+commands receive its deterministic JSON as the reserved
+`TAKOSUMI_PROVIDER_CONFIGS_JSON` env value; user command env MUST NOT override
+it. The dispatch path MUST re-reject secret-like keys and values. Credential
+material stays separate and is minted only when the reviewed action explicitly
+allows it.
+
 A repository may publish `.well-known/tcs.json` as an optional repo-owned
 presentation document for Store indexers. It is not a Takosumi manifest and is
 not required for direct Git installs. It can contain display text, icon URL,
