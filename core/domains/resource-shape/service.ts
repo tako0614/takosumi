@@ -142,6 +142,7 @@ export type ResourceServiceErrorCode =
   | "import_conflict"
   | "ownership_conflict"
   | "reconcile_conflict"
+  | "resource_version_conflict"
   | "deployment_review_required"
   | "deployment_plan_changed"
   | "deployment_quote_invalid"
@@ -172,6 +173,8 @@ export interface ApplyResourceRequest {
   /** Exact installed portable definition for Form-backed execution. */
   readonly form?: InstalledFormReference;
   readonly name: string;
+  /** Optional portable-client optimistic concurrency fence (0 means create). */
+  readonly expectedGeneration?: number;
   readonly spec: JsonObject;
   readonly managedBy?: ResourceManagedBy;
   readonly labels?: Readonly<Record<string, string>>;
@@ -306,6 +309,13 @@ export interface DeleteResourceOptions {
    * bypass the ownership fence.
    */
   readonly expectedManagedBy?: ResourceManagedBy;
+  /** Optional exact desired-generation fence used by portable clients. */
+  readonly expectedGeneration?: number;
+}
+
+export interface ResourceOperationPrecondition {
+  /** Optional exact desired-generation fence used by portable clients. */
+  readonly expectedGeneration?: number;
 }
 
 export interface ResourceOperationRunRepairResult {
@@ -685,6 +695,12 @@ export class ResourceShapeService {
   ): Promise<ServiceResult<PreviewResourceResult>> {
     const resourceId = formatResourceShapeId(req.space, req.kind, req.name);
     const existing = await this.#stores.resources.get(resourceId);
+    const versionError = resourceGenerationError(
+      resourceId,
+      existing,
+      req.expectedGeneration,
+    );
+    if (versionError) return versionError;
     const existingLock = await this.#stores.locks.get(resourceId);
     const form = await this.#resolveExactForm(req, existing, existingLock);
     if (!form.ok) return form;
@@ -878,6 +894,12 @@ export class ResourceShapeService {
       this.#stores.resources.get(id),
       this.#stores.locks.get(id),
     ]);
+    const versionError = resourceGenerationError(
+      id,
+      existing,
+      req.expectedGeneration,
+    );
+    if (versionError) return versionError;
     const form = await this.#resolveExactForm(req, existing, existingLock, {
       allowRetainedPackage: recoveryRequested,
     });
@@ -1682,11 +1704,40 @@ export class ResourceShapeService {
     const recoveringImport =
       existing !== undefined &&
       existingLock !== undefined &&
-      importRequestMatchesApplying(req, existing, importRequestDigest);
+      importRequestMatchesRecord(
+        req,
+        existing,
+        importRequestDigest,
+        "Applying",
+      );
+    const completedImport =
+      existing !== undefined &&
+      existingLock !== undefined &&
+      importRequestMatchesRecord(req, existing, importRequestDigest, "Ready");
     const form = await this.#resolveExactForm(req, existing, existingLock, {
-      allowRetainedPackage: recoveringImport,
+      allowRetainedPackage: recoveringImport || completedImport,
     });
     if (!form.ok) return form;
+    if (completedImport) {
+      return {
+        ok: true,
+        value: {
+          resource: this.#assemble(existing, existingLock),
+          import: {
+            summary: "canonical import already completed",
+            ...(existing.lastOperationRunId
+              ? { runId: existing.lastOperationRunId }
+              : {}),
+          },
+        },
+      };
+    }
+    const versionError = resourceGenerationError(
+      id,
+      existing,
+      req.expectedGeneration,
+    );
+    if (versionError && !recoveringImport) return versionError;
     if (existing && !recoveringImport) {
       return {
         ok: false,
@@ -2056,7 +2107,7 @@ export class ResourceShapeService {
       observedGeneration: 1,
       outputs: result.outputs,
       execution: result.execution,
-      conditions: [importedCondition(1, importedAt)],
+      conditions: [importedCondition(1, importedAt, importRequestDigest)],
       ...(operationRun ? { lastOperationRunId: operationRun.id } : {}),
       updatedAt: importedAt,
     };
@@ -2254,9 +2305,16 @@ export class ResourceShapeService {
     kind: ResourceShapeKind,
     name: string,
     actor: ActorContext,
+    precondition: ResourceOperationPrecondition = {},
   ): Promise<ServiceResult<ObserveResourceResult>> {
     const id = formatResourceShapeId(space, kind, name);
     const record = await this.#stores.resources.get(id);
+    const versionError = resourceGenerationError(
+      id,
+      record,
+      precondition.expectedGeneration,
+    );
+    if (versionError) return versionError;
     if (!record) {
       return {
         ok: false,
@@ -2662,9 +2720,16 @@ export class ResourceShapeService {
     kind: ResourceShapeKind,
     name: string,
     actor: ActorContext,
+    precondition: ResourceOperationPrecondition = {},
   ): Promise<ServiceResult<RefreshResourceResult>> {
     const id = formatResourceShapeId(space, kind, name);
     const record = await this.#stores.resources.get(id);
+    const versionError = resourceGenerationError(
+      id,
+      record,
+      precondition.expectedGeneration,
+    );
+    if (versionError) return versionError;
     if (!record) {
       return {
         ok: false,
@@ -3199,6 +3264,12 @@ export class ResourceShapeService {
   ): Promise<ServiceResult<void>> {
     const id = formatResourceShapeId(space, kind, name);
     const record = await this.#stores.resources.get(id);
+    const versionError = resourceGenerationError(
+      id,
+      record,
+      options.expectedGeneration,
+    );
+    if (versionError) return versionError;
     if (!record) {
       return await this.#retireResourceDeployment(
         space,
@@ -4862,6 +4933,7 @@ export class ResourceShapeService {
       metadata: {
         name: req.name,
         space: req.space,
+        generation: req.expectedGeneration ?? 0,
         project: req.project,
         environment: req.environment,
         owner: req.actor.actorAccountId,
@@ -4897,6 +4969,7 @@ export class ResourceShapeService {
       metadata: {
         name: record.name,
         space: record.spaceId,
+        generation: record.generation,
         project: record.project,
         environment: record.environment,
         labels: record.labels,
@@ -5236,6 +5309,23 @@ function resourceOwnershipConflict<T>(
   };
 }
 
+function resourceGenerationError(
+  resourceId: string,
+  current: ResourceShapeRecord | undefined,
+  expectedGeneration: number | undefined,
+): { readonly ok: false; readonly error: ResourceServiceError } | undefined {
+  if (expectedGeneration === undefined) return undefined;
+  const currentGeneration = current?.generation ?? 0;
+  if (currentGeneration === expectedGeneration) return undefined;
+  return {
+    ok: false,
+    error: {
+      code: "resource_version_conflict",
+      message: `resource ${resourceId} is at generation ${currentGeneration}; expected ${expectedGeneration}`,
+    },
+  };
+}
+
 function formIdentityConflict<T>(message: string): ServiceResult<T> {
   return {
     ok: false,
@@ -5336,20 +5426,22 @@ async function resourceImportRequestDigest(
   });
 }
 
-function importRequestMatchesApplying(
+function importRequestMatchesRecord(
   request: ImportResourceRequest,
   record: ResourceShapeRecord,
   requestDigest: string,
+  phase: "Applying" | "Ready",
 ): boolean {
   const marker = record.conditions?.find(
     (condition) =>
-      condition.type === "Ready" && condition.reason === "Importing",
+      condition.type === "Ready" &&
+      condition.reason === (phase === "Applying" ? "Importing" : "Imported"),
   );
   return (
-    record.phase === "Applying" &&
+    record.phase === phase &&
     record.managedBy === (request.managedBy ?? "opentofu") &&
     record.generation === 1 &&
-    record.observedGeneration === 0 &&
+    record.observedGeneration === (phase === "Applying" ? 0 : 1) &&
     request.space === record.spaceId &&
     request.kind === record.kind &&
     resourceFormIdentitiesEqual(request.form, record.form) &&
@@ -6288,11 +6380,16 @@ function importingCondition(
   };
 }
 
-function importedCondition(generation: number, at: IsoTimestamp): Condition {
+function importedCondition(
+  generation: number,
+  at: IsoTimestamp,
+  requestDigest: string,
+): Condition {
   return {
     type: "Ready",
     status: "true",
     reason: "Imported",
+    message: `import-request:${requestDigest}`,
     observedGeneration: generation,
     lastTransitionAt: at,
   };

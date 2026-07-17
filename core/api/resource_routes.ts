@@ -25,6 +25,7 @@ import { apiError, readJsonObject, requestIdFromContext } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
 import { parsePageQuery } from "./page_query.ts";
+import { registerPortableFormHostRoutes } from "./form_host_routes.ts";
 import {
   type ApplyResourceRequest,
   formatResourceShapeId,
@@ -179,6 +180,13 @@ export function registerResourceShapeRoutes(
       );
     }
   }
+
+  registerPortableFormHostRoutes(app, {
+    service,
+    availability: service,
+    authorize: (c) => authorizeResourceShapeRequest(c, options),
+    canReadForms: hasFormAvailabilityReadScope,
+  });
 
   app.get("/v1/form-availability", async (c) => {
     const auth = await authorizeResourceShape(c, options);
@@ -1014,6 +1022,7 @@ function httpStatusForServiceError(
     case "import_conflict":
     case "ownership_conflict":
     case "reconcile_conflict":
+    case "resource_version_conflict":
     case "deployment_review_required":
     case "deployment_plan_changed":
       return 409;
