@@ -980,6 +980,16 @@ mutation and never falls through to `latest`. Deprecated or revoked definition
 bytes are retained for safe observe/delete or an explicit operator recovery
 path.
 
+For a Resource with an exact identity, the canonical direct-operation `Run`,
+its terminal result evidence, and every associated `NativeResource` reference
+MUST carry the same `FormRef`/`packageDigest` pair. Preview, apply, import,
+observe, refresh, delete, recovery, and rollback MUST reject a missing or
+substituted pair before backend replay. The adapter receives the pinned pair as
+input and cannot select a replacement. Replay MUST verify the retained package
+and definition bytes for that exact pair without re-resolution. These records
+MUST remain redacted: the identity is durable evidence, not a place for
+credentials or native values.
+
 Workspace and Capsule control backups include a redacted exact-pin sidecar for
 coherent Resource/ResolutionLock pairs. The sidecar excludes Resource spec,
 outputs, target/implementation details, and NativeResource values. Internal
