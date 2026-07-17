@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import {
+  createAccountsHandler,
   InMemoryAccountsStore,
   PostgresAccountsStore,
   type PostgresQueryClient,
 } from "@takosjp/takosumi-accounts-service";
-import { handleUserInfo } from "../../../../accounts/service/src/oidc-routes.ts";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { ComposedAppInput } from "../../../../deploy/node-postgres/src/composed-app.ts";
 import type { NodeAccountsServerConfig } from "../../../../deploy/node-postgres/src/handler.ts";
@@ -292,13 +292,17 @@ test("composed Capsule Interface OAuth uses canonical Capsule authority without 
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const store = new InMemoryAccountsStore();
-  const spy = accountsHandlerSpy();
   const { buildComposedApp } =
     await import("../../../../deploy/node-postgres/src/composed-app.ts");
   const created = await buildComposedApp({
     config: testConfig(),
     store: store as unknown as PostgresAccountsStore,
-    accountsHandler: spy.handler,
+    createAccountsHandler: (controlPlaneOperations) =>
+      createAccountsHandler({
+        issuer: testConfig().issuer,
+        store,
+        controlPlaneOperations,
+      }),
     runtimeEnv: {
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
     },
@@ -409,13 +413,11 @@ test("composed Capsule Interface OAuth uses canonical Capsule authority without 
   assert.equal(issued.resource, audience);
   assert.equal(issued.scope, "mcp.invoke");
 
-  const userInfo = await handleUserInfo({
-    request: new Request("http://localhost/oauth/userinfo", {
+  const userInfo = await created.app.fetch(
+    new Request("http://localhost/oauth/userinfo", {
       headers: { authorization: `Bearer ${issued.access_token}` },
     }),
-    store,
-    expectedAudience: audience,
-  });
+  );
   assert.equal(userInfo.status, 200);
   assert.deepEqual(await userInfo.json(), {
     sub: principalSubject,
@@ -430,7 +432,16 @@ test("composed Capsule Interface OAuth uses canonical Capsule authority without 
       interface_resolved_revision: iface.status.resolvedRevision,
     },
   });
-
+  await created.operations.interfaces.revokeBinding(
+    iface.metadata.id,
+    binding.metadata.id,
+  );
+  const staleUserInfo = await created.app.fetch(
+    new Request("http://localhost/oauth/userinfo", {
+      headers: { authorization: `Bearer ${issued.access_token}` },
+    }),
+  );
+  assert.equal(staleUserInfo.status, 401);
 });
 
 test("composed app owns Takosumi product discovery before account fallback", async () => {

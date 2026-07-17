@@ -117,6 +117,7 @@ import {
   isControlRoutePath,
 } from "./control-routes.ts";
 import { maybeEnsurePersonalWorkspaceForSession } from "./control-personal-workspace.ts";
+import type { InterfaceOAuthActivityValidator } from "./access-token-activity.ts";
 export type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
@@ -126,6 +127,10 @@ export type { LoginEmailAllowlist } from "./login-email-allowlist.ts";
 export * from "./subject.ts";
 export * from "./store.ts";
 export * from "./interface-oauth-token.ts";
+export type {
+  InterfaceOAuthActivityEvidence,
+  InterfaceOAuthActivityValidator,
+} from "./access-token-activity.ts";
 export * from "./upstream.ts";
 export * from "./upstream-config.ts";
 export * from "./passkey.ts";
@@ -161,6 +166,8 @@ export interface AccountsHandlerOptions {
    * respond 503 after the session gate.
    */
   controlPlaneOperations?: ControlPlaneOperations;
+  /** Canonical current-state check for short-lived Interface OAuth tokens. */
+  interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   /** Operator-owned hostname namespace used for managed Capsule endpoints. */
   managedPublicBaseDomain?: string;
   loginEmailAllowlist?: LoginEmailAllowlist;
@@ -184,6 +191,7 @@ export interface EphemeralAccountsHandlerOptions {
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
   controlPlaneOperations?: ControlPlaneOperations;
+  interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   managedPublicBaseDomain?: string;
   loginEmailAllowlist?: LoginEmailAllowlist;
   privacyOperationsToken?: string;
@@ -301,6 +309,7 @@ export async function createEphemeralAccountsHandler(
     upstreamOAuth: options.upstreamOAuth,
     passkeys: options.passkeys,
     controlPlaneOperations: options.controlPlaneOperations,
+    interfaceOAuthActivityValidator: options.interfaceOAuthActivityValidator,
     ...(options.managedPublicBaseDomain
       ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
       : {}),
@@ -417,6 +426,14 @@ export function createAccountsHandler(
   const privacyRetentionPolicyRef = options.privacyRetentionPolicyRef
     ? normalizePrivacyRetentionPolicyRef(options.privacyRetentionPolicyRef)
     : undefined;
+  const interfaceOAuthActivityValidator =
+    options.interfaceOAuthActivityValidator ??
+    (options.controlPlaneOperations?.interfaces
+      ? (evidence) =>
+          options.controlPlaneOperations!.interfaces!.validatePrincipalOAuth2TokenEvidence(
+            evidence,
+          )
+      : undefined);
 
   // Per-isolate rate limiters. Each entry maps client IP to a sliding window
   // of recent request timestamps. These limiters guard the abuse-prone OIDC
@@ -497,7 +514,13 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_USERINFO_PATH) {
       if (request.method !== "GET") return methodNotAllowed("GET");
-      return await handleUserInfo({ request, store });
+      return await handleUserInfo({
+        request,
+        store,
+        ...(interfaceOAuthActivityValidator
+          ? { interfaceOAuthActivityValidator }
+          : {}),
+      });
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_REVOKE_PATH) {
@@ -507,7 +530,15 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_INTROSPECT_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      return await handleIntrospect({ issuer, request, store, clients });
+      return await handleIntrospect({
+        issuer,
+        request,
+        store,
+        clients,
+        ...(interfaceOAuthActivityValidator
+          ? { interfaceOAuthActivityValidator }
+          : {}),
+      });
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_SESSION_ME_PATH) {

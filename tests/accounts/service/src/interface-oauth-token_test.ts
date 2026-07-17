@@ -12,6 +12,7 @@ import {
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 
 const audience = "https://office.example.test/mcp";
+const currentInterfaceOAuthEvidence = () => true;
 const confidentialClients = new Map([
   [
     "resource-server",
@@ -76,6 +77,7 @@ test("Interface OAuth issuer mints a short-lived opaque token with exact UserInf
     }),
     store,
     expectedAudience: audience,
+    interfaceOAuthActivityValidator: currentInterfaceOAuthEvidence,
   });
 
   expect(response.status).toBe(200);
@@ -94,6 +96,64 @@ test("Interface OAuth issuer mints a short-lived opaque token with exact UserInf
       interface_resolved_revision: 7,
     },
   });
+});
+
+test("Interface OAuth activity fails closed and removes canonically stale tokens", async () => {
+  const store = new InMemoryAccountsStore();
+  const issued = await issueInterfaceOAuthAccessToken({
+    store,
+    subject: "pairwise_stale_subject",
+    workspaceId: "ws_owner",
+    capsuleId: "capsule_office",
+    audience,
+    permission: "mcp.invoke",
+    interfaceId: "if_stale",
+    bindingId: "ifb_stale",
+    interfaceRevision: 9,
+  });
+  let observed: unknown;
+  const stale = await handleIntrospect({
+    issuer: "https://accounts.example.test",
+    request: introspectionRequest(issued.accessToken, { resource: audience }),
+    store,
+    clients: confidentialClients,
+    interfaceOAuthActivityValidator: (evidence) => {
+      observed = evidence;
+      return false;
+    },
+  });
+  expect(await stale.json()).toEqual({ active: false });
+  expect(observed).toEqual({
+    workspaceId: "ws_owner",
+    capsuleId: "capsule_office",
+    interfaceId: "if_stale",
+    bindingId: "ifb_stale",
+    interfaceResolvedRevision: 9,
+    subjectId: "pairwise_stale_subject",
+    permission: "mcp.invoke",
+    resource: audience,
+  });
+  expect(await store.findAccessToken(issued.accessToken)).toBeUndefined();
+
+  const unvalidated = await issueInterfaceOAuthAccessToken({
+    store,
+    subject: "pairwise_unvalidated_subject",
+    workspaceId: "ws_owner",
+    audience,
+    permission: "mcp.invoke",
+    interfaceId: "if_unvalidated",
+    bindingId: "ifb_unvalidated",
+    interfaceRevision: 1,
+  });
+  const userInfo = await handleUserInfo({
+    request: new Request("https://accounts.example.test/oauth/userinfo", {
+      headers: { authorization: `Bearer ${unvalidated.accessToken}` },
+    }),
+    store,
+    expectedAudience: audience,
+  });
+  expect(userInfo.status).toBe(401);
+  expect(await store.findAccessToken(unvalidated.accessToken)).toBeUndefined();
 });
 
 test("ordinary OAuth UserInfo returns the subject account profile", async () => {
@@ -194,6 +254,7 @@ test("Interface OAuth introspection requires confidential client auth and the ex
     request: introspectionRequest(issued.accessToken, { resource: audience }),
     store,
     clients: confidentialClients,
+    interfaceOAuthActivityValidator: currentInterfaceOAuthEvidence,
   });
   expect(valid.status).toBe(200);
   expect(await valid.json()).toMatchObject({
@@ -217,6 +278,7 @@ test("Interface OAuth introspection requires confidential client auth and the ex
       request: introspectionRequest(issued.accessToken, { resource }),
       store,
       clients: confidentialClients,
+      interfaceOAuthActivityValidator: currentInterfaceOAuthEvidence,
     });
     expect(await denied.json()).toEqual({ active: false });
   }
@@ -232,6 +294,7 @@ test("Interface OAuth introspection requires confidential client auth and the ex
     }),
     store,
     clients: confidentialClients,
+    interfaceOAuthActivityValidator: currentInterfaceOAuthEvidence,
   });
   expect(unauthenticated.status).toBe(401);
   expect(await unauthenticated.json()).toEqual({ error: "invalid_client" });
@@ -255,6 +318,7 @@ test("Interface OAuth introspection requires confidential client auth and the ex
     }),
     store,
     clients: publicClient,
+    interfaceOAuthActivityValidator: currentInterfaceOAuthEvidence,
   });
   expect(publicDenied.status).toBe(401);
 });
@@ -365,6 +429,7 @@ test("Interface OAuth UserInfo supports Workspace-owned Interfaces and rejects a
     }),
     store,
     expectedAudience: "https://other.example.test/mcp",
+    interfaceOAuthActivityValidator: currentInterfaceOAuthEvidence,
   });
   expect(wrongAudience.status).toBe(401);
 
@@ -374,6 +439,7 @@ test("Interface OAuth UserInfo supports Workspace-owned Interfaces and rejects a
     }),
     store,
     expectedAudience: audience,
+    interfaceOAuthActivityValidator: currentInterfaceOAuthEvidence,
   });
   expect(valid.status).toBe(200);
   expect(await valid.json()).toEqual({

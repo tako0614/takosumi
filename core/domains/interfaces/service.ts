@@ -33,6 +33,10 @@ import type {
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
+import {
+  canonicalInterfaceOAuth2ResourceUri,
+  interfaceOAuth2ResourceUri,
+} from "./oauth_resource.ts";
 
 const INTERFACE_OAUTH2_MAX_TTL_MS = 60_000;
 
@@ -125,6 +129,18 @@ export interface InterfacePrincipalOAuth2IssueInput {
   readonly interfaceOwnerRef: Interface["metadata"]["ownerRef"];
   readonly bindingId: string;
   readonly bindingGeneration: number;
+  readonly subjectId: string;
+  readonly permission: string;
+  readonly resource: string;
+}
+
+/** Non-secret evidence persisted by a host OAuth issuer for active checks. */
+export interface InterfacePrincipalOAuth2ActivityEvidence {
+  readonly workspaceId: string;
+  readonly capsuleId?: string;
+  readonly interfaceId: string;
+  readonly bindingId: string;
+  readonly interfaceResolvedRevision: number;
   readonly subjectId: string;
   readonly permission: string;
   readonly resource: string;
@@ -738,6 +754,12 @@ export class InterfaceService {
         "Interface owner is not authoritative for the OAuth2 resource",
       );
     }
+    if ((await this.#claimOAuth2Resource(iface, resource)) !== "claimed") {
+      throw new InterfaceServiceError(
+        "failed_precondition",
+        "Interface OAuth2 resource is already claimed by another Interface",
+      );
+    }
 
     const issuedAt = this.#now();
     const issuedAtMillis = Date.parse(issuedAt);
@@ -804,6 +826,9 @@ export class InterfaceService {
         ownerRef: currentInterface.metadata.ownerRef,
         resource,
       }));
+    const resourceClaimStillCurrent =
+      (await this.#claimOAuth2Resource(currentInterface, resource)) ===
+      "claimed";
     if (
       currentInterface.metadata.workspaceId !== workspaceId ||
       currentInterface.metadata.generation !== iface.metadata.generation ||
@@ -812,6 +837,7 @@ export class InterfaceService {
         iface.status.resolvedRevision ||
       resolvedOAuth2Resource(currentInterface) !== resource ||
       !resourceStillAuthorized ||
+      !resourceClaimStillCurrent ||
       !currentBinding ||
       currentBinding.metadata.workspaceId !== workspaceId ||
       currentBinding.metadata.generation !== binding.metadata.generation ||
@@ -853,6 +879,75 @@ export class InterfaceService {
       scope: permission,
       resource,
     };
+  }
+
+  /**
+   * Revalidates opaque Accounts token evidence against canonical current Core
+   * state. Hosts call this at UserInfo/introspection time; a false result never
+   * reveals which lifecycle, Binding, ownership, or uniqueness fence failed.
+   */
+  async validatePrincipalOAuth2TokenEvidence(
+    input: InterfacePrincipalOAuth2ActivityEvidence,
+  ): Promise<boolean> {
+    try {
+      const workspaceId = requireText(input.workspaceId, "workspaceId");
+      const interfaceId = requireText(input.interfaceId, "interfaceId");
+      const bindingId = requireText(input.bindingId, "bindingId");
+      const subjectId = requireText(input.subjectId, "subjectId");
+      validatePermissionToken(input.permission, "permission");
+      if (
+        !Number.isSafeInteger(input.interfaceResolvedRevision) ||
+        input.interfaceResolvedRevision <= 0
+      ) {
+        return false;
+      }
+      const resource = canonicalInterfaceOAuth2ResourceUri(input.resource);
+      if (!resource || resource !== input.resource) return false;
+
+      const iface = await this.reconcile(interfaceId, {
+        allowSafetyRecovery: true,
+      });
+      const ownerCapsuleId =
+        iface.metadata.ownerRef.kind === "Capsule"
+          ? iface.metadata.ownerRef.id
+          : undefined;
+      if (
+        iface.metadata.workspaceId !== workspaceId ||
+        iface.status.phase !== "Resolved" ||
+        iface.status.resolvedRevision !== input.interfaceResolvedRevision ||
+        resolvedOAuth2Resource(iface) !== resource ||
+        ownerCapsuleId !== input.capsuleId ||
+        !this.#oauth2ResourceAuthorizer ||
+        !(await oauth2ResourceAuthorized(this.#oauth2ResourceAuthorizer, {
+          workspaceId,
+          interfaceId,
+          ownerRef: iface.metadata.ownerRef,
+          resource,
+        }))
+      ) {
+        return false;
+      }
+      const binding = await this.#stores.bindings.get(bindingId);
+      const bindingCurrent =
+        binding !== undefined &&
+        binding.metadata.workspaceId === workspaceId &&
+        binding.spec.interfaceId === interfaceId &&
+        binding.status.phase === "Ready" &&
+        binding.status.observedInterfaceRevision ===
+          iface.status.resolvedRevision &&
+        binding.spec.subjectRef.kind === "Principal" &&
+        binding.spec.subjectRef.id === subjectId &&
+        binding.spec.permissions.includes(input.permission) &&
+        binding.spec.delivery.type === "oauth2" &&
+        binding.spec.delivery.credentialRef === undefined &&
+        binding.spec.delivery.options === undefined;
+      return (
+        bindingCurrent &&
+        (await this.#claimOAuth2Resource(iface, resource)) === "claimed"
+      );
+    } catch {
+      return false;
+    }
   }
 
   async update(
@@ -1632,6 +1727,12 @@ export class InterfaceService {
       request.subjectRef,
       this.#bindingDeliveryHandlers,
     );
+    // The durable owner/resource claim is written only after the Binding row
+    // exists. Until #refreshBinding wins that CAS, OAuth delivery is not Ready.
+    const initialReadiness =
+      request.delivery.type === "oauth2" && readiness.ready
+        ? { ready: false, reason: "OAuthResourceClaimPending" }
+        : readiness;
     const record: InterfaceBinding = {
       apiVersion: TAKOSUMI_API_VERSION,
       kind: "InterfaceBinding",
@@ -1670,13 +1771,13 @@ export class InterfaceService {
         },
       },
       status: {
-        phase: readiness.ready ? "Ready" : "NotReady",
+        phase: initialReadiness.ready ? "Ready" : "NotReady",
         observedInterfaceRevision: iface.status.resolvedRevision,
         conditions: [
           condition(
             "Ready",
-            readiness.ready ? "true" : "false",
-            readiness.reason,
+            initialReadiness.ready ? "true" : "false",
+            initialReadiness.reason,
             now,
             1,
           ),
@@ -1969,19 +2070,37 @@ export class InterfaceService {
       const current = await this.#stores.bindings.get(bindingId);
       if (!current || current.status.phase === "Revoked") return;
       const iface = await this.get(current.spec.interfaceId);
-      const readiness = await bindingReadiness(
+      let readiness = await bindingReadiness(
         iface,
         current.spec.delivery,
         current.spec.subjectRef,
         this.#bindingDeliveryHandlers,
       );
+      if (readiness.ready && current.spec.delivery.type === "oauth2") {
+        const resource = resolvedOAuth2Resource(iface);
+        const claim = resource
+          ? await this.#claimOAuth2Resource(iface, resource)
+          : "changed";
+        if (claim === "changed") continue;
+        if (claim === "conflict") {
+          readiness = { ready: false, reason: "OAuthResourceConflict" };
+        }
+      }
       const retired = iface.status.phase === "Retired";
       const ready = readiness.ready;
       const desiredPhase = retired ? "Revoked" : ready ? "Ready" : "NotReady";
+      const desiredReason = retired ? "InterfaceRetired" : readiness.reason;
+      const desiredConditionStatus = ready ? "true" : "false";
       if (
         current.status.phase === desiredPhase &&
         current.status.observedInterfaceRevision ===
-          iface.status.resolvedRevision
+          iface.status.resolvedRevision &&
+        current.status.conditions?.some(
+          (item) =>
+            item.type === "Ready" &&
+            item.status === desiredConditionStatus &&
+            item.reason === desiredReason,
+        )
       )
         return;
       const now = this.#now();
@@ -2000,7 +2119,7 @@ export class InterfaceService {
                 condition(
                   "Ready",
                   "false",
-                  "InterfaceRetired",
+                  desiredReason,
                   now,
                   current.metadata.generation + 1,
                 ),
@@ -2010,7 +2129,7 @@ export class InterfaceService {
                   condition(
                     "Ready",
                     "true",
-                    "Resolved",
+                    desiredReason,
                     now,
                     current.metadata.generation + 1,
                   ),
@@ -2019,7 +2138,7 @@ export class InterfaceService {
                   condition(
                     "Ready",
                     "false",
-                    readiness.reason,
+                    desiredReason,
                     now,
                     current.metadata.generation + 1,
                   ),
@@ -2057,6 +2176,31 @@ export class InterfaceService {
         binding.status.observedInterfaceRevision ===
           iface.status.resolvedRevision,
     );
+  }
+
+  async #claimOAuth2Resource(
+    iface: Interface,
+    resource: string,
+  ): Promise<"claimed" | "conflict" | "changed"> {
+    if (interfaceOAuth2ResourceUri(iface) !== resource) return "changed";
+    if (
+      await this.#stores.interfaces.claimOAuth2Resource({
+        record: iface,
+        resource,
+      })
+    ) {
+      return "claimed";
+    }
+    const claimedBy =
+      await this.#stores.interfaces.findOAuth2ResourceClaim({
+        workspaceId: iface.metadata.workspaceId,
+        ownerKind: iface.metadata.ownerRef.kind,
+        ownerId: iface.metadata.ownerRef.id,
+        resource,
+      });
+    return claimedBy && claimedBy !== iface.metadata.id
+      ? "conflict"
+      : "changed";
   }
 }
 
@@ -2745,17 +2889,7 @@ async function oauth2ResourceAuthorized(
 }
 
 function resolvedOAuth2Resource(iface: Interface): string | undefined {
-  if (iface.status.phase !== "Resolved") return undefined;
-  const inputName = iface.spec.access.resourceUriInput;
-  if (!inputName) return undefined;
-  try {
-    return validateResolvedResourceUri(
-      iface.status.resolvedInputs?.[inputName],
-      inputName,
-    );
-  } catch {
-    return undefined;
-  }
+  return interfaceOAuth2ResourceUri(iface);
 }
 
 function normalizedOwner(owner: unknown): Interface["metadata"]["ownerRef"] {
@@ -2998,50 +3132,6 @@ function jsonByteLength(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
-const SECRET_URL_PARAMETER_NAMES = new Set([
-  "authorization",
-  "proxyauthorization",
-  "cookie",
-  "setcookie",
-  "password",
-  "passwd",
-  "secret",
-  "token",
-  "clientsecret",
-  "privatekey",
-  "signingkey",
-  "apikey",
-  "accesstoken",
-  "refreshtoken",
-  "sessiontoken",
-  "bearertoken",
-  "credential",
-  "credentials",
-  "credentialvalue",
-  "xapikey",
-  "auth",
-  "jwt",
-  "session",
-  "sessionid",
-  "sig",
-  "signature",
-  "xamzcredential",
-  "xamzsecuritytoken",
-  "xamzsignature",
-  "xgoogcredential",
-  "xgoogsignature",
-]);
-
-function urlParametersContainCredential(parameters: URLSearchParams): boolean {
-  for (const [name, value] of parameters) {
-    const normalizedName = name.toLowerCase().replace(/[^a-z0-9]/gu, "");
-    if (value.trim() !== "" && SECRET_URL_PARAMETER_NAMES.has(normalizedName)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function requireRecord(value: unknown, field: string): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new InterfaceServiceError(
@@ -3113,36 +3203,14 @@ function validateResolvedResourceUri(
       `resolved input ${inputName} URI exceeds 2048 characters`,
     );
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new InterfaceServiceError(
-      "invalid_argument",
-      `resolved input ${inputName} must be an absolute URI`,
-    );
-  }
-  if (
-    parsed.username !== "" ||
-    parsed.password !== "" ||
-    urlParametersContainCredential(parsed.searchParams) ||
-    (parsed.hash.length > 1 &&
-      urlParametersContainCredential(
-        new URLSearchParams(parsed.hash.slice(1)),
-      )) ||
-    parsed.protocol !== "https:"
-  ) {
+  const canonical = canonicalInterfaceOAuth2ResourceUri(value);
+  if (!canonical) {
     throw new InterfaceServiceError(
       "invalid_argument",
       `resolved input ${inputName} must be a credential-free HTTPS resource URI`,
     );
   }
-  // OAuth resource identity is the canonical HTTPS resource endpoint, not a
-  // particular request query or client-side fragment. Consumers perform the
-  // same query/hash-free exact comparison at invocation.
-  parsed.search = "";
-  parsed.hash = "";
-  return parsed.href;
+  return canonical;
 }
 
 function condition(
