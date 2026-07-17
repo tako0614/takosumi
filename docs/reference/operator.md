@@ -16,6 +16,9 @@ CLI/API/runbook による運用、managed target catalog、商用運用を追加
 - CredentialRecipe seed、provider allowlist、ProviderConnection policy を管理する
 - ProviderConnection の封印済み backing material / secret 配信を管理する
 - Form Registry / implementation / FormActivation / TargetPool / Adapter / compatibility profile の有効性を管理する
+- FormActivation は operator-bearer `/v1/form-activations` API または
+  `takosumi form-activations` で運用し、price / payment / capacity / SLA を
+  activation policy に入れない
 - Service Form-backed Resource の scheduled observation の頻度・batch・並列数を runner capacity に合わせて管理する
 - state backend と lock backend を管理する
 - production / staging では database URL の形式から保存時暗号化を推測せず、storage adapter の証跡、または確認済みの
