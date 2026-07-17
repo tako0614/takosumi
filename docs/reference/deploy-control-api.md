@@ -231,7 +231,12 @@ Ready になりません。Plan は applied 済みとして消費されるため
 Capsule は、個々の post-apply コマンドに `executor = "runner"` または
 `executor = "operator"` を指定できます。Runner コマンドは source snapshot に復元され、
 `TAKOSUMI_OUTPUTS_JSON` のような non-secret な metadata に加え、reviewed run が
-ProviderBinding を持っていた場合は dispatch-only の provider credential を受け取ります。
+ProviderBinding を持っていた場合は、exact binding から解決した non-secret な provider
+設定を `TAKOSUMI_PROVIDER_CONFIGS_JSON` (`takosumi.provider-configurations@v1`) で受け取ります。
+provider source と alias (`null` は default provider block) ごとの設定を `providers` 配列で
+表し、binding digest と RunEnvironment evidence digest が内容を固定します。この reserved env
+はコマンド側から override できません。dispatch-only の provider credential は別 bundle で、
+action が明示的に opt-in した場合だけ runner に渡します。
 Operator コマンドは組み込みの runner activator では実行されず、runner sandbox の外側の
 作業に対する credential boundary を持つ operator/Cloud release activator を host が
 設定しない場合、その Run は直ちに fail-closed します。コマンドは、実行制約として `timeout_seconds` /
@@ -251,7 +256,9 @@ URL は non-secret な operator 設定です。token は Worker secret です。
 `https` である必要があります。`http` は、明示的な local substrate/dev mode でのみ許容
 されます。webhook は、canonical な `workspaceId`、Capsule、StateVersion、Output、Run の
 ledger 参照と、すでに filter 済みの non-sensitive な output を持つ
-`takosumi.operator.release-activation@v2` の JSON payload を受け取ります。廃止済みの
+`takosumi.operator.release-activation@v2` の JSON payload を受け取ります。payload の
+`providerConfigurations` も同じ exact non-secret envelope であり、secret-like な key/value
+は送信前に再度拒否されます。廃止済みの
 Space / Installation / Deployment の別名は受け付けません。public な readiness の証跡は、
 Workspace / Project / Capsule / StateVersion / Output の主張として表現されます。この
 payload は operator が制御する bridge の契約であり、customer API surface ではありません。

@@ -42,6 +42,18 @@ test("local OpenTofu runner executes generic release commands in restored source
       nonSensitiveOutputs: {
         public_url: "https://app.example.test",
       },
+      providerConfigurations: {
+        format: "takosumi.provider-configurations@v1",
+        providers: [
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            alias: null,
+            configuration: {
+              base_url: "https://provider.example.test/api",
+            },
+          },
+        ],
+      },
       credentials: {
         env: {
           CLOUDFLARE_API_TOKEN: "fixture-cloudflare-release-token",
@@ -70,8 +82,9 @@ test("local OpenTofu runner executes generic release commands in restored source
             "-e",
             [
               "const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON)",
+              "const providerConfigs = JSON.parse(Bun.env.TAKOSUMI_PROVIDER_CONFIGS_JSON)",
               "if (Bun.env.CLOUDFLARE_API_TOKEN !== 'fixture-cloudflare-release-token') process.exit(7)",
-              "console.log(`${Bun.env.TAKOSUMI_APPLY_RUN_ID}:${outputs.public_url}`)",
+              "console.log(`${Bun.env.TAKOSUMI_APPLY_RUN_ID}:${outputs.public_url}:${providerConfigs.providers[0].configuration.base_url}`)",
               "console.log(`token=${Bun.env.CLOUDFLARE_API_TOKEN}`)",
             ].join(";"),
           ],
@@ -83,7 +96,9 @@ test("local OpenTofu runner executes generic release commands in restored source
     expect(result.status).toBe("succeeded");
     expect(result.runId).toBe("release_apply_1");
     expect(result.commandCount).toBe(1);
-    expect(result.stdout).toContain("apply_1:https://app.example.test");
+    expect(result.stdout).toContain(
+      "apply_1:https://app.example.test:https://provider.example.test/api",
+    );
     expect(result.stdout).toContain("token=[redacted]");
     expect(JSON.stringify(result)).not.toContain(
       "fixture-cloudflare-release-token",

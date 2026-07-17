@@ -15,12 +15,21 @@ import type {
   ProviderRequirementPhase,
   ProviderResolution,
 } from "takosumi-contract/provider-resolution";
+import {
+  emptyProviderConfigurationsEnvelope,
+  providerConfigurationsEnvelope,
+  type ProviderConfigurationsEnvelope,
+} from "takosumi-contract";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
-import type { ResolvedCapsuleProviderBinding } from "../connections/mod.ts";
+import {
+  resolvedProviderBindingsDigest,
+  type ResolvedCapsuleProviderBinding,
+} from "../connections/mod.ts";
 import type { RunCredentials } from "./mod.ts";
 import type { RunCredentialBroker } from "./run_credential_broker.ts";
 import {
   OpenTofuControllerError,
+  PROVIDER_CONNECTION_CHANGED_REASON,
   PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
 } from "./errors.ts";
 
@@ -66,11 +75,18 @@ export interface ResolveRunEnvironmentInput {
   readonly phase: "plan" | "apply" | "destroy";
   readonly auditRunId: string;
   readonly credentialContext?: "opentofu" | "release_command";
+  /**
+   * A lifecycle command without `useProviderCredentials` still needs the
+   * reviewed, non-secret provider configuration. Set false to resolve and
+   * fence that configuration without minting credential material.
+   */
+  readonly mintCredentials?: boolean;
 }
 
 export interface ResolvedRunEnvironment {
   readonly credentials?: RunCredentials;
   readonly providerResolutions: readonly ProviderResolution[];
+  readonly providerConfigurations: ProviderConfigurationsEnvelope;
   readonly runEnvironmentEvidenceDigest: string;
   readonly redactionProfileId: typeof RUN_ENV_REDACTION_PROFILE_ID;
 }
@@ -103,7 +119,12 @@ export class RunEnvResolver {
   async resolveRunEnvironment(
     input: ResolveRunEnvironmentInput,
   ): Promise<ResolvedRunEnvironment> {
-    const providerResolutions = await this.#providerResolutions(input);
+    const resolution = await this.#providerResolutionContext(input);
+    await assertPlanFencedResolvedBindings(input, resolution.resolvedBindings);
+    const providerResolutions = resolution.providerResolutions;
+    const providerConfigurations = providerConfigurationsFromResolved(
+      resolution.resolvedBindings,
+    );
     const blocked = providerResolutions.find(
       (resolution) => resolution.evidence.kind === "blocked",
     );
@@ -111,6 +132,7 @@ export class RunEnvResolver {
       const runEnvironment = await this.#buildRunEnvironmentEvidence(
         input,
         providerResolutions,
+        providerConfigurations,
         undefined,
       );
       throw new RunEnvironmentResolutionError(
@@ -120,20 +142,23 @@ export class RunEnvResolver {
       );
     }
     const credentials =
-      input.credentialContext === "release_command"
-        ? await this.#credentials.mintReleaseCommandCredentials(
-            input.planRun,
-            releaseCommandCredentialPhase(input.phase),
-            input.auditRunId,
-          )
-        : await this.#credentials.mintRunCredentials(
-            input.planRun,
-            input.phase,
-            input.auditRunId,
-          );
+      input.mintCredentials === false
+        ? undefined
+        : input.credentialContext === "release_command"
+          ? await this.#credentials.mintReleaseCommandCredentials(
+              input.planRun,
+              releaseCommandCredentialPhase(input.phase),
+              input.auditRunId,
+            )
+          : await this.#credentials.mintRunCredentials(
+              input.planRun,
+              input.phase,
+              input.auditRunId,
+            );
     return await this.#buildRunEnvironmentEvidence(
       input,
       providerResolutions,
+      providerConfigurations,
       withCapsuleRunAmbientEnv(
         credentials,
         await this.#capsuleRunAmbientEnv(input),
@@ -172,6 +197,7 @@ export class RunEnvResolver {
   async #buildRunEnvironmentEvidence(
     input: ResolveRunEnvironmentInput,
     providerResolutions: readonly ProviderResolution[],
+    providerConfigurations: ProviderConfigurationsEnvelope,
     credentials: RunCredentials | undefined,
   ): Promise<ResolvedRunEnvironment> {
     const credentialEnvNames =
@@ -181,60 +207,75 @@ export class RunEnvResolver {
       phase: input.phase,
       credentialContext: input.credentialContext ?? "opentofu",
       providerResolutions,
+      providerConfigurations,
       credentialEnvNames,
       credentialManifest: credentials?.manifest ?? null,
+      credentialMaterialRequested: input.mintCredentials !== false,
       redactionProfileId: RUN_ENV_REDACTION_PROFILE_ID,
     });
     return {
       ...(credentials ? { credentials } : {}),
       providerResolutions,
+      providerConfigurations,
       runEnvironmentEvidenceDigest,
       redactionProfileId: RUN_ENV_REDACTION_PROFILE_ID,
     };
   }
 
-  async #providerResolutions(
+  async #providerResolutionContext(
     input: ResolveRunEnvironmentInput,
-  ): Promise<readonly ProviderResolution[]> {
+  ): Promise<ProviderResolutionContext> {
     const planRun = input.planRun;
-    if (planRun.requiredProviders.length === 0) return [];
+    const resolveBindings =
+      planRun.requiredProviders.length > 0 ||
+      input.credentialContext === "release_command";
+    if (!resolveBindings) {
+      return {
+        providerResolutions: [],
+        resolvedBindings: undefined,
+      };
+    }
     if (!planRun.capsuleContext && !planRun.resourceContext) {
-      return planRun.requiredProviders.map((provider) => {
-        const requirement = providerRequirement(planRun, provider);
-        return {
-          requirement,
-          status: "blocked_missing_connection",
-          blockedReason: `capsule provider connection evidence is required for provider ${provider}`,
-          evidence: {
-            kind: "blocked",
-            provider,
-            reason: `capsule provider connection evidence is required for provider ${provider}`,
-          },
-        };
-      });
+      return {
+        providerResolutions: planRun.requiredProviders.map((provider) => {
+          const requirement = providerRequirement(planRun, provider);
+          return {
+            requirement,
+            status: "blocked_missing_connection",
+            blockedReason: `capsule provider connection evidence is required for provider ${provider}`,
+            evidence: {
+              kind: "blocked",
+              provider,
+              reason: `capsule provider connection evidence is required for provider ${provider}`,
+            },
+          };
+        }),
+        resolvedBindings: undefined,
+      };
     }
     const resolved = await this.#resolveRunProviderBindings(planRun);
     if (!resolved) {
-      return planRun.requiredProviders.map((provider) => {
-        const requirement = providerRequirement(planRun, provider);
-        return {
-          requirement,
-          status: "blocked_missing_connection",
-          blockedReason: `capsule provider connection resolution is required for provider ${provider}`,
-          evidence: {
-            kind: "blocked",
-            provider,
-            reason: `capsule provider connection resolution is required for provider ${provider}`,
-          },
-        };
-      });
+      return {
+        providerResolutions: planRun.requiredProviders.map((provider) => {
+          const requirement = providerRequirement(planRun, provider);
+          return {
+            requirement,
+            status: "blocked_missing_connection",
+            blockedReason: `capsule provider connection resolution is required for provider ${provider}`,
+            evidence: {
+              kind: "blocked",
+              provider,
+              reason: `capsule provider connection resolution is required for provider ${provider}`,
+            },
+          };
+        }),
+        resolvedBindings: undefined,
+      };
     }
 
     const resolutions: ProviderResolution[] = [];
     for (const provider of planRun.requiredProviders) {
-      const match = resolved.find((entry) =>
-        sameProviderSource(provider, entry.provider),
-      );
+      const match = resolvedBindingForProvider(resolved, provider);
       const requirement = providerRequirement(planRun, provider);
       if (!match) {
         // `resolveRunProviderBindings` has already enforced the
@@ -248,8 +289,71 @@ export class RunEnvResolver {
         providerResolutionFromResolved(input, requirement, match),
       );
     }
-    return resolutions;
+    return { providerResolutions: resolutions, resolvedBindings: resolved };
   }
+}
+
+async function assertPlanFencedResolvedBindings(
+  input: ResolveRunEnvironmentInput,
+  resolved: readonly ResolvedCapsuleProviderBinding[] | undefined,
+): Promise<void> {
+  const expected = input.planRun.resolvedProviderBindingsDigest;
+  if (input.phase === "plan" || expected === undefined || !resolved) return;
+  const actual = await resolvedProviderBindingsDigest(resolved);
+  if (actual === expected) return;
+  throw new OpenTofuControllerError(
+    "failed_precondition",
+    `resolved_bindings_changed: plan run ${input.planRun.id} was reviewed against different provider connections than are now resolved; re-plan before ${input.phase}`,
+    { reason: PROVIDER_CONNECTION_CHANGED_REASON },
+  );
+}
+
+function resolvedBindingForProvider(
+  resolved: readonly ResolvedCapsuleProviderBinding[],
+  provider: string,
+): ResolvedCapsuleProviderBinding | undefined {
+  return resolved
+    .filter((entry) => sameProviderSource(provider, entry.provider))
+    .sort((left, right) => {
+      if (left.alias === right.alias) {
+        return compareText(left.connection.id, right.connection.id);
+      }
+      if (left.alias === undefined) return -1;
+      if (right.alias === undefined) return 1;
+      return compareText(left.alias, right.alias);
+    })[0];
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+interface ProviderResolutionContext {
+  readonly providerResolutions: readonly ProviderResolution[];
+  readonly resolvedBindings:
+    readonly ResolvedCapsuleProviderBinding[] | undefined;
+}
+
+function providerConfigurationsFromResolved(
+  resolved: readonly ResolvedCapsuleProviderBinding[] | undefined,
+): ProviderConfigurationsEnvelope {
+  if (!resolved || resolved.length === 0) {
+    return emptyProviderConfigurationsEnvelope();
+  }
+  return providerConfigurationsEnvelope(
+    resolved.flatMap((entry) => {
+      const configuration = entry.connection.scopeHints?.providerConfig;
+      return configuration && Object.keys(configuration).length > 0
+        ? [
+            {
+              provider: entry.provider,
+              alias: entry.alias ?? null,
+              configuration,
+            },
+          ]
+        : [];
+    }),
+  );
 }
 
 function withCapsuleRunAmbientEnv(

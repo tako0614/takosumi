@@ -6313,7 +6313,7 @@ export class RunEngine {
     });
     let actionDispatched = false;
     try {
-      const credentials = await this.#releaseCredentialsForCommands({
+      const releaseEnvironment = await this.#releaseEnvironmentForCommands({
         planRun: input.planRun,
         applyRun: input.applyRun,
         commands,
@@ -6328,7 +6328,10 @@ export class RunEngine {
         stateVersion: input.stateVersion,
         output: input.output,
         nonSensitiveOutputs,
-        ...(credentials ? { credentials } : {}),
+        providerConfigurations: releaseEnvironment.providerConfigurations,
+        ...(releaseEnvironment.credentials
+          ? { credentials: releaseEnvironment.credentials }
+          : {}),
         commands,
         ...(sourceSnapshot ? { sourceSnapshot } : {}),
       });
@@ -6537,7 +6540,7 @@ export class RunEngine {
     let result: ReleaseActivationResult;
     let actionDispatched = false;
     try {
-      const credentials = await this.#releaseCredentialsForCommands({
+      const releaseEnvironment = await this.#releaseEnvironmentForCommands({
         planRun: input.planRun,
         applyRun: input.applyRun,
         commands,
@@ -6551,7 +6554,10 @@ export class RunEngine {
         stateVersion,
         output,
         nonSensitiveOutputs,
-        ...(credentials ? { credentials } : {}),
+        providerConfigurations: releaseEnvironment.providerConfigurations,
+        ...(releaseEnvironment.credentials
+          ? { credentials: releaseEnvironment.credentials }
+          : {}),
         commands,
         ...(sourceSnapshot ? { sourceSnapshot } : {}),
       });
@@ -6607,25 +6613,21 @@ export class RunEngine {
     return outcome;
   }
 
-  async #releaseCredentialsForCommands(input: {
+  async #releaseEnvironmentForCommands(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
     readonly commands: readonly ReleaseActivationCommand[];
     readonly phase: "apply" | "destroy";
-  }): Promise<RunCredentials | undefined> {
-    if (
-      !input.commands.some((command) => command.useProviderCredentials === true)
-    ) {
-      return undefined;
-    }
-    return (
-      await this.#runEnv.resolveRunEnvironment({
-        planRun: input.planRun,
-        phase: input.phase,
-        auditRunId: releaseCommandRunId(input.applyRun.id),
-        credentialContext: "release_command",
-      })
-    ).credentials;
+  }): Promise<ResolvedRunEnvironment> {
+    return await this.#runEnv.resolveRunEnvironment({
+      planRun: input.planRun,
+      phase: input.phase,
+      auditRunId: releaseCommandRunId(input.applyRun.id),
+      credentialContext: "release_command",
+      mintCredentials: input.commands.some(
+        (command) => command.useProviderCredentials === true,
+      ),
+    });
   }
 
   async #recordReleaseActivationActivity(input: {

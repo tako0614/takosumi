@@ -7,6 +7,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isReservedProviderEnvName } from "../../contract/provider-env-rules.ts";
+import {
+  emptyProviderConfigurationsEnvelope,
+  parseProviderConfigurationsEnvelope,
+  providerConfigurationsJson,
+} from "../../contract/provider-configurations.ts";
 import type {
   JsonRecord,
   RunWorkspace,
@@ -435,7 +440,18 @@ export function parseRelease(request: unknown): ReleaseSpec {
     }),
     ...releaseOutputs(recordField(request, "outputs")),
     ...releaseActivation(recordField(request, "activation")),
+    providerConfigurations: releaseProviderConfigurations(
+      isRecord(request) ? request.providerConfigurations : undefined,
+    ),
   };
+}
+
+function releaseProviderConfigurations(
+  value: unknown,
+): ReleaseSpec["providerConfigurations"] {
+  return value === undefined
+    ? emptyProviderConfigurationsEnvelope()
+    : parseProviderConfigurationsEnvelope(value);
 }
 
 export function releaseOutputs(
@@ -554,6 +570,9 @@ export function releaseBaseEnv(
         }
       : {}),
     TAKOSUMI_OUTPUTS_JSON: JSON.stringify(outputs),
+    TAKOSUMI_PROVIDER_CONFIGS_JSON: providerConfigurationsJson(
+      release.providerConfigurations,
+    ),
     TAKOSUMI_RELEASE_CONTEXT_JSON: JSON.stringify({
       kind: "takosumi.release-context@v1",
       releaseRunId: runId,

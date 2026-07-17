@@ -25,7 +25,8 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
                 [
                   `const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON)`,
                   `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
-                  `await Bun.write("release-output.txt", [Bun.env.RELEASE_LABEL, process.cwd().split("/").pop(), outputs.public_url, context.outputs.public_url, context.applyRunId, context.workspaceId, Bun.env.TAKOSUMI_WORKSPACE_ID, context.capsuleId, Bun.env.TAKOSUMI_CAPSULE_ID, context.stateVersionId, Bun.env.TAKOSUMI_STATE_VERSION_ID].join(":"))`,
+                  `const providerConfigs = JSON.parse(Bun.env.TAKOSUMI_PROVIDER_CONFIGS_JSON)`,
+                  `await Bun.write("release-output.txt", [Bun.env.RELEASE_LABEL, process.cwd().split("/").pop(), outputs.public_url, context.outputs.public_url, context.applyRunId, context.workspaceId, Bun.env.TAKOSUMI_WORKSPACE_ID, context.capsuleId, Bun.env.TAKOSUMI_CAPSULE_ID, context.stateVersionId, Bun.env.TAKOSUMI_STATE_VERSION_ID, providerConfigs.format, providerConfigs.providers[0].provider, providerConfigs.providers[0].alias, providerConfigs.providers[0].configuration.base_url].join(":"))`,
                   `console.log("release ok")`,
                 ].join(";"),
               ],
@@ -35,6 +36,19 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
           ],
         },
         outputs: { public_url: "https://app.example.test" },
+        providerConfigurations: {
+          format: "takosumi.provider-configurations@v1",
+          providers: [
+            {
+              provider: "cloudflare/cloudflare",
+              alias: "edge",
+              configuration: {
+                retries: 3,
+                base_url: "https://provider.example.test/api",
+              },
+            },
+          ],
+        },
         activation: {
           applyRunId: "run_apply_1",
           workspaceId: "space_1",
@@ -57,7 +71,7 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
     await expect(
       readFile(join(sourceRoot, "scripts", "release-output.txt"), "utf8"),
     ).resolves.toBe(
-      "public:scripts:https://app.example.test:https://app.example.test:run_apply_1:space_1:space_1:inst_1:inst_1:state_1:state_1",
+      "public:scripts:https://app.example.test:https://app.example.test:run_apply_1:space_1:space_1:inst_1:inst_1:state_1:state_1:takosumi.provider-configurations@v1:registry.opentofu.org/cloudflare/cloudflare:edge:https://provider.example.test/api",
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -83,6 +97,8 @@ test("release action treats post-apply work as opaque app commands", async () =>
                 [
                   `if (Bun.env.ARTIFACT_DIR !== "artifacts") process.exit(9)`,
                   `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
+                  `const providerConfigs = JSON.parse(Bun.env.TAKOSUMI_PROVIDER_CONFIGS_JSON)`,
+                  `if (providerConfigs.format !== "takosumi.provider-configurations@v1" || providerConfigs.providers.length !== 0) process.exit(8)`,
                   `await Bun.write("post-apply-ran.txt", ["opaque", context.kind, Bun.env.ARTIFACT_DIR].join(":"))`,
                 ].join(";"),
               ],
@@ -318,6 +334,32 @@ test("release action rejects provider credential and reserved env", async () => 
     await rm(reservedRoot, { recursive: true, force: true });
   }
 
+  const providerConfigsRunId = `release_provider_configs_reserved_${crypto.randomUUID().replace(/-/g, "")}`;
+  const providerConfigsRoot = join(RUN_ROOT, safeRunId(providerConfigsRunId));
+  try {
+    await mkdir(join(providerConfigsRoot, "source"), { recursive: true });
+    const response = await handleRunnerRequest(
+      runnerRequest(providerConfigsRunId, {
+        release: {
+          commands: [
+            {
+              id: "should-not-run",
+              command: [process.execPath, "-e", `console.log("ran")`],
+              env: { TAKOSUMI_PROVIDER_CONFIGS_JSON: "{}" },
+            },
+          ],
+        },
+      }),
+    );
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body.stderr).toContain(
+      "release command env must not override reserved TAKOSUMI_PROVIDER_CONFIGS_JSON",
+    );
+  } finally {
+    await rm(providerConfigsRoot, { recursive: true, force: true });
+  }
+
   const secretLikeRunId = `release_secret_like_${crypto.randomUUID().replace(/-/g, "")}`;
   const secretLikeRoot = join(RUN_ROOT, safeRunId(secretLikeRunId));
   try {
@@ -343,6 +385,49 @@ test("release action rejects provider credential and reserved env", async () => 
     expect(JSON.stringify(body)).not.toContain("postgres://localhost/example");
   } finally {
     await rm(secretLikeRoot, { recursive: true, force: true });
+  }
+});
+
+test("release action rejects secret-like provider configuration payloads", async () => {
+  const secret = "postgres://user:password@example.test/database";
+  for (const [suffix, configuration] of [
+    ["key", { api_token: "must-never-leak" }],
+    ["value", { endpoint: secret }],
+  ] as const) {
+    const runId = `release_provider_config_secret_${suffix}_${crypto.randomUUID().replace(/-/g, "")}`;
+    const root = join(RUN_ROOT, safeRunId(runId));
+    try {
+      await mkdir(join(root, "source"), { recursive: true });
+      const response = await handleRunnerRequest(
+        runnerRequest(runId, {
+          release: {
+            commands: [
+              {
+                id: "should-not-run",
+                command: [process.execPath, "-e", `console.log("ran")`],
+              },
+            ],
+          },
+          providerConfigurations: {
+            format: "takosumi.provider-configurations@v1",
+            providers: [
+              {
+                provider: "cloudflare/cloudflare",
+                alias: null,
+                configuration,
+              },
+            ],
+          },
+        }),
+      );
+      expect(response.status).toBe(500);
+      const body = await response.json();
+      expect(body.stderr).toContain("secret-like");
+      expect(JSON.stringify(body)).not.toContain(secret);
+      expect(JSON.stringify(body)).not.toContain("must-never-leak");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 

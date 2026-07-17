@@ -3129,6 +3129,19 @@ test("service-side lifecycle action receives only non-sensitive OpenTofu outputs
       },
     ]),
   });
+  const boundConnection = await store.getConnection(
+    "conn_fixture_ws_test001_cloudflare",
+  );
+  expect(boundConnection).toBeDefined();
+  await store.putConnection({
+    ...boundConnection!,
+    scopeHints: {
+      ...boundConnection!.scopeHints,
+      providerConfig: {
+        base_url: "https://provider.example.test/api",
+      },
+    },
+  });
   const activations: ReleaseActivationInput[] = [];
   const controller = controllerWith(store, runner, {
     activity: activityRecorderFor(store),
@@ -3169,6 +3182,19 @@ test("service-side lifecycle action receives only non-sensitive OpenTofu outputs
     worker_name: "yuru-smoke-secret",
     bucket_name: "my-bucket",
   });
+  expect(activations[0]?.providerConfigurations).toEqual({
+    format: "takosumi.provider-configurations@v1",
+    providers: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "main",
+        configuration: {
+          base_url: "https://provider.example.test/api",
+        },
+      },
+    ],
+  });
+  expect(activations[0]?.credentials).toBeUndefined();
   expect(JSON.stringify(activations[0])).not.toContain("admin_token");
   expect(JSON.stringify(activations[0])).not.toContain("super-secret-token");
   expect(JSON.stringify(activations[0])).not.toContain("sk-output-raw-token");
@@ -3643,6 +3669,19 @@ test("runner release commands receive dispatch-only provider credentials", async
       },
     ]),
   });
+  const boundConnection = await store.getConnection(
+    "conn_fixture_ws_test001_cloudflare",
+  );
+  expect(boundConnection).toBeDefined();
+  await store.putConnection({
+    ...boundConnection!,
+    scopeHints: {
+      ...boundConnection!.scopeHints,
+      providerConfig: {
+        base_url: "https://provider.example.test/api",
+      },
+    },
+  });
   const activations: ReleaseActivationInput[] = [];
   const controller = controllerWith(store, runner, {
     activity: activityRecorderFor(store),
@@ -3685,6 +3724,18 @@ test("runner release commands receive dispatch-only provider credentials", async
         }),
       ],
     },
+  });
+  expect(activations[0]?.providerConfigurations).toEqual({
+    format: "takosumi.provider-configurations@v1",
+    providers: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "main",
+        configuration: {
+          base_url: "https://provider.example.test/api",
+        },
+      },
+    ],
   });
 
   const activity = (await store.listActivityEvents("ws_test001")).find(

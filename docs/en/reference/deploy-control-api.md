@@ -244,7 +244,14 @@ as a missing activator re-evaluates the still-pinned runtime revision.
 Capsules may mark individual post-apply commands with `executor = "runner"` or
 `executor = "operator"`. Runner commands are restored into the source snapshot
 and receive non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON` plus
-dispatch-only provider credentials when the reviewed run had ProviderBindings.
+the non-secret provider configuration resolved from the exact binding as
+`TAKOSUMI_PROVIDER_CONFIGS_JSON` (`takosumi.provider-configurations@v1`) when
+the reviewed run had ProviderBindings. Its `providers` array identifies each
+configuration by provider source and alias (`null` means the default provider
+block), and both the binding digest and RunEnvironment evidence digest fence
+its contents. Command env cannot override this reserved name. Dispatch-only
+provider credentials remain a separate bundle and reach the runner only when
+the action explicitly opts in.
 Operator commands are not attempted by the built-in runner activator. Without
 an operator/Cloud release activator that owns the credential boundary for work
 outside the runner sandbox, the Run fails closed immediately.
@@ -265,7 +272,9 @@ The URL is non-secret operator config. The token is a Worker secret. Production
 URLs must be `https`; `http` is accepted only in explicit local substrate/dev
 mode. The webhook receives a `takosumi.operator.release-activation@v2` JSON
 payload with canonical `workspaceId`, Capsule, StateVersion, Output, and Run
-ledger references plus already-filtered non-sensitive outputs. It does not
+ledger references plus already-filtered non-sensitive outputs. Its
+`providerConfigurations` field carries the same exact non-secret envelope;
+secret-like keys and values are rejected again before dispatch. It does not
 accept retired Space / Installation / Deployment aliases. Public readiness
 evidence is expressed as Workspace /
 Project / Capsule / StateVersion / Output claims. This payload is an
