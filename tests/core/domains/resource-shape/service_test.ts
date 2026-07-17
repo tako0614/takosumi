@@ -261,7 +261,10 @@ function directOperationLedger() {
   };
 }
 
-function makeService(formRegistry?: ResourceShapeServiceDeps["formRegistry"]) {
+function makeService(
+  formRegistry?: ResourceShapeServiceDeps["formRegistry"],
+  deploymentAdmission?: ResourceDeploymentAdmission,
+) {
   const stores = createInMemoryResourceShapeStores();
   const service = new ResourceShapeService({
     stores,
@@ -270,6 +273,7 @@ function makeService(formRegistry?: ResourceShapeServiceDeps["formRegistry"]) {
     now: () => NOW,
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
     ...(formRegistry ? { formRegistry } : {}),
+    ...(deploymentAdmission ? { deploymentAdmission } : {}),
   });
   return { stores, service };
 }
@@ -1006,7 +1010,8 @@ test("exact Form path requires installed authority and explicitly backfills lega
     },
   });
 
-  const { service, stores } = makeService(exactFormRegistry());
+  const admission = new RecordingDeploymentAdmission();
+  const { service, stores } = makeService(exactFormRegistry(), admission);
   await seed(service);
   expect((await reviewedApply(service, APPLY)).ok).toBe(true);
   expect((await stores.resources.get(APPLY_ID))?.form).toBeUndefined();
@@ -1015,6 +1020,7 @@ test("exact Form path requires installed authority and explicitly backfills lega
   const exactPreview = await service.preview({ ...APPLY, form: EXACT_FORM });
   expect(exactPreview.ok).toBe(true);
   if (!exactPreview.ok) throw new Error(exactPreview.error.message);
+  expect(admission.quoteContexts.at(-1)?.form).toEqual(EXACT_FORM);
   const legacyComparison = makeService();
   await seed(legacyComparison.service);
   const legacyPreview = await legacyComparison.service.preview(APPLY);
@@ -1027,7 +1033,11 @@ test("exact Form path requires installed authority and explicitly backfills lega
     (
       await service.apply(
         { ...APPLY, form: EXACT_FORM },
-        { planDigest: exactPreview.value.planDigest },
+        {
+          planDigest: exactPreview.value.planDigest,
+          quoteId: exactPreview.value.quote!.quoteId,
+          quoteDigest: exactPreview.value.quote!.quoteDigest,
+        },
       )
     ).ok,
   ).toBe(true);
