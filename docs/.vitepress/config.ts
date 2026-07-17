@@ -82,6 +82,10 @@ const enSidebar: DefaultTheme.SidebarMulti = {
           text: "Execution boundaries",
           link: "/en/reference/operator-execution-boundaries",
         },
+        {
+          text: "Portable Form host API",
+          link: "/en/reference/portable-form-host-api",
+        },
         { text: "Operator", link: "/en/reference/operator" },
         { text: "CLI", link: "/en/reference/cli" },
         { text: "App Handoff", link: "/en/reference/app-handoff" },

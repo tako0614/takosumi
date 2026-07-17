@@ -41,6 +41,7 @@
     "provider:mirror:materialize": "bun scripts/provider-release.mjs materialize",
     "provider:mirror:proof": "bun tests/proofs/provider-mirror-install.ts",
     "service-form:compat-inventory": "bun scripts/report-service-form-compatibility-inventory.ts",
+    "service-form:host-conformance": "bun scripts/run-portable-form-host-conformance.ts",
     "credential-recipes:assets": "bun scripts/build-credential-recipe-assets.ts",
     "credential-recipes:check": "bun scripts/build-credential-recipe-assets.ts --check",
     "operator:release-activator": "bun scripts/operator-release-activator.ts",
