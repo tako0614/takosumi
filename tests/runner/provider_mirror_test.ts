@@ -64,3 +64,16 @@ test("runner image configures only an OpenTofu provider plugin cache", async () 
   expect(dockerfile).not.toContain("TAKOSUMI_APP_ARTIFACT_CACHE_DIR");
   expect(dockerfile).not.toContain("TAKOSUMI_BUILD_CACHE_DIR");
 });
+
+test("runner image copies the lifecycle provider-configuration contract closure", async () => {
+  const dockerfile = await readFile(RUNNER_DOCKERFILE, "utf8");
+
+  for (const path of [
+    "provider-env-rules.ts",
+    "provider-configurations.ts",
+    "redaction.ts",
+    "types.ts",
+  ]) {
+    expect(dockerfile).toContain(`COPY contract/${path} ./contract/${path}`);
+  }
+});
