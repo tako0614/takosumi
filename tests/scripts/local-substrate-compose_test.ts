@@ -306,6 +306,13 @@ test("route registrar smoke follows the active local-substrate profile", () => {
   expect(routeRegistrarSmoke).toContain(
     "docker inspect -f '{{.State.Status}}' \"$REGISTRAR_CONTAINER\"",
   );
+  expect(routeRegistrarSmoke).toContain(
+    'recent_logs=$(docker logs --since 30s "$REGISTRAR_CONTAINER" 2>&1)',
+  );
+  expect(routeRegistrarSmoke).toContain(
+    'grep -q "synced .* dynamic route" <<<"$recent_logs"',
+  );
+  expect(routeRegistrarSmoke).not.toMatch(/docker logs[^\n]*\n?\s*\| grep -q/u);
 });
 
 test("workers smoke starts every profile-specific production mirror dependency", () => {
