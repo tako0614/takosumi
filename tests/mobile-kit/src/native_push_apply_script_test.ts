@@ -38,6 +38,9 @@ test("native push apply script patches generated iOS and Android projects", () =
     expect(read(appDir, "src-tauri/gen/apple/App.entitlements")).toContain(
       "<string>production</string>",
     );
+    expect(read(appDir, "src-tauri/gen/apple/Info.plist")).toContain(
+      "<key>TauriMobilePushAPNSEnvironment</key>\n\t<string>production</string>",
+    );
     expect(read(appDir, "src-tauri/gen/android/build.gradle.kts")).toContain(
       'id("com.google.gms.google-services") version "4.5.0" apply false',
     );
@@ -268,6 +271,18 @@ function seedGeneratedNativeProject(appDir: string) {
   write(
     appDir,
     "src-tauri/gen/apple/App.entitlements",
+    [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<plist version="1.0">',
+      "<dict>",
+      "</dict>",
+      "</plist>",
+      "",
+    ].join("\n"),
+  );
+  write(
+    appDir,
+    "src-tauri/gen/apple/Info.plist",
     [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<plist version="1.0">',
