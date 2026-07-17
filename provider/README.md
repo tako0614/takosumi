@@ -249,7 +249,7 @@ bun run provider:compatibility:state-proof
 ```
 
 The first command proves that the current machine schema differs only by the
-declared four resources and eight optional attributes. It still reports
+declared four resources and nine optional attributes. It still reports
 `releaseReady: false`: the feature-bearing `1.0.1` patch was rejected and moved
 to this `1.1.0` candidate, while the Terraform install/FQN matrix is not yet
 proven. OpenTofu uses `registry.opentofu.org/takosjp/takosumi`; Terraform uses
@@ -324,7 +324,8 @@ provider "takosumi" {
 }
 
 resource "takosumi_target_pool" "default" {
-  name = "default"
+  name    = "default"
+  classes = ["edge.general"]
 
   target = [{
     name           = "cloudflare-main"
@@ -461,7 +462,7 @@ Operator/admin fields:
 
 | Resource               | Required fields              | Optional fields                                                                                                 |
 | ---------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `takosumi_target_pool` | `name`, one or more `target` | complete module (`provider_source`, `module_template`, input/output JSON) or `plugin` implementation descriptor |
+| `takosumi_target_pool` | `name`, one or more `target` | public placement `classes`; complete module (`provider_source`, `module_template`, input/output JSON) or `plugin` implementation descriptor |
 
 `TargetPool` is the execution authority for each Resource Shape implementation.
 `type`, `shape`, and `implementation` are opaque tokens: neither Takosumi Core

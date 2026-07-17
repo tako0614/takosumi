@@ -87,6 +87,19 @@ export interface RegisterResourceShapeRoutesOptions {
 
 /** Single-source route inventory for capabilities and OpenAPI publication. */
 export const RESOURCE_SHAPE_ENDPOINTS: readonly ApiEndpoint[] = [
+  endpoint("GET", "/v1/form-availability", "listFormAvailability", {
+    okSchema: "ListFormAvailabilityResponse",
+    query: [
+      "space",
+      "apiVersion",
+      "kind",
+      "definitionVersion",
+      "schemaDigest",
+      "packageDigest",
+      "limit",
+      "cursor",
+    ],
+  }),
   endpoint("POST", "/v1/resources/preview", "previewResource", {
     okSchema: "ResourceShapePreviewResponse",
   }),
@@ -166,6 +179,41 @@ export function registerResourceShapeRoutes(
       );
     }
   }
+
+  app.get("/v1/form-availability", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
+    if (!hasFormAvailabilityReadScope(auth.actor)) {
+      return c.json(
+        apiError(
+          "permission_denied",
+          "form availability requires forms:read or resources:read scope",
+          undefined,
+          requestIdFromContext(c),
+        ),
+        403,
+      );
+    }
+    const space = requireQuery(c, "space");
+    if ("response" in space) return space.response;
+    const identity = parseAvailabilityIdentity(c);
+    if ("response" in identity) return identity.response;
+    const page = parseResourcePageQuery(c);
+    if ("response" in page) return page.response;
+    const result = await service.listFormAvailability({
+      actor: auth.actor,
+      space: space.value,
+      ...(identity.value ? { identity: identity.value } : {}),
+      page: page.value,
+    });
+    return c.json(
+      {
+        forms: result.items,
+        ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+      },
+      200,
+    );
+  });
 
   app.post("/v1/resources/preview", async (c) => {
     const auth = await authorizeResourceShape(c, options);
@@ -635,7 +683,7 @@ type ResourceShapeAuthResult =
   | { readonly ok: true; readonly actor: ActorContext }
   | { readonly ok: false; readonly response: Response };
 
-async function authorizeResourceShape(
+export async function authorizeResourceShapeRequest(
   c: Context,
   options: RegisterResourceShapeRoutesOptions,
 ): Promise<ResourceShapeAuthResult> {
@@ -662,6 +710,8 @@ async function authorizeResourceShape(
   return { ok: true, actor: await resolveActor(c, options) };
 }
 
+const authorizeResourceShape = authorizeResourceShapeRequest;
+
 function bearerTokenFromAuthorization(
   value: string | undefined,
 ): string | undefined {
@@ -682,6 +732,64 @@ function invalidResourceShapeBearer(c: Context): ResourceShapeAuthResult {
       401,
     ),
   };
+}
+
+export function hasFormAvailabilityReadScope(actor: ActorContext): boolean {
+  if (actor.scopes === undefined) return true;
+  const scopes = new Set(actor.scopes);
+  return (
+    scopes.has("*") ||
+    scopes.has("forms:read") ||
+    scopes.has("resources:read") ||
+    scopes.has("resources:*") ||
+    // Platform session/PAT scope vocabulary. These remain authenticated
+    // read/admin grants, not an unscoped fallback.
+    scopes.has("read") ||
+    scopes.has("admin")
+  );
+}
+
+function parseAvailabilityIdentity(
+  c: Context,
+):
+  | { readonly value: InstalledFormReference | undefined }
+  | { readonly response: Response } {
+  const fields = {
+    apiVersion: c.req.query("apiVersion"),
+    kind: c.req.query("kind"),
+    definitionVersion: c.req.query("definitionVersion"),
+    schemaDigest: c.req.query("schemaDigest"),
+    packageDigest: c.req.query("packageDigest"),
+  };
+  const provided = Object.values(fields).filter(
+    (value) => value !== undefined,
+  ).length;
+  if (provided === 0) return { value: undefined };
+  if (provided !== Object.keys(fields).length) {
+    return {
+      response: badRequest(
+        c,
+        "exact availability lookup requires apiVersion, kind, definitionVersion, schemaDigest, and packageDigest",
+      ),
+    };
+  }
+  const identity = {
+    formRef: {
+      apiVersion: fields.apiVersion!,
+      kind: fields.kind!,
+      definitionVersion: fields.definitionVersion!,
+      schemaDigest: fields.schemaDigest!,
+    },
+    packageDigest: fields.packageDigest!,
+  };
+  return isInstalledFormReference(identity)
+    ? { value: identity }
+    : {
+        response: badRequest(
+          c,
+          "availability identity must be an exact InstalledFormReference",
+        ),
+      };
 }
 
 function withId(req: ApplyResourceRequest, value: object): object {

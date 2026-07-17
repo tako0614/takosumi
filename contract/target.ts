@@ -128,6 +128,13 @@ export interface TargetImplementationDescriptor {
 }
 
 export interface TargetPoolSpec {
+  /**
+   * Public placement-class tokens used by FormActivation. They deliberately
+   * do not expose Target names, credentials, regions, manager identity, or
+   * capacity. An empty/omitted list keeps the pool usable by unconstrained
+   * activations but gives discovery no class token to publish.
+   */
+  readonly classes?: readonly string[];
   readonly targets: readonly TargetPoolEntry[];
 }
 

@@ -1182,7 +1182,7 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.editor.service.custom": "Operator / custom Shape",
   "resources.editor.stable": "Stable",
   "resources.editor.stableHint":
-    "All ten bundled Resource Shapes use the same Stable Deploy API. AI Gateway and Custom Domains keep their separate Cloud control lifecycles.",
+    "The Resource Shapes available to you use the same Stable Deploy API. This list comes from the host's Form availability contract.",
   "resources.editor.customHint":
     "Operator-defined Shapes use a kind and raw Spec JSON under advanced settings. The endpoint decides availability.",
   "resources.editor.inputsStep": "Required inputs",
@@ -1192,6 +1192,8 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.editor.kindHint":
     "Use a bundled shape or a token explicitly registered by the operator.",
   "resources.editor.kindInvalid": "Enter a valid Shape kind.",
+  "resources.editor.formUnavailable":
+    "No exact Service Form is available to your account in this Space.",
   "resources.editor.name": "Service name",
   "resources.editor.nameRequired": "Enter a service name.",
   "resources.editor.artifactSource": "Immutable artifact source",

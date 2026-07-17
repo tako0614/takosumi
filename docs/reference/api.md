@@ -392,6 +392,36 @@ takosumi form-activations create --file activation.json
 takosumi form-activations update activation_id --file update.json
 ```
 
+### Form availability discovery
+
+認証済み principal は exact FormRef ごとの host 状態を read-only で取得できます。
+
+```http
+GET /v1/form-availability?space={space}&limit={n}&cursor={opaque}
+```
+
+完全一致 lookup は `apiVersion` / `kind` / `definitionVersion` /
+`schemaDigest` / `packageDigest` をすべて指定します。レスポンスは
+`definitionKnown` / `installed` / `executable` / `executableReason` /
+`activated` / `availableToPrincipal` / `availabilityReason` / `operations` /
+`compatibleAdapterIds` / `eligibleTargetPoolClasses` / `deprecated` を返します。
+`forms:read` または `resources:read` scope が必要です。
+
+判定は Form Registry、installed schema、TargetPool descriptor、実際に注入済みの
+module/adapter、FormActivation の scope/audience から fail-closed に導出されます。
+Target 名、implementation/manager identity、credential、region、raw capacity は返しません。
+価格、SKU、請求、Cloud offering は別の closed catalog の責務です。
+
+`GET /v1/capabilities?space={space}` は同じ認証・scope で、その principal の
+structured record を `formAvailability.forms` に投影します。この scoped projection
+では legacy `resources` boolean も `availableToPrincipal` から導出されます。
+`space` なしの capability document は、未移行 client 向けの context-free host
+enablement view のみであり、principal availability の根拠にはできません。
+
+```bash
+takosumi form-availability list --space space_1
+```
+
 現在の v1alpha1 public shape:
 
 ```text
@@ -463,6 +493,9 @@ Space/name が既にあれば `412 target_pool_exists` で、既存の capabilit
 Targetは独立した未実装の`/v1/targets` resourceではなく、現在はTargetPoolの
 `spec.targets[]`にoperatorが完全なcapability evidenceとして宣言します。Resource
 Shape flowのSpacePolicyは同じSpace-scoped endpointで保存・取得・一覧・削除します。
+`TargetPool.spec.classes` は FormActivation の `eligibleTargetPoolClasses` と照合する
+公開 placement class token だけを持ちます。target名、credential、region、manager、
+capacityなどのprivate placement情報を discovery に投影するフィールドではありません。
 
 provider 実行 credential はOpenTofu Stack flowの Provider Connection と Credential Recipe が所有します。
 Recipe の `authModes` key と `preRun.type` は operator/provider が公開する open token で、

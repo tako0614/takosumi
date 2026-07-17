@@ -50,16 +50,17 @@ describe("Resource Shape dashboard surface", () => {
     expect(preview).toBeGreaterThan(inputs);
     expect(price).toBeGreaterThan(preview);
     expect(deploy).toBeGreaterThan(price);
-    expect(editor).toContain('<option value="EdgeWorker">');
-    expect(editor).toContain('<option value="ObjectBucket">');
-    expect(editor).toContain('value="custom"');
+    expect(editor).toContain("<For each={availableForms()}>");
+    expect(editor).toContain("availableToPrincipal");
+    expect(editor).toContain("formIdentityKey(identity)");
+    expect(editor).toContain("formLabel(identity)");
     expect(editor).toContain("buildGuidedResourceServiceSpec");
     expect(editor).toContain("readGuidedResourceServiceForm");
     expect(editor).toContain('value="infrequent_access"');
     expect(detail).toContain("objectBucketStorageClass(item())");
   });
 
-  test("offers every bundled shape through the same guided and raw authoring paths", () => {
+  test("keeps every guided editor implementation behind discovered availability", () => {
     for (const kind of [
       "EdgeWorker",
       "ObjectBucket",
@@ -73,20 +74,23 @@ describe("Resource Shape dashboard surface", () => {
       "Schedule",
     ]) {
       expect(serviceForm).toContain(`"${kind}"`);
-      expect(editor).toContain(`<option value="${kind}">`);
       expect(editor).toContain(`case "${kind}":`);
     }
-    expect(editor).toContain("<For each={BUNDLED_KINDS}>");
-    expect(editor).toContain(
-      'type ServiceSelection = GuidedResourceServiceKind | "custom";',
-    );
+    expect(editor).toContain("props.formAvailability");
+    expect(editor).toContain("<For each={availableForms()}>");
+    expect(editor).not.toContain("BUNDLED_KINDS");
+    expect(inventory).toContain("listFormAvailability");
+    expect(inventory).toContain("formAvailability={formAvailability() ?? []}");
+    expect(detail).toContain("listFormAvailability");
+    expect(detail).toContain("formAvailability={formAvailability() ?? []}");
+    expect(editor).toContain("...(exactForm ? { form: exactForm } : {})");
     expect(serviceForm).toContain("draftGuidedResourceServiceSpec");
   });
 
-  test("labels the bundled set Stable without inventing AI or domain Resource kinds", () => {
+  test("labels the discovered set Stable without inventing AI or domain Resource kinds", () => {
     expect(editor).toContain('t("resources.editor.stable")');
-    expect(en).toContain("All ten bundled Resource Shapes");
-    expect(ja).toContain("10 個の組み込み Resource Shape");
+    expect(en).toContain("host's Form availability contract");
+    expect(ja).toContain("ホストの Form availability 契約");
     expect(serviceForm).not.toContain('"AIGateway"');
     expect(serviceForm).not.toContain('"VerifiedDomain"');
     expect(editor).not.toContain('<option value="AIGateway">');

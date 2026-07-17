@@ -22,7 +22,9 @@ import { ActivityService } from "../../../core/domains/activity/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import {
   type FormDefinition,
+  type FormActivation,
   type FormPackage,
+  type FormPackageLifecycleStatus,
   type InstalledFormReference,
   RESOURCE_SHAPE_KINDS,
   type SpacePolicySpec,
@@ -110,6 +112,7 @@ const ROUTE_IMPLEMENTATIONS: NonNullable<
 ];
 
 const POOL: TargetPoolSpec = {
+  classes: ["edge.object-store"],
   targets: [
     {
       name: "cloudflare-main",
@@ -147,6 +150,12 @@ function testOperatorModule() {
 async function buildApp(
   routeOptions?: Partial<RegisterResourceShapeRoutesOptions>,
   formRegistry?: ResourceShapeServiceDeps["formRegistry"],
+  serviceOverrides?: Partial<
+    Pick<
+      ResourceShapeServiceDeps,
+      "adapter" | "moduleRegistry" | "schemaRegistry"
+    >
+  >,
 ) {
   const stores = createInMemoryResourceShapeStores();
   const activityStore = new InMemoryOpenTofuControlStore();
@@ -156,11 +165,13 @@ async function buildApp(
   });
   const service = new ResourceShapeService({
     stores,
-    adapter: new StubResourceShapeAdapter(),
+    adapter: serviceOverrides?.adapter ?? new StubResourceShapeAdapter(),
     activity,
     operationRuns: activityStore,
-    moduleRegistry: ROUTE_MODULE_REGISTRY,
-    schemaRegistry: LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    moduleRegistry: serviceOverrides?.moduleRegistry ?? ROUTE_MODULE_REGISTRY,
+    schemaRegistry:
+      serviceOverrides?.schemaRegistry ??
+      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
     formRegistry,
     now: () => "2026-01-01T00:00:00.000Z",
   });
@@ -196,9 +207,14 @@ const EXACT_OBJECT_BUCKET_FORM: InstalledFormReference = {
   packageDigest: `sha256:${"2".repeat(64)}`,
 };
 
-function exactObjectBucketFormRegistry(): NonNullable<
-  ResourceShapeServiceDeps["formRegistry"]
-> {
+function exactObjectBucketFormRegistry(
+  options: {
+    readonly packageStatus?: FormPackageLifecycleStatus;
+    readonly packageIncludesDefinition?: boolean;
+    readonly activationStatus?: FormActivation["status"];
+    readonly eligibleTargetPoolClasses?: readonly string[];
+  } = {},
+): NonNullable<ResourceShapeServiceDeps["formRegistry"]> {
   const definition: FormDefinition = {
     identity: EXACT_OBJECT_BUCKET_FORM,
     displayName: "Object bucket",
@@ -209,11 +225,30 @@ function exactObjectBucketFormRegistry(): NonNullable<
     packageDigest: EXACT_OBJECT_BUCKET_FORM.packageDigest,
     artifactRef: "oci://forms.example/object-bucket@sha256:exact",
     verifierId: "test-verifier",
-    status: "installed",
-    definitionRefs: [EXACT_OBJECT_BUCKET_FORM.formRef],
+    status: options.packageStatus ?? "installed",
+    definitionRefs:
+      options.packageIncludesDefinition === false
+        ? []
+        : [EXACT_OBJECT_BUCKET_FORM.formRef],
     installedAt: "2026-01-01T00:00:00.000Z",
     installedBy: "test",
     updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const activation: FormActivation = {
+    id: "activation_object_bucket",
+    identity: EXACT_OBJECT_BUCKET_FORM,
+    scope: { type: "space", id: "space_1" },
+    audience: { roles: ["owner"] },
+    policy: {},
+    eligibleTargetPoolClasses: options.eligibleTargetPoolClasses ?? [
+      "edge.object-store",
+    ],
+    status: options.activationStatus ?? "active",
+    revision: 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    createdBy: "test",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    updatedBy: "test",
   };
   return {
     getDefinition: async (formRef) =>
@@ -225,6 +260,8 @@ function exactObjectBucketFormRegistry(): NonNullable<
       packageDigest === EXACT_OBJECT_BUCKET_FORM.packageDigest
         ? formPackage
         : undefined,
+    listDefinitions: async () => ({ items: [definition] }),
+    listActivations: async () => ({ items: [activation] }),
   };
 }
 
@@ -367,6 +404,223 @@ test("public Resource API rejects malformed or kind-mismatched exact Form identi
   });
   expect(mismatch.status).toBe(400);
   expect((await mismatch.json()).error.code).toBe("invalid_form_ref");
+});
+
+test("Form availability derives exact principal-safe executable truth", async () => {
+  const { app } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "acct_owner",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        scopes: ["forms:read"],
+        requestId: "req_availability",
+      }),
+    },
+    exactObjectBucketFormRegistry(),
+  );
+  const response = await app.request("/v1/form-availability?space=space_1");
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { forms: Record<string, unknown>[] };
+  expect(body.forms).toHaveLength(1);
+  expect(body.forms[0]).toMatchObject({
+    identity: EXACT_OBJECT_BUCKET_FORM,
+    definitionKnown: true,
+    installed: true,
+    executable: true,
+    activated: true,
+    availableToPrincipal: true,
+    compatibleAdapterIds: ["stub"],
+    eligibleTargetPoolClasses: ["edge.object-store"],
+    deprecated: false,
+  });
+  const serialized = JSON.stringify(body);
+  expect(serialized).not.toContain("cloudflare-main");
+  expect(serialized).not.toContain("cloudflare_r2_bucket");
+  expect(serialized).not.toContain("cf-acct");
+  expect(serialized).not.toContain("credentialRef");
+  expect(serialized).not.toContain("price");
+  expect(serialized).not.toContain("sku");
+  expect(serialized).not.toContain("capacity");
+
+  const capabilities = await app.request("/v1/capabilities?space=space_1");
+  expect(capabilities.status).toBe(200);
+  const projected = (await capabilities.json()) as {
+    resources: Record<string, boolean>;
+    formAvailability: { forms: unknown[] };
+  };
+  expect(projected.formAvailability.forms).toEqual(body.forms);
+  expect(projected.resources.ObjectBucket).toBe(true);
+  expect(projected.resources.EdgeWorker).toBe(false);
+});
+
+test("Form availability fails closed for audience, scope, and unknown exact identity", async () => {
+  const { app } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "acct_viewer",
+        roles: ["viewer"],
+        scopes: ["resources:read"],
+        requestId: "req_viewer",
+      }),
+    },
+    exactObjectBucketFormRegistry(),
+  );
+  const denied = await app.request("/v1/form-availability?space=space_1");
+  expect(denied.status).toBe(200);
+  expect((await denied.json()).forms[0]).toMatchObject({
+    executable: true,
+    activated: true,
+    availableToPrincipal: false,
+    availabilityReason: "principal_not_allowed",
+  });
+
+  const unknown = {
+    ...EXACT_OBJECT_BUCKET_FORM,
+    formRef: {
+      ...EXACT_OBJECT_BUCKET_FORM.formRef,
+      schemaDigest: `sha256:${"9".repeat(64)}`,
+    },
+  };
+  const query = new URLSearchParams({
+    space: "space_1",
+    apiVersion: unknown.formRef.apiVersion,
+    kind: unknown.formRef.kind,
+    definitionVersion: unknown.formRef.definitionVersion,
+    schemaDigest: unknown.formRef.schemaDigest,
+    packageDigest: unknown.packageDigest,
+  });
+  const missing = await app.request(`/v1/form-availability?${query}`);
+  expect(missing.status).toBe(200);
+  expect((await missing.json()).forms[0]).toMatchObject({
+    identity: unknown,
+    definitionKnown: false,
+    installed: false,
+    executable: false,
+    executableReason: "definition_unknown",
+    activated: false,
+    availableToPrincipal: false,
+    availabilityReason: "definition_unknown",
+  });
+
+  const { app: insufficientScope } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "acct_viewer",
+        roles: ["viewer"],
+        scopes: ["resources:write"],
+        requestId: "req_denied",
+      }),
+    },
+    exactObjectBucketFormRegistry(),
+  );
+  expect(
+    (await insufficientScope.request("/v1/form-availability?space=space_1"))
+      .status,
+  ).toBe(403);
+});
+
+test("Form availability fails closed when schema, module, lifecycle, or placement evidence is missing", async () => {
+  const routeOptions = {
+    resolveActor: () => ({
+      actorAccountId: "acct_owner",
+      roles: ["owner"],
+      scopes: ["forms:read"],
+      requestId: "req_fail_closed",
+    }),
+  } satisfies Partial<RegisterResourceShapeRoutesOptions>;
+  const readForm = async (
+    app: Awaited<ReturnType<typeof buildApp>>["app"],
+  ): Promise<Record<string, unknown>> => {
+    const response = await app.request("/v1/form-availability?space=space_1");
+    expect(response.status).toBe(200);
+    return (await response.json()).forms[0] as Record<string, unknown>;
+  };
+
+  const zeroFormHost = await buildApp(routeOptions);
+  const exactQuery = new URLSearchParams({
+    space: "space_1",
+    apiVersion: EXACT_OBJECT_BUCKET_FORM.formRef.apiVersion,
+    kind: EXACT_OBJECT_BUCKET_FORM.formRef.kind,
+    definitionVersion: EXACT_OBJECT_BUCKET_FORM.formRef.definitionVersion,
+    schemaDigest: EXACT_OBJECT_BUCKET_FORM.formRef.schemaDigest,
+    packageDigest: EXACT_OBJECT_BUCKET_FORM.packageDigest,
+  });
+  const zeroFormResponse = await zeroFormHost.app.request(
+    `/v1/form-availability?${exactQuery}`,
+  );
+  expect(zeroFormResponse.status).toBe(200);
+  expect((await zeroFormResponse.json()).forms[0]).toMatchObject({
+    identity: EXACT_OBJECT_BUCKET_FORM,
+    definitionKnown: false,
+    installed: false,
+    executable: false,
+    executableReason: "definition_unknown",
+    availableToPrincipal: false,
+  });
+
+  const schemaMissing = await buildApp(
+    routeOptions,
+    exactObjectBucketFormRegistry(),
+    { schemaRegistry: EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY },
+  );
+  expect(await readForm(schemaMissing.app)).toMatchObject({
+    installed: true,
+    executable: false,
+    executableReason: "schema_unavailable",
+    availableToPrincipal: false,
+    availabilityReason: "schema_unavailable",
+  });
+
+  const moduleMissing = await buildApp(
+    routeOptions,
+    exactObjectBucketFormRegistry(),
+    { moduleRegistry: new MapResourceShapeModuleRegistry({}) },
+  );
+  expect(await readForm(moduleMissing.app)).toMatchObject({
+    executable: false,
+    executableReason: "implementation_unavailable",
+    compatibleAdapterIds: [],
+    availableToPrincipal: false,
+  });
+
+  const packageMismatch = await buildApp(
+    routeOptions,
+    exactObjectBucketFormRegistry({ packageIncludesDefinition: false }),
+  );
+  expect(await readForm(packageMismatch.app)).toMatchObject({
+    definitionKnown: true,
+    installed: false,
+    executable: false,
+    executableReason: "package_not_installed",
+    availableToPrincipal: false,
+  });
+
+  const deprecated = await buildApp(
+    routeOptions,
+    exactObjectBucketFormRegistry({ packageStatus: "deprecated" }),
+  );
+  expect(await readForm(deprecated.app)).toMatchObject({
+    installed: true,
+    deprecated: true,
+    executable: false,
+    executableReason: "package_deprecated",
+    availableToPrincipal: false,
+  });
+
+  const classMismatch = await buildApp(
+    routeOptions,
+    exactObjectBucketFormRegistry({
+      eligibleTargetPoolClasses: ["private.unavailable"],
+    }),
+  );
+  expect(await readForm(classMismatch.app)).toMatchObject({
+    executable: true,
+    activated: true,
+    availableToPrincipal: false,
+    availabilityReason: "target_pool_class_unavailable",
+    eligibleTargetPoolClasses: [],
+  });
 });
 
 test("PUT /v1/resources preserves the caller-declared Resource manager", async () => {
@@ -1124,15 +1378,9 @@ test("disabled creation retains installed state read, events, observe, and delet
     "resource kind is not enabled",
   );
 
+  expect((await retainedApp.request(`${path}?space=space_1`)).status).toBe(200);
   expect(
-    (
-      await retainedApp.request(`${path}?space=space_1`)
-    ).status,
-  ).toBe(200);
-  expect(
-    (
-      await retainedApp.request(`${path}/events?space=space_1`)
-    ).status,
+    (await retainedApp.request(`${path}/events?space=space_1`)).status,
   ).toBe(200);
   expect(
     (

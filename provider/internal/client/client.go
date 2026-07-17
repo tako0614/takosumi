@@ -140,6 +140,7 @@ type NativeResourceRef struct {
 // Space. Implementation entries are extensible capability evidence; concrete AI
 // provider names live here, not in the provider binary.
 type TargetPoolSpec struct {
+	Classes []string          `json:"classes,omitempty"`
 	Targets []TargetPoolEntry `json:"targets"`
 }
 
