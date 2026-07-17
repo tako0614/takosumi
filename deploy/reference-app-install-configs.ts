@@ -541,7 +541,6 @@ function yuruConfig(input: {
     }),
     outputAllowlist: {
       launch_url: urlOutput("launch_url"),
-      api_url: urlOutput("api_url"),
     },
     policy: {},
     store: store({
