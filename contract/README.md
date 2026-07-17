@@ -37,6 +37,15 @@ detail is not part of the public contract. Public code should use `Workspace`,
 Account-plane workload compatibility shapes remain internal and are not
 re-exported from the public deploy-control contract facade.
 
+Mobile delivery remains product-owned. `notification-pushers.ts` is the
+portable client-to-host registration contract for new mobile shells; Takosumi
+does not define a generic push service, managed target, or Resource Shape.
+`mobile.ts` also retains typed `MobilePushHostRegistration*` DTOs and a strict
+parser as a wire-compatibility surface for product hosts that still expose a
+native-token registration route. The shared mobile kit does not advertise or
+call that compatibility route, and product-specific token storage and delivery
+stay in the product host.
+
 Repositories are plain OpenTofu modules. Source identity comes from the
 configured Git URL, ref, and module path plus the resolved commit. OpenTofu
 Outputs remain ordinary state results; Takosumi exposes or consumes selected
