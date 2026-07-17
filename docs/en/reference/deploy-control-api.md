@@ -133,7 +133,9 @@ authorized invocation; unsupported delivery fails closed as `NotReady`.
 Principal `oauth2` delivery becomes Ready only with a credential-free absolute
 HTTPS resource URI, a host issuer, and host-side proof that the Interface owner
 controls that hostname. A literal or Output URL alone is neither ownership proof
-nor OAuth audience authority.
+nor OAuth audience authority. Takosumi also atomically claims the canonical
+resource per Workspace owner; a competing Interface remains `NotReady` instead
+of creating ambiguous OAuth delivery.
 
 When an Output changes, only Interfaces that explicitly reference it resolve a
 new revision. This does not plan or apply the whole Workspace, nor does it

@@ -986,6 +986,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "phase",
         "generation",
         "resolved_revision",
+        "oauth_resource_uri",
         "record_json",
         "created_at",
         "updated_at",
@@ -994,6 +995,12 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [
         ["workspace_id", "owner_kind", "owner_id", "name"],
         ["workspace_id", "interface_type", "phase"],
+        [
+          "workspace_id",
+          "owner_kind",
+          "owner_id",
+          "oauth_resource_uri",
+        ],
       ],
     },
     {
@@ -4248,5 +4255,20 @@ alter table takosumi_resource_shapes
   drop constraint if exists takosumi_resource_shapes_form_identity_pair_check,
   drop column if exists package_digest,
   drop column if exists form_ref_json;`,
+    },
+    {
+      id: "runtime_interfaces.oauth_resource_claim.add",
+      version: 95,
+      domain: "runtime",
+      description:
+        "Add the database-backed claim used to make one canonical OAuth resource authoritative for at most one Interface under the same Workspace owner.",
+      sql: `alter table takosumi_interfaces
+  add column if not exists oauth_resource_uri text;
+create unique index if not exists takosumi_interfaces_oauth_resource_claim_unique
+  on takosumi_interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
+  where oauth_resource_uri is not null;`,
+      down: `drop index if exists takosumi_interfaces_oauth_resource_claim_unique;
+alter table takosumi_interfaces
+  drop column if exists oauth_resource_uri;`,
     },
   ]);

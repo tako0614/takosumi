@@ -7,6 +7,11 @@ import {
   type CloudflareWorkerEnv,
 } from "../../../../deploy/accounts-cloudflare/src/handler.ts";
 import { REQUIRED_PLATFORM_BINDINGS } from "../../../../deploy/accounts-cloudflare/src/bindings-check.ts";
+import {
+  D1AccountsStore,
+  issueInterfaceOAuthAccessToken,
+} from "../../../../accounts/service/src/mod.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 function env(values: Record<string, unknown> = {}): CloudflareWorkerEnv {
   return values as CloudflareWorkerEnv;
@@ -216,4 +221,77 @@ test("Cloudflare config preserves a host-specific public mobile OIDC client", ()
       env({ TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([mobileClient]) }),
     ),
   ).toEqual([mobileClient]);
+});
+
+test("Cloudflare identity handler lazily revalidates Interface OAuth against Core", async () => {
+  const db = new SqliteFakeD1();
+  const store = new D1AccountsStore(db);
+  await store.initialize();
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
+    )
+    .run();
+  await db
+    .prepare(
+      "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+    )
+    .bind(2, "current", Date.now())
+    .run();
+  const issued = await issueInterfaceOAuthAccessToken({
+    store,
+    subject: "principal_cloudflare",
+    workspaceId: "workspace_cloudflare",
+    capsuleId: "capsule_cloudflare",
+    audience: "https://resource.example.test/mcp",
+    permission: "mcp.invoke",
+    interfaceId: "if_cloudflare",
+    bindingId: "ifb_cloudflare",
+    interfaceRevision: 3,
+  });
+  let validations = 0;
+  const worker = createCloudflareWorker({
+    controlPlaneOperations: () =>
+      Promise.resolve({
+        interfaces: {
+          validatePrincipalOAuth2TokenEvidence: (evidence: {
+            readonly interfaceId: string;
+          }) => {
+            validations += 1;
+            return Promise.resolve(evidence.interfaceId === "if_cloudflare");
+          },
+        },
+      } as never),
+  });
+  const oidcKeyPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const workerEnv = env({
+    TAKOSUMI_ACCOUNTS_DB: db,
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.example.test",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
+      "cloudflare-interface-oauth-test-session-salt",
+    TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK: JSON.stringify(
+      await crypto.subtle.exportKey("jwk", oidcKeyPair.privateKey),
+    ),
+    TAKOSUMI_ACCOUNTS_ES256_KEY_ID: "cloudflare-interface-test-key",
+    TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET:
+      "cloudflare-interface-test-pairwise-secret",
+  });
+  const response = await worker.fetch(
+    new Request("https://app.example.test/oauth/userinfo", {
+      headers: { authorization: `Bearer ${issued.accessToken}` },
+    }),
+    workerEnv,
+  );
+  const responseBody = await response.text();
+  expect(response.status).toBe(200);
+  expect(validations).toBe(1);
+  expect(JSON.parse(responseBody)).toMatchObject({
+    token_use: "interface_oauth",
+    aud: "https://resource.example.test/mcp",
+    takosumi: { interface_id: "if_cloudflare" },
+  });
 });

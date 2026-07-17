@@ -705,6 +705,7 @@ export const interfaces = pgTable(
     phase: text("phase").notNull(),
     generation: integer("generation").notNull(),
     resolvedRevision: integer("resolved_revision").notNull(),
+    oauthResourceUri: text("oauth_resource_uri"),
     recordJson: json("record_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -718,6 +719,14 @@ export const interfaces = pgTable(
       table.interfaceType,
       table.phase,
     ),
+    uniqueIndex("takosumi_interfaces_oauth_resource_claim_unique")
+      .on(
+        table.workspaceId,
+        table.ownerKind,
+        table.ownerId,
+        table.oauthResourceUri,
+      )
+      .where(sql`${table.oauthResourceUri} is not null`),
   ],
 );
 
