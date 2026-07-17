@@ -102,6 +102,7 @@ import type {
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import type { InterfaceOAuthActivityEvidence } from "./access-token-activity.ts";
 
 interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
@@ -130,6 +131,12 @@ export interface MembershipActor {
  * convenience for the same-origin dashboard only.
  */
 export interface ControlPlaneOperations {
+  /** Optional narrow Core seam used only for Interface OAuth active checks. */
+  readonly interfaces?: {
+    validatePrincipalOAuth2TokenEvidence(
+      evidence: InterfaceOAuthActivityEvidence,
+    ): Promise<boolean>;
+  };
   // --- Workspaces (§4) ---
   readonly workspaces: {
     listWorkspaces(): Promise<readonly Workspace[]>;

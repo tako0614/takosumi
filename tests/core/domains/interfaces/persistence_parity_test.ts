@@ -344,6 +344,131 @@ for (const backend of backends) {
       await teardown();
     }
   });
+
+  test(`Interface OAuth resource claim is race-safe (${backend.label})`, async () => {
+    const { stores, teardown } = await backend.setup();
+    const service = (writer: string) => {
+      let sequence = 0;
+      return new InterfaceService({
+        stores,
+        now: () => NOW,
+        newId: (prefix) => `${prefix}_${writer}_${++sequence}`,
+        oauth2ResourceAuthorizer: () => true,
+        credentialIssuer: {
+          issuePrincipalOAuth2Token: () =>
+            Promise.resolve({
+              accessToken: `token_${writer}`,
+              expiresAt: "2026-07-13T15:00:30.000Z",
+            }),
+        },
+      });
+    };
+    const alpha = service("alpha");
+    const beta = service("beta");
+    try {
+      const createInterface = (
+        owner: InterfaceService,
+        name: string,
+        endpoint: string,
+      ) =>
+        owner.create({
+          workspaceId: "workspace_oauth_claim",
+          name,
+          ownerRef: { kind: "Capsule", id: "capsule_resource_server" },
+          spec: {
+            type: "example.oauth-resource",
+            version: "v1",
+            document: {},
+            inputs: { endpoint: { source: "literal", value: endpoint } },
+            access: {
+              visibility: "workspace",
+              resourceUriInput: "endpoint",
+            },
+          },
+        });
+      const [alphaInterface, betaInterface] = await Promise.all([
+        createInterface(
+          alpha,
+          "alpha-resource",
+          "https://resource.example.test/mcp?view=alpha",
+        ),
+        createInterface(
+          beta,
+          "beta-resource",
+          "https://resource.example.test/mcp#beta",
+        ),
+      ]);
+      expect(alphaInterface.status.phase).toBe("Resolved");
+      expect(betaInterface.status.phase).toBe("Resolved");
+
+      const grants = await Promise.all([
+        alpha.createBinding(alphaInterface.metadata.id, {
+          subjectRef: { kind: "Principal", id: "principal_alpha" },
+          permissions: ["mcp.invoke"],
+          delivery: { type: "oauth2" },
+        }),
+        beta.createBinding(betaInterface.metadata.id, {
+          subjectRef: { kind: "Principal", id: "principal_beta" },
+          permissions: ["mcp.invoke"],
+          delivery: { type: "oauth2" },
+        }),
+      ]);
+      const ready = grants.filter((binding) => binding.status.phase === "Ready");
+      const denied = grants.filter(
+        (binding) => binding.status.phase === "NotReady",
+      );
+      expect(ready).toHaveLength(1);
+      expect(denied).toHaveLength(1);
+      expect(denied[0]?.status.conditions?.[0]?.reason).toBe(
+        "OAuthResourceConflict",
+      );
+
+      const winnerInterface =
+        ready[0]!.spec.interfaceId === alphaInterface.metadata.id
+          ? alphaInterface
+          : betaInterface;
+      const loserInterface =
+        winnerInterface.metadata.id === alphaInterface.metadata.id
+          ? betaInterface
+          : alphaInterface;
+      const winnerService =
+        winnerInterface.metadata.id === alphaInterface.metadata.id
+          ? alpha
+          : beta;
+      const loserService = winnerService === alpha ? beta : alpha;
+      expect(
+        await stores.interfaces.findOAuth2ResourceClaim({
+          workspaceId: "workspace_oauth_claim",
+          ownerKind: "Capsule",
+          ownerId: "capsule_resource_server",
+          resource: "https://resource.example.test/mcp",
+        }),
+      ).toBe(winnerInterface.metadata.id);
+
+      await winnerService.retire(
+        winnerInterface.metadata.id,
+        winnerInterface.metadata.generation,
+        undefined,
+        winnerInterface.status.resolvedRevision,
+      );
+      await loserService.reconcile(loserInterface.metadata.id);
+      const promoted = await loserService.getBinding(
+        loserInterface.metadata.id,
+        denied[0]!.metadata.id,
+      );
+      expect(promoted.status.phase).toBe("Ready");
+      expect(
+        await stores.interfaces.findOAuth2ResourceClaim({
+          workspaceId: "workspace_oauth_claim",
+          ownerKind: "Capsule",
+          ownerId: "capsule_resource_server",
+          resource: "https://resource.example.test/mcp",
+        }),
+      ).toBe(loserInterface.metadata.id);
+    } finally {
+      await teardown();
+    }
+  });
 }
 
 async function expectServiceError(
