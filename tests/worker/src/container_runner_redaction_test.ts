@@ -605,6 +605,18 @@ test("container runner dispatches post-apply release commands to the release act
       public_url: "https://app.example.test",
       worker_script_name: "site-worker",
     },
+    providerConfigurations: {
+      format: "takosumi.provider-configurations@v1",
+      providers: [
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          alias: null,
+          configuration: {
+            base_url: "https://provider.example.test/api",
+          },
+        },
+      ],
+    },
     commands: [
       {
         id: "activate",
@@ -643,6 +655,20 @@ test("container runner dispatches post-apply release commands to the release act
   expect((captured?.request as Record<string, unknown>).outputs).toEqual({
     public_url: "https://app.example.test",
     worker_script_name: "site-worker",
+  });
+  expect(
+    (captured?.request as Record<string, unknown>).providerConfigurations,
+  ).toEqual({
+    format: "takosumi.provider-configurations@v1",
+    providers: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: null,
+        configuration: {
+          base_url: "https://provider.example.test/api",
+        },
+      },
+    ],
   });
   expect((captured?.request as Record<string, unknown>).activation).toEqual({
     applyRunId: "run_apply_1",

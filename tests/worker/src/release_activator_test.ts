@@ -77,6 +77,18 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
       public_url: "https://app.example.test",
       worker_script_name: "site-worker",
     },
+    providerConfigurations: {
+      format: "takosumi.provider-configurations@v1",
+      providers: [
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          alias: null,
+          configuration: {
+            base_url: "https://provider.example.test/api",
+          },
+        },
+      ],
+    },
     commands: [
       {
         id: "activate",
@@ -185,6 +197,18 @@ test("runner release activator runs opaque post-apply commands", async () => {
     nonSensitiveOutputs: {
       public_url: "https://app.example.test",
       worker_script_name: "site-worker",
+    },
+    providerConfigurations: {
+      format: "takosumi.provider-configurations@v1",
+      providers: [
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          alias: null,
+          configuration: {
+            base_url: "https://provider.example.test/api",
+          },
+        },
+      ],
     },
     credentials: {
       env: { CLOUDFLARE_API_TOKEN: "fixture-provider-token" },
@@ -709,6 +733,18 @@ function fakeActivationInput(
     nonSensitiveOutputs: {
       public_url: "https://app.example.test",
       worker_script_name: "site-worker",
+    },
+    providerConfigurations: {
+      format: "takosumi.provider-configurations@v1",
+      providers: [
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          alias: null,
+          configuration: {
+            base_url: "https://provider.example.test/api",
+          },
+        },
+      ],
     },
     commands,
   } as unknown as ReleaseActivationInput;

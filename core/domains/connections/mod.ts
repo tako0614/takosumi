@@ -115,15 +115,23 @@ export async function resolvedProviderBindingsDigest(
       credentialRecipe: entry.connection.credentialRecipe ?? null,
       connectionId: entry.connection.id,
       envNames: [...entry.connection.envNames].sort(),
+      providerConfig: entry.connection.scopeHints?.providerConfig ?? null,
       managedProviderProfile:
         managedProviderProfile(entry.connection.scopeHints) ?? null,
     }))
-    .sort(
-      (a, b) =>
-        a.provider.localeCompare(b.provider) ||
-        String(a.alias).localeCompare(String(b.alias)),
-    );
+    .sort((a, b) => {
+      const providerOrder = compareText(a.provider, b.provider);
+      if (providerOrder !== 0) return providerOrder;
+      if (a.alias === b.alias) return 0;
+      if (a.alias === null) return -1;
+      if (b.alias === null) return 1;
+      return compareText(a.alias, b.alias);
+    });
   return await stableJsonDigest(entries);
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export interface ConnectionsServiceDependencies {
