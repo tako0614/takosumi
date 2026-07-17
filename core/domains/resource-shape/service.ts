@@ -49,6 +49,8 @@ import type { IsoTimestamp } from "../../shared/time.ts";
 import type { SpaceId } from "../../shared/ids.ts";
 import { log } from "../../shared/log.ts";
 import {
+  assertNativeResourceFormIdentity,
+  bindNativeResourceFormIdentity,
   formatResourceShapeId,
   resourceFormIdentitiesEqual,
   type ResolutionLockRecord,
@@ -380,6 +382,37 @@ export class ResourceShapeService {
     let pending = 0;
     for (const candidate of runs) {
       try {
+        assertResourceOperationFormEvidence(candidate, candidate.resourceForm);
+        const retainedForm = await this.#validateRetainedFormIdentity(
+          candidate.resourceForm,
+          `canonical Resource Run ${candidate.id}`,
+        );
+        if (!retainedForm.ok) throw new Error(retainedForm.error.message);
+        const resource =
+          candidate.resourceOperation === "preview"
+            ? undefined
+            : await this.#stores.resources.get(candidate.subject.id);
+        if (resource) {
+          const lock = await this.#stores.locks.get(resource.id);
+          if (!lock) {
+            throw new Error(
+              `resource ${resource.id} has no ResolutionLock during Run recovery`,
+            );
+          }
+          const formEvidence = await this.#validatePinnedResourceFormEvidence(
+            resource,
+            lock,
+          );
+          if (!formEvidence.ok) throw new Error(formEvidence.error.message);
+          assertResourceOperationFormEvidence(candidate, formEvidence.value);
+        } else if (
+          candidate.resourceOperation !== "preview" &&
+          candidate.resourceOperation !== "delete"
+        ) {
+          throw new Error(
+            `resource ${candidate.subject.id} is missing during ${candidate.resourceOperation} Run recovery`,
+          );
+        }
         if (candidate.status === "succeeded") {
           if (await this.#repairPluginOperationAudit(candidate)) {
             auditsRepaired += 1;
@@ -400,7 +433,6 @@ export class ResourceShapeService {
           completed += 1;
           continue;
         }
-        const resource = await this.#stores.resources.get(candidate.subject.id);
         const finalized =
           candidate.resourceOperation === "delete"
             ? resource === undefined
@@ -607,6 +639,14 @@ export class ResourceShapeService {
     const prepared = await this.#resolveAndPlan(req, existingLock);
     if (!prepared.ok) return prepared;
     const { resource, output, plan, entry, parsed } = prepared.value;
+    let nativeResourcePlan: readonly NativeResourceRef[];
+    try {
+      nativeResourcePlan =
+        bindNativeResourceFormIdentity(output.nativeResourcePlan, form.value) ??
+        [];
+    } catch (error) {
+      return formIdentityConflict(errorMessage(error));
+    }
     const resolvedConnections = await this.#resolveConnections(
       req.space,
       output.resolutionLock.resourceId,
@@ -616,6 +656,7 @@ export class ResourceShapeService {
     const evidence = await resourceDeploymentEvidence(req, output, plan);
     const adapterInput = {
       resourceId: output.resolutionLock.resourceId,
+      ...(form.value === undefined ? {} : { form: form.value }),
       environment: req.environment ?? existing?.environment ?? "default",
       stateGeneration:
         existing?.execution?.stateGeneration ??
@@ -628,7 +669,7 @@ export class ResourceShapeService {
       target: entry,
       implementation: output.selectedImplementationDescriptor,
       credentialRef: entry.credentialRef,
-      nativeResources: output.nativeResourcePlan,
+      nativeResources: nativeResourcePlan,
       ...(Object.keys(resolvedConnections.value).length > 0
         ? { resolvedConnections: resolvedConnections.value }
         : {}),
@@ -642,6 +683,7 @@ export class ResourceShapeService {
           operation: "preview",
           resourceId,
           actor: req.actor,
+          ...(form.value === undefined ? {} : { form: form.value }),
           identity: {
             planDigest: evidence.planDigest,
             resolutionFingerprint: evidence.resolutionFingerprint,
@@ -687,6 +729,18 @@ export class ResourceShapeService {
     } else {
       adapterPreview = await this.#adapter.preview(adapterInput);
     }
+    try {
+      adapterPreview = {
+        ...adapterPreview,
+        nativeResources:
+          bindNativeResourceFormIdentity(
+            adapterPreview.nativeResources,
+            form.value,
+          ) ?? [],
+      };
+    } catch (error) {
+      return formIdentityConflict(errorMessage(error));
+    }
     const quoteContext = resourceDeploymentQuoteContext(
       req,
       output,
@@ -726,7 +780,7 @@ export class ResourceShapeService {
         selectedImplementation: output.selectedImplementation,
         selectedTarget: output.selectedTarget,
         portability: output.portability,
-        nativeResourcePlan: output.nativeResourcePlan,
+        nativeResourcePlan,
         riskNotes: output.riskNotes,
         summary: adapterPreview.summary,
       },
@@ -825,6 +879,14 @@ export class ResourceShapeService {
     const prepared = await this.#resolveAndPlan(req, existingLock);
     if (!prepared.ok) return prepared;
     const { output, plan, entry, parsed } = prepared.value;
+    let nativeResourcePlan: readonly NativeResourceRef[];
+    try {
+      nativeResourcePlan =
+        bindNativeResourceFormIdentity(output.nativeResourcePlan, form.value) ??
+        [];
+    } catch (error) {
+      return formIdentityConflict(errorMessage(error));
+    }
     const resolvedConnections = await this.#resolveConnections(
       req.space,
       id,
@@ -874,11 +936,13 @@ export class ResourceShapeService {
               `resource ${id} canonical apply Run is missing or mismatched`,
             );
           }
+          assertResourceOperationFormEvidence(operationRun, form.value);
         } else {
           const operationRunClaim = await this.#beginPluginOperationRunClaim({
             operation: "apply",
             resourceId: id,
             actor: req.actor,
+            ...(form.value === undefined ? {} : { form: form.value }),
             identity: {
               generation,
               managedBy: incomingManagedBy,
@@ -966,7 +1030,7 @@ export class ResourceShapeService {
       locked: output.resolutionLock.locked,
       reason: output.resolutionLock.reason,
       portability: output.resolutionLock.portability,
-      nativeResources: output.resolutionLock.nativeResources,
+      nativeResources: nativeResourcePlan,
       lockedAt: existingLock?.lockedAt ?? now,
       updatedAt: now,
     };
@@ -1118,6 +1182,7 @@ export class ResourceShapeService {
 
       const adapterInput = {
         resourceId: id,
+        ...(form.value === undefined ? {} : { form: form.value }),
         ...(operationRun
           ? { operationKey: operationRun.resourceOperationKey }
           : {}),
@@ -1133,7 +1198,7 @@ export class ResourceShapeService {
         target: entry,
         implementation: output.selectedImplementationDescriptor,
         credentialRef: entry.credentialRef,
-        nativeResources: output.nativeResourcePlan,
+        nativeResources: nativeResourcePlan,
         ...(Object.keys(resolvedConnections.value).length > 0
           ? { resolvedConnections: resolvedConnections.value }
           : {}),
@@ -1172,6 +1237,12 @@ export class ResourceShapeService {
             : await this.#adapter.apply(adapterInput);
         }
       }
+      result = {
+        ...result,
+        nativeResources:
+          bindNativeResourceFormIdentity(result.nativeResources, form.value) ??
+          [],
+      };
       adapterSucceeded = true;
       adapterResult = result;
       if (operationRun && result.execution) {
@@ -1589,6 +1660,14 @@ export class ResourceShapeService {
     );
     if (!prepared.ok) return prepared;
     const { output, plan, entry, parsed } = prepared.value;
+    let nativeResourcePlan: readonly NativeResourceRef[];
+    try {
+      nativeResourcePlan =
+        bindNativeResourceFormIdentity(output.nativeResourcePlan, form.value) ??
+        [];
+    } catch (error) {
+      return formIdentityConflict(errorMessage(error));
+    }
     if (
       !output.selectedImplementationDescriptor.plugin &&
       !output.selectedImplementationDescriptor.moduleImportAddress
@@ -1648,6 +1727,7 @@ export class ResourceShapeService {
           operation: "import",
           resourceId: id,
           actor: req.actor,
+          ...(form.value === undefined ? {} : { form: form.value }),
           identity: {
             importRequestDigest,
             resolutionFingerprint:
@@ -1715,7 +1795,7 @@ export class ResourceShapeService {
       locked: output.resolutionLock.locked,
       reason: output.resolutionLock.reason,
       portability: output.resolutionLock.portability,
-      nativeResources: output.resolutionLock.nativeResources,
+      nativeResources: nativeResourcePlan,
       lockedAt: existingLock?.lockedAt ?? now,
       updatedAt: now,
     };
@@ -1773,6 +1853,7 @@ export class ResourceShapeService {
       } else {
         result = await this.#adapter.importResource({
           resourceId: id,
+          ...(form.value === undefined ? {} : { form: form.value }),
           ...(operationRun
             ? { operationKey: operationRun.resourceOperationKey }
             : {}),
@@ -1782,7 +1863,7 @@ export class ResourceShapeService {
           target: entry,
           implementation: output.selectedImplementationDescriptor,
           credentialRef: entry.credentialRef,
-          nativeResources: output.nativeResourcePlan,
+          nativeResources: nativeResourcePlan,
           ...(Object.keys(resolvedConnections.value).length > 0
             ? { resolvedConnections: resolvedConnections.value }
             : {}),
@@ -1790,6 +1871,12 @@ export class ResourceShapeService {
           nativeId: req.nativeId,
         });
       }
+      result = {
+        ...result,
+        nativeResources:
+          bindNativeResourceFormIdentity(result.nativeResources, form.value) ??
+          [],
+      };
       if (operationRun && result.execution) {
         throw new Error(
           `direct Resource adapter ${output.selectedImplementation} returned an OpenTofu execution pointer`,
@@ -2146,6 +2233,8 @@ export class ResourceShapeService {
         },
       };
     }
+    const form = await this.#validatePinnedResourceFormEvidence(record, lock);
+    if (!form.ok) return form;
     const entry = await this.#targetPoolEntryForLock(space, lock);
     if (!entry) {
       return {
@@ -2221,6 +2310,7 @@ export class ResourceShapeService {
           operation: "observe",
           resourceId: id,
           actor,
+          ...(record.form === undefined ? {} : { form: record.form }),
           identity: {
             generation: record.generation,
             resourceVersion: record.updatedAt,
@@ -2271,6 +2361,7 @@ export class ResourceShapeService {
       } else {
         observation = await this.#adapter.observe({
           resourceId: id,
+          ...(record.form === undefined ? {} : { form: record.form }),
           ...(operationRun
             ? { operationKey: operationRun.resourceOperationKey }
             : {}),
@@ -2296,6 +2387,7 @@ export class ResourceShapeService {
       if (operationRun && !operationRun.resourceOperationResult) {
         operationRun = await this.#persistPluginOperationResult(operationRun, {
           summary: observation.summary,
+          nativeResources: lock.nativeResources ?? [],
           observationStatus: observation.status,
           ...(observation.backendOperationId
             ? { backendOperationId: observation.backendOperationId }
@@ -2554,6 +2646,8 @@ export class ResourceShapeService {
         },
       };
     }
+    const form = await this.#validatePinnedResourceFormEvidence(record, lock);
+    if (!form.ok) return form;
     const entry = await this.#targetPoolEntryForLock(space, lock);
     if (!entry) {
       return {
@@ -2644,11 +2738,13 @@ export class ResourceShapeService {
               `resource ${id} refresh Run evidence is missing or mismatched`,
             );
           }
+          assertResourceOperationFormEvidence(operationRun, record.form);
         } else {
           operationRun = await this.#beginPluginOperationRun({
             operation: "refresh",
             resourceId: id,
             actor,
+            ...(record.form === undefined ? {} : { form: record.form }),
             identity: {
               generation: record.generation,
               resourceVersion: record.updatedAt,
@@ -2820,6 +2916,7 @@ export class ResourceShapeService {
       } else {
         result = await this.#adapter.refresh({
           resourceId: id,
+          ...(record.form === undefined ? {} : { form: record.form }),
           ...(operationRun
             ? { operationKey: operationRun.resourceOperationKey }
             : {}),
@@ -2842,6 +2939,12 @@ export class ResourceShapeService {
           actor: actorForResourceOperationRun(actor, operationRun),
         });
       }
+      result = {
+        ...result,
+        nativeResources:
+          bindNativeResourceFormIdentity(result.nativeResources, record.form) ??
+          [],
+      };
       if (operationRun && result.execution) {
         throw new Error(
           `direct Resource adapter ${implementation.implementation} returned an OpenTofu execution pointer`,
@@ -3266,6 +3369,8 @@ export class ResourceShapeService {
         },
       };
     }
+    const form = await this.#validatePinnedResourceFormEvidence(record, lock);
+    if (!form.ok) return form;
     const entry = await this.#targetPoolEntryForLock(space, lock);
     if (!entry) {
       if (!(await this.#stores.resources.get(id))) {
@@ -3382,11 +3487,13 @@ export class ResourceShapeService {
               `resource ${id} canonical delete Run is missing or mismatched`,
             );
           }
+          assertResourceOperationFormEvidence(operationRun, record.form);
         } else {
           operationRun = await this.#beginPluginOperationRun({
             operation: "delete",
             resourceId: id,
             actor,
+            ...(record.form === undefined ? {} : { form: record.form }),
             identity: {
               generation: record.generation,
               managedBy: expectedManagedBy,
@@ -3489,6 +3596,7 @@ export class ResourceShapeService {
           // resolve absence through the plugin's read-only observation path.
           const observation = await this.#adapter.observe({
             resourceId: id,
+            ...(record.form === undefined ? {} : { form: record.form }),
             operationKey: operationRun.resourceOperationKey,
             environment: claimedRecord.environment ?? "default",
             stateGeneration:
@@ -3527,6 +3635,7 @@ export class ResourceShapeService {
             await withTimeout(
               this.#adapter.delete({
                 resourceId: id,
+                ...(record.form === undefined ? {} : { form: record.form }),
                 operationKey: operationRun.resourceOperationKey,
                 environment: claimedRecord.environment ?? "default",
                 stateGeneration:
@@ -3562,6 +3671,7 @@ export class ResourceShapeService {
           await withTimeout(
             this.#adapter.delete({
               resourceId: id,
+              ...(record.form === undefined ? {} : { form: record.form }),
               ...(operationRun
                 ? { operationKey: operationRun.resourceOperationKey }
                 : {}),
@@ -3838,6 +3948,7 @@ export class ResourceShapeService {
     readonly operation: ResourceOperation;
     readonly resourceId: string;
     readonly actor: ActorContext;
+    readonly form?: InstalledFormReference;
     readonly identity: unknown;
   }): Promise<PluginOperationRunClaim> {
     if (!this.#operationRuns) {
@@ -3849,6 +3960,7 @@ export class ResourceShapeService {
       apiVersion: "takosumi.resource-operation/v1",
       operation: input.operation,
       resourceId: input.resourceId,
+      form: input.form ?? null,
       identity: input.identity,
     });
     const id = `run_resource_${operationKey.replace(/^sha256:/, "").slice(0, 32)}`;
@@ -3858,6 +3970,7 @@ export class ResourceShapeService {
       workspaceId: resourceWorkspaceId(input.resourceId),
       subject: { kind: "resource", id: input.resourceId },
       resourceOperation: input.operation,
+      ...(input.form === undefined ? {} : { resourceForm: input.form }),
       resourceOperationKey: operationKey,
       resourceOperationVersion: 1,
       type: runTypeForResourceOperation(input.operation),
@@ -3873,6 +3986,7 @@ export class ResourceShapeService {
         `canonical Resource Run id ${id} is already owned by a different operation`,
       );
     }
+    assertResourceOperationFormEvidence(begun.run, input.form);
     return { run: begun.run, created: begun.status === "created" };
   }
 
@@ -3880,6 +3994,7 @@ export class ResourceShapeService {
     readonly operation: ResourceOperation;
     readonly resourceId: string;
     readonly actor: ActorContext;
+    readonly form?: InstalledFormReference;
     readonly identity: unknown;
   }): Promise<ResourceOperationRun> {
     return (await this.#beginPluginOperationRunClaim(input)).run;
@@ -3912,9 +4027,33 @@ export class ResourceShapeService {
     if (!this.#operationRuns) {
       throw new Error("canonical Resource Run ledger is not configured");
     }
+    assertResourceOperationFormEvidence(run, run.resourceForm);
+    const canonicalResult: ResourceOperationResultEvidence = {
+      ...result,
+      ...(run.resourceForm === undefined
+        ? {}
+        : { resourceForm: run.resourceForm }),
+      ...(result.nativeResources === undefined
+        ? {}
+        : {
+            nativeResources: bindNativeResourceFormIdentity(
+              result.nativeResources,
+              run.resourceForm,
+            ),
+          }),
+    };
+    if (
+      result.resourceForm !== undefined &&
+      !resourceFormIdentitiesEqual(result.resourceForm, run.resourceForm)
+    ) {
+      throw new Error(
+        `canonical Resource Run ${run.id} result substitutes its exact Form identity`,
+      );
+    }
     if (run.resourceOperationResult) {
       if (
-        canonicalJson(run.resourceOperationResult) !== canonicalJson(result)
+        canonicalJson(run.resourceOperationResult) !==
+        canonicalJson(canonicalResult)
       ) {
         throw new Error(
           `canonical Resource Run ${run.id} already carries a different backend result`,
@@ -3929,7 +4068,7 @@ export class ResourceShapeService {
     }
     const next: ResourceOperationRun = {
       ...run,
-      resourceOperationResult: result,
+      resourceOperationResult: canonicalResult,
       resourceOperationVersion: run.resourceOperationVersion + 1,
     };
     const transitioned: TransitionResourceOperationRunResult =
@@ -3944,7 +4083,8 @@ export class ResourceShapeService {
     const current = transitioned.run;
     if (
       current?.resourceOperationResult &&
-      canonicalJson(current.resourceOperationResult) === canonicalJson(result)
+      canonicalJson(current.resourceOperationResult) ===
+        canonicalJson(canonicalResult)
     ) {
       return current;
     }
@@ -4363,6 +4503,14 @@ export class ResourceShapeService {
         `Resource ${existing.id} and its ResolutionLock disagree on exact Form identity`,
       );
     }
+    try {
+      assertNativeResourceFormIdentity(
+        existingLock?.nativeResources,
+        existing?.form ?? existingLock?.form,
+      );
+    } catch (error) {
+      return formIdentityConflict(errorMessage(error));
+    }
     if (request.form === undefined) {
       if (existing?.form !== undefined || existingLock?.form !== undefined) {
         return formIdentityConflict(
@@ -4421,6 +4569,62 @@ export class ResourceShapeService {
           message: `exact Form ${installedFormReferenceKey(request.form)} is not installed and executable`,
         },
       };
+    }
+    return { ok: true, value: definition.identity };
+  }
+
+  /**
+   * Re-verifies replay evidence for read/refresh/delete paths. Revoked or
+   * deprecated packages remain usable here, but their retained immutable
+   * bytes and definition identity must still be present and exact.
+   */
+  async #validatePinnedResourceFormEvidence(
+    record: ResourceShapeRecord,
+    lock: ResolutionLockRecord,
+  ): Promise<ServiceResult<InstalledFormReference | undefined>> {
+    if (!resourceFormIdentitiesEqual(record.form, lock.form)) {
+      return formIdentityConflict(
+        `Resource ${record.id} and its ResolutionLock disagree on exact Form identity`,
+      );
+    }
+    try {
+      assertNativeResourceFormIdentity(lock.nativeResources, record.form);
+    } catch (error) {
+      return formIdentityConflict(errorMessage(error));
+    }
+    return await this.#validateRetainedFormIdentity(
+      record.form,
+      `resource ${record.id}`,
+    );
+  }
+
+  async #validateRetainedFormIdentity(
+    form: InstalledFormReference | undefined,
+    owner: string,
+  ): Promise<ServiceResult<InstalledFormReference | undefined>> {
+    if (form === undefined) return { ok: true, value: undefined };
+    if (!this.#formRegistry) {
+      return {
+        ok: false,
+        error: {
+          code: "form_registry_unavailable",
+          message: `${owner} exact Form replay requires the retained Form registry`,
+        },
+      };
+    }
+    const [definition, formPackage] = await Promise.all([
+      this.#formRegistry.getDefinition(form.formRef),
+      this.#formRegistry.getPackage(form.packageDigest),
+    ]);
+    if (
+      !definition ||
+      !resourceFormIdentitiesEqual(definition.identity, form) ||
+      !formPackage ||
+      formPackage.packageDigest !== form.packageDigest
+    ) {
+      return formIdentityConflict(
+        `${owner} retained exact Form evidence is missing or mismatched`,
+      );
     }
     return { ok: true, value: definition.identity };
   }
@@ -4494,9 +4698,26 @@ export class ResourceShapeService {
           },
         };
       }
+      try {
+        if (!resourceFormIdentitiesEqual(resource.form, lock.form)) {
+          throw new Error(
+            `Resource ${resource.id} and ResolutionLock Form identity differ`,
+          );
+        }
+        assertNativeResourceFormIdentity(lock.nativeResources, resource.form);
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: "connection_not_ready",
+            message: `spec.connections.${name}.resource exact Form evidence is not replayable: ${errorMessage(error)}`,
+          },
+        };
+      }
       resolved[name] = {
         resourceId: resource.id,
         kind: resource.kind,
+        ...(resource.form === undefined ? {} : { form: resource.form }),
         permissions: connection.permissions,
         projection: connection.projection,
         target: lock.target,
@@ -4848,6 +5069,29 @@ function actorForResourceOperationRun(
     return actor;
   }
   return { ...actor, actorAccountId: operationRun.createdBy };
+}
+
+/**
+ * Direct-plugin Runs are immutable replay evidence. An exact Resource may not
+ * resume through a Run/result/native reference from another or missing Form.
+ */
+function assertResourceOperationFormEvidence(
+  run: ResourceOperationRun,
+  expected: InstalledFormReference | undefined,
+): void {
+  if (!resourceFormIdentitiesEqual(run.resourceForm, expected)) {
+    throw new Error(
+      `canonical Resource Run ${run.id} is missing or mismatches the Resource Form identity`,
+    );
+  }
+  const result = run.resourceOperationResult;
+  if (!result) return;
+  if (!resourceFormIdentitiesEqual(result.resourceForm, expected)) {
+    throw new Error(
+      `canonical Resource Run ${run.id} result is missing or mismatches the Resource Form identity`,
+    );
+  }
+  assertNativeResourceFormIdentity(result.nativeResources, expected);
 }
 
 function applyingRequestMatchesRecord(
