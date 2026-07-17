@@ -96,6 +96,13 @@ test("reference interfaces match each app's audited runtime contract", () => {
   expect(blueprints("yurucommu").map((item) => item.spec.type)).toEqual([
     "interface.ui.surface",
   ]);
+  expect(byName.get("yurucommu-main")!.outputAllowlist).toEqual({
+    launch_url: {
+      from: "launch_url",
+      type: "url",
+      required: true,
+    },
+  });
   const storage = blueprints("takos-storage");
   expect(storage.map((item) => item.spec.type).sort()).toEqual([
     "interface.ui.surface",
