@@ -394,6 +394,20 @@ export const DEPLOY_CONTROL_CAPSULE_ENDPOINTS: readonly DeployControlEndpoint[] 
       notImplementedMessage: "capsules not wired",
     },
     {
+      method: "PATCH",
+      path: TAKOSUMI_INSTALL_CONFIG_ROUTE,
+      summary:
+        "Applies a strict versioned service-side patch to one explicitly selected InstallConfig.",
+      auth: "deploy-control-token",
+      operationId: "patchInstallConfig",
+      openapi: {
+        pathParams: ["installConfigId"],
+        requestSchema: "InstallConfigPatchV1",
+        okSchema: "InstallConfigResponse",
+      },
+      notImplementedMessage: "capsules not wired",
+    },
+    {
       method: "POST",
       path: TAKOSUMI_CAPSULE_PLAN_ROUTE,
       summary:
@@ -886,6 +900,31 @@ export function mountDeployControlCapsuleRoutes(
         if (config.workspaceId !== undefined) {
           ensureWorkspacePermission(principal, config.workspaceId);
         }
+        return c.json({ installConfig: publicInstallConfig(config) }, 200);
+      },
+    }),
+  );
+
+  app.patch(
+    TAKOSUMI_INSTALL_CONFIG_ROUTE,
+    deployControlBodyLimit,
+    defineRoute({
+      ctx,
+      requireService: requireCapsules,
+      param: INSTALL_CONFIG_ID_PARAM,
+      enforceBody: true,
+      handler: async ({ c, principal, id }) => {
+        const current = await capsules!.getInstallConfig(id);
+        if (current.workspaceId !== undefined) {
+          ensureWorkspacePermission(principal, current.workspaceId);
+        } else if (principal.workspaceIds !== "*") {
+          throw new OpenTofuControllerError(
+            "permission_denied",
+            "only an unrestricted operator may patch a shared InstallConfig",
+          );
+        }
+        const body = await readJsonBody<unknown>(c, "installConfigPatch");
+        const config = await capsules!.applyInstallConfigPatch(id, body);
         return c.json({ installConfig: publicInstallConfig(config) }, 200);
       },
     }),

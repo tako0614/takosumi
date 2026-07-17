@@ -192,6 +192,38 @@ audit evidence
 
 Secret は、log や診断情報が保存される前に redact されます。
 
+## Versioned InstallConfig patch
+
+operator は、対象 InstallConfig id と versioned JSON file を明示して service-side
+設定を更新できます。
+
+```text
+PATCH /internal/v1/install-configs/:installConfigId
+kind: takosumi.install-config-patch@v1
+```
+
+CLI は同じ境界を使います。
+
+```sh
+takosumi install-configs patch cfg-example \
+  --file install-config-patch.json \
+  --url https://takosumi.example.com \
+  --token "$TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+```
+
+patch は `variableMapping` / `variablePresentation` / `installExperience` /
+`outputAllowlist` / `interfaceBlueprints` / `lifecycleActions` と
+`lifecycleActionPolicy` のみを更新します。InstallConfig の id / ownership / source /
+Store metadata / runner / その他の policy は保持されます。未知の version・field・不正な
+declaration は write 前に拒否します。
+
+この API/CLI は repository や release asset を探索せず、`latest` を選択しません。
+operator が別途取得・検証した exact file と target id だけを適用します。Takosumi Cloud の
+reference config / offering / billing 設定を更新する surface でもありません。
+`subject.source = installing_principal` を含む Interface binding proposal は、Capsule 作成前の
+shared InstallConfig にだけ適用できます。Workspace-scoped config では installer identity を
+後から推測せず fail closed します。
+
 ## Release Activation Seam
 
 Takosumi OSS は、provider `apply` で materialize された infrastructure/state と、
