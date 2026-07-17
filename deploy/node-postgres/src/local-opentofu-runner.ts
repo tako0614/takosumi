@@ -214,6 +214,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     const result = await runRunner(this.transport, "release", job.runId, {
       release: { commands: job.commands },
       outputs: job.nonSensitiveOutputs,
+      providerConfigurations: job.providerConfigurations,
       ...(job.credentials ? { credentials: job.credentials } : {}),
       activation: {
         applyRunId: job.applyRunId,

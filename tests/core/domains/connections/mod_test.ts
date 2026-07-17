@@ -239,6 +239,38 @@ test("binding digest ignores verification progress but detects connection replac
   expect(await resolvedProviderBindingsDigest(authorityChanged)).not.toBe(
     pendingDigest,
   );
+
+  const reorderedProviderConfig = verified.map((entry) => ({
+    ...entry,
+    connection: {
+      ...entry.connection,
+      scopeHints: {
+        ...entry.connection.scopeHints,
+        providerConfig: {
+          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        },
+      },
+    },
+  }));
+  expect(await resolvedProviderBindingsDigest(reorderedProviderConfig)).toBe(
+    pendingDigest,
+  );
+
+  const providerConfigChanged = verified.map((entry) => ({
+    ...entry,
+    connection: {
+      ...entry.connection,
+      scopeHints: {
+        ...entry.connection.scopeHints,
+        providerConfig: {
+          base_url: "https://operator.example.test/compat/client/v4",
+        },
+      },
+    },
+  }));
+  expect(await resolvedProviderBindingsDigest(providerConfigChanged)).not.toBe(
+    pendingDigest,
+  );
 });
 
 test("provider connection listing exposes only public managed operator connections in Cloud mode", async () => {

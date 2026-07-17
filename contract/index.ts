@@ -22,6 +22,7 @@ export * from "./target.ts";
 export * from "./resolution.ts";
 export * from "./sources.ts";
 export * from "./redaction.ts";
+export * from "./provider-configurations.ts";
 export * from "./workspaces.ts";
 export type { CapsuleFullName } from "./workspaces.ts";
 export type { Project, PublicProject } from "./projects.ts";
