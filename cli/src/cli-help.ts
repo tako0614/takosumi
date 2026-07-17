@@ -24,6 +24,7 @@ export function helpText(): string {
       "",
       "Resource Shape:",
       "  resources               Resource の preview / apply / import / drift 操作",
+      "  form-availability       exact FormRef の利用可否を確認",
       "",
       "Operator:",
       "  connections             operator connection と internal resolver を管理",
@@ -50,6 +51,7 @@ export function helpText(): string {
     "",
     "Resource Shape:",
     "  resources               Preview and reconcile typed Resources",
+    "  form-availability       Inspect exact FormRef availability",
     "",
     "Operator:",
     "  connections             Manage operator connections and internal resolvers",
@@ -63,6 +65,25 @@ export function helpText(): string {
     "  open 'https://takosumi.example.com/install?git=https://git.example.com/example/app.git&path=deploy/opentofu'",
     "",
     "Internal/development commands are intentionally hidden from this help.",
+  ].join("\n");
+}
+
+export function formAvailabilityHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi form-availability list --space <id>",
+      "",
+      "principal に対する exact FormRef の known / installed / executable / activated / available 状態を表示します。",
+      "完全一致検索: --api-version --kind --definition-version --schema-digest --package-digest",
+      "共通オプション: --url、--token、--json、--limit、--cursor",
+    ].join("\n");
+  }
+  return [
+    "takosumi form-availability list --space <id>",
+    "",
+    "Shows known, installed, executable, activated, and principal availability for exact FormRefs.",
+    "Exact lookup: --api-version --kind --definition-version --schema-digest --package-digest",
+    "Common options: --url, --token, --json, --limit, --cursor",
   ].join("\n");
 }
 

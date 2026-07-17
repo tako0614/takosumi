@@ -12,6 +12,7 @@ import {
   ControlApiError,
   deleteResourceSpacePolicy,
   deleteResourceTargetPool,
+  listFormAvailability,
   listResourceShapes,
   listResourceSpacePolicies,
   listResourceTargetPools,
@@ -93,6 +94,11 @@ function Inner(): JSX.Element {
     scope,
     ({ workspaceId: workspace, space: selectedSpace }) =>
       listResourceShapes(workspace, selectedSpace),
+  );
+  const [formAvailability] = createResource(
+    scope,
+    ({ workspaceId: workspace, space: selectedSpace }) =>
+      listFormAvailability(workspace, selectedSpace),
   );
   const [targetPools, { refetch: refetchTargetPools }] = createResource(
     scope,
@@ -465,6 +471,7 @@ function Inner(): JSX.Element {
                 <ResourceEditor
                   workspaceId={active().workspaceId}
                   space={active().space}
+                  formAvailability={formAvailability() ?? []}
                   onCancel={() => setShowEditor(false)}
                   onApplied={async () => {
                     setShowEditor(false);

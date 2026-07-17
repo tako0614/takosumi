@@ -1191,7 +1191,7 @@ export const ja = {
   "resources.editor.service.custom": "Operator / カスタム Shape",
   "resources.editor.stable": "Stable",
   "resources.editor.stableHint":
-    "10 個の組み込み Resource Shape はすべて同じ Stable Deploy API を使います。AI Gateway と Custom Domains は別の Cloud control lifecycle を維持します。",
+    "あなたが利用できる Resource Shape は同じ Stable Deploy API を使います。一覧はホストの Form availability 契約から取得します。",
   "resources.editor.customHint":
     "Operator 定義の Shape は、詳細設定で kind と Spec JSON を入力します。利用可否は接続先が判定します。",
   "resources.editor.inputsStep": "必要な設定",
@@ -1201,6 +1201,8 @@ export const ja = {
   "resources.editor.kindHint":
     "組み込み shape のほか、operator が明示登録した token も指定できます。",
   "resources.editor.kindInvalid": "有効な Shape kind を入力してください。",
+  "resources.editor.formUnavailable":
+    "この Space であなたが利用できる exact Service Form がありません。",
   "resources.editor.name": "サービス名",
   "resources.editor.nameRequired": "サービス名を入力してください。",
   "resources.editor.artifactSource": "不変 artifact の参照方法",

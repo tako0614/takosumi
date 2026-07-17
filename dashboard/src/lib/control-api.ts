@@ -20,10 +20,12 @@
 import type {
   ActivityEvent as ContractActivityEvent,
   BackupRecord as ContractBackupRecord,
+  FormAvailability as ContractFormAvailability,
   CredentialRecipe as ContractCredentialRecipe,
   Dependency as ContractDependency,
   InstallConfig as ContractInstallConfig,
   InstallConfigVariableDefault as ContractInstallConfigVariableDefault,
+  InstalledFormReference as ContractInstalledFormReference,
   Capsule as ContractCapsule,
   JsonObject as ContractJsonObject,
   JsonValue as ContractJsonValue,
@@ -2190,6 +2192,8 @@ export type ResourceShapeNativeResource = ContractNativeResourceRef;
 export type ResourceShapeJsonObject = ContractJsonObject;
 export type ResourceDeploymentQuote = ContractResourceDeploymentQuote;
 export type ResourceDeploymentReview = ContractResourceDeploymentReview;
+export type FormAvailability = ContractFormAvailability;
+export type InstalledFormReference = ContractInstalledFormReference;
 export type ResourceTargetPoolSpec = ContractTargetPoolSpec;
 export type ResourceSpacePolicySpec = ContractSpacePolicySpec;
 
@@ -2197,6 +2201,7 @@ export interface ResourceShapeWriteInput {
   readonly workspaceId: string;
   readonly space: string;
   readonly kind: ResourceShapeKind;
+  readonly form?: InstalledFormReference;
   readonly name: string;
   readonly spec: ResourceShapeJsonObject;
   readonly project?: string;
@@ -2268,6 +2273,7 @@ function resourceShapeWriteBody(
   return {
     workspaceId: input.workspaceId,
     kind: input.kind,
+    ...(input.form ? { form: input.form } : {}),
     metadata: {
       name: input.name,
       space: input.space,
@@ -2291,6 +2297,17 @@ export async function listResourceShapes(
   return await fetchAllPages<ResourceShape>(
     `${RESOURCE_SHAPE_BASE}/resources${query({ workspaceId, space })}`,
     (body) => (body.resources as readonly ResourceShape[]) ?? [],
+  );
+}
+
+/** Principal-scoped exact FormRef discovery; never a commercial catalog. */
+export async function listFormAvailability(
+  workspaceId: string,
+  space: string,
+): Promise<readonly FormAvailability[]> {
+  return await fetchAllPages<FormAvailability>(
+    `${RESOURCE_SHAPE_BASE}/form-availability${query({ workspaceId, space })}`,
+    (body) => (body.forms as readonly FormAvailability[]) ?? [],
   );
 }
 
