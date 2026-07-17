@@ -5517,6 +5517,7 @@ function resourceDeploymentQuoteContext(
       request.name,
     ),
     kind: request.kind,
+    ...(request.form === undefined ? {} : { form: request.form }),
     name: request.name,
     operation,
     spec: request.spec,
