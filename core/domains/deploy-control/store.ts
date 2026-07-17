@@ -76,9 +76,14 @@ import type {
   SecurityFinding,
 } from "takosumi-contract/security";
 import type {
+  InstalledFormReference,
   JsonObject,
   JsonValue,
   NativeResourceRef,
+} from "takosumi-contract";
+import {
+  installedFormReferenceKey,
+  isInstalledFormReference,
 } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 import { log } from "../../shared/log.ts";
@@ -467,6 +472,11 @@ export type StoredRunRecord = PlanRun | ApplyRun | SourceSyncRun | Run;
 export type ResourceOperationRun = Run & {
   readonly subject: { readonly kind: "resource"; readonly id: string };
   readonly resourceOperation: ResourceOperation;
+  /**
+   * Exact immutable Form identity for a pinned Resource operation. Missing
+   * only on direct-operation Runs created before exact FormRef migration.
+   */
+  readonly resourceForm?: InstalledFormReference;
   readonly resourceOperationKey: string;
   readonly resourceOperationVersion: number;
   readonly resourceOperationResult?: ResourceOperationResultEvidence;
@@ -476,6 +486,8 @@ export type ResourceOperationRun = Run & {
 /** Internal restart-safe direct-adapter result; never projected publicly. */
 export interface ResourceOperationResultEvidence {
   readonly summary: string;
+  /** Exact Form identity repeated with replayable backend evidence. */
+  readonly resourceForm?: InstalledFormReference;
   readonly nativeResources?: readonly NativeResourceRef[];
   readonly outputs?: JsonObject;
   readonly observationStatus?: "current" | "drifted" | "missing";
@@ -2415,6 +2427,12 @@ export function isResourceOperationRun(
     isPublicRunRecord(row) &&
     candidate.subject?.kind === "resource" &&
     isResourceOperationToken(candidate.resourceOperation) &&
+    (candidate.resourceForm === undefined ||
+      isInstalledFormReference(candidate.resourceForm)) &&
+    (candidate.resourceOperationResult?.resourceForm === undefined ||
+      isInstalledFormReference(
+        candidate.resourceOperationResult.resourceForm,
+      )) &&
     resourceOperationRunType(candidate.resourceOperation) === candidate.type &&
     typeof candidate.resourceOperationKey === "string" &&
     candidate.resourceOperationKey.length > 0 &&
@@ -2487,9 +2505,17 @@ export function sameResourceOperationIdentity(
     left.workspaceId === right.workspaceId &&
     left.subject.id === right.subject.id &&
     left.resourceOperation === right.resourceOperation &&
+    optionalInstalledFormReferenceKey(left.resourceForm) ===
+      optionalInstalledFormReferenceKey(right.resourceForm) &&
     left.resourceOperationKey === right.resourceOperationKey &&
     left.type === right.type
   );
+}
+
+function optionalInstalledFormReferenceKey(
+  value: InstalledFormReference | undefined,
+): string | undefined {
+  return value === undefined ? undefined : installedFormReferenceKey(value);
 }
 
 /**

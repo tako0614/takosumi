@@ -191,3 +191,59 @@ export function resourceFormIdentitiesEqual(
   if (left === undefined || right === undefined) return left === right;
   return installedFormReferenceKey(left) === installedFormReferenceKey(right);
 }
+
+/**
+ * Attach the owning exact Form identity to canonical NativeResource evidence.
+ * Adapters may omit the repeated identity because Core already supplied the
+ * pinned form in their input, but they may never substitute another identity.
+ */
+export function bindNativeResourceFormIdentity(
+  nativeResources: readonly NativeResourceRef[] | undefined,
+  form: InstalledFormReference | undefined,
+): readonly NativeResourceRef[] | undefined {
+  if (nativeResources === undefined) return undefined;
+  return nativeResources.map((nativeResource) => {
+    if (form === undefined) {
+      if (nativeResource.form !== undefined) {
+        throw new Error(
+          `NativeResource ${nativeResource.type}/${nativeResource.id} carries Form evidence for an unpinned Resource`,
+        );
+      }
+      return nativeResource;
+    }
+    if (
+      nativeResource.form !== undefined &&
+      !resourceFormIdentitiesEqual(nativeResource.form, form)
+    ) {
+      throw new Error(
+        `NativeResource ${nativeResource.type}/${nativeResource.id} substitutes the Resource Form identity`,
+      );
+    }
+    return { ...nativeResource, form };
+  });
+}
+
+/** Fail closed when persisted NativeResource replay evidence is incomplete. */
+export function assertNativeResourceFormIdentity(
+  nativeResources: readonly NativeResourceRef[] | undefined,
+  form: InstalledFormReference | undefined,
+): void {
+  for (const nativeResource of nativeResources ?? []) {
+    if (form === undefined) {
+      if (nativeResource.form !== undefined) {
+        throw new Error(
+          `NativeResource ${nativeResource.type}/${nativeResource.id} carries unexpected Form evidence`,
+        );
+      }
+      continue;
+    }
+    if (
+      nativeResource.form === undefined ||
+      !resourceFormIdentitiesEqual(nativeResource.form, form)
+    ) {
+      throw new Error(
+        `NativeResource ${nativeResource.type}/${nativeResource.id} is missing or mismatches the Resource Form identity`,
+      );
+    }
+  }
+}

@@ -41,7 +41,9 @@ import type {
   TargetPoolRecordId,
 } from "./records.ts";
 import {
+  assertNativeResourceFormIdentity,
   assertResourceFormIdentity,
+  bindNativeResourceFormIdentity,
   resourceFormIdentitiesEqual,
 } from "./records.ts";
 import type {
@@ -669,6 +671,7 @@ async function pinSqlExactFormIdentity(
       resourceFormIdentitiesEqual(current.form, input.form) &&
       resourceFormIdentitiesEqual(currentLock.form, input.form)
     ) {
+      assertNativeResourceFormIdentity(currentLock.nativeResources, input.form);
       return {
         status: "already_pinned",
         record: current,
@@ -703,11 +706,18 @@ async function pinSqlExactFormIdentity(
     }
     const lockUpdate = await transaction.query(
       `update ${names.resolutionLocks}
-       set form_ref_json = $1::jsonb, package_digest = $2
-       where resource_id = $3 and form_ref_json is null and package_digest is null`,
+       set form_ref_json = $1::jsonb, package_digest = $2,
+           native_resources_json = $3::jsonb
+       where resource_id = $4 and form_ref_json is null and package_digest is null`,
       [
         JSON.stringify(input.form.formRef),
         input.form.packageDigest,
+        JSON.stringify(
+          bindNativeResourceFormIdentity(
+            currentLock.nativeResources,
+            input.form,
+          ) ?? null,
+        ),
         input.resourceId,
       ],
     );
@@ -715,7 +725,14 @@ async function pinSqlExactFormIdentity(
       throw new Error("exact Form pin lost the locked ResolutionLock row");
     }
     const record = { ...current, form: input.form };
-    const lock = { ...currentLock, form: input.form };
+    const lock = {
+      ...currentLock,
+      form: input.form,
+      nativeResources: bindNativeResourceFormIdentity(
+        currentLock.nativeResources,
+        input.form,
+      ),
+    };
     return { status: "pinned", record, lock };
   });
 }

@@ -39,7 +39,10 @@ import {
 } from "../../../../core/domains/resource-shape/mod.ts";
 import type { SpacePolicySpec, TargetPoolSpec } from "takosumi-contract";
 import { TEST_RESOURCE_SHAPE_MODULE_REGISTRY } from "../../../helpers/resource-shape/operator-module-registry.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  type ResourceOperationRun,
+} from "../../../../core/domains/deploy-control/store.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 
 class ResourceShapeService extends CoreResourceShapeService {
@@ -295,7 +298,10 @@ class PluginSpyAdapter extends StubResourceShapeAdapter {
     input: AdapterImportInput,
   ): Promise<AdapterImportResult> {
     this.importInputs.push(input);
-    return await super.importResource(input);
+    const result = await super.importResource(input);
+    if (!input.implementation.plugin) return result;
+    const { execution: _resourceOwnedExecution, ...directResult } = result;
+    return directResult;
   }
 
   override async delete(input: AdapterDeleteInput): Promise<void> {
@@ -946,32 +952,42 @@ const EXACT_FORM: InstalledFormReference = {
   packageDigest: `sha256:${"2".repeat(64)}`,
 };
 
-function exactFormRegistry(): NonNullable<
-  ResourceShapeServiceDeps["formRegistry"]
-> {
+const EXACT_CONTAINER_FORM: InstalledFormReference = {
+  formRef: {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ContainerService",
+    definitionVersion: "1.0.0",
+    schemaDigest: `sha256:${"4".repeat(64)}`,
+  },
+  packageDigest: `sha256:${"5".repeat(64)}`,
+};
+
+function exactFormRegistry(
+  identity: InstalledFormReference = EXACT_FORM,
+): NonNullable<ResourceShapeServiceDeps["formRegistry"]> {
   const definition: FormDefinition = {
-    identity: EXACT_FORM,
-    displayName: "Object bucket",
+    identity,
+    displayName: identity.formRef.kind,
     operations: ["create", "read", "update", "delete", "import", "refresh"],
     installedAt: NOW,
   };
   const formPackage: FormPackage = {
-    packageDigest: EXACT_FORM.packageDigest,
-    artifactRef: "oci://forms.example/object-bucket@sha256:exact",
+    packageDigest: identity.packageDigest,
+    artifactRef: `oci://forms.example/${identity.formRef.kind}@sha256:exact`,
     verifierId: "test-verifier",
     status: "installed",
-    definitionRefs: [EXACT_FORM.formRef],
+    definitionRefs: [identity.formRef],
     installedAt: NOW,
     installedBy: "test",
     updatedAt: NOW,
   };
   return {
     getDefinition: async (formRef) =>
-      JSON.stringify(formRef) === JSON.stringify(EXACT_FORM.formRef)
+      JSON.stringify(formRef) === JSON.stringify(identity.formRef)
         ? definition
         : undefined,
     getPackage: async (packageDigest) =>
-      packageDigest === EXACT_FORM.packageDigest ? formPackage : undefined,
+      packageDigest === identity.packageDigest ? formPackage : undefined,
   };
 }
 
@@ -1030,6 +1046,309 @@ test("exact Form path requires installed authority and explicitly backfills lega
   });
   expect(changed.ok).toBe(false);
   if (!changed.ok) expect(changed.error.code).toBe("form_identity_conflict");
+});
+
+test("exact direct-plugin lifecycle propagates one immutable Form through Runs, adapter inputs, and NativeResource evidence", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const ledger = new InMemoryOpenTofuControlStore();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    operationRuns: ledger,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    formRegistry: exactFormRegistry(EXACT_CONTAINER_FORM),
+    now: () => NOW,
+  });
+  await seed(service);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    form: EXACT_CONTAINER_FORM,
+    name: "agent-exact",
+    spec: {
+      name: "agent-exact",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+  const id = "tkrn:space_1:ContainerService:agent-exact";
+
+  const preview = await service.preview(request);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) throw new Error(preview.error.message);
+  expect(preview.value.nativeResourcePlan).toEqual([
+    {
+      type: "cloudflare.container",
+      id: "agent-exact",
+      ownership: "planned",
+      form: EXACT_CONTAINER_FORM,
+    },
+  ]);
+
+  const applied = await service.apply(request, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(applied.ok).toBe(true);
+  expect(adapter.applyInputs[0]).toMatchObject({
+    form: EXACT_CONTAINER_FORM,
+    nativeResources: [{ form: EXACT_CONTAINER_FORM }],
+  });
+  expect(await stores.resources.get(id)).toMatchObject({
+    form: EXACT_CONTAINER_FORM,
+    phase: "Ready",
+  });
+  expect(await stores.locks.get(id)).toMatchObject({
+    form: EXACT_CONTAINER_FORM,
+    nativeResources: [{ form: EXACT_CONTAINER_FORM }],
+  });
+
+  expect(
+    (await service.observe("space_1", "ContainerService", "agent-exact", ACTOR))
+      .ok,
+  ).toBe(true);
+  expect(
+    (await service.refresh("space_1", "ContainerService", "agent-exact", ACTOR))
+      .ok,
+  ).toBe(true);
+  expect(adapter.observeInputs.at(-1)).toMatchObject({
+    form: EXACT_CONTAINER_FORM,
+    nativeResources: [{ form: EXACT_CONTAINER_FORM }],
+  });
+  expect(adapter.refreshInputs.at(-1)).toMatchObject({
+    form: EXACT_CONTAINER_FORM,
+    nativeResources: [{ form: EXACT_CONTAINER_FORM }],
+  });
+
+  const imported = await service.importResource({
+    ...request,
+    name: "agent-import-exact",
+    spec: {
+      name: "agent-import-exact",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+    nativeId: "provider-agent-exact",
+  });
+  expect(imported.ok).toBe(true);
+  expect(adapter.importInputs.at(-1)).toMatchObject({
+    form: EXACT_CONTAINER_FORM,
+    nativeResources: [{ form: EXACT_CONTAINER_FORM }],
+  });
+  expect(
+    await stores.locks.get("tkrn:space_1:ContainerService:agent-import-exact"),
+  ).toMatchObject({
+    form: EXACT_CONTAINER_FORM,
+    nativeResources: [{ form: EXACT_CONTAINER_FORM }],
+  });
+
+  const runsBeforeDelete = await ledger.listRunsByWorkspace("space_1");
+  for (const run of runsBeforeDelete.filter(
+    (candidate) => "resourceOperation" in candidate,
+  )) {
+    const direct = await ledger.getResourceOperationRun(run.id);
+    expect(direct?.resourceForm).toEqual(EXACT_CONTAINER_FORM);
+    expect(direct?.resourceOperationResult?.resourceForm).toEqual(
+      EXACT_CONTAINER_FORM,
+    );
+    for (const native of direct?.resourceOperationResult?.nativeResources ??
+      []) {
+      expect(native.form).toEqual(EXACT_CONTAINER_FORM);
+    }
+  }
+  const observeRun = runsBeforeDelete.find(
+    (run) => "resourceOperation" in run && run.resourceOperation === "observe",
+  );
+  expect(
+    (await ledger.getResourceOperationRun(observeRun?.id ?? "missing"))
+      ?.resourceOperationResult?.nativeResources,
+  ).toMatchObject([{ form: EXACT_CONTAINER_FORM }]);
+
+  expect(
+    (await service.delete("space_1", "ContainerService", "agent-exact", ACTOR))
+      .ok,
+  ).toBe(true);
+  expect(adapter.deleteInputs.at(-1)).toMatchObject({
+    form: EXACT_CONTAINER_FORM,
+    nativeResources: [{ form: EXACT_CONTAINER_FORM }],
+  });
+  const deleteRun = (await ledger.listRunsByWorkspace("space_1")).find(
+    (run) => "resourceOperation" in run && run.resourceOperation === "delete",
+  );
+  const internalDeleteRun = await ledger.getResourceOperationRun(
+    deleteRun?.id ?? "missing",
+  );
+  expect(internalDeleteRun?.resourceForm).toEqual(EXACT_CONTAINER_FORM);
+  expect(internalDeleteRun?.resourceOperationResult?.resourceForm).toEqual(
+    EXACT_CONTAINER_FORM,
+  );
+});
+
+test("exact direct-plugin preview rejects adapter NativeResource Form substitution", async () => {
+  class SubstitutingPreviewAdapter extends PluginSpyAdapter {
+    override async preview(
+      input: AdapterApplyInput,
+    ): Promise<AdapterPreviewResult> {
+      const preview = await super.preview(input);
+      return {
+        ...preview,
+        nativeResources: preview.nativeResources.map((native) => ({
+          ...native,
+          form: {
+            ...EXACT_CONTAINER_FORM,
+            packageDigest: `sha256:${"9".repeat(64)}`,
+          },
+        })),
+      };
+    }
+  }
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new SubstitutingPreviewAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    ...directOperationLedger(),
+    formRegistry: exactFormRegistry(EXACT_CONTAINER_FORM),
+    now: () => NOW,
+  });
+  await seed(service);
+  const preview = await service.preview({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService",
+    form: EXACT_CONTAINER_FORM,
+    name: "agent-substituted-form",
+    spec: {
+      name: "agent-substituted-form",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  });
+  expect(preview.ok).toBe(false);
+  if (!preview.ok) {
+    expect(preview.error.code).toBe("apply_failed");
+    expect(preview.error.message).toContain("substitutes the Resource Form");
+  }
+  expect(adapter.previewInputs).toHaveLength(1);
+});
+
+test("exact direct-plugin recovery fails closed when persisted Run result omits Form evidence", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const ledger = new InMemoryOpenTofuControlStore();
+  const initial: ResourceOperationRun = {
+    id: "run_resource_exact_preview_missing_form",
+    workspaceId: "space_1",
+    subject: {
+      kind: "resource",
+      id: "tkrn:space_1:ContainerService:missing-form",
+    },
+    resourceOperation: "preview",
+    resourceForm: EXACT_CONTAINER_FORM,
+    resourceOperationKey: `sha256:${"7".repeat(64)}`,
+    resourceOperationVersion: 1,
+    type: "plan",
+    status: "running",
+    createdBy: ACTOR.actorAccountId,
+    createdAt: NOW,
+    startedAt: NOW,
+  };
+  await ledger.beginResourceOperationRun(initial);
+  const incomplete: ResourceOperationRun = {
+    ...initial,
+    resourceOperationVersion: 2,
+    resourceOperationResult: {
+      summary: "previewed without exact evidence",
+      nativeResources: [{ type: "cloudflare.container", id: "missing-form" }],
+    },
+  };
+  expect(
+    (
+      await ledger.transitionResourceOperationRun({
+        id: initial.id,
+        operationKey: initial.resourceOperationKey,
+        expectedVersion: 1,
+        expectFrom: ["running"],
+        run: incomplete,
+      })
+    ).won,
+  ).toBe(true);
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new PluginSpyAdapter(),
+    operationRuns: ledger,
+    formRegistry: exactFormRegistry(EXACT_CONTAINER_FORM),
+    now: () => NOW,
+  });
+  expect(await service.repairResourceOperationRuns()).toEqual({
+    scanned: 1,
+    completed: 0,
+    auditsRepaired: 0,
+    pending: 1,
+  });
+  expect((await ledger.getResourceOperationRun(initial.id))?.status).toBe(
+    "running",
+  );
+});
+
+test("pinned Resource operations reject missing NativeResource Form evidence before adapter replay", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    ...directOperationLedger(),
+    formRegistry: exactFormRegistry(EXACT_CONTAINER_FORM),
+    now: () => NOW,
+  });
+  await seed(service);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    form: EXACT_CONTAINER_FORM,
+    name: "agent-corrupt-evidence",
+    spec: {
+      name: "agent-corrupt-evidence",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+  expect((await reviewedApply(service, request)).ok).toBe(true);
+  const id = "tkrn:space_1:ContainerService:agent-corrupt-evidence";
+  const lock = await stores.locks.get(id);
+  if (!lock) throw new Error("missing exact lock");
+  await stores.locks.put({
+    ...lock,
+    nativeResources: lock.nativeResources?.map(
+      ({ form: _form, ...native }) => native,
+    ),
+  });
+
+  const observeCount = adapter.observeInputs.length;
+  const refreshCount = adapter.refreshInputs.length;
+  const deleteCount = adapter.deleteInputs.length;
+  const observed = await service.observe(
+    "space_1",
+    "ContainerService",
+    "agent-corrupt-evidence",
+    ACTOR,
+  );
+  const refreshed = await service.refresh(
+    "space_1",
+    "ContainerService",
+    "agent-corrupt-evidence",
+    ACTOR,
+  );
+  const deleted = await service.delete(
+    "space_1",
+    "ContainerService",
+    "agent-corrupt-evidence",
+    ACTOR,
+  );
+  for (const result of [observed, refreshed, deleted]) {
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("form_identity_conflict");
+  }
+  expect(adapter.observeInputs).toHaveLength(observeCount);
+  expect(adapter.refreshInputs).toHaveLength(refreshCount);
+  expect(adapter.deleteInputs).toHaveLength(deleteCount);
 });
 
 test("apply resolves ObjectBucket to the highest-priority target and locks it", async () => {
