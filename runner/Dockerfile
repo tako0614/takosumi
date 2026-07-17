@@ -64,12 +64,14 @@ RUN set -eux; \
 # dispatch seam after registry resolution.
 WORKDIR /app
 
-# The runner server imports the dependency-free shared provider->env-name table
-# from the contract layer via a relative path. The build context is the repo root
-# (image_build_context = "../.."), so we copy both files preserving the
-# entrypoint.ts -> ../contract/provider-env-rules.ts relative layout. No
-# other repo source (or the Worker browser bundle) is copied into the image.
+# The runner server imports a small shared contract dependency closure via
+# relative paths. The build context is the repo root
+# (image_build_context = "../.."), so preserve that layout explicitly. No other
+# repo source (or the Worker browser bundle) is copied into the image.
 COPY contract/provider-env-rules.ts ./contract/provider-env-rules.ts
+COPY contract/provider-configurations.ts ./contract/provider-configurations.ts
+COPY contract/redaction.ts ./contract/redaction.ts
+COPY contract/types.ts ./contract/types.ts
 COPY contract/reference/ip-classification.ts ./contract/reference/ip-classification.ts
 COPY contract/reference/host-blocklist.ts ./contract/reference/host-blocklist.ts
 COPY runner/entrypoint.ts ./runner/entrypoint.ts
