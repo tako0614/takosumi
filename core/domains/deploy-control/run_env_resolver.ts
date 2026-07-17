@@ -298,9 +298,18 @@ async function assertPlanFencedResolvedBindings(
   resolved: readonly ResolvedCapsuleProviderBinding[] | undefined,
 ): Promise<void> {
   const expected = input.planRun.resolvedProviderBindingsDigest;
-  if (input.phase === "plan" || expected === undefined || !resolved) return;
+  if (input.phase === "plan" || expected === undefined) return;
+  if (!resolved) {
+    throwResolvedBindingsChanged(input);
+  }
   const actual = await resolvedProviderBindingsDigest(resolved);
   if (actual === expected) return;
+  throwResolvedBindingsChanged(input);
+}
+
+function throwResolvedBindingsChanged(
+  input: ResolveRunEnvironmentInput,
+): never {
   throw new OpenTofuControllerError(
     "failed_precondition",
     `resolved_bindings_changed: plan run ${input.planRun.id} was reviewed against different provider connections than are now resolved; re-plan before ${input.phase}`,

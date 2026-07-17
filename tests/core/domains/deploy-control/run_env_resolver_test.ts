@@ -500,6 +500,48 @@ test("RunEnvResolver fences lifecycle provider configuration to the reviewed bin
   );
 });
 
+test("RunEnvResolver rejects a missing live binding resolution after Plan review", async () => {
+  const reviewed: readonly ResolvedCapsuleProviderBinding[] = [
+    {
+      provider: CLOUDFLARE_PROVIDER,
+      materialization: "secret",
+      connection: connection({
+        scopeHints: {
+          providerConfig: {
+            base_url: "https://reviewed.example.test/api",
+          },
+        },
+      }),
+    },
+  ];
+  const subject = resolver({
+    resolved: undefined,
+    credentials: () => undefined,
+  });
+
+  let thrown: unknown;
+  try {
+    await subject.resolveRunEnvironment({
+      planRun: planRun({
+        resolvedProviderBindingsDigest:
+          await resolvedProviderBindingsDigest(reviewed),
+      }),
+      phase: "destroy",
+      auditRunId: "release_destroy_1",
+      credentialContext: "release_command",
+      mintCredentials: false,
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  expect(thrown).toBeInstanceOf(Error);
+  expect((thrown as Error).message).toContain("resolved_bindings_changed");
+  expect((thrown as { details?: { reason?: string } }).details?.reason).toBe(
+    "provider_connection_changed",
+  );
+});
+
 test("RunEnvResolver treats unresolved Capsule providers as no-credential providers after policy resolution", async () => {
   const calls: Array<{
     phase: string;
