@@ -1,11 +1,18 @@
 #!/usr/bin/env bun
 
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadCompatibilityAuthorities } from "../../scripts/lib/provider-release-compatibility.mjs";
+import {
+  createProviderCompatibilityProofArtifact,
+  DEFAULT_COMPATIBILITY_PROOF_PATH,
+  loadCompatibilityAuthorities,
+  structuralSha256,
+  writeProviderCompatibilityProofArtifact,
+} from "../../scripts/lib/provider-release-compatibility.mjs";
 import { buildSanitizedProviderProofEnvironment } from "../../scripts/lib/provider-proof-environment.mjs";
 import { assertExactRequestDeltas } from "../../scripts/lib/provider-proof-requests.mjs";
 import { assertProviderStateIdentity } from "../../scripts/lib/provider-proof-state.mjs";
@@ -270,46 +277,66 @@ resource "takosumi_target_pool" "legacy" {
         reason: "terraform-cli-unavailable",
         addressesTreatedAsInterchangeable: false,
       };
+  if (
+    terraformEvidence.status === "proof-complete" &&
+    terraformEvidence.schemaStructuralSha256 !==
+      currentCreateCanonicalized.schemaStructuralSha256
+  ) {
+    throw new Error(
+      "OpenTofu and Terraform state proof exposed different candidate schemas",
+    );
+  }
 
-  process.stdout.write(
-    `${JSON.stringify(
-      {
-        kind: "takosumi.provider-old-state-compatibility-proof@v1",
-        baselineVersion: authorities.identity.provider.version,
-        candidateVersion: authorities.policy.candidate.version,
-        resourceTypes: [
-          "takosumi_container_service",
-          "takosumi_edge_worker",
-          "takosumi_kv_store",
-          "takosumi_object_bucket",
-          "takosumi_queue",
-          "takosumi_sql_database",
-          "takosumi_target_pool",
-        ],
-        stateValuesRecorded: false,
-        environmentEvidence: sanitized.evidence,
-        credentialsUsed: sanitized.evidence.credentialsUsed,
-        oldStateRefreshFreeNoOp: true,
-        currentObserveRefresh: true,
-        currentMutationDuringRefresh: false,
-        oldProviderRollbackNoOp: true,
-        currentOmittedBucketCreateCanonicalized:
-          currentCreateCanonicalized.storageClassKnownStandard,
-        openTofuEvidence: currentCreateCanonicalized,
-        terraformEvidence,
-        phaseEvidence: {
-          oldApply: "six-resource-put-and-target-pool-put-exact",
-          currentRefreshFreePlan: "zero-managed-route-requests",
-          currentRefresh: "six-resource-observe-and-target-pool-get-exact",
-          oldRollback: "six-resource-get-and-target-pool-get-exact",
-        },
-        exactHistoricalNetworkMirror: true,
-        devOverrideUsedOnlyForCandidate: true,
+  const proof = {
+    kind: "takosumi.provider-old-state-compatibility-proof@v1",
+    baselineVersion: authorities.identity.provider.version,
+    candidateVersion: authorities.policy.candidate.version,
+    resourceTypes: [
+      "takosumi_container_service",
+      "takosumi_edge_worker",
+      "takosumi_kv_store",
+      "takosumi_object_bucket",
+      "takosumi_queue",
+      "takosumi_sql_database",
+      "takosumi_target_pool",
+    ],
+    stateValuesRecorded: false,
+    environmentEvidence: sanitized.evidence,
+    credentialsUsed: sanitized.evidence.credentialsUsed,
+    oldStateRefreshFreeNoOp: true,
+    currentObserveRefresh: true,
+    currentMutationDuringRefresh: false,
+    oldProviderRollbackNoOp: true,
+    currentOmittedBucketCreateCanonicalized:
+      currentCreateCanonicalized.storageClassKnownStandard,
+    openTofuEvidence: currentCreateCanonicalized,
+    terraformEvidence,
+    phaseEvidence: {
+      oldApply: "six-resource-put-and-target-pool-put-exact",
+      currentRefreshFreePlan: "zero-managed-route-requests",
+      currentRefresh: "six-resource-observe-and-target-pool-get-exact",
+      oldRollback: "six-resource-get-and-target-pool-get-exact",
+    },
+    exactHistoricalNetworkMirror: true,
+    devOverrideUsedOnlyForCandidate: true,
+  };
+  if (terraformPath) {
+    const artifact = await createProviderCompatibilityProofArtifact({
+      proof,
+      toolchains: {
+        openTofu: await cliIdentity(openTofuPath, sanitized.environment),
+        terraform: await cliIdentity(terraformPath, sanitized.environment),
       },
-      null,
-      2,
-    )}\n`,
-  );
+    });
+    await writeProviderCompatibilityProofArtifact(artifact, {
+      path:
+        process.env.TAKOSUMI_PROVIDER_COMPATIBILITY_PROOF_PATH ??
+        DEFAULT_COMPATIBILITY_PROOF_PATH,
+    });
+    process.stdout.write(`${JSON.stringify(artifact, null, 2)}\n`);
+  } else {
+    process.stdout.write(`${JSON.stringify(proof, null, 2)}\n`);
+  }
 } finally {
   server.kill();
   await server.exited;
@@ -453,6 +480,9 @@ resource "takosumi_object_bucket" "terraform" {
     terraformAddress,
     openTofuAddress,
     schemaLoadedAtTerraformAddress: true,
+    schemaStructuralSha256: structuralSha256(
+      schemaDocument.provider_schemas[terraformAddress],
+    ),
     stateProviderAddressExact: true,
     refreshPlanNoOp: true,
     addressesTreatedAsInterchangeable: false,
@@ -503,6 +533,16 @@ resource "takosumi_object_bucket" "omitted" {
     TF_CLI_CONFIG_FILE: currentConfig,
     TF_DATA_DIR: join(root, "current-create-tofu-data"),
   };
+  const schemaDocument = JSON.parse(
+    run(openTofuPath, ["providers", "schema", "-json"], {
+      cwd: moduleDir,
+      env: environment,
+    }).stdout,
+  );
+  const providerSchema = schemaDocument.provider_schemas?.[providerAddress];
+  if (!providerSchema) {
+    throw new Error("OpenTofu current-state proof omitted its provider FQN");
+  }
   const before = await requestCounts(origin);
   run(openTofuPath, ["apply", "-auto-approve", "-input=false", "-no-color"], {
     cwd: moduleDir,
@@ -544,6 +584,7 @@ resource "takosumi_object_bucket" "omitted" {
     status: "proof-complete",
     cliPath: openTofuPath,
     providerAddress,
+    schemaStructuralSha256: structuralSha256(providerSchema),
     stateProviderAddressExact: true,
     storageClassKnownStandard: true,
     addressesTreatedAsInterchangeable: false,
@@ -693,6 +734,28 @@ function run(
   const result = runDetailed(command, args, options);
   if (result.status !== 0) throw commandError(command, args, result);
   return result;
+}
+
+async function cliIdentity(path: string, environment: NodeJS.ProcessEnv) {
+  const document = JSON.parse(
+    run(path, ["version", "-json"], {
+      cwd: repoRoot,
+      env: environment,
+    }).stdout,
+  ) as { terraform_version?: unknown; platform?: unknown };
+  if (
+    typeof document.terraform_version !== "string" ||
+    typeof document.platform !== "string"
+  ) {
+    throw new Error("provider proof CLI returned an invalid version document");
+  }
+  return {
+    version: document.terraform_version,
+    platform: document.platform,
+    executableSha256: createHash("sha256")
+      .update(await readFile(path))
+      .digest("hex"),
+  };
 }
 
 function runDetailed(

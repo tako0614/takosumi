@@ -22,6 +22,7 @@ import {
   buildProviderRelease,
   loadProviderReleaseRegistry,
   materializeProviderMirror,
+  providerPublicationBlockers,
   readJson,
   sha256,
   stableJson,
@@ -97,6 +98,17 @@ describe("provider release source", () => {
         (asset) => asset.classification === "exact-public",
       ),
     ).toBe(true);
+  });
+
+  test("clears only the address proof blocker after compatibility evidence", () => {
+    expect(providerPublicationBlockers("proof-required")).toContain(
+      "OpenTofu/Terraform provider address proof",
+    );
+    expect(providerPublicationBlockers("proof-complete")).toEqual([
+      "reviewed signer fingerprint and key custody",
+      "artifact signature and transparency log",
+      "public version-path nonexistence or exact-byte readback",
+    ]);
   });
 
   test("keeps every known provider version in the exact release registry", async () => {

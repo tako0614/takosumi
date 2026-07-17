@@ -249,13 +249,22 @@ bun run provider:compatibility:state-proof
 ```
 
 The first command proves that the current machine schema differs only by the
-declared four resources and nine optional attributes. It still reports
-`releaseReady: false`: the feature-bearing `1.0.1` patch was rejected and moved
-to this `1.1.0` candidate, while the Terraform install/FQN matrix is not yet
-proven. OpenTofu uses `registry.opentofu.org/takosjp/takosumi`; Terraform uses
-`registry.terraform.io/takosjp/takosumi`. A Terraform CLI found on `PATH` clears
-only its CLI prerequisite; it does not claim the matrix. None is treated as a
-skipped check.
+declared four resources and nine optional attributes. The state proof writes a
+credential-free, value-free artifact and SHA-256 sidecar under the ignored
+`tmp/provider-compatibility/` directory. The artifact binds the exact authority
+digests, candidate descriptor, provider/proof source, CLI versions and binary
+digests, explicit provider FQNs, and successful state transitions. It contains
+no timestamp, absolute path, environment value, provider state value, or
+credential. A source or policy change invalidates it.
+
+OpenTofu uses `registry.opentofu.org/takosjp/takosumi`; Terraform uses
+`registry.terraform.io/takosjp/takosumi`. The reviewed Terraform matrix is
+currently Terraform `1.15.8`. A Terraform CLI found on `PATH` clears only its
+CLI prerequisite; only the complete state proof can make
+`provider:compatibility:release-check` pass. That compatibility result does not
+make the provider publishable: reviewed signer custody, tag/artifact signatures,
+transparency evidence, immutable public-path readback, and registry/mirror
+activation remain separate external release gates.
 
 An actual release build requires the exact clean provider tag and source
 commit and writes to a new directory outside this repository:
