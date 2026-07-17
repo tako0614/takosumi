@@ -12,6 +12,7 @@
 
 import type { NativeResourceRef } from "./resolution.ts";
 import type { ResourceShapeKind } from "./resource-shape.ts";
+import type { InstalledFormReference } from "./service-forms.ts";
 import type { ActorContext, JsonObject, JsonValue } from "./types.ts";
 import type { UsageRatingStatus } from "./billing.ts";
 
@@ -80,6 +81,8 @@ export interface ResourceDeploymentQuoteContext {
   readonly space: string;
   readonly resourceId: string;
   readonly kind: ResourceShapeKind;
+  /** Exact installed Form selected by the caller; absent for legacy/native shape execution. */
+  readonly form?: InstalledFormReference;
   readonly name: string;
   readonly operation: ResourceDeploymentOperation;
   readonly spec: JsonObject;
@@ -124,9 +127,7 @@ export interface ResourceDeploymentRetireContext {
   readonly kind: ResourceShapeKind;
   readonly name: string;
   readonly reason:
-    | "canonical_delete"
-    | "force_tombstone"
-    | "force_tombstone_cancelled";
+    "canonical_delete" | "force_tombstone" | "force_tombstone_cancelled";
   readonly now: string;
 }
 
