@@ -271,7 +271,7 @@ test("Principal oauth2 delivery requires the host issuer and mints only from an 
       interfaceGeneration: 1,
       interfaceResolvedRevision: 1,
       bindingId: binding.metadata.id,
-      bindingGeneration: 1,
+      bindingGeneration: 2,
       subjectId: "principal_1",
       permission: "mcp.invoke",
       resource: "https://mcp.example.test/mcp",
@@ -288,6 +288,25 @@ test("Principal oauth2 delivery requires the host issuer and mints only from an 
     action: "interface_token.issued",
     targetId: binding.metadata.id,
   });
+  const activityEvidence = {
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_mcp",
+    interfaceId: iface.metadata.id,
+    bindingId: binding.metadata.id,
+    interfaceResolvedRevision: iface.status.resolvedRevision,
+    subjectId: "principal_1",
+    permission: "mcp.invoke",
+    resource: "https://mcp.example.test/mcp",
+  } as const;
+  expect(
+    await service.validatePrincipalOAuth2TokenEvidence(activityEvidence),
+  ).toBe(true);
+  expect(
+    await service.validatePrincipalOAuth2TokenEvidence({
+      ...activityEvidence,
+      interfaceResolvedRevision: iface.status.resolvedRevision + 1,
+    }),
+  ).toBe(false);
 
   await expect(
     service.issueToken(
@@ -305,6 +324,9 @@ test("Principal oauth2 delivery requires the host issuer and mints only from an 
   ).rejects.toThrow("Interface not found");
 
   await service.revokeBinding(iface.metadata.id, binding.metadata.id);
+  expect(
+    await service.validatePrincipalOAuth2TokenEvidence(activityEvidence),
+  ).toBe(false);
   await expect(
     service.issueToken(
       iface.metadata.id,

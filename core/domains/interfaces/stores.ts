@@ -1,5 +1,6 @@
 import type { Interface, InterfaceBinding } from "takosumi-contract/interfaces";
 import { freezeClone } from "../../shared/freeze.ts";
+import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 
 export interface InterfaceListFilter {
   readonly workspaceId: string;
@@ -36,6 +37,21 @@ export interface InterfaceStore {
     record: Interface,
     expected: InterfaceWriteGuard,
   ): Promise<boolean>;
+  /**
+   * Atomically reserves one canonical OAuth resource for this exact current
+   * Interface generation/revision. Durable implementations enforce uniqueness
+   * for `(Workspace, ownerRef, resource)` in the database.
+   */
+  claimOAuth2Resource(input: {
+    readonly record: Interface;
+    readonly resource: string;
+  }): Promise<boolean>;
+  findOAuth2ResourceClaim(input: {
+    readonly workspaceId: string;
+    readonly ownerKind: Interface["metadata"]["ownerRef"]["kind"];
+    readonly ownerId: string;
+    readonly resource: string;
+  }): Promise<string | undefined>;
 }
 
 export interface InterfaceBindingStore {
@@ -57,6 +73,8 @@ export interface InterfaceStores {
 
 export class InMemoryInterfaceStore implements InterfaceStore {
   readonly #records = new Map<string, Interface>();
+  readonly #oauthResourceClaims = new Map<string, string>();
+  readonly #oauthResourceClaimKeys = new Map<string, string>();
 
   create(record: Interface): Promise<boolean> {
     if (this.#records.has(record.metadata.id)) return Promise.resolve(false);
@@ -143,7 +161,61 @@ export class InMemoryInterfaceStore implements InterfaceStore {
         return Promise.resolve(false);
     }
     this.#records.set(record.metadata.id, freezeClone(record));
+    const claimedKey = this.#oauthResourceClaimKeys.get(record.metadata.id);
+    if (claimedKey) {
+      const nextResource = interfaceOAuth2ResourceUri(record);
+      const nextKey = nextResource
+        ? oauthResourceClaimKey({
+            workspaceId: record.metadata.workspaceId,
+            ownerKind: record.metadata.ownerRef.kind,
+            ownerId: record.metadata.ownerRef.id,
+            resource: nextResource,
+          })
+        : undefined;
+      if (claimedKey !== nextKey) {
+        this.#oauthResourceClaims.delete(claimedKey);
+        this.#oauthResourceClaimKeys.delete(record.metadata.id);
+      }
+    }
     return Promise.resolve(true);
+  }
+
+  claimOAuth2Resource(input: {
+    readonly record: Interface;
+    readonly resource: string;
+  }): Promise<boolean> {
+    const current = this.#records.get(input.record.metadata.id);
+    if (
+      !current ||
+      JSON.stringify(current) !== JSON.stringify(input.record) ||
+      interfaceOAuth2ResourceUri(current) !== input.resource
+    ) {
+      return Promise.resolve(false);
+    }
+    const key = oauthResourceClaimKey({
+      workspaceId: current.metadata.workspaceId,
+      ownerKind: current.metadata.ownerRef.kind,
+      ownerId: current.metadata.ownerRef.id,
+      resource: input.resource,
+    });
+    const owner = this.#oauthResourceClaims.get(key);
+    if (owner && owner !== current.metadata.id) return Promise.resolve(false);
+    const prior = this.#oauthResourceClaimKeys.get(current.metadata.id);
+    if (prior && prior !== key) this.#oauthResourceClaims.delete(prior);
+    this.#oauthResourceClaims.set(key, current.metadata.id);
+    this.#oauthResourceClaimKeys.set(current.metadata.id, key);
+    return Promise.resolve(true);
+  }
+
+  findOAuth2ResourceClaim(input: {
+    readonly workspaceId: string;
+    readonly ownerKind: Interface["metadata"]["ownerRef"]["kind"];
+    readonly ownerId: string;
+    readonly resource: string;
+  }): Promise<string | undefined> {
+    return Promise.resolve(
+      this.#oauthResourceClaims.get(oauthResourceClaimKey(input)),
+    );
   }
 }
 
@@ -209,6 +281,20 @@ function sameName(left: Interface, right: Interface): boolean {
     left.metadata.ownerRef.id === right.metadata.ownerRef.id &&
     left.metadata.name === right.metadata.name
   );
+}
+
+function oauthResourceClaimKey(input: {
+  readonly workspaceId: string;
+  readonly ownerKind: Interface["metadata"]["ownerRef"]["kind"];
+  readonly ownerId: string;
+  readonly resource: string;
+}): string {
+  return JSON.stringify([
+    input.workspaceId,
+    input.ownerKind,
+    input.ownerId,
+    input.resource,
+  ]);
 }
 
 function matches(record: Interface, filter: InterfaceListFilter): boolean {

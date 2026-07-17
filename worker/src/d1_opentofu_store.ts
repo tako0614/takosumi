@@ -3779,6 +3779,7 @@ export async function ensureD1OpenTofuLedgerSchema(
       phase text not null,
       generation integer not null,
       resolved_revision integer not null,
+      oauth_resource_uri text,
       record_json text not null,
       created_at text not null,
       updated_at text not null
@@ -3788,6 +3789,9 @@ export async function ensureD1OpenTofuLedgerSchema(
       where phase <> 'Retired'`,
     `create index if not exists interfaces_workspace_type_phase_idx
       on interfaces (workspace_id, interface_type, phase)`,
+    `create unique index if not exists interfaces_oauth_resource_claim_unique
+      on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
+      where oauth_resource_uri is not null`,
     `create table if not exists interface_bindings (
       id text primary key,
       workspace_id text not null,
@@ -5551,6 +5555,40 @@ partial or invalid exact identities fail closed in durable Resource stores
     },
     async apply(db) {
       await runD1AtomicSql(db, await d1ResourceExactFormIdentityStatements(db));
+    },
+  },
+  {
+    version: 47,
+    name: "d1_interface_oauth_resource_claim",
+    checksumSource: `
+one canonical OAuth resource can be claimed by at most one Interface under the same Workspace owner
+the nullable projection is populated only through exact Interface generation revision and record CAS
+legacy resolved Interfaces stay unclaimed until Binding refresh issuance or introspection revalidates them
+`,
+    async atomicStatements(db) {
+      if (!(await d1TableExists(db, "interfaces"))) return [];
+      const columns = await d1ColumnNames(db, "interfaces");
+      return [
+        ...(columns.has("oauth_resource_uri")
+          ? []
+          : [
+              `alter table interfaces add column oauth_resource_uri text`,
+            ]),
+        `create unique index if not exists interfaces_oauth_resource_claim_unique
+         on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
+         where oauth_resource_uri is not null`,
+      ];
+    },
+    async apply(db) {
+      if (!(await d1TableExists(db, "interfaces"))) return;
+      await ensureD1Column(db, "interfaces", "oauth_resource_uri", "text");
+      await db
+        .prepare(
+          `create unique index if not exists interfaces_oauth_resource_claim_unique
+           on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
+           where oauth_resource_uri is not null`,
+        )
+        .run();
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];

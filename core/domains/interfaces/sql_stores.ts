@@ -8,6 +8,7 @@ import type {
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
+import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 
 type InterfaceRow = { readonly record_json: unknown };
 type InterfaceBindingRow = { readonly record_json: unknown };
@@ -25,10 +26,11 @@ class SqlInterfaceStore implements InterfaceStore {
     const result = await this.client.query(
       `insert into ${this.#table} (
         id, workspace_id, owner_kind, owner_id, name, interface_type,
-        phase, generation, resolved_revision, record_json, created_at, updated_at
-      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12)
+        phase, generation, resolved_revision, oauth_resource_uri, record_json,
+        created_at, updated_at
+      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13)
       on conflict do nothing`,
-      interfaceParameters(record),
+      interfaceParameters(record, false),
     );
     return result.rowCount > 0;
   }
@@ -100,15 +102,17 @@ class SqlInterfaceStore implements InterfaceStore {
     record: Interface,
     expected: InterfaceWriteGuard,
   ): Promise<boolean> {
-    const p = interfaceParameters(record);
+    const p = interfaceParameters(record, true);
     try {
       const result = await this.client.query(
         `update ${this.#table} set
           workspace_id=$2, owner_kind=$3, owner_id=$4, name=$5,
           interface_type=$6, phase=$7, generation=$8, resolved_revision=$9,
-          record_json=$10::jsonb, created_at=$11, updated_at=$12
-         where id=$1 and generation=$13 and resolved_revision=$14
-           and record_json=$15::jsonb`,
+          oauth_resource_uri=case
+            when oauth_resource_uri=$10 then oauth_resource_uri else null end,
+          record_json=$11::jsonb, created_at=$12, updated_at=$13
+         where id=$1 and generation=$14 and resolved_revision=$15
+           and record_json=$16::jsonb`,
         [
           ...p,
           expected.generation,
@@ -121,6 +125,52 @@ class SqlInterfaceStore implements InterfaceStore {
       if (isUniqueConstraintError(error)) return false;
       throw error;
     }
+  }
+
+  async claimOAuth2Resource(input: {
+    readonly record: Interface;
+    readonly resource: string;
+  }): Promise<boolean> {
+    if (interfaceOAuth2ResourceUri(input.record) !== input.resource) {
+      return false;
+    }
+    try {
+      const result = await this.client.query(
+        `update ${this.#table} set oauth_resource_uri=$1
+         where id=$2 and workspace_id=$3 and owner_kind=$4 and owner_id=$5
+           and phase='Resolved' and generation=$6 and resolved_revision=$7
+           and record_json=$8::jsonb`,
+        [
+          input.resource,
+          input.record.metadata.id,
+          input.record.metadata.workspaceId,
+          input.record.metadata.ownerRef.kind,
+          input.record.metadata.ownerRef.id,
+          input.record.metadata.generation,
+          input.record.status.resolvedRevision,
+          JSON.stringify(input.record),
+        ],
+      );
+      return result.rowCount > 0;
+    } catch (error) {
+      if (isUniqueConstraintError(error)) return false;
+      throw error;
+    }
+  }
+
+  async findOAuth2ResourceClaim(input: {
+    readonly workspaceId: string;
+    readonly ownerKind: Interface["metadata"]["ownerRef"]["kind"];
+    readonly ownerId: string;
+    readonly resource: string;
+  }): Promise<string | undefined> {
+    const result = await this.client.query<{ readonly id: string }>(
+      `select id from ${this.#table}
+       where workspace_id=$1 and owner_kind=$2 and owner_id=$3
+         and oauth_resource_uri=$4 limit 1`,
+      [input.workspaceId, input.ownerKind, input.ownerId, input.resource],
+    );
+    return result.rows[0]?.id;
   }
 }
 
@@ -179,7 +229,10 @@ class SqlInterfaceBindingStore implements InterfaceBindingStore {
   }
 }
 
-function interfaceParameters(record: Interface): readonly SqlValue[] {
+function interfaceParameters(
+  record: Interface,
+  preserveClaim: boolean,
+): readonly SqlValue[] {
   return [
     record.metadata.id,
     record.metadata.workspaceId,
@@ -190,6 +243,7 @@ function interfaceParameters(record: Interface): readonly SqlValue[] {
     record.status.phase,
     record.metadata.generation,
     record.status.resolvedRevision,
+    preserveClaim ? (interfaceOAuth2ResourceUri(record) ?? null) : null,
     JSON.stringify(record),
     record.metadata.createdAt,
     record.metadata.updatedAt,

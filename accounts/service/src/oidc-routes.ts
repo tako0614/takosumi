@@ -29,6 +29,7 @@ import type {
 import { readEnvVar } from "./read-env.ts";
 import { requireAccountSession } from "./account-session.ts";
 import { findActiveAccessToken } from "./access-token-activity.ts";
+import type { InterfaceOAuthActivityValidator } from "./access-token-activity.ts";
 import type { ControlPlaneOperations } from "./control-operations.ts";
 
 // OIDC token / code lifetimes. These have safe production defaults and are
@@ -819,6 +820,7 @@ export async function handleUserInfo(input: {
    * enforcement should pass expectedAudience.
    */
   expectedAudience?: string;
+  interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
 }): Promise<Response> {
   const accessToken = bearerToken(input.request.headers.get("authorization"));
   if (!accessToken) return bearerChallenge("invalid_token");
@@ -826,6 +828,12 @@ export async function handleUserInfo(input: {
   const record = await findActiveAccessToken({
     store: input.store,
     token: accessToken,
+    ...(input.interfaceOAuthActivityValidator
+      ? {
+          interfaceOAuthActivityValidator:
+            input.interfaceOAuthActivityValidator,
+        }
+      : {}),
   });
   if (record) {
     const audience = record.audience ?? record.clientId;
@@ -971,6 +979,7 @@ export async function handleIntrospect(input: {
   store: AccountsStore;
   /** Static OIDC clients are always supplied by the Accounts composition root. */
   clients: ReadonlyMap<string, OidcClientRegistration>;
+  interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
 }): Promise<Response> {
   const params = new URLSearchParams(await input.request.text());
   // RFC 7662 §2.1: the introspection endpoint MUST require client
@@ -1000,6 +1009,12 @@ export async function handleIntrospect(input: {
   const accessRecord = await findActiveAccessToken({
     store: input.store,
     token,
+    ...(input.interfaceOAuthActivityValidator
+      ? {
+          interfaceOAuthActivityValidator:
+            input.interfaceOAuthActivityValidator,
+        }
+      : {}),
   });
   if (accessRecord) {
     const interfaceOAuth = accessRecord.role === "interface-runtime";
