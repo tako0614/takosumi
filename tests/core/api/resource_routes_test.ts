@@ -715,6 +715,18 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
     name: "runner-assets",
     identity: EXACT_OBJECT_BUCKET_FORM,
     desired: { name: "runner-assets", interfaces: ["s3_api"] },
+    positiveFixtureName: "basic",
+    negativeFixtures: [
+      {
+        name: "invalid-interfaces",
+        stage: "desired",
+        input: {
+          name: "runner-assets-negative-1",
+          interfaces: [7],
+        },
+        expectedErrorCode: "invalid_argument",
+      },
+    ],
     importNativeId: "provider-native-runner-assets",
     fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
       app.request(input.toString(), init)) as typeof fetch,
@@ -723,16 +735,24 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
   expect(report.checks).toContain("canonical-resource-parity");
   expect(report.checks).toContain("canonical-audit-parity");
   expect(report.checks).toContain("import-idempotency");
+  expect(report.checks).toContain("negative-fixtures");
+  expect(report.fixtures).toEqual({
+    positive: ["basic"],
+    negative: [
+      {
+        name: "invalid-interfaces",
+        stage: "desired",
+        errorCode: "invalid_argument",
+      },
+    ],
+  });
   expect(report.evidenceDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
-  expect(
-    portableHostConformanceProof(report, {
-      positive: ["basic"],
-      negative: ["invalid-name"],
-    }),
-  ).toMatchObject({
+  expect(portableHostConformanceProof(report)).toMatchObject({
     subject: "host:https://host.example.test",
     identity: EXACT_OBJECT_BUCKET_FORM,
     status: "passed",
+    positiveFixtures: ["basic"],
+    negativeFixtures: ["invalid-interfaces"],
   });
 });
 

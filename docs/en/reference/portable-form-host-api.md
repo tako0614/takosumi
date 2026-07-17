@@ -62,11 +62,15 @@ published through the Form's `Interface` contract.
 ## Conformance runner
 
 `bun run service-form:host-conformance` runs discovery, exact availability,
-preview/apply/replay/read, canonical `/v1` Resource parity, digest-substitution
-rejection, observe, refresh, canonical audit parity, optional import replay,
-and idempotent delete against a host. It accepts JSON files for the exact
-identity and desired spec; bearer and native import identities are read only
-from named environment variables.
+retained negative desired-fixture rejection, preview/apply/replay/read,
+canonical `/v1` Resource parity, digest-substitution rejection, observe,
+refresh, canonical audit parity, optional import replay, and idempotent delete
+against a host. It accepts JSON files for the exact identity, desired spec, and
+optional `StandardFormNegativeFixture[]`; bearer and native import identities
+are read only from named environment variables. Unsupported negative fixture
+stages fail closed. The emitted proof derives its fixture names only from the
+fixtures this runner actually executed; callers cannot attach unexecuted names
+after the run.
 
 The runner emits a digest-bound report suitable for the host half of standard
 Form admission evidence. Provider conformance remains separate evidence.
