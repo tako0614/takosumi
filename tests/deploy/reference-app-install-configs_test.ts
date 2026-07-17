@@ -195,7 +195,24 @@ test("stateful R2 services use reviewed runner pre-destroy cleanup", () => {
       type: "string",
       required: true,
     });
+    expect(config.outputAllowlist.cloudflare_account_id).toEqual({
+      from: "cloudflare_account_id",
+      type: "string",
+      required: true,
+    });
   }
+  const storage = REFERENCE_APP_INSTALL_CONFIGS.find(
+    (candidate) => candidate.name === "takos-storage-main",
+  )!;
+  const git = REFERENCE_APP_INSTALL_CONFIGS.find(
+    (candidate) => candidate.name === "takos-git-main",
+  )!;
+  expect(storage.outputAllowlist.actions_logs_bucket_name).toBeUndefined();
+  expect(git.outputAllowlist.actions_logs_bucket_name).toEqual({
+    from: "actions_logs_bucket_name",
+    type: "string",
+    required: true,
+  });
 });
 
 test("Office publishes the three surfaces and exact file handlers", () => {
