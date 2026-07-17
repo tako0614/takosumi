@@ -42,10 +42,14 @@ only after the independent provider identity and state-migration gates pass.
 Run `bun run provider:compatibility:check` for the hermetic current-schema
 comparison and prerequisite matrix. Run
 `bun run provider:compatibility:state-proof` separately for the connected
-old-state proof. `provider:compatibility:release-check` is intentionally red
-while the explicit OpenTofu/Terraform install, schema, state, and FQN matrix
-remains unproven. The feature-bearing patch lane is already rejected in favor
-of the `1.1.0` minor candidate; CLI discovery alone never claims the matrix.
+old-state proof. That command writes ignored, digest-bound, credential-free
+evidence to `tmp/provider-compatibility/1.1.0-state-proof.json` plus its SHA-256
+sidecar. `provider:compatibility:release-check` is red until that evidence proves
+the explicit OpenTofu/Terraform schema, state, and FQN matrix; CLI discovery
+alone never claims the matrix. Passing this compatibility gate does not clear
+the independent signer, signature, transparency, public-path, or mirror
+activation blockers. The feature-bearing patch lane is already rejected in
+favor of the `1.1.0` minor candidate.
 
 See [provider-release-and-mirror.md](../../docs/operations/provider-release-and-mirror.md)
 for commands and incident handling.

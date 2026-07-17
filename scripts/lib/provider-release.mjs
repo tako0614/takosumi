@@ -39,7 +39,10 @@ import {
   sep,
 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadCompatibilityAuthorities } from "./provider-release-compatibility.mjs";
+import {
+  loadCompatibilityAuthorities,
+  loadProviderCompatibilityProofArtifact,
+} from "./provider-release-compatibility.mjs";
 
 export const PROVIDER_RELEASE_ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -1072,6 +1075,18 @@ function validateManifestAsset(asset) {
   }
 }
 
+export function providerPublicationBlockers(compatibilityProofStatus) {
+  const blockers = [
+    "reviewed signer fingerprint and key custody",
+    "artifact signature and transparency log",
+    "public version-path nonexistence or exact-byte readback",
+  ];
+  if (compatibilityProofStatus !== "proof-complete") {
+    blockers.push("OpenTofu/Terraform provider address proof");
+  }
+  return blockers;
+}
+
 export async function verifyProviderReleaseSource({
   repoRoot = PROVIDER_RELEASE_ROOT,
   descriptorPath = join(repoRoot, "provider", "release", "version.json"),
@@ -1083,6 +1098,12 @@ export async function verifyProviderReleaseSource({
     "1.0.0.json",
   ),
   registryPath = join(repoRoot, "provider", "release", "registry.json"),
+  compatibilityProofPath = join(
+    repoRoot,
+    "tmp",
+    "provider-compatibility",
+    "1.1.0-state-proof.json",
+  ),
 } = {}) {
   const descriptorSnapshot = await readAuthorityJsonWithSidecar(
     descriptorPath,
@@ -1095,6 +1116,10 @@ export async function verifyProviderReleaseSource({
       "provider compatibility policy candidate does not match release descriptor",
     );
   }
+  const compatibilityProof = await loadProviderCompatibilityProofArtifact({
+    path: compatibilityProofPath,
+    repoRoot,
+  });
   const loadedRegistry = await loadProviderReleaseRegistry(registryPath);
   const quarantineIndex = loadedRegistry.manifestPaths.indexOf(
     resolve(quarantinePath),
@@ -1146,17 +1171,13 @@ export async function verifyProviderReleaseSource({
     quarantineManifestDigest: quarantineDigest,
     publicationStatus: descriptor.publicationPolicy.status,
     publicationReady: false,
-    publicationBlockers: [
-      "reviewed signer fingerprint and key custody",
-      "artifact signature and transparency log",
-      "public version-path nonexistence or exact-byte readback",
-      "OpenTofu/Terraform provider address proof",
-    ],
+    publicationBlockers: providerPublicationBlockers(compatibilityProof.status),
     compatibilityPolicy: {
       identityDigest: compatibility.identityDigest,
       policyDigest: compatibility.policyDigest,
       patchFeatureDecision: compatibility.policy.patchFeatureDecision.status,
       releaseEligibility: compatibility.policy.releaseEligibility,
+      proofEvidenceStatus: compatibilityProof.status,
     },
     localAssets,
   };
