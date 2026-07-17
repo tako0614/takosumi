@@ -84,6 +84,11 @@ export type ResourceManagedBy = string;
 export interface ResourceMetadata {
   readonly name: string;
   readonly space: string;
+  /**
+   * Canonical desired-generation fence. Existing clients may ignore it; the
+   * portable form-host projection returns it as the Resource ETag/version.
+   */
+  readonly generation?: number;
   readonly project?: string;
   readonly environment?: string;
   readonly owner?: string;
