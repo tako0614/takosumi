@@ -3948,6 +3948,237 @@ function workspaceProjectAndCapsuleRequestSchemas(): Record<
       },
       additionalProperties: false,
     },
+    InstallConfigPatchV1: {
+      type: "object",
+      required: ["kind"],
+      minProperties: 2,
+      description:
+        "Versioned service-side InstallConfig contribution. The target InstallConfig id is selected explicitly in the route; identity, source, Store metadata, runner choice, and timestamps are not patch fields.",
+      properties: {
+        kind: { const: "takosumi.install-config-patch@v1" },
+        variableMapping: { type: "object", additionalProperties: true },
+        variablePresentation: {
+          type: "array",
+          maxItems: 50,
+          items: {
+            type: "object",
+            required: ["name", "label"],
+            properties: {
+              name: { type: "string" },
+              type: { enum: ["string", "number", "boolean", "json"] },
+              format: { type: "string" },
+              required: { type: "boolean" },
+              advanced: { type: "boolean" },
+              secret: { type: "boolean" },
+              defaultValue: {
+                oneOf: [
+                  {
+                    type: "object",
+                    required: ["source", "value"],
+                    properties: {
+                      source: { const: "literal" },
+                      value: {},
+                    },
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    required: ["source"],
+                    properties: { source: { const: "capsule_name" } },
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    required: ["source"],
+                    properties: {
+                      source: { const: "workspace_scoped_capsule_name" },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
+              label: ref("LocalizedText"),
+              helper: ref("LocalizedText"),
+              placeholder: { type: "string" },
+            },
+            additionalProperties: false,
+          },
+        },
+        installExperience: {
+          type: "object",
+          properties: {
+            projections: {
+              type: "array",
+              maxItems: 20,
+              items: {
+                oneOf: [
+                  {
+                    type: "object",
+                    required: ["kind", "variable"],
+                    properties: {
+                      kind: { const: "service_name" },
+                      variable: { type: "string" },
+                    },
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    required: ["kind", "variables"],
+                    properties: {
+                      kind: { const: "public_endpoint" },
+                      variables: {
+                        type: "object",
+                        properties: {
+                          subdomain: { type: "string" },
+                          url: { type: "string" },
+                          routePattern: { type: "string" },
+                        },
+                        additionalProperties: false,
+                      },
+                      baseDomain: { type: "string" },
+                    },
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    required: ["kind", "variable"],
+                    properties: {
+                      kind: { const: "initial_secret" },
+                      variable: { type: "string" },
+                      secretKind: {
+                        enum: ["password", "password_or_hash", "token"],
+                      },
+                      optional: { type: "boolean" },
+                    },
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    required: ["kind", "variables", "callbackPath"],
+                    properties: {
+                      kind: { const: "oidc_client" },
+                      variables: {
+                        type: "object",
+                        properties: {
+                          issuerUrl: { type: "string" },
+                          accountsUrl: { type: "string" },
+                          clientId: { type: "string" },
+                          redirectUri: { type: "string" },
+                        },
+                        additionalProperties: false,
+                      },
+                      callbackPath: { type: "string" },
+                      scopes: { type: "array", items: { type: "string" } },
+                    },
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    required: ["kind", "variables"],
+                    properties: {
+                      kind: { const: "artifact" },
+                      variables: {
+                        type: "object",
+                        properties: {
+                          url: { type: "string" },
+                          sha256: { type: "string" },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
+            },
+          },
+          additionalProperties: false,
+        },
+        outputAllowlist: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            required: ["from", "type"],
+            properties: {
+              from: { type: "string" },
+              type: {
+                enum: [
+                  "string",
+                  "url",
+                  "hostname",
+                  "number",
+                  "boolean",
+                  "json",
+                ],
+              },
+              required: { type: "boolean" },
+              sensitive: { type: "boolean" },
+            },
+            additionalProperties: false,
+          },
+        },
+        interfaceBlueprints: {
+          type: "array",
+          maxItems: 64,
+          items: ref("CapsuleInterfaceBlueprint"),
+        },
+        lifecycleActions: {
+          type: "array",
+          maxItems: 20,
+          items: {
+            type: "object",
+            required: [
+              "apiVersion",
+              "kind",
+              "id",
+              "phase",
+              "executor",
+              "command",
+              "runnerCapability",
+            ],
+            properties: {
+              apiVersion: { const: "takosumi.dev/v1alpha1" },
+              kind: { const: "command" },
+              id: { type: "string" },
+              phase: { enum: ["post_apply", "pre_destroy"] },
+              executor: { enum: ["runner", "operator"] },
+              command: { type: "array", items: { type: "string" } },
+              workingDirectory: { type: "string" },
+              env: {
+                type: "object",
+                additionalProperties: { type: "string" },
+              },
+              timeoutSeconds: { type: "integer", minimum: 1, maximum: 21600 },
+              runnerCapability: { type: "string" },
+              useProviderCredentials: { type: "boolean" },
+            },
+            additionalProperties: false,
+          },
+        },
+        lifecycleActionPolicy: {
+          oneOf: [
+            { type: "null" },
+            {
+              type: "object",
+              required: ["allowedExecutors", "allowedRunnerCapabilities"],
+              properties: {
+                allowedExecutors: {
+                  type: "array",
+                  items: { enum: ["runner", "operator"] },
+                },
+                allowedRunnerCapabilities: {
+                  type: "array",
+                  items: { type: "string" },
+                },
+                allowProviderCredentials: { type: "boolean" },
+              },
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+      additionalProperties: false,
+    },
     InstallConfigResponse: {
       type: "object",
       required: ["installConfig"],

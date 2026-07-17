@@ -222,6 +222,16 @@ export const ALLOWED_KEYS: Record<
     "managedPublicHostname",
   ]),
   capsulePatch: new Set(["status"]),
+  installConfigPatch: new Set([
+    "kind",
+    "variableMapping",
+    "variablePresentation",
+    "installExperience",
+    "outputAllowlist",
+    "interfaceBlueprints",
+    "lifecycleActions",
+    "lifecycleActionPolicy",
+  ]),
   capsulePlan: new Set(["runnerId", "compatibilityReportId"]),
   capsuleDestroyPlan: new Set(["runnerId"]),
   runApprove: new Set(["reason"]),
@@ -266,6 +276,7 @@ export type DeployControlRouteName =
   | "projectCreate"
   | "capsuleCreate"
   | "capsulePatch"
+  | "installConfigPatch"
   | "capsulePlan"
   | "capsuleDestroyPlan"
   | "runApprove"
