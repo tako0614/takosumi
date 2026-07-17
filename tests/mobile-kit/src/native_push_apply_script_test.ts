@@ -41,6 +41,9 @@ test("native push apply script patches generated iOS and Android projects", () =
     expect(read(appDir, "src-tauri/gen/android/build.gradle.kts")).toContain(
       'id("com.google.gms.google-services") version "4.5.0" apply false',
     );
+    expect(read(appDir, "src-tauri/gen/android/settings.gradle.kts")).toContain(
+      "google()",
+    );
     expect(
       read(appDir, "src-tauri/gen/android/app/build.gradle.kts"),
     ).toContain(
@@ -271,6 +274,18 @@ function seedGeneratedNativeProject(appDir: string) {
       "<dict>",
       "</dict>",
       "</plist>",
+      "",
+    ].join("\n"),
+  );
+  write(
+    appDir,
+    "src-tauri/gen/android/settings.gradle.kts",
+    [
+      "pluginManagement {",
+      "    repositories {",
+      "        gradlePluginPortal()",
+      "    }",
+      "}",
       "",
     ].join("\n"),
   );
