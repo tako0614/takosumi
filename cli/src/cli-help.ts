@@ -28,6 +28,7 @@ export function helpText(): string {
       "",
       "Operator:",
       "  connections             operator connection と internal resolver を管理",
+      "  install-configs         versioned service-side config patch を適用",
       "  form-activations        exact FormRef の公開ポリシーを管理",
       "  target-pools            TargetPool 宣言を管理",
       "  space-policies          SpacePolicy 宣言を管理",
@@ -55,6 +56,7 @@ export function helpText(): string {
     "",
     "Operator:",
     "  connections             Manage operator connections and internal resolvers",
+    "  install-configs         Apply versioned service-side config patches",
     "  form-activations        Manage exact FormRef audience policy",
     "  target-pools            Manage TargetPool declarations",
     "  space-policies          Manage SpacePolicy declarations",
@@ -65,6 +67,48 @@ export function helpText(): string {
     "  open 'https://takosumi.example.com/install?git=https://git.example.com/example/app.git&path=deploy/opentofu'",
     "",
     "Internal/development commands are intentionally hidden from this help.",
+  ].join("\n");
+}
+
+export function installConfigsHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi install-configs <command>",
+      "",
+      "コマンド:",
+      "  patch <install-config-id> --file <install-config-patch.json>",
+      "",
+      "target id と versioned patch file を明示して service-side InstallConfig を更新します。",
+      "repository や release から patch を自動探索・選択しません。",
+      "共通オプション: --url、--token、--json",
+    ].join("\n");
+  }
+  return [
+    "takosumi install-configs <command>",
+    "",
+    "Commands:",
+    "  patch <install-config-id> --file <install-config-patch.json>",
+    "",
+    "Updates a service-side InstallConfig from an explicit target id and versioned patch file.",
+    "The command never discovers or selects a patch from a repository or release.",
+    "Common options: --url, --token, --json",
+  ].join("\n");
+}
+
+export function installConfigsPatchHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi install-configs patch <install-config-id> --file <install-config-patch.json>",
+      "",
+      "file kind は takosumi.install-config-patch@v1 である必要があります。",
+      "--url <Takosumi origin> / --token <operator bearer> / --json",
+    ].join("\n");
+  }
+  return [
+    "takosumi install-configs patch <install-config-id> --file <install-config-patch.json>",
+    "",
+    "The file kind must be takosumi.install-config-patch@v1.",
+    "--url <Takosumi origin> / --token <operator bearer> / --json",
   ].join("\n");
 }
 

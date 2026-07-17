@@ -18,6 +18,7 @@ import type {
   ProviderBindingSet,
   InstallConfig,
   InstallConfigLifecycleAction,
+  InstallConfigPatchV1,
 } from "takosumi-contract/install-configs";
 import type { Page } from "takosumi-contract/pagination";
 import {
@@ -40,6 +41,7 @@ import {
 } from "takosumi-contract/redaction";
 import { capsuleInterfaceBlueprintsNeedInstallingPrincipal } from "takosumi-contract/interfaces";
 import { materializeInstallContextVariables } from "../deploy-control/validation.ts";
+import { parseInstallConfigPatchV1 } from "./install_config_patch.ts";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -337,6 +339,54 @@ export class CapsulesService {
     return await this.#store.putInstallConfig(config);
   }
 
+  /**
+   * Apply a versioned, operator-selected mutable contribution to one exact
+   * InstallConfig row. The caller chooses the target id explicitly; this
+   * method never discovers a repository asset or selects a release.
+   */
+  async applyInstallConfigPatch(
+    id: string,
+    value: unknown,
+  ): Promise<InstallConfig> {
+    const patch = parseInstallConfigPatchV1(value);
+    const current = await this.getInstallConfig(id);
+    if (
+      current.workspaceId !== undefined &&
+      capsuleInterfaceBlueprintsNeedInstallingPrincipal(
+        patch.interfaceBlueprints,
+      )
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "installing Principal binding placeholders can be patched only on a shared pre-install config",
+      );
+    }
+    const nextPolicy = patchPolicy(current.policy, patch);
+    return await this.putInstallConfig({
+      ...current,
+      ...(hasOwn(patch, "variableMapping")
+        ? { variableMapping: patch.variableMapping! }
+        : {}),
+      ...(hasOwn(patch, "variablePresentation")
+        ? { variablePresentation: patch.variablePresentation! }
+        : {}),
+      ...(hasOwn(patch, "installExperience")
+        ? { installExperience: patch.installExperience! }
+        : {}),
+      ...(hasOwn(patch, "outputAllowlist")
+        ? { outputAllowlist: patch.outputAllowlist! }
+        : {}),
+      ...(hasOwn(patch, "interfaceBlueprints")
+        ? { interfaceBlueprints: patch.interfaceBlueprints! }
+        : {}),
+      ...(hasOwn(patch, "lifecycleActions")
+        ? { lifecycleActions: patch.lifecycleActions! }
+        : {}),
+      policy: nextPolicy,
+      updatedAt: this.#now().toISOString(),
+    });
+  }
+
   async getInstallConfig(id: string): Promise<InstallConfig> {
     requireNonEmptyString(id, "id");
     const config = await this.#store.getInstallConfig(id);
@@ -404,6 +454,22 @@ export class CapsulesService {
     }
     return capsule;
   }
+}
+
+function patchPolicy(
+  policy: InstallConfig["policy"],
+  patch: InstallConfigPatchV1,
+): InstallConfig["policy"] {
+  if (!hasOwn(patch, "lifecycleActionPolicy")) return policy;
+  if (patch.lifecycleActionPolicy !== null) {
+    return { ...policy, lifecycleActions: patch.lifecycleActionPolicy };
+  }
+  const { lifecycleActions: _lifecycleActions, ...remaining } = policy;
+  return remaining;
+}
+
+function hasOwn(value: object, key: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function assertSafeInstallConfigPath(value: string, field: string): void {

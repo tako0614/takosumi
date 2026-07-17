@@ -411,3 +411,30 @@ export interface InstallConfig {
 
 /** Public InstallConfig projection returned by `/api` and dashboard session routes. */
 export type PublicInstallConfig = Omit<InstallConfig, "runnerId" | "internal">;
+
+/**
+ * Exact artifact kind for a service-side InstallConfig patch.
+ *
+ * The artifact is an operator-selected DB contribution. It is never searched
+ * for in a Git repository, selected from a release automatically, or treated
+ * as an OpenTofu manifest/output schema.
+ */
+export const INSTALL_CONFIG_PATCH_V1_KIND =
+  "takosumi.install-config-patch@v1" as const;
+
+/**
+ * Versioned mutable subset accepted by the operator InstallConfig patch API.
+ * Identity, ownership, Git source selection, runner choice, Store metadata,
+ * and timestamps remain owned by the targeted Takosumi InstallConfig row.
+ */
+export interface InstallConfigPatchV1 {
+  readonly kind: typeof INSTALL_CONFIG_PATCH_V1_KIND;
+  readonly variableMapping?: Readonly<Record<string, JsonValue>>;
+  readonly variablePresentation?: readonly InstallConfigVariablePresentation[];
+  readonly installExperience?: InstallConfigInstallExperience;
+  readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
+  readonly interfaceBlueprints?: readonly CapsuleInterfaceBlueprint[];
+  readonly lifecycleActions?: readonly InstallConfigLifecycleAction[];
+  /** Replaces only `policy.lifecycleActions`; all other policy stays intact. */
+  readonly lifecycleActionPolicy?: PolicyConfig["lifecycleActions"] | null;
+}
