@@ -4,6 +4,7 @@ import {
   deleteResourceSpacePolicy,
   deleteResourceShape,
   getResourceSpacePolicy,
+  listFormAvailability,
   listResourceSpacePolicies,
   listResourceShapes,
   previewResourceShape,
@@ -53,6 +54,50 @@ describe("Resource Shape dashboard client", () => {
       "/v1/resources?workspaceId=workspace_1&space=workspace_1",
     );
     expect(calls[0]?.init?.credentials).toBe("include");
+  });
+
+  test("pages principal-scoped Form availability without a local kind catalog", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : String(input);
+      calls.push(url);
+      const identity = {
+        formRef: {
+          apiVersion: "forms.takoform.com/v1alpha1",
+          kind: url.includes("cursor=next") ? "Queue" : "ObjectBucket",
+          definitionVersion: "1.0.0",
+          schemaDigest: `sha256:${"1".repeat(64)}`,
+        },
+        packageDigest: `sha256:${"2".repeat(64)}`,
+      };
+      return jsonResponse({
+        forms: [
+          {
+            identity,
+            definitionKnown: true,
+            installed: true,
+            executable: true,
+            activated: true,
+            availableToPrincipal: true,
+            operations: ["create", "read"],
+            compatibleAdapterIds: ["opentofu"],
+            eligibleTargetPoolClasses: ["edge"],
+            deprecated: false,
+          },
+        ],
+        ...(url.includes("cursor=next") ? {} : { nextCursor: "next" }),
+      });
+    }) as typeof fetch;
+
+    expect(
+      (await listFormAvailability("workspace_1", "space_1")).map(
+        (form) => form.identity.formRef.kind,
+      ),
+    ).toEqual(["ObjectBucket", "Queue"]);
+    expect(calls).toEqual([
+      "/v1/form-availability?workspaceId=workspace_1&space=space_1",
+      "/v1/form-availability?workspaceId=workspace_1&space=space_1&cursor=next",
+    ]);
   });
 
   test("previews and applies the exact same typed manifest body", async () => {
@@ -112,6 +157,15 @@ describe("Resource Shape dashboard client", () => {
       workspaceId: "workspace_1",
       space: "workspace_1",
       kind: "ObjectBucket",
+      form: {
+        formRef: {
+          apiVersion: "forms.takoform.com/v1alpha1",
+          kind: "ObjectBucket",
+          definitionVersion: "1.0.0",
+          schemaDigest: `sha256:${"1".repeat(64)}`,
+        },
+        packageDigest: `sha256:${"2".repeat(64)}`,
+      },
       name: "assets/main",
       project: "media",
       environment: "production",
@@ -135,6 +189,7 @@ describe("Resource Shape dashboard client", () => {
     const expectedBody = {
       workspaceId: "workspace_1",
       kind: "ObjectBucket",
+      form: input.form,
       metadata: {
         name: "assets/main",
         space: "workspace_1",

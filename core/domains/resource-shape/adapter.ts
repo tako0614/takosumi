@@ -194,6 +194,15 @@ export interface AdapterDeleteInput {
 export interface ResourceAdapter {
   /** Stable adapter id, e.g. `opentofu` or `stub`. */
   readonly id: string;
+  /**
+   * Read-only host discovery hook. Returning undefined is a fail-closed
+   * declaration that this adapter cannot prove the descriptor executable.
+   * The public id must describe the adapter surface, never a backend manager,
+   * credential, private Target, or capacity record.
+   */
+  availabilityForImplementation?(
+    implementation: TargetImplementationDescriptor,
+  ): { readonly adapterId: string } | undefined;
   preview(input: AdapterApplyInput): Promise<AdapterPreviewResult>;
   /** Stable-name idempotent create/update when `operationKey` is present. */
   apply(input: AdapterApplyInput): Promise<AdapterApplyResult>;
@@ -212,6 +221,14 @@ export interface ResourceAdapter {
  */
 export class StubResourceShapeAdapter implements ResourceAdapter {
   readonly id = "stub";
+
+  availabilityForImplementation(
+    implementation: TargetImplementationDescriptor,
+  ): { readonly adapterId: string } | undefined {
+    return implementation.providerSource && implementation.moduleTemplate
+      ? { adapterId: this.id }
+      : undefined;
+  }
 
   preview(input: AdapterApplyInput): Promise<AdapterPreviewResult> {
     const native = input.nativeResources ?? [];

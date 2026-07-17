@@ -9,7 +9,11 @@ import type {
   AdapterRefreshResult,
   ResourceAdapter,
 } from "./adapter.ts";
-import type { JsonObject, NativeResourceRef } from "takosumi-contract";
+import type {
+  JsonObject,
+  NativeResourceRef,
+  TargetImplementationDescriptor,
+} from "takosumi-contract";
 
 export interface ResourceShapePluginBinding {
   fetch(request: Request): Promise<Response> | Response;
@@ -38,6 +42,17 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
     this.#fallback = fallback;
     this.#plugins = plugins;
     this.id = `${fallback.id}+plugins`;
+  }
+
+  availabilityForImplementation(
+    implementation: TargetImplementationDescriptor,
+  ): { readonly adapterId: string } | undefined {
+    if (implementation.plugin) {
+      return this.#plugins[implementation.plugin]
+        ? { adapterId: implementation.plugin }
+        : undefined;
+    }
+    return this.#fallback.availabilityForImplementation?.(implementation);
   }
 
   async preview(input: AdapterApplyInput): Promise<AdapterPreviewResult> {

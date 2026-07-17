@@ -399,6 +399,38 @@ takosumi form-activations create --file activation.json
 takosumi form-activations update activation_id --file update.json
 ```
 
+### Form availability discovery
+
+An authenticated principal can read host state for each exact FormRef:
+
+```http
+GET /v1/form-availability?space={space}&limit={n}&cursor={opaque}
+```
+
+An exact lookup supplies all of `apiVersion`, `kind`, `definitionVersion`,
+`schemaDigest`, and `packageDigest`. The response reports `definitionKnown`,
+`installed`, `executable`, `executableReason`, `activated`,
+`availableToPrincipal`, `availabilityReason`, `operations`,
+`compatibleAdapterIds`, `eligibleTargetPoolClasses`, and `deprecated`.
+The caller needs the `forms:read` or `resources:read` scope.
+
+The host derives this fail-closed from the Form Registry, installed schema,
+TargetPool descriptors, actually injected module/adapter support, and the
+FormActivation scope/audience. It never returns Target names,
+implementation/manager identity, credentials, regions, or raw capacity.
+Price, SKU, billing, and Cloud offerings remain in a separate closed catalog.
+
+`GET /v1/capabilities?space={space}` uses the same authentication and scopes
+and projects that principal's structured records into `formAvailability.forms`.
+In this scoped projection, legacy `resources` booleans are also derived from
+`availableToPrincipal`. The capability document without `space` is only the
+context-free host-enablement view for clients that have not migrated; it is not
+evidence of principal availability.
+
+```bash
+takosumi form-availability list --space space_1
+```
+
 Current v1alpha1 public shapes:
 
 ```text
@@ -468,6 +500,10 @@ Targets are currently complete operator-authored capability entries in
 `TargetPool.spec.targets[]`, not a separate unwired `/v1/targets` resource.
 Resource Shape SpacePolicy records are created, read, listed, and deleted
 through the same Space-scoped endpoint family.
+`TargetPool.spec.classes` contains only public placement-class tokens matched
+against a FormActivation's `eligibleTargetPoolClasses`. It is not a discovery
+projection for private target names, credentials, regions, managers, or
+capacity.
 
 Provider execution credentials are owned by the OpenTofu Stack flow's Provider
 Connections and Credential Recipes. Recipe `authModes` keys and `preRun.type` values are open tokens

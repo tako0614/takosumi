@@ -242,6 +242,16 @@ function coerceJsonValue(value: unknown): JsonValue | undefined {
  */
 export class OpentofuResourceShapeAdapter implements ResourceAdapter {
   readonly id = "opentofu";
+
+  availabilityForImplementation(
+    implementation: TargetImplementationDescriptor,
+  ): { readonly adapterId: string } | undefined {
+    return !implementation.plugin &&
+      implementation.providerSource &&
+      implementation.moduleTemplate
+      ? { adapterId: this.id }
+      : undefined;
+  }
   readonly #port: OpentofuRunPort;
 
   constructor(port: OpentofuRunPort) {

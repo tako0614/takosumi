@@ -61,9 +61,16 @@ func TestTargetPoolModelToSpecAcceptsAdminDefinedImplementations(t *testing.T) {
 	if diags.HasError() {
 		t.Fatalf("targets diagnostics: %v", diags)
 	}
+	classes, diags := types.SetValue(types.StringType, []attr.Value{
+		types.StringValue("edge.container"),
+	})
+	if diags.HasError() {
+		t.Fatalf("classes diagnostics: %v", diags)
+	}
 
 	model := targetPoolModel{
 		Name:    types.StringValue("default"),
+		Classes: classes,
 		Targets: targets,
 	}
 	space, spec, gotDiags := model.toSpec(ctx, "prod")
@@ -75,6 +82,9 @@ func TestTargetPoolModelToSpecAcceptsAdminDefinedImplementations(t *testing.T) {
 	}
 	if len(spec.Targets) != 1 {
 		t.Fatalf("expected one target, got %#v", spec.Targets)
+	}
+	if len(spec.Classes) != 1 || spec.Classes[0] != "edge.container" {
+		t.Fatalf("expected placement classes to pass through, got %#v", spec.Classes)
 	}
 	gotTarget := spec.Targets[0]
 	if gotTarget.Type != "kubernetes" || gotTarget.Name != "containers-main" {

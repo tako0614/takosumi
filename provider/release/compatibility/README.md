@@ -12,7 +12,7 @@ provider credentials, runtime values, or release signing material.
   sorting object keys and removing `description`, `description_kind`, and
   `validators`; boolean/type/nesting/state semantics remain included.
 - `1.1.0-delta-policy.json` classifies the current candidate delta. The four new
-  resource types and eight optional field additions are additive schema changes,
+  resource types and nine optional field additions are additive schema changes,
   so the feature-bearing `1.0.1` patch lane is rejected. They remain together
   only in the unpublished `1.1.0` minor candidate. Publication stays blocked by
   the independent compatibility and external release gates.

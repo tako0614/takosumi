@@ -1,3 +1,5 @@
+import type { FormAvailability } from "./service-forms.ts";
+
 export const TAKOSUMI_API_VERSION = "takosumi.dev/v1alpha1" as const;
 export const TAKOSUMI_INTERFACES_CAPABILITY = "takosumi.interfaces.v1" as const;
 
@@ -44,8 +46,24 @@ export interface TakosumiProductCapabilities {
   readonly compatibilityProfiles: TakosumiCompatibilityProfileCapabilities;
   readonly identity: TakosumiIdentityCapabilities;
   readonly operator: TakosumiOperatorCapabilities;
+  /**
+   * Principal-scoped structured Form discovery. Records are fetched from the
+   * authenticated endpoint; this public descriptor intentionally carries no
+   * installed definitions, private Targets, manager ids, or commercial data.
+   */
+  readonly formAvailability: TakosumiFormAvailabilityCapability;
   /** Versioned Takosumi extensions; these are not OpenTofu standards. */
   readonly extensions: readonly string[];
+}
+
+export interface TakosumiFormAvailabilityCapability {
+  readonly structured: true;
+  readonly endpoint: "/v1/form-availability";
+  readonly principalScoped: true;
+  readonly readScopesAnyOf: readonly ["forms:read", "resources:read"];
+  readonly commercialFields: false;
+  /** Present only for the authenticated `?space=` capabilities projection. */
+  readonly forms: readonly FormAvailability[];
 }
 
 /**
@@ -153,6 +171,8 @@ export interface CreateTakosumiDiscoveryOptions {
   readonly endpoints?: Readonly<Record<string, string>>;
   readonly resourceShapesEnabled?: boolean;
   readonly interfacesEnabled?: boolean;
+  /** Principal-scoped structured truth used to derive legacy booleans. */
+  readonly formAvailability?: readonly FormAvailability[];
   /** Open, versioned product/extension capability tokens. */
   readonly extensions?: readonly string[];
 }
@@ -218,7 +238,10 @@ export function createTakosumiProductCapabilities(
   };
   return {
     apiVersion: TAKOSUMI_API_VERSION,
-    resources: mergeResourceCapabilities(options.resources),
+    resources: mergeResourceCapabilities(
+      options.resources,
+      options.formAvailability,
+    ),
     adapters: {
       opentofu: true,
       ...(options.adapters ?? {}),
@@ -232,6 +255,14 @@ export function createTakosumiProductCapabilities(
       ...(options.identity ?? {}),
     },
     operator,
+    formAvailability: {
+      structured: true,
+      endpoint: "/v1/form-availability",
+      principalScoped: true,
+      readScopesAnyOf: ["forms:read", "resources:read"],
+      commercialFields: false,
+      forms: options.formAvailability ?? [],
+    },
     extensions: Object.freeze([
       ...new Set([
         ...(options.extensions ?? []).filter(
@@ -272,8 +303,9 @@ function normalizeCompatibilityProfiles(
 
 function mergeResourceCapabilities(
   resources: Partial<TakosumiResourceCapabilities> | undefined,
+  formAvailability: readonly FormAvailability[] | undefined,
 ): TakosumiResourceCapabilities {
-  return {
+  const compatibility = {
     Stack: resources?.Stack ?? true,
     EdgeWorker: resources?.EdgeWorker ?? false,
     ObjectBucket: resources?.ObjectBucket ?? false,
@@ -287,6 +319,19 @@ function mergeResourceCapabilities(
     Schedule: resources?.Schedule ?? false,
     ...(resources ?? {}),
   };
+  if (formAvailability === undefined) return compatibility;
+  const derived = Object.fromEntries(
+    Object.keys(compatibility)
+      .filter((kind) => kind !== "Stack")
+      .map((kind) => [
+        kind,
+        formAvailability.some(
+          (form) =>
+            form.identity.formRef.kind === kind && form.availableToPrincipal,
+        ),
+      ]),
+  );
+  return { ...compatibility, ...derived };
 }
 
 function trimTrailingSlash(value: string): string {
