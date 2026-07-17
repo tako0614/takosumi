@@ -1,5 +1,9 @@
 #!/usr/bin/env bun
-import type { InstalledFormReference, JsonObject } from "takosumi-contract";
+import type {
+  InstalledFormReference,
+  JsonObject,
+  StandardFormNegativeFixture,
+} from "takosumi-contract";
 import { isInstalledFormReference } from "takosumi-contract";
 import { runPortableFormHostConformance } from "../core/conformance/portable_form_host.ts";
 
@@ -16,6 +20,10 @@ if (!isInstalledFormReference(identity)) {
 const desired = await readJson(required(args, "desired"));
 if (!isObject(desired))
   throw new TypeError("--desired must contain a JSON object");
+const positiveFixtureName = args["positive-fixture-name"] ?? "canonical";
+const negativeFixtures = args["negative-fixtures"]
+  ? await readNegativeFixtures(args["negative-fixtures"])
+  : [];
 const token = args["token-env"] ? process.env[args["token-env"]] : undefined;
 if (args["token-env"] && !token) {
   throw new TypeError(
@@ -32,6 +40,8 @@ const report = await runPortableFormHostConformance({
   name,
   identity,
   desired: desired as JsonObject,
+  positiveFixtureName,
+  negativeFixtures,
   ...(token ? { token } : {}),
   ...(importNativeId ? { importNativeId } : {}),
 });
@@ -44,7 +54,7 @@ function parseArgs(values: readonly string[]): Record<string, string> {
     const value = values[index + 1];
     if (!key?.startsWith("--") || !value) {
       throw new TypeError(
-        "usage: --endpoint URL --space ID --name NAME --identity FILE --desired FILE [--token-env ENV] [--import-native-id-env ENV]",
+        "usage: --endpoint URL --space ID --name NAME --identity FILE --desired FILE [--positive-fixture-name NAME] [--negative-fixtures FILE] [--token-env ENV] [--import-native-id-env ENV]",
       );
     }
     result[key.slice(2)] = value;
@@ -60,6 +70,30 @@ function required(values: Record<string, string>, key: string): string {
 
 async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await Bun.file(path).text()) as unknown;
+}
+
+async function readNegativeFixtures(
+  path: string,
+): Promise<readonly StandardFormNegativeFixture[]> {
+  const value = await readJson(path);
+  if (!Array.isArray(value) || !value.every(isNegativeFixture)) {
+    throw new TypeError(
+      "--negative-fixtures must contain a StandardFormNegativeFixture JSON array",
+    );
+  }
+  return value;
+}
+
+function isNegativeFixture(
+  value: unknown,
+): value is StandardFormNegativeFixture {
+  return (
+    isObject(value) &&
+    typeof value.name === "string" &&
+    typeof value.stage === "string" &&
+    isObject(value.input) &&
+    typeof value.expectedErrorCode === "string"
+  );
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
