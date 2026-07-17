@@ -41,7 +41,9 @@ import type {
   TargetPoolRecordId,
 } from "./records.ts";
 import {
+  assertNativeResourceFormIdentity,
   assertResourceFormIdentity,
+  bindNativeResourceFormIdentity,
   resourceFormIdentitiesEqual,
 } from "./records.ts";
 import type {
@@ -787,12 +789,18 @@ async function pinD1ExactFormIdentity(
       db
         .prepare(
           `update ${names.resolutionLocks}
-           set form_ref_json = ?, package_digest = ?
+           set form_ref_json = ?, package_digest = ?, native_resources_json = ?
            where resource_id = ? and form_ref_json is null and package_digest is null`,
         )
         .bind(
           JSON.stringify(input.form.formRef),
           input.form.packageDigest,
+          jsonOrNull(
+            bindNativeResourceFormIdentity(
+              input.expectedLock.nativeResources,
+              input.form,
+            ),
+          ),
           input.resourceId,
         ),
     ]);
@@ -806,6 +814,7 @@ async function pinD1ExactFormIdentity(
       resourceFormIdentitiesEqual(current.form, input.form) &&
       resourceFormIdentitiesEqual(currentLock.form, input.form)
     ) {
+      assertNativeResourceFormIdentity(currentLock.nativeResources, input.form);
       return {
         status: "already_pinned",
         record: current,
@@ -836,6 +845,7 @@ async function pinD1ExactFormIdentity(
     resourceFormIdentitiesEqual(record.form, input.form) &&
     resourceFormIdentitiesEqual(lock.form, input.form)
   ) {
+    assertNativeResourceFormIdentity(lock.nativeResources, input.form);
     return { status: "pinned", record, lock };
   }
   return { status: "conflict", record, lock };

@@ -7,6 +7,7 @@
 
 import type {
   ActorContext,
+  InstalledFormReference,
   JsonObject,
   NativeResourceRef,
   ResourceConnectionPermission,
@@ -31,6 +32,8 @@ import type {
 export interface ResolvedResourceConnection {
   readonly resourceId: string;
   readonly kind: ResourceShapeKind;
+  /** Exact owning Form for replay-safe Resource connection evidence. */
+  readonly form?: InstalledFormReference;
   readonly permissions: readonly ResourceConnectionPermission[];
   readonly projection: ResourceProjectionKind;
   readonly target: string;
@@ -42,6 +45,8 @@ export interface ResolvedResourceConnection {
 export interface AdapterApplyInput {
   /** Canonical resource id (`tkrn:{space}:{kind}:{name}`). */
   readonly resourceId: string;
+  /** Exact immutable Form selected by the Resource/ResolutionLock pair. */
+  readonly form?: InstalledFormReference;
   /**
    * Core-minted stable operation identity for direct adapter plugins. When it
    * is present, `apply` MUST be safe to replay with the same key and
@@ -161,6 +166,8 @@ export interface AdapterObserveResult {
 
 export interface AdapterDeleteInput {
   readonly resourceId: string;
+  /** Exact immutable Form selected by the Resource/ResolutionLock pair. */
+  readonly form?: InstalledFormReference;
   /**
    * Core-minted stable operation identity. `delete` MUST be idempotent for the
    * same key and `resourceId`, including replay after a lost provider response.

@@ -304,6 +304,9 @@ for (const backend of backends) {
       const lock: ResolutionLockRecord = {
         ...fullLock(record.id),
         form: EXACT_FORM,
+        nativeResources: fullLock(record.id).nativeResources?.map(
+          (nativeResource) => ({ ...nativeResource, form: EXACT_FORM }),
+        ),
         updatedAt: T2,
       };
       expect(
@@ -383,6 +386,13 @@ for (const backend of backends) {
       ).toMatchObject({ status: "pinned" });
       expect((await stores.resources.get(record.id))?.form).toEqual(EXACT_FORM);
       expect((await stores.locks.get(record.id))?.form).toEqual(EXACT_FORM);
+      expect((await stores.locks.get(record.id))?.nativeResources).toEqual([
+        {
+          type: "cloudflare.r2_bucket",
+          id: "assets",
+          form: EXACT_FORM,
+        },
+      ]);
 
       expect(
         await stores.pinExactFormIdentity({
