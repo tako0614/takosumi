@@ -8,6 +8,7 @@ import type {
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
+import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 
 interface JsonRow {
   readonly record_json: string;
@@ -23,10 +24,11 @@ class D1InterfaceStore implements InterfaceStore {
       .prepare(
         `insert or ignore into ${this.#table} (
         id, workspace_id, owner_kind, owner_id, name, interface_type,
-        phase, generation, resolved_revision, record_json, created_at, updated_at
-      ) values (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        phase, generation, resolved_revision, oauth_resource_uri, record_json,
+        created_at, updated_at
+      ) values (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
-      .bind(...interfaceParameters(record))
+      .bind(...interfaceParameters(record, false))
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -106,12 +108,15 @@ class D1InterfaceStore implements InterfaceStore {
         .prepare(
           `update ${this.#table} set
           workspace_id=?, owner_kind=?, owner_id=?, name=?, interface_type=?,
-          phase=?, generation=?, resolved_revision=?, record_json=?,
+          phase=?, generation=?, resolved_revision=?,
+          oauth_resource_uri=case
+            when oauth_resource_uri=? then oauth_resource_uri else null end,
+          record_json=?,
           created_at=?, updated_at=?
          where id=? and generation=? and resolved_revision=? and record_json=?`,
         )
         .bind(
-          ...interfaceParameters(record).slice(1),
+          ...interfaceParameters(record, true).slice(1),
           record.metadata.id,
           expected.generation,
           expected.resolvedRevision,
@@ -123,6 +128,61 @@ class D1InterfaceStore implements InterfaceStore {
       if (isUniqueConstraintError(error)) return false;
       throw error;
     }
+  }
+
+  async claimOAuth2Resource(input: {
+    readonly record: Interface;
+    readonly resource: string;
+  }): Promise<boolean> {
+    if (interfaceOAuth2ResourceUri(input.record) !== input.resource) {
+      return false;
+    }
+    try {
+      const result = await this.db
+        .prepare(
+          `update ${this.#table} set oauth_resource_uri=?
+           where id=? and workspace_id=? and owner_kind=? and owner_id=?
+             and phase='Resolved' and generation=? and resolved_revision=?
+             and record_json=?`,
+        )
+        .bind(
+          input.resource,
+          input.record.metadata.id,
+          input.record.metadata.workspaceId,
+          input.record.metadata.ownerRef.kind,
+          input.record.metadata.ownerRef.id,
+          input.record.metadata.generation,
+          input.record.status.resolvedRevision,
+          JSON.stringify(input.record),
+        )
+        .run();
+      return (result.meta?.changes ?? 0) > 0;
+    } catch (error) {
+      if (isUniqueConstraintError(error)) return false;
+      throw error;
+    }
+  }
+
+  async findOAuth2ResourceClaim(input: {
+    readonly workspaceId: string;
+    readonly ownerKind: Interface["metadata"]["ownerRef"]["kind"];
+    readonly ownerId: string;
+    readonly resource: string;
+  }): Promise<string | undefined> {
+    const row = await this.db
+      .prepare(
+        `select id from ${this.#table}
+         where workspace_id=? and owner_kind=? and owner_id=?
+           and oauth_resource_uri=? limit 1`,
+      )
+      .bind(
+        input.workspaceId,
+        input.ownerKind,
+        input.ownerId,
+        input.resource,
+      )
+      .first<{ readonly id: string }>();
+    return row?.id;
   }
 }
 
@@ -187,7 +247,10 @@ class D1InterfaceBindingStore implements InterfaceBindingStore {
   }
 }
 
-function interfaceParameters(record: Interface): readonly unknown[] {
+function interfaceParameters(
+  record: Interface,
+  preserveClaim: boolean,
+): readonly unknown[] {
   return [
     record.metadata.id,
     record.metadata.workspaceId,
@@ -198,6 +261,7 @@ function interfaceParameters(record: Interface): readonly unknown[] {
     record.status.phase,
     record.metadata.generation,
     record.status.resolvedRevision,
+    preserveClaim ? (interfaceOAuth2ResourceUri(record) ?? null) : null,
     JSON.stringify(record),
     record.metadata.createdAt,
     record.metadata.updatedAt,

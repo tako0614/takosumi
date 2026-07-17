@@ -21,6 +21,7 @@ import {
   type UpstreamOAuthOptions,
   upstreamOAuthOptionsFromEnvironment,
   type LoginEmailAllowlist,
+  type InterfaceOAuthActivityValidator,
 } from "@takosjp/takosumi-accounts-service";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 import { checkPlatformBindings } from "./bindings-check.ts";
@@ -356,6 +357,20 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   const controlPlaneOperations = identityOnly
     ? undefined
     : await options.controlPlaneOperations?.(env);
+  // Keep ordinary identity requests on the lightweight handler. Canonical
+  // Core is resolved lazily only when an Interface OAuth token is actually
+  // presented to UserInfo/introspection.
+  const interfaceOAuthActivityValidator: InterfaceOAuthActivityValidator | undefined =
+    options.controlPlaneOperations
+      ? async (evidence) => {
+          const operations = await options.controlPlaneOperations?.(env);
+          return (
+            (await operations?.interfaces?.validatePrincipalOAuth2TokenEvidence(
+              evidence,
+            )) === true
+          );
+        }
+      : undefined;
   const managedPublicBaseDomain = optionalString(
     env.TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN,
   );
@@ -367,6 +382,9 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     passkeys: parsePasskeysFailClosed(env),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
+    ...(interfaceOAuthActivityValidator
+      ? { interfaceOAuthActivityValidator }
+      : {}),
     ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
     privacyOperationsToken: optionalString(
       env.TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN,

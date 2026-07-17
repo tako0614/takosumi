@@ -127,7 +127,9 @@ delivery方式はfail closedで`NotReady`になります。
 
 Principalの`oauth2` deliveryは、credentialを含まない絶対HTTPS resource URI、host issuer、
 およびInterface ownerがそのhostnameを所有することのhost-side証明が揃った場合だけReadyです。
-literalやOutputのURLだけでは所有権にもOAuth audience authorityにもなりません。
+literalやOutputのURLだけでは所有権にもOAuth audience authorityにもなりません。さらに
+canonical resourceをWorkspace owner単位でatomicにclaimし、競合するInterfaceは曖昧な
+OAuth deliveryを作らず`NotReady`になります。
 
 Outputが変化すると、そのOutputを明示参照するInterfaceだけが新revisionへ解決されます。
 Workspace全体のplan/applyやconsumer Capsuleの再applyは起動しません。OpenTofu間の

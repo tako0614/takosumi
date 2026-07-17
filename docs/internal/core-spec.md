@@ -380,6 +380,14 @@ The default OSS authorizer accepts only a Capsule owner with an active public
 hostname reservation matching the same Workspace and Capsule. Custom/external
 resources require an explicit host override; no proof means NotReady.
 
+Before an `oauth2` Binding becomes Ready, Core claims its canonical
+query/fragment-free resource URI for the exact `(Workspace, ownerRef)` through
+an Interface generation/revision CAS. D1 and Postgres enforce a unique partial
+index on that claim, so concurrent Bindings on two Interfaces produce exactly
+one Ready authority; the loser is `NotReady` with `OAuthResourceConflict`.
+Changing or retiring the Interface releases the projection atomically with the
+Interface row, and a later Binding refresh may acquire it.
+
 The token route reconciles lifecycle state and rechecks the exact Workspace,
 Principal, permission, Ready Binding, Binding observation of the current
 Interface revision, resolved resource audience, and host ownership proof
@@ -393,11 +401,15 @@ Output/state, Run, logs, or audit; only non-secret issuance evidence is audited.
 The Accounts-backed node and Worker compositions implement this issuer with an
 opaque `taksrv_` token. Durable Accounts stores retain the hash plus the exact
 subject, Workspace, Interface id, Binding id, resolved revision, audience,
-scope, and expiry. `/oauth/userinfo` exposes an active token as
-`/oauth/userinfo` and authenticated `/oauth/introspect` expose an active token
+scope, and expiry. `/oauth/userinfo` and authenticated `/oauth/introspect`
+expose an active token
 with `token_use = interface_oauth`, exact `aud` / `scope`, and the corresponding
 `takosumi` Interface/Binding/revision evidence (plus the Capsule id for a
-Capsule-owned Interface) so the target Capsule can fail closed. This is a host
+Capsule-owned Interface). Before returning an active result, Accounts calls a
+host-injected Core validator that reconciles lifecycle state and rechecks the
+exact current revision, resource claim/ownership, Principal Binding, subject,
+permission, and delivery. A missing/throwing validator or stale evidence is
+inactive and the opaque token record is removed. This is a host
 composition of the generic OSS Core issuer port, not a Cloud-only credential
 contract.
 
@@ -405,8 +417,14 @@ The Accounts introspection endpoint always requires a registered client;
 Interface OAuth introspection also requires the exact resource URI. Platform
 composition derives ordinary OAuth, personal access, and Interface OAuth
 identity from explicit `token_use` claims, rejects unknown claims, and verifies
-Interface audience/scope/evidence against the selected resource route. Opaque
-token prefixes are not routing or authorization authority.
+the active result's audience, scope, Workspace/Capsule, and subject against the
+selected resource route. The returned Interface id, Binding id, and positive
+resolved revision are required evidence fields, not static target configuration:
+authenticated `active: true` is authoritative because Core just revalidated
+their current values. The target validates that evidence shape together with
+the exact audience/scope/Workspace/Capsule/subject, without pre-pinning values
+that exist only after apply. Opaque token prefixes are not routing or
+authorization authority.
 
 `delivery.type = workload_token` remains NotReady even when the Principal
 OAuth issuer exists; its future identity is ServiceAccount, not a repurposed

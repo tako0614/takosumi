@@ -896,6 +896,13 @@ whose hostname has an active reservation for that exact Workspace and Capsule.
 An operator may inject a stricter or external-resource authorizer, but omitting
 proof always leaves the Binding NotReady; arbitrary URLs never inherit trust.
 
+`oauth2` readiness also requires a durable canonical-resource claim. The claim
+key is `(Workspace, ownerRef, query/fragment-free resource URI)` and is written
+with an exact Interface generation/revision CAS. D1/Postgres uniqueness makes
+concurrent claims deterministic: only one Interface becomes Ready and every
+competitor remains `NotReady` with `OAuthResourceConflict`. An Interface
+resource change or retirement releases its claim atomically with that row.
+
 For `oauth2`, an authenticated runtime Principal requests exactly one
 permission from `POST /v1/interfaces/:id/token`. Immediately before issuance,
 Core reconciles the Interface and rechecks the Workspace, Principal subject,
@@ -915,20 +922,26 @@ return `aud`, `scope`, plus
 `takosumi.workspace_id`, `takosumi.interface_id`,
 `takosumi.interface_binding_id`, and
 `takosumi.interface_resolved_revision`; a Capsule-owned Interface also carries
-`takosumi.capsule_id`. A Capsule verifies the required values against the
-current request resource and permission before accepting the Bearer. Takos uses
+`takosumi.capsule_id`. Before either endpoint reports the token active, the
+Accounts host port reconciles Core and revalidates the exact current resource
+claim/ownership, Interface revision, Ready Principal Binding, subject,
+permission, and delivery. Missing validation, a callback failure, revocation,
+or lifecycle drift is inactive. Takos uses
 its Accounts delegated token only to authenticate the token request; it never
 forwards that delegated token to the Capsule, and it keeps the issued
 credential only in call-local memory for catalog discovery or one invocation.
 
 Introspection always authenticates a registered client. Interface OAuth
 introspection additionally requires the caller to send the exact resource URI,
-and an invocation route accepts the result only when `aud`, the single
-permission scope, Workspace, Interface, Binding, and resolved revision all
-match. Ordinary OAuth and personal access credentials use explicit
-`token_use = oauth_access` and `token_use = personal_access` claims. Token
-prefixes remain an opaque generation format and never select an authorization
-path or principal kind.
+and an invocation route accepts the result only when it is active and `aud`,
+the single permission scope, Workspace/Capsule, and subject match. Interface,
+Binding, and resolved-revision fields remain required, well-formed evidence but
+are not static target pins: authenticated `active: true` means Core has just
+validated their current values. This avoids requiring post-apply Interface
+identities as pre-apply module inputs. Ordinary OAuth and personal access
+credentials use explicit `token_use = oauth_access` and
+`token_use = personal_access` claims. Token prefixes remain an opaque generation
+format and never select an authorization path or principal kind.
 
 `delivery.type = workload_token` remains `NotReady` in v1alpha1 even when the
 Principal OAuth issuer is configured. A future workload implementation must

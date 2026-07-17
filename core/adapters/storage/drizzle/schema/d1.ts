@@ -673,6 +673,7 @@ export const interfaces = sqliteTable(
     phase: text("phase").notNull(),
     generation: integer("generation").notNull(),
     resolvedRevision: integer("resolved_revision").notNull(),
+    oauthResourceUri: text("oauth_resource_uri"),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -686,6 +687,14 @@ export const interfaces = sqliteTable(
       table.interfaceType,
       table.phase,
     ),
+    uniqueIndex("interfaces_oauth_resource_claim_unique")
+      .on(
+        table.workspaceId,
+        table.ownerKind,
+        table.ownerId,
+        table.oauthResourceUri,
+      )
+      .where(sql`${table.oauthResourceUri} is not null`),
   ],
 );
 

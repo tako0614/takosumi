@@ -44,6 +44,15 @@ export class SqliteFakeD1 implements D1Database {
     return new SqliteFakeStatement(this.#db, query);
   }
 
+  /** Accounts D1 bootstrap uses the native multi-statement exec surface. */
+  exec(query: string): Promise<{ readonly count: number; readonly duration: number }> {
+    this.#db.exec(query);
+    return Promise.resolve({
+      count: query.split(";").filter((part) => part.trim().length > 0).length,
+      duration: 0,
+    });
+  }
+
   /**
    * Atomic multi-statement batch, mirroring D1's `batch()`. Runs every statement
    * inside ONE SQLite transaction (BEGIN / COMMIT, ROLLBACK on any error) so the
