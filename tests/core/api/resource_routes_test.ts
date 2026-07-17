@@ -19,6 +19,10 @@ import {
 import { createInMemoryInterfaceStores } from "../../../core/domains/interfaces/mod.ts";
 import type { AdapterDeleteInput } from "../../../core/domains/resource-shape/mod.ts";
 import { ActivityService } from "../../../core/domains/activity/mod.ts";
+import {
+  portableHostConformanceProof,
+  runPortableFormHostConformance,
+} from "../../../core/conformance/portable_form_host.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import {
   type FormDefinition,
@@ -213,12 +217,20 @@ function exactObjectBucketFormRegistry(
     readonly packageIncludesDefinition?: boolean;
     readonly activationStatus?: FormActivation["status"];
     readonly eligibleTargetPoolClasses?: readonly string[];
+    readonly operations?: FormDefinition["operations"];
   } = {},
 ): NonNullable<ResourceShapeServiceDeps["formRegistry"]> {
   const definition: FormDefinition = {
     identity: EXACT_OBJECT_BUCKET_FORM,
     displayName: "Object bucket",
-    operations: ["create", "read", "update", "delete", "import", "refresh"],
+    operations: options.operations ?? [
+      "create",
+      "read",
+      "update",
+      "delete",
+      "import",
+      "refresh",
+    ],
     installedAt: "2026-01-01T00:00:00.000Z",
   };
   const formPackage: FormPackage = {
@@ -270,6 +282,17 @@ const AUTH_HEADERS = {
   ...JSON_HEADERS,
   authorization: "Bearer resource-token",
 };
+
+function portableFormQuery(identity = EXACT_OBJECT_BUCKET_FORM): string {
+  const query = new URLSearchParams({
+    apiVersion: identity.formRef.apiVersion,
+    kind: identity.formRef.kind,
+    definitionVersion: identity.formRef.definitionVersion,
+    schemaDigest: identity.formRef.schemaDigest,
+    packageDigest: identity.packageDigest,
+  });
+  return query.toString();
+}
 
 type ResourceRouteApp = Awaited<ReturnType<typeof buildApp>>["app"];
 
@@ -404,6 +427,313 @@ test("public Resource API rejects malformed or kind-mismatched exact Form identi
   });
   expect(mismatch.status).toBe(400);
   expect((await mismatch.json()).error.code).toBe("invalid_form_ref");
+});
+
+test("portable Form host delegates exact lifecycle to the canonical Resource and audit ledger", async () => {
+  const { app, service } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "acct_portable",
+        roles: ["owner"],
+        scopes: ["forms:read", "resources:*"],
+        requestId: "req_portable",
+      }),
+    },
+    exactObjectBucketFormRegistry(),
+  );
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const path = `${base}/resources/ObjectBucket/portable-assets`;
+  const desired = {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    form: EXACT_OBJECT_BUCKET_FORM,
+    metadata: { name: "portable-assets", space: "space_1" },
+    spec: { name: "portable-assets", interfaces: ["s3_api"] },
+  };
+
+  const discovery = await app.request("/.well-known/takoform");
+  expect(discovery.status).toBe(200);
+  expect((await discovery.json()).endpoints.api).toEndWith(base);
+
+  const forms = await app.request(`${base}/forms?space=space_1`);
+  expect(forms.status).toBe(200);
+  expect((await forms.json()).forms[0].identity).toEqual(
+    EXACT_OBJECT_BUCKET_FORM,
+  );
+
+  const preview = await app.request(`${base}/resources/preview`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(desired),
+  });
+  expect(preview.status).toBe(200);
+  const previewBody = await preview.json();
+  expect(previewBody.resource.form).toEqual(EXACT_OBJECT_BUCKET_FORM);
+  expect(JSON.stringify(previewBody)).not.toContain("cloudflare-main");
+  expect(JSON.stringify(previewBody)).not.toContain("selectedImplementation");
+
+  const applyBody = {
+    ...desired,
+    review: { planDigest: previewBody.review.planDigest },
+  };
+  const applyHeaders = {
+    ...JSON_HEADERS,
+    "if-none-match": "*",
+    "idempotency-key": "portable-create-1",
+  };
+  const applied = await app.request(path, {
+    method: "PUT",
+    headers: applyHeaders,
+    body: JSON.stringify(applyBody),
+  });
+  expect(applied.status).toBe(200);
+  expect(applied.headers.get("etag")).toBe('"1"');
+  const appliedBody = await applied.json();
+  expect(appliedBody.metadata.resourceVersion).toBe("1");
+  expect(appliedBody.status.phase).toBe("Ready");
+  expect(JSON.stringify(appliedBody)).not.toContain("managedBy");
+  expect(JSON.stringify(appliedBody)).not.toContain("cloudflare-main");
+
+  const replayed = await app.request(path, {
+    method: "PUT",
+    headers: applyHeaders,
+    body: JSON.stringify(applyBody),
+  });
+  expect(replayed.status).toBe(200);
+  expect((await replayed.json()).metadata.resourceVersion).toBe("1");
+
+  const exactQuery = portableFormQuery();
+  const read = await app.request(`${path}?space=space_1&${exactQuery}`);
+  expect(read.status).toBe(200);
+  expect(read.headers.get("etag")).toBe('"1"');
+
+  const stale = await app.request(path, {
+    method: "PUT",
+    headers: {
+      ...JSON_HEADERS,
+      "if-match": '"9"',
+      "idempotency-key": "portable-update-1",
+    },
+    body: JSON.stringify({
+      ...applyBody,
+      spec: { ...desired.spec, standard: "infrequent" },
+    }),
+  });
+  expect(stale.status).toBe(412);
+  expect((await stale.json()).error.code).toBe("resource_version_conflict");
+
+  for (const action of ["observe", "refresh"] as const) {
+    const missingMatch = await app.request(
+      `${path}/${action}?space=space_1&${exactQuery}`,
+      {
+        method: "POST",
+        headers: { "idempotency-key": `portable-${action}-missing-match` },
+      },
+    );
+    expect(missingMatch.status).toBe(400);
+    expect((await missingMatch.json()).error.code).toBe("invalid_argument");
+
+    const staleMatch = await app.request(
+      `${path}/${action}?space=space_1&${exactQuery}`,
+      {
+        method: "POST",
+        headers: {
+          "if-match": '"9"',
+          "idempotency-key": `portable-${action}-stale-match`,
+        },
+      },
+    );
+    expect(staleMatch.status).toBe(412);
+    expect((await staleMatch.json()).error.code).toBe(
+      "resource_version_conflict",
+    );
+  }
+
+  const observe = await app.request(
+    `${path}/observe?space=space_1&${exactQuery}`,
+    {
+      method: "POST",
+      headers: {
+        "if-match": '"1"',
+        "idempotency-key": "portable-observe-1",
+      },
+    },
+  );
+  expect(observe.status).toBe(200);
+  expect((await observe.json()).resource.status.phase).toBe("Ready");
+
+  const events = await service.listEvents(
+    "space_1",
+    "ObjectBucket",
+    "portable-assets",
+    {},
+  );
+  expect(events.items.map((event) => event.action)).toContain(
+    "resource.apply.succeeded",
+  );
+  expect(events.items.map((event) => event.action)).toContain(
+    "resource.observe.succeeded",
+  );
+
+  const deleteWithoutMatch = await app.request(
+    `${path}?space=space_1&${exactQuery}`,
+    {
+      method: "DELETE",
+      headers: { "idempotency-key": "portable-delete-missing-match" },
+    },
+  );
+  expect(deleteWithoutMatch.status).toBe(400);
+  expect((await deleteWithoutMatch.json()).error.code).toBe("invalid_argument");
+
+  const deleteWithStaleMatch = await app.request(
+    `${path}?space=space_1&${exactQuery}`,
+    {
+      method: "DELETE",
+      headers: {
+        "if-match": '"9"',
+        "idempotency-key": "portable-delete-stale-match",
+      },
+    },
+  );
+  expect(deleteWithStaleMatch.status).toBe(412);
+  expect((await deleteWithStaleMatch.json()).error.code).toBe(
+    "resource_version_conflict",
+  );
+
+  const deleted = await app.request(`${path}?space=space_1&${exactQuery}`, {
+    method: "DELETE",
+    headers: {
+      "if-match": '"1"',
+      "idempotency-key": "portable-delete-1",
+    },
+  });
+  expect(deleted.status).toBe(204);
+  expect(
+    (await service.get("space_1", "ObjectBucket", "portable-assets")).ok,
+  ).toBe(false);
+  const deleteReplay = await app.request(
+    `${path}?space=space_1&${exactQuery}`,
+    {
+      method: "DELETE",
+      headers: {
+        "if-match": '"1"',
+        "idempotency-key": "portable-delete-1",
+      },
+    },
+  );
+  expect(deleteReplay.status).toBe(204);
+});
+
+test("portable Form host rejects invalid label values instead of dropping them", async () => {
+  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
+  const response = await app.request(
+    "/apis/forms.takoform.com/v1alpha1/resources/preview",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        apiVersion: "forms.takoform.com/v1alpha1",
+        kind: "ObjectBucket",
+        form: EXACT_OBJECT_BUCKET_FORM,
+        metadata: {
+          name: "invalid-labels",
+          space: "space_1",
+          labels: { valid: "label", invalid: 42 },
+        },
+        spec: { name: "invalid-labels", interfaces: ["s3_api"] },
+      }),
+    },
+  );
+  expect(response.status).toBe(400);
+  expect((await response.json()).error).toMatchObject({
+    code: "invalid_argument",
+    message: "metadata.labels must be an object whose values are strings",
+  });
+});
+
+test("portable Form host rejects incomplete and substituted exact identities", async () => {
+  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const incomplete = await app.request(
+    `${base}/resources/ObjectBucket/missing?space=space_1&kind=ObjectBucket`,
+  );
+  expect(incomplete.status).toBe(400);
+
+  const substitutedForm = {
+    ...EXACT_OBJECT_BUCKET_FORM,
+    formRef: {
+      ...EXACT_OBJECT_BUCKET_FORM.formRef,
+      schemaDigest: `sha256:${"f".repeat(64)}`,
+    },
+  };
+  const substituted = await app.request(`${base}/resources/preview`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      apiVersion: "forms.takoform.com/v1alpha1",
+      kind: "ObjectBucket",
+      form: substitutedForm,
+      metadata: { name: "substituted", space: "space_1" },
+      spec: { name: "substituted", interfaces: ["s3_api"] },
+    }),
+  });
+  expect(substituted.status).toBe(404);
+  expect((await substituted.json()).error.code).toBe("form_unknown");
+});
+
+test("portable Form host enforces the exact definition lifecycle operations", async () => {
+  const { app } = await buildApp(
+    undefined,
+    exactObjectBucketFormRegistry({ operations: ["read"] }),
+  );
+  const preview = await app.request(
+    "/apis/forms.takoform.com/v1alpha1/resources/preview",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        apiVersion: "forms.takoform.com/v1alpha1",
+        kind: "ObjectBucket",
+        form: EXACT_OBJECT_BUCKET_FORM,
+        metadata: { name: "read-only", space: "space_1" },
+        spec: { name: "read-only", interfaces: ["s3_api"] },
+      }),
+    },
+  );
+  expect(preview.status).toBe(409);
+  expect((await preview.json()).error).toMatchObject({
+    code: "form_unavailable",
+    message: "exact form does not support create",
+  });
+});
+
+test("portable Form host black-box runner proves canonical lifecycle parity", async () => {
+  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
+  const report = await runPortableFormHostConformance({
+    endpoint: "https://host.example.test",
+    space: "space_1",
+    name: "runner-assets",
+    identity: EXACT_OBJECT_BUCKET_FORM,
+    desired: { name: "runner-assets", interfaces: ["s3_api"] },
+    importNativeId: "provider-native-runner-assets",
+    fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
+      app.request(input.toString(), init)) as typeof fetch,
+  });
+  expect(report.status).toBe("passed");
+  expect(report.checks).toContain("canonical-resource-parity");
+  expect(report.checks).toContain("canonical-audit-parity");
+  expect(report.checks).toContain("import-idempotency");
+  expect(report.evidenceDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+  expect(
+    portableHostConformanceProof(report, {
+      positive: ["basic"],
+      negative: ["invalid-name"],
+    }),
+  ).toMatchObject({
+    subject: "host:https://host.example.test",
+    identity: EXACT_OBJECT_BUCKET_FORM,
+    status: "passed",
+  });
 });
 
 test("Form availability derives exact principal-safe executable truth", async () => {
