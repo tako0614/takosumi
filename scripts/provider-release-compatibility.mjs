@@ -5,14 +5,31 @@ import {
   verifyProviderCompatibility,
 } from "./lib/provider-release-compatibility.mjs";
 
-const command = process.argv[2];
-if (process.argv.length !== 3) throw new Error("expected exactly one compatibility command");
+const [command, ...args] = process.argv.slice(2);
+let proofPath;
+if (args.length > 0) {
+  if (args.length !== 2 || args[0] !== "--evidence") {
+    throw new Error("expected --evidence <provider-compatibility-proof.json>");
+  }
+  proofPath = args[1];
+}
 
 if (command === "check") {
-  process.stdout.write(`${JSON.stringify(await verifyProviderCompatibility(), null, 2)}\n`);
+  process.stdout.write(
+    `${JSON.stringify(await verifyProviderCompatibility({ proofPath }), null, 2)}\n`,
+  );
 } else if (command === "release-check") {
-  await requireProviderCompatibilityReleaseReady();
+  process.stdout.write(
+    `${JSON.stringify(
+      await requireProviderCompatibilityReleaseReady({ proofPath }),
+      null,
+      2,
+    )}\n`,
+  );
 } else if (command === "state-proof") {
+  if (proofPath) {
+    process.env.TAKOSUMI_PROVIDER_COMPATIBILITY_PROOF_PATH = proofPath;
+  }
   await import("../tests/proofs/provider-state-compatibility.ts");
 } else {
   throw new Error(`unknown provider compatibility command ${String(command)}`);
