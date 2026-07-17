@@ -69,6 +69,8 @@ export interface CreateTakosumiOpenApiDocumentOptions {
    * the Prometheus exposition `/metrics` endpoint in the OpenAPI document.
    */
   readonly metricsRoutesMounted?: boolean;
+  /** Mounted when the operator FormActivation lifecycle API is configured. */
+  readonly formActivationRoutesMounted?: boolean;
   /**
    * Mounted by default on `takosumi-api` as reference process route
    * inventory. Public deploy API docs remain the source of truth for
@@ -342,6 +344,14 @@ function operation(input: {
             "502": errorResponse(),
           }
         : {}),
+      ...(input.tag === "form-activations"
+        ? {
+            "400": errorResponse(),
+            "404": errorResponse(),
+            "409": errorResponse(),
+            "503": errorResponse(),
+          }
+        : {}),
     },
     "x-takos-auth": input.auth,
     ...(input.mountedPath ? { "x-takos-mounted-path": input.mountedPath } : {}),
@@ -487,6 +497,7 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     ...policySchemas(),
     ...interfaceSchemas(),
     ...resourceShapeSchemas(),
+    ...formActivationSchemas(),
     ...runnerSchemas(),
     ...capsuleAndInstallConfigSchemas(),
     ...capsuleSchemas(),
@@ -504,6 +515,120 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     ...backupSchemas(),
     ...outputShareSchemas(),
     ...errorSchemas(),
+  };
+}
+
+/** Generic OSS operator FormActivation contracts; never commercial offerings. */
+function formActivationSchemas(): Record<string, Record<string, unknown>> {
+  const timestamp = { type: "string", format: "date-time" };
+  const audience = {
+    type: "object",
+    properties: {
+      public: { type: "boolean" },
+      principalIds: {
+        type: "array",
+        uniqueItems: true,
+        items: { type: "string", minLength: 1, maxLength: 256 },
+      },
+      roles: {
+        type: "array",
+        uniqueItems: true,
+        items: { type: "string", minLength: 1, maxLength: 256 },
+      },
+    },
+    additionalProperties: false,
+  };
+  const scope = {
+    oneOf: [
+      {
+        type: "object",
+        required: ["type"],
+        properties: { type: { const: "operator" } },
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        required: ["type", "id"],
+        properties: {
+          type: { enum: ["workspace", "space"] },
+          id: { type: "string", minLength: 1, maxLength: 256 },
+        },
+        additionalProperties: false,
+      },
+    ],
+  };
+  const mutableProperties = {
+    audience,
+    policy: jsonObject,
+    eligibleTargetPoolClasses: {
+      type: "array",
+      uniqueItems: true,
+      items: {
+        type: "string",
+        pattern: "^[A-Za-z][A-Za-z0-9._/-]{0,127}$",
+      },
+    },
+    status: { enum: ["active", "inactive"] },
+  };
+  return {
+    FormActivation: {
+      type: "object",
+      required: [
+        "id",
+        "identity",
+        "scope",
+        "audience",
+        "policy",
+        "eligibleTargetPoolClasses",
+        "status",
+        "revision",
+        "createdAt",
+        "createdBy",
+        "updatedAt",
+        "updatedBy",
+      ],
+      properties: {
+        id: { type: "string", minLength: 1, maxLength: 256 },
+        identity: ref("InstalledFormReference"),
+        scope,
+        ...mutableProperties,
+        revision: { type: "integer", minimum: 1 },
+        createdAt: timestamp,
+        createdBy: { type: "string", minLength: 1 },
+        updatedAt: timestamp,
+        updatedBy: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    CreateFormActivationRequest: {
+      type: "object",
+      required: ["id", "identity", "scope"],
+      properties: {
+        id: { type: "string", minLength: 1, maxLength: 256 },
+        identity: ref("InstalledFormReference"),
+        scope,
+        ...mutableProperties,
+      },
+      additionalProperties: false,
+    },
+    UpdateFormActivationRequest: {
+      type: "object",
+      required: ["expectedRevision"],
+      properties: {
+        expectedRevision: { type: "integer", minimum: 1 },
+        ...mutableProperties,
+      },
+      additionalProperties: false,
+    },
+    ListFormActivationsResponse: {
+      type: "object",
+      required: ["activations"],
+      properties: {
+        activations: { type: "array", items: ref("FormActivation") },
+        nextCursor: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
   };
 }
 

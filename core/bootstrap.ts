@@ -1891,6 +1891,10 @@ export async function createTakosumiService(
       role === "takosumi-api" && Boolean(metricsScrapeToken),
     registerResourceShapeRoutes:
       role === "takosumi-api" && resourceShapeService !== undefined,
+    registerFormActivationRoutes:
+      role === "takosumi-api" &&
+      formRegistryService !== undefined &&
+      Boolean(deployControlToken),
     registerInterfaceRoutes: role === "takosumi-api",
     resourceCapabilities,
     ...(options.adapterCapabilities
@@ -1921,6 +1925,13 @@ export async function createTakosumiService(
             : {}),
         }
       : undefined,
+    formActivationRouteOptions:
+      formRegistryService && deployControlToken
+        ? {
+            service: formRegistryService,
+            getBearerToken: () => deployControlToken,
+          }
+        : undefined,
     interfaceRouteOptions: {
       service: interfaceService,
       ...(deployControlToken

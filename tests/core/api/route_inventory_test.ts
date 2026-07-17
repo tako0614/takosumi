@@ -23,6 +23,7 @@ const ALL_MOUNTED: RouteFamilyMountedFlags = {
   deployControlInternalRoutesMounted: true,
   metricsRoutesMounted: true,
   resourceShapeRoutesMounted: true,
+  formActivationRoutesMounted: true,
   interfaceRoutesMounted: true,
 };
 
@@ -144,6 +145,40 @@ test("Resource Shape OpenAPI publishes bounded list pagination", () => {
       type: "array",
       items: { $ref: "#/components/schemas/ResourceEvent" },
     },
+  );
+});
+
+test("FormActivation OpenAPI publishes exact noncommercial operator contracts", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const collection = openapi.paths["/v1/form-activations"];
+  const member = openapi.paths["/v1/form-activations/{id}"];
+  assert.ok(collection?.post);
+  assert.ok(collection.get);
+  assert.ok(member?.get);
+  assert.ok(member.patch);
+  assert.deepEqual(
+    collection.get.parameters?.map((parameter) => parameter.name),
+    ["limit", "cursor"],
+  );
+  assert.deepEqual(member.patch.security, [{ deployControlBearer: [] }]);
+
+  const activation = openapi.components.schemas.FormActivation;
+  assert.ok(activation);
+  assert.deepEqual(activation.properties.identity, {
+    $ref: "#/components/schemas/InstalledFormReference",
+  });
+  for (const commercialField of [
+    "price",
+    "sku",
+    "billing",
+    "capacity",
+    "sla",
+  ]) {
+    assert.equal(activation.properties[commercialField], undefined);
+  }
+  assert.equal(
+    openapi.components.schemas.CreateFormActivationRequest.additionalProperties,
+    false,
   );
 });
 

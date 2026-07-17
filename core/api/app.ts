@@ -41,6 +41,10 @@ import {
   registerInterfaceRoutes,
 } from "./interface_routes.ts";
 import {
+  type RegisterFormActivationRoutesOptions,
+  registerFormActivationRoutes,
+} from "./form_activation_routes.ts";
+import {
   registerRequestCorrelation,
   type RegisterRequestCorrelationOptions,
 } from "./request_correlation.ts";
@@ -66,6 +70,9 @@ export interface CreateApiAppOptions {
   /** When set, mounts the `/v1/resources` Resource Shape API (Flow B). */
   readonly registerResourceShapeRoutes?: boolean;
   readonly resourceShapeRouteOptions?: RegisterResourceShapeRoutesOptions;
+  /** Operator-only generic noncommercial FormActivation lifecycle API. */
+  readonly registerFormActivationRoutes?: boolean;
+  readonly formActivationRouteOptions?: RegisterFormActivationRoutesOptions;
   /** Takosumi-managed runtime declaration API shared by both authoring flows. */
   readonly registerInterfaceRoutes?: boolean;
   readonly interfaceRouteOptions?: RegisterInterfaceRoutesOptions;
@@ -98,6 +105,7 @@ export async function createApiApp(
     mounted.deployControlInternalRoutesMounted;
   const metricsRoutesMounted = mounted.metricsRoutesMounted;
   const resourceShapeRoutesMounted = mounted.resourceShapeRoutesMounted;
+  const formActivationRoutesMounted = mounted.formActivationRoutesMounted;
   const interfaceRoutesMounted = mounted.interfaceRoutesMounted;
 
   app.get("/capabilities", (c) => {
@@ -163,6 +171,16 @@ export async function createApiApp(
       );
     }
     registerResourceShapeRoutes(app, options.resourceShapeRouteOptions);
+  }
+
+  if (formActivationRoutesMounted) {
+    if (!options.formActivationRouteOptions) {
+      throw new Error(
+        "registerFormActivationRoutes was requested but " +
+          "formActivationRouteOptions (with service and operator bearer) was not supplied",
+      );
+    }
+    registerFormActivationRoutes(app, options.formActivationRouteOptions);
   }
 
   if (interfaceRoutesMounted) {
@@ -261,6 +279,10 @@ function routeFamilyMountInputs(
       override: options.registerResourceShapeRoutes,
       hasOptions: options.resourceShapeRouteOptions !== undefined,
     },
+    formActivationRoutesMounted: {
+      override: options.registerFormActivationRoutes,
+      hasOptions: options.formActivationRouteOptions !== undefined,
+    },
     interfaceRoutesMounted: {
       override: options.registerInterfaceRoutes,
       hasOptions: options.interfaceRouteOptions !== undefined,
@@ -300,9 +322,10 @@ function createProductDiscoveryOptions(input: {
   const resources: Partial<TakosumiResourceCapabilities> = {
     Stack: stacks,
     ...Object.fromEntries(
-      (
-        input.enabledResourceShapeKinds ?? []
-      ).map((kind) => [kind, resourceShapes]),
+      (input.enabledResourceShapeKinds ?? []).map((kind) => [
+        kind,
+        resourceShapes,
+      ]),
     ),
     ...(input.resourceCapabilities ?? {}),
   };
