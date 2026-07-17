@@ -130,13 +130,26 @@ interface TakoformDefinition {
   readonly status: string;
   readonly desiredSchema: CanonicalJsonValue;
   readonly observedSchema: CanonicalJsonValue;
+  readonly outputSchema?: CanonicalJsonValue;
   readonly immutableFields?: readonly string[];
   readonly lifecycleCapabilities: readonly string[];
-  readonly interfaces?: readonly CanonicalJsonValue[];
+  readonly interfaces?: readonly {
+    readonly name: string;
+    readonly version: string;
+    readonly description?: string;
+    readonly documentSchema?: CanonicalJsonValue;
+  }[];
   readonly conformanceFixtures?: readonly {
     readonly name: string;
     readonly desiredPath: string;
     readonly observedPath?: string;
+    readonly outputPath?: string;
+  }[];
+  readonly negativeConformanceFixtures?: readonly {
+    readonly name: string;
+    readonly stage: "desired" | "observed" | "output";
+    readonly inputPath: string;
+    readonly expectedFailure: string;
   }[];
 }
 
@@ -206,8 +219,12 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
     assertSchema(validateDefinition, definitionValue, "Form Definition");
     rejectForbiddenDefinitionContent(definitionValue, "$");
     const definition = definitionValue as unknown as TakoformDefinition;
+    verifyDefinitionSemantics(definition);
     verifyPortableSchema(definition.desiredSchema, "desiredSchema");
     verifyPortableSchema(definition.observedSchema, "observedSchema");
+    if (definition.outputSchema !== undefined) {
+      verifyPortableSchema(definition.outputSchema, "outputSchema");
+    }
     for (const [position, descriptor] of (
       definition.interfaces ?? []
     ).entries()) {
@@ -227,10 +244,38 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
       ...(definition.description
         ? { description: definition.description }
         : {}),
-      operations: lifecycleOperations(definition.lifecycleCapabilities),
+      operations: lifecycleOperations(
+        definition.lifecycleCapabilities,
+        definition.status,
+      ),
       metadata: definitionMetadata(definition),
     };
     return { packageDigest, definitions: [verifiedDefinition] };
+  }
+}
+
+function verifyDefinitionSemantics(definition: TakoformDefinition): void {
+  const interfaces = new Set<string>();
+  for (const descriptor of definition.interfaces ?? []) {
+    const key = `${descriptor.name}@${descriptor.version}`;
+    if (interfaces.has(key)) {
+      throw new TypeError(`duplicate Interface ${key}`);
+    }
+    interfaces.add(key);
+  }
+
+  const fixtureNames = new Set<string>();
+  for (const fixture of definition.conformanceFixtures ?? []) {
+    if (fixtureNames.has(fixture.name)) {
+      throw new TypeError(`duplicate conformance fixture name ${fixture.name}`);
+    }
+    fixtureNames.add(fixture.name);
+  }
+  for (const fixture of definition.negativeConformanceFixtures ?? []) {
+    if (fixtureNames.has(fixture.name)) {
+      throw new TypeError(`duplicate conformance fixture name ${fixture.name}`);
+    }
+    fixtureNames.add(fixture.name);
   }
 }
 
@@ -845,6 +890,7 @@ function verifyConformanceFixtures(
 ): void {
   let desiredValidator: ValidateFunction;
   let observedValidator: ValidateFunction;
+  let outputValidator: ValidateFunction | undefined;
   try {
     const fixtureAjv = new Ajv2020({
       strict: false,
@@ -853,6 +899,9 @@ function verifyConformanceFixtures(
     });
     desiredValidator = fixtureAjv.compile(definition.desiredSchema as object);
     observedValidator = fixtureAjv.compile(definition.observedSchema as object);
+    if (definition.outputSchema !== undefined) {
+      outputValidator = fixtureAjv.compile(definition.outputSchema as object);
+    }
   } catch (error) {
     throw new TypeError("Form Definition schemas cannot be compiled", {
       cause: error,
@@ -891,6 +940,70 @@ function verifyConformanceFixtures(
         );
       }
     }
+    if (fixture.outputPath) {
+      if (
+        definition.outputSchema === undefined ||
+        outputValidator === undefined
+      ) {
+        throw new TypeError(
+          `fixture ${fixture.name} declares outputPath without outputSchema`,
+        );
+      }
+      assertJsonFixture(index, fixture.outputPath, fixture.name, "output");
+      const outputBytes = payloads.get(fixture.outputPath);
+      if (!outputBytes)
+        throw new TypeError(`fixture ${fixture.name} outputPath is missing`);
+      const output = parseCanonicalJson(outputBytes);
+      assertFixtureValidationBudget(
+        definition.outputSchema,
+        output,
+        `${fixture.name} output`,
+      );
+      if (!outputValidator(output)) {
+        throw new TypeError(
+          `fixture ${fixture.name} does not satisfy outputSchema`,
+        );
+      }
+    }
+  }
+  for (const fixture of definition.negativeConformanceFixtures ?? []) {
+    assertJsonFixture(index, fixture.inputPath, fixture.name, fixture.stage);
+    const inputBytes = payloads.get(fixture.inputPath);
+    if (!inputBytes) {
+      throw new TypeError(
+        `negative fixture ${fixture.name} inputPath is missing`,
+      );
+    }
+    if (fixture.expectedFailure !== "schema_validation_failed") {
+      throw new TypeError(
+        `negative fixture ${fixture.name} has unsupported expectedFailure ${fixture.expectedFailure}`,
+      );
+    }
+    const selected =
+      fixture.stage === "desired"
+        ? { schema: definition.desiredSchema, validator: desiredValidator }
+        : fixture.stage === "observed"
+          ? { schema: definition.observedSchema, validator: observedValidator }
+          : definition.outputSchema !== undefined &&
+              outputValidator !== undefined
+            ? { schema: definition.outputSchema, validator: outputValidator }
+            : undefined;
+    if (selected === undefined) {
+      throw new TypeError(
+        `negative fixture ${fixture.name} stage ${fixture.stage} has no schema`,
+      );
+    }
+    const input = parseCanonicalJson(inputBytes);
+    assertFixtureValidationBudget(
+      selected.schema,
+      input,
+      `${fixture.name} ${fixture.stage}`,
+    );
+    if (selected.validator(input)) {
+      throw new TypeError(
+        `negative fixture ${fixture.name} unexpectedly passed ${fixture.stage} validation`,
+      );
+    }
   }
 }
 
@@ -910,19 +1023,32 @@ function assertJsonFixture(
   }
 }
 
-function lifecycleOperations(capabilities: readonly string[]): FormOperation[] {
+function lifecycleOperations(
+  capabilities: readonly string[],
+  status: string,
+): FormOperation[] {
   const result: FormOperation[] = [];
   for (const capability of capabilities) {
-    if (capability === "observe") {
-      result.push("read", "refresh");
-    } else if (
+    if (
       capability === "create" ||
+      capability === "read" ||
       capability === "update" ||
       capability === "delete" ||
-      capability === "import"
+      capability === "import" ||
+      capability === "refresh"
     ) {
       result.push(capability);
     }
+  }
+  // Pre-separation compatibility packages used `observe` as the combined
+  // read/refresh capability. Preserve only that historical candidate meaning;
+  // standard/deprecated definitions must declare read and refresh explicitly.
+  if (
+    status === "compatibility-candidate" &&
+    capabilities.includes("observe")
+  ) {
+    if (!capabilities.includes("read")) result.push("read");
+    if (!capabilities.includes("refresh")) result.push("refresh");
   }
   return [...new Set(result)];
 }
@@ -935,7 +1061,10 @@ function definitionMetadata(definition: TakoformDefinition): JsonObject {
         ? { immutableFields: [...definition.immutableFields] }
         : {}),
       ...(definition.interfaces
-        ? { interfaces: definition.interfaces as JsonObject["interfaces"] }
+        ? {
+            interfaces:
+              definition.interfaces as unknown as JsonObject["interfaces"],
+          }
         : {}),
     },
   };

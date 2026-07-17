@@ -197,6 +197,99 @@ test("strict I-JSON rejects duplicate names and negative zero", async () => {
   ).rejects.toThrow("not canonical base64");
 });
 
+test("output and negative fixtures are verified against their declared schemas", async () => {
+  const verifier = new TakoformDataOnlyPackageVerifier(
+    new AcceptingSignatureVerifier(),
+  );
+  const valid = await buildArtifact(undefined, {
+    fixture: { name: "store" },
+    observedFixture: { endpoint: "https://store.example" },
+    outputFixture: { url: "https://store.example" },
+    negativeFixture: {},
+    negativeStage: "output",
+  });
+  const verified = await verifier.verify(valid.envelope, valid.packageDigest);
+  expect(verified.definitions[0]?.operations).toEqual([
+    "create",
+    "update",
+    "read",
+    "refresh",
+    "delete",
+    "import",
+  ]);
+
+  const invalidOutput = await buildArtifact(undefined, {
+    fixture: { name: "store" },
+    outputFixture: {},
+  });
+  await expect(
+    verifier.verify(invalidOutput.envelope, invalidOutput.packageDigest),
+  ).rejects.toThrow("does not satisfy outputSchema");
+
+  const passingNegative = await buildArtifact(undefined, {
+    negativeFixture: { name: "valid" },
+    negativeStage: "desired",
+  });
+  await expect(
+    verifier.verify(passingNegative.envelope, passingNegative.packageDigest),
+  ).rejects.toThrow("unexpectedly passed desired validation");
+
+  const unsupportedFailure = await buildArtifact(undefined, {
+    negativeFixture: {},
+    negativeStage: "desired",
+    negativeExpectedFailure: "invalid_argument",
+  });
+  await expect(
+    verifier.verify(
+      unsupportedFailure.envelope,
+      unsupportedFailure.packageDigest,
+    ),
+  ).rejects.toThrow("unsupported expectedFailure");
+});
+
+test("definition semantics reject duplicate Interface and fixture identities", async () => {
+  const verifier = new TakoformDataOnlyPackageVerifier(
+    new AcceptingSignatureVerifier(),
+  );
+  const duplicateInterface = await buildArtifact((definition) => ({
+    ...(definition as Record<string, CanonicalJsonValue>),
+    interfaces: [
+      { name: "storage.object", version: "v1" },
+      {
+        name: "storage.object",
+        version: "v1",
+        description: "same semantic identity",
+      },
+    ],
+  }));
+  await expect(
+    verifier.verify(
+      duplicateInterface.envelope,
+      duplicateInterface.packageDigest,
+    ),
+  ).rejects.toThrow("duplicate Interface storage.object@v1");
+
+  const duplicateFixture = await buildArtifact(
+    (definition) => {
+      const value = definition as Record<string, CanonicalJsonValue>;
+      const negative = value.negativeConformanceFixtures as Array<
+        Record<string, CanonicalJsonValue>
+      >;
+      return {
+        ...value,
+        negativeConformanceFixtures: [{ ...negative[0], name: "positive" }],
+      };
+    },
+    {
+      fixture: { name: "valid" },
+      negativeFixture: {},
+    },
+  );
+  await expect(
+    verifier.verify(duplicateFixture.envelope, duplicateFixture.packageDigest),
+  ).rejects.toThrow("duplicate conformance fixture name positive");
+});
+
 async function buildArtifact(
   mutateDefinition?: (definition: CanonicalJsonValue) => CanonicalJsonValue,
   options: {
@@ -205,6 +298,11 @@ async function buildArtifact(
     readonly schemaDigestOverride?: string;
     readonly definitionPath?: string;
     readonly fixture?: CanonicalJsonValue;
+    readonly observedFixture?: CanonicalJsonValue;
+    readonly outputFixture?: CanonicalJsonValue;
+    readonly negativeFixture?: CanonicalJsonValue;
+    readonly negativeStage?: "desired" | "observed" | "output";
+    readonly negativeExpectedFailure?: string;
   } = {},
 ) {
   const originalDefinition: CanonicalJsonValue = {
@@ -231,12 +329,52 @@ async function buildArtifact(
         endpoint: { type: "string" },
       },
     },
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        url: { type: "string" },
+      },
+      required: ["url"],
+    },
     immutableFields: ["/name"],
-    lifecycleCapabilities: ["create", "update", "observe", "delete", "import"],
+    lifecycleCapabilities: [
+      "create",
+      "update",
+      "read",
+      "refresh",
+      "delete",
+      "import",
+      "observe",
+      "drift",
+    ],
     ...(options.fixture !== undefined
       ? {
           conformanceFixtures: [
-            { name: "positive", desiredPath: "fixture.json" },
+            {
+              name: "positive",
+              desiredPath: "fixture.json",
+              ...(options.observedFixture !== undefined
+                ? { observedPath: "observed.json" }
+                : {}),
+              ...(options.outputFixture !== undefined
+                ? { outputPath: "output.json" }
+                : {}),
+            },
+          ],
+        }
+      : {}),
+    ...(options.negativeFixture !== undefined
+      ? {
+          negativeConformanceFixtures: [
+            {
+              name: "negative",
+              stage: options.negativeStage ?? "desired",
+              inputPath: "negative.json",
+              expectedFailure:
+                options.negativeExpectedFailure ?? "schema_validation_failed",
+            },
           ],
         }
       : {}),
@@ -254,10 +392,28 @@ async function buildArtifact(
     schemaDigest,
   };
   const definitionPath = options.definitionPath ?? "definition.json";
-  const fixtureBytes =
-    options.fixture === undefined
-      ? undefined
-      : canonicalJsonBytes(options.fixture);
+  const fixturePayloads: Array<{
+    readonly path: string;
+    readonly bytes: Uint8Array;
+  }> = [];
+  const addFixture = (path: string, value: CanonicalJsonValue | undefined) => {
+    if (value !== undefined) {
+      fixturePayloads.push({ path, bytes: canonicalJsonBytes(value) });
+    }
+  };
+  addFixture("fixture.json", options.fixture);
+  addFixture("negative.json", options.negativeFixture);
+  addFixture("observed.json", options.observedFixture);
+  addFixture("output.json", options.outputFixture);
+  fixturePayloads.sort((left, right) => left.path.localeCompare(right.path));
+  const fixtureIndexEntries = await Promise.all(
+    fixturePayloads.map(async ({ path, bytes }) => ({
+      path,
+      mediaType: "application/json",
+      size: bytes.byteLength,
+      digest: `sha256:${await sha256HexAsync(bytes)}`,
+    })),
+  );
   const index: CanonicalJsonValue = {
     apiVersion: "packages.forms.takoform.com/v1alpha1",
     kind: "FormPackage",
@@ -271,16 +427,7 @@ async function buildArtifact(
         size: definitionBytes.byteLength,
         digest: `sha256:${await sha256HexAsync(definitionBytes)}`,
       },
-      ...(fixtureBytes
-        ? [
-            {
-              path: "fixture.json",
-              mediaType: "application/json",
-              size: fixtureBytes.byteLength,
-              digest: `sha256:${await sha256HexAsync(fixtureBytes)}`,
-            },
-          ]
-        : []),
+      ...fixtureIndexEntries,
     ],
   };
   const indexBytes = canonicalJsonBytes(index);
@@ -291,15 +438,11 @@ async function buildArtifact(
       mode: options.mode ?? 0o644,
       contentBase64: encodeBase64(definitionBytes),
     },
-    ...(fixtureBytes
-      ? [
-          {
-            path: "fixture.json",
-            mode: 0o644,
-            contentBase64: encodeBase64(fixtureBytes),
-          },
-        ]
-      : []),
+    ...fixturePayloads.map(({ path, bytes }) => ({
+      path,
+      mode: 0o644,
+      contentBase64: encodeBase64(bytes),
+    })),
   ];
   if (options.extraFile) {
     files.push({ path: "extra.txt", mode: 0o644, contentBase64: "" });
