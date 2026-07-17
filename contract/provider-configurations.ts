@@ -10,16 +10,21 @@ export interface ProviderConfigurationEntry {
   readonly provider: string;
   /** Explicit provider alias; null identifies the default provider block. */
   readonly alias: string | null;
-  /** Validated non-secret provider-block arguments. */
+  /**
+   * Validated non-secret provider-block arguments. An empty object explicitly
+   * records that the resolved ProviderBinding uses the provider's defaults.
+   */
   readonly configuration: JsonObject;
 }
 
 /**
  * Dispatch-only, non-secret ProviderBinding projection for lifecycle commands.
  *
- * This envelope never contains credential material. The `(provider, alias)`
- * tuple is the stable identity, so multiple aliases of the same provider do
- * not collapse into an ambiguous object map.
+ * This envelope never contains credential material. Every resolved
+ * ProviderBinding has one entry, including bindings whose provider
+ * configuration is `{}`. The `(provider, alias)` tuple is the stable identity,
+ * so multiple aliases of the same provider do not collapse into an ambiguous
+ * object map.
  */
 export interface ProviderConfigurationsEnvelope {
   readonly format: typeof PROVIDER_CONFIGURATIONS_FORMAT;
@@ -111,9 +116,6 @@ function parseProviderConfigurationEntry(
   const alias = parseAlias(value.alias, `${field}.alias`);
   if (!isRecord(value.configuration)) {
     throw new Error(`${field}.configuration must be a JSON object`);
-  }
-  if (Object.keys(value.configuration).length === 0) {
-    throw new Error(`${field}.configuration must not be empty`);
   }
   const configuration = canonicalNonSecretJsonObject(
     value.configuration,

@@ -557,10 +557,12 @@ generic Run/Capsule status and audit vocabulary and MUST NOT introduce an
 app-specific receipt/schema for these actions.
 
 Lifecycle dispatch MUST also resolve the Plan-fenced ProviderBinding set even
-when no command opts into provider credentials. Validated non-secret
-`ProviderConnection.scopeHints.providerConfig` values are carried in the
-canonical `takosumi.provider-configurations@v1` envelope, with a sorted
-`providers` array of `{ provider, alias, configuration }` entries. The binding
+when no command opts into provider credentials. Every resolved binding is
+carried in the canonical `takosumi.provider-configurations@v1` envelope, with a
+sorted `providers` array of `{ provider, alias, configuration }` entries.
+`configuration` is the validated non-secret
+`ProviderConnection.scopeHints.providerConfig`, or `{}` when the provider uses
+its defaults; an empty object remains explicit binding evidence. The binding
 digest and RunEnvironment evidence digest MUST cover the envelope. Runner
 commands receive its deterministic JSON as the reserved
 `TAKOSUMI_PROVIDER_CONFIGS_JSON` env value; user command env MUST NOT override
