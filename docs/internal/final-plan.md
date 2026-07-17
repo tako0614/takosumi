@@ -504,12 +504,15 @@ generic action phase/result; it does not add an app-specific receipt or infer an
 action from Output data.
 
 Every dispatched lifecycle phase resolves the same exact ProviderBinding set
-fenced by the reviewed Plan. Its validated non-secret
-`ProviderConnection.scopeHints.providerConfig` values are projected as the
-canonical `takosumi.provider-configurations@v1` envelope: a sorted `providers`
-array whose entries contain provider source, explicit alias (or `null`), and a
-configuration object. The envelope is included in binding/run-environment
-evidence. Runner commands receive it through the reserved
+fenced by the reviewed Plan. Those ProviderBindings are projected as the canonical
+`takosumi.provider-configurations@v1` envelope: a sorted `providers` array with
+one entry per resolved binding containing provider source, explicit alias (or
+`null`), and its validated non-secret
+`ProviderConnection.scopeHints.providerConfig`. An empty `configuration: {}` is
+preserved as explicit evidence that the binding uses the provider's default
+configuration; it is not an absent binding. The envelope is included
+in binding/run-environment evidence. Runner commands receive it through the
+reserved
 `TAKOSUMI_PROVIDER_CONFIGS_JSON` variable; command env cannot override that
 name. Credential material remains a separate opt-in dispatch bundle, and the
 projection rechecks secret-like keys and values before crossing the runner or

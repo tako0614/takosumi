@@ -246,10 +246,12 @@ Capsules may mark individual post-apply commands with `executor = "runner"` or
 and receive non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON` plus
 the non-secret provider configuration resolved from the exact binding as
 `TAKOSUMI_PROVIDER_CONFIGS_JSON` (`takosumi.provider-configurations@v1`) when
-the reviewed run had ProviderBindings. Its `providers` array identifies each
-configuration by provider source and alias (`null` means the default provider
-block), and both the binding digest and RunEnvironment evidence digest fence
-its contents. Command env cannot override this reserved name. Dispatch-only
+the reviewed run had ProviderBindings. Its `providers` array has one entry for
+every resolved binding and identifies it by provider source and alias (`null`
+means the default provider block). A binding that uses provider defaults is
+still present with `configuration: {}` rather than being omitted. Both the
+binding digest and RunEnvironment evidence digest fence its contents. Command
+env cannot override this reserved name. Dispatch-only
 provider credentials remain a separate bundle and reach the runner only when
 the action explicitly opts in.
 Operator commands are not attempted by the built-in runner activator. Without

@@ -294,7 +294,13 @@ test("RunEnvResolver mints provider env for release command context", async () =
   });
   expect(result.providerConfigurations).toEqual({
     format: "takosumi.provider-configurations@v1",
-    providers: [],
+    providers: [
+      {
+        provider: CLOUDFLARE_PROVIDER,
+        alias: null,
+        configuration: {},
+      },
+    ],
   });
   expect(result.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
