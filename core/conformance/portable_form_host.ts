@@ -41,10 +41,15 @@ export interface PortableFormHostConformanceReport {
   readonly status: "passed";
   readonly checks: readonly string[];
   readonly fixtures: {
-    readonly positive: readonly string[];
+    readonly positive: readonly {
+      readonly name: string;
+      readonly inputDigest: string;
+    }[];
     readonly negative: readonly {
       readonly name: string;
       readonly stage: "desired";
+      readonly inputDigest: string;
+      readonly httpStatus: 400;
       readonly errorCode: string;
     }[];
   };
@@ -286,7 +291,12 @@ export async function runPortableFormHostConformance(
     status: "passed" as const,
     checks,
     fixtures: {
-      positive: [positiveFixtureName],
+      positive: [
+        {
+          name: positiveFixtureName,
+          inputDigest: await jsonDigest(input.desired),
+        },
+      ],
       negative: fixtureReport,
     },
     canonicalResourceId,
@@ -305,7 +315,7 @@ export function portableHostConformanceProof(
     runnerVersion: "1.0.0",
     identity: report.identity,
     status: "passed",
-    positiveFixtures: report.fixtures.positive,
+    positiveFixtures: report.fixtures.positive.map((fixture) => fixture.name),
     negativeFixtures: report.fixtures.negative.map((fixture) => fixture.name),
     evidenceDigest: report.evidenceDigest,
   };
@@ -320,6 +330,8 @@ async function runNegativeFixtures(
   readonly {
     readonly name: string;
     readonly stage: "desired";
+    readonly inputDigest: string;
+    readonly httpStatus: 400;
     readonly errorCode: string;
   }[]
 > {
@@ -328,6 +340,8 @@ async function runNegativeFixtures(
   const report: {
     name: string;
     stage: "desired";
+    inputDigest: string;
+    httpStatus: 400;
     errorCode: string;
   }[] = [];
   for (const fixture of fixtures) {
@@ -365,6 +379,8 @@ async function runNegativeFixtures(
     report.push({
       name: fixture.name,
       stage: "desired",
+      inputDigest: await jsonDigest(fixture.input),
+      httpStatus: 400,
       errorCode: fixture.expectedErrorCode,
     });
   }
@@ -517,4 +533,8 @@ function canonicalJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+async function jsonDigest(value: unknown): Promise<string> {
+  return `sha256:${await sha256HexOfStringAsync(canonicalJson(value))}`;
 }
