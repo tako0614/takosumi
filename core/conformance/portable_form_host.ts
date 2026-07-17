@@ -1,6 +1,7 @@
 import type {
   InstalledFormReference,
   JsonObject,
+  StandardFormNegativeFixture,
   StandardFormConformanceProof,
   TakoformResource,
 } from "takosumi-contract";
@@ -20,6 +21,14 @@ export interface PortableFormHostConformanceInput {
   readonly name: string;
   readonly identity: InstalledFormReference;
   readonly desired: JsonObject;
+  /** Exact retained fixture name covered by the lifecycle run. */
+  readonly positiveFixtureName?: string;
+  /**
+   * Retained negative fixtures that the host must actually reject. The v1
+   * runner currently admits desired-state fixtures only; unsupported stages
+   * fail closed rather than being copied into evidence without execution.
+   */
+  readonly negativeFixtures?: readonly StandardFormNegativeFixture[];
   /** When present, the runner also proves exact import replay and cleanup. */
   readonly importNativeId?: string;
   readonly fetch?: typeof globalThis.fetch;
@@ -31,6 +40,14 @@ export interface PortableFormHostConformanceReport {
   readonly endpointOrigin: string;
   readonly status: "passed";
   readonly checks: readonly string[];
+  readonly fixtures: {
+    readonly positive: readonly string[];
+    readonly negative: readonly {
+      readonly name: string;
+      readonly stage: "desired";
+      readonly errorCode: string;
+    }[];
+  };
   readonly canonicalResourceId: string;
   readonly evidenceDigest: string;
 }
@@ -45,6 +62,12 @@ export async function runPortableFormHostConformance(
 ): Promise<PortableFormHostConformanceReport> {
   const endpoint = input.endpoint.replace(/\/+$/u, "");
   const fetcher = input.fetch ?? globalThis.fetch;
+  const positiveFixtureName = input.positiveFixtureName ?? "canonical";
+  if (!/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(positiveFixtureName)) {
+    throw new Error(
+      `positive fixture name is not canonical: ${positiveFixtureName}`,
+    );
+  }
   const headers = {
     ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
   };
@@ -85,6 +108,14 @@ export async function runPortableFormHostConformance(
     throw new Error("exact Form is not available to the conformance principal");
   }
   checks.push("exact-availability");
+
+  const fixtureReport = await runNegativeFixtures(
+    input,
+    fetcher,
+    base,
+    headers,
+  );
+  if (fixtureReport.length > 0) checks.push("negative-fixtures");
 
   const preview = await jsonRequest(fetcher, `${base}/resources/preview`, {
     method: "POST",
@@ -254,6 +285,10 @@ export async function runPortableFormHostConformance(
     endpointOrigin: new URL(endpoint).origin,
     status: "passed" as const,
     checks,
+    fixtures: {
+      positive: [positiveFixtureName],
+      negative: fixtureReport,
+    },
     canonicalResourceId,
   };
   return {
@@ -264,20 +299,76 @@ export async function runPortableFormHostConformance(
 
 export function portableHostConformanceProof(
   report: PortableFormHostConformanceReport,
-  fixtureNames: {
-    readonly positive: readonly string[];
-    readonly negative: readonly string[];
-  },
 ): StandardFormConformanceProof {
   return {
     subject: `host:${report.endpointOrigin}`,
     runnerVersion: "1.0.0",
     identity: report.identity,
     status: "passed",
-    positiveFixtures: fixtureNames.positive,
-    negativeFixtures: fixtureNames.negative,
+    positiveFixtures: report.fixtures.positive,
+    negativeFixtures: report.fixtures.negative.map((fixture) => fixture.name),
     evidenceDigest: report.evidenceDigest,
   };
+}
+
+async function runNegativeFixtures(
+  input: PortableFormHostConformanceInput,
+  fetcher: typeof globalThis.fetch,
+  base: string,
+  headers: Record<string, string>,
+): Promise<
+  readonly {
+    readonly name: string;
+    readonly stage: "desired";
+    readonly errorCode: string;
+  }[]
+> {
+  const fixtures = input.negativeFixtures ?? [];
+  const names = new Set<string>();
+  const report: {
+    name: string;
+    stage: "desired";
+    errorCode: string;
+  }[] = [];
+  for (const fixture of fixtures) {
+    if (!/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(fixture.name)) {
+      throw new Error(
+        `negative fixture name is not canonical: ${fixture.name}`,
+      );
+    }
+    if (names.has(fixture.name)) {
+      throw new Error(`duplicate negative fixture name: ${fixture.name}`);
+    }
+    names.add(fixture.name);
+    if (fixture.stage !== "desired") {
+      throw new Error(
+        `portable host runner does not execute negative fixture stage ${fixture.stage}`,
+      );
+    }
+    if (!/^[a-z][a-z0-9._-]{2,127}$/u.test(fixture.expectedErrorCode)) {
+      throw new Error(
+        `negative fixture error code is not canonical: ${fixture.expectedErrorCode}`,
+      );
+    }
+    const name = `${input.name}-negative-${report.length + 1}`;
+    await expectError(
+      fetcher,
+      `${base}/resources/preview`,
+      {
+        method: "POST",
+        headers: jsonHeaders(headers),
+        body: JSON.stringify(resourceBody(input, name, fixture.input)),
+      },
+      400,
+      fixture.expectedErrorCode,
+    );
+    report.push({
+      name: fixture.name,
+      stage: "desired",
+      errorCode: fixture.expectedErrorCode,
+    });
+  }
+  return report;
 }
 
 async function runImportConformance(
