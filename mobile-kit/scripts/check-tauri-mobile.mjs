@@ -39,6 +39,12 @@ const keystorePluginCargoToml = readText(
 const keystorePluginAndroid = readText(
   "src-tauri/plugins/keystore/android/src/main/java/KeystorePlugin.kt",
 );
+const keystorePluginAndroidGradle = readText(
+  "src-tauri/plugins/keystore/android/build.gradle.kts",
+);
+const keystorePluginAndroidManifest = readText(
+  "src-tauri/plugins/keystore/android/src/main/AndroidManifest.xml",
+);
 const keystorePluginIos = readText(
   "src-tauri/plugins/keystore/ios/Sources/KeystorePlugin.swift",
 );
@@ -47,6 +53,9 @@ const mobilePushPluginCargoToml = readText(
 );
 const mobilePushPluginAndroid = readText(
   "src-tauri/plugins/mobile-push/android/src/main/java/MobilePushPlugin.kt",
+);
+const mobilePushPluginAndroidGradle = readText(
+  "src-tauri/plugins/mobile-push/android/build.gradle.kts",
 );
 const mobilePushPluginAndroidService = readText(
   "src-tauri/plugins/mobile-push/android/src/main/java/TakosFirebaseMessagingService.kt",
@@ -75,6 +84,8 @@ checkKeystoreSecurity({
   cargoToml,
   keystorePluginCargoToml,
   keystorePluginAndroid,
+  keystorePluginAndroidGradle,
+  keystorePluginAndroidManifest,
   keystorePluginIos,
   mobileKitTauriBridgeTs,
 });
@@ -90,6 +101,7 @@ checkRemotePushPlugin(remotePushPlugin, {
   nativeTs,
   mobilePushPluginCargoToml,
   mobilePushPluginAndroid,
+  mobilePushPluginAndroidGradle,
   mobilePushPluginAndroidRuntime,
   mobilePushPluginAndroidService,
   mobilePushPluginAndroidManifest,
@@ -388,6 +400,8 @@ function checkKeystoreSecurity({
   cargoToml,
   keystorePluginCargoToml,
   keystorePluginAndroid,
+  keystorePluginAndroidGradle,
+  keystorePluginAndroidManifest,
   keystorePluginIos,
   mobileKitTauriBridgeTs,
 }) {
@@ -407,6 +421,11 @@ function checkKeystoreSecurity({
       keystorePluginAndroid.includes("AES/GCM/NoPadding") &&
       keystorePluginAndroid.includes(".commit()"),
     "Android keystore scopes each item and confirms encrypted persistence",
+  );
+  expect(
+    keystorePluginAndroidGradle.includes("minSdk = 24") &&
+      !keystorePluginAndroidManifest.includes("<uses-sdk"),
+    "Android keystore supports the app minimum SDK without a manifest override",
   );
   expect(
     !/unime|identity-wallet/i.test(keystorePluginAndroid),
@@ -540,6 +559,7 @@ function checkRemotePushPlugin(
     nativeTs,
     mobilePushPluginCargoToml,
     mobilePushPluginAndroid,
+    mobilePushPluginAndroidGradle,
     mobilePushPluginAndroidRuntime,
     mobilePushPluginAndroidService,
     mobilePushPluginAndroidManifest,
@@ -601,6 +621,14 @@ function checkRemotePushPlugin(
       !mobilePushPluginAndroid.includes(".deleteToken()") &&
       !mobilePushPluginAndroid.includes(".getToken()"),
     "Android plugin uses bounded FCM FID registration/unregistration and current lifecycle callbacks",
+  );
+  expect(
+    mobilePushPluginAndroidGradle.includes("minSdk = 24") &&
+      mobilePushPluginAndroidGradle.includes(
+        'implementation("androidx.appcompat:appcompat:1.6.0")',
+      ) &&
+      !mobilePushPluginAndroidManifest.includes("<uses-sdk"),
+    "Android push plugin supports the app minimum SDK and declares its lifecycle dependency",
   );
   expect(
     mobilePushPluginAndroidManifest.includes(
