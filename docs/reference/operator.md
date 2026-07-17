@@ -19,6 +19,7 @@ CLI/API/runbook による運用、managed target catalog、商用運用を追加
 - FormActivation は operator-bearer `/v1/form-activations` API または
   `takosumi form-activations` で運用し、price / payment / capacity / SLA を
   activation policy に入れない
+- 署名済み Form Package を使う場合は、operator runbook に従って artifact store、digest-pinned Sigstore TrustedRoot、publisher policy を明示する
 - Service Form-backed Resource の scheduled observation の頻度・batch・並列数を runner capacity に合わせて管理する
 - state backend と lock backend を管理する
 - production / staging では database URL の形式から保存時暗号化を推測せず、storage adapter の証跡、または確認済みの

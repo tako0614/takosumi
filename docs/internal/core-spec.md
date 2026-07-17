@@ -81,6 +81,16 @@ by exact FormRef and FormActivation, not a field in portable FormAvailability.
 The portable project owns no Resource ID, lifecycle ledger, Run, StateVersion,
 Output, Target, credential, Policy, Adapter, Interface, or InterfaceBinding.
 
+The OSS host consumes this independent contract through injected package
+reader/verifier ports. The shipped Workers/D1 composition can read immutable
+install envelopes plus a digest-pinned offline Sigstore TrustedRoot from an
+operator R2 bucket; the Bun/Node/Postgres composition can read the same material
+from a private immutable-staging directory. Both verify the signed RFC 8785
+package index, exact payload closure/digests/modes, Form Definition schema and
+data-only policy before one atomic Form Registry install. The Takosumi envelope
+is transport only and creates no portable definition authority. No package,
+publisher, trust root, FormActivation, implementation, or offering is implicit.
+
 An immutable ten-package legacy compatibility set, with one package per current
 Resource Shape kind, may freeze current behavior for migration. That does not
 admit those FormRefs as portable standards. Every FormRef included in the
