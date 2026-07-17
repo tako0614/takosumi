@@ -51,6 +51,14 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.operator.runner_pools, false);
   assert.equal(capabilities.operator.managed_target_catalog, false);
   assert.equal(capabilities.identity.external_oidc_login, false);
+  assert.deepEqual(capabilities.formAvailability, {
+    structured: true,
+    endpoint: "/v1/form-availability",
+    principalScoped: true,
+    readScopesAnyOf: ["forms:read", "resources:read"],
+    commercialFields: false,
+    forms: [],
+  });
   assert.deepEqual(capabilities.extensions, [TAKOSUMI_INTERFACES_CAPABILITY]);
 });
 

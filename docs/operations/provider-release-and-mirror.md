@@ -86,7 +86,7 @@ OpenTofu machine schema to the digest-pinned, value-free identity captured from
 the exact public `1.0.0` archive. After removing only the policy-declared delta,
 the historical provider schema and seven historical resource schemas must
 match. The declared delta is four resources (`durable_workflow`, `schedule`,
-`stateful_actor_namespace`, and `vector_index`) and eight optional attributes
+`stateful_actor_namespace`, and `vector_index`) and nine optional attributes
 on EdgeWorker, ObjectBucket, and TargetPool. Their complete machine schemas are
 also pinned, and implementation-source digests cover defaults and validators
 that OpenTofu schema JSON omits. Any removal, required/sensitive/type/nesting,
@@ -106,7 +106,7 @@ per-resource plus TargetPool request-count deltas.
 
 `release-check` remains intentionally failing until all release blockers are
 resolved. The feature-bearing `1.0.1` patch is rejected; the classified four
-resources and eight fields stay only in the `1.1.0` minor candidate. The
+resources and nine fields stay only in the `1.1.0` minor candidate. The
 supported Terraform install matrix must be run with its reviewed CLI, with
 OpenTofu proved under `registry.opentofu.org/takosjp/takosumi` and Terraform
 proved under `registry.terraform.io/takosjp/takosumi`. A missing

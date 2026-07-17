@@ -21,6 +21,7 @@
   "additiveAttributes": [
     "takosumi_edge_worker.artifact_ref",
     "takosumi_object_bucket.storage_class",
+    "takosumi_target_pool.classes",
     "takosumi_target_pool.target.implementation.module_input_mappings_json",
     "takosumi_target_pool.target.implementation.module_outputs_json",
     "takosumi_target_pool.target.implementation.module_template",
@@ -55,6 +56,7 @@
     "attributes": {
       "takosumi_edge_worker.artifact_ref": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612",
       "takosumi_object_bucket.storage_class": "dfd8da8b7deef3ec0105ec347d365ece72c196b206b2fbd1bc4aab99e04e999c",
+      "takosumi_target_pool.classes": "d052f2ff454d75e252166b0861192f85af2ab4b052eaedd0a1cd5434f46705b1",
       "takosumi_target_pool.target.implementation.module_input_mappings_json": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612",
       "takosumi_target_pool.target.implementation.module_outputs_json": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612",
       "takosumi_target_pool.target.implementation.module_template": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612",
@@ -63,17 +65,50 @@
       "takosumi_target_pool.target.implementation.provider_source": "355f386442937b7c2901ae61e9db05712572081631ab7807d51c13aacd2e0612"
     },
     "implementationSources": [
-      { "path": "provider/internal/provider/artifact_source.go", "sha256": "b990e156772b9397d1198653c618847a3508b8dbc9691967e959a6c69551c09e" },
-      { "path": "provider/internal/provider/edge_worker_resource.go", "sha256": "7ea4d23f24527cfd2c1f94bc50cead199ec3cfc83688caa651dc29777e3d1e48" },
-      { "path": "provider/internal/provider/interface_data_source.go", "sha256": "dd3ec243301750f6ea64dad17419edeab47db303821629713258381ab1b3bc7f" },
-      { "path": "provider/internal/provider/interface_resource.go", "sha256": "739e17c2a485e20a09b55b60768dffb3d671150a4d3841fcc861b44173c1155d" },
-      { "path": "provider/internal/provider/provider.go", "sha256": "9802e83ec76fa9af99d94f1a8fbcf6c1b2099d050a181233337896d85212114b" },
-      { "path": "provider/internal/provider/resource_connection.go", "sha256": "760f2e7e2b1dbde8180df7a4d82a348661fa90be3fd01f981d013e0ccea9f997" },
-      { "path": "provider/internal/provider/resource_helpers.go", "sha256": "5dea2445416c4d1b0d16223d8a448485f96c8d401fff2e5e2152184d9a02fe39" },
-      { "path": "provider/internal/provider/service_shape_resources.go", "sha256": "de473886497eaf1d7ab8b827b4a4ce80886588b7f21629366bae9b3b83378e88" },
-      { "path": "provider/internal/provider/service_shape_validation.go", "sha256": "435d48dbc29134572b6d5eabf6e3102788e96451d0d055b085b25f1a87c9992f" },
-      { "path": "provider/internal/provider/target_pool_resource.go", "sha256": "539f8d4945f7c266a04b53c34c4bb6e49b1f034380a51d555389a6d077a45c76" },
-      { "path": "provider/internal/provider/validators.go", "sha256": "5aeb85025842f7aa5aeeb5cc3b65fdfea3d3c7d9dca83ca4923b636fe5e55971" }
+      {
+        "path": "provider/internal/provider/artifact_source.go",
+        "sha256": "b990e156772b9397d1198653c618847a3508b8dbc9691967e959a6c69551c09e"
+      },
+      {
+        "path": "provider/internal/provider/edge_worker_resource.go",
+        "sha256": "7ea4d23f24527cfd2c1f94bc50cead199ec3cfc83688caa651dc29777e3d1e48"
+      },
+      {
+        "path": "provider/internal/provider/interface_data_source.go",
+        "sha256": "dd3ec243301750f6ea64dad17419edeab47db303821629713258381ab1b3bc7f"
+      },
+      {
+        "path": "provider/internal/provider/interface_resource.go",
+        "sha256": "739e17c2a485e20a09b55b60768dffb3d671150a4d3841fcc861b44173c1155d"
+      },
+      {
+        "path": "provider/internal/provider/provider.go",
+        "sha256": "9802e83ec76fa9af99d94f1a8fbcf6c1b2099d050a181233337896d85212114b"
+      },
+      {
+        "path": "provider/internal/provider/resource_connection.go",
+        "sha256": "760f2e7e2b1dbde8180df7a4d82a348661fa90be3fd01f981d013e0ccea9f997"
+      },
+      {
+        "path": "provider/internal/provider/resource_helpers.go",
+        "sha256": "5dea2445416c4d1b0d16223d8a448485f96c8d401fff2e5e2152184d9a02fe39"
+      },
+      {
+        "path": "provider/internal/provider/service_shape_resources.go",
+        "sha256": "de473886497eaf1d7ab8b827b4a4ce80886588b7f21629366bae9b3b83378e88"
+      },
+      {
+        "path": "provider/internal/provider/service_shape_validation.go",
+        "sha256": "435d48dbc29134572b6d5eabf6e3102788e96451d0d055b085b25f1a87c9992f"
+      },
+      {
+        "path": "provider/internal/provider/target_pool_resource.go",
+        "sha256": "66ccbc22a32f9f123fe37b2ee13f33ebf4a9e81711f3a449b094a43416b564a0"
+      },
+      {
+        "path": "provider/internal/provider/validators.go",
+        "sha256": "5aeb85025842f7aa5aeeb5cc3b65fdfea3d3c7d9dca83ca4923b636fe5e55971"
+      }
     ]
   },
   "patchFeatureDecision": {

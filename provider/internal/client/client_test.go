@@ -474,7 +474,7 @@ func TestTargetPoolCRUD(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "tok", srv.Client())
-	spec := TargetPoolSpec{Targets: []TargetPoolEntry{{
+	spec := TargetPoolSpec{Classes: []string{"edge.container"}, Targets: []TargetPoolEntry{{
 		Name:     "containers-main",
 		Type:     "kubernetes",
 		Ref:      "cluster-prod",
@@ -504,6 +504,9 @@ func TestTargetPoolCRUD(t *testing.T) {
 	}
 	if put.ID != "tkrn:prod:TargetPool:default" {
 		t.Fatalf("unexpected put response %#v", put)
+	}
+	if len(gotBody.Spec.Classes) != 1 || gotBody.Spec.Classes[0] != "edge.container" {
+		t.Fatalf("placement classes did not pass through: %#v", gotBody.Spec)
 	}
 	if gotBody.Spec.Targets[0].Implementations[0].Implementation != "custom_container_runtime" {
 		t.Fatalf("custom container implementation did not pass through: %#v", gotBody.Spec)

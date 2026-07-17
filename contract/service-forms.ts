@@ -111,7 +111,9 @@ export type FormAvailabilityReason =
   | "package_not_installed"
   | "package_deprecated"
   | "package_revoked"
+  | "schema_unavailable"
   | "implementation_unavailable"
+  | "adapter_unavailable"
   | "activation_missing"
   | "activation_inactive"
   | "principal_not_allowed"
@@ -123,9 +125,10 @@ export interface FormAvailability {
   readonly definitionKnown: boolean;
   readonly installed: boolean;
   readonly executable: boolean;
+  readonly executableReason?: FormAvailabilityReason;
   readonly activated: boolean;
   readonly availableToPrincipal: boolean;
-  readonly reasons: readonly FormAvailabilityReason[];
+  readonly availabilityReason?: FormAvailabilityReason;
   readonly operations: readonly FormOperation[];
   readonly compatibleAdapterIds: readonly string[];
   readonly eligibleTargetPoolClasses: readonly string[];

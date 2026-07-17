@@ -109,7 +109,7 @@ describe("provider release compatibility", () => {
       semverChange: "minor",
     });
     expect(policy.additiveResources).toHaveLength(5);
-    expect(policy.additiveAttributes).toHaveLength(8);
+    expect(policy.additiveAttributes).toHaveLength(9);
     expect(policy.patchFeatureDecision).toMatchObject({
       status: "resolved-move-to-minor",
       admitted: false,

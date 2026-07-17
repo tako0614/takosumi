@@ -10,6 +10,9 @@ import type {
   ActorContext,
   Condition,
   FormDefinition,
+  FormActivation,
+  FormAvailability,
+  FormAvailabilityReason,
   FormPackage,
   InstalledFormReference,
   JsonObject,
@@ -38,6 +41,7 @@ import type {
   TargetPoolSpec,
 } from "takosumi-contract";
 import {
+  formRefKey,
   installedFormReferenceKey,
   isInstalledFormReference,
   isResourceShapeKind,
@@ -253,6 +257,8 @@ export interface ResourceShapeServiceDeps {
       formRef: InstalledFormReference["formRef"],
     ): Promise<FormDefinition | undefined>;
     getPackage(packageDigest: string): Promise<FormPackage | undefined>;
+    listDefinitions?(params?: PageParams): Promise<Page<FormDefinition>>;
+    listActivations?(params?: PageParams): Promise<Page<FormActivation>>;
   };
   /** Absolute providerConfig URL values trusted by this operator. */
   readonly allowedProviderConfigUrls?: readonly string[];
@@ -604,6 +610,52 @@ export class ResourceShapeService {
     name: string,
   ): Promise<TargetPoolRecord | undefined> {
     return this.#stores.targetPools.getByName(space, name);
+  }
+
+  /**
+   * Principal-scoped, read-only discovery for exact installed FormRefs.
+   * Private Target/implementation/credential records are consumed only as
+   * boolean evidence and never returned.
+   */
+  async listFormAvailability(input: {
+    readonly actor: ActorContext;
+    readonly space: SpaceId;
+    readonly identity?: InstalledFormReference;
+    readonly page?: PageParams;
+  }): Promise<Page<FormAvailability>> {
+    if (!this.#formRegistry && !input.identity) return { items: [] };
+    const definitions = input.identity
+      ? {
+          items: [
+            await this.#formRegistry?.getDefinition(input.identity.formRef),
+          ],
+          nextCursor: undefined,
+        }
+      : this.#formRegistry?.listDefinitions
+        ? await this.#formRegistry.listDefinitions(input.page ?? {})
+        : { items: [], nextCursor: undefined };
+    const activations = await this.#allFormActivations();
+    const pools = await this.#stores.targetPools.listBySpace(input.space);
+    const items = await Promise.all(
+      definitions.items.map((definition) =>
+        this.#formAvailabilityFor({
+          actor: input.actor,
+          space: input.space,
+          identity:
+            input.identity ??
+            // listDefinitions never returns undefined; the fallback is only
+            // for TypeScript narrowing of the exact-identity branch.
+            definition!.identity,
+          definition,
+          activations,
+          pools,
+        }),
+      ),
+    );
+    return {
+      items,
+      ...(definitions.nextCursor ? { nextCursor: definitions.nextCursor } : {}),
+    };
   }
 
   async deleteTargetPool(
@@ -4910,6 +4962,154 @@ export class ResourceShapeService {
     );
     return current ? cloneImplementationDescriptor(current) : undefined;
   }
+
+  async #allFormActivations(): Promise<readonly FormActivation[]> {
+    if (!this.#formRegistry?.listActivations) return [];
+    const result: FormActivation[] = [];
+    let cursor: string | undefined;
+    // Cursor traversal is bounded to keep discovery from becoming an
+    // unbounded operator-table scan. Truncation fails closed (it can only
+    // hide an activation, never grant one).
+    for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+      const page = await this.#formRegistry.listActivations({
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      });
+      result.push(...page.items);
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    return result;
+  }
+
+  async #formAvailabilityFor(input: {
+    readonly actor: ActorContext;
+    readonly space: SpaceId;
+    readonly identity: InstalledFormReference;
+    readonly definition: FormDefinition | undefined;
+    readonly activations: readonly FormActivation[];
+    readonly pools: readonly TargetPoolRecord[];
+  }): Promise<FormAvailability> {
+    const definitionKnown =
+      input.definition !== undefined &&
+      installedFormReferenceKey(input.definition.identity) ===
+        installedFormReferenceKey(input.identity);
+    const packageRecord = await this.#formRegistry?.getPackage(
+      input.identity.packageDigest,
+    );
+    const packageMatches = Boolean(
+      definitionKnown &&
+      packageRecord &&
+      packageRecord.definitionRefs.some(
+        (ref) => formRefKey(ref) === formRefKey(input.identity.formRef),
+      ),
+    );
+    const installed = Boolean(
+      packageMatches && packageRecord?.status !== "revoked",
+    );
+    const deprecated =
+      packageRecord?.status === "deprecated" ||
+      packageRecord?.status === "revoked";
+    const schemaInstalled = this.#schemaRegistry
+      .kinds()
+      .includes(input.identity.formRef.kind);
+
+    const executablePools: {
+      readonly classes: readonly string[];
+      readonly adapterId: string;
+    }[] = [];
+    let sawDescriptor = false;
+    let sawInstalledModule = false;
+    for (const pool of input.pools) {
+      const spec = targetPoolSpecOf(pool);
+      const classes = uniqueSortedTokens(spec.classes ?? []);
+      for (const target of spec.targets) {
+        for (const descriptor of target.implementations ?? []) {
+          if (descriptor.shape !== input.identity.formRef.kind) continue;
+          sawDescriptor = true;
+          const moduleInstalled = descriptor.moduleTemplate
+            ? this.#moduleRegistry.get(descriptor.moduleTemplate) !== undefined
+            : true;
+          if (moduleInstalled) sawInstalledModule = true;
+          const adapter =
+            this.#adapter.availabilityForImplementation?.(descriptor);
+          if (!moduleInstalled || !adapter) continue;
+          executablePools.push({ classes, adapterId: adapter.adapterId });
+        }
+      }
+    }
+
+    let executableReason: FormAvailabilityReason | undefined;
+    if (!definitionKnown) executableReason = "definition_unknown";
+    else if (!packageMatches) executableReason = "package_not_installed";
+    else if (packageRecord?.status === "revoked") {
+      executableReason = "package_revoked";
+    } else if (packageRecord?.status === "deprecated") {
+      executableReason = "package_deprecated";
+    } else if (!schemaInstalled) executableReason = "schema_unavailable";
+    else if (!sawDescriptor) executableReason = "implementation_unavailable";
+    else if (!sawInstalledModule) {
+      executableReason = "implementation_unavailable";
+    } else if (executablePools.length === 0) {
+      executableReason = "adapter_unavailable";
+    }
+    const executable = executableReason === undefined;
+
+    const exactActivations = input.activations.filter(
+      (activation) =>
+        installedFormReferenceKey(activation.identity) ===
+          installedFormReferenceKey(input.identity) &&
+        activationScopeApplies(activation, input.actor, input.space),
+    );
+    const active = exactActivations.filter(
+      (activation) => activation.status === "active",
+    );
+    const activated = active.length > 0;
+    const audienceAllowed = active.filter((activation) =>
+      activationAudienceAllows(activation, input.actor),
+    );
+    const permitted = audienceAllowed.filter((activation) =>
+      activationHasExecutablePool(activation, executablePools),
+    );
+
+    let availabilityReason: FormAvailabilityReason | undefined;
+    if (!executable) availabilityReason = executableReason;
+    else if (exactActivations.length === 0) {
+      availabilityReason = "activation_missing";
+    } else if (!activated) availabilityReason = "activation_inactive";
+    else if (audienceAllowed.length === 0) {
+      availabilityReason = "principal_not_allowed";
+    } else if (permitted.length === 0) {
+      availabilityReason = "target_pool_class_unavailable";
+    }
+    const availableToPrincipal = availabilityReason === undefined;
+    const eligibleClasses = uniqueSortedTokens(
+      permitted.length > 0
+        ? permitted.flatMap((activation) =>
+            activation.eligibleTargetPoolClasses.length > 0
+              ? activation.eligibleTargetPoolClasses
+              : executablePools.flatMap((pool) => pool.classes),
+          )
+        : [],
+    );
+
+    return {
+      identity: input.identity,
+      definitionKnown,
+      installed,
+      executable,
+      ...(executableReason ? { executableReason } : {}),
+      activated,
+      availableToPrincipal,
+      ...(availabilityReason ? { availabilityReason } : {}),
+      operations: definitionKnown ? input.definition!.operations : [],
+      compatibleAdapterIds: uniqueSortedTokens(
+        executablePools.map((pool) => pool.adapterId),
+      ),
+      eligibleTargetPoolClasses: eligibleClasses,
+      deprecated,
+    };
+  }
 }
 
 // --- helpers (module-level, pure) ---------------------------------------------
@@ -5174,6 +5374,58 @@ function toTargetPool(record: TargetPoolRecord): TargetPool {
 
 function targetPoolSpecOf(record: TargetPoolRecord): TargetPoolSpec {
   return record.spec as unknown as TargetPoolSpec;
+}
+
+function activationScopeApplies(
+  activation: FormActivation,
+  actor: ActorContext,
+  space: SpaceId,
+): boolean {
+  switch (activation.scope.type) {
+    case "operator":
+      return true;
+    case "workspace":
+      return (
+        actor.workspaceId !== undefined &&
+        actor.workspaceId === activation.scope.id
+      );
+    case "space":
+      return activation.scope.id === space;
+  }
+}
+
+function activationAudienceAllows(
+  activation: FormActivation,
+  actor: ActorContext,
+): boolean {
+  if (activation.audience.public === true) return true;
+  const principals = new Set([
+    actor.actorAccountId,
+    ...(actor.serviceId ? [actor.serviceId] : []),
+    ...(actor.agentId ? [actor.agentId] : []),
+  ]);
+  if (activation.audience.principalIds?.some((id) => principals.has(id))) {
+    return true;
+  }
+  const roles = new Set(actor.roles);
+  return Boolean(activation.audience.roles?.some((role) => roles.has(role)));
+}
+
+function activationHasExecutablePool(
+  activation: FormActivation,
+  pools: readonly { readonly classes: readonly string[] }[],
+): boolean {
+  if (activation.eligibleTargetPoolClasses.length === 0) {
+    return pools.length > 0;
+  }
+  const required = new Set(activation.eligibleTargetPoolClasses);
+  return pools.some((pool) =>
+    pool.classes.some((value) => required.has(value)),
+  );
+}
+
+function uniqueSortedTokens(values: readonly string[]): readonly string[] {
+  return [...new Set(values)].sort();
 }
 
 function cloneTargetPoolEntry(entry: TargetPoolEntry): TargetPoolEntry {
@@ -5484,6 +5736,25 @@ function validateTargetPoolSpec(
     return invalidTargetPool("TargetPool spec must be an object");
   }
   const targets = spec.targets;
+  if (spec.classes !== undefined) {
+    if (!Array.isArray(spec.classes)) {
+      return invalidTargetPool("TargetPool spec.classes must be an array");
+    }
+    const seenClasses = new Set<string>();
+    for (const [index, value] of spec.classes.entries()) {
+      if (typeof value !== "string") {
+        return invalidTargetPool(
+          `TargetPool spec.classes[${index}] must be a string`,
+        );
+      }
+      const classError = tokenError(value, `TargetPool spec.classes[${index}]`);
+      if (classError) return classError;
+      if (seenClasses.has(value)) {
+        return invalidTargetPool(`TargetPool class ${value} is duplicated`);
+      }
+      seenClasses.add(value);
+    }
+  }
   if (!Array.isArray(targets) || targets.length === 0) {
     return invalidTargetPool(
       "TargetPool spec.targets must contain at least one target",

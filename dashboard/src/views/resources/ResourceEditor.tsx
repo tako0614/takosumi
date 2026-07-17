@@ -13,6 +13,8 @@ import {
   importResourceShape,
   previewResourceShape,
   type ResourceShape,
+  type FormAvailability,
+  type InstalledFormReference,
   type ResourceShapeJsonObject,
   type ResourceShapePreview,
   type ResourceShapeResult,
@@ -52,11 +54,10 @@ import {
   Toast,
 } from "../../components/ui/index.ts";
 
-const BUNDLED_KINDS = GUIDED_RESOURCE_SERVICE_KINDS;
-
 type Props = {
   readonly workspaceId: string;
   readonly space: string;
+  readonly formAvailability: readonly FormAvailability[];
   readonly resource?: ResourceShape;
   readonly onApplied?: (resource: ResourceShapeResult) => void | Promise<void>;
   readonly onCancel?: () => void;
@@ -66,7 +67,15 @@ type ParsedInput =
   | { readonly ok: true; readonly value: ResourceShapeWriteInput }
   | { readonly ok: false; readonly message: string };
 
-type ServiceSelection = GuidedResourceServiceKind | "custom";
+function formIdentityKey(identity: InstalledFormReference): string {
+  return JSON.stringify([
+    identity.formRef.apiVersion,
+    identity.formRef.kind,
+    identity.formRef.definitionVersion,
+    identity.formRef.schemaDigest,
+    identity.packageDigest,
+  ]);
+}
 
 export default function ResourceEditor(props: Props): JSX.Element {
   const { confirm } = useConfirmDialog();
@@ -120,6 +129,57 @@ export default function ResourceEditor(props: Props): JSX.Element {
   const [busy, setBusy] = createSignal<"preview" | "apply" | "import">();
   const [error, setError] = createSignal<string>();
   const [success, setSuccess] = createSignal<string>();
+  const [selectedForm, setSelectedForm] =
+    createSignal<InstalledFormReference>();
+
+  const availableForms = createMemo(() => {
+    const operation = props.resource ? "update" : "create";
+    const discovered = props.formAvailability
+      .filter(
+        (form) =>
+          form.availableToPrincipal && form.operations.includes(operation),
+      )
+      .map((form) => form.identity);
+    const current = props.resource?.form;
+    const identities = current ? [current, ...discovered] : discovered;
+    return [
+      ...new Map(
+        identities.map((identity) => [formIdentityKey(identity), identity]),
+      ).values(),
+    ].sort((left, right) =>
+      formIdentityKey(left).localeCompare(formIdentityKey(right)),
+    );
+  });
+
+  createEffect(
+    on(availableForms, (available) => {
+      if (props.resource) {
+        setSelectedForm(props.resource.form);
+        return;
+      }
+      const current = selectedForm();
+      if (
+        current &&
+        available.some(
+          (candidate) =>
+            formIdentityKey(candidate) === formIdentityKey(current),
+        )
+      ) {
+        return;
+      }
+      const first = available[0];
+      setSelectedForm(first);
+      if (!first) {
+        setKind("");
+        setGuidedMode(false);
+      } else if (isGuidedResourceServiceKind(first.formRef.kind)) {
+        selectService(first.formRef.kind);
+      } else {
+        setKind(first.formRef.kind);
+        setGuidedMode(false);
+      }
+    }),
+  );
 
   const guidedForm = (): GuidedResourceServiceForm | undefined => {
     switch (kind()) {
@@ -229,12 +289,9 @@ export default function ResourceEditor(props: Props): JSX.Element {
     }
   };
 
-  const serviceSelection = createMemo<ServiceSelection>(() => {
-    const currentKind = kind();
-    if (guidedMode() && isGuidedResourceServiceKind(currentKind)) {
-      return currentKind;
-    }
-    return "custom";
+  const selectedFormKey = createMemo(() => {
+    const current = selectedForm();
+    return current ? formIdentityKey(current) : "";
   });
 
   const guidedSpec = createMemo<GuidedSpecResult | undefined>(() => {
@@ -292,6 +349,26 @@ export default function ResourceEditor(props: Props): JSX.Element {
     if (!props.space.trim()) {
       return { ok: false, message: t("resources.scope.required") };
     }
+    const exactForm = props.resource?.form ?? selectedForm();
+    if (!props.resource && !exactForm) {
+      return { ok: false, message: t("resources.editor.formUnavailable") };
+    }
+    if (exactForm && exactForm.formRef.kind !== normalizedKind) {
+      return { ok: false, message: t("resources.editor.formUnavailable") };
+    }
+    if (exactForm) {
+      const operation = props.resource ? "update" : "create";
+      const evidence = props.formAvailability.find(
+        (candidate) =>
+          formIdentityKey(candidate.identity) === formIdentityKey(exactForm),
+      );
+      if (
+        !evidence?.availableToPrincipal ||
+        !evidence.operations.includes(operation)
+      ) {
+        return { ok: false, message: t("resources.editor.formUnavailable") };
+      }
+    }
 
     let spec: ResourceShapeJsonObject;
     if (guidedMode()) {
@@ -331,6 +408,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
         workspaceId: props.workspaceId,
         space: props.space.trim(),
         kind: normalizedKind,
+        ...(exactForm ? { form: exactForm } : {}),
         name: normalizedName,
         spec,
         ...(project().trim() ? { project: project().trim() } : {}),
@@ -496,11 +574,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
     setGuidedMode(false);
   }
 
-  function selectService(next: ServiceSelection): void {
-    if (next === "custom") {
-      switchToRawAuthoring();
-      return;
-    }
+  function selectService(next: GuidedResourceServiceKind): void {
     const previousKind = kind();
     if (!guidedMode() && previousKind === next) {
       const parsed = parseJsonObjectText(specText());
@@ -522,6 +596,20 @@ export default function ResourceEditor(props: Props): JSX.Element {
     setKind(next);
     if (previousKind !== next) resetGuidedForm(next);
     setGuidedMode(true);
+  }
+
+  function selectAvailableForm(key: string): void {
+    const identity = availableForms().find(
+      (candidate) => formIdentityKey(candidate) === key,
+    );
+    if (!identity) return;
+    setSelectedForm(identity);
+    if (isGuidedResourceServiceKind(identity.formRef.kind)) {
+      selectService(identity.formRef.kind);
+    } else {
+      setKind(identity.formRef.kind);
+      setGuidedMode(false);
+    }
   }
 
   function clearFeedback(): void {
@@ -612,6 +700,17 @@ export default function ResourceEditor(props: Props): JSX.Element {
       setError(t("resources.editor.nativeIdRequired"));
       return;
     }
+    if (input.value.form) {
+      const evidence = props.formAvailability.find(
+        (candidate) =>
+          formIdentityKey(candidate.identity) ===
+          formIdentityKey(input.value.form!),
+      );
+      if (!evidence?.operations.includes("import")) {
+        setError(t("resources.editor.formUnavailable"));
+        return;
+      }
+    }
     const proceed = await confirm({
       title: t("resources.confirm.importTitle"),
       message: t("resources.confirm.importMessage", {
@@ -680,6 +779,39 @@ export default function ResourceEditor(props: Props): JSX.Element {
     }
   }
 
+  function serviceLabel(service: GuidedResourceServiceKind): string {
+    switch (service) {
+      case "EdgeWorker":
+        return t("resources.editor.service.edgeWorker");
+      case "ObjectBucket":
+        return t("resources.editor.service.objectBucket");
+      case "KVStore":
+        return t("resources.editor.service.kvStore");
+      case "SQLDatabase":
+        return t("resources.editor.service.sqlDatabase");
+      case "Queue":
+        return t("resources.editor.service.queue");
+      case "VectorIndex":
+        return t("resources.editor.service.vectorIndex");
+      case "DurableWorkflow":
+        return t("resources.editor.service.durableWorkflow");
+      case "ContainerService":
+        return t("resources.editor.service.containerService");
+      case "StatefulActorNamespace":
+        return t("resources.editor.service.statefulActorNamespace");
+      case "Schedule":
+        return t("resources.editor.service.schedule");
+    }
+  }
+
+  function formLabel(identity: InstalledFormReference): string {
+    const { formRef } = identity;
+    const label = isGuidedResourceServiceKind(formRef.kind)
+      ? serviceLabel(formRef.kind)
+      : formRef.kind;
+    return `${label} · ${formRef.definitionVersion} · schema ${formRef.schemaDigest.slice(7, 15)} · package ${identity.packageDigest.slice(7, 15)}`;
+  }
+
   function previewPriceLabel(result: ResourceShapePreview): string {
     const quote = result.quote;
     if (!quote) return t("resources.preview.noQuoteShort");
@@ -724,48 +856,31 @@ export default function ResourceEditor(props: Props): JSX.Element {
             <span class="tg-field-label">{t("resources.editor.service")}</span>
             <select
               class="tg-select"
-              value={serviceSelection()}
+              value={selectedFormKey()}
               disabled={Boolean(props.resource)}
               onChange={(event) =>
-                selectService(event.currentTarget.value as ServiceSelection)
+                selectAvailableForm(event.currentTarget.value)
               }
             >
-              <option value="EdgeWorker">
-                {t("resources.editor.service.edgeWorker")}
-              </option>
-              <option value="ObjectBucket">
-                {t("resources.editor.service.objectBucket")}
-              </option>
-              <option value="KVStore">
-                {t("resources.editor.service.kvStore")}
-              </option>
-              <option value="SQLDatabase">
-                {t("resources.editor.service.sqlDatabase")}
-              </option>
-              <option value="Queue">
-                {t("resources.editor.service.queue")}
-              </option>
-              <option value="VectorIndex">
-                {t("resources.editor.service.vectorIndex")}
-              </option>
-              <option value="DurableWorkflow">
-                {t("resources.editor.service.durableWorkflow")}
-              </option>
-              <option value="ContainerService">
-                {t("resources.editor.service.containerService")}
-              </option>
-              <option value="StatefulActorNamespace">
-                {t("resources.editor.service.statefulActorNamespace")}
-              </option>
-              <option value="Schedule">
-                {t("resources.editor.service.schedule")}
-              </option>
-              <option value="custom">
-                {t("resources.editor.service.custom")}
-              </option>
+              <Show
+                when={availableForms().length > 0}
+                fallback={
+                  <option value="" disabled>
+                    {t("resources.editor.formUnavailable")}
+                  </option>
+                }
+              >
+                <For each={availableForms()}>
+                  {(identity) => (
+                    <option value={formIdentityKey(identity)}>
+                      {formLabel(identity)}
+                    </option>
+                  )}
+                </For>
+              </Show>
             </select>
             <Show
-              when={serviceSelection() !== "custom"}
+              when={guidedMode()}
               fallback={
                 <span class="tg-field-hint">
                   {t("resources.editor.customHint")}
@@ -1512,18 +1627,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
               <p class="rs-raw-warning">{t("resources.editor.rawWarning")}</p>
               <label class="tg-field">
                 <span class="tg-field-label">{t("resources.editor.kind")}</span>
-                <input
-                  class="tg-input"
-                  list="rs-resource-kinds"
-                  value={kind()}
-                  disabled={Boolean(props.resource)}
-                  onInput={(event) => setKind(event.currentTarget.value)}
-                />
-                <datalist id="rs-resource-kinds">
-                  <For each={BUNDLED_KINDS}>
-                    {(item) => <option value={item} />}
-                  </For>
-                </datalist>
+                <input class="tg-input" value={kind()} disabled />
                 <span class="tg-field-hint">
                   {t("resources.editor.kindHint")}
                 </span>

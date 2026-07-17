@@ -22,6 +22,7 @@ import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
   deleteResourceShape,
   getResourceShape,
+  listFormAvailability,
   listResourceShapeEvents,
   observeResourceShape,
   refreshResourceShape,
@@ -97,6 +98,9 @@ function Inner(): JSX.Element {
     identity,
     (item) =>
       getResourceShape(item.workspaceId, item.space, item.kind, item.name),
+  );
+  const [formAvailability] = createResource(identity, (item) =>
+    listFormAvailability(item.workspaceId, item.space),
   );
   const [events, { refetch: refetchEvents }] = createResource(
     identity,
@@ -365,6 +369,7 @@ function Inner(): JSX.Element {
                   <ResourceEditor
                     workspaceId={current().workspaceId}
                     space={current().space}
+                    formAvailability={formAvailability() ?? []}
                     resource={item()}
                     onCancel={() => setEditing(false)}
                     onApplied={afterApplied}

@@ -33,6 +33,8 @@ import {
   type RegisterMetricsRoutesOptions,
 } from "./metrics_routes.ts";
 import {
+  authorizeResourceShapeRequest,
+  hasFormAvailabilityReadScope,
   type RegisterResourceShapeRoutesOptions,
   registerResourceShapeRoutes,
 } from "./resource_routes.ts";
@@ -130,7 +132,33 @@ export async function createApiApp(
     );
   });
 
-  app.get(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, (c) => {
+  app.get(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, async (c) => {
+    let formAvailability;
+    const space = c.req.query("space")?.trim();
+    if (space && options.resourceShapeRouteOptions) {
+      const auth = await authorizeResourceShapeRequest(
+        c,
+        options.resourceShapeRouteOptions,
+      );
+      if (!auth.ok) return auth.response;
+      if (!hasFormAvailabilityReadScope(auth.actor)) {
+        return c.json(
+          apiError(
+            "permission_denied",
+            "form availability requires forms:read or resources:read scope",
+            undefined,
+            requestIdFromContext(c),
+          ),
+          403,
+        );
+      }
+      formAvailability = (
+        await options.resourceShapeRouteOptions.service.listFormAvailability({
+          actor: auth.actor,
+          space,
+        })
+      ).items;
+    }
     return c.json(
       createTakosumiProductCapabilities(
         createProductDiscoveryOptions({
@@ -141,6 +169,7 @@ export async function createApiApp(
             options.resourceShapeRouteOptions?.enabledResourceShapeKinds,
           adapterCapabilities: options.adapterCapabilities,
           operatorCapabilities: options.operatorCapabilities,
+          formAvailability,
         }),
       ),
     );
@@ -316,6 +345,7 @@ function createProductDiscoveryOptions(input: {
   readonly enabledResourceShapeKinds?: readonly string[];
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
+  readonly formAvailability?: readonly import("takosumi-contract").FormAvailability[];
 }): CreateTakosumiDiscoveryOptions {
   const resourceShapes = input.mounted.resourceShapeRoutesMounted;
   const stacks = input.mounted.deployControlInternalRoutesMounted;
@@ -345,6 +375,9 @@ function createProductDiscoveryOptions(input: {
         ? resourceShapes
         : resourceShapeCapabilitiesEnabled(resources),
     interfacesEnabled: input.mounted.interfaceRoutesMounted,
+    ...(input.formAvailability !== undefined
+      ? { formAvailability: input.formAvailability }
+      : {}),
   };
 }
 

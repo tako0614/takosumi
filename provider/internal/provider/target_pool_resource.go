@@ -39,6 +39,7 @@ type targetPoolModel struct {
 	ID      types.String `tfsdk:"id"`
 	Name    types.String `tfsdk:"name"`
 	Space   types.String `tfsdk:"space"`
+	Classes types.Set    `tfsdk:"classes"`
 	Targets types.List   `tfsdk:"target"`
 }
 
@@ -118,6 +119,11 @@ func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					stringplanmodifier.RequiresReplace(),
 					stringplanmodifier.UseStateForUnknown(),
 				},
+			},
+			"classes": schema.SetAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				Description: "Public placement-class tokens used to match exact FormActivation constraints. These tokens never contain Target identity, credentials, region, manager, or capacity.",
 			},
 			"target": schema.ListNestedAttribute{
 				Required:    true,
@@ -290,7 +296,7 @@ func (r *targetPoolResource) Read(ctx context.Context, req resource.ReadRequest,
 		resp.Diagnostics.AddError("Failed to read TargetPool", err.Error())
 		return
 	}
-	applyTargetPoolRecord(record, readSpace, &state)
+	applyTargetPoolRecord(ctx, record, readSpace, &state, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -344,7 +350,7 @@ func (r *targetPoolResource) put(ctx context.Context, plan *targetPoolModel, dia
 		diags.AddError("Failed to apply TargetPool", err.Error())
 		return
 	}
-	applyTargetPoolRecord(record, space, plan)
+	applyTargetPoolRecord(ctx, record, space, plan, diags)
 }
 
 func (m targetPoolModel) toSpec(ctx context.Context, defaultSpace string) (string, client.TargetPoolSpec, diag.Diagnostics) {
@@ -374,6 +380,11 @@ func (m targetPoolModel) toSpec(ctx context.Context, defaultSpace string) (strin
 	}
 
 	spec := client.TargetPoolSpec{Targets: make([]client.TargetPoolEntry, 0, len(targets))}
+	if !m.Classes.IsNull() && !m.Classes.IsUnknown() {
+		var classes []string
+		diags.Append(m.Classes.ElementsAs(ctx, &classes, false)...)
+		spec.Classes = classes
+	}
 	for index, target := range targets {
 		entry := client.TargetPoolEntry{
 			Name:     target.Name.ValueString(),
@@ -546,7 +557,7 @@ func decodeModuleOutputsAttribute(value types.String, attributePath path.Path, d
 	return decoded
 }
 
-func applyTargetPoolRecord(record *client.TargetPoolRecord, fallbackSpace string, m *targetPoolModel) {
+func applyTargetPoolRecord(ctx context.Context, record *client.TargetPoolRecord, fallbackSpace string, m *targetPoolModel, diags *diag.Diagnostics) {
 	space := record.SpaceID
 	if space == "" {
 		space = fallbackSpace
@@ -561,6 +572,13 @@ func applyTargetPoolRecord(record *client.TargetPoolRecord, fallbackSpace string
 	}
 	if record.Name != "" {
 		m.Name = types.StringValue(record.Name)
+	}
+	if record.Spec.Classes == nil {
+		m.Classes = types.SetNull(types.StringType)
+	} else {
+		classes, classDiags := types.SetValueFrom(ctx, types.StringType, record.Spec.Classes)
+		diags.Append(classDiags...)
+		m.Classes = classes
 	}
 }
 
