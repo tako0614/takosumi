@@ -4,7 +4,10 @@ import type {
   ProviderConnection,
   PlanRun,
 } from "@takosumi/internal/deploy-control-api";
-import type { ResolvedCapsuleProviderBinding } from "../../../../core/domains/connections/mod.ts";
+import {
+  resolvedProviderBindingsDigest,
+  type ResolvedCapsuleProviderBinding,
+} from "../../../../core/domains/connections/mod.ts";
 import type { RunCredentials } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   type CapsuleRunIdentityIssuer,
@@ -14,6 +17,7 @@ import {
 } from "../../../../core/domains/deploy-control/run_env_resolver.ts";
 
 const CLOUDFLARE_PROVIDER = "registry.opentofu.org/cloudflare/cloudflare";
+const AWS_PROVIDER = "registry.opentofu.org/hashicorp/aws";
 const NULL_PROVIDER = "registry.opentofu.org/hashicorp/null";
 
 function planRun(over: Partial<PlanRun> = {}): PlanRun {
@@ -288,7 +292,212 @@ test("RunEnvResolver mints provider env for release command context", async () =
   expect(result.credentials?.env).toEqual({
     CLOUDFLARE_API_TOKEN: "fixture-provider-token",
   });
+  expect(result.providerConfigurations).toEqual({
+    format: "takosumi.provider-configurations@v1",
+    providers: [],
+  });
   expect(result.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
+});
+
+test("RunEnvResolver delivers deterministic alias-aware non-secret provider configurations without minting credentials", async () => {
+  const calls: Array<{
+    phase: string;
+    auditRunId: string;
+    context: "opentofu" | "release_command";
+  }> = [];
+  const cloudflareDefault = connection({
+    id: "conn_cf_default",
+    scopeHints: {
+      providerConfig: {
+        retries: 3,
+        base_url: "https://api.example.test/client/v4",
+      },
+    },
+  });
+  const cloudflareEdge = connection({
+    id: "conn_cf_edge",
+    scopeHints: {
+      providerConfig: {
+        request: { timeout_ms: 5000, mode: "strict" },
+      },
+    },
+  });
+  const aws = connection({
+    id: "conn_aws",
+    provider: AWS_PROVIDER,
+    providerSource: AWS_PROVIDER,
+    kind: "generic_env",
+    envNames: ["AWS_REGION"],
+    scopeHints: {
+      providerConfig: { region: "ap-northeast-1" },
+    },
+  });
+  const resolved: readonly ResolvedCapsuleProviderBinding[] = [
+    {
+      provider: AWS_PROVIDER,
+      materialization: "secret",
+      connection: aws,
+    },
+    {
+      provider: CLOUDFLARE_PROVIDER,
+      alias: "edge",
+      materialization: "secret",
+      connection: cloudflareEdge,
+    },
+    {
+      provider: "cloudflare/cloudflare",
+      materialization: "secret",
+      connection: cloudflareDefault,
+    },
+  ];
+  const subject = resolver({
+    calls,
+    resolved,
+    credentials: () => undefined,
+  });
+
+  const result = await subject.resolveRunEnvironment({
+    planRun: planRun({
+      requiredProviders: [AWS_PROVIDER, CLOUDFLARE_PROVIDER],
+    }),
+    phase: "apply",
+    auditRunId: "release_apply_1",
+    credentialContext: "release_command",
+    mintCredentials: false,
+  });
+  const reordered = await resolver({
+    resolved: [...resolved].reverse(),
+    credentials: () => undefined,
+  }).resolveRunEnvironment({
+    planRun: planRun({
+      requiredProviders: [AWS_PROVIDER, CLOUDFLARE_PROVIDER],
+    }),
+    phase: "apply",
+    auditRunId: "release_apply_1",
+    credentialContext: "release_command",
+    mintCredentials: false,
+  });
+
+  expect(calls).toEqual([]);
+  expect(result.credentials).toBeUndefined();
+  expect(result.providerConfigurations).toEqual({
+    format: "takosumi.provider-configurations@v1",
+    providers: [
+      {
+        provider: CLOUDFLARE_PROVIDER,
+        alias: null,
+        configuration: {
+          base_url: "https://api.example.test/client/v4",
+          retries: 3,
+        },
+      },
+      {
+        provider: CLOUDFLARE_PROVIDER,
+        alias: "edge",
+        configuration: {
+          request: { mode: "strict", timeout_ms: 5000 },
+        },
+      },
+      {
+        provider: AWS_PROVIDER,
+        alias: null,
+        configuration: { region: "ap-northeast-1" },
+      },
+    ],
+  });
+  expect(JSON.stringify(reordered.providerConfigurations)).toBe(
+    JSON.stringify(result.providerConfigurations),
+  );
+  expect(reordered.runEnvironmentEvidenceDigest).toBe(
+    result.runEnvironmentEvidenceDigest,
+  );
+});
+
+test("RunEnvResolver rejects secret-like provider configuration keys and values before lifecycle dispatch", async () => {
+  const secretValue = "postgres://user:password@example.test/database";
+  for (const providerConfig of [
+    { api_token: "must-never-leak" },
+    { endpoint: secretValue },
+  ]) {
+    const subject = resolver({
+      resolved: [
+        {
+          provider: CLOUDFLARE_PROVIDER,
+          materialization: "secret",
+          connection: connection({ scopeHints: { providerConfig } }),
+        },
+      ],
+      credentials: () => undefined,
+    });
+    let thrown: unknown;
+    try {
+      await subject.resolveRunEnvironment({
+        planRun: planRun(),
+        phase: "destroy",
+        auditRunId: "release_destroy_1",
+        credentialContext: "release_command",
+        mintCredentials: false,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("secret-like");
+    expect((thrown as Error).message).not.toContain(secretValue);
+    expect((thrown as Error).message).not.toContain("must-never-leak");
+  }
+});
+
+test("RunEnvResolver fences lifecycle provider configuration to the reviewed binding digest", async () => {
+  const reviewed: readonly ResolvedCapsuleProviderBinding[] = [
+    {
+      provider: CLOUDFLARE_PROVIDER,
+      alias: "main",
+      materialization: "secret",
+      connection: connection({
+        scopeHints: {
+          providerConfig: {
+            base_url: "https://reviewed.example.test/api",
+          },
+        },
+      }),
+    },
+  ];
+  const live: readonly ResolvedCapsuleProviderBinding[] = [
+    {
+      ...reviewed[0]!,
+      connection: connection({
+        scopeHints: {
+          providerConfig: {
+            base_url: "https://changed.example.test/api",
+          },
+        },
+      }),
+    },
+  ];
+  const subject = resolver({ resolved: live, credentials: () => undefined });
+
+  let thrown: unknown;
+  try {
+    await subject.resolveRunEnvironment({
+      planRun: planRun({
+        resolvedProviderBindingsDigest:
+          await resolvedProviderBindingsDigest(reviewed),
+      }),
+      phase: "apply",
+      auditRunId: "release_apply_1",
+      credentialContext: "release_command",
+      mintCredentials: false,
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  expect(thrown).toBeInstanceOf(Error);
+  expect((thrown as Error).message).toContain("resolved_bindings_changed");
+  expect((thrown as { details?: { reason?: string } }).details?.reason).toBe(
+    "provider_connection_changed",
+  );
 });
 
 test("RunEnvResolver treats unresolved Capsule providers as no-credential providers after policy resolution", async () => {
@@ -314,6 +523,10 @@ test("RunEnvResolver treats unresolved Capsule providers as no-credential provid
   ]);
   expect(result.credentials).toBeUndefined();
   expect(result.providerResolutions).toEqual([]);
+  expect(result.providerConfigurations).toEqual({
+    format: "takosumi.provider-configurations@v1",
+    providers: [],
+  });
   expect(result.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 

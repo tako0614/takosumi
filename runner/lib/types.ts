@@ -93,6 +93,7 @@ export interface ReleaseSpec {
   readonly commands: readonly ReleaseCommandSpec[];
   readonly outputs?: JsonRecord;
   readonly activation?: ReleaseActivationSpec;
+  readonly providerConfigurations: import("../../contract/provider-configurations.ts").ProviderConfigurationsEnvelope;
 }
 
 export interface ReleaseActivationSpec {

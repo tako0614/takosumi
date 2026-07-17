@@ -212,6 +212,7 @@ export function createRunnerReleaseActivator(
         commands: input.commands,
         sourceSnapshot: input.sourceSnapshot,
         nonSensitiveOutputs: input.nonSensitiveOutputs,
+        providerConfigurations: input.providerConfigurations,
         ...(input.credentials ? { credentials: input.credentials } : {}),
         applyRunId: input.applyRun.id,
         workspaceId,
@@ -355,6 +356,7 @@ function releaseActivationWebhookPayload(
         }
       : {}),
     nonSensitiveOutputs: input.nonSensitiveOutputs,
+    providerConfigurations: input.providerConfigurations,
     commands: input.commands,
   };
 }
