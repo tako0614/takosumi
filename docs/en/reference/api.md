@@ -370,6 +370,35 @@ target will still resolve into this one Resource / Run / state / audit ledger
 after additive migration; it does not create another API authority. Takosumi does not expose a catch-all
 `takosumi_resource { type, spec }` as the normal interface.
 
+### FormActivation operator API
+
+An operator exposes one exact installed FormRef to an audience through the
+generic, noncommercial FormActivation API:
+
+```http
+POST  /v1/form-activations
+GET   /v1/form-activations?limit={n}&cursor={opaque}
+GET   /v1/form-activations/{id}
+PATCH /v1/form-activations/{id}
+```
+
+These routes require the operator deploy-control bearer. They do not accept a
+customer session/PAT, and `createdBy` / `updatedBy` come from the authenticated
+operator rather than request JSON. Create pins an exact `FormRef` plus
+`packageDigest`; update uses `expectedRevision` CAS and returns an `ETag` for
+the resulting revision. Unknown fields are rejected, so price, SKU, payment,
+billing, managed capacity, region inventory, SLA, and support cannot be smuggled
+into this OSS policy record. Commercial availability remains a separate closed
+ServiceOffering keyed to the same exact identity and activation.
+
+The operator CLI maps directly to this API:
+
+```bash
+takosumi form-activations list --url "$TAKOSUMI_DEPLOY_CONTROL_URL"
+takosumi form-activations create --file activation.json
+takosumi form-activations update activation_id --file update.json
+```
+
 Current v1alpha1 public shapes:
 
 ```text

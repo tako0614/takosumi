@@ -19,6 +19,9 @@ commercial operation. Takosumi Cloud is the official hosted operation run by us.
 - manage CredentialRecipe seeds, provider allowlists, and ProviderConnection policy
 - manage sealed backing material and secret delivery for ProviderConnections
 - manage Form Registry, implementation, FormActivation, TargetPool, Adapter, and compatibility profile availability
+- operate FormActivation through the operator-bearer `/v1/form-activations`
+  API or `takosumi form-activations`; never put price, payment, capacity, or SLA
+  into the activation policy
 - tune scheduled Resource observation cadence, batch, and concurrency to runner capacity
 - manage state and lock backends
 - in production/staging, do not infer encryption at rest from the database URL
