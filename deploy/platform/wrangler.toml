@@ -54,6 +54,15 @@ database_id = "replace-with-deploy-d1-database-id"
 binding = "R2_ARTIFACTS"
 bucket_name = "takos-artifacts"
 
+# Optional immutable signed Takoform Form Package store. Operators that enable
+# it also set TAKOSUMI_FORM_PACKAGE_TRUST_POLICY to non-secret JSON containing
+# an artifact prefix, a digest-pinned Sigstore TrustedRoot key, and explicit
+# publisher identities. It is intentionally commented in the neutral template:
+# zero-form hosts have no package binding or implicit trust root.
+# [[r2_buckets]]
+# binding = "R2_FORM_PACKAGES"
+# bucket_name = "takosumi-form-packages"
+
 # Source archive snapshots (immutable per-snapshot tar.zst). Written by the
 # runner DO during a source_sync run, keyed
 # workspaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst.
