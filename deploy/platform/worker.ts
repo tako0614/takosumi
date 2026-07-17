@@ -67,6 +67,7 @@ import {
 import type {
   ActorContext,
   FormActivation,
+  FormOperation,
   InstalledFormReference,
   Interface,
   NativeResourceRef,
@@ -277,25 +278,32 @@ export type PlatformFormActivationResolution =
         | "activation_inactive"
         | "identity_mismatch"
         | "definition_not_installed"
+        | "operation_not_supported"
         | "package_not_installed";
     };
 
 /**
  * Narrow read-only composition authority for hosted offering layers. It never
  * exposes Form Registry mutation or an HTTP route, and returns an activation
- * only while the caller's exact package identity is still installed.
+ * only while the caller's exact package identity is still installed and its
+ * definition supports the caller's explicitly required lifecycle operation.
  */
 export async function resolvePlatformFormActivation(
   input: {
     readonly activationId: string;
     readonly expectedIdentity: InstalledFormReference;
+    /** Optional lifecycle operation the installed definition must support. */
+    readonly requiredOperation?: FormOperation;
   },
   env: object,
+  operationsForEnv: (
+    env: PlatformEnv,
+  ) => Promise<Pick<TakosumiOperations, "forms">> = takosumiOperationsFor,
 ): Promise<PlatformFormActivationResolution> {
   if (!isInstalledFormReference(input.expectedIdentity)) {
     return { status: "unavailable", reason: "identity_mismatch" };
   }
-  const forms = (await takosumiOperationsFor(env as PlatformEnv)).forms;
+  const forms = (await operationsForEnv(env as PlatformEnv)).forms;
   if (!forms) {
     return { status: "unavailable", reason: "registry_unavailable" };
   }
@@ -322,6 +330,12 @@ export async function resolvePlatformFormActivation(
       installedFormReferenceKey(input.expectedIdentity)
   ) {
     return { status: "unavailable", reason: "definition_not_installed" };
+  }
+  if (
+    input.requiredOperation !== undefined &&
+    !definition.operations.includes(input.requiredOperation)
+  ) {
+    return { status: "unavailable", reason: "operation_not_supported" };
   }
   if (!formPackage || formPackage.status !== "installed") {
     return { status: "unavailable", reason: "package_not_installed" };
