@@ -104,14 +104,32 @@ omitted create value is known `standard`. All proof subprocesses use an
 explicit, credential-free environment allowlist, and every phase asserts exact
 per-resource plus TargetPool request-count deltas.
 
-`release-check` remains intentionally failing until all release blockers are
-resolved. The feature-bearing `1.0.1` patch is rejected; the classified four
-resources and nine fields stay only in the `1.1.0` minor candidate. The
-supported Terraform install matrix must be run with its reviewed CLI, with
-OpenTofu proved under `registry.opentofu.org/takosjp/takosumi` and Terraform
-proved under `registry.terraform.io/takosjp/takosumi`. A missing
-Terraform CLI is `blocked-prerequisite`, never `skipped`; a CLI found on `PATH`
-clears only that prerequisite and does not claim matrix evidence.
+With the reviewed Terraform `1.15.8` binary on `PATH`, the command atomically
+writes `tmp/provider-compatibility/1.1.0-state-proof.json` and its SHA-256
+sidecar. The ignored document is deterministic for the same inputs and records
+only authority/candidate/source/toolchain digests, CLI version/platform,
+explicit FQNs, and bounded success flags. It records no timestamp, executable
+path, environment value, state value, or credential. A changed authority,
+candidate descriptor, provider/proof source, unreviewed Terraform version, or
+sidecar mismatch fails closed. For separately custodied evidence, both commands
+accept the same explicit path:
+
+```bash
+bun run provider:compatibility:state-proof -- --evidence /operator/evidence/provider-1.1.0-proof.json
+bun run provider:compatibility:release-check -- --evidence /operator/evidence/provider-1.1.0-proof.json
+```
+
+`release-check` remains failing until the digest-bound compatibility evidence
+proves the matrix. The feature-bearing `1.0.1` patch is rejected; the classified
+four resources and nine fields stay only in the `1.1.0` minor candidate. The
+supported Terraform matrix must be run with its reviewed CLI, with OpenTofu
+proved under `registry.opentofu.org/takosjp/takosumi` and Terraform proved under
+`registry.terraform.io/takosjp/takosumi`. A missing Terraform CLI is
+`blocked-prerequisite`, never `skipped`; a CLI found on `PATH` clears only that
+prerequisite and does not claim matrix evidence. A passing compatibility
+release check clears only this schema/state/FQN blocker. Signer custody,
+signatures, transparency, public-path verification, and publication remain
+independent external blockers below.
 
 ## Build a corrected candidate
 

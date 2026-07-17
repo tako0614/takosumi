@@ -35,14 +35,20 @@ the exact quarantined provider from the public mirror, creates only disposable
 non-secret fixture state against a local fake Takosumi endpoint, switches to the
 current candidate, checks refresh-free no-op planning and observe behavior, and
 then attempts rollback to the exact old provider. It never writes operator state
-or credentials to this repository.
+or credentials to this repository. With reviewed Terraform `1.15.8` on `PATH`,
+it writes a deterministic, value-free evidence document and digest sidecar to
+the ignored `tmp/provider-compatibility/` directory. The document records only
+authority/source/toolchain digests, CLI version/platform, explicit provider
+FQNs, and bounded success flags; timestamps, executable paths, environment
+values, state values, and credentials are excluded. A changed authority,
+candidate descriptor, provider source, or proof implementation makes the
+evidence stale and keeps the release check closed.
 
 The connected proof covers all seven historical resource types across old
 apply, current refresh-free no-op, current read-only observe/refresh,
 old-provider rollback no-op, and destroy. It detected and drove removal of the
 ObjectBucket plan-time schema default that had forced old state to update;
-wire/state refresh still canonicalizes omission to `standard`. Publication
-remains blocked by the explicit dual-FQN proof and external release gates.
+wire/state refresh still canonicalizes omission to `standard`.
 
 Every proof subprocess receives an explicit environment allowlist rooted in a
 temporary HOME. Provider tokens, cloud credentials, secret/password variables,
@@ -52,3 +58,9 @@ deltas for historical apply, current refresh-free no-op, current observe,
 TargetPool read/write, and historical rollback. A second real current-provider
 `tofu apply` proves an omitted ObjectBucket `storage_class` persists as known
 `standard` without regressing the old-state no-op.
+
+After the connected proof, `bun run provider:compatibility:release-check`
+validates the evidence sidecar and exact bindings before clearing only the
+Terraform/address compatibility blocker. Provider signing, transparency,
+immutable public-path verification, and publication remain external release
+gates.
