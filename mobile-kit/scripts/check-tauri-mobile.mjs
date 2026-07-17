@@ -637,8 +637,9 @@ function checkRemotePushPlugin(
       mobilePushPluginIos.includes("requestAuthorization") &&
       mobilePushPluginIos.includes('return "sandbox"') &&
       mobilePushPluginIos.includes('return "production"') &&
-      mobilePushPluginIos.includes("SecTaskCopyValueForEntitlement") &&
-      mobilePushPluginIos.includes("aps-environment") &&
+      mobilePushPluginIos.includes("Bundle.main.object(") &&
+      mobilePushPluginIos.includes("TauriMobilePushAPNSEnvironment") &&
+      !mobilePushPluginIos.includes("SecTask") &&
       !mobilePushPluginIos.includes("#if DEBUG") &&
       mobilePushPluginIos.includes("tokenRequestTimeoutSeconds") &&
       mobilePushPluginIos.includes("timeoutPendingTokenInvoke") &&
@@ -646,7 +647,7 @@ function checkRemotePushPlugin(
       mobilePushPluginIos.includes("registrationRequested") &&
       mobilePushPluginIos.includes("UNPushNotificationTrigger.self") &&
       !mobilePushPluginIos.includes("UserDefaults"),
-    "iOS plugin separates permission from bounded session registration, unregisters on logout, and derives APNs environment from the signed entitlement",
+    "iOS plugin separates permission from bounded session registration, unregisters on logout, and reads the signed bundle APNs environment",
   );
   expect(
     mobilePushPluginIos.includes("notification-received") &&
@@ -700,11 +701,44 @@ function checkIosPushEntitlement() {
   } else {
     warn("iOS aps-environment entitlement has an invalid value", true);
   }
+
+  const bundleEnvironments = collectFiles(appleDir)
+    .filter((filePath) => path.basename(filePath) === "Info.plist")
+    .map((filePath) =>
+      readPlistString(
+        readFileSync(filePath, "utf8"),
+        "TauriMobilePushAPNSEnvironment",
+      ),
+    )
+    .filter((value) => value !== undefined);
+  const distinctEntitlements = [...new Set(environments)];
+  const distinctBundleEnvironments = [...new Set(bundleEnvironments)];
+  if (
+    distinctEntitlements.length === 1 &&
+    distinctBundleEnvironments.length === 1 &&
+    distinctBundleEnvironments[0] === distinctEntitlements[0]
+  ) {
+    ok(
+      `iOS signed bundle APNs environment matches entitlement: ${distinctBundleEnvironments[0]}`,
+    );
+  } else {
+    warn(
+      "iOS signed bundle APNs environment is missing or does not match the entitlement; run tauri:native-push:apply",
+      true,
+    );
+  }
 }
 
 function readApsEnvironment(xml) {
+  return readPlistString(xml, "aps-environment");
+}
+
+function readPlistString(xml, key) {
   return xml.match(
-    /<key>\s*aps-environment\s*<\/key>\s*<string>\s*([^<]+?)\s*<\/string>/,
+    new RegExp(
+      `<key>\\s*${key}\\s*<\\/key>\\s*<string>\\s*([^<]+?)\\s*<\\/string>`,
+      "u",
+    ),
   )?.[1];
 }
 
