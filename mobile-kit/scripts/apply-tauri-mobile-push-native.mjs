@@ -53,19 +53,39 @@ async function applyApplePushEntitlement() {
     return;
   }
 
-  const entitlementFiles = (await collectFiles(appleDir)).filter((filePath) =>
+  const appleFiles = await collectFiles(appleDir);
+  const entitlementFiles = appleFiles.filter((filePath) =>
     filePath.endsWith(".entitlements"),
   );
   if (entitlementFiles.length === 0) {
     warn(
       "no iOS .entitlements file found; add Push Notifications in Xcode, then rerun",
     );
-    return;
+  } else {
+    for (const filePath of entitlementFiles) {
+      const updated = upsertPlistString(
+        readText(filePath),
+        "aps-environment",
+        appleEnvironment,
+      );
+      writeIfChanged(filePath, updated, "iOS aps-environment entitlement");
+    }
   }
 
-  for (const filePath of entitlementFiles) {
-    const updated = upsertApsEnvironment(readText(filePath), appleEnvironment);
-    writeIfChanged(filePath, updated, "iOS aps-environment entitlement");
+  const infoPlistFiles = appleFiles.filter(
+    (filePath) => path.basename(filePath) === "Info.plist",
+  );
+  if (infoPlistFiles.length === 0) {
+    warn("no generated iOS Info.plist found; rerun tauri ios init");
+  } else {
+    for (const filePath of infoPlistFiles) {
+      const updated = upsertPlistString(
+        readText(filePath),
+        "TauriMobilePushAPNSEnvironment",
+        appleEnvironment,
+      );
+      writeIfChanged(filePath, updated, "iOS mobile-push bundle environment");
+    }
   }
 }
 
@@ -179,16 +199,17 @@ function findNamedBlock(text, name) {
   return null;
 }
 
-function upsertApsEnvironment(xml, environment) {
-  if (xml.includes("<key>aps-environment</key>")) {
+function upsertPlistString(xml, key, value) {
+  const keyElement = `<key>${key}</key>`;
+  if (xml.includes(keyElement)) {
     return xml.replace(
-      /(<key>aps-environment<\/key>\s*<string>)([^<]*)(<\/string>)/,
-      `$1${environment}$3`,
+      new RegExp(`(<key>${key}<\\/key>\\s*<string>)([^<]*)(<\\/string>)`, "u"),
+      `$1${value}$3`,
     );
   }
   return xml.replace(
     /<\/dict>/,
-    `\t<key>aps-environment</key>\n\t<string>${environment}</string>\n</dict>`,
+    `\t${keyElement}\n\t<string>${value}</string>\n</dict>`,
   );
 }
 
