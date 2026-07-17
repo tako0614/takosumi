@@ -30,11 +30,17 @@ if [[ "$state" != "running" ]]; then
 	exit 1
 fi
 
-# 2. Recent tick log
-if ! docker logs --since 30s "$REGISTRAR_CONTAINER" 2>&1 \
-		| grep -q "synced .* dynamic route"; then
+# 2. Recent tick log. Capture before matching: under `set -o pipefail`, piping
+# `docker logs` into `grep -q` can turn a successful early match into SIGPIPE
+# exit 141 from Docker and report a false failure.
+if ! recent_logs=$(docker logs --since 30s "$REGISTRAR_CONTAINER" 2>&1); then
+	echo "FAIL: route-registrar logs are unavailable" >&2
+	printf '%s\n' "$recent_logs" >&2
+	exit 1
+fi
+if ! grep -q "synced .* dynamic route" <<<"$recent_logs"; then
 	echo "FAIL: no 'synced N dynamic' log line in the last 30s" >&2
-	docker logs --tail 5 "$REGISTRAR_CONTAINER" >&2
+	printf '%s\n' "$recent_logs" | tail -n 5 >&2
 	exit 1
 fi
 
