@@ -500,7 +500,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly resolveResourceInterfaceWorkspace?: ResourceInterfaceWorkspaceResolver;
   /**
    * Explicit host-owned Workspace -> Resource authorization-scope mapping used
-   * only for the redacted exact-Form backup sidecar.
+   * for the redacted exact-Form backup sidecar and exact FormRef migration.
    */
   readonly resolveResourceBackupScope?: (
     workspaceId: string,
@@ -2001,6 +2001,12 @@ export async function createTakosumiService(
       activityService,
       backupsService,
       legacyResourceStateAdoptionService,
+      ...(resourceFormPinOperations && options.resolveResourceBackupScope
+        ? {
+            resourceFormPinOperations,
+            resolveResourceFormPinScope: options.resolveResourceBackupScope,
+          }
+        : {}),
       legacyOutputInterfaceMigrationService,
       ...(deployControlToken
         ? { getDeployControlToken: () => deployControlToken }

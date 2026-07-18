@@ -49,21 +49,22 @@ Normal screens do not expose the internal model directly; they use these words i
 These only appear when you use the typed service lifecycle. If you only run
 plain OpenTofu modules, you can skip them. `Service Form` is the adopted target
 concept. The current `/v1/resources`, `takosumi_*` provider, and state retain the
-`Resource Shape` compatibility name until additive FormRef migration and
-compatibility evidence exist.
+`Resource Shape` compatibility name. Exact FormRef additive persistence is
+implemented, but the alias remains until live migration/rollback evidence and
+the compatibility-removal gate are complete.
 
-| Term                         | Meaning                                                                                                                                                                 |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Service Form                 | A portable, implementation-independent service definition, such as "I want one object store".                                                                           |
-| FormRef                      | The exact immutable identity: `apiVersion`, `kind`, `definitionVersion`, and `schemaDigest`. It is a target contract and still needs an additive persistence migration. |
-| Form Package / Form Registry | A signed data-only definition bundle and the trusted package pins installed on one host. Packages contain no executable code, credentials, price, or capacity.          |
-| Resource Shape               | The compatibility name used by the current API/provider/state for a Service Form-backed Resource.                                                                       |
-| FormActivation               | A generic OSS operator record exposing an exact FormRef to an audience/policy scope. It contains no price, payment, official capacity, or SLA.                          |
-| ServiceOffering              | A closed Cloud/operator record officially binding an exact FormRef, activation, implementation, target/region, SKU, price, quota, and support.                          |
-| Target / TargetPool          | Where a Resource resolves: the operator-enabled candidates and their pools.                                                                                             |
-| Policy                       | The rules for which Resource may resolve where.                                                                                                                         |
-| Adapter                      | The trusted host implementation that turns a Resource into a real resource.                                                                                             |
-| ResolutionLock               | The record that pins an exact form / implementation / Target decision.                                                                                                  |
-| NativeResource               | The record of the real resource created by a resolution.                                                                                                                |
-| Space / Environment / Stack  | The Resource API namespace, environment (dev/prod, etc.), and grouping units.                                                                                           |
-| Compatibility API            | A compatibility API with an explicit scope and version, like `compat.s3.v1`. Not full AWS or Cloudflare compatibility.                                                  |
+| Term                         | Meaning                                                                                                                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Service Form                 | A portable, implementation-independent service definition, such as "I want one object store".                                                                                  |
+| FormRef                      | The exact immutable identity: `apiVersion`, `kind`, `definitionVersion`, and `schemaDigest`. Resource and ResolutionLock pin it beside the package digest in additive columns. |
+| Form Package / Form Registry | A signed data-only definition bundle and the trusted package pins installed on one host. Packages contain no executable code, credentials, price, or capacity.                 |
+| Resource Shape               | The compatibility name used by the current API/provider/state for a Service Form-backed Resource.                                                                              |
+| FormActivation               | A generic OSS operator record exposing an exact FormRef to an audience/policy scope. It contains no price, payment, official capacity, or SLA.                                 |
+| ServiceOffering              | A closed Cloud/operator record officially binding an exact FormRef, activation, implementation, target/region, SKU, price, quota, and support.                                 |
+| Target / TargetPool          | Where a Resource resolves: the operator-enabled candidates and their pools.                                                                                                    |
+| Policy                       | The rules for which Resource may resolve where.                                                                                                                                |
+| Adapter                      | The trusted host implementation that turns a Resource into a real resource.                                                                                                    |
+| ResolutionLock               | The record that pins an exact form / implementation / Target decision.                                                                                                         |
+| NativeResource               | The record of the real resource created by a resolution.                                                                                                                       |
+| Space / Environment / Stack  | The Resource API namespace, environment (dev/prod, etc.), and grouping units.                                                                                                  |
+| Compatibility API            | A compatibility API with an explicit scope and version, like `compat.s3.v1`. Not full AWS or Cloudflare compatibility.                                                         |
