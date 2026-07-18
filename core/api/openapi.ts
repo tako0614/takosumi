@@ -513,8 +513,124 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     ...runSchemas(),
     ...activitySchemas(),
     ...backupSchemas(),
+    ...resourceFormPinSchemas(),
     ...outputShareSchemas(),
     ...errorSchemas(),
+  };
+}
+
+/** Operator-only exact FormRef backfill and retained replay contracts. */
+function resourceFormPinSchemas(): Record<string, Record<string, unknown>> {
+  const resourceKind = {
+    type: "string",
+    pattern: "^[A-Za-z][A-Za-z0-9._-]{0,127}$",
+  };
+  const pageProperties = {
+    cursor: { type: "string", minLength: 1 },
+    limit: { type: "integer", minimum: 1, maximum: 100 },
+  };
+  return {
+    ResourceFormPinBackupEntry: {
+      type: "object",
+      required: ["resourceId", "resourceScopeId", "kind", "identity"],
+      properties: {
+        resourceId: { type: "string", minLength: 1 },
+        resourceScopeId: { type: "string", minLength: 1 },
+        kind: resourceKind,
+        identity: ref("InstalledFormReference"),
+      },
+      additionalProperties: false,
+    },
+    BackfillResourceFormPinsRequest: {
+      type: "object",
+      required: ["kind", "activationIds"],
+      properties: {
+        kind: resourceKind,
+        activationIds: {
+          type: "array",
+          minItems: 1,
+          maxItems: 32,
+          uniqueItems: true,
+          items: { type: "string", minLength: 1, maxLength: 256 },
+        },
+        dryRun: { type: "boolean" },
+        ...pageProperties,
+      },
+      additionalProperties: false,
+    },
+    RestoreResourceFormPinsRequest: {
+      type: "object",
+      required: ["entries"],
+      properties: {
+        entries: {
+          type: "array",
+          items: ref("ResourceFormPinBackupEntry"),
+        },
+        ...pageProperties,
+      },
+      additionalProperties: false,
+    },
+    ResourceFormPinEvidence: {
+      type: "object",
+      required: ["resourceId", "kind", "outcome", "reason"],
+      properties: {
+        resourceId: { type: "string", minLength: 1 },
+        kind: resourceKind,
+        outcome: {
+          enum: ["would_pin", "pinned", "already_pinned", "refused"],
+        },
+        reason: {
+          enum: [
+            "eligible",
+            "activation_missing",
+            "activation_inactive",
+            "activation_kind_mismatch",
+            "activation_scope_mismatch",
+            "activation_audience_mismatch",
+            "activation_ambiguous",
+            "definition_missing_or_mismatched",
+            "package_missing",
+            "package_deprecated",
+            "package_revoked",
+            "resolution_lock_missing",
+            "resolution_lock_already_pinned",
+            "concurrent_conflict",
+            "backup_entry_invalid",
+            "backup_scope_mismatch",
+            "retained_package_unverifiable",
+          ],
+        },
+        activationId: { type: "string", minLength: 1 },
+        installedFormReferenceKey: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    ResourceFormPinOperationReport: {
+      type: "object",
+      required: [
+        "dryRun",
+        "scanned",
+        "wouldPin",
+        "pinned",
+        "alreadyPinned",
+        "refused",
+        "evidence",
+      ],
+      properties: {
+        dryRun: { type: "boolean" },
+        scanned: { type: "integer", minimum: 0 },
+        wouldPin: { type: "integer", minimum: 0 },
+        pinned: { type: "integer", minimum: 0 },
+        alreadyPinned: { type: "integer", minimum: 0 },
+        refused: { type: "integer", minimum: 0 },
+        evidence: {
+          type: "array",
+          items: ref("ResourceFormPinEvidence"),
+        },
+        nextCursor: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
   };
 }
 

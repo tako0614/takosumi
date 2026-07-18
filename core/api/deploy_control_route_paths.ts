@@ -144,6 +144,12 @@ export const TAKOSUMI_CAPSULE_BACKUPS_ROUTE =
 /** Operator-only, explicit migration from retired backing-Capsule state. */
 export const TAKOSUMI_WORKSPACE_RESOURCE_STATE_ADOPTION_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/resource-state-adoption` as const;
+/** Operator-only exact FormRef migration over canonical Resource/ResolutionLock rows. */
+export const TAKOSUMI_WORKSPACE_RESOURCE_FORM_PIN_BACKFILL_ROUTE =
+  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/resource-form-pins/backfill` as const;
+/** Operator-only retained exact FormRef replay from a redacted backup sidecar. */
+export const TAKOSUMI_WORKSPACE_RESOURCE_FORM_PIN_RESTORE_ROUTE =
+  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/resource-form-pins/restore` as const;
 /** Operator-only migration from retired runtime Output conventions. */
 export const TAKOSUMI_WORKSPACE_OUTPUT_INTERFACE_MIGRATION_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/output-interfaces` as const;
