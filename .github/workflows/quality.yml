@@ -59,7 +59,11 @@ jobs:
         working-directory: provider
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
-      - name: Audit JavaScript dependencies
+      - name: Audit root JavaScript dependencies
+        run: bun audit
+
+      - name: Audit dashboard JavaScript dependencies
+        working-directory: dashboard
         run: bun audit
 
       - name: Run canonical Takosumi checks
