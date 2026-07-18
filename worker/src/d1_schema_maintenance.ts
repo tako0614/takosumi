@@ -449,11 +449,14 @@ async function readMaintenanceRow(
 }
 
 async function listGuardedTables(db: D1Database): Promise<readonly string[]> {
+  // `_cf_KV` is a Cloudflare-managed D1 table. It is not application state
+  // and must never receive Takosumi maintenance triggers.
   const result = await db
     .prepare(
       `select name from sqlite_master
        where type = 'table' and name not like 'sqlite_%' and name != ?
          and name != 'schema_migrations'
+         and name != '_cf_KV'
        order by name`,
     )
     .bind(CONTROL_D1_MAINTENANCE_TABLE)

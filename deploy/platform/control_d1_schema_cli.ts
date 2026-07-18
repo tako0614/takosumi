@@ -9,7 +9,10 @@ import {
   type ControlD1SchemaPlan,
   verifyControlD1Schema,
 } from "./control_d1_schema.ts";
-import type { ControlD1MaintenanceFence } from "../../worker/src/d1_schema_maintenance.ts";
+import {
+  ControlD1MaintenanceError,
+  type ControlD1MaintenanceFence,
+} from "../../worker/src/d1_schema_maintenance.ts";
 import {
   CloudflareControlD1RestDatabase,
   ControlD1RestError,
@@ -466,9 +469,13 @@ function transcriptTimestamp(value: string): string {
 function errorCode(error: unknown): string {
   if (
     error instanceof ControlD1SchemaError ||
-    error instanceof ControlD1RestError
+    error instanceof ControlD1RestError ||
+    error instanceof ControlD1MaintenanceError
   ) {
-    return error.code.split(":", 1)[0] ?? "control_d1_schema_failed";
+    const code = error.code.split(":", 1)[0] ?? "";
+    return /^[a-z][a-z0-9_]{0,127}$/u.test(code)
+      ? code
+      : "control_d1_schema_failed";
   }
   return "control_d1_schema_failed";
 }
