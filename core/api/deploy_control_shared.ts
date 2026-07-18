@@ -37,6 +37,7 @@ import type { RunGroupsService } from "../domains/run-groups/mod.ts";
 import type { ActivityService } from "../domains/activity/mod.ts";
 import type { BackupsService } from "../domains/backups/mod.ts";
 import type { LegacyResourceStateAdoptionService } from "../domains/resource-shape/legacy_state_adoption.ts";
+import type { ResourceFormPinOperations } from "../domains/resource-shape/form_pin_operations.ts";
 import type { LegacyOutputInterfaceMigrationService } from "../domains/interfaces/legacy_output_migration.ts";
 import {
   OpenTofuControllerError,
@@ -259,6 +260,14 @@ export const ALLOWED_KEYS: Record<
     "stateRef",
     "stateDigest",
   ]),
+  resourceFormPinBackfill: new Set([
+    "kind",
+    "activationIds",
+    "cursor",
+    "limit",
+    "dryRun",
+  ]),
+  resourceFormPinRestore: new Set(["entries", "cursor", "limit"]),
   outputInterfaceMigrationConfirm: new Set(["candidate", "selection"]),
 };
 
@@ -284,6 +293,8 @@ export type DeployControlRouteName =
   | "outputShareCreate"
   | "billingSettingsUpdate"
   | "resourceStateAdoptionConfirm"
+  | "resourceFormPinBackfill"
+  | "resourceFormPinRestore"
   | "outputInterfaceMigrationConfirm";
 
 export interface DeployControlInternalRouteDependencies {
@@ -382,6 +393,15 @@ export interface DeployControlInternalRouteDependencies {
    * confirmation requires an exact reviewed candidate.
    */
   readonly legacyResourceStateAdoptionService?: LegacyResourceStateAdoptionService;
+  /** Operator-only exact FormRef backfill and retained backup replay. */
+  readonly resourceFormPinOperations?: ResourceFormPinOperations;
+  /**
+   * Explicit Workspace -> Resource authorization-scope bridge. Matching raw
+   * id strings are never treated as authority.
+   */
+  readonly resolveResourceFormPinScope?: (
+    workspaceId: string,
+  ) => string | undefined | Promise<string | undefined>;
   readonly legacyOutputInterfaceMigrationService?: LegacyOutputInterfaceMigrationService;
 }
 
