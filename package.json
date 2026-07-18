@@ -37,7 +37,7 @@
     "provider:release:verify": "bun scripts/provider-release.mjs verify-bundle",
     "provider:release:prepublish": "bun scripts/provider-release.mjs prepublish-check",
     "provider:mirror:materialize": "bun scripts/provider-release.mjs materialize",
-    "provider:mirror:proof": "bun tests/proofs/provider-mirror-install.ts",
+    "provider:mirror:proof": "bun tests/proofs/provider-mirror-quarantine-exclusion.ts",
     "service-form:compat-inventory": "bun scripts/report-service-form-compatibility-inventory.ts",
     "service-form:host-conformance": "bun scripts/run-portable-form-host-conformance.ts",
     "credential-recipes:assets": "bun scripts/build-credential-recipe-assets.ts",
