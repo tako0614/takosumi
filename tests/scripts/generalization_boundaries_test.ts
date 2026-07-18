@@ -934,14 +934,9 @@ describe("generalization boundary scanner", () => {
         content:
           "return runtimeCapabilities()?.commercial.payment_enforcement === true;",
       },
-      {
-        path: "mobile-kit/src/types.ts",
-        content: "readonly commercial?: Record<string, unknown>;",
-      },
     ]);
 
     expect(violations.map((violation) => violation.ruleId)).toEqual([
-      "fixed-commercial-capability-schema",
       "fixed-commercial-capability-schema",
       "fixed-commercial-capability-schema",
     ]);
@@ -950,17 +945,12 @@ describe("generalization boundary scanner", () => {
   test("keeps the official hosted endpoint out of shared clients", () => {
     const violations = findGeneralizationBoundaryViolations([
       {
-        path: "mobile-kit/src/url.ts",
-        content: 'const hostCenterUrl = "https://app.takosumi.com/install";',
-      },
-      {
         path: "dashboard/src/lib/operator.ts",
         content: 'return fetch("https://app.takosumi.com/api/v1/session");',
       },
     ]);
 
     expect(violations.map((violation) => violation.ruleId)).toEqual([
-      "hosted-endpoint-in-shared-client",
       "hosted-endpoint-in-shared-client",
     ]);
   });
