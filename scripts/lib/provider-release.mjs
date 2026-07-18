@@ -231,8 +231,8 @@ export function validateVersionDescriptor(descriptor) {
   for (const platform of descriptor.platforms) {
     assertExactObjectKeys(platform, ["os", "arch"], "provider platform");
   }
-  if (descriptor.toolchain?.go?.version !== "go1.26.0") {
-    throw new Error("provider release Go toolchain must be pinned to go1.26.0");
+  if (descriptor.toolchain?.go?.version !== "go1.26.5") {
+    throw new Error("provider release Go toolchain must be pinned to go1.26.5");
   }
   if (descriptor.toolchain?.zip?.version !== "Info-ZIP 3.0") {
     throw new Error(
@@ -1030,7 +1030,7 @@ function validateManifestToolchain(toolchain) {
     "provider release toolchain",
   );
   for (const [name, version] of [
-    ["go", "go1.26.0"],
+    ["go", "go1.26.5"],
     ["zip", "Info-ZIP 3.0"],
     ["unzip", "Info-ZIP UnZip 6.00"],
     ["git", "git version 2.53.0"],
