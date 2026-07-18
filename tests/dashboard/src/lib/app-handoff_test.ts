@@ -8,7 +8,7 @@ import {
 import {
   createTakosumiHostCenterUrl,
   parseMobileConnectInput,
-} from "../../../../mobile-kit/src/index.ts";
+} from "../../../../../mobile-kit/src/index.ts";
 
 describe("Takosumi App Handoff", () => {
   test("parses typed app return targets from Host Center query params", () => {

@@ -11,8 +11,7 @@
     "accounts/contract",
     "accounts/service",
     "cli",
-    "deploy/node-postgres",
-    "mobile-kit"
+    "deploy/node-postgres"
   ],
   "scripts": {
     "wrangler": "wrangler",
@@ -22,7 +21,6 @@
     "check:dashboard": "(cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build) && bash scripts/build-app-docs.sh",
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",
     "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers deploy/platform/worker.ts --outfile /tmp/takosumi-platform-worker-check.mjs",
-    "check:mobile-kit": "cd mobile-kit && bun run check && bun run test",
     "test": "bun test ./tests",
     "test:service": "bun test ./tests/core",
     "test:accounts": "bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare",
