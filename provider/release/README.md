@@ -8,8 +8,10 @@ version.
   hermetic toolchain/runtime contract. Its SHA-256 sidecar is required.
   `1.1.0` is a candidate only; it has not been published.
 - `registry.json` plus its sidecar is the only normal mirror-admission
-  authority. It retains all known versions. Direct candidate-manifest
-  materialization is restricted to the explicit test-only seam.
+  authority. It retains all known versions, but only an externally verified
+  `approved` entry is publishable. Quarantine entries are validated evidence,
+  never mirror inputs. Direct candidate-manifest materialization is restricted
+  to the explicit test-only seam.
 - `quarantine/1.0.0.json` records every immutable public `1.0.0` version
   document and archive byte sequence. Its `indexObservation` is evidence of
   the mutable aggregate catalog seen at the same time, not a frozen `1.0.0`
@@ -31,9 +33,10 @@ version.
   dynamic runtime files used by release tools. Dependency resolution is
   offline and the pre-populated Go module cache must pass `go mod verify`.
 - Dashboard and Worker builds are mirror consumers. They materialize immutable
-  version/archive bytes into generated `dashboard/dist`, then derive the
-  aggregate index by deterministically merging reviewed versions. They never
-  rebuild an old provider version.
+  version/archive bytes for approved releases into generated `dashboard/dist`,
+  then derive the aggregate index by deterministically merging those releases.
+  With no approved release they emit an empty index and no provider artifacts.
+  They never rebuild or republish a quarantined provider version.
 
 The current mixed provider keeps the supported `takosumi_*` form state and
 `takosumi_target_pool` ownership. Future portable Service Form resources move

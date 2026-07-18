@@ -422,7 +422,7 @@ function normalizedStateProof(proof, identity) {
     proof.currentMutationDuringRefresh !== false ||
     proof.oldProviderRollbackNoOp !== true ||
     proof.currentOmittedBucketCreateCanonicalized !== true ||
-    proof.exactHistoricalNetworkMirror !== true ||
+    proof.exactHistoricalFilesystemMirror !== true ||
     proof.devOverrideUsedOnlyForCandidate !== true
   ) {
     throw new Error("provider compatibility proof is incomplete or unsafe");
@@ -475,7 +475,7 @@ function normalizedStateProof(proof, identity) {
     currentMutationDuringRefresh: false,
     oldProviderRollbackNoOp: true,
     currentOmittedBucketCreateCanonicalized: true,
-    exactHistoricalNetworkMirror: true,
+    exactHistoricalFilesystemMirror: true,
     devOverrideUsedOnlyForCandidate: true,
     phaseEvidence: {
       oldApply: phaseEvidence.oldApply,
@@ -615,8 +615,8 @@ export async function validateProviderCompatibilityProofArtifact(
       oldProviderRollbackNoOp: artifact.evidence.oldProviderRollbackNoOp,
       currentOmittedBucketCreateCanonicalized:
         artifact.evidence.currentOmittedBucketCreateCanonicalized,
-      exactHistoricalNetworkMirror:
-        artifact.evidence.exactHistoricalNetworkMirror,
+      exactHistoricalFilesystemMirror:
+        artifact.evidence.exactHistoricalFilesystemMirror,
       devOverrideUsedOnlyForCandidate:
         artifact.evidence.devOverrideUsedOnlyForCandidate,
       phaseEvidence: artifact.evidence.phaseEvidence,

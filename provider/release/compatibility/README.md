@@ -30,8 +30,11 @@ a skipped test; finding the CLI clears only that prerequisite. The separate
 state-proof command must still run the explicit Terraform schema/state/FQN
 matrix.
 
-`bun run provider:compatibility:state-proof` is the connected proof. It installs
-the exact quarantined provider from the public mirror, creates only disposable
+`bun run provider:compatibility:state-proof` is the connected proof. It requires
+`TAKOSUMI_PROVIDER_QUARANTINE_ROOT` to point to an operator-retained local
+filesystem mirror, verifies every retained version/archive byte against the
+quarantine authority, installs the exact quarantined provider without a network
+or direct fallback, and creates only disposable
 non-secret fixture state against a local fake Takosumi endpoint, switches to the
 current candidate, checks refresh-free no-op planning and observe behavior, and
 then attempts rollback to the exact old provider. It never writes operator state

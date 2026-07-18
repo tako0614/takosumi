@@ -527,7 +527,7 @@ function completeStateProof(
       currentRefresh: "six-resource-observe-and-target-pool-get-exact",
       oldRollback: "six-resource-get-and-target-pool-get-exact",
     },
-    exactHistoricalNetworkMirror: true,
+    exactHistoricalFilesystemMirror: true,
     devOverrideUsedOnlyForCandidate: true,
   };
 }

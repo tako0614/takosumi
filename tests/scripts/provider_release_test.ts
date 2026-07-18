@@ -93,9 +93,10 @@ describe("provider release source", () => {
     const result = await verifyProviderReleaseSource();
     expect(result.providerVersion).toBe("1.1.0");
     expect(result.quarantineVersion).toBe("1.0.0");
+    expect(result.approvedMirrorVersions).toEqual([]);
     expect(
       result.localAssets.every(
-        (asset) => asset.classification === "exact-public",
+        (asset) => asset.classification === "derived-approved-index",
       ),
     ).toBe(true);
   });
@@ -142,10 +143,11 @@ describe("provider release source", () => {
     await expect(
       verifyLocalProviderMirrorSources({
         localMirrorRoot: root,
-        manifest,
+        manifests: [],
+        providerAddress: manifest.providerAddress,
         checkTracked: false,
       }),
-    ).rejects.toThrow("rejected or unreviewed bytes");
+    ).rejects.toThrow("unreviewed mirror path");
   });
 
   test("rejects release output inside the tracked source repository", async () => {
@@ -254,6 +256,129 @@ describe("provider release source", () => {
 });
 
 describe("immutable mirror materializer", () => {
+  test("validates quarantine authority but materializes an honest empty approved mirror", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-empty-mirror-test-"));
+    temporaryRoots.push(root);
+    const outputRoot = join(root, "mirror");
+    let fetches = 0;
+
+    const result = await materializeProviderMirror({
+      outputRoot,
+      registryPath: PROVIDER_REGISTRY_PATH,
+      cacheRoot: join(root, "cache"),
+      fetchImpl: async () => {
+        fetches += 1;
+        return new Response("unexpected fetch", { status: 500 });
+      },
+    });
+
+    expect(fetches).toBe(0);
+    expect(result.versions).toEqual([]);
+    expect(result.assets).toEqual([]);
+    expect(result.manifestPaths).toEqual([]);
+    expect(result.manifestDigests).toEqual([]);
+    const providerAddress = "registry.opentofu.org/takosjp/takosumi";
+    expect(
+      await readJson(join(outputRoot, providerAddress, "index.json")),
+    ).toEqual({ versions: {} });
+    expect(
+      await verifyNetworkMirrorLayout(outputRoot, [], { providerAddress }),
+    ).toEqual({ providerAddress, versions: [] });
+    expect(
+      await verifyLocalProviderMirrorSources({
+        localMirrorRoot: outputRoot,
+        manifests: [],
+        providerAddress,
+        checkTracked: false,
+      }),
+    ).toEqual([
+      {
+        path: `${providerAddress}/index.json`,
+        digest: sha256(
+          Buffer.from(`${JSON.stringify({ versions: {} }, null, 2)}\n`),
+        ),
+        classification: "derived-approved-index",
+      },
+    ]);
+  });
+
+  test("never materializes the historical quarantine even through the test seam", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "provider-quarantine-materialize-test-"),
+    );
+    temporaryRoots.push(root);
+    let fetches = 0;
+
+    await expect(
+      materializeUnapproved({
+        outputRoot: join(root, "mirror"),
+        manifestPath: PROVIDER_QUARANTINE_PATH,
+        cacheRoot: join(root, "cache"),
+        fetchImpl: async () => {
+          fetches += 1;
+          return new Response("unexpected fetch", { status: 500 });
+        },
+      }),
+    ).rejects.toThrow("quarantine is evidence-only");
+    expect(fetches).toBe(0);
+  });
+
+  test("fails closed on an approved entry before any fetch until signature verification exists", async () => {
+    const fixture = await makeReleaseFixture();
+    const registryRoot = join(fixture.root, "registry-authority");
+    await mkdir(join(registryRoot, "quarantine"), { recursive: true });
+    await mkdir(join(registryRoot, "approved"), { recursive: true });
+    await cp(
+      PROVIDER_QUARANTINE_PATH,
+      join(registryRoot, "quarantine", "1.0.0.json"),
+    );
+    await cp(
+      `${PROVIDER_QUARANTINE_PATH}.sha256`,
+      join(registryRoot, "quarantine", "1.0.0.json.sha256"),
+    );
+    const approvedManifestPath = join(registryRoot, "approved", "1.1.0.json");
+    const approvedDigest = await writeManifest(
+      approvedManifestPath,
+      fixture.manifest,
+    );
+    const quarantineDigest = sha256(await readFile(PROVIDER_QUARANTINE_PATH));
+    const registryPath = join(registryRoot, "registry.json");
+    await writeManifest(registryPath, {
+      schemaVersion: 1,
+      kind: "takosumi.provider-release-registry@v1",
+      providerAddress: "registry.opentofu.org/takosjp/takosumi",
+      retentionPolicy: "all-known-versions-required",
+      versions: [
+        {
+          version: "1.0.0",
+          classification: "historical-quarantine",
+          manifest: "quarantine/1.0.0.json",
+          sha256: quarantineDigest,
+        },
+        {
+          version: "1.1.0",
+          classification: "approved",
+          manifest: "approved/1.1.0.json",
+          sha256: approvedDigest,
+        },
+      ],
+    });
+    let fetches = 0;
+
+    await expect(
+      materializeProviderMirror({
+        outputRoot: join(fixture.root, "approved-mirror"),
+        registryPath,
+        cacheRoot: join(fixture.root, "approved-cache"),
+        fetchImpl: async () => {
+          fetches += 1;
+          return new Response("unexpected fetch", { status: 500 });
+        },
+      }),
+    ).rejects.toThrow("artifact-signature/transparency verifier");
+    expect(fetches).toBe(0);
+  });
+
   test("never admits a candidate manifest through the normal materializer", async () => {
     const fixture = await makeReleaseFixture();
     await expect(
