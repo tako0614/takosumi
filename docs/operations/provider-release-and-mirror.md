@@ -12,10 +12,12 @@ ServiceOffering, backend selection, or price.
 
 `provider/release/registry.json` plus its SHA-256 sidecar is the normal mirror
 admission authority. It lists every known immutable version. Historical
-quarantine entries remain materializable for compatibility; a corrected
-candidate does not enter the hosted mirror until a separately reviewed
-approved entry has artifact-signature and transparency evidence. Direct
-manifest selection exists only behind an explicit test-only environment seam.
+quarantine entries remain retained and validated for compatibility/audit, but
+they are never fetched, exposed, or indexed by the dashboard/Worker mirror. A
+corrected candidate does not enter the hosted mirror until a separately
+reviewed approved entry has artifact-signature and transparency evidence.
+Direct candidate-manifest selection exists only behind an explicit test-only
+environment seam; that seam does not permit quarantine materialization.
 
 ## Historical `1.0.0` quarantine
 
@@ -34,8 +36,9 @@ vcs.modified:          true
 provenance:            unknown-dirty
 ```
 
-These bytes may remain necessary for existing lock/state compatibility. They
-are not reproducible release evidence. Never upload a local rebuild to a
+These observations remain necessary for state-compatibility and migration
+proof. They are not reproducible release evidence or a publishable mirror
+source. Never upload a local rebuild or the retained historical bytes to a
 `1.0.0` path, even when its HCL schema appears unchanged.
 
 ## Normal check and generated mirror
@@ -47,29 +50,30 @@ cd dashboard && bun run build
 
 The first command verifies descriptor/registry/manifest digest sidecars, the
 independent candidate version, all-known-version retention, duplicate-version
-rule, and ignored local mirror drift. It never builds Go.
+rule, quarantine exclusion, and ignored local mirror drift. It never builds Go.
 The dashboard build removes the generated `dist/opentofu/providers` overlay,
-downloads or reuses a content-addressed cache entry for each exact reviewed
+downloads or reuses a content-addressed cache entry for each exact approved
 version/archive asset, verifies it, and copies the bytes unchanged. It then
-derives `index.json` by deterministically merging the version entries from all
-reviewed manifests. Adding `1.1.0` can change that aggregate catalog but cannot
-change any `1.0.0` byte. Missing, conflicting, or mismatched bytes fail the
-build. Files under ignored
+derives `index.json` by deterministically merging approved entries. Until an
+approved release exists, it emits an honest empty `{"versions":{}}` index and
+no version/archive paths. Missing, conflicting, or mismatched approved bytes
+fail the build. Files under ignored
 `dashboard/public/.../registry.opentofu.org` are generated only by the
 immutable materializer for local dev. Wrong, unreviewed, or tracked provider
 bytes fail the dev/build preflight and must be removed; an ignored source-tree
 rebuild is never selected as release authority.
 
-Run the connected installation proof separately:
+Run the local quarantine-exclusion proof separately:
 
 ```bash
 bun run provider:mirror:proof
 ```
 
-It configures the public HTTPS network mirror, pins `1.0.0`, runs OpenTofu init
-without a dev override or direct fallback, and verifies the lock/install
-evidence. Repository checks do not substitute for this live distribution
-proof.
+It validates the retained quarantine manifest, materializes the approved set
+with network access made fail-closed, and proves that the current empty set has
+only an empty aggregate index: no `1.0.0` entry, version document, or archive.
+It does not install or fetch the quarantined provider. Live deployment smoke
+must separately prove the same index and 404 behavior at the deployed origin.
 
 ## Candidate schema and old-state compatibility
 
@@ -92,12 +96,20 @@ also pinned, and implementation-source digests cover defaults and validators
 that OpenTofu schema JSON omits. Any removal, required/sensitive/type/nesting,
 default/validator change, or undeclared addition fails.
 
-The state proof uses only a temporary directory and a local fake endpoint. It
-installs exact public `1.0.0`, applies disposable state for all seven historical
-resource types, switches to the current candidate, requires a refresh-free
-no-op and read-only observe refresh, then switches back and requires an
-old-provider no-op before destroy. It prints no state values and uses no
-credential. It also guards the ObjectBucket compatibility correction that
+The state proof uses only a temporary directory, a local fake endpoint, and an
+operator-retained filesystem mirror supplied as:
+
+```bash
+TAKOSUMI_PROVIDER_QUARANTINE_ROOT=/operator/evidence/provider-1.0.0-mirror \
+  bun run provider:compatibility:state-proof
+```
+
+It verifies every retained version/archive byte against the quarantine
+authority, installs exact `1.0.0` without a network or direct fallback, applies
+disposable state for all seven historical resource types, switches to the
+current candidate, requires a refresh-free no-op and read-only observe refresh,
+then switches back and requires an old-provider no-op before destroy. It prints
+no state values and uses no credential. It also guards the ObjectBucket compatibility correction that
 keeps omission materialized as `standard` without a plan-time default forcing
 pre-field state to update. A second real current-provider apply proves the
 omitted create value is known `standard`. All proof subprocesses use an

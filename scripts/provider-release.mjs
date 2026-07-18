@@ -58,7 +58,8 @@ export async function runProviderReleaseCli(argv = process.argv.slice(2)) {
       );
       const result = await verifyNetworkMirrorLayout(
         resolve(args.root),
-        loaded.manifests,
+        loaded.approvedManifests,
+        { providerAddress: loaded.registry.providerAddress },
       );
       printJson({
         kind: "takosumi.provider-mirror-verification@v1",
