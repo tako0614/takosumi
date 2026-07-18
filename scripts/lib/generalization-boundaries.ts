@@ -25,7 +25,6 @@ const IMPLEMENTATION_ROOTS = [
   "core/",
   "dashboard/src/",
   "deploy/",
-  "mobile-kit/",
   "provider/",
   "providers/",
   "runner/",
@@ -855,8 +854,7 @@ const RULES: readonly BoundaryRule[] = [
     appliesTo: (path) =>
       path === "contract/capabilities.ts" ||
       path === "core/api/openapi.ts" ||
-      path === "dashboard/src/lib/runtime-capabilities.ts" ||
-      path === "mobile-kit/src/types.ts",
+      path === "dashboard/src/lib/runtime-capabilities.ts",
     patterns: [
       /\bTakosumiCommercialCapabilities\b/,
       /\b(?:commercialBilling|paymentEnforcement|operatorTenants)\b/,
@@ -871,7 +869,6 @@ const RULES: readonly BoundaryRule[] = [
     message:
       "shared clients and libraries must receive an explicit operator endpoint; the official hosted deployment is product composition, not a default authority",
     appliesTo: (path) =>
-      path.startsWith("mobile-kit/src/") ||
       path.startsWith("contract/") ||
       path.startsWith("core/") ||
       path.startsWith("accounts/") ||
@@ -974,7 +971,6 @@ const RULES: readonly BoundaryRule[] = [
       path.startsWith("core/") ||
       path.startsWith("accounts/") ||
       path.startsWith("dashboard/src/") ||
-      path.startsWith("mobile-kit/") ||
       path.startsWith("cli/"),
     patterns: [
       /\b(?:errorCode|findingCode|diagnosticCode)\s*\??\.\s*(?:startsWith|endsWith|includes|match|search)\s*\(/,
