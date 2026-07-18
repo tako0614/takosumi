@@ -59,6 +59,9 @@ const RESOURCE_SHAPE_PATHS = [
   "contract/resolution.ts",
   "contract/target.ts",
   "core/api/resource_routes.ts",
+  // Although mounted under the operator deploy-control seam, this route owns
+  // only Service Form-backed Resource/ResolutionLock migration semantics.
+  "core/api/deploy_control_resource_form_pin_routes.ts",
   "core/domains/resource-shape/",
   "dashboard/src/lib/resource-shapes.ts",
   "dashboard/src/views/resources/",

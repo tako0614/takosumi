@@ -149,6 +149,16 @@ test("deploy_control_internal_routes — internal seam endpoints respond with 50
       {},
     ],
     [
+      "POST",
+      "/internal/v1/workspaces/ws_abcdef12/migrations/resource-form-pins/backfill",
+      {},
+    ],
+    [
+      "POST",
+      "/internal/v1/workspaces/ws_abcdef12/migrations/resource-form-pins/restore",
+      {},
+    ],
+    [
       "GET",
       "/internal/v1/workspaces/ws_abcdef12/migrations/output-interfaces",
       undefined,
