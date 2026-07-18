@@ -124,10 +124,19 @@ Deploy the fence-aware Worker version before entering the contract-migration
 window. The apply command atomically acquires a deterministic maintenance
 fence and installs write-block triggers on existing user tables, waits five
 seconds for request reads to drain, and then runs each migration. Versions 24
-through 43 submit the complete migration statements and their
-`schema_migrations` insert as one D1 batch transaction. Inside that transaction
-only, an uncommitted bypass permits the migration writes; requests always see
-the blocking state. Rebuilt tables receive their trigger again before commit.
+through 47 submit the complete migration statements and their
+`schema_migrations` insert as one atomic statement group. Ordinary groups use
+the D1 `/query` endpoint. If a group contains compound `CREATE TRIGGER` DDL,
+the operator REST adapter renders the whole group as one SQL file and uses the
+official D1 Import API (`init` / presigned upload / `ingest` / `poll`) because
+the `/query` parser does not accept that DDL reliably. The adapter validates the
+uploaded file ETag, never sends the Cloudflare bearer token to the presigned
+upload origin, and reports success only after import completion. The Import API
+blocks database access while it applies the file atomically; this is only a
+transport change and does not weaken or replace the canonical trigger fence.
+Inside the transaction only, an uncommitted bypass permits the migration
+writes; requests always see the blocking state. Rebuilt tables receive their
+trigger again before commit.
 
 `fence` installs the same durable maintenance record and write-block triggers
 without running a migration or releasing the fence:
