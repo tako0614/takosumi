@@ -15,11 +15,11 @@
   ],
   "toolchain": {
     "go": {
-      "version": "go1.26.0",
-      "path": "/usr/lib/go-1.26/bin/go",
-      "sha256": "170f0aeacbfecf200f42cfa837034239860b50dc8f62f664258b887a1f0776d1",
-      "distributionRoot": "/usr/lib/go-1.26",
-      "distributionSha256": "fbd2b717c7ca4223047e0dfb149fda783348aadfbd9d0d06eebe7846127d166a"
+      "version": "go1.26.5",
+      "path": "/usr/lib/go-1.26.5/bin/go",
+      "sha256": "8da5fd321795754b994c64e3eb8a5a14ff47bd285559a7e876f3c79abafc67f9",
+      "distributionRoot": "/usr/lib/go-1.26.5",
+      "distributionSha256": "3d6ed2f34883a9a97c8ef995e13e0964185bb3996caa132ec307ab8661a8bc8d"
     },
     "zip": {
       "version": "Info-ZIP 3.0",
