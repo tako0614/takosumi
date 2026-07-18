@@ -493,7 +493,7 @@ function maintenanceTriggerStatements(
        ), 0)
        begin
          select raise(abort, 'takosumi control schema maintenance');
-       end`,
+       end;`,
     ),
   );
 }
