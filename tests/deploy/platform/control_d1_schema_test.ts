@@ -1065,6 +1065,99 @@ test("control D1 REST adapter emits the documented single and batch shapes", asy
   expect(JSON.stringify(requests)).not.toContain("secret-token");
 });
 
+test("control D1 REST maintenance trigger DDL is parser-complete", async () => {
+  type RestQuery = {
+    readonly sql: string;
+    readonly params?: readonly unknown[];
+  };
+
+  let maintenanceRow: Record<string, unknown> | null = null;
+  let triggerSql: readonly string[] = [];
+  const database = new CloudflareControlD1RestDatabase({
+    accountId: "account_123",
+    databaseId: "database_456",
+    apiToken: "secret-token",
+    fetch: async (_input, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as
+        RestQuery | { readonly batch: readonly RestQuery[] };
+      if ("batch" in body) {
+        triggerSql = body.batch
+          .map((query) => query.sql)
+          .filter((sql) => /^\s*create trigger\b/iu.test(sql));
+        // D1's REST parser rejects a standalone CREATE TRIGGER body ending in
+        // bare `END` as incomplete even though bun:sqlite accepts it.
+        if (triggerSql.some((sql) => !/\bend;\s*$/iu.test(sql))) {
+          return Response.json(
+            {
+              success: false,
+              errors: [
+                { code: 7500, message: "incomplete input: SQLITE_ERROR" },
+              ],
+            },
+            { status: 400 },
+          );
+        }
+        const upsert = body.batch.find((query) =>
+          /^\s*insert into _takosumi_control_schema_maintenance\b/iu.test(
+            query.sql,
+          ),
+        );
+        const params = upsert?.params ?? [];
+        maintenanceRow = {
+          active: 1,
+          migration_bypass: 0,
+          fence_id: params[0],
+          source_commit: params[1],
+          manifest_digest: params[2],
+          environment: params[3],
+          activated_at: params[4],
+          released_at: null,
+          database_role: params[5],
+          release_policy: params[6],
+          database_id: params[7],
+          source_export_sha256: params[8],
+        };
+        return Response.json({
+          success: true,
+          result: body.batch.map(() => ({ success: true, results: [] })),
+        });
+      }
+      if (/name not like 'sqlite_%'/u.test(body.sql)) {
+        return Response.json({
+          success: true,
+          result: [{ success: true, results: [{ name: "workspaces" }] }],
+        });
+      }
+      if (/where type = 'table' and name = \?/u.test(body.sql)) {
+        return Response.json({
+          success: true,
+          result: [{ success: true, results: [] }],
+        });
+      }
+      if (/select active, migration_bypass/u.test(body.sql)) {
+        return Response.json({
+          success: true,
+          result: [{ success: true, results: [maintenanceRow] }],
+        });
+      }
+      throw new Error(`unexpected test query: ${body.sql}`);
+    },
+  });
+
+  await acquireControlD1MaintenanceFence(
+    database,
+    {
+      sourceCommit: SOURCE_COMMIT,
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "staging",
+    },
+    NOW,
+  );
+
+  expect(triggerSql).toHaveLength(3);
+  expect(triggerSql.every((sql) => /\bend;\s*$/iu.test(sql))).toBe(true);
+});
+
 test("control D1 REST failures expose only a stable code", async () => {
   const database = new CloudflareControlD1RestDatabase({
     accountId: "account_123",
