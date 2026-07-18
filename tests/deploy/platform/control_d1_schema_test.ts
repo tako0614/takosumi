@@ -18,6 +18,7 @@ import { ensureD1OpenTofuLedgerSchema } from "../../../worker/src/d1_opentofu_st
 import {
   acquireControlD1MaintenanceFence,
   assertControlD1MaintenanceInactive,
+  ControlD1MaintenanceError,
   readControlD1MaintenanceState,
   releaseControlD1MaintenanceFence,
 } from "../../../worker/src/d1_schema_maintenance.ts";
@@ -671,6 +672,62 @@ test("control D1 maintenance fence blocks direct writes and readiness", async ()
   }
 });
 
+test("control D1 maintenance guards user tables but never D1 internal _cf_KV", async () => {
+  const database = new SqliteControlD1Database();
+  try {
+    await database
+      .prepare(`create table "_cf_KV" (key text primary key, value text)`)
+      .run();
+    await database
+      .prepare(`create table user_records (id text primary key, value text)`)
+      .run();
+    await acquireControlD1MaintenanceFence(
+      database,
+      {
+        sourceCommit: SOURCE_COMMIT,
+        manifestDigest: `sha256:${"b".repeat(64)}`,
+        environment: "test",
+      },
+      NOW,
+    );
+
+    const triggers = await database
+      .prepare(
+        `select name, tbl_name from sqlite_master
+         where type = 'trigger' and name like '_takosumi_schema_fence_%'
+         order by name`,
+      )
+      .all<{ readonly name: string; readonly tbl_name: string }>();
+    expect(
+      (triggers.results ?? []).filter((row) => row.tbl_name === "_cf_KV"),
+    ).toEqual([]);
+    expect(
+      (triggers.results ?? [])
+        .filter((row) => row.tbl_name === "user_records")
+        .map((row) => row.name),
+    ).toEqual([
+      "_takosumi_schema_fence_user_records_delete",
+      "_takosumi_schema_fence_user_records_insert",
+      "_takosumi_schema_fence_user_records_update",
+    ]);
+
+    await expect(
+      database
+        .prepare(`insert into "_cf_KV" (key, value) values ('one', 'allowed')`)
+        .run(),
+    ).resolves.toMatchObject({ success: true });
+    await expect(
+      database
+        .prepare(
+          `insert into user_records (id, value) values ('one', 'blocked')`,
+        )
+        .run(),
+    ).rejects.toThrow("takosumi control schema maintenance");
+  } finally {
+    database.close();
+  }
+});
+
 test("control D1 maintenance state fails closed on missing, contradictory, or malformed state", async () => {
   for (const corrupt of [
     `delete from _takosumi_control_schema_maintenance where singleton = 1`,
@@ -886,6 +943,46 @@ test("control D1 CLI apply requires exact manifest confirmation", async () => {
     status: "failed",
     failureCode: "manifest_confirmation_required",
   });
+});
+
+test("control D1 CLI exposes stable maintenance codes without raw detail", async () => {
+  const planOutput: string[] = [];
+  expect(
+    await runControlD1SchemaCli(
+      ["plan"],
+      {},
+      (value) => planOutput.push(value),
+      { sourceCommit: SOURCE_COMMIT, now: () => NOW },
+    ),
+  ).toBe(0);
+  const manifestDigest = JSON.parse(planOutput.at(-1) ?? "{}")
+    .manifestDigest as string;
+  const output: string[] = [];
+  const code = await runControlD1SchemaCli(
+    ["apply", "--environment", "staging", "--confirm-manifest", manifestDigest],
+    {},
+    (value) => output.push(value),
+    {
+      sourceCommit: SOURCE_COMMIT,
+      now: () => NOW,
+      inspectSourceCheckout: async () => ({
+        head: SOURCE_COMMIT,
+        clean: true,
+      }),
+      createRemoteDatabase: () => {
+        throw new ControlD1MaintenanceError(
+          "maintenance_table_name_invalid:secret-token remote detail",
+        );
+      },
+    },
+  );
+  expect(code).toBe(1);
+  expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+    status: "failed",
+    failureCode: "maintenance_table_name_invalid",
+  });
+  expect(output.join("\n")).not.toContain("secret-token");
+  expect(output.join("\n")).not.toContain("remote detail");
 });
 
 test("control D1 CLI rejects a dirty source before opening the remote target", async () => {
