@@ -602,6 +602,9 @@ export async function loadProviderReleaseRegistry(
   const manifests = [];
   const manifestPaths = [];
   const manifestDigests = [];
+  const approvedManifests = [];
+  const approvedManifestPaths = [];
+  const approvedManifestDigests = [];
   for (const entry of registry.versions) {
     const manifestPath = join(registryRoot, safeRelativePath(entry.manifest));
     const snapshot = await readAuthorityJsonWithSidecar(
@@ -616,6 +619,12 @@ export async function loadProviderReleaseRegistry(
     if (entry.classification === "historical-quarantine") {
       validateQuarantineManifest(snapshot.value);
     } else {
+      if (snapshot.value?.kind !== "takosumi.provider-release@v1") {
+        throw new Error(
+          `approved provider ${entry.version} must reference a provider release manifest`,
+        );
+      }
+      validateReleaseManifest(snapshot.value);
       throw new Error(
         `approved provider ${entry.version} requires the not-yet-configured artifact-signature/transparency verifier`,
       );
@@ -628,6 +637,11 @@ export async function loadProviderReleaseRegistry(
     manifests.push(snapshot.value);
     manifestPaths.push(manifestPath);
     manifestDigests.push(snapshot.sha256);
+    if (entry.classification === "approved") {
+      approvedManifests.push(snapshot.value);
+      approvedManifestPaths.push(manifestPath);
+      approvedManifestDigests.push(snapshot.sha256);
+    }
   }
   return {
     registry,
@@ -636,6 +650,9 @@ export async function loadProviderReleaseRegistry(
     manifests,
     manifestPaths,
     manifestDigests,
+    approvedManifests,
+    approvedManifestPaths,
+    approvedManifestDigests,
   };
 }
 
@@ -1150,7 +1167,8 @@ export async function verifyProviderReleaseSource({
   const localAssets = await verifyLocalProviderMirrorSources({
     repoRoot,
     localMirrorRoot,
-    manifest: quarantine,
+    manifests: loadedRegistry.approvedManifests,
+    providerAddress: loadedRegistry.registry.providerAddress,
   });
 
   const retiredBuilder = await readFile(
@@ -1169,6 +1187,9 @@ export async function verifyProviderReleaseSource({
     packageVersion,
     quarantineVersion: quarantine.version,
     quarantineManifestDigest: quarantineDigest,
+    approvedMirrorVersions: loadedRegistry.approvedManifests.map(
+      (manifest) => manifest.version,
+    ),
     publicationStatus: descriptor.publicationPolicy.status,
     publicationReady: false,
     publicationBlockers: providerPublicationBlockers(compatibilityProof.status),
@@ -1192,22 +1213,40 @@ export async function verifyLocalProviderMirrorSources({
     "opentofu",
     "providers",
   ),
-  manifest,
+  manifests = [],
+  providerAddress,
   checkTracked = true,
 }) {
   const localAssets = [];
   if (!(await exists(localMirrorRoot))) return localAssets;
+  rejectDuplicateVersions(manifests);
+  const manifestProviderAddresses = [
+    ...new Set(manifests.map((manifest) => manifest.providerAddress)),
+  ];
+  if (manifestProviderAddresses.length > 1) {
+    throw new Error("local provider mirror manifests use different addresses");
+  }
+  const selectedProviderAddress =
+    providerAddress ?? manifestProviderAddresses[0] ?? PROVIDER_ADDRESS;
+  if (
+    manifestProviderAddresses.length === 1 &&
+    manifestProviderAddresses[0] !== selectedProviderAddress
+  ) {
+    throw new Error("local provider mirror address does not match manifests");
+  }
   const approvedAssets = new Map(
-    [manifest.mirror.indexObservation ?? manifest.mirror.derivedIndex]
-      .filter(Boolean)
-      .concat(manifest.mirror.assets)
+    manifests
+      .flatMap(normalizeManifestAssets)
       .map((asset) => [asset.path, asset]),
   );
+  const aggregateIndexPath = `${selectedProviderAddress}/index.json`;
+  const aggregateIndexBytes = derivedIndexBytes(manifests);
   for (const path of await listTree(localMirrorRoot)) {
     const normalizedPath = path.split(sep).join("/");
     if (normalizedPath === "README.md") continue;
+    const isAggregateIndex = normalizedPath === aggregateIndexPath;
     const asset = approvedAssets.get(normalizedPath);
-    if (!asset) {
+    if (!isAggregateIndex && !asset) {
       throw new Error(
         `provider public source contains an unreviewed mirror path: ${normalizedPath}`,
       );
@@ -1229,15 +1268,23 @@ export async function verifyLocalProviderMirrorSources({
     }
     const bytes = await readFile(localPath);
     const digest = sha256(bytes);
-    if (bytes.length !== asset.size || digest !== asset.sha256) {
+    if (isAggregateIndex) {
+      if (!bytes.equals(aggregateIndexBytes)) {
+        throw new Error(
+          `provider public source contains a non-canonical aggregate index at ${normalizedPath}: ${digest}`,
+        );
+      }
+    } else if (bytes.length !== asset.size || digest !== asset.sha256) {
       throw new Error(
         `provider public source contains rejected or unreviewed bytes at ${asset.path}: ${digest}`,
       );
     }
     localAssets.push({
-      path: asset.path,
+      path: normalizedPath,
       digest,
-      classification: "exact-public",
+      classification: isAggregateIndex
+        ? "derived-approved-index"
+        : "exact-approved-release",
     });
   }
   return localAssets;
@@ -1259,6 +1306,7 @@ export async function materializeProviderMirror({
   let manifests;
   let manifestDigests;
   let registryDigest;
+  let providerAddress;
   if (manifestPath || manifestPaths) {
     if (
       !testOnlyAllowUnapprovedManifest ||
@@ -1291,15 +1339,11 @@ export async function materializeProviderMirror({
     }
   } else {
     const loaded = await loadProviderReleaseRegistry(registryPath);
-    selectedManifestPaths = loaded.manifestPaths;
-    manifests = loaded.manifests;
-    manifestDigests = loaded.manifestDigests;
+    selectedManifestPaths = loaded.approvedManifestPaths;
+    manifests = loaded.approvedManifests;
+    manifestDigests = loaded.approvedManifestDigests;
     registryDigest = loaded.registryDigest;
-  }
-  if (manifests.length === 0) {
-    throw new Error(
-      "materialize requires at least one registered provider version",
-    );
+    providerAddress = loaded.registry.providerAddress;
   }
   rejectDuplicateVersions(manifests);
   if (artifactRoot) {
@@ -1314,6 +1358,11 @@ export async function materializeProviderMirror({
     if (releaseManifestEntries.length > 1) {
       throw new Error(
         "one artifact root cannot supply multiple release bundles",
+      );
+    }
+    if (releaseManifestEntries.length === 0) {
+      throw new Error(
+        "provider artifact root requires one approved release manifest",
       );
     }
     if (releaseManifestEntries.length === 1) {
@@ -1334,10 +1383,17 @@ export async function materializeProviderMirror({
   const providerAddresses = [
     ...new Set(manifests.map((manifest) => manifest.providerAddress)),
   ];
-  if (providerAddresses.length !== 1) {
+  if (providerAddresses.length > 1) {
     throw new Error(
       "one materialization may contain only one provider address",
     );
+  }
+  providerAddress = providerAddress ?? providerAddresses[0];
+  if (!providerAddress) {
+    throw new Error("materialize requires a provider address authority");
+  }
+  if (providerAddresses[0] && providerAddresses[0] !== providerAddress) {
+    throw new Error("provider registry address does not match its manifests");
   }
   const assets = manifests.flatMap(normalizeManifestAssets);
   rejectDuplicateAssets(assets);
@@ -1398,10 +1454,12 @@ export async function materializeProviderMirror({
       await verifyFile(destination, asset);
     }
 
-    const indexPath = join(stagingOutput, providerAddresses[0], "index.json");
+    const indexPath = join(stagingOutput, providerAddress, "index.json");
     await mkdir(dirname(indexPath), { recursive: true });
     await writeFile(indexPath, derivedIndexBytes(manifests), { flag: "wx" });
-    await verifyNetworkMirrorLayout(stagingOutput, manifests);
+    await verifyNetworkMirrorLayout(stagingOutput, manifests, {
+      providerAddress,
+    });
     if (await exists(resolvedOutput)) {
       const info = await lstat(resolvedOutput);
       if (info.isSymbolicLink())
@@ -1519,7 +1577,9 @@ async function fetchReviewedProviderAsset({
 function normalizeManifestAssets(manifest) {
   if (manifest.kind === "takosumi.provider-release-quarantine@v1") {
     validateQuarantineManifest(manifest);
-    return manifest.mirror.assets;
+    throw new Error(
+      "historical provider quarantine is evidence-only and cannot be materialized",
+    );
   }
   if (manifest.kind === "takosumi.provider-release@v1") {
     return validateReleaseManifest(manifest).mirror.assets.map((asset) => ({
@@ -1623,14 +1683,19 @@ function rejectDuplicateAssets(assets) {
   }
 }
 
-export async function verifyNetworkMirrorLayout(root, manifestOrManifests) {
+export async function verifyNetworkMirrorLayout(
+  root,
+  manifestOrManifests,
+  { providerAddress: providerAddressAuthority } = {},
+) {
   const manifests = Array.isArray(manifestOrManifests)
     ? manifestOrManifests
     : [manifestOrManifests];
   rejectDuplicateVersions(manifests);
-  const providerAddress = manifests[0]?.providerAddress;
+  const providerAddress =
+    providerAddressAuthority ?? manifests[0]?.providerAddress;
   if (!providerAddress)
-    throw new Error("mirror verification requires a manifest");
+    throw new Error("mirror verification requires a provider address");
   if (
     manifests.some((manifest) => manifest.providerAddress !== providerAddress)
   ) {

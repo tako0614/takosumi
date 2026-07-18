@@ -223,13 +223,18 @@ cd dashboard && bun run build
 
 `provider:assets` verifies the independent provider version source, its digest
 sidecar, and `provider/release/registry.json`. The registry is the only normal
-mirror-admission authority and retains every known version; a candidate
-manifest cannot be passed directly except through an explicit test-only seam.
+mirror-admission authority and retains every known version, but only an
+`approved` entry with the configured signature/transparency verifier may enter
+the mirror. A `historical-quarantine` entry is validated as retained evidence
+and is never fetched, exposed, or indexed. A candidate manifest cannot be
+passed directly except through an explicit test-only seam.
 Dashboard build materializes exact
 digest-pinned bytes into generated `dashboard/dist/opentofu/providers`; it
 copies immutable version/archive assets unchanged and fails closed when the
-exact historical bytes are unavailable. The mutable aggregate `index.json` is
-then derived by deterministically merging all reviewed version entries.
+exact approved bytes are unavailable. The mutable aggregate `index.json` is
+then derived by deterministically merging all approved version entries.
+When there are no approved releases, the honest result is an empty
+`{"versions":{}}` index and no version/archive paths.
 Local dev may place exact generated mirror bytes under the ignored
 `dashboard/public/opentofu/providers` path, but wrong, unreviewed, or tracked
 provider bytes fail before dev/build and are never release authority.
@@ -237,6 +242,9 @@ provider bytes fail before dev/build and are never release authority.
 Public `1.0.0` is historical quarantine: its version metadata and four
 archives are retained byte-for-byte, but its binary reports `dev` and dirty,
 unknown provenance. It must never be overwritten or described as reproducible.
+Those observations remain compatibility/audit evidence only; dashboard and
+Worker builds do not download or republish them and do not advertise `1.0.0`
+in the generated mirror index.
 The corrected provider version is the unpublished `1.1.0` candidate in
 `provider/release/version.json`.
 
@@ -469,8 +477,8 @@ the token is supported.
 
 Operator/admin fields:
 
-| Resource               | Required fields              | Optional fields                                                                                                 |
-| ---------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Resource               | Required fields              | Optional fields                                                                                                                             |
+| ---------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `takosumi_target_pool` | `name`, one or more `target` | public placement `classes`; complete module (`provider_source`, `module_template`, input/output JSON) or `plugin` implementation descriptor |
 
 `TargetPool` is the execution authority for each Resource Shape implementation.
