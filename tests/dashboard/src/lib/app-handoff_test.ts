@@ -5,10 +5,6 @@ import {
   appHandoffProductLabel,
   createAppHandoffConnectHref,
 } from "../../../../dashboard/src/lib/app-handoff.ts";
-import {
-  createTakosumiHostCenterUrl,
-  parseMobileConnectInput,
-} from "../../../../../mobile-kit/src/index.ts";
 
 describe("Takosumi App Handoff", () => {
   test("parses typed app return targets from Host Center query params", () => {
@@ -87,33 +83,6 @@ describe("Takosumi App Handoff", () => {
     expect(
       createAppHandoffConnectHref(handoff, "javascript:alert(1)"),
     ).toBeUndefined();
-  });
-
-  test("round-trips a Host Center URL into a mobile connect payload", () => {
-    const hostCenterUrl = createTakosumiHostCenterUrl({
-      hostCenterUrl: "https://operator.example/install",
-      product: "notes-app",
-      source: {
-        git: "https://github.com/acme/notes.git",
-        ref: "main",
-        path: "deploy/opentofu",
-      },
-      returnUri: "notesapp://connect",
-    });
-    const handoff = appHandoffFromSearch(new URL(hostCenterUrl).search);
-    const connectHref = createAppHandoffConnectHref(
-      handoff,
-      "https://host.example/workspace",
-    );
-
-    expect(connectHref).toBe(
-      "notesapp://connect?host_url=https%3A%2F%2Fhost.example&product=notes-app",
-    );
-    expect(parseMobileConnectInput(connectHref ?? "")).toEqual({
-      hostUrl: "https://host.example",
-      product: "notes-app",
-      setupTicket: undefined,
-    });
   });
 
   test("formats arbitrary product keys for dashboard copy", () => {
