@@ -40,6 +40,7 @@ Secrets / patching:
   patch-management.md
 
 State / migrations:
+  exact-formref-migration.md
   resource-state-adoption.md
   output-interface-migration.md
   form-package-installation.md
