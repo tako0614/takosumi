@@ -2,10 +2,25 @@
 
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  PROVIDER_QUARANTINE_PATH,
+  readJson,
+  sha256,
+  validateQuarantineManifest,
+  verifyManifestSidecar,
+} from "../../scripts/lib/provider-release.mjs";
 import {
   createProviderCompatibilityProofArtifact,
   DEFAULT_COMPATIBILITY_PROOF_PATH,
@@ -21,6 +36,14 @@ const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const authorities = await loadCompatibilityAuthorities();
 const descriptor = JSON.parse(
   await Bun.file(join(repoRoot, "provider/release/version.json")).text(),
+);
+const quarantine = validateQuarantineManifest(
+  await readJson(PROVIDER_QUARANTINE_PATH),
+);
+await verifyManifestSidecar(PROVIDER_QUARANTINE_PATH);
+const retainedQuarantineRoot = await verifyRetainedQuarantineRoot(
+  process.env.TAKOSUMI_PROVIDER_QUARANTINE_ROOT,
+  quarantine,
 );
 const historicalResourceRoutes = [
   ["ContainerService", "agent"],
@@ -126,8 +149,8 @@ resource "takosumi_target_pool" "legacy" {
   await Bun.write(
     oldConfig,
     `provider_installation {
-  network_mirror {
-    url     = "https://app.takosumi.com/opentofu/providers/"
+  filesystem_mirror {
+    path    = ${JSON.stringify(retainedQuarantineRoot)}
     include = ["${authorities.identity.provider.openTofuAddress}"]
   }
 }
@@ -190,15 +213,10 @@ resource "takosumi_target_pool" "legacy" {
     !lock.includes(
       `provider "${authorities.identity.provider.openTofuAddress}"`,
     ) ||
-    !lock.includes(
-      `version     = "${authorities.identity.provider.version}"`,
-    ) ||
-    !lock.includes(
-      `"zh:${authorities.identity.provider.linuxAmd64ArchiveSha256}"`,
-    )
+    !lock.includes(`version     = "${authorities.identity.provider.version}"`)
   ) {
     throw new Error(
-      "old-state proof lockfile did not bind the exact public 1.0.0 archive",
+      "old-state proof lockfile did not bind the exact retained quarantined 1.0.0 archive",
     );
   }
   const beforeOldApply = await requestCounts(origin);
@@ -317,7 +335,7 @@ resource "takosumi_target_pool" "legacy" {
       currentRefresh: "six-resource-observe-and-target-pool-get-exact",
       oldRollback: "six-resource-get-and-target-pool-get-exact",
     },
-    exactHistoricalNetworkMirror: true,
+    exactHistoricalFilesystemMirror: true,
     devOverrideUsedOnlyForCandidate: true,
   };
   if (terraformPath) {
@@ -614,6 +632,55 @@ async function requestCounts(origin: string) {
   if (!response.ok)
     throw new Error("failed to read compatibility server request counters");
   return (await response.json()) as Record<string, number>;
+}
+
+async function verifyRetainedQuarantineRoot(
+  input: string | undefined,
+  manifest: {
+    mirror: {
+      assets: Array<{ path: string; size: number; sha256: string }>;
+    };
+  },
+) {
+  if (!input) {
+    throw new Error(
+      "TAKOSUMI_PROVIDER_QUARANTINE_ROOT must point to the operator-retained 1.0.0 filesystem mirror",
+    );
+  }
+  if (!isAbsolute(input) || resolve(input) !== input) {
+    throw new Error(
+      "TAKOSUMI_PROVIDER_QUARANTINE_ROOT must be an absolute canonical path",
+    );
+  }
+  const rootInfo = await lstat(input);
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
+    throw new Error(
+      "retained provider quarantine root must be a real directory",
+    );
+  }
+  if ((await realpath(input)) !== input) {
+    throw new Error("retained provider quarantine root must not use symlinks");
+  }
+  for (const asset of manifest.mirror.assets) {
+    const path = join(input, asset.path);
+    const info = await lstat(path);
+    if (
+      !info.isFile() ||
+      info.isSymbolicLink() ||
+      (await realpath(path)) !== path
+    ) {
+      throw new Error(
+        `retained provider quarantine asset is unsafe: ${asset.path}`,
+      );
+    }
+    const bytes = await readFile(path);
+    if (bytes.length !== asset.size || sha256(bytes) !== asset.sha256) {
+      throw new Error(
+        `retained provider quarantine asset drifted: ${asset.path}`,
+      );
+    }
+  }
+  return input;
 }
 
 function findCommand(command: string, environment: NodeJS.ProcessEnv) {
