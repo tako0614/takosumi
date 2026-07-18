@@ -9,7 +9,6 @@ License: AGPL-3.0-only
 Files:
  accounts/contract/*
  cli/*
- mobile-kit/*
  provider/*
  examples/*
 Copyright: 2026 Takos Contributors
