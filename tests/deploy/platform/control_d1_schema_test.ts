@@ -36,6 +36,171 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
+type RestQuery = {
+  readonly sql: string;
+  readonly params?: readonly (string | number | null)[];
+};
+
+function createD1RestAndImportFetch(
+  backing: SqliteControlD1Database,
+  options: { readonly pendingPolls?: number } = {},
+) {
+  const uploads = new Map<string, string>();
+  const filenames = new Map<string, string>();
+  const bookmarks = new Map<string, { etag: string; remaining: number }>();
+  const completed = new Set<string>();
+  const stats = {
+    importIngests: 0,
+    polls: 0,
+    queryTriggerRejections: 0,
+    uploadedSql: [] as string[],
+    uploadAuthorizationHeaders: [] as (string | null)[],
+  };
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === "d1-import-upload.example.test") {
+      const etag = url.pathname.slice(1);
+      const sql = String(init?.body ?? "");
+      uploads.set(etag, sql);
+      stats.uploadedSql.push(sql);
+      stats.uploadAuthorizationHeaders.push(
+        new Headers(init?.headers).get("authorization"),
+      );
+      return new Response(null, {
+        status: 200,
+        headers: { etag: `"${etag}"` },
+      });
+    }
+
+    const body = JSON.parse(String(init?.body ?? "{}")) as
+      | RestQuery
+      | { readonly batch: readonly RestQuery[] }
+      | {
+          readonly action: "init" | "ingest";
+          readonly etag: string;
+          readonly filename?: string;
+        }
+      | { readonly action: "poll"; readonly current_bookmark: string };
+    if (url.pathname.endsWith("/import")) {
+      if (!("action" in body)) throw new Error("missing import action");
+      if (body.action === "init") {
+        if (completed.has(body.etag)) {
+          return Response.json({
+            success: true,
+            result: { status: "complete", success: true },
+          });
+        }
+        const filename = `control-${body.etag}.sql`;
+        filenames.set(filename, body.etag);
+        return Response.json({
+          success: true,
+          result: {
+            filename,
+            upload_url: `https://d1-import-upload.example.test/${body.etag}`,
+          },
+        });
+      }
+      if (body.action === "ingest") {
+        const etag = filenames.get(body.filename ?? "");
+        const sql = etag ? uploads.get(etag) : undefined;
+        if (!etag || etag !== body.etag || !sql) {
+          return Response.json({
+            success: true,
+            result: { status: "error", error: "missing upload" },
+          });
+        }
+        try {
+          backing.exec(`begin immediate;\n${sql}\ncommit;`);
+        } catch (error) {
+          return Response.json({
+            success: true,
+            result: { status: "error", error: String(error) },
+          });
+        }
+        stats.importIngests += 1;
+        const remaining = options.pendingPolls ?? 0;
+        if (remaining === 0) {
+          completed.add(etag);
+          return Response.json({
+            success: true,
+            result: { status: "complete", success: true },
+          });
+        }
+        const bookmark = `bookmark-${etag}`;
+        bookmarks.set(bookmark, { etag, remaining });
+        return Response.json({
+          success: true,
+          result: { at_bookmark: bookmark },
+        });
+      }
+      if (body.action === "poll") {
+        stats.polls += 1;
+        const current = bookmarks.get(body.current_bookmark);
+        if (!current) {
+          return Response.json({
+            success: true,
+            result: { status: "error", error: "unknown bookmark" },
+          });
+        }
+        if (current.remaining > 1) {
+          bookmarks.set(body.current_bookmark, {
+            ...current,
+            remaining: current.remaining - 1,
+          });
+          return Response.json({ success: true, result: {} });
+        }
+        completed.add(current.etag);
+        bookmarks.delete(body.current_bookmark);
+        return Response.json({
+          success: true,
+          result: { status: "complete", success: true },
+        });
+      }
+    }
+
+    if (!url.pathname.endsWith("/query") || "action" in body) {
+      throw new Error(`unexpected test request: ${url}`);
+    }
+    const queries = "batch" in body ? body.batch : [body];
+    if (
+      queries.some((query) =>
+        query.sql.trimStart().toUpperCase().startsWith("CREATE TRIGGER"),
+      )
+    ) {
+      stats.queryTriggerRejections += 1;
+      return Response.json(
+        {
+          success: false,
+          errors: [{ code: 7500, message: "incomplete input: SQLITE_ERROR" }],
+        },
+        { status: 400 },
+      );
+    }
+    try {
+      const result =
+        "batch" in body
+          ? await backing.batch(
+              body.batch.map((query) =>
+                backing.prepare(query.sql).bind(...(query.params ?? [])),
+              ),
+            )
+          : [
+              await backing
+                .prepare(body.sql)
+                .bind(...(body.params ?? []))
+                .all(),
+            ];
+      return Response.json({ success: true, result });
+    } catch {
+      return Response.json(
+        { success: false, errors: [{ code: 7500, message: "SQLITE_ERROR" }] },
+        { status: 400 },
+      );
+    }
+  };
+  return { fetch, stats };
+}
+
 async function seedLiveV24ConvergenceRows(
   database: D1Database,
   environment: "staging" | "production",
@@ -1065,97 +1230,169 @@ test("control D1 REST adapter emits the documented single and batch shapes", asy
   expect(JSON.stringify(requests)).not.toContain("secret-token");
 });
 
-test("control D1 REST maintenance trigger DDL is parser-complete", async () => {
-  type RestQuery = {
-    readonly sql: string;
-    readonly params?: readonly unknown[];
-  };
-
-  let maintenanceRow: Record<string, unknown> | null = null;
-  let triggerSql: readonly string[] = [];
+test("control D1 REST imports compound trigger batches and resolves only after poll completion", async () => {
+  const backing = new SqliteControlD1Database();
+  const { fetch, stats } = createD1RestAndImportFetch(backing, {
+    pendingPolls: 2,
+  });
   const database = new CloudflareControlD1RestDatabase({
     accountId: "account_123",
     databaseId: "database_456",
     apiToken: "secret-token",
-    fetch: async (_input, init) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as
-        RestQuery | { readonly batch: readonly RestQuery[] };
-      if ("batch" in body) {
-        triggerSql = body.batch
-          .map((query) => query.sql)
-          .filter((sql) => /^\s*create trigger\b/iu.test(sql));
-        // D1's REST parser rejects a standalone CREATE TRIGGER body ending in
-        // bare `END` as incomplete even though bun:sqlite accepts it.
-        if (triggerSql.some((sql) => !/\bend;\s*$/iu.test(sql))) {
-          return Response.json(
-            {
-              success: false,
-              errors: [
-                { code: 7500, message: "incomplete input: SQLITE_ERROR" },
-              ],
-            },
-            { status: 400 },
-          );
-        }
-        const upsert = body.batch.find((query) =>
-          /^\s*insert into _takosumi_control_schema_maintenance\b/iu.test(
-            query.sql,
-          ),
-        );
-        const params = upsert?.params ?? [];
-        maintenanceRow = {
-          active: 1,
-          migration_bypass: 0,
-          fence_id: params[0],
-          source_commit: params[1],
-          manifest_digest: params[2],
-          environment: params[3],
-          activated_at: params[4],
-          released_at: null,
-          database_role: params[5],
-          release_policy: params[6],
-          database_id: params[7],
-          source_export_sha256: params[8],
-        };
-        return Response.json({
-          success: true,
-          result: body.batch.map(() => ({ success: true, results: [] })),
-        });
-      }
-      if (/name not like 'sqlite_%'/u.test(body.sql)) {
-        return Response.json({
-          success: true,
-          result: [{ success: true, results: [{ name: "workspaces" }] }],
-        });
-      }
-      if (/where type = 'table' and name = \?/u.test(body.sql)) {
-        return Response.json({
-          success: true,
-          result: [{ success: true, results: [] }],
-        });
-      }
-      if (/select active, migration_bypass/u.test(body.sql)) {
-        return Response.json({
-          success: true,
-          result: [{ success: true, results: [maintenanceRow] }],
-        });
-      }
-      throw new Error(`unexpected test query: ${body.sql}`);
+    fetch,
+    importPollIntervalMilliseconds: 0,
+    wait: async () => {},
+  });
+  const value = "quote'\n-- ? /* */\u0000雪";
+  try {
+    const statements = [
+      database.prepare(
+        `create table demo (id text primary key, value text, optional integer)`,
+      ),
+      database.prepare(
+        `create trigger demo_blocked_insert
+         before insert on demo
+         when new.id = 'blocked ?'
+         begin
+           select raise(abort, 'blocked ?');
+         end;`,
+      ),
+      database
+        .prepare(
+          `insert into demo (id, value, optional) values (?, ?, ?) /* ? */`,
+        )
+        .bind("safe", value, null),
+    ];
+    const result = await database.batch(statements);
+
+    expect(result).toHaveLength(statements.length);
+    expect(result.every((entry) => entry.success === true)).toBe(true);
+    expect(stats.polls).toBe(2);
+    expect(stats.importIngests).toBe(1);
+    expect(stats.queryTriggerRejections).toBe(0);
+    expect(stats.uploadAuthorizationHeaders).toEqual([null]);
+    expect(stats.uploadedSql).toHaveLength(1);
+    expect(stats.uploadedSql[0]).not.toContain(value);
+    expect(stats.uploadedSql[0]).toContain("CAST(X'");
+    expect(stats.uploadedSql[0]).not.toContain("end;;");
+    expect(stats.uploadedSql[0]).toContain(
+      "optional integer);\ncreate trigger",
+    );
+    expect(
+      await backing
+        .prepare(`select id, hex(value) as value_hex, optional from demo`)
+        .first(),
+    ).toEqual({
+      id: "safe",
+      value_hex: [...new TextEncoder().encode(value)]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("")
+        .toUpperCase(),
+      optional: null,
+    });
+    await expect(
+      backing
+        .prepare(
+          `insert into demo (id, value, optional) values ('blocked ?', '', null)`,
+        )
+        .run(),
+    ).rejects.toThrow("blocked ?");
+  } finally {
+    backing.close();
+  }
+});
+
+test("control D1 REST compound renderer fails closed on bind mismatch", async () => {
+  let fetchCalls = 0;
+  const database = new CloudflareControlD1RestDatabase({
+    accountId: "account_123",
+    databaseId: "database_456",
+    apiToken: "secret-token",
+    fetch: async () => {
+      fetchCalls += 1;
+      throw new Error("fetch must not run");
     },
   });
+  await expect(
+    database.batch([
+      database.prepare(
+        `create trigger invalid before insert on demo begin select ?; end;`,
+      ),
+    ]),
+  ).rejects.toThrow("query_parameter_mismatch");
+  expect(fetchCalls).toBe(0);
+});
 
-  await acquireControlD1MaintenanceFence(
-    database,
-    {
+test("control D1 REST import transport converges the live v24 fixture through canonical v47 triggers", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const backing = new SqliteControlD1Database();
+  const sql = await Bun.file(
+    resolve(
+      import.meta.dir,
+      "../../fixtures/control-d1-live-v24/staging-schema.sql",
+    ),
+  ).text();
+  try {
+    backing.exec(sql);
+    for (const migration of plan.migrations.filter(
+      (entry) => entry.version <= 24,
+    )) {
+      await backing
+        .prepare(
+          `insert into schema_migrations (version, name, checksum, applied_at)
+           values (?, ?, ?, ?)`,
+        )
+        .bind(migration.version, migration.name, migration.checksum, NOW)
+        .run();
+    }
+    await seedLiveV24ConvergenceRows(backing, "staging");
+    const before = await readLiveV24ConvergenceRows(backing);
+    const { fetch, stats } = createD1RestAndImportFetch(backing);
+    const database = new CloudflareControlD1RestDatabase({
+      accountId: "account_123",
+      databaseId: "database_456",
+      apiToken: "secret-token",
+      fetch,
+      importPollIntervalMilliseconds: 0,
+      wait: async () => {},
+    });
+
+    const applied = await applyControlD1Schema(database, plan, {
       sourceCommit: SOURCE_COMMIT,
-      manifestDigest: `sha256:${"b".repeat(64)}`,
       environment: "staging",
-    },
-    NOW,
-  );
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+    });
 
-  expect(triggerSql).toHaveLength(3);
-  expect(triggerSql.every((sql) => /\bend;\s*$/iu.test(sql))).toBe(true);
+    expect(applied.beforeMigrationVersions.at(-1)).toBe(24);
+    expect(applied.appliedMigrationVersions).toEqual(
+      plan.migrations
+        .filter((entry) => entry.version >= 25)
+        .map((entry) => entry.version),
+    );
+    expect(applied.verification.status).toBe("ready");
+    expect(applied.verification.latestMigrationVersion).toBe(47);
+    expect(stats.importIngests).toBeGreaterThan(0);
+    expect(stats.queryTriggerRejections).toBe(0);
+    expect(await readLiveV24ConvergenceRows(backing)).toEqual(before);
+    const formTriggers = await backing
+      .prepare(
+        `select name from sqlite_master
+         where type = 'trigger' and name like '%_form_identity_pair_%'
+         order by name`,
+      )
+      .all<{ readonly name: string }>();
+    expect((formTriggers.results ?? []).map((row) => row.name)).toEqual([
+      "resolution_locks_form_identity_pair_insert",
+      "resolution_locks_form_identity_pair_update",
+      "resource_shapes_form_identity_pair_insert",
+      "resource_shapes_form_identity_pair_update",
+    ]);
+  } finally {
+    backing.close();
+  }
 });
 
 test("control D1 REST failures expose only a stable code", async () => {
