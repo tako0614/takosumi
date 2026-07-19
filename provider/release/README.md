@@ -21,7 +21,7 @@ version.
   retained for compatibility but is never reproducible release evidence.
 - `compatibility/1.0.0-state-identity.json` pins the non-secret structural
   schema identity read from those exact public bytes. The adjacent `1.1.1`
-  delta policy classifies four new resources and nine optional attributes,
+  delta policy classifies five new resources and nine optional attributes,
   rejects their inclusion in the `1.0.1` patch lane, and keeps them together
   only in the unpublished minor candidate.
 - Release builds are explicit: a clean `provider/v<version>` tag and its exact

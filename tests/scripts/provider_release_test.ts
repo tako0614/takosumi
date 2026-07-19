@@ -185,6 +185,37 @@ describe("provider release source", () => {
     expect(second.goDistribution).toEqual(first.goDistribution);
   });
 
+  test("keeps the fixture Go version exact while delegating other commands", async () => {
+    const fixture = await makeTaggedSourceFixture();
+    const descriptor = await readJson(
+      join(fixture.repoRoot, "provider", "release", "version.json"),
+    );
+    const actualGo = await executablePath("go");
+    const exactVersion = spawnSync(
+      descriptor.toolchain.go.path,
+      ["env", "GOVERSION"],
+      { encoding: "utf8" },
+    );
+    const delegated = spawnSync(descriptor.toolchain.go.path, ["env", "GOOS"], {
+      encoding: "utf8",
+    });
+    const actual = spawnSync(actualGo, ["env", "GOOS"], {
+      encoding: "utf8",
+    });
+    const inspected = spawnSync(
+      descriptor.toolchain.go.path,
+      ["version", "-m", actualGo],
+      { encoding: "utf8" },
+    );
+
+    expect(exactVersion.status).toBe(0);
+    expect(exactVersion.stdout.trim()).toBe("go1.26.5");
+    expect(delegated.status).toBe(0);
+    expect(delegated.stdout).toBe(actual.stdout);
+    expect(inspected.status).toBe(0);
+    expect(inspected.stdout.split("\n")[0]).toEndWith(": go1.26.5");
+  });
+
   test("normalizes exactly zero or the complete pinned Go module-cache extras", async () => {
     const fixture = await makeTaggedSourceFixture();
     const descriptor = await readJson(
@@ -949,7 +980,7 @@ async function pinFixtureToolchain(repoRoot: string, descriptor: any) {
   const actualZip = await executablePath("zip");
   const actualUnzip = await executablePath("unzip");
 
-  const goWrapper = await writeToolWrapper(
+  const goWrapper = await writeGoToolWrapper(
     join(toolchainRoot, "go", "bin", "go"),
     actualGo,
   );
@@ -1009,8 +1040,23 @@ async function executablePath(name: string) {
   throw new Error(`fixture tool ${name} is unavailable on PATH`);
 }
 
-async function writeToolWrapper(path: string, target: string) {
-  const bytes = Buffer.from(`#!/bin/sh\nexec ${JSON.stringify(target)} "$@"\n`);
+async function writeGoToolWrapper(path: string, target: string) {
+  const bytes = Buffer.from(
+    [
+      "#!/bin/sh",
+      'if [ "$#" -eq 2 ] && [ "$1" = "env" ] && [ "$2" = "GOVERSION" ]; then',
+      "  printf '%s\\n' go1.26.5",
+      "  exit 0",
+      "fi",
+      'if [ "$#" -eq 3 ] && [ "$1" = "version" ] && [ "$2" = "-m" ]; then',
+      `  output="$(${JSON.stringify(target)} "$@")" || exit $?`,
+      `  printf '%s\\n' "$output" | sed '1s/: go[^[:space:]]*$/: go1.26.5/'`,
+      "  exit 0",
+      "fi",
+      `exec ${JSON.stringify(target)} "$@"`,
+      "",
+    ].join("\n"),
+  );
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, bytes);
   await chmod(path, 0o755);
