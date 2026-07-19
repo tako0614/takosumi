@@ -76,8 +76,8 @@ describe("provider release workflow authority", () => {
       contents: "write",
       "id-token": "write",
     });
-    expect(workflow.jobs.candidate["runs-on"]).toBe("ubuntu-26.04");
-    expect(workflow.jobs.promote["runs-on"]).toBe("ubuntu-26.04");
+    expect(workflow.jobs.candidate["runs-on"]).toBe("ubuntu-24.04");
+    expect(workflow.jobs.promote["runs-on"]).toBe("ubuntu-24.04");
     expect(workflow.env.BUN_VERSION).toBe("1.3.14");
     expect(workflow.env.GO_VERSION).toBe("1.26.5");
     expect(releaseDescriptor.toolchain.go.version).toBe(
@@ -126,17 +126,48 @@ describe("provider release workflow authority", () => {
     ).toHaveLength(2);
     expect(source.match(/value\.Path.*value\.Version/gu)).toHaveLength(2);
     expect(source).not.toContain('source_root="$(go env GOROOT)"');
+    const copyToolchainMarker =
+      'sudo cp -a "${source_root}/." "${target_root}/"';
+    const makeWritableMarker =
+      'sudo chown -R "$(id -u):$(id -g)" "${target_root}"';
+    const normalizeToolchainMarker =
+      "bun scripts/provider-release.mjs normalize-toolchain";
+    const restoreExecutionMarker =
+      'find "${target_root}/bin" "${target_root}/pkg/tool" -type f -exec chmod 0555 {} +';
     const verifyToolchainMarker =
       "bun scripts/provider-release.mjs verify-toolchain";
     const executeGoMarker = '"${target_root}/bin/go" version';
+    expect(source.match(/sudo cp -a "\$\{source_root\}\/\."/gu)).toHaveLength(
+      2,
+    );
+    expect(source).not.toContain("-name go.mod -delete");
+    expect(
+      source.match(/provider-release\.mjs normalize-toolchain/gu),
+    ).toHaveLength(2);
+    expect(source.match(/-exec chmod 0555 \{\} \+/gu)).toHaveLength(2);
+    expect(
+      source.match(/provider-release\.mjs verify-toolchain/gu),
+    ).toHaveLength(2);
     let searchFrom = 0;
     for (let index = 0; index < 2; index += 1) {
+      const copyAt = source.indexOf(copyToolchainMarker, searchFrom);
+      const writableAt = source.indexOf(makeWritableMarker, searchFrom);
+      const normalizeAt = source.indexOf(normalizeToolchainMarker, searchFrom);
+      const restoreAt = source.indexOf(restoreExecutionMarker, searchFrom);
       const verifyAt = source.indexOf(verifyToolchainMarker, searchFrom);
       const executeAt = source.indexOf(executeGoMarker, searchFrom);
-      expect(verifyAt).toBeGreaterThanOrEqual(searchFrom);
+      expect(copyAt).toBeGreaterThanOrEqual(searchFrom);
+      expect(writableAt).toBeGreaterThan(copyAt);
+      expect(normalizeAt).toBeGreaterThan(writableAt);
+      expect(restoreAt).toBeGreaterThan(normalizeAt);
+      expect(verifyAt).toBeGreaterThan(restoreAt);
       expect(executeAt).toBeGreaterThan(verifyAt);
       searchFrom = executeAt + executeGoMarker.length;
     }
+    expect(source.indexOf(copyToolchainMarker, searchFrom)).toBe(-1);
+    expect(source.indexOf(makeWritableMarker, searchFrom)).toBe(-1);
+    expect(source.indexOf(normalizeToolchainMarker, searchFrom)).toBe(-1);
+    expect(source.indexOf(restoreExecutionMarker, searchFrom)).toBe(-1);
     expect(source.indexOf(verifyToolchainMarker, searchFrom)).toBe(-1);
     expect(source.indexOf(executeGoMarker, searchFrom)).toBe(-1);
     expect(source).toContain("'$value | @uri'");
@@ -204,7 +235,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: "release-manifest.json",
         bundlePath: "/tmp/release-manifest.sigstore.json",
-        expectedTag: "provider/v1.1.0",
+        expectedTag: "provider/v1.1.1",
       }),
     ).rejects.toThrow("authority path must be absolute");
   });
@@ -219,7 +250,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: fixture.subjectPath,
         bundlePath: fixture.bundlePath,
-        expectedTag: "provider/v1.1.0",
+        expectedTag: "provider/v1.1.1",
         policyPath: fixture.policyPath,
       }),
     ).rejects.toThrow("provider publisher policy sidecar mismatch");
@@ -235,7 +266,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: fixture.subjectPath,
         bundlePath: fixture.bundlePath,
-        expectedTag: "provider/v1.1.0",
+        expectedTag: "provider/v1.1.1",
         policyPath: fixture.policyPath,
       }),
     ).rejects.toThrow("provider Sigstore TrustedRoot sidecar mismatch");
@@ -261,7 +292,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseTag({
         repoRoot: new URL("../../", import.meta.url).pathname,
         sourceCommit: "not-a-commit",
-        tag: "provider/v1.1.0",
+        tag: "provider/v1.1.1",
       }),
     ).rejects.toThrow("exact source commit");
   });
@@ -302,8 +333,8 @@ async function candidateFixture(options: {
     surfaceId: "takosumi-provider",
     repository: "https://github.com/tako0614/takosumi.git",
     sourceCommit: "1".repeat(40),
-    version: "1.1.0",
-    tag: "provider/v1.1.0",
+    version: "1.1.1",
+    tag: "provider/v1.1.1",
     workflowRunId: "123",
     builtAt: "2026-07-19T00:00:00.000Z",
     ociImages: [],

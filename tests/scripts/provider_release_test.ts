@@ -22,6 +22,8 @@ import {
   buildProviderRelease,
   loadProviderReleaseRegistry,
   materializeProviderMirror,
+  normalizeProviderReleaseGoDistribution,
+  probeProviderReleaseToolchainTree,
   providerPublicationBlockers,
   readJson,
   sha256,
@@ -51,7 +53,7 @@ afterEach(async () => {
 });
 
 describe("provider release source", () => {
-  test("uses an independent 1.1.0 candidate lane and immutable historical quarantine", async () => {
+  test("uses an independent 1.1.1 candidate lane and immutable historical quarantine", async () => {
     const packageJson = await readJson(
       join(PROVIDER_RELEASE_ROOT, "package.json"),
     );
@@ -62,9 +64,9 @@ describe("provider release source", () => {
       await readJson(PROVIDER_QUARANTINE_PATH),
     );
 
-    expect(descriptor.version).toBe("1.1.0");
+    expect(descriptor.version).toBe("1.1.1");
     expect(descriptor.version).not.toBe(packageJson.version);
-    expect(descriptor.tag).toBe("provider/v1.1.0");
+    expect(descriptor.tag).toBe("provider/v1.1.1");
     expect(descriptor.publishable).toBe(false);
     expect(quarantine.version).toBe("1.0.0");
     expect(quarantine.publishable).toBe(false);
@@ -92,7 +94,7 @@ describe("provider release source", () => {
       "2d7313612f827336b6bb2d0e4155c4af04f4717f18760f87ee18cd5f4c2dcad3",
     );
     const result = await verifyProviderReleaseSource();
-    expect(result.providerVersion).toBe("1.1.0");
+    expect(result.providerVersion).toBe("1.1.1");
     expect(result.quarantineVersion).toBe("1.0.0");
     expect(result.approvedMirrorVersions).toEqual([]);
     expect(
@@ -165,6 +167,74 @@ describe("provider release source", () => {
     ).rejects.toThrow("Go distribution digest mismatch");
   });
 
+  test("reports a deterministic content-only Go distribution tree", async () => {
+    const fixture = await makeTaggedSourceFixture();
+    const first = await probeProviderReleaseToolchainTree({
+      repoRoot: fixture.repoRoot,
+    });
+    const second = await probeProviderReleaseToolchainTree({
+      repoRoot: fixture.repoRoot,
+    });
+
+    expect(first.goDistribution.observedSha256).toBe(
+      first.goDistribution.expectedSha256,
+    );
+    expect(first.goDistribution.entries).toEqual([
+      expect.objectContaining({ kind: "file", path: "bin/go" }),
+    ]);
+    expect(second.goDistribution).toEqual(first.goDistribution);
+  });
+
+  test("normalizes exactly zero or the complete pinned Go module-cache extras", async () => {
+    const fixture = await makeTaggedSourceFixture();
+    const descriptor = await readJson(
+      join(fixture.repoRoot, "provider", "release", "version.json"),
+    );
+    const normalization = descriptor.toolchain.go.moduleCacheNormalization;
+    const root = descriptor.toolchain.go.distributionRoot;
+
+    const unchanged = await normalizeProviderReleaseGoDistribution({
+      repoRoot: fixture.repoRoot,
+    });
+    expect(unchanged).toMatchObject({
+      allowlistEntryCount: 20,
+      presentAllowlistEntryCount: 0,
+      beforeEntryCount: 1,
+      afterEntryCount: 1,
+    });
+
+    const partialPath = join(root, normalization.allowedExtraPaths[0]);
+    await mkdir(dirname(partialPath), { recursive: true });
+    await writeFile(partialPath, "module fixture\n");
+    await expect(
+      normalizeProviderReleaseGoDistribution({ repoRoot: fixture.repoRoot }),
+    ).rejects.toThrow("requires zero or all allowlisted extras");
+    await rm(partialPath);
+
+    for (const relativePath of normalization.allowedExtraPaths) {
+      const path = join(root, relativePath);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `module ${relativePath}\n`);
+    }
+    const normalized = await normalizeProviderReleaseGoDistribution({
+      repoRoot: fixture.repoRoot,
+    });
+    expect(normalized).toMatchObject({
+      allowlistSha256:
+        "bf81703f69ebc02518907e26893c3ae6de7eb2fd5de7a2892ac2890e6931ed78",
+      allowlistEntryCount: 20,
+      presentAllowlistEntryCount: 20,
+      beforeEntryCount: 21,
+      afterEntryCount: 1,
+      afterSha256: descriptor.toolchain.go.distributionSha256,
+    });
+
+    await writeFile(join(root, "unknown-extra"), "unknown\n");
+    await expect(
+      normalizeProviderReleaseGoDistribution({ repoRoot: fixture.repoRoot }),
+    ).rejects.toThrow("pre-normalization entry count mismatch");
+  });
+
   test("fails before dev/build when public contains wrong provider bytes", async () => {
     const root = await mkdtemp(join(tmpdir(), "provider-public-source-test-"));
     temporaryRoots.push(root);
@@ -190,7 +260,7 @@ describe("provider release source", () => {
         repoRoot: PROVIDER_RELEASE_ROOT,
         outputRoot: join(PROVIDER_RELEASE_ROOT, ".forbidden-provider-release"),
         sourceCommit: "a".repeat(40),
-        tag: "provider/v1.1.0",
+        tag: "provider/v1.1.1",
       }),
     ).rejects.toThrow("outside the tracked source repository");
   });
@@ -203,7 +273,7 @@ describe("provider release source", () => {
         repoRoot: PROVIDER_RELEASE_ROOT,
         outputRoot: root,
         sourceCommit: "a".repeat(40),
-        tag: "provider/v1.1.0",
+        tag: "provider/v1.1.1",
       }),
     ).rejects.toThrow("provider release output already exists");
   });
@@ -215,7 +285,7 @@ describe("provider release source", () => {
         repoRoot: fixture.repoRoot,
         outputRoot: fixture.outputRoot,
         sourceCommit: fixture.sourceCommit,
-        tag: "provider/v1.1.0",
+        tag: "provider/v1.1.1",
       }),
     ).rejects.toThrow("must be annotated and signed");
   });
@@ -231,7 +301,7 @@ describe("provider release source", () => {
           repoRoot: fixture.repoRoot,
           outputRoot: fixture.outputRoot,
           sourceCommit: fixture.sourceCommit,
-          tag: "provider/v1.1.0",
+          tag: "provider/v1.1.1",
           testOnlyAllowUnsignedTag: true,
         }),
       ).rejects.toThrow("go toolchain digest mismatch");
@@ -255,7 +325,7 @@ describe("provider release source", () => {
         repoRoot: fixture.repoRoot,
         outputRoot: fixture.outputRoot,
         sourceCommit: fixture.sourceCommit,
-        tag: "provider/v1.1.0",
+        tag: "provider/v1.1.1",
         testOnlyAllowUnsignedTag: true,
       });
       expect(result.bundleVerification.releaseEligibility).toBe("test-only");
@@ -271,7 +341,7 @@ describe("provider release source", () => {
         testOnlyAllowUnsignedManifest: true,
         fetchImpl: async (url) => {
           expect(String(url)).toBe(
-            "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/1.1.0.json",
+            "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/1.1.1.json",
           );
           return new Response("not found", { status: 404 });
         },
@@ -834,7 +904,7 @@ async function makeTaggedSourceFixture({ wrongGoDigest = false } = {}) {
   runGit(repoRoot, ["config", "user.name", "Provider Release Test"]);
   runGit(repoRoot, ["add", "."]);
   runGit(repoRoot, ["commit", "-q", "-m", "provider fixture"]);
-  runGit(repoRoot, ["tag", "provider/v1.1.0"]);
+  runGit(repoRoot, ["tag", "provider/v1.1.1"]);
   return {
     repoRoot,
     outputRoot: join(root, "output"),
@@ -863,7 +933,7 @@ async function makeCompleteTaggedSourceFixture() {
   runGit(repoRoot, ["config", "user.name", "Provider Release Test"]);
   runGit(repoRoot, ["add", "."]);
   runGit(repoRoot, ["commit", "-q", "-m", "complete provider fixture"]);
-  runGit(repoRoot, ["tag", "provider/v1.1.0"]);
+  runGit(repoRoot, ["tag", "provider/v1.1.1"]);
   return {
     repoRoot,
     outputRoot: join(root, "output"),
@@ -886,12 +956,12 @@ async function pinFixtureToolchain(repoRoot: string, descriptor: any) {
   const gitWrapper = await writeVersionedToolWrapper(
     join(toolchainRoot, "bin", "git"),
     actualGit,
-    "git version 2.53.0",
+    "git version 2.54.0",
   );
   const gpgvWrapper = await writeVersionedToolWrapper(
     join(toolchainRoot, "bin", "gpgv"),
     actualGpgv,
-    "gpgv (GnuPG) 2.4.8",
+    "gpgv (GnuPG) 2.4.4",
   );
   const goDistributionRoot = await realpath(join(toolchainRoot, "go"));
 
@@ -903,6 +973,7 @@ async function pinFixtureToolchain(repoRoot: string, descriptor: any) {
     .update(goWrapper.bytes)
     .update("\0")
     .digest("hex");
+  descriptor.toolchain.go.distributionEntryCount = 1;
   descriptor.toolchain.git.path = gitWrapper.path;
   descriptor.toolchain.git.sha256 = sha256(gitWrapper.bytes);
   descriptor.toolchain.gpgv.path = gpgvWrapper.path;

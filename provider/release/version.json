@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "providerAddress": "registry.opentofu.org/takosjp/takosumi",
   "modulePath": "github.com/takosjp/terraform-provider-takosumi",
-  "version": "1.1.0",
-  "tag": "provider/v1.1.0",
+  "version": "1.1.1",
+  "tag": "provider/v1.1.1",
   "status": "candidate",
   "publishable": false,
   "protocols": ["5.0"],
@@ -19,67 +19,99 @@
       "path": "/usr/lib/go-1.26.5/bin/go",
       "sha256": "8da5fd321795754b994c64e3eb8a5a14ff47bd285559a7e876f3c79abafc67f9",
       "distributionRoot": "/usr/lib/go-1.26.5",
-      "distributionSha256": "3d6ed2f34883a9a97c8ef995e13e0964185bb3996caa132ec307ab8661a8bc8d"
+      "distributionSha256": "246230185eb04379c22d2011ad0ef22de493e85c36aa7b2b2fdb5410d3023afd",
+      "distributionEntryCount": 11516,
+      "moduleCacheNormalization": {
+        "allowedExtraPaths": [
+          "src/cmd/compile/internal/ssa/_gen/go.mod",
+          "src/cmd/go.mod",
+          "src/cmd/objdump/testdata/testfilenum/go.mod",
+          "src/cmd/vet/testdata/rangeloop/go.mod",
+          "src/cmd/vet/testdata/stdversion/go.mod",
+          "src/crypto/internal/fips140/aes/_asm/ctr/go.mod",
+          "src/crypto/internal/fips140/aes/_asm/standard/go.mod",
+          "src/crypto/internal/fips140/aes/gcm/_asm/gcm/go.mod",
+          "src/crypto/internal/fips140/bigmod/_asm/go.mod",
+          "src/crypto/internal/fips140/edwards25519/field/_asm/go.mod",
+          "src/crypto/internal/fips140/nistec/_asm/go.mod",
+          "src/crypto/internal/fips140/sha256/_asm/go.mod",
+          "src/crypto/internal/fips140/sha3/_asm/go.mod",
+          "src/crypto/internal/fips140/sha512/_asm/go.mod",
+          "src/crypto/md5/_asm/go.mod",
+          "src/crypto/sha1/_asm/go.mod",
+          "src/debug/buildinfo/testdata/go117/go.mod",
+          "src/go.mod",
+          "src/runtime/_mkmalloc/go.mod",
+          "src/simd/archsimd/_gen/go.mod"
+        ],
+        "allowedExtraPathsSha256": "bf81703f69ebc02518907e26893c3ae6de7eb2fd5de7a2892ac2890e6931ed78"
+      }
     },
     "zip": {
       "version": "Info-ZIP 3.0",
       "path": "/usr/bin/zip",
-      "sha256": "4497470bb70f9ecb837817cc9de0d479951a3f25ef252c0bbcc9667af8c4a8c6"
+      "sha256": "7e79c60c3d1e182664a1bce9a70a13462e5da4a087ae5aa75950695ce7431b0a"
     },
     "unzip": {
       "version": "Info-ZIP UnZip 6.00",
       "path": "/usr/bin/unzip",
-      "sha256": "908a7d41dfe105c724737cb7f355f474186f51d645829af522265f01492a0cc7"
+      "sha256": "b582f2d782989a4d0105284b8032b076222eb29a6c141b5c53b792c864199396"
     },
     "git": {
-      "version": "git version 2.53.0",
+      "version": "git version 2.54.0",
       "path": "/usr/bin/git",
-      "sha256": "5516c9f362c29376ab9a499a33082f9f611941d8c75930c880e30ad109e39c9a"
+      "sha256": "f54a87f6253aab09ed7b522bd78ddeab509105b1043076209d89127e55877a48"
     },
     "gpgv": {
-      "version": "gpgv (GnuPG) 2.4.8",
+      "version": "gpgv (GnuPG) 2.4.4",
       "path": "/usr/bin/gpgv",
-      "sha256": "eecb5abc574311e2de4d9183eaa4cfbe794d0674f4939e02b255f2a826834212"
+      "sha256": "097b577cdf8b51dcc1fb42417d5ef3ca2e22b36a8ad16c9df4bd083a38fe476c"
     }
   },
   "runtimeTrust": {
     "files": [
       {
         "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
-        "sha256": "223b94a42758f2434da331cc0aa62db1af5b456481762c5caceefa1a2d1eb8fb"
+        "sha256": "1cd555ac46b7887edeaf3c42aac5408c8135e52f6b37870da2cf82d5fe14e829"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libassuan.so.0.8.6",
+        "sha256": "ae80d8e06d17cd95d654da3dd52f3a63ad241ea5fc001fa2f52ada5e640cfdd8"
       },
       {
         "path": "/usr/lib/x86_64-linux-gnu/libbz2.so.1.0.4",
-        "sha256": "4427719530606773e846e443d0288b32ee7fbdcf0a6f80638c5eda4c810e92eb"
+        "sha256": "218c4abdabce31161f3c2778762986d1fe06633705c7eb004a740946a5ccdfff"
       },
       {
         "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
-        "sha256": "d763925433ff9b757390549e1b20c085f5e6de27ae700fe89194178d96a8a2b0"
+        "sha256": "d8db8739a1633c972cec6a4fe0566bdcec6fd088f98723492ab0361f66238f75"
       },
       {
-        "path": "/usr/lib/x86_64-linux-gnu/libgcrypt.so.20.7.0",
-        "sha256": "0f13a440aae59ca3750f550ac029af6d282e43cccfa623d139a9b256f8b25174"
+        "path": "/usr/lib/x86_64-linux-gnu/libgcrypt.so.20.4.3",
+        "sha256": "9f872b8956edfa11a3ad093f509cf312e8d135dd801ca548c990daa214c03bd4"
       },
       {
-        "path": "/usr/lib/x86_64-linux-gnu/libgpg-error.so.0.41.1",
-        "sha256": "406246f1b22422bac96081fcf655ce2746e6ebcd72268497083eab9f57ddafa0"
+        "path": "/usr/lib/x86_64-linux-gnu/libgpg-error.so.0.34.0",
+        "sha256": "6cb18a007bfcb623029f4528a36b46578fea7dc34c2b505b8e6e0d99e6348cd1"
       },
       {
-        "path": "/usr/lib/x86_64-linux-gnu/libpcre2-8.so.0.14.0",
-        "sha256": "4a6b6b2078685b074869d75cb068664d7da6b3036df7bca0442b1bbbd4ac7e65"
+        "path": "/usr/lib/x86_64-linux-gnu/libnpth.so.0.1.2",
+        "sha256": "d5d934c9382c733e43edecf6d9ed446d9b9985591ee1c638413f4879c7f57f6a"
       },
       {
-        "path": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
-        "sha256": "fbf56b0e59287033b6579bbbeae2f9de2fe86ad5bf2bd44d44aad67a15109318"
+        "path": "/usr/lib/x86_64-linux-gnu/libpcre2-8.so.0.11.2",
+        "sha256": "e00576d71d81d3ba0cfa4903c835a44a8723aac96f72f79ff75200b4cff9071b"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libz.so.1.3",
+        "sha256": "9b64150b28505a33d6bc3ecf709c279f6de97a1c184dbda65d06ee4537f6d286"
       }
     ]
   },
   "publicationPolicy": {
     "mode": "candidate-only",
     "status": "blocked-external-review",
-    "reviewedSignerFingerprints": [
-      "2D479FAE54E1784AE0AF6E8F62EBC84B824E8A13"
-    ],
+    "reviewedSignerFingerprints": ["2D479FAE54E1784AE0AF6E8F62EBC84B824E8A13"],
     "signerKeyring": {
       "path": "provider/release/keys/provider-signers.gpg",
       "sha256": "6b49405f7ba7289d8ad4cf654283d00008e47125c79cc8ffdaf65677842f2cf8",
