@@ -145,6 +145,7 @@ jobs:
           sudo rm -rf "${target_root}"
           sudo mkdir -p "${target_root}"
           sudo cp -a "$(realpath "${source_root}")/." "${target_root}/"
+          sudo find "${target_root}/bin" "${target_root}/pkg/tool" -type f -exec chmod 0555 {} +
 
       - name: Capture read-only toolchain evidence
         run: |
@@ -208,6 +209,7 @@ jobs:
           sudo rm -rf "${target_root}"
           sudo mkdir -p "${target_root}"
           sudo cp -a "${source_root}/." "${target_root}/"
+          sudo find "${target_root}/bin" "${target_root}/pkg/tool" -type f -exec chmod 0555 {} +
           bun scripts/provider-release.mjs verify-toolchain
           "${target_root}/bin/go" version
 
@@ -362,6 +364,7 @@ jobs:
           sudo rm -rf "${target_root}"
           sudo mkdir -p "${target_root}"
           sudo cp -a "${source_root}/." "${target_root}/"
+          sudo find "${target_root}/bin" "${target_root}/pkg/tool" -type f -exec chmod 0555 {} +
           bun scripts/provider-release.mjs verify-toolchain
           "${target_root}/bin/go" version
 
