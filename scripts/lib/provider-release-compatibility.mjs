@@ -30,7 +30,7 @@ export const STATE_IDENTITY_PATH = join(
 );
 export const DELTA_POLICY_PATH = join(
   COMPATIBILITY_ROOT,
-  "1.1.0-delta-policy.json",
+  "1.1.1-delta-policy.json",
 );
 const REPO_ROOT = resolve(COMPATIBILITY_ROOT, "..", "..", "..");
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -61,7 +61,7 @@ export const DEFAULT_COMPATIBILITY_PROOF_PATH = join(
   REPO_ROOT,
   "tmp",
   "provider-compatibility",
-  "1.1.0-state-proof.json",
+  "1.1.1-state-proof.json",
 );
 
 function digest(bytes) {
@@ -243,9 +243,9 @@ export function validateCompatibilityAuthorities(
     policy.schemaVersion !== 1 ||
     policy.kind !== "takosumi.provider-candidate-delta-policy@v1" ||
     policy.baseline.version !== identity.provider.version ||
-    policy.candidate.version !== "1.1.0"
+    policy.candidate.version !== "1.1.1"
   ) {
-    throw new Error("compatibility policy does not bind 1.0.0 to 1.1.0");
+    throw new Error("compatibility policy does not bind 1.0.0 to 1.1.1");
   }
   if (digests.identity && policy.baseline.identitySha256 !== digests.identity) {
     throw new Error(

@@ -7,7 +7,7 @@
     "identitySha256": "568ca5b286c646c0308dd0837274458aba8dea2f5018bdb32fb12c6093d2bf4a"
   },
   "candidate": {
-    "version": "1.1.0",
+    "version": "1.1.1",
     "semverChange": "minor",
     "classification": "correction-plus-additive-features"
   },
@@ -114,7 +114,7 @@
   "patchFeatureDecision": {
     "status": "resolved-move-to-minor",
     "admitted": false,
-    "requiredOutcome": "The feature-bearing 1.0.1 patch is rejected; ship the additive candidate only as 1.1.0 after all remaining release gates pass."
+    "requiredOutcome": "The feature-bearing 1.0.1 patch is rejected; ship the additive candidate only as 1.1.1 after all remaining release gates pass."
   },
   "stateCompatibility": {
     "oldStateNoOpRequired": true,
