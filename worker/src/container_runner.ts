@@ -18,6 +18,10 @@ import type {
   OpenTofuRunner,
   OpenTofuSourceSyncJob,
   OpenTofuSourceSyncResult,
+  OpenTofuStableSourceTagResolutionJob,
+  OpenTofuStableSourceTagResolutionResult,
+  OpenTofuSourceSnapshotPresentationFileJob,
+  OpenTofuSourceSnapshotPresentationFile,
   ReleaseCommandRunJob,
   ReleaseCommandRunResult,
 } from "../../core/domains/deploy-control/mod.ts";
@@ -46,7 +50,11 @@ const RUNNER_CAPACITY_EXCEEDED_PATTERN =
 const RUNNER_SUBSTRATE_RESET_PATTERN =
   /durable object reset because its code was updated/i;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
-type ContainerRunnerAction = OpenTofuRunQueueMessage["action"] | "release";
+type ContainerRunnerAction =
+  | OpenTofuRunQueueMessage["action"]
+  | "release"
+  | "stable_semver_tag"
+  | "source_snapshot_file";
 
 export class CloudflareContainerOpenTofuRunner
   implements OpenTofuRunner, ServiceDataBackupRunner
@@ -327,6 +335,53 @@ export class CloudflareContainerOpenTofuRunner
       }
       return { path, text };
     });
+  }
+
+  async resolveStableSourceTag(
+    job: OpenTofuStableSourceTagResolutionJob,
+  ): Promise<OpenTofuStableSourceTagResolutionResult> {
+    const result = await this.#runContainer("stable_semver_tag", job.runId, {
+      action: "stable_semver_tag",
+      url: job.url,
+    });
+    const tag = stringFromRecord(result, "tag");
+    const commit = stringFromRecord(result, "commit");
+    if (!tag || !commit) {
+      throw new Error("stable_semver_tag returned an incomplete result");
+    }
+    return { tag, commit };
+  }
+
+  async readSourceSnapshotPresentationFile(
+    job: OpenTofuSourceSnapshotPresentationFileJob,
+  ): Promise<OpenTofuSourceSnapshotPresentationFile> {
+    const result = await this.#runContainer(
+      "source_snapshot_file",
+      job.runId,
+      {
+        sourceArchive: {
+          ref: job.sourceSnapshot.archiveRef,
+          digest: job.sourceSnapshot.archiveDigest,
+        },
+        action: "source_snapshot_file",
+        path: job.path,
+      },
+      { timeoutMs: compatibilityCheckTimeoutMs(this.env) },
+    );
+    const path = stringFromRecord(result, "path");
+    const text = stringFromRecord(result, "text");
+    const digest = stringFromRecord(result, "digest");
+    const sizeBytes = result.sizeBytes;
+    if (
+      !path ||
+      text === undefined ||
+      !digest ||
+      typeof sizeBytes !== "number" ||
+      !Number.isSafeInteger(sizeBytes)
+    ) {
+      throw new Error("source_snapshot_file returned an incomplete result");
+    }
+    return { path, text, digest, sizeBytes };
   }
 
   async run(

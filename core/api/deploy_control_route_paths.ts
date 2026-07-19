@@ -58,6 +58,10 @@ export const TAKOSUMI_SOURCE_COMPATIBILITY_CHECK_ROUTE =
   `${INTERNAL_V1_PREFIX}/sources/:sourceId/compatibility-check` as const;
 export const TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE =
   `${INTERNAL_V1_PREFIX}/sources/:sourceId/snapshots` as const;
+export const TAKOSUMI_SOURCE_SNAPSHOT_FILE_ROUTE =
+  `${INTERNAL_V1_PREFIX}/sources/:sourceId/snapshots/:sourceSnapshotId/file` as const;
+export const TAKOSUMI_WORKSPACE_STABLE_SOURCE_TAG_ROUTE =
+  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/source-ref-resolutions/stable-semver` as const;
 export const TAKOSUMI_COMPATIBILITY_REPORT_ROUTE =
   `${INTERNAL_V1_PREFIX}/compatibility-reports/:reportId` as const;
 export const TAKOSUMI_WORKSPACES_ROUTE =

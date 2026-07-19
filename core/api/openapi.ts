@@ -3650,6 +3650,33 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+    StableSourceTagResolutionRequest: {
+      type: "object",
+      required: ["url"],
+      properties: { url: { type: "string", format: "uri" } },
+      additionalProperties: false,
+    },
+    StableSourceTagResolutionResponse: {
+      type: "object",
+      required: ["tag", "commit"],
+      properties: {
+        tag: { type: "string" },
+        commit: { type: "string", pattern: "^[0-9a-f]{40}$|^[0-9a-f]{64}$" },
+      },
+      additionalProperties: false,
+    },
+    SourceSnapshotFileResponse: {
+      type: "object",
+      required: ["sourceSnapshotId", "path", "text", "digest", "sizeBytes"],
+      properties: {
+        sourceSnapshotId: { type: "string" },
+        path: { type: "string" },
+        text: { type: "string" },
+        digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        sizeBytes: { type: "integer", minimum: 0 },
+      },
+      additionalProperties: false,
+    },
   };
 }
 

@@ -890,6 +890,19 @@ export interface TakosumiOperations {
     id: string,
     options?: { readonly modulePath?: string },
   ): Promise<readonly { readonly path: string; readonly text: string }[]>;
+  resolveStableSourceTag(url: string): Promise<{
+    readonly tag: string;
+    readonly commit: string;
+  }>;
+  readSourceSnapshotPresentationFile(
+    id: string,
+    path: string,
+  ): Promise<{
+    readonly path: string;
+    readonly text: string;
+    readonly digest: string;
+    readonly sizeBytes: number;
+  }>;
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
   /**
@@ -2250,6 +2263,10 @@ export async function createTakosumiService(
     getSourceSnapshot: (id) => opentofuController.getSourceSnapshot(id),
     readSourceSnapshotFiles: (id, fileOptions) =>
       opentofuController.readSourceSnapshotFiles(id, fileOptions),
+    resolveStableSourceTag: (url) =>
+      opentofuController.resolveStableSourceTag(url),
+    readSourceSnapshotPresentationFile: (id, path) =>
+      opentofuController.readSourceSnapshotPresentationFile(id, path),
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
     createCapsulePlan: (capsuleId, options) =>
