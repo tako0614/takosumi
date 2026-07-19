@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "version": "1.1.0",
+  "tag": "provider/v1.1.0",
+  "tagObjectId": "628255c563174524ded30d3cad21a5acae18c9af",
+  "sourceCommit": "60c9ef676220bce462ab96fc009d6fd47dfe58b1",
+  "workflowRunId": "29681461022",
+  "workflowRunUrl": "https://github.com/tako0614/takosumi/actions/runs/29681461022",
+  "observedAt": "2026-07-19T09:22:46Z",
+  "status": "failed-before-artifact",
+  "failure": {
+    "step": "Materialize descriptor-pinned Go path",
+    "code": "hosted-runner-toolchain-digest-drift",
+    "tool": "/usr/bin/zip",
+    "expectedSha256": "4497470bb70f9ecb837817cc9de0d479951a3f25ef252c0bbcc9667af8c4a8c6",
+    "observedSha256": "1633b06b3f1c4ac571b06b74f29155a93010145ead3349b4294d296fdbb3e84f"
+  },
+  "artifactProduced": false,
+  "stableMutationAttempted": false,
+  "tagDisposition": "immutable-retained-never-move-or-delete",
+  "replacementCandidate": "1.1.1"
+}

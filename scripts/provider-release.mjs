@@ -8,6 +8,9 @@ import {
   manifestDigest,
   loadProviderReleaseRegistry,
   materializeProviderMirror,
+  normalizeProviderReleaseGoDistribution,
+  probeProviderReleaseToolchain,
+  probeProviderReleaseToolchainTree,
   verifyNetworkMirrorLayout,
   verifyProviderReleaseBundle,
   verifyProviderPrepublication,
@@ -32,6 +35,30 @@ export async function runProviderReleaseCli(argv = process.argv.slice(2)) {
       const result = await verifyProviderReleaseToolchain();
       printJson({
         kind: "takosumi.provider-release-toolchain-verification@v1",
+        ...result,
+      });
+      return result;
+    }
+    case "normalize-toolchain": {
+      const result = await normalizeProviderReleaseGoDistribution();
+      printJson({
+        kind: "takosumi.provider-release-toolchain-normalization@v1",
+        ...result,
+      });
+      return result;
+    }
+    case "probe-toolchain": {
+      const result = await probeProviderReleaseToolchain();
+      printJson({
+        kind: "takosumi.provider-release-toolchain-probe@v1",
+        ...result,
+      });
+      return result;
+    }
+    case "probe-toolchain-tree": {
+      const result = await probeProviderReleaseToolchainTree();
+      printJson({
+        kind: "takosumi.provider-release-toolchain-tree-probe@v1",
         ...result,
       });
       return result;
@@ -146,7 +173,7 @@ export async function runProviderReleaseCli(argv = process.argv.slice(2)) {
     }
     default:
       throw new Error(
-        "usage: bun scripts/provider-release.mjs <verify-source|verify-toolchain|materialize|verify-mirror|verify-bundle|verify-tag|prepublish-check|build|manifest-digest> [options]",
+        "usage: bun scripts/provider-release.mjs <verify-source|verify-toolchain|normalize-toolchain|probe-toolchain|probe-toolchain-tree|materialize|verify-mirror|verify-bundle|verify-tag|prepublish-check|build|manifest-digest> [options]",
       );
   }
 }
@@ -154,6 +181,9 @@ export async function runProviderReleaseCli(argv = process.argv.slice(2)) {
 const COMMAND_OPTIONS = {
   "verify-source": new Set(),
   "verify-toolchain": new Set(),
+  "normalize-toolchain": new Set(),
+  "probe-toolchain": new Set(),
+  "probe-toolchain-tree": new Set(),
   materialize: new Set(["output", "registry", "artifact-root", "cache-root"]),
   "verify-mirror": new Set(["root", "registry"]),
   "verify-bundle": new Set(["root"]),

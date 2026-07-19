@@ -143,12 +143,12 @@ describe("provider release compatibility", () => {
     ).rejects.toThrow("digest mismatch");
   });
 
-  test("pins historical identity and rejects the feature-bearing patch in favor of 1.1.0", async () => {
+  test("pins historical identity and rejects the feature-bearing patch in favor of 1.1.1", async () => {
     const { identity, policy } = await loadCompatibilityAuthorities();
     expect(identity.capture.containsStateValues).toBe(false);
     expect(identity.capture.containsSecrets).toBe(false);
     expect(policy.candidate).toMatchObject({
-      version: "1.1.0",
+      version: "1.1.1",
       semverChange: "minor",
     });
     expect(policy.additiveResources).toHaveLength(5);

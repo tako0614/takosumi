@@ -258,6 +258,8 @@ export function validateVersionDescriptor(descriptor) {
             "sha256",
             "distributionRoot",
             "distributionSha256",
+            "distributionEntryCount",
+            "moduleCacheNormalization",
           ]
         : ["version", "path", "sha256"];
     assertExactObjectKeys(
@@ -272,13 +274,18 @@ export function validateVersionDescriptor(descriptor) {
     }
   }
   if (
-    descriptor.toolchain.git.version !== "git version 2.53.0" ||
-    descriptor.toolchain.gpgv.version !== "gpgv (GnuPG) 2.4.8" ||
+    descriptor.toolchain.git.version !== "git version 2.54.0" ||
+    descriptor.toolchain.gpgv.version !== "gpgv (GnuPG) 2.4.4" ||
     !isAbsolute(descriptor.toolchain.go.distributionRoot ?? "") ||
-    !SHA256.test(descriptor.toolchain.go.distributionSha256 ?? "")
+    !SHA256.test(descriptor.toolchain.go.distributionSha256 ?? "") ||
+    !Number.isSafeInteger(descriptor.toolchain.go.distributionEntryCount) ||
+    descriptor.toolchain.go.distributionEntryCount <= 0
   ) {
     throw new Error("provider Git/GPG/Go distribution trust must be pinned");
   }
+  validateGoDistributionNormalization(
+    descriptor.toolchain.go.moduleCacheNormalization,
+  );
   assertObject(descriptor.runtimeTrust, "provider runtime trust");
   assertExactObjectKeys(
     descriptor.runtimeTrust,
@@ -1033,8 +1040,8 @@ function validateManifestToolchain(toolchain) {
     ["go", "go1.26.5"],
     ["zip", "Info-ZIP 3.0"],
     ["unzip", "Info-ZIP UnZip 6.00"],
-    ["git", "git version 2.53.0"],
-    ["gpgv", "gpgv (GnuPG) 2.4.8"],
+    ["git", "git version 2.54.0"],
+    ["gpgv", "gpgv (GnuPG) 2.4.4"],
   ]) {
     const executable = toolchain[name];
     assertExactObjectKeys(
@@ -1046,6 +1053,8 @@ function validateManifestToolchain(toolchain) {
             "sha256",
             "distributionRoot",
             "distributionSha256",
+            "distributionEntryCount",
+            "moduleCacheNormalization",
           ]
         : ["version", "path", "sha256"],
       `provider ${name} toolchain evidence`,
@@ -1060,10 +1069,46 @@ function validateManifestToolchain(toolchain) {
   }
   if (
     !isAbsolute(toolchain.go.distributionRoot ?? "") ||
-    !SHA256.test(toolchain.go.distributionSha256 ?? "")
+    !SHA256.test(toolchain.go.distributionSha256 ?? "") ||
+    !Number.isSafeInteger(toolchain.go.distributionEntryCount) ||
+    toolchain.go.distributionEntryCount <= 0
   ) {
     throw new Error("invalid Go distribution evidence");
   }
+  validateGoDistributionNormalization(toolchain.go.moduleCacheNormalization);
+}
+
+function validateGoDistributionNormalization(normalization) {
+  assertObject(normalization, "provider Go module-cache normalization");
+  assertExactObjectKeys(
+    normalization,
+    ["allowedExtraPaths", "allowedExtraPathsSha256"],
+    "provider Go module-cache normalization",
+  );
+  if (
+    !Array.isArray(normalization.allowedExtraPaths) ||
+    normalization.allowedExtraPaths.length === 0 ||
+    !SHA256.test(normalization.allowedExtraPathsSha256 ?? "")
+  ) {
+    throw new Error("provider Go normalization allowlist is invalid");
+  }
+  const paths = normalization.allowedExtraPaths.map(safeRelativePath);
+  const sorted = [...paths].sort(codeUnitCompare);
+  if (
+    new Set(paths).size !== paths.length ||
+    JSON.stringify(paths) !== JSON.stringify(sorted)
+  ) {
+    throw new Error(
+      "provider Go normalization allowlist must be unique and code-unit sorted",
+    );
+  }
+  const digest = sha256(Buffer.from(`${paths.join("\n")}\n`));
+  if (digest !== normalization.allowedExtraPathsSha256) {
+    throw new Error(
+      `provider Go normalization allowlist digest mismatch: expected ${normalization.allowedExtraPathsSha256}, got ${digest}`,
+    );
+  }
+  return paths;
 }
 
 function validateManifestAsset(asset) {
@@ -1124,6 +1169,223 @@ export async function verifyProviderReleaseToolchain({
   };
 }
 
+export async function normalizeProviderReleaseGoDistribution({
+  repoRoot = PROVIDER_RELEASE_ROOT,
+  descriptorPath = join(repoRoot, "provider", "release", "version.json"),
+} = {}) {
+  const descriptorSnapshot = await readAuthorityJsonWithSidecar(
+    descriptorPath,
+    "provider release descriptor",
+  );
+  const descriptor = validateVersionDescriptor(descriptorSnapshot.value);
+  const go = descriptor.toolchain.go;
+  const root = realpathSync(go.distributionRoot);
+  if (root !== go.distributionRoot) {
+    throw new Error(
+      `Go distribution root must be canonical: ${go.distributionRoot} -> ${root}`,
+    );
+  }
+  const allowlist = validateGoDistributionNormalization(
+    go.moduleCacheNormalization,
+  );
+  const beforeEntries = manifestTreeSync(root);
+  const present = [];
+  for (const relativePath of allowlist) {
+    const path = join(root, relativePath);
+    try {
+      const info = await lstat(path);
+      if (!info.isFile() || info.isSymbolicLink()) {
+        throw new Error(
+          `provider Go normalization path must be a regular file: ${relativePath}`,
+        );
+      }
+      if ((await realpath(path)) !== path) {
+        throw new Error(
+          `provider Go normalization path must be canonical: ${relativePath}`,
+        );
+      }
+      present.push(relativePath);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  if (present.length !== 0 && present.length !== allowlist.length) {
+    throw new Error(
+      `provider Go normalization requires zero or all allowlisted extras: found ${present.length}/${allowlist.length}`,
+    );
+  }
+  if (beforeEntries.length !== go.distributionEntryCount + present.length) {
+    throw new Error(
+      `provider Go pre-normalization entry count mismatch: expected ${go.distributionEntryCount + present.length}, got ${beforeEntries.length}`,
+    );
+  }
+  for (const relativePath of present) {
+    await rm(join(root, relativePath));
+  }
+  const afterEntries = manifestTreeSync(root);
+  const afterSha256 = digestTreeSync(root);
+  if (
+    afterEntries.length !== go.distributionEntryCount ||
+    afterSha256 !== go.distributionSha256
+  ) {
+    throw new Error(
+      `provider Go normalized distribution mismatch: expected ${go.distributionEntryCount}/${go.distributionSha256}, got ${afterEntries.length}/${afterSha256}`,
+    );
+  }
+  return {
+    descriptorDigest: descriptorSnapshot.sha256,
+    root,
+    allowlistSha256: go.moduleCacheNormalization.allowedExtraPathsSha256,
+    allowlistEntryCount: allowlist.length,
+    presentAllowlistEntryCount: present.length,
+    beforeEntryCount: beforeEntries.length,
+    afterEntryCount: afterEntries.length,
+    afterSha256,
+  };
+}
+
+export async function probeProviderReleaseToolchain({
+  repoRoot = PROVIDER_RELEASE_ROOT,
+  descriptorPath = join(repoRoot, "provider", "release", "version.json"),
+} = {}) {
+  const descriptorSnapshot = await readAuthorityJsonWithSidecar(
+    descriptorPath,
+    "provider release descriptor",
+  );
+  const descriptor = validateVersionDescriptor(descriptorSnapshot.value);
+  const toolchain = Object.fromEntries(
+    Object.entries(descriptor.toolchain).map(([name, expected]) => {
+      const canonicalPath = realpathSync(expected.path);
+      return [
+        name,
+        {
+          path: expected.path,
+          canonicalPath,
+          expectedSha256: expected.sha256,
+          observedSha256: sha256(readFileSync(canonicalPath)),
+        },
+      ];
+    }),
+  );
+  const runtimeTrust = descriptor.runtimeTrust.files.map((expected) => {
+    try {
+      const canonicalPath = realpathSync(expected.path);
+      return {
+        path: expected.path,
+        canonicalPath,
+        expectedSha256: expected.sha256,
+        observedSha256: sha256(readFileSync(canonicalPath)),
+        exists: true,
+      };
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      return {
+        path: expected.path,
+        canonicalPath: null,
+        expectedSha256: expected.sha256,
+        observedSha256: null,
+        exists: false,
+      };
+    }
+  });
+  const observedRuntimePaths = new Set();
+  for (const expected of Object.values(descriptor.toolchain)) {
+    const result = command("/usr/bin/ldd", [expected.path], {
+      cwd: repoRoot,
+      allowFailure: true,
+    });
+    for (const line of result.stdout.split("\n")) {
+      const dependency =
+        /=>\s+(\/\S+)\s+\(/.exec(line)?.[1] ??
+        /^\s*(\/\S+)\s+\(/.exec(line)?.[1];
+      if (dependency) observedRuntimePaths.add(realpathSync(dependency));
+    }
+  }
+  const observedRuntimeTrust = [...observedRuntimePaths]
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    .map((path) => ({ path, sha256: sha256(readFileSync(path)) }));
+  const zipOutput = command(descriptor.toolchain.zip.path, ["-v"], {
+    cwd: repoRoot,
+  }).stdout;
+  const unzipOutput = command(descriptor.toolchain.unzip.path, ["-v"], {
+    cwd: repoRoot,
+  }).stdout;
+  return {
+    runnerImage: {
+      os: process.env.ImageOS ?? null,
+      version: process.env.ImageVersion ?? null,
+    },
+    descriptorDigest: descriptorSnapshot.sha256,
+    versions: {
+      go: command(descriptor.toolchain.go.path, ["env", "GOVERSION"], {
+        cwd: join(repoRoot, "provider"),
+        env: hermeticGoEnvironment(process.env),
+      }).stdout.trim(),
+      zip: /This is Zip ([0-9.]+)/.exec(zipOutput)?.[1] ?? null,
+      unzip: /^UnZip ([0-9.]+)/.exec(unzipOutput)?.[1] ?? null,
+      git: command(descriptor.toolchain.git.path, ["--version"], {
+        cwd: repoRoot,
+      }).stdout.trim(),
+      gpgv: command(descriptor.toolchain.gpgv.path, ["--version"], {
+        cwd: repoRoot,
+      })
+        .stdout.split("\n")[0]
+        .trim(),
+    },
+    toolchain,
+    goDistribution: {
+      root: descriptor.toolchain.go.distributionRoot,
+      expectedSha256: descriptor.toolchain.go.distributionSha256,
+      observedSha256: digestTreeSync(descriptor.toolchain.go.distributionRoot),
+      expectedEntryCount: descriptor.toolchain.go.distributionEntryCount,
+      entries: manifestTreeSync(descriptor.toolchain.go.distributionRoot),
+      normalization: {
+        allowlistSha256:
+          descriptor.toolchain.go.moduleCacheNormalization
+            .allowedExtraPathsSha256,
+        allowlistEntryCount:
+          descriptor.toolchain.go.moduleCacheNormalization.allowedExtraPaths
+            .length,
+      },
+    },
+    runtimeTrust,
+    observedRuntimeTrust,
+  };
+}
+
+export async function probeProviderReleaseToolchainTree({
+  repoRoot = PROVIDER_RELEASE_ROOT,
+  descriptorPath = join(repoRoot, "provider", "release", "version.json"),
+} = {}) {
+  const descriptorSnapshot = await readAuthorityJsonWithSidecar(
+    descriptorPath,
+    "provider release descriptor",
+  );
+  const descriptor = validateVersionDescriptor(descriptorSnapshot.value);
+  return {
+    runnerImage: {
+      os: process.env.ImageOS ?? null,
+      version: process.env.ImageVersion ?? null,
+    },
+    descriptorDigest: descriptorSnapshot.sha256,
+    goDistribution: {
+      root: descriptor.toolchain.go.distributionRoot,
+      expectedSha256: descriptor.toolchain.go.distributionSha256,
+      observedSha256: digestTreeSync(descriptor.toolchain.go.distributionRoot),
+      expectedEntryCount: descriptor.toolchain.go.distributionEntryCount,
+      entries: manifestTreeSync(descriptor.toolchain.go.distributionRoot),
+      normalization: {
+        allowlistSha256:
+          descriptor.toolchain.go.moduleCacheNormalization
+            .allowedExtraPathsSha256,
+        allowlistEntryCount:
+          descriptor.toolchain.go.moduleCacheNormalization.allowedExtraPaths
+            .length,
+      },
+    },
+  };
+}
+
 export async function verifyProviderReleaseSource({
   repoRoot = PROVIDER_RELEASE_ROOT,
   descriptorPath = join(repoRoot, "provider", "release", "version.json"),
@@ -1139,7 +1401,7 @@ export async function verifyProviderReleaseSource({
     repoRoot,
     "tmp",
     "provider-compatibility",
-    "1.1.0-state-proof.json",
+    "1.1.1-state-proof.json",
   ),
 } = {}) {
   const descriptorSnapshot = await readAuthorityJsonWithSidecar(
@@ -2855,6 +3117,14 @@ function verifyToolchainExecutableDigests(toolchain, runtimeTrust) {
       `Go distribution digest mismatch: expected ${toolchain.go.distributionSha256}, got ${distributionDigest}`,
     );
   }
+  const distributionEntries = manifestTreeSync(
+    toolchain.go.distributionRoot,
+  ).length;
+  if (distributionEntries !== toolchain.go.distributionEntryCount) {
+    throw new Error(
+      `Go distribution entry count mismatch: expected ${toolchain.go.distributionEntryCount}, got ${distributionEntries}`,
+    );
+  }
   if (!runtimeTrust?.files) {
     throw new Error("provider runtime trust evidence is absent");
   }
@@ -2913,10 +3183,52 @@ function digestTreeSync(root) {
   return hash.digest("hex");
 }
 
+function manifestTreeSync(root) {
+  const entries = [];
+  const walk = (filesystemPath, logicalPath) => {
+    for (const entry of readdirSyncSorted(filesystemPath)) {
+      const path = join(filesystemPath, entry.name);
+      const logical = logicalPath ? `${logicalPath}/${entry.name}` : entry.name;
+      const info = lstatSyncSafe(path);
+      if (info.isSymbolicLink()) {
+        const target = readlinkSync(path);
+        const resolved = realpathSync(path);
+        const targetInfo = lstatSyncSafe(resolved);
+        entries.push({
+          kind: "symlink",
+          path: logical,
+          target,
+          resolvedKind: targetInfo.isDirectory() ? "directory" : "file",
+          resolvedSha256: targetInfo.isFile()
+            ? sha256(readFileSync(resolved))
+            : null,
+        });
+      } else if (info.isDirectory()) {
+        walk(path, logical);
+      } else if (info.isFile()) {
+        entries.push({
+          kind: "file",
+          path: logical,
+          size: info.size,
+          sha256: sha256(readFileSync(path)),
+        });
+      } else {
+        throw new Error(`unsupported toolchain entry ${logical}`);
+      }
+    }
+  };
+  walk(root, "");
+  return entries;
+}
+
 function readdirSyncSorted(path) {
   return readdirSync(path, { withFileTypes: true }).sort((a, b) =>
-    a.name.localeCompare(b.name),
+    codeUnitCompare(a.name, b.name),
   );
+}
+
+function codeUnitCompare(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function lstatSyncSafe(path) {
