@@ -2274,6 +2274,18 @@ test("import finalization retries only the exact request without exposing native
     nativeId: "sensitive-provider-id-123",
   } as const;
 
+  const staleReplayDecision = await service.importResource(request, {
+    replayOnly: true,
+  });
+  expect(staleReplayDecision).toEqual({
+    ok: false,
+    error: {
+      code: "import_conflict",
+      message: `resource ${APPLY_ID} no longer matches the replayed import request`,
+    },
+  });
+  expect(adapter.importInputs).toHaveLength(0);
+
   const pending = await service.importResource(request);
   expect(pending.ok).toBe(false);
   if (!pending.ok) {

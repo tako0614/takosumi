@@ -65,9 +65,10 @@ class SqlInterfaceStore implements InterfaceStore {
   }
 
   async list(filter: InterfaceListFilter): Promise<readonly Interface[]> {
+    if (filter.ownerIds?.length === 0) return [];
     const clauses = ["workspace_id = $1"];
-    const parameters: (string | boolean)[] = [filter.workspaceId];
-    const add = (sql: string, value: string | boolean): void => {
+    const parameters: SqlValue[] = [filter.workspaceId];
+    const add = (sql: string, value: SqlValue): void => {
       parameters.push(value);
       clauses.push(sql.replace("?", `$${parameters.length}`));
     };
@@ -75,10 +76,20 @@ class SqlInterfaceStore implements InterfaceStore {
     if (filter.phase !== undefined) add("phase = ?", filter.phase);
     if (filter.ownerKind !== undefined) add("owner_kind = ?", filter.ownerKind);
     if (filter.ownerId !== undefined) add("owner_id = ?", filter.ownerId);
+    if (filter.ownerIds !== undefined) {
+      const placeholders = filter.ownerIds.map((ownerId) => {
+        parameters.push(ownerId);
+        return `$${parameters.length}`;
+      });
+      clauses.push(`owner_id in (${placeholders.join(",")})`);
+    }
     if (filter.includeRetired !== true) clauses.push("phase <> 'Retired'");
+    if (filter.limit !== undefined) parameters.push(filter.limit);
     const result = await this.client.query<InterfaceRow>(
       `select record_json from ${this.#table}
-       where ${clauses.join(" and ")} order by name asc, id asc`,
+       where ${clauses.join(" and ")} order by name asc, id asc${
+         filter.limit === undefined ? "" : ` limit $${parameters.length}`
+       }`,
       parameters,
     );
     return result.rows.map((row) => decode<Interface>(row.record_json));

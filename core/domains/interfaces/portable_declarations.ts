@@ -11,7 +11,18 @@ import { formatResourceShapeId } from "../resource-shape/records.ts";
 import type { InterfaceService } from "./service.ts";
 import type { ResourceInterfaceWorkspaceResolver } from "./output_resolver.ts";
 
-const RESOURCE_PAGE_LIMIT = 100;
+const RESOURCE_PAGE_LIMIT = 51;
+const RESOURCE_READ_LIMIT = 50;
+const INTERFACE_READ_LIMIT = 500;
+
+export class PortableDeclarationReadLimitError extends Error {
+  constructor() {
+    super(
+      "interface declaration query is too broad; provide an exact Resource selector",
+    );
+    this.name = "PortableDeclarationReadLimitError";
+  }
+}
 
 export interface PortableDeclarationReaderOptions {
   readonly interfaces: InterfaceService;
@@ -19,6 +30,11 @@ export interface PortableDeclarationReaderOptions {
     space: string,
     page: PageParams,
   ) => Promise<Page<ResourceObject>>;
+  readonly getResource: (
+    space: string,
+    kind: string,
+    name: string,
+  ) => Promise<ResourceObject | undefined>;
   readonly resolveWorkspace: ResourceInterfaceWorkspaceResolver;
   /** Idempotent lazy repair for Ready Resources created before this feature. */
   readonly ensureResourceDeclarations?: (
@@ -44,80 +60,98 @@ export function createPortableDeclarationReader(
       input: PortableDeclarationFilter,
     ): Promise<readonly TakoformDeclaredInterface[]> {
       const declared: TakoformDeclaredInterface[] = [];
-      const workspaceBySpace = new Map<string, Promise<string | undefined>>();
+      const workspaceByResource = new Map<
+        string,
+        Promise<string | undefined>
+      >();
       const resourcesByWorkspace = new Map<
         string,
         Map<string, ResourceObject>
       >();
-      let cursor: string | undefined;
-      do {
-        const page = await options.listResources(input.space, {
-          limit: RESOURCE_PAGE_LIMIT,
-          ...(cursor ? { cursor } : {}),
-        });
-        for (const resource of page.items) {
-          if (
-            (input.resourceKind !== undefined &&
-              resource.kind !== input.resourceKind) ||
-            (input.resourceName !== undefined &&
-              resource.metadata.name !== input.resourceName)
-          ) {
-            continue;
+      const exactResource =
+        input.resourceKind && input.resourceName
+          ? await options.getResource(
+              input.space,
+              input.resourceKind,
+              input.resourceName,
+            )
+          : undefined;
+      const resources: ResourceObject[] = exactResource ? [exactResource] : [];
+      if (!input.resourceKind || !input.resourceName) {
+        let scanned = 0;
+        let cursor: string | undefined;
+        do {
+          const page = await options.listResources(input.space, {
+            limit: RESOURCE_PAGE_LIMIT,
+            ...(cursor ? { cursor } : {}),
+          });
+          scanned += page.items.length;
+          if (scanned > RESOURCE_READ_LIMIT || page.nextCursor) {
+            throw new PortableDeclarationReadLimitError();
           }
-          if (
-            !resource.form ||
-            resource.status?.phase !== "Ready" ||
-            resource.status.observedGeneration !== resource.metadata.generation
-          ) {
-            continue;
-          }
-          const resourceId = formatResourceShapeId(
-            resource.metadata.space,
-            resource.kind,
-            resource.metadata.name,
-          );
-          let workspace = workspaceBySpace.get(resource.metadata.space);
-          if (!workspace) {
-            workspace = options.resolveWorkspace({
-              resourceSpaceId: resource.metadata.space,
-              resourceId,
-            });
-            workspaceBySpace.set(resource.metadata.space, workspace);
-          }
-          const workspaceId = await workspace;
-          if (!workspaceId) continue;
-          // A scoped principal may never use a caller-chosen portable Space to
-          // cross the explicit Resource Space -> Workspace bridge. Hosts with
-          // unscoped operator actors retain their existing policy boundary.
-          if (
-            input.actor.workspaceId !== undefined &&
-            input.actor.workspaceId !== workspaceId
-          ) {
-            continue;
-          }
-          // Broad reads stay read-only. An exact Resource read is the bounded
-          // lazy-repair boundary for a missed lifecycle observer.
-          if (input.resourceKind && input.resourceName) {
-            await options.ensureResourceDeclarations?.(resource);
-          }
-          let resources = resourcesByWorkspace.get(workspaceId);
-          if (!resources) {
-            resources = new Map();
-            resourcesByWorkspace.set(workspaceId, resources);
-          }
-          resources.set(resourceId, resource);
+          resources.push(...page.items);
+          cursor = page.nextCursor;
+        } while (cursor);
+      }
+
+      for (const resource of resources) {
+        if (
+          !resource.form ||
+          resource.status?.phase !== "Ready" ||
+          resource.status.observedGeneration !== resource.metadata.generation
+        ) {
+          continue;
         }
-        cursor = page.nextCursor;
-      } while (cursor);
+        const resourceId = formatResourceShapeId(
+          resource.metadata.space,
+          resource.kind,
+          resource.metadata.name,
+        );
+        let workspace = workspaceByResource.get(resourceId);
+        if (!workspace) {
+          workspace = options.resolveWorkspace({
+            resourceSpaceId: resource.metadata.space,
+            resourceId,
+          });
+          workspaceByResource.set(resourceId, workspace);
+        }
+        const workspaceId = await workspace;
+        if (!workspaceId) continue;
+        // A scoped principal may never use a caller-chosen portable Space to
+        // cross the explicit Resource Space -> Workspace bridge. Hosts with
+        // unscoped operator actors retain their existing policy boundary.
+        if (
+          input.actor.workspaceId !== undefined &&
+          input.actor.workspaceId !== workspaceId
+        ) {
+          continue;
+        }
+        // Broad reads stay read-only. An exact Resource read is the bounded
+        // lazy-repair boundary for a missed lifecycle observer.
+        if (input.resourceKind && input.resourceName) {
+          await options.ensureResourceDeclarations?.(resource);
+        }
+        let resources = resourcesByWorkspace.get(workspaceId);
+        if (!resources) {
+          resources = new Map();
+          resourcesByWorkspace.set(workspaceId, resources);
+        }
+        resources.set(resourceId, resource);
+      }
 
       for (const [workspaceId, resources] of resourcesByWorkspace) {
         const owned = await options.interfaces.list({
           workspaceId,
           ownerKind: "Resource",
+          ownerIds: [...resources.keys()],
           ...(input.name ? { type: input.name } : {}),
           phase: "Resolved",
+          limit: INTERFACE_READ_LIMIT + 1,
           includeRetired: false,
         });
+        if (owned.length > INTERFACE_READ_LIMIT) {
+          throw new PortableDeclarationReadLimitError();
+        }
         for (const iface of owned) {
           const resource = resources.get(iface.metadata.ownerRef.id);
           if (!resource) continue;

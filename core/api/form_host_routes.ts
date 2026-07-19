@@ -26,6 +26,7 @@ import type {
   ResourceShapeService,
 } from "../domains/resource-shape/mod.ts";
 import { formatResourceShapeId } from "../domains/resource-shape/mod.ts";
+import { PortableDeclarationReadLimitError } from "../domains/interfaces/portable_declarations.ts";
 import { readJsonObject, requestIdFromContext } from "./errors.ts";
 import { parsePageQuery } from "./page_query.ts";
 
@@ -100,11 +101,12 @@ export function registerPortableFormHostRoutes(
       }
       const query = declarationQuery(c);
       if (!query.ok) return query.response;
-      const interfaces = await declarations.listDeclaredInterfaces({
+      const listed = await readPortableDeclarations(c, declarations, {
         actor: auth.actor,
         ...query.value,
       });
-      return c.json({ interfaces }, 200);
+      if (!listed.ok) return listed.response;
+      return c.json({ interfaces: listed.value }, 200);
     });
 
     app.get(`${base}/interfaces/:name`, async (c) => {
@@ -122,11 +124,13 @@ export function registerPortableFormHostRoutes(
       if (!query.ok) return query.response;
       const name = c.req.param("name");
       if (!name) return failed(c, "interface name is required").response;
-      const matches = await declarations.listDeclaredInterfaces({
+      const listed = await readPortableDeclarations(c, declarations, {
         actor: auth.actor,
         ...query.value,
         name,
       });
+      if (!listed.ok) return listed.response;
+      const matches = listed.value;
       if (matches.length === 0) {
         return portableError(
           c,
@@ -283,7 +287,9 @@ export function registerPortableFormHostRoutes(
       );
       if (!available.ok) return available.response;
     }
-    const result = await options.service.importResource(importRequest);
+    const result = await options.service.importResource(importRequest, {
+      replayOnly: replayStatus !== undefined,
+    });
     if (!result.ok) return serviceError(c, result.error);
     return portableJson(
       c,
@@ -966,6 +972,27 @@ function declarationQuery(c: Context):
       ...(resourceKind && resourceName ? { resourceKind, resourceName } : {}),
     },
   };
+}
+
+async function readPortableDeclarations(
+  c: Context,
+  reader: PortableInterfaceDeclarationReader,
+  input: Parameters<
+    PortableInterfaceDeclarationReader["listDeclaredInterfaces"]
+  >[0],
+): Promise<
+  | { readonly ok: true; readonly value: readonly TakoformDeclaredInterface[] }
+  | { readonly ok: false; readonly response: Response }
+> {
+  try {
+    return { ok: true, value: await reader.listDeclaredInterfaces(input) };
+  } catch (error) {
+    if (!(error instanceof PortableDeclarationReadLimitError)) throw error;
+    return {
+      ok: false,
+      response: portableError(c, "invalid_argument", error.message, 400),
+    };
+  }
 }
 
 function pageQuery(c: Context) {

@@ -8,6 +8,7 @@ import {
   registerPortableFormHostRoutes,
   type PortableInterfaceDeclarationReader,
 } from "../../../core/api/form_host_routes.ts";
+import { PortableDeclarationReadLimitError } from "../../../core/domains/interfaces/mod.ts";
 import type { ResourceShapeService } from "../../../core/domains/resource-shape/mod.ts";
 
 const ACTOR: ActorContext = {
@@ -108,5 +109,31 @@ test("portable Interface selectors and read scope fail closed", async () => {
   expect(denied.status).toBe(403);
   expect(await denied.json()).toMatchObject({
     error: { code: "permission_denied" },
+  });
+});
+
+test("portable Interface broad-read limit returns an explicit narrowing error", async () => {
+  const app = new Hono();
+  registerPortableFormHostRoutes(app, {
+    service: {} as ResourceShapeService,
+    availability: { listFormAvailability: async () => ({ items: [] }) },
+    authorize: async () => ({ ok: true, actor: ACTOR }),
+    canReadForms: () => true,
+    interfaceDeclarations: {
+      listDeclaredInterfaces: async () => {
+        throw new PortableDeclarationReadLimitError();
+      },
+    },
+  });
+  const response = await app.request(
+    "/apis/forms.takoform.com/v1alpha1/interfaces?space=space_1",
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "invalid_argument",
+      message:
+        "interface declaration query is too broad; provide an exact Resource selector",
+    },
   });
 });

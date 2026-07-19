@@ -177,16 +177,47 @@ export async function ensureFormDescriptorInterfaces(
       continue;
     }
 
-    const created = await input.interfaces.create(
-      {
-        workspaceId: input.workspaceId,
-        name,
-        ownerRef: { kind: "Resource", id: input.resourceId },
-        spec: desiredSpec,
-      },
-      input.actor,
-      lineage,
-    );
+    let created: Interface;
+    try {
+      created = await input.interfaces.create(
+        {
+          workspaceId: input.workspaceId,
+          name,
+          ownerRef: { kind: "Resource", id: input.resourceId },
+          spec: desiredSpec,
+        },
+        input.actor,
+        lineage,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof InterfaceServiceError) ||
+        error.code !== "already_exists"
+      ) {
+        throw error;
+      }
+      const winner = (
+        await input.interfaces.list({
+          workspaceId: input.workspaceId,
+          ownerKind: "Resource",
+          ownerId: input.resourceId,
+          includeRetired: false,
+        })
+      ).find((record) => {
+        const source = record.metadata.materializedFrom;
+        return (
+          record.metadata.name === name &&
+          source?.source === "form_descriptor" &&
+          descriptorLineageKey(source) === descriptorLineageKey(lineage) &&
+          interfaceSpecsEqual(record.spec, desiredSpec)
+        );
+      });
+      if (!winner) throw error;
+      created =
+        winner.status.phase === "Resolved"
+          ? winner
+          : await input.interfaces.reconcile(winner.metadata.id);
+    }
     if (required && created.status.phase !== "Resolved") {
       throw new RequiredFormInterfaceError(
         descriptor.name,

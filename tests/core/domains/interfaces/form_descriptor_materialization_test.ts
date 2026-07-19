@@ -11,6 +11,7 @@ import {
   ensureFormDescriptorInterfaces,
   InterfaceService,
   OutputBackedInterfaceInputResolver,
+  PortableDeclarationReadLimitError,
   RequiredFormInterfaceError,
 } from "../../../../core/domains/interfaces/mod.ts";
 import {
@@ -240,28 +241,60 @@ test("portable Form descriptors preserve pair identity, exact document, and RFC 
   );
 });
 
-test("portable declaration reads paginate every Resource and enforce the explicit Workspace bridge", async () => {
+test("concurrent descriptor materialization adopts the exact persisted winner", async () => {
+  const interfaces = new InterfaceService({
+    stores: createInMemoryInterfaceStores(),
+    now: () => NOW,
+    newId: () => "if_parallel",
+  });
+  const input = {
+    interfaces,
+    workspaceId: "workspace_1",
+    resourceId: "space_1/ExampleInterfaceService/parallel",
+    form: FORM,
+    descriptors: [
+      {
+        name: "mcp.server",
+        version: "1",
+        document: { title: "parallel" },
+      },
+    ],
+  } as const;
+  const [left, right] = await Promise.all([
+    ensureFormDescriptorInterfaces(input),
+    ensureFormDescriptorInterfaces(input),
+  ]);
+  expect(left.materialized[0]?.metadata.id).toBe("if_parallel");
+  expect(right.materialized[0]?.metadata.id).toBe("if_parallel");
+  expect(
+    await interfaces.list({
+      workspaceId: "workspace_1",
+      ownerKind: "Resource",
+      ownerId: input.resourceId,
+      includeRetired: false,
+    }),
+  ).toHaveLength(1);
+});
+
+test("portable declaration reads are bounded and enforce each Resource Workspace bridge", async () => {
   const stores = createInMemoryInterfaceStores();
   const interfaces = new InterfaceService({
     stores,
     now: () => NOW,
     newId: () => "if_last",
   });
-  const resources: ResourceObject[] = Array.from(
-    { length: 201 },
-    (_, index) => ({
-      apiVersion: "takosumi.dev/v1alpha1",
-      kind: "ExampleInterfaceService",
-      form: FORM,
-      metadata: {
-        name: `service-${String(index).padStart(3, "0")}`,
-        space: "space_1",
-        generation: 1,
-      },
-      spec: {},
-      status: { phase: "Ready", observedGeneration: 1 },
-    }),
-  );
+  const resources: ResourceObject[] = Array.from({ length: 2 }, (_, index) => ({
+    apiVersion: "takosumi.dev/v1alpha1",
+    kind: "ExampleInterfaceService",
+    form: FORM,
+    metadata: {
+      name: `service-${String(index).padStart(3, "0")}`,
+      space: "space_1",
+      generation: 1,
+    },
+    spec: {},
+    status: { phase: "Ready", observedGeneration: 1 },
+  }));
   const last = resources.at(-1)!;
   const lastId = formatResourceShapeId(
     last.metadata.space,
@@ -282,20 +315,20 @@ test("portable declaration reads paginate every Resource and enforce the explici
       },
     ],
   });
-  const cursors: Array<string | undefined> = [];
   let repairCalls = 0;
   let resolverCalls = 0;
   const reader = createPortableDeclarationReader({
     interfaces,
-    resolveWorkspace: async () => {
+    resolveWorkspace: async ({ resourceId }) => {
       resolverCalls += 1;
-      return "workspace_1";
+      return resourceId.endsWith("service-000")
+        ? "workspace_other"
+        : "workspace_1";
     },
     ensureResourceDeclarations: async () => {
       repairCalls += 1;
     },
     listResources: (_space, page) => {
-      cursors.push(page.cursor);
       const offset = page.cursor ? Number(page.cursor) : 0;
       const items = resources.slice(offset, offset + page.limit);
       const next = offset + items.length;
@@ -304,6 +337,13 @@ test("portable declaration reads paginate every Resource and enforce the explici
         ...(next < resources.length ? { nextCursor: String(next) } : {}),
       });
     },
+    getResource: (_space, kind, name) =>
+      Promise.resolve(
+        resources.find(
+          (resource) =>
+            resource.kind === kind && resource.metadata.name === name,
+        ),
+      ),
   });
 
   const visible = await reader.listDeclaredInterfaces({
@@ -316,14 +356,13 @@ test("portable declaration reads paginate every Resource and enforce the explici
     space: "space_1",
     name: "mcp.server",
   });
-  expect(cursors).toEqual([undefined, "100", "200"]);
   expect(visible).toEqual([
     {
       name: "mcp.server",
       version: "1",
       resource: {
         kind: "ExampleInterfaceService",
-        name: "service-200",
+        name: "service-001",
       },
       document: { title: "last page" },
       values: { protocol: "http" },
@@ -331,7 +370,7 @@ test("portable declaration reads paginate every Resource and enforce the explici
     },
   ]);
   expect(repairCalls).toBe(0);
-  expect(resolverCalls).toBe(1);
+  expect(resolverCalls).toBe(2);
 
   expect(
     await reader.listDeclaredInterfaces({
@@ -347,7 +386,7 @@ test("portable declaration reads paginate every Resource and enforce the explici
     }),
   ).toHaveLength(1);
   expect(repairCalls).toBe(1);
-  expect(resolverCalls).toBe(2);
+  expect(resolverCalls).toBe(3);
 
   resources[resources.length - 1] = {
     ...last,
@@ -370,7 +409,7 @@ test("portable declaration reads paginate every Resource and enforce the explici
     }),
   ).toEqual([]);
   expect(repairCalls).toBe(1);
-  expect(resolverCalls).toBe(2);
+  expect(resolverCalls).toBe(3);
 
   expect(
     await reader.listDeclaredInterfaces({
@@ -385,5 +424,30 @@ test("portable declaration reads paginate every Resource and enforce the explici
     }),
   ).toEqual([]);
   expect(repairCalls).toBe(1);
-  expect(resolverCalls).toBe(3);
+  expect(resolverCalls).toBe(4);
+
+  const tooMany = Array.from({ length: 51 }, (_, index) => ({
+    ...resources[0]!,
+    metadata: {
+      ...resources[0]!.metadata,
+      name: `overflow-${index}`,
+    },
+  }));
+  const bounded = createPortableDeclarationReader({
+    interfaces,
+    resolveWorkspace: async () => "workspace_1",
+    getResource: async () => undefined,
+    listResources: async () => ({ items: tooMany }),
+  });
+  await expect(
+    bounded.listDeclaredInterfaces({
+      actor: {
+        actorAccountId: "acct_1",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        requestId: "req_overflow",
+      },
+      space: "space_1",
+    }),
+  ).rejects.toBeInstanceOf(PortableDeclarationReadLimitError);
 });

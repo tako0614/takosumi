@@ -2109,6 +2109,14 @@ export async function createTakosumiService(
                   interfaces: interfaceService,
                   listResources: (space, page) =>
                     resourceShapeService.listPage(space, page),
+                  getResource: async (space, kind, name) => {
+                    const result = await resourceShapeService.get(
+                      space,
+                      kind,
+                      name,
+                    );
+                    return result.ok ? result.value : undefined;
+                  },
                   resolveWorkspace: options.resolveResourceInterfaceWorkspace,
                   ensureResourceDeclarations: (resource) =>
                     materializeFormDescriptorInterfaces(

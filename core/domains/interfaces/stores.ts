@@ -8,6 +8,10 @@ export interface InterfaceListFilter {
   readonly phase?: Interface["status"]["phase"];
   readonly ownerKind?: Interface["metadata"]["ownerRef"]["kind"];
   readonly ownerId?: string;
+  /** Bounded internal batch selector; never accepted directly from public API. */
+  readonly ownerIds?: readonly string[];
+  /** Bounded internal read limit. */
+  readonly limit?: number;
   readonly includeRetired?: boolean;
 }
 
@@ -131,14 +135,15 @@ export class InMemoryInterfaceStore implements InterfaceStore {
   }
 
   list(filter: InterfaceListFilter): Promise<readonly Interface[]> {
+    const records = [...this.#records.values()]
+      .filter((record) => matches(record, filter))
+      .sort(
+        (left, right) =>
+          left.metadata.name.localeCompare(right.metadata.name) ||
+          left.metadata.id.localeCompare(right.metadata.id),
+      );
     return Promise.resolve(
-      [...this.#records.values()]
-        .filter((record) => matches(record, filter))
-        .sort(
-          (left, right) =>
-            left.metadata.name.localeCompare(right.metadata.name) ||
-            left.metadata.id.localeCompare(right.metadata.id),
-        ),
+      filter.limit === undefined ? records : records.slice(0, filter.limit),
     );
   }
 
@@ -326,6 +331,8 @@ function matches(record: Interface, filter: InterfaceListFilter): boolean {
       record.metadata.ownerRef.kind === filter.ownerKind) &&
     (filter.ownerId === undefined ||
       record.metadata.ownerRef.id === filter.ownerId) &&
+    (filter.ownerIds === undefined ||
+      filter.ownerIds.includes(record.metadata.ownerRef.id)) &&
     (filter.includeRetired === true || record.status.phase !== "Retired")
   );
 }

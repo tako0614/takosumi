@@ -150,6 +150,25 @@ for (const backend of backends) {
         descriptorName: "storage.object",
         descriptorVersion: "v1",
       });
+      expect(
+        await service.list({
+          workspaceId: "workspace_parity",
+          ownerKind: "Resource",
+          ownerIds: [
+            "tkrn:space_parity:ObjectBucket:assets",
+            "tkrn:space_parity:ObjectBucket:missing",
+          ],
+          limit: 1,
+        }),
+      ).toEqual([formMaterialized]);
+      expect(
+        await service.list({
+          workspaceId: "workspace_parity",
+          ownerKind: "Resource",
+          ownerIds: [],
+          limit: 1,
+        }),
+      ).toEqual([]);
 
       // Lifecycle conditions intentionally do not advance resolvedRevision.
       // The exact-record fence must still reject a stale condition-only write

@@ -1717,6 +1717,7 @@ export class ResourceShapeService {
 
   async importResource(
     req: ImportResourceRequest,
+    options: { readonly replayOnly?: boolean } = {},
   ): Promise<ServiceResult<ImportResourceResult>> {
     if (
       req.nativeId.trim() === "" ||
@@ -1748,6 +1749,15 @@ export class ResourceShapeService {
     );
     const recoveringImport = replayStatus === "recovering";
     const completedImport = replayStatus === "completed";
+    if (options.replayOnly === true && !replayStatus) {
+      return {
+        ok: false,
+        error: {
+          code: "import_conflict",
+          message: `resource ${id} no longer matches the replayed import request`,
+        },
+      };
+    }
     const form = await this.#resolveExactForm(req, existing, existingLock, {
       allowRetainedPackage: recoveringImport || completedImport,
       skipRequiredInterfaceAdmission: recoveringImport || completedImport,

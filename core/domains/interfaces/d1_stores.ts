@@ -61,6 +61,7 @@ class D1InterfaceStore implements InterfaceStore {
   }
 
   async list(filter: InterfaceListFilter): Promise<readonly Interface[]> {
+    if (filter.ownerIds?.length === 0) return [];
     const clauses = ["workspace_id = ?"];
     const parameters: unknown[] = [filter.workspaceId];
     const add = (sql: string, value: unknown): void => {
@@ -71,11 +72,18 @@ class D1InterfaceStore implements InterfaceStore {
     if (filter.phase !== undefined) add("phase = ?", filter.phase);
     if (filter.ownerKind !== undefined) add("owner_kind = ?", filter.ownerKind);
     if (filter.ownerId !== undefined) add("owner_id = ?", filter.ownerId);
+    if (filter.ownerIds !== undefined) {
+      clauses.push(`owner_id in (${filter.ownerIds.map(() => "?").join(",")})`);
+      parameters.push(...filter.ownerIds);
+    }
     if (filter.includeRetired !== true) clauses.push("phase <> 'Retired'");
+    if (filter.limit !== undefined) parameters.push(filter.limit);
     const rows = await this.db
       .prepare(
         `select record_json from ${this.#table}
-       where ${clauses.join(" and ")} order by name asc, id asc`,
+       where ${clauses.join(" and ")} order by name asc, id asc${
+         filter.limit === undefined ? "" : " limit ?"
+       }`,
       )
       .bind(...parameters)
       .all<JsonRow>();

@@ -532,6 +532,32 @@ export class InterfaceService {
   list(filter: InterfaceListFilter): Promise<readonly Interface[]> {
     const workspaceId = requireText(filter.workspaceId, "workspaceId");
     if (filter.type !== undefined) validateToken(filter.type, "type");
+    if (filter.ownerId !== undefined && filter.ownerIds !== undefined) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "ownerId and ownerIds are mutually exclusive",
+      );
+    }
+    if (filter.ownerIds !== undefined) {
+      if (filter.ownerIds.length > 50) {
+        throw new InterfaceServiceError(
+          "invalid_argument",
+          "ownerIds cannot contain more than 50 entries",
+        );
+      }
+      for (const ownerId of filter.ownerIds) requireText(ownerId, "ownerId");
+    }
+    if (
+      filter.limit !== undefined &&
+      (!Number.isSafeInteger(filter.limit) ||
+        filter.limit < 1 ||
+        filter.limit > 1000)
+    ) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "limit must be an integer between 1 and 1000",
+      );
+    }
     return this.#stores.interfaces.list({
       ...filter,
       workspaceId,
