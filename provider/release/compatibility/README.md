@@ -11,10 +11,10 @@ provider credentials, runtime values, or release signing material.
   public bytes. Structural hashes are SHA-256 over compact JSON after recursively
   sorting object keys and removing `description`, `description_kind`, and
   `validators`; boolean/type/nesting/state semantics remain included.
-- `1.1.2-delta-policy.json` classifies the current candidate delta. The five new
+- `1.1.3-delta-policy.json` classifies the current candidate delta. The five new
   resource types and nine optional field additions are additive schema changes,
   so the feature-bearing `1.0.1` patch lane is rejected. They remain together
-  only in the unpublished `1.1.2` minor candidate. Publication stays blocked by
+  only in the unpublished `1.1.3` minor candidate. Publication stays blocked by
   the independent compatibility and external release gates.
 - `service-form-removal-policy.json` keeps the Resource Shape/API/provider/state
   aliases supported through v1 and announces a non-retroactive minimum 365-day

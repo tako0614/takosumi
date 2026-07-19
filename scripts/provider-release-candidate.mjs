@@ -227,7 +227,7 @@ function buildCandidateManifest({
     join(REPO_ROOT, "provider/release/version.json"),
   );
   const policyDigest = sha256FileSync(
-    join(REPO_ROOT, "provider/release/compatibility/1.1.2-delta-policy.json"),
+    join(REPO_ROOT, "provider/release/compatibility/1.1.3-delta-policy.json"),
   );
   return {
     kind: "takos.release-candidate-manifest@v1",
