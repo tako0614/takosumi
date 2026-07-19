@@ -29,6 +29,7 @@ import type {
   PatchSourceRequest,
   SourceResponse,
   SourceSnapshot,
+  SourceSnapshotFileResponse,
 } from "takosumi-contract/sources";
 import type {
   CapsuleCompatibilityReportResponse,
@@ -238,6 +239,52 @@ export async function handleSources(
         snapshots: response.snapshots.map(publicSourceSnapshot),
       });
     }
+    if (
+      segments.length === 5 &&
+      segments[2] === "snapshots" &&
+      segments[4] === "file"
+    ) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      const sourceId = decodeURIComponent(segments[1] ?? "");
+      const sourceSnapshotId = decodeURIComponent(segments[3] ?? "");
+      const { source } = await operations.getSource(sourceId);
+      const workspaceId = sourceWorkspaceId(source);
+      if (!workspaceId) return sourceWorkspaceIdentityMissing();
+      const auth = await requireWorkspaceAccess({
+        operations,
+        store,
+        workspaceId,
+        subject: ctx.session.subject,
+      });
+      if (!auth.ok) return auth.response;
+      if (source.authConnectionId) {
+        return errorJson(
+          "failed_precondition",
+          "presentation-file inspection is limited to credential-free public Sources",
+          409,
+        );
+      }
+      const snapshot = await operations.getSourceSnapshot(sourceSnapshotId);
+      if (snapshot.sourceId !== sourceId) {
+        return errorJson("not_found", "SourceSnapshot not found", 404);
+      }
+      const path = presentationFilePath(url.searchParams.get("path"));
+      if (!path) {
+        return errorJson(
+          "invalid_request",
+          "path must be a safe relative JSON file path",
+          400,
+        );
+      }
+      const file = await operations.readSourceSnapshotPresentationFile(
+        sourceSnapshotId,
+        path,
+      );
+      return json({
+        sourceSnapshotId,
+        ...file,
+      } satisfies SourceSnapshotFileResponse);
+    }
     if (segments.length === 3 && segments[2] === "compatibility-check") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "POST") return methodNotAllowed("POST");
@@ -319,6 +366,14 @@ export async function handleSources(
   return undefined;
 }
 
+function presentationFilePath(value: string | null): string | undefined {
+  const path = modulePathValue(value ?? undefined);
+  if (!path || path.length > 1_024 || !path.toLowerCase().endsWith(".json")) {
+    return undefined;
+  }
+  return path;
+}
+
 export async function handleCompatibilityReports(
   ctx: ControlDispatchContext,
   segments: readonly string[],
@@ -333,8 +388,7 @@ export async function handleCompatibilityReports(
     const reportWorkspaceId = report.sourceId
       ? sourceWorkspaceId((await operations.getSource(report.sourceId)).source)
       : report.capsuleId
-        ? (await operations.capsules.getCapsule(report.capsuleId))
-            .workspaceId
+        ? (await operations.capsules.getCapsule(report.capsuleId)).workspaceId
         : undefined;
     if (!reportWorkspaceId) {
       return errorJson("not_found", "compatibility report not found", 404);

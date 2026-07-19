@@ -324,6 +324,18 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
+      method: "GET",
+      path: "/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/file",
+      summary: "Read one bounded SourceSnapshot presentation file",
+      auth: "account-session",
+    },
+    {
+      method: "POST",
+      path: "/api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver",
+      summary: "Resolve the highest public stable SemVer Git tag",
+      auth: "account-session",
+    },
+    {
       method: "POST",
       path: "/api/v1/sources/{sourceId}/compatibility-check",
       summary: "Create a Compatibility Report",

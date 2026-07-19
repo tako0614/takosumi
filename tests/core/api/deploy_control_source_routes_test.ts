@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import { createApiApp } from "../../../core/api/app.ts";
-import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
+import {
+  OpenTofuController,
+  type OpenTofuRunner,
+} from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import {
   SourcesService,
@@ -18,6 +21,7 @@ function makeApp() {
 async function makeAppWithStore(
   options: {
     readonly readCapsuleSourceFiles?: ReadCapsuleSourceFiles;
+    readonly runner?: OpenTofuRunner;
   } = {},
 ) {
   const store = new InMemoryOpenTofuControlStore();
@@ -34,6 +38,7 @@ async function makeAppWithStore(
   const controller = new OpenTofuController({
     store,
     sourcesService,
+    ...(options.runner ? { runner: options.runner } : {}),
   });
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
@@ -71,6 +76,108 @@ test("POST /internal/v1/sources requires a bearer (401)", async () => {
     }),
   });
   expect(response.status).toBe(401);
+});
+
+test("stable tag and SourceSnapshot presentation-file routes are authenticated and runner-backed", async () => {
+  const stableJobs: unknown[] = [];
+  const fileJobs: unknown[] = [];
+  const runner: OpenTofuRunner = {
+    plan: () => {
+      throw new Error("not used");
+    },
+    apply: () => {
+      throw new Error("not used");
+    },
+    resolveStableSourceTag: (job) => {
+      stableJobs.push(job);
+      return Promise.resolve({
+        tag: "v1.2.3",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+      });
+    },
+    readSourceSnapshotPresentationFile: (job) => {
+      fileJobs.push(job);
+      return Promise.resolve({
+        path: job.path,
+        text: '{"kind":"CapsuleSourceOptions"}\n',
+        digest:
+          "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        sizeBytes: 32,
+      });
+    },
+  };
+  const { app, store } = await makeAppWithStore({ runner });
+  const created = await app.request("/internal/v1/sources", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      workspaceId: "ws_001",
+      name: "options",
+      url: "https://github.com/acme/catalog.git",
+    }),
+  });
+  const { source } = await created.json();
+  const snapshot: SourceSnapshot = {
+    id: "snap_options00000001",
+    origin: "git",
+    workspaceId: "ws_001",
+    sourceId: source.id,
+    url: source.url,
+    ref: "0123456789abcdef0123456789abcdef01234567",
+    resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
+    path: ".",
+    archiveRef: "workspaces/ws_001/options/source.tar.zst",
+    archiveDigest:
+      "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    archiveSizeBytes: 123,
+    fetchedByRunId: "ssr_options00000001",
+    fetchedAt: "2026-07-19T00:00:00.000Z",
+  };
+  await store.putSourceSnapshot(snapshot);
+
+  const unauthenticated = await app.request(
+    `/internal/v1/sources/${source.id}/snapshots/${snapshot.id}/file?path=install/options.json`,
+  );
+  expect(unauthenticated.status).toBe(401);
+
+  const file = await app.request(
+    `/internal/v1/sources/${source.id}/snapshots/${snapshot.id}/file?path=install/options.json`,
+    { headers: { authorization: "Bearer scoped-token" } },
+  );
+  expect(file.status).toBe(200);
+  expect(await file.json()).toMatchObject({
+    sourceSnapshotId: snapshot.id,
+    path: "install/options.json",
+    digest:
+      "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    sizeBytes: 32,
+  });
+  expect(fileJobs).toHaveLength(1);
+
+  const stable = await app.request(
+    "/internal/v1/workspaces/ws_001/source-ref-resolutions/stable-semver",
+    {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({ url: "https://github.com/acme/catalog.git" }),
+    },
+  );
+  expect(stable.status).toBe(200);
+  expect(await stable.json()).toEqual({
+    tag: "v1.2.3",
+    commit: "0123456789abcdef0123456789abcdef01234567",
+  });
+  expect(stableJobs).toHaveLength(1);
+
+  const denied = await app.request(
+    "/internal/v1/workspaces/ws_denied/source-ref-resolutions/stable-semver",
+    {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({ url: "https://github.com/acme/catalog.git" }),
+    },
+  );
+  expect(denied.status).toBe(403);
 });
 
 test("POST /internal/v1/sources rejects an unknown field (400)", async () => {

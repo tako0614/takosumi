@@ -19,6 +19,7 @@ export {
   parseSourceSyncSource,
   parseSourceCredentials,
   parseLsRemoteCommit,
+  resolveHighestStableSemverTag,
   handleDepStateRestoreRequest,
 } from "./lib/source_sync.ts";
 export {

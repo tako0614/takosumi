@@ -13,6 +13,8 @@ import type {
   OpenTofuPlanJob,
   OpenTofuPlanResult,
   OpenTofuRunner,
+  OpenTofuStableSourceTagResolutionJob,
+  OpenTofuSourceSnapshotPresentationFileJob,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -37,6 +39,8 @@ interface RecordingRunner extends OpenTofuRunner {
   readonly planJobs: OpenTofuPlanJob[];
   readonly applyJobs: OpenTofuApplyJob[];
   readonly destroyJobs: OpenTofuDestroyJob[];
+  readonly stableTagJobs: OpenTofuStableSourceTagResolutionJob[];
+  readonly presentationFileJobs: OpenTofuSourceSnapshotPresentationFileJob[];
 }
 
 function recordingRunner(
@@ -45,10 +49,14 @@ function recordingRunner(
   const planJobs: OpenTofuPlanJob[] = [];
   const applyJobs: OpenTofuApplyJob[] = [];
   const destroyJobs: OpenTofuDestroyJob[] = [];
+  const stableTagJobs: OpenTofuStableSourceTagResolutionJob[] = [];
+  const presentationFileJobs: OpenTofuSourceSnapshotPresentationFileJob[] = [];
   return {
     planJobs,
     applyJobs,
     destroyJobs,
+    stableTagJobs,
+    presentationFileJobs,
     plan: (job) => {
       planJobs.push(job);
       return Promise.resolve({
@@ -111,6 +119,23 @@ output "launch_url" {
 `,
         },
       ]),
+    resolveStableSourceTag: (job) => {
+      stableTagJobs.push(job);
+      return Promise.resolve({
+        tag: "v2.4.0",
+        commit: "1234567890abcdef1234567890abcdef12345678",
+      });
+    },
+    readSourceSnapshotPresentationFile: (job) => {
+      presentationFileJobs.push(job);
+      return Promise.resolve({
+        path: job.path,
+        text: '{"kind":"CapsuleSourceOptions"}\n',
+        digest:
+          "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        sizeBytes: 32,
+      });
+    },
   };
 }
 
@@ -206,6 +231,48 @@ test("account session control routes execute plan and apply through the real Ope
     environment: "preview",
   });
   await seedProviderConnections(deployStore, seeded.capsule);
+
+  const stableTag = await controlJson<{
+    readonly tag: string;
+    readonly commit: string;
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${seeded.workspace.id}/source-ref-resolutions/stable-semver`,
+      body: { url: "https://github.com/example/options.git" },
+    },
+    200,
+  );
+  expect(stableTag).toEqual({
+    tag: "v2.4.0",
+    commit: "1234567890abcdef1234567890abcdef12345678",
+  });
+  expect(runner.stableTagJobs).toHaveLength(1);
+
+  const presentationFile = await controlJson<{
+    readonly sourceSnapshotId: string;
+    readonly path: string;
+    readonly digest: string;
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "GET",
+      path: `/api/v1/sources/${seeded.source.id}/snapshots/${seeded.snapshot.id}/file?path=install%2Foptions.json`,
+    },
+    200,
+  );
+  expect(presentationFile).toMatchObject({
+    sourceSnapshotId: seeded.snapshot.id,
+    path: "install/options.json",
+    digest:
+      "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+  });
+  expect(runner.presentationFileJobs).toHaveLength(1);
 
   const planBody = await controlJson<{
     readonly run: {
