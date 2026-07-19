@@ -93,7 +93,7 @@ fail-closed gate in the operator evidence environment:
 bun run service-form:compat-removal:eligible -- \
   --evidence /operator/evidence/removal-evidence.json \
   --inventory /operator/evidence/compat-inventory-1.json \
-  --takosumi-provider-proof /operator/evidence/1.1.3-state-proof.json \
+  --takosumi-provider-proof /operator/evidence/1.1.4-state-proof.json \
   --takoform-migration-evidence /operator/evidence/takoform-migration-evidence.json \
   --rollback-artifacts /operator/evidence/rollback-artifacts.json
 ```

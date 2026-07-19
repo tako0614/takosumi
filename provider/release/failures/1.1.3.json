@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "version": "1.1.3",
+  "tag": "provider/v1.1.3",
+  "tagObjectId": "d8da6bab688f1e974aa3b671e05e3a976bdd5708",
+  "sourceCommit": "3e76203aff781394e84614b4143c31a626e31c83",
+  "candidateWorkflowRunId": "29685320924",
+  "candidateWorkflowRunUrl": "https://github.com/tako0614/takosumi/actions/runs/29685320924",
+  "promotionWorkflowRunId": "29685864746",
+  "promotionWorkflowRunUrl": "https://github.com/tako0614/takosumi/actions/runs/29685864746",
+  "observedAt": "2026-07-19T13:40:01Z",
+  "status": "abandoned-after-artifact-before-promotion",
+  "reason": {
+    "code": "release-authority-superseded",
+    "message": "The immutable tag embeds the retired protected-environment promotion authority and cannot be rewritten; a new version is required for the single-operator technical-authorization workflow."
+  },
+  "candidateArtifact": {
+    "id": "8441951016",
+    "name": "takosumi-provider-release-candidate-1.1.3-3e76203aff78",
+    "sizeBytes": 48055686,
+    "buildSucceeded": true
+  },
+  "artifactProduced": true,
+  "promotionCancelled": true,
+  "stableMutationAttempted": false,
+  "tagDisposition": "immutable-retained-never-move-or-delete",
+  "replacementCandidate": "1.1.4"
+}
