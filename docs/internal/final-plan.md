@@ -2582,7 +2582,7 @@ portable Takoform/CLI/dashboard/compat control requests converge on that API
 compat data planes resolve Ready canonical Resources
 no adapter or backend manager calls a compat handler as its implementation
 the portable Takoform provider has an immutable independent release lane while the discontinued Takosumi provider remains custody-only with no replacement release
-Capsule Interface blueprint ownership, retained run-token fencing, shared display parsing, and status self-report are conformant
+Capsule Interface blueprint ownership, operator cleanup of retained historical rows, shared display parsing, and status self-report are conformant
 supported old provider state has no-op migration and rollback proof
 TargetPool/Policy/Adapter remain usable but live in operator/advanced UX
 FormActivation is generic OSS policy with no price/payment/capacity fields

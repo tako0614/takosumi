@@ -1554,8 +1554,8 @@ isolation, quota, network egress policy, admin audit, and usage metering.
 2. OpenTofu Stack controller: Git, runner, state, logs, approval, credentials.
 3. ProviderConnection / CredentialRecipe / generic env / OIDC federation.
 4. Interface storage/API, service-side blueprint ownership, generic input
-   resolution, provenance, lifecycle/status channels, retained historical
-   run-token fencing, and InterfaceBinding authorization.
+   resolution, provenance, lifecycle/status channels, operator cleanup of
+   retained historical rows, and InterfaceBinding authorization.
 5. Move first-party runtime consumers to Interface reads and invocation-time
    Principal OAuth credentials; remove legacy Output convention and
    Workspace-wide Output reconcile paths.

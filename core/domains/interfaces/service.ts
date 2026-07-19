@@ -393,9 +393,10 @@ export class InterfaceService {
           record.metadata.materializedFrom?.source === "capsule_blueprint" &&
           record.metadata.materializedFrom.key === key,
       );
-      // Exclusive declaration ownership: a module-declared Interface owns its
-      // name and spec. A matching blueprint contributes only its service-side
-      // binding proposals and never adopts or rewrites that record.
+      // Exclusive declaration ownership: a retained historical
+      // capsule_resource Interface owns its name and spec. A matching blueprint
+      // contributes only service-side binding proposals and never adopts or
+      // rewrites that record.
       if (!existing) {
         const resourceOwned = history.find(
           (record) =>
