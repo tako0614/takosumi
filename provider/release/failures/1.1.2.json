@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "version": "1.1.2",
+  "tag": "provider/v1.1.2",
+  "tagObjectId": "8f6512dd27e529e37bfe6217212653aacd1d49b1",
+  "sourceCommit": "d89d355a22fd4927cae0aba035a7aa9c806b1490",
+  "workflowRunId": "29684554265",
+  "workflowRunUrl": "https://github.com/tako0614/takosumi/actions/runs/29684554265",
+  "observedAt": "2026-07-19T11:07:20Z",
+  "status": "failed-before-artifact",
+  "failure": {
+    "step": "Run canonical Takosumi quality gates",
+    "code": "opentofu-cli-unavailable",
+    "message": "OpenTofu CLI is required for provider schema compatibility",
+    "priorReleaseFixVerified": true
+  },
+  "artifactProduced": false,
+  "stableMutationAttempted": false,
+  "tagDisposition": "immutable-retained-never-move-or-delete",
+  "replacementCandidate": "1.1.3"
+}

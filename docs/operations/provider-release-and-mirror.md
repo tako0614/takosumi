@@ -85,7 +85,7 @@ bun run provider:compatibility:state-proof
 bun run provider:compatibility:release-check
 ```
 
-The first command builds `1.1.2` in a temporary directory and compares the
+The first command builds `1.1.3` in a temporary directory and compares the
 OpenTofu machine schema to the digest-pinned, value-free identity captured from
 the exact public `1.0.0` archive. After removing only the policy-declared delta,
 the historical provider schema and seven historical resource schemas must
@@ -118,7 +118,7 @@ explicit, credential-free environment allowlist, and every phase asserts exact
 per-resource plus TargetPool request-count deltas.
 
 With the reviewed Terraform `1.15.8` binary on `PATH`, the command atomically
-writes `tmp/provider-compatibility/1.1.2-state-proof.json` and its SHA-256
+writes `tmp/provider-compatibility/1.1.3-state-proof.json` and its SHA-256
 sidecar. The ignored document is deterministic for the same inputs and records
 only authority/candidate/source/toolchain digests, CLI version/platform,
 explicit FQNs, and bounded success flags. It records no timestamp, executable
@@ -144,13 +144,13 @@ or all 20, removes only those exact regular files, then requires the pinned
 extra, path substitution, or post-normalization drift fails before Go executes.
 
 ```bash
-bun run provider:compatibility:state-proof -- --evidence /operator/evidence/provider-1.1.2-proof.json
-bun run provider:compatibility:release-check -- --evidence /operator/evidence/provider-1.1.2-proof.json
+bun run provider:compatibility:state-proof -- --evidence /operator/evidence/provider-1.1.3-proof.json
+bun run provider:compatibility:release-check -- --evidence /operator/evidence/provider-1.1.3-proof.json
 ```
 
 `release-check` remains failing until the digest-bound compatibility evidence
 proves the matrix. The feature-bearing `1.0.1` patch is rejected; the classified
-five resources and nine fields stay only in the `1.1.2` minor candidate. The
+five resources and nine fields stay only in the `1.1.3` minor candidate. The
 supported Terraform matrix must be run with its reviewed CLI, with OpenTofu
 proved under `registry.opentofu.org/takosjp/takosumi` and Terraform proved under
 `registry.terraform.io/takosjp/takosumi`. A missing Terraform CLI is
@@ -162,17 +162,20 @@ independent external blockers below.
 
 ## Build a corrected candidate
 
-The current corrected version is `1.1.2` and remains unpublished. The signed
+The current corrected version is `1.1.3` and remains unpublished. The signed
 `provider/v1.1.0` tag is retained as an immutable failed-candidate record: run
 `29681461022` failed before producing any artifact because its preview-runner
 tool digest drifted, and no stable mutation was attempted. Signed tag
 `provider/v1.1.1` is also retained immutably: run `29683430714` proved the
 pinned Ubuntu 24.04 substrate and then failed before producing an artifact
 because `go mod download all` exposed 52 missing `provider/go.sum` checksum
-lines. `1.1.2` includes those checksums, verifies signed source identity before
-dependency installation, and requires cache priming to leave `go.mod` and
-`go.sum` clean. The commands below are a local, non-publishing diagnostic for
-the exact builder. Production
+lines. Signed `provider/v1.1.2` is retained after run `29684554265`: its
+isolated materialization, clean-source assertions, signature verification, and
+external cache prime all passed, then the canonical compatibility gate stopped
+before artifact creation because the candidate job lacked OpenTofu. `1.1.3`
+keeps the source isolation and adds the same SHA-pinned OpenTofu action/version
+as the quality workflow plus an exact JSON identity check. The commands below
+are a local, non-publishing diagnostic for the exact builder. Production
 candidate authority comes only from the `candidate` phase of
 `.github/workflows/provider-release.yml` on the signed tag. After the release
 change is committed, create the exact clean provider tag according to the
@@ -184,11 +187,11 @@ operator-custodied outside every repository and are not shared with Takoform.
 The diagnostic output path must not exist and must be outside the repository:
 
 ```bash
-commit=$(git rev-parse 'refs/tags/provider/v1.1.2^{commit}')
+commit=$(git rev-parse 'refs/tags/provider/v1.1.3^{commit}')
 bun run provider:release:build -- \
-  --tag provider/v1.1.2 \
+  --tag provider/v1.1.3 \
   --source-commit "$commit" \
-  --output /srv/takosumi-provider-candidates/1.1.2
+  --output /srv/takosumi-provider-candidates/1.1.3
 ```
 
 The command fails when the caller checkout or detached tagged worktree is
@@ -202,6 +205,8 @@ configuration, hooks, fsmonitor, attributes, and implicit signing disabled;
 gpgv verifies the captured annotated-tag payload directly against the pinned
 keyring. Go dependency resolution is offline (`GOPROXY=off`) and `go mod
 verify` must validate the pre-populated module cache before compilation.
+The workflow verifies OpenTofu's exact version and `linux_amd64` platform
+before source materialization and canonical compatibility checks.
 Release output
 contains:
 
@@ -220,7 +225,7 @@ Re-verify a reviewed release bundle before it can be considered for
 publication:
 
 ```bash
-bun run provider:release:verify -- --root /srv/takosumi-provider-candidates/1.1.2
+bun run provider:release:verify -- --root /srv/takosumi-provider-candidates/1.1.3
 ```
 
 This gate captures each input file once into a private `0700` snapshot with
@@ -234,7 +239,7 @@ public-path gate are still required.
 Before an approved external publication, run the read-only public-path gate:
 
 ```bash
-bun run provider:release:prepublish -- --root /srv/takosumi-provider-candidates/1.1.2
+bun run provider:release:prepublish -- --root /srv/takosumi-provider-candidates/1.1.3
 ```
 
 It permits only the fixed `https://app.takosumi.com/opentofu/providers/`

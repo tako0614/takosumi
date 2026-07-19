@@ -42,6 +42,11 @@ describe("provider release workflow authority", () => {
       new URL("../../.github/workflows/provider-release.yml", import.meta.url),
     ).text();
     const workflow = parse(source) as Record<string, any>;
+    const qualityWorkflow = parse(
+      await Bun.file(
+        new URL("../../.github/workflows/quality.yml", import.meta.url),
+      ).text(),
+    ) as Record<string, any>;
     const releaseDescriptor = (await Bun.file(
       new URL("../../provider/release/version.json", import.meta.url),
     ).json()) as Record<string, any>;
@@ -80,6 +85,12 @@ describe("provider release workflow authority", () => {
     expect(workflow.jobs.promote["runs-on"]).toBe("ubuntu-24.04");
     expect(workflow.env.BUN_VERSION).toBe("1.3.14");
     expect(workflow.env.GO_VERSION).toBe("1.26.5");
+    const qualityOpenTofu = qualityWorkflow.jobs.quality.steps.find(
+      (step: Record<string, unknown>) => step.name === "Setup OpenTofu",
+    );
+    expect(workflow.env.OPENTOFU_VERSION).toBe(
+      String(qualityOpenTofu.with.tofu_version),
+    );
     expect(releaseDescriptor.toolchain.go.version).toBe(
       `go${workflow.env.GO_VERSION}`,
     );
@@ -132,6 +143,34 @@ describe("provider release workflow authority", () => {
         jobName === "candidate"
           ? "Validate immutable source identity"
           : "Validate sealed controller inputs";
+      const setupOpenTofu = workflow.jobs[jobName].steps.find(
+        (step: Record<string, unknown>) =>
+          step.name === "Setup OpenTofu for canonical quality gates",
+      );
+      expect(setupOpenTofu.uses).toBe(
+        "opentofu/setup-opentofu@847eaa4afeb791b06daa46e8eafa8b1b68d7cfb4",
+      );
+      expect(setupOpenTofu.with).toEqual({
+        tofu_version: "${{ env.OPENTOFU_VERSION }}",
+        tofu_wrapper: false,
+      });
+      const verifyOpenTofu = workflow.jobs[jobName].steps.find(
+        (step: Record<string, unknown>) =>
+          step.name === "Verify exact OpenTofu CLI",
+      );
+      expect(verifyOpenTofu.run).toContain("tofu version -json");
+      expect(verifyOpenTofu.run).toContain(
+        'test "${tofu_identity[0]}" = "${OPENTOFU_VERSION}"',
+      );
+      expect(verifyOpenTofu.run).toContain(
+        'test "${tofu_identity[1]}" = "linux_amd64"',
+      );
+      expect(
+        stepNames.indexOf("Setup OpenTofu for canonical quality gates"),
+      ).toBeLessThan(stepNames.indexOf("Verify exact OpenTofu CLI"));
+      expect(stepNames.indexOf("Verify exact OpenTofu CLI")).toBeLessThan(
+        stepNames.indexOf("Materialize descriptor-pinned Go path"),
+      );
       expect(
         stepNames.indexOf("Materialize descriptor-pinned Go path"),
       ).toBeLessThan(
@@ -154,6 +193,11 @@ describe("provider release workflow authority", () => {
         "git diff --exit-code -- provider/go.mod provider/go.sum",
       );
     }
+    expect(
+      candidateStepNames.indexOf("Verify exact OpenTofu CLI"),
+    ).toBeLessThan(
+      candidateStepNames.indexOf("Run canonical Takosumi quality gates"),
+    );
 
     const actionReferences = [...source.matchAll(/uses:\s*([^\s#]+)/gu)].map(
       ([, reference]) => reference,
@@ -298,7 +342,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: "release-manifest.json",
         bundlePath: "/tmp/release-manifest.sigstore.json",
-        expectedTag: "provider/v1.1.2",
+        expectedTag: "provider/v1.1.3",
       }),
     ).rejects.toThrow("authority path must be absolute");
   });
@@ -313,7 +357,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: fixture.subjectPath,
         bundlePath: fixture.bundlePath,
-        expectedTag: "provider/v1.1.2",
+        expectedTag: "provider/v1.1.3",
         policyPath: fixture.policyPath,
       }),
     ).rejects.toThrow("provider publisher policy sidecar mismatch");
@@ -329,7 +373,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: fixture.subjectPath,
         bundlePath: fixture.bundlePath,
-        expectedTag: "provider/v1.1.2",
+        expectedTag: "provider/v1.1.3",
         policyPath: fixture.policyPath,
       }),
     ).rejects.toThrow("provider Sigstore TrustedRoot sidecar mismatch");
@@ -355,7 +399,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseTag({
         repoRoot: new URL("../../", import.meta.url).pathname,
         sourceCommit: "not-a-commit",
-        tag: "provider/v1.1.2",
+        tag: "provider/v1.1.3",
       }),
     ).rejects.toThrow("exact source commit");
   });
@@ -396,8 +440,8 @@ async function candidateFixture(options: {
     surfaceId: "takosumi-provider",
     repository: "https://github.com/tako0614/takosumi.git",
     sourceCommit: "1".repeat(40),
-    version: "1.1.2",
-    tag: "provider/v1.1.2",
+    version: "1.1.3",
+    tag: "provider/v1.1.3",
     workflowRunId: "123",
     builtAt: "2026-07-19T00:00:00.000Z",
     ociImages: [],

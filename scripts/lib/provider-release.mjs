@@ -1401,7 +1401,7 @@ export async function verifyProviderReleaseSource({
     repoRoot,
     "tmp",
     "provider-compatibility",
-    "1.1.2-state-proof.json",
+    "1.1.3-state-proof.json",
   ),
 } = {}) {
   const descriptorSnapshot = await readAuthorityJsonWithSidecar(
