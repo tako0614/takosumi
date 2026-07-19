@@ -6,12 +6,13 @@ version.
 
 - `version.json` is the exact candidate version, tag, address, platform, and
   hermetic toolchain/runtime contract. Its SHA-256 sidecar is required.
-  `1.1.3` is the current candidate and has not been published. The signed
-  `1.1.0`, `1.1.1`, and `1.1.2` tags are retained immutably under `failures/`
-  after their pre-artifact failures; they are never moved, deleted, or reused.
-  `1.1.1` exposed source-mutating Go download preparation. `1.1.2` proved the
-  resulting clean-source path, then stopped because the candidate job had not
-  installed the OpenTofu CLI required by the canonical compatibility gate.
+  `1.1.4` is the current candidate and has not been published. The signed
+  `1.1.0`, `1.1.1`, `1.1.2`, and `1.1.3` tags are retained immutably under
+  `failures/`; they are never moved, deleted, or reused. The first three record
+  pre-artifact failures. `1.1.3` built and sealed an immutable artifact, but its
+  promotion was cancelled before stable mutation because that immutable source
+  still embedded the retired protected-environment authority. `1.1.4` carries
+  the single-operator technical-authorization workflow on a new exact tag.
 - `registry.json` plus its sidecar is the only normal mirror-admission
   authority. It retains all known versions, but only an externally verified
   `approved` entry is publishable. Quarantine entries are validated evidence,
@@ -23,7 +24,7 @@ version.
   asset. The served binary reports `dev` and dirty provenance, so `1.0.0` is
   retained for compatibility but is never reproducible release evidence.
 - `compatibility/1.0.0-state-identity.json` pins the non-secret structural
-  schema identity read from those exact public bytes. The adjacent `1.1.3`
+  schema identity read from those exact public bytes. The adjacent `1.1.4`
   delta policy classifies five new resources and nine optional attributes,
   rejects their inclusion in the `1.0.1` patch lane, and keeps them together
   only in the unpublished minor candidate.
@@ -67,13 +68,13 @@ Run `bun run provider:compatibility:check` for the hermetic current-schema
 comparison and prerequisite matrix. Run
 `bun run provider:compatibility:state-proof` separately for the connected
 old-state proof. That command writes ignored, digest-bound, credential-free
-evidence to `tmp/provider-compatibility/1.1.3-state-proof.json` plus its SHA-256
+evidence to `tmp/provider-compatibility/1.1.4-state-proof.json` plus its SHA-256
 sidecar. `provider:compatibility:release-check` is red until that evidence proves
 the explicit OpenTofu/Terraform schema, state, and FQN matrix; CLI discovery
 alone never claims the matrix. Passing this compatibility gate does not clear
 the independent signer, signature, transparency, public-path, or mirror
 activation blockers. The feature-bearing patch lane is already rejected in
-favor of the `1.1.3` minor candidate.
+favor of the `1.1.4` minor candidate.
 
 See [provider-release-and-mirror.md](../../docs/operations/provider-release-and-mirror.md)
 for commands and incident handling.
