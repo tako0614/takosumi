@@ -4667,7 +4667,7 @@ async function runSelfTest(): Promise<void> {
   if (serializedProviderless.includes("keyless-selftest")) {
     throw new Error("providerless self-test leaked vars content");
   }
-  const managedCompatOptions = await resolveOptions(
+  const managedCloudflareOptions = await resolveOptions(
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
@@ -4679,7 +4679,7 @@ async function runSelfTest(): Promise<void> {
       cloudflareConnectionMode: "none",
       verificationMode: "opentofu",
       varsJson:
-        '{"target":"cloudflare","project_name":"takos-managed-selftest","environment":"selftest","cloudflare":{"account_id":"ts_acc_takosumi_cloud","api_base_url":"https://app.takosumi.com/compat/cloudflare/client/v4","workers_subdomain":"app.takos.jp"}}',
+        '{"target":"cloudflare","project_name":"takos-managed-selftest","environment":"selftest","cloudflare":{"account_id":"acc_selftest","workers_subdomain":"app.takos.jp"}}',
       outputAllowlistJson:
         '{"published_endpoint":{"from":"url","type":"url","required":true},"runtime_resource":{"from":"worker_name","type":"string","required":true}}',
       cloudflareWorkerNameOutput: "runtime_resource",
@@ -4688,11 +4688,11 @@ async function runSelfTest(): Promise<void> {
     {},
   );
   if (
-    "name" in managedCompatOptions.vars ||
-    "base_url" in managedCompatOptions.vars
+    "name" in managedCloudflareOptions.vars ||
+    "base_url" in managedCloudflareOptions.vars
   ) {
     throw new Error(
-      "managed compat self-test should not inherit providerless default vars",
+      "managed Cloudflare self-test should not inherit providerless default vars",
     );
   }
   const currentHelloHtml =
@@ -4711,7 +4711,7 @@ async function runSelfTest(): Promise<void> {
     throw new Error("self-test accepted a non-Takosumi hello page");
   }
   if (
-    cloudflareWorkerName(managedCompatOptions, {
+    cloudflareWorkerName(managedCloudflareOptions, {
       runtime_resource: "portable-storage-runtime",
     }) !== "portable-storage-runtime"
   ) {
@@ -4722,14 +4722,14 @@ async function runSelfTest(): Promise<void> {
   const {
     cloudflareWorkerNameOutput: _explicitWorkerNameOutput,
     ...configuredWorkerOptions
-  } = managedCompatOptions;
+  } = managedCloudflareOptions;
   if (
     cloudflareWorkerName(configuredWorkerOptions) !== "takos-managed-selftest"
   ) {
     throw new Error("self-test did not use the explicit app name fallback");
   }
   if (
-    publicRuntimeUrl(managedCompatOptions, {
+    publicRuntimeUrl(managedCloudflareOptions, {
       published_endpoint: "https://storage.example.test",
     }) !== "https://storage.example.test"
   ) {

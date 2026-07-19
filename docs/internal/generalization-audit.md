@@ -39,9 +39,9 @@ The following are forbidden in the OSS core:
   label.
 
 Generalization is not vocabulary erasure. `Space` remains the current Resource
-API namespace, a Cloudflare compatibility adapter may use Worker/D1/R2 terms,
-and a concrete module may expose ordinary outputs such as `worker_name` or
-`url`. Those names become a boundary violation only when generic Core,
+API namespace, a concrete compatibility adapter may use protocol-specific terms,
+and a module may expose ordinary outputs such as `worker_name` or `url`. Those
+names become a boundary violation only when generic Core,
 dashboard, or operator tooling interprets them without an explicit
 adapter/contribution or service-side mapping.
 

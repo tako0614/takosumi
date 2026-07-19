@@ -21,9 +21,8 @@ object should not exist in this provider.
 The standard rule is simple: if an industry-standard surface fits, use that
 surface. If the service form is real but no adequate standard surface exists,
 define a typed Takosumi shape. S3-compatible object storage, OCI registries,
-Kubernetes CRDs, CloudEvents, OpenAI-compatible APIs, and scoped Cloudflare
-Workers-compatible import/deploy paths are standard-conscious compatibility
-surfaces; they are not reasons to add duplicate `takosumi_*` resources. The
+Kubernetes CRDs, CloudEvents, and OpenAI-compatible APIs are standard-conscious
+compatibility surfaces; they are not reasons to add duplicate `takosumi_*` resources. The
 Takosumi endpoint owns resolver decisions, credentials, state, drift, and
 adapter execution.
 
@@ -177,7 +176,7 @@ capability discovery, cursor pagination, and structured error codes.
 Compatibility APIs are separate first-class surfaces. They preserve standard
 protocol/API facades when Takosumi provides the backend or import path. When
 Takosumi exposes S3-compatible storage, OCI registry, CloudEvents, Kubernetes
-CRDs, OpenAI-compatible AI Gateway, or a Cloudflare Workers-compatible subset,
+CRDs, or an OpenAI-compatible AI Gateway,
 those facades enter Takosumi-managed capabilities. They are not this provider's
 internal model, and the provider is not the canonical route for them. Internal
 normalization into Resource API state, usage, or audit records is bookkeeping,

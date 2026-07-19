@@ -1309,14 +1309,14 @@ test("platformExtensionRoutes merges duplicate capability descriptors", () => {
     platformExtensionRoutes({
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
-          basePath: "/compat/cloudflare/client/v4",
+          basePath: "/compat/example/v1",
           handlerKey: "TEST_COMPAT_EXTENSION",
           compatibilityProfiles: [
             { profile: "compat.object-store.v1", planes: ["data"] },
           ],
         },
         {
-          basePath: "/compat/cloudflare/client/v4",
+          basePath: "/compat/example/v1",
           handlerKey: "TEST_COMPAT_EXTENSION",
           compatibilityProfiles: [
             { profile: "compat.kv.v1", planes: ["data"] },
@@ -1326,7 +1326,7 @@ test("platformExtensionRoutes merges duplicate capability descriptors", () => {
     }),
   ).toEqual([
     {
-      basePath: "/compat/cloudflare/client/v4",
+      basePath: "/compat/example/v1",
       handlerKey: "TEST_COMPAT_EXTENSION",
       capabilities: ["compat.object-store.v1", "compat.kv.v1"],
       compatibilityProfiles: [
@@ -1374,6 +1374,17 @@ test("the seam claims no extension path when TAKOSUMI_PLATFORM_EXTENSIONS is uns
   expect(result).toBeUndefined();
 });
 
+test("unmatched compatibility profiles fail closed before the accounts SPA", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const response = await worker.fetch(
+    new Request("https://operator.example.test/compat/uninstalled/v1"),
+    {} as never,
+  );
+
+  expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({ error: "not found" });
+});
+
 test("platform worker exposes product discovery before accounts handler", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
 
@@ -1416,7 +1427,7 @@ test("platform worker exposes product discovery before accounts handler", async 
   ]);
   expect(capabilitiesBody.adapters.cloudflare).toBeUndefined();
   expect(
-    capabilitiesBody.compat["compat.cloudflare.workers.v1"],
+    capabilitiesBody.compat["compat.example.v1"],
   ).toBeUndefined();
   expect(capabilitiesBody.operator.usage_showback).toBe(false);
   expect(capabilitiesBody).not.toHaveProperty("commercial");
@@ -1469,11 +1480,11 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
           capabilities: ["ai.gateway"],
         },
         {
-          basePath: "/compat/cloudflare/client/v4",
+          basePath: "/compat/example/v1",
           handlerKey: "TEST_PROVIDER_EXTENSION",
           compatibilityProfiles: [
             {
-              profile: "compat.cloudflare.workers.v1",
+              profile: "compat.example.v1",
               planes: ["control"],
             },
           ],
@@ -1529,7 +1540,7 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
   ]);
   expect(body.adapters.cloudflare).toBeUndefined();
   expect(body.adapters.takosumi_native).toBeUndefined();
-  expect(body.compat["compat.cloudflare.workers.v1"]).toBe(true);
+  expect(body.compat["compat.example.v1"]).toBe(true);
   expect(body.compat["compat.s3.v1"]).toBe(true);
   const discovery = await worker.fetch(
     new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
@@ -1852,7 +1863,7 @@ test("platform public Resource ingress cannot spoof a compatibility managedBy id
       headers: {
         authorization: "Bearer takpat_write",
         "content-type": "application/json",
-        "x-takosumi-resource-managed-by": "compat.cloudflare.workers.v1",
+        "x-takosumi-resource-managed-by": "compat.example.v1",
       },
       body: JSON.stringify({
         workspaceId: "workspace_a",
@@ -1860,7 +1871,7 @@ test("platform public Resource ingress cannot spoof a compatibility managedBy id
         metadata: {
           name: "assets",
           space: "workspace_a",
-          managedBy: "compat.cloudflare.workers.v1",
+          managedBy: "compat.example.v1",
         },
         spec: { name: "assets" },
       }),
@@ -2034,7 +2045,7 @@ test("compatibility reads are profile-scoped while operator recovery reads every
   await stores.resources.upsert(
     record(
       "compat-api",
-      "compat.cloudflare.workers.v1",
+      "compat.example.v1",
       "2026-07-15T00:00:01.000Z",
     ),
   );
@@ -2046,20 +2057,20 @@ test("compatibility reads are profile-scoped while operator recovery reads every
     TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
   } as never;
   const route = {
-    id: "cloudflare-workers-compatibility",
-    basePath: "/compat/cloudflare/client/v4",
+    id: "example-compatibility",
+    basePath: "/compat/example/v1",
     handlerKey: "TEST_PROVIDER_EXTENSION",
     authMode: "platform",
     compatibilityProfiles: [
       {
-        profile: "compat.cloudflare.workers.v1",
+        profile: "compat.example.v1",
         planes: ["control"],
       },
     ],
   } as const;
   const compatibility = await createPlatformCompatibilityAuthority({
     request: new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4",
+      "https://operator.example.test/compat/example/v1",
     ),
     env,
     route,
@@ -2097,7 +2108,7 @@ test("compatibility reads are profile-scoped while operator recovery reads every
     {
       metadata: {
         name: "compat-api",
-        managedBy: "compat.cloudflare.workers.v1",
+        managedBy: "compat.example.v1",
       },
     },
   ]);
@@ -2494,7 +2505,7 @@ test("platform extension route replaces spoofed Workspace context", async () => 
 test("platform workspace verification lets personal access tokens select an accessible Workspace", async () => {
   const checked: string[] = [];
   const verified = await platformExtensionVerifiedWorkspaceSession(
-    new Request("https://app.takosumi.com/compat/cloudflare/client/v4", {
+    new Request("https://operator.example.test/compat/example/v1", {
       headers: {
         authorization: "Bearer takpat_cloud",
         "x-takosumi-platform-workspace-id": "space_cloud",
@@ -2529,7 +2540,7 @@ test("platform workspace verification lets personal access tokens select an acce
 test("platform workspace verification keeps service tokens bound to token metadata", async () => {
   let checked = false;
   const verified = await platformExtensionVerifiedWorkspaceSession(
-    new Request("https://app.takosumi.com/compat/cloudflare/client/v4", {
+    new Request("https://operator.example.test/compat/example/v1", {
       headers: {
         authorization: "Bearer taksrv_cloud",
         "x-takosumi-platform-workspace-id": "space_cloud",
@@ -2562,11 +2573,11 @@ test("platform workspace verification keeps service tokens bound to token metada
 test("platform extension authenticates managed provider run tokens with Workspace context", async () => {
   const issued = await createManagedProviderRunToken({
     secret: "managed-secret",
-    audience: "compat.cloudflare.workers.v1",
+    audience: "compat.example.v1",
     workspaceId: "space_cc8dbfedfc6347d5",
     capsuleId: "capsule_ca4ebb681fb24044",
-    connectionId: "conn_operator_takosumi_cloud_cloudflare_compat",
-    provider: "cloudflare",
+    connectionId: "conn_operator_managed_example",
+    provider: "registry.example/operator/provider",
     phase: "apply",
     scopes: ["write"],
   });
@@ -2574,7 +2585,7 @@ test("platform extension authenticates managed provider run tokens with Workspac
 
   const session = await verifyPlatformExtensionSession(
     new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc_takosumi_cloud/d1/database",
+      "https://operator.example.test/compat/example/v1/resources/widgets",
       {
         method: "POST",
         headers: { authorization: `Bearer ${issued.token}` },
@@ -2582,13 +2593,13 @@ test("platform extension authenticates managed provider run tokens with Workspac
     ),
     { TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret" } as never,
     {
-      basePath: "/compat/cloudflare/client/v4",
+      basePath: "/compat/example/v1",
       handlerKey: "TEST_PROVIDER_COMPAT_EXTENSION",
       requiredScopes: ["write"],
-      managedProviderProfile: "compat.cloudflare.workers.v1",
+      managedProviderProfile: "compat.example.v1",
       compatibilityProfiles: [
         {
-          profile: "compat.cloudflare.workers.v1",
+          profile: "compat.example.v1",
           planes: ["control"],
         },
       ],
@@ -2598,8 +2609,7 @@ test("platform extension authenticates managed provider run tokens with Workspac
   expect(session).toEqual({
     authenticated: true,
     authKind: "service-token",
-    subject:
-      "provider-connection:conn_operator_takosumi_cloud_cloudflare_compat",
+    subject: "provider-connection:conn_operator_managed_example",
     workspaceId: "space_cc8dbfedfc6347d5",
     capsuleId: "capsule_ca4ebb681fb24044",
     scopes: ["write"],
@@ -2609,10 +2619,10 @@ test("platform extension authenticates managed provider run tokens with Workspac
 test("platform extension rejects managed provider run tokens for another explicit profile", async () => {
   const issued = await createManagedProviderRunToken({
     secret: "managed-secret",
-    audience: "compat.cloudflare.workers.v1",
+    audience: "compat.example.v1",
     workspaceId: "space_cc8dbfedfc6347d5",
     connectionId: "conn_managed",
-    provider: "cloudflare",
+    provider: "registry.example/operator/provider",
     phase: "apply",
     scopes: ["write"],
   });
@@ -2663,7 +2673,7 @@ test("platform extension without an explicit profile rejects managed provider ru
 test("platform extension billing context reads the canonical Capsule", async () => {
   const seenPaths: string[] = [];
   const allowed = await platformExtensionSessionCanAccessCapsule(
-    new Request("https://app.takosumi.com/compat/cloudflare/client/v4", {
+    new Request("https://operator.example.test/compat/example/v1", {
       headers: {
         authorization: "Bearer session-token",
       },

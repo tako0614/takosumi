@@ -986,13 +986,13 @@ test("PUT /v1/resources preserves the caller-declared Resource manager", async (
   const res = await reviewedResourceApply(app, "/v1/resources/KVStore/cache", {
     metadata: {
       space: "space_1",
-      managedBy: "compatibility:cloudflare-workers",
+      managedBy: "compatibility:example",
     },
     spec: { name: "cache", consistency: "eventual" },
   });
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.metadata.managedBy).toBe("compatibility:cloudflare-workers");
+  expect(body.metadata.managedBy).toBe("compatibility:example");
 });
 
 test("Resource API atomically rejects managedBy takeover and wrong-manager delete", async () => {
@@ -1008,7 +1008,7 @@ test("Resource API atomically rejects managedBy takeover and wrong-manager delet
     ...desired,
     metadata: {
       space: "space_1",
-      managedBy: "compat.cloudflare.workers.v1",
+      managedBy: "compat.example.v1",
     },
   });
   expect(takeover.status).toBe(409);
@@ -1017,7 +1017,7 @@ test("Resource API atomically rejects managedBy takeover and wrong-manager delet
   });
 
   const wrongDelete = await app.request(
-    `${path}?space=space_1&managedBy=compat.cloudflare.workers.v1`,
+    `${path}?space=space_1&managedBy=compat.example.v1`,
     { method: "DELETE" },
   );
   expect(wrongDelete.status).toBe(409);
@@ -1046,7 +1046,7 @@ test("trusted Resource authoring surface rejects caller-controlled managedBy spo
     {
       metadata: {
         space: "space_1",
-        managedBy: "compat.cloudflare.workers.v1",
+        managedBy: "compat.example.v1",
       },
       spec: { name: "spoofed-cache", consistency: "eventual" },
     },
@@ -1069,7 +1069,7 @@ test("trusted Resource authoring surface rejects caller-controlled managedBy spo
   );
 
   const spoofedDelete = await app.request(
-    "/v1/resources/KVStore/trusted-cache?space=space_1&managedBy=compat.cloudflare.workers.v1",
+    "/v1/resources/KVStore/trusted-cache?space=space_1&managedBy=compat.example.v1",
     {
       method: "DELETE",
       headers: {

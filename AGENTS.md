@@ -134,11 +134,11 @@ Three principles are load-bearing for new work:
   lifecycle authority for managed Resources; a future portable route must delegate to the same row/ledger.
   The mixed `takosumi/takosumi` provider remains frozen compatibility/admin custody, while the target typed form
   provider is independently released. Neither owns host availability, backend selection, state, or pricing.
-- **Compatibility profiles by capability**: S3 / OCI / CloudEvents / Kubernetes CRD / Cloudflare subset surfaces are
+- **Compatibility profiles by capability**: S3 / OCI / CloudEvents / Kubernetes CRD surfaces are
   capability-versioned protocol surfaces for Takosumi-managed capabilities. Control-plane profiles translate into
   the Deploy API and own no lifecycle state; data-plane profiles resolve canonical Ready Resources. Resource adapters
-  and backend managers never use compatibility handlers as their implementation. Do not claim complete AWS or
-  Cloudflare API compatibility.
+  and backend managers never use compatibility handlers as their implementation. Do not claim complete provider API
+  compatibility.
 - **Shared Interface layer**: Workspace, Capsule, and Resource owners use the same Interface API. Core resolves only literal,
   `capsule_output`, and `resource_output` inputs; type-specific JSON is validated by consumers. Interface changes do
   not schedule Workspace-wide reconciliation, and Resource `connections` remain adapter materialization contracts.
@@ -191,8 +191,7 @@ via `deploy/platform/`, and the self-hosted Takos product worker via `takos/depl
 services. The worker injects stores/capabilities and mounts the account-plane handler at the origin root. `/internal/*`
 HTTP route families are not customer APIs; they are reserved for opentofu-runner / executor container callbacks,
 host-internal deploy-control seams, and operator hardening gates. Public compatibility routes must be explicit,
-versioned capability surfaces such as `compat.s3.v1` or `compat.cloudflare.workers.v1`, not hidden internal Gateway
-bridges.
+versioned capability surfaces such as `compat.s3.v1`, not hidden internal Gateway bridges.
 
 `deploy/node-postgres/` is the Bun + Postgres substrate that backs the account-plane handler in the local-substrate
 cloud profile (the `deploy/local-substrate/` cloud wrapper imports its server). It is a substrate for the same

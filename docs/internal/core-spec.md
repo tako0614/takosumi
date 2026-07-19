@@ -1287,7 +1287,6 @@ compat.s3.v1
 compat.oci.v1
 compat.cloudevents.v1
 compat.kubernetes.crd.v1
-compat.cloudflare.workers.v1
 compat.aws.sqs.v1
 compat.redis.v1
 compat.postgres.v1
@@ -1298,8 +1297,8 @@ for Redis, Postgres, SQS, S3, OCI, or other standards. Existing providers and
 standard endpoints stay the default unless a Takosumi-managed import,
 projection, policy, or metering surface is actually needed.
 
-Do not claim complete AWS API or Cloudflare API compatibility. Specific surfaces are
-enabled or disabled by `/v1/capabilities`.
+Do not claim complete provider API compatibility. Specific surfaces are enabled
+or disabled by `/v1/capabilities`.
 
 An installed profile declares its authority planes explicitly:
 
@@ -1346,8 +1345,8 @@ handler as its backend.
 Cloud/operator offerings fail closed when a service form is recognized but its
 selected manager is not configured. That failure happens before billing
 reservation and before the backend API call, so an unsupported
-`ContainerService` manager cannot be translated through the Cloudflare Workers
-compatibility path or any unrelated route.
+`ContainerService` manager cannot be translated through any compatibility path
+or unrelated route.
 
 For example, ordinary S3/R2/GCS object storage can use existing providers while
 `compat.s3.v1` remains disabled. An object-storage Service Form or S3
@@ -1467,7 +1466,7 @@ quota, and support tooling.
 
 Hosted form-backed Resource API and compatibility API calls are attributed to a
 Workspace, not to a required Capsule record. A request may carry a Capsule id
-when it exists, but direct `takosumi` provider and Cloudflare-compatible import
+when it exists, but direct `takosumi` provider and installed compatibility-profile
 calls can be metered with only an authenticated actor and verified Workspace.
 Cloud-only payment enforcement authorizes the
 normalized dispatch plan after selected-manager availability is confirmed and

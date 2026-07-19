@@ -63,8 +63,8 @@ const cloudflareTarget: TargetPoolEntry = {
   priority: 10,
 };
 
-const providerCompatBaseUrl =
-  "https://app.takosumi.com/compat/cloudflare/client/v4";
+const customProviderBaseUrl =
+  "https://operator.example.test/compat/example/v1";
 
 const edgeDescriptor: TargetImplementationDescriptor = {
   shape: "EdgeWorker",
@@ -242,13 +242,13 @@ test("apply threads managed provider base_url from implementation options", asyn
     applyInput(plan, cloudflareTarget, {
       implementation: {
         ...edgeDescriptor,
-        providerConfig: { base_url: providerCompatBaseUrl },
+        providerConfig: { base_url: customProviderBaseUrl },
       },
     }),
   );
 
   expect(port.applyRequests[0]?.providerBinding.configuration?.base_url).toBe(
-    providerCompatBaseUrl,
+    customProviderBaseUrl,
   );
 });
 
@@ -407,13 +407,13 @@ test("delete threads managed provider base_url from implementation options", asy
       plan,
       implementation: {
         ...edgeDescriptor,
-        providerConfig: { base_url: providerCompatBaseUrl },
+        providerConfig: { base_url: customProviderBaseUrl },
       },
     }),
   );
 
   expect(port.destroyRequests[0]?.providerBinding.configuration?.base_url).toBe(
-    providerCompatBaseUrl,
+    customProviderBaseUrl,
   );
 });
 
@@ -1012,7 +1012,7 @@ test("real OpenTofuController applies a Resource without creating Capsule ledger
   expect(await store.listOutputs("tkrn:demo:EdgeWorker:api")).toEqual([]);
 });
 
-test("ControllerOpentofuRunPort renders provider base_url for managed compatibility targets", async () => {
+test("ControllerOpentofuRunPort renders base_url for operator-configured provider endpoints", async () => {
   const driver = new FakeDeployControlDriver();
   const port = new ControllerOpentofuRunPort({
     driver,
@@ -1024,7 +1024,7 @@ test("ControllerOpentofuRunPort renders provider base_url for managed compatibil
     applyInput(plan, cloudflareTarget, {
       implementation: {
         ...edgeDescriptor,
-        providerConfig: { base_url: providerCompatBaseUrl },
+        providerConfig: { base_url: customProviderBaseUrl },
       },
     }),
   );
@@ -1036,7 +1036,7 @@ test("ControllerOpentofuRunPort renders provider base_url for managed compatibil
   expect(mainTf).toBeDefined();
   if (!mainTf) return;
   expect(mainTf).toContain('provider "cloudflare"');
-  expect(mainTf).toContain(`base_url = "${providerCompatBaseUrl}"`);
+  expect(mainTf).toContain(`base_url = "${customProviderBaseUrl}"`);
   expect(mainTf).not.toContain("api_token = var.");
   expect(mainTf).not.toContain('variable "cloudflare_api_token"');
 });
@@ -1092,7 +1092,7 @@ test("ControllerOpentofuRunPort apply guard does not encode credential delivery"
     applyInput(plan, cloudflareTarget, {
       implementation: {
         ...edgeDescriptor,
-        providerConfig: { base_url: providerCompatBaseUrl },
+        providerConfig: { base_url: customProviderBaseUrl },
       },
     }),
   );

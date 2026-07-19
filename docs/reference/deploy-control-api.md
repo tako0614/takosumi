@@ -331,7 +331,6 @@ document され、discovery で広告されます。
 OSS Deploy-Control API は、公式 hosted Cloud endpoint family を直接公開しません。
 
 ```text
-/compat/cloudflare/client/v4
 /gateway/ai/v1
 provider-compatible endpoint families
 official managed resource backend controls
@@ -340,11 +339,10 @@ official billing/quota/usage endpoints
 ```
 
 Compatibility API framework 自体は Takosumi の一部です。
-`compat.cloudflare.workers.v1`、`compat.s3.v1`、OpenAI-compatible AI endpoint
-などの profile は scoped / versioned capability であり、Deploy-Control の hidden
-route ではありません。
+`compat.s3.v1` や OpenAI-compatible AI endpoint などの profile は scoped /
+versioned capability であり、Deploy-Control の hidden route ではありません。
 
 公式 hosted service で現在 document している Cloud endpoint family は
-`compat.cloudflare.workers.v1`、`compat.s3.v1`、OpenAI-compatible AI Gateway です。
+`compat.s3.v1` と OpenAI-compatible AI Gateway です。
 追加 endpoint family は、それぞれ compatibility matrix、auth model、usage
 contract、fail-closed behavior を持つ別仕様として定義します。

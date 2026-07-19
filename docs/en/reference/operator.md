@@ -65,8 +65,8 @@ Operators can enable scoped and versioned compatibility profiles when they are
 actually needed, such as `compat.s3.v1`, `compat.oci.v1`, and
 `compat.cloudevents.v1`. If an existing OpenTofu provider or standard endpoint
 is enough, use that instead of recreating it in Takosumi. Operators must report
-the enabled surface through `/v1/capabilities` and must not claim full AWS or
-full Cloudflare Workers provider compatibility.
+the enabled surface through `/v1/capabilities` and must not claim full vendor
+provider compatibility.
 
 ## Operator / Cloud Boundary
 

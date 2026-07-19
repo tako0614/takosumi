@@ -653,6 +653,12 @@ export default {
         );
       }
     }
+    // `/compat` is an explicit profile namespace, never an accounts/dashboard
+    // SPA route. An uninstalled or retired profile must fail closed instead of
+    // falling through to the accounts worker's HTML fallback.
+    if (url.pathname === "/compat" || url.pathname.startsWith("/compat/")) {
+      return Response.json({ error: "not found" }, { status: 404 });
+    }
     const accountsResponse = withPlatformAssetCacheHeaders(
       request,
       url,
