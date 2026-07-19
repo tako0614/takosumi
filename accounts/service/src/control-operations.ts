@@ -44,6 +44,8 @@ import type {
 } from "takosumi-contract/capsules";
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type {
+  AccountWorkspaceListParams,
+  AccountWorkspacePage,
   Workspace,
   WorkspaceMember,
   WorkspaceMemberStatus,
@@ -144,6 +146,14 @@ export interface ControlPlaneOperations {
     listWorkspaces(): Promise<readonly Workspace[]>;
     listWorkspacesByOwner(ownerUserId: string): Promise<readonly Workspace[]>;
     listWorkspacesForAccount(accountId: string): Promise<readonly Workspace[]>;
+    listWorkspacesForAccountPage(
+      accountId: string,
+      params: AccountWorkspaceListParams,
+    ): Promise<AccountWorkspacePage>;
+    getWorkspaceForAccount(
+      accountId: string,
+      workspaceId: string,
+    ): Promise<Workspace | undefined>;
     listWorkspacesByIds?(ids: readonly string[]): Promise<readonly Workspace[]>;
     getWorkspace(id: string): Promise<Workspace>;
     createWorkspace(request: {

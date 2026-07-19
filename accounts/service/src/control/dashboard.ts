@@ -376,32 +376,9 @@ interface DashboardWorkspaceListMeta {
   readonly truncated: boolean;
 }
 
-async function listWorkspacesForSession(
-  operations: ControlPlaneOperations,
-  _store: AccountsStore,
-  sessionSubject: string,
-): Promise<readonly Workspace[]> {
-  return [
-    ...(await operations.workspaces.listWorkspacesForAccount(sessionSubject)),
-  ].sort(
-    (a, b) =>
-      a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-  );
-}
-
-async function listActiveWorkspacesForSession(
-  operations: ControlPlaneOperations,
-  store: AccountsStore,
-  sessionSubject: string,
-): Promise<readonly Workspace[]> {
-  return (
-    await listWorkspacesForSession(operations, store, sessionSubject)
-  ).filter((workspace) => !isArchivedWorkspace(workspace));
-}
-
 async function listActiveWorkspaceProjectionForSession(
   operations: ControlPlaneOperations,
-  store: AccountsStore,
+  _store: AccountsStore,
   sessionSubject: string,
   options: {
     readonly limit: number;
@@ -411,43 +388,44 @@ async function listActiveWorkspaceProjectionForSession(
   readonly workspaces: readonly Workspace[];
   readonly meta: DashboardWorkspaceListMeta;
 }> {
-  const all = await listActiveWorkspacesForSession(
-    operations,
-    store,
-    sessionSubject,
-  );
-  const sorted = [...all].sort(compareWorkspaceMostRecentFirst);
-  const limited = limitWorkspaces(
-    sorted,
-    options.limit,
-    options.ensureWorkspaceId,
-  );
+  const workspaces: Workspace[] = [];
+  let cursor: string | undefined;
+  let total = 0;
+  do {
+    const page = await operations.workspaces.listWorkspacesForAccountPage(
+      sessionSubject,
+      {
+        includeArchived: false,
+        order: "updated_desc",
+        limit: options.limit - workspaces.length,
+        ...(cursor ? { cursor } : {}),
+      },
+    );
+    total = page.total;
+    workspaces.push(...page.items);
+    cursor = page.nextCursor;
+  } while (workspaces.length < options.limit && cursor !== undefined);
+
+  let limited = workspaces.slice(0, options.limit);
+  if (
+    options.ensureWorkspaceId !== undefined &&
+    !limited.some((workspace) => workspace.id === options.ensureWorkspaceId)
+  ) {
+    const selected = await operations.workspaces.getWorkspaceForAccount(
+      sessionSubject,
+      options.ensureWorkspaceId,
+    );
+    if (selected && !isArchivedWorkspace(selected)) {
+      limited = [
+        selected,
+        ...limited.filter((workspace) => workspace.id !== selected.id),
+      ].slice(0, options.limit);
+    }
+  }
   return {
     workspaces: limited,
-    meta: workspaceListMeta(limited, all.length, options.limit),
+    meta: workspaceListMeta(limited, total, options.limit),
   };
-}
-
-function limitWorkspaces(
-  workspaces: readonly Workspace[],
-  limit: number,
-  ensureWorkspaceId?: string,
-): readonly Workspace[] {
-  const limited = workspaces.slice(0, limit);
-  if (
-    ensureWorkspaceId === undefined ||
-    limited.some((workspace) => workspace.id === ensureWorkspaceId)
-  ) {
-    return limited;
-  }
-  const selected = workspaces.find(
-    (workspace) => workspace.id === ensureWorkspaceId,
-  );
-  if (!selected) return limited;
-  return [
-    selected,
-    ...limited.filter((workspace) => workspace.id !== selected.id),
-  ].slice(0, limit);
 }
 
 function workspaceListMeta(
@@ -461,12 +439,6 @@ function workspaceListMeta(
     limit,
     truncated: total > workspaces.length,
   };
-}
-
-function compareWorkspaceMostRecentFirst(a: Workspace, b: Workspace): number {
-  const aTime = a.updatedAt || a.createdAt;
-  const bTime = b.updatedAt || b.createdAt;
-  return bTime.localeCompare(aTime) || a.id.localeCompare(b.id);
 }
 
 function isArchivedWorkspace(workspace: Workspace): boolean {

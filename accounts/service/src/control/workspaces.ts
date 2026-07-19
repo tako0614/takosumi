@@ -397,40 +397,43 @@ export async function handleWorkspaces(
 
 async function listWorkspaces(
   operations: ControlPlaneOperations,
-  store: AccountsStore,
+  _store: AccountsStore,
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  // Scope the read to the caller's own Workspaces instead of loading every tenant's
-  // Workspace and filtering per row. This reproduces `canAccessWorkspace`'s accept set
-  // as a UNION of two scoped queries:
-  //   (A) deploy-control Workspaces the subject directly owns (ownerUserId), and
-  //   (B) Workspaces whose account is legally owned by the subject (the accounts
-  //       ledger's `legalOwnerSubject`), fetched individually so we never read
-  //       another tenant's Workspace.
+  // Preserve the public all-matching response and createdAt/id order while the
+  // durable store performs membership/status/archive filtering in bounded
+  // keyset pages. The route never materializes archived rows unless explicitly
+  // requested with includeArchived=true.
   const includeArchived = parseBooleanQuery(url, "includeArchived") === true;
-  const visible = (
-    await listWorkspacesForSession(operations, store, sessionSubject)
-  )
-    .filter((workspace) => includeArchived || !isArchivedWorkspace(workspace))
-    .sort(
-      (a, b) =>
-        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-    );
+  const visible = await listWorkspacesForSession(
+    operations,
+    sessionSubject,
+    includeArchived,
+  );
   return json({ workspaces: visible });
 }
 
 async function listWorkspacesForSession(
   operations: ControlPlaneOperations,
-  _store: AccountsStore,
   sessionSubject: string,
+  includeArchived: boolean,
 ): Promise<readonly Workspace[]> {
-  return [
-    ...(await operations.workspaces.listWorkspacesForAccount(sessionSubject)),
-  ].sort(
-    (a, b) =>
-      a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-  );
+  const workspaces: Workspace[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await operations.workspaces.listWorkspacesForAccountPage(
+      sessionSubject,
+      {
+        includeArchived,
+        order: "created_asc",
+        ...(cursor ? { cursor } : {}),
+      },
+    );
+    workspaces.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor !== undefined);
+  return workspaces;
 }
 
 function isArchivedWorkspace(workspace: Workspace): boolean {
@@ -527,14 +530,15 @@ async function updateWorkspace(
     );
   }
   if (patch.archived === true) {
-    const [target, workspaces] = await Promise.all([
+    const [target, activePage] = await Promise.all([
       operations.workspaces.getWorkspace(workspaceId),
-      listWorkspacesForSession(operations, store, sessionSubject),
+      operations.workspaces.listWorkspacesForAccountPage(sessionSubject, {
+        includeArchived: false,
+        order: "created_asc",
+        limit: 1,
+      }),
     ]);
-    const activeWorkspaces = workspaces.filter(
-      (workspace) => !isArchivedWorkspace(workspace),
-    );
-    if (!isArchivedWorkspace(target) && activeWorkspaces.length <= 1) {
+    if (!isArchivedWorkspace(target) && activePage.total <= 1) {
       return errorJson(
         "failed_precondition",
         "cannot archive the last active workspace",

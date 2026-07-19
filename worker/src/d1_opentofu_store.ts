@@ -56,7 +56,12 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import type { Workspace, WorkspaceMember } from "takosumi-contract/workspaces";
+import type {
+  AccountWorkspaceListParams,
+  AccountWorkspacePage,
+  Workspace,
+  WorkspaceMember,
+} from "takosumi-contract/workspaces";
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type {
@@ -344,6 +349,22 @@ function d1KeysetWhereDesc(
   const keyset = or(
     lt(createdAtCol, cursor.createdAt),
     and(eq(createdAtCol, cursor.createdAt), lt(idCol, cursor.id)),
+  );
+  return filter === undefined ? keyset : and(filter, keyset);
+}
+
+/** Dashboard order is updated_at DESC with id ASC (the established UI order). */
+function d1WorkspaceUpdatedDescKeysetWhere(
+  filter: SQL | undefined,
+  cursor: { readonly createdAt: string; readonly id: string } | undefined,
+): SQL | undefined {
+  if (cursor === undefined) return filter;
+  const keyset = or(
+    lt(schema.workspaces.updatedAt, cursor.createdAt),
+    and(
+      eq(schema.workspaces.updatedAt, cursor.createdAt),
+      gt(schema.workspaces.id, cursor.id),
+    ),
   );
   return filter === undefined ? keyset : and(filter, keyset);
 }
@@ -1022,6 +1043,69 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ],
       },
     );
+  }
+
+  async listWorkspacesForAccountPage(
+    accountId: string,
+    params: AccountWorkspaceListParams,
+  ): Promise<AccountWorkspacePage> {
+    await this.#ensureSchema();
+    const includeArchived = params.includeArchived === true;
+    const order = params.order ?? "created_asc";
+    const limit = clampPageLimit(params.limit);
+    const baseFilter = and(
+      eq(schema.workspaceMembers.accountId, accountId),
+      eq(schema.workspaceMembers.status, "active"),
+      includeArchived
+        ? undefined
+        : sql`COALESCE(json_extract(${schema.workspaces.recordJson}, '$.archivedAt'), '') = ''`,
+    );
+    const countRows = await this.#orm
+      .select({ total: sql<number>`count(*)` })
+      .from(schema.workspaceMembers)
+      .innerJoin(
+        schema.workspaces,
+        eq(schema.workspaces.id, schema.workspaceMembers.workspaceId),
+      )
+      .where(baseFilter);
+    const cursor = decodeCursor(params.cursor);
+    const pageFilter =
+      order === "updated_desc"
+        ? d1WorkspaceUpdatedDescKeysetWhere(baseFilter, cursor)
+        : d1KeysetWhere(
+            baseFilter,
+            schema.workspaces.createdAt,
+            schema.workspaces.id,
+            cursor,
+          );
+    const query = this.#orm
+      .select({ value: schema.workspaces.recordJson })
+      .from(schema.workspaceMembers)
+      .innerJoin(
+        schema.workspaces,
+        eq(schema.workspaces.id, schema.workspaceMembers.workspaceId),
+      )
+      .where(pageFilter)
+      .$dynamic();
+    const ordered =
+      order === "updated_desc"
+        ? query.orderBy(
+            desc(schema.workspaces.updatedAt),
+            asc(schema.workspaces.id),
+          )
+        : query.orderBy(
+            asc(schema.workspaces.createdAt),
+            asc(schema.workspaces.id),
+          );
+    const workspaces = (await ordered.limit(limit + 1)).map(
+      (row) => row.value as Workspace,
+    );
+    const page = pageFromProbeBy(workspaces, limit, (workspace) => ({
+      createdAt:
+        order === "updated_desc" ? workspace.updatedAt : workspace.createdAt,
+      id: workspace.id,
+    }));
+    return { ...page, total: Number(countRows[0]?.total ?? 0) };
   }
 
   async putProject(project: Project): Promise<Project> {
@@ -5605,9 +5689,7 @@ legacy resolved Interfaces stay unclaimed until Binding refresh issuance or intr
       return [
         ...(columns.has("oauth_resource_uri")
           ? []
-          : [
-              `alter table interfaces add column oauth_resource_uri text`,
-            ]),
+          : [`alter table interfaces add column oauth_resource_uri text`]),
         `create unique index if not exists interfaces_oauth_resource_claim_unique
          on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
          where oauth_resource_uri is not null`,

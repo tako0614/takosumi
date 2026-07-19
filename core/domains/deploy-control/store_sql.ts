@@ -43,7 +43,12 @@ import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import type { Workspace, WorkspaceMember } from "takosumi-contract/workspaces";
+import type {
+  AccountWorkspaceListParams,
+  AccountWorkspacePage,
+  Workspace,
+  WorkspaceMember,
+} from "takosumi-contract/workspaces";
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type {
@@ -294,6 +299,22 @@ function pgKeysetWhereDesc(
   const keyset = or(
     lt(createdAtCol, cursor.createdAt),
     and(eq(createdAtCol, cursor.createdAt), lt(idCol, cursor.id)),
+  );
+  return filter === undefined ? keyset : and(filter, keyset);
+}
+
+/** Dashboard order is updated_at DESC with id ASC (the established UI order). */
+function pgWorkspaceUpdatedDescKeysetWhere(
+  filter: SQL | undefined,
+  cursor: { readonly createdAt: string; readonly id: string } | undefined,
+): SQL | undefined {
+  if (cursor === undefined) return filter;
+  const keyset = or(
+    lt(pgSchema.workspaces.updatedAt, cursor.createdAt),
+    and(
+      eq(pgSchema.workspaces.updatedAt, cursor.createdAt),
+      gt(pgSchema.workspaces.id, cursor.id),
+    ),
   );
   return filter === undefined ? keyset : and(filter, keyset);
 }
@@ -1028,6 +1049,68 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         ],
       },
     );
+  }
+
+  async listWorkspacesForAccountPage(
+    accountId: string,
+    params: AccountWorkspaceListParams,
+  ): Promise<AccountWorkspacePage> {
+    const includeArchived = params.includeArchived === true;
+    const order = params.order ?? "created_asc";
+    const limit = clampPageLimit(params.limit);
+    const baseFilter = and(
+      eq(pgSchema.workspaceMembers.accountId, accountId),
+      eq(pgSchema.workspaceMembers.status, "active"),
+      includeArchived
+        ? undefined
+        : sql`COALESCE(${pgSchema.workspaces.spaceJson} ->> 'archivedAt', '') = ''`,
+    );
+    const countRows = await this.#db
+      .select({ total: sql<number>`count(*)` })
+      .from(pgSchema.workspaceMembers)
+      .innerJoin(
+        pgSchema.workspaces,
+        eq(pgSchema.workspaces.id, pgSchema.workspaceMembers.workspaceId),
+      )
+      .where(baseFilter);
+    const cursor = decodeCursor(params.cursor);
+    const pageFilter =
+      order === "updated_desc"
+        ? pgWorkspaceUpdatedDescKeysetWhere(baseFilter, cursor)
+        : pgKeysetWhere(
+            baseFilter,
+            pgSchema.workspaces.createdAt,
+            pgSchema.workspaces.id,
+            cursor,
+          );
+    const query = this.#db
+      .select({ json: pgSchema.workspaces.spaceJson })
+      .from(pgSchema.workspaceMembers)
+      .innerJoin(
+        pgSchema.workspaces,
+        eq(pgSchema.workspaces.id, pgSchema.workspaceMembers.workspaceId),
+      )
+      .where(pageFilter)
+      .$dynamic();
+    const ordered =
+      order === "updated_desc"
+        ? query.orderBy(
+            desc(pgSchema.workspaces.updatedAt),
+            asc(pgSchema.workspaces.id),
+          )
+        : query.orderBy(
+            asc(pgSchema.workspaces.createdAt),
+            asc(pgSchema.workspaces.id),
+          );
+    const workspaces = (await ordered.limit(limit + 1)).map(
+      (row) => parseRow(row) as Workspace,
+    );
+    const page = pageFromProbeBy(workspaces, limit, (workspace) => ({
+      createdAt:
+        order === "updated_desc" ? workspace.updatedAt : workspace.createdAt,
+      id: workspace.id,
+    }));
+    return { ...page, total: Number(countRows[0]?.total ?? 0) };
   }
 
   async putProject(project: Project): Promise<Project> {
