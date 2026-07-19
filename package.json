@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "wrangler": "wrangler",
-    "check": "bun run credential-recipes:assets && bun run provider:assets && bun run provider:compatibility:check && bun run test:provider && bun run test:control-d1-schema && bun run check:test-source-boundary && bun run check:generalization-boundaries && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "check": "bun run credential-recipes:assets && bun run provider:assets && bun run provider:compatibility:check && bun run service-form:compat-removal:check && bun run test:provider && bun run test:control-d1-schema && bun run check:test-source-boundary && bun run check:generalization-boundaries && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
     "check:generalization-boundaries": "bun scripts/check-generalization-boundaries.ts",
     "check:test-source-boundary": "bun scripts/check-test-source-boundary.ts",
     "check:dashboard": "(cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build) && bash scripts/build-app-docs.sh",
@@ -39,6 +39,8 @@
     "provider:mirror:materialize": "bun scripts/provider-release.mjs materialize",
     "provider:mirror:proof": "bun tests/proofs/provider-mirror-quarantine-exclusion.ts",
     "service-form:compat-inventory": "bun scripts/report-service-form-compatibility-inventory.ts",
+    "service-form:compat-removal:check": "bun scripts/check-service-form-compatibility-removal.mjs repo",
+    "service-form:compat-removal:eligible": "bun scripts/check-service-form-compatibility-removal.mjs eligible",
     "service-form:host-conformance": "bun scripts/run-portable-form-host-conformance.ts",
     "credential-recipes:assets": "bun scripts/build-credential-recipe-assets.ts",
     "credential-recipes:check": "bun scripts/build-credential-recipe-assets.ts --check",
