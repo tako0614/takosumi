@@ -873,14 +873,18 @@ export async function resolveCompatibilityGoCommand(
     accessCommand = (path) => access(path, constants.X_OK),
     findOnPath = commandAvailable,
     runCommand = run,
+    digestCommand = async (path) => digest(await readFile(path)),
   } = {},
 ) {
   if (
     !toolchain ||
     typeof toolchain.path !== "string" ||
-    typeof toolchain.version !== "string"
+    typeof toolchain.version !== "string" ||
+    !SHA256.test(toolchain.sha256 ?? "")
   ) {
-    throw new Error("candidate descriptor requires a Go path and version");
+    throw new Error(
+      "candidate descriptor requires a Go path, version, and executable digest",
+    );
   }
 
   let command = toolchain.path;
@@ -910,6 +914,12 @@ export async function resolveCompatibilityGoCommand(
   if (match[1] !== toolchain.version) {
     throw new Error(
       `Go toolchain ${command} version mismatch: expected ${toolchain.version}, observed ${match[1]}`,
+    );
+  }
+  const executableDigest = await digestCommand(command);
+  if (executableDigest !== toolchain.sha256) {
+    throw new Error(
+      `Go toolchain ${command} digest mismatch: expected ${toolchain.sha256}, observed ${executableDigest}`,
     );
   }
   return command;

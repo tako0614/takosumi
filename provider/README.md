@@ -265,6 +265,12 @@ digests, explicit provider FQNs, and successful state transitions. It contains
 no timestamp, absolute path, environment value, provider state value, or
 credential. A source or policy change invalidates it.
 
+If the descriptor's absolute Go path is not installed on a repo-native runner
+or CI host, the compatibility commands may use `go` from `PATH` only after both
+the exact version and descriptor-pinned executable SHA-256 match. This fallback
+does not relax the production release builder's canonical-path,
+whole-distribution, or runtime-library checks.
+
 OpenTofu uses `registry.opentofu.org/takosjp/takosumi`; Terraform uses
 `registry.terraform.io/takosjp/takosumi`. The reviewed Terraform matrix is
 currently Terraform `1.15.8`. A Terraform CLI found on `PATH` clears only its
