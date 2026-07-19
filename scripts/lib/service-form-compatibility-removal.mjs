@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadProviderCompatibilityProofArtifact } from "./provider-release-compatibility.mjs";
+import { loadProviderCompatibilityProofArtifact } from "./provider-custody-compatibility.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 export const SERVICE_FORM_REMOVAL_POLICY_PATH = join(

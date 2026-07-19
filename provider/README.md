@@ -19,16 +19,19 @@ the Takosumi-specific mixed form/admin client; it does not remove runner
 provider installation, mirrors/caches, credentials, aliases, or ordinary
 provider-native state.
 
-## Historical source custody
+## Historical compatibility custody
 
-The Go source remains in this directory only for existing-state inspection,
-migration, no-op/rollback proofs, and security custody. The v1 compatibility
-policy requires a non-retroactive minimum 365-day support window plus external
-zero-usage and rollback evidence before these state aliases or sources can be
-removed. That window has not started, so deleting the historical source now
-would be unsafe.
+The retained Go implementation is the cancelled `1.1.4` migration snapshot. It
+remains only for existing-state inspection, migration, no-op/rollback proofs,
+and security custody; it is not proven to be the source that produced the exact
+served `1.0.0` bytes. Their source provenance is unresolved. The v1
+compatibility policy requires a non-retroactive minimum 365-day support window
+plus external zero-usage and rollback evidence before these state aliases or
+the migration implementation can be removed. That window has not started, so
+deleting this custody surface now would be unsafe.
 
-The source must not gain new resources or features. For custody checks:
+The migration implementation must not gain new resources or features. For
+custody checks:
 
 ```bash
 bun run provider:custody:check

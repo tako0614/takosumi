@@ -7,22 +7,42 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RELEASE = join(ROOT, "provider", "release");
+export const PROVIDER_QUARANTINE_PATH = join(
+  RELEASE,
+  "quarantine",
+  "1.0.0.json",
+);
+const PROVIDER_ADDRESS = "registry.opentofu.org/takosjp/takosumi";
+const PUBLIC_MIRROR_BASE = "https://app.takosumi.com/opentofu/providers/";
+const RETAINED_VERSION = "1.0.0";
+const OBSERVED_BINARY_MODULE_PATH =
+  "github.com/takosjp/terraform-provider-takosumi";
+const OBSERVED_BINARY_VCS_REVISION = "06319f127353410d97f7966fb82f579f3e6245b6";
+const REQUIRED_PLATFORMS = [
+  "darwin_amd64",
+  "darwin_arm64",
+  "linux_amd64",
+  "linux_arm64",
+];
+const SHA256 = /^[a-f0-9]{64}$/u;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-async function json(path) {
+export async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
 async function digest(path) {
-  return createHash("sha256")
-    .update(await readFile(path))
-    .digest("hex");
+  return sha256(await readFile(path));
 }
 
-async function verifySidecar(path) {
+export function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+export async function verifyManifestSidecar(path) {
   const sidecar = await readFile(`${path}.sha256`, "utf8");
   const match = /^([a-f0-9]{64})  ([^/\n]+)\n?$/u.exec(sidecar);
   assert(match, `invalid digest sidecar ${relative(ROOT, path)}.sha256`);
@@ -35,6 +55,293 @@ async function verifySidecar(path) {
     `digest mismatch for ${relative(ROOT, path)}`,
   );
   return match[1];
+}
+
+export function validateQuarantineManifest(manifest) {
+  exactKeys(
+    manifest,
+    [
+      "schemaVersion",
+      "kind",
+      "providerAddress",
+      "version",
+      "state",
+      "publishable",
+      "reproducible",
+      "observedAt",
+      "reason",
+      "source",
+      "mirror",
+      "rejectedLocalRebuild",
+    ],
+    "provider quarantine manifest",
+  );
+  assert(
+    manifest.schemaVersion === 1 &&
+      manifest.kind === "takosumi.provider-release-quarantine@v1" &&
+      manifest.providerAddress === PROVIDER_ADDRESS &&
+      manifest.version === RETAINED_VERSION &&
+      manifest.state === "historical-quarantine" &&
+      manifest.publishable === false &&
+      manifest.reproducible === false,
+    "invalid provider quarantine identity",
+  );
+  exactKeys(
+    manifest.source,
+    [
+      "modulePath",
+      "sourceCommit",
+      "sourceCommitTime",
+      "goVersion",
+      "vcsModified",
+      "providerReportedVersion",
+      "archiveClaimedVersion",
+      "provenance",
+      "provenanceVerified",
+    ],
+    "provider quarantine source observation",
+  );
+  assert(
+    manifest.source.modulePath === OBSERVED_BINARY_MODULE_PATH &&
+      manifest.source.sourceCommit === OBSERVED_BINARY_VCS_REVISION &&
+      manifest.source.archiveClaimedVersion === RETAINED_VERSION &&
+      manifest.source.providerReportedVersion === "dev" &&
+      manifest.source.vcsModified === true &&
+      manifest.source.provenance === "unknown-dirty" &&
+      manifest.source.provenanceVerified === false,
+    "served 1.0.0 source provenance must remain unresolved",
+  );
+  exactKeys(
+    manifest.mirror,
+    ["baseUrl", "providerPath", "indexEntry", "indexObservation", "assets"],
+    "provider quarantine mirror observation",
+  );
+  assert(
+    manifest.mirror.baseUrl === PUBLIC_MIRROR_BASE &&
+      manifest.mirror.providerPath === PROVIDER_ADDRESS,
+    "provider quarantine mirror identity drifted",
+  );
+  validateIndexEntry(manifest);
+  assert(
+    Array.isArray(manifest.mirror.assets) &&
+      manifest.mirror.assets.length === 5,
+    "provider quarantine must inventory one version document and four archives",
+  );
+  const paths = [];
+  const platforms = [];
+  const expectedAssets = new Map([
+    [`${PROVIDER_ADDRESS}/${RETAINED_VERSION}.json`, { kind: "version" }],
+    ...REQUIRED_PLATFORMS.map((platform) => [
+      `${PROVIDER_ADDRESS}/terraform-provider-takosumi_${RETAINED_VERSION}_${platform}.zip`,
+      { kind: "archive", platform },
+    ]),
+  ]);
+  for (const asset of manifest.mirror.assets) {
+    assert(
+      asset?.kind === "version" || asset?.kind === "archive",
+      `invalid provider quarantine asset kind ${String(asset?.kind)}`,
+    );
+    const expectedKeys =
+      asset.kind === "archive"
+        ? [
+            "kind",
+            "platform",
+            "path",
+            "url",
+            "size",
+            "sha256",
+            "etag",
+            "cacheControl",
+            "observedAt",
+          ]
+        : [
+            "kind",
+            "path",
+            "url",
+            "size",
+            "sha256",
+            "etag",
+            "cacheControl",
+            "observedAt",
+          ];
+    exactKeys(asset, expectedKeys, `provider quarantine ${asset.kind} asset`);
+    validateObservedAsset(asset);
+    const expected = expectedAssets.get(asset.path);
+    assert(
+      expected?.kind === asset.kind &&
+        (asset.kind !== "archive" || expected.platform === asset.platform),
+      `provider quarantine asset identity drifted: ${String(asset.path)}`,
+    );
+    assert(
+      asset.cacheControl === "public, max-age=31536000, immutable",
+      `provider quarantine asset is not immutable: ${asset.path}`,
+    );
+    paths.push(asset.path);
+    if (asset.kind === "archive") platforms.push(asset.platform);
+  }
+  assert(
+    new Set(paths).size === paths.length,
+    "provider quarantine contains duplicate asset paths",
+  );
+  sameSet(paths, [...expectedAssets.keys()], "provider quarantine asset paths");
+  assert(
+    manifest.mirror.assets.filter((asset) => asset.kind === "version")
+      .length === 1,
+    "provider quarantine requires exactly one version document",
+  );
+  sameSet(platforms, REQUIRED_PLATFORMS, "provider quarantine platforms");
+  const index = manifest.mirror.indexObservation;
+  exactKeys(
+    index,
+    [
+      "kind",
+      "immutableAuthority",
+      "path",
+      "url",
+      "size",
+      "sha256",
+      "etag",
+      "cacheControl",
+      "observedAt",
+    ],
+    "provider quarantine index observation",
+  );
+  validateObservedAsset(index);
+  assert(
+    index.kind === "derived-index-observation" &&
+      index.immutableAuthority === false &&
+      index.path === `${PROVIDER_ADDRESS}/index.json` &&
+      index.cacheControl === "no-cache",
+    "provider index must remain a mutable observation rather than retained authority",
+  );
+  const derivedIndex = Buffer.from(
+    `${JSON.stringify(
+      {
+        versions: {
+          [RETAINED_VERSION]: manifest.mirror.indexEntry,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  assert(
+    index.size === derivedIndex.length && index.sha256 === sha256(derivedIndex),
+    "provider index observation does not match the retained 1.0.0 index entry",
+  );
+  exactKeys(
+    manifest.rejectedLocalRebuild,
+    ["description", "assets"],
+    "rejected local rebuild",
+  );
+  const rejected = manifest.rejectedLocalRebuild.assets;
+  assert(
+    rejected && typeof rejected === "object" && !Array.isArray(rejected),
+    "rejected local rebuild assets must be an object",
+  );
+  sameSet(
+    Object.keys(rejected),
+    [...paths, index.path],
+    "rejected local rebuild paths",
+  );
+  for (const value of Object.values(rejected)) {
+    assert(SHA256.test(value), "invalid rejected local rebuild digest");
+  }
+  return manifest;
+}
+
+function validateIndexEntry(manifest) {
+  const entry = manifest.mirror.indexEntry;
+  exactKeys(
+    entry,
+    ["protocols", "platforms"],
+    "provider quarantine index entry",
+  );
+  assert(
+    Array.isArray(entry.protocols),
+    "provider quarantine index protocols must be an array",
+  );
+  sameSet(entry.protocols, ["5.0"], "provider quarantine index protocols");
+  assert(
+    Array.isArray(entry.platforms),
+    "provider quarantine index platforms must be an array",
+  );
+  const platforms = entry.platforms.map((platform) => {
+    exactKeys(platform, ["os", "arch"], "provider quarantine index platform");
+    assert(
+      typeof platform.os === "string" && typeof platform.arch === "string",
+      "provider quarantine index platform values must be strings",
+    );
+    return `${platform.os}_${platform.arch}`;
+  });
+  sameSet(platforms, REQUIRED_PLATFORMS, "provider quarantine index platforms");
+}
+
+export function validateProviderCustodyRegistry(registry, quarantineDigest) {
+  exactKeys(
+    registry,
+    ["schemaVersion", "kind", "providerAddress", "retentionPolicy", "versions"],
+    "provider custody registry",
+  );
+  assert(
+    registry.schemaVersion === 1 &&
+      registry.kind === "takosumi.provider-release-registry@v1" &&
+      registry.providerAddress === PROVIDER_ADDRESS &&
+      registry.retentionPolicy === "all-known-versions-required" &&
+      Array.isArray(registry.versions) &&
+      registry.versions.length === 1,
+    "invalid provider custody registry identity",
+  );
+  const entry = registry.versions[0];
+  exactKeys(
+    entry,
+    ["version", "classification", "manifest", "sha256"],
+    "provider custody registry entry",
+  );
+  assert(
+    entry.version === RETAINED_VERSION &&
+      entry.classification === "historical-quarantine" &&
+      entry.manifest === `quarantine/${RETAINED_VERSION}.json` &&
+      SHA256.test(entry.sha256 ?? "") &&
+      entry.sha256 === quarantineDigest,
+    "provider custody registry is not linked to the exact retained quarantine sidecar",
+  );
+  return registry;
+}
+
+function validateObservedAsset(asset) {
+  assert(
+    typeof asset.path === "string" &&
+      asset.path.startsWith(`${PROVIDER_ADDRESS}/`) &&
+      !asset.path.includes("..") &&
+      asset.url === `${PUBLIC_MIRROR_BASE}${asset.path}` &&
+      Number.isSafeInteger(asset.size) &&
+      asset.size > 0 &&
+      SHA256.test(asset.sha256 ?? "") &&
+      typeof asset.etag === "string" &&
+      /^"[a-f0-9]+"$/u.test(asset.etag) &&
+      typeof asset.observedAt === "string" &&
+      !Number.isNaN(Date.parse(asset.observedAt)),
+    `invalid provider quarantine asset ${String(asset.path)}`,
+  );
+}
+
+function exactKeys(value, expected, label) {
+  assert(
+    value && typeof value === "object" && !Array.isArray(value),
+    `${label} must be an object`,
+  );
+  sameSet(Object.keys(value), expected, `${label} fields`);
+}
+
+function sameSet(actual, expected, label) {
+  const left = [...actual].sort();
+  const right = [...expected].sort();
+  assert(
+    actual.length === expected.length &&
+      JSON.stringify(left) === JSON.stringify(right),
+    `${label} mismatch`,
+  );
 }
 
 async function listJsonAuthorities(root) {
@@ -86,7 +393,9 @@ async function findForbiddenActiveProviderAuthority(
       await findForbiddenActiveProviderAuthority(path, needles, result);
       continue;
     }
-    if (!entry.isFile() || !/\.(?:[cm]?[jt]sx?)$/u.test(entry.name)) continue;
+    if (!entry.isFile() || !/\.(?:[cm]?[jt]sx?|ya?ml)$/u.test(entry.name)) {
+      continue;
+    }
     const source = await readFile(path, "utf8");
     for (const needle of needles) {
       if (source.includes(needle)) {
@@ -108,12 +417,12 @@ export async function verifyProviderCustody() {
   );
   const [descriptor, registry, delta, removal, packageJson, dashboardPackage] =
     await Promise.all([
-      json(descriptorPath),
-      json(registryPath),
-      json(deltaPath),
-      json(removalPath),
-      json(join(ROOT, "package.json")),
-      json(join(ROOT, "dashboard", "package.json")),
+      readJson(descriptorPath),
+      readJson(registryPath),
+      readJson(deltaPath),
+      readJson(removalPath),
+      readJson(join(ROOT, "package.json")),
+      readJson(join(ROOT, "dashboard", "package.json")),
     ]);
 
   assert(descriptor.version === "1.1.4", "custody snapshot must remain 1.1.4");
@@ -145,24 +454,6 @@ export async function verifyProviderCustody() {
   );
 
   assert(
-    registry.providerAddress === descriptor.providerAddress,
-    "registry address drifted",
-  );
-  assert(
-    Array.isArray(registry.versions) && registry.versions.length === 1,
-    "registry must retain only historical 1.0.0",
-  );
-  assert(
-    registry.versions[0]?.version === "1.0.0" &&
-      registry.versions[0]?.classification === "historical-quarantine",
-    "1.0.0 must remain historical quarantine",
-  );
-  assert(
-    !registry.versions.some((entry) => entry.classification === "approved"),
-    "discontinued provider cannot admit mirror releases",
-  );
-
-  assert(
     delta.kind === "takosumi.provider-cancelled-delta-record@v1" &&
       delta.releaseEligibility === "cancelled-discontinued",
     "1.1.4 must remain cancelled custody evidence",
@@ -188,6 +479,17 @@ export async function verifyProviderCustody() {
     join(ROOT, ".github", "workflows", "provider-release.yml"),
     "provider publication workflow",
   );
+  for (const path of [
+    "scripts/build-provider-assets.mjs",
+    "scripts/provider-release.mjs",
+    "scripts/lib/provider-release.mjs",
+    "scripts/provider-release-candidate.mjs",
+    "scripts/provider-release-approval.ts",
+    "scripts/lib/provider-release-approval.ts",
+    "tests/proofs/provider-mirror-quarantine-exclusion.ts",
+  ]) {
+    await absent(join(ROOT, path), `provider mutation path ${path}`);
+  }
   await absent(
     join(ROOT, "tests", "proofs", "resource-shape-opentofu-provider.ts"),
     "active Takosumi provider lifecycle proof",
@@ -222,6 +524,27 @@ export async function verifyProviderCustody() {
     activeAuthority.length === 0,
     `retired Takosumi provider authority returned: ${activeAuthority.join(", ")}`,
   );
+  const mutationAuthority = (
+    await findForbiddenActiveProviderAuthority(join(ROOT, "scripts"), [
+      "buildProviderRelease",
+      "materializeProviderMirror",
+      "verifyProviderPrepublication",
+      "finalizeProviderReleaseApproval",
+      "takosumi.provider-release-candidate-preparation@v1",
+      "takosumi.provider-release-prepublication@v1",
+    ])
+  ).filter((entry) => !entry.startsWith("scripts/provider-custody.mjs:"));
+  const workflowAuthority = await findForbiddenActiveProviderAuthority(
+    join(ROOT, ".github", "workflows"),
+    ["terraform-provider-takosumi", "provider-release"],
+  );
+  assert(
+    mutationAuthority.length === 0 && workflowAuthority.length === 0,
+    `provider mutation authority returned: ${[
+      ...mutationAuthority,
+      ...workflowAuthority,
+    ].join(", ")}`,
+  );
 
   const forbiddenScripts = [
     "opentofu:resource-shape-provider-proof",
@@ -239,6 +562,7 @@ export async function verifyProviderCustody() {
     "provider:release:prepublish",
     "provider:mirror:materialize",
     "provider:mirror:proof",
+    "provider:custody:mirror-proof",
   ];
   for (const name of forbiddenScripts) {
     assert(
@@ -251,6 +575,22 @@ export async function verifyProviderCustody() {
       "bun scripts/provider-custody.mjs",
     "provider custody check must remain wired",
   );
+  assert(
+    packageJson.scripts["provider:custody:compatibility-check"] ===
+      "bun scripts/provider-custody-compatibility.mjs check" &&
+      packageJson.scripts["provider:custody:state-proof"] ===
+        "bun scripts/provider-custody-compatibility.mjs state-proof",
+    "provider compatibility commands must remain custody-only",
+  );
+  for (const [name, command] of Object.entries(packageJson.scripts)) {
+    if (!name.startsWith("provider:")) continue;
+    assert(
+      !/(?:release|publish|prepublish|candidate|approval|materialize|sign|promote|upload|mirror-proof)/u.test(
+        `${name} ${command}`,
+      ),
+      `provider mutation command remains: ${name}`,
+    );
+  }
   for (const name of ["dev", "build"]) {
     const command = dashboardPackage.scripts[name];
     assert(
@@ -266,8 +606,19 @@ export async function verifyProviderCustody() {
   const authorities = await listJsonAuthorities(RELEASE);
   const digests = {};
   for (const path of authorities) {
-    digests[relative(RELEASE, path)] = await verifySidecar(path);
+    digests[relative(RELEASE, path)] = await verifyManifestSidecar(path);
   }
+  const quarantine = validateQuarantineManifest(
+    await readJson(PROVIDER_QUARANTINE_PATH),
+  );
+  validateProviderCustodyRegistry(
+    registry,
+    digests[`quarantine/${quarantine.version}.json`],
+  );
+  assert(
+    registry.providerAddress === descriptor.providerAddress,
+    "registry address drifted",
+  );
 
   return {
     kind: "takosumi.provider-custody@v1",
@@ -276,7 +627,9 @@ export async function verifyProviderCustody() {
     newVersionsAllowed: false,
     retainedVersion: "1.0.0",
     cancelledSnapshot: "1.1.4",
+    sourceProvenance: "unresolved",
     releaseWorkflow: "absent",
+    mutationPaths: "absent",
     defaultMirrorVersions: [],
     authorityDigests: digests,
   };

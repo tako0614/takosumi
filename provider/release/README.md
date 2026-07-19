@@ -6,9 +6,10 @@ This directory is a historical custody record, not a release lane.
   `status: discontinued`, `publishable: false`, with new versions forbidden.
 - `registry.json` retains only the quarantined public `1.0.0` observation. It
   has no approved version and therefore admits no Takosumi mirror artifacts.
-- `quarantine/1.0.0.json` preserves the exact public metadata/archive evidence.
-  The binary reported `dev` and modified VCS provenance, so it must never be
-  rebuilt, overwritten, or republished.
+- `quarantine/1.0.0.json` pins observations and digests for the exact public
+  metadata/archives retained in operator custody. The binary reported `dev`
+  and modified VCS provenance, so its exact source provenance is unresolved;
+  the public bytes must never be rebuilt, overwritten, or republished.
 - `failures/1.1.0.json` through `1.1.3.json` preserve immutable failed/cancelled
   attempts. Tags and evidence are never moved or reused.
 - `compatibility/` preserves value-free schema identity, the cancelled 1.1.4
@@ -18,10 +19,10 @@ This directory is a historical custody record, not a release lane.
   publication workflow is absent.
 
 `bun run provider:custody:check` verifies every JSON digest sidecar, the exact
-historical set, the absence of the release workflow and active release package
-scripts, and the empty default mirror admission set. Go tests continue to keep
-the retained migration source buildable; neither check is a provider release
-or a Takosumi GA publication prerequisite.
+historical set, the absence of every build/materialize/sign/approve/publish
+command and workflow, and the empty default mirror admission set. Go tests
+continue to keep the retained migration implementation inspectable; neither
+check is a provider release or a Takosumi GA publication prerequisite.
 
 Portable Service Forms and their Resource Interface descriptors belong to
 Takoform. Capsule Interfaces use service-side InstallConfig blueprints.

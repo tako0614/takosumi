@@ -1,9 +1,6 @@
 #!/usr/bin/env bun
 
-import {
-  requireProviderCompatibilityReleaseReady,
-  verifyProviderCompatibility,
-} from "./lib/provider-release-compatibility.mjs";
+import { verifyProviderCompatibility } from "./lib/provider-custody-compatibility.mjs";
 
 const [command, ...args] = process.argv.slice(2);
 let proofPath;
@@ -17,14 +14,6 @@ if (args.length > 0) {
 if (command === "check") {
   process.stdout.write(
     `${JSON.stringify(await verifyProviderCompatibility({ proofPath }), null, 2)}\n`,
-  );
-} else if (command === "release-check") {
-  process.stdout.write(
-    `${JSON.stringify(
-      await requireProviderCompatibilityReleaseReady({ proofPath }),
-      null,
-      2,
-    )}\n`,
   );
 } else if (command === "state-proof") {
   if (proofPath) {
