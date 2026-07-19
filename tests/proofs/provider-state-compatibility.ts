@@ -25,6 +25,7 @@ import {
   createProviderCompatibilityProofArtifact,
   DEFAULT_COMPATIBILITY_PROOF_PATH,
   loadCompatibilityAuthorities,
+  resolveCompatibilityGoCommand,
   structuralSha256,
   writeProviderCompatibilityProofArtifact,
 } from "../../scripts/lib/provider-release-compatibility.mjs";
@@ -70,6 +71,9 @@ const openTofuPath = findCommand("tofu", sanitized.environment);
 if (!openTofuPath)
   throw new Error("OpenTofu CLI is required for provider state proof");
 const terraformPath = findCommand("terraform", sanitized.environment);
+const candidateGoPath = await resolveCompatibilityGoCommand(
+  descriptor.toolchain.go,
+);
 const server = Bun.spawn(
   [
     "bun",
@@ -161,7 +165,7 @@ resource "takosumi_target_pool" "legacy" {
     `terraform-provider-takosumi_v${descriptor.version}`,
   );
   run(
-    descriptor.toolchain.go.path,
+    candidateGoPath,
     [
       "build",
       "-trimpath",
