@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "kind": "takosumi.service-form-migration-fixture-authority@v1",
+  "takoformSource": {
+    "repository": "https://github.com/tako0614/terraform-provider-takoform",
+    "tag": "v0.1.0-rc.3",
+    "commit": "47698a158fb330b36e92450852a66ffa510e734e",
+    "artifacts": {
+      "mapping.json": "sha256:c94f59e5b5c783fa36434e3fe87d567c29ffd05b80860ffcb9a057a43f638ae0",
+      "legacy-state.json": "sha256:d9e5c5e9d368bde2ed4a7c18b4fa2e46e1ff3a5f71ff6a9ad7199083c66339a1",
+      "golden-state.json": "sha256:ca333579961032f94f04a143801fa11e6ff95c646dea20624dbeb29849c25a1d",
+      "evidence.json": "sha256:647be39bc9e4ee6142afcd7b92e27dcef7bbfc4e589758a3f850e1a7611740d2",
+      "migration-from-takosumi-provider.md": "sha256:cbef5e3859d6ffff64da058c764dec27c127b4a04fbd882c18dcf0b76df4873f"
+    }
+  },
+  "migration": {
+    "format": "takoform.provider-migration-evidence@v1",
+    "approvedPath": "backup-remove-import-refresh-or-restore-backup",
+    "legacyResourceCount": 6,
+    "targetResourceCount": 10,
+    "legacyResourceTypes": [
+      "takosumi_container_service",
+      "takosumi_edge_worker",
+      "takosumi_kv_store",
+      "takosumi_object_bucket",
+      "takosumi_queue",
+      "takosumi_sql_database"
+    ],
+    "requiredPhases": [
+      "state-backup",
+      "old-refresh-no-op",
+      "approved-remove-import",
+      "new-refresh-no-op",
+      "old-artifact-lock-rollback"
+    ]
+  },
+  "takosumiProviderProof": {
+    "command": "bun run provider:compatibility:state-proof",
+    "evidenceKind": "takosumi.provider-compatibility-proof-evidence@v1",
+    "coveredResourceTypes": [
+      "takosumi_container_service",
+      "takosumi_edge_worker",
+      "takosumi_kv_store",
+      "takosumi_object_bucket",
+      "takosumi_queue",
+      "takosumi_sql_database",
+      "takosumi_target_pool"
+    ]
+  },
+  "status": "repo-fixtures-pinned-live-phases-required"
+}
