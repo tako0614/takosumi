@@ -1,5 +1,14 @@
-import Ajv2020, { type ValidateFunction } from "ajv/dist/2020.js";
-import type { FormOperation, FormRef, JsonObject } from "takosumi-contract";
+import Ajv2020, {
+  type AnySchema,
+  type ValidateFunction,
+} from "ajv/dist/2020.js";
+import type {
+  FormInterfaceDescriptor,
+  FormOperation,
+  FormRef,
+  JsonObject,
+  JsonValue,
+} from "takosumi-contract";
 import type {
   FormPackageVerifier,
   VerifiedFormDefinition,
@@ -137,7 +146,15 @@ interface TakoformDefinition {
     readonly name: string;
     readonly version: string;
     readonly description?: string;
+    readonly required?: boolean;
+    readonly document?: CanonicalJsonValue;
     readonly documentSchema?: CanonicalJsonValue;
+    readonly inputs?: readonly {
+      readonly name: string;
+      readonly source: string;
+      readonly pointer?: string;
+      readonly value?: CanonicalJsonValue;
+    }[];
   }[];
   readonly conformanceFixtures?: readonly {
     readonly name: string;
@@ -249,6 +266,9 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
         definition.status,
       ),
       metadata: definitionMetadata(definition),
+      ...(definition.interfaces?.length
+        ? { interfaceDescriptors: verifiedInterfaceDescriptors(definition) }
+        : {}),
     };
     return { packageDigest, definitions: [verifiedDefinition] };
   }
@@ -256,12 +276,51 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
 
 function verifyDefinitionSemantics(definition: TakoformDefinition): void {
   const interfaces = new Set<string>();
-  for (const descriptor of definition.interfaces ?? []) {
+  for (const [position, descriptor] of (
+    definition.interfaces ?? []
+  ).entries()) {
     const key = `${descriptor.name}@${descriptor.version}`;
     if (interfaces.has(key)) {
       throw new TypeError(`duplicate Interface ${key}`);
     }
     interfaces.add(key);
+    const inputs = new Set<string>();
+    for (const input of descriptor.inputs ?? []) {
+      if (inputs.has(input.name)) {
+        throw new TypeError(`duplicate Interface input ${key}:${input.name}`);
+      }
+      inputs.add(input.name);
+      if (input.source === "literal") {
+        if (input.value === undefined || input.pointer !== undefined) {
+          throw new TypeError(
+            `literal Interface input ${key}:${input.name} requires value and forbids pointer`,
+          );
+        }
+      } else if (input.value !== undefined) {
+        throw new TypeError(
+          `non-literal Interface input ${key}:${input.name} forbids value`,
+        );
+      }
+    }
+    if (descriptor.documentSchema !== undefined) {
+      let validateDocument: ValidateFunction;
+      try {
+        // The closed Form Definition schema already proved this value is a
+        // JSON Schema object. CanonicalJsonValue remains intentionally wider
+        // at the parser boundary, so narrow only at the Ajv compile seam.
+        validateDocument = ajv.compile(descriptor.documentSchema as AnySchema);
+      } catch (error) {
+        throw new TypeError(
+          `interfaces[${position}].documentSchema could not be compiled: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      const document = descriptor.document ?? {};
+      if (!validateDocument(document)) {
+        throw new TypeError(
+          `interfaces[${position}].document does not satisfy documentSchema: ${ajv.errorsText(validateDocument.errors)}`,
+        );
+      }
+    }
   }
 
   const fixtureNames = new Set<string>();
@@ -277,6 +336,35 @@ function verifyDefinitionSemantics(definition: TakoformDefinition): void {
     }
     fixtureNames.add(fixture.name);
   }
+}
+
+function verifiedInterfaceDescriptors(
+  definition: TakoformDefinition,
+): readonly FormInterfaceDescriptor[] {
+  return (definition.interfaces ?? []).map((descriptor) => ({
+    name: descriptor.name,
+    version: descriptor.version,
+    ...(descriptor.description ? { description: descriptor.description } : {}),
+    ...(descriptor.required === true ? { required: true } : {}),
+    ...(descriptor.document !== undefined
+      ? { document: descriptor.document as JsonObject }
+      : {}),
+    ...(descriptor.documentSchema !== undefined
+      ? { documentSchema: descriptor.documentSchema as JsonObject }
+      : {}),
+    ...(descriptor.inputs?.length
+      ? {
+          inputs: descriptor.inputs.map((input) => ({
+            name: input.name,
+            source: input.source,
+            ...(input.pointer !== undefined ? { pointer: input.pointer } : {}),
+            ...(input.value !== undefined
+              ? { value: input.value as JsonValue }
+              : {}),
+          })),
+        }
+      : {}),
+  }));
 }
 
 function decodeEnvelope(value: CanonicalJsonValue): InstallEnvelope {

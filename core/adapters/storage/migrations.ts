@@ -995,12 +995,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [
         ["workspace_id", "owner_kind", "owner_id", "name"],
         ["workspace_id", "interface_type", "phase"],
-        [
-          "workspace_id",
-          "owner_kind",
-          "owner_id",
-          "oauth_resource_uri",
-        ],
+        ["workspace_id", "owner_kind", "owner_id", "oauth_resource_uri"],
       ],
     },
     {
@@ -4270,5 +4265,28 @@ create unique index if not exists takosumi_interfaces_oauth_resource_claim_uniqu
       down: `drop index if exists takosumi_interfaces_oauth_resource_claim_unique;
 alter table takosumi_interfaces
   drop column if exists oauth_resource_uri;`,
+    },
+    {
+      id: "runtime_interfaces.form_descriptor_lineage.add",
+      version: 96,
+      domain: "runtime",
+      description:
+        "Add nullable exact Form and descriptor identity projections for host-owned Interfaces materialized from portable declarations.",
+      sql: `alter table takosumi_interfaces
+  add column if not exists form_ref_key text,
+  add column if not exists form_schema_digest text,
+  add column if not exists descriptor_name text,
+  add column if not exists descriptor_version text;
+create index if not exists takosumi_interfaces_form_descriptor_idx
+  on takosumi_interfaces (
+    workspace_id, form_ref_key, form_schema_digest,
+    descriptor_name, descriptor_version
+  ) where form_ref_key is not null;`,
+      down: `drop index if exists takosumi_interfaces_form_descriptor_idx;
+alter table takosumi_interfaces
+  drop column if exists descriptor_version,
+  drop column if exists descriptor_name,
+  drop column if exists form_schema_digest,
+  drop column if exists form_ref_key;`,
     },
   ]);

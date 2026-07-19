@@ -359,8 +359,8 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(47);
-  expect(plan.migrations).toHaveLength(44);
+  expect(plan.migrations.at(-1)?.version).toBe(48);
+  expect(plan.migrations).toHaveLength(45);
   expect(plan.tables.some((table) => table.name === "target_pools")).toBe(true);
   expect(
     plan.tables.some((table) => table.name === "takosumi_target_pools"),
@@ -377,6 +377,20 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(usageEvents?.columns.every((column) => column.hidden === 0)).toBe(
     true,
   );
+  const interfaces = plan.tables.find((table) => table.name === "interfaces");
+  expect(interfaces?.columns.map((column) => column.name)).toEqual(
+    expect.arrayContaining([
+      "form_ref_key",
+      "form_schema_digest",
+      "descriptor_name",
+      "descriptor_version",
+    ]),
+  );
+  expect(
+    interfaces?.indexes.some(
+      (index) => index.name === "interfaces_form_descriptor_idx",
+    ),
+  ).toBe(true);
 });
 
 test("control D1 verify is read-only and accepts host extension tables", async () => {
@@ -401,7 +415,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(47);
+    expect(verification.latestMigrationVersion).toBe(48);
   } finally {
     database.close();
   }
@@ -1088,7 +1102,7 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 47 },
+      verification: { latestMigrationVersion: 48 },
     });
   } finally {
     database.close();
@@ -1323,7 +1337,7 @@ test("control D1 REST compound renderer fails closed on bind mismatch", async ()
   expect(fetchCalls).toBe(0);
 });
 
-test("control D1 REST import transport converges the live v24 fixture through canonical v47 triggers", async () => {
+test("control D1 REST import transport converges the live v24 fixture through canonical v48 triggers", async () => {
   const plan = await buildControlD1SchemaPlan();
   const backing = new SqliteControlD1Database();
   const sql = await Bun.file(
@@ -1373,7 +1387,7 @@ test("control D1 REST import transport converges the live v24 fixture through ca
         .map((entry) => entry.version),
     );
     expect(applied.verification.status).toBe("ready");
-    expect(applied.verification.latestMigrationVersion).toBe(47);
+    expect(applied.verification.latestMigrationVersion).toBe(48);
     expect(stats.importIngests).toBeGreaterThan(0);
     expect(stats.queryTriggerRejections).toBe(0);
     expect(await readLiveV24ConvergenceRows(backing)).toEqual(before);

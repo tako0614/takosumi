@@ -1,4 +1,4 @@
-import type { IsoTimestamp, JsonObject } from "./types.ts";
+import type { IsoTimestamp, JsonObject, JsonValue } from "./types.ts";
 
 /**
  * Exact, immutable identity of one portable Service Form definition.
@@ -44,6 +44,46 @@ export function isInstalledFormReference(
 export type FormOperation =
   "create" | "read" | "update" | "delete" | "import" | "refresh";
 
+/** Portable, data-only mapping sources every conforming host understands. */
+export const PORTABLE_INTERFACE_INPUT_SOURCES = ["literal", "output"] as const;
+export type PortableInterfaceInputSource =
+  (typeof PORTABLE_INTERFACE_INPUT_SOURCES)[number];
+
+export function isPortableInterfaceInputSource(
+  value: unknown,
+): value is PortableInterfaceInputSource {
+  return (
+    typeof value === "string" &&
+    (PORTABLE_INTERFACE_INPUT_SOURCES as readonly string[]).includes(value)
+  );
+}
+
+/** One deterministic, non-executable input mapping declared by a Form. */
+export interface FormInterfaceInputDeclaration {
+  readonly name: string;
+  readonly source: string;
+  /** RFC 6901 pointer into the source document. Empty selects the whole value. */
+  readonly pointer?: string;
+  /** Exact JSON literal. Valid only for `source: literal`. */
+  readonly value?: JsonValue;
+}
+
+/**
+ * One portable runtime-interface declaration. Its exact identity is
+ * `(name, version)`. It grants no access and owns no host lifecycle state.
+ */
+export interface FormInterfaceDescriptor {
+  readonly name: string;
+  readonly version: string;
+  readonly description?: string;
+  readonly required?: boolean;
+  /** Exact non-secret document copied by a host; omitted means `{}`. */
+  readonly document?: JsonObject;
+  /** Portable schema already verified with the containing Form Package. */
+  readonly documentSchema?: JsonObject;
+  readonly inputs?: readonly FormInterfaceInputDeclaration[];
+}
+
 /** Portable, data-only definition metadata exposed by the host registry. */
 export interface FormDefinition {
   readonly identity: InstalledFormReference;
@@ -51,6 +91,7 @@ export interface FormDefinition {
   readonly description?: string;
   readonly operations: readonly FormOperation[];
   readonly metadata?: JsonObject;
+  readonly interfaceDescriptors?: readonly FormInterfaceDescriptor[];
   readonly installedAt: IsoTimestamp;
 }
 
@@ -112,6 +153,7 @@ export type FormAvailabilityReason =
   | "package_deprecated"
   | "package_revoked"
   | "schema_unavailable"
+  | "interface_capability_missing"
   | "implementation_unavailable"
   | "adapter_unavailable"
   | "activation_missing"

@@ -8,6 +8,7 @@ import type {
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
+import { interfaceFormLineage } from "./stores.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 
 interface JsonRow {
@@ -24,9 +25,10 @@ class D1InterfaceStore implements InterfaceStore {
       .prepare(
         `insert or ignore into ${this.#table} (
         id, workspace_id, owner_kind, owner_id, name, interface_type,
-        phase, generation, resolved_revision, oauth_resource_uri, record_json,
-        created_at, updated_at
-      ) values (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        phase, generation, resolved_revision, oauth_resource_uri,
+        form_ref_key, form_schema_digest, descriptor_name, descriptor_version,
+        record_json, created_at, updated_at
+      ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .bind(...interfaceParameters(record, false))
       .run();
@@ -111,6 +113,7 @@ class D1InterfaceStore implements InterfaceStore {
           phase=?, generation=?, resolved_revision=?,
           oauth_resource_uri=case
             when oauth_resource_uri=? then oauth_resource_uri else null end,
+          form_ref_key=?, form_schema_digest=?, descriptor_name=?, descriptor_version=?,
           record_json=?,
           created_at=?, updated_at=?
          where id=? and generation=? and resolved_revision=? and record_json=?`,
@@ -175,12 +178,7 @@ class D1InterfaceStore implements InterfaceStore {
          where workspace_id=? and owner_kind=? and owner_id=?
            and oauth_resource_uri=? limit 1`,
       )
-      .bind(
-        input.workspaceId,
-        input.ownerKind,
-        input.ownerId,
-        input.resource,
-      )
+      .bind(input.workspaceId, input.ownerKind, input.ownerId, input.resource)
       .first<{ readonly id: string }>();
     return row?.id;
   }
@@ -251,6 +249,7 @@ function interfaceParameters(
   record: Interface,
   preserveClaim: boolean,
 ): readonly unknown[] {
+  const form = interfaceFormLineage(record);
   return [
     record.metadata.id,
     record.metadata.workspaceId,
@@ -262,6 +261,10 @@ function interfaceParameters(
     record.metadata.generation,
     record.status.resolvedRevision,
     preserveClaim ? (interfaceOAuth2ResourceUri(record) ?? null) : null,
+    form?.formRefKey ?? null,
+    form?.formSchemaDigest ?? null,
+    form?.descriptorName ?? null,
+    form?.descriptorVersion ?? null,
     JSON.stringify(record),
     record.metadata.createdAt,
     record.metadata.updatedAt,

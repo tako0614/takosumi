@@ -243,6 +243,12 @@ export type InterfaceServiceMaterialization =
   | {
       readonly compatibilityProfile: string;
       readonly compatibilityKey: string;
+    }
+  | {
+      readonly formRefKey: string;
+      readonly formSchemaDigest: string;
+      readonly descriptorName: string;
+      readonly descriptorVersion: string;
     };
 
 export type InterfaceBindingServiceMaterialization =
@@ -2191,13 +2197,12 @@ export class InterfaceService {
     ) {
       return "claimed";
     }
-    const claimedBy =
-      await this.#stores.interfaces.findOAuth2ResourceClaim({
-        workspaceId: iface.metadata.workspaceId,
-        ownerKind: iface.metadata.ownerRef.kind,
-        ownerId: iface.metadata.ownerRef.id,
-        resource,
-      });
+    const claimedBy = await this.#stores.interfaces.findOAuth2ResourceClaim({
+      workspaceId: iface.metadata.workspaceId,
+      ownerKind: iface.metadata.ownerRef.kind,
+      ownerId: iface.metadata.ownerRef.id,
+      resource,
+    });
     return claimedBy && claimedBy !== iface.metadata.id
       ? "conflict"
       : "changed";
@@ -2597,7 +2602,9 @@ function materializeCapsuleBlueprintInputs(
     materialized[name] = {
       source: "resource_output",
       resourceId: requireText(raw.resourceId, `${name}.resourceId`),
-      outputName: requireText(raw.outputName, `${name}.outputName`),
+      ...(raw.outputName !== undefined
+        ? { outputName: requireText(raw.outputName, `${name}.outputName`) }
+        : {}),
       ...(raw.pointer !== undefined
         ? { pointer: validatePointer(raw.pointer, name) }
         : {}),
@@ -2719,7 +2726,9 @@ function normalizeInputs(
       normalized[name] = {
         source: "resource_output",
         resourceId: requireText(raw.resourceId, `${name}.resourceId`),
-        outputName: requireText(raw.outputName, `${name}.outputName`),
+        ...(raw.outputName !== undefined
+          ? { outputName: requireText(raw.outputName, `${name}.outputName`) }
+          : {}),
         ...(raw.pointer !== undefined
           ? { pointer: validatePointer(raw.pointer, name) }
           : {}),
@@ -2937,6 +2946,24 @@ function interfaceMaterialization(
   }
   if ("capsuleResource" in materialization) {
     return { source: "capsule_resource" };
+  }
+  if ("formRefKey" in materialization) {
+    return {
+      source: "form_descriptor",
+      formRefKey: requireText(materialization.formRefKey, "formRefKey"),
+      formSchemaDigest: requireText(
+        materialization.formSchemaDigest,
+        "formSchemaDigest",
+      ),
+      descriptorName: requireText(
+        materialization.descriptorName,
+        "descriptorName",
+      ),
+      descriptorVersion: requireText(
+        materialization.descriptorVersion,
+        "descriptorVersion",
+      ),
+    };
   }
   return {
     source: "compatibility_profile",

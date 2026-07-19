@@ -18,6 +18,7 @@ export interface VerifiedFormDefinition {
   readonly description?: string;
   readonly operations: FormDefinition["operations"];
   readonly metadata?: JsonObject;
+  readonly interfaceDescriptors?: FormDefinition["interfaceDescriptors"];
 }
 
 /** Verifier-neutral result for one immutable, data-only package. */

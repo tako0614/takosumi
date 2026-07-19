@@ -63,13 +63,30 @@ test("a signed exact data-only package reaches the durable Form Registry seam", 
     "takoform.form-package.v1alpha1+test.sigstore.v1",
   );
   expect(installed.definitionRefs).toEqual([artifact.formRef]);
-  expect((await registry.getDefinition(artifact.formRef))?.operations).toEqual([
+  const definition = await registry.getDefinition(artifact.formRef);
+  expect(definition?.operations).toEqual([
     "create",
     "update",
     "read",
     "refresh",
     "delete",
     "import",
+  ]);
+  expect(definition?.interfaceDescriptors).toEqual([
+    {
+      name: "storage.object",
+      version: "v1",
+      required: true,
+      document: { protocol: "https" },
+      documentSchema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: false,
+        properties: { protocol: { const: "https" } },
+        required: ["protocol"],
+      },
+      inputs: [{ name: "bucket", source: "output", pointer: "/bucket_name" }],
+    },
   ]);
 });
 
@@ -290,6 +307,67 @@ test("definition semantics reject duplicate Interface and fixture identities", a
   ).rejects.toThrow("duplicate conformance fixture name positive");
 });
 
+test("Interface descriptor versions coexist and exact documents fail closed", async () => {
+  const verifier = new TakoformDataOnlyPackageVerifier(
+    new AcceptingSignatureVerifier(),
+  );
+  const versioned = await buildArtifact((definition) => ({
+    ...asRecord(definition),
+    interfaces: [
+      ...((asRecord(definition).interfaces as CanonicalJsonValue[]) ?? []),
+      { name: "storage.object", version: "v2" },
+    ],
+  }));
+  const verified = await verifier.verify(
+    versioned.envelope,
+    versioned.packageDigest,
+  );
+  expect(
+    verified.definitions[0]?.interfaceDescriptors?.map((descriptor) => [
+      descriptor.name,
+      descriptor.version,
+    ]),
+  ).toEqual([
+    ["storage.object", "v1"],
+    ["storage.object", "v2"],
+  ]);
+
+  const invalidDocument = await buildArtifact((definition) => ({
+    ...asRecord(definition),
+    interfaces: [
+      {
+        name: "storage.object",
+        version: "v1",
+        document: { protocol: "http" },
+        documentSchema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          additionalProperties: false,
+          properties: { protocol: { const: "https" } },
+          required: ["protocol"],
+        },
+      },
+    ],
+  }));
+  await expect(
+    verifier.verify(invalidDocument.envelope, invalidDocument.packageDigest),
+  ).rejects.toThrow("document does not satisfy documentSchema");
+
+  const invalidPointer = await buildArtifact((definition) => ({
+    ...asRecord(definition),
+    interfaces: [
+      {
+        name: "storage.object",
+        version: "v1",
+        inputs: [{ name: "bucket", source: "output", pointer: "/bad~2" }],
+      },
+    ],
+  }));
+  await expect(
+    verifier.verify(invalidPointer.envelope, invalidPointer.packageDigest),
+  ).rejects.toThrow("pointer must match pattern");
+});
+
 async function buildArtifact(
   mutateDefinition?: (definition: CanonicalJsonValue) => CanonicalJsonValue,
   options: {
@@ -348,6 +426,22 @@ async function buildArtifact(
       "import",
       "observe",
       "drift",
+    ],
+    interfaces: [
+      {
+        name: "storage.object",
+        version: "v1",
+        required: true,
+        document: { protocol: "https" },
+        documentSchema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          additionalProperties: false,
+          properties: { protocol: { const: "https" } },
+          required: ["protocol"],
+        },
+        inputs: [{ name: "bucket", source: "output", pointer: "/bucket_name" }],
+      },
     ],
     ...(options.fixture !== undefined
       ? {

@@ -11,6 +11,26 @@ export interface InterfaceListFilter {
   readonly includeRetired?: boolean;
 }
 
+/** Nullable query projection for exact portable Form descriptor lineage. */
+export function interfaceFormLineage(record: Interface):
+  | {
+      readonly formRefKey: string;
+      readonly formSchemaDigest: string;
+      readonly descriptorName: string;
+      readonly descriptorVersion: string;
+    }
+  | undefined {
+  const source = record.metadata.materializedFrom;
+  return source?.source === "form_descriptor"
+    ? {
+        formRefKey: source.formRefKey,
+        formSchemaDigest: source.formSchemaDigest,
+        descriptorName: source.descriptorName,
+        descriptorVersion: source.descriptorVersion,
+      }
+    : undefined;
+}
+
 export interface InterfaceWriteGuard {
   readonly generation: number;
   readonly resolvedRevision: number;

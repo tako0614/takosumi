@@ -25,7 +25,10 @@ import { apiError, readJsonObject, requestIdFromContext } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
 import { parsePageQuery } from "./page_query.ts";
-import { registerPortableFormHostRoutes } from "./form_host_routes.ts";
+import {
+  type PortableInterfaceDeclarationReader,
+  registerPortableFormHostRoutes,
+} from "./form_host_routes.ts";
 import {
   type ApplyResourceRequest,
   formatResourceShapeId,
@@ -43,6 +46,7 @@ export const TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER =
 
 export interface RegisterResourceShapeRoutesOptions {
   readonly service: ResourceShapeService;
+  readonly interfaceDeclarations?: PortableInterfaceDeclarationReader;
   /**
    * Public Resource Shape kinds this host exposes for preview/apply/import and
    * refresh. Omitted means no new desired-state authority.
@@ -186,6 +190,9 @@ export function registerResourceShapeRoutes(
     availability: service,
     authorize: (c) => authorizeResourceShapeRequest(c, options),
     canReadForms: hasFormAvailabilityReadScope,
+    ...(options.interfaceDeclarations
+      ? { interfaceDeclarations: options.interfaceDeclarations }
+      : {}),
   });
 
   app.get("/v1/form-availability", async (c) => {

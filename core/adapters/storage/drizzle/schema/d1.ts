@@ -674,6 +674,10 @@ export const interfaces = sqliteTable(
     generation: integer("generation").notNull(),
     resolvedRevision: integer("resolved_revision").notNull(),
     oauthResourceUri: text("oauth_resource_uri"),
+    formRefKey: text("form_ref_key"),
+    formSchemaDigest: text("form_schema_digest"),
+    descriptorName: text("descriptor_name"),
+    descriptorVersion: text("descriptor_version"),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -695,6 +699,15 @@ export const interfaces = sqliteTable(
         table.oauthResourceUri,
       )
       .where(sql`${table.oauthResourceUri} is not null`),
+    index("interfaces_form_descriptor_idx")
+      .on(
+        table.workspaceId,
+        table.formRefKey,
+        table.formSchemaDigest,
+        table.descriptorName,
+        table.descriptorVersion,
+      )
+      .where(sql`${table.formRefKey} is not null`),
   ],
 );
 

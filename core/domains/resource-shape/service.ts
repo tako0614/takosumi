@@ -44,6 +44,7 @@ import {
   formRefKey,
   installedFormReferenceKey,
   isInstalledFormReference,
+  isPortableInterfaceInputSource,
   isResourceShapeKind,
   NOOP_RESOURCE_DEPLOYMENT_ADMISSION,
   TAKOSUMI_API_VERSION,
@@ -263,6 +264,16 @@ export interface ResourceShapeServiceDeps {
     listDefinitions?(params?: PageParams): Promise<Page<FormDefinition>>;
     listActivations?(params?: PageParams): Promise<Page<FormActivation>>;
   };
+  /**
+   * Host composition proof for required portable Interface declarations.
+   * Returning a message rejects Form-backed admission before any adapter or
+   * backend mutation. Package installation remains independent of host
+   * capability so optional declarations stay portable.
+   */
+  readonly requiredFormInterfaceAdmission?: (input: {
+    readonly request: ApplyResourceRequest;
+    readonly definition: FormDefinition;
+  }) => Promise<string | undefined>;
   /** Absolute providerConfig URL values trusted by this operator. */
   readonly allowedProviderConfigUrls?: readonly string[];
   /** @deprecated Use allowedProviderConfigUrls. */
@@ -340,6 +351,7 @@ export class ResourceShapeService {
   readonly #moduleRegistry: ResourceShapeModuleRegistry;
   readonly #schemaRegistry: ResourceShapeSchemaRegistry;
   readonly #formRegistry: ResourceShapeServiceDeps["formRegistry"];
+  readonly #requiredFormInterfaceAdmission: ResourceShapeServiceDeps["requiredFormInterfaceAdmission"];
   readonly #activity: ActivityLedger | undefined;
   readonly #operationRuns: ResourceShapeServiceDeps["operationRuns"];
   readonly #deploymentAdmission: ResourceDeploymentAdmission;
@@ -360,6 +372,7 @@ export class ResourceShapeService {
     this.#schemaRegistry =
       deps.schemaRegistry ?? EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY;
     this.#formRegistry = deps.formRegistry;
+    this.#requiredFormInterfaceAdmission = deps.requiredFormInterfaceAdmission;
     this.#allowedProviderConfigUrls = new Set(
       (
         deps.allowedProviderConfigUrls ??
@@ -1395,6 +1408,11 @@ export class ResourceShapeService {
         spaceId: req.space,
         resourceId: id,
       });
+      const lifecycleRecord = await this.#stores.resources.get(id);
+      const finalizedRecord =
+        lifecycleRecord?.generation === published.record.generation
+          ? lifecycleRecord
+          : published.record;
       let operationAuditComplete = true;
       if (operationRun) {
         const completed = await this.#completePluginOperationRun({
@@ -1489,7 +1507,7 @@ export class ResourceShapeService {
       }
       return {
         ok: true,
-        value: this.#assemble(published.record, published.lock),
+        value: this.#assemble(finalizedRecord, published.lock),
       };
     } catch (error) {
       if (adapterSucceeded) {
@@ -2168,10 +2186,15 @@ export class ResourceShapeService {
       spaceId: req.space,
       resourceId: id,
     });
+    const lifecycleRecord = await this.#stores.resources.get(id);
+    const finalizedRecord =
+      lifecycleRecord?.generation === persisted.record.generation
+        ? lifecycleRecord
+        : persisted.record;
     const successMetadata = {
       generation: 1,
       observedGeneration: 1,
-      phase: "Ready" as const,
+      phase: finalizedRecord.phase,
       nativeResourceCount: result.nativeResources.length,
     };
     if (operationRun) {
@@ -2203,7 +2226,7 @@ export class ResourceShapeService {
     return {
       ok: true,
       value: {
-        resource: this.#assemble(persisted.record, persisted.lock),
+        resource: this.#assemble(finalizedRecord, persisted.lock),
         import: {
           summary: result.summary,
           ...(operationRun
@@ -3207,10 +3230,15 @@ export class ResourceShapeService {
       spaceId: space,
       resourceId: id,
     });
+    const lifecycleRecord = await this.#stores.resources.get(id);
+    const finalizedRecord =
+      lifecycleRecord?.generation === persisted.record.generation
+        ? lifecycleRecord
+        : persisted.record;
     const successMetadata = {
-      generation: persisted.record.generation,
-      observedGeneration: persisted.record.observedGeneration,
-      phase: persisted.record.phase,
+      generation: finalizedRecord.generation,
+      observedGeneration: finalizedRecord.observedGeneration,
+      phase: finalizedRecord.phase,
       nativeResourceCount: result.nativeResources.length,
     };
     if (operationRun) {
@@ -3242,7 +3270,7 @@ export class ResourceShapeService {
     return {
       ok: true,
       value: {
-        resource: this.#assemble(persisted.record, refreshedLock),
+        resource: this.#assemble(finalizedRecord, refreshedLock),
         refresh: {
           summary: result.summary,
           ...(operationRun
@@ -4693,6 +4721,43 @@ export class ResourceShapeService {
         },
       };
     }
+    const missingInterfaceCapability =
+      requiredInterfaceCapabilityMissing(definition);
+    if (missingInterfaceCapability) {
+      return {
+        ok: false,
+        error: {
+          code: "capability_missing",
+          message: missingInterfaceCapability,
+        },
+      };
+    }
+    if (
+      this.#requiredFormInterfaceAdmission &&
+      definition.interfaceDescriptors?.some(
+        (descriptor) => descriptor.required === true,
+      )
+    ) {
+      let hostAdmissionFailure: string | undefined;
+      try {
+        hostAdmissionFailure = await this.#requiredFormInterfaceAdmission({
+          request,
+          definition,
+        });
+      } catch {
+        hostAdmissionFailure =
+          "required Interface host admission could not be verified";
+      }
+      if (hostAdmissionFailure) {
+        return {
+          ok: false,
+          error: {
+            code: "capability_missing",
+            message: hostAdmissionFailure,
+          },
+        };
+      }
+    }
     return { ok: true, value: definition.identity };
   }
 
@@ -5120,7 +5185,12 @@ export class ResourceShapeService {
     } else if (packageRecord?.status === "deprecated") {
       executableReason = "package_deprecated";
     } else if (!schemaInstalled) executableReason = "schema_unavailable";
-    else if (!sawDescriptor) executableReason = "implementation_unavailable";
+    else if (
+      input.definition &&
+      requiredInterfaceCapabilityMissing(input.definition)
+    ) {
+      executableReason = "interface_capability_missing";
+    } else if (!sawDescriptor) executableReason = "implementation_unavailable";
     else if (!sawInstalledModule) {
       executableReason = "implementation_unavailable";
     } else if (executablePools.length === 0) {
@@ -5186,6 +5256,31 @@ export class ResourceShapeService {
 }
 
 // --- helpers (module-level, pure) ---------------------------------------------
+
+/**
+ * Portable literal/output mappings are the only Interface input sources Core
+ * can materialize without an explicitly composed host extension. A required
+ * descriptor must therefore fail admission before any backend mutation when
+ * this host cannot satisfy its source contract. Optional descriptors remain
+ * installable and are omitted at materialization time.
+ */
+function requiredInterfaceCapabilityMissing(
+  definition: FormDefinition,
+): string | undefined {
+  for (const descriptor of definition.interfaceDescriptors ?? []) {
+    if (descriptor.required !== true) continue;
+    const unsupported = (descriptor.inputs ?? []).find(
+      (input) => !isPortableInterfaceInputSource(input.source),
+    );
+    if (unsupported) {
+      return (
+        `required Interface ${descriptor.name}@${descriptor.version} ` +
+        `needs unsupported host input source ${unsupported.source}`
+      );
+    }
+  }
+  return undefined;
+}
 
 function versionOf(record: ResourceShapeRecord): {
   readonly generation: number;

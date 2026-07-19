@@ -95,9 +95,12 @@ import {
 import { createSqlResourceShapeStores } from "./domains/resource-shape/sql_stores.ts";
 import {
   createInMemoryInterfaceStores,
+  createPortableDeclarationReader,
+  ensureFormDescriptorInterfaces,
   InterfaceService,
   LegacyOutputInterfaceMigrationService,
   OutputBackedInterfaceInputResolver,
+  RequiredFormInterfaceError,
   resourceInterfaceWorkspaceInput,
   resourceLifecycleInterfaceWorkspaceInput,
   type ResourceInterfaceWorkspaceResolver,
@@ -1407,6 +1410,8 @@ export async function createTakosumiService(
       sharedOpenTofuStore,
       () => new Date().toISOString(),
     );
+  const resolveResourceInterfaceWorkspace =
+    options.resolveResourceInterfaceWorkspace;
   const resourceShapeService = resourceShapeAdapter
     ? new ResourceShapeService({
         stores: resourceShapeStores,
@@ -1423,6 +1428,36 @@ export async function createTakosumiService(
           ? { schemaRegistry: options.resourceShapeSchemaRegistry }
           : {}),
         ...(formRegistryService ? { formRegistry: formRegistryService } : {}),
+        ...(formRegistryService
+          ? {
+              requiredFormInterfaceAdmission: async ({
+                request,
+                definition,
+              }) => {
+                if (
+                  !definition.interfaceDescriptors?.some(
+                    (descriptor) => descriptor.required === true,
+                  )
+                ) {
+                  return undefined;
+                }
+                if (!resolveResourceInterfaceWorkspace) {
+                  return "required Interface materialization needs an explicit Resource-to-Workspace bridge";
+                }
+                const workspaceId = await resolveResourceInterfaceWorkspace({
+                  resourceSpaceId: request.space,
+                  resourceId: formatResourceShapeId(
+                    request.space,
+                    request.kind,
+                    request.name,
+                  ),
+                });
+                return workspaceId
+                  ? undefined
+                  : "required Interface materialization has no authorized Workspace mapping for this Resource";
+              },
+            }
+          : {}),
         now: () => new Date().toISOString(),
         ...(options.resourceShapeDeleteTimeoutMs !== undefined
           ? { deleteTimeoutMs: options.resourceShapeDeleteTimeoutMs }
@@ -1440,8 +1475,6 @@ export async function createTakosumiService(
     (options.sqlClient
       ? createSqlInterfaceStores(options.sqlClient)
       : createInMemoryInterfaceStores());
-  const resolveResourceInterfaceWorkspace =
-    options.resolveResourceInterfaceWorkspace;
   const interfaceProjectionSink = options.interfaceProjectionSink
     ? withCanonicalResourceProjectionEvidence(
         options.interfaceProjectionSink,
@@ -1722,6 +1755,91 @@ export async function createTakosumiService(
       return [...names].sort((left, right) => left.localeCompare(right));
     },
   );
+  const materializeFormDescriptorInterfaces = async (
+    resourceId: string,
+  ): Promise<void> => {
+    if (!formRegistryService || !resolveResourceInterfaceWorkspace) return;
+    const resource = await resourceShapeStores.resources.get(resourceId);
+    if (
+      !resource?.form ||
+      resource.phase !== "Ready" ||
+      resource.observedGeneration !== resource.generation
+    ) {
+      return;
+    }
+    const workspaceId = await resolveResourceInterfaceWorkspace(
+      resourceInterfaceWorkspaceInput(resource),
+    );
+    if (!workspaceId) return;
+    const definition = await formRegistryService.getDefinition(
+      resource.form.formRef,
+    );
+    if (!definition?.interfaceDescriptors?.length) return;
+    await ensureFormDescriptorInterfaces({
+      interfaces: interfaceService,
+      workspaceId,
+      resourceId,
+      form: resource.form,
+      descriptors: definition.interfaceDescriptors,
+    });
+  };
+  const degradeRequiredFormInterface = async (
+    resourceId: string,
+    error: unknown,
+  ): Promise<boolean> => {
+    if (!formRegistryService) return false;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const current = await resourceShapeStores.resources.get(resourceId);
+      if (!current?.form) return false;
+      const definition = await formRegistryService.getDefinition(
+        current.form.formRef,
+      );
+      const required = definition?.interfaceDescriptors?.some(
+        (descriptor) => descriptor.required === true,
+      );
+      if (!required) return false;
+      if (
+        current.phase !== "Ready" ||
+        current.observedGeneration !== current.generation
+      ) {
+        return current.phase === "Degraded";
+      }
+      const at = new Date().toISOString();
+      const reason =
+        error instanceof RequiredFormInterfaceError
+          ? `${error.descriptorName}@${error.descriptorVersion}: ${error.reason}`
+          : "required Interface materialization is unavailable";
+      const degraded: ResourceShapeRecord = {
+        ...current,
+        phase: "Degraded",
+        conditions: [
+          ...(current.conditions ?? []).filter(
+            (condition) => condition.type.toLowerCase() !== "ready",
+          ),
+          {
+            type: "Ready",
+            status: "false",
+            reason: "RequiredInterfaceNotReady",
+            message: reason,
+            observedGeneration: current.generation,
+            lastTransitionAt: at,
+          },
+        ],
+        updatedAt: at,
+      };
+      const changed = await resourceShapeStores.resources.compareAndSet(
+        degraded,
+        {
+          generation: current.generation,
+          phase: current.phase,
+          updatedAt: current.updatedAt,
+        },
+      );
+      if (changed.status === "updated") return true;
+      if (changed.status === "not_found") return false;
+    }
+    return false;
+  };
   resourceShapeService?.setLifecycleObserver({
     async observe(event) {
       if (!resolveResourceInterfaceWorkspace) return;
@@ -1731,6 +1849,19 @@ export async function createTakosumiService(
       if (!workspaceId) return;
       switch (event.type) {
         case "ready":
+          try {
+            await materializeFormDescriptorInterfaces(event.resourceId);
+          } catch (error) {
+            if (await degradeRequiredFormInterface(event.resourceId, error)) {
+              await interfaceService.markResourceUnknown(
+                workspaceId,
+                event.resourceId,
+                "required portable Interface did not become Ready",
+              );
+              return;
+            }
+            throw error;
+          }
           await interfaceService.reconcileResource(
             workspaceId,
             event.resourceId,
@@ -1952,6 +2083,24 @@ export async function createTakosumiService(
           service: resourceShapeService,
           enabledResourceShapeKinds,
           installedResourceShapeKinds,
+          ...(options.resolveResourceInterfaceWorkspace
+            ? {
+                interfaceDeclarations: createPortableDeclarationReader({
+                  interfaces: interfaceService,
+                  listResources: (space, page) =>
+                    resourceShapeService.listPage(space, page),
+                  resolveWorkspace: options.resolveResourceInterfaceWorkspace,
+                  ensureResourceDeclarations: (resource) =>
+                    materializeFormDescriptorInterfaces(
+                      formatResourceShapeId(
+                        resource.metadata.space,
+                        resource.kind,
+                        resource.metadata.name,
+                      ),
+                    ),
+                }),
+              }
+            : {}),
           ...(deployControlToken
             ? { getResourceShapeBearerToken: () => deployControlToken }
             : {}),

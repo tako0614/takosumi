@@ -166,6 +166,9 @@ export class FormRegistryService {
       description: definition.description,
       operations: definition.operations,
       metadata: definition.metadata,
+      ...(definition.interfaceDescriptors
+        ? { interfaceDescriptors: definition.interfaceDescriptors }
+        : {}),
       installedAt: now,
     }));
     const result = await this.#store.installPackage(packageRecord, definitions);

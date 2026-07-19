@@ -110,6 +110,47 @@ for (const backend of backends) {
         }),
       ).toEqual([created]);
 
+      const formMaterialized = await service.create(
+        {
+          workspaceId: "workspace_parity",
+          name: "form-storage-v1",
+          ownerRef: {
+            kind: "Resource",
+            id: "tkrn:space_parity:ObjectBucket:assets",
+          },
+          spec: {
+            type: "storage.object",
+            version: "v1",
+            document: { protocol: "https" },
+            inputs: {
+              bucket: { source: "literal", value: "assets" },
+            },
+            access: { visibility: "workspace" },
+          },
+        },
+        undefined,
+        {
+          formRefKey:
+            "forms.takoform.com/v1alpha1/ObjectBucket/1.0.0/sha256:" +
+            "1".repeat(64),
+          formSchemaDigest: `sha256:${"1".repeat(64)}`,
+          descriptorName: "storage.object",
+          descriptorVersion: "v1",
+        },
+      );
+      expect(await service.get(formMaterialized.metadata.id)).toEqual(
+        formMaterialized,
+      );
+      expect(formMaterialized.metadata.materializedFrom).toEqual({
+        source: "form_descriptor",
+        formRefKey:
+          "forms.takoform.com/v1alpha1/ObjectBucket/1.0.0/sha256:" +
+          "1".repeat(64),
+        formSchemaDigest: `sha256:${"1".repeat(64)}`,
+        descriptorName: "storage.object",
+        descriptorVersion: "v1",
+      });
+
       // Lifecycle conditions intentionally do not advance resolvedRevision.
       // The exact-record fence must still reject a stale condition-only write
       // so plan/drift observers cannot overwrite each other on durable stores.
@@ -413,7 +454,9 @@ for (const backend of backends) {
           delivery: { type: "oauth2" },
         }),
       ]);
-      const ready = grants.filter((binding) => binding.status.phase === "Ready");
+      const ready = grants.filter(
+        (binding) => binding.status.phase === "Ready",
+      );
       const denied = grants.filter(
         (binding) => binding.status.phase === "NotReady",
       );

@@ -1,0 +1,260 @@
+import Ajv2020 from "ajv/dist/2020.js";
+import type {
+  ActorContext,
+  FormInterfaceDescriptor,
+  FormInterfaceInputDeclaration,
+  InstalledFormReference,
+  Interface,
+  InterfaceInput,
+  JsonObject,
+} from "takosumi-contract";
+import { formRefKey, isPortableInterfaceInputSource } from "takosumi-contract";
+import { sha256HexAsync } from "../../shared/runtime/hash.ts";
+import { InterfaceService } from "./service.ts";
+
+export type FormDescriptorSkipReason =
+  "unsupported_source" | "name_taken" | "document_invalid" | "input_not_ready";
+
+export class RequiredFormInterfaceError extends Error {
+  constructor(
+    readonly descriptorName: string,
+    readonly descriptorVersion: string,
+    readonly reason: FormDescriptorSkipReason,
+  ) {
+    super(
+      `required Interface ${descriptorName}@${descriptorVersion} could not become Ready: ${reason}`,
+    );
+    this.name = "RequiredFormInterfaceError";
+  }
+}
+
+export interface FormDescriptorMaterializationInput {
+  readonly interfaces: InterfaceService;
+  readonly workspaceId: string;
+  readonly resourceId: string;
+  readonly form: InstalledFormReference;
+  readonly descriptors: readonly FormInterfaceDescriptor[];
+  readonly actor?: ActorContext;
+}
+
+export interface FormDescriptorMaterializationResult {
+  readonly materialized: readonly Interface[];
+  readonly skipped: readonly {
+    readonly name: string;
+    readonly version: string;
+    readonly required: boolean;
+    readonly reason: FormDescriptorSkipReason;
+  }[];
+}
+
+/**
+ * Materialize verified portable descriptors as ordinary host-owned Interfaces.
+ * No binding is created: declaration and authorization remain separate.
+ */
+export async function ensureFormDescriptorInterfaces(
+  input: FormDescriptorMaterializationInput,
+): Promise<FormDescriptorMaterializationResult> {
+  const exactFormKey = formRefKey(input.form.formRef);
+  const history = [
+    ...(await input.interfaces.list({
+      workspaceId: input.workspaceId,
+      ownerKind: "Resource",
+      ownerId: input.resourceId,
+      includeRetired: true,
+    })),
+  ];
+  const materialized: Interface[] = [];
+  const skipped: FormDescriptorMaterializationResult["skipped"][number][] = [];
+
+  for (const descriptor of input.descriptors) {
+    const required = descriptor.required === true;
+    const lineage = {
+      formRefKey: exactFormKey,
+      formSchemaDigest: input.form.formRef.schemaDigest,
+      descriptorName: descriptor.name,
+      descriptorVersion: descriptor.version,
+    };
+    const existing = history.find((record) => {
+      const source = record.metadata.materializedFrom;
+      return (
+        source?.source === "form_descriptor" &&
+        source.formRefKey === lineage.formRefKey &&
+        source.formSchemaDigest === lineage.formSchemaDigest &&
+        source.descriptorName === lineage.descriptorName &&
+        source.descriptorVersion === lineage.descriptorVersion &&
+        record.status.phase !== "Retired"
+      );
+    });
+    if (existing) {
+      const reconciled =
+        existing.status.phase === "Resolved"
+          ? existing
+          : await input.interfaces.reconcile(existing.metadata.id);
+      if (required && reconciled.status.phase !== "Resolved") {
+        throw new RequiredFormInterfaceError(
+          descriptor.name,
+          descriptor.version,
+          "input_not_ready",
+        );
+      }
+      materialized.push(reconciled);
+      continue;
+    }
+
+    const document = descriptor.document ?? {};
+    if (!validDocument(document, descriptor.documentSchema)) {
+      if (required) {
+        throw new RequiredFormInterfaceError(
+          descriptor.name,
+          descriptor.version,
+          "document_invalid",
+        );
+      }
+      skipped.push({
+        name: descriptor.name,
+        version: descriptor.version,
+        required,
+        reason: "document_invalid",
+      });
+      continue;
+    }
+    const inputs = translateInputs(input.resourceId, descriptor.inputs ?? []);
+    if (!inputs.ok) {
+      if (required) {
+        throw new RequiredFormInterfaceError(
+          descriptor.name,
+          descriptor.version,
+          "unsupported_source",
+        );
+      }
+      skipped.push({
+        name: descriptor.name,
+        version: descriptor.version,
+        required,
+        reason: "unsupported_source",
+      });
+      continue;
+    }
+
+    const name = await descriptorRecordName(descriptor);
+    const nameTaken = history.some(
+      (record) =>
+        record.metadata.name === name && record.status.phase !== "Retired",
+    );
+    if (nameTaken) {
+      if (required) {
+        throw new RequiredFormInterfaceError(
+          descriptor.name,
+          descriptor.version,
+          "name_taken",
+        );
+      }
+      skipped.push({
+        name: descriptor.name,
+        version: descriptor.version,
+        required,
+        reason: "name_taken",
+      });
+      continue;
+    }
+
+    const created = await input.interfaces.create(
+      {
+        workspaceId: input.workspaceId,
+        name,
+        ownerRef: { kind: "Resource", id: input.resourceId },
+        spec: {
+          type: descriptor.name,
+          version: descriptor.version,
+          document,
+          ...(Object.keys(inputs.value).length > 0
+            ? { inputs: inputs.value }
+            : {}),
+          access: { visibility: "workspace" },
+        },
+      },
+      input.actor,
+      lineage,
+    );
+    if (required && created.status.phase !== "Resolved") {
+      throw new RequiredFormInterfaceError(
+        descriptor.name,
+        descriptor.version,
+        "input_not_ready",
+      );
+    }
+    materialized.push(created);
+    history.push(created);
+  }
+
+  return { materialized, skipped };
+}
+
+async function descriptorRecordName(
+  descriptor: FormInterfaceDescriptor,
+): Promise<string> {
+  const identity = `${descriptor.name}\0${descriptor.version}`;
+  const digest = await sha256HexAsync(new TextEncoder().encode(identity));
+  const readable = descriptor.name.slice(0, 94);
+  return `form.${readable}.${digest.slice(0, 24)}`;
+}
+
+function validDocument(
+  document: JsonObject,
+  schema: JsonObject | undefined,
+): boolean {
+  if (!schema) return true;
+  try {
+    return (
+      new Ajv2020({
+        allErrors: true,
+        strict: false,
+        validateFormats: false,
+      }).compile(schema)(document) === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+function translateInputs(
+  resourceId: string,
+  declarations: readonly FormInterfaceInputDeclaration[],
+):
+  | { readonly ok: true; readonly value: Record<string, InterfaceInput> }
+  | { readonly ok: false } {
+  const inputs: Record<string, InterfaceInput> = {};
+  for (const declaration of declarations) {
+    if (!isPortableInterfaceInputSource(declaration.source))
+      return { ok: false };
+    if (declaration.source === "literal") {
+      if (declaration.value === undefined) return { ok: false };
+      inputs[declaration.name] = {
+        source: "literal",
+        value: declaration.value,
+      };
+      continue;
+    }
+    const pointer = declaration.pointer;
+    if (pointer === undefined || pointer === "") {
+      inputs[declaration.name] = { source: "resource_output", resourceId };
+      continue;
+    }
+    const encodedTokens = pointer.slice(1).split("/");
+    const outputName = decodePointerToken(encodedTokens[0]!);
+    if (outputName === "") return { ok: false };
+    inputs[declaration.name] = {
+      source: "resource_output",
+      resourceId,
+      outputName,
+      ...(encodedTokens.length > 1
+        ? { pointer: `/${encodedTokens.slice(1).join("/")}` }
+        : {}),
+    };
+  }
+  return { ok: true, value: inputs };
+}
+
+function decodePointerToken(token: string): string {
+  return token.replaceAll("~1", "/").replaceAll("~0", "~");
+}

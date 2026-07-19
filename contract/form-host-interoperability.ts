@@ -12,6 +12,10 @@ export const TAKOFORM_FORM_HOST_WELL_KNOWN_PATH =
   "/.well-known/takoform" as const;
 export const TAKOFORM_FORM_HOST_API_PATH =
   "/apis/forms.takoform.com/v1alpha1" as const;
+export const TAKOFORM_FORM_HOST_INTERFACES_PATH =
+  `${TAKOFORM_FORM_HOST_API_PATH}/interfaces` as const;
+export const TAKOFORM_INTERFACE_DECLARATIONS_FEATURE =
+  "interface_declarations" as const;
 
 /**
  * Neutral discovery document. Takosumi implements this document but does not
@@ -24,6 +28,7 @@ export interface TakoformHostDiscovery {
     readonly exact_form_ref: true;
     readonly optimistic_concurrency: true;
     readonly idempotent_lifecycle: true;
+    readonly interface_declarations?: true;
   };
   readonly endpoints: {
     readonly api: string;
@@ -32,7 +37,25 @@ export interface TakoformHostDiscovery {
     readonly capabilities: string;
     /** Existing pre-standard Resource facade retained during provider migration. */
     readonly compatibility_api: string;
+    readonly interfaces?: string;
   };
+}
+
+/** One portable runtime declaration instance. It grants no authorization. */
+export interface TakoformDeclaredInterface {
+  readonly name: string;
+  readonly version: string;
+  readonly resource: {
+    readonly kind: string;
+    readonly name: string;
+  };
+  readonly document?: JsonObject;
+  readonly values?: JsonObject;
+  readonly form?: InstalledFormReference;
+}
+
+export interface ListTakoformDeclaredInterfacesResponse {
+  readonly interfaces: readonly TakoformDeclaredInterface[];
 }
 
 export interface TakoformResourceMetadata {
@@ -132,6 +155,8 @@ export type TakoformHostErrorCode =
   | "form_unavailable"
   | "form_identity_conflict"
   | "resource_not_found"
+  | "interface_identity_ambiguous"
+  | "interface_instance_ambiguous"
   | "resource_version_conflict"
   | "resource_busy"
   | "import_conflict"
@@ -151,6 +176,7 @@ export interface TakoformHostErrorEnvelope {
 
 export function createTakoformHostDiscovery(
   origin: string,
+  options: { readonly interfaceDeclarations?: boolean } = {},
 ): TakoformHostDiscovery {
   const normalized = origin.replace(/\/+$/u, "");
   const api = `${normalized}${TAKOFORM_FORM_HOST_API_PATH}`;
@@ -161,12 +187,18 @@ export function createTakoformHostDiscovery(
       exact_form_ref: true,
       optimistic_concurrency: true,
       idempotent_lifecycle: true,
+      ...(options.interfaceDeclarations
+        ? { interface_declarations: true as const }
+        : {}),
     },
     endpoints: {
       api,
       forms: `${api}/forms`,
       capabilities: `${normalized}/v1/capabilities`,
       compatibility_api: `${normalized}/v1`,
+      ...(options.interfaceDeclarations
+        ? { interfaces: `${normalized}${TAKOFORM_FORM_HOST_INTERFACES_PATH}` }
+        : {}),
     },
   };
 }
