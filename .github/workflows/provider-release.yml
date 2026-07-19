@@ -136,9 +136,12 @@ jobs:
             exit 1
           fi
           toolchain_module="golang.org/toolchain@v0.0.1-${descriptor_go_version}.linux-amd64"
+          toolchain_lookup_root="${RUNNER_TEMP}/takosumi-provider-toolchain-module"
+          test ! -e "${toolchain_lookup_root}"
+          mkdir -p "${toolchain_lookup_root}"
           source_root="$(
-            cd provider
-            GOTOOLCHAIN=local go mod download -json "${toolchain_module}" |
+            cd "${toolchain_lookup_root}"
+            GOWORK=off GOTOOLCHAIN=local go mod download -json "${toolchain_module}" |
               TOOLCHAIN_MODULE="${toolchain_module}" bun -e '
                 const value = JSON.parse(await Bun.stdin.text());
                 if (`${value.Path}@${value.Version}` !== process.env.TOOLCHAIN_MODULE || value.Error || !value.Dir) process.exit(1);
@@ -155,16 +158,9 @@ jobs:
           bun scripts/provider-release.mjs verify-toolchain
           "${target_root}/bin/go" version
 
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Install locked dashboard dependencies
-        working-directory: dashboard
-        run: bun install --frozen-lockfile
-
-      - name: Prime the exact offline Go module cache
-        working-directory: provider
-        run: /usr/lib/go-${GO_VERSION}/bin/go mod download all
+      - name: Assert materialization preserved source checkout
+        shell: bash
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Validate immutable source identity
         id: source
@@ -200,6 +196,29 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "source_commit=${source_commit}" >> "${GITHUB_OUTPUT}"
           echo "source_commit_short=${source_commit:0:12}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install locked dashboard dependencies
+        working-directory: dashboard
+        run: bun install --frozen-lockfile
+
+      - name: Prime the exact offline Go module cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          prime_root="${RUNNER_TEMP}/takosumi-provider-module-cache-prime"
+          test ! -e "${prime_root}"
+          mkdir -p "${prime_root}"
+          install -m 0644 provider/go.mod "${prime_root}/go.mod"
+          install -m 0644 provider/go.sum "${prime_root}/go.sum"
+          (
+            cd "${prime_root}"
+            GOWORK=off /usr/lib/go-${GO_VERSION}/bin/go mod download all
+          )
+          git diff --exit-code -- provider/go.mod provider/go.sum
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Run canonical Takosumi quality gates
         run: bun run check
@@ -293,9 +312,12 @@ jobs:
             exit 1
           fi
           toolchain_module="golang.org/toolchain@v0.0.1-${descriptor_go_version}.linux-amd64"
+          toolchain_lookup_root="${RUNNER_TEMP}/takosumi-provider-toolchain-module"
+          test ! -e "${toolchain_lookup_root}"
+          mkdir -p "${toolchain_lookup_root}"
           source_root="$(
-            cd provider
-            GOTOOLCHAIN=local go mod download -json "${toolchain_module}" |
+            cd "${toolchain_lookup_root}"
+            GOWORK=off GOTOOLCHAIN=local go mod download -json "${toolchain_module}" |
               TOOLCHAIN_MODULE="${toolchain_module}" bun -e '
                 const value = JSON.parse(await Bun.stdin.text());
                 if (`${value.Path}@${value.Version}` !== process.env.TOOLCHAIN_MODULE || value.Error || !value.Dir) process.exit(1);
@@ -312,12 +334,9 @@ jobs:
           bun scripts/provider-release.mjs verify-toolchain
           "${target_root}/bin/go" version
 
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Prime the exact offline Go module cache
-        working-directory: provider
-        run: /usr/lib/go-${GO_VERSION}/bin/go mod download all
+      - name: Assert materialization preserved source checkout
+        shell: bash
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Validate sealed controller inputs
         id: source
@@ -383,6 +402,25 @@ jobs:
             --tag "${RELEASE_TAG}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "source_commit_short=${SOURCE_COMMIT:0:12}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Prime the exact offline Go module cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          prime_root="${RUNNER_TEMP}/takosumi-provider-module-cache-prime"
+          test ! -e "${prime_root}"
+          mkdir -p "${prime_root}"
+          install -m 0644 provider/go.mod "${prime_root}/go.mod"
+          install -m 0644 provider/go.sum "${prime_root}/go.sum"
+          (
+            cd "${prime_root}"
+            GOWORK=off /usr/lib/go-${GO_VERSION}/bin/go mod download all
+          )
+          git diff --exit-code -- provider/go.mod provider/go.sum
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Verify candidate workflow authority
         shell: bash
