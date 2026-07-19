@@ -13,7 +13,9 @@ describe("discontinued terraform-provider-takosumi custody", () => {
       newVersionsAllowed: false,
       retainedVersion: "1.0.0",
       cancelledSnapshot: "1.1.4",
+      sourceProvenance: "unresolved",
       releaseWorkflow: "absent",
+      mutationPaths: "absent",
       defaultMirrorVersions: [],
     });
     expect(Object.keys(result.authorityDigests)).toEqual(

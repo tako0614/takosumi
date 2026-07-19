@@ -110,18 +110,22 @@ target:
   Takosumi consumes exact definitions and hosts one canonical lifecycle.
 ```
 
-The 2026-07-16 Phase 0 artifact recheck is a confirmed release blocker. The
+The 2026-07-16 Phase 0 artifact recheck established the immutable custody
+boundary for the now-discontinued provider. The
 live `app.takosumi.com` mirror index digest matches the local index, but its
 `1.0.0.json` and every served archive differ from a current local `1.0.0`
 rebuild. The live archive SHA-256 prefixes are `9de3e6e5`, `82cf0196`,
 `3433cb34`, and `9eca4738`; the corresponding local prefixes are `54732315`,
 `cb62cafb`, `cf72e6b6`, and `d42c4435`. The current build uses
 `go build -trimpath` without injecting `main.version` and writes the same
-version paths. Therefore every live `1.0.0` byte sequence is retained as
-historical immutable evidence, never overwritten. A corrected legacy provider
-must use a new version, an injected/asserted binary version, one immutable
-manifest, and byte-for-byte mirror verification before provider extraction or
-state migration.
+version paths. Therefore the exact served `1.0.0` metadata and archives are
+retained in operator custody, their digests and observations remain pinned in
+this repository, and that public identity is never overwritten. The repository
+does not prove which source tree produced those bytes: exact source provenance
+remains unresolved. No corrected or replacement Takosumi provider version will
+be built or published. The cancelled `1.1.4` source/schema snapshot is retained
+only to inspect and migrate known state identities; it is not provenance for
+the served `1.0.0` artifacts.
 
 The downloaded public `linux_amd64` binary confirms the metadata mismatch:
 `go version -m` reports module `(devel)`, revision `06319f127353...`, and
@@ -1114,7 +1118,7 @@ They are not an implicit Core default. They remain current wire kind tokens and
 compatibility schemas until Form Package conformance, additive FormRef
 persistence, and client/state migration prove the target representation.
 
-### 2.4 Deploy API And Optional OpenTofu Provider
+### 2.4 Deploy API And Discontinued Provider Custody
 
 `/v1/resources` is the current Takosumi Deploy API for form-backed Resources.
 It is the only lifecycle authority for a managed Resource. The future portable
@@ -1124,8 +1128,10 @@ preview/apply/observe/refresh/import/delete behavior, and the canonical
 evidence live behind this API. The retired `Deployment` ledger is not restored.
 
 The mixed `takosumi/takosumi` provider is discontinued. Its unpublished 1.1.4
-release is cancelled; retained source and schemas exist only for legacy state
-inspection, migration, and rollback under the compatibility support policy.
+release is cancelled; the retained `1.1.4` implementation/schema snapshot
+exists only for legacy state inspection, migration, and rollback under the
+compatibility support policy. It is not proven source provenance for the exact
+served `1.0.0` bytes, whose provenance remains unresolved.
 Portable Service Form authoring and Resource Interface descriptors belong to
 Takoform. Operator administration uses Takosumi API/CLI/dashboard. This does not restrict ordinary
 OpenTofu providers: plain Stack execution and ProviderConnection,
@@ -1140,7 +1146,8 @@ Deploy API:
   adapter/backend-manager dispatch after resolution
 
 discontinued takosumi/takosumi provider (historical custody only):
-  frozen typed HCL schema and source for supported legacy state
+  known typed HCL schema/state/address identities and a retained migration snapshot
+  no claim that the retained snapshot produced the served 1.0.0 bytes
   migration/no-op/rollback evidence; no new authoring or publication
 
 target portable form provider:

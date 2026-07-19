@@ -52,7 +52,7 @@ const PROOF_SOURCE_PATHS = [
   "scripts/lib/provider-proof-environment.mjs",
   "scripts/lib/provider-proof-requests.mjs",
   "scripts/lib/provider-proof-state.mjs",
-  "scripts/lib/provider-release-compatibility.mjs",
+  "scripts/lib/provider-custody-compatibility.mjs",
   "tests/proofs/fixtures/provider-compatibility-server.ts",
   "tests/proofs/provider-state-compatibility.ts",
 ];
@@ -1084,19 +1084,19 @@ export function providerCliPrerequisites(identity, available = {}) {
       : {
           status: "blocked-prerequisite",
           reason: "opentofu-cli-unavailable",
-          releaseBlocking: true,
+          evidenceBlocking: true,
         },
     terraform: terraformPath
       ? { status: "ready", path: terraformPath }
       : {
           status: "blocked-prerequisite",
           reason: "terraform-cli-unavailable",
-          releaseBlocking: true,
+          evidenceBlocking: true,
         },
     terraformMatrix: {
       status: "proof-command-required",
       reason: "terraform-schema-state-and-fqn-proof-command-required",
-      releaseBlocking: true,
+      evidenceBlocking: true,
     },
     addressMatrix: {
       status: "explicit-dual-address-proof-required",
@@ -1104,7 +1104,7 @@ export function providerCliPrerequisites(identity, available = {}) {
       terraformServeAddress: identity.provider.terraformServeAddress,
       hostedMirrorAddresses: identity.addressMatrix.hostedMirrorAddresses,
       addressesTreatedAsInterchangeable: false,
-      releaseBlocking: true,
+      evidenceBlocking: true,
     },
   };
 }
@@ -1141,7 +1141,7 @@ export async function verifyProviderCompatibility({
       status: "schema-proven-state-proof-command-required",
       reason: "terraform-state-and-fqn-proof-command-required",
       schemaProof: schema._takosumiTerraformSchemaProof,
-      releaseBlocking: true,
+      evidenceBlocking: true,
     };
     prerequisites.addressMatrix.status =
       "explicit-dual-address-schema-proven-state-pending";
@@ -1168,15 +1168,15 @@ export async function verifyProviderCompatibility({
         openTofu: evidence.toolchains.openTofu,
         terraform: evidence.toolchains.terraform,
       },
-      releaseBlocking: false,
+      evidenceBlocking: false,
     };
     prerequisites.addressMatrix.status = "explicit-dual-address-proof-complete";
-    prerequisites.addressMatrix.releaseBlocking = false;
+    prerequisites.addressMatrix.evidenceBlocking = false;
   } else if (proofResult.status === "invalid-evidence") {
     prerequisites.terraformMatrix = {
       status: "invalid-evidence",
       reason: proofResult.reason,
-      releaseBlocking: true,
+      evidenceBlocking: true,
     };
     blockers.push("terraform-schema-state-and-fqn-proof-invalid");
   } else {
@@ -1188,7 +1188,7 @@ export async function verifyProviderCompatibility({
   return {
     kind: "takosumi.provider-compatibility-verification@v1",
     baselineVersion: authorities.identity.provider.version,
-    candidateVersion: authorities.policy.candidate.version,
+    cancelledSnapshotVersion: authorities.policy.candidate.version,
     identityDigest: authorities.identityDigest,
     policyDigest: authorities.policyDigest,
     schemaCompatibility,
@@ -1202,17 +1202,7 @@ export async function verifyProviderCompatibility({
             releaseEvidenceStatus: "proof-complete",
           }
         : authorities.policy.terraformCompatibility,
-    releaseReady: blockers.length === 0,
-    blockers,
+    custodyEvidenceComplete: blockers.length === 0,
+    missingEvidence: blockers,
   };
-}
-
-export async function requireProviderCompatibilityReleaseReady(options = {}) {
-  const result = await verifyProviderCompatibility(options);
-  if (!result.releaseReady) {
-    throw new Error(
-      `provider compatibility release blocked: ${result.blockers.join(", ")}`,
-    );
-  }
-  return result;
 }

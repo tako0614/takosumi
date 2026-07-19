@@ -20,7 +20,7 @@ import {
   sha256,
   validateQuarantineManifest,
   verifyManifestSidecar,
-} from "../../scripts/lib/provider-release.mjs";
+} from "../../scripts/provider-custody.mjs";
 import {
   createProviderCompatibilityProofArtifact,
   DEFAULT_COMPATIBILITY_PROOF_PATH,
@@ -28,7 +28,7 @@ import {
   resolveCompatibilityGoCommand,
   structuralSha256,
   writeProviderCompatibilityProofArtifact,
-} from "../../scripts/lib/provider-release-compatibility.mjs";
+} from "../../scripts/lib/provider-custody-compatibility.mjs";
 import { buildSanitizedProviderProofEnvironment } from "../../scripts/lib/provider-proof-environment.mjs";
 import { assertExactRequestDeltas } from "../../scripts/lib/provider-proof-requests.mjs";
 import { assertProviderStateIdentity } from "../../scripts/lib/provider-proof-state.mjs";
