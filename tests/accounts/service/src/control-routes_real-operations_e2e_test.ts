@@ -208,6 +208,10 @@ async function controlJson<T>(
       `${input.method} ${input.path} expected ${expectedStatus}, got ${response!.status}: ${failureText}`,
     );
   }
+  expect(response!.headers.get("server-timing")).toContain("tk_control_auth");
+  expect(response!.headers.get("server-timing")).toContain(
+    "tk_control_dispatch",
+  );
   return (await response!.json()) as T;
 }
 

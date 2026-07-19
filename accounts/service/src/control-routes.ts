@@ -62,6 +62,7 @@ import {
   appendServerTiming,
   measureServerTiming,
   serverTimingBucketForPath,
+  type ServerTimingBucket,
 } from "./server-timing.ts";
 
 // Re-exports keep the pre-split import surface stable for in-tree consumers
@@ -153,6 +154,62 @@ interface ControlRouteContext {
 }
 
 /**
+ * Dispatches the public control surface after a composition root has already
+ * authenticated one exact Accounts subject.
+ *
+ * This is an in-process authority seam, not another HTTP authentication path:
+ * callers must not expose it directly. The normal account-session/PAT route
+ * below remains the public entrypoint. Runtime adapters such as the optional
+ * operator-control MCP route use this seam only after current Interface OAuth
+ * introspection and then retain every existing per-Workspace membership gate,
+ * controller policy check, saved-plan guard, Run/state/output update, and audit
+ * write implemented by the public handlers.
+ */
+export async function handleAuthenticatedControlRoute(
+  context: ControlRouteContext & {
+    readonly subject: string;
+  },
+): Promise<Response | undefined> {
+  const { request, url } = context;
+  if (!isApiV1Path(url.pathname)) return undefined;
+  const timings = serverTimingBucketForPath(url.pathname);
+  return await dispatchAuthenticatedControlRoute(context, timings);
+}
+
+async function dispatchAuthenticatedControlRoute(
+  context: ControlRouteContext & { readonly subject: string },
+  timings: ServerTimingBucket,
+): Promise<Response> {
+  const { request, url } = context;
+  const operations = context.operations;
+  if (!operations)
+    return appendServerTiming(controlPlaneUnavailable(), timings);
+  const tail = url.pathname.slice(API_V1_PREFIX.length);
+  try {
+    const response = await measureServerTiming(
+      timings,
+      "tk_control_dispatch",
+      () =>
+        dispatch({
+          request,
+          url,
+          tail,
+          operations,
+          store: context.store,
+          ...(context.issuer ? { issuer: context.issuer } : {}),
+          ...(context.managedPublicBaseDomain
+            ? { managedPublicBaseDomain: context.managedPublicBaseDomain }
+            : {}),
+          session: { subject: context.subject },
+        }),
+    );
+    return appendServerTiming(response, timings);
+  } catch (error) {
+    return appendServerTiming(controllerErrorResponse(error), timings);
+  }
+}
+
+/**
  * Single entry point for the `/api/v1/*` family. Authenticates the account
  * session/PAT ONCE (anonymous -> 401), then dispatches to the matched sub-route.
  * Returns `undefined` only when the path is not owned by this family (so the
@@ -211,30 +268,14 @@ export async function handleControlRoute(
   const operations = context.operations;
   if (!operations)
     return appendServerTiming(controlPlaneUnavailable(), timings);
-
-  const tail = url.pathname.slice(prefix.length); // e.g. "/workspaces"
-  try {
-    const response = await measureServerTiming(
-      timings,
-      "tk_control_dispatch",
-      () =>
-        dispatch({
-          request,
-          url,
-          tail,
-          operations,
-          store,
-          ...(context.issuer ? { issuer: context.issuer } : {}),
-          ...(context.managedPublicBaseDomain
-            ? { managedPublicBaseDomain: context.managedPublicBaseDomain }
-            : {}),
-          session: { subject: bearer.auth.subject },
-        }),
-    );
-    return appendServerTiming(response, timings);
-  } catch (error) {
-    return appendServerTiming(controllerErrorResponse(error), timings);
-  }
+  return await dispatchAuthenticatedControlRoute(
+    {
+      ...context,
+      operations,
+      subject: bearer.auth.subject,
+    },
+    timings,
+  );
 }
 
 function controlRouteRequiredScope(

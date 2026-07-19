@@ -12,6 +12,7 @@ import type {
   OpenTofuRunnerExecutorRegistry,
   ReleaseActivator,
 } from "../../core/domains/deploy-control/mod.ts";
+import type { OpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
 import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
 import type { CapsuleCoordination } from "../../core/domains/deploy-control/capsule_lease.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
@@ -82,6 +83,11 @@ import {
   createR2TakoformPackageHostComposition,
   type TakoformPackageHostComposition,
 } from "../../core/adapters/takoform/mod.ts";
+import {
+  OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
+  operatorControlMcpEnabled,
+  operatorControlMcpResourceAuthorized,
+} from "../../deploy/operator-control-mcp.ts";
 
 const RESOURCE_SHAPE_RUN_WAIT_TIMEOUT_MS = 300_000;
 const RESOURCE_SHAPE_DELETE_TIMEOUT_MS =
@@ -119,6 +125,8 @@ export async function createWorkerServiceApp(
     readonly formPackageArtifactReader?: CreateTakosumiServiceOptions["formPackageArtifactReader"];
     /** Trusted data-only package verifier selected by the host trust policy. */
     readonly formPackageVerifier?: CreateTakosumiServiceOptions["formPackageVerifier"];
+    /** Additional host proof for custom/external Interface OAuth resources. */
+    readonly interfaceOAuth2ResourceAuthorizer?: CreateTakosumiServiceOptions["interfaceOAuth2ResourceAuthorizer"];
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
@@ -216,16 +224,25 @@ export async function createWorkerServiceApp(
         new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB),
       )
     : undefined;
+  const interfaceOAuth2ResourceAuthorizer =
+    workerInterfaceOAuth2ResourceAuthorizer(
+      env,
+      opentofuControlStore,
+      options.interfaceOAuth2ResourceAuthorizer,
+    );
   const connectionOAuthHelpers =
     options.connectionOAuthHelpers ??
     createConnectionOAuthHelpers({
       stateSecret: runtimeEnv.TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET,
       descriptors: connectionOAuthDescriptorsFromEnv(runtimeEnv),
     });
-  const operatorInstallConfigs =
-    options.operatorInstallConfigs ??
-    env.TAKOSUMI_INSTALL_CONFIG_COMPOSITION ??
-    REFERENCE_APP_INSTALL_CONFIGS;
+  const operatorInstallConfigs = options.operatorInstallConfigs ??
+    env.TAKOSUMI_INSTALL_CONFIG_COMPOSITION ?? [
+      ...REFERENCE_APP_INSTALL_CONFIGS,
+      ...(operatorControlMcpEnabled(env)
+        ? [OPERATOR_CONTROL_MCP_INSTALL_CONFIG]
+        : []),
+    ];
   const formPackageHost = resolveFormPackageHostComposition(env, options);
   return await createTakosumiService({
     role,
@@ -267,6 +284,7 @@ export async function createWorkerServiceApp(
       ? { resolveResourceInterfaceWorkspace }
       : {}),
     ...(interfaceCredentialIssuer ? { interfaceCredentialIssuer } : {}),
+    interfaceOAuth2ResourceAuthorizer,
     resourceShapeAllowedProviderBaseUrls: providerBaseUrlAllowlist,
     resourceShapeAdapterFactory: ({ controller }) => {
       const adapter = new OpentofuResourceShapeAdapter(
@@ -463,6 +481,32 @@ function interfaceCredentialIssuerFromAccountsStore(
         expiresAt: new Date(issued.expiresAt).toISOString(),
       };
     },
+  };
+}
+
+function workerInterfaceOAuth2ResourceAuthorizer(
+  env: CloudflareWorkerEnv,
+  store: Pick<OpenTofuControlStore, "getPublicHostReservation">,
+  additional?: CreateTakosumiServiceOptions["interfaceOAuth2ResourceAuthorizer"],
+): NonNullable<
+  CreateTakosumiServiceOptions["interfaceOAuth2ResourceAuthorizer"]
+> {
+  return async (input) => {
+    if (additional && (await additional(input))) return true;
+    if (operatorControlMcpResourceAuthorized(env, input)) {
+      // The host proves only its own enabled, versioned adapter route. The
+      // Capsule still cannot grant a Binding; an operator/installer owns that
+      // separate service-side authorization.
+      return true;
+    }
+    if (input.ownerRef.kind !== "Capsule") return false;
+    const hostname = new URL(input.resource).hostname.toLowerCase();
+    const reservation = await store.getPublicHostReservation(hostname);
+    return (
+      reservation?.status === "reserved" &&
+      reservation.workspaceId === input.workspaceId &&
+      reservation.capsuleId === input.ownerRef.id
+    );
   };
 }
 
