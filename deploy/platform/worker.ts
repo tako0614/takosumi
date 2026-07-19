@@ -20,7 +20,11 @@ import {
   accountsExternalLoginConfigured,
   createCloudflareWorker,
 } from "../accounts-cloudflare/src/handler.ts";
-import { type ControlPlaneOperations } from "@takosjp/takosumi-accounts-service";
+import {
+  D1AccountsStore,
+  handleAuthenticatedControlRoute,
+  type ControlPlaneOperations,
+} from "@takosjp/takosumi-accounts-service";
 import {
   type CloudflareWorkerEnv as DeployControlEnv,
   createDeployControlQueueConsumer,
@@ -75,6 +79,7 @@ import type {
   ResourceShapeKind,
 } from "takosumi-contract";
 import {
+  MCP_SERVER_INVOKE_PERMISSION,
   installedFormReferenceKey,
   isInstalledFormReference,
   isResourceShapeKind,
@@ -133,6 +138,12 @@ import {
   LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
 } from "../../core/domains/resource-shape/mod.ts";
 import { evaluateProductionHardeningGates } from "./production_hardening.ts";
+import {
+  OPERATOR_CONTROL_MCP_PATH,
+  handleOperatorControlMcpRequest,
+  operatorControlMcpEnabled,
+  type OperatorControlMcpAuthority,
+} from "../operator-control-mcp.ts";
 export {
   isPlatformExtensionCatalogPath,
   isPlatformExtensionContributionsPath,
@@ -255,6 +266,161 @@ async function takosumiOperationsFor(
   env: PlatformEnv,
 ): Promise<TakosumiOperations> {
   return await deployControlSeam(env).operations();
+}
+
+const OPERATOR_CONTROL_MCP_ROUTE: PlatformExtensionRoute = Object.freeze({
+  id: "operator-control-mcp.v1",
+  basePath: OPERATOR_CONTROL_MCP_PATH,
+  handlerKey: "builtin:operator-control-mcp.v1",
+  authMode: "platform",
+  requiredScopes: [MCP_SERVER_INVOKE_PERMISSION],
+  capabilities: ["mcp.operator-control.v1"],
+});
+
+type OperatorControlMcpSessionVerifier = (
+  request: Request,
+  env: CloudflareWorkerEnv,
+  route?: PlatformExtensionRoute,
+) => Promise<PlatformExtensionSessionContext>;
+
+/**
+ * Optional built-in adapter route. Every MCP POST performs exact-resource
+ * Interface OAuth introspection before the JSON-RPC body is read. The raw
+ * bearer is neither forwarded to the public control handlers nor persisted.
+ */
+export async function handlePlatformOperatorControlMcpRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  dependencies: {
+    readonly verifySession?: OperatorControlMcpSessionVerifier;
+    readonly createAuthority?: (
+      session: PlatformExtensionSessionContext & {
+        readonly subject: string;
+        readonly workspaceId: string;
+      },
+    ) => Promise<OperatorControlMcpAuthority>;
+  } = {},
+): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  if (url.pathname !== OPERATOR_CONTROL_MCP_PATH) return undefined;
+  if (!operatorControlMcpEnabled(env)) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  if (request.method !== "POST") {
+    return await handleOperatorControlMcpRequest(request, {
+      workspaceId: "disabled",
+      dispatchPublicControl: async () =>
+        Response.json({ error: "unavailable" }, { status: 503 }),
+      capsuleWorkspaceId: async () => undefined,
+      runWorkspaceId: async () => undefined,
+    });
+  }
+  const session = await (
+    dependencies.verifySession ?? verifyPlatformExtensionSession
+  )(request, env, OPERATOR_CONTROL_MCP_ROUTE);
+  const subject = safePlatformExtensionSubject(session.subject);
+  const workspaceId = safePlatformExtensionContextId(session.workspaceId);
+  const capsuleId = safePlatformExtensionContextId(session.capsuleId);
+  const interfaceId = safePlatformExtensionContextId(session.interfaceId);
+  const interfaceBindingId = safePlatformExtensionContextId(
+    session.interfaceBindingId,
+  );
+  if (
+    !session.authenticated ||
+    session.authKind !== "interface-oauth-token" ||
+    !subject ||
+    !workspaceId ||
+    !capsuleId ||
+    !interfaceId ||
+    !interfaceBindingId ||
+    typeof session.interfaceResolvedRevision !== "number" ||
+    !Number.isSafeInteger(session.interfaceResolvedRevision) ||
+    session.interfaceResolvedRevision <= 0 ||
+    session.audience !==
+      platformExtensionRouteBaseUrl(request, OPERATOR_CONTROL_MCP_ROUTE) ||
+    session.scopes?.length !== 1 ||
+    session.scopes[0] !== MCP_SERVER_INVOKE_PERMISSION
+  ) {
+    return Response.json(
+      { error: "unauthenticated" },
+      { status: 401, headers: { "cache-control": "no-store" } },
+    );
+  }
+  const exactSession = {
+    ...session,
+    subject,
+    workspaceId,
+    capsuleId,
+    interfaceId,
+    interfaceBindingId,
+  };
+  const authority = dependencies.createAuthority
+    ? await dependencies.createAuthority(exactSession)
+    : await createPlatformOperatorControlMcpAuthority(
+        request,
+        env,
+        exactSession,
+      );
+  return await handleOperatorControlMcpRequest(request, authority);
+}
+
+async function createPlatformOperatorControlMcpAuthority(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  session: PlatformExtensionSessionContext & {
+    readonly subject: string;
+    readonly workspaceId: string;
+  },
+): Promise<OperatorControlMcpAuthority> {
+  const operations = await controlPlaneOperationsFor(env);
+  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB);
+  return {
+    workspaceId: session.workspaceId,
+    dispatchPublicControl: async (controlRequest) => {
+      const sourceUrl = new URL(controlRequest.url);
+      const targetUrl = new URL(request.url);
+      targetUrl.pathname = sourceUrl.pathname;
+      targetUrl.search = sourceUrl.search;
+      targetUrl.hash = "";
+      const response = await handleAuthenticatedControlRoute({
+        request: new Request(targetUrl, {
+          method: controlRequest.method,
+          headers: controlRequest.headers,
+          body:
+            controlRequest.method === "GET" || controlRequest.method === "HEAD"
+              ? undefined
+              : controlRequest.body,
+        }),
+        url: targetUrl,
+        store,
+        operations,
+        subject: session.subject,
+        ...(env.TAKOSUMI_ACCOUNTS_ISSUER
+          ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
+          : {}),
+        ...(env.TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN
+          ? {
+              managedPublicBaseDomain: env.TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN,
+            }
+          : {}),
+      });
+      return response ?? Response.json({ error: "not found" }, { status: 404 });
+    },
+    capsuleWorkspaceId: async (capsuleId) => {
+      try {
+        return (await operations.capsules.getCapsule(capsuleId)).workspaceId;
+      } catch {
+        return undefined;
+      }
+    },
+    runWorkspaceId: async (runId) => {
+      try {
+        return (await operations.getRun(runId)).workspaceId;
+      } catch {
+        return undefined;
+      }
+    },
+  };
 }
 
 /**
@@ -459,6 +625,12 @@ export default {
     if (isPlatformResourceShapeApiPath(url.pathname)) {
       return await handlePlatformResourceShapeApiRequest(request, env);
     }
+    if (url.pathname === OPERATOR_CONTROL_MCP_PATH) {
+      return (
+        (await handlePlatformOperatorControlMcpRequest(request, env)) ??
+        Response.json({ error: "not found" }, { status: 404 })
+      );
+    }
     // Source webhook surface (Core Specification §6). This is a NEW top-level
     // prefix the accounts handler does not own; handle it here via the
     // deploy-control service seam BEFORE delegating to the accounts handler.
@@ -543,6 +715,7 @@ function platformDiscoveryOptions(
   env: CloudflareWorkerEnv,
 ): CreateTakosumiDiscoveryOptions {
   const extensionDiscovery = platformExtensionDiscovery(env);
+  const operatorControlMcp = operatorControlMcpEnabled(env);
   const resourceShapeApi = platformResourceShapeApiEnabled(env);
   const resources = platformResourceCapabilities(env, resourceShapeApi);
   const resourceShapes =
@@ -559,12 +732,19 @@ function platformDiscoveryOptions(
     operator,
     compat: extensionDiscovery.compat,
     compatibilityProfiles: extensionDiscovery.compatibilityProfiles,
-    extensions: extensionDiscovery.extensions,
-    endpoints: Object.fromEntries(
-      Object.entries(extensionDiscovery.endpoints).map(([token, path]) => [
-        token,
-        new URL(path, origin).toString(),
+    extensions: [
+      ...new Set([
+        ...extensionDiscovery.extensions,
+        ...(operatorControlMcp ? ["mcp.operator-control.v1"] : []),
       ]),
+    ],
+    endpoints: Object.fromEntries(
+      [
+        ...Object.entries(extensionDiscovery.endpoints),
+        ...(operatorControlMcp
+          ? ([["mcp.operator-control.v1", OPERATOR_CONTROL_MCP_PATH]] as const)
+          : []),
+      ].map(([token, path]) => [token, new URL(path, origin).toString()]),
     ),
     resourceShapesEnabled: resourceShapes,
     interfacesEnabled: platformResourceShapeApiEnabled(env),

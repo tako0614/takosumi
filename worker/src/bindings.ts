@@ -13,6 +13,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * fail-closed as NotReady.
    */
   readonly TAKOSUMI_ACCOUNTS_DB?: import("@takosjp/takosumi-accounts-service").D1Database;
+  /** Bare operator origin used as the exact Interface OAuth resource base. */
+  readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
   readonly R2_ARTIFACTS: R2Bucket;
   /**
    * Operator-owned immutable Takoform package envelopes and digest-pinned
@@ -73,6 +75,13 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * Canonical Interface and Binding rows remain authority.
    */
   readonly TAKOSUMI_INTERFACE_PROJECTION_SINK?: import("takosumi-contract/interfaces").InterfaceProjectionSink;
+  /**
+   * Enables the optional, versioned operator-control MCP adapter at the
+   * platform worker's `/mcp/operator-control/v1` route. The route is absent
+   * unless this exact flag is `1`; authorization still requires a current
+   * Principal `mcp.invoke` InterfaceBinding and invocation-time OAuth token.
+   */
+  readonly TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED?: string;
   /**
    * Explicit host-code bridge from a Resource Shape namespace to the Workspace
    * allowed to own that Resource's runtime Interfaces. Resource and Workspace
