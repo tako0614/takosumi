@@ -59,6 +59,13 @@ export function createPortableDeclarationReader(
           ) {
             continue;
           }
+          if (
+            !resource.form ||
+            resource.status?.phase !== "Ready" ||
+            resource.status.observedGeneration !== resource.metadata.generation
+          ) {
+            continue;
+          }
           const resourceId = formatResourceShapeId(
             resource.metadata.space,
             resource.kind,
@@ -118,6 +125,12 @@ function projectDeclaration(
   iface: Interface,
   resource: ResourceObject,
 ): TakoformDeclaredInterface | undefined {
+  if (
+    resource.status?.phase !== "Ready" ||
+    resource.status.observedGeneration !== resource.metadata.generation
+  ) {
+    return undefined;
+  }
   if (iface.status.phase !== "Resolved") return undefined;
   if (iface.spec.access.visibility === "private") return undefined;
   const lineage = iface.metadata.materializedFrom;

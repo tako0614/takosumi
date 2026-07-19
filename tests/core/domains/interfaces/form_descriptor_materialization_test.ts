@@ -273,6 +273,28 @@ test("portable declaration reads paginate every Resource and enforce the explici
   ]);
   expect(repairCalls).toBe(resources.length);
 
+  resources[resources.length - 1] = {
+    ...last,
+    status: {
+      ...last.status,
+      phase: "Degraded",
+    },
+  };
+  expect(
+    await reader.listDeclaredInterfaces({
+      actor: {
+        actorAccountId: "acct_1",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        requestId: "req_degraded",
+      },
+      space: "space_1",
+      resourceKind: last.kind,
+      resourceName: last.metadata.name,
+    }),
+  ).toEqual([]);
+  expect(repairCalls).toBe(resources.length);
+
   expect(
     await reader.listDeclaredInterfaces({
       actor: {
