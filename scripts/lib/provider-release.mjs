@@ -3014,7 +3014,7 @@ function digestTreeSync(root) {
 
 function readdirSyncSorted(path) {
   return readdirSync(path, { withFileTypes: true }).sort((a, b) =>
-    a.name.localeCompare(b.name),
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
   );
 }
 
