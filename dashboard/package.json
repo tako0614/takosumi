@@ -4,8 +4,8 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "bun ../scripts/provider-release.mjs verify-source && bun ../scripts/provider-release.mjs materialize --output public/opentofu/providers && vite",
-    "build": "bun ../scripts/provider-release.mjs verify-source && vite build && bun ../scripts/provider-release.mjs materialize --output dist/opentofu/providers",
+    "dev": "bun ../scripts/provider-custody.mjs && vite",
+    "build": "bun ../scripts/provider-custody.mjs && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -241,7 +241,7 @@ export function validateCompatibilityAuthorities(
   );
   if (
     policy.schemaVersion !== 1 ||
-    policy.kind !== "takosumi.provider-candidate-delta-policy@v1" ||
+    policy.kind !== "takosumi.provider-cancelled-delta-record@v1" ||
     policy.baseline.version !== identity.provider.version ||
     policy.candidate.version !== "1.1.4"
   ) {
@@ -260,10 +260,10 @@ export function validateCompatibilityAuthorities(
       policy.candidate.semverChange !== "minor" ||
       policy.patchFeatureDecision.admitted !== false ||
       policy.patchFeatureDecision.status !== "resolved-move-to-minor" ||
-      policy.releaseEligibility !== "blocked"
+      policy.releaseEligibility !== "cancelled-discontinued"
     ) {
       throw new Error(
-        "additive provider changes must reject the patch lane and remain a blocked minor candidate",
+        "cancelled provider changes must remain classified and non-publishable",
       );
     }
   }

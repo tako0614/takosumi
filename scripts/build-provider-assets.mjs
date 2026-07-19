@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-// Compatibility entrypoint. Provider assets are immutable release inputs now;
-// this normal/check path verifies manifests and never builds provider binaries.
-import { runProviderReleaseCli } from "./provider-release.mjs";
+// Historical compatibility entrypoint. The Takosumi provider is discontinued;
+// this verifies custody and intentionally emits no provider assets.
+import { verifyProviderCustody } from "./provider-custody.mjs";
 
-await runProviderReleaseCli(["verify-source"]);
+await verifyProviderCustody();

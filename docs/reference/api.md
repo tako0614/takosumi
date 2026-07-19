@@ -22,11 +22,10 @@ Takosumi/operator が managed service を提供する:
   generic-env ProviderConnection と通常の OpenTofu module で扱う。
 ```
 
-`takosumi/takosumi` provider は、この API の任意の typed client です。provider がベンダーの
-API を直接呼ぶことはなく、backend を選ぶこともありません。provider は preview / apply /
-delete / status を Deploy API に送り、Takosumi endpoint が Resolver / Adapter /
-TargetPool / Policy に基づいて処理します。provider は service catalog、価格、lifecycle
-state の正本ではありません。
+廃止済み `takosumi/takosumi` provider は新規 client ではありません。portable Form /
+Interface authoring は Takoform、operator 操作はこの API / CLI / dashboard を使います。
+外部 provider は plain Stack flow でそのまま実行され、Takosumi endpoint が Resolver /
+Adapter / TargetPool / Policy と canonical lifecycle を管理します。
 
 ## Discovery
 
@@ -37,8 +36,7 @@ GET /.well-known/takosumi
 GET /v1/capabilities
 ```
 
-`takosumi/takosumi` provider、CLI、dashboard は、edition 名ではなく
-capability を参照します。
+CLI、dashboard、portable clients は edition 名ではなく capability を参照します。
 
 例を示します。
 
@@ -455,8 +453,8 @@ HCL では `connection` は予約語なので、provider surface は `connection
 `standard` / `infrequent_access` です。省略時は `standard` に正規化します。
 `infrequent_access` は TargetPool が `storage_class_infrequent_access` capability を
 公開するときだけ解決でき、未対応時は backend 呼び出し前に失敗します。既存 object の
-class を暗黙に変更する selector ではありません。Takosumi provider では同じ入力を
-`storage_class` として公開します。
+class を暗黙に変更する selector ではありません。廃止済み Takosumi provider の
+`storage_class` は既存 state migration の互換名としてだけ残ります。
 `AI Gateway` は provider resource ではなく OpenAI-compatible endpoint と env/secret
 projection として扱います。
 

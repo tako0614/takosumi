@@ -298,7 +298,7 @@ fallback identity, and an unkeyed blueprint is invalid.
 
 Capsule declarations converge from exactly two sources:
 `InstallConfig.interfaceBlueprints` (`capsule_blueprint`) and an optional
-module-declared `takosumi_interface` written during the Capsule's Run
+portable Takoform Interface declaration admitted during the Capsule's Run
 (`capsule_resource`). `metadata.materializedFrom` is immutable and the two
 owners cannot adopt or rewrite each other's spec. If their names match, the
 module keeps spec authority and the blueprint contributes only its service-side
@@ -874,9 +874,9 @@ Resource; they do not become lifecycle state owners.
 If a mature vendor-neutral provider exists for external infrastructure, prefer
 that provider in the Stack flow. For Takosumi-managed capacity, keep the
 provider-neutral Resource lifecycle canonical even when a universal client or
-protocol exists. The current `takosumi/takosumi` compatibility/admin provider
-and the target portable typed form provider are optional clients; neither
-defines whether a form is installed, executable, activated, or offered.
+protocol exists. Takoform's portable typed client is optional; the discontinued
+`takosumi/takosumi` provider is historical custody only. Neither defines whether
+a form is installed, executable, activated, or offered.
 
 This remains true over time. A new universal client may replace the HCL provider
 as the preferred user surface, but its control operations still call the Deploy
@@ -890,8 +890,8 @@ Cloud separately creates an exact ServiceOffering. One-off gaps and external inf
 declared-env-capable ProviderConnections and ordinary OpenTofu modules. Add a
 standard typed form-provider schema only for a repeated portable form with a
 clear schema, validation, lifecycle, adapter path, state/import/drift story,
-security review, and conformance evidence. A Takosumi provider resource must be
-an operator/admin object or retained compatibility state.
+security review, and conformance evidence. No new Takosumi-provider resource is
+admitted; operator objects use API/CLI/dashboard and old types remain custody.
 
 The target extension has two layers. Adding a standard HCL-facing form resource
 requires an immutable Form Package/provider release so OpenTofu can keep
@@ -901,22 +901,18 @@ can publish implementation tokens, adapter plugin ids, plugin-local non-secret
 options, and interface capability evidence. The Resolver and Adapter decide
 whether those tokens are supported by the endpoint.
 
-## Portable Form Provider, Takosumi Admin Provider, And API Contract
+## Portable Form Provider, Discontinued Takosumi Provider, And API Contract
 
-The current mixed `takosumi/takosumi` provider is an optional Deploy API and
-shared Interface client. It remains Takosumi-owned, retains frozen form types
-for supported state, and owns `takosumi_target_pool` plus future justified
-operator/admin types. It also exposes the optional in-run
-`takosumi_interface` resource and `data.takosumi_interface` without acquiring
-portable Service Form definition authority. It is
-not rebuilt under an old version or silently changed to admin-only while state
-still refers to its form types.
+The mixed `takosumi/takosumi` provider is discontinued. It retains frozen form,
+Interface, and TargetPool source only for supported historical state,
+migration, and rollback evidence. It is not published under a corrected version
+and gains no operator/admin types. Portable Form/Interface authoring belongs to
+Takoform; active operator administration belongs to Takosumi API/CLI/dashboard.
 
-The runner injects `TAKOSUMI_ENDPOINT`, a Capsule-scoped `TAKOSUMI_TOKEN`,
-`TAKOSUMI_WORKSPACE_ID`, and `TAKOSUMI_CAPSULE_ID`. The provider uses the
-public Interface CRUD API with ETag/If-Match concurrency, treats Retired as
-absent, preserves out-of-band `policyRef`, retries bounded 409/412 conflicts,
-and supports import recovery. It never creates InterfaceBindings.
+The portable host integration may receive a Capsule-scoped run credential and
+uses the public Interface CRUD API without InterfaceBinding authority. The
+retained discontinued provider implementation is compatibility evidence, not
+the active declaration client.
 
 The target portable form provider is independently versioned from exact Form
 Packages, exposes statically typed standard form resources, and calls only the
@@ -1389,24 +1385,13 @@ CLI/API/runbook operation, usage showback, and audit evidence. It does not
 advertise an operator admin UI. Operator-only changes are applied through
 database-backed configuration, CLI/API operations, runbooks, and audit logs.
 
-The official hosted platform currently serves the mixed `takosumi/takosumi`
-provider from the same platform Worker static assets as the dashboard. The
-mirror base is:
-
-```text
-https://app.takosumi.com/opentofu/providers/
-```
-
-This is an OpenTofu network mirror, not a separate provider service. Current
-assets are generated into `dashboard/public/opentofu/providers/`, but that is
-not the target release authority. The 2026-07-16 live `1.0.0` archive bytes
-differ from local rebuilds on all four platforms, and the live linux_amd64
-binary identifies `main.version` as `dev` while the index/archive call it
-`1.0.0`. The served bytes are immutable historical evidence and MUST NOT be
-overwritten. A corrected legacy/admin release uses a new version and exact
-version injection, manifest, checksums, provenance, and mirror-copy
-verification. Independently released portable form-provider bytes are consumed
-and mirrored without rebuilding.
+The official hosted platform does not publish or index the discontinued
+`takosumi/takosumi` provider. Its former 1.0.0 public bytes differ from local
+rebuilds and are retained only as immutable quarantine/migration evidence; they
+MUST NOT be overwritten or republished. The dashboard no longer materializes a
+Takosumi-provider default mirror. Generic runner mirror/cache support remains
+available for ordinary providers and independently published Takoform bytes,
+without rebuilding provider artifacts.
 
 ## OIDC And Workload Identity
 

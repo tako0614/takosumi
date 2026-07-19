@@ -291,10 +291,10 @@ compatibility state; new typed form-client authority moves to the independent
 provider. A provider resource that maps to neither a portable Service Form nor
 a Takosumi operator/admin object has no reason to exist.
 
-`takosumi/takosumi` is the typed Deploy API client retaining current compatibility
-state and operator/admin objects, not the authority for Service Forms,
-ServiceOfferings, prices, backend selection, or lifecycle state. Direct
-API, CLI, dashboard, and compatibility clients can deploy the same service.
+`takosumi/takosumi` is discontinued and retained only for existing-state
+migration and rollback custody. Takoform owns portable authoring; direct API,
+CLI, and dashboard own operator/admin operations and converge on the same
+managed-service lifecycle.
 
 Takos is a representative consumer of this rule. Takos should be described as
 the composition of generic Service Form-backed Resources it actually needs,
