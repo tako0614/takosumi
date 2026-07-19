@@ -36,10 +36,11 @@
  *  - otherwise: `pretty` when `TAKOSUMI_ENVIRONMENT` / `NODE_ENV` is
  *    `local` or `development` (or unset), `json` everywhere else.
  *
- * Stderr vs stdout:
- *  - `warn` / `error` → stderr (so operator log scrapers can separate)
- *  - `info` → stdout (standard convention; service boot diagnostics are
- *    informational unless they include `level=error`)
+ * Console severity:
+ *  - `warn` → `console.warn` so runtimes such as Cloudflare Workers retain
+ *    warning severity instead of reporting the event as an error
+ *  - `error` → stderr / `console.error`
+ *  - `info` → stdout / `console.log`
  *
  * Migration note: pre-logger boot diagnostics used inline strings such
  * as `[takosumi-init] storage migrations up-to-date (3 applied)`. Each such
@@ -71,6 +72,9 @@ export interface TakosumiLoggerOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly now?: () => Date;
   readonly stdout?: (line: string) => void;
+  /** Warning sink. Falls back to an explicitly injected stderr sink for
+   * backwards-compatible test/host capture, then to `console.warn`. */
+  readonly warn?: (line: string) => void;
   readonly stderr?: (line: string) => void;
 }
 
@@ -132,6 +136,7 @@ class TakosumiLoggerImpl implements TakosumiLogger {
   readonly #format: TakosumiLogFormat;
   readonly #now: () => Date;
   readonly #stdout: (line: string) => void;
+  readonly #warn: (line: string) => void;
   readonly #stderr: (line: string) => void;
 
   constructor(options: TakosumiLoggerOptions = {}) {
@@ -140,6 +145,7 @@ class TakosumiLoggerImpl implements TakosumiLogger {
     this.#format = options.format ?? resolveDefaultFormat(env);
     this.#now = options.now ?? (() => new Date());
     this.#stdout = options.stdout ?? defaultStdout;
+    this.#warn = options.warn ?? options.stderr ?? defaultWarn;
     this.#stderr = options.stderr ?? defaultStderr;
   }
 
@@ -162,7 +168,11 @@ class TakosumiLoggerImpl implements TakosumiLogger {
   ): void {
     const ts = this.#now().toISOString();
     const data = normalizeFields(fields);
-    const sink = level === "info" ? this.#stdout : this.#stderr;
+    const sink = level === "info"
+      ? this.#stdout
+      : level === "warn"
+      ? this.#warn
+      : this.#stderr;
     if (this.#format === "json") {
       sink(JSON.stringify({
         level,
@@ -185,6 +195,10 @@ function defaultStdout(line: string): void {
   // Keep this as a single console.log so structured output is emitted
   // consistently under Bun, Node, and test harnesses.
   console.log(line);
+}
+
+function defaultWarn(line: string): void {
+  console.warn(line);
 }
 
 function defaultStderr(line: string): void {
