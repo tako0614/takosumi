@@ -53,7 +53,7 @@ afterEach(async () => {
 });
 
 describe("provider release source", () => {
-  test("uses an independent 1.1.2 candidate lane and immutable historical quarantine", async () => {
+  test("uses an independent 1.1.3 candidate lane and immutable historical quarantine", async () => {
     const packageJson = await readJson(
       join(PROVIDER_RELEASE_ROOT, "package.json"),
     );
@@ -64,9 +64,9 @@ describe("provider release source", () => {
       await readJson(PROVIDER_QUARANTINE_PATH),
     );
 
-    expect(descriptor.version).toBe("1.1.2");
+    expect(descriptor.version).toBe("1.1.3");
     expect(descriptor.version).not.toBe(packageJson.version);
-    expect(descriptor.tag).toBe("provider/v1.1.2");
+    expect(descriptor.tag).toBe("provider/v1.1.3");
     expect(descriptor.publishable).toBe(false);
     expect(quarantine.version).toBe("1.0.0");
     expect(quarantine.publishable).toBe(false);
@@ -94,7 +94,7 @@ describe("provider release source", () => {
       "2d7313612f827336b6bb2d0e4155c4af04f4717f18760f87ee18cd5f4c2dcad3",
     );
     const result = await verifyProviderReleaseSource();
-    expect(result.providerVersion).toBe("1.1.2");
+    expect(result.providerVersion).toBe("1.1.3");
     expect(result.quarantineVersion).toBe("1.0.0");
     expect(result.approvedMirrorVersions).toEqual([]);
     expect(
@@ -291,7 +291,7 @@ describe("provider release source", () => {
         repoRoot: PROVIDER_RELEASE_ROOT,
         outputRoot: join(PROVIDER_RELEASE_ROOT, ".forbidden-provider-release"),
         sourceCommit: "a".repeat(40),
-        tag: "provider/v1.1.2",
+        tag: "provider/v1.1.3",
       }),
     ).rejects.toThrow("outside the tracked source repository");
   });
@@ -304,7 +304,7 @@ describe("provider release source", () => {
         repoRoot: PROVIDER_RELEASE_ROOT,
         outputRoot: root,
         sourceCommit: "a".repeat(40),
-        tag: "provider/v1.1.2",
+        tag: "provider/v1.1.3",
       }),
     ).rejects.toThrow("provider release output already exists");
   });
@@ -316,7 +316,7 @@ describe("provider release source", () => {
         repoRoot: fixture.repoRoot,
         outputRoot: fixture.outputRoot,
         sourceCommit: fixture.sourceCommit,
-        tag: "provider/v1.1.2",
+        tag: "provider/v1.1.3",
       }),
     ).rejects.toThrow("must be annotated and signed");
   });
@@ -332,7 +332,7 @@ describe("provider release source", () => {
           repoRoot: fixture.repoRoot,
           outputRoot: fixture.outputRoot,
           sourceCommit: fixture.sourceCommit,
-          tag: "provider/v1.1.2",
+          tag: "provider/v1.1.3",
           testOnlyAllowUnsignedTag: true,
         }),
       ).rejects.toThrow("go toolchain digest mismatch");
@@ -356,7 +356,7 @@ describe("provider release source", () => {
         repoRoot: fixture.repoRoot,
         outputRoot: fixture.outputRoot,
         sourceCommit: fixture.sourceCommit,
-        tag: "provider/v1.1.2",
+        tag: "provider/v1.1.3",
         testOnlyAllowUnsignedTag: true,
       });
       expect(result.bundleVerification.releaseEligibility).toBe("test-only");
@@ -372,7 +372,7 @@ describe("provider release source", () => {
         testOnlyAllowUnsignedManifest: true,
         fetchImpl: async (url) => {
           expect(String(url)).toBe(
-            "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/1.1.2.json",
+            "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/1.1.3.json",
           );
           return new Response("not found", { status: 404 });
         },
@@ -935,7 +935,7 @@ async function makeTaggedSourceFixture({ wrongGoDigest = false } = {}) {
   runGit(repoRoot, ["config", "user.name", "Provider Release Test"]);
   runGit(repoRoot, ["add", "."]);
   runGit(repoRoot, ["commit", "-q", "-m", "provider fixture"]);
-  runGit(repoRoot, ["tag", "provider/v1.1.2"]);
+  runGit(repoRoot, ["tag", "provider/v1.1.3"]);
   return {
     repoRoot,
     outputRoot: join(root, "output"),
@@ -964,7 +964,7 @@ async function makeCompleteTaggedSourceFixture() {
   runGit(repoRoot, ["config", "user.name", "Provider Release Test"]);
   runGit(repoRoot, ["add", "."]);
   runGit(repoRoot, ["commit", "-q", "-m", "complete provider fixture"]);
-  runGit(repoRoot, ["tag", "provider/v1.1.2"]);
+  runGit(repoRoot, ["tag", "provider/v1.1.3"]);
   return {
     repoRoot,
     outputRoot: join(root, "output"),
