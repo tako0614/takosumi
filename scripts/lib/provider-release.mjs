@@ -1124,6 +1124,76 @@ export async function verifyProviderReleaseToolchain({
   };
 }
 
+export async function probeProviderReleaseToolchain({
+  repoRoot = PROVIDER_RELEASE_ROOT,
+  descriptorPath = join(repoRoot, "provider", "release", "version.json"),
+} = {}) {
+  const descriptorSnapshot = await readAuthorityJsonWithSidecar(
+    descriptorPath,
+    "provider release descriptor",
+  );
+  const descriptor = validateVersionDescriptor(descriptorSnapshot.value);
+  const toolchain = Object.fromEntries(
+    Object.entries(descriptor.toolchain).map(([name, expected]) => {
+      const canonicalPath = realpathSync(expected.path);
+      return [
+        name,
+        {
+          path: expected.path,
+          canonicalPath,
+          expectedSha256: expected.sha256,
+          observedSha256: sha256(readFileSync(canonicalPath)),
+        },
+      ];
+    }),
+  );
+  const runtimeTrust = descriptor.runtimeTrust.files.map((expected) => {
+    const canonicalPath = realpathSync(expected.path);
+    return {
+      path: expected.path,
+      canonicalPath,
+      expectedSha256: expected.sha256,
+      observedSha256: sha256(readFileSync(canonicalPath)),
+    };
+  });
+  const zipOutput = command(descriptor.toolchain.zip.path, ["-v"], {
+    cwd: repoRoot,
+  }).stdout;
+  const unzipOutput = command(descriptor.toolchain.unzip.path, ["-v"], {
+    cwd: repoRoot,
+  }).stdout;
+  return {
+    runnerImage: {
+      os: process.env.ImageOS ?? null,
+      version: process.env.ImageVersion ?? null,
+    },
+    descriptorDigest: descriptorSnapshot.sha256,
+    versions: {
+      go: command(descriptor.toolchain.go.path, ["env", "GOVERSION"], {
+        cwd: join(repoRoot, "provider"),
+        env: hermeticGoEnvironment(process.env),
+      }).stdout.trim(),
+      zip: /This is Zip ([0-9.]+)/.exec(zipOutput)?.[1] ?? null,
+      unzip: /^UnZip ([0-9.]+)/.exec(unzipOutput)?.[1] ?? null,
+      git: command(descriptor.toolchain.git.path, ["--version"], {
+        cwd: repoRoot,
+      }).stdout.trim(),
+      gpgv: command(descriptor.toolchain.gpgv.path, ["--version"], {
+        cwd: repoRoot,
+      })
+        .stdout.split("\n")[0]
+        .trim(),
+    },
+    toolchain,
+    goDistribution: {
+      root: descriptor.toolchain.go.distributionRoot,
+      expectedSha256: descriptor.toolchain.go.distributionSha256,
+      observedSha256: digestTreeSync(descriptor.toolchain.go.distributionRoot),
+    },
+    runtimeTrust,
+  };
+}
+
 export async function verifyProviderReleaseSource({
   repoRoot = PROVIDER_RELEASE_ROOT,
   descriptorPath = join(repoRoot, "provider", "release", "version.json"),

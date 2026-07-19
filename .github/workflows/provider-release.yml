@@ -11,6 +11,7 @@ on:
         options:
           - candidate
           - promote
+          - probe
       version:
         description: Assertion; provider/release/version.json remains authoritative
         required: true
@@ -100,6 +101,62 @@ env:
   RELEASE_SAFETY_ADAPTER_DIGEST: "sha256:0f601ba59ae736fcd912b09580228365e8fc64885efbbc2dfa3622060730575f"
 
 jobs:
+  probe:
+    name: Probe hosted provider toolchain
+    if: inputs.phase == 'probe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout probe source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup Go bootstrap
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+          check-latest: false
+
+      - name: Materialize descriptor-pinned Go path
+        shell: bash
+        run: |
+          set -euo pipefail
+          descriptor_go_version="$(bun -e 'console.log((await Bun.file("provider/release/version.json").json()).toolchain.go.version)')"
+          target_root="$(bun -e 'console.log((await Bun.file("provider/release/version.json").json()).toolchain.go.distributionRoot)')"
+          toolchain_module="golang.org/toolchain@v0.0.1-${descriptor_go_version}.linux-amd64"
+          source_root="$(
+            cd provider
+            GOTOOLCHAIN=local go mod download -json "${toolchain_module}" |
+              TOOLCHAIN_MODULE="${toolchain_module}" bun -e '
+                const value = JSON.parse(await Bun.stdin.text());
+                if (`${value.Path}@${value.Version}` !== process.env.TOOLCHAIN_MODULE || value.Error || !value.Dir) process.exit(1);
+                console.log(value.Dir);
+              '
+          )"
+          sudo rm -rf "${target_root}"
+          sudo mkdir -p "${target_root}"
+          sudo cp -a "$(realpath "${source_root}")/." "${target_root}/"
+
+      - name: Capture read-only toolchain evidence
+        run: bun scripts/provider-release.mjs probe-toolchain | tee provider-toolchain-probe.json
+
+      - name: Upload read-only toolchain evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: provider-toolchain-probe-${{ github.run_id }}
+          path: provider-toolchain-probe.json
+          if-no-files-found: error
+          retention-days: 1
+
   candidate:
     name: Build immutable provider candidate
     if: inputs.phase == 'candidate'
