@@ -264,21 +264,26 @@ export function registerPortableFormHostRoutes(
       true,
     );
     if (!parsed.ok) return parsed.response;
-    const available = await requireAvailableForm(
-      c,
-      options,
-      auth.actor,
-      parsed.request,
-      "import",
-    );
-    if (!available.ok) return available.response;
     const nativeId = stringValue(parsed.body.nativeId);
     if (!nativeId)
       return portableError(c, "invalid_argument", "nativeId is required", 400);
-    const result = await options.service.importResource({
+    const importRequest = {
       ...parsed.request,
       nativeId,
-    });
+    };
+    const replayStatus =
+      await options.service.importReplayStatus(importRequest);
+    if (!replayStatus) {
+      const available = await requireAvailableForm(
+        c,
+        options,
+        auth.actor,
+        parsed.request,
+        "import",
+      );
+      if (!available.ok) return available.response;
+    }
+    const result = await options.service.importResource(importRequest);
     if (!result.ok) return serviceError(c, result.error);
     return portableJson(
       c,

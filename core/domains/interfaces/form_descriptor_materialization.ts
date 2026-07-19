@@ -6,6 +6,7 @@ import type {
   InstalledFormReference,
   Interface,
   InterfaceInput,
+  InterfaceSpec,
   JsonObject,
 } from "takosumi-contract";
 import { formRefKey, isPortableInterfaceInputSource } from "takosumi-contract";
@@ -74,33 +75,6 @@ export async function ensureFormDescriptorInterfaces(
       descriptorName: descriptor.name,
       descriptorVersion: descriptor.version,
     };
-    const existing = history.find((record) => {
-      const source = record.metadata.materializedFrom;
-      return (
-        source?.source === "form_descriptor" &&
-        source.formRefKey === lineage.formRefKey &&
-        source.formSchemaDigest === lineage.formSchemaDigest &&
-        source.descriptorName === lineage.descriptorName &&
-        source.descriptorVersion === lineage.descriptorVersion &&
-        record.status.phase !== "Retired"
-      );
-    });
-    if (existing) {
-      const reconciled =
-        existing.status.phase === "Resolved"
-          ? existing
-          : await input.interfaces.reconcile(existing.metadata.id);
-      if (required && reconciled.status.phase !== "Resolved") {
-        throw new RequiredFormInterfaceError(
-          descriptor.name,
-          descriptor.version,
-          "input_not_ready",
-        );
-      }
-      materialized.push(reconciled);
-      continue;
-    }
-
     const document = descriptor.document ?? {};
     if (!validDocument(document, descriptor.documentSchema)) {
       if (required) {
@@ -136,7 +110,52 @@ export async function ensureFormDescriptorInterfaces(
       continue;
     }
 
+    const desiredSpec: InterfaceSpec = {
+      type: descriptor.name,
+      version: descriptor.version,
+      document,
+      ...(Object.keys(inputs.value).length > 0 ? { inputs: inputs.value } : {}),
+      access: { visibility: "workspace" },
+    };
     const name = await descriptorRecordName(descriptor);
+    const existingIndex = history.findIndex((record) => {
+      const source = record.metadata.materializedFrom;
+      return (
+        source?.source === "form_descriptor" &&
+        source.formRefKey === lineage.formRefKey &&
+        source.formSchemaDigest === lineage.formSchemaDigest &&
+        source.descriptorName === lineage.descriptorName &&
+        source.descriptorVersion === lineage.descriptorVersion &&
+        record.status.phase !== "Retired"
+      );
+    });
+    const existing = existingIndex === -1 ? undefined : history[existingIndex];
+    if (
+      existing &&
+      existing.metadata.name === name &&
+      interfaceSpecsEqual(existing.spec, desiredSpec)
+    ) {
+      const reconciled =
+        existing.status.phase === "Resolved"
+          ? existing
+          : await input.interfaces.reconcile(existing.metadata.id);
+      if (required && reconciled.status.phase !== "Resolved") {
+        throw new RequiredFormInterfaceError(
+          descriptor.name,
+          descriptor.version,
+          "input_not_ready",
+        );
+      }
+      materialized.push(reconciled);
+      continue;
+    }
+    if (existing) {
+      history[existingIndex] = await retireStaleDescriptor(
+        input.interfaces,
+        existing,
+      );
+    }
+
     const nameTaken = history.some(
       (record) =>
         record.metadata.name === name && record.status.phase !== "Retired",
@@ -163,15 +182,7 @@ export async function ensureFormDescriptorInterfaces(
         workspaceId: input.workspaceId,
         name,
         ownerRef: { kind: "Resource", id: input.resourceId },
-        spec: {
-          type: descriptor.name,
-          version: descriptor.version,
-          document,
-          ...(Object.keys(inputs.value).length > 0
-            ? { inputs: inputs.value }
-            : {}),
-          access: { visibility: "workspace" },
-        },
+        spec: desiredSpec,
       },
       input.actor,
       lineage,
@@ -229,13 +240,15 @@ function descriptorLineageKey(input: {
 async function retireStaleDescriptor(
   interfaces: InterfaceService,
   initial: Interface,
-): Promise<void> {
+): Promise<Interface> {
   let current = initial;
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    if (current.status.phase === "Retired") return;
+    if (current.status.phase === "Retired") return current;
     try {
-      await interfaces.retire(current.metadata.id, current.metadata.generation);
-      return;
+      return await interfaces.retire(
+        current.metadata.id,
+        current.metadata.generation,
+      );
     } catch (error) {
       if (
         !(error instanceof InterfaceServiceError) ||
@@ -249,6 +262,24 @@ async function retireStaleDescriptor(
     "conflict",
     "stale Form descriptor Interface changed during retirement",
   );
+}
+
+function interfaceSpecsEqual(
+  left: InterfaceSpec,
+  right: InterfaceSpec,
+): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 async function descriptorRecordName(

@@ -640,6 +640,70 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   expect(deleteReplay.status).toBe(204);
 });
 
+test("portable Form import replay consumes pinned admission after availability changes", async () => {
+  let active = true;
+  const installed = exactObjectBucketFormRegistry();
+  const registry: NonNullable<ResourceShapeServiceDeps["formRegistry"]> = {
+    ...installed,
+    listActivations: async () =>
+      active ? await installed.listActivations() : { items: [] },
+  };
+  const { app } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "acct_import_replay",
+        roles: ["owner"],
+        scopes: ["forms:read", "resources:*"],
+        requestId: "req_import_replay",
+      }),
+    },
+    registry,
+  );
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const desired = {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    form: EXACT_OBJECT_BUCKET_FORM,
+    metadata: { name: "imported-assets", space: "space_1" },
+    spec: { name: "imported-assets", interfaces: ["s3_api"] },
+    nativeId: "native-imported-assets",
+  };
+  const headers = {
+    ...JSON_HEADERS,
+    "if-none-match": "*",
+    "idempotency-key": "portable-import-replay-1",
+  };
+  const imported = await app.request(
+    `${base}/resources/ObjectBucket/imported-assets/import`,
+    { method: "POST", headers, body: JSON.stringify(desired) },
+  );
+  expect(imported.status).toBe(200);
+
+  active = false;
+  const replayed = await app.request(
+    `${base}/resources/ObjectBucket/imported-assets/import`,
+    { method: "POST", headers, body: JSON.stringify(desired) },
+  );
+  expect(replayed.status).toBe(200);
+  expect((await replayed.json()).resource.metadata.resourceVersion).toBe("1");
+
+  const rejectedNewImport = await app.request(
+    `${base}/resources/ObjectBucket/unavailable-assets/import`,
+    {
+      method: "POST",
+      headers: { ...headers, "idempotency-key": "portable-import-new-2" },
+      body: JSON.stringify({
+        ...desired,
+        metadata: { name: "unavailable-assets", space: "space_1" },
+        spec: { ...desired.spec, name: "unavailable-assets" },
+        nativeId: "native-unavailable-assets",
+      }),
+    },
+  );
+  expect(rejectedNewImport.status).toBe(409);
+  expect((await rejectedNewImport.json()).error.code).toBe("form_unavailable");
+});
+
 test("portable Form host rejects invalid label values instead of dropping them", async () => {
   const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
   const response = await app.request(

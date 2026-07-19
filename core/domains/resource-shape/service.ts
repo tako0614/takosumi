@@ -1703,6 +1703,18 @@ export class ResourceShapeService {
    * The adapter is required to prove a read-only import before this projection
    * becomes Ready; failed attempts remain removable ledger-only records.
    */
+  async importReplayStatus(
+    req: ImportResourceRequest,
+  ): Promise<"recovering" | "completed" | undefined> {
+    const id = formatResourceShapeId(req.space, req.kind, req.name);
+    const [existing, existingLock] = await Promise.all([
+      this.#stores.resources.get(id),
+      this.#stores.locks.get(id),
+    ]);
+    const requestDigest = await resourceImportRequestDigest(req);
+    return classifyImportReplay(req, existing, existingLock, requestDigest);
+  }
+
   async importResource(
     req: ImportResourceRequest,
   ): Promise<ServiceResult<ImportResourceResult>> {
@@ -1728,25 +1740,20 @@ export class ResourceShapeService {
       this.#stores.locks.get(id),
     ]);
     const importRequestDigest = await resourceImportRequestDigest(req);
-    const recoveringImport =
-      existing !== undefined &&
-      existingLock !== undefined &&
-      importRequestMatchesRecord(
-        req,
-        existing,
-        importRequestDigest,
-        "Applying",
-      );
-    const completedImport =
-      existing !== undefined &&
-      existingLock !== undefined &&
-      importRequestMatchesRecord(req, existing, importRequestDigest, "Ready");
+    const replayStatus = classifyImportReplay(
+      req,
+      existing,
+      existingLock,
+      importRequestDigest,
+    );
+    const recoveringImport = replayStatus === "recovering";
+    const completedImport = replayStatus === "completed";
     const form = await this.#resolveExactForm(req, existing, existingLock, {
       allowRetainedPackage: recoveringImport || completedImport,
       skipRequiredInterfaceAdmission: recoveringImport || completedImport,
     });
     if (!form.ok) return form;
-    if (completedImport) {
+    if (completedImport && existing && existingLock) {
       return {
         ok: true,
         value: {
@@ -5568,6 +5575,21 @@ function importRequestMatchesRecord(
       canonicalJson(record.labels ?? null) &&
     marker?.message === `import-request:${requestDigest}`
   );
+}
+
+function classifyImportReplay(
+  request: ImportResourceRequest,
+  record: ResourceShapeRecord | undefined,
+  lock: ResolutionLockRecord | undefined,
+  requestDigest: string,
+): "recovering" | "completed" | undefined {
+  if (!record || !lock) return undefined;
+  if (importRequestMatchesRecord(request, record, requestDigest, "Applying")) {
+    return "recovering";
+  }
+  return importRequestMatchesRecord(request, record, requestDigest, "Ready")
+    ? "completed"
+    : undefined;
 }
 
 function toTargetPool(record: TargetPoolRecord): TargetPool {

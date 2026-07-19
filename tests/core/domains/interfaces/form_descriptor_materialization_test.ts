@@ -140,6 +140,61 @@ test("portable Form descriptors preserve pair identity, exact document, and RFC 
     first.materialized.map((item) => item.metadata.id).sort(),
   );
 
+  const controlActor = {
+    actorAccountId: "acct_control",
+    workspaceId: "workspace_1",
+    roles: ["owner"] as const,
+    requestId: "req_control",
+  };
+  await expect(
+    interfaces.update(
+      required.metadata.id,
+      {
+        spec: {
+          ...required.spec,
+          document: { title: "must not be changed by the host API" },
+        },
+      },
+      required.metadata.generation,
+      controlActor,
+    ),
+  ).rejects.toMatchObject({ code: "failed_precondition" });
+  await expect(
+    interfaces.retire(
+      required.metadata.id,
+      required.metadata.generation,
+      controlActor,
+    ),
+  ).rejects.toMatchObject({ code: "failed_precondition" });
+
+  const internallyTampered = await interfaces.update(
+    required.metadata.id,
+    {
+      spec: {
+        ...required.spec,
+        document: { title: "simulated storage drift" },
+      },
+    },
+    required.metadata.generation,
+  );
+  expect(internallyTampered.spec.document).toEqual({
+    title: "simulated storage drift",
+  });
+  const repaired = await ensureFormDescriptorInterfaces({
+    interfaces,
+    workspaceId: "workspace_1",
+    resourceId,
+    form: FORM,
+    descriptors,
+  });
+  const repairedRequired = repaired.materialized.find(
+    (item) => item.spec.version === "2025-11-25",
+  )!;
+  expect(repairedRequired.metadata.id).not.toBe(required.metadata.id);
+  expect(repairedRequired.spec.document).toEqual({
+    title: "Exact portable declaration",
+  });
+
   await expect(
     ensureFormDescriptorInterfaces({
       interfaces,
@@ -179,7 +234,7 @@ test("portable Form descriptors preserve pair identity, exact document, and RFC 
     ownerId: resourceId,
     includeRetired: true,
   });
-  expect(upgradedHistory).toHaveLength(3);
+  expect(upgradedHistory.length).toBeGreaterThanOrEqual(3);
   expect(upgradedHistory.every((item) => item.status.phase === "Retired")).toBe(
     true,
   );
@@ -229,9 +284,13 @@ test("portable declaration reads paginate every Resource and enforce the explici
   });
   const cursors: Array<string | undefined> = [];
   let repairCalls = 0;
+  let resolverCalls = 0;
   const reader = createPortableDeclarationReader({
     interfaces,
-    resolveWorkspace: async () => "workspace_1",
+    resolveWorkspace: async () => {
+      resolverCalls += 1;
+      return "workspace_1";
+    },
     ensureResourceDeclarations: async () => {
       repairCalls += 1;
     },
@@ -271,7 +330,24 @@ test("portable declaration reads paginate every Resource and enforce the explici
       form: FORM,
     },
   ]);
-  expect(repairCalls).toBe(resources.length);
+  expect(repairCalls).toBe(0);
+  expect(resolverCalls).toBe(1);
+
+  expect(
+    await reader.listDeclaredInterfaces({
+      actor: {
+        actorAccountId: "acct_1",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        requestId: "req_exact",
+      },
+      space: "space_1",
+      resourceKind: last.kind,
+      resourceName: last.metadata.name,
+    }),
+  ).toHaveLength(1);
+  expect(repairCalls).toBe(1);
+  expect(resolverCalls).toBe(2);
 
   resources[resources.length - 1] = {
     ...last,
@@ -293,7 +369,8 @@ test("portable declaration reads paginate every Resource and enforce the explici
       resourceName: last.metadata.name,
     }),
   ).toEqual([]);
-  expect(repairCalls).toBe(resources.length);
+  expect(repairCalls).toBe(1);
+  expect(resolverCalls).toBe(2);
 
   expect(
     await reader.listDeclaredInterfaces({
@@ -307,5 +384,6 @@ test("portable declaration reads paginate every Resource and enforce the explici
       name: "mcp.server",
     }),
   ).toEqual([]);
-  expect(repairCalls).toBe(resources.length);
+  expect(repairCalls).toBe(1);
+  expect(resolverCalls).toBe(3);
 });

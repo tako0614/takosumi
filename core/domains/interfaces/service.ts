@@ -972,6 +972,15 @@ export class InterfaceService {
       );
     }
     const current = await this.get(id);
+    if (
+      actor !== undefined &&
+      current.metadata.materializedFrom?.source === "form_descriptor"
+    ) {
+      throw new InterfaceServiceError(
+        "failed_precondition",
+        "Form descriptor Interface desired state is owned by its exact Form",
+      );
+    }
     if (current.status.phase === "Retired") {
       throw new InterfaceServiceError(
         "failed_precondition",
@@ -1499,6 +1508,15 @@ export class InterfaceService {
     expectedResolvedRevision?: number,
   ): Promise<Interface> {
     const current = await this.get(id);
+    if (
+      actor !== undefined &&
+      current.metadata.materializedFrom?.source === "form_descriptor"
+    ) {
+      throw new InterfaceServiceError(
+        "failed_precondition",
+        "Form descriptor Interface lifecycle is owned by its exact Form",
+      );
+    }
     if (current.status.phase === "Retired") return current;
     if (current.metadata.generation !== expectedGeneration) {
       throw new InterfaceServiceError(

@@ -44,6 +44,11 @@ export function createPortableDeclarationReader(
       input: PortableDeclarationFilter,
     ): Promise<readonly TakoformDeclaredInterface[]> {
       const declared: TakoformDeclaredInterface[] = [];
+      const workspaceBySpace = new Map<string, Promise<string | undefined>>();
+      const resourcesByWorkspace = new Map<
+        string,
+        Map<string, ResourceObject>
+      >();
       let cursor: string | undefined;
       do {
         const page = await options.listResources(input.space, {
@@ -71,10 +76,15 @@ export function createPortableDeclarationReader(
             resource.kind,
             resource.metadata.name,
           );
-          const workspaceId = await options.resolveWorkspace({
-            resourceSpaceId: resource.metadata.space,
-            resourceId,
-          });
+          let workspace = workspaceBySpace.get(resource.metadata.space);
+          if (!workspace) {
+            workspace = options.resolveWorkspace({
+              resourceSpaceId: resource.metadata.space,
+              resourceId,
+            });
+            workspaceBySpace.set(resource.metadata.space, workspace);
+          }
+          const workspaceId = await workspace;
           if (!workspaceId) continue;
           // A scoped principal may never use a caller-chosen portable Space to
           // cross the explicit Resource Space -> Workspace bridge. Hosts with
@@ -85,30 +95,44 @@ export function createPortableDeclarationReader(
           ) {
             continue;
           }
-          // Lazy repair is a write. Never let a scoped reader trigger it for a
-          // Resource outside the already-proven Workspace bridge.
-          await options.ensureResourceDeclarations?.(resource);
-          const owned = await options.interfaces.list({
-            workspaceId,
-            ownerKind: "Resource",
-            ownerId: resourceId,
-            includeRetired: false,
-          });
-          for (const iface of owned) {
-            const projected = projectDeclaration(iface, resource);
-            if (!projected) continue;
-            if (input.name !== undefined && projected.name !== input.name)
-              continue;
-            if (
-              input.version !== undefined &&
-              projected.version !== input.version
-            )
-              continue;
-            declared.push(projected);
+          // Broad reads stay read-only. An exact Resource read is the bounded
+          // lazy-repair boundary for a missed lifecycle observer.
+          if (input.resourceKind && input.resourceName) {
+            await options.ensureResourceDeclarations?.(resource);
           }
+          let resources = resourcesByWorkspace.get(workspaceId);
+          if (!resources) {
+            resources = new Map();
+            resourcesByWorkspace.set(workspaceId, resources);
+          }
+          resources.set(resourceId, resource);
         }
         cursor = page.nextCursor;
       } while (cursor);
+
+      for (const [workspaceId, resources] of resourcesByWorkspace) {
+        const owned = await options.interfaces.list({
+          workspaceId,
+          ownerKind: "Resource",
+          ...(input.name ? { type: input.name } : {}),
+          phase: "Resolved",
+          includeRetired: false,
+        });
+        for (const iface of owned) {
+          const resource = resources.get(iface.metadata.ownerRef.id);
+          if (!resource) continue;
+          const projected = projectDeclaration(iface, resource);
+          if (!projected) continue;
+          if (input.name !== undefined && projected.name !== input.name)
+            continue;
+          if (
+            input.version !== undefined &&
+            projected.version !== input.version
+          )
+            continue;
+          declared.push(projected);
+        }
+      }
 
       return declared.sort(
         (left, right) =>
