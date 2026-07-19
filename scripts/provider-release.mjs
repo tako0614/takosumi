@@ -11,6 +11,7 @@ import {
   verifyNetworkMirrorLayout,
   verifyProviderReleaseBundle,
   verifyProviderPrepublication,
+  verifyProviderReleaseTag,
   verifyProviderReleaseSource,
 } from "./lib/provider-release.mjs";
 
@@ -78,6 +79,21 @@ export async function runProviderReleaseCli(argv = process.argv.slice(2)) {
       });
       return result;
     }
+    case "verify-tag": {
+      if (!args["source-commit"] || !args.tag) {
+        throw new Error("verify-tag requires --source-commit and --tag");
+      }
+      const result = await verifyProviderReleaseTag({
+        repoRoot: resolve(args.repo ?? PROVIDER_RELEASE_ROOT),
+        sourceCommit: args["source-commit"],
+        tag: args.tag,
+      });
+      printJson({
+        kind: "takosumi.provider-release-tag-verification@v1",
+        ...result,
+      });
+      return result;
+    }
     case "prepublish-check": {
       if (!args.root) throw new Error("prepublish-check requires --root");
       const result = await verifyProviderPrepublication({
@@ -121,7 +137,7 @@ export async function runProviderReleaseCli(argv = process.argv.slice(2)) {
     }
     default:
       throw new Error(
-        "usage: bun scripts/provider-release.mjs <verify-source|materialize|verify-mirror|verify-bundle|prepublish-check|build|manifest-digest> [options]",
+        "usage: bun scripts/provider-release.mjs <verify-source|materialize|verify-mirror|verify-bundle|verify-tag|prepublish-check|build|manifest-digest> [options]",
       );
   }
 }
@@ -131,6 +147,7 @@ const COMMAND_OPTIONS = {
   materialize: new Set(["output", "registry", "artifact-root", "cache-root"]),
   "verify-mirror": new Set(["root", "registry"]),
   "verify-bundle": new Set(["root"]),
+  "verify-tag": new Set(["source-commit", "tag", "repo"]),
   "prepublish-check": new Set(["root"]),
   build: new Set([
     "output",

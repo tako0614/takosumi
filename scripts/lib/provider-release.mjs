@@ -2230,6 +2230,72 @@ async function verifySourceTag({
   };
 }
 
+export async function verifyProviderReleaseTag({
+  repoRoot = PROVIDER_RELEASE_ROOT,
+  sourceCommit,
+  tag,
+} = {}) {
+  if (!/^[a-f0-9]{40}$/.test(sourceCommit ?? "")) {
+    throw new Error(
+      "provider tag verification requires an exact source commit",
+    );
+  }
+  const sourceRepo = await realpath(repoRoot);
+  const descriptorSnapshot = await readAuthorityJsonWithSidecar(
+    join(sourceRepo, "provider", "release", "version.json"),
+    "provider release descriptor",
+  );
+  const descriptor = validateVersionDescriptor(descriptorSnapshot.value);
+  if (tag !== descriptor.tag) {
+    throw new Error(`--tag must equal descriptor tag ${descriptor.tag}`);
+  }
+  verifyToolchainExecutableDigests(
+    descriptor.toolchain,
+    descriptor.runtimeTrust,
+  );
+  const authorityRoot = await mkdtemp(
+    join(tmpdir(), "takosumi-provider-tag-authority-"),
+  );
+  await chmod(authorityRoot, 0o700);
+  try {
+    const dirty = gitCommand(
+      descriptor.toolchain,
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      { cwd: sourceRepo, home: authorityRoot },
+    ).stdout;
+    if (dirty.trim()) {
+      throw new Error("provider tag verification requires a clean checkout");
+    }
+    const tagRef = `refs/tags/${tag}`;
+    const taggedCommit = gitCommand(
+      descriptor.toolchain,
+      ["rev-parse", `${tagRef}^{commit}`],
+      { cwd: sourceRepo, home: authorityRoot },
+    ).stdout.trim();
+    if (taggedCommit !== sourceCommit) {
+      throw new Error(
+        `provider tag resolves to ${taggedCommit}, not ${sourceCommit}`,
+      );
+    }
+    const verification = await verifySourceTag({
+      sourceRepo,
+      tag,
+      tagRef,
+      descriptor,
+      testOnlyAllowUnsignedTag: false,
+      authorityRoot,
+    });
+    return {
+      sourceCommit,
+      tag,
+      descriptorDigest: descriptorSnapshot.sha256,
+      tagVerification: verification,
+    };
+  } finally {
+    await rm(authorityRoot, { recursive: true, force: true });
+  }
+}
+
 export async function buildProviderRelease({
   repoRoot = PROVIDER_RELEASE_ROOT,
   outputRoot,
