@@ -21,11 +21,12 @@ One-off gap:
   use generic-env ProviderConnection and an ordinary OpenTofu module.
 ```
 
-`takosumi/takosumi` is an optional typed client for this API. The provider does not call
-vendor APIs directly and does not choose backends. It sends preview / apply /
-delete / status requests to the Deploy API, and the Takosumi endpoint runs the
-Resolver, Adapter, TargetPool, and Policy logic. The provider does not own the
-service catalog, prices, or lifecycle state.
+The discontinued `takosumi/takosumi` provider is not a client for new
+configuration. Use Takoform for portable Forms and Form-backed Resource
+Interface descriptors, service-side InstallConfig blueprints for Capsule
+Interfaces, and this API, CLI, or dashboard for operator operations. External
+providers continue to run through plain Stack execution while Takosumi owns the
+canonical lifecycle.
 
 ## Discovery
 
@@ -36,7 +37,7 @@ GET /.well-known/takosumi
 GET /v1/capabilities
 ```
 
-The provider, CLI, and dashboard branch on capabilities, not edition names.
+The CLI, dashboard, and portable clients branch on capabilities, not edition names.
 
 Example:
 
@@ -462,7 +463,8 @@ provider-neutral default for newly written objects. Its exact values are
 `infrequent_access` resolves only when the TargetPool advertises
 `storage_class_infrequent_access`; unsupported placement fails before backend
 calls. The selector does not implicitly change objects written earlier. The
-Takosumi provider exposes the same input as `storage_class`.
+discontinued Takosumi provider retains `storage_class` only as a historical
+state-migration compatibility name.
 
 ## Target / Credential / Policy API
 

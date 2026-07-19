@@ -53,7 +53,7 @@ The AI Gateway, S3-compatible endpoint, and Cloud usage endpoint are handled thr
 
 Every Cloud managed resource entrypoint uses the same managed operation
 pipeline before a backend API is called. Whether the request comes from a
-compatibility endpoint, the `takosumi/takosumi` provider, or the Dashboard, it
+compatibility endpoint, the direct API, or the Dashboard, it
 passes through authentication, source Workspace context, owner billing context, Resource /
 NativeResource normalization, managed-operation dispatch planning,
 selected-manager availability checks, usage / spend guard, and then manager
@@ -133,7 +133,7 @@ Cloud stays Pre-GA until every item passes the same readiness matrix.
 | ----------- | ------------------------------------------------------------------------------------------ |
 | GA contract | Edge Worker modules, assets, vars, write-only secrets, bindings, versions, and deployments |
 | GA contract | Object Storage Standard and Infrequent Access offerings                                    |
-| GA contract | KV, Database, and Queue                                                                     |
+| GA contract | KV, Database, and Queue                                                                    |
 | GA contract | OpenAI-compatible AI Gateway endpoint                                                      |
 | GA contract | verified custom domains                                                                    |
 | Preview     | Vector Index, Durable Workflow, Container, Stateful Actor Namespace, and Schedule          |

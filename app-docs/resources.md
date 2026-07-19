@@ -74,15 +74,15 @@ Operator/internal jobs:
 ```
 
 すべての Cloud マネージドリソースの control-plane 操作は、実際のバックエンド API を
-叩く前に canonical `/v1/resources` Deploy API へ収束します。`takosumi/takosumi`
-provider、Dashboard、直接 API はこの lifecycle をそのまま呼びます。インストールされた
+叩く前に canonical `/v1/resources` Deploy API へ収束します。Dashboard、直接 API、
+portable clients はこの lifecycle をそのまま呼びます。インストールされた
 Compatibility API profile がある場合も、protocol request を typed Resource request へ
 変換して同じ preview / reviewed apply / delete を呼び、manager や parallel lifecycle
 store は所有しません。
 
 ```text
 compat control request -> typed Resource request
-takosumi provider / direct API / Dashboard -> typed Resource request
+portable client / direct API / Dashboard -> typed Resource request
   -> /v1/resources preview + reviewed apply/delete
   -> auth + Space/Workspace ownership
   -> TargetPool + Policy + ResolutionLock

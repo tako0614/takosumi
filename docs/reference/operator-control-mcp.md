@@ -31,17 +31,12 @@ variables:
   takosumi_origin = https://<bare-operator-origin>
 ```
 
-module は credential-free な ordinary Output `endpoint` を返します。Interface の
-producer 宣言は次のどちらかです。
-
-- `declare_interface_resource = false` (default):
-  `InstallConfig.interfaceBlueprints` が最初の successful apply 後に
-  `materializedFrom: capsule_blueprint` の Interface を作ります。
-- `declare_interface_resource = true`: module の optional
-  `takosumi_interface.operator_control` が Capsule-scoped Run credential で
-  `materializedFrom: capsule_resource` の同名・同spec Interface を作ります。
-  blueprint はその record を adopt/rewrite せず、service-side installer Binding
-  proposal だけを提供します。
+module は credential-free な ordinary Output `endpoint` を返します。
+`InstallConfig.interfaceBlueprints` が最初の successful apply 後に
+`materializedFrom: capsule_blueprint` の Interface を作ります。この module は廃止済み
+`takosumi/takosumi` provider に依存しません。Takoform の Interface descriptor は
+Form Package から Form-backed Resource へ `form_descriptor` として materialize する別経路で、
+この Capsule module の authoring path ではありません。
 
 両方が収束する desired spec は次です。
 
@@ -76,7 +71,7 @@ Binding proposal は installing Principal への exact permission です。
 }
 ```
 
-module resource は Binding を作れません。host ownership authorizer が特別に
+module code は Binding を作れません。host ownership authorizer が特別に
 許可するのも、flag が有効で owner が Capsule のときの exact
 `https://<operator-origin>/mcp/operator-control/v1` だけです。
 

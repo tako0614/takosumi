@@ -35,7 +35,7 @@
     ]
   },
   "takosumiProviderProof": {
-    "command": "bun run provider:compatibility:state-proof",
+    "command": "bun run provider:custody:state-proof",
     "evidenceKind": "takosumi.provider-compatibility-proof-evidence@v1",
     "coveredResourceTypes": [
       "takosumi_container_service",

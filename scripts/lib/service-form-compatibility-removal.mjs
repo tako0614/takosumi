@@ -68,7 +68,7 @@ const POLICY_REQUIREMENTS = [
   "authorized-external-state-inventory",
   "public-support-window-notice-and-elapsed-window",
   "external-legacy-usage-observation",
-  "takosumi-provider-no-op-and-rollback-proof",
+  "retained-takosumi-provider-no-op-and-rollback-proof",
   "takoform-remove-import-no-op-migration-proof",
   "operator-retained-rollback-artifacts-and-restore-drill",
 ];
@@ -284,7 +284,7 @@ export function validateServiceFormMigrationFixtureAuthority(authority) {
   );
   if (
     authority.takosumiProviderProof.command !==
-      "bun run provider:compatibility:state-proof" ||
+      "bun run provider:custody:state-proof" ||
     authority.takosumiProviderProof.evidenceKind !== PROVIDER_PROOF_KIND ||
     !sameStrings(
       authority.takosumiProviderProof.coveredResourceTypes,

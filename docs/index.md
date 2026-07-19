@@ -104,10 +104,11 @@ Takosumi は作り直しません。
   generic-env ProviderConnection と通常の OpenTofu module で扱う。
 ```
 
-`takosumi/takosumi` provider は Takosumi を使うための必須入口ではありません。
-既存 provider が十分なら Stack flow でそのまま使います。現在の Takosumi provider は
-supported Resource Shape compatibility state と operator/admin object を維持します。新しい
-typed Service Form client の authority は、state migration 後に独立 provider へ移ります。
+`takosumi/takosumi` provider は廃止済みで、新規設定には使いません。既存 provider は
+Stack flow でそのまま使えます。portable Service Form と Form-backed Resource の
+Interface descriptor は Takoform、Capsule Interface は service-side InstallConfig
+blueprint、operator 管理は Takosumi API / CLI / dashboard を使います。旧 provider
+source は既存 state の migration / rollback custody のためだけに残ります。
 
 ## Compatibility API
 

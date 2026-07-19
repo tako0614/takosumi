@@ -38,7 +38,7 @@
     "authorized-external-state-inventory",
     "public-support-window-notice-and-elapsed-window",
     "external-legacy-usage-observation",
-    "takosumi-provider-no-op-and-rollback-proof",
+    "retained-takosumi-provider-no-op-and-rollback-proof",
     "takoform-remove-import-no-op-migration-proof",
     "operator-retained-rollback-artifacts-and-restore-drill"
   ],

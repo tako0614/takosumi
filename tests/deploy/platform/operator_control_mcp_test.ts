@@ -236,7 +236,7 @@ test("non-Interface, wrong-audience, and stale-scope sessions fail closed", asyn
   }
 });
 
-test("blueprint and module resource converge on one ordinary mcp.server spec and service-side Binding proposal", async () => {
+test("blueprint owns the ordinary mcp.server spec while the module stays provider-independent", async () => {
   const blueprintSpec = structuredClone(
     OPERATOR_CONTROL_MCP_INTERFACE_BLUEPRINT.spec,
   );
@@ -268,8 +268,8 @@ test("blueprint and module resource converge on one ordinary mcp.server spec and
       import.meta.url,
     ),
   ).text();
-  expect(module).toContain('resource "takosumi_interface" "operator_control"');
-  expect(module).toContain('name    = "takosumi.operator-control"');
+  expect(module).not.toContain('source = "takosjp/takosumi"');
+  expect(module).not.toContain('resource "takosumi_interface"');
   expect(module).not.toContain('resource "takosumi_interface_binding"');
 });
 

@@ -126,7 +126,7 @@ GET /__takosumi/cloud/extensions
 
 ## API key / owner billing context
 
-`takosumi` provider が使う Resource Shape API (`/v1/resources` /
+Resource Shape compatibility API (`/v1/resources` /
 `/v1/target-pools` / `/v1/space-policies`) は匿名では使えません。アカウントセッション、
 パーソナルアクセストークン、またはサービストークンで認証し、発生元 Workspace と所有ユーザーの
 課金アカウントを検証できる必要があります。EdgeWorker route は、同じ Workspace に属する
@@ -349,7 +349,7 @@ Stable contract は次の 7 service form（8 offering）です。
 
 Vector Index / Durable Workflow / Container / Stateful Actor Namespace / Schedule は Preview で、
 active offering がある場合だけ同じ一覧に状態を表示します。Compatibility API profile の
-仮想 inventory や独自 Resource 台帳は使いません。Dashboard、`takosumi/takosumi` provider、
+仮想 inventory や独自 Resource 台帳は使いません。Dashboard、portable client、
 direct Deploy API はすべて同じ Resource に収束します。`resource_shapes` capability は型付き Resource Shape API が
 使えることを示すもので、別の lifecycle を意味しません。
 

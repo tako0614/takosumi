@@ -48,7 +48,7 @@ State / migrations:
   control-d1-schema-predeploy.md
   online-db-migrations.md
 
-Release supply chain:
+Historical provider custody:
   provider-release-and-mirror.md
 
 Incident / recovery / on-call:
