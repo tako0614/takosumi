@@ -1182,7 +1182,7 @@ export async function probeProviderReleaseToolchain({
     }
   }
   const observedRuntimeTrust = [...observedRuntimePaths]
-    .sort((a, b) => a.localeCompare(b))
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
     .map((path) => ({ path, sha256: sha256(readFileSync(path)) }));
   const zipOutput = command(descriptor.toolchain.zip.path, ["-v"], {
     cwd: repoRoot,
@@ -1217,9 +1217,34 @@ export async function probeProviderReleaseToolchain({
       root: descriptor.toolchain.go.distributionRoot,
       expectedSha256: descriptor.toolchain.go.distributionSha256,
       observedSha256: digestTreeSync(descriptor.toolchain.go.distributionRoot),
+      entries: manifestTreeSync(descriptor.toolchain.go.distributionRoot),
     },
     runtimeTrust,
     observedRuntimeTrust,
+  };
+}
+
+export async function probeProviderReleaseToolchainTree({
+  repoRoot = PROVIDER_RELEASE_ROOT,
+  descriptorPath = join(repoRoot, "provider", "release", "version.json"),
+} = {}) {
+  const descriptorSnapshot = await readAuthorityJsonWithSidecar(
+    descriptorPath,
+    "provider release descriptor",
+  );
+  const descriptor = validateVersionDescriptor(descriptorSnapshot.value);
+  return {
+    runnerImage: {
+      os: process.env.ImageOS ?? null,
+      version: process.env.ImageVersion ?? null,
+    },
+    descriptorDigest: descriptorSnapshot.sha256,
+    goDistribution: {
+      root: descriptor.toolchain.go.distributionRoot,
+      expectedSha256: descriptor.toolchain.go.distributionSha256,
+      observedSha256: digestTreeSync(descriptor.toolchain.go.distributionRoot),
+      entries: manifestTreeSync(descriptor.toolchain.go.distributionRoot),
+    },
   };
 }
 
@@ -3010,6 +3035,44 @@ function digestTreeSync(root) {
   }
   walk(root, "", new Set([canonicalRoot]));
   return hash.digest("hex");
+}
+
+function manifestTreeSync(root) {
+  const entries = [];
+  const walk = (filesystemPath, logicalPath) => {
+    for (const entry of readdirSyncSorted(filesystemPath)) {
+      const path = join(filesystemPath, entry.name);
+      const logical = logicalPath ? `${logicalPath}/${entry.name}` : entry.name;
+      const info = lstatSyncSafe(path);
+      if (info.isSymbolicLink()) {
+        const target = readlinkSync(path);
+        const resolved = realpathSync(path);
+        const targetInfo = lstatSyncSafe(resolved);
+        entries.push({
+          kind: "symlink",
+          path: logical,
+          target,
+          resolvedKind: targetInfo.isDirectory() ? "directory" : "file",
+          resolvedSha256: targetInfo.isFile()
+            ? sha256(readFileSync(resolved))
+            : null,
+        });
+      } else if (info.isDirectory()) {
+        walk(path, logical);
+      } else if (info.isFile()) {
+        entries.push({
+          kind: "file",
+          path: logical,
+          size: info.size,
+          sha256: sha256(readFileSync(path)),
+        });
+      } else {
+        throw new Error(`unsupported toolchain entry ${logical}`);
+      }
+    }
+  };
+  walk(root, "");
+  return entries;
 }
 
 function readdirSyncSorted(path) {

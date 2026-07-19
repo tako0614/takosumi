@@ -145,18 +145,28 @@ jobs:
           sudo rm -rf "${target_root}"
           sudo mkdir -p "${target_root}"
           sudo cp -a "$(realpath "${source_root}")/." "${target_root}/"
+
+      - name: Capture module tree before restoring execution modes
+        run: bun scripts/provider-release.mjs probe-toolchain-tree > provider-toolchain-tree-before.json
+
+      - name: Restore module tool execution modes
+        run: |
+          target_root="$(bun -e 'console.log((await Bun.file("provider/release/version.json").json()).toolchain.go.distributionRoot)')"
           sudo find "${target_root}/bin" "${target_root}/pkg/tool" -type f -exec chmod 0555 {} +
 
       - name: Capture read-only toolchain evidence
         run: |
-          set -o pipefail
-          bun scripts/provider-release.mjs probe-toolchain | tee provider-toolchain-probe.json
+          bun scripts/provider-release.mjs probe-toolchain-tree > provider-toolchain-tree-after.json
+          bun scripts/provider-release.mjs probe-toolchain > provider-toolchain-probe.json
 
       - name: Upload read-only toolchain evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: provider-toolchain-probe-${{ github.run_id }}
-          path: provider-toolchain-probe.json
+          path: |
+            provider-toolchain-tree-before.json
+            provider-toolchain-tree-after.json
+            provider-toolchain-probe.json
           if-no-files-found: error
           retention-days: 1
 
