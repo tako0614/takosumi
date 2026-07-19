@@ -156,4 +156,5 @@ The full classification is fixed in the
 - [Model reference](./reference/model.md)
 - [Takosumi API](./reference/api.md)
 - [Deploy-Control API](./reference/deploy-control-api.md)
+- [Operator control MCP](./reference/operator-control-mcp.md)
 - [Takosumi Cloud docs](https://app.takosumi.com/docs/en/)

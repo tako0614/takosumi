@@ -27,6 +27,12 @@ InterfaceBinding
 AuditEvent
 ```
 
+Takos などの agent から control operation を使う optional producer は
+[Operator control MCP adapter](./operator-control-mcp.md) を参照してください。
+これは普通の `mcp.server` Interface / Principal `InterfaceBinding` と同じ経路を
+使い、既存 public control service の RBAC / policy / Run / state / audit authority
+へ収束します。
+
 呼び出し側の契約は Capsule-driven plan Run です。client は Capsule を作成または選択し、
 ProviderBinding で provider を紐づけ、`plan` Run を作成し、保存された plan の結果を確認して
 から、その保存済みの plan/state context に対して `apply` または `destroy` Run を承認します。

@@ -27,6 +27,12 @@ InterfaceBinding
 AuditEvent
 ```
 
+For the optional producer that exposes control operations to Takos or another
+agent, see the [Operator control MCP adapter](./operator-control-mcp.md). It uses
+the same ordinary `mcp.server` Interface and Principal `InterfaceBinding` path
+and converges on the existing public control service's RBAC, policy, Run, state,
+and audit authority.
+
 A Capsule-driven plan Run is the caller contract: clients create or select a
 Capsule, bind providers through ProviderBindings, create a `plan` Run, review the
 saved plan result, then approve an `apply` or `destroy` Run against that saved

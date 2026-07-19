@@ -36,6 +36,10 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "API", link: "/reference/api" },
         { text: "Deploy Control API", link: "/reference/deploy-control-api" },
         {
+          text: "Operator control MCP",
+          link: "/reference/operator-control-mcp",
+        },
+        {
           text: "Execution boundaries",
           link: "/reference/operator-execution-boundaries",
         },
@@ -81,6 +85,10 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         {
           text: "Deploy Control API",
           link: "/en/reference/deploy-control-api",
+        },
+        {
+          text: "Operator control MCP",
+          link: "/en/reference/operator-control-mcp",
         },
         {
           text: "Execution boundaries",
