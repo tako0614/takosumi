@@ -6,9 +6,11 @@ version.
 
 - `version.json` is the exact candidate version, tag, address, platform, and
   hermetic toolchain/runtime contract. Its SHA-256 sidecar is required.
-  `1.1.1` is the current candidate and has not been published. The signed
-  `1.1.0` tag is retained immutably under `failures/` after its hosted-runner
-  pre-artifact failure; it is never moved, deleted, or reused.
+  `1.1.2` is the current candidate and has not been published. The signed
+  `1.1.0` and `1.1.1` tags are retained immutably under `failures/` after their
+  pre-artifact failures; they are never moved, deleted, or reused. `1.1.1`
+  proved the pinned Ubuntu 24.04 toolchain path, then stopped because the Go
+  module-cache prime exposed 52 missing checksum lines in `provider/go.sum`.
 - `registry.json` plus its sidecar is the only normal mirror-admission
   authority. It retains all known versions, but only an externally verified
   `approved` entry is publishable. Quarantine entries are validated evidence,
@@ -20,7 +22,7 @@ version.
   asset. The served binary reports `dev` and dirty provenance, so `1.0.0` is
   retained for compatibility but is never reproducible release evidence.
 - `compatibility/1.0.0-state-identity.json` pins the non-secret structural
-  schema identity read from those exact public bytes. The adjacent `1.1.1`
+  schema identity read from those exact public bytes. The adjacent `1.1.2`
   delta policy classifies five new resources and nine optional attributes,
   rejects their inclusion in the `1.0.1` patch lane, and keeps them together
   only in the unpublished minor candidate.
@@ -39,7 +41,9 @@ version.
   limited to the exact 20-path allowlist in `version.json`; only zero or all 20
   paths are accepted before the normalized entry count and content tree are
   verified. Dependency resolution is offline and the pre-populated Go module
-  cache must pass `go mod verify`.
+  cache must pass `go mod verify`. Signed source identity is verified before
+  dependency installation, and cache priming must leave `go.mod` and `go.sum`
+  byte-for-byte clean before any build begins.
 - Dashboard and Worker builds are mirror consumers. They materialize immutable
   version/archive bytes for approved releases into generated `dashboard/dist`,
   then derive the aggregate index by deterministically merging those releases.
@@ -54,13 +58,13 @@ Run `bun run provider:compatibility:check` for the hermetic current-schema
 comparison and prerequisite matrix. Run
 `bun run provider:compatibility:state-proof` separately for the connected
 old-state proof. That command writes ignored, digest-bound, credential-free
-evidence to `tmp/provider-compatibility/1.1.1-state-proof.json` plus its SHA-256
+evidence to `tmp/provider-compatibility/1.1.2-state-proof.json` plus its SHA-256
 sidecar. `provider:compatibility:release-check` is red until that evidence proves
 the explicit OpenTofu/Terraform schema, state, and FQN matrix; CLI discovery
 alone never claims the matrix. Passing this compatibility gate does not clear
 the independent signer, signature, transparency, public-path, or mirror
 activation blockers. The feature-bearing patch lane is already rejected in
-favor of the `1.1.1` minor candidate.
+favor of the `1.1.2` minor candidate.
 
 See [provider-release-and-mirror.md](../../docs/operations/provider-release-and-mirror.md)
 for commands and incident handling.

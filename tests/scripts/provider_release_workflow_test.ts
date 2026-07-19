@@ -97,6 +97,64 @@ describe("provider release workflow authority", () => {
       "sha256:0f601ba59ae736fcd912b09580228365e8fc64885efbbc2dfa3622060730575f",
     );
 
+    const candidateStepNames = workflow.jobs.candidate.steps.map(
+      (step: Record<string, unknown>) => step.name,
+    );
+    const promoteStepNames = workflow.jobs.promote.steps.map(
+      (step: Record<string, unknown>) => step.name,
+    );
+    expect(
+      candidateStepNames.indexOf("Validate immutable source identity"),
+    ).toBeLessThan(candidateStepNames.indexOf("Install locked dependencies"));
+    expect(
+      candidateStepNames.indexOf("Validate immutable source identity"),
+    ).toBeLessThan(
+      candidateStepNames.indexOf("Install locked dashboard dependencies"),
+    );
+    expect(
+      candidateStepNames.indexOf("Validate immutable source identity"),
+    ).toBeLessThan(
+      candidateStepNames.indexOf("Prime the exact offline Go module cache"),
+    );
+    expect(
+      promoteStepNames.indexOf("Validate sealed controller inputs"),
+    ).toBeLessThan(promoteStepNames.indexOf("Install locked dependencies"));
+    expect(
+      promoteStepNames.indexOf("Validate sealed controller inputs"),
+    ).toBeLessThan(
+      promoteStepNames.indexOf("Prime the exact offline Go module cache"),
+    );
+    for (const jobName of ["candidate", "promote"] as const) {
+      const stepNames = workflow.jobs[jobName].steps.map(
+        (step: Record<string, unknown>) => step.name,
+      );
+      const validateName =
+        jobName === "candidate"
+          ? "Validate immutable source identity"
+          : "Validate sealed controller inputs";
+      expect(
+        stepNames.indexOf("Materialize descriptor-pinned Go path"),
+      ).toBeLessThan(
+        stepNames.indexOf("Assert materialization preserved source checkout"),
+      );
+      expect(
+        stepNames.indexOf("Assert materialization preserved source checkout"),
+      ).toBeLessThan(stepNames.indexOf(validateName));
+      const prime = workflow.jobs[jobName].steps.find(
+        (step: Record<string, unknown>) =>
+          step.name === "Prime the exact offline Go module cache",
+      );
+      expect(prime.run).toContain(
+        'install -m 0644 provider/go.mod "${prime_root}/go.mod"',
+      );
+      expect(prime.run).toContain(
+        "GOWORK=off /usr/lib/go-${GO_VERSION}/bin/go mod download all",
+      );
+      expect(prime.run).toContain(
+        "git diff --exit-code -- provider/go.mod provider/go.sum",
+      );
+    }
+
     const actionReferences = [...source.matchAll(/uses:\s*([^\s#]+)/gu)].map(
       ([, reference]) => reference,
     );
@@ -122,8 +180,13 @@ describe("provider release workflow authority", () => {
     ).toHaveLength(2);
     expect(source.match(/go mod download -json/gu)).toHaveLength(2);
     expect(
-      source.match(/GOTOOLCHAIN=local go mod download -json/gu),
+      source.match(/GOWORK=off GOTOOLCHAIN=local go mod download -json/gu),
     ).toHaveLength(2);
+    expect(source.match(/cd "\$\{toolchain_lookup_root\}"/gu)).toHaveLength(2);
+    expect(
+      source.match(/test ! -e "\$\{toolchain_lookup_root\}"/gu),
+    ).toHaveLength(2);
+    expect(source).not.toMatch(/cd provider\s+GOTOOLCHAIN=local/gu);
     expect(source.match(/value\.Path.*value\.Version/gu)).toHaveLength(2);
     expect(source).not.toContain('source_root="$(go env GOROOT)"');
     const copyToolchainMarker =
@@ -235,7 +298,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: "release-manifest.json",
         bundlePath: "/tmp/release-manifest.sigstore.json",
-        expectedTag: "provider/v1.1.1",
+        expectedTag: "provider/v1.1.2",
       }),
     ).rejects.toThrow("authority path must be absolute");
   });
@@ -250,7 +313,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: fixture.subjectPath,
         bundlePath: fixture.bundlePath,
-        expectedTag: "provider/v1.1.1",
+        expectedTag: "provider/v1.1.2",
         policyPath: fixture.policyPath,
       }),
     ).rejects.toThrow("provider publisher policy sidecar mismatch");
@@ -266,7 +329,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: fixture.subjectPath,
         bundlePath: fixture.bundlePath,
-        expectedTag: "provider/v1.1.1",
+        expectedTag: "provider/v1.1.2",
         policyPath: fixture.policyPath,
       }),
     ).rejects.toThrow("provider Sigstore TrustedRoot sidecar mismatch");
@@ -292,7 +355,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseTag({
         repoRoot: new URL("../../", import.meta.url).pathname,
         sourceCommit: "not-a-commit",
-        tag: "provider/v1.1.1",
+        tag: "provider/v1.1.2",
       }),
     ).rejects.toThrow("exact source commit");
   });
@@ -333,8 +396,8 @@ async function candidateFixture(options: {
     surfaceId: "takosumi-provider",
     repository: "https://github.com/tako0614/takosumi.git",
     sourceCommit: "1".repeat(40),
-    version: "1.1.1",
-    tag: "provider/v1.1.1",
+    version: "1.1.2",
+    tag: "provider/v1.1.2",
     workflowRunId: "123",
     builtAt: "2026-07-19T00:00:00.000Z",
     ociImages: [],
