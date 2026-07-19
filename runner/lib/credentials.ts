@@ -57,13 +57,9 @@ export function commandContextFromRequest(
   // Credential Recipes deliver provider credentials under their declared
   // process-env names (for example CLOUDFLARE_API_TOKEN or
   // SNOWFLAKE_PASSWORD). They arrive only via the dispatched credential bundle:
-  // never from Bun.env and never from the runner profile env map. The ambient
-  // Capsule run identity names ride the same dispatch payload.
+  // never from Bun.env and never from the runner profile env map.
   for (const [name, value] of Object.entries(payloadCredentials)) {
-    if (
-      isAdmittedDeclaredProviderEnvName(name) ||
-      isCapsuleRunIdentityEnvName(name)
-    ) {
+    if (isAdmittedDeclaredProviderEnvName(name)) {
       env[name] = value;
     }
   }
@@ -100,10 +96,7 @@ export function credentialsFromRequest(
   const manifest = credentialManifestFromRequest(request);
   if (
     !manifest &&
-    Object.keys(source).some(
-      (name) =>
-        typeof source[name] === "string" && !isCapsuleRunIdentityEnvName(name),
-    )
+    Object.keys(source).some((name) => typeof source[name] === "string")
   ) {
     throw new Error(
       "provider credentials require an explicit run credential manifest",
@@ -116,7 +109,7 @@ export function credentialsFromRequest(
   );
   const out = credentialsFromRecord(source);
   for (const name of Object.keys(out)) {
-    if (!allowed.has(name) && !isCapsuleRunIdentityEnvName(name)) {
+    if (!allowed.has(name)) {
       throw new Error(
         `provider credential env name is not declared by the run recipe: ${name}`,
       );
@@ -131,10 +124,7 @@ export function credentialsFromRecord(
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(credentials)) {
     if (typeof value !== "string") continue;
-    if (
-      isAdmittedDeclaredProviderEnvName(name) ||
-      isCapsuleRunIdentityEnvName(name)
-    ) {
+    if (isAdmittedDeclaredProviderEnvName(name)) {
       out[name] = value;
     }
   }
@@ -304,24 +294,6 @@ export function isAdmittedDeclaredProviderEnvName(name: string): boolean {
   return isProviderEnvName(name) && !isReservedProviderEnvName(name);
 }
 
-/**
- * Ambient Capsule run identity injected by the control plane so the module's
- * optional `takosumi_interface` resources can call the public Interface API.
- * These are dispatch-payload values (never ambient process env) but they are
- * runtime identity, not Credential Recipe material, so they are admitted
- * without a recipe binding. Only TAKOSUMI_TOKEN is secret.
- */
-const CAPSULE_RUN_IDENTITY_ENV_NAMES = new Set([
-  "TAKOSUMI_ENDPOINT",
-  "TAKOSUMI_TOKEN",
-  "TAKOSUMI_WORKSPACE_ID",
-  "TAKOSUMI_CAPSULE_ID",
-]);
-
-export function isCapsuleRunIdentityEnvName(name: string): boolean {
-  return CAPSULE_RUN_IDENTITY_ENV_NAMES.has(name);
-}
-
 export function redactionValuesFromRequest(request: unknown): string[] {
   return [
     ...redactionValuesFromRequestCredentials(request),
@@ -333,14 +305,7 @@ export function redactionValuesFromRequestCredentials(
   request: unknown,
 ): string[] {
   return [
-    // Non-secret ambient identity values (endpoint URL, workspace/capsule
-    // ids) legitimately appear in plan output; only the run token is secret.
-    ...Object.entries(credentialsFromRequest(request))
-      .filter(
-        ([name]) =>
-          !isCapsuleRunIdentityEnvName(name) || name === "TAKOSUMI_TOKEN",
-      )
-      .map(([, value]) => value),
+    ...Object.values(credentialsFromRequest(request)),
     ...providerCredentialFilesFromRequest(request).map((file) => file.content),
   ];
 }

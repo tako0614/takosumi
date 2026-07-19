@@ -3,9 +3,9 @@
 // The Resource object mirrors the Kubernetes-style shape mandated by
 // `docs/internal/final-plan.md` §4 (Resource Object Model) and §5 (Resource Shapes):
 // a desired `spec`, an observed `status`, the `resolution` decision, and
-// `conditions`. Ten typed compatibility schemas ship with the legacy provider,
-// but Core activates none of them unless a host composition explicitly installs
-// the compatibility schema authority and enables the desired-state kind.
+// `conditions`. Ten frozen compatibility schemas remain in this contract, but
+// Core activates none of them unless a host composition explicitly installs the
+// compatibility schema authority and enables the desired-state kind.
 
 import type { Condition, JsonObject } from "./types.ts";
 import type { InstalledFormReference } from "./service-forms.ts";
@@ -25,9 +25,9 @@ export type BundledResourceShapeKind =
   | "Schedule";
 
 /**
- * Open Resource Shape token carried by the API and plugin seam. The bundled
- * provider still exposes only {@link BundledResourceShapeKind}; another token
- * is executable only when the host explicitly registers its schema and
+ * Open Resource Shape token carried by the API and plugin seam. The frozen
+ * compatibility parser understands {@link BundledResourceShapeKind}; another
+ * token is executable only when the host explicitly registers its schema and
  * adapter/plugin. Merely choosing a string never grants execution authority.
  */
 export type ResourceShapeKind = string;

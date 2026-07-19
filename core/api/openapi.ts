@@ -911,7 +911,7 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
         pattern: "^[A-Za-z][A-Za-z0-9._-]{0,127}$",
         examples: [...RESOURCE_SHAPE_KINDS],
         description:
-          "Bundled kinds have typed provider schemas. Additional tokens require an explicitly installed host schema and adapter/plugin.",
+          "Installed Form Packages provide portable typed schemas. Additional tokens require an explicitly installed host schema and adapter/plugin; the discontinued Takosumi provider is historical state custody only.",
       },
       form: ref("InstalledFormReference"),
       metadata: {

@@ -298,10 +298,9 @@ fallback identity, and an unkeyed blueprint is invalid.
 
 New Capsule declarations come from `InstallConfig.interfaceBlueprints`
 (`capsule_blueprint`) only. Historical `capsule_resource` records remain
-readable and removable under migration custody, but are not a new module-author
-surface. Their retained Run credential is scoped to one Workspace, Capsule,
-Run, and operation; it cannot read another owner, manage bindings, or read
-Secrets. A same-name blueprint never adopts or rewrites a historical record.
+readable and removable by operators under migration custody, but are not a new
+module-author or authentication surface. No Capsule-scoped Run credential is
+retained. A same-name blueprint never adopts or rewrites a historical record.
 
 A Takoform Form Package Interface descriptor is separate: after a Form-backed
 Resource is admitted, it materializes as Resource-owned `form_descriptor`
@@ -1200,8 +1199,8 @@ compliance rules
 ```
 
 TargetPool entries may include operator-declared implementations. This is how
-an operator enables custom adapters without waiting for the `takosumi`
-OpenTofu provider binary to know the backend name.
+an operator enables custom adapters through Takosumi API/CLI/dashboard without
+waiting for any Takosumi-owned HCL client to know the backend name.
 
 Each entry is a complete, non-secret execution descriptor. Core never infers a
 provider source, provider configuration, module template/input, native resource
@@ -1232,8 +1231,9 @@ targets:
 
 The current compatibility API/plugin seam accepts operator-defined shape
 tokens, while target mutation requires a trusted installed exact FormRef. The
-ten current typed provider resources remain a frozen compatibility convenience,
-not a global enum or target definition authority.
+ten current `takosumi_*` state aliases remain frozen historical compatibility
+custody, not an active client, global enum, or target-definition authority.
+Portable typed authoring belongs to Takoform.
 
 `ref` is the target-native reference such as an account id, cluster id, or
 fleet id. `credentialRef` is the ProviderConnection / Credential id used by the
@@ -1416,8 +1416,9 @@ Takosumi resource state
 Native resource state
 ```
 
-OpenTofu provider state for `takosumi_*` resources should hold Takosumi resource
-ids and outputs, not secret material or raw native provider internals.
+Retained historical OpenTofu state for `takosumi_*` resources holds Takosumi
+resource ids and outputs, not secret material or raw native provider internals.
+No new Takosumi-provider state is authored.
 
 For the Stack flow, a successful apply captures `tofu output -json` as the
 current Capsule Output. An Interface may explicitly resolve a non-sensitive
@@ -1540,7 +1541,7 @@ destroy protection is supported
 audit log is required
 Interface documents and resolved inputs contain no secret values
 InterfaceBinding credentials are short-lived or invocation-materialized
-Capsule run tokens are operation-scoped, domain-separated, and never authorize bindings
+historical capsule_resource rows have no Capsule-scoped Run token or authoring path
 ```
 
 Operator/Cloud deployments additionally require tenant isolation, runner pool
@@ -1552,14 +1553,15 @@ isolation, quota, network egress policy, admin audit, and usage metering.
    `/v1/capabilities`.
 2. OpenTofu Stack controller: Git, runner, state, logs, approval, credentials.
 3. ProviderConnection / CredentialRecipe / generic env / OIDC federation.
-4. Interface storage/API, blueprint/module declaration ownership, generic
-   input resolution, provenance, lifecycle/status channels, run-token fencing,
-   and InterfaceBinding authorization.
+4. Interface storage/API, service-side blueprint ownership, generic input
+   resolution, provenance, lifecycle/status channels, operator cleanup of
+   retained historical rows, and InterfaceBinding authorization.
 5. Move first-party runtime consumers to Interface reads and invocation-time
    Principal OAuth credentials; remove legacy Output convention and
    Workspace-wide Output reconcile paths.
-6. Characterize and freeze the current Resource/provider state and publish a
-   corrected immutable legacy provider version without overwriting `1.0.0`.
+6. Characterize and freeze the current Resource/provider state, retain the
+   immutable `1.0.0` quarantine and migration/rollback fixtures, and publish no
+   replacement Takosumi provider version.
 7. After public identity gates, extract FormRef and the data-only ten-package
    legacy compatibility set, then standard definitions, portable
    interoperability, typed provider, and conformance without moving Takosumi

@@ -1022,7 +1022,6 @@ const RULES: readonly BoundaryRule[] = [
 
 function isExplicitInterfaceMappingPath(path: string): boolean {
   return (
-    path.startsWith("provider/examples/resources/takosumi_interface/") ||
     path === "provider/internal/client/interface_test.go" ||
     path === "provider/internal/provider/interface_resource_test.go"
   );

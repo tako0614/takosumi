@@ -57,6 +57,46 @@ async function absent(path, label) {
   throw new Error(`${label} must be absent`);
 }
 
+async function containsFile(root) {
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.isFile()) return true;
+    if (entry.isDirectory() && (await containsFile(join(root, entry.name)))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function findForbiddenActiveProviderAuthority(
+  root,
+  needles,
+  result = [],
+) {
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) {
+      await findForbiddenActiveProviderAuthority(path, needles, result);
+      continue;
+    }
+    if (!entry.isFile() || !/\.(?:[cm]?[jt]sx?)$/u.test(entry.name)) continue;
+    const source = await readFile(path, "utf8");
+    for (const needle of needles) {
+      if (source.includes(needle)) {
+        result.push(`${relative(ROOT, path)}:${needle}`);
+      }
+    }
+  }
+  return result;
+}
+
 export async function verifyProviderCustody() {
   const descriptorPath = join(RELEASE, "version.json");
   const registryPath = join(RELEASE, "registry.json");
@@ -148,8 +188,45 @@ export async function verifyProviderCustody() {
     join(ROOT, ".github", "workflows", "provider-release.yml"),
     "provider publication workflow",
   );
+  await absent(
+    join(ROOT, "tests", "proofs", "resource-shape-opentofu-provider.ts"),
+    "active Takosumi provider lifecycle proof",
+  );
+  await absent(
+    join(ROOT, "core", "shared", "capsule_run_tokens.ts"),
+    "retired Takosumi provider Capsule run-token authority",
+  );
+  await absent(
+    join(ROOT, "tests", "core", "api", "interface_capsule_actor_test.ts"),
+    "retired Capsule provider-authoring route proof",
+  );
+  assert(
+    !(await containsFile(join(ROOT, "provider", "examples"))),
+    "active Takosumi provider examples must be absent",
+  );
+  const activeAuthority = [];
+  for (const root of ["contract", "core", "deploy", "runner"]) {
+    await findForbiddenActiveProviderAuthority(
+      join(ROOT, root),
+      [
+        "TAKOSUMI_RUN_INTERFACE_API_URL",
+        "TAKOSUMI_RUN_TOKEN_SECRET",
+        "capsuleRunMutable",
+        "capsule-run-token",
+        "takrun_",
+      ],
+      activeAuthority,
+    );
+  }
+  assert(
+    activeAuthority.length === 0,
+    `retired Takosumi provider authority returned: ${activeAuthority.join(", ")}`,
+  );
 
   const forbiddenScripts = [
+    "opentofu:resource-shape-provider-proof",
+    "opentofu:takos-shape-provider-proof",
+    "opentofu:yurucommu-shape-provider-proof",
     "provider:assets",
     "provider:compatibility:check",
     "provider:compatibility:release-check",

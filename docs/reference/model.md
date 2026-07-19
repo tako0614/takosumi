@@ -232,8 +232,9 @@ run をまたぐ source-sync cache ではありません。
 Service Form host flow は exact FormRef を持つ typed Resource object から始まり、それを Target へ解決します。
 現在の API/provider/state は FormRef をまだ additive persistence しておらず、Resource Shape kind を互換 identity
 として使います。既存 Resource ID、kind、ResolutionLock、Run、state は移行中も維持され、別 ledger は作りません。
-これらの object は `/v1/resources` Deploy API、`takosumi_*` provider resources、CLI、dashboard、
-Kubernetes CRD のいずれからでも送信できます。
+これらの object は `/v1/resources` Deploy API、portable な Takoform typed client、
+Takosumi CLI/dashboard、Kubernetes CRD のいずれからでも送信できます。廃止済み
+`takosumi_*` HCL は既存 state の migration / rollback custody に限ります。
 
 ```text
 exact FormRef + Resource
@@ -264,13 +265,12 @@ Policy、Adapter、backend manager はこの API の背後にある operator/adv
 
 標準 surface が存在しないだけでは、Takosumi が自動的に catch-all な provider を
 作る理由になりません。一回限りの不足や外部インフラは generic-env
-ProviderConnection と通常の OpenTofu module に留めるべきです。新しい `takosumi_*`
-resource が正当化されるのは、operator が managed capacity として提供し、typed schema、
-planner、adapter、import/drift/state の挙動、capability 証跡を必要とする、繰り返し現れる
-provider-neutral な Service Form だけです。現在の `takosumi_*` form resource は compatibility state として維持し、
-新しい typed form client authority は独立 provider へ移します。
-portable Service Form にも Takosumi operator/admin object にも対応しない provider resource は、
-存在する理由がありません。
+ProviderConnection と通常の OpenTofu module に留めるべきです。繰り返し現れる
+provider-neutral な Service Form は、exact Takoform Form Package、typed client schema、
+planner/adapter/import/drift/state の挙動、conformance 証跡を必要とします。現在の
+`takosumi_*` form resource は compatibility state として維持し、新しい typed form client
+authority はすべて Takoform が所有します。Takosumi operator object は API / CLI /
+dashboard から authoring し、Takosumi-owned provider は使いません。
 
 `takosumi/takosumi` provider は廃止済みで、既存 compatibility state の migration / rollback
 custody にだけ残ります。portable authoring は Takoform、operator/admin 操作は direct API、
@@ -300,8 +300,8 @@ gate を通過してから、その不足しているサービス形態だけを
 non-secret な `connections` を宣言できます。connection が運ぶのは resource reference、
 requested permissions、projection kind だけです。credential material と具体的な
 runtime binding の生成は、Credential / ProviderConnection と adapter の実行側に
-留まります。HCL の surface は `connections = [...]` です。`connection` は
-OpenTofu/Terraform の予約語です。
+留まります。portable Takoform HCL の surface は `connections = [...]` です。
+`connection` は OpenTofu/Terraform の予約語です。
 
 Adapter は capability を報告し、preview/apply/import/observe/refresh/delete の
 作業を行います。初期の adapter family には OpenTofu、Cloudflare、AWS、Kubernetes、VM、
@@ -316,9 +316,9 @@ scheduler が refresh、apply、ResolutionLock の変更、別の Resource regis
 target は、custom な interface 証跡を持つ operator 定義の implementation plugin を
 公開できます。endpoint はこれらの token を、ハードコードされた provider binary
 allow-list ではなく resolver/policy を通して受理・拒否します。この拡張は既存の typed
-shape の backend 向けです。新しい HCL 向けの `takosumi_*` shape を追加するには、
-OpenTofu が typed validation、plan diff、import、state upgrade の挙動を維持できるよう、
-引き続き schema/API/provider の release が必要です。
+shape の backend 向けです。新しい portable HCL Form は、OpenTofu が typed validation、
+plan diff、import、state upgrade を維持できるよう、Takoform schema / Form Package /
+provider release と host conformance が必要です。Takosumi provider は更新しません。
 
 Provider capability document は、`adapters` 配下の追加 boolean key として
 operator 定義の adapter token を含められます。既知の adapter key は引き続き `opentofu`、

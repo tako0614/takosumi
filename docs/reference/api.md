@@ -267,8 +267,10 @@ Content-Type: application/json
 `/v1/resources` は provider-neutral な managed Resource の Deploy API です。
 preview / apply / observe / refresh / import / delete と、canonical Resource、
 ResolutionLock、NativeResource、Run、status、Output、audit の唯一の lifecycle authority
-です。`takosumi_*` provider resources、CLI、dashboard、Kubernetes CRD、control-plane
-compatibility handler はこの API の client です。
+です。Takoform の portable typed client、Takosumi CLI/dashboard、Kubernetes CRD、
+control-plane compatibility handler はこの API の client です。廃止済み
+`takosumi_*` HCL は既存 state の migration/rollback custody に限り、新しい authoring
+経路ではありません。
 
 multi-tenant platform の session / personal access token / service token / OAuth
 token 経路では、request の `space` は検証済み Workspace id と同じでなければなりません。
@@ -468,8 +470,9 @@ capability evidence / ResolutionLock で決めます。
 `/v1/capabilities.adapters` は既知 key (`opentofu`, `aws`, `cloudflare`,
 `kubernetes`, `vm`, `takosumi_native`) に加えて operator-defined adapter
 token を boolean key として返せます。これは既存 typed shape の実装先を増やす
-ための拡張であり、新しい `takosumi_*` HCL resource type を runtime に生やす
-仕組みではありません。新しい shape は schema/API/provider release が必要です。
+ための拡張であり、新しい HCL resource type を runtime に生やす仕組みではありません。
+新しい portable Form は Takoform の exact Form Package/schema/provider conformance と、
+Takosumi host API/adapter conformance が必要です。Takosumi provider は更新しません。
 
 ```http
 PUT    /v1/target-pools/{name}
@@ -547,7 +550,7 @@ compat.kubernetes.crd.v1
 これは provider API 全体の互換を意味しません。範囲は capability と
 compatibility matrix で明示します。
 
-control-plane compat、typed `takosumi_*` resource、dashboard、CLI は、公開 protocol
+control-plane compat、direct Resource API、portable Takoform client、dashboard、CLI は、公開 protocol
 こそ異なっても同じ Resource desired state と Deploy API lifecycle に収束します。
 data-plane profile は既存 Resource を暗黙作成せず、Ready な Resource を解決します。
 表現できない操作は互換のように成功させず、compatibility matrix で範囲を明示して

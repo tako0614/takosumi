@@ -2,8 +2,8 @@
 
 Takosumi is software that deploys and manages OpenTofu/Terraform modules from
 Git through a plan → review → apply flow. It can run ordinary
-OpenTofu/Terraform modules as-is, and it can resolve `takosumi_*` Resource
-Shapes through the current compatibility surface when a typed service form is
+OpenTofu/Terraform modules as-is, and it can resolve Resource Shapes through
+the current compatibility API when a typed service form is
 useful. In the adopted target, the portable definition is a Service Form, its
 exact identity is a FormRef, and Takosumi is an optional host that still works
 with zero Form Packages installed (see the [glossary](./reference/glossary.md)

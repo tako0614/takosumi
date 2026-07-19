@@ -115,21 +115,13 @@ func TestResourceAPIHTTPClientWaitsForServerSideOpenTofuRuns(t *testing.T) {
 	}
 }
 
-func TestProviderExampleResourcesMatchCurrentResources(t *testing.T) {
-	entries, err := os.ReadDir(filepath.Clean("../../examples/resources"))
-	if err != nil {
-		t.Fatalf("read examples/resources: %v", err)
+func TestDiscontinuedProviderHasNoActiveAuthoringExamples(t *testing.T) {
+	_, err := os.Stat(filepath.Clean("../../examples"))
+	if err == nil {
+		t.Fatal("discontinued provider must not ship active authoring examples")
 	}
-	got := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
-			got = append(got, entry.Name())
-		}
-	}
-	sort.Strings(got)
-	want := currentProviderResourceTypeNames()
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("example resource directories must match provider resources:\ngot  %v\nwant %v", got, want)
+	if !os.IsNotExist(err) {
+		t.Fatalf("inspect discontinued provider examples: %v", err)
 	}
 }
 

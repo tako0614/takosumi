@@ -232,7 +232,7 @@ boundary. Form Package Interface descriptors materialize only on Form-backed
 Resources. Operator administration uses Takosumi API/CLI/dashboard. None owns
 host availability, backend selection, price, Resource state, or lifecycle.
 
-Before adding any `takosumi_*` resource, the design must pass a prior-art gate:
+Before adding any portable Service Form, the design must pass a prior-art gate:
 
 ```text
 1. Is this only external infrastructure that an existing provider/module can
@@ -247,8 +247,9 @@ Before adding any `takosumi_*` resource, the design must pass a prior-art gate:
 If answer 1 is yes and answers 2-4 are no, do not add a managed Resource. If
 answers 2-4 are yes, admit a Service Form through portable governance even when
 a standard control/data protocol exists. Takosumi's Deploy API remains the
-canonical Resource lifecycle, and provider/CLI/dashboard/compatibility routes
-are clients or projections of it.
+canonical Resource lifecycle, and Takoform/CLI/dashboard/compatibility routes
+are clients or projections of it. The discontinued Takosumi provider is not an
+active client surface.
 
 The client surface is intentionally replaceable. If a better universal provider
 or protocol appears, new clients may use it, but supported control operations
@@ -274,8 +275,8 @@ Ordinary VM, Kubernetes, or container infrastructure:
   use existing OpenTofu providers when that is sufficient.
 
 Provider-neutral edge JavaScript app hosting:
-  use takosumi_edge_worker. This is one service shape, not the whole Cloud
-  product identity.
+  use the direct Resource API or portable takoform_edge_worker client. This is
+  one service shape, not the whole Cloud product identity.
 
 AI Gateway or OpenAI-compatible upstream access:
   do not create a Service Form by default.
@@ -1010,9 +1011,8 @@ capsule_blueprint:
 ```
 
 Historical `capsule_resource` records created through `takosumi_interface`
-remain readable, fenced, and removable for migration custody. Their short-lived
-Capsule-scoped Run credential may touch only the owning Capsule and never grants
-InterfaceBinding or Secret authority, but it is not a new module-author path.
+remain readable and removable by operators for migration custody. They have no
+Capsule-scoped Run credential or new module-authoring path.
 A same-name blueprint does not adopt or rewrite a retained historical record.
 
 Separately, a Form Package may carry an Interface descriptor. After a Form-backed
@@ -1333,7 +1333,7 @@ It is not a generic container service and it is not a generic HTTP service. A
 container is a different service form. A VM is a different service form.
 
 ```hcl
-resource "takosumi_edge_worker" "api" {
+resource "takoform_edge_worker" "api" {
   name               = "api"
   artifact_url       = "https://example.com/releases/api-worker.js"
   artifact_sha256    = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
@@ -1347,9 +1347,10 @@ resource "takosumi_edge_worker" "api" {
 ```
 
 `profiles` are examples of endpoint-defined capability/profile tokens. The
-OpenTofu provider must not freeze this list in the provider binary; support is
-advertised and enforced by the Takosumi endpoint through capabilities,
-TargetPool policy, adapter evidence, and the Resolver.
+portable Takoform provider validates the open token shape but must not freeze
+host availability into the binary; support is advertised and enforced by the
+Takosumi endpoint through capabilities, TargetPool policy, adapter evidence,
+and the Resolver.
 
 The same rule applies to current Resource Shape `interfaces` compatibility
 fields such as ObjectBucket interface requirements. These lower-case
@@ -1428,7 +1429,8 @@ separate reviewed lifecycle operation.
 
 From the user's perspective the service is an `EdgeWorker`, selected through
 the dashboard, CLI, direct Deploy API, a supported compatibility client, or the
-optional `takosumi_edge_worker` HCL resource. No OpenTofu provider is required.
+optional portable `takoform_edge_worker` HCL resource. Direct API/CLI/dashboard
+use requires no OpenTofu provider, and the Takosumi provider is never required.
 Behind the Deploy API, the selected Target/Adapter decides whether the
 implementation is Workers for Platforms, Takosumi native runtime, or an
 operator-provided plugin. Do not hard-code WfP into a client or Service Form.
@@ -1446,7 +1448,7 @@ All Cloud-managed service entrypoints share the Cloud extension boundary before
 any backend API call:
 
 ```text
-OpenTofu provider / control-plane Compatibility API / Dashboard / CLI
+Takoform / control-plane Compatibility API / Dashboard / CLI / direct API
   -> auth + source Workspace + owner billing account
   -> provider-neutral Resource desired state
   -> Deploy API preview
@@ -1528,31 +1530,32 @@ GCS / MinIO / other S3-compatible storage:
 Takosumi enables `compat.s3.v1` only when the operator intentionally exposes an
 object-storage import/data path, binding projection, policy, metering, or
 managed target control. This lets Takosumi-provided storage be received and used
-through the same S3-compatible provider/SDK surface. `takosumi_object_bucket`
-exists for the control-plane shape; S3-compatible APIs remain the data-plane
-surface.
+through the same S3-compatible provider/SDK surface. The portable
+`takoform_object_bucket` client can author the control-plane Form; S3-compatible
+APIs remain the data-plane surface. Historical `takosumi_object_bucket` state is
+migration/rollback custody only.
 
 ### 4.3 KVStore / Queue / SQLDatabase / ContainerService
 
 These are minimum service forms needed by Takos and yurucommu-style apps.
 
 ```hcl
-resource "takosumi_kv_store" "cache" {
+resource "takoform_kv_store" "cache" {
   name = "cache"
 }
 
-resource "takosumi_queue" "delivery" {
+resource "takoform_queue" "delivery" {
   name        = "delivery"
   max_retries = 5
 }
 
-resource "takosumi_sql_database" "main" {
+resource "takoform_sql_database" "main" {
   name            = "main"
   engine          = "sqlite"
   migrations_path = "migrations"
 }
 
-resource "takosumi_container_service" "agent" {
+resource "takoform_container_service" "agent" {
   name        = "agent"
   image       = "ghcr.io/example/agent:1.0.0"
   public_http = true
@@ -1615,13 +1618,14 @@ guessing resource names or credentials. Resource API applies also reject any
 update that would introduce a cycle into the desired connection graph.
 
 ```hcl
-resource "takosumi_edge_worker" "takos_worker" {
-  name          = "takos-worker"
-  artifact_path = "/work/dist/takos-worker.js"
+resource "takoform_edge_worker" "takos_worker" {
+  name            = "takos-worker"
+  artifact_url    = "https://example.com/releases/takos-worker.js"
+  artifact_sha256 = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 
   connections = [{
     name        = "FILES"
-    resource    = takosumi_object_bucket.files.id
+    resource    = "ObjectBucket/files"
     permissions = ["read", "write"]
     projection  = "runtime_binding"
   }]
@@ -1631,10 +1635,11 @@ resource "takosumi_edge_worker" "takos_worker" {
 This keeps Takos on the same provider-neutral shape model as third-party apps.
 If a future Takos component needs a service form that is not covered by these
 shapes, add that missing service form only after the prior-art gate passes. The
-proof command is:
+Takosumi host proof exercises the direct portable API; Takoform owns provider
+conformance:
 
 ```bash
-bun run opentofu:takos-shape-provider-proof
+bun run service-form:host-conformance
 ```
 
 ### 4.4 VectorIndex / DurableWorkflow / StatefulActorNamespace / Schedule
@@ -1646,32 +1651,32 @@ recovery lifecycle. External equivalents remain valid through their ordinary
 OpenTofu providers.
 
 ```hcl
-resource "takosumi_vector_index" "search" {
+resource "takoform_vector_index" "search" {
   name       = "search"
   dimensions = 768
   metric     = "cosine"
 }
 
-resource "takosumi_durable_workflow" "release" {
+resource "takoform_durable_workflow" "release" {
   name          = "release"
   artifact_url  = "https://example.com/releases/workflow.js"
   artifact_sha256 = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
   entrypoint    = "ReleaseWorkflow"
 }
 
-resource "takosumi_stateful_actor_namespace" "rooms" {
+resource "takoform_stateful_actor_namespace" "rooms" {
   name            = "rooms"
   class_name      = "Room"
   storage_profile = "durable_sqlite"
 }
 
-resource "takosumi_schedule" "nightly" {
+resource "takoform_schedule" "nightly" {
   name     = "nightly"
   cron     = "0 3 * * *"
   timezone = "UTC"
   connections = [{
     name        = "target"
-    resource    = takosumi_durable_workflow.release.id
+    resource    = "DurableWorkflow/release"
     permissions = ["invoke"]
     projection  = "schedule_trigger"
   }]
@@ -1840,33 +1845,32 @@ operator-defined target type
 
 TargetPool implementation entries can point to adapter plugins.
 
-```hcl
-resource "takosumi_target_pool" "default" {
-  name = "default"
+```http
+PUT /v1/target-pools/default
+Content-Type: application/json
 
-  target = [{
-    name     = "containers-main"
-    type     = "kubernetes"
-    ref      = "cluster-prod"
-    credential_ref = "conn_k8s_prod"
-    priority = 80
-
-    implementation = [{
-      shape          = "ContainerService"
-      implementation = "custom_container_runtime"
-      plugin         = "takosumi-plugin-container-runtime"
-
-      options_json = jsonencode({
-        runtime_class = "edge"
-      })
-
-      interfaces = {
-        oci_container = "native"
-        public_http   = "shim"
-        "custom.mesh" = "native"
-      }
+{
+  "space": "space_1",
+  "spec": {
+    "targets": [{
+      "name": "containers-main",
+      "type": "kubernetes",
+      "ref": "cluster-prod",
+      "credentialRef": "conn_k8s_prod",
+      "priority": 80,
+      "implementations": [{
+        "shape": "ContainerService",
+        "implementation": "custom_container_runtime",
+        "plugin": "takosumi-plugin-container-runtime",
+        "options": { "runtime_class": "edge" },
+        "interfaces": {
+          "oci_container": "native",
+          "public_http": "shim",
+          "custom.mesh": "native"
+        }
+      }]
     }]
-  }]
+  }
 }
 ```
 
@@ -2076,9 +2080,10 @@ Takosumi resource state
 Native resource state
 ```
 
-The OpenTofu provider state keeps Takosumi ids and outputs. Native provider
-identifiers, resolution details, and secret material belong in Takosumi state,
-not in user HCL.
+Portable Takoform state keeps Takosumi Resource ids and public outputs. Retained
+historical `takosumi_*` state follows the same migration invariant but is never
+newly authored. Native provider identifiers, resolution details, and secret
+material belong in Takosumi state, not in user HCL.
 
 ## 10. Discovery And Capabilities
 
@@ -2573,11 +2578,11 @@ every GA Service Form exact FormRef passes its provider-neutral semantic audit a
 every form-backed Resource and ResolutionLock resolves to an exact immutable FormRef
 definition / installed / executable / activated discovery states and reason codes are truthful
 /v1/resources is the only Resource lifecycle authority
-portable and compatibility provider/CLI/dashboard/compat control requests converge on that API
+portable Takoform/CLI/dashboard/compat control requests converge on that API
 compat data planes resolve Ready canonical Resources
 no adapter or backend manager calls a compat handler as its implementation
-portable typed provider and Takosumi legacy/admin provider have immutable independent release lanes
-Capsule Interface blueprint/module declaration ownership, run-token fencing, shared display parsing, and status self-report are conformant
+the portable Takoform provider has an immutable independent release lane while the discontinued Takosumi provider remains custody-only with no replacement release
+Capsule Interface blueprint ownership, operator cleanup of retained historical rows, shared display parsing, and status self-report are conformant
 supported old provider state has no-op migration and rollback proof
 TargetPool/Policy/Adapter remain usable but live in operator/advanced UX
 FormActivation is generic OSS policy with no price/payment/capacity fields
