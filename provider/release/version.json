@@ -77,10 +77,12 @@
   "publicationPolicy": {
     "mode": "candidate-only",
     "status": "blocked-external-review",
-    "reviewedSignerFingerprints": [],
+    "reviewedSignerFingerprints": [
+      "2D479FAE54E1784AE0AF6E8F62EBC84B824E8A13"
+    ],
     "signerKeyring": {
       "path": "provider/release/keys/provider-signers.gpg",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "6b49405f7ba7289d8ad4cf654283d00008e47125c79cc8ffdaf65677842f2cf8",
       "format": "openpgp-keyring"
     },
     "publicExistingVersionReadbackRequired": true,

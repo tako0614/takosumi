@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "kind": "takosumi.provider-release-signer@v1",
+  "purpose": "takosumi-admin-provider-release",
+  "fingerprint": "2D479FAE54E1784AE0AF6E8F62EBC84B824E8A13",
+  "userId": "Takosumi Provider Release <provider-release@takosumi.com>",
+  "algorithm": "Ed25519",
+  "createdAt": "2026-07-19T06:42:58Z",
+  "expiresAt": "2028-07-18T06:42:58Z",
+  "publicKey": {
+    "path": "provider-signer-2D479FAE54E1784AE0AF6E8F62EBC84B824E8A13.asc",
+    "sha256": "13c7f4f35aab81868ea63793b25464d747b972cbf5ccf8b5d5a1aa6fc167ea75"
+  },
+  "verificationKeyring": {
+    "path": "provider-signers.gpg",
+    "sha256": "6b49405f7ba7289d8ad4cf654283d00008e47125c79cc8ffdaf65677842f2cf8"
+  },
+  "custody": {
+    "privateMaterialCommitted": false,
+    "operatorCustodied": true,
+    "separateFromTakoform": true,
+    "passphraseRequired": true
+  }
+}

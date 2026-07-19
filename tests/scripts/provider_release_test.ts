@@ -106,7 +106,7 @@ describe("provider release source", () => {
       "OpenTofu/Terraform provider address proof",
     );
     expect(providerPublicationBlockers("proof-complete")).toEqual([
-      "reviewed signer fingerprint and key custody",
+      "signed annotated release tag",
       "artifact signature and transparency log",
       "public version-path nonexistence or exact-byte readback",
     ]);
