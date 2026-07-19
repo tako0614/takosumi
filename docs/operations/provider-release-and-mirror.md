@@ -258,8 +258,9 @@ registers `takosumi-provider` with one fixed release-safety adapter. Use the
 root `release:safety:*` commands and an operator-private `0700` evidence
 directory; the adapter alone dispatches the workflow's `promote` phase after
 the same ordered candidate bytes pass long-lived staging, a fresh
-production-equivalent install/upgrade replica, and the independent
-`provider-release` protected-environment review.
+production-equivalent install/upgrade replica, and the root controller's
+automatic, digest-bound single-operator technical authorization. This workflow
+does not use a GitHub protected environment as release authority.
 
 The workflow has two fail-closed phases:
 
@@ -283,7 +284,7 @@ or resumed with changed bytes. Stop and prepare a new version. GitHub release
 publication does not itself admit the version to Takosumi's hosted provider
 mirror or either external Terraform/OpenTofu registry: mirror registry
 admission and a platform artifact promotion remain separate reviewed steps.
-Before approval, pass `provider:compatibility:release-check`, run OpenTofu and
+Before controller authorization, pass `provider:compatibility:release-check`, run OpenTofu and
 supported Terraform installation matrices, record external provider state/FQN
 evidence, and verify the exact candidate in staging and a fresh replica.
 
