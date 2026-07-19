@@ -12,6 +12,10 @@ import type {
   OpenTofuRunner,
   OpenTofuSourceSyncJob,
   OpenTofuSourceSyncResult,
+  OpenTofuStableSourceTagResolutionJob,
+  OpenTofuStableSourceTagResolutionResult,
+  OpenTofuSourceSnapshotPresentationFileJob,
+  OpenTofuSourceSnapshotPresentationFile,
   ProviderInstallationEvidence,
   ReleaseCommandRunJob,
   ReleaseCommandRunResult,
@@ -318,6 +322,46 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     });
   }
 
+  async resolveStableSourceTag(
+    job: OpenTofuStableSourceTagResolutionJob,
+  ): Promise<OpenTofuStableSourceTagResolutionResult> {
+    const result = await runRunner(
+      this.transport,
+      "stable_semver_tag",
+      job.runId,
+      { action: "stable_semver_tag", url: job.url },
+    );
+    return {
+      tag: requiredString(result, "tag"),
+      commit: requiredString(result, "commit"),
+    };
+  }
+
+  async readSourceSnapshotPresentationFile(
+    job: OpenTofuSourceSnapshotPresentationFileJob,
+  ): Promise<OpenTofuSourceSnapshotPresentationFile> {
+    await this.restoreSourceArchive(job.runId, {
+      ref: job.sourceSnapshot.archiveRef,
+      digest: job.sourceSnapshot.archiveDigest,
+    });
+    const result = await runRunner(
+      this.transport,
+      "source_snapshot_file",
+      job.runId,
+      { action: "source_snapshot_file", path: job.path },
+    );
+    const sizeBytes = result.sizeBytes;
+    if (typeof sizeBytes !== "number" || !Number.isSafeInteger(sizeBytes)) {
+      throw new Error("source_snapshot_file returned an invalid sizeBytes");
+    }
+    return {
+      path: requiredString(result, "path"),
+      text: requiredString(result, "text"),
+      digest: requiredString(result, "digest"),
+      sizeBytes,
+    };
+  }
+
   private async restoreSourceArchive(
     runId: string,
     sourceArchive: OpenTofuPlanJob["sourceArchive"],
@@ -414,6 +458,8 @@ async function runRunner(
     | "destroy"
     | "compatibility_check"
     | "source_sync"
+    | "stable_semver_tag"
+    | "source_snapshot_file"
     | "release",
   runId: string,
   request: unknown,

@@ -66,6 +66,9 @@ import {
 import type { RepositoryInstallMetadataSnapshot } from "takosumi-contract/sources";
 
 const REPOSITORY_INSTALL_METADATA_PATH = ".well-known/tcs.json";
+const SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES = 128 * 1024;
+const STABLE_TAG_DISCOVERY_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+const STABLE_TAG_DISCOVERY_MAX_CANDIDATES = 10_000;
 
 export async function ensureSourceAvailable(
   source: OpenTofuModuleSource,
@@ -102,6 +105,186 @@ export async function ensureSourceAvailable(
 
 export function isSourceSyncRequest(request: unknown): boolean {
   return stringField(request, "action") === "source_sync";
+}
+
+export function isStableSemverTagRequest(request: unknown): boolean {
+  return stringField(request, "action") === "stable_semver_tag";
+}
+
+export function isSourceSnapshotFileRequest(request: unknown): boolean {
+  return stringField(request, "action") === "source_snapshot_file";
+}
+
+/**
+ * Resolve the highest public stable SemVer Git tag without consulting a forge
+ * API or a mutable default branch. Both `vX.Y.Z` and `X.Y.Z` are accepted, but
+ * two tags that normalize to the same version are deliberately ambiguous.
+ */
+export async function runStableSemverTagResolution(
+  runId: string,
+  request: unknown,
+): Promise<JsonRecord> {
+  const url = requiredStringField(request, "url");
+  assertSourceUrlPolicy(url);
+  if (sourceUrlScheme(url) !== "https") {
+    throw new Error("stable tag resolution requires a public HTTPS Git URL");
+  }
+  await assertResolvedHostNotBlocked(sourceUrlHost(url), "source URL host");
+  const context: CommandContext = {
+    env: { ...baseCommandEnv(), GIT_TERMINAL_PROMPT: "0" },
+  };
+  const result = await runCommand(["git", "ls-remote", "--tags", "--", url], {
+    cwd: RUN_ROOT,
+    context,
+  });
+  if (result.exitCode !== 0) {
+    throw new Error("public Git tag discovery failed");
+  }
+  if (
+    new TextEncoder().encode(result.stdout).byteLength >
+    STABLE_TAG_DISCOVERY_MAX_OUTPUT_BYTES
+  ) {
+    throw new Error("public Git tag discovery output exceeds the safe limit");
+  }
+  const resolved = resolveHighestStableSemverTag(result.stdout);
+  return {
+    runId,
+    action: "stable_semver_tag",
+    status: "succeeded",
+    exitCode: 0,
+    ...resolved,
+  };
+}
+
+export interface StableSemverTagResolution {
+  readonly tag: string;
+  readonly commit: string;
+}
+
+export function resolveHighestStableSemverTag(
+  stdout: string,
+): StableSemverTagResolution {
+  const refs = new Map<string, { direct?: string; peeled?: string }>();
+  for (const line of stdout.split(/\r?\n/u)) {
+    const [rawCommit, rawRef] = line.trim().split(/\s+/u, 2);
+    if (
+      !rawCommit ||
+      !rawRef ||
+      !/^[0-9a-f]{40}$|^[0-9a-f]{64}$/iu.test(rawCommit)
+    ) {
+      continue;
+    }
+    const match =
+      /^refs\/tags\/(v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))(\^\{\})?$/u.exec(
+        rawRef,
+      );
+    if (!match) continue;
+    if (
+      refs.size >= STABLE_TAG_DISCOVERY_MAX_CANDIDATES &&
+      !refs.has(match[1]!)
+    ) {
+      throw new Error("repository has too many stable SemVer tags");
+    }
+    const tag = match[1]!;
+    const current = refs.get(tag) ?? {};
+    if (match[5]) current.peeled = rawCommit.toLowerCase();
+    else current.direct = rawCommit.toLowerCase();
+    refs.set(tag, current);
+  }
+  const candidates = [...refs.entries()].map(([tag, commits]) => {
+    const match = /^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u.exec(
+      tag,
+    )!;
+    return {
+      tag,
+      version: [
+        BigInt(match[1]!),
+        BigInt(match[2]!),
+        BigInt(match[3]!),
+      ] as const,
+      commit: commits.peeled ?? commits.direct!,
+    };
+  });
+  if (candidates.length === 0) {
+    throw new Error("repository has no stable SemVer tag");
+  }
+  const normalized = new Map<string, string[]>();
+  for (const candidate of candidates) {
+    const key = candidate.version.join(".");
+    const tags = normalized.get(key) ?? [];
+    tags.push(candidate.tag);
+    normalized.set(key, tags);
+  }
+  const ambiguous = [...normalized.entries()].find(
+    ([, tags]) => tags.length > 1,
+  );
+  if (ambiguous) {
+    throw new Error(
+      `stable SemVer is ambiguous (${ambiguous[1].sort().join(", ")})`,
+    );
+  }
+  candidates.sort((left, right) => compareSemver(right.version, left.version));
+  const highest = candidates[0]!;
+  return { tag: highest.tag, commit: highest.commit };
+}
+
+function compareSemver(
+  left: readonly [bigint, bigint, bigint],
+  right: readonly [bigint, bigint, bigint],
+): number {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index]! < right[index]!) return -1;
+    if (left[index]! > right[index]!) return 1;
+  }
+  return 0;
+}
+
+/** Read one bounded regular file from an already-restored SourceSnapshot. */
+export async function runSourceSnapshotFileRead(
+  runId: string,
+  request: unknown,
+): Promise<JsonRecord> {
+  const requestedPath = requiredStringField(request, "path");
+  const path = normalizeSourceSubtreePath(requestedPath);
+  if (path === ".") throw new Error("source snapshot file path is required");
+  const workspace = workspaceForRun(runId);
+  await assertDirectory(workspace.sourceRoot, "source root");
+  const target = resolve(workspace.sourceRoot, path);
+  await assertRealPathInsideSourceRoot(
+    target,
+    workspace.sourceRoot,
+    "source snapshot file",
+  );
+  const stat = await lstat(target);
+  if (!stat.isFile())
+    throw new Error("source snapshot path is not a regular file");
+  if (stat.size > SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES) {
+    throw new Error(
+      `source snapshot file exceeds ${SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES} bytes`,
+    );
+  }
+  const bytes = await readFile(target);
+  if (bytes.byteLength > SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES) {
+    throw new Error(
+      `source snapshot file exceeds ${SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES} bytes`,
+    );
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("source snapshot presentation file must be UTF-8 text");
+  }
+  return {
+    runId,
+    action: "source_snapshot_file",
+    status: "succeeded",
+    exitCode: 0,
+    path,
+    text,
+    digest: await digestBytes(bytes),
+    sizeBytes: bytes.byteLength,
+  };
 }
 
 export function parseSourceSyncSource(request: unknown): SourceSyncSource {

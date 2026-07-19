@@ -267,6 +267,23 @@ export async function handleWorkspaces(
     if (leaf === "projects" && segments.length === 3) {
       return await handleWorkspaceProjects(ctx, workspaceId, method);
     }
+    if (
+      leaf === "source-ref-resolutions" &&
+      segments.length === 4 &&
+      segments[3] === "stable-semver"
+    ) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      const body = await readJsonObject(request);
+      const url = body ? stringValue(body.url) : undefined;
+      if (!url || Object.keys(body!).some((key) => key !== "url")) {
+        return errorJson(
+          "invalid_request",
+          "body must contain only a non-empty url",
+          400,
+        );
+      }
+      return json(await operations.resolveStableSourceTag(url));
+    }
     if (leaf === "capsules" && segments.length === 3) {
       if (method === "GET")
         return await listWorkspaceCapsules(operations, workspaceId, url);

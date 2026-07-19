@@ -48,6 +48,8 @@ import type {
   Source as ContractSource,
   SourceBuildConfig,
   SourceSnapshot as ContractSourceSnapshot,
+  SourceSnapshotFileResponse,
+  StableSourceTagResolutionResponse,
   SpacePolicySpec as ContractSpacePolicySpec,
   TargetPoolSpec as ContractTargetPoolSpec,
   Workspace as ContractWorkspace,
@@ -1548,6 +1550,26 @@ export async function listSourceSnapshots(
     `${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots`,
     (body) => (body.snapshots as readonly SourceSnapshot[]) ?? [],
     { signal: options.signal },
+  );
+}
+
+export async function resolveStableSourceTag(
+  workspaceId: string,
+  url: string,
+): Promise<StableSourceTagResolutionResponse> {
+  return await controlFetch<StableSourceTagResolutionResponse>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/source-ref-resolutions/stable-semver`,
+    { method: "POST", body: { url } },
+  );
+}
+
+export async function readSourceSnapshotPresentationFile(
+  sourceId: string,
+  sourceSnapshotId: string,
+  path: string,
+): Promise<SourceSnapshotFileResponse> {
+  return await controlFetch<SourceSnapshotFileResponse>(
+    `${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/file?${new URLSearchParams({ path }).toString()}`,
   );
 }
 

@@ -82,6 +82,7 @@ import type {
   UsageEvent,
 } from "takosumi-contract/billing";
 import type { SourcesService } from "../sources/mod.ts";
+import { evaluateSourceUrl } from "../sources/url-policy.ts";
 import type {
   CapsuleCompatibilityReport,
   CapsuleCompatibilityReportResponse,
@@ -608,6 +609,14 @@ export interface OpenTofuRunner {
   readCapsuleSourceFiles?(
     job: OpenTofuCapsuleSourceFilesJob,
   ): Promise<readonly OpenTofuCapsuleSourceFile[]>;
+  /** Resolves only the highest stable SemVer tag + immutable commit. */
+  resolveStableSourceTag?(
+    job: OpenTofuStableSourceTagResolutionJob,
+  ): Promise<OpenTofuStableSourceTagResolutionResult>;
+  /** Reads one bounded presentation file from an immutable SourceSnapshot. */
+  readSourceSnapshotPresentationFile?(
+    job: OpenTofuSourceSnapshotPresentationFileJob,
+  ): Promise<OpenTofuSourceSnapshotPresentationFile>;
 }
 
 /**
@@ -629,6 +638,29 @@ export interface OpenTofuCapsuleSourceFilesJob {
   readonly runId: string;
   readonly sourceSnapshot: SourceSnapshot;
   readonly modulePath?: string;
+}
+
+export interface OpenTofuStableSourceTagResolutionJob {
+  readonly runId: string;
+  readonly url: string;
+}
+
+export interface OpenTofuStableSourceTagResolutionResult {
+  readonly tag: string;
+  readonly commit: string;
+}
+
+export interface OpenTofuSourceSnapshotPresentationFileJob {
+  readonly runId: string;
+  readonly sourceSnapshot: SourceSnapshot;
+  readonly path: string;
+}
+
+export interface OpenTofuSourceSnapshotPresentationFile {
+  readonly path: string;
+  readonly text: string;
+  readonly digest: string;
+  readonly sizeBytes: number;
 }
 
 /**
@@ -1816,6 +1848,62 @@ export class OpenTofuController {
     }
     const snapshot = await this.#sources.getSourceSnapshot(id);
     return await this.#sourcesService.readCapsuleSourceFiles(snapshot, options);
+  }
+
+  async resolveStableSourceTag(
+    url: string,
+  ): Promise<OpenTofuStableSourceTagResolutionResult> {
+    const policy = evaluateSourceUrl(url);
+    if (!policy.ok || policy.scheme !== "https") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "stable source tag resolution requires a public HTTPS Git URL",
+      );
+    }
+    if (!this.#runner?.resolveStableSourceTag) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "stable source tag resolution is not configured",
+      );
+    }
+    try {
+      return await this.#runner.resolveStableSourceTag({
+        runId: `source_tag_${crypto.randomUUID().replaceAll("-", "")}`,
+        url,
+      });
+    } catch (error) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        error instanceof Error
+          ? error.message
+          : "stable source tag resolution failed",
+      );
+    }
+  }
+
+  async readSourceSnapshotPresentationFile(
+    id: string,
+    path: string,
+  ): Promise<OpenTofuSourceSnapshotPresentationFile> {
+    if (!this.#runner?.readSourceSnapshotPresentationFile) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "SourceSnapshot presentation-file inspection is not configured",
+      );
+    }
+    const snapshot = await this.#sources.getSourceSnapshot(id);
+    const source = await this.#sources.getSource(snapshot.sourceId);
+    if (source.source.authConnectionId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "presentation-file inspection is limited to credential-free public Sources",
+      );
+    }
+    return await this.#runner.readSourceSnapshotPresentationFile({
+      runId: `source_file_${crypto.randomUUID().replaceAll("-", "")}`,
+      sourceSnapshot: snapshot,
+      path,
+    });
   }
 
   async createSourceCompatibilityCheck(
