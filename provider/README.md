@@ -6,8 +6,9 @@ configuration. The unpublished `1.1.4` work was cancelled.
 
 Use the maintained surfaces instead:
 
-- portable Service Form and portable Interface declarations: Takoform
-  (`registry.terraform.io/tako0614/takoform`);
+- portable Service Forms and their Resource Interface descriptors: Takoform
+  (`registry.terraform.io/tako0614/takoform`); Capsule Interface declarations
+  remain service-side InstallConfig blueprints;
 - Takosumi operator administration: the Takosumi API, CLI, or dashboard;
 - ordinary infrastructure: the provider that owns that infrastructure, run as
   a plain OpenTofu/Terraform Stack with ProviderConnection, CredentialRecipe,

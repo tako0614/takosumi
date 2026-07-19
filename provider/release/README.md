@@ -23,5 +23,6 @@ scripts, and the empty default mirror admission set. Go tests continue to keep
 the retained migration source buildable; neither check is a provider release
 or a Takosumi GA publication prerequisite.
 
-Portable Service Form and Interface authoring belongs to Takoform. Takosumi
-operator objects are managed through Takosumi API/CLI/dashboard.
+Portable Service Forms and their Resource Interface descriptors belong to
+Takoform. Capsule Interfaces use service-side InstallConfig blueprints.
+Takosumi operator objects are managed through Takosumi API/CLI/dashboard.

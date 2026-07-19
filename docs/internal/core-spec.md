@@ -296,21 +296,18 @@ Each service-side Capsule Interface blueprint has an explicit immutable `key`
 for one-shot materialization provenance. The editable Interface `name` is not a
 fallback identity, and an unkeyed blueprint is invalid.
 
-Capsule declarations converge from exactly two sources:
-`InstallConfig.interfaceBlueprints` (`capsule_blueprint`) and an optional
-portable Takoform Interface declaration admitted during the Capsule's Run
-(`capsule_resource`). `metadata.materializedFrom` is immutable and the two
-owners cannot adopt or rewrite each other's spec. If their names match, the
-module keeps spec authority and the blueprint contributes only its service-side
-binding proposals. Scoped compatibility control may separately retain
-`compatibility_profile` provenance for its canonical Resource-owned
-`http.route`; it is not a Capsule declaration source.
+New Capsule declarations come from `InstallConfig.interfaceBlueprints`
+(`capsule_blueprint`) only. Historical `capsule_resource` records remain
+readable and removable under migration custody, but are not a new module-author
+surface. Their retained Run credential is scoped to one Workspace, Capsule,
+Run, and operation; it cannot read another owner, manage bindings, or read
+Secrets. A same-name blueprint never adopts or rewrites a historical record.
 
-The module author credential is minted inside the runner boundary, signed with
-a token-family domain tag, and scoped to one Workspace, Capsule, Run, and
-operation. Apply/destroy may mutate only that Capsule's `capsule_resource`
-Interfaces. Plan/drift/refresh may read and self-report only. No Capsule run
-credential can read another owner, manage bindings, or read Secrets.
+A Takoform Form Package Interface descriptor is separate: after a Form-backed
+Resource is admitted, it materializes as Resource-owned `form_descriptor`
+provenance. Scoped compatibility control may similarly retain
+`compatibility_profile` provenance for its canonical Resource-owned
+`http.route`. Neither is a Capsule declaration source.
 
 One resolution pass pins each referenced StateVersion or Resource generation.
 Missing, null, sensitive, invalid-pointer, unavailable-generation, or cross-Workspace
@@ -906,13 +903,14 @@ whether those tokens are supported by the endpoint.
 The mixed `takosumi/takosumi` provider is discontinued. It retains frozen form,
 Interface, and TargetPool source only for supported historical state,
 migration, and rollback evidence. It is not published under a corrected version
-and gains no operator/admin types. Portable Form/Interface authoring belongs to
-Takoform; active operator administration belongs to Takosumi API/CLI/dashboard.
+and gains no operator/admin types. Portable Form authoring and Form Package
+Interface descriptors belong to Takoform; active operator administration
+belongs to Takosumi API/CLI/dashboard.
 
-The portable host integration may receive a Capsule-scoped run credential and
-uses the public Interface CRUD API without InterfaceBinding authority. The
-retained discontinued provider implementation is compatibility evidence, not
-the active declaration client.
+Portable host integration materializes a Form Package descriptor only onto the
+admitted Form-backed Resource, with no Capsule-scoped authoring credential and
+no InterfaceBinding authority. The retained discontinued provider implementation
+is compatibility evidence, not the active declaration client.
 
 The target portable form provider is independently versioned from exact Form
 Packages, exposes statically typed standard form resources, and calls only the

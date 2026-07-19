@@ -9,7 +9,7 @@
   "newVersionsAllowed": false,
   "discontinuedAt": "2026-07-19",
   "replacement": {
-    "portableFormsAndInterfaces": "registry.terraform.io/tako0614/takoform",
+    "portableFormsAndResourceInterfaceDescriptors": "registry.terraform.io/tako0614/takoform",
     "operatorAdministration": "Takosumi API/CLI/dashboard",
     "ordinaryInfrastructure": "plain OpenTofu/Terraform providers through Takosumi Stack execution"
   },

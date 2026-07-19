@@ -22,9 +22,11 @@ One-off gap:
 ```
 
 The discontinued `takosumi/takosumi` provider is not a client for new
-configuration. Use Takoform for portable Form/Interface authoring and this API,
-CLI, or dashboard for operator operations. External providers continue to run
-through plain Stack execution while Takosumi owns the canonical lifecycle.
+configuration. Use Takoform for portable Forms and Form-backed Resource
+Interface descriptors, service-side InstallConfig blueprints for Capsule
+Interfaces, and this API, CLI, or dashboard for operator operations. External
+providers continue to run through plain Stack execution while Takosumi owns the
+canonical lifecycle.
 
 ## Discovery
 

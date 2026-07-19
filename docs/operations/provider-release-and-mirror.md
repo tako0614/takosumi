@@ -27,7 +27,8 @@ TAKOSUMI_PROVIDER_QUARANTINE_ROOT=/operator/evidence/provider-1.0.0-mirror \
 This evidence is for existing-state migration and rollback only. It is not a
 Takosumi GA gate and never permits publication.
 
-For new work, use Takoform for portable Service Form/Interface declarations,
-Takosumi API/CLI/dashboard for operator administration, and ordinary providers
-through the plain Stack + ProviderConnection/CredentialRecipe/ProviderBinding
-flow for infrastructure.
+For new work, use Takoform for portable Service Forms and their Resource
+Interface descriptors, service-side InstallConfig blueprints for Capsule
+Interfaces, Takosumi API/CLI/dashboard for operator administration, and
+ordinary providers through the plain Stack +
+ProviderConnection/CredentialRecipe/ProviderBinding flow for infrastructure.

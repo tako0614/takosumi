@@ -105,9 +105,10 @@ Takosumi は作り直しません。
 ```
 
 `takosumi/takosumi` provider は廃止済みで、新規設定には使いません。既存 provider は
-Stack flow でそのまま使えます。portable Service Form / Interface は Takoform、operator
-管理は Takosumi API / CLI / dashboard を使います。旧 provider source は既存 state の
-migration / rollback custody のためだけに残ります。
+Stack flow でそのまま使えます。portable Service Form と Form-backed Resource の
+Interface descriptor は Takoform、Capsule Interface は service-side InstallConfig
+blueprint、operator 管理は Takosumi API / CLI / dashboard を使います。旧 provider
+source は既存 state の migration / rollback custody のためだけに残ります。
 
 ## Compatibility API
 

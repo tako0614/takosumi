@@ -226,10 +226,11 @@ service form or an operator/admin object:
 ```
 
 The mixed `takosumi/takosumi` provider is discontinued and retained only for
-supported historical state/migration custody. The portable typed Form and
-Interface provider is independently released by Takoform and calls the portable
-interoperability boundary. Operator administration uses Takosumi API/CLI/dashboard.
-None owns host availability, backend selection, price, Resource state, or lifecycle.
+supported historical state/migration custody. The portable typed Form provider
+is independently released by Takoform and calls the portable interoperability
+boundary. Form Package Interface descriptors materialize only on Form-backed
+Resources. Operator administration uses Takosumi API/CLI/dashboard. None owns
+host availability, backend selection, price, Resource state, or lifecycle.
 
 Before adding any `takosumi_*` resource, the design must pass a prior-art gate:
 
@@ -842,10 +843,12 @@ POST /v1/interfaces/:id/token
 The Interface record is Takosumi service-side DB state. Dashboard, Takos, or
 Store UX may propose a spec, but after acceptance the Takosumi record is
 authoritative and independent of the Store node. A repository manifest,
-well-known Output name, or Output convention is never required. A module may
-optionally carry a portable Takoform Interface declaration through the host
-integration; a plain module remains fully supported. The discontinued
-Takosumi provider is not an authoring path.
+well-known Output name, or Output convention is never required. New Capsule
+Interfaces come from service-side InstallConfig blueprints; a plain module
+remains fully supported. The discontinued Takosumi provider is not an authoring
+path. A Takoform Form Package may separately declare an Interface descriptor
+for a Form-backed Resource; that becomes Resource-owned `form_descriptor`
+provenance and is not a Capsule declaration.
 
 `visibility` is discovery policy, not authorization: runtime use still requires
 an exact `InterfaceBinding`. `policyRef` is an optional host extension point.
@@ -996,40 +999,26 @@ the legacy record is never fallback authority. After consumers read only the
 Interface API, remove the Output Sync capability, projection/grant code, old
 schemas/routes, and legacy documentation.
 
-#### Interface Declaration Sources
+#### Capsule Interface Declaration And Historical Custody
 
-Capsule-owned Interface specs materialize from exactly two sources:
+New Capsule-owned Interface specs materialize from one active source:
 
 ```text
 capsule_blueprint:
   service-side InstallConfig.interfaceBlueprints materialized once after the
   first successful apply; works for every plain module
-
-capsule_resource:
-  optional portable Takoform Interface declaration in the Capsule's OpenTofu
-  module, admitted through the public host integration during that Capsule's Run
 ```
 
-Both converge on one Interface object and the same resolution/lifecycle rules.
-`metadata.materializedFrom` is immutable and ownership is exclusive: a
-blueprint never rewrites a module-declared spec, and a module resource never
-adopts a blueprint record. A blueprint with the same name contributes only its
-service-side binding proposals, so authorization defaults compose without
-giving repository code binding authority. Separately, a scoped compatibility
-profile may retain `compatibility_profile` provenance for the canonical
-Resource-owned `http.route` it controls; that route-specific control is not a
-third Capsule declaration source.
+Historical `capsule_resource` records created through `takosumi_interface`
+remain readable, fenced, and removable for migration custody. Their short-lived
+Capsule-scoped Run credential may touch only the owning Capsule and never grants
+InterfaceBinding or Secret authority, but it is not a new module-author path.
+A same-name blueprint does not adopt or rewrite a retained historical record.
 
-The module author path uses a short-lived Capsule-scoped run credential minted
-inside the runner boundary. It may read only that Capsule's Interfaces, may
-mutate only its own `capsule_resource` records during apply/destroy, may
-self-report status, and never carries InterfaceBinding or Secret authority.
-Plan, drift, and refresh credentials are read-only. The HMAC signature includes
-a token-family domain tag, so sharing the host secret fallback with another
-token family cannot make signatures interchangeable.
-
-Neither source is inferred. The portable declaration is optional, and the
-discontinued `takosumi_interface` resource is retained only for state custody.
+Separately, a Form Package may carry an Interface descriptor. After a Form-backed
+Resource is admitted, Takosumi materializes the descriptor with Resource-owned
+`form_descriptor` provenance. A scoped compatibility profile may similarly own
+the canonical Resource `http.route` it controls. Neither is a Capsule source.
 
 #### Interface Status And Freshness
 
@@ -1137,8 +1126,8 @@ evidence live behind this API. The retired `Deployment` ledger is not restored.
 The mixed `takosumi/takosumi` provider is discontinued. Its unpublished 1.1.4
 release is cancelled; retained source and schemas exist only for legacy state
 inspection, migration, and rollback under the compatibility support policy.
-Portable Service Form and Interface authoring belongs to Takoform. Operator
-administration uses Takosumi API/CLI/dashboard. This does not restrict ordinary
+Portable Service Form authoring and Resource Interface descriptors belong to
+Takoform. Operator administration uses Takosumi API/CLI/dashboard. This does not restrict ordinary
 OpenTofu providers: plain Stack execution and ProviderConnection,
 CredentialRecipe, and ProviderBinding remain provider-neutral.
 
@@ -1166,9 +1155,10 @@ not:
   a catch-all takosumi_resource { type, spec } provider
 ```
 
-Portable host integration may use a Capsule-scoped run credential. That
-credential is fenced to the running Capsule and never authorizes bindings. The
-retained discontinued provider is not part of this active path.
+Portable form-host integration materializes Form Package descriptors only for
+the admitted Form-backed Resource. It does not receive a Capsule authoring
+credential or create Capsule-owned Interfaces. The retained discontinued
+provider is not part of this active path.
 
 When this document says a Service Form is provider-neutral, it means
 vendor-independent under portable form governance. It does not mean either

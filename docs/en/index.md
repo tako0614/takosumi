@@ -108,9 +108,10 @@ One-off gap:
 
 The `takosumi/takosumi` provider is discontinued and must not be used for new
 configuration. Existing providers run unchanged through the Stack flow. Use
-Takoform for portable Service Form/Interface declarations and Takosumi API,
-CLI, or dashboard for operator administration. Old provider source remains only
-for existing-state migration and rollback custody.
+Takoform for portable Service Forms and Form-backed Resource Interface
+descriptors, service-side InstallConfig blueprints for Capsule Interfaces, and
+Takosumi API, CLI, or dashboard for operator administration. Old provider
+source remains only for existing-state migration and rollback custody.
 
 ## Compatibility API
 

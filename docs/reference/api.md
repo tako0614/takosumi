@@ -22,8 +22,9 @@ Takosumi/operator が managed service を提供する:
   generic-env ProviderConnection と通常の OpenTofu module で扱う。
 ```
 
-廃止済み `takosumi/takosumi` provider は新規 client ではありません。portable Form /
-Interface authoring は Takoform、operator 操作はこの API / CLI / dashboard を使います。
+廃止済み `takosumi/takosumi` provider は新規 client ではありません。portable Form と
+Form-backed Resource Interface descriptor は Takoform、Capsule Interface は
+service-side InstallConfig blueprint、operator 操作はこの API / CLI / dashboard を使います。
 外部 provider は plain Stack flow でそのまま実行され、Takosumi endpoint が Resolver /
 Adapter / TargetPool / Policy と canonical lifecycle を管理します。
 

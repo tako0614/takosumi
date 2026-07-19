@@ -11,8 +11,10 @@ while the flag is off.
 The service-side InstallConfig blueprint declares the
 `mcp.server@2025-11-25` spec and explicit `endpoint` Output mapping, granting
 only the installing Principal `mcp.invoke` with `delivery.type = oauth2`. The
-module has no dependency on the discontinued `takosumi/takosumi` provider;
-portable module-author Interface declarations use Takoform host integration.
+module has no dependency on the discontinued `takosumi/takosumi` provider.
+Takoform Interface descriptors materialize from Form Packages onto Form-backed
+Resources with `form_descriptor` provenance; they are not an authoring path for
+this Capsule module.
 
 Every MCP POST introspects the invocation token against the exact route
 resource. Accounts/Core revalidates the current Interface, Ready Principal

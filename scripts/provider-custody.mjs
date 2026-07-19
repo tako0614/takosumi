@@ -99,9 +99,9 @@ export async function verifyProviderCustody() {
     "provider publication status drifted",
   );
   assert(
-    descriptor.replacement?.portableFormsAndInterfaces ===
+    descriptor.replacement?.portableFormsAndResourceInterfaceDescriptors ===
       "registry.terraform.io/tako0614/takoform",
-    "portable Form/Interface replacement must remain Takoform",
+    "portable Form/Resource Interface descriptor replacement must remain Takoform",
   );
 
   assert(

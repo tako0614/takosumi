@@ -8,8 +8,9 @@ OAuth2 InterfaceBinding cannot become Ready for it.
 Takosumi's service-side InstallConfig blueprint materializes the `mcp.server`
 Interface and contributes the installing Principal's `mcp.invoke` / `oauth2`
 binding proposal. This module deliberately has no dependency on the
-discontinued `takosumi/takosumi` provider. Portable module-author Interface
-declarations use Takoform's host integration.
+discontinued `takosumi/takosumi` provider. Takoform Interface descriptors
+materialize from Form Packages onto Form-backed Resources; they are not a
+Capsule module-author path.
 
 The adapter's tool catalog is versioned with `/mcp/operator-control/v1` and is
 owned by this Takosumi adapter. Takos discovers it with MCP `tools/list`; Takos
