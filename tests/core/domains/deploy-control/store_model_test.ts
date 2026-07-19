@@ -8,7 +8,7 @@ import type {
 import type { Dependency } from "takosumi-contract/dependencies";
 import type { Output, OutputShare } from "takosumi-contract/outputs";
 import type { Project } from "takosumi-contract/projects";
-import type { Workspace } from "takosumi-contract/workspaces";
+import type { Workspace, WorkspaceMember } from "takosumi-contract/workspaces";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import {
   CapsuleStateVersionGuardConflict,
@@ -50,6 +50,22 @@ function workspace(overrides: Partial<Workspace> = {}): Workspace {
     displayName: "Workspace A",
     type: "personal",
     ownerUserId: "user_a",
+    createdAt: TS,
+    updatedAt: TS,
+    ...overrides,
+  };
+}
+
+function workspaceMember(
+  workspaceId: string,
+  overrides: Partial<WorkspaceMember> = {},
+): WorkspaceMember {
+  return {
+    id: `member_${workspaceId}`,
+    workspaceId,
+    accountId: "account_many",
+    roles: ["owner"],
+    status: "active",
     createdAt: TS,
     updatedAt: TS,
     ...overrides,
@@ -266,6 +282,112 @@ test("D1 Workspace id lookup chunks large membership sets without changing order
     (await store.listWorkspacesByIds(requestedIds)).map((item) => item.id),
   ).toEqual([...seeded.map((item) => item.id).reverse(), seeded[0]!.id]);
 });
+
+test("account Workspace pages push active/archive/order/limit/cursor into every store", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = Array.from({ length: 177 }, (_, index) => {
+      const sequence = String(index).padStart(3, "0");
+      const timestamp = new Date(
+        Date.UTC(2026, 5, 20, 0, index, 0),
+      ).toISOString();
+      return workspace({
+        id: `workspace_many_${sequence}`,
+        handle: `workspace-many-${sequence}`,
+        displayName: `Workspace Many ${sequence}`,
+        ownerUserId: "account_many",
+        ...(index < 169 ? { archivedAt: timestamp } : {}),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+    });
+    for (const item of seeded) {
+      await store.putWorkspace(item);
+      await store.putWorkspaceMember(
+        workspaceMember(item.id, {
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        }),
+      );
+    }
+
+    const suspended = workspace({
+      id: "workspace_many_suspended",
+      handle: "workspace-many-suspended",
+      ownerUserId: "account_many",
+      createdAt: "2026-07-20T00:00:00.000Z",
+      updatedAt: "2026-07-20T00:00:00.000Z",
+    });
+    await store.putWorkspace(suspended);
+    await store.putWorkspaceMember(
+      workspaceMember(suspended.id, { status: "suspended" }),
+    );
+    const other = workspace({
+      id: "workspace_other_account",
+      handle: "workspace-other-account",
+      ownerUserId: "account_other",
+      createdAt: "2026-07-21T00:00:00.000Z",
+      updatedAt: "2026-07-21T00:00:00.000Z",
+    });
+    await store.putWorkspace(other);
+    await store.putWorkspaceMember(
+      workspaceMember(other.id, {
+        accountId: "account_other",
+        createdAt: other.createdAt,
+        updatedAt: other.updatedAt,
+      }),
+    );
+
+    const activeFirst = await store.listWorkspacesForAccountPage(
+      "account_many",
+      { includeArchived: false, order: "updated_desc", limit: 3 },
+    );
+    expect(activeFirst.total, label).toBe(8);
+    expect(
+      activeFirst.items.map((item) => item.id),
+      label,
+    ).toEqual([
+      "workspace_many_176",
+      "workspace_many_175",
+      "workspace_many_174",
+    ]);
+    expect(activeFirst.nextCursor, label).toBeDefined();
+    const activeSecond = await store.listWorkspacesForAccountPage(
+      "account_many",
+      {
+        includeArchived: false,
+        order: "updated_desc",
+        limit: 3,
+        cursor: activeFirst.nextCursor,
+      },
+    );
+    expect(
+      activeSecond.items.map((item) => item.id),
+      label,
+    ).toEqual([
+      "workspace_many_173",
+      "workspace_many_172",
+      "workspace_many_171",
+    ]);
+
+    const allIds: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await store.listWorkspacesForAccountPage("account_many", {
+        includeArchived: true,
+        order: "created_asc",
+        limit: 500,
+        ...(cursor ? { cursor } : {}),
+      });
+      expect(page.total, label).toBe(177);
+      allIds.push(...page.items.map((item) => item.id));
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    expect(allIds, label).toEqual(seeded.map((item) => item.id));
+    expect(new Set(allIds).size, label).toBe(177);
+    expect(allIds, label).not.toContain(suspended.id);
+    expect(allIds, label).not.toContain(other.id);
+  }
+}, 60_000);
 
 test("Capsule store is keyed by Project, name, and environment", async () => {
   for (const [label, store] of await stores()) {

@@ -34,7 +34,12 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
-import type { Workspace, WorkspaceMember } from "takosumi-contract/workspaces";
+import type {
+  AccountWorkspaceListParams,
+  AccountWorkspacePage,
+  Workspace,
+  WorkspaceMember,
+} from "takosumi-contract/workspaces";
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type {
@@ -53,8 +58,11 @@ import {
   type ActivityEvent,
 } from "takosumi-contract/activity";
 import {
+  clampPageLimit,
+  decodeCursor,
   type Page,
   type PageParams,
+  pageFromProbeBy,
   pageSorted,
   pageSortedBy,
   pageSortedDesc,
@@ -687,6 +695,15 @@ export interface OpenTofuControlStore {
   listWorkspaceMembersByAccount(
     accountId: string,
   ): Promise<readonly WorkspaceMember[]>;
+  /**
+   * Pages Workspaces through the canonical active WorkspaceMember ledger.
+   * Filtering, ordering, and the page bound belong in the durable store so an
+   * account with many archived Workspaces never becomes a caller-sized `IN`.
+   */
+  listWorkspacesForAccountPage(
+    accountId: string,
+    params: AccountWorkspaceListParams,
+  ): Promise<AccountWorkspacePage>;
 
   // Workspace-owned Project records. Capsules reference one Project id.
   putProject(project: Project): Promise<Project>;
@@ -1419,6 +1436,46 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         ),
     );
+  }
+
+  listWorkspacesForAccountPage(
+    accountId: string,
+    params: AccountWorkspaceListParams,
+  ): Promise<AccountWorkspacePage> {
+    const includeArchived = params.includeArchived === true;
+    const order = params.order ?? "created_asc";
+    const workspaceIds = new Set(
+      Array.from(this.#workspaceMembers.values())
+        .filter(
+          (member) =>
+            member.accountId === accountId && member.status === "active",
+        )
+        .map((member) => member.workspaceId),
+    );
+    const all = Array.from(this.#workspaces.values()).filter(
+      (workspace) =>
+        workspaceIds.has(workspace.id) &&
+        (includeArchived || !isArchivedWorkspace(workspace)),
+    );
+    all.sort(
+      order === "updated_desc"
+        ? compareWorkspaceUpdatedDesc
+        : compareWorkspaceCreatedAsc,
+    );
+
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const afterCursor = cursor
+      ? all.filter((workspace) =>
+          workspaceAfterAccountCursor(workspace, order, cursor),
+        )
+      : all;
+    const page = pageFromProbeBy(
+      afterCursor.slice(0, limit + 1),
+      limit,
+      (workspace) => accountWorkspaceKeyset(workspace, order),
+    );
+    return Promise.resolve({ ...page, total: all.length });
   }
 
   putProject(project: Project): Promise<Project> {
@@ -2909,6 +2966,49 @@ function normalizeUsageEvent(event: UsageEvent): UsageEvent {
 
 function workspaceMemberKey(workspaceId: string, accountId: string): string {
   return `${workspaceId}\u0000${accountId}`;
+}
+
+function isArchivedWorkspace(workspace: Workspace): boolean {
+  return (
+    typeof workspace.archivedAt === "string" && workspace.archivedAt.length > 0
+  );
+}
+
+function compareWorkspaceCreatedAsc(a: Workspace, b: Workspace): number {
+  return a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+}
+
+function compareWorkspaceUpdatedDesc(a: Workspace, b: Workspace): number {
+  return b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id);
+}
+
+function accountWorkspaceKeyset(
+  workspace: Workspace,
+  order: AccountWorkspaceListParams["order"],
+): { readonly createdAt: string; readonly id: string } {
+  return {
+    createdAt:
+      order === "updated_desc" ? workspace.updatedAt : workspace.createdAt,
+    id: workspace.id,
+  };
+}
+
+function workspaceAfterAccountCursor(
+  workspace: Workspace,
+  order: AccountWorkspaceListParams["order"],
+  cursor: { readonly createdAt: string; readonly id: string },
+): boolean {
+  const keyset = accountWorkspaceKeyset(workspace, order);
+  if (order === "updated_desc") {
+    return (
+      keyset.createdAt < cursor.createdAt ||
+      (keyset.createdAt === cursor.createdAt && keyset.id > cursor.id)
+    );
+  }
+  return (
+    keyset.createdAt > cursor.createdAt ||
+    (keyset.createdAt === cursor.createdAt && keyset.id > cursor.id)
+  );
 }
 
 function maybeWarnInMemoryStore(storeName: string): void {
