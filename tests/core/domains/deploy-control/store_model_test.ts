@@ -933,6 +933,27 @@ test("Space store: put/get/get-by-handle/list are symmetric", async () => {
   }
 });
 
+test("D1 Space id lookup chunks large membership sets without changing order", async () => {
+  const store = new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1());
+  const seeded = Array.from({ length: 205 }, (_, index) =>
+    space({
+      id: `space_chunk_${String(index).padStart(3, "0")}`,
+      handle: `space-chunk-${String(index).padStart(3, "0")}`,
+      displayName: `Space Chunk ${index}`,
+    }),
+  );
+  for (const item of seeded) await store.putSpace(item);
+
+  const requestedIds = [
+    ...seeded.map((item) => item.id).reverse(),
+    seeded[0]!.id,
+    "space_missing",
+  ];
+  expect(
+    (await store.listSpacesByIds(requestedIds)).map((item) => item.id),
+  ).toEqual([...seeded.map((item) => item.id).reverse(), seeded[0]!.id]);
+});
+
 test("InstallConfig store: put/get/list-by-space + built-in shared configs", async () => {
   for (const [label, store] of await forEachStore()) {
     // Space-authored config + a built-in shared config (no spaceId).

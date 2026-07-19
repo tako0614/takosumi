@@ -162,6 +162,11 @@ const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
 const RUN_KIND_BACKUP = "backup" as const;
 const RUN_KIND_RESTORE = "restore" as const;
 
+// D1 rejects statements with more than 100 bound parameters. Leave headroom
+// for future predicates instead of allowing a large Workspace membership set
+// to turn the dashboard list route into a production 500.
+const D1_IN_QUERY_ID_CHUNK_SIZE = 90;
+
 function d1RunCreatedAtMillisOrder(): SQL {
   return sql`
     CASE
@@ -599,11 +604,26 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
 
   async listSpacesByIds(ids: readonly string[]): Promise<readonly Space[]> {
     if (ids.length === 0) return [];
-    const rows = await this.#drizzleManyJson<Space>(
-      schema.spaces,
-      schema.spaces.recordJson,
-      { where: inArray(schema.spaces.id, [...new Set(ids)]) },
-    );
+    const uniqueIds = [...new Set(ids)];
+    const rows: Space[] = [];
+    for (
+      let offset = 0;
+      offset < uniqueIds.length;
+      offset += D1_IN_QUERY_ID_CHUNK_SIZE
+    ) {
+      rows.push(
+        ...(await this.#drizzleManyJson<Space>(
+          schema.spaces,
+          schema.spaces.recordJson,
+          {
+            where: inArray(
+              schema.spaces.id,
+              uniqueIds.slice(offset, offset + D1_IN_QUERY_ID_CHUNK_SIZE),
+            ),
+          },
+        )),
+      );
+    }
     const byId = new Map(rows.map((row) => [row.id, row] as const));
     return ids
       .map((id) => byId.get(id))
