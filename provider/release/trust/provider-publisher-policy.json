@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "kind": "takosumi.provider-release-sigstore-policy@v1",
+  "bundleMediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+  "oidcIssuer": "https://token.actions.githubusercontent.com",
+  "sourceRepository": "tako0614/takosumi",
+  "workflow": ".github/workflows/provider-release.yml",
+  "refPattern": "refs/tags/provider/v*",
+  "trustedRoot": {
+    "path": "sigstore-trusted-root.json",
+    "sha256": "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66"
+  }
+}

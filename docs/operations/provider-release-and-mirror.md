@@ -153,14 +153,17 @@ independent external blockers below.
 
 ## Build a corrected candidate
 
-The current corrected version is `1.1.0` and remains unpublished. After the
-release change is committed, create the exact clean provider tag according to
-the release approval process. A production build accepts only an annotated tag
+The current corrected version is `1.1.0` and remains unpublished. The commands
+below are a local, non-publishing diagnostic for the exact builder. Production
+candidate authority comes only from the `candidate` phase of
+`.github/workflows/provider-release.yml` on the signed tag. After the release
+change is committed, create the exact clean provider tag according to the
+release approval process. A production build accepts only an annotated tag
 whose signature matches the reviewed admin-provider-only fingerprint in
 `version.json`. Public verification material is committed under
 `provider/release/keys/`; the private key and passphrase remain separately
 operator-custodied outside every repository and are not shared with Takoform.
-The output path must not exist and must be outside the repository:
+The diagnostic output path must not exist and must be outside the repository:
 
 ```bash
 commit=$(git rev-parse 'refs/tags/provider/v1.1.0^{commit}')
@@ -224,13 +227,42 @@ not sign, upload, mutate a registry, or publish anything, and still reports
 `publicationReady: false` until the external signature/transparency approval
 is represented by the approved registry workflow.
 
-Publishing, signing, transparency-log submission, registry creation, and
-production mirror activation are separate reviewed external operations. The
-builder performs none of them. Before approval, verify signature/provenance,
-pass `provider:compatibility:release-check`, run OpenTofu and supported
-Terraform installation matrices, record external provider state/FQNs, and
-confirm that the final aggregate network-mirror index contains both historical
-and new immutable versions.
+## Sealed GitHub release promotion
+
+Raw `gh release create`, tag-triggered publication, local artifact signing, and
+rerunning a failed promotion are not release authority. The ecosystem root
+registers `takosumi-provider` with one fixed release-safety adapter. Use the
+root `release:safety:*` commands and an operator-private `0700` evidence
+directory; the adapter alone dispatches the workflow's `promote` phase after
+the same ordered candidate bytes pass long-lived staging, a fresh
+production-equivalent install/upgrade replica, and the independent
+`provider-release` protected-environment review.
+
+The workflow has two fail-closed phases:
+
+1. `candidate` runs on the exact pushed `provider/v<version>` tag. It verifies
+   the pinned OpenPGP tag signer and hermetic toolchain, runs Takosumi/provider
+   quality gates, builds twice, verifies the complete bundle, and uploads one
+   flat Actions artifact named
+   `takosumi-provider-release-candidate-<version>-<source-sha-prefix-12>`.
+2. `promote` accepts only the release-safety controller's sealed digests. It
+   downloads that exact candidate by run id, rebuilds nothing, refuses any
+   existing release, keyless-signs `release-manifest.json`, verifies the
+   Sigstore bundle against the digest-pinned TrustedRoot plus exact GitHub OIDC
+   issuer/repository/workflow/tag/source-SHA/`workflow_dispatch` claims, writes
+   `provider-release-approval.json`, and publishes a new GitHub release only
+   after exact draft inventory and digest readback. The final
+   `release-safety-readback.json` is retained as a unique release asset and is
+   independently checked by the root adapter.
+
+A failed or partially created provider release is never deleted, overwritten,
+or resumed with changed bytes. Stop and prepare a new version. GitHub release
+publication does not itself admit the version to Takosumi's hosted provider
+mirror or either external Terraform/OpenTofu registry: mirror registry
+admission and a platform artifact promotion remain separate reviewed steps.
+Before approval, pass `provider:compatibility:release-check`, run OpenTofu and
+supported Terraform installation matrices, record external provider state/FQN
+evidence, and verify the exact candidate in staging and a fresh replica.
 
 ## Incident response
 
