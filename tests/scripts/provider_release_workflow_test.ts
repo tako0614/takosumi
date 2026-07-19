@@ -42,6 +42,9 @@ describe("provider release workflow authority", () => {
       new URL("../../.github/workflows/provider-release.yml", import.meta.url),
     ).text();
     const workflow = parse(source) as Record<string, any>;
+    const releaseDescriptor = (await Bun.file(
+      new URL("../../provider/release/version.json", import.meta.url),
+    ).json()) as Record<string, any>;
 
     const dispatchInputs = Object.keys(workflow.on.workflow_dispatch.inputs);
     expect(dispatchInputs.length).toBeLessThanOrEqual(25);
@@ -77,6 +80,12 @@ describe("provider release workflow authority", () => {
     expect(workflow.jobs.promote["runs-on"]).toBe("ubuntu-26.04");
     expect(workflow.env.BUN_VERSION).toBe("1.3.14");
     expect(workflow.env.GO_VERSION).toBe("1.26.5");
+    expect(releaseDescriptor.toolchain.go.version).toBe(
+      `go${workflow.env.GO_VERSION}`,
+    );
+    expect(releaseDescriptor.toolchain.go.distributionRoot).toBe(
+      `/usr/lib/go-${workflow.env.GO_VERSION}`,
+    );
     expect(workflow.env.COSIGN_VERSION).toBe("v3.0.6");
     expect(workflow.env.COSIGN_LINUX_AMD64_SHA256).toBe(
       "c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74",
@@ -106,6 +115,14 @@ describe("provider release workflow authority", () => {
     expect(source).toContain("provider-release-approval.json");
     expect(source).toContain("release-manifest.sigstore.json");
     expect(source).toContain("release-safety-readback.json");
+    expect(
+      source.match(
+        /golang\.org\/toolchain@v0\.0\.1-\$\{descriptor_go_version\}\.linux-amd64/gu,
+      ),
+    ).toHaveLength(2);
+    expect(source.match(/go mod download -json/gu)).toHaveLength(2);
+    expect(source.match(/value\.Path.*value\.Version/gu)).toHaveLength(2);
+    expect(source).not.toContain('source_root="$(go env GOROOT)"');
     expect(source).toContain("'$value | @uri'");
     expect(source).not.toContain("/releases/tags/${RELEASE_TAG}");
     expect(source).not.toContain("--clobber");

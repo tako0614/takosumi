@@ -129,13 +129,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_root="$(go env GOROOT)"
-          target_root="/usr/lib/go-${GO_VERSION}"
-          if [[ "$(realpath "${source_root}")" != "${target_root}" ]]; then
-            sudo rm -rf "${target_root}"
-            sudo mkdir -p "${target_root}"
-            sudo cp -a "${source_root}/." "${target_root}/"
+          descriptor_go_version="$(bun -e 'console.log((await Bun.file("provider/release/version.json").json()).toolchain.go.version)')"
+          target_root="$(bun -e 'console.log((await Bun.file("provider/release/version.json").json()).toolchain.go.distributionRoot)')"
+          if [[ "${descriptor_go_version}" != "go${GO_VERSION}" || "${target_root}" != "/usr/lib/go-${GO_VERSION}" ]]; then
+            echo "Provider descriptor and workflow Go pins differ." >&2
+            exit 1
           fi
+          toolchain_module="golang.org/toolchain@v0.0.1-${descriptor_go_version}.linux-amd64"
+          source_root="$(
+            cd provider
+            go mod download -json "${toolchain_module}" |
+              TOOLCHAIN_MODULE="${toolchain_module}" bun -e '
+                const value = JSON.parse(await Bun.stdin.text());
+                if (`${value.Path}@${value.Version}` !== process.env.TOOLCHAIN_MODULE || value.Error || !value.Dir) process.exit(1);
+                console.log(value.Dir);
+              '
+          )"
+          source_root="$(realpath "${source_root}")"
+          sudo rm -rf "${target_root}"
+          sudo mkdir -p "${target_root}"
+          sudo cp -a "${source_root}/." "${target_root}/"
           "${target_root}/bin/go" version
 
       - name: Install locked dependencies
@@ -269,13 +282,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_root="$(go env GOROOT)"
-          target_root="/usr/lib/go-${GO_VERSION}"
-          if [[ "$(realpath "${source_root}")" != "${target_root}" ]]; then
-            sudo rm -rf "${target_root}"
-            sudo mkdir -p "${target_root}"
-            sudo cp -a "${source_root}/." "${target_root}/"
+          descriptor_go_version="$(bun -e 'console.log((await Bun.file("provider/release/version.json").json()).toolchain.go.version)')"
+          target_root="$(bun -e 'console.log((await Bun.file("provider/release/version.json").json()).toolchain.go.distributionRoot)')"
+          if [[ "${descriptor_go_version}" != "go${GO_VERSION}" || "${target_root}" != "/usr/lib/go-${GO_VERSION}" ]]; then
+            echo "Provider descriptor and workflow Go pins differ." >&2
+            exit 1
           fi
+          toolchain_module="golang.org/toolchain@v0.0.1-${descriptor_go_version}.linux-amd64"
+          source_root="$(
+            cd provider
+            go mod download -json "${toolchain_module}" |
+              TOOLCHAIN_MODULE="${toolchain_module}" bun -e '
+                const value = JSON.parse(await Bun.stdin.text());
+                if (`${value.Path}@${value.Version}` !== process.env.TOOLCHAIN_MODULE || value.Error || !value.Dir) process.exit(1);
+                console.log(value.Dir);
+              '
+          )"
+          source_root="$(realpath "${source_root}")"
+          sudo rm -rf "${target_root}"
+          sudo mkdir -p "${target_root}"
+          sudo cp -a "${source_root}/." "${target_root}/"
           "${target_root}/bin/go" version
 
       - name: Install locked dependencies
