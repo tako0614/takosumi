@@ -342,7 +342,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: "release-manifest.json",
         bundlePath: "/tmp/release-manifest.sigstore.json",
-        expectedTag: "provider/v1.1.3",
+        expectedTag: "provider/v1.1.4",
       }),
     ).rejects.toThrow("authority path must be absolute");
   });
@@ -357,7 +357,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: fixture.subjectPath,
         bundlePath: fixture.bundlePath,
-        expectedTag: "provider/v1.1.3",
+        expectedTag: "provider/v1.1.4",
         policyPath: fixture.policyPath,
       }),
     ).rejects.toThrow("provider publisher policy sidecar mismatch");
@@ -373,7 +373,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseSignature({
         subjectPath: fixture.subjectPath,
         bundlePath: fixture.bundlePath,
-        expectedTag: "provider/v1.1.3",
+        expectedTag: "provider/v1.1.4",
         policyPath: fixture.policyPath,
       }),
     ).rejects.toThrow("provider Sigstore TrustedRoot sidecar mismatch");
@@ -399,7 +399,7 @@ describe("provider signature approval authority", () => {
       verifyProviderReleaseTag({
         repoRoot: new URL("../../", import.meta.url).pathname,
         sourceCommit: "not-a-commit",
-        tag: "provider/v1.1.3",
+        tag: "provider/v1.1.4",
       }),
     ).rejects.toThrow("exact source commit");
   });
@@ -440,8 +440,8 @@ async function candidateFixture(options: {
     surfaceId: "takosumi-provider",
     repository: "https://github.com/tako0614/takosumi.git",
     sourceCommit: "1".repeat(40),
-    version: "1.1.3",
-    tag: "provider/v1.1.3",
+    version: "1.1.4",
+    tag: "provider/v1.1.4",
     workflowRunId: "123",
     builtAt: "2026-07-19T00:00:00.000Z",
     ociImages: [],
