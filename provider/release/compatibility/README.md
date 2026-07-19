@@ -16,6 +16,14 @@ provider credentials, runtime values, or release signing material.
   so the feature-bearing `1.0.1` patch lane is rejected. They remain together
   only in the unpublished `1.1.0` minor candidate. Publication stays blocked by
   the independent compatibility and external release gates.
+- `service-form-removal-policy.json` keeps the Resource Shape/API/provider/state
+  aliases supported through v1 and announces a non-retroactive minimum 365-day
+  window before any v2+ removal can become eligible. A current 90-day external
+  zero-legacy-usage observation remains required.
+- `service-form-migration-fixture-authority.json` pins the independent Takoform
+  `v0.1.0-rc.3` structural remove/import/no-op/rollback fixtures by exact commit
+  and digest. Takosumi consumes that migration authority without copying the
+  portable provider's state fixtures into this repository.
 
 `bun run provider:compatibility:check` builds the current candidate outside the
 repository, asks OpenTofu for its machine schema, removes only the declared
@@ -67,3 +75,11 @@ validates the evidence sidecar and exact bindings before clearing only the
 Terraform/address compatibility blocker. Provider signing, transparency,
 immutable public-path verification, and publication remain external release
 gates.
+
+`bun run service-form:compat-removal:check` validates the repository policy and
+fixture authority while deliberately reporting removal ineligible. The
+operator-only `service-form:compat-removal:eligible` command additionally
+requires complete authorized-state inventories, elapsed support/usage windows,
+the current Takosumi provider proof, complete Takoform live migration phases,
+and a digest-only rollback artifact/restore-drill manifest. See
+[`docs/operations/service-form-compatibility-inventory.md`](../../../docs/operations/service-form-compatibility-inventory.md).
