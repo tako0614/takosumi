@@ -163,9 +163,21 @@ const RUN_KIND_BACKUP = "backup" as const;
 const RUN_KIND_RESTORE = "restore" as const;
 
 // D1 rejects statements with more than 100 bound parameters. Leave headroom
-// for future predicates instead of allowing a large Workspace membership set
-// to turn the dashboard list route into a production 500.
-const D1_IN_QUERY_ID_CHUNK_SIZE = 90;
+// for future predicates instead of allowing a caller/data-sized `IN (...)`
+// list to turn an otherwise valid route into a production 500.
+const D1_IN_QUERY_VALUE_CHUNK_SIZE = 90;
+
+function d1InQueryChunks<T>(values: readonly T[]): readonly (readonly T[])[] {
+  const chunks: T[][] = [];
+  for (
+    let offset = 0;
+    offset < values.length;
+    offset += D1_IN_QUERY_VALUE_CHUNK_SIZE
+  ) {
+    chunks.push(values.slice(offset, offset + D1_IN_QUERY_VALUE_CHUNK_SIZE));
+  }
+  return chunks;
+}
 
 function compatibilityReportSourceId(value: string | null | undefined): string {
   if (!value?.trim()) {
@@ -894,20 +906,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (ids.length === 0) return [];
     const uniqueIds = [...new Set(ids)];
     const rows: Workspace[] = [];
-    for (
-      let offset = 0;
-      offset < uniqueIds.length;
-      offset += D1_IN_QUERY_ID_CHUNK_SIZE
-    ) {
+    for (const idChunk of d1InQueryChunks(uniqueIds)) {
       rows.push(
         ...(await this.#drizzleManyJson<Workspace>(
           schema.workspaces,
           schema.workspaces.recordJson,
           {
-            where: inArray(
-              schema.workspaces.id,
-              uniqueIds.slice(offset, offset + D1_IN_QUERY_ID_CHUNK_SIZE),
-            ),
+            where: inArray(schema.workspaces.id, [...idChunk]),
           },
         )),
       );
@@ -1925,19 +1930,28 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     sourceIds: readonly string[],
   ): Promise<readonly SourceSnapshot[]> {
     if (sourceIds.length === 0) return [];
-    return (
-      await this.#drizzleManyJson<SourceSnapshot>(
-        schema.sourceSnapshots,
-        schema.sourceSnapshots.recordJson,
-        {
-          where: inArray(schema.sourceSnapshots.sourceId, [...sourceIds]),
-          orderBy: [
-            asc(schema.sourceSnapshots.fetchedAt),
-            asc(schema.sourceSnapshots.id),
-          ],
-        },
-      )
-    ).map(normalizeSourceSnapshotRecord);
+    const rows: SourceSnapshot[] = [];
+    for (const sourceIdChunk of d1InQueryChunks([...new Set(sourceIds)])) {
+      rows.push(
+        ...(await this.#drizzleManyJson<SourceSnapshot>(
+          schema.sourceSnapshots,
+          schema.sourceSnapshots.recordJson,
+          {
+            where: inArray(schema.sourceSnapshots.sourceId, [...sourceIdChunk]),
+            orderBy: [
+              asc(schema.sourceSnapshots.fetchedAt),
+              asc(schema.sourceSnapshots.id),
+            ],
+          },
+        )),
+      );
+    }
+    return rows
+      .map(normalizeSourceSnapshotRecord)
+      .sort(
+        (a, b) =>
+          a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id),
+      );
   }
 
   async listSourceSnapshotsPage(
