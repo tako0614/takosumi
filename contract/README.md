@@ -69,7 +69,7 @@ CredentialRecipe, ProviderBinding, and per-run env/file injection. It must not
 define complete provider-compatible cloud APIs or official managed capacity as
 OSS product concepts. Compatibility API profiles are scoped capabilities such as
 `compat.s3.v1`, `compat.oci.v1`, `compat.cloudevents.v1`, and
-`compat.cloudflare.workers.v1`; official managed target pools, billing
+`compat.kubernetes.crd.v1`; official managed target pools, billing
 enforcement, quota, usage rating, support, and resource backends belong to
 Takosumi for Operator / Takosumi Cloud composition.
 

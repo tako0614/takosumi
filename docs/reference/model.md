@@ -340,11 +340,10 @@ compat.s3.v1
 compat.oci.v1
 compat.cloudevents.v1
 compat.kubernetes.crd.v1
-compat.cloudflare.workers.v1
 ```
 
 これらは、Takosumi が backend、import path、managed-target の制御を提供する
-場合に、狭い範囲の標準 facade を維持します。AWS 完全互換、Cloudflare API 完全互換、
+場合に、狭い範囲の標準 facade を維持します。provider API 全体の互換や
 内部の provider 固有モデルを名乗るものではなく、既存 provider ですでに動く標準を
 作り直す理由にもなりません。
 

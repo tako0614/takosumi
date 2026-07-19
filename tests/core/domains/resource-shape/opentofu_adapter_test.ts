@@ -64,7 +64,7 @@ const cloudflareTarget: TargetPoolEntry = {
 };
 
 const providerCompatBaseUrl =
-  "https://app.takosumi.com/compat/cloudflare/client/v4";
+  "https://operator.example.test/compat/example/v1";
 
 const edgeDescriptor: TargetImplementationDescriptor = {
   shape: "EdgeWorker",

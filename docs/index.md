@@ -113,9 +113,9 @@ typed Service Form client の authority は、state migration 後に独立 provi
 
 Compatibility API は OSS Takosumi の framework と capability surface です。
 `compat.s3.v1`、`compat.oci.v1`、`compat.cloudevents.v1`、
-`compat.cloudflare.workers.v1` のように scope と version を明示します。
+`compat.kubernetes.crd.v1` のように scope と version を明示します。
 
-これらは full AWS API compatibility や full Cloudflare API compatibility ではありません。
+これらは provider API 全体の compatibility を意味しません。
 普通の S3/R2/GCS、registry、queue、database 利用で既存 provider や標準 endpoint が
 足りる場合は、それを使います。
 

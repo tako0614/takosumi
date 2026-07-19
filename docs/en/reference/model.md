@@ -363,12 +363,11 @@ compat.s3.v1
 compat.oci.v1
 compat.cloudevents.v1
 compat.kubernetes.crd.v1
-compat.cloudflare.workers.v1
 ```
 
 They preserve narrow standard facades when Takosumi provides the backend,
-import path, or managed-target control. They are not a claim of full AWS
-compatibility, full Cloudflare API compatibility, an internal provider-specific
+import path, or managed-target control. They are not a claim of complete
+provider API compatibility, an internal provider-specific
 model, or a reason to recreate standards that already work through existing
 providers.
 

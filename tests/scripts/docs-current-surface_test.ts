@@ -168,7 +168,7 @@ test("hosted Cloud docs keep current usage identity provider neutral", async () 
     const doc = await readText(new URL(path, ROOT));
     assert.match(doc, /`takosumi\.edge_worker`/);
     assert.match(doc, /`takosumi:edge_worker:\*`/);
-    assert.match(doc, /`takosumi\.entrypoint=compat\.cloudflare\.workers\.v1`/);
+    assert.doesNotMatch(doc, /takosumi\.entrypoint=/);
     assert.match(doc, /historical|過去/);
   }
 });
@@ -180,14 +180,15 @@ test("hosted Cloud docs keep the all-or-nothing GA contract Pre-GA before eviden
   const endpoints = await readText(new URL("app-docs/en/endpoints.md", ROOT));
 
   assert.match(index, /one Stable contract/);
-  assert.match(index, /Takosumi Cloud stays Pre-GA until every item passes/);
-  assert.match(pricing, /unpriced meter, inactive catalog, missing manager/);
-  assert.match(resources, /GA contract \| EdgeWorker modules/);
+  assert.match(index, /Takosumi\s+Cloud stays Pre-GA until every item passes/);
+  assert.match(index, /seven\s+Stable service forms \(eight offerings\)/);
   assert.match(
-    resources,
-    /Pre-GA\s+\| public GA stays closed until every item passes/,
+    index,
+    /Vector Index, Durable Workflow, Container, Stateful Actor Namespace, and Schedule/,
   );
-  assert.match(endpoints, /The whole set remains Pre-GA/);
+  assert.match(pricing, /unpriced meter, inactive catalog, missing manager/);
+  assert.match(resources, /public Resource identity remains `EdgeWorker`/);
+  assert.match(endpoints, /seven service forms \(eight offerings\)/);
   for (const doc of [index, resources, endpoints]) {
     assert.doesNotMatch(doc, /\|\s*Stable\s*\|/);
   }

@@ -210,7 +210,7 @@ standard surface exists:
   A Takosumi-managed service may still have its own provider-neutral shape and
   use the standard as a control-plane translation or data-plane protocol.
   Examples: S3-compatible object storage, OCI registry, Kubernetes CRD,
-  CloudEvents, OpenAI-compatible API, scoped Cloudflare Workers-compatible API.
+  CloudEvents, and an OpenAI-compatible API.
 
 standard surface does not exist, but the need is one-off:
   use a declared-env-capable ProviderConnection and a normal OpenTofu
@@ -1238,8 +1238,7 @@ Compatibility APIs use real standards where they are intentionally exposed:
 S3-compatible APIs for object storage data-plane, OCI registry APIs for
 artifacts/images, CloudEvents for event ingress, Kubernetes CRDs for
 Kubernetes northbound integration, OpenAI-compatible endpoints for AI gateway
-access, and a scoped Cloudflare Workers-compatible subset for Worker import /
-deploy. A control-plane compatibility handler translates the request into a
+access. A control-plane compatibility handler translates the request into a
 typed Resource request and calls the Deploy API. It never writes lifecycle
 state, selects a manager, or maintains a compatibility-owned registry. A
 data-plane handler resolves a Ready canonical Resource plus authorized
@@ -1340,7 +1339,9 @@ Managed application and data resources on official targets, with explicit USD
 prices, usage metering, invoices, and OpenTofu deploys.
 ```
 
-Cloudflare-compatible APIs are import/deploy paths, not the product identity.
+The former public provider-shaped import API and its capability profile are
+retired. Cloudflare remains available through ordinary provider-native targets
+and as a replaceable internal manager for selected official Cloud services.
 
 ## 4. Service Forms (current `Resource Shape` compatibility names)
 
@@ -1421,22 +1422,21 @@ names. For example, the provider configuration may explicitly contain:
 
 ```json
 {
-  "base_url": "https://app.takosumi.com/compat/cloudflare/client/v4"
+  "api_endpoint": "https://provider.example.test/v1"
 }
 ```
 
 The OpenTofu adapter renders the explicit provider arguments without renaming or
 augmenting them. URL values require the operator allowlist. For managed targets,
 credentials are delivered as provider-native runner env rather than
-generated-root secret variables. In Takosumi Cloud this means the Cloudflare
-provider can receive a Workspace-bound Takosumi personal access token or service
-token through the normal `CLOUDFLARE_API_TOKEN` env name while the provider block
-only contains the managed `base_url`.
+generated-root secret variables. Provider-native Cloudflare targets use the
+user's Cloudflare ProviderConnection and normal provider credential contract;
+they do not redirect the provider to a Takosumi-hosted import API.
 
 Managed hostname ownership has exactly one authority: the OSS control-plane
-hostname reservation store. The Stable Cloudflare routes subset does not claim
-a hostname: it can only project an existing profile-owned EdgeWorker's canonical
-Cloud system `url` output into a Resource-owned `http.route` / `v1alpha1`
+hostname reservation store. An EdgeWorker route does not claim a hostname: it
+can only project an existing Ready EdgeWorker's canonical Cloud system `url`
+output into a Resource-owned `http.route` / `v1alpha1`
 Interface plus an exact Principal `edge.request` Binding. Any runtime routing
 projection is a recoverable cache of that canonical state, not a compatibility
 lifecycle ledger. Route DELETE revokes the Binding and retires the Interface;
@@ -1458,7 +1458,7 @@ For Takosumi Cloud official managed targets, typed Resources use an installed
 adapter/backend manager behind the Deploy API instead of nesting an OpenTofu
 destroy/apply per resource. A manager consumes only the resolved operation; it
 does not parse an OpenTofu provider request or invoke a compatibility handler.
-The Cloudflare compatibility handler must call the Deploy API, never the other
+Any installed compatibility handler must call the Deploy API, never the other
 way around. Workers for Platforms, Object Storage, KV, SQL, Queue, and other
 substrates remain replaceable manager implementations behind provider-neutral
 service forms.
@@ -1499,18 +1499,8 @@ manager, DurableWorkflow selects the workflow manager, AI Gateway selects the
 AI gateway profile router, and future/native service forms select the
 operator-installed manager for that service form.
 
-`/compat/cloudflare/client/v4` is therefore only a protocol adapter. Its
-supported create/update/delete operations translate to the same EdgeWorker
-Resource request and call the Deploy API. Reads project the canonical Resource;
-the handler owns no script/resource lifecycle database. Its scoped Workers
-routes operations use the capability-limited compatibility route port to
-create/read/update/retire the canonical `http.route` Interface and exact
-InterfaceBinding; the route id is the Interface id, and no compatibility KV or
-backend route call is made. The Stable subset has exactly one active route per
-profile-owned EdgeWorker, requires an explicit path, and permits at most one
-terminal `*`; multiple/overlapping routes and host-only patterns fail
-explicitly rather than inventing match precedence. Standard data-plane facades similarly resolve an
-already-Ready Resource before manager access.
+Installed standard data-plane facades resolve an already-Ready Resource before
+manager access. They do not create Resource or Interface state implicitly.
 AI Gateway does not become a Service Form unless portable governance later
 admits a durable provider-neutral AI service contract; its request/token metering still uses
 the Cloud rating and invoice-reconciliation boundary. The official EdgeWorker
@@ -2003,7 +1993,6 @@ Examples:
 compat.oci.v1
 compat.cloudevents.v1
 compat.kubernetes.crd.v1
-compat.cloudflare.workers.v1
 compat.s3.v1
 compat.redis.v1
 compat.postgres.v1
@@ -2026,11 +2015,6 @@ canonical Resource lifecycle.
 Examples:
 
 ```text
-Cloudflare Workers subset:
-  translate supported script control operations into EdgeWorker Deploy API
-  calls, and scoped system-hostname route operations into canonical
-  http.route Interface / InterfaceBinding operations.
-
 S3 API:
   resolve a Ready ObjectBucket for data-plane calls; supported control-plane
   operations translate into ObjectBucket Deploy API calls. It is not mandatory
@@ -2064,7 +2048,7 @@ Unsupported claims:
 
 ```text
 complete AWS API compatibility
-complete Cloudflare API compatibility
+complete provider API compatibility
 all Terraform provider compatibility
 ```
 
@@ -2196,8 +2180,7 @@ Example:
   "compat": {
     "s3": false,
     "oci": true,
-    "cloudevents": true,
-    "provider_cloudflare_workers": true
+    "cloudevents": true
   },
   "identity": {
     "oidc_issuer": true,
@@ -2281,51 +2264,35 @@ Implementation can use Cloudflare primitives such as Workers for Platforms,
 Dynamic Workers, R2, D1, KV, Queues, Workflows, Containers, and AI Gateway.
 Those are implementation details behind official managed targets.
 
-Docs must publish one compatibility matrix. The GA is the Cloudflare Developer
-Platform-like subset below, not Cloudflare account/API compatibility:
+Docs must publish one service-availability matrix. The Cloud Stable contract is
+seven service forms across eight offerings; advanced managed services remain
+Preview until their full evidence is complete:
 
 ```text
 Stable:
-  EdgeWorker modules + static assets + vars + write-only secrets
-  EdgeWorker service/resource bindings
-  EdgeWorker versions + reviewed deployments + routes + cron + logs
-  managed hostnames + verified custom domains
-  ObjectBucket with the documented R2/S3-compatible control/data subset
+  EdgeWorker modules and static assets
+  EdgeWorker vars, write-only secrets, bindings, reviewed deployments, and routes
+  ObjectBucket Standard and Infrequent Access (two offerings) with the documented
+  S3-compatible data-plane subset
   KVStore
   SQLDatabase
   Queue
+  AI Gateway as an OpenAI-compatible endpoint surface
+  VerifiedDomain
+
+Preview:
   VectorIndex
   DurableWorkflow
   ContainerService
   StatefulActorNamespace
   Schedule
-  AI Gateway as an OpenAI-compatible env/endpoint surface
-
-Unsupported:
-  Pages
-  Hyperdrive
-  Analytics Engine
-  Browser Rendering
-  Images
-  Stream
-  Pipelines
-  DNS full management
-  WAF
-  Zero Trust
-  Registrar
-  Cloudflare account IAM
-  Load Balancer
-  Email Routing
 ```
 
-Provider compatibility is pinned to the selected Cloudflare Terraform Provider
-`5.19.1` schemas, not to every provider resource and not to the moving REST API.
-The GA compatibility allowlist covers Workers script/deployment/route/
-cron/custom-domain/subdomain, Workers KV namespace/value, R2 bucket plus its
-documented CORS/event/lifecycle/lock/domain subset, D1 database, Queue and Queue
-consumer, Workflow, AI Gateway/dynamic routing, and their selected singular or
-plural data sources. WfP dispatch namespaces and fallback origins are operator
-implementation details and are never tenant compatibility resources.
+WfP dispatch namespaces, provider-specific storage/database names, and fallback
+origins are operator implementation details. They are never tenant compatibility
+resources or public lifecycle authorities. Cloudflare remains usable through
+ordinary provider-native Stack targets where users supply their own
+ProviderConnection.
 
 Current managed hostname support:
 
@@ -2582,7 +2549,7 @@ Do not build:
 
 ```text
 complete AWS API compatibility
-complete Cloudflare API compatibility
+complete provider API compatibility
 a Takosumi clone of every existing OpenTofu provider
 generic takosumi_resource { type, spec } as the primary interface
 Takosumi runtime schemas inside reserved OpenTofu Outputs
@@ -2717,8 +2684,8 @@ self-test, a descriptor, an unconfigured manager, or one green client.
 11. Keep every compatibility control profile translating into the Deploy API
     and every data-plane profile resolving canonical Ready Resources.
 12. Complete one canonical meter/price/quote/reserve/capture/release/invoice
-    ledger and every selected Cloud manager/data plane, including the scoped
-    Cloudflare `5.19.1` compatibility subset without claiming full compatibility.
+    ledger and every selected Cloud manager/data plane without exposing a
+    provider-shaped parallel lifecycle.
 13. Prototype and rehearse provider address/type state migration, import,
     no-op refresh, rollback, registry/mirror, and air-gap paths before changing
     public vocabulary or removing an alias.

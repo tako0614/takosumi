@@ -35,11 +35,12 @@ plane, account plane, dashboard, CLI, runner env, and HTTP routes.
 - The Runtime Projection (ServiceExport / ServiceBinding / ServiceGrant) is removed
   from OSS; runtime service surfaces are projected from a Capsule's
   `tofu output -json` by the consuming product profile.
-- The Cloudflare Workers provider compatibility profile, AI Gateway, managed
+- Cloudflare remains an ordinary provider-native target through explicit
+  ProviderConnection / ProviderBinding configuration. AI Gateway, managed
   resources, and Stripe-enforced billing move to the closed `takosumi-cloud/`
-  delta (one-way Cloud → OSS, Seam A additive routes + Seam B composition
-  ports). OSS billing is a Workspace/Organization-scoped showback-or-disabled
-  ledger with no payment gate.
+  delta (one-way Cloud → OSS, Seam A additive routes + Seam B composition ports).
+  OSS billing is a Workspace/Organization-scoped showback-or-disabled ledger
+  with no payment gate.
 - Physical DB table renames are non-destructive and reversible (rename-aside DDL
   in both the Postgres and D1 catalogs, with a forward-only retired-Deployment
   value translation of the current state-version pointer).
