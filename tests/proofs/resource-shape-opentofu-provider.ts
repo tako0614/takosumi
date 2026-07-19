@@ -306,9 +306,26 @@ export async function runResourceShapeOpenTofuProviderProof(
   }
 }
 
+export function validateLiveTargetTransport(
+  options: Pick<
+    LiveProofOptions,
+    "targetType" | "targetRef" | "targetProviderBaseUrl"
+  >,
+): void {
+  if (
+    options.targetType.trim().toLowerCase() === "cloudflare" &&
+    options.targetRef.trim().startsWith("ts_acc_")
+  ) {
+    throw new Error(
+      "retired virtual Cloudflare target refs (ts_acc_*) are not accepted; use a real provider-native account id",
+    );
+  }
+}
+
 export async function runResourceShapeOpenTofuProviderLiveProof(
   options: LiveProofOptions,
 ): Promise<ResourceShapeOpenTofuProviderLiveProof> {
+  validateLiveTargetTransport(options);
   const temp = await mkdtemp(join(tmpdir(), "takosumi-provider-live-"));
   try {
     const providerDir = join(temp, "provider");
@@ -1787,7 +1804,7 @@ resource "takosumi_target_pool" "live" {
     ref            = var.target_ref
     credential_ref = var.credential_ref
     priority       = 100
-${managedCompatImplementationHcl({ targetProviderBaseUrl, targetPlugin })}
+${providerPluginImplementationHcl({ targetProviderBaseUrl, targetPlugin })}
   }]
 }
 
@@ -1920,7 +1937,7 @@ function liveQueueNameSuffix(profile: ProofProfile, index: number): string {
   return index === 0 ? "queue" : `queue-${index + 1}`;
 }
 
-function managedCompatImplementationHcl({
+function providerPluginImplementationHcl({
   targetProviderBaseUrl,
   targetPlugin,
 }: {
