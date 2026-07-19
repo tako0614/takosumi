@@ -152,26 +152,39 @@ export function parseTrustPolicy(
   const publishers = value.publishers.map((entry, position) => {
     if (!isRecord(entry))
       throw new TypeError(`publishers[${position}] must be an object`);
+    const hasRefPattern = Object.hasOwn(entry, "refPattern");
+    const hasLegacyTagPattern = Object.hasOwn(entry, "tagPattern");
+    if (hasRefPattern === hasLegacyTagPattern) {
+      throw new TypeError(
+        `publishers[${position}] requires exactly one of refPattern or tagPattern`,
+      );
+    }
     assertExactKeys(
       entry,
-      ["oidcIssuer", "sourceRepository", "workflow", "tagPattern"],
+      [
+        "oidcIssuer",
+        "sourceRepository",
+        "workflow",
+        hasRefPattern ? "refPattern" : "tagPattern",
+      ],
       `publishers[${position}]`,
     );
-    for (const key of [
-      "oidcIssuer",
-      "sourceRepository",
-      "workflow",
-      "tagPattern",
-    ] as const) {
+    for (const key of ["oidcIssuer", "sourceRepository", "workflow"] as const) {
       if (typeof entry[key] !== "string" || entry[key].length === 0) {
         throw new TypeError(`publishers[${position}].${key} must be a string`);
       }
+    }
+    const refPattern = hasRefPattern ? entry.refPattern : entry.tagPattern;
+    if (typeof refPattern !== "string" || refPattern.length === 0) {
+      throw new TypeError(
+        `publishers[${position}].${hasRefPattern ? "refPattern" : "tagPattern"} must be a string`,
+      );
     }
     return {
       oidcIssuer: entry.oidcIssuer as string,
       sourceRepository: entry.sourceRepository as string,
       workflow: entry.workflow as string,
-      tagPattern: entry.tagPattern as string,
+      refPattern,
     };
   });
   return {
