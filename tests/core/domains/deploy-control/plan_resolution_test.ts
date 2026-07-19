@@ -18,9 +18,9 @@ test("managed Provider Connection threads generic provider configuration into ro
         envNames: ["CLOUDFLARE_API_TOKEN"],
         scopeHints: {
           managedProvider: true,
-          managedProviderProfile: "compat.cloudflare.workers.v1",
+          managedProviderProfile: "compat.example.v1",
           providerConfig: {
-            base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+            base_url: "https://operator.example.test/compat/example/v1",
           },
           accountId: "ts_acc_takosumi_cloud",
         },
@@ -35,7 +35,7 @@ test("managed Provider Connection threads generic provider configuration into ro
     {
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       configuration: {
-        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        base_url: "https://operator.example.test/compat/example/v1",
       },
     },
   ]);

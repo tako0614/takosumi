@@ -353,7 +353,6 @@ The OSS Deploy-Control API must not expose the official hosted Cloud endpoint
 families:
 
 ```text
-/compat/cloudflare/client/v4
 /gateway/ai/v1
 provider-compatible endpoint families
 official managed resource backend controls
@@ -362,12 +361,10 @@ official billing/quota/usage endpoints
 ```
 
 The Compatibility API framework itself remains part of Takosumi. Specific
-profiles such as `compat.cloudflare.workers.v1`, `compat.s3.v1`, or an
-OpenAI-compatible AI endpoint are scoped, versioned capabilities, not hidden
-Deploy-Control routes.
+profiles such as `compat.s3.v1` or an OpenAI-compatible AI endpoint are scoped,
+versioned capabilities, not hidden Deploy-Control routes.
 
 For the official hosted service, the currently documented Cloud endpoint
-families are `compat.cloudflare.workers.v1`, `compat.s3.v1`, and the
-OpenAI-compatible AI Gateway. Additional endpoint families must be specified
+families are `compat.s3.v1` and the OpenAI-compatible AI Gateway. Additional endpoint families must be specified
 with their own compatibility matrix, auth model, usage contract, and
 fail-closed behavior.

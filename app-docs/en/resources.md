@@ -22,10 +22,6 @@ Takosumi Cloud Resources =
   + OpenTofu deploys
 ```
 
-The Cloudflare-compatible API is not the product itself. It is an import path
-for the supported `EdgeWorker` and `ObjectBucket` operations in existing
-Terraform/OpenTofu manifests, and remains only a limited protocol adapter.
-
 ## Product Vocabulary
 
 Use these terms in landing pages and the main app screen:
@@ -47,10 +43,6 @@ Use these terms in landing pages and the main app screen:
 - Vector Index
 - Stateful Actor Namespace
 - Schedule
-
-Keep `compat.cloudflare.workers.v1` as the architecture and compatibility
-docs capability name. Use Takosumi Cloud resources and services as the main
-heading and screen language.
 
 ## Runtime Architecture
 
@@ -87,10 +79,10 @@ Operator/internal jobs:
 Every Cloud managed-resource control operation converges on the canonical
 `/v1/resources` Deploy API before any backend API is called. The
 `takosumi/takosumi` provider, Dashboard, and direct API call that lifecycle
-directly. A Cloudflare-compatible control request first translates into the
-corresponding `EdgeWorker` or `ObjectBucket` request, then calls the same
-preview, reviewed apply, and delete operations. The compatibility handler owns
-neither a backend manager nor a parallel lifecycle store.
+directly. When an installed Compatibility API profile is used, it translates
+the protocol request into a typed Resource request and calls the same preview,
+reviewed apply, and delete operations. It owns neither a backend manager nor a
+parallel lifecycle store.
 
 ```text
 compat control request -> typed Resource request
@@ -120,30 +112,22 @@ authority. It owns no compatibility KV or backend route call. Custom hostnames
 use an owner-account and Workspace-scoped `VerifiedDomain`; the route becomes
 active only while both ownership and certificate status are current.
 
-The Cloudflare-compatible path is a limited import path into this pipeline. The
-GA subset pins selected Workers, R2, KV, D1, Queue, Workflow, and AI Gateway
-resources and data sources from Cloudflare Terraform Provider `5.19.1`.
-Vector, Container, Stateful Actor, and Schedule use typed `takosumi_*`
-Resources and official APIs because that provider has no matching independent
-resources. The current
-official EdgeWorker manager uses a Workers for Platforms dispatch namespace,
-but the public Resource identity remains `EdgeWorker`. A future manager change
-updates TargetPool, adapter, and manager-descriptor evidence rather than the
-compatibility handler.
+The current official EdgeWorker manager uses a Workers for Platforms dispatch
+namespace, but the public Resource identity remains `EdgeWorker`. A future
+manager change updates TargetPool, adapter, and manager-descriptor evidence.
 
 The shared manager descriptor keeps the provider-neutral customer contract and
 the replaceable backend manager separate. `EdgeWorker` uses
 `takosumi.edge_worker` as both its service and billing family, with meter ids
-under `takosumi:edge_worker:*`. A Cloudflare-compatible import records
-`takosumi.entrypoint=compat.cloudflare.workers.v1` as metadata; it does not
-change the billing identity. The Workers for Platforms dispatch namespace is
+under `takosumi:edge_worker:*`. A different entry point does not change the
+billing identity. The Workers for Platforms dispatch namespace is
 an implementation token, not a user-facing resource name or billing unit.
 The historical `cloudflare.workers_script` family is read only when reconciling
 immutable old usage and invoices and is never written for new usage.
 
 For the same reason, Cloud's normalized resource kind is service-form-oriented,
 such as `object_bucket`, `sql_database`, and `durable_workflow`. Tokens such as
-`r2` and `d1` stay compatibility URL tokens or current backend prefixes; they
+`r2` and `d1` stay backend-specific URL tokens or current backend prefixes; they
 are not the shared operation kind.
 
 References:
@@ -197,14 +181,13 @@ Managed hostname reservations and vanity slots belong to the Capsule lifetime,
 and a successful Capsule destroy releases the reservation.
 
 A Cloud-managed `EdgeWorker` separately receives an opaque, non-derivable
-canonical system URL. Compatibility responses discover it as `system_url` from
-the Resource's `url` Output. Clients must not construct or infer a value such as
-`ew-<hash>.<system-base-domain>`. This URL is not a vanity hostname claimed by a
-compatibility route and route DELETE does not release it.
+canonical system URL, discovered from the Resource's `url` Output. Clients must
+not construct or infer a value such as `ew-<hash>.<system-base-domain>`. This URL
+is not a vanity hostname, and Interface route DELETE does not release it.
 
-The GA-candidate Cloudflare-compatible route contract accepts only the
-discovered `system_url` host followed by an explicit path. Each profile-owned
-`EdgeWorker` can have one active route. The path accepts no wildcard or one
+The EdgeWorker route contract accepts only the discovered system URL host
+followed by an explicit path. Each `EdgeWorker` can have one active route. The
+path accepts no wildcard or one
 terminal `*`. Host-only, multiple, overlapping, infix-wildcard,
 wildcard-hostname, and custom-hostname patterns fail before Interface mutation.
 
@@ -219,7 +202,7 @@ Current route evidence is:
 | `custom_domains` | GA scope | active VerifiedDomain, certificate, and exact Resource attachment |
 
 Route CRUD calls the Interface and InterfaceBinding authority. There is no
-compatibility KV, backend route API, or separate hostname-ownership ledger.
+backend route API or separate hostname-ownership ledger.
 Updates use a strong-ETag CAS. DELETE revokes the Binding and retires the
 Interface, but releases neither the system URL nor Capsule managed-hostname
 ownership.
@@ -231,62 +214,10 @@ an active custom domain.
 
 In app install and Store flows, this value is passed to ordinary OpenTofu
 variables through the `installExperience` `public_endpoint` projection. For
-example, `subdomain` is the label for a managed URL, `url` is a managed URL or
-an ordinary OpenTofu variable, and `routePattern` is the route pattern used by
-compatibility imports. A user-owned URL can still be passed to a BYOC provider,
+example, `subdomain` is the label for a managed URL and `url` is a managed URL or
+an ordinary OpenTofu variable. A user-owned URL can still be passed to a BYOC provider,
 but Takosumi Cloud requires a VerifiedDomain rather than activating it
 implicitly. Takosumi does not infer meaning from
 variable names such as `worker_name` or `app_url` by themselves. Only the
 store-declared projection and input `format` drive Dashboard input UX and
 hostname reservation.
-
-## Compatibility Matrix
-
-The Cloudflare import capability is `compat.cloudflare.workers.v1`. It exposes
-only the subset needed to import Workers-oriented resources into Takosumi Cloud
-resources. Unsupported Cloudflare products stay explicit.
-
-| Status      | Scope                                                                                                         |
-| ----------- | ------------------------------------------------------------------------------------------------------------- |
-| GA contract | EdgeWorker modules, assets, vars, write-only secrets, bindings, versions, deployments, routes, and cron (Workers Logs / Logpush are not Stable) |
-| GA contract | managed URL and verified-custom-domain `http.route` Interfaces                                                |
-| GA contract | ObjectBucket plus the documented R2/S3 control and data subset                                                |
-| GA contract | provider `5.19.1` selected subset for KVStore, SQLDatabase, Queue, and DurableWorkflow                        |
-| GA contract | typed Resource API for VectorIndex, ContainerService, StatefulActorNamespace, and Schedule                    |
-| GA contract | AI Gateway OpenAI-compatible endpoint                                                                         |
-| Pre-GA      | public GA stays closed until every item passes the same Stable evidence matrix                                |
-| Unsupported | Pages, Hyperdrive, Analytics Engine, Browser Rendering, Images, Stream, and Pipelines                         |
-| Unsupported | DNS, WAF, Zero Trust, Registrar, account IAM, Load Balancer, and Email Routing                                |
-
-AI Gateway is not part of Workers compatibility. It is a separate
-OpenAI-compatible endpoint profile. See
-[AI Gateway in Cloud endpoints](./endpoints.md#ai-gateway).
-
-## OpenTofu Import Path
-
-The Cloudflare-compatible API is the import path for Cloudflare
-Workers-oriented manifests.
-
-```hcl
-provider "cloudflare" {
-  api_token  = var.takosumi_cloud_api_key
-  account_id = var.takosumi_virtual_account_id
-  base_url   = "https://app.takosumi.com/compat/cloudflare/client/v4"
-}
-```
-
-Use this wording in docs:
-
-```text
-Deploy apps and managed resources to Takosumi Cloud.
-Use Cloudflare-compatible Terraform/OpenTofu resources when importing Workers-oriented apps.
-```
-
-Switching between real Cloudflare and Takosumi Cloud belongs in Provider
-Binding / Provider Connection. Do not put raw secrets in the manifest.
-
-On Takosumi Cloud, this import path can be used without first creating a Capsule
-through the Dashboard app flow. It still requires an authenticated token and a
-billable source Workspace. Billable writes spend the owning user's account
-credits and are not forwarded to the compatibility endpoint when the owner
-account has insufficient balance.

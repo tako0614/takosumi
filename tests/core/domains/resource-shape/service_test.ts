@@ -909,7 +909,7 @@ const POLICY: SpacePolicySpec = {
 };
 
 const PROVIDER_COMPAT_BASE_URL =
-  "https://app.takosumi.com/compat/cloudflare/client/v4";
+  "https://operator.example.test/compat/example/v1";
 
 async function seed(service: ResourceShapeService, policy = POLICY) {
   await service.putTargetPool("space_1", "default", POOL);
@@ -1403,14 +1403,14 @@ test("managedBy ownership blocks takeover and normal delete before admission or 
   };
 
   const takeover = await service.apply(
-    { ...APPLY, managedBy: "compat.cloudflare.workers.v1" },
+    { ...APPLY, managedBy: "compat.example.v1" },
     { planDigest: `sha256:${"f".repeat(64)}` },
   );
   expect(takeover).toEqual({
     ok: false,
     error: {
       code: "ownership_conflict",
-      message: `resource ${APPLY_ID} is managed by takosumi.resource-api.v1; apply from compat.cloudflare.workers.v1 is not allowed`,
+      message: `resource ${APPLY_ID} is managed by takosumi.resource-api.v1; apply from compat.example.v1 is not allowed`,
     },
   });
 
@@ -1419,7 +1419,7 @@ test("managedBy ownership blocks takeover and normal delete before admission or 
     "ObjectBucket",
     "assets",
     ACTOR,
-    { expectedManagedBy: "compat.cloudflare.workers.v1" },
+    { expectedManagedBy: "compat.example.v1" },
   );
   expect(wrongDelete.ok).toBe(false);
   if (!wrongDelete.ok)
@@ -1443,7 +1443,7 @@ test("managedBy ownership blocks takeover and normal delete before admission or 
     ACTOR,
     {
       force: true,
-      expectedManagedBy: "compat.cloudflare.workers.v1",
+      expectedManagedBy: "compat.example.v1",
     },
   );
   expect(forced.ok).toBe(true);
@@ -1482,7 +1482,7 @@ test("late managedBy apply conflict terminalizes its distinct direct-plugin Run"
     space: "space_1",
     kind: "ContainerService" as const,
     name: "agent-owner-race",
-    managedBy: "compat.cloudflare.workers.v1",
+    managedBy: "compat.example.v1",
     spec: {
       name: "agent-owner-race",
       image: "ghcr.io/example/agent:1.0.0",

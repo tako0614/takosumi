@@ -475,7 +475,7 @@ test("provider-connection connection pool mints a pending managed-provider conne
         CLOUDFLARE_API_TOKEN: "takmpt_provider_env",
         CLOUDFLARE_ACCOUNT_ID: "ts_acc_takosumi_cloud",
         CLOUDFLARE_API_BASE_URL:
-          "https://app.takosumi.com/compat/cloudflare/client/v4",
+          "https://operator.example.test/compat/example/v1",
       },
       issuer: "takosumi_managed_provider_token",
       temporary: true,
@@ -490,9 +490,9 @@ test("provider-connection connection pool mints a pending managed-provider conne
     values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
     scopeHints: {
       managedProvider: true,
-      managedProviderProfile: "compat.cloudflare.workers.v1",
+      managedProviderProfile: "compat.example.v1",
       providerConfig: {
-        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        base_url: "https://operator.example.test/compat/example/v1",
       },
       managedPublicBaseDomain: "app-staging.takos.jp",
     },
@@ -512,7 +512,7 @@ test("provider-connection connection pool mints a pending managed-provider conne
   expect(bundle.env.CLOUDFLARE_API_TOKEN).toBe("takmpt_provider_env");
   expect(bundle.env.CLOUDFLARE_ACCOUNT_ID).toBe("ts_acc_takosumi_cloud");
   expect(bundle.env.CLOUDFLARE_API_BASE_URL).toBe(
-    "https://app.takosumi.com/compat/cloudflare/client/v4",
+    "https://operator.example.test/compat/example/v1",
   );
   expect(bundle.providerCredentialEvidence[0]).toMatchObject({
     connectionId: operatorConn.id,
@@ -1062,9 +1062,9 @@ test("mintForCapsuleProviderBindings uses managed-provider issuer before stored 
       values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
       scopeHints: {
         managedProvider: true,
-        managedProviderProfile: "compat.cloudflare.workers.v1",
+        managedProviderProfile: "compat.example.v1",
         providerConfig: {
-          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+          base_url: "https://operator.example.test/compat/example/v1",
         },
       },
     }),
@@ -1090,7 +1090,7 @@ test("mintForCapsuleProviderBindings uses managed-provider issuer before stored 
       workspaceId: "space_other",
       capsuleId: "cap_1234567890abcdef",
       connectionId: operatorConn.id,
-      managedProviderProfile: "compat.cloudflare.workers.v1",
+      managedProviderProfile: "compat.example.v1",
     },
   ]);
   expect(bundle.providerCredentialEvidence).toEqual([
@@ -1138,9 +1138,9 @@ test("mintForCapsuleProviderBindings mints a pending managed-provider connection
     values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
     scopeHints: {
       managedProvider: true,
-      managedProviderProfile: "compat.cloudflare.workers.v1",
+      managedProviderProfile: "compat.example.v1",
       providerConfig: {
-        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        base_url: "https://operator.example.test/compat/example/v1",
       },
     },
   });
@@ -1166,7 +1166,7 @@ test("mintForCapsuleProviderBindings mints a pending managed-provider connection
       workspaceId: "space_other",
       capsuleId: "cap_1234567890abcdef",
       connectionId: operatorConn.id,
-      managedProviderProfile: "compat.cloudflare.workers.v1",
+      managedProviderProfile: "compat.example.v1",
     },
   ]);
   expect(JSON.stringify(bundle)).not.toContain("operator-static-token");
@@ -1222,7 +1222,7 @@ test("managed provider registration rejects Workspace-owned rows", async () => {
       values: { CLOUDFLARE_API_TOKEN: "workspace-static-token" },
       scopeHints: {
         managedProvider: true,
-        managedProviderProfile: "compat.cloudflare.workers.v1",
+        managedProviderProfile: "compat.example.v1",
       },
     }),
   ).rejects.toThrow(
@@ -1258,9 +1258,9 @@ test("mintForCapsuleProviderBindings rejects managed-provider connections withou
       values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
       scopeHints: {
         managedProvider: true,
-        managedProviderProfile: "compat.cloudflare.workers.v1",
+        managedProviderProfile: "compat.example.v1",
         providerConfig: {
-          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+          base_url: "https://operator.example.test/compat/example/v1",
         },
       },
     }),
@@ -1302,9 +1302,9 @@ test("mintForCapsuleProviderBindings rejects managed-provider connections when i
       values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
       scopeHints: {
         managedProvider: true,
-        managedProviderProfile: "compat.cloudflare.workers.v1",
+        managedProviderProfile: "compat.example.v1",
         providerConfig: {
-          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+          base_url: "https://operator.example.test/compat/example/v1",
         },
       },
     }),

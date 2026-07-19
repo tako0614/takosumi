@@ -958,13 +958,13 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
     ),
     scopeHints: {
       providerConfig: {
-        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        base_url: "https://api.cloudflare.com/client/v4",
       },
       accountId: "acct_scope_123",
       workersSubdomain: "team-workers",
       moduleInputDefaults: cloudflareModuleInputDefaults({
         accountId: "acct_scope_123",
-        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        providerBaseUrl: "https://api.cloudflare.com/client/v4",
         workersSubdomain: "team-workers",
       }),
     },
@@ -997,14 +997,14 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
   expect(mainTf).toContain('cloudflare_account_id = "acct_scope_123"');
   expect(mainTf).toContain('account_id = "acct_scope_123"');
   expect(mainTf).toContain(
-    'cloudflare_api_base_url = "https://app.takosumi.com/compat/cloudflare/client/v4"',
+    'cloudflare_api_base_url = "https://api.cloudflare.com/client/v4"',
   );
   expect(mainTf).toContain('cloudflare_workers_subdomain = "team-workers"');
   expect(mainTf).toContain('workersSubdomain = "team-workers"');
   expect(mainTf).toContain("enable_cloudflare_resources = true");
   expect(mainTf).toContain("enable_cloudflare_worker_script = true");
   expect(mainTf).toContain(
-    'cloudflare = jsondecode("{\\"account_id\\":\\"acct_scope_123\\",\\"api_base_url\\":\\"https://app.takosumi.com/compat/cloudflare/client/v4\\",\\"workers_subdomain\\":\\"team-workers\\"}")',
+    'cloudflare = jsondecode("{\\"account_id\\":\\"acct_scope_123\\",\\"api_base_url\\":\\"https://api.cloudflare.com/client/v4\\",\\"workers_subdomain\\":\\"team-workers\\"}")',
   );
   expect(mainTf).toContain("untouched = null");
   expect(mainTf).not.toContain("fixture-provider-token");
@@ -1214,7 +1214,7 @@ test("app_url stays an ordinary OpenTofu input without publicEndpoint mapping", 
     ),
     scopeHints: {
       providerConfig: {
-        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        base_url: "https://operator.example.test/compat/example/v1",
       },
       accountId: "ts_acc_takosumi_cloud",
     },

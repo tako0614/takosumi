@@ -15,7 +15,7 @@ import {
 } from "../../../../core/domains/interfaces/service.ts";
 import { createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/stores.ts";
 
-const PROFILE = "compat.cloudflare.workers.v1";
+const PROFILE = "compat.example.v1";
 const WORKSPACE = "workspace_1";
 const RESOURCE = "api";
 const RESOURCE_ID = `tkrn:${WORKSPACE}:EdgeWorker:${RESOURCE}`;
@@ -101,13 +101,13 @@ test("compatibility route reads and mutations are Workspace- and profile-owned",
   });
   expect(
     await fixture.control.list({
-      profile: "compat.example.v1",
+      profile: "compat.other.v1",
       workspaceId: WORKSPACE,
     }),
   ).toEqual([]);
   expect(
     await fixture.control.get(
-      { profile: "compat.example.v1", workspaceId: WORKSPACE },
+      { profile: "compat.other.v1", workspaceId: WORKSPACE },
       route.interfaceId,
     ),
   ).toBeUndefined();
@@ -120,7 +120,7 @@ test("compatibility route reads and mutations are Workspace- and profile-owned",
 
   await expect(
     fixture.control.update(
-      { profile: "compat.example.v1", workspaceId: WORKSPACE },
+      { profile: "compat.other.v1", workspaceId: WORKSPACE },
       {
         interfaceId: route.interfaceId,
         resourceName: RESOURCE,

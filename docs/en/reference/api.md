@@ -49,7 +49,6 @@ Example:
     "opentofuRunner": true,
     "oidc": true,
     "compatS3": true,
-    "compatCloudflareWorkers": false,
     "billing": false
   },
   "endpoints": {
@@ -558,12 +557,9 @@ compat.cloudevents.v1
 
 compat.kubernetes.crd.v1
   Kubernetes northbound API
-
-compat.cloudflare.workers.v1
-  scoped Workers-compatible import/deploy path
 ```
 
-These are not full AWS API compatibility or full Cloudflare API compatibility claims. Scope is
+These are not complete provider API compatibility claims. Scope is
 published through capabilities and a compatibility matrix.
 
 Control-plane compatibility, typed `takosumi_*` resources, dashboard, and CLI
@@ -591,7 +587,7 @@ Failures return structured errors.
 {
   "error": {
     "code": "capability_not_available",
-    "message": "compat.cloudflare.workers.v1 is not enabled for this endpoint",
+    "message": "compat.example.v1 is not enabled for this endpoint",
     "requestId": "req_123"
   }
 }

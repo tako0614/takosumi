@@ -116,9 +116,9 @@ after the state-migration gates pass.
 
 Compatibility APIs are Takosumi OSS framework and capability surfaces. They are
 scoped and versioned, such as `compat.s3.v1`, `compat.oci.v1`,
-`compat.cloudevents.v1`, and `compat.cloudflare.workers.v1`.
+`compat.cloudevents.v1`, and `compat.kubernetes.crd.v1`.
 
-They are not full AWS API compatibility or full Cloudflare API compatibility.
+They are not claims of complete provider API compatibility.
 When existing providers or standard endpoints are enough for S3/R2/GCS,
 registries, queues, or databases, use those providers or endpoints.
 

@@ -51,7 +51,6 @@ capability を参照します。
     "opentofuRunner": true,
     "oidc": true,
     "compatS3": true,
-    "compatCloudflareWorkers": false,
     "billing": false
   },
   "endpoints": {
@@ -544,12 +543,9 @@ compat.cloudevents.v1
 
 compat.kubernetes.crd.v1
   Kubernetes northbound API
-
-compat.cloudflare.workers.v1
-  scoped Workers-compatible import/deploy path
 ```
 
-これは full AWS API や full Cloudflare API 互換を意味しません。範囲は capability と
+これは provider API 全体の互換を意味しません。範囲は capability と
 compatibility matrix で明示します。
 
 control-plane compat、typed `takosumi_*` resource、dashboard、CLI は、公開 protocol
@@ -575,7 +571,7 @@ Takosumi Cloud 固有の endpoint 例は
 {
   "error": {
     "code": "capability_not_available",
-    "message": "compat.cloudflare.workers.v1 is not enabled for this endpoint",
+    "message": "compat.example.v1 is not enabled for this endpoint",
     "requestId": "req_123"
   }
 }

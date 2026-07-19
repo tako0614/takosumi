@@ -1,33 +1,24 @@
 import { expect, test } from "bun:test";
 import { validateLiveTargetTransport } from "./resource-shape-opentofu-provider.ts";
 
-test("live Resource Shape proof requires an explicit compat endpoint for virtual Cloudflare accounts", () => {
+test("live Resource Shape proof rejects retired virtual Cloudflare target refs", () => {
   expect(() =>
     validateLiveTargetTransport({
       targetType: "cloudflare",
       targetRef: "ts_acc_operator",
+      targetProviderBaseUrl: "https://operator.example.test/provider/v1",
     }),
-  ).toThrow(/target-provider-base-url/);
+  ).toThrow(/retired virtual Cloudflare target refs/);
 
   expect(() =>
     validateLiveTargetTransport({
       targetType: "cloudflare",
       targetRef: "ts_acc_operator",
-      targetProviderBaseUrl: "http://localhost/compat/cloudflare/client/v4",
     }),
-  ).toThrow(/HTTPS/);
-
-  expect(() =>
-    validateLiveTargetTransport({
-      targetType: "cloudflare",
-      targetRef: "ts_acc_operator",
-      targetProviderBaseUrl:
-        "https://operator.example/compat/cloudflare/client/v4",
-    }),
-  ).not.toThrow();
+  ).toThrow(/real provider-native account id/);
 });
 
-test("live Resource Shape proof leaves real provider targets and other adapters unchanged", () => {
+test("live Resource Shape proof permits real provider targets and other adapters", () => {
   expect(() =>
     validateLiveTargetTransport({
       targetType: "cloudflare",

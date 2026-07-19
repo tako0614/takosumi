@@ -49,9 +49,8 @@ Edge JS app は `EdgeWorker` resource として動きます。Takosumi Cloud は
 Cloudflare Workers for Platforms と Takosumi が管理する dispatch layer で
 実装できます。これは Cloud が提供する resource のひとつで、ContainerService、
 Object Storage、KV、Database、Queue、AI とは別の service form です。
-AI Gateway、Cloudflare Workers 互換 profile、S3-compatible endpoint、Cloud
-usage endpoint は、同じ hosted Cloud origin 上の Cloud extension boundary を
-通して提供されます。
+AI Gateway、S3-compatible endpoint、Cloud usage endpoint は、同じ hosted Cloud
+origin 上の Cloud extension boundary を通して提供されます。
 
 どの入口から入っても — Dashboard、`takosumi/takosumi` provider、互換 endpoint の
 いずれでも — リクエストは同じ確認の流れを通ります。認証、発生元 Workspace の確認、
@@ -122,18 +121,18 @@ domain は安全側に停止します。
 
 ## GA Contract と Launch Gate
 
-Takosumi Cloud の GA はサービスごとの段階公開ではありません。次の Cloudflare Developer
-Platform-like set を 1 つの Stable 契約として扱い、全項目が同じ readiness matrix を通るまで
-Takosumi Cloud 全体を Pre-GA のままにします。一部の runtime や API が先に利用できても、その項目だけを
-Stable / GA とは表示しません。
+Takosumi Cloud の GA はサービスごとの段階公開ではありません。7 つの Stable service form
+（8 offering）を 1 つの Stable 契約として扱い、全項目が同じ readiness matrix を通るまで
+Takosumi Cloud 全体を Pre-GA のままにします。
 
 | Status      | Scope                                                                                           |
 | ----------- | ----------------------------------------------------------------------------------------------- |
 | GA contract | Edge Worker の modules / assets / vars / write-only secrets / bindings / versions / deployments |
-| GA contract | managed URL / routes / cron / logs / verified custom domains                                    |
-| GA contract | Object Storage / KV / Database / Queue / Vector Index                                           |
-| GA contract | Durable Workflow / Container / Stateful Actor Namespace / Schedule                              |
+| GA contract | Object Storage の Standard / Infrequent Access offering                                         |
+| GA contract | KV / Database / Queue                                                                            |
 | GA contract | OpenAI-compatible AI Gateway endpoint                                                           |
+| GA contract | Verified custom domain                                                                          |
+| Preview     | Vector Index / Durable Workflow / Container / Stateful Actor Namespace / Schedule               |
 | Pre-GA      | 上の全項目が同じ Stable evidence matrix を通るまで public GA は開かない                         |
 
 Stable evidence には lifecycle、価格、immutable metering、spend enforcement、invoice reconciliation、
@@ -160,28 +159,11 @@ Dashboard では次を確認できます。
 - API keys
 - 現在の Cloud resources
 
-## Compatibility Profiles
+## Standard protocol endpoints
 
-Takosumi Cloud は profile ごとに互換範囲を分けます。Cloudflare 互換の API surface は
-`compat.cloudflare.workers.v1` という範囲を限った profile であり、Cloudflare API
-全体の互換ではありません。AI Gateway は別の OpenAI 互換 profile です。
-
-### `compat.cloudflare.workers.v1`
-
-互換 contract は Cloudflare provider `5.19.1` の選択した schema に固定します。これは
-Takosumi Cloud Resource への入口であり、Cloudflare account/API 全体の再実装ではありません。
-
-| Status      | Scope                                                                                                              |
-| ----------- | ------------------------------------------------------------------------------------------------------------------ |
-| GA contract | EdgeWorker modules / assets / vars / write-only secrets / bindings / versions / deployments / routes / cron (Workers Logs / Logpush は Stable 外) |
-| GA contract | managed URL と verified custom domain の `http.route` Interface                                                    |
-| GA contract | ObjectBucket + documented R2/S3 control/data subset                                                                |
-| GA contract | KVStore / SQLDatabase / Queue / DurableWorkflow の provider `5.19.1` selected subset                               |
-| GA contract | VectorIndex / ContainerService / StatefulActorNamespace / Schedule typed Resource API                              |
-| GA contract | AI Gateway OpenAI-compatible endpoint                                                                              |
-| Pre-GA      | 上の全項目が同じ Stable evidence matrix を通るまで public GA は開かない                                            |
-| Unsupported | Pages、Hyperdrive、Analytics Engine、Browser Rendering、Images、Stream、Pipelines                                  |
-| Unsupported | DNS、WAF、Zero Trust、Registrar、account IAM、Load Balancer、Email Routing                                         |
+Object Storage は scoped な `compat.s3.v1` data-plane profile を公開します。bucket の
+lifecycle authority は canonical Resource API のままで、S3 endpoint は Ready
+`ObjectBucket` と認可済み Interface を解決します。
 
 ### AI Gateway OpenAI-compatible profile
 
@@ -190,18 +172,6 @@ Takosumi Cloud Resource への入口であり、Cloudflare account/API 全体の
 | Production Preview | `/gateway/ai/v1/models`           |
 | Production Preview | `/gateway/ai/v1/chat/completions` |
 | Production Preview | `/gateway/ai/v1/embeddings`       |
-
-Cloudflare Workers provider compatibility profile は import / deploy の入口です。
-既存の Cloudflare Workers の定義を、Takosumi Cloud の `EdgeWorker` と managed
-bindings に向けたいときに使います。
-
-```hcl
-provider "cloudflare" {
-  api_token  = var.takosumi_cloud_api_key
-  account_id = var.takosumi_virtual_account_id
-  base_url   = "https://app.takosumi.com/compat/cloudflare/client/v4"
-}
-```
 
 詳細:
 

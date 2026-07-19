@@ -110,13 +110,13 @@ test("Cloud mode resolves a pending public managed operator connection", async (
   const { store, model } = await setup();
   await store.putConnection(
     connection({
-      id: "conn_operator_compat_pending",
+      id: "conn_operator_pending",
       status: "pending",
       scopeHints: {
         managedProvider: true,
-        managedProviderProfile: "compat.cloudflare.workers.v1",
+        managedProviderProfile: "compat.example.v1",
         providerConfig: {
-          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+          base_url: "https://operator.example.test/compat/example/v1",
         },
       },
     }),
@@ -127,7 +127,7 @@ test("Cloud mode resolves a pending public managed operator connection", async (
     capsuleId: model.capsule.id,
     environment: model.capsule.environment,
     bindings: [
-      { provider: CLOUDFLARE, connectionId: "conn_operator_compat_pending" },
+      { provider: CLOUDFLARE, connectionId: "conn_operator_pending" },
     ],
     createdAt: NOW,
     updatedAt: NOW,
@@ -141,10 +141,8 @@ test("Cloud mode resolves a pending public managed operator connection", async (
   });
   const resolved = await cloudService.resolveProviderBindings(model.capsule);
   expect(resolved).toHaveLength(1);
-  expect(resolved[0]?.connection.id).toBe("conn_operator_compat_pending");
-  expect(mintableConnectionIds(resolved)).toEqual([
-    "conn_operator_compat_pending",
-  ]);
+  expect(resolved[0]?.connection.id).toBe("conn_operator_pending");
+  expect(mintableConnectionIds(resolved)).toEqual(["conn_operator_pending"]);
 });
 
 test("providerConfig base_url alone never authorizes an operator managed connection", async () => {
@@ -187,9 +185,9 @@ test("binding digest ignores verification progress but detects connection replac
     status: "pending",
     scopeHints: {
       managedProvider: true,
-      managedProviderProfile: "compat.cloudflare.workers.v1",
+      managedProviderProfile: "compat.example.v1",
       providerConfig: {
-        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        base_url: "https://operator.example.test/compat/example/v1",
       },
     },
   });
@@ -232,7 +230,7 @@ test("binding digest ignores verification progress but detects connection replac
       ...entry.connection,
       scopeHints: {
         ...entry.connection.scopeHints,
-        managedProviderProfile: "compat.cloudflare.workers.v2",
+        managedProviderProfile: "compat.example.v2",
       },
     },
   }));
@@ -247,7 +245,7 @@ test("binding digest ignores verification progress but detects connection replac
       scopeHints: {
         ...entry.connection.scopeHints,
         providerConfig: {
-          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+          base_url: "https://operator.example.test/compat/example/v1",
         },
       },
     },
@@ -284,9 +282,9 @@ test("provider connection listing exposes only public managed operator connectio
       id: "conn_operator_compat",
       scopeHints: {
         managedProvider: true,
-        managedProviderProfile: "compat.cloudflare.workers.v1",
+        managedProviderProfile: "compat.example.v1",
         providerConfig: {
-          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+          base_url: "https://operator.example.test/compat/example/v1",
         },
       },
     }),
@@ -397,9 +395,9 @@ test("Cloud mode does not implicitly bind a single public managed operator conne
       id: "conn_operator_compat",
       scopeHints: {
         managedProvider: true,
-        managedProviderProfile: "compat.cloudflare.workers.v1",
+        managedProviderProfile: "compat.example.v1",
         providerConfig: {
-          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+          base_url: "https://operator.example.test/compat/example/v1",
         },
       },
     }),
@@ -437,13 +435,13 @@ test("Cloud mode does not implicitly bind a pending public managed operator conn
   });
   await store.putConnection(
     connection({
-      id: "conn_operator_compat_pending",
+      id: "conn_operator_managed_pending",
       status: "pending",
       scopeHints: {
         managedProvider: true,
-        managedProviderProfile: "compat.cloudflare.workers.v1",
+        managedProviderProfile: "compat.example.v1",
         providerConfig: {
-          base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+          base_url: "https://operator.example.test/compat/example/v1",
         },
       },
     }),
@@ -462,15 +460,15 @@ test("Cloud mode does not implicitly bind a pending public managed operator conn
 
 test("Cloud mode does not guess when multiple managed operator connections match", async () => {
   const { store, model } = await setup();
-  for (const id of ["conn_operator_compat_a", "conn_operator_compat_b"]) {
+  for (const id of ["conn_operator_managed_a", "conn_operator_managed_b"]) {
     await store.putConnection(
       connection({
         id,
         scopeHints: {
           managedProvider: true,
-          managedProviderProfile: "compat.cloudflare.workers.v1",
+          managedProviderProfile: "compat.example.v1",
           providerConfig: {
-            base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+            base_url: "https://operator.example.test/compat/example/v1",
           },
         },
       }),
