@@ -37,7 +37,7 @@ afterEach(async () => {
 });
 
 describe("provider release workflow authority", () => {
-  test("is a pinned two-phase workflow with one protected mutation job", async () => {
+  test("is a pinned two-phase workflow with controller-authorized mutation", async () => {
     const source = await Bun.file(
       new URL("../../.github/workflows/provider-release.yml", import.meta.url),
     ).text();
@@ -74,7 +74,7 @@ describe("provider release workflow authority", () => {
     expect(workflow.jobs.candidate.if).toBe("inputs.phase == 'candidate'");
     expect(workflow.jobs.candidate.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.promote.if).toBe("inputs.phase == 'promote'");
-    expect(workflow.jobs.promote.environment).toBe("provider-release");
+    expect(workflow.jobs.promote.environment).toBeUndefined();
     expect(workflow.jobs.promote.permissions).toEqual({
       actions: "read",
       attestations: "write",
@@ -102,10 +102,10 @@ describe("provider release workflow authority", () => {
       "c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74",
     );
     expect(workflow.env.RELEASE_SAFETY_CONTROLLER_COMMIT).toBe(
-      "856ec30dd6c1dbc16e20f4d401fc0b381b35a8e1",
+      "65f73a39899e4c8c01083fec3c6c97d432b7aaf2",
     );
     expect(workflow.env.RELEASE_SAFETY_ADAPTER_DIGEST).toBe(
-      "sha256:0f601ba59ae736fcd912b09580228365e8fc64885efbbc2dfa3622060730575f",
+      "sha256:d1e1926c7a73ca817c70f6e0ff1c81f58000fe084ed209f0fe164e10c4307dd0",
     );
 
     const candidateStepNames = workflow.jobs.candidate.steps.map(
