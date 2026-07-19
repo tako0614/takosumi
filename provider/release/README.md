@@ -24,8 +24,11 @@ version.
   only in the unpublished minor candidate.
 - Release builds are explicit: a clean `provider/v<version>` tag and its exact
   commit are required. Production also requires an annotated signature from a
-  reviewed signer fingerprint. No signer fingerprint is configured yet, so
-  this is a candidate-only lane and production publication remains blocked.
+  reviewed signer fingerprint. The admin-provider-only signer, public key,
+  digest-pinned keyring, expiry, and repo-external custody policy are recorded
+  under `keys/`; private material is never committed or reused for Takoform.
+  This remains a candidate-only lane until the signed tag, artifact signature,
+  transparency evidence, and immutable public mirror activation all pass.
   The builder writes only to a new directory outside the tracked mirror and
   builds twice before accepting any byte. Git and gpgv use pinned absolute
   paths, versions, executable digests, an isolated config/home, and a

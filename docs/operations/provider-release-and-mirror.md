@@ -156,10 +156,11 @@ independent external blockers below.
 The current corrected version is `1.1.0` and remains unpublished. After the
 release change is committed, create the exact clean provider tag according to
 the release approval process. A production build accepts only an annotated tag
-whose signature matches a reviewed fingerprint in `version.json`. That signer
-list is intentionally empty until key custody is approved, so the command
-below is currently blocked rather than publication-ready. The output path must
-not exist and must be outside the repository:
+whose signature matches the reviewed admin-provider-only fingerprint in
+`version.json`. Public verification material is committed under
+`provider/release/keys/`; the private key and passphrase remain separately
+operator-custodied outside every repository and are not shared with Takoform.
+The output path must not exist and must be outside the repository:
 
 ```bash
 commit=$(git rev-parse 'refs/tags/provider/v1.1.0^{commit}')

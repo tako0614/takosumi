@@ -301,9 +301,12 @@ provenance, per-binary Go build-info digests, and an immutable manifest seam.
 Bundle verification first snapshots the complete input into a private
 `0700` authority directory with `0600` files so later path replacement cannot
 change the reviewed bytes.
-Production requires a signed annotated tag from a reviewed fingerprint; no
-fingerprint is configured yet, so `1.1.0` remains a candidate-only lane.
-It does not publish anything.
+Production requires a signed annotated tag from the reviewed
+admin-provider-only fingerprint under `release/keys/`. Private material stays
+operator-custodied outside the repository and is not shared with Takoform.
+`1.1.0` remains candidate-only until the tag, artifact signature,
+transparency, and immutable mirror gates pass. The builder does not publish
+anything.
 
 Network mirror base URL:
 

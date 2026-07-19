@@ -1094,7 +1094,7 @@ function validateManifestAsset(asset) {
 
 export function providerPublicationBlockers(compatibilityProofStatus) {
   const blockers = [
-    "reviewed signer fingerprint and key custody",
+    "signed annotated release tag",
     "artifact signature and transparency log",
     "public version-path nonexistence or exact-byte readback",
   ];
