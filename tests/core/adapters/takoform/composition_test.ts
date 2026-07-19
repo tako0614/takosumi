@@ -43,7 +43,7 @@ test("host trust policy is exact, publisher-explicit, and digest-pinned", () => 
           oidcIssuer: "https://token.actions.githubusercontent.com",
           sourceRepository: "tako0614/terraform-provider-takoform",
           workflow: ".github/workflows/form-package-release.yml",
-          tagPattern: "refs/tags/forms/*/v*",
+          refPattern: "refs/heads/main",
         },
       ],
     }),
@@ -56,4 +56,46 @@ test("host trust policy is exact, publisher-explicit, and digest-pinned", () => 
       JSON.stringify({ ...policy, publishers: [], implicitTrust: true }),
     ),
   ).toThrow("unknown or missing fields");
+});
+
+test("schema v1 accepts legacy tagPattern alone and normalizes it", () => {
+  const base = {
+    schemaVersion: 1,
+    artifactPrefix: "packages/",
+    trustedRoot: {
+      key: "trust/sigstore-public-good-root.json",
+      digest: `sha256:${"a".repeat(64)}`,
+    },
+  } as const;
+  const legacy = parseTrustPolicy(
+    JSON.stringify({
+      ...base,
+      publishers: [
+        {
+          oidcIssuer: "https://token.actions.githubusercontent.com",
+          sourceRepository: "tako0614/terraform-provider-takoform",
+          workflow: ".github/workflows/form-package-release.yml",
+          tagPattern: "refs/tags/forms-*",
+        },
+      ],
+    }),
+  );
+  expect(legacy.publishers[0]?.refPattern).toBe("refs/tags/forms-*");
+
+  expect(() =>
+    parseTrustPolicy(
+      JSON.stringify({
+        ...base,
+        publishers: [
+          {
+            oidcIssuer: "https://token.actions.githubusercontent.com",
+            sourceRepository: "tako0614/terraform-provider-takoform",
+            workflow: ".github/workflows/form-package-release.yml",
+            refPattern: "refs/heads/main",
+            tagPattern: "refs/tags/forms-*",
+          },
+        ],
+      }),
+    ),
+  ).toThrow("exactly one");
 });
