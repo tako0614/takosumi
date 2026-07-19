@@ -74,6 +74,29 @@ async function containsFile(root) {
   return false;
 }
 
+async function findForbiddenActiveProviderAuthority(
+  root,
+  needles,
+  result = [],
+) {
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) {
+      await findForbiddenActiveProviderAuthority(path, needles, result);
+      continue;
+    }
+    if (!entry.isFile() || !/\.(?:[cm]?[jt]sx?)$/u.test(entry.name)) continue;
+    const source = await readFile(path, "utf8");
+    for (const needle of needles) {
+      if (source.includes(needle)) {
+        result.push(`${relative(ROOT, path)}:${needle}`);
+      }
+    }
+  }
+  return result;
+}
+
 export async function verifyProviderCustody() {
   const descriptorPath = join(RELEASE, "version.json");
   const registryPath = join(RELEASE, "registry.json");
@@ -180,6 +203,24 @@ export async function verifyProviderCustody() {
   assert(
     !(await containsFile(join(ROOT, "provider", "examples"))),
     "active Takosumi provider examples must be absent",
+  );
+  const activeAuthority = [];
+  for (const root of ["contract", "core", "deploy", "runner"]) {
+    await findForbiddenActiveProviderAuthority(
+      join(ROOT, root),
+      [
+        "TAKOSUMI_RUN_INTERFACE_API_URL",
+        "TAKOSUMI_RUN_TOKEN_SECRET",
+        "capsuleRunMutable",
+        "capsule-run-token",
+        "takrun_",
+      ],
+      activeAuthority,
+    );
+  }
+  assert(
+    activeAuthority.length === 0,
+    `retired Takosumi provider authority returned: ${activeAuthority.join(", ")}`,
   );
 
   const forbiddenScripts = [
