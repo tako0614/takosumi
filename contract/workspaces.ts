@@ -12,6 +12,7 @@
 
 import type { PolicyConfig } from "./install-configs.ts";
 import type { BillingSettings } from "./billing.ts";
+import type { Page, PageParams } from "./pagination.ts";
 
 export type WorkspaceType = "personal" | "organization";
 
@@ -97,6 +98,31 @@ export interface Workspace {
   readonly policy?: PolicyConfig;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/**
+ * Stable account-scoped Workspace list orders used by the account/dashboard
+ * composition. `created_asc` preserves the public `/api/v1/workspaces` order;
+ * `updated_desc` preserves the dashboard switcher's most-recent-first order.
+ */
+export type AccountWorkspaceListOrder = "created_asc" | "updated_desc";
+
+/**
+ * Internal account-scoped Workspace page request. The cursor is the same
+ * opaque keyset token as other control-plane lists; callers must not decode it.
+ */
+export interface AccountWorkspaceListParams extends PageParams {
+  readonly includeArchived?: boolean;
+  readonly order?: AccountWorkspaceListOrder;
+}
+
+/**
+ * Bounded canonical-membership Workspace page. `total` counts all matching
+ * active memberships before the cursor so dashboard truncation metadata does
+ * not require materializing the full list.
+ */
+export interface AccountWorkspacePage extends Page<Workspace> {
+  readonly total: number;
 }
 
 /** Capsule full name (`@workspace/name`) helper shape. */
