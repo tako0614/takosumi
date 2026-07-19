@@ -37,7 +37,7 @@ afterEach(async () => {
 });
 
 describe("provider release workflow authority", () => {
-  test("is a pinned two-phase workflow with one protected mutation job", async () => {
+  test("is a pinned two-phase workflow with controller-authorized mutation", async () => {
     const source = await Bun.file(
       new URL("../../.github/workflows/provider-release.yml", import.meta.url),
     ).text();
@@ -74,7 +74,7 @@ describe("provider release workflow authority", () => {
     expect(workflow.jobs.candidate.if).toBe("inputs.phase == 'candidate'");
     expect(workflow.jobs.candidate.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.promote.if).toBe("inputs.phase == 'promote'");
-    expect(workflow.jobs.promote.environment).toBe("provider-release");
+    expect(workflow.jobs.promote.environment).toBeUndefined();
     expect(workflow.jobs.promote.permissions).toEqual({
       actions: "read",
       attestations: "write",

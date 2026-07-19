@@ -52,6 +52,12 @@ version.
   then derive the aggregate index by deterministically merging those releases.
   With no approved release they emit an empty index and no provider artifacts.
   They never rebuild or republish a quarantined provider version.
+- Stable promotion accepts only the ecosystem release-safety controller's
+  automatic, digest-bound single-operator technical authorization after staging
+  and a fresh production-equivalent replica. It does not depend on a GitHub
+  protected environment reviewer. Signed annotated tags, artifact signatures,
+  Sigstore transparency evidence, immutable public-path readback, and external
+  registry/mirror admission remain independent fail-closed gates.
 
 The current mixed provider keeps the supported `takosumi_*` form state and
 `takosumi_target_pool` ownership. Future portable Service Form resources move

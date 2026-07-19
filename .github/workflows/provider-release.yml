@@ -61,7 +61,7 @@ on:
         default: ""
         type: string
       authorization_digest:
-        description: Protected controller authorization evidence digest
+        description: Controller technical-authorization evidence digest
         required: false
         default: ""
         type: string
@@ -294,7 +294,6 @@ jobs:
     if: inputs.phase == 'promote'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    environment: provider-release
     permissions:
       actions: read
       attestations: write
