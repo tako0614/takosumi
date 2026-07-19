@@ -5,6 +5,10 @@ import {
   ensureD1OpenTofuLedgerSchema,
 } from "../../../worker/src/d1_opentofu_store.ts";
 
+import {
+  TAKOFORM_FORM_HOST_API_PATH,
+  TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
+} from "../../../contract/form-host-interoperability.ts";
 import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
@@ -24,6 +28,7 @@ import {
   handlePlatformMetricsDashboardRequest,
   handlePlatformMetricsRequest,
   handlePlatformResourceShapeApiRequest,
+  handlePlatformTakoformDiscoveryRequest,
   handlePlatformRunOwnerRequest,
   handleSourceWebhookRequest,
   isOperatorBillingPath,
@@ -64,6 +69,7 @@ import {
   type SourcePollOperations,
   type SourceWebhookOperations,
 } from "../../../deploy/platform/worker.ts";
+import { platformResourceInterfaceWorkspaceResolver } from "../../../worker/src/deploy_control_seam.ts";
 import { createManagedProviderRunToken } from "../../../core/shared/managed_provider_tokens.ts";
 import {
   createInMemoryResourceShapeStores,
@@ -1358,6 +1364,18 @@ test("platformExtensionRoutes rejects malformed descriptors", () => {
       ]),
     }),
   ).toThrow("capabilities");
+  for (const basePath of [
+    "/v1/form-availability",
+    TAKOFORM_FORM_HOST_API_PATH,
+  ]) {
+    expect(() =>
+      platformExtensionRoutes({
+        TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+          { basePath, handlerKey: "X" },
+        ]),
+      }),
+    ).toThrow("overlaps a Takosumi core route prefix");
+  }
 });
 
 test("the seam claims no extension path when TAKOSUMI_PLATFORM_EXTENSIONS is unset", async () => {
@@ -1426,9 +1444,7 @@ test("platform worker exposes product discovery before accounts handler", async 
     "VectorIndex",
   ]);
   expect(capabilitiesBody.adapters.cloudflare).toBeUndefined();
-  expect(
-    capabilitiesBody.compat["compat.example.v1"],
-  ).toBeUndefined();
+  expect(capabilitiesBody.compat["compat.example.v1"]).toBeUndefined();
   expect(capabilitiesBody.operator.usage_showback).toBe(false);
   expect(capabilitiesBody).not.toHaveProperty("commercial");
 });
@@ -1678,6 +1694,15 @@ test("platform Resource Shape API does not advertise shapes without an operator 
 
 test("platform Resource Shape API routes are routed before accounts and bearer-gated", async () => {
   expect(isPlatformResourceShapeApiPath("/v1/resources")).toBe(true);
+  expect(isPlatformResourceShapeApiPath("/v1/form-availability")).toBe(true);
+  expect(isPlatformResourceShapeApiPath(TAKOFORM_FORM_HOST_API_PATH)).toBe(
+    true,
+  );
+  expect(
+    isPlatformResourceShapeApiPath(
+      `${TAKOFORM_FORM_HOST_API_PATH}/interfaces/mcp.server`,
+    ),
+  ).toBe(true);
   expect(isPlatformResourceShapeApiPath("/v1/interfaces")).toBe(true);
   expect(isPlatformResourceShapeApiPath("/v1/interfaces/if_1/bindings")).toBe(
     true,
@@ -1746,6 +1771,121 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
     env,
   );
   expect(authorized.status).toBe(200);
+});
+
+test("platform exposes public Takoform discovery and fences portable reads to an existing Workspace", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const workspaceId = "workspace_takoform";
+  await new CloudflareD1OpenTofuControlStore(db).putWorkspace({
+    id: workspaceId,
+    handle: "takoform",
+    displayName: "Takoform Workspace",
+    type: "personal",
+    ownerUserId: "user_takoform",
+    createdAt: "2026-07-19T00:00:00.000Z",
+    updatedAt: "2026-07-19T00:00:00.000Z",
+  });
+  const env = {
+    TAKOSUMI_CONTROL_DB: db,
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+  } as never;
+
+  const resolveWorkspace = platformResourceInterfaceWorkspaceResolver(env);
+  expect(
+    await resolveWorkspace({
+      resourceSpaceId: workspaceId,
+      resourceId: `tkrn:${workspaceId}:ObjectBucket:assets`,
+    }),
+  ).toBe(workspaceId);
+  expect(
+    await resolveWorkspace({
+      resourceSpaceId: "workspace_missing",
+      resourceId: "tkrn:workspace_missing:ObjectBucket:assets",
+    }),
+  ).toBeUndefined();
+
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const discovery = await worker.fetch(
+    new Request(
+      `https://app.takosumi.com${TAKOFORM_FORM_HOST_WELL_KNOWN_PATH}`,
+      { headers: { authorization: "Bearer must-not-be-forwarded" } },
+    ),
+    env,
+  );
+  expect(discovery.status).toBe(200);
+  expect(await discovery.json()).toMatchObject({
+    features: { interface_declarations: true },
+    endpoints: {
+      api: `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}`,
+      interfaces: `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}/interfaces`,
+    },
+  });
+
+  const unauthenticated = await handlePlatformResourceShapeApiRequest(
+    new Request(
+      `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}/interfaces?space=${workspaceId}`,
+    ),
+    env,
+    async () => ({ authenticated: false }),
+  );
+  expect(unauthenticated.status).toBe(401);
+
+  const verify = async () => ({
+    authenticated: true as const,
+    authKind: "personal-access-token" as const,
+    subject: "user_takoform",
+    scopes: ["read"],
+  });
+  const workspaceAccess = async (
+    _request: Request,
+    _env: unknown,
+    requestedWorkspaceId: string,
+  ) => requestedWorkspaceId === workspaceId;
+  const interfaces = await handlePlatformResourceShapeApiRequest(
+    new Request(
+      `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}/interfaces?space=${workspaceId}`,
+    ),
+    env,
+    verify,
+    workspaceAccess,
+  );
+  expect(interfaces.status).toBe(200);
+  expect(await interfaces.json()).toEqual({ interfaces: [] });
+
+  const availability = await handlePlatformResourceShapeApiRequest(
+    new Request(
+      `https://app.takosumi.com/v1/form-availability?space=${workspaceId}`,
+    ),
+    env,
+    verify,
+    workspaceAccess,
+  );
+  expect(availability.status).toBe(200);
+  expect(await availability.json()).toEqual({ forms: [] });
+
+  const crossWorkspace = await handlePlatformResourceShapeApiRequest(
+    new Request(
+      `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}/interfaces?space=workspace_other`,
+    ),
+    env,
+    async () => ({ ...(await verify()), workspaceId }),
+  );
+  expect(crossWorkspace.status).toBe(403);
+  expect(await crossWorkspace.json()).toEqual({
+    error: "access_denied",
+    error_description: "workspace context is not authorized",
+  });
+
+  const disabledDiscovery = await handlePlatformTakoformDiscoveryRequest(
+    new Request(
+      `https://app.takosumi.com${TAKOFORM_FORM_HOST_WELL_KNOWN_PATH}`,
+    ),
+    {} as never,
+  );
+  expect(disabledDiscovery.status).toBe(404);
 });
 
 test("platform Resource Shape API accepts user tokens without applying hosted pricing in OSS", async () => {
@@ -2043,11 +2183,7 @@ test("compatibility reads are profile-scoped while operator recovery reads every
     ),
   );
   await stores.resources.upsert(
-    record(
-      "compat-api",
-      "compat.example.v1",
-      "2026-07-15T00:00:01.000Z",
-    ),
+    record("compat-api", "compat.example.v1", "2026-07-15T00:00:01.000Z"),
   );
   const env = {
     TAKOSUMI_CONTROL_DB: database,
@@ -2069,9 +2205,7 @@ test("compatibility reads are profile-scoped while operator recovery reads every
     ],
   } as const;
   const compatibility = await createPlatformCompatibilityAuthority({
-    request: new Request(
-      "https://operator.example.test/compat/example/v1",
-    ),
+    request: new Request("https://operator.example.test/compat/example/v1"),
     env,
     route,
     session: {

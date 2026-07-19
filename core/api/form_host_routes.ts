@@ -6,6 +6,7 @@ import type {
   JsonObject,
   ResourceObject,
   ResourceShapeKind,
+  TakoformDeclaredInterface,
   TakoformResource,
   TakoformHostErrorCode,
 } from "takosumi-contract";
@@ -25,6 +26,7 @@ import type {
   ResourceShapeService,
 } from "../domains/resource-shape/mod.ts";
 import { formatResourceShapeId } from "../domains/resource-shape/mod.ts";
+import { PortableDeclarationReadLimitError } from "../domains/interfaces/portable_declarations.ts";
 import { readJsonObject, requestIdFromContext } from "./errors.ts";
 import { parsePageQuery } from "./page_query.ts";
 
@@ -40,6 +42,17 @@ export interface PortableFormAvailabilityReader {
   }): Promise<Page<FormAvailability>>;
 }
 
+export interface PortableInterfaceDeclarationReader {
+  listDeclaredInterfaces(input: {
+    readonly actor: ActorContext;
+    readonly space: string;
+    readonly name?: string;
+    readonly version?: string;
+    readonly resourceKind?: string;
+    readonly resourceName?: string;
+  }): Promise<readonly TakoformDeclaredInterface[]>;
+}
+
 export type PortableFormHostAuthResult =
   | { readonly ok: true; readonly actor: ActorContext }
   | { readonly ok: false; readonly response: Response };
@@ -50,6 +63,7 @@ export interface RegisterPortableFormHostRoutesOptions {
   /** Uses the same trusted principal resolution as the canonical Resource API. */
   readonly authorize: (c: Context) => Promise<PortableFormHostAuthResult>;
   readonly canReadForms: (actor: ActorContext) => boolean;
+  readonly interfaceDeclarations?: PortableInterfaceDeclarationReader;
 }
 
 /**
@@ -62,10 +76,89 @@ export function registerPortableFormHostRoutes(
   options: RegisterPortableFormHostRoutesOptions,
 ): void {
   const base = TAKOFORM_FORM_HOST_API_PATH;
+  const declarations = options.interfaceDeclarations;
 
   app.get(TAKOFORM_FORM_HOST_WELL_KNOWN_PATH, (c) =>
-    c.json(createTakoformHostDiscovery(new URL(c.req.url).origin), 200),
+    c.json(
+      createTakoformHostDiscovery(new URL(c.req.url).origin, {
+        interfaceDeclarations: declarations !== undefined,
+      }),
+      200,
+    ),
   );
+
+  if (declarations) {
+    app.get(`${base}/interfaces`, async (c) => {
+      const auth = await options.authorize(c);
+      if (!auth.ok) return portableAuthError(c, auth.response);
+      if (!options.canReadForms(auth.actor)) {
+        return portableError(
+          c,
+          "permission_denied",
+          "interface declaration read scope is required",
+          403,
+        );
+      }
+      const query = declarationQuery(c);
+      if (!query.ok) return query.response;
+      const listed = await readPortableDeclarations(c, declarations, {
+        actor: auth.actor,
+        ...query.value,
+      });
+      if (!listed.ok) return listed.response;
+      return c.json({ interfaces: listed.value }, 200);
+    });
+
+    app.get(`${base}/interfaces/:name`, async (c) => {
+      const auth = await options.authorize(c);
+      if (!auth.ok) return portableAuthError(c, auth.response);
+      if (!options.canReadForms(auth.actor)) {
+        return portableError(
+          c,
+          "permission_denied",
+          "interface declaration read scope is required",
+          403,
+        );
+      }
+      const query = declarationQuery(c);
+      if (!query.ok) return query.response;
+      const name = c.req.param("name");
+      if (!name) return failed(c, "interface name is required").response;
+      const listed = await readPortableDeclarations(c, declarations, {
+        actor: auth.actor,
+        ...query.value,
+        name,
+      });
+      if (!listed.ok) return listed.response;
+      const matches = listed.value;
+      if (matches.length === 0) {
+        return portableError(
+          c,
+          "resource_not_found",
+          "no declared interface matches that exact identity",
+          404,
+        );
+      }
+      if (matches.length !== 1) {
+        const versions = new Set(matches.map((match) => match.version));
+        if (query.value.version === undefined && versions.size > 1) {
+          return portableError(
+            c,
+            "interface_identity_ambiguous",
+            "interface name matches multiple visible versions; provide version",
+            409,
+          );
+        }
+        return portableError(
+          c,
+          "interface_instance_ambiguous",
+          "declared interface identity matches multiple visible instances; provide version and Resource selector",
+          409,
+        );
+      }
+      return c.json(matches[0]!, 200);
+    });
+  }
 
   app.get(`${base}/forms`, async (c) => {
     const auth = await options.authorize(c);
@@ -175,20 +268,27 @@ export function registerPortableFormHostRoutes(
       true,
     );
     if (!parsed.ok) return parsed.response;
-    const available = await requireAvailableForm(
-      c,
-      options,
-      auth.actor,
-      parsed.request,
-      "import",
-    );
-    if (!available.ok) return available.response;
     const nativeId = stringValue(parsed.body.nativeId);
     if (!nativeId)
       return portableError(c, "invalid_argument", "nativeId is required", 400);
-    const result = await options.service.importResource({
+    const importRequest = {
       ...parsed.request,
       nativeId,
+    };
+    const replayStatus =
+      await options.service.importReplayStatus(importRequest);
+    if (!replayStatus) {
+      const available = await requireAvailableForm(
+        c,
+        options,
+        auth.actor,
+        parsed.request,
+        "import",
+      );
+      if (!available.ok) return available.response;
+    }
+    const result = await options.service.importResource(importRequest, {
+      replayOnly: replayStatus !== undefined,
     });
     if (!result.ok) return serviceError(c, result.error);
     return portableJson(
@@ -840,6 +940,59 @@ function requiredQuery(c: Context, key: string) {
   return value
     ? { ok: true as const, value }
     : failed(c, `${key} query is required`);
+}
+
+function declarationQuery(c: Context):
+  | {
+      readonly ok: true;
+      readonly value: {
+        readonly space: string;
+        readonly name?: string;
+        readonly version?: string;
+        readonly resourceKind?: string;
+        readonly resourceName?: string;
+      };
+    }
+  | { readonly ok: false; readonly response: Response } {
+  const space = requiredQuery(c, "space");
+  if (!space.ok) return space;
+  const name = c.req.query("name")?.trim() || undefined;
+  const version = c.req.query("version")?.trim() || undefined;
+  const resourceKind = c.req.query("resourceKind")?.trim() || undefined;
+  const resourceName = c.req.query("resourceName")?.trim() || undefined;
+  if ((resourceKind === undefined) !== (resourceName === undefined)) {
+    return failed(c, "resourceKind and resourceName must be provided together");
+  }
+  return {
+    ok: true,
+    value: {
+      space: space.value,
+      ...(name ? { name } : {}),
+      ...(version ? { version } : {}),
+      ...(resourceKind && resourceName ? { resourceKind, resourceName } : {}),
+    },
+  };
+}
+
+async function readPortableDeclarations(
+  c: Context,
+  reader: PortableInterfaceDeclarationReader,
+  input: Parameters<
+    PortableInterfaceDeclarationReader["listDeclaredInterfaces"]
+  >[0],
+): Promise<
+  | { readonly ok: true; readonly value: readonly TakoformDeclaredInterface[] }
+  | { readonly ok: false; readonly response: Response }
+> {
+  try {
+    return { ok: true, value: await reader.listDeclaredInterfaces(input) };
+  } catch (error) {
+    if (!(error instanceof PortableDeclarationReadLimitError)) throw error;
+    return {
+      ok: false,
+      response: portableError(c, "invalid_argument", error.message, 400),
+    };
+  }
 }
 
 function pageQuery(c: Context) {

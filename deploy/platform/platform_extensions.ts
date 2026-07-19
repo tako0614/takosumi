@@ -88,10 +88,12 @@ export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
   "/v1/auth",
   "/v1/privacy",
   "/v1/capabilities",
+  "/v1/form-availability",
   "/v1/interfaces",
   "/v1/resources",
   "/v1/target-pools",
   "/v1/space-policies",
+  "/apis/forms.takoform.com/v1alpha1",
 ] as const;
 
 export function platformExtensionRoutes(env: {

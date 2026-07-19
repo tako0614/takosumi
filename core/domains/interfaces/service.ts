@@ -243,6 +243,12 @@ export type InterfaceServiceMaterialization =
   | {
       readonly compatibilityProfile: string;
       readonly compatibilityKey: string;
+    }
+  | {
+      readonly formRefKey: string;
+      readonly formSchemaDigest: string;
+      readonly descriptorName: string;
+      readonly descriptorVersion: string;
     };
 
 export type InterfaceBindingServiceMaterialization =
@@ -526,6 +532,32 @@ export class InterfaceService {
   list(filter: InterfaceListFilter): Promise<readonly Interface[]> {
     const workspaceId = requireText(filter.workspaceId, "workspaceId");
     if (filter.type !== undefined) validateToken(filter.type, "type");
+    if (filter.ownerId !== undefined && filter.ownerIds !== undefined) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "ownerId and ownerIds are mutually exclusive",
+      );
+    }
+    if (filter.ownerIds !== undefined) {
+      if (filter.ownerIds.length > 50) {
+        throw new InterfaceServiceError(
+          "invalid_argument",
+          "ownerIds cannot contain more than 50 entries",
+        );
+      }
+      for (const ownerId of filter.ownerIds) requireText(ownerId, "ownerId");
+    }
+    if (
+      filter.limit !== undefined &&
+      (!Number.isSafeInteger(filter.limit) ||
+        filter.limit < 1 ||
+        filter.limit > 1000)
+    ) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "limit must be an integer between 1 and 1000",
+      );
+    }
     return this.#stores.interfaces.list({
       ...filter,
       workspaceId,
@@ -966,6 +998,15 @@ export class InterfaceService {
       );
     }
     const current = await this.get(id);
+    if (
+      actor !== undefined &&
+      current.metadata.materializedFrom?.source === "form_descriptor"
+    ) {
+      throw new InterfaceServiceError(
+        "failed_precondition",
+        "Form descriptor Interface desired state is owned by its exact Form",
+      );
+    }
     if (current.status.phase === "Retired") {
       throw new InterfaceServiceError(
         "failed_precondition",
@@ -1493,6 +1534,15 @@ export class InterfaceService {
     expectedResolvedRevision?: number,
   ): Promise<Interface> {
     const current = await this.get(id);
+    if (
+      actor !== undefined &&
+      current.metadata.materializedFrom?.source === "form_descriptor"
+    ) {
+      throw new InterfaceServiceError(
+        "failed_precondition",
+        "Form descriptor Interface lifecycle is owned by its exact Form",
+      );
+    }
     if (current.status.phase === "Retired") return current;
     if (current.metadata.generation !== expectedGeneration) {
       throw new InterfaceServiceError(
@@ -2191,13 +2241,12 @@ export class InterfaceService {
     ) {
       return "claimed";
     }
-    const claimedBy =
-      await this.#stores.interfaces.findOAuth2ResourceClaim({
-        workspaceId: iface.metadata.workspaceId,
-        ownerKind: iface.metadata.ownerRef.kind,
-        ownerId: iface.metadata.ownerRef.id,
-        resource,
-      });
+    const claimedBy = await this.#stores.interfaces.findOAuth2ResourceClaim({
+      workspaceId: iface.metadata.workspaceId,
+      ownerKind: iface.metadata.ownerRef.kind,
+      ownerId: iface.metadata.ownerRef.id,
+      resource,
+    });
     return claimedBy && claimedBy !== iface.metadata.id
       ? "conflict"
       : "changed";
@@ -2597,7 +2646,9 @@ function materializeCapsuleBlueprintInputs(
     materialized[name] = {
       source: "resource_output",
       resourceId: requireText(raw.resourceId, `${name}.resourceId`),
-      outputName: requireText(raw.outputName, `${name}.outputName`),
+      ...(raw.outputName !== undefined
+        ? { outputName: requireText(raw.outputName, `${name}.outputName`) }
+        : {}),
       ...(raw.pointer !== undefined
         ? { pointer: validatePointer(raw.pointer, name) }
         : {}),
@@ -2719,7 +2770,9 @@ function normalizeInputs(
       normalized[name] = {
         source: "resource_output",
         resourceId: requireText(raw.resourceId, `${name}.resourceId`),
-        outputName: requireText(raw.outputName, `${name}.outputName`),
+        ...(raw.outputName !== undefined
+          ? { outputName: requireText(raw.outputName, `${name}.outputName`) }
+          : {}),
         ...(raw.pointer !== undefined
           ? { pointer: validatePointer(raw.pointer, name) }
           : {}),
@@ -2937,6 +2990,24 @@ function interfaceMaterialization(
   }
   if ("capsuleResource" in materialization) {
     return { source: "capsule_resource" };
+  }
+  if ("formRefKey" in materialization) {
+    return {
+      source: "form_descriptor",
+      formRefKey: requireText(materialization.formRefKey, "formRefKey"),
+      formSchemaDigest: requireText(
+        materialization.formSchemaDigest,
+        "formSchemaDigest",
+      ),
+      descriptorName: requireText(
+        materialization.descriptorName,
+        "descriptorName",
+      ),
+      descriptorVersion: requireText(
+        materialization.descriptorVersion,
+        "descriptorVersion",
+      ),
+    };
   }
   return {
     source: "compatibility_profile",

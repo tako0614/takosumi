@@ -44,6 +44,7 @@ import {
   formRefKey,
   installedFormReferenceKey,
   isInstalledFormReference,
+  isPortableInterfaceInputSource,
   isResourceShapeKind,
   NOOP_RESOURCE_DEPLOYMENT_ADMISSION,
   TAKOSUMI_API_VERSION,
@@ -263,6 +264,16 @@ export interface ResourceShapeServiceDeps {
     listDefinitions?(params?: PageParams): Promise<Page<FormDefinition>>;
     listActivations?(params?: PageParams): Promise<Page<FormActivation>>;
   };
+  /**
+   * Host composition proof for required portable Interface declarations.
+   * Returning a message rejects Form-backed admission before any adapter or
+   * backend mutation. Package installation remains independent of host
+   * capability so optional declarations stay portable.
+   */
+  readonly requiredFormInterfaceAdmission?: (input: {
+    readonly request: ApplyResourceRequest;
+    readonly definition: FormDefinition;
+  }) => Promise<string | undefined>;
   /** Absolute providerConfig URL values trusted by this operator. */
   readonly allowedProviderConfigUrls?: readonly string[];
   /** @deprecated Use allowedProviderConfigUrls. */
@@ -340,6 +351,7 @@ export class ResourceShapeService {
   readonly #moduleRegistry: ResourceShapeModuleRegistry;
   readonly #schemaRegistry: ResourceShapeSchemaRegistry;
   readonly #formRegistry: ResourceShapeServiceDeps["formRegistry"];
+  readonly #requiredFormInterfaceAdmission: ResourceShapeServiceDeps["requiredFormInterfaceAdmission"];
   readonly #activity: ActivityLedger | undefined;
   readonly #operationRuns: ResourceShapeServiceDeps["operationRuns"];
   readonly #deploymentAdmission: ResourceDeploymentAdmission;
@@ -360,6 +372,7 @@ export class ResourceShapeService {
     this.#schemaRegistry =
       deps.schemaRegistry ?? EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY;
     this.#formRegistry = deps.formRegistry;
+    this.#requiredFormInterfaceAdmission = deps.requiredFormInterfaceAdmission;
     this.#allowedProviderConfigUrls = new Set(
       (
         deps.allowedProviderConfigUrls ??
@@ -894,6 +907,7 @@ export class ResourceShapeService {
       this.#stores.resources.get(id),
       this.#stores.locks.get(id),
     ]);
+    const recoveringApplying = existing?.phase === "Applying";
     const versionError = resourceGenerationError(
       id,
       existing,
@@ -902,6 +916,7 @@ export class ResourceShapeService {
     if (versionError) return versionError;
     const form = await this.#resolveExactForm(req, existing, existingLock, {
       allowRetainedPackage: recoveryRequested,
+      skipRequiredInterfaceAdmission: recoveryRequested && recoveringApplying,
     });
     if (!form.ok) return form;
     const incomingManagedBy = req.managedBy ?? "opentofu";
@@ -922,7 +937,6 @@ export class ResourceShapeService {
         },
       };
     }
-    const recoveringApplying = existing?.phase === "Applying";
     if (recoveringApplying && !applyingRequestMatchesRecord(req, existing)) {
       return {
         ok: false,
@@ -969,7 +983,15 @@ export class ResourceShapeService {
     if (!resolvedConnections.ok) return resolvedConnections;
 
     const evidence = await resourceDeploymentEvidence(req, output, plan);
-    const reviewError = deploymentReviewError(review, evidence.planDigest);
+    // Recovery is an internal continuation of the already claimed Resource,
+    // pinned ResolutionLock, and canonical operation Run. Requiring a fresh
+    // preview digest after backend dispatch can strand Applying state when
+    // host composition changes. Keep the review envelope well-formed, but use
+    // the durable claim as recovery authority.
+    const reviewError =
+      recoveryRequested && recoveringApplying
+        ? deploymentReviewSyntaxError(review)
+        : deploymentReviewError(review, evidence.planDigest);
     if (reviewError) {
       return {
         ok: false,
@@ -1395,6 +1417,11 @@ export class ResourceShapeService {
         spaceId: req.space,
         resourceId: id,
       });
+      const lifecycleRecord = await this.#stores.resources.get(id);
+      const finalizedRecord =
+        lifecycleRecord?.generation === published.record.generation
+          ? lifecycleRecord
+          : published.record;
       let operationAuditComplete = true;
       if (operationRun) {
         const completed = await this.#completePluginOperationRun({
@@ -1489,7 +1516,7 @@ export class ResourceShapeService {
       }
       return {
         ok: true,
-        value: this.#assemble(published.record, published.lock),
+        value: this.#assemble(finalizedRecord, published.lock),
       };
     } catch (error) {
       if (adapterSucceeded) {
@@ -1676,8 +1703,21 @@ export class ResourceShapeService {
    * The adapter is required to prove a read-only import before this projection
    * becomes Ready; failed attempts remain removable ledger-only records.
    */
+  async importReplayStatus(
+    req: ImportResourceRequest,
+  ): Promise<"recovering" | "completed" | undefined> {
+    const id = formatResourceShapeId(req.space, req.kind, req.name);
+    const [existing, existingLock] = await Promise.all([
+      this.#stores.resources.get(id),
+      this.#stores.locks.get(id),
+    ]);
+    const requestDigest = await resourceImportRequestDigest(req);
+    return classifyImportReplay(req, existing, existingLock, requestDigest);
+  }
+
   async importResource(
     req: ImportResourceRequest,
+    options: { readonly replayOnly?: boolean } = {},
   ): Promise<ServiceResult<ImportResourceResult>> {
     if (
       req.nativeId.trim() === "" ||
@@ -1701,24 +1741,29 @@ export class ResourceShapeService {
       this.#stores.locks.get(id),
     ]);
     const importRequestDigest = await resourceImportRequestDigest(req);
-    const recoveringImport =
-      existing !== undefined &&
-      existingLock !== undefined &&
-      importRequestMatchesRecord(
-        req,
-        existing,
-        importRequestDigest,
-        "Applying",
-      );
-    const completedImport =
-      existing !== undefined &&
-      existingLock !== undefined &&
-      importRequestMatchesRecord(req, existing, importRequestDigest, "Ready");
+    const replayStatus = classifyImportReplay(
+      req,
+      existing,
+      existingLock,
+      importRequestDigest,
+    );
+    const recoveringImport = replayStatus === "recovering";
+    const completedImport = replayStatus === "completed";
+    if (options.replayOnly === true && !replayStatus) {
+      return {
+        ok: false,
+        error: {
+          code: "import_conflict",
+          message: `resource ${id} no longer matches the replayed import request`,
+        },
+      };
+    }
     const form = await this.#resolveExactForm(req, existing, existingLock, {
       allowRetainedPackage: recoveringImport || completedImport,
+      skipRequiredInterfaceAdmission: recoveringImport || completedImport,
     });
     if (!form.ok) return form;
-    if (completedImport) {
+    if (completedImport && existing && existingLock) {
       return {
         ok: true,
         value: {
@@ -2168,10 +2213,15 @@ export class ResourceShapeService {
       spaceId: req.space,
       resourceId: id,
     });
+    const lifecycleRecord = await this.#stores.resources.get(id);
+    const finalizedRecord =
+      lifecycleRecord?.generation === persisted.record.generation
+        ? lifecycleRecord
+        : persisted.record;
     const successMetadata = {
       generation: 1,
       observedGeneration: 1,
-      phase: "Ready" as const,
+      phase: finalizedRecord.phase,
       nativeResourceCount: result.nativeResources.length,
     };
     if (operationRun) {
@@ -2203,7 +2253,7 @@ export class ResourceShapeService {
     return {
       ok: true,
       value: {
-        resource: this.#assemble(persisted.record, persisted.lock),
+        resource: this.#assemble(finalizedRecord, persisted.lock),
         import: {
           summary: result.summary,
           ...(operationRun
@@ -3207,10 +3257,15 @@ export class ResourceShapeService {
       spaceId: space,
       resourceId: id,
     });
+    const lifecycleRecord = await this.#stores.resources.get(id);
+    const finalizedRecord =
+      lifecycleRecord?.generation === persisted.record.generation
+        ? lifecycleRecord
+        : persisted.record;
     const successMetadata = {
-      generation: persisted.record.generation,
-      observedGeneration: persisted.record.observedGeneration,
-      phase: persisted.record.phase,
+      generation: finalizedRecord.generation,
+      observedGeneration: finalizedRecord.observedGeneration,
+      phase: finalizedRecord.phase,
       nativeResourceCount: result.nativeResources.length,
     };
     if (operationRun) {
@@ -3242,7 +3297,7 @@ export class ResourceShapeService {
     return {
       ok: true,
       value: {
-        resource: this.#assemble(persisted.record, refreshedLock),
+        resource: this.#assemble(finalizedRecord, refreshedLock),
         refresh: {
           summary: result.summary,
           ...(operationRun
@@ -4615,7 +4670,16 @@ export class ResourceShapeService {
     request: ApplyResourceRequest,
     existing: ResourceShapeRecord | undefined,
     existingLock: ResolutionLockRecord | undefined,
-    options: { readonly allowRetainedPackage?: boolean } = {},
+    options: {
+      readonly allowRetainedPackage?: boolean;
+      /**
+       * A backend-dispatched recovery or completed import replay consumes its
+       * pinned prior admission. Re-running current host capability admission
+       * here can strand Applying state or turn an idempotent success into a
+       * conflict after operator composition changes.
+       */
+      readonly skipRequiredInterfaceAdmission?: boolean;
+    } = {},
   ): Promise<ServiceResult<InstalledFormReference | undefined>> {
     if (
       existing &&
@@ -4692,6 +4756,44 @@ export class ResourceShapeService {
           message: `exact Form ${installedFormReferenceKey(request.form)} is not installed and executable`,
         },
       };
+    }
+    const missingInterfaceCapability =
+      requiredInterfaceCapabilityMissing(definition);
+    if (missingInterfaceCapability) {
+      return {
+        ok: false,
+        error: {
+          code: "capability_missing",
+          message: missingInterfaceCapability,
+        },
+      };
+    }
+    if (
+      options.skipRequiredInterfaceAdmission !== true &&
+      this.#requiredFormInterfaceAdmission &&
+      definition.interfaceDescriptors?.some(
+        (descriptor) => descriptor.required === true,
+      )
+    ) {
+      let hostAdmissionFailure: string | undefined;
+      try {
+        hostAdmissionFailure = await this.#requiredFormInterfaceAdmission({
+          request,
+          definition,
+        });
+      } catch {
+        hostAdmissionFailure =
+          "required Interface host admission could not be verified";
+      }
+      if (hostAdmissionFailure) {
+        return {
+          ok: false,
+          error: {
+            code: "capability_missing",
+            message: hostAdmissionFailure,
+          },
+        };
+      }
     }
     return { ok: true, value: definition.identity };
   }
@@ -5120,7 +5222,12 @@ export class ResourceShapeService {
     } else if (packageRecord?.status === "deprecated") {
       executableReason = "package_deprecated";
     } else if (!schemaInstalled) executableReason = "schema_unavailable";
-    else if (!sawDescriptor) executableReason = "implementation_unavailable";
+    else if (
+      input.definition &&
+      requiredInterfaceCapabilityMissing(input.definition)
+    ) {
+      executableReason = "interface_capability_missing";
+    } else if (!sawDescriptor) executableReason = "implementation_unavailable";
     else if (!sawInstalledModule) {
       executableReason = "implementation_unavailable";
     } else if (executablePools.length === 0) {
@@ -5186,6 +5293,31 @@ export class ResourceShapeService {
 }
 
 // --- helpers (module-level, pure) ---------------------------------------------
+
+/**
+ * Portable literal/output mappings are the only Interface input sources Core
+ * can materialize without an explicitly composed host extension. A required
+ * descriptor must therefore fail admission before any backend mutation when
+ * this host cannot satisfy its source contract. Optional descriptors remain
+ * installable and are omitted at materialization time.
+ */
+function requiredInterfaceCapabilityMissing(
+  definition: FormDefinition,
+): string | undefined {
+  for (const descriptor of definition.interfaceDescriptors ?? []) {
+    if (descriptor.required !== true) continue;
+    const unsupported = (descriptor.inputs ?? []).find(
+      (input) => !isPortableInterfaceInputSource(input.source),
+    );
+    if (unsupported) {
+      return (
+        `required Interface ${descriptor.name}@${descriptor.version} ` +
+        `needs unsupported host input source ${unsupported.source}`
+      );
+    }
+  }
+  return undefined;
+}
 
 function versionOf(record: ResourceShapeRecord): {
   readonly generation: number;
@@ -5455,6 +5587,21 @@ function importRequestMatchesRecord(
   );
 }
 
+function classifyImportReplay(
+  request: ImportResourceRequest,
+  record: ResourceShapeRecord | undefined,
+  lock: ResolutionLockRecord | undefined,
+  requestDigest: string,
+): "recovering" | "completed" | undefined {
+  if (!record || !lock) return undefined;
+  if (importRequestMatchesRecord(request, record, requestDigest, "Applying")) {
+    return "recovering";
+  }
+  return importRequestMatchesRecord(request, record, requestDigest, "Ready")
+    ? "completed"
+    : undefined;
+}
+
 function toTargetPool(record: TargetPoolRecord): TargetPool {
   return {
     apiVersion: TAKOSUMI_API_VERSION,
@@ -5640,11 +5787,19 @@ function deploymentReviewError(
   review: ResourceDeploymentReview,
   expectedPlanDigest: string,
 ): string | undefined {
-  if (!SHA256_DIGEST_PATTERN.test(review.planDigest)) {
-    return "deployment review planDigest must be a SHA-256 digest";
-  }
+  const syntaxError = deploymentReviewSyntaxError(review);
+  if (syntaxError) return syntaxError;
   if (review.planDigest !== expectedPlanDigest) {
     return "deployment changed after preview; preview the current service definition again";
+  }
+  return undefined;
+}
+
+function deploymentReviewSyntaxError(
+  review: ResourceDeploymentReview,
+): string | undefined {
+  if (!SHA256_DIGEST_PATTERN.test(review.planDigest)) {
+    return "deployment review planDigest must be a SHA-256 digest";
   }
   if (Boolean(review.quoteId) !== Boolean(review.quoteDigest)) {
     return "deployment review must provide quoteId and quoteDigest together";

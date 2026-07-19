@@ -142,7 +142,9 @@ export class OutputBackedInterfaceInputResolver implements InterfaceInputResolve
         source: "resource_output",
         resourceId: source.resourceId,
         resourceGeneration: resource.generation,
-        outputName: source.outputName,
+        ...(source.outputName !== undefined
+          ? { outputName: source.outputName }
+          : {}),
         ...(source.pointer === undefined ? {} : { pointer: source.pointer }),
       };
     }
@@ -269,7 +271,7 @@ export class OutputBackedInterfaceInputResolver implements InterfaceInputResolve
 
 function selectOutput(
   outputs: Readonly<Record<string, unknown>>,
-  outputName: string,
+  outputName?: string,
   pointer?: string,
 ):
   | { readonly ok: true; readonly value: JsonValue }
@@ -277,13 +279,16 @@ function selectOutput(
       readonly ok: false;
       readonly message: string;
     } {
-  if (!Object.prototype.hasOwnProperty.call(outputs, outputName)) {
+  if (
+    outputName !== undefined &&
+    !Object.prototype.hasOwnProperty.call(outputs, outputName)
+  ) {
     return {
       ok: false,
       message: `output ${outputName} is missing, sensitive, or excluded by output policy`,
     };
   }
-  let value: unknown = outputs[outputName];
+  let value: unknown = outputName === undefined ? outputs : outputs[outputName];
   if (pointer !== undefined && pointer !== "") {
     for (const encoded of pointer.slice(1).split("/")) {
       const token = encoded.replaceAll("~1", "/").replaceAll("~0", "~");
@@ -305,10 +310,10 @@ function selectOutput(
       }
     }
   }
-  if (value === null || value === undefined || !isJsonValue(value)) {
+  if (value === undefined || !isJsonValue(value)) {
     return {
       ok: false,
-      message: `output ${outputName} resolved to null or a non-JSON value`,
+      message: `output ${outputName ?? "document"} resolved to a non-JSON value`,
     };
   }
   return { ok: true, value };

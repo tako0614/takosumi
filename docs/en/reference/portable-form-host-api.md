@@ -13,6 +13,8 @@ second lifecycle or idempotency ledger.
 
 - `endpoints.api`: `/apis/forms.takoform.com/v1alpha1`, the exact FormRef API;
 - `endpoints.forms`: principal-scoped exact Form availability;
+- `endpoints.interfaces`: read-only portable Interface declarations
+  materialized for Form-backed Resources;
 - `endpoints.capabilities`: the existing `/v1/capabilities` compatibility
   endpoint;
 - `endpoints.compatibility_api`: the existing `/v1` candidate API.
@@ -29,6 +31,10 @@ the versioned contract before it can count as portable-host conformance.
 The versioned base is `/apis/forms.takoform.com/v1alpha1`:
 
 - `GET /forms` lists principal-scoped `FormAvailability` records;
+- `GET /interfaces` lists visible Interface declaration instances;
+- `GET /interfaces/{name}` reads one declaration identity and returns an
+  explicit ambiguity error until `version` and, when needed,
+  `resourceKind`/`resourceName` select one instance;
 - `POST /resources/preview` previews one exact desired Resource;
 - `PUT /resources/{kind}/{name}` creates or updates it;
 - `POST /resources/{kind}/{name}/import` imports a native identity;
@@ -58,6 +64,21 @@ implementation, manager, credential, capacity, price, SKU, quota, and SLA
 state. Raw canonical Outputs are also omitted because a generic host cannot
 prove which values are safe portable output fields. Audited runtime values are
 published through the Form's `Interface` contract.
+
+Interface declarations are read-only projections of ordinary Takosumi
+`Interface` records with exact `form_descriptor` lineage. Descriptor identity
+is `(name, version)` and runtime instance identity additionally includes the
+Form-backed Resource kind/name and Space. The endpoint exposes only the exact
+descriptor document and resolved public values. It never exposes the host
+Interface id, `InterfaceBinding`, bearer/token delivery, private declarations,
+or raw Resource Outputs. Declaration and authorization remain separate.
+
+A required descriptor is part of Resource admission. Takosumi rejects the
+initial mutation before adapter/backend execution when its input source or the
+explicit Resource-to-Workspace ownership bridge is unavailable. Backend-
+dispatched recovery consumes its pinned admission instead of re-running the
+current host check; if declaration materialization can no longer converge, the
+canonical Resource becomes `Degraded` rather than being reported `Ready`.
 
 ## Conformance runner
 

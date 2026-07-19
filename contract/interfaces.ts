@@ -17,6 +17,14 @@ export type InterfaceMaterializedFrom =
       readonly source: "compatibility_profile";
       readonly profile: string;
       readonly key: string;
+    }
+  | {
+      /** Portable Form descriptor; authorization remains host-owned. */
+      readonly source: "form_descriptor";
+      readonly formRefKey: string;
+      readonly formSchemaDigest: string;
+      readonly descriptorName: string;
+      readonly descriptorVersion: string;
     };
 
 /** Stable lexical contract shared by Interface producers and consumers. */
@@ -79,7 +87,8 @@ export interface InterfaceCapsuleOutputInput {
 export interface InterfaceResourceOutputInput {
   readonly source: "resource_output";
   readonly resourceId: string;
-  readonly outputName: string;
+  /** Omitted selects the complete public Resource output document. */
+  readonly outputName?: string;
   /** Optional RFC 6901 pointer into the Resource observed public output. */
   readonly pointer?: string;
 }
@@ -127,7 +136,7 @@ export interface InterfaceResourceOutputProvenance {
   readonly source: "resource_output";
   readonly resourceId: string;
   readonly resourceGeneration: number;
-  readonly outputName: string;
+  readonly outputName?: string;
   readonly pointer?: string;
 }
 

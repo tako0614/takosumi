@@ -1047,6 +1047,7 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
         "package_deprecated",
         "package_revoked",
         "schema_unavailable",
+        "interface_capability_missing",
         "implementation_unavailable",
         "adapter_unavailable",
         "activation_missing",

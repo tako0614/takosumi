@@ -127,6 +127,12 @@ export async function createWorkerServiceApp(
     readonly formPackageVerifier?: CreateTakosumiServiceOptions["formPackageVerifier"];
     /** Additional host proof for custom/external Interface OAuth resources. */
     readonly interfaceOAuth2ResourceAuthorizer?: CreateTakosumiServiceOptions["interfaceOAuth2ResourceAuthorizer"];
+    /**
+     * Explicit host-code bridge from a Resource namespace to an existing
+     * Workspace. Platform compositions inject their Workspace authority here;
+     * this is never populated from a Wrangler text variable.
+     */
+    readonly resolveResourceInterfaceWorkspace?: CreateTakosumiServiceOptions["resolveResourceInterfaceWorkspace"];
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
@@ -218,6 +224,7 @@ export async function createWorkerServiceApp(
   const billingExtensionFactory = billingExtensionFactoryFromEnv(env);
   const resourceDeploymentAdmission = resourceDeploymentAdmissionFromEnv(env);
   const resolveResourceInterfaceWorkspace =
+    options.resolveResourceInterfaceWorkspace ??
     resourceInterfaceWorkspaceResolverFromEnv(env);
   const interfaceCredentialIssuer = env.TAKOSUMI_ACCOUNTS_DB
     ? interfaceCredentialIssuerFromAccountsStore(

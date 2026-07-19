@@ -3898,6 +3898,10 @@ export async function ensureD1OpenTofuLedgerSchema(
       generation integer not null,
       resolved_revision integer not null,
       oauth_resource_uri text,
+      form_ref_key text,
+      form_schema_digest text,
+      descriptor_name text,
+      descriptor_version text,
       record_json text not null,
       created_at text not null,
       updated_at text not null
@@ -3910,6 +3914,11 @@ export async function ensureD1OpenTofuLedgerSchema(
     `create unique index if not exists interfaces_oauth_resource_claim_unique
       on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
       where oauth_resource_uri is not null`,
+    `create index if not exists interfaces_form_descriptor_idx
+      on interfaces (
+        workspace_id, form_ref_key, form_schema_digest,
+        descriptor_name, descriptor_version
+      ) where form_ref_key is not null`,
     `create table if not exists interface_bindings (
       id text primary key,
       workspace_id text not null,
@@ -5703,6 +5712,54 @@ legacy resolved Interfaces stay unclaimed until Binding refresh issuance or intr
           `create unique index if not exists interfaces_oauth_resource_claim_unique
            on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
            where oauth_resource_uri is not null`,
+        )
+        .run();
+    },
+  },
+  {
+    version: 48,
+    name: "d1_interface_form_descriptor_lineage",
+    checksumSource: `
+portable Form descriptor Interfaces project exact FormRef schema and descriptor name version
+all four columns remain null for every other Interface materialization source
+the immutable Interface record remains authority and the columns are query projections only
+`,
+    async atomicStatements(db) {
+      if (!(await d1TableExists(db, "interfaces"))) return [];
+      const columns = await d1ColumnNames(db, "interfaces");
+      return [
+        ...(columns.has("form_ref_key")
+          ? []
+          : [`alter table interfaces add column form_ref_key text`]),
+        ...(columns.has("form_schema_digest")
+          ? []
+          : [`alter table interfaces add column form_schema_digest text`]),
+        ...(columns.has("descriptor_name")
+          ? []
+          : [`alter table interfaces add column descriptor_name text`]),
+        ...(columns.has("descriptor_version")
+          ? []
+          : [`alter table interfaces add column descriptor_version text`]),
+        `create index if not exists interfaces_form_descriptor_idx
+         on interfaces (
+           workspace_id, form_ref_key, form_schema_digest,
+           descriptor_name, descriptor_version
+         ) where form_ref_key is not null`,
+      ];
+    },
+    async apply(db) {
+      if (!(await d1TableExists(db, "interfaces"))) return;
+      await ensureD1Column(db, "interfaces", "form_ref_key", "text");
+      await ensureD1Column(db, "interfaces", "form_schema_digest", "text");
+      await ensureD1Column(db, "interfaces", "descriptor_name", "text");
+      await ensureD1Column(db, "interfaces", "descriptor_version", "text");
+      await db
+        .prepare(
+          `create index if not exists interfaces_form_descriptor_idx
+           on interfaces (
+             workspace_id, form_ref_key, form_schema_digest,
+             descriptor_name, descriptor_version
+           ) where form_ref_key is not null`,
         )
         .run();
     },
