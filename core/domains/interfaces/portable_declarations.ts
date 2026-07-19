@@ -59,7 +59,6 @@ export function createPortableDeclarationReader(
           ) {
             continue;
           }
-          await options.ensureResourceDeclarations?.(resource);
           const resourceId = formatResourceShapeId(
             resource.metadata.space,
             resource.kind,
@@ -79,6 +78,9 @@ export function createPortableDeclarationReader(
           ) {
             continue;
           }
+          // Lazy repair is a write. Never let a scoped reader trigger it for a
+          // Resource outside the already-proven Workspace bridge.
+          await options.ensureResourceDeclarations?.(resource);
           const owned = await options.interfaces.list({
             workspaceId,
             ownerKind: "Resource",

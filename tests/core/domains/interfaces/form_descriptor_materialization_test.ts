@@ -156,6 +156,33 @@ test("portable Form descriptors preserve pair identity, exact document, and RFC 
       ],
     }),
   ).rejects.toBeInstanceOf(RequiredFormInterfaceError);
+
+  const upgradedForm: InstalledFormReference = {
+    formRef: {
+      ...FORM.formRef,
+      definitionVersion: "2.0.0",
+      schemaDigest: `sha256:${"3".repeat(64)}`,
+    },
+    packageDigest: `sha256:${"4".repeat(64)}`,
+  };
+  const upgraded = await ensureFormDescriptorInterfaces({
+    interfaces,
+    workspaceId: "workspace_1",
+    resourceId,
+    form: upgradedForm,
+    descriptors: [],
+  });
+  expect(upgraded.materialized).toEqual([]);
+  const upgradedHistory = await interfaces.list({
+    workspaceId: "workspace_1",
+    ownerKind: "Resource",
+    ownerId: resourceId,
+    includeRetired: true,
+  });
+  expect(upgradedHistory).toHaveLength(3);
+  expect(upgradedHistory.every((item) => item.status.phase === "Retired")).toBe(
+    true,
+  );
 });
 
 test("portable declaration reads paginate every Resource and enforce the explicit Workspace bridge", async () => {
@@ -201,9 +228,13 @@ test("portable declaration reads paginate every Resource and enforce the explici
     ],
   });
   const cursors: Array<string | undefined> = [];
+  let repairCalls = 0;
   const reader = createPortableDeclarationReader({
     interfaces,
     resolveWorkspace: async () => "workspace_1",
+    ensureResourceDeclarations: async () => {
+      repairCalls += 1;
+    },
     listResources: (_space, page) => {
       cursors.push(page.cursor);
       const offset = page.cursor ? Number(page.cursor) : 0;
@@ -240,6 +271,7 @@ test("portable declaration reads paginate every Resource and enforce the explici
       form: FORM,
     },
   ]);
+  expect(repairCalls).toBe(resources.length);
 
   expect(
     await reader.listDeclaredInterfaces({
@@ -253,4 +285,5 @@ test("portable declaration reads paginate every Resource and enforce the explici
       name: "mcp.server",
     }),
   ).toEqual([]);
+  expect(repairCalls).toBe(resources.length);
 });

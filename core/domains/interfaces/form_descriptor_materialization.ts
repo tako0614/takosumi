@@ -10,7 +10,7 @@ import type {
 } from "takosumi-contract";
 import { formRefKey, isPortableInterfaceInputSource } from "takosumi-contract";
 import { sha256HexAsync } from "../../shared/runtime/hash.ts";
-import { InterfaceService } from "./service.ts";
+import { InterfaceService, InterfaceServiceError } from "./service.ts";
 
 export type FormDescriptorSkipReason =
   "unsupported_source" | "name_taken" | "document_invalid" | "input_not_ready";
@@ -187,7 +187,68 @@ export async function ensureFormDescriptorInterfaces(
     history.push(created);
   }
 
+  const desiredLineages = new Set(
+    input.descriptors.map((descriptor) =>
+      descriptorLineageKey({
+        formRefKey: exactFormKey,
+        formSchemaDigest: input.form.formRef.schemaDigest,
+        descriptorName: descriptor.name,
+        descriptorVersion: descriptor.version,
+      }),
+    ),
+  );
+  for (const record of history) {
+    const source = record.metadata.materializedFrom;
+    if (
+      source?.source !== "form_descriptor" ||
+      record.status.phase === "Retired" ||
+      desiredLineages.has(descriptorLineageKey(source))
+    ) {
+      continue;
+    }
+    await retireStaleDescriptor(input.interfaces, record);
+  }
+
   return { materialized, skipped };
+}
+
+function descriptorLineageKey(input: {
+  readonly formRefKey: string;
+  readonly formSchemaDigest: string;
+  readonly descriptorName: string;
+  readonly descriptorVersion: string;
+}): string {
+  return [
+    input.formRefKey,
+    input.formSchemaDigest,
+    input.descriptorName,
+    input.descriptorVersion,
+  ].join("\0");
+}
+
+async function retireStaleDescriptor(
+  interfaces: InterfaceService,
+  initial: Interface,
+): Promise<void> {
+  let current = initial;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (current.status.phase === "Retired") return;
+    try {
+      await interfaces.retire(current.metadata.id, current.metadata.generation);
+      return;
+    } catch (error) {
+      if (
+        !(error instanceof InterfaceServiceError) ||
+        error.code !== "conflict"
+      )
+        throw error;
+      current = await interfaces.get(current.metadata.id);
+    }
+  }
+  throw new InterfaceServiceError(
+    "conflict",
+    "stale Form descriptor Interface changed during retirement",
+  );
 }
 
 async function descriptorRecordName(

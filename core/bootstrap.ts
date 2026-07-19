@@ -1774,13 +1774,13 @@ export async function createTakosumiService(
     const definition = await formRegistryService.getDefinition(
       resource.form.formRef,
     );
-    if (!definition?.interfaceDescriptors?.length) return;
+    if (!definition) return;
     await ensureFormDescriptorInterfaces({
       interfaces: interfaceService,
       workspaceId,
       resourceId,
       form: resource.form,
-      descriptors: definition.interfaceDescriptors,
+      descriptors: definition.interfaceDescriptors ?? [],
     });
   };
   const degradeRequiredFormInterface = async (
