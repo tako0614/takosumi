@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "kind": "takosumi.service-form-compatibility-removal-policy@v1",
+  "policyId": "resource-shape-compatibility-aliases-v1",
+  "scope": {
+    "apiGroup": "takosumi.dev/v1alpha1",
+    "resourceApiPrefix": "/v1/resources",
+    "providerAddresses": [
+      "registry.opentofu.org/takosjp/takosumi",
+      "registry.terraform.io/takosjp/takosumi"
+    ],
+    "legacyFormResourceTypes": [
+      "takosumi_container_service",
+      "takosumi_durable_workflow",
+      "takosumi_edge_worker",
+      "takosumi_kv_store",
+      "takosumi_object_bucket",
+      "takosumi_queue",
+      "takosumi_schedule",
+      "takosumi_sql_database",
+      "takosumi_stateful_actor_namespace",
+      "takosumi_vector_index"
+    ]
+  },
+  "supportWindow": {
+    "minimumDays": 365,
+    "startRule": "later-of-public-notice-and-stable-migration-availability",
+    "startedAt": null,
+    "minimumRemovalMajor": 2
+  },
+  "usageObservation": {
+    "minimumDays": 90,
+    "maximumLagDays": 7,
+    "requiredLegacyControlRequests": "0",
+    "requiredLegacyStateInstances": "0"
+  },
+  "requiredEvidence": [
+    "authorized-external-state-inventory",
+    "public-support-window-notice-and-elapsed-window",
+    "external-legacy-usage-observation",
+    "takosumi-provider-no-op-and-rollback-proof",
+    "takoform-remove-import-no-op-migration-proof",
+    "operator-retained-rollback-artifacts-and-restore-drill"
+  ],
+  "status": "announced-policy-window-not-started"
+}
