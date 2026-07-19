@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,10 +21,17 @@ import { assertExactRequestDeltas } from "../../scripts/lib/provider-proof-reque
 import { assertProviderStateIdentity } from "../../scripts/lib/provider-proof-state.mjs";
 
 describe("provider release compatibility", () => {
+  const goDigest = createHash("sha256").update("reviewed-go").digest("hex");
+  const digestCommand = async () => goDigest;
+
   test("uses the executable pinned Go toolchain after exact version verification", async () => {
     const commands: string[] = [];
     const command = await resolveCompatibilityGoCommand(
-      { path: "/usr/lib/go-1.26/bin/go", version: "go1.26.0" },
+      {
+        path: "/usr/lib/go-1.26/bin/go",
+        version: "go1.26.0",
+        sha256: goDigest,
+      },
       {
         accessCommand: async (path: string) => commands.push(`access:${path}`),
         findOnPath: () => "/opt/hostedtoolcache/go/1.26.0/x64/bin/go",
@@ -31,6 +39,7 @@ describe("provider release compatibility", () => {
           commands.push(`${path} ${args.join(" ")}`);
           return "go version go1.26.0 linux/amd64\n";
         },
+        digestCommand,
       },
     );
     expect(command).toBe("/usr/lib/go-1.26/bin/go");
@@ -42,7 +51,11 @@ describe("provider release compatibility", () => {
 
   test("falls back to PATH only when the pinned Go path is missing", async () => {
     const command = await resolveCompatibilityGoCommand(
-      { path: "/usr/lib/go-1.26/bin/go", version: "go1.26.0" },
+      {
+        path: "/usr/lib/go-1.26/bin/go",
+        version: "go1.26.0",
+        sha256: goDigest,
+      },
       {
         accessCommand: async () => {
           throw Object.assign(new Error("missing"), { code: "ENOENT" });
@@ -53,6 +66,7 @@ describe("provider release compatibility", () => {
           expect(path).toBe("/opt/hostedtoolcache/go/1.26.0/x64/bin/go");
           return "go version go1.26.0 linux/amd64\n";
         },
+        digestCommand,
       },
     );
     expect(command).toBe("/opt/hostedtoolcache/go/1.26.0/x64/bin/go");
@@ -61,13 +75,14 @@ describe("provider release compatibility", () => {
   test("fails closed when the selected Go version does not exactly match", async () => {
     await expect(
       resolveCompatibilityGoCommand(
-        { path: "/missing/go", version: "go1.26.0" },
+        { path: "/missing/go", version: "go1.26.0", sha256: goDigest },
         {
           accessCommand: async () => {
             throw Object.assign(new Error("missing"), { code: "ENOENT" });
           },
           findOnPath: () => "/usr/bin/go",
           runCommand: () => "go version go1.26.1 linux/amd64\n",
+          digestCommand,
         },
       ),
     ).rejects.toThrow("version mismatch: expected go1.26.0, observed go1.26.1");
@@ -77,7 +92,11 @@ describe("provider release compatibility", () => {
     let searchedPath = false;
     await expect(
       resolveCompatibilityGoCommand(
-        { path: "/usr/lib/go-1.26/bin/go", version: "go1.26.0" },
+        {
+          path: "/usr/lib/go-1.26/bin/go",
+          version: "go1.26.0",
+          sha256: goDigest,
+        },
         {
           accessCommand: async () => {
             throw Object.assign(new Error("permission denied"), {
@@ -97,7 +116,7 @@ describe("provider release compatibility", () => {
   test("fails when neither pinned nor PATH Go is available", async () => {
     await expect(
       resolveCompatibilityGoCommand(
-        { path: "/missing/go", version: "go1.26.0" },
+        { path: "/missing/go", version: "go1.26.0", sha256: goDigest },
         {
           accessCommand: async () => {
             throw Object.assign(new Error("missing"), { code: "ENOENT" });
@@ -106,6 +125,22 @@ describe("provider release compatibility", () => {
         },
       ),
     ).rejects.toThrow("go is unavailable on PATH");
+  });
+
+  test("fails closed when the selected Go executable digest differs", async () => {
+    await expect(
+      resolveCompatibilityGoCommand(
+        { path: "/missing/go", version: "go1.26.0", sha256: goDigest },
+        {
+          accessCommand: async () => {
+            throw Object.assign(new Error("missing"), { code: "ENOENT" });
+          },
+          findOnPath: () => "/opt/hostedtoolcache/go/1.26.0/x64/bin/go",
+          runCommand: () => "go version go1.26.0 linux/amd64\n",
+          digestCommand: async () => "f".repeat(64),
+        },
+      ),
+    ).rejects.toThrow("digest mismatch");
   });
 
   test("pins historical identity and rejects the feature-bearing patch in favor of 1.1.0", async () => {

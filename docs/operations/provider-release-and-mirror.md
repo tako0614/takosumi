@@ -126,6 +126,14 @@ candidate descriptor, provider/proof source, unreviewed Terraform version, or
 sidecar mismatch fails closed. For separately custodied evidence, both commands
 accept the same explicit path:
 
+The candidate build uses the descriptor's pinned Go path when present. On a
+repo-native runner or CI host where that absolute path is absent, it may select
+`go` from `PATH` only when both the exact Go version and the descriptor-pinned
+executable SHA-256 match; a same-version binary with different bytes fails
+closed. The production release builder remains stricter and additionally
+requires the canonical absolute path, whole-distribution digest, and runtime
+library pins.
+
 ```bash
 bun run provider:compatibility:state-proof -- --evidence /operator/evidence/provider-1.1.0-proof.json
 bun run provider:compatibility:release-check -- --evidence /operator/evidence/provider-1.1.0-proof.json
