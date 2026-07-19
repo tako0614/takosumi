@@ -49,6 +49,34 @@ test("createTakosumiLogger routes warn / error to stderr", () => {
   assert.equal(errorEntry.level, "error");
 });
 
+test("createTakosumiLogger preserves default console warning severity", () => {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  try {
+    console.warn = (line?: unknown) => warnings.push(String(line));
+    console.error = (line?: unknown) => errors.push(String(line));
+    const log = createTakosumiLogger({
+      format: "json",
+      now: () => new Date("2026-07-19T06:00:00.000Z"),
+    });
+
+    log.warn("service.runner_profiles.unknown_enabled_ids", {
+      unknownIds: ["retired-profile"],
+    });
+    log.error("service.test.failure");
+  } finally {
+    console.warn = originalWarn;
+    console.error = originalError;
+  }
+
+  assert.equal(warnings.length, 1);
+  assert.equal(errors.length, 1);
+  assert.equal(JSON.parse(warnings[0]).level, "warn");
+  assert.equal(JSON.parse(errors[0]).level, "error");
+});
+
 test("createTakosumiLogger pretty format embeds event and JSON tail", () => {
   const stdout: string[] = [];
   const log = createTakosumiLogger({
