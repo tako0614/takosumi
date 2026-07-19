@@ -907,6 +907,7 @@ export class ResourceShapeService {
       this.#stores.resources.get(id),
       this.#stores.locks.get(id),
     ]);
+    const recoveringApplying = existing?.phase === "Applying";
     const versionError = resourceGenerationError(
       id,
       existing,
@@ -915,6 +916,7 @@ export class ResourceShapeService {
     if (versionError) return versionError;
     const form = await this.#resolveExactForm(req, existing, existingLock, {
       allowRetainedPackage: recoveryRequested,
+      skipRequiredInterfaceAdmission: recoveryRequested && recoveringApplying,
     });
     if (!form.ok) return form;
     const incomingManagedBy = req.managedBy ?? "opentofu";
@@ -935,7 +937,6 @@ export class ResourceShapeService {
         },
       };
     }
-    const recoveringApplying = existing?.phase === "Applying";
     if (recoveringApplying && !applyingRequestMatchesRecord(req, existing)) {
       return {
         ok: false,
@@ -982,7 +983,15 @@ export class ResourceShapeService {
     if (!resolvedConnections.ok) return resolvedConnections;
 
     const evidence = await resourceDeploymentEvidence(req, output, plan);
-    const reviewError = deploymentReviewError(review, evidence.planDigest);
+    // Recovery is an internal continuation of the already claimed Resource,
+    // pinned ResolutionLock, and canonical operation Run. Requiring a fresh
+    // preview digest after backend dispatch can strand Applying state when
+    // host composition changes. Keep the review envelope well-formed, but use
+    // the durable claim as recovery authority.
+    const reviewError =
+      recoveryRequested && recoveringApplying
+        ? deploymentReviewSyntaxError(review)
+        : deploymentReviewError(review, evidence.planDigest);
     if (reviewError) {
       return {
         ok: false,
@@ -1734,6 +1743,7 @@ export class ResourceShapeService {
       importRequestMatchesRecord(req, existing, importRequestDigest, "Ready");
     const form = await this.#resolveExactForm(req, existing, existingLock, {
       allowRetainedPackage: recoveringImport || completedImport,
+      skipRequiredInterfaceAdmission: recoveringImport || completedImport,
     });
     if (!form.ok) return form;
     if (completedImport) {
@@ -4643,7 +4653,16 @@ export class ResourceShapeService {
     request: ApplyResourceRequest,
     existing: ResourceShapeRecord | undefined,
     existingLock: ResolutionLockRecord | undefined,
-    options: { readonly allowRetainedPackage?: boolean } = {},
+    options: {
+      readonly allowRetainedPackage?: boolean;
+      /**
+       * A backend-dispatched recovery or completed import replay consumes its
+       * pinned prior admission. Re-running current host capability admission
+       * here can strand Applying state or turn an idempotent success into a
+       * conflict after operator composition changes.
+       */
+      readonly skipRequiredInterfaceAdmission?: boolean;
+    } = {},
   ): Promise<ServiceResult<InstalledFormReference | undefined>> {
     if (
       existing &&
@@ -4733,6 +4752,7 @@ export class ResourceShapeService {
       };
     }
     if (
+      options.skipRequiredInterfaceAdmission !== true &&
       this.#requiredFormInterfaceAdmission &&
       definition.interfaceDescriptors?.some(
         (descriptor) => descriptor.required === true,
@@ -5735,11 +5755,19 @@ function deploymentReviewError(
   review: ResourceDeploymentReview,
   expectedPlanDigest: string,
 ): string | undefined {
-  if (!SHA256_DIGEST_PATTERN.test(review.planDigest)) {
-    return "deployment review planDigest must be a SHA-256 digest";
-  }
+  const syntaxError = deploymentReviewSyntaxError(review);
+  if (syntaxError) return syntaxError;
   if (review.planDigest !== expectedPlanDigest) {
     return "deployment changed after preview; preview the current service definition again";
+  }
+  return undefined;
+}
+
+function deploymentReviewSyntaxError(
+  review: ResourceDeploymentReview,
+): string | undefined {
+  if (!SHA256_DIGEST_PATTERN.test(review.planDigest)) {
+    return "deployment review planDigest must be a SHA-256 digest";
   }
   if (Boolean(review.quoteId) !== Boolean(review.quoteDigest)) {
     return "deployment review must provide quoteId and quoteDigest together";

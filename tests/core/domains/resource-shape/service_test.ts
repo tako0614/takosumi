@@ -968,11 +968,13 @@ const EXACT_CONTAINER_FORM: InstalledFormReference = {
 
 function exactFormRegistry(
   identity: InstalledFormReference = EXACT_FORM,
+  interfaceDescriptors?: FormDefinition["interfaceDescriptors"],
 ): NonNullable<ResourceShapeServiceDeps["formRegistry"]> {
   const definition: FormDefinition = {
     identity,
     displayName: identity.formRef.kind,
     operations: ["create", "read", "update", "delete", "import", "refresh"],
+    ...(interfaceDescriptors ? { interfaceDescriptors } : {}),
     installedAt: NOW,
   };
   const formPackage: FormPackage = {
@@ -2309,6 +2311,67 @@ test("import finalization retries only the exact request without exposing native
   ]);
 });
 
+test("Form-backed import recovery and completed replay do not re-run current host admission", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let failCommit = true;
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async commitApply(input) {
+      if (failCommit) throw new Error("simulated import finalization outage");
+      return await baseStores.commitApply(input);
+    },
+  };
+  const adapter = new ImportingAdapter();
+  const formRegistry = exactFormRegistry(EXACT_FORM, [
+    {
+      name: "storage.object",
+      version: "v1",
+      required: true,
+      inputs: [{ name: "protocol", source: "literal", value: "https" }],
+    },
+  ]);
+  const first = new ResourceShapeService({
+    stores,
+    adapter,
+    formRegistry,
+    requiredFormInterfaceAdmission: async () => undefined,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(first);
+  const request = {
+    ...APPLY,
+    form: EXACT_FORM,
+    nativeId: "form-backed-native-123",
+  };
+  const pending = await first.importResource(request);
+  expect(pending.ok).toBe(false);
+  expect((await stores.resources.get(APPLY_ID))?.phase).toBe("Applying");
+
+  failCommit = false;
+  let currentAdmissionCalls = 0;
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter,
+    formRegistry,
+    requiredFormInterfaceAdmission: async () => {
+      currentAdmissionCalls++;
+      return "bridge was removed after import dispatch";
+    },
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  const recovered = await restarted.importResource(request);
+  expect(recovered.ok).toBe(true);
+  const replayed = await restarted.importResource(request);
+  expect(replayed.ok).toBe(true);
+  expect(replayed.ok && replayed.value.import.summary).toBe(
+    "canonical import already completed",
+  );
+  expect(currentAdmissionCalls).toBe(0);
+  expect(adapter.importInputs).toHaveLength(2);
+});
+
 test("failed import remains a ledger-only removable record", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new FailingImportAdapter();
@@ -3493,6 +3556,94 @@ test("direct-plugin apply recovers a persisted backend result after restart with
   );
   expect(completedRun?.status).toBe("succeeded");
   expect(completedRun?.resourceOperationAudit?.status).toBe("completed");
+});
+
+test("Form-backed apply recovery consumes pinned admission after the backend was dispatched", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let failReadyCommit = true;
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async commitApply(input) {
+      if (failReadyCommit) {
+        throw new Error("simulated Form-backed finalization outage");
+      }
+      return await baseStores.commitApply(input);
+    },
+  };
+  const ledger = new InMemoryOpenTofuControlStore();
+  const formRegistry = exactFormRegistry(EXACT_CONTAINER_FORM, [
+    {
+      name: "runtime.service",
+      version: "v1",
+      required: true,
+      inputs: [{ name: "protocol", source: "literal", value: "https" }],
+    },
+  ]);
+  const first = new ResourceShapeService({
+    stores,
+    adapter: new PluginSpyAdapter(),
+    operationRuns: ledger,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    formRegistry,
+    requiredFormInterfaceAdmission: async () => undefined,
+    now: () => NOW,
+  });
+  await seed(first);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    form: EXACT_CONTAINER_FORM,
+    name: "form-recovery",
+    spec: {
+      name: "form-recovery",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+  const preview = await first.preview(request);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+  const pending = await first.apply(request, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("deployment_finalize_pending");
+  }
+
+  failReadyCommit = false;
+  let currentAdmissionCalls = 0;
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: new DirectReadOnlyRecoveryAdapter(),
+    operationRuns: ledger,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    formRegistry,
+    requiredFormInterfaceAdmission: async () => {
+      currentAdmissionCalls++;
+      return "bridge was removed after dispatch";
+    },
+    now: () => NOW,
+  });
+  const malformed = await restarted.recoverApply(request, {
+    planDigest: "not-a-digest",
+  });
+  expect(malformed).toEqual({
+    ok: false,
+    error: {
+      code: "deployment_plan_changed",
+      message: "deployment review planDigest must be a SHA-256 digest",
+    },
+  });
+  const recovered = await restarted.recoverApply(request, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(recovered.ok).toBe(true);
+  expect(currentAdmissionCalls).toBe(0);
+  expect(
+    (await stores.resources.get("tkrn:space_1:ContainerService:form-recovery"))
+      ?.phase,
+  ).toBe("Ready");
 });
 
 test("direct-plugin apply response loss observes current and never creates a duplicate after restart", async () => {

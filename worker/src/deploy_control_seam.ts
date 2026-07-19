@@ -13,7 +13,9 @@ import {
   LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
   type ResourceShapeSchemaRegistry,
 } from "../../core/domains/resource-shape/mod.ts";
+import type { ResourceInterfaceWorkspaceResolver } from "../../core/domains/interfaces/mod.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
+import { createCloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
 
 /**
  * Builds the deploy-control Takosumi service (the `takosumi-api` role) directly,
@@ -38,6 +40,7 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
   readonly defaultRunnerProfileId?: string;
   readonly managedVanityHostnameSlotsPerOwner?: number;
   readonly resourceShapeSchemaRegistry: ResourceShapeSchemaRegistry;
+  readonly resolveResourceInterfaceWorkspace: ResourceInterfaceWorkspaceResolver;
   readonly mountInternalLedgerRoutes?: boolean;
 } {
   const hostComposition = runnerHostCompositionFromEnv(env);
@@ -50,6 +53,8 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
     // compatibility schemas. Core and the generic Worker factory remain empty.
     resourceShapeSchemaRegistry:
       LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    resolveResourceInterfaceWorkspace:
+      platformResourceInterfaceWorkspaceResolver(env),
     ...(env.LOCAL_SUBSTRATE_TEST_BED === "1" ||
     env.TAKOSUMI_EXPOSE_INTERNAL_EDGE === "1"
       ? { mountInternalLedgerRoutes: true }
@@ -66,6 +71,28 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
     ...(managedVanityHostnameSlotsPerOwner !== undefined
       ? { managedVanityHostnameSlotsPerOwner }
       : {}),
+  };
+}
+
+/**
+ * The platform public Resource surface uses a verified Workspace id as its
+ * portable namespace selector. Preserve Core's independent namespaces by
+ * proving that the
+ * candidate id exists in the canonical Workspace ledger before returning the
+ * bridge; equal-looking strings alone are never authority.
+ */
+export function platformResourceInterfaceWorkspaceResolver(
+  env: CloudflareWorkerEnv,
+): ResourceInterfaceWorkspaceResolver {
+  const workspaces = createCloudflareD1OpenTofuControlStore(
+    env.TAKOSUMI_CONTROL_DB,
+    {
+      schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap",
+    },
+  );
+  return async ({ resourceSpaceId }) => {
+    const workspace = await workspaces.getWorkspace(resourceSpaceId);
+    return workspace?.id === resourceSpaceId ? workspace.id : undefined;
   };
 }
 

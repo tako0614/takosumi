@@ -83,6 +83,8 @@ import {
   installedFormReferenceKey,
   isInstalledFormReference,
   isResourceShapeKind,
+  TAKOFORM_FORM_HOST_API_PATH,
+  TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
 } from "takosumi-contract";
 import type {
   ManagedPublicHostnameClaimRequest,
@@ -619,6 +621,9 @@ export default {
     if (isPlatformExtensionContributionsPath(url.pathname)) {
       return handlePlatformExtensionContributionsRequest(request, url, env);
     }
+    if (url.pathname === TAKOFORM_FORM_HOST_WELL_KNOWN_PATH) {
+      return await handlePlatformTakoformDiscoveryRequest(request, env);
+    }
     // Core lifecycle and identity prefixes always win over extension routing.
     // Descriptor validation rejects overlaps too; keeping the dispatch order
     // explicit prevents a future parser regression from shadowing authority.
@@ -858,6 +863,9 @@ const PUBLIC_RESOURCE_API_MANAGED_BY = "takosumi.resource-api.v1";
 
 export function isPlatformResourceShapeApiPath(pathname: string): boolean {
   return (
+    pathname === "/v1/form-availability" ||
+    pathname === TAKOFORM_FORM_HOST_API_PATH ||
+    pathname.startsWith(`${TAKOFORM_FORM_HOST_API_PATH}/`) ||
     pathname === "/v1/interfaces" ||
     pathname.startsWith("/v1/interfaces/") ||
     pathname === "/v1/resources" ||
@@ -866,6 +874,28 @@ export function isPlatformResourceShapeApiPath(pathname: string): boolean {
     pathname.startsWith("/v1/target-pools/") ||
     pathname === "/v1/space-policies" ||
     pathname.startsWith("/v1/space-policies/")
+  );
+}
+
+/** Public, read-only Takoform discovery; lifecycle/read routes stay authenticated. */
+export async function handlePlatformTakoformDiscoveryRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Promise<Response> {
+  if (!platformResourceShapeApiEnabled(env)) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return Response.json({ error: "method not allowed" }, { status: 405 });
+  }
+  const service = await cachedDeployControlService(env);
+  // Discovery is intentionally public. Do not forward caller credentials into
+  // the in-process control service just because the edge request carried them.
+  return await service.app.fetch(
+    new Request(request.url, {
+      method: request.method,
+      headers: { accept: request.headers.get("accept") ?? "application/json" },
+    }),
   );
 }
 
@@ -886,6 +916,7 @@ export async function handlePlatformResourceShapeApiRequest(
   request: Request,
   env: CloudflareWorkerEnv,
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
+  workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
 ): Promise<Response> {
   if (!platformResourceShapeApiEnabled(env)) {
     return Response.json({ error: "not found" }, { status: 404 });
@@ -895,6 +926,7 @@ export async function handlePlatformResourceShapeApiRequest(
       request,
       env,
       sessionVerifier,
+      workspaceAccess,
     );
     if (!authorized.ok) return authorized.response;
     request = authorized.request;
@@ -921,6 +953,7 @@ async function platformResourceShapeExternalRequest(
   request: Request,
   env: CloudflareWorkerEnv,
   sessionVerifier: PlatformExtensionSessionVerifier,
+  workspaceAccess: PlatformExtensionWorkspaceAccess,
 ): Promise<
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
@@ -937,6 +970,8 @@ async function platformResourceShapeExternalRequest(
     request,
     env,
     session,
+    undefined,
+    workspaceAccess,
   );
 }
 
@@ -946,6 +981,7 @@ async function platformResourceShapeAuthorizedRequest(
   env: CloudflareWorkerEnv,
   session: PlatformExtensionSessionContext,
   trustedManagedBy?: string,
+  workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
 ): Promise<
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
@@ -1015,6 +1051,7 @@ async function platformResourceShapeAuthorizedRequest(
     env,
     session,
     workspaceId,
+    workspaceAccess,
   );
   if (!verified.ok) return verified;
 
@@ -1356,13 +1393,24 @@ function platformResourceShapeRequestWorkspaceId(
   url: URL,
   body: Record<string, unknown>,
 ): string | undefined {
-  return (
+  const explicit =
     safePlatformExtensionContextId(url.searchParams.get("workspaceId")) ??
     safePlatformExtensionContextId(
       request.headers.get(PLATFORM_EXTENSION_WORKSPACE_ID_HEADER),
     ) ??
-    safePlatformExtensionContextId(valueString(body.workspaceId))
-  );
+    safePlatformExtensionContextId(valueString(body.workspaceId));
+  if (explicit) return explicit;
+
+  // The portable Form host protocol carries `space`, not a Takosumi-specific
+  // Workspace selector. Accept one unambiguous portable namespace only as a
+  // candidate, then
+  // prove the caller's Workspace access below; the string itself grants
+  // nothing and the Resource-to-Workspace resolver separately proves the
+  // canonical Workspace exists.
+  const requestedSpaces = platformResourceShapeRequestedSpaces(url, body)
+    .map((space) => safePlatformExtensionContextId(space))
+    .filter((space): space is string => space !== undefined);
+  return requestedSpaces.length === 1 ? requestedSpaces[0] : undefined;
 }
 
 function platformResourceShapeRequestedSpaces(

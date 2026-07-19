@@ -1842,11 +1842,31 @@ export async function createTakosumiService(
   };
   resourceShapeService?.setLifecycleObserver({
     async observe(event) {
-      if (!resolveResourceInterfaceWorkspace) return;
+      if (!resolveResourceInterfaceWorkspace) {
+        if (event.type === "ready") {
+          await degradeRequiredFormInterface(
+            event.resourceId,
+            new Error(
+              "required Interface materialization has no Resource-to-Workspace bridge",
+            ),
+          );
+        }
+        return;
+      }
       const workspaceId = await resolveResourceInterfaceWorkspace(
         resourceLifecycleInterfaceWorkspaceInput(event),
       );
-      if (!workspaceId) return;
+      if (!workspaceId) {
+        if (event.type === "ready") {
+          await degradeRequiredFormInterface(
+            event.resourceId,
+            new Error(
+              "required Interface materialization has no authorized Workspace mapping",
+            ),
+          );
+        }
+        return;
+      }
       switch (event.type) {
         case "ready":
           try {
