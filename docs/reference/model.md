@@ -272,9 +272,9 @@ provider-neutral な Service Form だけです。現在の `takosumi_*` form res
 portable Service Form にも Takosumi operator/admin object にも対応しない provider resource は、
 存在する理由がありません。
 
-`takosumi/takosumi` provider は現在の compatibility state と operator/admin object を持つ typed Deploy API client です。
-Service Form、ServiceOffering、価格、backend selection、lifecycle state の正本ではないため、direct API、CLI、dashboard、
-compatibility client から同じ managed service を利用できます。
+`takosumi/takosumi` provider は廃止済みで、既存 compatibility state の migration / rollback
+custody にだけ残ります。portable authoring は Takoform、operator/admin 操作は direct API、
+CLI、dashboard を使い、すべて同じ managed-service lifecycle に収束します。
 
 Takos は、この rule の代表的な consumer です。Takos は、製品固有の catch-all shape
 としてではなく、実際に必要な汎用 Service Form-backed Resource の合成として説明するべきです。

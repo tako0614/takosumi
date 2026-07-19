@@ -80,7 +80,7 @@ The pinned lifecycle has five ordered phases:
 
 The structural Takoform fixture intentionally labels the three host-dependent
 phases `external-required`. The existing
-`bun run provider:compatibility:state-proof` separately validates the retained
+`bun run provider:custody:state-proof` separately validates the retained
 Takosumi provider's old-state no-op/observe/rollback behavior. Neither local
 fixture substitutes for the live cross-provider operation.
 

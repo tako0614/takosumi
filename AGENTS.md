@@ -125,15 +125,16 @@ Three principles are load-bearing for new work:
   integrations are optional adapters outside core.
 - **No in-repo manifest**: user repos stay plain git repos with no required Takosumi metadata file. All Capsule
   configuration is service-side DB config. Interface declarations materialize into service-side DB state from exactly
-  two Capsule sources: service-side config (`InstallConfig.interfaceBlueprints`) or an optional module-declared
-  `takosumi_interface` resource written through the authorized public API during that Capsule's own Run
+  two Capsule sources: service-side config (`InstallConfig.interfaceBlueprints`) or an optional portable Interface
+  declaration owned by Takoform and admitted through the authorized host integration during that Capsule's own Run
   (`materializedFrom: capsule_blueprint | capsule_resource`, with exclusive ownership). They are never inferred from
-  Output names, no manifest is required, and a plain module with no `takosumi_*` resources remains fully valid.
+  Output names, no Takosumi manifest/provider is required, and a plain module remains fully valid.
 - **Service Form host API**: Service Form authoring is not repository metadata. Takosumi Core has zero implicit Form
   Packages and plain OpenTofu repos remain valid. `/v1/resources` is the current compatibility Deploy API and sole
   lifecycle authority for managed Resources; a future portable route must delegate to the same row/ledger.
-  The mixed `takosumi/takosumi` provider remains frozen compatibility/admin custody, while the target typed form
-  provider is independently released. Neither owns host availability, backend selection, state, or pricing.
+  The mixed `takosumi/takosumi` provider is discontinued historical state custody. Takoform owns portable typed
+  Form/Interface authoring; Takosumi API/CLI/dashboard owns operator administration. None owns host availability,
+  backend selection, state, or pricing outside the canonical Takosumi lifecycle.
 - **Compatibility profiles by capability**: S3 / OCI / CloudEvents / Kubernetes CRD surfaces are
   capability-versioned protocol surfaces for Takosumi-managed capabilities. Control-plane profiles translate into
   the Deploy API and own no lifecycle state; data-plane profiles resolve canonical Ready Resources. Resource adapters

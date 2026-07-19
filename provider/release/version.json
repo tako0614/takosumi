@@ -4,8 +4,15 @@
   "modulePath": "github.com/takosjp/terraform-provider-takosumi",
   "version": "1.1.4",
   "tag": "provider/v1.1.4",
-  "status": "candidate",
+  "status": "discontinued",
   "publishable": false,
+  "newVersionsAllowed": false,
+  "discontinuedAt": "2026-07-19",
+  "replacement": {
+    "portableFormsAndInterfaces": "registry.terraform.io/tako0614/takoform",
+    "operatorAdministration": "Takosumi API/CLI/dashboard",
+    "ordinaryInfrastructure": "plain OpenTofu/Terraform providers through Takosumi Stack execution"
+  },
   "protocols": ["5.0"],
   "platforms": [
     { "os": "linux", "arch": "amd64" },
@@ -109,8 +116,8 @@
     ]
   },
   "publicationPolicy": {
-    "mode": "candidate-only",
-    "status": "blocked-external-review",
+    "mode": "disabled",
+    "status": "cancelled-discontinued",
     "reviewedSignerFingerprints": ["2D479FAE54E1784AE0AF6E8F62EBC84B824E8A13"],
     "signerKeyring": {
       "path": "provider/release/keys/provider-signers.gpg",

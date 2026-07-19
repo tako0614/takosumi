@@ -1132,10 +1132,10 @@ test("platform assets are served with immutable cache headers", async () => {
 test("platform provider mirror assets use mirror-aware cache headers", async () => {
   const indexResponse = withPlatformAssetCacheHeaders(
     new Request(
-      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/index.json",
+      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/hashicorp/random/index.json",
     ),
     new URL(
-      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/index.json",
+      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/hashicorp/random/index.json",
     ),
     new Response('{"versions":{}}', {
       headers: { "cache-control": "public, max-age=0, must-revalidate" },
@@ -1145,10 +1145,10 @@ test("platform provider mirror assets use mirror-aware cache headers", async () 
 
   const archiveResponse = withPlatformAssetCacheHeaders(
     new Request(
-      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_0.1.0_linux_amd64.zip",
+      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/hashicorp/random/terraform-provider-random_3.7.2_linux_amd64.zip",
     ),
     new URL(
-      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_0.1.0_linux_amd64.zip",
+      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/hashicorp/random/terraform-provider-random_3.7.2_linux_amd64.zip",
     ),
     new Response("zip", {
       headers: { "cache-control": "public, max-age=0, must-revalidate" },

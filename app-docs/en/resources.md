@@ -78,15 +78,15 @@ Operator/internal jobs:
 
 Every Cloud managed-resource control operation converges on the canonical
 `/v1/resources` Deploy API before any backend API is called. The
-`takosumi/takosumi` provider, Dashboard, and direct API call that lifecycle
-directly. When an installed Compatibility API profile is used, it translates
+Dashboard, direct API, and portable clients call that lifecycle directly. When
+an installed Compatibility API profile is used, it translates
 the protocol request into a typed Resource request and calls the same preview,
 reviewed apply, and delete operations. It owns neither a backend manager nor a
 parallel lifecycle store.
 
 ```text
 compat control request -> typed Resource request
-takosumi provider / direct API / Dashboard -> typed Resource request
+portable client / direct API / Dashboard -> typed Resource request
   -> /v1/resources preview + reviewed apply/delete
   -> auth + Space/Workspace ownership
   -> TargetPool + Policy + ResolutionLock

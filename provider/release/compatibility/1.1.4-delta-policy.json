@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "kind": "takosumi.provider-candidate-delta-policy@v1",
+  "kind": "takosumi.provider-cancelled-delta-record@v1",
   "baseline": {
     "version": "1.0.0",
     "identity": "1.0.0-state-identity.json",
@@ -9,7 +9,7 @@
   "candidate": {
     "version": "1.1.4",
     "semverChange": "minor",
-    "classification": "correction-plus-additive-features"
+    "classification": "cancelled-unpublished-source-snapshot"
   },
   "additiveResources": [
     "takosumi_durable_workflow",
@@ -114,7 +114,7 @@
   "patchFeatureDecision": {
     "status": "resolved-move-to-minor",
     "admitted": false,
-    "requiredOutcome": "The feature-bearing 1.0.1 patch is rejected; ship the additive candidate only as 1.1.4 after all remaining release gates pass."
+    "requiredOutcome": "The feature-bearing 1.0.1 patch was rejected and the replacement 1.1.4 publication was cancelled when terraform-provider-takosumi was discontinued."
   },
   "stateCompatibility": {
     "oldStateNoOpRequired": true,
@@ -122,7 +122,7 @@
     "rollbackRequired": true,
     "status": "proof-complete",
     "evidence": {
-      "command": "bun run provider:compatibility:state-proof",
+      "command": "bun run provider:custody:state-proof",
       "credentialEnvironment": "explicit-allowlist-derived-empty",
       "exactPhaseRequestDeltas": true,
       "currentOmittedObjectBucketCreateCanonicalized": true,
@@ -140,11 +140,11 @@
   },
   "terraformCompatibility": {
     "status": "proof-command-implemented",
-    "command": "PATH=<terraform-directory>:$PATH bun run provider:compatibility:state-proof",
+    "command": "PATH=<terraform-directory>:$PATH bun run provider:custody:state-proof",
     "openTofuAddress": "registry.opentofu.org/takosjp/takosumi",
     "terraformAddress": "registry.terraform.io/takosjp/takosumi",
     "addressesTreatedAsInterchangeable": false,
     "releaseEvidenceStatus": "proof-run-required"
   },
-  "releaseEligibility": "blocked"
+  "releaseEligibility": "cancelled-discontinued"
 }

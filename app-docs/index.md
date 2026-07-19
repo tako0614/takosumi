@@ -52,8 +52,8 @@ Object Storage、KV、Database、Queue、AI とは別の service form です。
 AI Gateway、S3-compatible endpoint、Cloud usage endpoint は、同じ hosted Cloud
 origin 上の Cloud extension boundary を通して提供されます。
 
-どの入口から入っても — Dashboard、`takosumi/takosumi` provider、互換 endpoint の
-いずれでも — リクエストは同じ確認の流れを通ります。認証、発生元 Workspace の確認、
+どの現行入口から入っても — Dashboard、direct API、互換 endpoint のいずれでも —
+リクエストは同じ確認の流れを通ります。認証、発生元 Workspace の確認、
 支払い主体の確認、リソースの正規化、実行先の空き確認、使用量と上限の確認を経て、
 選ばれた backend (Workers for Platforms、R2、D1、KV、Queue、Containers など) が
 実行します。実行先が未設定の service form は、課金や backend 呼び出しの前に
@@ -129,7 +129,7 @@ Takosumi Cloud 全体を Pre-GA のままにします。
 | ----------- | ----------------------------------------------------------------------------------------------- |
 | GA contract | Edge Worker の modules / assets / vars / write-only secrets / bindings / versions / deployments |
 | GA contract | Object Storage の Standard / Infrequent Access offering                                         |
-| GA contract | KV / Database / Queue                                                                            |
+| GA contract | KV / Database / Queue                                                                           |
 | GA contract | OpenAI-compatible AI Gateway endpoint                                                           |
 | GA contract | Verified custom domain                                                                          |
 | Preview     | Vector Index / Durable Workflow / Container / Stateful Actor Namespace / Schedule               |

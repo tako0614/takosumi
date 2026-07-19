@@ -133,7 +133,7 @@ hosted-origin hostname dispatch registry.
 
 ## API key / owner billing context
 
-The Resource Shape API used by the `takosumi` provider (`/v1/resources`,
+The Resource Shape compatibility API (`/v1/resources`,
 `/v1/target-pools`, and `/v1/space-policies`) is not anonymous. A
 request must authenticate with an account session, personal access token, or
 service token, and the source Workspace plus owning user's billing account must
@@ -377,8 +377,8 @@ inventory. The Stable contract has seven service forms (eight offerings):
 Vector Index, Durable Workflow, Container, Stateful Actor Namespace, and
 Schedule are Preview service forms. They appear in the same inventory only when
 an active offering exists. An installed Compatibility API profile owns no
-virtual inventory or separate Resource ledger. Dashboard, the
-`takosumi/takosumi` provider, and direct Deploy API all converge on the same Resource. The
+virtual inventory or separate Resource ledger. Dashboard, portable clients,
+and direct Deploy API all converge on the same Resource. The
 `resource_shapes` capability means typed Resource Shape APIs are available; it
 does not imply a separate managed-resource lifecycle.
 
