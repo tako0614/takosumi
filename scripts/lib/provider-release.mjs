@@ -1104,6 +1104,26 @@ export function providerPublicationBlockers(compatibilityProofStatus) {
   return blockers;
 }
 
+export async function verifyProviderReleaseToolchain({
+  repoRoot = PROVIDER_RELEASE_ROOT,
+  descriptorPath = join(repoRoot, "provider", "release", "version.json"),
+} = {}) {
+  const descriptorSnapshot = await readAuthorityJsonWithSidecar(
+    descriptorPath,
+    "provider release descriptor",
+  );
+  const descriptor = validateVersionDescriptor(descriptorSnapshot.value);
+  verifyToolchainExecutableDigests(
+    descriptor.toolchain,
+    descriptor.runtimeTrust,
+  );
+  return {
+    descriptorDigest: descriptorSnapshot.sha256,
+    go: { ...descriptor.toolchain.go },
+    runtimeTrustFileCount: descriptor.runtimeTrust.files.length,
+  };
+}
+
 export async function verifyProviderReleaseSource({
   repoRoot = PROVIDER_RELEASE_ROOT,
   descriptorPath = join(repoRoot, "provider", "release", "version.json"),

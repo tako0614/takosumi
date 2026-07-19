@@ -36,6 +36,7 @@ import {
   verifyProviderReleaseBundle,
   verifyProviderPrepublication,
   verifyProviderReleaseSource,
+  verifyProviderReleaseToolchain,
 } from "../../scripts/lib/provider-release.mjs";
 import { runProviderReleaseCli } from "../../scripts/provider-release.mjs";
 
@@ -129,6 +130,39 @@ describe("provider release source", () => {
     await expect(
       runProviderReleaseCli(["verify-source", "--typo", "ignored"]),
     ).rejects.toThrow("unknown option --typo");
+  });
+
+  test("rejects a changed Go executable without executing it", async () => {
+    const fixture = await makeTaggedSourceFixture();
+    const descriptor = await readJson(
+      join(fixture.repoRoot, "provider", "release", "version.json"),
+    );
+    const marker = join(fixture.repoRoot, "untrusted-go-executed");
+    await writeFile(
+      descriptor.toolchain.go.path,
+      `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`,
+    );
+    await chmod(descriptor.toolchain.go.path, 0o755);
+
+    await expect(
+      verifyProviderReleaseToolchain({ repoRoot: fixture.repoRoot }),
+    ).rejects.toThrow("go toolchain digest mismatch");
+    expect(await Bun.file(marker).exists()).toBe(false);
+  });
+
+  test("rejects changed Go distribution bytes", async () => {
+    const fixture = await makeTaggedSourceFixture();
+    const descriptor = await readJson(
+      join(fixture.repoRoot, "provider", "release", "version.json"),
+    );
+    await writeFile(
+      join(descriptor.toolchain.go.distributionRoot, "unexpected-file"),
+      "untrusted distribution bytes",
+    );
+
+    await expect(
+      verifyProviderReleaseToolchain({ repoRoot: fixture.repoRoot }),
+    ).rejects.toThrow("Go distribution digest mismatch");
   });
 
   test("fails before dev/build when public contains wrong provider bytes", async () => {

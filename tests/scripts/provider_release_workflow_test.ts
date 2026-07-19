@@ -121,8 +121,24 @@ describe("provider release workflow authority", () => {
       ),
     ).toHaveLength(2);
     expect(source.match(/go mod download -json/gu)).toHaveLength(2);
+    expect(
+      source.match(/GOTOOLCHAIN=local go mod download -json/gu),
+    ).toHaveLength(2);
     expect(source.match(/value\.Path.*value\.Version/gu)).toHaveLength(2);
     expect(source).not.toContain('source_root="$(go env GOROOT)"');
+    const verifyToolchainMarker =
+      "bun scripts/provider-release.mjs verify-toolchain";
+    const executeGoMarker = '"${target_root}/bin/go" version';
+    let searchFrom = 0;
+    for (let index = 0; index < 2; index += 1) {
+      const verifyAt = source.indexOf(verifyToolchainMarker, searchFrom);
+      const executeAt = source.indexOf(executeGoMarker, searchFrom);
+      expect(verifyAt).toBeGreaterThanOrEqual(searchFrom);
+      expect(executeAt).toBeGreaterThan(verifyAt);
+      searchFrom = executeAt + executeGoMarker.length;
+    }
+    expect(source.indexOf(verifyToolchainMarker, searchFrom)).toBe(-1);
+    expect(source.indexOf(executeGoMarker, searchFrom)).toBe(-1);
     expect(source).toContain("'$value | @uri'");
     expect(source).not.toContain("/releases/tags/${RELEASE_TAG}");
     expect(source).not.toContain("--clobber");
