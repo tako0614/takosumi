@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "version": "1.1.1",
+  "tag": "provider/v1.1.1",
+  "tagObjectId": "01929558a95d7cac1359565607849436880aa45c",
+  "sourceCommit": "99f20c52cda77cf7f3e2343f68c8f6c66854af83",
+  "workflowRunId": "29683430714",
+  "workflowRunUrl": "https://github.com/tako0614/takosumi/actions/runs/29683430714",
+  "observedAt": "2026-07-19T10:30:04Z",
+  "status": "failed-before-artifact",
+  "failure": {
+    "step": "Validate immutable source identity",
+    "code": "source-mutating-download-before-identity-check",
+    "causeSteps": [
+      "Materialize descriptor-pinned Go path",
+      "Prime the exact offline Go module cache"
+    ],
+    "dirtyPaths": ["provider/go.sum"],
+    "freshTagPrimeReproductionAddedChecksumLines": 52
+  },
+  "artifactProduced": false,
+  "stableMutationAttempted": false,
+  "tagDisposition": "immutable-retained-never-move-or-delete",
+  "replacementCandidate": "1.1.2"
+}
