@@ -246,6 +246,27 @@ test("Workspace and Project stores expose only canonical ownership fields", asyn
   }
 });
 
+test("D1 Workspace id lookup chunks large membership sets without changing order", async () => {
+  const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
+  const seeded = Array.from({ length: 205 }, (_, index) =>
+    workspace({
+      id: `workspace_chunk_${String(index).padStart(3, "0")}`,
+      handle: `workspace-chunk-${String(index).padStart(3, "0")}`,
+      displayName: `Workspace Chunk ${index}`,
+    }),
+  );
+  for (const item of seeded) await store.putWorkspace(item);
+
+  const requestedIds = [
+    ...seeded.map((item) => item.id).reverse(),
+    seeded[0]!.id,
+    "workspace_missing",
+  ];
+  expect(
+    (await store.listWorkspacesByIds(requestedIds)).map((item) => item.id),
+  ).toEqual([...seeded.map((item) => item.id).reverse(), seeded[0]!.id]);
+});
+
 test("Capsule store is keyed by Project, name, and environment", async () => {
   for (const [label, store] of await stores()) {
     const seeded = await seedCapsuleModel(store, {
