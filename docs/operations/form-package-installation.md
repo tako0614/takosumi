@@ -44,7 +44,7 @@ Bind the bucket as `R2_FORM_PACKAGES` and set the non-secret policy JSON:
       "oidcIssuer": "https://token.actions.githubusercontent.com",
       "sourceRepository": "tako0614/terraform-provider-takoform",
       "workflow": ".github/workflows/form-package-release.yml",
-      "tagPattern": "refs/tags/forms/*/v*"
+      "refPattern": "refs/heads/main"
     }
   ]
 }
@@ -54,6 +54,15 @@ Set that document as `TAKOSUMI_FORM_PACKAGE_TRUST_POLICY`. The stock platform
 composition requires the bucket and policy together. Operators with a custom
 store may inject the code-only `TAKOSUMI_FORM_PACKAGE_HOST_COMPOSITION` reader /
 verifier object instead; a serialized object is rejected.
+
+`refPattern` is matched against the Fulcio certificate identity, not against
+release metadata. Branch refs must be exact (the published `1.0.0` package set
+uses the protected release workflow at `refs/heads/main`); tag refs may use
+single-segment `*` globs. The immutable release tag and asset closure are
+reviewed separately before the operator builds the internal install envelope.
+Existing schema-v1 documents using `tagPattern` remain accepted and are
+normalized to `refPattern`; specifying both is rejected. `tagPattern` is a
+deprecated compatibility field retained until a schema-v2 transition.
 
 The operator-only in-process operation calls
 `operations.forms.installPackage({ artifactRef: "r2:packages/<asset>",
@@ -87,7 +96,28 @@ and record the exact package digest and actor audit evidence. FormActivation,
 an executable implementation, and any Cloud ServiceOffering remain separate
 operations.
 
-Production activation is blocked until the independent project publishes a
-real signed package and the operator pins its current TrustedRoot, package
-digest, provenance, SBOM, and revocation evidence. This repository intentionally
-contains no production signing key, package signature, or implicit activation.
+The repository-retained publication lane can be replayed through the actual
+Takosumi host verifier and registry with:
+
+```console
+bun run service-form:published-package-host-proof \
+  --takoform-root /absolute/path/to/terraform-provider-takoform \
+  --json
+```
+
+The command first requires the exact clean Takoform checkout and independently
+reviewed Takosumi-owned commit, published-set, trust, policy, version, and
+release-commit pins. It then verifies the immutable 10-package set, exact
+retained trust and asset closure, SET and checkpoint/Merkle transparency
+evidence, protected workflow identity, install, service reconstruction with a
+fresh verifier and reloaded trust bytes, replay, and deliberate transparency
+tampering rejection. This is repository-regression evidence, not a durable
+substrate restart. It proves package publication and host compatibility only.
+It preserves Takoform's `external-required` admission and revocation status and
+never creates a FormActivation.
+
+Production standard-form activation remains blocked until the independent
+publisher roles, signed host/provider/admission reports, and live revocation
+checkpoint required by Takoform's admission contract are settled. This
+repository intentionally contains no production signing key or implicit
+activation.
