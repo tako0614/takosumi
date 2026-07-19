@@ -10,6 +10,7 @@ import {
   type ControlDispatchContext,
 } from "../../../../accounts/service/src/control/shared.ts";
 import { handleWorkspaces } from "../../../../accounts/service/src/control/workspaces.ts";
+import { handleDashboard } from "../../../../accounts/service/src/control/dashboard.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 
 const workspace = {
@@ -113,6 +114,7 @@ function operationsFixture() {
     updatedAt: string;
   }> = [];
   const capsuleCreates: Record<string, unknown>[] = [];
+  const workspacePageCalls: Record<string, unknown>[] = [];
   let providerBindingSet:
     | {
         readonly id: string;
@@ -130,7 +132,18 @@ function operationsFixture() {
   const operations = {
     workspaces: {
       getWorkspace: async () => workspace,
+      getWorkspaceForAccount: async (
+        _accountId: string,
+        workspaceId: string,
+      ) => (workspaceId === workspace.id ? workspace : undefined),
       listWorkspacesForAccount: async () => [workspace],
+      listWorkspacesForAccountPage: async (
+        accountId: string,
+        params: Record<string, unknown>,
+      ) => {
+        workspacePageCalls.push({ accountId, ...params });
+        return { items: [workspace], total: 1 };
+      },
     },
     members: {
       listMembers: async () => [
@@ -244,7 +257,7 @@ function operationsFixture() {
       ],
     },
   } as unknown as ControlPlaneOperations;
-  return { operations, projects, capsuleCreates };
+  return { operations, projects, capsuleCreates, workspacePageCalls };
 }
 
 function context(
@@ -303,6 +316,52 @@ test("Project create/list/get routes are a facade over canonical operations", as
     "GET",
   );
   expect((await fetched?.json()).project.name).toBe("Production");
+});
+
+test("Workspace list preserves its response/order while using account pages", async () => {
+  const fixture = operationsFixture();
+  const request = new Request("https://app.example.test/api/v1/workspaces");
+  const response = await handleWorkspaces(
+    context(fixture.operations, request),
+    ["workspaces"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toEqual({ workspaces: [workspace] });
+  expect(fixture.workspacePageCalls).toEqual([
+    {
+      accountId: "tsub_owner",
+      includeArchived: false,
+      order: "created_asc",
+    },
+  ]);
+});
+
+test("Dashboard Workspace projection pushes active latest-first limit into the store", async () => {
+  const fixture = operationsFixture();
+  const request = new Request(
+    "https://app.example.test/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceLimit=50",
+  );
+  const response = await handleDashboard(
+    context(fixture.operations, request),
+    ["dashboard", "bootstrap"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({
+    workspaces: [workspace],
+    workspaceList: { total: 1, returned: 1, limit: 50, truncated: false },
+  });
+  expect(fixture.workspacePageCalls).toEqual([
+    {
+      accountId: "tsub_owner",
+      includeArchived: false,
+      order: "updated_desc",
+      limit: 50,
+    },
+  ]);
 });
 
 test("Capsule create forwards optional projectId and otherwise uses the canonical default", async () => {

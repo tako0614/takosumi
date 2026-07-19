@@ -12,6 +12,8 @@
 
 import {
   WORKSPACE_HANDLE_PATTERN,
+  type AccountWorkspaceListParams,
+  type AccountWorkspacePage,
   type Workspace,
   type WorkspaceMember,
   type WorkspaceMemberStatus,
@@ -210,20 +212,42 @@ export class WorkspacesService {
     accountId: string,
   ): Promise<readonly Workspace[]> {
     requireNonEmptyString(accountId, "accountId");
-    const owned = await this.#store.listWorkspacesByOwner(accountId);
-    await Promise.all(owned.map((workspace) => this.#ensureOwnerMember(workspace)));
-    const memberships = await this.#store.listWorkspaceMembersByAccount(
-      accountId,
-    );
-    const ids = new Set(owned.map((workspace) => workspace.id));
-    for (const member of memberships) {
-      if (member.status === "active") ids.add(member.workspaceId);
-    }
-    const workspaces = await this.#store.listWorkspacesByIds([...ids]);
-    return [...workspaces].sort(
-      (a, b) =>
-        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-    );
+    const workspaces: Workspace[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.#store.listWorkspacesForAccountPage(accountId, {
+        includeArchived: true,
+        order: "created_asc",
+        ...(cursor ? { cursor } : {}),
+      });
+      workspaces.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    return workspaces;
+  }
+
+  /**
+   * Bounded account-scoped list over the canonical active membership join.
+   * Durable stores push archive filtering, order, cursor, and limit into SQL.
+   */
+  async listWorkspacesForAccountPage(
+    accountId: string,
+    params: AccountWorkspaceListParams,
+  ): Promise<AccountWorkspacePage> {
+    requireNonEmptyString(accountId, "accountId");
+    return await this.#store.listWorkspacesForAccountPage(accountId, params);
+  }
+
+  /** Exact active-membership lookup used when a selected Workspace is off-page. */
+  async getWorkspaceForAccount(
+    accountId: string,
+    workspaceId: string,
+  ): Promise<Workspace | undefined> {
+    requireNonEmptyString(accountId, "accountId");
+    requireNonEmptyString(workspaceId, "workspaceId");
+    const member = await this.#store.getWorkspaceMember(workspaceId, accountId);
+    if (member?.status !== "active") return undefined;
+    return await this.#store.getWorkspace(workspaceId);
   }
 
   /** Returns the single canonical WorkspaceMember roster. */
@@ -280,10 +304,7 @@ export class WorkspacesService {
         "only an owner can grant the owner role",
       );
     }
-    if (
-      existing?.roles.includes("owner") &&
-      !actor.roles.includes("owner")
-    ) {
+    if (existing?.roles.includes("owner") && !actor.roles.includes("owner")) {
       throw new OpenTofuControllerError(
         "permission_denied",
         "only an owner can update an owner membership",
@@ -304,9 +325,9 @@ export class WorkspacesService {
     if (
       dropsActiveOwner &&
       members.filter(
-          (member) =>
-            member.status === "active" && member.roles.includes("owner"),
-        ).length <= 1
+        (member) =>
+          member.status === "active" && member.roles.includes("owner"),
+      ).length <= 1
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -356,10 +377,7 @@ export class WorkspacesService {
       workspace.id,
       workspace.ownerUserId,
     );
-    if (
-      existing?.status === "active" &&
-      existing.roles.includes("owner")
-    ) {
+    if (existing?.status === "active" && existing.roles.includes("owner")) {
       return existing;
     }
     const nowIso = this.#now().toISOString();
@@ -373,7 +391,6 @@ export class WorkspacesService {
       updatedAt: nowIso,
     });
   }
-
 }
 
 function defaultId(prefix: string): string {
@@ -387,8 +404,13 @@ const WORKSPACE_ROLES: readonly WorkspaceRole[] = [
   "viewer",
 ];
 
-function normalizeRoles(roles: readonly WorkspaceRole[]): readonly WorkspaceRole[] {
-  if (roles.length === 0 || roles.some((role) => !WORKSPACE_ROLES.includes(role))) {
+function normalizeRoles(
+  roles: readonly WorkspaceRole[],
+): readonly WorkspaceRole[] {
+  if (
+    roles.length === 0 ||
+    roles.some((role) => !WORKSPACE_ROLES.includes(role))
+  ) {
     throw new OpenTofuControllerError(
       "invalid_argument",
       "roles must contain one or more of owner, admin, member, viewer",

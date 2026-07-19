@@ -130,9 +130,12 @@ async function subjectOwnsWorkspace(input: {
   const operations = input.operations;
   if (!operations) return false;
   try {
-    return (
-      await operations.workspaces.listWorkspacesForAccount(input.subject)
-    ).some((workspace) => workspace.id === input.workspaceId);
+    return Boolean(
+      await operations.workspaces.getWorkspaceForAccount(
+        input.subject,
+        input.workspaceId,
+      ),
+    );
   } catch {
     return false;
   }
