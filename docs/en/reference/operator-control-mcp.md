@@ -10,7 +10,7 @@ while the flag is off.
 
 The service-side InstallConfig blueprint and the optional
 `takosumi_interface.operator_control` module resource declare the same
-`mcp.server@2025-11-25` spec and `mcp_url` Output mapping. The resource path
+`mcp.server@2025-11-25` spec and explicit `endpoint` Output mapping. The resource path
 cannot create a Binding; the service-side proposal grants only the installing
 Principal `mcp.invoke` with `delivery.type = oauth2`.
 

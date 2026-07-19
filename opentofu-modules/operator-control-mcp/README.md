@@ -1,7 +1,7 @@
 # Operator control MCP adapter Capsule
 
 This plain OpenTofu module publishes the optional Takosumi platform route as an
-ordinary `mcp_url` Output. The operator must enable
+ordinary `endpoint` Output. The operator must enable
 `TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED=1`; otherwise the route is absent and an
 OAuth2 InterfaceBinding cannot become Ready for it.
 

@@ -31,7 +31,7 @@ variables:
   takosumi_origin = https://<bare-operator-origin>
 ```
 
-module は credential-free な ordinary Output `mcp_url` を返します。Interface の
+module は credential-free な ordinary Output `endpoint` を返します。Interface の
 producer 宣言は次のどちらかです。
 
 - `declare_interface_resource = false` (default):
@@ -56,7 +56,7 @@ producer 宣言は次のどちらかです。
   "inputs": {
     "endpoint": {
       "source": "capsule_output",
-      "outputName": "mcp_url"
+      "outputName": "endpoint"
     }
   },
   "access": {

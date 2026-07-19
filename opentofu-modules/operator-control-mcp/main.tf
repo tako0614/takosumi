@@ -27,7 +27,7 @@ variable "declare_interface_resource" {
 }
 
 locals {
-  mcp_url = "${trimsuffix(trimspace(var.takosumi_origin), "/")}/mcp/operator-control/v1"
+  endpoint = "${trimsuffix(trimspace(var.takosumi_origin), "/")}/mcp/operator-control/v1"
 }
 
 # Optional module-author declaration. The service-side InstallConfig blueprint
@@ -51,7 +51,7 @@ resource "takosumi_interface" "operator_control" {
   inputs = {
     endpoint = {
       source      = "capsule_output"
-      output_name = "mcp_url"
+      output_name = "endpoint"
     }
   }
 
@@ -59,7 +59,7 @@ resource "takosumi_interface" "operator_control" {
   resource_uri_input = "endpoint"
 }
 
-output "mcp_url" {
+output "endpoint" {
   description = "Credential-free exact resource URI published as an ordinary Capsule Output."
-  value       = local.mcp_url
+  value       = local.endpoint
 }

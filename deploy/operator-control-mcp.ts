@@ -37,7 +37,7 @@ export const OPERATOR_CONTROL_MCP_INTERFACE_BLUEPRINT = Object.freeze({
     inputs: {
       endpoint: {
         source: "capsule_output",
-        outputName: "mcp_url",
+        outputName: "endpoint",
       },
     },
     access: {
@@ -84,7 +84,7 @@ export const OPERATOR_CONTROL_MCP_INSTALL_CONFIG = Object.freeze({
     },
   ],
   outputAllowlist: {
-    mcp_url: { from: "mcp_url", type: "url", required: true },
+    endpoint: { from: "endpoint", type: "url", required: true },
   },
   policy: {},
   interfaceBlueprints: [OPERATOR_CONTROL_MCP_INTERFACE_BLUEPRINT],
@@ -108,7 +108,7 @@ export const OPERATOR_CONTROL_MCP_MODULE_INTERFACE_SPEC = Object.freeze({
     endpoint: {
       source: "capsule_output",
       capsuleId: "<ambient-capsule-id>",
-      outputName: "mcp_url",
+      outputName: "endpoint",
     },
   },
   access: {
@@ -317,7 +317,7 @@ export async function handleOperatorControlMcpRequest(
         result: { tools: TOOLS },
       });
     case "tools/call":
-      return await callTool(value, authority);
+      return await callTool({ ...value, id: value.id }, authority);
     default:
       return jsonRpcResponse(
         jsonRpcError(value.id, -32601, "method not found"),
@@ -333,12 +333,13 @@ async function callTool(
   const params = record(request.params);
   const name = textValue(params.name);
   const args = record(params.arguments);
-  if (!name || !TOOLS.some((tool) => tool.name === name)) {
+  const tool = TOOLS.find((candidate) => candidate.name === name);
+  if (!tool) {
     return jsonRpcResponse(jsonRpcError(request.id, -32602, "unknown tool"));
   }
   let controlRequest: Request;
   try {
-    controlRequest = await publicControlRequest(name, args, authority);
+    controlRequest = await publicControlRequest(tool.name, args, authority);
   } catch (error) {
     return toolResult(request.id, 403, {
       error: "access_denied",
