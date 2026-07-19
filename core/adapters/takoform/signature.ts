@@ -68,7 +68,7 @@ export interface TakoformPackageSignatureVerifier {
  * checked from retained input bytes.
  */
 export class SigstoreTakoformPackageSignatureVerifier implements TakoformPackageSignatureVerifier {
-  readonly id = "takoform.sigstore-keyless.v1";
+  readonly id: string = "takoform.sigstore-keyless.v1";
   readonly #policy: TakoformSigstoreTrustPolicy;
   #trustedRoot?: ReturnType<typeof TrustedRoot.fromJSON>;
   #trustMaterial?: ReturnType<typeof toTrustMaterial>;
@@ -199,6 +199,20 @@ export class SigstoreTakoformPackageSignatureVerifier implements TakoformPackage
     return this.#trustedRoot;
   }
 }
+
+/**
+ * Product-neutral keyless blob verifier. The implementation predates the
+ * provider release lane and is retained in this module for source
+ * compatibility; callers provide an independent publisher policy and trust
+ * root, so no Takoform publisher authority is inherited.
+ */
+export class SigstoreBlobSignatureVerifier extends SigstoreTakoformPackageSignatureVerifier {
+  override readonly id = "sigstore.keyless-blob.v1";
+}
+
+export type SigstorePublisherPolicy = TakoformPublisherPolicy;
+export type SigstoreBlobTrustPolicy = TakoformSigstoreTrustPolicy;
+export type VerifiedSigstorePublisher = VerifiedTakoformPublisher;
 
 type ParsedSigstoreBundle = ReturnType<typeof bundleFromJSON>;
 type ParsedTrustedRoot = ReturnType<typeof TrustedRoot.fromJSON>;
