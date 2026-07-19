@@ -133,24 +133,9 @@ export function registerInterfaceRoutes(
         string(body.workspaceId),
       );
       if (!scoped.ok) return scoped.response;
-      const createMutableDenied = enforceCapsuleActorMutable(c, scoped.actor);
-      if (createMutableDenied) return createMutableDenied;
-      if (isCapsuleActor(scoped.actor)) {
-        const owner = body.ownerRef as
-          { kind?: unknown; id?: unknown } | undefined;
-        if (owner?.kind !== "Capsule" || owner.id !== scoped.actor.capsuleId) {
-          return capsuleScopeForbidden(
-            c,
-            "a Capsule-scoped run credential can create only its own Capsule's Interfaces",
-          );
-        }
-      }
       const record = await options.service.create(
         body as unknown as CreateInterfaceRequest,
         scoped.actor,
-        // A run-ambient Capsule credential is the module-declaration path;
-        // its records carry the exclusive capsule_resource ownership marker.
-        isCapsuleActor(scoped.actor) ? { capsuleResource: true } : undefined,
       );
       return withEtag(c, record, 201);
     });
@@ -178,22 +163,12 @@ export function registerInterfaceRoutes(
       if (ownerKind && !OWNER_KINDS.has(ownerKind)) {
         throw invalid("ownerKind is not supported");
       }
-      // A Capsule-scoped run credential reads only its own Capsule's
-      // Interfaces, never other owners' (including `private`) records or their
-      // resolved inputs. The owner filter is forced, not merely defaulted.
-      const capsuleActor = isCapsuleActor(scoped.actor);
       const filter = {
         workspaceId,
         ...(c.req.query("type") ? { type: c.req.query("type") } : {}),
         ...(phase ? { phase } : {}),
-        ...(capsuleActor
-          ? { ownerKind: "Capsule" as const, ownerId: scoped.actor.capsuleId }
-          : {
-              ...(ownerKind ? { ownerKind } : {}),
-              ...(c.req.query("ownerId")
-                ? { ownerId: c.req.query("ownerId") }
-                : {}),
-            }),
+        ...(ownerKind ? { ownerKind } : {}),
+        ...(c.req.query("ownerId") ? { ownerId: c.req.query("ownerId") } : {}),
         includeRetired: truthy(c.req.query("includeRetired")),
       };
       const interfaces = isRuntimePrincipal(scoped.actor)
@@ -225,8 +200,6 @@ export function registerInterfaceRoutes(
         record.metadata.workspaceId,
       );
       if (!scoped.ok) return scoped.response;
-      const capsuleReadDenied = denyForeignCapsuleRead(c, scoped.actor, record);
-      if (capsuleReadDenied) return capsuleReadDenied;
       return withEtag(c, record, 200);
     });
   });
@@ -282,8 +255,6 @@ export function registerInterfaceRoutes(
         current.metadata.workspaceId,
       );
       if (!scoped.ok) return scoped.response;
-      const capsuleDenied = enforceCapsuleActorRecord(c, scoped.actor, current);
-      if (capsuleDenied) return capsuleDenied;
       requireEtag(c, current);
       const body = await readJsonObject(c.req.raw, { maxBytes: 1_048_576 });
       const record = await options.service.update(
@@ -311,8 +282,6 @@ export function registerInterfaceRoutes(
         current.metadata.workspaceId,
       );
       if (!scoped.ok) return scoped.response;
-      const capsuleDenied = enforceCapsuleActorRecord(c, scoped.actor, current);
-      if (capsuleDenied) return capsuleDenied;
       requireEtag(c, current);
       const record = await options.service.retire(
         current.metadata.id,
@@ -327,10 +296,8 @@ export function registerInterfaceRoutes(
   app.post("/v1/interfaces/:id/status", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
-    // Status self-report is neither desired-state mutation nor binding
-    // authority: runtime principals stay excluded, a Capsule-scoped run
-    // credential may report only for Interfaces its own Capsule owns
-    // (regardless of declaration source), and control actors may probe.
+    // Status self-report is a control-plane operation. Runtime principals stay
+    // excluded; operators and service-side probes may update conditions.
     const controlDenied = enforceControlActor(c, auth.actor);
     if (controlDenied) return controlDenied;
     return respond(c, async () => {
@@ -342,18 +309,6 @@ export function registerInterfaceRoutes(
         current.metadata.workspaceId,
       );
       if (!scoped.ok) return scoped.response;
-      if (
-        isCapsuleActor(scoped.actor) &&
-        !(
-          current.metadata.ownerRef.kind === "Capsule" &&
-          current.metadata.ownerRef.id === scoped.actor.capsuleId
-        )
-      ) {
-        return capsuleScopeForbidden(
-          c,
-          "a Capsule-scoped run credential can report status only for its own Capsule's Interfaces",
-        );
-      }
       const body = await readJsonObject(c.req.raw, { maxBytes: 65_536 });
       const record = await options.service.reportStatusConditions(
         current.metadata.id,
@@ -371,8 +326,6 @@ export function registerInterfaceRoutes(
     if (!auth.ok) return auth.response;
     const controlDenied = enforceControlActor(c, auth.actor);
     if (controlDenied) return controlDenied;
-    const capsuleBindingDenied = enforceNoCapsuleActorBindings(c, auth.actor);
-    if (capsuleBindingDenied) return capsuleBindingDenied;
     return respond(c, async () => {
       const iface = await options.service.get(c.req.param("id"));
       const scoped = await scopeInterfaceWorkspace(
@@ -410,8 +363,6 @@ export function registerInterfaceRoutes(
         iface.metadata.workspaceId,
       );
       if (!scoped.ok) return scoped.response;
-      const capsuleReadDenied = denyForeignCapsuleRead(c, scoped.actor, iface);
-      if (capsuleReadDenied) return capsuleReadDenied;
       return c.json(
         {
           bindings: isRuntimePrincipal(scoped.actor)
@@ -445,8 +396,6 @@ export function registerInterfaceRoutes(
         iface.metadata.workspaceId,
       );
       if (!scoped.ok) return scoped.response;
-      const capsuleReadDenied = denyForeignCapsuleRead(c, scoped.actor, iface);
-      if (capsuleReadDenied) return capsuleReadDenied;
       if (isRuntimePrincipal(scoped.actor)) {
         const binding = (
           await options.service.listAuthorizedBindingsForPrincipal(
@@ -478,8 +427,6 @@ export function registerInterfaceRoutes(
     if (!auth.ok) return auth.response;
     const controlDenied = enforceControlActor(c, auth.actor);
     if (controlDenied) return controlDenied;
-    const capsuleBindingDenied = enforceNoCapsuleActorBindings(c, auth.actor);
-    if (capsuleBindingDenied) return capsuleBindingDenied;
     return respond(c, async () => {
       const iface = await options.service.get(c.req.param("id"));
       const scoped = await scopeInterfaceWorkspace(
@@ -619,108 +566,6 @@ function enforceControlActor(
       requestIdFromContext(c),
     ),
     403,
-  );
-}
-
-function isCapsuleActor(
-  actor: ActorContext | undefined,
-): actor is ActorContext & { readonly capsuleId: string } {
-  return Boolean(actor?.capsuleId);
-}
-
-/**
- * A read-only Capsule run credential (plan / drift-check / refresh) can read
- * and self-report status but never mutate spec. Only an apply/destroy run
- * carries `capsuleRunMutable`.
- */
-function enforceCapsuleActorMutable(
-  c: Context,
-  actor: ActorContext | undefined,
-): Response | undefined {
-  if (!isCapsuleActor(actor) || actor.capsuleRunMutable === true) {
-    return undefined;
-  }
-  return capsuleScopeForbidden(
-    c,
-    "a read-only Capsule run credential cannot mutate Interfaces; only an apply/destroy run may",
-  );
-}
-
-function capsuleScopeForbidden(c: Context, message: string): Response {
-  return c.json(
-    apiError("forbidden", message, undefined, requestIdFromContext(c)),
-    403,
-  );
-}
-
-/**
- * A Capsule-scoped run credential manages only its own Capsule's
- * module-declared (`capsule_resource`) Interfaces. Blueprint-materialized and
- * foreign records stay out of reach, matching the exclusive
- * declaration-ownership contract.
- */
-function enforceCapsuleActorRecord(
-  c: Context,
-  actor: ActorContext | undefined,
-  record: Interface,
-): Response | undefined {
-  if (!isCapsuleActor(actor)) return undefined;
-  const mutableDenied = enforceCapsuleActorMutable(c, actor);
-  if (mutableDenied) return mutableDenied;
-  if (
-    record.metadata.ownerRef.kind !== "Capsule" ||
-    record.metadata.ownerRef.id !== actor.capsuleId
-  ) {
-    return capsuleScopeForbidden(
-      c,
-      "a Capsule-scoped run credential can manage only its own Capsule's Interfaces",
-    );
-  }
-  if (record.metadata.materializedFrom?.source !== "capsule_resource") {
-    return capsuleScopeForbidden(
-      c,
-      "a Capsule-scoped run credential cannot adopt or rewrite an Interface it did not declare",
-    );
-  }
-  return undefined;
-}
-
-/**
- * A Capsule-scoped run credential reads only its own Capsule's Interfaces. A
- * foreign record is reported as not found (not forbidden) so the credential
- * cannot enumerate other owners' Interface ids by probing status codes.
- */
-function denyForeignCapsuleRead(
-  c: Context,
-  actor: ActorContext | undefined,
-  record: Interface,
-): Response | undefined {
-  if (!isCapsuleActor(actor)) return undefined;
-  if (
-    record.metadata.ownerRef.kind === "Capsule" &&
-    record.metadata.ownerRef.id === actor.capsuleId
-  ) {
-    return undefined;
-  }
-  return c.json(
-    apiError(
-      "not_found",
-      "Interface not found",
-      undefined,
-      requestIdFromContext(c),
-    ),
-    404,
-  );
-}
-
-function enforceNoCapsuleActorBindings(
-  c: Context,
-  actor: ActorContext | undefined,
-): Response | undefined {
-  if (!isCapsuleActor(actor)) return undefined;
-  return capsuleScopeForbidden(
-    c,
-    "a Capsule-scoped run credential never carries InterfaceBinding authority",
   );
 }
 

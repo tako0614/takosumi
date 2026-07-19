@@ -126,7 +126,7 @@ Three principles are load-bearing for new work:
 - **No in-repo manifest**: user repos stay plain git repos with no required Takosumi metadata file. All Capsule
   configuration is service-side DB config. New Capsule-owned Interface declarations materialize from service-side
   `InstallConfig.interfaceBlueprints` (`materializedFrom: capsule_blueprint`) and are never inferred from Output names.
-  Historical `capsule_resource` records and their fenced Run path remain migration custody, not a new authoring surface.
+  Historical `capsule_resource` records remain operator cleanup custody, not a new authoring or authentication surface.
   A plain module requires no Takosumi manifest/provider. Separately, a Takoform Form Package may declare a required
   Interface descriptor that Takosumi materializes as a Resource-owned `form_descriptor`; it is not a Capsule source.
 - **Service Form host API**: Service Form authoring is not repository metadata. Takosumi Core has zero implicit Form
@@ -144,8 +144,8 @@ Three principles are load-bearing for new work:
   `capsule_output`, and `resource_output` inputs; type-specific JSON is validated by consumers. Interface changes do
   not schedule Workspace-wide reconciliation, and Resource `connections` remain adapter materialization contracts.
   New Capsule declarations come from service-side blueprints; historical `capsule_resource` custody never becomes a
-  recommended module-author path. A Run's Capsule-scoped credential can manage only that Capsule's retained
-  `capsule_resource` Interfaces. Resource-owned Form descriptors are a separate provenance. InterfaceBinding
+  recommended module-author path and has no Capsule-scoped Run credential. Operators may inspect or retire those rows
+  through the ordinary control API. Resource-owned Form descriptors are a separate provenance. InterfaceBinding
   authorization never becomes module or Form Package authority. Freshness beyond apply time is a status-plane channel
   (self-report / probe / refresh Run) that may update conditions only, never spec. The `document.display` consumer
   profile is defined once in the Final Plan / Core Spec and parsed through the shared contract-layer parser.

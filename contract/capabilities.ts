@@ -67,9 +67,10 @@ export interface TakosumiFormAvailabilityCapability {
 }
 
 /**
- * Open capability-token map. Bundled shapes have typed provider schemas;
- * operator-defined tokens are advertised only when their host schema and
- * adapter/plugin are installed.
+ * Open capability-token map. Installed Form Packages provide portable typed
+ * schemas; operator-defined tokens are advertised only when their host schema
+ * and adapter/plugin are installed. The discontinued Takosumi provider is not
+ * a capability authority.
  */
 export type TakosumiResourceCapabilities = Readonly<Record<string, boolean>>;
 

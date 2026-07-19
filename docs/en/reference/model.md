@@ -249,8 +249,9 @@ FormRef and resolves them to Targets. The current API/provider/state has not yet
 added FormRef persistence and uses the Resource Shape kind as its compatibility
 identity. Existing Resource IDs, kinds, ResolutionLocks, Runs, and state remain
 stable throughout migration; no second ledger is created. Objects can be
-submitted through the `/v1/resources` Deploy API,
-`takosumi_*` provider resources, CLI, dashboard, or Kubernetes CRDs:
+submitted through the `/v1/resources` Deploy API, the portable Takoform typed
+client, Takosumi CLI/dashboard, or Kubernetes CRDs. Discontinued `takosumi_*`
+HCL remains only as existing-state migration/rollback custody:
 
 ```text
 exact FormRef + Resource
@@ -283,13 +284,12 @@ selection are operator/advanced machinery behind that API.
 
 The absence of a standard surface does not justify a catch-all provider.
 One-off gaps and external infrastructure stay in generic-env
-ProviderConnections and normal OpenTofu modules. A new `takosumi_*` schema is
-justified only for a repeated provider-neutral Service Form backed by typed
-schema, planner, adapter, import/drift/state
-behavior, and capability evidence. Current `takosumi_*` form resources remain
-compatibility state; new typed form-client authority moves to the independent
-provider. A provider resource that maps to neither a portable Service Form nor
-a Takosumi operator/admin object has no reason to exist.
+ProviderConnections and normal OpenTofu modules. A repeated provider-neutral
+Service Form requires an exact Takoform Form Package, typed client schema,
+planner/adapter/import/drift/state behavior, and conformance evidence. Current
+`takosumi_*` form resources remain compatibility state; all new typed
+form-client authority belongs to Takoform. Takosumi operator objects are
+authored through API, CLI, or dashboard rather than a Takosumi-owned provider.
 
 `takosumi/takosumi` is discontinued and retained only for existing-state
 migration and rollback custody. Takoform owns portable authoring; direct API,
@@ -321,8 +321,8 @@ Consumer shapes such as `EdgeWorker` and `ContainerService` can declare
 non-secret `connections` to the shapes they use. A connection carries only the
 resource reference, requested permissions, and projection kind. Credential
 material and concrete runtime binding generation remain in Credential /
-ProviderConnection and adapter execution. The HCL surface is `connections =
-[...]`; `connection` is reserved by OpenTofu/Terraform.
+ProviderConnection and adapter execution. The portable Takoform HCL surface is
+`connections = [...]`; `connection` is reserved by OpenTofu/Terraform.
 
 Adapters report capabilities and perform preview/apply/import/observe/refresh/delete work.
 Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
@@ -339,9 +339,10 @@ Extensible surfaces use capability tokens. For example, a
 with custom interface evidence. The endpoint accepts or rejects those tokens
 through resolver/policy, not through a hard-coded provider binary allow-list.
 That extension is for backends of an existing typed shape. Adding a new
-HCL-facing `takosumi_*` shape still requires a schema/API/provider release so
-OpenTofu can keep typed validation, plan diffs, import, and state upgrade
-behavior.
+portable HCL-facing Form requires a Takoform schema/Form Package/provider
+release plus host conformance so OpenTofu can keep typed validation, plan
+diffs, import, and state upgrade behavior. It does not revive the Takosumi
+provider.
 
 Provider capability documents may include operator-defined adapter tokens as
 additional boolean keys under `adapters`. Known adapter keys remain

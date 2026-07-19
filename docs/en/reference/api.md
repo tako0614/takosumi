@@ -265,8 +265,10 @@ its `sourceSnapshotId` is present in the Source snapshot list.
 `/v1/resources` is the Deploy API for provider-neutral managed Resources. It is
 the sole lifecycle authority for preview/apply/observe/refresh/import/delete and
 for canonical Resource, ResolutionLock, NativeResource, Run, status, Output,
-and audit evidence. The typed provider, CLI, dashboard, Kubernetes CRDs, and
-control-plane compatibility handlers are clients of this API.
+and audit evidence. The portable Takoform typed client, Takosumi CLI/dashboard,
+Kubernetes CRDs, and control-plane compatibility handlers are clients of this
+API. Discontinued `takosumi_*` HCL is existing-state migration/rollback custody,
+not an active authoring path.
 
 On a multi-tenant platform, the session / personal access token / service
 token / OAuth token paths require the request's `space` to match the caller's
@@ -469,16 +471,18 @@ state-migration compatibility name.
 ## Target / Credential / Policy API
 
 Backends are resolved through TargetPool, Policy, capability evidence, and
-ResolutionLock. Normal `takosumi_*` HCL does not hard-code backend placement.
+ResolutionLock. Takosumi does not expose active operator HCL for backend
+placement.
 This is an operator/advanced API. The default deploy UX exposes the service
 form, required inputs, price, preview, and apply without requiring users to
 understand TargetPool, Policy, or Adapter configuration.
 `/v1/capabilities.adapters` may return operator-defined adapter tokens as
 additional boolean keys alongside the known keys (`opentofu`, `aws`,
 `cloudflare`, `kubernetes`, `vm`, and `takosumi_native`). Those extension keys
-add implementations for existing typed shapes; they do not create new
-`takosumi_*` HCL resource types at runtime. New shapes still require a
-schema/API/provider release.
+add implementations for existing typed shapes; they do not create new HCL
+resource types at runtime. New portable Forms require a Takoform exact Form
+Package/schema/provider release and Takosumi host/adapter conformance. The
+Takosumi provider is not updated.
 
 ```http
 PUT    /v1/target-pools/{name}
