@@ -10,7 +10,11 @@ import { redactRunnerOutput } from "./redaction.ts";
 import { redactionValuesFromRequest } from "./credentials.ts";
 import {
   isSourceSyncRequest,
+  isStableSemverTagRequest,
+  isSourceSnapshotFileRequest,
   runSourceSync,
+  runStableSemverTagResolution,
+  runSourceSnapshotFileRead,
   handleSourceArchiveArtifactRequest,
   handleSourceArchiveRestoreRequest,
   handleDepStateRestoreRequest,
@@ -113,6 +117,36 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
           {
             runId,
             action: "source_sync",
+            status: "failed",
+            exitCode: 1,
+            stderr: redactRunnerOutput(
+              error instanceof Error ? error.message : String(error),
+              requestRedactionValues,
+            ),
+          },
+          { status: 500 },
+        );
+      }
+    }
+
+    if (
+      isStableSemverTagRequest(body.request) ||
+      isSourceSnapshotFileRequest(body.request)
+    ) {
+      const action = isStableSemverTagRequest(body.request)
+        ? "stable_semver_tag"
+        : "source_snapshot_file";
+      try {
+        const result =
+          action === "stable_semver_tag"
+            ? await runStableSemverTagResolution(runId, body.request)
+            : await runSourceSnapshotFileRead(runId, body.request);
+        return Response.json(result, { status: 200 });
+      } catch (error) {
+        return Response.json(
+          {
+            runId,
+            action,
             status: "failed",
             exitCode: 1,
             stderr: redactRunnerOutput(

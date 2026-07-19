@@ -257,6 +257,13 @@ export const SOURCE_SYNC_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}/sync`;
 export const SOURCE_SNAPSHOTS_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}/snapshots`;
+export const SOURCE_SNAPSHOT_FILE_PATH = (
+  sourceId: string,
+  sourceSnapshotId: string,
+): string =>
+  `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/file`;
+export const WORKSPACE_STABLE_SOURCE_TAG_PATH = (workspaceId: string): string =>
+  `${INTERNAL_V1_PREFIX}/workspaces/${encodeURIComponent(workspaceId)}/source-ref-resolutions/stable-semver`;
 export const SOURCE_COMPATIBILITY_CHECK_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}/compatibility-check`;
 export const COMPATIBILITY_REPORT_PATH = (id: string): string =>
@@ -290,6 +297,24 @@ export interface CreateSourceResponse {
 
 export interface SourceResponse {
   readonly source: Source;
+}
+
+export interface StableSourceTagResolutionRequest {
+  readonly url: string;
+}
+
+export interface StableSourceTagResolutionResponse {
+  readonly tag: string;
+  readonly commit: string;
+}
+
+export interface SourceSnapshotFileResponse {
+  readonly sourceSnapshotId: string;
+  readonly path: string;
+  readonly text: string;
+  /** SHA-256 of the exact UTF-8 bytes read inside the Runner boundary. */
+  readonly digest: string;
+  readonly sizeBytes: number;
 }
 
 export interface ListSourcesResponse {

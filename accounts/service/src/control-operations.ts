@@ -34,6 +34,8 @@ import type {
   SourceResponse,
   SourceSnapshot,
   SourceSyncIntent,
+  StableSourceTagResolutionResponse,
+  SourceSnapshotFileResponse,
 } from "takosumi-contract/sources";
 import type {
   CapsuleCompatibilityReportResponse,
@@ -298,6 +300,13 @@ export interface ControlPlaneOperations {
     id: string,
     options?: { readonly modulePath?: string },
   ): Promise<readonly { readonly path: string; readonly text: string }[]>;
+  resolveStableSourceTag(
+    url: string,
+  ): Promise<StableSourceTagResolutionResponse>;
+  readSourceSnapshotPresentationFile(
+    id: string,
+    path: string,
+  ): Promise<Omit<SourceSnapshotFileResponse, "sourceSnapshotId">>;
   // --- Billing (§28) ---
   getWorkspaceBilling(workspaceId: string): Promise<{
     readonly billing: {

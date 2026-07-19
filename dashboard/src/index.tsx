@@ -8,6 +8,7 @@ import {
   useLocation,
   useParams,
 } from "@solidjs/router";
+import { hasCapsuleSourceOptionsInstallLink } from "takosumi-contract";
 import { installStaleAssetReload } from "./lib/chunk-reload.ts";
 import { initializeTakosumiRuntimeCapabilities } from "./lib/runtime-capabilities.ts";
 import ErrorBoundary from "./components/ErrorBoundary.tsx";
@@ -55,6 +56,9 @@ const ManageView = lazy(() => import("./views/settings/ManageView.tsx"));
 const ServiceListView = lazy(() => import("./views/apps/ServiceListView.tsx"));
 const AppDetailView = lazy(() => import("./views/apps/AppDetailView.tsx"));
 const NewAppView = lazy(() => import("./views/new/NewAppView.tsx"));
+const CapsuleSourceOptionsInstallView = lazy(
+  () => import("./views/new/CapsuleSourceOptionsInstallView.tsx"),
+);
 const RunsListView = lazy(() => import("./views/runs/RunsListView.tsx"));
 const RunView = lazy(() => import("./views/runs/RunView.tsx"));
 const RunGroupView = lazy(() => import("./views/runs/RunGroupView.tsx"));
@@ -113,6 +117,15 @@ function RedirectWithQuery(props: { readonly to: string }) {
   return <Navigate href={`${props.to}${loc.search}`} />;
 }
 
+function InstallEntryRoute() {
+  const location = useLocation();
+  return hasCapsuleSourceOptionsInstallLink(location.search) ? (
+    <CapsuleSourceOptionsInstallView />
+  ) : (
+    <Navigate href={`/new${location.search}`} />
+  );
+}
+
 /** `/apps/:id` -> `/services/:id` (legacy dashboard links). */
 function RedirectLegacyAppDetail() {
   const params = useParams();
@@ -162,6 +175,7 @@ function App() {
         <Route path="/settings/manage" component={ManageView} />
         <Route path="/services" component={ServiceListView} />
         <Route path="/new" component={NewAppView} />
+        <Route path="/install" component={InstallEntryRoute} />
         <Route path="/connections" component={ConnectionsView} />
         <Route path="/services/:id" component={AppDetailView} />
         <Route path="/services/:id/:tab" component={AppDetailView} />
@@ -203,10 +217,6 @@ function App() {
           lib/install-link.ts pre-fills the Git form — pre-fill only, the visitor
           always confirms before anything installs. A provider OAuth helper
           callback's /connections keeps its result query too. */}
-      <Route
-        path="/install"
-        component={() => <RedirectWithQuery to="/new" />}
-      />
       <Route path="/home" component={() => <Navigate href="/" />} />
       <Route path="/apps" component={() => <Navigate href="/" />} />
       <Route path="/apps/:id" component={RedirectLegacyAppDetail} />
