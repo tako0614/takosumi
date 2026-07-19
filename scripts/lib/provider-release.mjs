@@ -1148,14 +1148,42 @@ export async function probeProviderReleaseToolchain({
     }),
   );
   const runtimeTrust = descriptor.runtimeTrust.files.map((expected) => {
-    const canonicalPath = realpathSync(expected.path);
-    return {
-      path: expected.path,
-      canonicalPath,
-      expectedSha256: expected.sha256,
-      observedSha256: sha256(readFileSync(canonicalPath)),
-    };
+    try {
+      const canonicalPath = realpathSync(expected.path);
+      return {
+        path: expected.path,
+        canonicalPath,
+        expectedSha256: expected.sha256,
+        observedSha256: sha256(readFileSync(canonicalPath)),
+        exists: true,
+      };
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      return {
+        path: expected.path,
+        canonicalPath: null,
+        expectedSha256: expected.sha256,
+        observedSha256: null,
+        exists: false,
+      };
+    }
   });
+  const observedRuntimePaths = new Set();
+  for (const expected of Object.values(descriptor.toolchain)) {
+    const result = command("/usr/bin/ldd", [expected.path], {
+      cwd: repoRoot,
+      allowFailure: true,
+    });
+    for (const line of result.stdout.split("\n")) {
+      const dependency =
+        /=>\s+(\/\S+)\s+\(/.exec(line)?.[1] ??
+        /^\s*(\/\S+)\s+\(/.exec(line)?.[1];
+      if (dependency) observedRuntimePaths.add(realpathSync(dependency));
+    }
+  }
+  const observedRuntimeTrust = [...observedRuntimePaths]
+    .sort((a, b) => a.localeCompare(b))
+    .map((path) => ({ path, sha256: sha256(readFileSync(path)) }));
   const zipOutput = command(descriptor.toolchain.zip.path, ["-v"], {
     cwd: repoRoot,
   }).stdout;
@@ -1191,6 +1219,7 @@ export async function probeProviderReleaseToolchain({
       observedSha256: digestTreeSync(descriptor.toolchain.go.distributionRoot),
     },
     runtimeTrust,
+    observedRuntimeTrust,
   };
 }
 

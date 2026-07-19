@@ -147,7 +147,9 @@ jobs:
           sudo cp -a "$(realpath "${source_root}")/." "${target_root}/"
 
       - name: Capture read-only toolchain evidence
-        run: bun scripts/provider-release.mjs probe-toolchain | tee provider-toolchain-probe.json
+        run: |
+          set -o pipefail
+          bun scripts/provider-release.mjs probe-toolchain | tee provider-toolchain-probe.json
 
       - name: Upload read-only toolchain evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
