@@ -23,6 +23,9 @@ interface D1SourceStoreSlice {
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
   getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined>;
   listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]>;
+  listSourceSnapshotsBySourceIds(
+    sourceIds: readonly string[],
+  ): Promise<readonly SourceSnapshot[]>;
   listSourceSnapshotsPage(
     sourceId: string,
     params: PageParams,
@@ -228,3 +231,27 @@ for (const [name, make] of STORES) {
     expect(list.map((x) => x.id)).toEqual([r1.id, r2.id]);
   });
 }
+
+test("d1: source snapshot lookup chunks large Source sets with stable SQL-IN semantics", async () => {
+  const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
+  const seeded = Array.from({ length: 205 }, (_, index) => {
+    const sequence = String(index).padStart(3, "0");
+    return snapshot({
+      id: `snap_chunk_${sequence}`,
+      sourceId: `src_chunk_${sequence}`,
+      fetchedAt: `2026-06-06T00:00:00.${sequence}Z`,
+    });
+  });
+  for (const item of seeded) await store.putSourceSnapshot(item);
+
+  const requestedSourceIds = [
+    ...seeded.map((item) => item.sourceId).reverse(),
+    seeded[0]!.sourceId,
+    "src_chunk_missing",
+  ];
+  expect(
+    (await store.listSourceSnapshotsBySourceIds(requestedSourceIds)).map(
+      (item) => item.id,
+    ),
+  ).toEqual(seeded.map((item) => item.id));
+});
