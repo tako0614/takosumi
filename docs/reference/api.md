@@ -550,7 +550,7 @@ compat.kubernetes.crd.v1
 これは provider API 全体の互換を意味しません。範囲は capability と
 compatibility matrix で明示します。
 
-control-plane compat、typed `takosumi_*` resource、dashboard、CLI は、公開 protocol
+control-plane compat、direct Resource API、portable Takoform client、dashboard、CLI は、公開 protocol
 こそ異なっても同じ Resource desired state と Deploy API lifecycle に収束します。
 data-plane profile は既存 Resource を暗黙作成せず、Ready な Resource を解決します。
 表現できない操作は互換のように成功させず、compatibility matrix で範囲を明示して

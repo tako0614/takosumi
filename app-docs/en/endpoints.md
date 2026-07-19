@@ -57,7 +57,7 @@ served by Takosumi Cloud managed backends. Managed-backend internals, secrets,
 and operator-only records are not public contracts; they belong in operator
 runbooks.
 All managed endpoint families normalize into the same Cloud managed-operation
-boundary before a backend API is called. `takosumi_*` Resource Shape calls,
+boundary before a backend API is called. Canonical Resource API calls,
 S3-compatible data-plane requests, AI Gateway
 requests, runtime dispatch, and Dashboard actions are peer entrypoints. They
 are not fallback layers for each other. The platform resolves the public service

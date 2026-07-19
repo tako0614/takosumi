@@ -568,9 +568,9 @@ compat.kubernetes.crd.v1
 These are not complete provider API compatibility claims. Scope is
 published through capabilities and a compatibility matrix.
 
-Control-plane compatibility, typed `takosumi_*` resources, dashboard, and CLI
-use different public protocols but converge on the same Resource desired state
-and Deploy API lifecycle. Data-plane profiles never create a Resource
+Control-plane compatibility, the direct Resource API, portable Takoform
+clients, dashboard, and CLI use different public protocols but converge on the
+same Resource desired state and Deploy API lifecycle. Data-plane profiles never create a Resource
 implicitly; they resolve one that is already Ready. Operations outside a scoped
 profile fail closed and are documented in the compatibility matrix instead of
 pretending full vendor compatibility.

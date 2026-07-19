@@ -2,7 +2,7 @@
 
 Takosumi は、Git に置いた OpenTofu/Terraform module を、計画 → 確認 → 反映の流れで
 安全にデプロイ・管理する基盤ソフトウェアです。普通の OpenTofu/Terraform module を
-そのまま実行でき、必要な場合は現在の `takosumi_*` Resource Shape 互換 surface を
+そのまま実行でき、必要な場合は現在の Resource Shape API 互換 surface を
 Target / Adapter に解決できます。採用済みの target では、portable な定義を Service Form、
 exact identity を FormRef と呼び、Takosumi は Form Package が 0 個でも動く optional host です
 (用語のひとこと説明は [用語集](./reference/glossary.md) を参照)。
