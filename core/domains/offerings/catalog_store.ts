@@ -28,6 +28,8 @@ export type CreateOfferingCatalogResult =
  * concerns and never contain Cloud price, capacity, manager, or support data.
  */
 export interface OfferingCatalogStore extends OfferingCatalogReader {
+  /** Composition-time persistence assertion used by strict runtime gates. */
+  readonly persistence: "durable" | "ephemeral";
   createCatalog(
     record: StoredOfferingCatalog,
   ): Promise<CreateOfferingCatalogResult>;

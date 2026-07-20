@@ -365,6 +365,137 @@ async function legacyApplicationSchemaSnapshot(database: D1Database) {
   return { objects: objects.results ?? [], ledger: ledger.results ?? [] };
 }
 
+async function seedAppendedV48InterfaceLayout(
+  database: D1Database,
+): Promise<void> {
+  await database.prepare(`drop table interfaces`).run();
+  await database
+    .prepare(
+      `create table interfaces (
+        id text primary key,
+        workspace_id text not null,
+        owner_kind text not null,
+        owner_id text not null,
+        name text not null,
+        interface_type text not null,
+        phase text not null,
+        generation integer not null,
+        resolved_revision integer not null,
+        record_json text not null,
+        created_at text not null,
+        updated_at text not null,
+        oauth_resource_uri text,
+        form_ref_key text,
+        form_schema_digest text,
+        descriptor_name text,
+        descriptor_version text
+      )`,
+    )
+    .run();
+  await database
+    .prepare(
+      `create unique index interfaces_active_name_unique
+       on interfaces (workspace_id, owner_kind, owner_id, name)
+       where phase <> 'Retired'`,
+    )
+    .run();
+  await database
+    .prepare(
+      `create index interfaces_workspace_type_phase_idx
+       on interfaces (workspace_id, interface_type, phase)`,
+    )
+    .run();
+  await database
+    .prepare(
+      `create unique index interfaces_oauth_resource_claim_unique
+       on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
+       where oauth_resource_uri is not null`,
+    )
+    .run();
+  await database
+    .prepare(
+      `create index interfaces_form_descriptor_idx
+       on interfaces (
+         workspace_id, form_ref_key, form_schema_digest,
+         descriptor_name, descriptor_version
+       ) where form_ref_key is not null`,
+    )
+    .run();
+  await database
+    .prepare(
+      `insert into interfaces (
+         id, workspace_id, owner_kind, owner_id, name, interface_type, phase,
+         generation, resolved_revision, record_json, created_at, updated_at,
+         oauth_resource_uri, form_ref_key, form_schema_digest,
+         descriptor_name, descriptor_version
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "iface_v48",
+      "ws_v48",
+      "resource",
+      "resource_v48",
+      "document",
+      "document.display",
+      "Ready",
+      3,
+      2,
+      JSON.stringify({ id: "iface_v48", generation: 3 }),
+      NOW,
+      NOW,
+      "https://resource.example.test",
+      "forms.takoform.com/v1alpha1|Document|1.0.0",
+      `sha256:${"d".repeat(64)}`,
+      "display",
+      "1",
+    )
+    .run();
+  await database
+    .prepare(
+      `insert into interface_bindings (
+         id, workspace_id, interface_id, subject_kind, subject_id, phase,
+         generation, record_json, created_at, updated_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "ifbind_v48",
+      "ws_v48",
+      "iface_v48",
+      "service_account",
+      "sa_v48",
+      "Active",
+      4,
+      JSON.stringify({ id: "ifbind_v48", interfaceId: "iface_v48" }),
+      NOW,
+      NOW,
+    )
+    .run();
+  await database
+    .prepare(`delete from schema_migrations where version = 49`)
+    .run();
+}
+
+async function readV48InterfaceRows(database: D1Database) {
+  return {
+    interface: await database
+      .prepare(
+        `select id, workspace_id, owner_kind, owner_id, name, interface_type,
+                phase, generation, resolved_revision, oauth_resource_uri,
+                form_ref_key, form_schema_digest, descriptor_name,
+                descriptor_version, record_json, created_at, updated_at
+         from interfaces where id = 'iface_v48'`,
+      )
+      .first(),
+    binding: await database
+      .prepare(
+        `select id, workspace_id, interface_id, subject_kind, subject_id,
+                phase, generation, record_json, created_at, updated_at
+         from interface_bindings where id = 'ifbind_v48'`,
+      )
+      .first(),
+  };
+}
+
 async function seedImmediatePredecessorV49(
   database: D1Database,
 ): Promise<void> {
@@ -596,6 +727,291 @@ test("control D1 apply converges a fresh database and records every version", as
   }
 });
 
+test("control D1 v49 atomically preserves populated appended-order Interfaces through predecessor fence recovery", async () => {
+  const plan = await buildControlD1SchemaPlan({
+    throughMigrationVersion: 49,
+  });
+  const database = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(database, {
+      throughMigrationVersion: 49,
+    });
+    await seedAppendedV48InterfaceLayout(database);
+    const before = await readV48InterfaceRows(database);
+    const beforeVerification = await verifyControlD1Schema(database, plan);
+    expect(beforeVerification.issues).toContain(
+      "schema_table_mismatch:interfaces",
+    );
+    expect(beforeVerification.issues).toContain("migration_ledger_mismatch");
+
+    const predecessorFence = await acquireControlD1MaintenanceFence(
+      database,
+      {
+        sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+      },
+      NOW,
+    );
+    // Live v48 predates durable predecessor lineage. Recovery must add these
+    // nullable columns before the first state read while the old fence and all
+    // guards remain active.
+    await downgradeMaintenanceTableToV48(database);
+    await database
+      .prepare(`drop trigger "_takosumi_schema_fence_interfaces_insert"`)
+      .run();
+
+    let supersessionBatchCount = 0;
+    let firstUpgradeBatchBlockedWrite = false;
+    const migrationDatabase: D1Database = {
+      prepare: (query) => database.prepare(query),
+      batch: async <T>(statements) => {
+        const results = await database.batch<T>(statements);
+        supersessionBatchCount += 1;
+        if (supersessionBatchCount === 1) {
+          try {
+            await database
+              .prepare(
+                `insert into interfaces (
+                   id, workspace_id, owner_kind, owner_id, name,
+                   interface_type, phase, generation, resolved_revision,
+                   record_json, created_at, updated_at
+                 ) values (
+                   'iface_upgrade_gap', 'ws_v48', 'resource', 'resource_gap',
+                   'gap', 'document.display', 'Ready', 1, 0, '{}', ?, ?
+                 )`,
+              )
+              .bind(NOW, NOW)
+              .run();
+          } catch (error) {
+            firstUpgradeBatchBlockedWrite = String(error).includes(
+              "takosumi control schema maintenance",
+            );
+          }
+        }
+        return results;
+      },
+    };
+    let blockedDuringTransition = 0;
+    const applyWithPredecessor = (retainMaintenanceFence: boolean) =>
+      applyControlD1Schema(migrationDatabase, plan, {
+        sourceCommit: SOURCE_COMMIT,
+        environment: "staging",
+        activatedAt: "2026-07-16T00:01:00.000Z",
+        releasedAt: () => "2026-07-16T00:02:00.000Z",
+        maintenanceDrainMilliseconds: 0,
+        waitForRequestDrain: async () => {
+          await expect(
+            database
+              .prepare(
+                `insert into interfaces (
+                   id, workspace_id, owner_kind, owner_id, name,
+                   interface_type, phase, generation, resolved_revision,
+                   record_json, created_at, updated_at
+                 ) values (
+                   'iface_blocked', 'ws_v48', 'resource', 'resource_blocked',
+                   'blocked', 'document.display', 'Ready', 1, 0, '{}', ?, ?
+                 )`,
+              )
+              .bind(NOW, NOW)
+              .run(),
+          ).rejects.toThrow("takosumi control schema maintenance");
+          blockedDuringTransition += 1;
+        },
+        retainMaintenanceFence,
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+        activePredecessorFence: {
+          sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+          manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        },
+      });
+
+    const retained = await applyWithPredecessor(true);
+    expect(retained.appliedMigrationVersions).toEqual([49]);
+    expect(retained.verification.status).toBe("ready");
+    expect(retained.maintenanceStatus).toBe("retained");
+    expect(retained.predecessorMaintenanceFence).toEqual(predecessorFence);
+    expect(firstUpgradeBatchBlockedWrite).toBe(true);
+    expect(await readV48InterfaceRows(database)).toEqual(before);
+    const interfaceGuards = await database
+      .prepare(
+        `select name from sqlite_master
+         where type = 'trigger'
+           and tbl_name = 'interfaces'
+           and name like '_takosumi_schema_fence_interfaces_%'
+         order by name`,
+      )
+      .all<{ readonly name: string }>();
+    expect((interfaceGuards.results ?? []).map((row) => row.name)).toEqual([
+      "_takosumi_schema_fence_interfaces_delete",
+      "_takosumi_schema_fence_interfaces_insert",
+      "_takosumi_schema_fence_interfaces_update",
+    ]);
+
+    const resumed = await applyWithPredecessor(false);
+    expect(resumed.appliedMigrationVersions).toEqual([]);
+    expect(resumed.maintenanceStatus).toBe("released");
+    expect(resumed.predecessorMaintenanceFence).toEqual(predecessorFence);
+    expect(blockedDuringTransition).toBe(2);
+    expect(await readV48InterfaceRows(database)).toEqual(before);
+    expect(await verifyControlD1Schema(database, plan)).toMatchObject({
+      status: "ready",
+      latestMigrationVersion: 49,
+      issues: [],
+    });
+    expect(await readControlD1MaintenanceState(database)).toEqual({
+      status: "inactive",
+    });
+    expect(
+      await database
+        .prepare(
+          `select name from sqlite_master
+           where type = 'table' and name = 'interfaces__takosumi_v49'`,
+        )
+        .first(),
+    ).toBeNull();
+  } finally {
+    database.close();
+  }
+});
+
+for (const responseLossBatch of [1, 2, 3] as const) {
+  test(`control D1 v49 predecessor recovery resumes after committed batch ${responseLossBatch} loses its response`, async () => {
+    const plan = await buildControlD1SchemaPlan({
+      throughMigrationVersion: 49,
+    });
+    const database = new SqliteControlD1Database();
+    try {
+      await ensureD1OpenTofuLedgerSchema(database, {
+        throughMigrationVersion: 49,
+      });
+      await seedAppendedV48InterfaceLayout(database);
+      const before = await readV48InterfaceRows(database);
+      await acquireControlD1MaintenanceFence(
+        database,
+        {
+          sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+          manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+          environment: "staging",
+          databaseRole: "in_place",
+          releasePolicy: "in_place",
+          databaseId: "database_staging",
+        },
+        NOW,
+      );
+      await downgradeMaintenanceTableToV48(database);
+
+      let batchCount = 0;
+      let responseLost = false;
+      const responseLossDatabase: D1Database = {
+        prepare: (query) => database.prepare(query),
+        batch: async <T>(statements) => {
+          const results = await database.batch<T>(statements);
+          batchCount += 1;
+          if (!responseLost && batchCount === responseLossBatch) {
+            responseLost = true;
+            throw new Error(`simulated committed batch ${responseLossBatch}`);
+          }
+          return results;
+        },
+      };
+      const apply = () =>
+        applyControlD1Schema(responseLossDatabase, plan, {
+          sourceCommit: SOURCE_COMMIT,
+          environment: "staging",
+          activatedAt: "2026-07-16T00:01:00.000Z",
+          releasedAt: () => "2026-07-16T00:02:00.000Z",
+          maintenanceDrainMilliseconds: 0,
+          waitForRequestDrain: async () => {},
+          retainMaintenanceFence: true,
+          databaseRole: "in_place",
+          releasePolicy: "in_place",
+          databaseId: "database_staging",
+          activePredecessorFence: {
+            sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+            manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+          },
+        });
+
+      await expect(apply()).rejects.toBeInstanceOf(Error);
+      expect(responseLost).toBe(true);
+      expect(await readControlD1MaintenanceState(database)).toMatchObject({
+        status: "active",
+      });
+      expect(await readV48InterfaceRows(database)).toEqual(before);
+      await expect(
+        database
+          .prepare(
+            `insert into interfaces (
+               id, workspace_id, owner_kind, owner_id, name, interface_type,
+               phase, generation, resolved_revision, record_json,
+               created_at, updated_at
+             ) values (
+               'response-loss-blocked', 'ws_v48', 'resource', 'resource_loss',
+               'blocked', 'document.display', 'Ready', 1, 0, '{}', ?, ?
+             )`,
+          )
+          .bind(NOW, NOW)
+          .run(),
+      ).rejects.toThrow("takosumi control schema maintenance");
+
+      const resumed = await apply();
+      expect(resumed.verification).toMatchObject({
+        status: "ready",
+        latestMigrationVersion: 49,
+        issues: [],
+      });
+      expect(resumed.appliedMigrationVersions).toEqual(
+        responseLossBatch === 3 ? [] : [49],
+      );
+      expect(resumed.maintenanceStatus).toBe("retained");
+      expect(await readV48InterfaceRows(database)).toEqual(before);
+      const state = await readControlD1MaintenanceState(database);
+      expect(state).toMatchObject({
+        status: "active",
+        fence: {
+          sourceCommit: SOURCE_COMMIT,
+          manifestDigest: plan.manifestDigest,
+          predecessor: {
+            sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+            manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+          },
+        },
+      });
+      await expect(
+        database
+          .prepare(
+            `insert into interfaces (
+               id, workspace_id, owner_kind, owner_id, name, interface_type,
+               phase, generation, resolved_revision, record_json,
+               created_at, updated_at
+             ) values (
+               'retry-blocked', 'ws_v48', 'resource', 'resource_retry',
+               'blocked', 'document.display', 'Ready', 1, 0, '{}', ?, ?
+             )`,
+          )
+          .bind(NOW, NOW)
+          .run(),
+      ).rejects.toThrow("takosumi control schema maintenance");
+      expect(
+        await database
+          .prepare(
+            `select name from sqlite_master
+             where type = 'table' and name = 'interfaces__takosumi_v49'`,
+          )
+          .first(),
+      ).toBeNull();
+    } finally {
+      database.close();
+    }
+  });
+}
+
 test("control D1 v50 preserves predecessor Interface rows through fenced Offering catalog creation", async () => {
   const plan = await buildControlD1SchemaPlan();
   const database = new SqliteControlD1Database();
@@ -746,7 +1162,7 @@ test("control D1 v50 preserves predecessor Interface rows through fenced Offerin
 });
 
 for (const responseLossBatch of [1, 2, 3] as const) {
-  test(`control D1 predecessor recovery resumes after committed batch ${responseLossBatch} loses its response`, async () => {
+  test(`control D1 v50 predecessor recovery resumes after committed batch ${responseLossBatch} loses its response`, async () => {
     const plan = await buildControlD1SchemaPlan();
     const database = new SqliteControlD1Database();
     try {

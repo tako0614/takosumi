@@ -26,6 +26,8 @@ interface CatalogListRow extends CatalogRow {
 }
 
 export class D1OfferingCatalogStore implements OfferingCatalogStore {
+  readonly persistence = "durable" as const;
+
   constructor(readonly db: D1Like) {}
 
   async createCatalog(

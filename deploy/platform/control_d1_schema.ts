@@ -195,10 +195,12 @@ export async function fenceControlD1Schema(
   };
 }
 
-export async function buildControlD1SchemaPlan(): Promise<ControlD1SchemaPlan> {
+export async function buildControlD1SchemaPlan(
+  options: { readonly throughMigrationVersion?: number } = {},
+): Promise<ControlD1SchemaPlan> {
   const database = new SqliteControlD1Database();
   try {
-    await ensureD1OpenTofuLedgerSchema(database);
+    await ensureD1OpenTofuLedgerSchema(database, options);
     const tables = await inspectOwnedTables(database);
     const attachedSchemaObjects = await inspectAttachedSchemaObjects(
       database,
@@ -273,7 +275,13 @@ export async function applyControlD1Schema(
   // Any failure before the explicit release deliberately leaves the durable
   // fence active and all request writes blocked. A retry of the same exact
   // source/manifest resumes the deterministic fence.
-  await ensureD1OpenTofuLedgerSchema(database);
+  const plannedMigrationVersion = plan.migrations.at(-1)?.version;
+  if (plannedMigrationVersion === undefined) {
+    throw new ControlD1SchemaError("schema_plan_migration_ledger_empty");
+  }
+  await ensureD1OpenTofuLedgerSchema(database, {
+    throughMigrationVersion: plannedMigrationVersion,
+  });
   const fencedVerification = await verifyControlD1Schema(database, plan, {
     allowActiveMaintenanceFence: true,
   });

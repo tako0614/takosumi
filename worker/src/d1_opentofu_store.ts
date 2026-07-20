@@ -3411,7 +3411,19 @@ const D1_OFFERING_CATALOG_STATEMENTS = [
  */
 export async function ensureD1OpenTofuLedgerSchema(
   db: D1Database,
+  options: { readonly throughMigrationVersion?: number } = {},
 ): Promise<void> {
+  const throughMigrationVersion =
+    options.throughMigrationVersion ??
+    D1_OPEN_TOFU_SCHEMA_MIGRATIONS.at(-1)?.version;
+  if (
+    throughMigrationVersion === undefined ||
+    !D1_OPEN_TOFU_SCHEMA_MIGRATIONS.some(
+      (migration) => migration.version === throughMigrationVersion,
+    )
+  ) {
+    throw new Error("D1 OpenTofu schema migration ceiling is invalid");
+  }
   const statements = [
     `create table if not exists workspaces (
       id text primary key,
@@ -3957,7 +3969,7 @@ export async function ensureD1OpenTofuLedgerSchema(
     `create index if not exists interface_bindings_workspace_subject_idx
       on interface_bindings (workspace_id, subject_kind, subject_id)`,
     ...D1_SERVICE_FORM_REGISTRY_STATEMENTS,
-    ...D1_OFFERING_CATALOG_STATEMENTS,
+    ...(throughMigrationVersion >= 50 ? D1_OFFERING_CATALOG_STATEMENTS : []),
   ];
   const tableStatements = statements.filter((sql) => !isD1IndexStatement(sql));
   const indexStatements = statements.filter((sql) => isD1IndexStatement(sql));
@@ -3971,7 +3983,7 @@ export async function ensureD1OpenTofuLedgerSchema(
   for (const sql of tableStatements) {
     await db.prepare(sql).run();
   }
-  await migrateD1OpenTofuLedgerSchema(db);
+  await migrateD1OpenTofuLedgerSchema(db, throughMigrationVersion);
   for (const sql of indexStatements) {
     await db.prepare(sql).run();
   }
@@ -4018,13 +4030,17 @@ export async function applyD1GuardedTableRenames(
   }
 }
 
-async function migrateD1OpenTofuLedgerSchema(db: D1Database): Promise<void> {
+async function migrateD1OpenTofuLedgerSchema(
+  db: D1Database,
+  throughMigrationVersion: number,
+): Promise<void> {
   await ensureD1SchemaMigrationLedger(db);
   // A legacy/empty database can acquire the fence before this ledger exists.
   // Cover the newly created table before the migration chain yields.
   await repairControlD1MaintenanceGuards(db);
   await prepareRetiredD1WorkspaceOutputSyncMigration(db);
   for (const migration of D1_OPEN_TOFU_SCHEMA_MIGRATIONS) {
+    if (migration.version > throughMigrationVersion) break;
     await applyD1OpenTofuSchemaMigration(db, migration);
   }
 }
