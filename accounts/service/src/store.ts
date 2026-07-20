@@ -101,6 +101,20 @@ export interface AccountSessionRecord {
 }
 
 /**
+ * Exact records matching one opaque account-plane bearer value. Durable stores
+ * may resolve these together so collision rejection does not require one
+ * database round trip per credential kind. The records remain candidates only;
+ * expiry, audience, scope, account existence, and collision checks stay in the
+ * service authorization layer.
+ */
+export interface AccountsBearerCredentialCandidates {
+  readonly session?: AccountSessionRecord;
+  readonly sessionAccount?: TakosumiAccountRecord;
+  readonly accessToken?: TokenRecord;
+  readonly personalAccessToken?: PersonalAccessTokenRecord;
+}
+
+/**
  * Result of {@link AccountsStore.pruneRefreshChain}. Counts the rows deleted
  * from each retention-managed refresh-chain / authorization-code table so the
  * operator cleanup task can report progress.
@@ -163,6 +177,15 @@ export interface PrivacyRequestRecord {
 }
 
 export interface AccountsStore {
+  /**
+   * Optional bounded lookup for all credential kinds sharing one opaque token.
+   * Implementations must use exact indexed keys and must not select a winner.
+   */
+  resolveAccountsBearerCandidates?(
+    token: string,
+  ):
+    | AccountsBearerCredentialCandidates
+    | Promise<AccountsBearerCredentialCandidates>;
   saveAccount(record: TakosumiAccountRecord): void | Promise<void>;
   findAccount(
     subject: TakosumiSubject,

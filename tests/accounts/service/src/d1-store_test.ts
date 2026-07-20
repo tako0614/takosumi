@@ -11,6 +11,8 @@ import {
   __resetSessionHashSaltConfigForTesting,
   registerSessionHashSaltConfig,
 } from "../../../../accounts/service/src/session-hash-salt.ts";
+import { requireAccountsBearer } from "../../../../accounts/service/src/account-session.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 afterEach(() => {
   __resetSessionHashSaltConfigForTesting();
@@ -56,6 +58,109 @@ test("D1AccountsStore indexes Capsule OIDC registrations directly", async () => 
     "oidc_d1",
   );
 });
+
+test("D1AccountsStore resolves a session and its account in one exact bearer query", async () => {
+  registerSessionHashSaltConfig({ salt: "d1-bearer-session-salt" });
+  const db = new CountingD1Database();
+  const store = new D1AccountsStore(db);
+  const now = Date.now();
+  const token = "opaque.session.without-prefix-authority";
+  await store.initialize();
+  await store.saveAccount({
+    subject: "tsub_d1_bearer",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await store.saveAccountSession({
+    sessionId: token,
+    subject: "tsub_d1_bearer",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+
+  db.resetPrepareCount();
+  const result = await requireAccountsBearer({
+    request: bearerRequest(token),
+    store,
+    scope: "read",
+  });
+
+  expect(result).toEqual({
+    ok: true,
+    auth: { subject: "tsub_d1_bearer", credential: "session" },
+  });
+  expect(db.prepareCount).toBe(1);
+});
+
+test("D1AccountsStore rejects a cross-store collision after one bounded query", async () => {
+  registerSessionHashSaltConfig({ salt: "d1-bearer-collision-salt" });
+  const db = new CountingD1Database();
+  const store = new D1AccountsStore(db);
+  const now = Date.now();
+  const token = "opaque.colliding-secret";
+  await store.initialize();
+  await store.saveAccount({
+    subject: "tsub_d1_collision_session",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await store.saveAccountSession({
+    sessionId: token,
+    subject: "tsub_d1_collision_session",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  await store.saveAccessToken(token, {
+    clientId: "client_d1_collision",
+    scope: "capsules:read",
+    subject: "principal_d1_collision",
+    takosumiSubject: "tsub_d1_collision_oauth",
+    expiresAt: now + 60_000,
+  });
+  await store.savePersonalAccessToken(token, {
+    tokenId: "pat_d1_collision",
+    tokenPrefix: "display-only",
+    subject: "tsub_d1_collision_pat",
+    name: "collision PAT",
+    scopes: ["read"],
+    createdAt: now,
+  });
+
+  db.resetPrepareCount();
+  const result = await requireAccountsBearer({
+    request: bearerRequest(token),
+    store,
+    scope: "read",
+  });
+
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.response.status).toBe(401);
+  expect(db.prepareCount).toBe(1);
+});
+
+class CountingD1Database implements D1Database {
+  readonly #delegate = new SqliteFakeD1();
+  prepareCount = 0;
+
+  prepare(query: string): D1PreparedStatement {
+    this.prepareCount += 1;
+    return this.#delegate.prepare(query);
+  }
+
+  exec(query: string): Promise<D1ExecResult> {
+    return this.#delegate.exec(query);
+  }
+
+  resetPrepareCount(): void {
+    this.prepareCount = 0;
+  }
+}
+
+function bearerRequest(token: string): Request {
+  return new Request("https://accounts.example.test/v1/control", {
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
 
 interface DocumentRow {
   readonly document: string;

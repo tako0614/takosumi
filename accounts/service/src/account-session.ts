@@ -13,7 +13,10 @@ import {
 // Shared PAT-activity predicate. Imported (not re-declared) so the activity
 // rule has a single owner and cannot drift between the two call sites.
 import { personalAccessTokenIsActive } from "./pat-routes.ts";
-import { findActiveAccessToken } from "./access-token-activity.ts";
+import {
+  findActiveAccessToken,
+  validateActiveAccessTokenRecord,
+} from "./access-token-activity.ts";
 
 export const TAKOSUMI_ACCOUNTS_SESSION_ME_PATH = "/v1/account/session/me";
 
@@ -289,22 +292,39 @@ export async function requireAccountsBearer(input: {
   // Token prefixes are generation/display formatting only. Resolve the same
   // opaque value against every credential store so authorization follows the
   // authenticated persisted record rather than caller-controlled spelling.
-  // Parallel exact lookups also avoid a prefix-dependent fast path and keep
-  // durable stores free to hash lookup keys internally.
+  // Durable stores may coalesce the exact lookups into one bounded statement;
+  // the service still evaluates every candidate and rejects collisions.
   const now = Date.now();
+  const resolved = input.store.resolveAccountsBearerCandidates
+    ? await input.store.resolveAccountsBearerCandidates(token)
+    : undefined;
+  const bearerCandidates = resolved
+    ? ([
+        resolved.session,
+        await validateActiveAccessTokenRecord({
+          store: input.store,
+          token,
+          record: resolved.accessToken,
+          now,
+        }),
+        resolved.personalAccessToken,
+      ] as const)
+    : await Promise.all([
+        input.store.findAccountSession(token),
+        findActiveAccessToken({ store: input.store, token, now }),
+        input.store.findPersonalAccessToken(token),
+      ]);
   const [sessionRecord, accessRecord, personalAccessTokenRecord] =
-    await Promise.all([
-      input.store.findAccountSession(token),
-      findActiveAccessToken({ store: input.store, token, now }),
-      input.store.findPersonalAccessToken(token),
-    ]);
+    bearerCandidates;
 
   let sessionSubject: TakosumiSubject | undefined;
   if (sessionRecord) {
     if (sessionRecord.expiresAt <= now) {
       await input.store.deleteAccountSession(token);
     } else {
-      const account = await input.store.findAccount(sessionRecord.subject);
+      const account = resolved
+        ? resolved.sessionAccount
+        : await input.store.findAccount(sessionRecord.subject);
       if (account) {
         sessionSubject = sessionRecord.subject;
       } else {

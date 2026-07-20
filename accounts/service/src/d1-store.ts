@@ -13,6 +13,7 @@ import { hashSessionId } from "./session-hash-salt.ts";
 import { sha256Text as hashSecret } from "./encoding.ts";
 import type {
   AccountSessionRecord,
+  AccountsBearerCredentialCandidates,
   AccountsStore,
   AuthorizationCodeRecord,
   OidcClientRecord,
@@ -109,6 +110,47 @@ type D1AccountsDrizzleDatabase = DrizzleD1Database<typeof d1AccountsSchema>;
 
 interface D1DocumentRow {
   readonly document: string;
+}
+
+interface D1AccountsBearerCandidateRow extends D1DocumentRow {
+  readonly kind: "session" | "session_account" | "access_token" | "pat";
+}
+
+const RESOLVE_ACCOUNTS_BEARER_CANDIDATES_SQL = `with
+  presented_session as (
+    select document from takosumi_accounts_documents
+    where bucket = 'account_sessions' and key = ? limit 1
+  ),
+  presented_access_token as (
+    select document from takosumi_accounts_documents
+    where bucket = 'access_tokens' and key = ? limit 1
+  ),
+  presented_pat_secret as (
+    select document from takosumi_accounts_documents
+    where bucket = 'personal_access_token_secrets' and key = ? limit 1
+  )
+select 'session' as kind, document from presented_session
+union all
+select 'session_account' as kind, account.document
+from presented_session
+join takosumi_accounts_documents as account
+  on account.bucket = 'accounts'
+ and account.key = json_extract(presented_session.document, '$.subject')
+union all
+select 'access_token' as kind, document from presented_access_token
+union all
+select 'pat' as kind, pat.document
+from presented_pat_secret
+join takosumi_accounts_documents as pat
+  on pat.bucket = 'personal_access_tokens'
+ and pat.key = json_extract(presented_pat_secret.document, '$.tokenId')`;
+
+function duplicateBearerCandidate(
+  kind: D1AccountsBearerCandidateRow["kind"],
+): Error {
+  return new Error(
+    `D1 Accounts bearer candidate lookup returned duplicate ${kind}`,
+  );
 }
 
 class D1AccountsDocumentIndexStore {
@@ -321,6 +363,57 @@ export class D1AccountsStore implements AccountsStore {
         .then(() => {});
     }
     await this.#initialized;
+  }
+
+  async resolveAccountsBearerCandidates(
+    token: string,
+  ): Promise<AccountsBearerCredentialCandidates> {
+    const [sessionHash, tokenHash] = await Promise.all([
+      hashSessionId(token),
+      hashSecret(token),
+    ]);
+    const result = await this.#db
+      .prepare(RESOLVE_ACCOUNTS_BEARER_CANDIDATES_SQL)
+      .bind(sessionHash, tokenHash, tokenHash)
+      .all<D1AccountsBearerCandidateRow>();
+    if (!result.success || !result.results) {
+      throw new Error("D1 Accounts bearer candidate lookup failed");
+    }
+
+    let session: AccountSessionRecord | undefined;
+    let sessionAccount: TakosumiAccountRecord | undefined;
+    let accessToken: TokenRecord | undefined;
+    let personalAccessToken: PersonalAccessTokenRecord | undefined;
+    for (const row of result.results) {
+      if (row.kind === "session") {
+        if (session) throw duplicateBearerCandidate(row.kind);
+        session = {
+          ...(JSON.parse(row.document) as AccountSessionRecord),
+          sessionId: token,
+        };
+      } else if (row.kind === "session_account") {
+        if (sessionAccount) throw duplicateBearerCandidate(row.kind);
+        sessionAccount = JSON.parse(row.document) as TakosumiAccountRecord;
+      } else if (row.kind === "access_token") {
+        if (accessToken) throw duplicateBearerCandidate(row.kind);
+        accessToken = JSON.parse(row.document) as TokenRecord;
+      } else if (row.kind === "pat") {
+        if (personalAccessToken) throw duplicateBearerCandidate(row.kind);
+        personalAccessToken = JSON.parse(
+          row.document,
+        ) as PersonalAccessTokenRecord;
+      } else {
+        throw new Error(
+          "D1 Accounts bearer candidate lookup returned an unknown kind",
+        );
+      }
+    }
+    return {
+      ...(session ? { session } : {}),
+      ...(sessionAccount ? { sessionAccount } : {}),
+      ...(accessToken ? { accessToken } : {}),
+      ...(personalAccessToken ? { personalAccessToken } : {}),
+    };
   }
 
   async saveAccount(record: TakosumiAccountRecord): Promise<void> {
