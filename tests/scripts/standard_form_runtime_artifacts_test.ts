@@ -46,7 +46,7 @@ test("release builder binds the exact source commit without signing or publishin
     await readFile(join(output, "release-manifest.json"), "utf8"),
   );
   expect(manifest.sourceCommit).toBe("a".repeat(40));
-  expect(manifest.publicationStatus).toBe("candidate-only");
+  expect(manifest.publicationStatus).toBe("pending-immutable-publication");
   expect(manifest.assets.map(({ name }: { name: string }) => name)).toEqual([
     "durable-workflow.mjs",
     "edge-worker.mjs",

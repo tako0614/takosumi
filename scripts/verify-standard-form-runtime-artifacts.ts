@@ -39,7 +39,7 @@ export interface RuntimeManifest {
   readonly format: string;
   readonly version: string;
   readonly releaseTag: string;
-  readonly publicationStatus: string;
+  readonly sourceStatus: string;
   readonly hostConformanceOnly: boolean;
   readonly assets: readonly RuntimeAsset[];
   readonly externalArtifacts: readonly ExternalArtifact[];
@@ -62,8 +62,8 @@ export async function verifyRuntimeArtifacts(
       "externalArtifacts",
       "format",
       "hostConformanceOnly",
-      "publicationStatus",
       "releaseTag",
+      "sourceStatus",
       "version",
     ],
     "runtime manifest",
@@ -72,7 +72,7 @@ export async function verifyRuntimeArtifacts(
     manifest.format !== FORMAT ||
     manifest.version !== VERSION ||
     manifest.releaseTag !== RELEASE_TAG ||
-    manifest.publicationStatus !== "candidate-only" ||
+    manifest.sourceStatus !== "candidate-only" ||
     manifest.hostConformanceOnly !== true
   ) {
     throw new Error("runtime manifest identity or publication boundary is invalid");
@@ -185,7 +185,7 @@ export async function buildRuntimeRelease(
     releaseTag: RELEASE_TAG,
     sourceRepository: "github.com/tako0614/takosumi",
     sourceCommit,
-    publicationStatus: "candidate-only",
+    publicationStatus: "pending-immutable-publication",
     hostConformanceOnly: true,
     assets: releaseAssets,
     externalArtifacts: manifest.externalArtifacts,

@@ -2,7 +2,7 @@
   "format": "takosumi.standard-form-runtime@v1",
   "version": "1.0.1",
   "releaseTag": "standard-form-runtime-v1.0.1",
-  "publicationStatus": "candidate-only",
+  "sourceStatus": "candidate-only",
   "hostConformanceOnly": true,
   "assets": [
     {

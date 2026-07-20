@@ -24,12 +24,25 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   EXPECTED_COSIGN_VERSION: "v3.0.6"
+  # Keep this mutation lane inert until the ecosystem release-safety registry
+  # owns an exact surface, fixed adapter, and verified envelope for it.
+  RELEASE_SAFETY_REGISTRATION: "disabled-unregistered"
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    environment: standard-form-runtime-release
     timeout-minutes: 20
     steps:
+      - name: Refuse unregistered release mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RELEASE_SAFETY_REGISTRATION" = "registered-fixed-envelope" || {
+            echo "standard Form runtime publication is disabled until its fixed adapter and envelope are registered in the ecosystem release-safety registry" >&2
+            exit 1
+          }
+
       - name: Check out trusted main release tooling
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
