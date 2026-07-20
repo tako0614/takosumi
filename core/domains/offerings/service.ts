@@ -12,6 +12,7 @@ import type {
   OfferingSubjectReference,
   OfferingSubjectResolver,
 } from "takosumi-contract";
+import { stableJsonDigest } from "../../adapters/source/digest.ts";
 
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const NAMESPACED_TYPE =
@@ -177,15 +178,22 @@ export class OfferingService {
         "subject_unavailable",
       );
     }
+    const reference = offeringReference(catalog, offering);
     return {
-      reference: offeringReference(catalog, offering),
+      reference,
       subject: structuredClone(offering.subject),
       requirements: structuredClone(offering.requirements),
       profile: offering.profile,
       region: offering.region,
       maturity: offering.maturity,
       resolverId: resolved.resolverId,
-      resolutionFingerprint: resolved.resolutionFingerprint,
+      resolutionFingerprint: await stableJsonDigest({
+        schema: "takosumi.offering-selection.v1",
+        reference,
+        offering,
+        resolverId: resolved.resolverId,
+        subjectResolutionFingerprint: resolved.resolutionFingerprint,
+      }),
       resolvedAt: now,
     };
   }
@@ -202,6 +210,12 @@ export class OfferingService {
       throw new OfferingError(
         "catalog_not_found",
         "the exact Offering catalog does not exist",
+      );
+    }
+    if (catalog.id !== id || catalog.version !== version) {
+      throw new OfferingError(
+        "invalid_catalog",
+        "Offering catalog reader returned a different id/version",
       );
     }
     const problems = offeringCatalogProblems(catalog);
