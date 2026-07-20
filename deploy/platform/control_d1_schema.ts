@@ -15,12 +15,10 @@ import {
   isControlD1MaintenanceFenceActive,
   releaseControlD1MaintenanceFence,
   readControlD1MaintenanceState,
+  supersedeActiveControlD1MaintenanceFence,
 } from "../../worker/src/d1_schema_maintenance.ts";
 
-export {
-  adoptControlD1LegacyCloneAsCandidate,
-  readControlD1MaintenanceState,
-};
+export { adoptControlD1LegacyCloneAsCandidate, readControlD1MaintenanceState };
 
 export const CONTROL_D1_SCHEMA_MANIFEST_VERSION = 2 as const;
 
@@ -135,6 +133,7 @@ export interface ControlD1SchemaApplyResult {
   readonly verification: ControlD1SchemaVerification;
   readonly maintenanceDrainMilliseconds: number;
   readonly maintenanceFence: ControlD1MaintenanceFence;
+  readonly predecessorMaintenanceFence?: ControlD1MaintenanceFence;
   readonly maintenanceStatus: "retained" | "released";
 }
 
@@ -151,6 +150,14 @@ export interface ControlD1SchemaApplyOptions {
   readonly releasePolicy?: ControlD1MaintenanceReleasePolicy;
   readonly databaseId?: string;
   readonly sourceExportSha256?: string;
+  /**
+   * Explicit recovery for one already-active immediate-predecessor fence.
+   * Both values must be copied from the retained predecessor transcript.
+   */
+  readonly activePredecessorFence?: {
+    readonly sourceCommit: string;
+    readonly manifestDigest: string;
+  };
 }
 
 export interface ControlD1SchemaFenceResult {
@@ -233,19 +240,34 @@ export async function applyControlD1Schema(
   options: ControlD1SchemaApplyOptions,
 ): Promise<ControlD1SchemaApplyResult> {
   const before = await readControlD1MigrationLedger(database);
-  const fence = await acquireControlD1MaintenanceFence(
-    database,
-    {
-      sourceCommit: options.sourceCommit,
-      manifestDigest: plan.manifestDigest,
-      environment: options.environment,
-      databaseRole: options.databaseRole ?? "in_place",
-      releasePolicy: options.releasePolicy ?? "in_place",
-      databaseId: options.databaseId,
-      sourceExportSha256: options.sourceExportSha256,
-    },
-    options.activatedAt,
-  );
+  const successorIdentity = {
+    sourceCommit: options.sourceCommit,
+    manifestDigest: plan.manifestDigest,
+    environment: options.environment,
+    databaseRole: options.databaseRole ?? "in_place",
+    releasePolicy: options.releasePolicy ?? "in_place",
+    databaseId: options.databaseId,
+    sourceExportSha256: options.sourceExportSha256,
+  } as const;
+  let predecessorMaintenanceFence: ControlD1MaintenanceFence | undefined;
+  let fence: ControlD1MaintenanceFence;
+  if (options.activePredecessorFence) {
+    const recoveryLedger = predecessorRecoveryMigrationLedger(before, plan);
+    const superseded = await supersedeActiveControlD1MaintenanceFence(
+      database,
+      options.activePredecessorFence,
+      successorIdentity,
+      { requireExistingSuccessor: recoveryLedger === "successor" },
+    );
+    predecessorMaintenanceFence = superseded.predecessorFence;
+    fence = superseded.maintenanceFence;
+  } else {
+    fence = await acquireControlD1MaintenanceFence(
+      database,
+      successorIdentity,
+      options.activatedAt,
+    );
+  }
   await options.waitForRequestDrain(options.maintenanceDrainMilliseconds);
 
   // Any failure before the explicit release deliberately leaves the durable
@@ -287,10 +309,31 @@ export async function applyControlD1Schema(
     verification,
     maintenanceDrainMilliseconds: options.maintenanceDrainMilliseconds,
     maintenanceFence: fence,
-    maintenanceStatus: options.retainMaintenanceFence
-      ? "retained"
-      : "released",
+    ...(predecessorMaintenanceFence ? { predecessorMaintenanceFence } : {}),
+    maintenanceStatus: options.retainMaintenanceFence ? "retained" : "released",
   };
+}
+
+function predecessorRecoveryMigrationLedger(
+  actual: readonly ControlD1MigrationLedgerRow[],
+  plan: ControlD1SchemaPlan,
+): "predecessor" | "successor" {
+  const predecessor = plan.migrations.slice(0, -1);
+  const predecessorTail = predecessor.at(-1);
+  const successorTail = plan.migrations.at(-1);
+  const isPredecessorLedger = stableJson(actual) === stableJson(predecessor);
+  const isSuccessorLedger = stableJson(actual) === stableJson(plan.migrations);
+  if (
+    !predecessorTail ||
+    !successorTail ||
+    successorTail.version !== predecessorTail.version + 1 ||
+    (!isPredecessorLedger && !isSuccessorLedger)
+  ) {
+    throw new ControlD1SchemaError(
+      "maintenance_fence_predecessor_not_immediate",
+    );
+  }
+  return isPredecessorLedger ? "predecessor" : "successor";
 }
 
 /** Read-only verification of the complete OSS-owned control D1 subset. */

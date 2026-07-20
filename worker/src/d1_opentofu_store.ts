@@ -5764,7 +5764,88 @@ the immutable Interface record remains authority and the columns are query proje
         .run();
     },
   },
+  {
+    version: 49,
+    name: "d1_interface_canonical_table_convergence",
+    checksumSource: () => `
+historical Interfaces created before v47 and v48 appended projection columns after the record columns
+the canonical table order matches the current D1 schema while preserving every Interface and InterfaceBinding row
+the complete rebuild index recreation and migration ledger insert execute in one D1 batch transaction
+${D1_INTERFACE_CANONICAL_TABLE_CONVERGENCE_STATEMENTS.join("\n---\n")}
+`,
+    permanentlyDroppedTables: ["interfaces__takosumi_v49"],
+    async atomicStatements() {
+      return D1_INTERFACE_CANONICAL_TABLE_CONVERGENCE_STATEMENTS;
+    },
+    async apply(db) {
+      await runD1AtomicSql(
+        db,
+        D1_INTERFACE_CANONICAL_TABLE_CONVERGENCE_STATEMENTS,
+      );
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
+
+/**
+ * v47/v48 added nullable Interface projections with ALTER TABLE on already
+ * initialized databases. SQLite appends those columns, while a fresh current
+ * database creates them before record_json/created_at/updated_at. The control
+ * schema verifier intentionally treats column order as physical authority, so
+ * converge the two layouts without changing row values.
+ *
+ * D1 batch() is the transaction boundary. The reserved temporary table is
+ * excluded from maintenance-trigger recreation because it is renamed away
+ * before the atomic batch commits; the canonical `interfaces` guard is
+ * recreated by the maintenance wrapper.
+ */
+const D1_INTERFACE_CANONICAL_TABLE_CONVERGENCE_STATEMENTS = [
+  `drop table if exists interfaces__takosumi_v49`,
+  `create table interfaces__takosumi_v49 (
+    id text primary key,
+    workspace_id text not null,
+    owner_kind text not null,
+    owner_id text not null,
+    name text not null,
+    interface_type text not null,
+    phase text not null,
+    generation integer not null,
+    resolved_revision integer not null,
+    oauth_resource_uri text,
+    form_ref_key text,
+    form_schema_digest text,
+    descriptor_name text,
+    descriptor_version text,
+    record_json text not null,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `insert into interfaces__takosumi_v49 (
+     id, workspace_id, owner_kind, owner_id, name, interface_type, phase,
+     generation, resolved_revision, oauth_resource_uri, form_ref_key,
+     form_schema_digest, descriptor_name, descriptor_version, record_json,
+     created_at, updated_at
+   )
+   select id, workspace_id, owner_kind, owner_id, name, interface_type, phase,
+          generation, resolved_revision, oauth_resource_uri, form_ref_key,
+          form_schema_digest, descriptor_name, descriptor_version, record_json,
+          created_at, updated_at
+   from interfaces`,
+  `drop table interfaces`,
+  `alter table interfaces__takosumi_v49 rename to interfaces`,
+  `create unique index interfaces_active_name_unique
+     on interfaces (workspace_id, owner_kind, owner_id, name)
+     where phase <> 'Retired'`,
+  `create index interfaces_workspace_type_phase_idx
+     on interfaces (workspace_id, interface_type, phase)`,
+  `create unique index interfaces_oauth_resource_claim_unique
+     on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
+     where oauth_resource_uri is not null`,
+  `create index interfaces_form_descriptor_idx
+     on interfaces (
+       workspace_id, form_ref_key, form_schema_digest,
+       descriptor_name, descriptor_version
+     ) where form_ref_key is not null`,
+] as const;
 
 /**
  * v1..v24 were historically executed from request-time bootstrap code. Two

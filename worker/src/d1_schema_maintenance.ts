@@ -14,13 +14,9 @@ export interface ControlD1MaintenanceFenceIdentity {
 }
 
 export type ControlD1MaintenanceDatabaseRole =
-  | "legacy"
-  | "candidate"
-  | "in_place";
+  "legacy" | "candidate" | "in_place";
 export type ControlD1MaintenanceReleasePolicy =
-  | "never"
-  | "cutover"
-  | "in_place";
+  "never" | "cutover" | "in_place";
 
 export interface ControlD1MaintenanceFence {
   readonly fenceId: string;
@@ -32,6 +28,11 @@ export interface ControlD1MaintenanceFence {
   readonly releasePolicy: ControlD1MaintenanceReleasePolicy;
   readonly databaseId: string | null;
   readonly sourceExportSha256: string | null;
+  readonly predecessor: {
+    readonly fenceId: string;
+    readonly sourceCommit: string;
+    readonly manifestDigest: string;
+  } | null;
 }
 
 interface ControlD1MaintenanceRow {
@@ -47,6 +48,9 @@ interface ControlD1MaintenanceRow {
   readonly release_policy: string;
   readonly database_id: string | null;
   readonly source_export_sha256: string | null;
+  readonly predecessor_fence_id: string | null;
+  readonly predecessor_source_commit: string | null;
+  readonly predecessor_manifest_digest: string | null;
 }
 
 export type ControlD1MaintenanceState =
@@ -70,7 +74,10 @@ const CREATE_MAINTENANCE_TABLE = `create table if not exists ${CONTROL_D1_MAINTE
   database_role text not null default 'legacy',
   release_policy text not null default 'never',
   database_id text,
-  source_export_sha256 text
+  source_export_sha256 text,
+  predecessor_fence_id text,
+  predecessor_source_commit text,
+  predecessor_manifest_digest text
 )`;
 
 /**
@@ -122,7 +129,11 @@ export async function readControlD1MaintenanceState(
   } catch {
     throw new ControlD1MaintenanceError("maintenance_fence_invalid");
   }
-  if (!row || !validMaintenanceIdentity(row)) {
+  if (
+    !row ||
+    !validMaintenanceIdentity(row) ||
+    !(await validMaintenancePredecessorIdentity(row))
+  ) {
     throw new ControlD1MaintenanceError("maintenance_fence_invalid");
   }
   const active = strictBinary(row.active);
@@ -143,6 +154,7 @@ export async function readControlD1MaintenanceState(
         releasePolicy: releasePolicy(row.release_policy),
         databaseId: row.database_id,
         sourceExportSha256: row.source_export_sha256,
+        predecessor: maintenancePredecessor(row),
       },
     };
   }
@@ -167,8 +179,9 @@ export async function acquireControlD1MaintenanceFence(
         `insert into ${CONTROL_D1_MAINTENANCE_TABLE} (
            singleton, active, migration_bypass, fence_id, source_commit, manifest_digest,
            environment, activated_at, released_at, database_role, release_policy,
-           database_id, source_export_sha256
-         ) values (1, 1, 0, ?, ?, ?, ?, ?, null, ?, ?, ?, ?)
+           database_id, source_export_sha256, predecessor_fence_id,
+           predecessor_source_commit, predecessor_manifest_digest
+         ) values (1, 1, 0, ?, ?, ?, ?, ?, null, ?, ?, ?, ?, null, null, null)
          on conflict(singleton) do update set
            active = 1,
            migration_bypass = 0,
@@ -181,7 +194,25 @@ export async function acquireControlD1MaintenanceFence(
            database_role = excluded.database_role,
            release_policy = excluded.release_policy,
            database_id = excluded.database_id,
-           source_export_sha256 = excluded.source_export_sha256
+           source_export_sha256 = excluded.source_export_sha256,
+           predecessor_fence_id = case
+             when ${CONTROL_D1_MAINTENANCE_TABLE}.active = 1
+              and ${CONTROL_D1_MAINTENANCE_TABLE}.fence_id = excluded.fence_id
+             then ${CONTROL_D1_MAINTENANCE_TABLE}.predecessor_fence_id
+             else null
+           end,
+           predecessor_source_commit = case
+             when ${CONTROL_D1_MAINTENANCE_TABLE}.active = 1
+              and ${CONTROL_D1_MAINTENANCE_TABLE}.fence_id = excluded.fence_id
+             then ${CONTROL_D1_MAINTENANCE_TABLE}.predecessor_source_commit
+             else null
+           end,
+           predecessor_manifest_digest = case
+             when ${CONTROL_D1_MAINTENANCE_TABLE}.active = 1
+              and ${CONTROL_D1_MAINTENANCE_TABLE}.fence_id = excluded.fence_id
+             then ${CONTROL_D1_MAINTENANCE_TABLE}.predecessor_manifest_digest
+             else null
+           end
          where ${CONTROL_D1_MAINTENANCE_TABLE}.active = 0
             or ${CONTROL_D1_MAINTENANCE_TABLE}.fence_id = excluded.fence_id`,
       )
@@ -231,6 +262,170 @@ export async function acquireControlD1MaintenanceFence(
     releasePolicy: releasePolicy(row.release_policy),
     databaseId: row.database_id,
     sourceExportSha256: row.source_export_sha256,
+    predecessor: maintenancePredecessor(row),
+  };
+}
+
+/**
+ * Atomically replace one exact active predecessor fence with its reviewed
+ * successor identity without ever setting active=0 or migration_bypass=1.
+ *
+ * The schema-plan layer must first prove that the live migration ledger is the
+ * exact immediate predecessor of the new plan. This lower-level operation
+ * only accepts the caller-reviewed old source/manifest pair and requires every
+ * database authority dimension to remain unchanged.
+ */
+export async function supersedeActiveControlD1MaintenanceFence(
+  db: D1Database,
+  predecessor: {
+    readonly sourceCommit: string;
+    readonly manifestDigest: string;
+  },
+  successor: ControlD1MaintenanceFenceIdentity,
+  options: { readonly requireExistingSuccessor?: boolean } = {},
+): Promise<{
+  readonly predecessorFence: ControlD1MaintenanceFence;
+  readonly maintenanceFence: ControlD1MaintenanceFence;
+}> {
+  if (
+    !/^[0-9a-f]{40}$/u.test(predecessor.sourceCommit) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(predecessor.manifestDigest)
+  ) {
+    throw new ControlD1MaintenanceError(
+      "maintenance_fence_predecessor_invalid",
+    );
+  }
+  const normalizedSuccessor = normalizeMaintenanceIdentity(successor);
+  if (!(await maintenanceTableExists(db))) {
+    throw new ControlD1MaintenanceError(
+      "maintenance_fence_predecessor_mismatch",
+    );
+  }
+  const guardedTables = await listGuardedTables(db);
+  const canonicalGuardStatements = guardedTables.flatMap((table) => [
+    ...maintenanceDropTriggerStatements(db, table),
+    ...maintenanceTriggerStatements(db, table),
+  ]);
+  const maintenanceUpgrade = await maintenanceTableUpgradeStatements(db);
+  // Canonicalize every guard in the same transaction that upgrades the old
+  // maintenance table. A retained predecessor with incomplete historical
+  // guard coverage must be fully fail-closed before the first state read.
+  await checkedBatch(
+    db,
+    [...maintenanceUpgrade, ...canonicalGuardStatements],
+    "maintenance_fence_supersession_failed",
+  );
+  const state = await readControlD1MaintenanceState(db);
+  if (
+    state.status === "active" &&
+    state.fence.sourceCommit === normalizedSuccessor.sourceCommit &&
+    state.fence.manifestDigest === normalizedSuccessor.manifestDigest &&
+    state.fence.environment === normalizedSuccessor.environment &&
+    state.fence.databaseRole === normalizedSuccessor.databaseRole &&
+    state.fence.releasePolicy === normalizedSuccessor.releasePolicy &&
+    state.fence.databaseId === normalizedSuccessor.databaseId &&
+    state.fence.sourceExportSha256 === normalizedSuccessor.sourceExportSha256 &&
+    state.fence.predecessor?.sourceCommit === predecessor.sourceCommit &&
+    state.fence.predecessor.manifestDigest === predecessor.manifestDigest
+  ) {
+    await checkedBatch(
+      db,
+      canonicalGuardStatements,
+      "maintenance_fence_supersession_failed",
+    );
+    return {
+      predecessorFence: predecessorFenceFromTransition(state.fence),
+      maintenanceFence: state.fence,
+    };
+  }
+  if (options.requireExistingSuccessor) {
+    // A full migration ledger is valid only after a prior supersession and
+    // migration batch committed but its response was lost. Never reinterpret
+    // a full ledger behind the exact old fence as a fresh transition.
+    throw new ControlD1MaintenanceError(
+      "maintenance_fence_predecessor_not_immediate",
+    );
+  }
+  if (
+    state.status !== "active" ||
+    state.fence.sourceCommit !== predecessor.sourceCommit ||
+    state.fence.manifestDigest !== predecessor.manifestDigest ||
+    state.fence.environment !== normalizedSuccessor.environment ||
+    state.fence.databaseRole !== normalizedSuccessor.databaseRole ||
+    state.fence.releasePolicy !== normalizedSuccessor.releasePolicy ||
+    state.fence.databaseId !== normalizedSuccessor.databaseId ||
+    state.fence.sourceExportSha256 !== normalizedSuccessor.sourceExportSha256
+  ) {
+    throw new ControlD1MaintenanceError(
+      "maintenance_fence_predecessor_mismatch",
+    );
+  }
+  const predecessorFence = state.fence;
+  const successorFenceId = await maintenanceFenceId(normalizedSuccessor);
+  if (successorFenceId === predecessorFence.fenceId) {
+    throw new ControlD1MaintenanceError(
+      "maintenance_fence_supersession_invalid",
+    );
+  }
+
+  await checkedBatch(
+    db,
+    [
+      db
+        .prepare(
+          `update ${CONTROL_D1_MAINTENANCE_TABLE}
+           set fence_id = ?, source_commit = ?, manifest_digest = ?,
+               predecessor_fence_id = ?, predecessor_source_commit = ?,
+               predecessor_manifest_digest = ?
+           where singleton = 1 and active = 1 and migration_bypass = 0
+             and fence_id = ? and source_commit = ? and manifest_digest = ?
+             and environment = ? and database_role = ? and release_policy = ?
+             and database_id is ? and source_export_sha256 is ?`,
+        )
+        .bind(
+          successorFenceId,
+          normalizedSuccessor.sourceCommit,
+          normalizedSuccessor.manifestDigest,
+          predecessorFence.fenceId,
+          predecessor.sourceCommit,
+          predecessor.manifestDigest,
+          predecessorFence.fenceId,
+          predecessor.sourceCommit,
+          predecessor.manifestDigest,
+          normalizedSuccessor.environment,
+          normalizedSuccessor.databaseRole,
+          normalizedSuccessor.releasePolicy,
+          normalizedSuccessor.databaseId,
+          normalizedSuccessor.sourceExportSha256,
+        ),
+      ...canonicalGuardStatements,
+    ],
+    "maintenance_fence_supersession_failed",
+  );
+
+  const updated = await readControlD1MaintenanceState(db);
+  if (
+    updated.status !== "active" ||
+    updated.fence.fenceId !== successorFenceId ||
+    updated.fence.sourceCommit !== normalizedSuccessor.sourceCommit ||
+    updated.fence.manifestDigest !== normalizedSuccessor.manifestDigest ||
+    updated.fence.environment !== predecessorFence.environment ||
+    updated.fence.databaseRole !== predecessorFence.databaseRole ||
+    updated.fence.releasePolicy !== predecessorFence.releasePolicy ||
+    updated.fence.databaseId !== predecessorFence.databaseId ||
+    updated.fence.sourceExportSha256 !== predecessorFence.sourceExportSha256 ||
+    updated.fence.activatedAt !== predecessorFence.activatedAt ||
+    updated.fence.predecessor?.fenceId !== predecessorFence.fenceId ||
+    updated.fence.predecessor.sourceCommit !== predecessor.sourceCommit ||
+    updated.fence.predecessor.manifestDigest !== predecessor.manifestDigest
+  ) {
+    throw new ControlD1MaintenanceError(
+      "maintenance_fence_supersession_failed",
+    );
+  }
+  return {
+    predecessorFence,
+    maintenanceFence: updated.fence,
   };
 }
 
@@ -311,14 +506,10 @@ export async function releaseControlD1MaintenanceFence(
   fence: ControlD1MaintenanceFence,
   releasedAt: string,
 ): Promise<void> {
-  if (
-    !(
-      (fence.databaseRole === "candidate" &&
-        fence.releasePolicy === "cutover") ||
-      (fence.databaseRole === "in_place" &&
-        fence.releasePolicy === "in_place")
-    )
-  ) {
+  if (!(
+    (fence.databaseRole === "candidate" && fence.releasePolicy === "cutover") ||
+    (fence.databaseRole === "in_place" && fence.releasePolicy === "in_place")
+  )) {
     throw new ControlD1MaintenanceError("maintenance_fence_not_releasable");
   }
   const guardedTables = await listGuardedTables(db);
@@ -370,8 +561,8 @@ export async function wrapControlD1MaintenanceMigrationBatch(
     readonly newlyCreatedTables?: ReadonlySet<string>;
   } = {},
 ): Promise<readonly D1PreparedStatement[]> {
-  const permanentlyDroppedTables = options.permanentlyDroppedTables ??
-    new Set<string>();
+  const permanentlyDroppedTables =
+    options.permanentlyDroppedTables ?? new Set<string>();
   const guardedTables = new Set(
     (await listGuardedTables(db)).filter(
       (table) => !permanentlyDroppedTables.has(table),
@@ -404,9 +595,9 @@ export async function wrapControlD1MaintenanceMigrationBatch(
          where singleton = 1`,
       )
       .bind(fence.fenceId),
-    ...[...guardedTables].sort().flatMap((table) =>
-      maintenanceTriggerStatements(db, table),
-    ),
+    ...[...guardedTables]
+      .sort()
+      .flatMap((table) => maintenanceTriggerStatements(db, table)),
   ];
 }
 
@@ -421,7 +612,7 @@ export async function repairControlD1MaintenanceGuards(
   const incomplete = tables.filter((table) =>
     (["insert", "update", "delete"] as const).some(
       (operation) => !existing.has(maintenanceTriggerName(table, operation)),
-    )
+    ),
   );
   if (incomplete.length === 0) return;
   await checkedBatch(
@@ -441,7 +632,8 @@ async function readMaintenanceRow(
     .prepare(
       `select active, migration_bypass, fence_id, source_commit, manifest_digest, environment,
               activated_at, released_at, database_role, release_policy,
-              database_id, source_export_sha256
+              database_id, source_export_sha256, predecessor_fence_id,
+              predecessor_source_commit, predecessor_manifest_digest
        from ${CONTROL_D1_MAINTENANCE_TABLE}
        where singleton = 1`,
     )
@@ -520,6 +712,82 @@ function validMaintenanceIdentity(row: ControlD1MaintenanceRow): boolean {
   );
 }
 
+function maintenancePredecessor(
+  row: ControlD1MaintenanceRow,
+): ControlD1MaintenanceFence["predecessor"] {
+  if (
+    row.predecessor_fence_id === null &&
+    row.predecessor_source_commit === null &&
+    row.predecessor_manifest_digest === null
+  ) {
+    return null;
+  }
+  if (
+    typeof row.predecessor_fence_id !== "string" ||
+    typeof row.predecessor_source_commit !== "string" ||
+    typeof row.predecessor_manifest_digest !== "string"
+  ) {
+    return null;
+  }
+  return {
+    fenceId: row.predecessor_fence_id,
+    sourceCommit: row.predecessor_source_commit,
+    manifestDigest: row.predecessor_manifest_digest,
+  };
+}
+
+async function validMaintenancePredecessorIdentity(
+  row: ControlD1MaintenanceRow,
+): Promise<boolean> {
+  const predecessor = maintenancePredecessor(row);
+  const allNull =
+    row.predecessor_fence_id === null &&
+    row.predecessor_source_commit === null &&
+    row.predecessor_manifest_digest === null;
+  if (!predecessor) return allNull;
+  if (
+    !/^sha256:[0-9a-f]{64}$/u.test(predecessor.fenceId) ||
+    !/^[0-9a-f]{40}$/u.test(predecessor.sourceCommit) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(predecessor.manifestDigest)
+  ) {
+    return false;
+  }
+  return (
+    predecessor.fenceId ===
+    (await maintenanceFenceId({
+      sourceCommit: predecessor.sourceCommit,
+      manifestDigest: predecessor.manifestDigest,
+      environment: row.environment,
+      databaseRole: databaseRole(row.database_role),
+      releasePolicy: releasePolicy(row.release_policy),
+      databaseId: row.database_id,
+      sourceExportSha256: row.source_export_sha256,
+    }))
+  );
+}
+
+function predecessorFenceFromTransition(
+  successor: ControlD1MaintenanceFence,
+): ControlD1MaintenanceFence {
+  if (!successor.predecessor) {
+    throw new ControlD1MaintenanceError(
+      "maintenance_fence_supersession_failed",
+    );
+  }
+  return {
+    fenceId: successor.predecessor.fenceId,
+    sourceCommit: successor.predecessor.sourceCommit,
+    manifestDigest: successor.predecessor.manifestDigest,
+    environment: successor.environment,
+    activatedAt: successor.activatedAt,
+    databaseRole: successor.databaseRole,
+    releasePolicy: successor.releasePolicy,
+    databaseId: successor.databaseId,
+    sourceExportSha256: successor.sourceExportSha256,
+    predecessor: null,
+  };
+}
+
 function validTimestamp(value: string | null): boolean {
   if (typeof value !== "string") return false;
   const parsed = new Date(value);
@@ -570,9 +838,7 @@ async function maintenanceTableUpgradeStatements(
   db: D1Database,
 ): Promise<readonly D1PreparedStatement[]> {
   const table = await db
-    .prepare(
-      `select name from sqlite_master where type = 'table' and name = ?`,
-    )
+    .prepare(`select name from sqlite_master where type = 'table' and name = ?`)
     .bind(CONTROL_D1_MAINTENANCE_TABLE)
     .first<{ readonly name?: string }>();
   if (!table) return [];
@@ -585,14 +851,25 @@ async function maintenanceTableUpgradeStatements(
     ["release_policy", "text not null default 'never'"],
     ["database_id", "text"],
     ["source_export_sha256", "text"],
+    ["predecessor_fence_id", "text"],
+    ["predecessor_source_commit", "text"],
+    ["predecessor_manifest_digest", "text"],
   ] as const;
   return additions
     .filter(([name]) => !names.has(name))
     .map(([name, definition]) =>
       db.prepare(
         `alter table "${CONTROL_D1_MAINTENANCE_TABLE}" add column "${name}" ${definition}`,
-      )
+      ),
     );
+}
+
+async function maintenanceTableExists(db: D1Database): Promise<boolean> {
+  const table = await db
+    .prepare(`select name from sqlite_master where type = 'table' and name = ?`)
+    .bind(CONTROL_D1_MAINTENANCE_TABLE)
+    .first<{ readonly name?: string }>();
+  return table?.name === CONTROL_D1_MAINTENANCE_TABLE;
 }
 
 function normalizeMaintenanceIdentity(

@@ -11,6 +11,7 @@ import {
 } from "./control_d1_schema.ts";
 import {
   ControlD1MaintenanceError,
+  readControlD1MaintenanceState,
   type ControlD1MaintenanceFence,
 } from "../../worker/src/d1_schema_maintenance.ts";
 import {
@@ -27,7 +28,16 @@ interface ParsedArgs {
   readonly confirmManifest?: string;
   readonly dryRun: boolean;
   readonly retainMaintenanceFence: boolean;
+  readonly confirmPredecessorSource?: string;
+  readonly confirmPredecessorManifest?: string;
   readonly help: boolean;
+}
+
+interface MaintenanceFenceTransitionTranscript {
+  readonly predecessorSourceCommit: string;
+  readonly predecessorManifestDigest: string;
+  readonly predecessorFenceId: string;
+  readonly successorFenceId: string;
 }
 
 interface ControlD1RemoteTarget {
@@ -144,8 +154,9 @@ export async function runControlD1SchemaCli(
 
   const createRemoteDatabase =
     dependencies.createRemoteDatabase ?? defaultRemoteDatabase;
+  let remote: ControlD1RemoteTarget | undefined;
   try {
-    const remote = await createRemoteDatabase(args.environment, env);
+    remote = await createRemoteDatabase(args.environment, env);
     if (args.command === "verify") {
       const verification = await verifyControlD1Schema(remote.database, plan);
       write(
@@ -196,6 +207,13 @@ export async function runControlD1SchemaCli(
       );
       return 0;
     }
+    const activePredecessorFence =
+      args.confirmPredecessorSource && args.confirmPredecessorManifest
+        ? {
+            sourceCommit: args.confirmPredecessorSource,
+            manifestDigest: args.confirmPredecessorManifest,
+          }
+        : undefined;
     const applied = await applyControlD1Schema(remote.database, plan, {
       sourceCommit: provenance.sourceCommit,
       environment: args.environment,
@@ -208,6 +226,7 @@ export async function runControlD1SchemaCli(
       databaseRole: "in_place",
       releasePolicy: "in_place",
       databaseId: remote.databaseId,
+      ...(activePredecessorFence ? { activePredecessorFence } : {}),
     });
     write(
       JSON.stringify(
@@ -220,6 +239,14 @@ export async function runControlD1SchemaCli(
           appliedMigrationVersions: applied.appliedMigrationVersions,
           maintenanceDrainMilliseconds: applied.maintenanceDrainMilliseconds,
           maintenanceFence: applied.maintenanceFence,
+          ...(applied.predecessorMaintenanceFence
+            ? {
+                maintenanceFenceTransition: maintenanceFenceTransition(
+                  applied.predecessorMaintenanceFence,
+                  applied.maintenanceFence,
+                ),
+              }
+            : {}),
           maintenanceStatus: applied.maintenanceStatus,
         }),
         null,
@@ -228,7 +255,18 @@ export async function runControlD1SchemaCli(
     );
     return applied.verification.status === "ready" ? 0 : 1;
   } catch (error) {
-    write(failureTranscript(errorCode(error), plan, args, provenance));
+    const transition = remote
+      ? await confirmedMaintenanceFenceTransition(
+          remote.database,
+          args,
+          plan,
+          provenance,
+          remote.databaseId,
+        )
+      : undefined;
+    write(
+      failureTranscript(errorCode(error), plan, args, provenance, transition),
+    );
     return 1;
   }
 }
@@ -318,6 +356,7 @@ function operationTranscript(input: {
   readonly appliedMigrationVersions?: readonly number[];
   readonly maintenanceDrainMilliseconds?: number;
   readonly maintenanceFence?: ControlD1MaintenanceFence;
+  readonly maintenanceFenceTransition?: MaintenanceFenceTransitionTranscript;
   readonly maintenanceStatus?: "retained" | "released";
 }) {
   return {
@@ -340,6 +379,9 @@ function operationTranscript(input: {
     ...(input.maintenanceFence
       ? { maintenanceFence: input.maintenanceFence }
       : {}),
+    ...(input.maintenanceFenceTransition
+      ? { maintenanceFenceTransition: input.maintenanceFenceTransition }
+      : {}),
     ...(input.maintenanceStatus
       ? { maintenanceStatus: input.maintenanceStatus }
       : {}),
@@ -352,6 +394,7 @@ function failureTranscript(
   plan?: ControlD1SchemaPlan,
   args?: ParsedArgs,
   provenance?: TranscriptProvenance,
+  maintenanceFenceTransition?: MaintenanceFenceTransitionTranscript,
 ): string {
   return JSON.stringify(
     {
@@ -363,6 +406,7 @@ function failureTranscript(
       failureCode,
       ...(provenance ?? {}),
       ...(plan ? planSummary(plan) : {}),
+      ...(maintenanceFenceTransition ? { maintenanceFenceTransition } : {}),
     },
     null,
     2,
@@ -380,6 +424,55 @@ function planSummary(plan: ControlD1SchemaPlan) {
     expectedTableCount: plan.tables.length,
     retiredTables: plan.retiredTables,
   };
+}
+
+function maintenanceFenceTransition(
+  predecessor: ControlD1MaintenanceFence,
+  successor: ControlD1MaintenanceFence,
+): MaintenanceFenceTransitionTranscript {
+  return {
+    predecessorSourceCommit: predecessor.sourceCommit,
+    predecessorManifestDigest: predecessor.manifestDigest,
+    predecessorFenceId: predecessor.fenceId,
+    successorFenceId: successor.fenceId,
+  };
+}
+
+async function confirmedMaintenanceFenceTransition(
+  database: D1Database,
+  args: ParsedArgs,
+  plan: ControlD1SchemaPlan,
+  provenance: TranscriptProvenance,
+  databaseId: string | undefined,
+): Promise<MaintenanceFenceTransitionTranscript | undefined> {
+  if (!args.confirmPredecessorSource || !args.confirmPredecessorManifest) {
+    return undefined;
+  }
+  try {
+    const state = await readControlD1MaintenanceState(database);
+    if (
+      state.status !== "active" ||
+      state.fence.sourceCommit !== provenance.sourceCommit ||
+      state.fence.manifestDigest !== plan.manifestDigest ||
+      state.fence.environment !== args.environment ||
+      state.fence.databaseRole !== "in_place" ||
+      state.fence.releasePolicy !== "in_place" ||
+      state.fence.databaseId !== (databaseId ?? null) ||
+      state.fence.sourceExportSha256 !== null ||
+      state.fence.predecessor?.sourceCommit !== args.confirmPredecessorSource ||
+      state.fence.predecessor.manifestDigest !== args.confirmPredecessorManifest
+    ) {
+      return undefined;
+    }
+    return {
+      predecessorSourceCommit: args.confirmPredecessorSource,
+      predecessorManifestDigest: args.confirmPredecessorManifest,
+      predecessorFenceId: state.fence.predecessor.fenceId,
+      successorFenceId: state.fence.fenceId,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -404,6 +497,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let confirmManifest: string | undefined;
   let dryRun = false;
   let retainMaintenanceFence = false;
+  let confirmPredecessorSource: string | undefined;
+  let confirmPredecessorManifest: string | undefined;
   for (let index = 1; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--environment") {
@@ -427,11 +522,34 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       retainMaintenanceFence = true;
       continue;
     }
+    if (arg === "--confirm-predecessor-source") {
+      confirmPredecessorSource = argv[++index];
+      if (!/^[0-9a-f]{40}$/u.test(confirmPredecessorSource ?? "")) {
+        throw new Error("predecessor_source_invalid");
+      }
+      continue;
+    }
+    if (arg === "--confirm-predecessor-manifest") {
+      confirmPredecessorManifest = argv[++index];
+      if (!/^sha256:[0-9a-f]{64}$/u.test(confirmPredecessorManifest ?? "")) {
+        throw new Error("predecessor_manifest_invalid");
+      }
+      continue;
+    }
     throw new Error("argument_unknown");
   }
   if (command !== "apply" && dryRun) throw new Error("dry_run_invalid");
   if (command !== "apply" && retainMaintenanceFence) {
     throw new Error("retain_fence_invalid");
+  }
+  if (
+    command !== "apply" ||
+    dryRun ||
+    Boolean(confirmPredecessorSource) !== Boolean(confirmPredecessorManifest)
+  ) {
+    if (confirmPredecessorSource || confirmPredecessorManifest) {
+      throw new Error("predecessor_confirmation_invalid");
+    }
   }
   return {
     command,
@@ -439,6 +557,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     confirmManifest,
     dryRun,
     retainMaintenanceFence,
+    confirmPredecessorSource,
+    confirmPredecessorManifest,
     help: false,
   };
 }
@@ -487,11 +607,15 @@ function helpText(): string {
   bun scripts/control-d1-schema.ts fence --environment staging|production --confirm-manifest sha256:...
   bun scripts/control-d1-schema.ts verify --environment staging|production
   bun scripts/control-d1-schema.ts apply --environment staging|production --confirm-manifest sha256:... [--retain-maintenance-fence]
+    [--confirm-predecessor-source <40hex> --confirm-predecessor-manifest sha256:...]
 
 plan and apply --dry-run are local-only and perform no remote request. verify is
 read-only. fence freezes a legacy database without changing its application
 schema. apply requires the exact manifest digest emitted by plan. Official
 Cloud blue/green candidates use --retain-maintenance-fence through cutover.
+The paired predecessor confirmations allow one exact immediate-predecessor
+active in-place fence to transition atomically to the new reviewed plan; they
+never release application writes between plans.
 
 Remote commands read TAKOSUMI_CONTROL_D1_<ENV>_CLOUDFLARE_ACCOUNT_ID,
 TAKOSUMI_CONTROL_D1_<ENV>_DATABASE_ID, and
