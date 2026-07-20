@@ -11,15 +11,46 @@ import { createHash } from "node:crypto";
 
 const FORMAT = "takosumi.standard-form-runtime@v1";
 const RELEASE_FORMAT = "takosumi.standard-form-runtime-release@v1";
+const CANDIDATE_FORMAT = "takos.release-candidate-manifest@v1";
+const ADAPTER_RESULT_FORMAT = "takos.release-safety-adapter-result@v1";
+const SURFACE_ID = "takosumi-standard-form-runtime";
+const REPOSITORY = "https://github.com/tako0614/takosumi.git";
 const VERSION = "1.0.1";
 const RELEASE_TAG = `standard-form-runtime-v${VERSION}`;
 const SOURCE_ROOT = `conformance/standard-form-runtime/v${VERSION}`;
 const SHA256 = /^sha256:[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
+const RUN_ID = /^[1-9][0-9]*$/u;
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const EXPECTED_ASSETS = ["durable-workflow.mjs", "edge-worker.mjs"] as const;
 const SBOM_NAME = "runtime-sbom.spdx.json";
 const SBOM_MEDIA_TYPE = "application/spdx+json";
 const SBOM_CREATED = "2026-07-20T00:00:00Z";
+const WORKFLOW_PATH = ".github/workflows/standard-form-runtime-release.yml";
+const STABLE_RELEASE_ASSETS = [
+  "SHA256SUMS",
+  "durable-workflow.mjs",
+  "edge-worker.mjs",
+  "release-manifest.json",
+  "release-manifest.sigstore.json",
+  "runtime-manifest.json",
+  "runtime-sbom.spdx.json",
+] as const;
+const TOOLCHAIN_DESCRIPTOR = `${JSON.stringify({
+  bun: "1.3.14",
+  cosign: "v3.0.6",
+  actions: {
+    attest: "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+    checkout: "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+    downloadArtifact: "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    setupBun: "735343b667d3e6f658f44d0eca948eb6282f2b76",
+    uploadArtifact: "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+  },
+})}\n`;
+const REQUIRED_HEALTH_CHECKS = [
+  "stable GitHub release asset readback",
+  "Sigstore bundle and transparency readback",
+] as const;
 const OCI_REFERENCE =
   "docker.io/library/nginx@sha256:845b5424415de5f77dd5753cbb7c1be8bd8e44cc81f20f9705783a02f8848317";
 
@@ -58,6 +89,54 @@ interface ReleaseManifest {
   readonly hostConformanceOnly: boolean;
   readonly assets: readonly RuntimeAsset[];
   readonly externalArtifacts: readonly ExternalArtifact[];
+}
+
+interface ReleaseAssetDigest {
+  readonly name: string;
+  readonly digest: string;
+}
+
+export interface RuntimeCandidateManifest {
+  readonly kind: string;
+  readonly surfaceId: string;
+  readonly repository: string;
+  readonly sourceCommit: string;
+  readonly version: string;
+  readonly tag: string;
+  readonly workflowRunId: string;
+  readonly builtAt: string;
+  readonly ociImages: readonly never[];
+  readonly releaseAssets: readonly ReleaseAssetDigest[];
+  readonly artifactDigests: readonly string[];
+  readonly sbomDigests: readonly string[];
+  readonly provenanceDigests: readonly string[];
+  readonly configDigest: string;
+  readonly policyDigest: string;
+  readonly toolchainDigest: string;
+}
+
+interface HealthCheck {
+  readonly name: string;
+  readonly status: "required" | "passed";
+  readonly bindingDigest: string;
+}
+
+export interface RuntimeReleaseReadback {
+  readonly kind: string;
+  readonly status: "promoted";
+  readonly surfaceId: string;
+  readonly sourceCommit: string;
+  readonly controllerCommit: string;
+  readonly controllerDigest: string;
+  readonly adapterDigest: string;
+  readonly artifactDigests: readonly string[];
+  readonly targetFingerprint: string;
+  readonly attestationDigest: string;
+  readonly releaseTag: string;
+  readonly releaseUrl: string;
+  readonly workflowRunId: string;
+  readonly readbackAt: string;
+  readonly healthChecks: readonly HealthCheck[];
 }
 
 export async function verifyRuntimeArtifacts(
@@ -358,6 +437,342 @@ export async function verifyBuiltRuntimeRelease(
   }
 }
 
+export async function buildRuntimeCandidateManifest(
+  repoRoot: string,
+  output: string,
+  sourceCommit: string,
+  workflowRunId: string,
+  builtAt: string,
+): Promise<RuntimeCandidateManifest> {
+  validateCandidateIdentity(sourceCommit, workflowRunId, builtAt);
+  await verifyBuiltRuntimeRelease(repoRoot, output, sourceCommit);
+  await verifyStableAssetClosure(output);
+
+  const releaseAssets = await Promise.all(
+    STABLE_RELEASE_ASSETS.map(async (name) => ({
+      name,
+      digest: digest(await readFile(join(output, name))),
+    })),
+  );
+  const byName = new Map(
+    releaseAssets.map((asset) => [asset.name, asset.digest]),
+  );
+  const manifest: RuntimeCandidateManifest = {
+    kind: CANDIDATE_FORMAT,
+    surfaceId: SURFACE_ID,
+    repository: REPOSITORY,
+    sourceCommit,
+    version: VERSION,
+    tag: RELEASE_TAG,
+    workflowRunId,
+    builtAt,
+    ociImages: [],
+    releaseAssets,
+    artifactDigests: releaseAssets.map(({ digest: value }) => value),
+    sbomDigests: [requiredDigest(byName, SBOM_NAME)],
+    provenanceDigests: [
+      requiredDigest(byName, "release-manifest.json"),
+      requiredDigest(byName, "release-manifest.sigstore.json"),
+    ],
+    configDigest: requiredDigest(byName, "runtime-manifest.json"),
+    policyDigest: digest(await readFile(resolve(repoRoot, WORKFLOW_PATH))),
+    toolchainDigest: digest(Buffer.from(TOOLCHAIN_DESCRIPTOR)),
+  };
+  await writeFile(
+    join(output, "release-candidate-manifest.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    { mode: 0o644 },
+  );
+  await verifyRuntimeCandidateManifest(repoRoot, output, {
+    sourceCommit,
+    workflowRunId,
+  });
+  return manifest;
+}
+
+export async function verifyRuntimeCandidateManifest(
+  repoRoot: string,
+  output: string,
+  expected: {
+    readonly sourceCommit: string;
+    readonly workflowRunId: string;
+    readonly manifestDigest?: string;
+    readonly artifactDigests?: readonly string[];
+  },
+): Promise<RuntimeCandidateManifest> {
+  if (!COMMIT.test(expected.sourceCommit)) {
+    throw new Error("source commit must be a 40-character SHA-1");
+  }
+  if (!RUN_ID.test(expected.workflowRunId)) {
+    throw new Error("workflow run id must be a positive decimal integer");
+  }
+  await verifyBuiltRuntimeRelease(repoRoot, output, expected.sourceCommit);
+  const manifestBytes = await readFile(
+    join(output, "release-candidate-manifest.json"),
+  );
+  if (
+    expected.manifestDigest !== undefined &&
+    digest(manifestBytes) !== expected.manifestDigest
+  ) {
+    throw new Error("candidate manifest digest does not match the envelope");
+  }
+  const manifest = object(
+    JSON.parse(manifestBytes.toString("utf8")),
+    "candidate manifest",
+  ) as unknown as RuntimeCandidateManifest;
+  exactKeys(
+    manifest as unknown as Record<string, unknown>,
+    [
+      "artifactDigests",
+      "builtAt",
+      "configDigest",
+      "kind",
+      "ociImages",
+      "policyDigest",
+      "provenanceDigests",
+      "releaseAssets",
+      "repository",
+      "sbomDigests",
+      "sourceCommit",
+      "surfaceId",
+      "tag",
+      "toolchainDigest",
+      "version",
+      "workflowRunId",
+    ],
+    "candidate manifest",
+  );
+  validateCandidateIdentity(
+    manifest.sourceCommit,
+    manifest.workflowRunId,
+    manifest.builtAt,
+  );
+  if (
+    manifest.kind !== CANDIDATE_FORMAT ||
+    manifest.surfaceId !== SURFACE_ID ||
+    manifest.repository !== REPOSITORY ||
+    manifest.sourceCommit !== expected.sourceCommit ||
+    manifest.version !== VERSION ||
+    manifest.tag !== RELEASE_TAG ||
+    manifest.workflowRunId !== expected.workflowRunId ||
+    !Array.isArray(manifest.ociImages) ||
+    manifest.ociImages.length !== 0
+  ) {
+    throw new Error("candidate manifest identity is invalid");
+  }
+  await verifyStableAssetClosure(output, { includeCandidateManifest: true });
+  const actualAssets = await Promise.all(
+    STABLE_RELEASE_ASSETS.map(async (name) => ({
+      name,
+      digest: digest(await readFile(join(output, name))),
+    })),
+  );
+  if (JSON.stringify(manifest.releaseAssets) !== JSON.stringify(actualAssets)) {
+    throw new Error(
+      "candidate release asset inventory or digest order drifted",
+    );
+  }
+  const actualDigests = actualAssets.map(({ digest: value }) => value);
+  if (
+    JSON.stringify(manifest.artifactDigests) !== JSON.stringify(actualDigests)
+  ) {
+    throw new Error("candidate artifact digests do not close release assets");
+  }
+  if (
+    expected.artifactDigests !== undefined &&
+    JSON.stringify(manifest.artifactDigests) !==
+      JSON.stringify(expected.artifactDigests)
+  ) {
+    throw new Error("candidate artifact digests do not match the envelope");
+  }
+  const byName = new Map(
+    actualAssets.map((asset) => [asset.name, asset.digest]),
+  );
+  const expectedSbom = [requiredDigest(byName, SBOM_NAME)];
+  const expectedProvenance = [
+    requiredDigest(byName, "release-manifest.json"),
+    requiredDigest(byName, "release-manifest.sigstore.json"),
+  ];
+  if (
+    JSON.stringify(manifest.sbomDigests) !== JSON.stringify(expectedSbom) ||
+    JSON.stringify(manifest.provenanceDigests) !==
+      JSON.stringify(expectedProvenance) ||
+    manifest.configDigest !== requiredDigest(byName, "runtime-manifest.json") ||
+    manifest.policyDigest !==
+      digest(await readFile(resolve(repoRoot, WORKFLOW_PATH))) ||
+    manifest.toolchainDigest !== digest(Buffer.from(TOOLCHAIN_DESCRIPTOR))
+  ) {
+    throw new Error("candidate evidence digests do not bind reviewed inputs");
+  }
+  return manifest;
+}
+
+export function decodePromotionHealthChecks(encoded: string): HealthCheck[] {
+  const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length !== REQUIRED_HEALTH_CHECKS.length
+  ) {
+    throw new Error("promotion health checks are not the fixed ordered set");
+  }
+  return parsed.map((raw, index) => {
+    const check = object(
+      raw,
+      `health check ${index}`,
+    ) as unknown as HealthCheck;
+    exactKeys(
+      check as unknown as Record<string, unknown>,
+      ["bindingDigest", "name", "status"],
+      `health check ${index}`,
+    );
+    if (
+      check.name !== REQUIRED_HEALTH_CHECKS[index] ||
+      check.status !== "required" ||
+      !SHA256.test(check.bindingDigest)
+    ) {
+      throw new Error("promotion health checks are not the fixed ordered set");
+    }
+    return check;
+  });
+}
+
+export function buildRuntimeReleaseReadback(input: {
+  readonly sourceCommit: string;
+  readonly controllerCommit: string;
+  readonly controllerDigest: string;
+  readonly adapterDigest: string;
+  readonly artifactDigests: readonly string[];
+  readonly healthChecks: readonly HealthCheck[];
+  readonly targetFingerprint: string;
+  readonly attestationDigest: string;
+  readonly workflowRunId: string;
+  readonly readbackAt: string;
+}): RuntimeReleaseReadback {
+  if (
+    !COMMIT.test(input.sourceCommit) ||
+    !COMMIT.test(input.controllerCommit)
+  ) {
+    throw new Error("readback commits must be full SHA-1 values");
+  }
+  for (const value of [
+    input.controllerDigest,
+    input.adapterDigest,
+    input.targetFingerprint,
+    input.attestationDigest,
+    ...input.artifactDigests,
+  ]) {
+    if (!SHA256.test(value)) {
+      throw new Error("readback contains a non-canonical SHA-256 digest");
+    }
+  }
+  if (
+    !RUN_ID.test(input.workflowRunId) ||
+    !validTimestamp(input.readbackAt) ||
+    input.artifactDigests.length !== STABLE_RELEASE_ASSETS.length ||
+    new Set(input.artifactDigests).size !== input.artifactDigests.length
+  ) {
+    throw new Error("readback identity or artifact digest set is invalid");
+  }
+  if (
+    input.healthChecks.length !== REQUIRED_HEALTH_CHECKS.length ||
+    input.healthChecks.some(
+      (check, index) =>
+        check.name !== REQUIRED_HEALTH_CHECKS[index] ||
+        check.status !== "required" ||
+        !SHA256.test(check.bindingDigest),
+    )
+  ) {
+    throw new Error("readback health checks are not the fixed required set");
+  }
+  return {
+    kind: ADAPTER_RESULT_FORMAT,
+    status: "promoted",
+    surfaceId: SURFACE_ID,
+    sourceCommit: input.sourceCommit,
+    controllerCommit: input.controllerCommit,
+    controllerDigest: input.controllerDigest,
+    adapterDigest: input.adapterDigest,
+    artifactDigests: input.artifactDigests,
+    targetFingerprint: input.targetFingerprint,
+    attestationDigest: input.attestationDigest,
+    releaseTag: RELEASE_TAG,
+    releaseUrl: `https://github.com/tako0614/takosumi/releases/tag/${RELEASE_TAG}`,
+    workflowRunId: input.workflowRunId,
+    readbackAt: input.readbackAt,
+    healthChecks: input.healthChecks.map((check) => ({
+      ...check,
+      status: "passed",
+    })),
+  };
+}
+
+async function verifyStableAssetClosure(
+  output: string,
+  {
+    includeCandidateManifest = false,
+  }: { includeCandidateManifest?: boolean } = {},
+): Promise<void> {
+  const expected = [
+    ...STABLE_RELEASE_ASSETS,
+    ...(includeCandidateManifest ? ["release-candidate-manifest.json"] : []),
+  ].sort();
+  const entries = await readdir(output, { withFileTypes: true });
+  if (
+    entries.some((entry) => !entry.isFile()) ||
+    JSON.stringify(entries.map(({ name }) => name).sort()) !==
+      JSON.stringify(expected)
+  ) {
+    throw new Error("runtime release candidate directory is not closed");
+  }
+  const checksumNames = STABLE_RELEASE_ASSETS.filter(
+    (name) => name !== "SHA256SUMS",
+  ).sort();
+  const expectedChecksums = `${(
+    await Promise.all(
+      checksumNames.map(async (name) => {
+        const value = digest(await readFile(join(output, name))).slice(
+          "sha256:".length,
+        );
+        return `${value}  ${name}`;
+      }),
+    )
+  ).join("\n")}\n`;
+  if (
+    (await readFile(join(output, "SHA256SUMS"), "utf8")) !== expectedChecksums
+  ) {
+    throw new Error("SHA256SUMS is not the canonical stable asset closure");
+  }
+}
+
+function validateCandidateIdentity(
+  sourceCommit: string,
+  workflowRunId: string,
+  builtAt: string,
+): void {
+  if (!COMMIT.test(sourceCommit)) {
+    throw new Error("source commit must be a 40-character SHA-1");
+  }
+  if (!RUN_ID.test(workflowRunId)) {
+    throw new Error("workflow run id must be a positive decimal integer");
+  }
+  if (!validTimestamp(builtAt)) {
+    throw new Error("candidate build time must be an exact UTC timestamp");
+  }
+}
+
+function validTimestamp(value: string): boolean {
+  return TIMESTAMP.test(value) && Number.isFinite(Date.parse(value));
+}
+
+function requiredDigest(
+  values: ReadonlyMap<string, string>,
+  name: string,
+): string {
+  const value = values.get(name);
+  if (!value) throw new Error(`required release asset is missing: ${name}`);
+  return value;
+}
+
 function spdxDocument(
   manifest: RuntimeManifest,
   sourceCommit: string,
@@ -496,33 +911,129 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "build-release") {
-    const sourceCommit = option(args, "--source-commit");
-    const output = option(args, "--output");
+    const values = options(args, ["--source-commit", "--output"]);
+    const sourceCommit = values.get("--source-commit")!;
+    const output = values.get("--output")!;
     await buildRuntimeRelease(process.cwd(), sourceCommit, resolve(output));
     console.log(`standard-form runtime ${VERSION}: release candidate built`);
     return;
   }
+  if (command === "build-candidate") {
+    const values = options(args, [
+      "--source-commit",
+      "--workflow-run-id",
+      "--built-at",
+      "--output",
+    ]);
+    await buildRuntimeCandidateManifest(
+      process.cwd(),
+      resolve(values.get("--output")!),
+      values.get("--source-commit")!,
+      values.get("--workflow-run-id")!,
+      values.get("--built-at")!,
+    );
+    console.log(`standard-form runtime ${VERSION}: candidate manifest built`);
+    return;
+  }
+  if (command === "verify-candidate") {
+    const values = options(args, [
+      "--source-commit",
+      "--workflow-run-id",
+      "--manifest-digest",
+      "--artifact-digests-b64",
+      "--output",
+    ]);
+    const artifactDigests = decodeDigestArray(
+      values.get("--artifact-digests-b64")!,
+    );
+    await verifyRuntimeCandidateManifest(
+      process.cwd(),
+      resolve(values.get("--output")!),
+      {
+        sourceCommit: values.get("--source-commit")!,
+        workflowRunId: values.get("--workflow-run-id")!,
+        manifestDigest: values.get("--manifest-digest")!,
+        artifactDigests,
+      },
+    );
+    console.log(`standard-form runtime ${VERSION}: candidate verified`);
+    return;
+  }
+  if (command === "build-readback") {
+    const values = options(args, [
+      "--source-commit",
+      "--controller-commit",
+      "--controller-digest",
+      "--adapter-digest",
+      "--artifact-digests-b64",
+      "--health-checks-b64",
+      "--target-fingerprint",
+      "--attestation-digest",
+      "--workflow-run-id",
+      "--readback-at",
+      "--output",
+    ]);
+    const readback = buildRuntimeReleaseReadback({
+      sourceCommit: values.get("--source-commit")!,
+      controllerCommit: values.get("--controller-commit")!,
+      controllerDigest: values.get("--controller-digest")!,
+      adapterDigest: values.get("--adapter-digest")!,
+      artifactDigests: decodeDigestArray(values.get("--artifact-digests-b64")!),
+      healthChecks: decodePromotionHealthChecks(
+        values.get("--health-checks-b64")!,
+      ),
+      targetFingerprint: values.get("--target-fingerprint")!,
+      attestationDigest: values.get("--attestation-digest")!,
+      workflowRunId: values.get("--workflow-run-id")!,
+      readbackAt: values.get("--readback-at")!,
+    });
+    await writeFile(
+      resolve(values.get("--output")!),
+      `${JSON.stringify(readback, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    console.log(`standard-form runtime ${VERSION}: release readback built`);
+    return;
+  }
   throw new Error(
-    "usage: bun scripts/verify-standard-form-runtime-artifacts.ts check [--verify-oci] | build-release --source-commit <sha> --output <dir>",
+    "usage: bun scripts/verify-standard-form-runtime-artifacts.ts <check|build-release|build-candidate|verify-candidate|build-readback> [...options]",
   );
 }
 
-function option(args: readonly string[], name: string): string {
-  const index = args.indexOf(name);
-  if (
-    index < 0 ||
-    !args[index + 1] ||
-    args.filter((value) => value === name).length !== 1
-  ) {
-    throw new Error(`${name} is required exactly once`);
-  }
-  const allowed = new Set(["--source-commit", "--output"]);
+function options(
+  args: readonly string[],
+  requiredNames: readonly string[],
+): ReadonlyMap<string, string> {
+  const allowed = new Set(requiredNames);
+  const result = new Map<string, string>();
+  if (args.length % 2 !== 0) throw new Error("option values must be paired");
   for (let cursor = 0; cursor < args.length; cursor += 2) {
-    if (!allowed.has(args[cursor] ?? "") || !args[cursor + 1]) {
-      throw new Error(`unknown build-release argument ${args[cursor] ?? ""}`);
+    const name = args[cursor] ?? "";
+    const value = args[cursor + 1] ?? "";
+    if (!allowed.has(name) || value.length === 0 || result.has(name)) {
+      throw new Error(`unknown, empty, or duplicate argument ${name}`);
     }
+    result.set(name, value);
   }
-  return args[index + 1]!;
+  for (const name of requiredNames) {
+    if (!result.has(name)) throw new Error(`${name} is required exactly once`);
+  }
+  return result;
+}
+
+function decodeDigestArray(encoded: string): readonly string[] {
+  const values = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  if (
+    !Array.isArray(values) ||
+    values.length === 0 ||
+    values.some((value) => typeof value !== "string" || !SHA256.test(value)) ||
+    new Set(values).size !== values.length
+  ) {
+    throw new Error(
+      "artifact digests must be a non-empty unique SHA-256 array",
+    );
+  }
+  return values;
 }
 
 if (import.meta.main) {

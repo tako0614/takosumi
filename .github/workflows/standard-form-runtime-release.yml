@@ -3,86 +3,218 @@ name: Release standard Form host-conformance runtime
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: Exact existing standard-form-runtime-v<semver> tag
+      phase:
+        description: Build one immutable candidate or promote an existing candidate
+        required: true
+        default: candidate
+        type: choice
+        options:
+          - candidate
+          - promote
+      version:
+        description: Exact standard Form runtime version
         required: true
         type: string
-      expected_commit:
-        description: Exact approved 40-character tag commit
-        required: true
+      release_id:
+        description: Private-envelope release identifier (promote only)
+        required: false
+        default: ""
+        type: string
+      tag:
+        description: Exact signed annotated tag
+        required: false
+        default: ""
+        type: string
+      source_commit:
+        description: Exact reviewed source commit
+        required: false
+        default: ""
+        type: string
+      candidate_run_id:
+        description: Successful candidate workflow run id (promote only)
+        required: false
+        default: ""
+        type: string
+      candidate_manifest_digest:
+        description: SHA-256 of release-candidate-manifest.json (promote only)
+        required: false
+        default: ""
+        type: string
+      envelope_digest:
+        description: SHA-256 of the operator-private release envelope
+        required: false
+        default: ""
+        type: string
+      controller_commit:
+        description: Pinned ecosystem release-safety controller commit
+        required: false
+        default: ""
+        type: string
+      controller_digest:
+        description: Pinned ecosystem release-safety controller digest
+        required: false
+        default: ""
+        type: string
+      adapter_digest:
+        description: Pinned fixed-adapter SHA-256 digest
+        required: false
+        default: ""
+        type: string
+      authorization_digest:
+        description: Controller technical-authorization evidence digest
+        required: false
+        default: ""
+        type: string
+      artifact_digests_b64:
+        description: Base64url ordered envelope artifact digest JSON
+        required: false
+        default: ""
+        type: string
+      health_checks_b64:
+        description: Base64url required envelope health-check JSON
+        required: false
+        default: ""
+        type: string
+      target_fingerprint:
+        description: Expected deterministic stable-target fingerprint
+        required: false
+        default: ""
         type: string
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
-  artifact-metadata: write
+run-name: ${{ inputs.phase == 'promote' && format('release-safety:standard-form-runtime:{0}:{1}', inputs.release_id, inputs.envelope_digest) || format('standard-form-runtime-candidate:{0}:{1}', inputs.version, github.sha) }}
 
 concurrency:
-  group: standard-form-runtime-release-${{ inputs.tag }}
+  group: standard-form-runtime-release-${{ github.ref }}
   cancel-in-progress: false
+
+permissions:
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   EXPECTED_COSIGN_VERSION: "v3.0.6"
-  # Keep this mutation lane inert until the ecosystem release-safety registry
-  # owns an exact surface, fixed adapter, and verified envelope for it.
-  RELEASE_SAFETY_REGISTRATION: "disabled-unregistered"
+  RELEASE_SAFETY_CONTROLLER_COMMIT: "cd9b8b74672e3f436cc467ca8359738a232599fc"
+  RELEASE_SAFETY_ADAPTER_DIGEST: "sha256:c25918640423a52c014ad903a57cefa8208b29348d60fc76084ea13e57bc1f3f"
 
 jobs:
-  release:
-    # release-safety: blocked until the ecosystem registry owns a fixed adapter.
-    if: ${{ false }}
+  validate:
+    name: Validate release-safety inputs and signed source tag
     runs-on: ubuntu-latest
-    environment: standard-form-runtime-release
-    timeout-minutes: 20
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+      tag: ${{ steps.source.outputs.tag }}
+      source_commit: ${{ steps.source.outputs.source_commit }}
+      source_commit_short: ${{ steps.source.outputs.source_commit_short }}
     steps:
-      - name: Refuse unregistered release mutation
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$RELEASE_SAFETY_REGISTRATION" = "registered-fixed-envelope" || {
-            echo "standard Form runtime publication is disabled until its fixed adapter and envelope are registered in the ecosystem release-safety registry" >&2
-            exit 1
-          }
-
-      - name: Check out trusted main release tooling
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify trusted main and exact approved tag commit
+      - name: Validate exact source and fixed controller bindings
         id: source
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          GH_TOKEN: ${{ github.token }}
+          PHASE: ${{ inputs.phase }}
+          VERSION: ${{ inputs.version }}
+          REQUESTED_RELEASE_ID: ${{ inputs.release_id }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+          REQUESTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_MANIFEST_DIGEST: ${{ inputs.candidate_manifest_digest }}
+          ENVELOPE_DIGEST: ${{ inputs.envelope_digest }}
+          CONTROLLER_COMMIT: ${{ inputs.controller_commit }}
+          CONTROLLER_DIGEST: ${{ inputs.controller_digest }}
+          ADAPTER_DIGEST: ${{ inputs.adapter_digest }}
+          AUTHORIZATION_DIGEST: ${{ inputs.authorization_digest }}
+          ARTIFACT_DIGESTS_B64: ${{ inputs.artifact_digests_b64 }}
+          HEALTH_CHECKS_B64: ${{ inputs.health_checks_b64 }}
+          TARGET_FINGERPRINT: ${{ inputs.target_fingerprint }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/main"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
-          [[ "$RELEASE_TAG" =~ ^standard-form-runtime-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          test "$RELEASE_TAG" = "standard-form-runtime-v1.0.1"
-          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
-          tag_commit="$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")"
-          test "$tag_commit" = "$EXPECTED_COMMIT"
-          git merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main
-          test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled)" = "true"
-          {
-            echo "tag=$RELEASE_TAG"
-            echo "commit=$tag_commit"
-          } >> "$GITHUB_OUTPUT"
+          test "${GITHUB_RUN_ATTEMPT}" = "1" || {
+            echo "Release runs are immutable; dispatch a new candidate or release id instead of rerunning." >&2
+            exit 1
+          }
+          test "${VERSION}" = "1.0.1"
+          release_tag="standard-form-runtime-v${VERSION}"
+          test "${GITHUB_REF}" = "refs/tags/${release_tag}" || {
+            echo "Candidate and promotion must execute from the exact signed release tag." >&2
+            exit 1
+          }
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          if [[ -n "${REQUESTED_TAG}" && "${REQUESTED_TAG}" != "${release_tag}" ]]; then
+            echo "Requested tag differs from ${release_tag}." >&2
+            exit 1
+          fi
+          if [[ -n "${REQUESTED_SOURCE_COMMIT}" && "${REQUESTED_SOURCE_COMMIT}" != "${GITHUB_SHA}" ]]; then
+            echo "Requested source commit differs from the tagged workflow commit." >&2
+            exit 1
+          fi
 
-      - name: Check out untrusted tagged runtime source separately
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+          ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${release_tag}")"
+          tag_object_sha="$(jq -er '.object.sha' <<<"${ref_json}")"
+          jq -e '.object.type == "tag"' <<<"${ref_json}" >/dev/null
+          tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}")"
+          jq -e --arg source "${GITHUB_SHA}" \
+            '.object.type == "commit" and .object.sha == $source and .verification.verified == true' \
+            <<<"${tag_json}" >/dev/null
+
+          if [[ "${PHASE}" == "candidate" ]]; then
+            for value in REQUESTED_RELEASE_ID CANDIDATE_RUN_ID CANDIDATE_MANIFEST_DIGEST ENVELOPE_DIGEST CONTROLLER_COMMIT CONTROLLER_DIGEST ADAPTER_DIGEST AUTHORIZATION_DIGEST ARTIFACT_DIGESTS_B64 HEALTH_CHECKS_B64 TARGET_FINGERPRINT; do
+              if [[ -n "${!value}" ]]; then
+                echo "${value} is promotion-only and must be empty for a candidate." >&2
+                exit 1
+              fi
+            done
+          elif [[ "${PHASE}" == "promote" ]]; then
+            for value in REQUESTED_RELEASE_ID REQUESTED_TAG REQUESTED_SOURCE_COMMIT CANDIDATE_RUN_ID CANDIDATE_MANIFEST_DIGEST ENVELOPE_DIGEST CONTROLLER_COMMIT CONTROLLER_DIGEST ADAPTER_DIGEST AUTHORIZATION_DIGEST ARTIFACT_DIGESTS_B64 HEALTH_CHECKS_B64 TARGET_FINGERPRINT; do
+              if [[ -z "${!value}" ]]; then
+                echo "${value} is required for promotion." >&2
+                exit 1
+              fi
+            done
+            [[ "${CANDIDATE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+            [[ "${CONTROLLER_COMMIT}" =~ ^[0-9a-f]{40}$ ]]
+            for value in "${CANDIDATE_MANIFEST_DIGEST}" "${ENVELOPE_DIGEST}" "${CONTROLLER_DIGEST}" "${ADAPTER_DIGEST}" "${AUTHORIZATION_DIGEST}" "${TARGET_FINGERPRINT}"; do
+              [[ "${value}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            done
+            test "${CONTROLLER_COMMIT}" = "${RELEASE_SAFETY_CONTROLLER_COMMIT}"
+            test "${ADAPTER_DIGEST}" = "${RELEASE_SAFETY_ADAPTER_DIGEST}"
+          else
+            echo "Unsupported release phase: ${PHASE}" >&2
+            exit 1
+          fi
+          if gh release view "${release_tag}" >/dev/null 2>&1; then
+            echo "An immutable release already owns ${release_tag}; refusing overwrite." >&2
+            exit 1
+          fi
+          {
+            echo "version=${VERSION}"
+            echo "tag=${release_tag}"
+            echo "source_commit=${GITHUB_SHA}"
+            echo "source_commit_short=${GITHUB_SHA:0:12}"
+          } >> "${GITHUB_OUTPUT}"
+
+  candidate:
+    name: Build, sign, attest, and seal candidate once
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: validate
+    if: inputs.phase == 'candidate' && needs.validate.result == 'success'
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ inputs.tag }}
-          path: release-source
+          ref: ${{ needs.validate.outputs.source_commit }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -93,109 +225,59 @@ jobs:
       - name: Install pinned Cosign v3
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2, Cosign v3.0.6
 
-      - name: Build exact release candidate with trusted main tooling
+      - name: Run the complete source quality gate
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          bun run check
+
+      - name: Build the exact runtime release bytes once
         id: build
         shell: bash
         env:
-          EXPECTED_COMMIT: ${{ steps.source.outputs.commit }}
-          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
         run: |
           set -euo pipefail
-          test "$(git -C release-source rev-parse HEAD)" = "$EXPECTED_COMMIT"
-          test -z "$(git -C release-source status --porcelain=v1 --untracked-files=all)"
-          grep -F "$EXPECTED_COSIGN_VERSION" <<<"$(cosign version 2>&1)"
-          (
-            cd release-source
-            bun "$GITHUB_WORKSPACE/scripts/verify-standard-form-runtime-artifacts.ts" check
-            bun "$GITHUB_WORKSPACE/scripts/verify-standard-form-runtime-artifacts.ts" \
-              build-release --source-commit "$EXPECTED_COMMIT" \
-              --output "$RUNNER_TEMP/standard-form-runtime"
-          )
-          test "$(jq -r .releaseTag "$RUNNER_TEMP/standard-form-runtime/release-manifest.json")" = "$RELEASE_TAG"
-          echo "output=$RUNNER_TEMP/standard-form-runtime" >> "$GITHUB_OUTPUT"
-
-      - name: Refuse an existing release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.source.outputs.tag }}
-        run: |
-          set -euo pipefail
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "A GitHub release already owns $RELEASE_TAG; refusing overwrite" >&2
-            exit 1
-          fi
+          output="${RUNNER_TEMP}/standard-form-runtime-candidate"
+          mkdir -p "${output}"
+          bun scripts/verify-standard-form-runtime-artifacts.ts check --verify-oci
+          bun scripts/verify-standard-form-runtime-artifacts.ts build-release \
+            --source-commit "${SOURCE_COMMIT}" --output "${output}"
+          echo "output=${output}" >> "${GITHUB_OUTPUT}"
 
       - name: Keyless-sign the exact release manifest and close checksums
         shell: bash
         env:
           OUTPUT: ${{ steps.build.outputs.output }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          identity="https://github.com/$GITHUB_REPOSITORY/.github/workflows/standard-form-runtime-release.yml@refs/heads/main"
-          cosign sign-blob "$OUTPUT/release-manifest.json" \
-            --bundle "$OUTPUT/release-manifest.sigstore.json" --yes
-          cosign verify-blob "$OUTPUT/release-manifest.json" \
-            --bundle "$OUTPUT/release-manifest.sigstore.json" \
-            --certificate-identity "$identity" \
+          grep -F "${EXPECTED_COSIGN_VERSION}" <<<"$(cosign version 2>&1)"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/standard-form-runtime-release.yml@refs/tags/${RELEASE_TAG}"
+          cosign sign-blob "${OUTPUT}/release-manifest.json" \
+            --bundle "${OUTPUT}/release-manifest.sigstore.json" --yes
+          cosign verify-blob "${OUTPUT}/release-manifest.json" \
+            --bundle "${OUTPUT}/release-manifest.sigstore.json" \
+            --certificate-identity "${identity}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
           (
-            cd "$OUTPUT"
+            cd "${OUTPUT}"
             find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | \
               xargs sha256sum > SHA256SUMS
             sha256sum --check --strict SHA256SUMS
           )
 
-      - name: Create this run's immutable-release candidate
-        id: draft
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.source.outputs.tag }}
-        run: |
-          set -euo pipefail
-          response="$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
-            -f tag_name="$RELEASE_TAG" -f name="$RELEASE_TAG" -F draft=true \
-            -f body='Takosumi-owned host-conformance-only runtime artifacts for the Takoform 1.0.1 evidence run. These assets grant no portable host, target, capacity, or admission authority.')"
-          release_id="$(jq -r .id <<<"$response")"
-          test "$release_id" != "null"
-          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
-
-      - name: Upload and verify the exact draft inventory
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
-          RELEASE_TAG: ${{ steps.source.outputs.tag }}
-          OUTPUT: ${{ steps.build.outputs.output }}
-        run: |
-          set -euo pipefail
-          while IFS= read -r asset; do
-            gh release upload "$RELEASE_TAG" "$asset"
-          done < <(find "$OUTPUT" -maxdepth 1 -type f -print | sort)
-          find "$OUTPUT" -maxdepth 1 -type f -printf '%f\n' | sort > "$RUNNER_TEMP/expected-assets.txt"
-          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --jq '.[].name' | sort > "$RUNNER_TEMP/actual-assets.txt"
-          diff -u "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/actual-assets.txt"
-          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .draft)" = "true"
-          while IFS= read -r asset; do
-            name="$(basename "$asset")"
-            want="sha256:$(sha256sum "$asset" | cut -d' ' -f1)"
-            got="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
-              --jq ".[] | select(.name == \"$name\") | .digest")"
-            test "$got" = "$want"
-          done < <(find "$OUTPUT" -maxdepth 1 -type f -print | sort)
-
-      - name: Attest exact runtime release inventory
+      - name: Attest exact release assets
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-path: |
-            ${{ steps.build.outputs.output }}/edge-worker.mjs
+            ${{ steps.build.outputs.output }}/SHA256SUMS
             ${{ steps.build.outputs.output }}/durable-workflow.mjs
-            ${{ steps.build.outputs.output }}/runtime-manifest.json
-            ${{ steps.build.outputs.output }}/runtime-sbom.spdx.json
+            ${{ steps.build.outputs.output }}/edge-worker.mjs
             ${{ steps.build.outputs.output }}/release-manifest.json
             ${{ steps.build.outputs.output }}/release-manifest.sigstore.json
-            ${{ steps.build.outputs.output }}/SHA256SUMS
+            ${{ steps.build.outputs.output }}/runtime-manifest.json
+            ${{ steps.build.outputs.output }}/runtime-sbom.spdx.json
 
       - name: Attest runtime SBOM
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
@@ -205,30 +287,329 @@ jobs:
             ${{ steps.build.outputs.output }}/durable-workflow.mjs
           sbom-path: ${{ steps.build.outputs.output }}/runtime-sbom.spdx.json
 
-      - name: Publish and require repository-enforced immutability
+      - name: Seal the root-controller candidate manifest
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          OUTPUT: ${{ steps.build.outputs.output }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
         run: |
           set -euo pipefail
-          finalized="$(gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false)"
-          test "$(jq -r .draft <<<"$finalized")" = "false"
-          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .immutable)" = "true"
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+          bun scripts/verify-standard-form-runtime-artifacts.ts build-candidate \
+            --source-commit "${SOURCE_COMMIT}" \
+            --workflow-run-id "${GITHUB_RUN_ID}" \
+            --built-at "${built_at}" \
+            --output "${OUTPUT}"
+          manifest_digest="sha256:$(sha256sum "${OUTPUT}/release-candidate-manifest.json" | cut -d' ' -f1)"
+          echo "Candidate manifest: ${manifest_digest}" >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Remove a partial draft after failure
+      - name: Upload the closed candidate without publishing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: takosumi-standard-form-runtime-candidate-${{ needs.validate.outputs.version }}-${{ needs.validate.outputs.source_commit_short }}
+          path: ${{ steps.build.outputs.output }}/
+          if-no-files-found: error
+          retention-days: 90
+
+  promote:
+    name: Promote exact candidate bytes without rebuilding
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: validate
+    if: inputs.phase == 'promote' && needs.validate.result == 'success'
+    environment: standard-form-runtime-release
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Refuse stale or non-controller-authorized promotion
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHORIZATION_DIGEST: ${{ inputs.authorization_digest }}
+          EXPECTED_AUTHORIZATION_DIGEST: ${{ secrets.RELEASE_SAFETY_AUTHORIZATION_DIGEST }}
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_AUTHORIZATION_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "The protected environment does not contain the exact controller authorization digest." >&2
+            exit 1
+          }
+          test "${AUTHORIZATION_DIGEST}" = "${EXPECTED_AUTHORIZATION_DIGEST}" || {
+            echo "The dispatch does not carry the controller-sealed authorization digest." >&2
+            exit 1
+          }
+          created_at="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)"
+          created_epoch="$(date -u -d "${created_at}" +%s)"
+          now_epoch="$(date -u +%s)"
+          age_seconds="$((now_epoch - created_epoch))"
+          if (( age_seconds < 0 || age_seconds > 300 )); then
+            echo "The promotion approval missed the five-minute controller dispatch window." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install pinned Cosign v3 for independent readback
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2, Cosign v3.0.6
+
+      - name: Verify candidate workflow authority
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}")"
+          jq -e --arg source "${SOURCE_COMMIT}" \
+            '.head_sha == $source and .event == "workflow_dispatch" and
+             .status == "completed" and .conclusion == "success" and
+             .run_attempt == 1 and
+             (.path | endswith("/.github/workflows/standard-form-runtime-release.yml") or . == ".github/workflows/standard-form-runtime-release.yml")' \
+            <<<"${run_json}" >/dev/null
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takosumi-standard-form-runtime-candidate-${{ inputs.version }}-${{ needs.validate.outputs.source_commit_short }}
+          path: candidate
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.candidate_run_id }}
+
+      - name: Verify envelope bindings and every candidate byte
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_MANIFEST_DIGEST: ${{ inputs.candidate_manifest_digest }}
+          ARTIFACT_DIGESTS_B64: ${{ inputs.artifact_digests_b64 }}
+        run: |
+          set -euo pipefail
+          bun scripts/verify-standard-form-runtime-artifacts.ts verify-candidate \
+            --source-commit "${SOURCE_COMMIT}" \
+            --workflow-run-id "${CANDIDATE_RUN_ID}" \
+            --manifest-digest "${CANDIDATE_MANIFEST_DIGEST}" \
+            --artifact-digests-b64 "${ARTIFACT_DIGESTS_B64}" \
+            --output "${GITHUB_WORKSPACE}/candidate"
+
+      - name: Verify candidate Sigstore identity and GitHub attestation before mutation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          grep -F "${EXPECTED_COSIGN_VERSION}" <<<"$(cosign version 2>&1)"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/standard-form-runtime-release.yml@refs/tags/${RELEASE_TAG}"
+          cosign verify-blob candidate/release-manifest.json \
+            --bundle candidate/release-manifest.sigstore.json \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+          gh attestation verify candidate/release-manifest.json --repo "${GITHUB_REPOSITORY}"
+
+      - name: Verify deterministic stable target and preflight immutability
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RULESET_AUDIT_TOKEN: ${{ secrets.RELEASE_SAFETY_RULESET_AUDIT_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          TARGET_FINGERPRINT: ${{ inputs.target_fingerprint }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq .enabled)" = "true"
+          test -n "${RULESET_AUDIT_TOKEN}" || {
+            echo "The protected environment ruleset readback credential is missing." >&2
+            exit 1
+          }
+          rulesets="$(GH_TOKEN="${RULESET_AUDIT_TOKEN}" gh api "repos/${GITHUB_REPOSITORY}/rulesets?targets=tag")"
+          ruleset_id="$(jq -er '
+            [.[] | select(.name == "standard-form-runtime-release-tags" and .target == "tag" and .enforcement == "active")] |
+            if length == 1 then .[0].id else error("one active standard Form runtime tag ruleset is required") end' \
+            <<<"${rulesets}")"
+          ruleset="$(GH_TOKEN="${RULESET_AUDIT_TOKEN}" gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}")"
+          jq -e '
+            .target == "tag" and .enforcement == "active" and
+            .bypass_actors == [] and
+            .conditions.ref_name.include == ["refs/tags/standard-form-runtime-v*"] and
+            .conditions.ref_name.exclude == [] and
+            ([.rules[].type] | sort) == ["deletion", "update"]' \
+            <<<"${ruleset}" >/dev/null
+          ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}")"
+          tag_object_sha="$(jq -er '.object.sha' <<<"${ref_json}")"
+          jq -e '.object.type == "tag"' <<<"${ref_json}" >/dev/null
+          tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}")"
+          jq -e --arg source "${SOURCE_COMMIT}" \
+            '.object.type == "commit" and .object.sha == $source and .verification.verified == true' \
+            <<<"${tag_json}" >/dev/null
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists; immutable versions are never overwritten." >&2
+            exit 1
+          fi
+          computed="$(RELEASE_TAG="${RELEASE_TAG}" bun -e '
+            import { createHash } from "node:crypto";
+            const sorted = (value) => Array.isArray(value) ? value.map(sorted) :
+              value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])])) : value;
+            const target = { release: { tag: process.env.RELEASE_TAG, url: `https://github.com/tako0614/takosumi/releases/tag/${process.env.RELEASE_TAG}` }, ociImages: [] };
+            process.stdout.write(`sha256:${createHash("sha256").update(JSON.stringify(sorted(target))).digest("hex")}`);
+          ')"
+          test "${computed}" = "${TARGET_FINGERPRINT}" || {
+            echo "Target fingerprint does not bind the deterministic GitHub release target." >&2
+            exit 1
+          }
+
+      - name: Create an exact draft release
+        id: draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          response="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+            -f tag_name="${RELEASE_TAG}" -f name="${RELEASE_TAG}" -F draft=true -F prerelease=false \
+            -f body='Takosumi-owned host-conformance-only runtime artifacts for the Takoform 1.0.1 evidence run. These assets grant no portable host, target, capacity, billing, or admission authority.')"
+          release_id="$(jq -er .id <<<"${response}")"
+          echo "release_id=${release_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload exact candidate assets to the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r name; do
+            gh release upload "${RELEASE_TAG}" "${GITHUB_WORKSPACE}/candidate/${name}"
+          done < <(jq -r '.releaseAssets[].name' candidate/release-candidate-manifest.json)
+
+      - name: Seal the promotion readback before immutable finalization
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          CONTROLLER_COMMIT: ${{ inputs.controller_commit }}
+          CONTROLLER_DIGEST: ${{ inputs.controller_digest }}
+          ADAPTER_DIGEST: ${{ inputs.adapter_digest }}
+          ARTIFACT_DIGESTS_B64: ${{ inputs.artifact_digests_b64 }}
+          HEALTH_CHECKS_B64: ${{ inputs.health_checks_b64 }}
+          TARGET_FINGERPRINT: ${{ inputs.target_fingerprint }}
+        run: |
+          set -euo pipefail
+          attestation_digest="sha256:$(sha256sum candidate/release-manifest.sigstore.json | cut -d' ' -f1)"
+          readback_at="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+          bun scripts/verify-standard-form-runtime-artifacts.ts build-readback \
+            --source-commit "${SOURCE_COMMIT}" \
+            --controller-commit "${CONTROLLER_COMMIT}" \
+            --controller-digest "${CONTROLLER_DIGEST}" \
+            --adapter-digest "${ADAPTER_DIGEST}" \
+            --artifact-digests-b64 "${ARTIFACT_DIGESTS_B64}" \
+            --health-checks-b64 "${HEALTH_CHECKS_B64}" \
+            --target-fingerprint "${TARGET_FINGERPRINT}" \
+            --attestation-digest "${attestation_digest}" \
+            --workflow-run-id "${GITHUB_RUN_ID}" \
+            --readback-at "${readback_at}" \
+            --output "${GITHUB_WORKSPACE}/release-safety-readback.json"
+
+      - name: Upload and verify the closed draft inventory
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "${RELEASE_TAG}" release-safety-readback.json
+          jq -r '.releaseAssets[].name' candidate/release-candidate-manifest.json | sort > "${RUNNER_TEMP}/expected-assets.txt"
+          echo release-safety-readback.json >> "${RUNNER_TEMP}/expected-assets.txt"
+          sort -o "${RUNNER_TEMP}/expected-assets.txt" "${RUNNER_TEMP}/expected-assets.txt"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets" --jq '.[].name' | sort > "${RUNNER_TEMP}/actual-assets.txt"
+          diff -u "${RUNNER_TEMP}/expected-assets.txt" "${RUNNER_TEMP}/actual-assets.txt"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq .draft)" = "true"
+          readback_dir="${RUNNER_TEMP}/draft-readback"
+          mkdir -p "${readback_dir}"
+          gh release download "${RELEASE_TAG}" --dir "${readback_dir}"
+          while IFS=$'\t' read -r name expected; do
+            actual="sha256:$(sha256sum "${readback_dir}/${name}" | cut -d' ' -f1)"
+            test "${actual}" = "${expected}"
+          done < <(jq -r '.releaseAssets[] | [.name, .digest] | @tsv' candidate/release-candidate-manifest.json)
+          cmp -s release-safety-readback.json "${readback_dir}/release-safety-readback.json"
+
+      - name: Publish the sealed draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}")"
+          tag_object_sha="$(jq -er '.object.sha' <<<"${ref_json}")"
+          jq -e '.object.type == "tag"' <<<"${ref_json}" >/dev/null
+          tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}")"
+          jq -e --arg source "${SOURCE_COMMIT}" \
+            '.object.type == "commit" and .object.sha == $source and .verification.verified == true' \
+            <<<"${tag_json}" >/dev/null
+          finalized="$(gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false)"
+          test "$(jq -r .draft <<<"${finalized}")" = "false"
+
+      - name: Read back immutable stable bytes, Sigstore, and GitHub attestation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          jq -e --arg tag "${RELEASE_TAG}" \
+            '.tag_name == $tag and .draft == false and .prerelease == false and .immutable == true' \
+            <<<"${release_json}" >/dev/null
+          ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}")"
+          tag_object_sha="$(jq -er '.object.sha' <<<"${ref_json}")"
+          jq -e '.object.type == "tag"' <<<"${ref_json}" >/dev/null
+          tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}")"
+          jq -e --arg source "${SOURCE_COMMIT}" \
+            '.object.type == "commit" and .object.sha == $source and .verification.verified == true' \
+            <<<"${tag_json}" >/dev/null
+          stable_dir="${RUNNER_TEMP}/stable-readback"
+          mkdir -p "${stable_dir}"
+          gh release download "${RELEASE_TAG}" --dir "${stable_dir}"
+          while IFS=$'\t' read -r name expected; do
+            actual="sha256:$(sha256sum "${stable_dir}/${name}" | cut -d' ' -f1)"
+            test "${actual}" = "${expected}"
+          done < <(jq -r '.releaseAssets[] | [.name, .digest] | @tsv' candidate/release-candidate-manifest.json)
+          cmp -s release-safety-readback.json "${stable_dir}/release-safety-readback.json"
+          grep -F "${EXPECTED_COSIGN_VERSION}" <<<"$(cosign version 2>&1)"
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/standard-form-runtime-release.yml@refs/tags/${RELEASE_TAG}"
+          cosign verify-blob "${stable_dir}/release-manifest.json" \
+            --bundle "${stable_dir}/release-manifest.sigstore.json" \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+          gh attestation verify "${stable_dir}/release-manifest.json" --repo "${GITHUB_REPOSITORY}"
+
+      - name: Remove only a partial draft after failure
         if: ${{ always() && !success() }}
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.draft.outputs.release_id }}
-          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ -z "$RELEASE_ID" ]]; then
+          if [[ -z "${RELEASE_ID}" ]]; then
             exit 0
           fi
-          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" 2>/dev/null || true)"
-          if [[ -n "$release_json" && "$(jq -r .draft <<<"$release_json")" == "true" && "$(jq -r .tag_name <<<"$release_json")" == "$RELEASE_TAG" ]]; then
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" 2>/dev/null || true)"
+          if [[ -n "${release_json}" && "$(jq -r .draft <<<"${release_json}")" == "true" && "$(jq -r .tag_name <<<"${release_json}")" == "${RELEASE_TAG}" ]]; then
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
           fi
