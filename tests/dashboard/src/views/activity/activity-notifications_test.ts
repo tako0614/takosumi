@@ -116,9 +116,8 @@ describe("History and notifications", () => {
     expect(topBarSource).not.toContain("refreshNotificationFeed()");
     expect(topBarSource).not.toContain("setInterval");
     // NotificationsView: same feed (revalidated in the background), same count.
-    expect(notificationsSource).toContain(
-      "refreshNotificationFeed({ force: true })",
-    );
+    expect(notificationsSource).toContain("refreshNotificationFeed({");
+    expect(notificationsSource).toContain("selectedWorkspaceId:");
     expect(notificationsSource).toContain(
       "attentionCount(feed(), currentWorkspaceId() || undefined)",
     );
@@ -131,6 +130,9 @@ describe("History and notifications", () => {
     expect(notificationsLibSource).toContain(
       "export async function refreshWorkspaceNotificationFeed",
     );
+    expect(notificationsLibSource).toContain("NOTIF_WORKSPACE_LIMIT = 12");
+    expect(notificationsLibSource).toContain("NOTIF_FANOUT_CONCURRENCY = 4");
+    expect(notificationsLibSource).not.toContain("Promise.allSettled(");
     expect(notificationsLibSource).not.toContain("tg_notif_seen_at");
   });
 
@@ -168,7 +170,7 @@ describe("History and notifications", () => {
     // event target) resolves to its name — never an invented value.
     expect(notificationsSource).toContain("function eventCapsuleId(");
     expect(notificationsSource).toContain('metaString(m, "capsuleId")');
-    expect(notificationsSource).toContain("loadCapsuleNameIndex");
+    expect(notificationsSource).toContain("loadNotificationCapsuleNameIndex");
     expect(notificationsSource).toContain("serviceNameFor(entry.event)");
     expect(notificationsSource).toContain('t("notif.event.planReadyNamed"');
     expect(notificationsSource).toContain('t("notif.event.failedNamed"');

@@ -90,4 +90,41 @@ describe("listWorkspacesCached", () => {
       "/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceLimit=50&workspaceId=space_selected",
     ]);
   });
+
+  test("uses the bounded page fallback and pins the selected Workspace", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      return new Response(
+        JSON.stringify({
+          workspaces: [
+            {
+              id: "space_selected",
+              handle: "selected",
+              displayName: "Selected",
+              type: "personal",
+              ownerUserId: "user_1",
+              createdAt: "2026-06-30T00:00:00.000Z",
+              updatedAt: "2026-06-30T00:00:00.000Z",
+            },
+          ],
+          total: 70,
+          returned: 1,
+          limit: 50,
+          truncated: true,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    await listWorkspacesCached({
+      force: true,
+      selectedWorkspaceId: "space_selected",
+    });
+
+    expect(calls).toEqual([
+      "/api/v1/workspaces?limit=50&order=updated_desc&selectedWorkspaceId=space_selected",
+    ]);
+  });
 });

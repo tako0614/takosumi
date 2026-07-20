@@ -3,9 +3,10 @@
  * working in" for the whole dashboard (GitHub org-switcher analogue).
  *
  * Replaces the per-view `lib/workspace-state.ts` signal: every view
- * now reads the same `workspace-state.ts` signal this control writes. Lists Workspaces
- * via `GET /api/v1/workspaces` and defaults to the first Workspace when none is
- * selected. Creation belongs in setup/admin flows, not in the everyday topbar.
+ * now reads the same `workspace-state.ts` signal this control writes. It lists
+ * a bounded recent Workspace projection, always pins the current Workspace,
+ * and defaults to the first Workspace when none is selected. Creation belongs
+ * in setup/admin flows, not in the everyday topbar.
  *
  * The picker is a lightweight popover menu (not a native `<select>`): one tap
  * on the current-workspace chip opens a list with the active one checked.

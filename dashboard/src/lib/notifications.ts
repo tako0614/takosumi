@@ -1,11 +1,11 @@
 /**
  * Shared notification-feed primitives.
  *
- * The friendly notifications page reads the Activity trail for every Workspace
- * the visitor belongs to, merged newest-first. The TopBar bell has a separate,
- * Workspace-scoped snapshot: ordinary navigation must never list every
- * Workspace and fan out one Activity request per Workspace just to render a
- * badge. Both surfaces still use the same failure predicate and count helper.
+ * The friendly notifications page reads the Activity trail for a bounded set
+ * of recently updated active Workspaces, always pinning the current Workspace,
+ * and merges them newest-first. The TopBar bell has a separate,
+ * Workspace-scoped snapshot. Both surfaces use the same failure predicate and
+ * count helper.
  *
  * Honesty contract (inherited from the original feed): only values the backend
  * already recorded as public-safe Activity metadata are surfaced — no invented
@@ -18,10 +18,15 @@ import {
   listWorkspaces,
   type Workspace,
 } from "./control-api.ts";
+import { listCapsulesCached } from "./capsule-list.ts";
 
 /** Max events fetched per Workspace and rendered in the merged feed. */
 export const NOTIF_PER_WORKSPACE_LIMIT = 50;
 export const NOTIF_FEED_LIMIT = 60;
+/** Recent Workspaces included in the cross-Workspace feed (plus current). */
+export const NOTIF_WORKSPACE_LIMIT = 12;
+/** Browser requests allowed in flight for either Activity or Capsule labels. */
+export const NOTIF_FANOUT_CONCURRENCY = 4;
 
 /** An ActivityEvent plus the Workspace it came from (for cross-Workspace labelling). */
 export interface FeedEntry {
@@ -43,14 +48,64 @@ export function isFailureAction(action: string): boolean {
   );
 }
 
-/** Load every Workspace's recent activity and merge it into one newest-first feed. */
+function notificationWorkspaces(
+  workspaces: readonly Workspace[],
+  selectedWorkspaceId?: string,
+): readonly Workspace[] {
+  const sorted = [...workspaces].sort(
+    (a, b) =>
+      b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id),
+  );
+  const recent = sorted.slice(0, NOTIF_WORKSPACE_LIMIT);
+  const selected = selectedWorkspaceId
+    ? sorted.find((workspace) => workspace.id === selectedWorkspaceId)
+    : undefined;
+  return selected && !recent.some((workspace) => workspace.id === selected.id)
+    ? [selected, ...recent]
+    : recent;
+}
+
+async function settledNotificationFanout<T, R>(
+  items: readonly T[],
+  load: (item: T) => Promise<R>,
+): Promise<readonly R[]> {
+  if (items.length === 0) return [];
+  const results: Array<R | undefined> = new Array(items.length);
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const item = items[index];
+      if (item === undefined) continue;
+      try {
+        results[index] = await load(item);
+      } catch {
+        // One inaccessible Workspace must not blank the reachable feed.
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(NOTIF_FANOUT_CONCURRENCY, items.length) },
+      () => worker(),
+    ),
+  );
+  return results.filter((result): result is R => result !== undefined);
+}
+
+/** Load bounded recent Workspace activity and merge it newest-first. */
 export async function loadNotificationFeed(
   workspaces: readonly Workspace[],
+  options: { readonly selectedWorkspaceId?: string } = {},
 ): Promise<readonly FeedEntry[]> {
-  // allSettled, not all: one workspace whose activity fetch rejects must not
-  // blank the entire merged feed — the reachable workspaces still show.
-  const perWorkspace = await Promise.allSettled(
-    workspaces.map(async (workspace): Promise<readonly FeedEntry[]> => {
+  const candidates = notificationWorkspaces(
+    workspaces,
+    options.selectedWorkspaceId,
+  );
+  const perWorkspace = await settledNotificationFanout(
+    candidates,
+    async (workspace): Promise<readonly FeedEntry[]> => {
       const events = await listActivity(
         workspace.id,
         NOTIF_PER_WORKSPACE_LIMIT,
@@ -59,14 +114,41 @@ export async function loadNotificationFeed(
         event,
         workspaceHandle: workspace.handle,
       }));
-    }),
+    },
   );
   return perWorkspace
-    .flatMap((result) => (result.status === "fulfilled" ? result.value : []))
+    .flatMap((entries) => entries)
     .sort(
       (a, b) => Date.parse(b.event.createdAt) - Date.parse(a.event.createdAt),
     )
     .slice(0, NOTIF_FEED_LIMIT);
+}
+
+/** workspaceId -> (capsuleId -> name), resolved with the same fan-out cap. */
+export type NotificationCapsuleNameIndex = ReadonlyMap<
+  string,
+  ReadonlyMap<string, string>
+>;
+
+export async function loadNotificationCapsuleNameIndex(
+  entries: readonly FeedEntry[],
+): Promise<NotificationCapsuleNameIndex> {
+  const workspaceIds = [
+    ...new Set(entries.map((entry) => entry.event.workspaceId)),
+  ];
+  const rows = await settledNotificationFanout(
+    workspaceIds,
+    async (id) =>
+      [id, await listCapsulesCached(id, { includeDestroyed: true })] as const,
+  );
+  const index = new Map<string, ReadonlyMap<string, string>>();
+  for (const [id, capsules] of rows) {
+    index.set(
+      id,
+      new Map(capsules.map((capsule) => [capsule.id, capsule.name])),
+    );
+  }
+  return index;
 }
 
 // --- shared feed snapshot (TopBar badge + /notifications banner) -------------
@@ -79,7 +161,9 @@ const [sharedFeed, setSharedFeed] = createSignal<
   readonly FeedEntry[] | undefined
 >(undefined);
 let sharedFeedFetchedAt = 0;
-let sharedFeedInflight: Promise<readonly FeedEntry[]> | undefined;
+let sharedFeedScope = "";
+let requestedSharedFeedScope = "";
+const sharedFeedInflight = new Map<string, Promise<readonly FeedEntry[]>>();
 
 interface WorkspaceFeedSnapshot {
   readonly workspaceId: string;
@@ -130,27 +214,44 @@ export function attentionCount(
  * already absorbed by {@link loadNotificationFeed}).
  */
 export async function refreshNotificationFeed(
-  options: { readonly force?: boolean } = {},
+  options: {
+    readonly force?: boolean;
+    readonly selectedWorkspaceId?: string;
+  } = {},
 ): Promise<readonly FeedEntry[]> {
+  const scope = options.selectedWorkspaceId?.trim() ?? "";
   const current = sharedFeed();
   if (
     !options.force &&
     current !== undefined &&
+    sharedFeedScope === scope &&
     Date.now() - sharedFeedFetchedAt < NOTIF_FEED_TTL_MS
   ) {
     return current;
   }
-  if (sharedFeedInflight) return sharedFeedInflight;
+  requestedSharedFeedScope = scope;
+  const currentInflight = sharedFeedInflight.get(scope);
+  if (currentInflight) return currentInflight;
   const request = (async () => {
-    const workspaces = await listWorkspaces();
-    const entries = await loadNotificationFeed(workspaces);
-    sharedFeedFetchedAt = Date.now();
-    setSharedFeed(entries);
+    const workspaces = await listWorkspaces({
+      limit: NOTIF_WORKSPACE_LIMIT,
+      selectedWorkspaceId: scope || undefined,
+    });
+    const entries = await loadNotificationFeed(workspaces, {
+      selectedWorkspaceId: scope || undefined,
+    });
+    if (requestedSharedFeedScope === scope) {
+      sharedFeedFetchedAt = Date.now();
+      sharedFeedScope = scope;
+      setSharedFeed(entries);
+    }
     return entries;
   })().finally(() => {
-    if (sharedFeedInflight === request) sharedFeedInflight = undefined;
+    if (sharedFeedInflight.get(scope) === request) {
+      sharedFeedInflight.delete(scope);
+    }
   });
-  sharedFeedInflight = request;
+  sharedFeedInflight.set(scope, request);
   return request;
 }
 

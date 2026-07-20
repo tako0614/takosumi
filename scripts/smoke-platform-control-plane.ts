@@ -1683,21 +1683,7 @@ async function resolveWorkspaceId(
     }
     return normalized;
   }
-  const response = await requestJson<{
-    readonly workspaces?: readonly {
-      readonly id: string;
-      readonly handle: string;
-      readonly archivedAt?: string;
-    }[];
-  }>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    path: `${API_PREFIX}/workspaces?includeArchived=true`,
-  });
-  const listedWorkspaces = response.workspaces ?? [];
-  const match = listedWorkspaces.find(
-    (workspace) => workspace.handle === normalized,
-  );
+  const match = await findWorkspaceByHandle(options, normalized);
   if (match?.id) {
     if (typeof match.archivedAt === "string" && match.archivedAt.length > 0) {
       await requestJson({
@@ -1737,6 +1723,43 @@ async function resolveWorkspaceId(
       `workspace @${normalized} was not found; pass --ensure-workspace or create the scratch Workspace first`,
     );
   }
+}
+
+async function findWorkspaceByHandle(
+  options: PlatformControlPlaneSmokeOptions,
+  handle: string,
+): Promise<
+  | {
+      readonly id: string;
+      readonly handle: string;
+      readonly archivedAt?: string;
+    }
+  | undefined
+> {
+  let cursor: string | undefined;
+  for (let page = 0; page < 1_000; page += 1) {
+    const response = await requestJson<{
+      readonly workspaces?: readonly {
+        readonly id: string;
+        readonly handle: string;
+        readonly archivedAt?: string;
+      }[];
+      readonly nextCursor?: string;
+    }>({
+      baseUrl: options.url,
+      token: options.accountSessionToken,
+      path:
+        `${API_PREFIX}/workspaces?includeArchived=true&limit=100&order=updated_desc` +
+        (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""),
+    });
+    const match = (response.workspaces ?? []).find(
+      (workspace) => workspace.handle === handle,
+    );
+    if (match) return match;
+    if (!response.nextCursor) return undefined;
+    cursor = response.nextCursor;
+  }
+  throw new Error("Workspace pagination exceeded the smoke safety ceiling");
 }
 
 async function createWorkspaceCloudflareConnection(
@@ -5008,7 +5031,19 @@ async function runSelfTest(): Promise<void> {
     );
     if (
       url ===
-      "https://app-staging.takosumi.com/api/v1/workspaces?includeArchived=true"
+      "https://app-staging.takosumi.com/api/v1/workspaces?includeArchived=true&limit=100&order=updated_desc"
+    ) {
+      return new Response(
+        JSON.stringify({
+          workspaces: [{ id: "ws_other", handle: "other-workspace" }],
+          nextCursor: "cursor_next",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (
+      url ===
+      "https://app-staging.takosumi.com/api/v1/workspaces?includeArchived=true&limit=100&order=updated_desc&cursor=cursor_next"
     ) {
       return new Response(
         JSON.stringify({
@@ -5043,7 +5078,7 @@ async function runSelfTest(): Promise<void> {
     const url = String(input);
     if (
       url ===
-      "https://app-staging.takosumi.com/api/v1/workspaces?includeArchived=true"
+      "https://app-staging.takosumi.com/api/v1/workspaces?includeArchived=true&limit=100&order=updated_desc"
     ) {
       return new Response(JSON.stringify({ workspaces: [] }), {
         status: 200,

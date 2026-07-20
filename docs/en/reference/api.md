@@ -168,6 +168,27 @@ GET    /v1/capsules/{capsuleId}/outputs
 GET    /v1/audit-events
 ```
 
+Interactive clients such as the Dashboard read Workspaces through bounded
+pages. `limit` is capped at 100, `cursor` is the opaque token returned by the
+previous page, and `order` is either `created_asc` or `updated_desc`. Passing
+the current Workspace as `selectedWorkspaceId` pins that authorized Workspace
+to the first response even when it falls outside the ordinary page;
+`pinnedWorkspaceId` identifies the extra row. The ordinary page still contains
+at most `limit` rows and the full response at most `limit + 1`.
+
+```http
+GET /api/v1/workspaces?limit=50&order=updated_desc&selectedWorkspaceId=ws_current
+GET /api/v1/workspaces?limit=50&order=updated_desc&cursor=<opaque>
+```
+
+The response contains `workspaces`, `returned`, `limit`, `truncated`, and
+optional `nextCursor` / `pinnedWorkspaceId`. Only management operations that
+need an exact count request `includeTotal=true`; ordinary interactive reads
+omit it so D1/Postgres complete with a `limit + 1` probe and no extra
+`count(*)`. The queryless `GET /api/v1/workspaces` is also a bounded page in
+`created_asc` order with a maximum of 100 rows. Clients that genuinely need all
+authorized Workspaces must follow `nextCursor`.
+
 A Run is one ledger entry with a `plan`, `apply`, `destroy`, `refresh`, or
 `output` operation. Plan / Apply / Destroy are not separate ledgers.
 

@@ -1482,7 +1482,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       limit,
       (workspace) => accountWorkspaceKeyset(workspace, order),
     );
-    return Promise.resolve({ ...page, total: all.length });
+    return Promise.resolve({
+      ...page,
+      ...(params.includeTotal === false ? {} : { total: all.length }),
+    });
   }
 
   putProject(project: Project): Promise<Project> {

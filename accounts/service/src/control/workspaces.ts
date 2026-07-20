@@ -36,7 +36,12 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
-import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
+import type {
+  AccountWorkspaceListOrder,
+  PublicWorkspaceListPage,
+  Workspace,
+  WorkspaceType,
+} from "takosumi-contract/workspaces";
 import type {
   InstallConfig,
   InstallConfigVariableDefault,
@@ -155,7 +160,11 @@ import {
   defaultCapsuleOutputAllowlist,
 } from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
-import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
+import {
+  clampPageLimit,
+  decodeCursor,
+  pageSorted,
+} from "takosumi-contract/pagination";
 import { maybeEnsurePersonalWorkspaceForSession } from "../control-personal-workspace.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { ensureTakosumiAccountsOidcForCapsule } from "./capsule-oidc.ts";
@@ -401,39 +410,67 @@ async function listWorkspaces(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  // Preserve the public all-matching response and createdAt/id order while the
-  // durable store performs membership/status/archive filtering in bounded
-  // keyset pages. The route never materializes archived rows unless explicitly
-  // requested with includeArchived=true.
-  const includeArchived = parseBooleanQuery(url, "includeArchived") === true;
-  const visible = await listWorkspacesForSession(
-    operations,
-    sessionSubject,
-    includeArchived,
-  );
-  return json({ workspaces: visible });
+  return await listWorkspacePage(operations, sessionSubject, url);
 }
 
-async function listWorkspacesForSession(
+async function listWorkspacePage(
   operations: ControlPlaneOperations,
   sessionSubject: string,
-  includeArchived: boolean,
-): Promise<readonly Workspace[]> {
-  const workspaces: Workspace[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await operations.workspaces.listWorkspacesForAccountPage(
-      sessionSubject,
-      {
-        includeArchived,
-        order: "created_asc",
-        ...(cursor ? { cursor } : {}),
-      },
+  url: URL,
+): Promise<Response> {
+  const parsedPage = parseControlPageParams(url);
+  if (!parsedPage.ok) return parsedPage.response;
+  const rawOrder = url.searchParams.get("order");
+  if (
+    rawOrder !== null &&
+    rawOrder !== "" &&
+    rawOrder !== "created_asc" &&
+    rawOrder !== "updated_desc"
+  ) {
+    return errorJson(
+      "invalid_request",
+      "order must be created_asc or updated_desc",
+      400,
     );
-    workspaces.push(...page.items);
-    cursor = page.nextCursor;
-  } while (cursor !== undefined);
-  return workspaces;
+  }
+  const order: AccountWorkspaceListOrder =
+    rawOrder === "updated_desc" ? "updated_desc" : "created_asc";
+  const includeArchived = parseBooleanQuery(url, "includeArchived") === true;
+  const selectedWorkspaceId = stringValue(
+    url.searchParams.get("selectedWorkspaceId") ?? undefined,
+  );
+  const includeTotal = parseBooleanQuery(url, "includeTotal") === true;
+  const limit = clampPageLimit(parsedPage.params.limit);
+  const isFirstPage = parsedPage.params.cursor === undefined;
+  const [page, selected] = await Promise.all([
+    operations.workspaces.listWorkspacesForAccountPage(sessionSubject, {
+      ...parsedPage.params,
+      includeArchived,
+      includeTotal,
+      order,
+      limit,
+    }),
+    selectedWorkspaceId && isFirstPage
+      ? operations.workspaces.getWorkspaceForAccount(
+          sessionSubject,
+          selectedWorkspaceId,
+        )
+      : Promise.resolve(undefined),
+  ]);
+  const pinSelected =
+    selected !== undefined &&
+    (includeArchived || !isArchivedWorkspace(selected)) &&
+    !page.items.some((workspace) => workspace.id === selected.id);
+  const workspaces = pinSelected ? [selected, ...page.items] : page.items;
+  return json({
+    workspaces,
+    ...(page.total === undefined ? {} : { total: page.total }),
+    returned: workspaces.length,
+    limit,
+    truncated: page.nextCursor !== undefined,
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    ...(pinSelected ? { pinnedWorkspaceId: selected.id } : {}),
+  } satisfies PublicWorkspaceListPage);
 }
 
 function isArchivedWorkspace(workspace: Workspace): boolean {
@@ -534,11 +571,12 @@ async function updateWorkspace(
       operations.workspaces.getWorkspace(workspaceId),
       operations.workspaces.listWorkspacesForAccountPage(sessionSubject, {
         includeArchived: false,
+        includeTotal: true,
         order: "created_asc",
         limit: 1,
       }),
     ]);
-    if (!isArchivedWorkspace(target) && activePage.total <= 1) {
+    if (!isArchivedWorkspace(target) && (activePage.total ?? 0) <= 1) {
       return errorJson(
         "failed_precondition",
         "cannot archive the last active workspace",

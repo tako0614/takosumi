@@ -32,8 +32,10 @@ export function primeWorkspaceListCache(
   cachedAt = Date.now();
 }
 
-function fetchAndCacheWorkspaces(): Promise<readonly Workspace[]> {
-  return listWorkspaces().then((workspaces) => {
+function fetchAndCacheWorkspaces(
+  selectedWorkspaceId?: string,
+): Promise<readonly Workspace[]> {
+  return listWorkspaces({ selectedWorkspaceId }).then((workspaces) => {
     primeWorkspaceListCache(workspaces);
     return workspaces;
   });
@@ -63,16 +65,21 @@ export async function listWorkspacesCached(
 
   if (!options.force) {
     inflight = fetchBootstrapWorkspaces(options.selectedWorkspaceId)
-      .then((workspaces) => workspaces ?? fetchAndCacheWorkspaces())
-      .catch(() => fetchAndCacheWorkspaces())
+      .then(
+        (workspaces) =>
+          workspaces ?? fetchAndCacheWorkspaces(options.selectedWorkspaceId),
+      )
+      .catch(() => fetchAndCacheWorkspaces(options.selectedWorkspaceId))
       .finally(() => {
         inflight = undefined;
       });
     return inflight;
   }
 
-  inflight = fetchAndCacheWorkspaces().finally(() => {
-    inflight = undefined;
-  });
+  inflight = fetchAndCacheWorkspaces(options.selectedWorkspaceId).finally(
+    () => {
+      inflight = undefined;
+    },
+  );
   return inflight;
 }

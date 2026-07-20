@@ -19,9 +19,11 @@ import {
   type ControlApiError,
   approveOutputShare,
   createOutputShare,
+  getWorkspace,
   listOutputShares,
-  listWorkspaces,
+  listWorkspacePage,
   type OutputShare,
+  type Workspace,
   revokeOutputShare,
 } from "../../../lib/control-api.ts";
 import { createAction } from "../../account/lib/action.tsx";
@@ -72,10 +74,20 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
   const { confirm } = useConfirmDialog();
   const workspaceId = () => props.workspaceId;
   const [shares, { refetch }] = createResource(workspaceId, listOutputShares);
-  const [workspaces] = createResource(listWorkspaces);
+  const [workspacePage, { mutate: mutateWorkspacePage }] = createResource(() =>
+    listWorkspacePage({
+      limit: 50,
+      order: "updated_desc",
+      selectedWorkspaceId: props.workspaceId,
+    }),
+  );
   const [capsules] = createResource(workspaceId, (id) =>
     listCapsulesCached(id, { includeDestroyed: false }),
   );
+  const [loadingWorkspaceMore, setLoadingWorkspaceMore] = createSignal(false);
+  const [workspaceLoadError, setWorkspaceLoadError] = createSignal<
+    string | null
+  >(null);
 
   const [toWorkspaceId, setToWorkspaceId] = createSignal("");
   const [producerCapsuleId, setProducerCapsuleId] = createSignal("");
@@ -85,13 +97,27 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
   const [sensitiveReason, setSensitiveReason] = createSignal("");
   const [formError, setFormError] = createSignal<string | null>(null);
 
+  const shareWorkspaceIds = createMemo(() => [
+    ...new Set(
+      (shares.error ? [] : (shares.latest ?? [])).flatMap((share) => [
+        share.fromWorkspaceId,
+        share.toWorkspaceId,
+      ]),
+    ),
+  ]);
+  const [shareWorkspaceLabels] = createResource(
+    shareWorkspaceIds,
+    loadWorkspaceLabels,
+  );
+
   // Errored-resource accessors THROW when read, so the supplemental
   // workspaces / capsules resources (which have no error UI of their own) must
   // be guarded with `.error` before `workspaces()` / `capsules()` is called.
   const otherWorkspaces = createMemo(() =>
-    (workspaces.error ? [] : (workspaces() ?? [])).filter(
-      (s) => s.id !== workspaceId(),
-    ),
+    (workspacePage.error
+      ? []
+      : (workspacePage.latest?.workspaces ?? [])
+    ).filter((s) => s.id !== workspaceId()),
   );
   const producerCapsules = createMemo(() =>
     capsules.error ? [] : (capsules() ?? []),
@@ -99,8 +125,15 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
 
   const workspaceName = createMemo(() => {
     const map = new Map<string, string>();
-    for (const s of workspaces.error ? [] : (workspaces() ?? []))
+    for (const s of workspacePage.error
+      ? []
+      : (workspacePage.latest?.workspaces ?? []))
       map.set(s.id, `@${s.handle}`);
+    for (const [id, label] of shareWorkspaceLabels.error
+      ? []
+      : (shareWorkspaceLabels.latest ?? [])) {
+      map.set(id, label);
+    }
     return map;
   });
 
@@ -212,6 +245,36 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
   const sensitiveSelected = createMemo(() =>
     outputs().some((output) => output.sensitive),
   );
+
+  const loadMoreWorkspaces = async () => {
+    const current = workspacePage.latest;
+    if (!current?.nextCursor || loadingWorkspaceMore()) return;
+    setLoadingWorkspaceMore(true);
+    setWorkspaceLoadError(null);
+    try {
+      const next = await listWorkspacePage({
+        limit: 50,
+        order: "updated_desc",
+        cursor: current.nextCursor,
+      });
+      const byId = new Map(
+        [...current.workspaces, ...next.workspaces].map((item) => [
+          item.id,
+          item,
+        ]),
+      );
+      const workspaces = [...byId.values()];
+      mutateWorkspacePage({
+        ...next,
+        workspaces,
+        returned: workspaces.length,
+      });
+    } catch {
+      setWorkspaceLoadError(t("shares.create.workspacesError"));
+    } finally {
+      setLoadingWorkspaceMore(false);
+    }
+  };
 
   const columns: readonly Column<OutputShare>[] = [
     {
@@ -341,19 +404,38 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                       )}
                     </For>
                   </Select>
-                  <Show when={workspaces.error}>
+                  <Show when={workspacePage.error}>
                     <p class="wb-error" role="alert">
                       {t("shares.create.workspacesError")}
                     </p>
                   </Show>
                   <Show
                     when={
-                      !workspaces.error &&
-                      !workspaces.loading &&
+                      !workspacePage.error &&
+                      !workspacePage.loading &&
                       otherWorkspaces().length === 0
                     }
                   >
                     <p class="muted">{t("shares.create.workspacesEmpty")}</p>
+                  </Show>
+                  <Show when={workspacePage.latest?.nextCursor}>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      type="button"
+                      busy={loadingWorkspaceMore()}
+                      disabled={loadingWorkspaceMore()}
+                      onClick={() => void loadMoreWorkspaces()}
+                    >
+                      {t("common.loadMore")}
+                    </Button>
+                  </Show>
+                  <Show when={workspaceLoadError()}>
+                    {(message) => (
+                      <p class="wb-error" role="alert">
+                        {message()}
+                      </p>
+                    )}
                   </Show>
                 </FormField>
                 <FormField label={t("shares.create.producer")}>
@@ -586,4 +668,34 @@ function normalizeOutputDrafts(rows: readonly OutputDraft[]): readonly {
       ...(row.alias ? { alias: row.alias } : {}),
       ...(row.sensitive ? { sensitive: true } : {}),
     }));
+}
+
+async function loadWorkspaceLabels(
+  ids: readonly string[],
+): Promise<readonly (readonly [string, string])[]> {
+  const results: Array<readonly [string, string] | undefined> = new Array(
+    ids.length,
+  );
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < ids.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const id = ids[index];
+      if (!id) continue;
+      try {
+        const workspace: Workspace = await getWorkspace(id);
+        results[index] = [id, `@${workspace.handle}`];
+      } catch {
+        // A share may reference a Workspace no longer visible to this account;
+        // the row safely falls back to its opaque id.
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(4, ids.length) }, () => worker()),
+  );
+  return results.filter(
+    (row): row is readonly [string, string] => row !== undefined,
+  );
 }

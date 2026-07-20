@@ -221,7 +221,13 @@ test("Workspace creation persists its namespace owner in the canonical roster", 
 });
 
 test("canonical Workspace membership controls mutation and account visibility", async () => {
-  const { service } = build();
+  const { service, store } = build();
+  const workspacePageCalls: unknown[] = [];
+  const listWorkspacePage = store.listWorkspacesForAccountPage.bind(store);
+  store.listWorkspacesForAccountPage = async (accountId, params) => {
+    workspacePageCalls.push({ accountId, params });
+    return await listWorkspacePage(accountId, params);
+  };
   const workspace = await service.createWorkspace({
     handle: "team-ledger",
     displayName: "Team Ledger",
@@ -241,6 +247,16 @@ test("canonical Workspace membership controls mutation and account visibility", 
       row.id
     ),
   ).toEqual([workspace.id]);
+  expect(workspacePageCalls).toEqual([
+    {
+      accountId: "user_member",
+      params: {
+        includeArchived: true,
+        includeTotal: false,
+        order: "created_asc",
+      },
+    },
+  ]);
   await expect(
     service.upsertWorkspaceMember({
       workspaceId: workspace.id,
