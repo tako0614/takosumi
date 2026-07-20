@@ -13,7 +13,10 @@ import {
   LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
   type ResourceShapeSchemaRegistry,
 } from "../../core/domains/resource-shape/mod.ts";
-import type { ResourceInterfaceWorkspaceResolver } from "../../core/domains/interfaces/mod.ts";
+import type {
+  InterfaceOAuth2ResourceAuthorizer,
+  ResourceInterfaceWorkspaceResolver,
+} from "../../core/domains/interfaces/mod.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
 import { createCloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
 
@@ -41,12 +44,15 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
   readonly managedVanityHostnameSlotsPerOwner?: number;
   readonly resourceShapeSchemaRegistry: ResourceShapeSchemaRegistry;
   readonly resolveResourceInterfaceWorkspace: ResourceInterfaceWorkspaceResolver;
+  readonly interfaceOAuth2ResourceAuthorizer?: InterfaceOAuth2ResourceAuthorizer;
   readonly mountInternalLedgerRoutes?: boolean;
 } {
   const hostComposition = runnerHostCompositionFromEnv(env);
   const managedVanityHostnameSlotsPerOwner = nonNegativeInteger(
     env.TAKOSUMI_MANAGED_VANITY_HOST_SLOTS_PER_OWNER,
   );
+  const interfaceOAuth2ResourceAuthorizer =
+    interfaceOAuth2ResourceAuthorizerFromEnv(env);
   return {
     runnerProfiles: resolveEnabledRunnerProfilesFromEnv(env, hostComposition),
     // The shipped Takos/Takosumi host explicitly installs the frozen v1alpha1
@@ -55,6 +61,9 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
       LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
     resolveResourceInterfaceWorkspace:
       platformResourceInterfaceWorkspaceResolver(env),
+    ...(interfaceOAuth2ResourceAuthorizer
+      ? { interfaceOAuth2ResourceAuthorizer }
+      : {}),
     ...(env.LOCAL_SUBSTRATE_TEST_BED === "1" ||
     env.TAKOSUMI_EXPOSE_INTERNAL_EDGE === "1"
       ? { mountInternalLedgerRoutes: true }
@@ -72,6 +81,19 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
       ? { managedVanityHostnameSlotsPerOwner }
       : {}),
   };
+}
+
+function interfaceOAuth2ResourceAuthorizerFromEnv(
+  env: CloudflareWorkerEnv,
+): InterfaceOAuth2ResourceAuthorizer | undefined {
+  const value = env.TAKOSUMI_INTERFACE_OAUTH2_RESOURCE_AUTHORIZER;
+  if (value === undefined) return undefined;
+  if (typeof value !== "function") {
+    throw new TypeError(
+      "TAKOSUMI_INTERFACE_OAUTH2_RESOURCE_AUTHORIZER must be a host-code function",
+    );
+  }
+  return value;
 }
 
 /**

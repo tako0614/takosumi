@@ -2362,6 +2362,29 @@ test("canonical Ready Resource inventory is bounded, global, and lock-coherent",
   } as never;
   const inventory = createPlatformCanonicalReadyResourceInventory(env);
 
+  await expect(
+    inventory.get({
+      space: "workspace_inventory_a",
+      kind: "EdgeWorker",
+      name: "api",
+    }),
+  ).resolves.toMatchObject({
+    resourceId: "tkrn:workspace_inventory_a:EdgeWorker:api",
+    resourceGeneration: 2,
+    resource: {
+      kind: "EdgeWorker",
+      metadata: { space: "workspace_inventory_a", name: "api" },
+      status: { phase: "Ready", observedGeneration: 2 },
+    },
+  });
+  await expect(
+    inventory.get({
+      space: "workspace_inventory_a",
+      kind: "EdgeWorker",
+      name: "missing",
+    }),
+  ).resolves.toBeUndefined();
+
   const first = await inventory.list({ kind: "EdgeWorker", limit: 1 });
   expect(first.items).toHaveLength(1);
   expect(first.nextCursor).toBeString();
@@ -2404,7 +2427,7 @@ test("canonical Ready Resource inventory is bounded, global, and lock-coherent",
   );
 });
 
-test("canonical Ready inventory fails closed when ResolutionLock changes during projection", async () => {
+test("canonical Ready exact and paged inventory fail closed when ResolutionLock changes during projection", async () => {
   const stores = createInMemoryResourceShapeStores();
   const record: ResourceShapeRecord = {
     id: "tkrn:workspace_lock_race:EdgeWorker:api",
@@ -2464,6 +2487,17 @@ test("canonical Ready inventory fails closed when ResolutionLock changes during 
     resourceShapeStores: racingStores,
     resourceShapeAdapter: new StubResourceShapeAdapter(),
   });
+  await expect(
+    operations.resourceCompatibility?.resolveReadyResource({
+      space: record.spaceId,
+      kind: record.kind,
+      name: record.name,
+    }),
+  ).rejects.toThrow(
+    `canonical Ready Resource inventory conflict for ${record.id}`,
+  );
+  expect(reads).toBe(3);
+  reads = 0;
   await expect(
     operations.resourceCompatibility?.listReadyResourcesPage({
       kind: "EdgeWorker",

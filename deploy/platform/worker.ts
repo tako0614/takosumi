@@ -2305,6 +2305,16 @@ export interface PlatformCanonicalReadyResourceInventoryPage {
  * enumeration, and every item is a coherent fully observed Ready Resource.
  */
 export interface PlatformCanonicalReadyResourceInventory {
+  /**
+   * Exact coherent Ready lookup for latency-sensitive host data planes. This
+   * is an in-process composition port and is never exposed as global public
+   * inventory.
+   */
+  get(input: {
+    readonly space: string;
+    readonly kind: ResourceShapeKind;
+    readonly name: string;
+  }): Promise<PlatformCanonicalReadyResourceInventoryItem | undefined>;
   list(input: {
     readonly kind: ResourceShapeKind;
     readonly cursor?: string;
@@ -2830,6 +2840,28 @@ export function createPlatformCanonicalReadyResourceInventory(
   env: CloudflareWorkerEnv,
 ): PlatformCanonicalReadyResourceInventory {
   return Object.freeze({
+    get: async (
+      input: Parameters<PlatformCanonicalReadyResourceInventory["get"]>[0],
+    ): Promise<PlatformCanonicalReadyResourceInventoryItem | undefined> => {
+      const space = safePlatformExtensionContextId(input.space);
+      const name = safePlatformCompatibilityResourceName(input.name);
+      if (!space || !name || !isResourceShapeKind(input.kind)) {
+        throw new TypeError("canonical Resource lookup input is invalid");
+      }
+      const operations = await takosumiOperationsFor(env);
+      const evidence =
+        await operations.resourceCompatibility?.resolveReadyResource({
+          space,
+          kind: input.kind,
+          name,
+        });
+      return evidence
+        ? structuredClone({
+            resourceId: `tkrn:${space}:${input.kind}:${name}`,
+            ...evidence,
+          })
+        : undefined;
+    },
     list: async (
       input: Parameters<PlatformCanonicalReadyResourceInventory["list"]>[0],
     ): Promise<PlatformCanonicalReadyResourceInventoryPage> => {
