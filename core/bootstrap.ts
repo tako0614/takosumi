@@ -428,6 +428,30 @@ function assertDurableResourceShapeStoresOrWarn(input: {
   });
 }
 
+function assertDurableOfferingCatalogStoreOrWarn(input: {
+  readonly environment?: string;
+  readonly exposed: boolean;
+  readonly durable: boolean;
+}): void {
+  if (!input.exposed || input.durable) return;
+  const strict =
+    input.environment === "production" || input.environment === "staging";
+  if (strict) {
+    throw new Error(
+      `${input.environment} runtime exposes the Offering catalog API but no ` +
+        `durable Offering catalog store is configured; published exact ` +
+        `catalog authority would be lost on restart. Inject a durable ` +
+        `offeringCatalogStore (or a sqlClient).`,
+    );
+  }
+  log.warn("service.offeringCatalog.in_memory_store", {
+    environment: input.environment ?? "unknown",
+    hint:
+      "Published Offering catalogs will not persist across restart. Inject " +
+      "a durable offeringCatalogStore (or a sqlClient) for production/staging.",
+  });
+}
+
 export interface ResourceShapeAdapterFactoryDeps {
   readonly controller: OpenTofuController;
   readonly capsules: CapsulesService;
@@ -2076,6 +2100,11 @@ export async function createTakosumiService(
     environment: runtimeConfig.environment,
     exposed: role === "takosumi-api",
     durable: interfaceStores.persistence === "durable",
+  });
+  assertDurableOfferingCatalogStoreOrWarn({
+    environment: runtimeConfig.environment,
+    exposed: role === "takosumi-api" && Boolean(deployControlToken),
+    durable: Boolean(options.offeringCatalogStore ?? options.sqlClient),
   });
   const connectionOAuthHelpers = options.connectionOAuthHelpers;
   const installedResourceShapeKinds =
