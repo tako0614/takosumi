@@ -485,6 +485,7 @@ export interface GraphEdge {
 export type RunType =
   | "source_sync"
   | "compatibility_check"
+  | "artifact"
   | "plan"
   | "apply"
   | "destroy_plan"

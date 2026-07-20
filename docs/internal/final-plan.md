@@ -409,6 +409,23 @@ never reconstructs them from Workspace, Capsule, Resource, generation, or Run
 ids. The runner/storage adapter owns physical placement and durability and must
 persist at the supplied ref. Physical key layouts belong only to that adapter.
 
+Resource-owned immutable bytes have one explicit ingress when a stable HTTPS
+release URL is unavailable:
+
+```text
+POST /v1/resources/{kind}/{name}/artifacts?space={workspaceId}
+```
+
+The authenticated caller supplies a purpose token, an exact SHA-256 digest,
+content type, idempotency key, and the raw bounded body. Core verifies the
+Workspace/Space boundary and digest, creates one canonical `artifact` Run,
+records an `ArtifactRecord` plus redacted Activity evidence, and returns the
+host writer's opaque `ref`. Staging never creates or mutates a Resource,
+ResolutionLock, NativeResource, Output, or Interface. A later explicit
+preview/apply must place the returned `ref` and digest in typed desired state.
+The injected writer owns physical storage only; it cannot authorize the caller,
+select a Target, apply a Resource, or place credentials in the returned pointer.
+
 Provider execution has one invariant:
 
 ```text

@@ -1089,6 +1089,21 @@ async function platformResourceShapeAuthorizedRequest(
     }
   }
 
+  // Artifact staging is the one Resource route whose request body is opaque
+  // bytes rather than JSON. Authenticate and bind it to the verified Workspace
+  // before forwarding the untouched stream; the Core/host writer owns the
+  // exact per-kind size and digest fences.
+  if (isPlatformResourceArtifactRequest(request, url)) {
+    return await platformResourceArtifactAuthorizedRequest(
+      request,
+      workspaceVerificationRequest,
+      env,
+      session,
+      trustedManagedBy,
+      workspaceAccess,
+    );
+  }
+
   const materialized = await materializeRequestBody(request);
   if (!materialized.ok) return materialized;
   const body = materialized.bodyText
@@ -1170,6 +1185,110 @@ async function platformResourceShapeAuthorizedRequest(
         if (header !== "authorization") headers.delete(header);
       }
     }),
+  };
+}
+
+function isPlatformResourceArtifactRequest(
+  request: Request,
+  url: URL = new URL(request.url),
+): boolean {
+  return (
+    request.method === "POST" &&
+    /^\/v1\/resources\/[^/]+\/[^/]+\/artifacts$/u.test(url.pathname)
+  );
+}
+
+async function platformResourceArtifactAuthorizedRequest(
+  request: Request,
+  workspaceVerificationRequest: Request,
+  env: CloudflareWorkerEnv,
+  session: PlatformExtensionSessionContext,
+  trustedManagedBy: string | undefined,
+  workspaceAccess: PlatformExtensionWorkspaceAccess,
+): Promise<
+  | { readonly ok: true; readonly request: Request }
+  | { readonly ok: false; readonly response: Response }
+> {
+  const url = new URL(request.url);
+  const requestedSpaces = platformResourceShapeRequestedSpaces(url, {})
+    .map((space) => safePlatformExtensionContextId(space))
+    .filter((space): space is string => space !== undefined);
+  const requestedSpace =
+    requestedSpaces.length === 1 ? requestedSpaces[0] : undefined;
+  if (!requestedSpace) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "invalid_request",
+          error_description: "space query is required",
+        },
+        { status: 400 },
+      ),
+    };
+  }
+  const requestedWorkspaceId = platformResourceShapeRequestWorkspaceId(
+    request,
+    url,
+    {},
+  );
+  const workspaceId =
+    requestedWorkspaceId ?? safePlatformExtensionContextId(session.workspaceId);
+  if (!workspaceId) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "invalid_request",
+          error_description: "workspaceId is required",
+        },
+        { status: 400 },
+      ),
+    };
+  }
+  const verified = await platformExtensionVerifiedWorkspaceSession(
+    workspaceVerificationRequest,
+    env,
+    session,
+    workspaceId,
+    workspaceAccess,
+  );
+  if (!verified.ok) return verified;
+  if (requestedSpace !== workspaceId) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "forbidden",
+          error_description: "Resource Space must match the verified Workspace",
+        },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const headers = new Headers(request.headers);
+  headers.delete(TAKOSUMI_INTERNAL_ACTOR_HEADER);
+  headers.set(
+    "authorization",
+    `Bearer ${String(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)}`,
+  );
+  headers.set(
+    TAKOSUMI_INTERNAL_ACTOR_HEADER,
+    encodeActorContext(
+      platformResourceShapeActorContext(verified.session, workspaceId),
+    ),
+  );
+  headers.set(
+    TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
+    trustedManagedBy ?? PUBLIC_RESOURCE_API_MANAGED_BY,
+  );
+  for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
+    if (header !== "authorization") headers.delete(header);
+  }
+  return {
+    ok: true,
+    request: new Request(request, { headers }),
   };
 }
 

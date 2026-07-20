@@ -11,5 +11,6 @@ export * from "./plugin_adapter.ts";
 export * from "./resolver.ts";
 export * from "./planner.ts";
 export * from "./service.ts";
+export * from "./artifacts.ts";
 export * from "./legacy_state_adoption.ts";
 export * from "./form_pin_operations.ts";

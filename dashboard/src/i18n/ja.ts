@@ -221,6 +221,7 @@ export const ja = {
   "op.drift_check": "ズレの確認",
   "op.source_sync": "内容の取得",
   "op.compatibility_check": "追加前の確認",
+  "op.artifact": "成果物の準備",
   "op.backup": "バックアップ",
   "op.restore": "復元",
   // Internal plan-operation nouns recorded on Activity metadata

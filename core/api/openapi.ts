@@ -343,7 +343,9 @@ function operation(input: {
             "403": errorResponse(),
             "404": errorResponse(),
             "409": errorResponse(),
+            "413": errorResponse(),
             "502": errorResponse(),
+            "503": errorResponse(),
           }
         : {}),
       ...(input.tag === "form-activations"
@@ -1294,6 +1296,65 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
       additionalProperties: false,
     },
     ResourceShapeResponse: resourceShape,
+    ResourceArtifactPointer: {
+      type: "object",
+      required: ["purpose", "ref", "digest", "sizeBytes"],
+      properties: {
+        purpose: {
+          type: "string",
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+        },
+        ref: { type: "string", minLength: 1, maxLength: 1024 },
+        digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        sizeBytes: { type: "integer", minimum: 0 },
+      },
+      additionalProperties: false,
+    },
+    ResourceArtifactStageResponse: {
+      type: "object",
+      required: ["artifact", "run", "replayed"],
+      properties: {
+        artifact: ref("ResourceArtifactPointer"),
+        run: ref("ResourceArtifactRun"),
+        replayed: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    ResourceArtifactRun: {
+      type: "object",
+      required: [
+        "id",
+        "workspaceId",
+        "subject",
+        "resourceOperation",
+        "type",
+        "status",
+        "createdBy",
+        "createdAt",
+        "finishedAt",
+      ],
+      properties: {
+        id: { type: "string", minLength: 1 },
+        workspaceId: { type: "string", minLength: 1 },
+        subject: {
+          type: "object",
+          required: ["kind", "id"],
+          properties: {
+            kind: { const: "resource" },
+            id: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        resourceOperation: { const: "artifact" },
+        type: { const: "artifact" },
+        status: { const: "succeeded" },
+        createdBy: { type: "string", minLength: 1 },
+        createdAt: { type: "string", format: "date-time" },
+        startedAt: { type: "string", format: "date-time" },
+        finishedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
     ResourceDeploymentReview: {
       type: "object",
       required: ["planDigest"],
@@ -4600,7 +4661,15 @@ function runSchemas(): Record<string, Record<string, unknown>> {
           additionalProperties: false,
         },
         resourceOperation: {
-          enum: ["preview", "apply", "import", "observe", "refresh", "delete"],
+          enum: [
+            "artifact",
+            "preview",
+            "apply",
+            "import",
+            "observe",
+            "refresh",
+            "delete",
+          ],
         },
         capsuleId: { type: "string" },
         environment: { type: "string" },
@@ -4610,6 +4679,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
           enum: [
             "source_sync",
             "compatibility_check",
+            "artifact",
             "plan",
             "apply",
             "destroy_plan",

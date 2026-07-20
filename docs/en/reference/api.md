@@ -297,6 +297,7 @@ canonical Resource and Run ledger and is not a Form Package or FormActivation.
 ```http
 POST   /v1/resources/preview
 PUT    /v1/resources/{kind}/{name}
+POST   /v1/resources/{kind}/{name}/artifacts?space={spaceId}
 POST   /v1/resources/{kind}/{name}/import
 GET    /v1/resources/{kind}/{name}?space={spaceId}
 GET    /v1/resources/{kind}/{name}/events?space={spaceId}&limit={1..100}&cursor={opaque}
@@ -305,6 +306,24 @@ POST   /v1/resources/{kind}/{name}/refresh?space={spaceId}
 DELETE /v1/resources/{kind}/{name}?space={spaceId}
 GET    /v1/resources?space={spaceId}&limit={1..100}&cursor={opaque}
 ```
+
+The optional `/artifacts` route stages immutable raw bytes for typed Resource
+desired state when a stable HTTPS artifact URL is unavailable. It requires a
+caller with `resources:write` and these headers:
+
+```http
+Idempotency-Key: release-2026-07-20
+X-Takosumi-Artifact-Purpose: worker_release
+X-Takosumi-Artifact-Sha256: sha256:<64 lowercase hex characters>
+Content-Type: application/octet-stream
+```
+
+The response contains an opaque `artifact.ref`, its digest and size, a narrow
+succeeded `artifact` Run projection, and `replayed`. The caller then references
+that exact ref and digest in a separate preview/apply. Uploading bytes does not
+create or update a Resource, does not select a Target, and does not expose bytes
+or credentials through Run, Output, or Interface records. Host support and the
+maximum body size are kind/purpose-specific; unsupported staging fails closed.
 
 OSS preview does not require pricing. On a Cloud endpoint with the commercial
 billing extension, billable preview returns a `DeploymentQuote` from a

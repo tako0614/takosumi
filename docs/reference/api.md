@@ -297,6 +297,7 @@ ledgerを使い、Form PackageやFormActivationを代用しません。
 ```http
 POST   /v1/resources/preview
 PUT    /v1/resources/{kind}/{name}
+POST   /v1/resources/{kind}/{name}/artifacts?space={spaceId}
 POST   /v1/resources/{kind}/{name}/import
 GET    /v1/resources/{kind}/{name}?space={spaceId}
 GET    /v1/resources/{kind}/{name}/events?space={spaceId}&limit={1..100}&cursor={opaque}
@@ -305,6 +306,23 @@ POST   /v1/resources/{kind}/{name}/refresh?space={spaceId}
 DELETE /v1/resources/{kind}/{name}?space={spaceId}
 GET    /v1/resources?space={spaceId}&limit={1..100}&cursor={opaque}
 ```
+
+安定した HTTPS artifact URL を使えない場合、optional な `/artifacts` route で typed
+Resource の desired state が参照する immutable raw bytes を stage できます。caller は
+`resources:write` と次の header を持つ必要があります。
+
+```http
+Idempotency-Key: release-2026-07-20
+X-Takosumi-Artifact-Purpose: worker_release
+X-Takosumi-Artifact-Sha256: sha256:<64文字のlowercase hex>
+Content-Type: application/octet-stream
+```
+
+response は opaque な `artifact.ref`、digest、size、成功した `artifact` Run の限定
+projection、`replayed` を返します。caller はその exact ref と digest を別の
+preview/apply で参照します。bytes の upload だけでは Resource を作成・更新せず、Target
+も選択せず、Run / Output / Interface に bytes や credential を公開しません。host の対応
+kind/purpose と最大 body size は host 固有で、未対応なら fail closed します。
 
 OSS の preview は価格を要求しません。commercial billing extension を有効にした Cloud
 endpoint では、billable preview が versioned `ServiceOffering` / `PriceCatalog` に基づく

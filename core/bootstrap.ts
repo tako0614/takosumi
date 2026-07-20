@@ -48,6 +48,7 @@ import type {
 } from "takosumi-contract/billing";
 import type {
   OfferingHostComposition,
+  ResourceArtifactWriter,
   ResourceDeploymentAdmission,
 } from "takosumi-contract";
 import type {
@@ -82,6 +83,7 @@ import {
   LegacyResourceStateAdoptionService,
   matchesApplyLock,
   ResourceFormPinOperations,
+  ResourceArtifactService,
   ResourceShapeService,
   type ResourceAdapter,
   type ResourceObservationClaimInput,
@@ -603,6 +605,12 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   ) => ResourceAdapter | Promise<ResourceAdapter>;
   /** Host price/quote and reserve/capture/release policy for Deploy API. */
   readonly resourceDeploymentAdmission?: ResourceDeploymentAdmission;
+  /**
+   * Host-owned immutable byte storage for canonical Resource artifact staging.
+   * Core retains Run, digest, ArtifactRecord, authorization, and replay
+   * authority; the host returns an opaque ref and owns only physical storage.
+   */
+  readonly resourceArtifactWriter?: ResourceArtifactWriter;
   /**
    * Upper bound for a synchronous Resource Shape delete request. OpenTofu-backed
    * deletes may perform a destroy plan and a destroy apply, so hosts that wire a
@@ -1503,6 +1511,14 @@ export async function createTakosumiService(
           : {}),
       })
     : undefined;
+  const resourceArtifactService =
+    resourceShapeService && options.resourceArtifactWriter
+      ? new ResourceArtifactService({
+          store: sharedOpenTofuStore,
+          activity: activityService,
+          writer: options.resourceArtifactWriter,
+        })
+      : undefined;
   const offeringService = new OfferingService({
     catalogs: options.offeringHostComposition?.catalogs
       ? new CompositeOfferingCatalogReader([
@@ -2163,6 +2179,9 @@ export async function createTakosumiService(
     resourceShapeRouteOptions: resourceShapeService
       ? {
           service: resourceShapeService,
+          ...(resourceArtifactService
+            ? { artifactService: resourceArtifactService }
+            : {}),
           enabledResourceShapeKinds,
           installedResourceShapeKinds,
           ...(options.resolveResourceInterfaceWorkspace

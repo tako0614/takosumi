@@ -77,6 +77,11 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_RESOURCE_DEPLOYMENT_ADMISSION?: import("takosumi-contract/resource-deployment").ResourceDeploymentAdmission;
   /**
+   * Code-only immutable artifact storage port. This is never a serialized
+   * Wrangler variable and never carries credentials through Run/Output rows.
+   */
+  readonly TAKOSUMI_RESOURCE_ARTIFACT_WRITER?: import("takosumi-contract").ResourceArtifactWriter;
+  /**
    * Host-code projector for recoverable runtime routing/activation state.
    * Canonical Interface and Binding rows remain authority.
    */

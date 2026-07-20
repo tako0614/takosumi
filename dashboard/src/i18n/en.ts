@@ -215,6 +215,7 @@ export const en: Record<keyof typeof ja, string> = {
   "op.drift_check": "Drift check",
   "op.source_sync": "Fetch contents",
   "op.compatibility_check": "Pre-add check",
+  "op.artifact": "Stage artifact",
   "op.backup": "Backup",
   "op.restore": "Restore",
   // Internal plan-operation nouns recorded on Activity metadata

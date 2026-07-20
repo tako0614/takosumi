@@ -5991,6 +5991,7 @@ function recoveredPluginOperationAudit(
 function runTypeForResourceOperation(
   operation: ResourceOperation,
 ): ResourceOperationRun["type"] {
+  if (operation === "artifact") return "artifact";
   if (operation === "preview") return "plan";
   if (operation === "observe") return "drift_check";
   if (operation === "delete") return "destroy_apply";
