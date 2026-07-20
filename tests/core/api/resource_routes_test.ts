@@ -22,6 +22,7 @@ import type { AdapterDeleteInput } from "../../../core/domains/resource-shape/mo
 import { ActivityService } from "../../../core/domains/activity/mod.ts";
 import {
   portableHostConformanceProof,
+  portableStandardHostRunnerReport,
   runPortableFormHostConformance,
 } from "../../../core/conformance/portable_form_host.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
@@ -351,6 +352,19 @@ class CountingPreviewAdapter extends StubResourceShapeAdapter {
   ) {
     this.previewCalls++;
     return await super.preview(input);
+  }
+}
+
+class DriftableAdapter extends StubResourceShapeAdapter {
+  drifted = false;
+
+  override async observe(
+    input: Parameters<StubResourceShapeAdapter["observe"]>[0],
+  ) {
+    const observed = await super.observe(input);
+    return this.drifted
+      ? { ...observed, status: "drifted" as const, summary: "test drift" }
+      : observed;
   }
 }
 
@@ -788,13 +802,20 @@ test("portable Form host enforces the exact definition lifecycle operations", as
 });
 
 test("portable Form host black-box runner proves canonical lifecycle parity", async () => {
-  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
+  const adapter = new DriftableAdapter();
+  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry(), {
+    adapter,
+  });
   const report = await runPortableFormHostConformance({
     endpoint: "https://host.example.test",
     space: "space_1",
     name: "runner-assets",
     identity: EXACT_OBJECT_BUCKET_FORM,
     desired: { name: "runner-assets", interfaces: ["s3_api"] },
+    updatedDesired: {
+      name: "runner-assets",
+      interfaces: ["s3_api", "signed_url"],
+    },
     positiveFixtureName: "basic",
     negativeFixtures: [
       {
@@ -808,6 +829,10 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
       },
     ],
     importNativeId: "provider-native-runner-assets",
+    expectDrift: true,
+    beforeDriftObserve: () => {
+      adapter.drifted = true;
+    },
     fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
       app.request(input.toString(), init)) as typeof fetch,
   });
@@ -815,6 +840,8 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
   expect(report.checks).toContain("canonical-resource-parity");
   expect(report.checks).toContain("canonical-audit-parity");
   expect(report.checks).toContain("import-idempotency");
+  expect(report.checks).toContain("update");
+  expect(report.checks).toContain("drift");
   expect(report.checks).toContain("negative-fixtures");
   expect(report.fixtures.positive).toEqual([
     {
@@ -842,6 +869,69 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
     positiveFixtures: ["basic"],
     negativeFixtures: ["invalid-interfaces"],
   });
+  const standard = await portableStandardHostRunnerReport(report);
+  expect(JSON.parse(standard.canonical)).toEqual(standard.report);
+  expect(standard.report).toMatchObject({
+    format: "takoform.standard-runner-report@v1",
+    role: "host-report",
+    subject: "host:https://host.example.test",
+    identity: EXACT_OBJECT_BUCKET_FORM,
+    status: "passed",
+    lifecycle: {
+      create: true,
+      read: true,
+      update: true,
+      delete: true,
+      import: true,
+      observe: true,
+      refresh: true,
+      drift: true,
+    },
+  });
+  expect(standard.evidenceDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+  expect(standard.proof.evidenceDigest).toBe(standard.evidenceDigest);
+  await expect(
+    portableStandardHostRunnerReport({
+      ...report,
+      fixtures: {
+        ...report.fixtures,
+        negative: report.fixtures.negative.map((fixture) => ({
+          ...fixture,
+          errorCode: "policy_denied",
+        })),
+      },
+    }),
+  ).rejects.toThrow(
+    "negative fixture invalid-interfaces returned policy_denied instead of invalid_argument",
+  );
+});
+
+test("portable Form host refuses to serialize partial runs as standard admission evidence", async () => {
+  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
+  const report = await runPortableFormHostConformance({
+    endpoint: "https://host.example.test",
+    space: "space_1",
+    name: "partial-runner-assets",
+    identity: EXACT_OBJECT_BUCKET_FORM,
+    desired: { name: "partial-runner-assets", interfaces: ["s3_api"] },
+    positiveFixtureName: "basic",
+    negativeFixtures: [
+      {
+        name: "invalid-interfaces",
+        stage: "desired",
+        input: {
+          name: "partial-runner-assets-negative-1",
+          interfaces: [7],
+        },
+        expectedErrorCode: "invalid_argument",
+      },
+    ],
+    fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
+      app.request(input.toString(), init)) as typeof fetch,
+  });
+  await expect(portableStandardHostRunnerReport(report)).rejects.toThrow(
+    "missing update, import-idempotency, drift",
+  );
 });
 
 test("Form availability derives exact principal-safe executable truth", async () => {
