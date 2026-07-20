@@ -32,6 +32,12 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_FORM_PACKAGE_HOST_COMPOSITION?: import("../../core/adapters/takoform/mod.ts").TakoformPackageHostComposition;
   /**
+   * Complete code-level generic Offering contribution. This may contain
+   * database-backed catalog readers and open subject resolvers; it is never a
+   * serialized Worker var and contains no commercial binding data.
+   */
+  readonly TAKOSUMI_OFFERING_HOST_COMPOSITION?: import("takosumi-contract").OfferingHostComposition;
+  /**
    * Source-archive bucket (`takosumi-source`). The OpenTofu runner DO persists
    * the deterministic source archive produced by a `source_sync` run here, under
    * the agreed key layout

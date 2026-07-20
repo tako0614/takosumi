@@ -46,7 +46,10 @@ import type {
   QuotaPolicy,
   ShowbackRater,
 } from "takosumi-contract/billing";
-import type { ResourceDeploymentAdmission } from "takosumi-contract";
+import type {
+  OfferingHostComposition,
+  ResourceDeploymentAdmission,
+} from "takosumi-contract";
 import type {
   InstallConfig,
   ManagedPublicHostnameClaimRequest,
@@ -113,6 +116,11 @@ import {
   type FormPackageVerifier,
   type FormRegistryStore,
 } from "./domains/service-forms/mod.ts";
+import {
+  FormOfferingSubjectResolver,
+  InMemoryOfferingCatalogReader,
+  OfferingService,
+} from "./domains/offerings/mod.ts";
 import {
   type BackupArtifactStore,
   type BackupObjectReader,
@@ -469,6 +477,12 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   /** Trusted data-only package verifier installed by the host trust policy. */
   readonly formPackageVerifier?: FormPackageVerifier;
   /**
+   * Complete generic noncommercial Offering contribution. Omitted installs an
+   * empty catalog with no subject resolvers; plain OpenTofu and zero-form hosts
+   * therefore remain fully functional without an Offering dependency.
+   */
+  readonly offeringHostComposition?: OfferingHostComposition;
+  /**
    * Pre-built durable store for the public OpenTofu run ledger. When omitted,
    * a configured `sqlClient` backs it with SQL; when neither is present the
    * controller falls back to an in-memory dev/test store (gated for
@@ -729,6 +743,12 @@ export interface TakosumiOperations {
   readonly controller: OpenTofuController;
   /** Optional zero-form-capable portable Service Form host registry. */
   readonly forms?: FormRegistryService;
+  /**
+   * Generic noncommercial availability and exact-selection engine. Commercial
+   * hosts bind manager/price/capacity evidence only after this returns an exact
+   * OfferingSelection.
+   */
+  readonly offerings: Pick<OfferingService, "listAvailability" | "resolve">;
   /** Internal-only bounded exact-Form backfill and backup replay operation. */
   readonly resourceFormPins?: ResourceFormPinOperations;
   claimManagedPublicHostname(
@@ -1439,6 +1459,22 @@ export async function createTakosumiService(
           : {}),
       })
     : undefined;
+  const offeringService = new OfferingService({
+    catalogs:
+      options.offeringHostComposition?.catalogs ??
+      new InMemoryOfferingCatalogReader(),
+    resolvers: [
+      ...(formRegistryService && resourceShapeService
+        ? [
+            new FormOfferingSubjectResolver({
+              forms: formRegistryService,
+              availability: resourceShapeService,
+            }),
+          ]
+        : []),
+      ...(options.offeringHostComposition?.resolvers ?? []),
+    ],
+  });
   const interfaceStores =
     options.interfaceStores ??
     (options.sqlClient
@@ -2213,6 +2249,7 @@ export async function createTakosumiService(
   const operations: TakosumiOperations = {
     controller: opentofuController,
     ...(formRegistryService ? { forms: formRegistryService } : {}),
+    offerings: offeringService,
     ...(resourceFormPinOperations
       ? { resourceFormPins: resourceFormPinOperations }
       : {}),

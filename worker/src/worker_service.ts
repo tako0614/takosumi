@@ -125,6 +125,8 @@ export async function createWorkerServiceApp(
     readonly formPackageArtifactReader?: CreateTakosumiServiceOptions["formPackageArtifactReader"];
     /** Trusted data-only package verifier selected by the host trust policy. */
     readonly formPackageVerifier?: CreateTakosumiServiceOptions["formPackageVerifier"];
+    /** Complete generic noncommercial Offering contribution. */
+    readonly offeringHostComposition?: CreateTakosumiServiceOptions["offeringHostComposition"];
     /** Additional host proof for custom/external Interface OAuth resources. */
     readonly interfaceOAuth2ResourceAuthorizer?: CreateTakosumiServiceOptions["interfaceOAuth2ResourceAuthorizer"];
     /**
@@ -251,6 +253,7 @@ export async function createWorkerServiceApp(
         : []),
     ];
   const formPackageHost = resolveFormPackageHostComposition(env, options);
+  const offeringHostComposition = resolveOfferingHostComposition(env, options);
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -281,6 +284,7 @@ export async function createWorkerServiceApp(
     ...(formPackageHost
       ? { formPackageVerifier: formPackageHost.verifier }
       : {}),
+    ...(offeringHostComposition ? { offeringHostComposition } : {}),
     resourceShapeSchemaRegistry,
     ...(resourceShapeModuleRegistry ? { resourceShapeModuleRegistry } : {}),
     interfaceStores: createD1InterfaceStores(env.TAKOSUMI_CONTROL_DB),
@@ -351,6 +355,36 @@ export async function createWorkerServiceApp(
         }
       : {}),
   });
+}
+
+function resolveOfferingHostComposition(
+  env: CloudflareWorkerEnv,
+  options: {
+    readonly offeringHostComposition?: CreateTakosumiServiceOptions["offeringHostComposition"];
+  },
+): CreateTakosumiServiceOptions["offeringHostComposition"] {
+  const composition =
+    options.offeringHostComposition ?? env.TAKOSUMI_OFFERING_HOST_COMPOSITION;
+  if (composition === undefined) return undefined;
+  if (
+    typeof composition !== "object" ||
+    composition === null ||
+    typeof composition.catalogs?.getCatalog !== "function" ||
+    (composition.resolvers !== undefined &&
+      (!Array.isArray(composition.resolvers) ||
+        composition.resolvers.some(
+          (resolver) =>
+            typeof resolver !== "object" ||
+            resolver === null ||
+            typeof resolver.subjectType !== "string" ||
+            typeof resolver.resolve !== "function",
+        )))
+  ) {
+    throw new TypeError(
+      "TAKOSUMI_OFFERING_HOST_COMPOSITION must provide a catalog reader and optional subject resolvers",
+    );
+  }
+  return composition;
 }
 
 function resolveFormPackageHostComposition(
