@@ -23,6 +23,7 @@ import { setCurrentWorkspaceId } from "../../../lib/workspace-state.ts";
 import { primeWorkspaceListCache } from "../../../lib/workspace-list.ts";
 import {
   fetchDashboardBootstrap,
+  fetchDashboardWorkspaceBootstrap,
   type DashboardBootstrapResponse,
 } from "../../../lib/dashboard-bootstrap.ts";
 
@@ -92,10 +93,24 @@ function pickResponseRecord(data: SessionMeResponse): SessionRecord | null {
   return null;
 }
 
-async function fetchSessionMe(): Promise<SessionRecord | null> {
+interface SessionRefreshOptions {
+  /**
+   * The authenticated shell always needs the Workspace switcher. Asking the
+   * dashboard bootstrap for both records lets that first render share one
+   * request with `listWorkspacesCached()` instead of serially fetching a
+   * session-only bootstrap and then the Workspace bootstrap.
+   */
+  readonly includeWorkspaces?: boolean;
+}
+
+async function fetchSessionMe(
+  options: SessionRefreshOptions = {},
+): Promise<SessionRecord | null> {
   if (typeof fetch === "undefined") return null;
   try {
-    const data = await fetchDashboardBootstrap();
+    const data = options.includeWorkspaces
+      ? await fetchDashboardWorkspaceBootstrap()
+      : await fetchDashboardBootstrap();
     if (!data) throw new Error("dashboard bootstrap unavailable");
     if (Array.isArray(data.workspaces)) {
       primeWorkspaceListCache(data.workspaces);
@@ -125,9 +140,11 @@ async function fetchSessionMe(): Promise<SessionRecord | null> {
  * with the latest known session record (or null). Subsequent calls
  * while a refresh is inflight return the same promise.
  */
-export function refreshSession(): Promise<SessionRecord | null> {
+export function refreshSession(
+  options: SessionRefreshOptions = {},
+): Promise<SessionRecord | null> {
   if (inflight) return inflight;
-  inflight = fetchSessionMe().then((s) => {
+  inflight = fetchSessionMe(options).then((s) => {
     cachedSession = s;
     cachedAt = Date.now();
     initialized = true;
@@ -155,12 +172,14 @@ function cacheIsFresh(): boolean {
  * (but still return the cached value synchronously so the UI doesn't
  * flicker).
  */
-export function readSession(): SessionRecord | null {
+export function readSession(
+  options: SessionRefreshOptions = {},
+): SessionRecord | null {
   if (!initialized && !inflight) {
     // Fire-and-forget; listeners will get notified when it resolves.
-    void refreshSession();
+    void refreshSession(options);
   } else if (!inflight && !cacheIsFresh()) {
-    void refreshSession();
+    void refreshSession(options);
   }
   if (
     cachedSession &&
