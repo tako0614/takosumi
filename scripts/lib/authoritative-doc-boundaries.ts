@@ -34,10 +34,32 @@ const RETIRED_CLOUDFLARE_COMPATIBILITY: readonly {
   },
 ];
 
-const TAKOSUMI_PROVIDER_REFERENCE =
-  /(?:takosumi\/takosumi|takosumi_\*|terraform-provider-takosumi|Takosumi(?:-owned)? provider|Takosumi-provider)/u;
+const TAKOSUMI_PROVIDER_TOKEN = String.raw`(?:takosumi\/takosumi|takosumi_\*|terraform-provider-takosumi|Takosumi(?:-owned)? provider|Takosumi-provider)`;
+const TAKOSUMI_PROVIDER_REFERENCE = new RegExp(TAKOSUMI_PROVIDER_TOKEN, "u");
 const TAKOSUMI_PROVIDER_CUSTODY_CONTEXT =
-  /(?:discontinued|retired|historical|custody|no (?:new|corrected|replacement)|not (?:an? )?(?:active|published|updated|required|mandatory)|never required|does not revive|without reviving|does not depend|no dependency|must not be (?:overwritten|republished)|廃止|旧 provider|既存(?: compatibility)? state|履歴|新規[^。\n]*(?:使|作|公開)|更新[^。\n]*(?:しません|しない)|再公開[^。\n]*(?:しません|しない)|依存しません|不要)/iu;
+  /(?:\b(?:discontinued|retired)\b|\b(?:historical|migration|rollback|existing-state)[^.]{0,120}\bcustody\b|\bcustody\b[^.]{0,120}\b(?:historical|migration|rollback|existing-state)\b|\bno (?:corrected or replacement|corrected|replacement) Takosumi provider version\b[^.]{0,120}\b(?:built|published)\b|\bno new Takosumi-provider state is authored\b|廃止(?:済み)?|(?:historical|migration|rollback|履歴|既存 state)[^。]{0,120}\bcustody\b|\bcustody\b[^。]{0,120}(?:historical|migration|rollback|履歴|既存 state))/iu;
+const TAKOSUMI_PROVIDER_ACTIVE_CLAIMS: readonly RegExp[] = [
+  new RegExp(
+    `${TAKOSUMI_PROVIDER_TOKEN}[^.!?]{0,160}\\b(?:will|shall|should|must|may|can|plans? to|is going to|continues? to)\\s+(?:publish|release|add|create|author|ship|update|republish|support|maintain)\\b`,
+    "iu",
+  ),
+  new RegExp(
+    `${TAKOSUMI_PROVIDER_TOKEN}[^.!?]{0,120}\\b(?:publishes|releases|adds|creates|authors|ships|updates|republishes|supports|maintains)\\b`,
+    "iu",
+  ),
+  new RegExp(
+    `${TAKOSUMI_PROVIDER_TOKEN}[^.!?]{0,80}\\bis\\s+(?:active|current|maintained|published|supported)\\b`,
+    "iu",
+  ),
+  new RegExp(
+    `(?:^|\\n)\\s*(?:Add|Create|Publish|Release|Ship|Update|Republish)\\b(?!\\s+(?:no|neither)\\b)[^.!?]{0,160}${TAKOSUMI_PROVIDER_TOKEN}`,
+    "u",
+  ),
+  new RegExp(
+    `${TAKOSUMI_PROVIDER_TOKEN}[^。]{0,120}(?:新規|今後)[^。]{0,60}(?:公開|追加|作成|更新|再公開|リリース|提供|使用|利用)(?:する|します|していく)`,
+    "iu",
+  ),
+];
 
 const REQUIRED_DOC_CLAIMS: Readonly<
   Record<
@@ -118,13 +140,22 @@ export function findAuthoritativeDocViolations(
 
     for (const paragraph of paragraphs(source.content)) {
       if (!TAKOSUMI_PROVIDER_REFERENCE.test(paragraph.content)) continue;
-      if (TAKOSUMI_PROVIDER_CUSTODY_CONTEXT.test(paragraph.content)) continue;
+      const activeClaim = TAKOSUMI_PROVIDER_ACTIVE_CLAIMS.some((pattern) =>
+        pattern.test(paragraph.content),
+      );
+      if (
+        !activeClaim &&
+        TAKOSUMI_PROVIDER_CUSTODY_CONTEXT.test(paragraph.content)
+      ) {
+        continue;
+      }
       violations.push({
         ruleId: "active-takosumi-provider-doc",
         path: source.path,
         line: paragraph.line,
-        message:
-          "Takosumi provider references must be explicitly limited to discontinued historical custody",
+        message: activeClaim
+          ? "active Takosumi provider publication or resource-authoring claims are forbidden even beside retirement wording"
+          : "Takosumi provider references must be explicitly limited to discontinued historical migration/rollback custody",
         excerpt: paragraph.content.split("\n", 1)[0]?.trim() ?? "",
       });
     }
