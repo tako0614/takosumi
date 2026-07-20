@@ -167,7 +167,12 @@ export const FORM_HOST_RESOURCE_NAMESPACE_OFFERING_CONTEXT_TYPE =
 export function formHostResourceNamespaceOfferingContext(
   id: string,
 ): OfferingContextReference {
-  if (typeof id !== "string" || id.trim() === "" || id.length > 256) {
+  if (
+    typeof id !== "string" ||
+    id.trim() === "" ||
+    id.length > 256 ||
+    /[\u0000-\u001f\u007f]/u.test(id)
+  ) {
     throw new TypeError("invalid Form host Resource namespace context");
   }
   return {

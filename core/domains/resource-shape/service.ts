@@ -691,13 +691,16 @@ export class ResourceShapeService {
     readonly space: SpaceId;
     readonly identity: InstalledFormReference;
     readonly activationId: string;
-  }): Promise<FormAvailability> {
+  }): Promise<{
+    readonly availability: FormAvailability;
+    readonly evidenceFingerprint: string;
+  }> {
     const [definition, activation, pools] = await Promise.all([
       this.#formRegistry?.getDefinition(input.identity.formRef),
       this.#formRegistry?.getActivation?.(input.activationId),
       this.#stores.targetPools.listBySpace(input.space),
     ]);
-    return await this.#formAvailabilityFor({
+    const availability = await this.#formAvailabilityFor({
       actor: input.actor,
       space: input.space,
       identity: input.identity,
@@ -705,6 +708,17 @@ export class ResourceShapeService {
       activations: activation ? [activation] : [],
       pools,
     });
+    return {
+      availability,
+      evidenceFingerprint: await canonicalSha256({
+        schema: "takosumi.form-offering-resource-evidence.v1",
+        identity: input.identity,
+        activation: activation ?? null,
+        definition: definition ?? null,
+        targetPools: pools,
+        availability,
+      }),
+    };
   }
 
   async deleteTargetPool(
