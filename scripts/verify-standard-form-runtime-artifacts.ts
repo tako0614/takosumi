@@ -278,16 +278,47 @@ export async function verifyBuiltRuntimeRelease(
     );
   }
 
-  const expectedMediaTypes = new Map<string, string>([
-    ...sourceManifest.assets.map(
-      ({ name, mediaType }) => [name, mediaType] as const,
-    ),
-    ["runtime-manifest.json", "application/json"],
-    [SBOM_NAME, SBOM_MEDIA_TYPE],
+  const actualSbom = JSON.parse(
+    await readFile(join(output, SBOM_NAME), "utf8"),
+  );
+  if (
+    JSON.stringify(actualSbom) !==
+    JSON.stringify(spdxDocument(sourceManifest, sourceCommit))
+  ) {
+    throw new Error(
+      "runtime SBOM inventory does not match the exact local and OCI artifacts",
+    );
+  }
+  const runtimeManifestBytes = await readFile(
+    resolve(repoRoot, SOURCE_ROOT, "runtime-manifest.json"),
+  );
+  const sbomBytes = Buffer.from(
+    `${JSON.stringify(spdxDocument(sourceManifest, sourceCommit), null, 2)}\n`,
+  );
+  const expectedAssets = new Map<string, RuntimeAsset>([
+    ...sourceManifest.assets.map((asset) => [asset.name, asset] as const),
+    [
+      "runtime-manifest.json",
+      {
+        name: "runtime-manifest.json",
+        mediaType: "application/json",
+        size: runtimeManifestBytes.byteLength,
+        sha256: digest(runtimeManifestBytes),
+      },
+    ],
+    [
+      SBOM_NAME,
+      {
+        name: SBOM_NAME,
+        mediaType: SBOM_MEDIA_TYPE,
+        size: sbomBytes.byteLength,
+        sha256: digest(sbomBytes),
+      },
+    ],
   ]);
   if (
     !Array.isArray(releaseManifest.assets) ||
-    releaseManifest.assets.length !== expectedMediaTypes.size
+    releaseManifest.assets.length !== expectedAssets.size
   ) {
     throw new Error("release manifest asset inventory is not closed");
   }
@@ -299,15 +330,19 @@ export async function verifyBuiltRuntimeRelease(
       ["mediaType", "name", "sha256", "size"],
       `release asset ${asset.name}`,
     );
+    const expected = expectedAssets.get(asset.name);
     if (
-      expectedMediaTypes.get(asset.name) !== asset.mediaType ||
+      !expected ||
+      asset.mediaType !== expected.mediaType ||
+      asset.size !== expected.size ||
+      asset.sha256 !== expected.sha256 ||
       seen.has(asset.name) ||
       !Number.isSafeInteger(asset.size) ||
       asset.size <= 0 ||
       !SHA256.test(asset.sha256)
     ) {
       throw new Error(
-        `release asset ${String(asset.name)} identity is invalid`,
+        `release asset ${String(asset.name)} identity does not match the source closure`,
       );
     }
     const bytes = await readFile(join(output, asset.name));
@@ -318,20 +353,8 @@ export async function verifyBuiltRuntimeRelease(
     }
     seen.add(asset.name);
   }
-  if ([...expectedMediaTypes.keys()].some((name) => !seen.has(name))) {
+  if ([...expectedAssets.keys()].some((name) => !seen.has(name))) {
     throw new Error("release manifest asset inventory is incomplete");
-  }
-
-  const actualSbom = JSON.parse(
-    await readFile(join(output, SBOM_NAME), "utf8"),
-  );
-  if (
-    JSON.stringify(actualSbom) !==
-    JSON.stringify(spdxDocument(sourceManifest, sourceCommit))
-  ) {
-    throw new Error(
-      "runtime SBOM inventory does not match the exact local and OCI artifacts",
-    );
   }
 }
 

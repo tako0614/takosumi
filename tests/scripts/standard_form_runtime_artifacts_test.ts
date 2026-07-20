@@ -101,3 +101,31 @@ test("release verification rejects SBOM byte tampering and concealed inventory d
     "SBOM inventory",
   );
 });
+
+test("release verification rejects source asset changes concealed by an updated release manifest", async () => {
+  for (const [index, name] of [
+    "edge-worker.mjs",
+    "durable-workflow.mjs",
+    "runtime-manifest.json",
+  ].entries()) {
+    const output = await mkdtemp(
+      join(tmpdir(), `takosumi-runtime-source-tamper-${index}-`),
+    );
+    const commit = String(index + 3).repeat(40);
+    await buildRuntimeRelease(ROOT, commit, output);
+    const path = join(output, name);
+    const changed = Buffer.from(`${await readFile(path, "utf8")}\n`);
+    await writeFile(path, changed);
+    const releasePath = join(output, "release-manifest.json");
+    const release = JSON.parse(await readFile(releasePath, "utf8"));
+    const asset = release.assets.find(
+      (candidate: { name: string }) => candidate.name === name,
+    );
+    asset.size = changed.byteLength;
+    asset.sha256 = `sha256:${createHash("sha256").update(changed).digest("hex")}`;
+    await writeFile(releasePath, `${JSON.stringify(release, null, 2)}\n`);
+    await expect(
+      verifyBuiltRuntimeRelease(ROOT, output, commit),
+    ).rejects.toThrow("does not match the source closure");
+  }
+});
