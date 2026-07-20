@@ -52,6 +52,10 @@ const TAKOSUMI_PROVIDER_ACTIVE_CLAIMS: readonly RegExp[] = [
     "iu",
   ),
   new RegExp(
+    `${TAKOSUMI_PROVIDER_TOKEN}[^.!?]{0,160}\\b(?:(?:is|remains|stays|continues?\\s+to\\s+be)\\s+(?:still\\s+)?used\\s+(?:to|for|as)|(?:continues?\\s+as|acts?\\s+as|serves?\\s+as|is|remains|stays)\\s+(?:the\\s+|an?\\s+)?(?:default|active|current|authoritative|authoring|provisioning|deployment)\\b)`,
+    "iu",
+  ),
+  new RegExp(
     `(?:^|\\n)\\s*(?:Add|Create|Publish|Release|Ship|Update|Republish)\\b(?!\\s+(?:no|neither)\\b)[^.!?]{0,160}${TAKOSUMI_PROVIDER_TOKEN}`,
     "u",
   ),
