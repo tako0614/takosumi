@@ -43,9 +43,11 @@ Takosumi OSS:
   one canonical Resource / Run / state / audit lifecycle
   Resolver / Planner / Reconciler / Target / Policy / Adapter / credentials
   Interface / InterfaceBinding / generic FormActivation
+  generic noncommercial Offering catalog / audience / subject resolver
 
 Takosumi Cloud closed:
-  exact ServiceOffering / official target and capacity / backend manager
+  realized Offering contributions / official target and capacity / backend manager
+  commercial Offering binding
   price / rating / billing / quota / abuse / SLA / support
 ```
 
@@ -69,15 +71,19 @@ provider-native Stack resources.
 `schemaDigest`. Form Packages are signed, content-addressed, immutable,
 data-only definitions and fixtures. Executable validators/realizers are
 separately trusted Host Extensions/Adapters. Resources, ResolutionLocks,
-FormActivations, and Cloud ServiceOfferings eventually pin exact references;
+FormActivations, and Form-backed generic Offerings pin exact references; a
+closed commercial binding pins the exact Offering selection;
 `packageDigest` identifies the immutable package envelope beside the FormRef
 and is never one of its fields. Old definition bytes remain retained for
 observe/delete.
 
-Core has zero implicit Form Packages. Portable host discovery reports definition
+Core has zero implicit Form Packages or Offerings. Portable host discovery reports definition
 known, installed, executable, activated, and available-to-principal as
-independent states. Cloud-offered is a separate closed catalog projection keyed
-by exact FormRef and FormActivation, not a field in portable FormAvailability.
+independent states. Generic Offering availability is a separate OSS projection
+with open subject types; a Form subject re-reads exact FormRef and
+FormActivation. Commercially available is a separate closed projection keyed
+by an exact Offering selection, not a field in portable FormAvailability or the
+generic Offering.
 The portable project owns no Resource ID, lifecycle ledger, Run, StateVersion,
 Output, Target, credential, Policy, Adapter, Interface, or InterfaceBinding.
 
@@ -444,6 +450,7 @@ for Interface resolution.
 | Resource       | Canonical desired/observed host-owned resource object                        |
 | FormRegistry   | Installed trusted exact definitions visible to one host                      |
 | FormActivation | Generic OSS audience/policy admission for an executable exact FormRef        |
+| Offering       | Generic OSS exact-subject availability and audience selection                |
 | Profile        | Ecosystem compatibility surface such as workers_bindings                     |
 | Implementation | Concrete backend such as cloudflare_workers or cloudflare_r2                 |
 | Target         | Southbound account/cluster/fleet/runtime endpoint                            |
@@ -881,8 +888,9 @@ service state portable without making the Takosumi provider mandatory.
 
 When a durable managed-service definition is justified, the portable project
 admits an exact versioned Service Form even if its public protocol is standard.
-A Takosumi operator separately installs an implementation and FormActivation;
-Cloud separately creates an exact ServiceOffering. One-off gaps and external infrastructure remain in
+A Takosumi operator separately installs an implementation and FormActivation,
+then may publish an exact generic Offering. Cloud separately attaches a closed
+commercial binding to that Offering selection. One-off gaps and external infrastructure remain in
 declared-env-capable ProviderConnections and ordinary OpenTofu modules. Add a
 standard typed form-provider schema only for a repeated portable form with a
 clear schema, validation, lifecycle, adapter path, state/import/drift story,
@@ -1477,7 +1485,8 @@ adding Cloud fields to the Resource shape. Its required semantics are:
 
 ```text
 preview:
-  resolve a versioned ServiceOffering
+  resolve an exact generic OSS OfferingSelection through its installed subject resolver
+  bind that exact selection to a closed commercial offering record
   rate against a versioned PriceCatalog
   return DeploymentQuote bound to desired-state + resolution digests
 
@@ -1516,8 +1525,9 @@ period close:
   against payment-provider invoice lines
 ```
 
-Unknown offerings, unpriced billable SKUs, expired/mismatched quotes, and
-unconfigured managers fail before reservation or backend work. Explicit free
+Unknown generic offerings, missing/mismatched commercial bindings, unpriced
+billable SKUs, expired/mismatched quotes, and unconfigured managers fail before
+reservation or backend work. Explicit free
 service uses a rated-zero SKU. Reservation/capture/release and invoice lines are
 idempotent and retain account, Workspace/Resource, offering/SKU/price version,
 quote/usage ids, quantity/unit, currency, tax treatment, period, and audit
@@ -1577,5 +1587,8 @@ isolation, quota, network egress policy, admin audit, and usage metering.
 12. Add the write-only Secret control API and optional VerifiedDomain framework.
 13. Keep Kubernetes / VM / Machine / Job / Function specification-only for this
     GA; add a manager only after separate portability and operation review.
-14. Migrate Cloud to exact FormRef + FormActivation ServiceOfferings; release
-    provider/state vocabulary changes only after no-op and rollback proof.
+14. Migrate Cloud from its current ServiceOffering compatibility rows to exact
+    generic OfferingSelection + closed CommercialOfferingBinding records.
+    Form subjects additionally pin exact FormRef + FormActivation; non-Form
+    subjects use their own installed resolvers. Release provider/state
+    vocabulary changes only after no-op and rollback proof.

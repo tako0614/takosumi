@@ -70,5 +70,6 @@ agent-facing truth sources:
 final-plan.md
 core-spec.md
 core-conformance.md
+offering-model.md
 ai-gateway.md
 ```
