@@ -140,7 +140,7 @@ jobs:
             echo "Release runs are immutable; dispatch a new candidate or release id instead of rerunning." >&2
             exit 1
           }
-          test "${VERSION}" = "1.0.1"
+          test "${VERSION}" = "1.0.2"
           release_tag="standard-form-runtime-v${VERSION}"
           test "${GITHUB_REF}" = "refs/tags/${release_tag}" || {
             echo "Candidate and promotion must execute from the exact signed release tag." >&2
@@ -229,6 +229,7 @@ jobs:
         run: |
           set -euo pipefail
           bun install --frozen-lockfile
+          (cd dashboard && bun install --frozen-lockfile)
           bun run check
 
       - name: Build the exact runtime release bytes once
