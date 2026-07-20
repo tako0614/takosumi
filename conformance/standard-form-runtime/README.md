@@ -22,8 +22,10 @@ bun run service-form:runtime-artifacts:oci-readback
 The main workflow is assigned to the `standard-form-runtime-release`
 environment, but is deliberately fail-closed before checkout or any release
 mutation while its fixed adapter and evidence envelope remain unregistered in
-the ecosystem release-safety registry. Once that registration is reviewed, the
-workflow accepts only the exact existing
+the ecosystem release-safety registry: the release job has the registry-required
+`if: ${{ false }}` hard disable, with an additional first-step registration
+guard for defense in depth once that fixed adapter is added. After registration
+is reviewed, the workflow accepts only the exact existing
 `standard-form-runtime-v1.0.1` tag and source commit, builds the closed release
 inventory from a separate tag checkout, emits a deterministic SPDX 2.3 SBOM
 covering both JavaScript modules and the pinned external OCI manifest,

@@ -31,6 +31,8 @@ env:
 
 jobs:
   release:
+    # release-safety: blocked until the ecosystem registry owns a fixed adapter.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     environment: standard-form-runtime-release
     timeout-minutes: 20
