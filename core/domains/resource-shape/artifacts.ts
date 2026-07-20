@@ -312,15 +312,17 @@ export class ResourceArtifactService {
     run: ResourceOperationRun,
     pointer: ResourceArtifactPointer,
   ): Promise<void> {
-    const record: ArtifactRecord = {
-      id: `artifact_${run.id.slice("run_".length)}`,
-      runId: run.id,
-      kind: pointer.purpose,
-      ref: pointer.ref,
-      digest: pointer.digest,
-      sizeBytes: pointer.sizeBytes,
-      createdAt: run.finishedAt ?? run.createdAt,
-    };
+    const record = artifactRecordFromSucceededRun(run);
+    if (
+      record.kind !== pointer.purpose ||
+      record.ref !== pointer.ref ||
+      record.digest !== pointer.digest ||
+      record.sizeBytes !== pointer.sizeBytes
+    ) {
+      throw new TypeError(
+        "canonical artifact Run and response pointer do not match",
+      );
+    }
     await this.#store.putArtifactRecord(record);
   }
 
@@ -357,6 +359,44 @@ export class ResourceArtifactService {
     });
     return transition.run ?? run;
   }
+}
+
+/**
+ * Reconstructs the deterministic artifact-ledger row from terminal Run
+ * evidence. This is shared with restart repair so a process loss after the Run
+ * CAS but before `putArtifactRecord` cannot let Activity acknowledgement make
+ * the missing row permanent.
+ */
+export function artifactRecordFromSucceededRun(
+  run: ResourceOperationRun,
+): ArtifactRecord {
+  if (
+    run.status !== "succeeded" ||
+    run.resourceOperation !== "artifact" ||
+    run.type !== "artifact" ||
+    !run.finishedAt
+  ) {
+    throw new TypeError(
+      "artifact record reconstruction requires a succeeded artifact Run",
+    );
+  }
+  const evidence = run.resourceOperationResult?.artifact;
+  if (!evidence) {
+    throw new TypeError(
+      "succeeded artifact Run is missing immutable artifact evidence",
+    );
+  }
+  const pointer = artifactPointerFromRun(run, evidence.kind);
+  if (!pointer.ok) throw new TypeError(pointer.error.message);
+  return {
+    id: `artifact_${run.id.slice("run_".length)}`,
+    runId: run.id,
+    kind: pointer.value.purpose,
+    ref: pointer.value.ref,
+    digest: pointer.value.digest,
+    sizeBytes: pointer.value.sizeBytes,
+    createdAt: run.finishedAt,
+  };
 }
 
 function validateStageInput(

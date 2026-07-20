@@ -11,6 +11,12 @@ import { RunQueryService } from "../../../../core/domains/deploy-control/run_que
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { ActivityService } from "../../../../core/domains/activity/mod.ts";
+import {
+  createInMemoryResourceShapeStores,
+  ResourceShapeService,
+  StubResourceShapeAdapter,
+} from "../../../../core/domains/resource-shape/mod.ts";
 
 setDefaultTimeout(20_000);
 
@@ -333,6 +339,106 @@ test("running artifact Runs cannot starve bounded recovery of terminal audit wor
         (run) => run.id,
       ),
     ).toEqual([staged.id, ordinary.id]);
+  }
+});
+
+test("terminal artifact repair reconstructs the pointer row before acknowledging audit on every store", async () => {
+  for (const [label, store] of await stores()) {
+    const initial = resourceRun({
+      id: `run_artifact_reconstruct_${label}`,
+      subject: {
+        kind: "resource",
+        id: `tkrn:space_a:EdgeWorker:reconstruct-${label}`,
+      },
+      resourceOperation: "artifact",
+      resourceOperationKey: `sha256:artifact-reconstruct-${label}`,
+      type: "artifact",
+    });
+    await store.beginResourceOperationRun(initial);
+    const succeeded: ResourceOperationRun = {
+      ...initial,
+      status: "succeeded",
+      finishedAt: "2026-07-14T00:00:04.000Z",
+      resourceOperationVersion: 2,
+      resourceOperationResult: {
+        summary: "staged worker release",
+        artifact: {
+          kind: "worker_release",
+          ref: `artifact:v1:sha256:${"b".repeat(64)}`,
+          digest: `sha256:${"b".repeat(64)}`,
+          sizeBytes: 256,
+        },
+      },
+      resourceOperationAudit: {
+        status: "pending",
+        eventId: `act_${initial.id}`,
+        action: "resource.artifact.staged",
+        metadata: {
+          purpose: "worker_release",
+          digest: `sha256:${"b".repeat(64)}`,
+          sizeBytes: 256,
+          resourceKind: "EdgeWorker",
+        },
+        createdAt: "2026-07-14T00:00:04.000Z",
+      },
+    };
+    expect(
+      (
+        await store.transitionResourceOperationRun({
+          id: initial.id,
+          operationKey: initial.resourceOperationKey,
+          expectedVersion: 1,
+          expectFrom: ["running"],
+          run: succeeded,
+        })
+      ).won,
+    ).toBe(true);
+    expect(await store.listArtifactRecordsForRun(initial.id)).toEqual([]);
+
+    const service = new ResourceShapeService({
+      stores: createInMemoryResourceShapeStores(),
+      adapter: new StubResourceShapeAdapter(),
+      operationRuns: store,
+      activity: new ActivityService({
+        store,
+        now: () => new Date("2026-07-14T00:00:05.000Z"),
+      }),
+      now: () => "2026-07-14T00:00:05.000Z",
+    });
+    expect(await service.repairResourceOperationRuns({ limit: 1 })).toEqual({
+      scanned: 1,
+      completed: 0,
+      auditsRepaired: 1,
+      pending: 0,
+    });
+    expect(await store.listArtifactRecordsForRun(initial.id)).toEqual([
+      {
+        id: `artifact_artifact_reconstruct_${label}`,
+        runId: initial.id,
+        kind: "worker_release",
+        ref: `artifact:v1:sha256:${"b".repeat(64)}`,
+        digest: `sha256:${"b".repeat(64)}`,
+        sizeBytes: 256,
+        createdAt: "2026-07-14T00:00:04.000Z",
+      },
+    ]);
+    expect(
+      (await store.getResourceOperationRun(initial.id))?.resourceOperationAudit
+        ?.status,
+    ).toBe("completed");
+    expect(await store.listActivityEvents("space_a")).toMatchObject([
+      {
+        id: `act_${initial.id}`,
+        action: "resource.artifact.staged",
+        runId: initial.id,
+      },
+    ]);
+    expect(await service.repairResourceOperationRuns({ limit: 1 })).toEqual({
+      scanned: 0,
+      completed: 0,
+      auditsRepaired: 0,
+      pending: 0,
+    });
   }
 });
 
