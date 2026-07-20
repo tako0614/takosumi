@@ -817,6 +817,7 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
       interfaces: ["s3_api", "signed_url"],
     },
     positiveFixtureName: "basic",
+    positivePackageFixtureDigest: `sha256:${"a".repeat(64)}`,
     negativeFixtures: [
       {
         name: "invalid-interfaces",
@@ -828,6 +829,9 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
         expectedErrorCode: "invalid_argument",
       },
     ],
+    negativePackageFixtureDigests: {
+      "invalid-interfaces": `sha256:${"b".repeat(64)}`,
+    },
     importNativeId: "provider-native-runner-assets",
     expectDrift: true,
     beforeDriftObserve: () => {
@@ -847,6 +851,7 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
     {
       name: "basic",
       inputDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      packageFixtureDigest: `sha256:${"a".repeat(64)}`,
     },
   ]);
   expect(report.fixtures.negative).toEqual([
@@ -854,6 +859,7 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
       name: "invalid-interfaces",
       stage: "desired",
       inputDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      packageFixtureDigest: `sha256:${"b".repeat(64)}`,
       httpStatus: 400,
       errorCode: "invalid_argument",
     },
@@ -877,6 +883,7 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
     subject: "host:https://host.example.test",
     identity: EXACT_OBJECT_BUCKET_FORM,
     status: "passed",
+    executionEvidenceDigest: report.evidenceDigest,
     lifecycle: {
       create: true,
       read: true,
@@ -887,6 +894,14 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
       refresh: true,
       drift: true,
     },
+    positiveFixtures: [
+      {
+        name: "basic",
+        packageFixtureDigest: `sha256:${"a".repeat(64)}`,
+        effectiveInputDigest: report.fixtures.positive[0]?.inputDigest,
+        passed: true,
+      },
+    ],
   });
   expect(standard.evidenceDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
   expect(standard.proof.evidenceDigest).toBe(standard.evidenceDigest);

@@ -34,11 +34,18 @@ export interface PortableFormHostConformanceInput {
   /** Exact retained fixture name covered by the lifecycle run. */
   readonly positiveFixtureName?: string;
   /**
+   * SHA-256 of the exact retained package fixture file executed as desired.
+   * Standard-admission serialization requires this package readback binding.
+   */
+  readonly positivePackageFixtureDigest?: string;
+  /**
    * Retained negative fixtures that the host must actually reject. The v1
    * runner currently admits desired-state fixtures only; unsupported stages
    * fail closed rather than being copied into evidence without execution.
    */
   readonly negativeFixtures?: readonly StandardFormNegativeFixture[];
+  /** Exact retained package fixture-file SHA-256 keyed by negative name. */
+  readonly negativePackageFixtureDigests?: Readonly<Record<string, string>>;
   /** When present, the runner also proves exact import replay and cleanup. */
   readonly importNativeId?: string;
   /**
@@ -66,11 +73,13 @@ export interface PortableFormHostConformanceReport {
     readonly positive: readonly {
       readonly name: string;
       readonly inputDigest: string;
+      readonly packageFixtureDigest?: string;
     }[];
     readonly negative: readonly {
       readonly name: string;
       readonly stage: "desired";
       readonly inputDigest: string;
+      readonly packageFixtureDigest?: string;
       readonly httpStatus: 400;
       readonly errorCode: string;
     }[];
@@ -409,6 +418,14 @@ export async function runPortableFormHostConformance(
         {
           name: positiveFixtureName,
           inputDigest: await jsonDigest(input.desired),
+          ...(input.positivePackageFixtureDigest
+            ? {
+                packageFixtureDigest: assertSha256Digest(
+                  input.positivePackageFixtureDigest,
+                  "positive package fixture",
+                ),
+              }
+            : {}),
         },
       ],
       negative: fixtureReport,
@@ -430,9 +447,14 @@ export interface TakoformStandardHostRunnerReport {
   readonly format: "takoform.standard-runner-report@v1";
   readonly role: "host-report";
   readonly subject: string;
-  readonly runnerVersion: "1.0.0";
+  readonly runnerVersion: "1.1.0";
   readonly identity: InstalledFormReference;
   readonly status: "passed";
+  readonly executionEvidence: Omit<
+    PortableFormHostConformanceReport,
+    "evidenceDigest"
+  >;
+  readonly executionEvidenceDigest: string;
   readonly lifecycle: {
     readonly create: true;
     readonly read: true;
@@ -445,10 +467,14 @@ export interface TakoformStandardHostRunnerReport {
   };
   readonly positiveFixtures: readonly {
     readonly name: string;
+    readonly packageFixtureDigest: string;
+    readonly effectiveInputDigest: string;
     readonly passed: true;
   }[];
   readonly negativeFixtures: readonly {
     readonly name: string;
+    readonly packageFixtureDigest: string;
+    readonly effectiveInputDigest: string;
     readonly errorCode: string;
     readonly passed: true;
   }[];
@@ -495,13 +521,28 @@ export async function portableStandardHostRunnerReport(
       `portable host run cannot become standard-admission evidence; negative fixture ${nonPortableNegative.name} returned ${nonPortableNegative.errorCode} instead of invalid_argument`,
     );
   }
+  const unboundPositive = report.fixtures.positive.find(
+    ({ packageFixtureDigest }) => !packageFixtureDigest,
+  );
+  const unboundNegative = report.fixtures.negative.find(
+    ({ packageFixtureDigest }) => !packageFixtureDigest,
+  );
+  if (unboundPositive || unboundNegative) {
+    throw new Error(
+      "portable host run cannot become standard-admission evidence without exact retained package fixture digests",
+    );
+  }
+  const { evidenceDigest: executionEvidenceDigest, ...executionEvidence } =
+    report;
   const standardReport: TakoformStandardHostRunnerReport = {
     format: "takoform.standard-runner-report@v1",
     role: "host-report",
     subject: `host:${report.endpointOrigin}`,
-    runnerVersion: "1.0.0",
+    runnerVersion: "1.1.0",
     identity: report.identity,
     status: "passed",
+    executionEvidence,
+    executionEvidenceDigest,
     lifecycle: {
       create: true,
       read: true,
@@ -512,15 +553,23 @@ export async function portableStandardHostRunnerReport(
       refresh: true,
       drift: true,
     },
-    positiveFixtures: report.fixtures.positive.map(({ name }) => ({
-      name,
-      passed: true,
-    })),
-    negativeFixtures: report.fixtures.negative.map(({ name, errorCode }) => ({
-      name,
-      errorCode,
-      passed: true,
-    })),
+    positiveFixtures: report.fixtures.positive.map(
+      ({ name, packageFixtureDigest, inputDigest }) => ({
+        name,
+        packageFixtureDigest: packageFixtureDigest!,
+        effectiveInputDigest: inputDigest,
+        passed: true,
+      }),
+    ),
+    negativeFixtures: report.fixtures.negative.map(
+      ({ name, errorCode, packageFixtureDigest, inputDigest }) => ({
+        name,
+        packageFixtureDigest: packageFixtureDigest!,
+        effectiveInputDigest: inputDigest,
+        errorCode,
+        passed: true,
+      }),
+    ),
   };
   const canonical = rfc8785CanonicalJson(
     standardReport as unknown as CanonicalJsonValue,
@@ -566,6 +615,7 @@ async function runNegativeFixtures(
     readonly name: string;
     readonly stage: "desired";
     readonly inputDigest: string;
+    readonly packageFixtureDigest?: string;
     readonly httpStatus: 400;
     readonly errorCode: string;
   }[]
@@ -576,6 +626,7 @@ async function runNegativeFixtures(
     name: string;
     stage: "desired";
     inputDigest: string;
+    packageFixtureDigest?: string;
     httpStatus: 400;
     errorCode: string;
   }[] = [];
@@ -599,7 +650,12 @@ async function runNegativeFixtures(
         `negative fixture error code is not canonical: ${fixture.expectedErrorCode}`,
       );
     }
-    const name = `${input.name}-negative-${report.length + 1}`;
+    const name = fixture.input.name;
+    if (typeof name !== "string" || name.trim() === "") {
+      throw new Error(
+        `negative fixture ${fixture.name} must contain its exact Resource spec.name`,
+      );
+    }
     await expectError(
       fetcher,
       `${base}/resources/preview`,
@@ -615,11 +671,26 @@ async function runNegativeFixtures(
       name: fixture.name,
       stage: "desired",
       inputDigest: await jsonDigest(fixture.input),
+      ...(input.negativePackageFixtureDigests?.[fixture.name]
+        ? {
+            packageFixtureDigest: assertSha256Digest(
+              input.negativePackageFixtureDigests[fixture.name]!,
+              `negative package fixture ${fixture.name}`,
+            ),
+          }
+        : {}),
       httpStatus: 400,
       errorCode: fixture.expectedErrorCode,
     });
   }
   return report;
+}
+
+function assertSha256Digest(value: string, label: string): string {
+  if (!/^sha256:[a-f0-9]{64}$/u.test(value)) {
+    throw new Error(`${label} digest is not a canonical SHA-256 digest`);
+  }
+  return value;
 }
 
 async function runImportConformance(
