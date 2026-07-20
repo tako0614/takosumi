@@ -32,6 +32,8 @@ import {
   type FormPackage,
   type FormPackageLifecycleStatus,
   type InstalledFormReference,
+  type JsonObject,
+  type ResourceShapeKind,
   RESOURCE_SHAPE_KINDS,
   type SpacePolicySpec,
   type TargetPoolSpec,
@@ -358,6 +360,30 @@ class CountingPreviewAdapter extends StubResourceShapeAdapter {
 class DriftableAdapter extends StubResourceShapeAdapter {
   drifted = false;
 
+  override async apply(
+    input: Parameters<StubResourceShapeAdapter["apply"]>[0],
+  ) {
+    const applied = await super.apply(input);
+    const name = input.plan.validatedSpec.name;
+    if (typeof name !== "string") {
+      throw new Error("standard Form test adapter requires a validated name");
+    }
+    return {
+      ...applied,
+      outputs: {
+        ...applied.outputs,
+        id: `${input.plan.shape}/${name}`,
+        kind: input.plan.shape,
+        name,
+        generation: input.stateGeneration + 1,
+        portability: "portable",
+        ...(input.plan.shape === "SQLDatabase"
+          ? { engine: input.plan.validatedSpec.engine ?? "sqlite" }
+          : {}),
+      },
+    };
+  }
+
   override async observe(
     input: Parameters<StubResourceShapeAdapter["observe"]>[0],
   ) {
@@ -366,6 +392,225 @@ class DriftableAdapter extends StubResourceShapeAdapter {
       ? { ...observed, status: "drifted" as const, summary: "test drift" }
       : observed;
   }
+}
+
+interface StandardFormHostMatrixEntry {
+  readonly kind: ResourceShapeKind;
+  readonly identity: InstalledFormReference;
+  readonly interfaceDescriptors?: FormDefinition["interfaceDescriptors"];
+  readonly desired: JsonObject;
+  readonly negative: JsonObject;
+  readonly desiredDigest: string;
+  readonly negativeDigest: string;
+}
+
+interface StandardFormHostMatrix {
+  readonly format: "takosumi.takoform-standard-host-matrix@v1";
+  readonly status: "candidate-only";
+  readonly definitionVersion: "1.0.1";
+  readonly packageVersion: "1.0.1";
+  readonly entries: readonly StandardFormHostMatrixEntry[];
+}
+
+const STANDARD_FORM_HOST_MATRIX = (await Bun.file(
+  new URL(
+    "../../../fixtures/takoform-standard-1.0.1-host-matrix.json",
+    import.meta.url,
+  ),
+).json()) as StandardFormHostMatrix;
+
+const STANDARD_HOST_INTERFACES: Readonly<
+  Record<ResourceShapeKind, Readonly<Record<string, "native">>>
+> = {
+  EdgeWorker: {
+    worker_fetch: "native",
+    workers: "native",
+    resource_connection: "native",
+    "object.binding.v1": "native",
+    grant_read: "native",
+    grant_write: "native",
+  },
+  ObjectBucket: {
+    object_store: "native",
+    s3_api: "native",
+    signed_url: "native",
+  },
+  KVStore: { kv_store: "native", runtime_binding: "native" },
+  SQLDatabase: { sql: "native", sqlite: "native" },
+  Queue: { queue: "native", publish: "native", consume: "native" },
+  VectorIndex: {
+    vector_index: "native",
+    vector_query: "native",
+    runtime_binding: "native",
+    cosine: "native",
+    dot: "native",
+  },
+  DurableWorkflow: {
+    durable_workflow: "native",
+    invoke: "native",
+    signal: "native",
+  },
+  ContainerService: { oci_container: "native", public_http: "native" },
+  StatefulActorNamespace: {
+    stateful_actor_namespace: "native",
+    runtime_binding: "native",
+    durable_sqlite: "native",
+  },
+  Schedule: {
+    schedule: "native",
+    cron: "native",
+    invoke: "native",
+    resource_connection: "native",
+    schedule_trigger: "native",
+    grant_invoke: "native",
+  },
+};
+
+function standardFormHostMatrixRegistry(
+  matrix: StandardFormHostMatrix,
+): NonNullable<ResourceShapeServiceDeps["formRegistry"]> {
+  const definitions: FormDefinition[] = matrix.entries.map((entry) => ({
+    identity: entry.identity,
+    displayName: `${entry.kind} standard Form candidate`,
+    operations: ["create", "read", "update", "delete", "import", "refresh"],
+    ...(entry.interfaceDescriptors
+      ? { interfaceDescriptors: entry.interfaceDescriptors }
+      : {}),
+    installedAt: "2026-07-20T00:00:00.000Z",
+  }));
+  const packages: FormPackage[] = matrix.entries.map((entry) => ({
+    packageDigest: entry.identity.packageDigest,
+    artifactRef: `test://takoform/${entry.kind}/1.0.1`,
+    verifierId: "standard-form-host-matrix",
+    status: "installed",
+    definitionRefs: [entry.identity.formRef],
+    installedAt: "2026-07-20T00:00:00.000Z",
+    installedBy: "test",
+    updatedAt: "2026-07-20T00:00:00.000Z",
+  }));
+  const activations: FormActivation[] = matrix.entries.map((entry) => ({
+    id: `activation_standard_${entry.kind}`,
+    identity: entry.identity,
+    scope: { type: "space", id: "space_1" },
+    audience: { roles: ["owner"] },
+    policy: {},
+    eligibleTargetPoolClasses: ["standard-host-matrix"],
+    status: "active",
+    revision: 1,
+    createdAt: "2026-07-20T00:00:00.000Z",
+    createdBy: "test",
+    updatedAt: "2026-07-20T00:00:00.000Z",
+    updatedBy: "test",
+  }));
+  return {
+    getDefinition: async (formRef) =>
+      definitions.find(
+        (definition) =>
+          JSON.stringify(definition.identity.formRef) ===
+          JSON.stringify(formRef),
+      ),
+    getPackage: async (packageDigest) =>
+      packages.find(
+        (formPackage) => formPackage.packageDigest === packageDigest,
+      ),
+    getActivation: async (id) =>
+      activations.find((activation) => activation.id === id),
+    listDefinitions: async () => ({ items: definitions }),
+    listActivations: async () => ({ items: activations }),
+  };
+}
+
+async function installStandardFormHostMatrix(
+  matrix: StandardFormHostMatrix,
+): Promise<InMemoryFormRegistryStore> {
+  const store = new InMemoryFormRegistryStore();
+  const installedAt = "2026-07-20T00:00:00.000Z";
+  for (const entry of matrix.entries) {
+    await store.installPackage(
+      {
+        packageDigest: entry.identity.packageDigest,
+        artifactRef: `test://takoform/${entry.kind}/1.0.1`,
+        verifierId: "standard-form-host-matrix",
+        status: "installed",
+        definitionRefs: [entry.identity.formRef],
+        installedAt,
+        installedBy: "test",
+        updatedAt: installedAt,
+      },
+      [
+        {
+          identity: entry.identity,
+          displayName: `${entry.kind} standard Form candidate`,
+          operations: [
+            "create",
+            "read",
+            "update",
+            "delete",
+            "import",
+            "refresh",
+          ],
+          ...(entry.interfaceDescriptors
+            ? { interfaceDescriptors: entry.interfaceDescriptors }
+            : {}),
+          installedAt,
+        },
+      ],
+    );
+    await store.createActivation({
+      id: `activation_standard_${entry.kind}`,
+      identity: entry.identity,
+      scope: { type: "space", id: "space_1" },
+      audience: { roles: ["owner"] },
+      policy: {},
+      eligibleTargetPoolClasses: ["standard-host-matrix"],
+      status: "active",
+      revision: 1,
+      createdAt: installedAt,
+      createdBy: "test",
+      updatedAt: installedAt,
+      updatedBy: "test",
+    });
+  }
+  return store;
+}
+
+function updatedStandardDesired(
+  entry: StandardFormHostMatrixEntry,
+): JsonObject {
+  const desired = structuredClone(entry.desired);
+  switch (entry.kind) {
+    case "EdgeWorker":
+      desired.compatibilityDate = "2026-07-21";
+      break;
+    case "ObjectBucket":
+      desired.interfaces = ["s3_api", "signed_url"];
+      break;
+    case "KVStore":
+      desired.consistency = "strong";
+      break;
+    case "SQLDatabase":
+      desired.migrationsPath = "migrations";
+      break;
+    case "Queue":
+      desired.delivery = { maxRetries: 3 };
+      break;
+    case "VectorIndex":
+      desired.metric = "dot";
+      break;
+    case "DurableWorkflow":
+      desired.retry = { initialBackoffSeconds: 5, maxAttempts: 4 };
+      break;
+    case "ContainerService":
+      desired.publicHttp = false;
+      break;
+    case "StatefulActorNamespace":
+      desired.migrationTag = "v2";
+      break;
+    case "Schedule":
+      desired.cron = "5 0 * * *";
+      break;
+  }
+  return desired;
 }
 
 test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", async () => {
@@ -919,6 +1164,273 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
   ).rejects.toThrow(
     "negative fixture invalid-interfaces returned policy_denied instead of invalid_argument",
   );
+});
+
+test("portable Form host proves the exact ten-Form 1.0.1 successor matrix", async () => {
+  expect(STANDARD_FORM_HOST_MATRIX).toMatchObject({
+    format: "takosumi.takoform-standard-host-matrix@v1",
+    status: "candidate-only",
+    definitionVersion: "1.0.1",
+    packageVersion: "1.0.1",
+  });
+  expect(STANDARD_FORM_HOST_MATRIX.entries).toHaveLength(10);
+  expect(
+    STANDARD_FORM_HOST_MATRIX.entries.map(({ kind }) => kind).sort(),
+  ).toEqual([...RESOURCE_SHAPE_KINDS].sort());
+
+  const adapter = new DriftableAdapter();
+  const { app, service } = await buildApp(
+    undefined,
+    standardFormHostMatrixRegistry(STANDARD_FORM_HOST_MATRIX),
+    { adapter },
+  );
+  await service.putTargetPool("space_1", "default", {
+    classes: ["standard-host-matrix"],
+    targets: [
+      {
+        name: "standard-host-matrix",
+        type: "test",
+        ref: "standard-host-matrix",
+        priority: 100,
+        implementations: STANDARD_FORM_HOST_MATRIX.entries.map((entry) => ({
+          shape: entry.kind,
+          implementation: `test_${entry.kind.toLowerCase()}`,
+          nativeResourceType: `test.${entry.kind.toLowerCase()}`,
+          providerSource: CLOUDFLARE_PROVIDER,
+          moduleTemplate: "cloudflare-worker-service",
+          moduleImportAddress: "test_resource.this",
+          moduleOutputs: [
+            { name: "id", type: "string" },
+            { name: "name", type: "string" },
+            ...(entry.kind === "SQLDatabase"
+              ? [{ name: "engine" as const, type: "string" as const }]
+              : []),
+          ],
+          interfaces: STANDARD_HOST_INTERFACES[entry.kind],
+        })),
+      },
+    ],
+  });
+
+  const edgeBucket = STANDARD_FORM_HOST_MATRIX.entries.find(
+    ({ kind }) => kind === "ObjectBucket",
+  );
+  if (!edgeBucket) throw new Error("matrix omitted ObjectBucket");
+  const edgeBucketDependency = await reviewedResourceApply(
+    app,
+    "/v1/resources/ObjectBucket/edge-assets",
+    {
+      metadata: { space: "space_1" },
+      form: edgeBucket.identity,
+      spec: { ...edgeBucket.desired, name: "edge-assets" },
+    },
+  );
+  expect(edgeBucketDependency.status).toBe(200);
+
+  const reports = [];
+  for (const entry of STANDARD_FORM_HOST_MATRIX.entries) {
+    adapter.drifted = false;
+    if (entry.kind === "Schedule") {
+      const workflow = STANDARD_FORM_HOST_MATRIX.entries.find(
+        ({ kind }) => kind === "DurableWorkflow",
+      );
+      if (!workflow) throw new Error("matrix omitted DurableWorkflow");
+      const dependency = await reviewedResourceApply(
+        app,
+        `/v1/resources/DurableWorkflow/${workflow.desired.name as string}`,
+        {
+          metadata: { space: "space_1" },
+          form: workflow.identity,
+          spec: workflow.desired,
+        },
+      );
+      expect(dependency.status).toBe(200);
+    }
+
+    const report = await runPortableFormHostConformance({
+      endpoint: "https://host.example.test",
+      space: "space_1",
+      name: entry.desired.name as string,
+      identity: entry.identity,
+      desired: entry.desired,
+      updatedDesired: updatedStandardDesired(entry),
+      positiveFixtureName: "desired",
+      positivePackageFixtureDigest: entry.desiredDigest,
+      negativeFixtures: [
+        {
+          name: "negative",
+          stage: "desired",
+          input: entry.negative,
+          expectedErrorCode: "invalid_argument",
+        },
+      ],
+      negativePackageFixtureDigests: { negative: entry.negativeDigest },
+      importNativeId: `provider-native-${entry.kind.toLowerCase()}`,
+      expectDrift: true,
+      beforeDriftObserve: () => {
+        adapter.drifted = true;
+      },
+      fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
+        app.request(input.toString(), init)) as typeof fetch,
+    });
+    expect(report.status).toBe("passed");
+    expect(report.identity).toEqual(entry.identity);
+    expect(report.fixtures.positive[0]?.packageFixtureDigest).toBe(
+      entry.desiredDigest,
+    );
+    expect(report.fixtures.negative[0]?.packageFixtureDigest).toBe(
+      entry.negativeDigest,
+    );
+    const standard = await portableStandardHostRunnerReport(report);
+    expect(standard.report.identity).toEqual(entry.identity);
+    expect(standard.report.status).toBe("passed");
+    expect(standard.report.positiveFixtures[0]?.packageFixtureDigest).toBe(
+      entry.desiredDigest,
+    );
+    expect(standard.report.negativeFixtures[0]?.packageFixtureDigest).toBe(
+      entry.negativeDigest,
+    );
+    reports.push(standard.report);
+  }
+
+  expect(reports).toHaveLength(10);
+});
+
+test("exact 1.0.1 runtime descriptors materialize as portable host-owned Interfaces", async () => {
+  const formRegistryStore = await installStandardFormHostMatrix(
+    STANDARD_FORM_HOST_MATRIX,
+  );
+  const { app, operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
+    formRegistryStore,
+    resourceShapeAdapter: new DriftableAdapter(),
+    resourceShapeSchemaRegistry:
+      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
+    resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
+    resolveResourceInterfaceWorkspace: async ({ resourceSpaceId }) =>
+      resourceSpaceId === "space_1" ? "workspace_1" : undefined,
+  });
+  const implementations = STANDARD_FORM_HOST_MATRIX.entries.map((entry) => ({
+    shape: entry.kind,
+    implementation: `test_${entry.kind.toLowerCase()}`,
+    nativeResourceType: `test.${entry.kind.toLowerCase()}`,
+    providerSource: CLOUDFLARE_PROVIDER,
+    moduleTemplate: "cloudflare-worker-service",
+    moduleImportAddress: "test_resource.this",
+    moduleOutputs: [
+      { name: "id", type: "string" as const },
+      { name: "name", type: "string" as const },
+      ...(entry.kind === "SQLDatabase"
+        ? [{ name: "engine", type: "string" as const }]
+        : []),
+    ],
+    interfaces: STANDARD_HOST_INTERFACES[entry.kind],
+  }));
+  expect(
+    (
+      await app.request("/v1/target-pools/default", {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          space: "space_1",
+          spec: {
+            classes: ["standard-host-matrix"],
+            targets: [
+              {
+                name: "standard-host-matrix",
+                type: "test",
+                ref: "standard-host-matrix",
+                priority: 100,
+                implementations,
+              },
+            ],
+          },
+        }),
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await app.request("/v1/space-policies/default", {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ space: "space_1", spec: POLICY }),
+      })
+    ).status,
+  ).toBe(200);
+
+  const bucket = STANDARD_FORM_HOST_MATRIX.entries.find(
+    ({ kind }) => kind === "ObjectBucket",
+  );
+  if (!bucket) throw new Error("matrix omitted ObjectBucket");
+  expect(
+    (
+      await reviewedResourceApply(
+        app,
+        "/v1/resources/ObjectBucket/edge-assets",
+        {
+          metadata: { space: "space_1" },
+          form: bucket.identity,
+          spec: { ...bucket.desired, name: "edge-assets" },
+        },
+      )
+    ).status,
+  ).toBe(200);
+
+  let descriptorCount = 0;
+  for (const entry of STANDARD_FORM_HOST_MATRIX.entries) {
+    const name = entry.desired.name as string;
+    const applied = await reviewedResourceApply(
+      app,
+      `/v1/resources/${entry.kind}/${name}`,
+      {
+        metadata: { space: "space_1" },
+        form: entry.identity,
+        spec: entry.desired,
+      },
+    );
+    expect(applied.status).toBe(200);
+    expect((await applied.json()).status.phase).toBe("Ready");
+
+    const resourceId = `tkrn:space_1:${entry.kind}:${name}`;
+    const materialized = await operations.interfaces.list({
+      workspaceId: "workspace_1",
+      ownerKind: "Resource",
+      ownerId: resourceId,
+      includeRetired: false,
+    });
+    const descriptors = entry.interfaceDescriptors ?? [];
+    expect(materialized).toHaveLength(descriptors.length);
+    if (descriptors.length === 0) {
+      expect(entry.kind).toBe("Schedule");
+      continue;
+    }
+    descriptorCount += descriptors.length;
+    expect(JSON.stringify(descriptors)).not.toContain("takosumi.cloud");
+    const descriptor = descriptors[0]!;
+    const iface = materialized[0]!;
+    expect(iface.status.phase).toBe("Resolved");
+    expect(iface.spec).toMatchObject({
+      type: descriptor.name,
+      version: descriptor.version,
+      document: descriptor.document,
+      access: { visibility: "workspace" },
+    });
+    expect(iface.metadata.materializedFrom).toMatchObject({
+      source: "form_descriptor",
+      descriptorName: descriptor.name,
+      descriptorVersion: descriptor.version,
+      formSchemaDigest: entry.identity.formRef.schemaDigest,
+    });
+    expect(iface.status.resolvedInputs).toMatchObject({
+      resource: `${entry.kind}/${name}`,
+      name,
+      ...(entry.kind === "SQLDatabase" ? { engine: "sqlite" } : {}),
+    });
+  }
+  expect(descriptorCount).toBe(9);
 });
 
 test("portable Form host refuses to serialize partial runs as standard admission evidence", async () => {
