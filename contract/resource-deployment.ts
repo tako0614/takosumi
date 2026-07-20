@@ -15,6 +15,7 @@ import type { ResourceShapeKind } from "./resource-shape.ts";
 import type { InstalledFormReference } from "./service-forms.ts";
 import type { ActorContext, JsonObject, JsonValue } from "./types.ts";
 import type { UsageRatingStatus } from "./billing.ts";
+import type { OfferingSelection } from "./offerings.ts";
 
 export type ResourceDeploymentChargeKind =
   "one_time" | "recurring" | "usage_estimate";
@@ -59,10 +60,19 @@ export interface ResourceDeploymentQuote {
   readonly resolutionFingerprint: string;
   readonly ratingStatus: UsageRatingStatus;
   readonly currency: string;
+  /** Exact price-catalog snapshot used to rate the line items. */
   readonly catalogId?: string;
+  /** Price-catalog version; distinct from OfferingSelection.reference catalog. */
   readonly catalogVersion?: string;
   readonly offeringId?: string;
   readonly offeringVersion?: string;
+  /**
+   * Exact generic OSS Offering resolution pinned before a commercial host
+   * attaches manager, capacity, SKU, price, and billing evidence. Rated host
+   * quotes require it; OSS unrated quotes may omit it. Its catalog reference
+   * names the generic Offering catalog, not the price catalog above.
+   */
+  readonly offeringSelection?: OfferingSelection;
   readonly region?: string;
   readonly lineItems: readonly ResourceDeploymentQuoteLineItem[];
   readonly estimatedTotalUsdMicros: number;

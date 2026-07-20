@@ -851,6 +851,27 @@ function ratedQuote(
     catalogVersion: "2026-07-14",
     offeringId: "object-bucket.standard",
     offeringVersion: "1",
+    offeringSelection: {
+      reference: {
+        catalogId: "official-managed-services",
+        catalogVersion: "2026-07-14",
+        offeringId: "object-bucket.standard",
+        offeringVersion: "1",
+      },
+      subject: {
+        type: "forms.takoform.com/v1alpha1/Form",
+        ref: "ObjectBucket",
+        version: "1.0.0",
+        digest: `sha256:${"b".repeat(64)}`,
+      },
+      requirements: [],
+      profile: "default",
+      region: "global",
+      maturity: "stable",
+      resolverId: "test-form-resolver",
+      resolutionFingerprint: `sha256:${"c".repeat(64)}`,
+      resolvedAt: context.now,
+    },
     region: "global",
     lineItems: [
       {
@@ -2158,6 +2179,39 @@ test("rated quote without an offering version fails closed", async () => {
   if (!preview.ok) {
     expect(preview.error.code).toBe("deployment_quote_invalid");
     expect(preview.error.message).toContain("offering identity");
+  }
+});
+
+test("rated quote rejects an OfferingSelection for a different offering", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const admission = new RecordingDeploymentAdmission();
+  admission.quoteFactory = (context) => {
+    const quote = ratedQuote(context);
+    return {
+      ...quote,
+      offeringSelection: {
+        ...quote.offeringSelection!,
+        reference: {
+          ...quote.offeringSelection!.reference,
+          offeringId: "different-offering",
+        },
+      },
+    };
+  };
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new StubResourceShapeAdapter(),
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const preview = await service.preview(APPLY);
+  expect(preview.ok).toBe(false);
+  if (!preview.ok) {
+    expect(preview.error.code).toBe("deployment_quote_invalid");
+    expect(preview.error.message).toContain("OfferingSelection");
   }
 });
 

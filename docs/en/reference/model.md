@@ -245,10 +245,14 @@ non-secret speed settings. This is not a cross-run source-sync cache.
 ## Service Form Host Resolution (`Resource Shape` compatibility)
 
 The Service Form host flow starts from typed Resource objects with an exact
-FormRef and resolves them to Targets. The current API/provider/state has not yet
-added FormRef persistence and uses the Resource Shape kind as its compatibility
-identity. Existing Resource IDs, kinds, ResolutionLocks, Runs, and state remain
-stable throughout migration; no second ledger is created. Objects can be
+FormRef and resolves them to Targets. Since D1 v46 / Postgres v94 the current
+API/provider/state additively persists exact FormRef and package-digest evidence
+on Resource and ResolutionLock records. Resource Shape kind remains the current
+wire/provider compatibility identity, not a substitute for the persisted Form
+identity. Bounded production-ledger backfill and readback are operator readiness
+evidence separate from repository implementation. Existing Resource IDs, kinds,
+ResolutionLocks, Runs, and state remain stable throughout migration; no second
+ledger is created. Objects can be
 submitted through the `/v1/resources` Deploy API, the portable Takoform typed
 client, Takosumi CLI/dashboard, or Kubernetes CRDs. Discontinued `takosumi_*`
 HCL remains only as existing-state migration/rollback custody:

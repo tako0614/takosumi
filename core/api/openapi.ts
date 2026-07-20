@@ -1391,6 +1391,7 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
         catalogVersion: { type: "string", minLength: 1 },
         offeringId: { type: "string", minLength: 1 },
         offeringVersion: { type: "string", minLength: 1 },
+        offeringSelection: ref("OfferingSelection"),
         region: { type: "string", minLength: 1 },
         lineItems: {
           type: "array",

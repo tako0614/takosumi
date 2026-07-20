@@ -230,8 +230,11 @@ run をまたぐ source-sync cache ではありません。
 ## Service Form Host Resolution (`Resource Shape` compatibility)
 
 Service Form host flow は exact FormRef を持つ typed Resource object から始まり、それを Target へ解決します。
-現在の API/provider/state は FormRef をまだ additive persistence しておらず、Resource Shape kind を互換 identity
-として使います。既存 Resource ID、kind、ResolutionLock、Run、state は移行中も維持され、別 ledger は作りません。
+現在の API/provider/state は D1 v46 / Postgres v94 以降で exact FormRef と package digest を Resource / ResolutionLock
+へ additive persistence します。Resource Shape kind は current wire/provider compatibility identity として残りますが、
+永続化された Form identity の代用ではありません。production ledger の bounded backfill と readback 証跡は repository
+実装とは別の operator readiness gate です。既存 Resource ID、kind、ResolutionLock、Run、state は移行中も維持され、
+別 ledger は作りません。
 これらの object は `/v1/resources` Deploy API、portable な Takoform typed client、
 Takosumi CLI/dashboard、Kubernetes CRD のいずれからでも送信できます。廃止済み
 `takosumi_*` HCL は既存 state の migration / rollback custody に限ります。

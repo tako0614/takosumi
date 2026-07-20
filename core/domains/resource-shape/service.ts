@@ -5902,9 +5902,21 @@ function deploymentQuoteError(
       !quote.catalogId ||
       !quote.catalogVersion ||
       !quote.offeringId ||
-      !quote.offeringVersion
+      !quote.offeringVersion ||
+      !quote.offeringSelection
     ) {
-      return "a rated deployment quote requires catalog and offering identity";
+      return "a rated deployment quote requires catalog and offering identity plus an exact OfferingSelection";
+    }
+    const selection = quote.offeringSelection;
+    if (
+      selection.reference.offeringId !== quote.offeringId ||
+      selection.reference.offeringVersion !== quote.offeringVersion ||
+      selection.region !== quote.region ||
+      !selection.resolverId.trim() ||
+      !SHA256_DIGEST_PATTERN.test(selection.resolutionFingerprint) ||
+      !Number.isFinite(Date.parse(selection.resolvedAt))
+    ) {
+      return "rated deployment quote OfferingSelection does not match its exact catalog identity";
     }
   } else if (quote.ratingStatus !== "unrated") {
     return "deployment quote ratingStatus must be rated or unrated";
