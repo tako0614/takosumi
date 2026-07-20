@@ -54,6 +54,28 @@ test("Worker composition rejects a text RunnerProfile catalog", () => {
   ).toThrow("must be a host-code runtime object");
 });
 
+test("Worker composition accepts only a host-code Interface OAuth resource authorizer", async () => {
+  const authorizer = async () => true;
+  const options = deployControlServiceOptions({
+    TAKOSUMI_INTERFACE_OAUTH2_RESOURCE_AUTHORIZER: authorizer,
+  } as unknown as CloudflareWorkerEnv);
+  expect(options.interfaceOAuth2ResourceAuthorizer).toBe(authorizer);
+  await expect(
+    options.interfaceOAuth2ResourceAuthorizer!({
+      workspaceId: "workspace_1",
+      interfaceId: "interface_1",
+      ownerRef: { kind: "Resource", id: "tkrn:workspace_1:KVStore:cache" },
+      resource: "https://app.takosumi.com/v1/cloud/resources",
+    }),
+  ).resolves.toBeTrue();
+
+  expect(() =>
+    deployControlServiceOptions({
+      TAKOSUMI_INTERFACE_OAUTH2_RESOURCE_AUTHORIZER: "true",
+    } as unknown as CloudflareWorkerEnv),
+  ).toThrow("must be a host-code function");
+});
+
 test("Worker composition mounts ledger HTTP routes only for explicit private ingress", () => {
   expect(
     deployControlServiceOptions({} as unknown as CloudflareWorkerEnv)

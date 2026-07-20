@@ -2334,6 +2334,7 @@ export async function createTakosumiService(
     ...(resourceShapeService
       ? {
           resourceCompatibility: {
+            // --- Resource Shape host inventory
             resolveReadyResource: async (input: {
               readonly space: string;
               readonly kind: ResourceShapeKind;
@@ -2344,38 +2345,66 @@ export async function createTakosumiService(
                 input.kind,
                 input.name,
               );
+              const [recordBefore, lockBefore] = await Promise.all([
+                resourceShapeStores.resources.get(resourceId),
+                resourceShapeStores.locks.get(resourceId),
+              ]);
+              if (
+                !recordBefore ||
+                recordBefore.phase !== "Ready" ||
+                recordBefore.observedGeneration !== recordBefore.generation
+              ) {
+                return undefined;
+              }
               const result = await resourceShapeService.get(
                 input.space,
                 input.kind,
                 input.name,
               );
-              if (!result.ok || result.value.status?.phase !== "Ready") {
-                return undefined;
-              }
-              // Re-read the durable record and lock after projection. A
-              // concurrent update must not pair an older Ready projection with
-              // a newer ResolutionLock (or vice versa).
-              const [record, lock] = await Promise.all([
-                resourceShapeStores.resources.get(resourceId),
+              const [lockAfter, recordAfter] = await Promise.all([
                 resourceShapeStores.locks.get(resourceId),
+                resourceShapeStores.resources.get(resourceId),
               ]);
+              const unchanged =
+                recordAfter &&
+                recordBefore.id === resourceId &&
+                recordAfter.id === resourceId &&
+                recordBefore.spaceId === input.space &&
+                recordAfter.spaceId === input.space &&
+                recordBefore.kind === input.kind &&
+                recordAfter.kind === input.kind &&
+                recordBefore.name === input.name &&
+                recordAfter.name === input.name &&
+                recordAfter.phase === "Ready" &&
+                recordAfter.generation === recordBefore.generation &&
+                recordAfter.observedGeneration === recordBefore.generation &&
+                recordAfter.updatedAt === recordBefore.updatedAt;
               if (
-                !record ||
-                !lock ||
-                record.phase !== "Ready" ||
-                record.observedGeneration !== record.generation ||
+                !unchanged ||
+                !result.ok ||
+                result.value.status?.phase !== "Ready" ||
                 result.value.status.observedGeneration !==
-                  record.observedGeneration
+                  recordBefore.generation ||
+                !lockBefore ||
+                !lockAfter ||
+                !matchesApplyLock(lockBefore, lockAfter) ||
+                lockBefore.resourceId !== resourceId ||
+                lockBefore.locked !== true ||
+                result.value.status.resolution?.locked !== true ||
+                result.value.status.resolution.selectedImplementation !==
+                  lockBefore.selectedImplementation ||
+                result.value.status.resolution.target !== lockBefore.target
               ) {
-                return undefined;
+                throw new Error(
+                  `canonical Ready Resource inventory conflict for ${resourceId}`,
+                );
               }
               return structuredClone({
                 resource: result.value,
-                resourceGeneration: record.generation,
-                nativeResources: lock.nativeResources ?? [],
+                resourceGeneration: recordBefore.generation,
+                nativeResources: lockBefore.nativeResources ?? [],
               });
             },
-            // --- Resource Shape host inventory
             listReadyResourcesPage: async (input: {
               readonly kind: ResourceShapeKind;
               readonly cursor?: string;
