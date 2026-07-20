@@ -74,6 +74,42 @@ test("authoritative docs reject active Takosumi provider wording", () => {
   }
 });
 
+test("authoritative docs reject active provider claims masked by generic negative context", () => {
+  for (const content of [
+    "The Takosumi provider will publish new resources. It is not required for plain stacks.",
+    "The Takosumi provider publishes new resources alongside existing state.",
+    "The Takosumi provider will add an admin resource. Takosumi does not depend on it.",
+    "Add new `takosumi_*` resources to the provider. The provider is retired.",
+    "Takosumi provider は今後新規 resource を公開します。他の Stack は依存しません。",
+  ]) {
+    const violations = findAuthoritativeDocViolations([
+      ...COMPLETE_BASELINE,
+      { path: "docs/reference/provider-mixed-claim.md", content },
+    ]);
+
+    expect(violations).toContainEqual(
+      expect.objectContaining({ ruleId: "active-takosumi-provider-doc" }),
+    );
+  }
+});
+
+test("authoritative docs reject generic negatives without explicit retirement custody", () => {
+  for (const content of [
+    "The Takosumi provider is not required for plain stacks.",
+    "Takosumi does not depend on the Takosumi provider.",
+    "The `takosumi_*` resources have existing state.",
+  ]) {
+    const violations = findAuthoritativeDocViolations([
+      ...COMPLETE_BASELINE,
+      { path: "docs/reference/provider-generic-negative.md", content },
+    ]);
+
+    expect(violations).toContainEqual(
+      expect.objectContaining({ ruleId: "active-takosumi-provider-doc" }),
+    );
+  }
+});
+
 test("authoritative docs require matching Japanese and English retirement claims", () => {
   const violations = findAuthoritativeDocViolations(
     COMPLETE_BASELINE.filter(({ path }) => path !== "docs/en/reference/api.md"),

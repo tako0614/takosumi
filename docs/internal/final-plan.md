@@ -1469,7 +1469,8 @@ separate reviewed lifecycle operation.
 From the user's perspective the service is an `EdgeWorker`, selected through
 the dashboard, CLI, direct Deploy API, a supported compatibility client, or the
 optional portable `takoform_edge_worker` HCL resource. Direct API/CLI/dashboard
-use requires no OpenTofu provider, and the Takosumi provider is never required.
+use requires no OpenTofu provider; the discontinued Takosumi provider remains
+historical migration/rollback custody and is not used by this flow.
 Behind the Deploy API, the selected Target/Adapter decides whether the
 implementation is Workers for Platforms, Takosumi native runtime, or an
 operator-provided plugin. Do not hard-code WfP into a client or Service Form.
@@ -2125,10 +2126,11 @@ Takosumi resource state
 Native resource state
 ```
 
-Portable Takoform state keeps Takosumi Resource ids and public outputs. Retained
-historical `takosumi_*` state follows the same migration invariant but is never
-newly authored. Native provider identifiers, resolution details, and secret
-material belong in Takosumi state, not in user HCL.
+Portable Takoform state keeps Takosumi Resource ids and public outputs.
+Historical migration/rollback custody for retained `takosumi_*` state follows
+the same invariant, but that state is never newly authored. Native provider
+identifiers, resolution details, and secret material belong in Takosumi state,
+not in user HCL.
 
 ## 10. Discovery And Capabilities
 

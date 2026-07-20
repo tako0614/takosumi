@@ -902,7 +902,8 @@ declared-env-capable ProviderConnections and ordinary OpenTofu modules. Add a
 standard typed form-provider schema only for a repeated portable form with a
 clear schema, validation, lifecycle, adapter path, state/import/drift story,
 security review, and conformance evidence. No new Takosumi-provider resource is
-admitted; operator objects use API/CLI/dashboard and old types remain custody.
+admitted; operator objects use API/CLI/dashboard, and the discontinued
+provider's old types remain historical migration/rollback custody.
 
 The target extension has two layers. Adding a standard HCL-facing form resource
 requires an immutable Form Package and Takoform typed-provider release so OpenTofu can keep
@@ -1576,9 +1577,9 @@ isolation, quota, network egress policy, admin audit, and usage metering.
 5. Move first-party runtime consumers to Interface reads and invocation-time
    Principal OAuth credentials; remove legacy Output convention and
    Workspace-wide Output reconcile paths.
-6. Characterize and freeze the current Resource/provider state, retain the
-   immutable `1.0.0` quarantine and migration/rollback fixtures, and publish no
-   replacement Takosumi provider version.
+6. Characterize and freeze the discontinued Takosumi provider's historical
+   Resource/state custody, retain the immutable `1.0.0` quarantine and
+   migration/rollback fixtures, and publish no replacement version.
 7. After public identity gates, extract FormRef and the data-only ten-package
    legacy compatibility set, then standard definitions, portable
    interoperability, typed provider, and conformance without moving Takosumi

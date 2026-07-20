@@ -1,6 +1,6 @@
 # Discontinued Takosumi provider custody
 
-There is no Takosumi provider release operation. The `provider/v1.1.4`
+The Takosumi provider is discontinued; there is no release operation. The `provider/v1.1.4`
 publication was cancelled, the GitHub publication workflow is removed, no new
 version is allowed, and the dashboard/platform no longer materializes this
 provider into its default mirror.
