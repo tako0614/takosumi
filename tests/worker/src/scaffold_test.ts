@@ -50,7 +50,7 @@ test("platform scaffold exposes production hardening evidence gates", async () =
   assert.match(wrangler, /TAKOSUMI_PLATFORM_HARDENING_EVIDENCE/);
   assert.doesNotMatch(wrangler, /CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE/);
   // The OSS platform template names no Cloud feature: the generic Seam A is
-  // config-driven (TAKOSUMI_CLOUD_EXTENSIONS + Cloud-supplied handler keys),
+  // config-driven (TAKOSUMI_PLATFORM_EXTENSIONS + Cloud-supplied handler keys),
   // so no `TAKOSUMI_CLOUD_*` extension handler is hardcoded in the OSS wrangler.
   assert.doesNotMatch(wrangler, /TAKOSUMI_CLOUD_AI_GATEWAY/);
   assert.match(worker, /\/internal\/platform\/hardening-gates/);

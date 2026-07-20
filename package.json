@@ -37,6 +37,7 @@
     "service-form:compat-removal:eligible": "bun scripts/check-service-form-compatibility-removal.mjs eligible",
     "service-form:host-conformance": "bun scripts/run-portable-form-host-conformance.ts",
     "service-form:published-package-host-proof": "bun scripts/verify-takoform-published-package-host-proof.ts",
+    "service-form:prepare-install-envelopes": "bun scripts/prepare-takoform-install-envelopes.ts",
     "credential-recipes:assets": "bun scripts/build-credential-recipe-assets.ts",
     "credential-recipes:check": "bun scripts/build-credential-recipe-assets.ts --check",
     "operator:release-activator": "bun scripts/operator-release-activator.ts",

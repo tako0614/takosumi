@@ -190,6 +190,48 @@ substrate restart. It proves package publication and host compatibility only.
 It preserves Takoform's `external-required` admission and revocation status and
 never creates a FormActivation.
 
+### Prepare the reviewed internal install inputs
+
+An operator can turn that exact retained set into the host-internal transport
+documents without contacting GitHub, R2, or any Takosumi service:
+
+```console
+bun run service-form:prepare-install-envelopes -- \
+  --takoform-root /absolute/path/to/clean/retained-takoform-checkout \
+  --output-dir /absolute/private/path/to/new-install-envelope-set \
+  --json
+```
+
+Both paths must be absolute and canonical. The Takoform checkout must be the
+exact clean commit pinned by Takosumi. The output parent must not traverse a
+symlink and must be owned by the invoking user with mode `0700`. The dedicated
+output directory must not already exist, and it must be outside both source
+repositories. The command reads only the independently reviewed 10-package
+published set and its pinned trust documents. It constructs RFC 8785 install
+envelopes, then runs every envelope through the actual Sigstore and data-only
+host verifier before making any output visible.
+
+The completed directory is published with an atomic no-overwrite move, mode
+`0700`; every file is mode `0600`. It contains:
+
+- one canonical install envelope and one non-secret install/reverify request
+  for each exact FormRef and package digest;
+- the pinned public Sigstore TrustedRoot; and
+- `install-envelope-manifest.json`, which binds the reviewed checkout and
+  release commits, trust/policy/published-set digests, publisher identity,
+  package kind and digest, raw envelope digest, proposed immutable R2 key, and
+  both request bodies.
+
+Do not commit this operator output. Recompute each raw envelope SHA-256 before
+upload, place the envelope and TrustedRoot bytes at the manifest's exact R2
+keys, and require the host trust policy to retain the same
+`trust/sigstore-public-good-root.json` key and manifest digest. Then submit the
+matching request file through the private operator route. After the host
+restart, submit the matching reverify request and retain the operator audit
+evidence. The preparation command has no R2 client, deploy token, signing key,
+activation action, or network publication behavior; it cannot make an
+`external-required` package production-admissible.
+
 Production standard-form activation remains blocked until the independent
 publisher roles, signed host/provider/admission reports, and live revocation
 checkpoint required by Takoform's admission contract are settled. This
