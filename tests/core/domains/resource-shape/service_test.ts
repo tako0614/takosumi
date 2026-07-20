@@ -1590,6 +1590,7 @@ test("a shared existing direct-plugin Run is not failed by a losing apply claim"
     getResourceOperationRun: ledger.getResourceOperationRun.bind(ledger),
     listRecoverableResourceOperationRuns:
       ledger.listRecoverableResourceOperationRuns.bind(ledger),
+    putArtifactRecord: ledger.putArtifactRecord.bind(ledger),
     async transitionResourceOperationRun(
       input: Parameters<
         InMemoryOpenTofuControlStore["transitionResourceOperationRun"]
@@ -3397,6 +3398,7 @@ test("scheduled repair terminalizes a direct-plugin Run after Resource commit wi
     getResourceOperationRun: ledger.getResourceOperationRun.bind(ledger),
     listRecoverableResourceOperationRuns:
       ledger.listRecoverableResourceOperationRuns.bind(ledger),
+    putArtifactRecord: ledger.putArtifactRecord.bind(ledger),
     transitionResourceOperationRun: async (
       input: Parameters<
         InMemoryOpenTofuControlStore["transitionResourceOperationRun"]
@@ -3575,6 +3577,17 @@ test("scheduled repair completes a staged artifact audit without a Resource whil
     "running",
   );
   expect(await stores.resources.get(staged.subject.id)).toBeUndefined();
+  expect(await ledger.listArtifactRecordsForRun(staged.id)).toEqual([
+    {
+      id: "artifact_artifact_pending_audit",
+      runId: staged.id,
+      kind: "worker_release",
+      ref: `artifact:v1:sha256:${"a".repeat(64)}`,
+      digest: `sha256:${"a".repeat(64)}`,
+      sizeBytes: 128,
+      createdAt: NOW,
+    },
+  ]);
   expect(await ledger.listRecoverableResourceOperationRuns()).toEqual([]);
   expect(await ledger.listActivityEvents("space_1")).toMatchObject([
     {

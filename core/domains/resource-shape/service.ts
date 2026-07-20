@@ -96,6 +96,7 @@ import type {
   ResourceOperationRun,
   TransitionResourceOperationRunResult,
 } from "../deploy-control/store.ts";
+import { artifactRecordFromSucceededRun } from "./artifacts.ts";
 
 export type ResourceServiceErrorCode =
   | "invalid_form_ref"
@@ -250,6 +251,7 @@ export interface ResourceShapeServiceDeps {
     | "getResourceOperationRun"
     | "transitionResourceOperationRun"
     | "listRecoverableResourceOperationRuns"
+    | "putArtifactRecord"
   >;
   /** Explicit operator module catalog for `moduleTemplate` descriptors. */
   readonly moduleRegistry?: ResourceShapeModuleRegistry;
@@ -445,6 +447,15 @@ export class ResourceShapeService {
           );
         }
         if (candidate.status === "succeeded") {
+          if (candidate.resourceOperation === "artifact") {
+            // The terminal Run is the durable integrity authority. Restore its
+            // deterministic pointer row before acknowledging Activity so a
+            // crash between those original writes cannot be permanently
+            // hidden by the outbox repair sweep.
+            await this.#operationRuns.putArtifactRecord(
+              artifactRecordFromSucceededRun(candidate),
+            );
+          }
           if (await this.#repairPluginOperationAudit(candidate)) {
             auditsRepaired += 1;
           } else {
