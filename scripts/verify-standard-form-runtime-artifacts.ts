@@ -17,6 +17,9 @@ const SOURCE_ROOT = `conformance/standard-form-runtime/v${VERSION}`;
 const SHA256 = /^sha256:[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
 const EXPECTED_ASSETS = ["durable-workflow.mjs", "edge-worker.mjs"] as const;
+const SBOM_NAME = "runtime-sbom.spdx.json";
+const SBOM_MEDIA_TYPE = "application/spdx+json";
+const SBOM_CREATED = "2026-07-20T00:00:00Z";
 const OCI_REFERENCE =
   "docker.io/library/nginx@sha256:845b5424415de5f77dd5753cbb7c1be8bd8e44cc81f20f9705783a02f8848317";
 
@@ -40,6 +43,18 @@ export interface RuntimeManifest {
   readonly version: string;
   readonly releaseTag: string;
   readonly sourceStatus: string;
+  readonly hostConformanceOnly: boolean;
+  readonly assets: readonly RuntimeAsset[];
+  readonly externalArtifacts: readonly ExternalArtifact[];
+}
+
+interface ReleaseManifest {
+  readonly format: string;
+  readonly version: string;
+  readonly releaseTag: string;
+  readonly sourceRepository: string;
+  readonly sourceCommit: string;
+  readonly publicationStatus: string;
   readonly hostConformanceOnly: boolean;
   readonly assets: readonly RuntimeAsset[];
   readonly externalArtifacts: readonly ExternalArtifact[];
@@ -75,7 +90,9 @@ export async function verifyRuntimeArtifacts(
     manifest.sourceStatus !== "candidate-only" ||
     manifest.hostConformanceOnly !== true
   ) {
-    throw new Error("runtime manifest identity or publication boundary is invalid");
+    throw new Error(
+      "runtime manifest identity or publication boundary is invalid",
+    );
   }
 
   if (!Array.isArray(manifest.assets) || manifest.assets.length !== 2) {
@@ -90,14 +107,18 @@ export async function verifyRuntimeArtifacts(
       `runtime asset ${asset.name}`,
     );
     if (
-      !EXPECTED_ASSETS.includes(asset.name as (typeof EXPECTED_ASSETS)[number]) ||
+      !EXPECTED_ASSETS.includes(
+        asset.name as (typeof EXPECTED_ASSETS)[number],
+      ) ||
       asset.mediaType !== "text/javascript" ||
       !Number.isSafeInteger(asset.size) ||
       asset.size <= 0 ||
       !SHA256.test(asset.sha256) ||
       seen.has(asset.name)
     ) {
-      throw new Error(`runtime asset ${String(asset.name)} identity is invalid`);
+      throw new Error(
+        `runtime asset ${String(asset.name)} identity is invalid`,
+      );
     }
     const path = join(sourceRoot, asset.name);
     if (basename(path) !== asset.name || !(await stat(path)).isFile()) {
@@ -105,15 +126,20 @@ export async function verifyRuntimeArtifacts(
     }
     const bytes = await readFile(path);
     if (bytes.byteLength !== asset.size || digest(bytes) !== asset.sha256) {
-      throw new Error(`runtime asset ${asset.name} bytes do not match the manifest`);
+      throw new Error(
+        `runtime asset ${asset.name} bytes do not match the manifest`,
+      );
     }
     const source = bytes.toString("utf8");
     if (
-      (asset.name === "edge-worker.mjs" && !source.includes("export default")) ||
+      (asset.name === "edge-worker.mjs" &&
+        !source.includes("export default")) ||
       (asset.name === "durable-workflow.mjs" &&
         !source.includes("export class IngestWorkflow"))
     ) {
-      throw new Error(`runtime asset ${asset.name} omits its required entrypoint`);
+      throw new Error(
+        `runtime asset ${asset.name} omits its required entrypoint`,
+      );
     }
     seen.add(asset.name);
   }
@@ -125,7 +151,9 @@ export async function verifyRuntimeArtifacts(
     !Array.isArray(manifest.externalArtifacts) ||
     manifest.externalArtifacts.length !== 1
   ) {
-    throw new Error("runtime manifest must contain exactly one external OCI artifact");
+    throw new Error(
+      "runtime manifest must contain exactly one external OCI artifact",
+    );
   }
   const external = object(
     manifest.externalArtifacts[0],
@@ -144,7 +172,9 @@ export async function verifyRuntimeArtifacts(
     external.platform !== "linux/amd64" ||
     !SHA256.test(external.digest)
   ) {
-    throw new Error("external OCI artifact is not the reviewed linux/amd64 digest");
+    throw new Error(
+      "external OCI artifact is not the reviewed linux/amd64 digest",
+    );
   }
   if (options.verifyOci) await verifyOciManifest(external);
   return manifest;
@@ -155,7 +185,8 @@ export async function buildRuntimeRelease(
   sourceCommit: string,
   output: string,
 ): Promise<void> {
-  if (!COMMIT.test(sourceCommit)) throw new Error("source commit must be a 40-character SHA-1");
+  if (!COMMIT.test(sourceCommit))
+    throw new Error("source commit must be a 40-character SHA-1");
   const manifest = await verifyRuntimeArtifacts(repoRoot);
   await mkdir(output, { recursive: true, mode: 0o755 });
   if ((await readdir(output)).length !== 0) {
@@ -169,11 +200,17 @@ export async function buildRuntimeRelease(
     join(sourceRoot, "runtime-manifest.json"),
     join(output, "runtime-manifest.json"),
   );
+  await writeFile(
+    join(output, SBOM_NAME),
+    `${JSON.stringify(spdxDocument(manifest, sourceCommit), null, 2)}\n`,
+    { mode: 0o644 },
+  );
   const releaseAssets = await Promise.all(
-    [...manifest.assets.map(({ name, mediaType }) => ({ name, mediaType })), {
-      name: "runtime-manifest.json",
-      mediaType: "application/json",
-    }].map(async ({ name, mediaType }) => {
+    [
+      ...manifest.assets.map(({ name, mediaType }) => ({ name, mediaType })),
+      { name: "runtime-manifest.json", mediaType: "application/json" },
+      { name: SBOM_NAME, mediaType: SBOM_MEDIA_TYPE },
+    ].map(async ({ name, mediaType }) => {
       const bytes = await readFile(join(output, name));
       return { name, mediaType, size: bytes.byteLength, sha256: digest(bytes) };
     }),
@@ -195,6 +232,180 @@ export async function buildRuntimeRelease(
     `${JSON.stringify(releaseManifest, null, 2)}\n`,
     { mode: 0o644 },
   );
+  await verifyBuiltRuntimeRelease(repoRoot, output, sourceCommit);
+}
+
+export async function verifyBuiltRuntimeRelease(
+  repoRoot: string,
+  output: string,
+  sourceCommit: string,
+): Promise<void> {
+  if (!COMMIT.test(sourceCommit))
+    throw new Error("source commit must be a 40-character SHA-1");
+  const sourceManifest = await verifyRuntimeArtifacts(repoRoot);
+  const releaseManifest = object(
+    JSON.parse(await readFile(join(output, "release-manifest.json"), "utf8")),
+    "release manifest",
+  ) as unknown as ReleaseManifest;
+  exactKeys(
+    releaseManifest as unknown as Record<string, unknown>,
+    [
+      "assets",
+      "externalArtifacts",
+      "format",
+      "hostConformanceOnly",
+      "publicationStatus",
+      "releaseTag",
+      "sourceCommit",
+      "sourceRepository",
+      "version",
+    ],
+    "release manifest",
+  );
+  if (
+    releaseManifest.format !== RELEASE_FORMAT ||
+    releaseManifest.version !== VERSION ||
+    releaseManifest.releaseTag !== RELEASE_TAG ||
+    releaseManifest.sourceRepository !== "github.com/tako0614/takosumi" ||
+    releaseManifest.sourceCommit !== sourceCommit ||
+    releaseManifest.publicationStatus !== "pending-immutable-publication" ||
+    releaseManifest.hostConformanceOnly !== true ||
+    JSON.stringify(releaseManifest.externalArtifacts) !==
+      JSON.stringify(sourceManifest.externalArtifacts)
+  ) {
+    throw new Error(
+      "release manifest identity or publication boundary is invalid",
+    );
+  }
+
+  const expectedMediaTypes = new Map<string, string>([
+    ...sourceManifest.assets.map(
+      ({ name, mediaType }) => [name, mediaType] as const,
+    ),
+    ["runtime-manifest.json", "application/json"],
+    [SBOM_NAME, SBOM_MEDIA_TYPE],
+  ]);
+  if (
+    !Array.isArray(releaseManifest.assets) ||
+    releaseManifest.assets.length !== expectedMediaTypes.size
+  ) {
+    throw new Error("release manifest asset inventory is not closed");
+  }
+  const seen = new Set<string>();
+  for (const rawAsset of releaseManifest.assets) {
+    const asset = object(rawAsset, "release asset") as unknown as RuntimeAsset;
+    exactKeys(
+      asset as unknown as Record<string, unknown>,
+      ["mediaType", "name", "sha256", "size"],
+      `release asset ${asset.name}`,
+    );
+    if (
+      expectedMediaTypes.get(asset.name) !== asset.mediaType ||
+      seen.has(asset.name) ||
+      !Number.isSafeInteger(asset.size) ||
+      asset.size <= 0 ||
+      !SHA256.test(asset.sha256)
+    ) {
+      throw new Error(
+        `release asset ${String(asset.name)} identity is invalid`,
+      );
+    }
+    const bytes = await readFile(join(output, asset.name));
+    if (bytes.byteLength !== asset.size || digest(bytes) !== asset.sha256) {
+      throw new Error(
+        `release asset ${asset.name} bytes do not match the manifest`,
+      );
+    }
+    seen.add(asset.name);
+  }
+  if ([...expectedMediaTypes.keys()].some((name) => !seen.has(name))) {
+    throw new Error("release manifest asset inventory is incomplete");
+  }
+
+  const actualSbom = JSON.parse(
+    await readFile(join(output, SBOM_NAME), "utf8"),
+  );
+  if (
+    JSON.stringify(actualSbom) !==
+    JSON.stringify(spdxDocument(sourceManifest, sourceCommit))
+  ) {
+    throw new Error(
+      "runtime SBOM inventory does not match the exact local and OCI artifacts",
+    );
+  }
+}
+
+function spdxDocument(
+  manifest: RuntimeManifest,
+  sourceCommit: string,
+): Record<string, unknown> {
+  const files = manifest.assets.map((asset) => ({
+    fileName: asset.name,
+    SPDXID: `SPDXRef-File-${asset.name === "edge-worker.mjs" ? "EdgeWorker" : "DurableWorkflow"}`,
+    checksums: [
+      {
+        algorithm: "SHA256",
+        checksumValue: asset.sha256.slice("sha256:".length),
+      },
+    ],
+    fileTypes: ["SOURCE"],
+    licenseConcluded: "NOASSERTION",
+    licenseInfoInFiles: ["NOASSERTION"],
+    copyrightText: "NOASSERTION",
+  }));
+  const external = manifest.externalArtifacts[0]!;
+  const packageID = "SPDXRef-Package-ContainerService";
+  return {
+    spdxVersion: "SPDX-2.3",
+    dataLicense: "CC0-1.0",
+    SPDXID: "SPDXRef-DOCUMENT",
+    name: `takosumi-standard-form-runtime-${VERSION}`,
+    documentNamespace: `https://takosumi.com/spdx/standard-form-runtime/${VERSION}/${sourceCommit}`,
+    creationInfo: {
+      created: SBOM_CREATED,
+      creators: [
+        "Organization: Takosumi",
+        `Tool: takosumi-standard-form-runtime-builder-${VERSION}`,
+      ],
+    },
+    documentDescribes: [...files.map(({ SPDXID }) => SPDXID), packageID],
+    files,
+    packages: [
+      {
+        name: external.name,
+        SPDXID: packageID,
+        versionInfo: external.digest,
+        downloadLocation: "NOASSERTION",
+        filesAnalyzed: false,
+        licenseConcluded: "NOASSERTION",
+        licenseDeclared: "NOASSERTION",
+        copyrightText: "NOASSERTION",
+        checksums: [
+          {
+            algorithm: "SHA256",
+            checksumValue: external.digest.slice("sha256:".length),
+          },
+        ],
+        externalRefs: [
+          {
+            referenceCategory: "OTHER",
+            referenceType: "pinned-oci-reference",
+            referenceLocator: external.reference,
+          },
+          {
+            referenceCategory: "OTHER",
+            referenceType: "runtime-platform",
+            referenceLocator: external.platform,
+          },
+          {
+            referenceCategory: "OTHER",
+            referenceType: "oci-manifest-media-type",
+            referenceLocator: external.mediaType,
+          },
+        ],
+      },
+    ],
+  };
 }
 
 async function verifyOciManifest(external: ExternalArtifact): Promise<void> {
@@ -211,14 +422,18 @@ async function verifyOciManifest(external: ExternalArtifact): Promise<void> {
     throw new Error(`OCI registry readback failed: ${stderr.trim()}`);
   }
   if (digest(new Uint8Array(raw)) !== external.digest) {
-    throw new Error("OCI registry readback digest does not match the retained reference");
+    throw new Error(
+      "OCI registry readback digest does not match the retained reference",
+    );
   }
   const manifest = object(
     JSON.parse(new TextDecoder().decode(raw)),
     "OCI manifest",
   );
   if (manifest.mediaType !== external.mediaType) {
-    throw new Error("OCI registry readback media type does not match the retained reference");
+    throw new Error(
+      "OCI registry readback media type does not match the retained reference",
+    );
   }
 }
 
@@ -249,7 +464,8 @@ async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   if (command === "check") {
     const unexpected = args.filter((value) => value !== "--verify-oci");
-    if (unexpected.length !== 0) throw new Error(`unknown check argument ${unexpected[0]}`);
+    if (unexpected.length !== 0)
+      throw new Error(`unknown check argument ${unexpected[0]}`);
     await verifyRuntimeArtifacts(process.cwd(), {
       verifyOci: args.includes("--verify-oci"),
     });
@@ -270,7 +486,11 @@ async function main(): Promise<void> {
 
 function option(args: readonly string[], name: string): string {
   const index = args.indexOf(name);
-  if (index < 0 || !args[index + 1] || args.filter((value) => value === name).length !== 1) {
+  if (
+    index < 0 ||
+    !args[index + 1] ||
+    args.filter((value) => value === name).length !== 1
+  ) {
     throw new Error(`${name} is required exactly once`);
   }
   const allowed = new Set(["--source-commit", "--output"]);

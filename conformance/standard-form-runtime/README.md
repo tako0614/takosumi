@@ -25,7 +25,9 @@ mutation while its fixed adapter and evidence envelope remain unregistered in
 the ecosystem release-safety registry. Once that registration is reviewed, the
 workflow accepts only the exact existing
 `standard-form-runtime-v1.0.1` tag and source commit, builds the closed release
-inventory from a separate tag checkout, keyless-signs the release manifest,
-attests every asset, refuses overwrite, and requires repository-enforced
-immutable releases. A release remains evidence material only; it does not
-admit or activate any Form.
+inventory from a separate tag checkout, emits a deterministic SPDX 2.3 SBOM
+covering both JavaScript modules and the pinned external OCI manifest,
+keyless-signs the release manifest, attests every asset plus the SBOM, refuses
+overwrite, and requires repository-enforced immutable releases. The SBOM digest
+is part of the release manifest and `SHA256SUMS` closure. A release remains
+evidence material only; it does not admit or activate any Form.

@@ -16,6 +16,7 @@ permissions:
   contents: write
   id-token: write
   attestations: write
+  artifact-metadata: write
 
 concurrency:
   group: standard-form-runtime-release-${{ inputs.tag }}
@@ -189,9 +190,18 @@ jobs:
             ${{ steps.build.outputs.output }}/edge-worker.mjs
             ${{ steps.build.outputs.output }}/durable-workflow.mjs
             ${{ steps.build.outputs.output }}/runtime-manifest.json
+            ${{ steps.build.outputs.output }}/runtime-sbom.spdx.json
             ${{ steps.build.outputs.output }}/release-manifest.json
             ${{ steps.build.outputs.output }}/release-manifest.sigstore.json
             ${{ steps.build.outputs.output }}/SHA256SUMS
+
+      - name: Attest runtime SBOM
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: |
+            ${{ steps.build.outputs.output }}/edge-worker.mjs
+            ${{ steps.build.outputs.output }}/durable-workflow.mjs
+          sbom-path: ${{ steps.build.outputs.output }}/runtime-sbom.spdx.json
 
       - name: Publish and require repository-enforced immutability
         shell: bash
