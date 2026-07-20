@@ -100,6 +100,28 @@ test("list is newest-first, Workspace-scoped, and limit-clamped", async () => {
   );
 });
 
+test("listAcrossWorkspaces performs one bounded newest-first projection", async () => {
+  const { service } = makeService();
+  await service.record(base({ workspaceId: "workspace_1", targetId: "a" }));
+  await service.record(base({ workspaceId: "workspace_2", targetId: "b" }));
+  await service.record(base({ workspaceId: "workspace_3", targetId: "c" }));
+
+  expect(
+    (
+      await service.listAcrossWorkspaces(
+        ["workspace_1", "workspace_2", "workspace_1"],
+        2,
+      )
+    ).map((event) => event.targetId),
+  ).toEqual(["b", "a"]);
+  expect(await service.listAcrossWorkspaces([], 2)).toEqual([]);
+  await expect(
+    service.listAcrossWorkspaces(
+      Array.from({ length: 13 }, (_, index) => `workspace_${index}`),
+    ),
+  ).rejects.toBeInstanceOf(RangeError);
+});
+
 test("listTargetPage filters one target and carries an opaque cursor", async () => {
   const { service } = makeService();
   for (const targetId of ["resource_a", "resource_b", "resource_a"] as const) {

@@ -104,6 +104,7 @@ import type {
 import {
   assertResourceOperationRun,
   assertResourceOperationRunStart,
+  boundedActivityWorkspaceIds,
   clampActivityLimit,
   clampRecoverableOpenTofuRunListLimit,
   clampRecoverableResourceOperationRunListLimit,
@@ -1341,6 +1342,23 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return normalizeOptionalCapsuleRecord(
       parseRow(rows[0]) as Capsule | undefined,
     );
+  }
+
+  async getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.#db
+      .select({ json: pgSchema.capsules.capsuleJson })
+      .from(pgSchema.capsules)
+      .where(inArray(pgSchema.capsules.id, [...new Set(ids)]));
+    const byId = new Map(
+      rows.map((row) => {
+        const value = normalizeCapsuleRecord(parseRow(row) as Capsule);
+        return [value.id, value] as const;
+      }),
+    );
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is Capsule => row !== undefined);
   }
 
   async getCapsuleByName(
@@ -2741,6 +2759,27 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       pgSchema.auditEvents.eventJson,
       {
         where: eq(pgSchema.auditEvents.workspaceId, workspaceId),
+        orderBy: [
+          desc(pgSchema.auditEvents.createdAt),
+          desc(pgSchema.auditEvents.id),
+        ],
+        limit,
+      },
+    );
+  }
+
+  async listActivityEventsForWorkspaces(
+    workspaceIds: readonly string[],
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly ActivityEvent[]> {
+    const ids = boundedActivityWorkspaceIds(workspaceIds);
+    if (ids.length === 0) return [];
+    const limit = clampActivityLimit(options.limit);
+    return await this.#pgManyJson<ActivityEvent>(
+      pgSchema.auditEvents,
+      pgSchema.auditEvents.eventJson,
+      {
+        where: inArray(pgSchema.auditEvents.workspaceId, ids),
         orderBy: [
           desc(pgSchema.auditEvents.createdAt),
           desc(pgSchema.auditEvents.id),

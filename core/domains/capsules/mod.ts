@@ -226,6 +226,11 @@ export class CapsulesService {
     return await this.#requireCapsule(id);
   }
 
+  async getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
+    for (const id of ids) requireNonEmptyString(id, "id");
+    return await this.#store.getCapsulesByIds(ids);
+  }
+
   async listCapsules(workspaceId: string): Promise<readonly Capsule[]> {
     requireNonEmptyString(workspaceId, "workspaceId");
     return await this.#store.listCapsules(workspaceId);

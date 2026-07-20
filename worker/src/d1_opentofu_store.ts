@@ -118,6 +118,7 @@ import type {
 import {
   assertResourceOperationRun,
   assertResourceOperationRunStart,
+  boundedActivityWorkspaceIds,
   clampActivityLimit,
   clampRecoverableOpenTofuRunListLimit,
   clampRecoverableResourceOperationRunListLimit,
@@ -1318,6 +1319,29 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         eq(schema.capsules.id, id),
       ),
     );
+  }
+
+  async getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
+    if (ids.length === 0) return [];
+    const rows: Capsule[] = [];
+    for (const idChunk of d1InQueryChunks([...new Set(ids)])) {
+      rows.push(
+        ...(await this.#drizzleManyJson<Capsule>(
+          schema.capsules,
+          schema.capsules.recordJson,
+          { where: inArray(schema.capsules.id, [...idChunk]) },
+        )),
+      );
+    }
+    const byId = new Map(
+      rows.map((row) => {
+        const value = normalizeCapsuleRecord(row);
+        return [value.id, value] as const;
+      }),
+    );
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is Capsule => row !== undefined);
   }
 
   async getCapsuleByName(
@@ -2729,6 +2753,27 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       schema.auditEvents.recordJson,
       {
         where: eq(schema.auditEvents.workspaceId, workspaceId),
+        orderBy: [
+          desc(schema.auditEvents.createdAt),
+          desc(schema.auditEvents.id),
+        ],
+        limit,
+      },
+    );
+  }
+
+  async listActivityEventsForWorkspaces(
+    workspaceIds: readonly string[],
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly ActivityEvent[]> {
+    const ids = boundedActivityWorkspaceIds(workspaceIds);
+    if (ids.length === 0) return [];
+    const limit = clampActivityLimit(options.limit);
+    return await this.#drizzleManyJson<ActivityEvent>(
+      schema.auditEvents,
+      schema.auditEvents.recordJson,
+      {
+        where: inArray(schema.auditEvents.workspaceId, ids),
         orderBy: [
           desc(schema.auditEvents.createdAt),
           desc(schema.auditEvents.id),

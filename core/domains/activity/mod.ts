@@ -19,7 +19,10 @@
 
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
-import { clampActivityLimit } from "../deploy-control/store.ts";
+import {
+  boundedActivityWorkspaceIds,
+  clampActivityLimit,
+} from "../deploy-control/store.ts";
 import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 import { log } from "../../shared/log.ts";
 import { redactRecord } from "../../shared/redaction.ts";
@@ -159,6 +162,18 @@ export class ActivityService implements ActivityLedger {
     limit?: number,
   ): Promise<readonly ActivityEvent[]> {
     return await this.#store.listActivityEvents(workspaceId, {
+      limit: clampActivityLimit(limit),
+    });
+  }
+
+  /** One bounded newest-first read across already-authorized Workspaces. */
+  async listAcrossWorkspaces(
+    workspaceIds: readonly string[],
+    limit?: number,
+  ): Promise<readonly ActivityEvent[]> {
+    const ids = boundedActivityWorkspaceIds(workspaceIds);
+    if (ids.length === 0) return [];
+    return await this.#store.listActivityEventsForWorkspaces(ids, {
       limit: clampActivityLimit(limit),
     });
   }

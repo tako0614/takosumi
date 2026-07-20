@@ -219,6 +219,7 @@ export interface ControlPlaneOperations {
   // --- Capsules + InstallConfigs (§5 / §11) ---
   readonly capsules: {
     getCapsule(id: string): Promise<Capsule>;
+    getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]>;
     listCapsules(workspaceId: string): Promise<readonly Capsule[]>;
     listCapsulesPage(
       workspaceId: string,
@@ -314,6 +315,10 @@ export interface ControlPlaneOperations {
     ): Promise<ActivityEvent | undefined>;
     list(
       workspaceId: string,
+      limit?: number,
+    ): Promise<readonly ActivityEvent[]>;
+    listAcrossWorkspaces(
+      workspaceIds: readonly string[],
       limit?: number,
     ): Promise<readonly ActivityEvent[]>;
   };

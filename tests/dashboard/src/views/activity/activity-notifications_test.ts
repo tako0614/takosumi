@@ -166,11 +166,15 @@ describe("History and notifications", () => {
   });
 
   test("run/service notification lines name the service when the payload allows", () => {
-    // The recorded Capsule id (metadata capsuleId or the
-    // event target) resolves to its name — never an invented value.
-    expect(notificationsSource).toContain("function eventCapsuleId(");
-    expect(notificationsSource).toContain('metaString(m, "capsuleId")');
-    expect(notificationsSource).toContain("loadNotificationCapsuleNameIndex");
+    // The batched projection carries only a recorded name; the page never
+    // opens a second per-Workspace Capsule-list fan-out.
+    expect(notificationsLibSource).toContain("includeNotifications: true");
+    expect(notificationsSource).not.toContain(
+      "loadNotificationCapsuleNameIndex",
+    );
+    expect(notificationsSource).toContain(
+      'metaString(metadata, "capsuleName")',
+    );
     expect(notificationsSource).toContain("serviceNameFor(entry.event)");
     expect(notificationsSource).toContain('t("notif.event.planReadyNamed"');
     expect(notificationsSource).toContain('t("notif.event.failedNamed"');

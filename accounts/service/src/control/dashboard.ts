@@ -45,6 +45,8 @@ const DEFAULT_CAPSULE_LIMIT = 100;
 const DEFAULT_ACTIVITY_LIMIT = 50;
 const DEFAULT_INSTALL_CONFIG_LIMIT = 200;
 const DEFAULT_WORKSPACE_BOOTSTRAP_LIMIT = 50;
+const DASHBOARD_NOTIFICATION_WORKSPACE_LIMIT = 12;
+const DASHBOARD_NOTIFICATION_FEED_LIMIT = 60;
 const DASHBOARD_OPTIONAL_PROJECTION_TIMEOUT_MS = 1_200;
 
 export async function handleDashboard(
@@ -97,6 +99,11 @@ async function dashboardBootstrap(
 ): Promise<Response> {
   const includeWorkspaces =
     url.searchParams.get("includeWorkspaces") !== "false";
+  const includeNotifications =
+    url.searchParams.get("includeNotifications") === "true";
+  const selectedWorkspaceId = stringValue(
+    url.searchParams.get("workspaceId") ?? undefined,
+  );
   const workspaceLimit = parseLimitOrDefault(
     url.searchParams.get("workspaceLimit"),
     DEFAULT_WORKSPACE_BOOTSTRAP_LIMIT,
@@ -108,28 +115,36 @@ async function dashboardBootstrap(
       400,
     );
   }
-  const workspaceList = includeWorkspaces
-    ? await listActiveWorkspaceProjectionForSession(
-        operations,
-        store,
-        sessionSubject,
-        {
-          limit: workspaceLimit,
-          ensureWorkspaceId: stringValue(
-            url.searchParams.get("workspaceId") ?? undefined,
-          ),
-        },
-      )
-    : undefined;
+  const workspaceList =
+    includeWorkspaces || includeNotifications
+      ? await listActiveWorkspaceProjectionForSession(
+          operations,
+          store,
+          sessionSubject,
+          {
+            limit: workspaceLimit,
+            ensureWorkspaceId: selectedWorkspaceId,
+          },
+        )
+      : undefined;
+  const notifications =
+    includeNotifications && workspaceList
+      ? await listDashboardNotifications(
+          operations,
+          workspaceList.workspaces,
+          selectedWorkspaceId,
+        )
+      : undefined;
   return json(
     {
       session: { subject: sessionSubject },
-      ...(workspaceList
+      ...(includeWorkspaces && workspaceList
         ? {
             workspaces: workspaceList.workspaces,
             workspaceList: workspaceList.meta,
           }
         : {}),
+      ...(notifications ? { notifications } : {}),
     } satisfies DashboardBootstrapResponse,
     200,
     { "cache-control": "no-store" },
@@ -296,7 +311,7 @@ async function dashboardOverview(
     workspace: selectedWorkspace,
     capsules,
     currentStateVersions,
-    activity: activity.map(compactDashboardActivityEvent),
+    activity: activity.map((event) => compactDashboardActivityEvent(event)),
     installConfigs: visibleInstallConfigs,
     ...(capsulePage.nextCursor !== undefined
       ? { nextCapsuleCursor: capsulePage.nextCursor }
@@ -307,15 +322,19 @@ async function dashboardOverview(
 async function optionalDashboardProjection<T>(
   promise: Promise<T>,
   fallback: T,
+  timeoutMs = DASHBOARD_OPTIONAL_PROJECTION_TIMEOUT_MS,
 ): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<T>((resolve) => {
-        timeout = setTimeout(() => {
-          resolve(fallback);
-        }, DASHBOARD_OPTIONAL_PROJECTION_TIMEOUT_MS);
+        timeout = setTimeout(
+          () => {
+            resolve(fallback);
+          },
+          Math.max(0, timeoutMs),
+        );
       }),
     ]);
   } catch {
@@ -340,12 +359,109 @@ interface DashboardBootstrapResponse {
   readonly session: { readonly subject: string };
   readonly workspaces?: readonly Workspace[];
   readonly workspaceList?: DashboardWorkspaceListMeta;
+  readonly notifications?: readonly DashboardNotificationFeedEntry[];
 }
 
-function compactDashboardActivityEvent(event: ActivityEvent): ActivityEvent {
+interface DashboardNotificationFeedEntry {
+  readonly event: ActivityEvent;
+  readonly workspaceHandle: string;
+}
+
+async function listDashboardNotifications(
+  operations: ControlPlaneOperations,
+  workspaces: readonly Workspace[],
+  selectedWorkspaceId: string | undefined,
+): Promise<readonly DashboardNotificationFeedEntry[]> {
+  const recent = workspaces.slice(0, DASHBOARD_NOTIFICATION_WORKSPACE_LIMIT);
+  const selected = selectedWorkspaceId
+    ? workspaces.find((workspace) => workspace.id === selectedWorkspaceId)
+    : undefined;
+  const candidates = selected
+    ? [
+        selected,
+        ...recent.filter((workspace) => workspace.id !== selected.id),
+      ].slice(0, DASHBOARD_NOTIFICATION_WORKSPACE_LIMIT)
+    : recent;
+  if (candidates.length === 0) return [];
+  const handles = new Map(
+    candidates.map((workspace) => [workspace.id, workspace.handle]),
+  );
+  const deadline = Date.now() + DASHBOARD_OPTIONAL_PROJECTION_TIMEOUT_MS;
+  const events = await optionalDashboardProjection(
+    operations.activity.listAcrossWorkspaces(
+      candidates.map((workspace) => workspace.id),
+      DASHBOARD_NOTIFICATION_FEED_LIMIT,
+    ),
+    [],
+    remainingDashboardProjectionMs(deadline),
+  );
+  if (events.length === 0) return [];
+  const capsuleIds = [
+    ...new Set(
+      events
+        .map(dashboardActivityCapsuleId)
+        .filter((id): id is string => id !== undefined),
+    ),
+  ];
+  const remainingMs = remainingDashboardProjectionMs(deadline);
+  const capsules =
+    capsuleIds.length === 0 || remainingMs === 0
+      ? []
+      : await optionalDashboardProjection(
+          operations.capsules.getCapsulesByIds(capsuleIds),
+          [],
+          remainingMs,
+        );
+  const capsulesById = new Map(
+    capsules.map((capsule) => [capsule.id, capsule] as const),
+  );
+  return events.map((event) => ({
+    event: compactDashboardActivityEvent(
+      event,
+      dashboardActivityCapsuleName(event, capsulesById),
+    ),
+    workspaceHandle: handles.get(event.workspaceId) ?? event.workspaceId,
+  }));
+}
+
+function remainingDashboardProjectionMs(deadline: number): number {
+  return Math.max(0, deadline - Date.now());
+}
+
+function dashboardActivityCapsuleId(event: ActivityEvent): string | undefined {
+  const value = event.metadata.capsuleId;
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+  return event.targetType === "capsule" && event.targetId.trim().length > 0
+    ? event.targetId.trim()
+    : undefined;
+}
+
+function dashboardActivityCapsuleName(
+  event: ActivityEvent,
+  capsulesById: ReadonlyMap<string, Capsule>,
+): string | undefined {
+  const recordedName = event.metadata.capsuleName;
+  if (typeof recordedName === "string" && recordedName.trim().length > 0) {
+    return recordedName;
+  }
+  const capsuleId = dashboardActivityCapsuleId(event);
+  if (!capsuleId) return undefined;
+  const capsule = capsulesById.get(capsuleId);
+  return capsule?.workspaceId === event.workspaceId ? capsule.name : undefined;
+}
+
+function compactDashboardActivityEvent(
+  event: ActivityEvent,
+  capsuleName?: string,
+): ActivityEvent {
   return {
     ...event,
-    metadata: compactDashboardActivityMetadata(event.metadata),
+    metadata: {
+      ...compactDashboardActivityMetadata(event.metadata),
+      ...(capsuleName ? { capsuleName } : {}),
+    },
   };
 }
 
@@ -362,6 +478,11 @@ function compactDashboardActivityMetadata(
 
 const DASHBOARD_ACTIVITY_METADATA_KEYS = [
   "capsuleId",
+  "capsuleName",
+  "name",
+  "environment",
+  "provider",
+  "outputCount",
   "stateVersionId",
   "applyRunId",
   "operation",
