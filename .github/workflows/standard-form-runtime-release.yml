@@ -140,7 +140,7 @@ jobs:
             echo "Release runs are immutable; dispatch a new candidate or release id instead of rerunning." >&2
             exit 1
           }
-          test "${VERSION}" = "1.0.2"
+          test "${VERSION}" = "1.0.3"
           release_tag="standard-form-runtime-v${VERSION}"
           test "${GITHUB_REF}" = "refs/tags/${release_tag}" || {
             echo "Candidate and promotion must execute from the exact signed release tag." >&2
@@ -426,11 +426,11 @@ jobs:
           TARGET_FINGERPRINT: ${{ inputs.target_fingerprint }}
         run: |
           set -euo pipefail
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq .enabled)" = "true"
           test -n "${RULESET_AUDIT_TOKEN}" || {
-            echo "The protected environment ruleset readback credential is missing." >&2
+            echo "The protected environment repository-settings readback credential is missing." >&2
             exit 1
           }
+          test "$(GH_TOKEN="${RULESET_AUDIT_TOKEN}" gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq .enabled)" = "true"
           rulesets="$(GH_TOKEN="${RULESET_AUDIT_TOKEN}" gh api "repos/${GITHUB_REPOSITORY}/rulesets?targets=tag")"
           ruleset_id="$(jq -er '
             [.[] | select(.name == "standard-form-runtime-release-tags" and .target == "tag" and .enforcement == "active")] |

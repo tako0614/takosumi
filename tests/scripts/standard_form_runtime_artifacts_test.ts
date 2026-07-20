@@ -17,7 +17,7 @@ const ROOT = new URL("../..", import.meta.url).pathname;
 
 test("committed standard Form runtime candidate has an exact closed artifact set", async () => {
   const manifest = await verifyRuntimeArtifacts(ROOT);
-  expect(manifest.version).toBe("1.0.2");
+  expect(manifest.version).toBe("1.0.3");
   expect(manifest.assets.map(({ name }) => name)).toEqual([
     "durable-workflow.mjs",
     "edge-worker.mjs",
@@ -25,15 +25,15 @@ test("committed standard Form runtime candidate has an exact closed artifact set
   expect(manifest.externalArtifacts[0]?.platform).toBe("linux/amd64");
 });
 
-test("runtime 1.0.2 preserves the unpublished Form Package 1.0.1 executable fixture bytes", async () => {
+test("runtime 1.0.3 preserves the previous candidate executable fixture bytes", async () => {
   for (const name of ["durable-workflow.mjs", "edge-worker.mjs"]) {
     expect(
       await readFile(
-        join(ROOT, "conformance", "standard-form-runtime", "v1.0.2", name),
+        join(ROOT, "conformance", "standard-form-runtime", "v1.0.3", name),
       ),
     ).toEqual(
       await readFile(
-        join(ROOT, "conformance", "standard-form-runtime", "v1.0.1", name),
+        join(ROOT, "conformance", "standard-form-runtime", "v1.0.2", name),
       ),
     );
   }
@@ -50,7 +50,7 @@ test("runtime verification rejects changed executable bytes", async () => {
     root,
     "conformance",
     "standard-form-runtime",
-    "v1.0.2",
+    "v1.0.3",
     "edge-worker.mjs",
   );
   await writeFile(path, `${await readFile(path, "utf8")}\n`);
@@ -245,7 +245,7 @@ test("release readback converts only the fixed envelope checks to passed", () =>
     "passed",
   ]);
   expect(readback.releaseUrl).toBe(
-    "https://github.com/tako0614/takosumi/releases/tag/standard-form-runtime-v1.0.2",
+    "https://github.com/tako0614/takosumi/releases/tag/standard-form-runtime-v1.0.3",
   );
 });
 
@@ -268,7 +268,7 @@ test("runtime release workflow is fixed-controller-bound and promotion cannot re
   expect(workflow).toContain("age_seconds > 300");
   expect(workflow).toContain("standard-form-runtime-release-tags");
   expect(workflow).toContain(".bypass_actors == []");
-  expect(workflow).toContain('test "${VERSION}" = "1.0.2"');
+  expect(workflow).toContain('test "${VERSION}" = "1.0.3"');
   const qualityGate = workflow.slice(
     workflow.indexOf("- name: Run the complete source quality gate"),
     workflow.indexOf("- name: Build the exact runtime release bytes once"),
@@ -292,6 +292,20 @@ test("runtime release workflow is fixed-controller-bound and promotion cannot re
       "Verify candidate Sigstore identity and GitHub attestation before mutation",
     ),
   ).toBeLessThan(promote.indexOf("Create an exact draft release"));
+  const repositorySettingsPreflight = promote.slice(
+    promote.indexOf(
+      "Verify deterministic stable target and preflight immutability",
+    ),
+    promote.indexOf("Create an exact draft release"),
+  );
+  const auditCredentialCheck = 'test -n "${RULESET_AUDIT_TOKEN}"';
+  const immutableReleaseReadback =
+    'GH_TOKEN="${RULESET_AUDIT_TOKEN}" gh api "repos/${GITHUB_REPOSITORY}/immutable-releases"';
+  expect(repositorySettingsPreflight).toContain(auditCredentialCheck);
+  expect(repositorySettingsPreflight).toContain(immutableReleaseReadback);
+  expect(
+    repositorySettingsPreflight.indexOf(auditCredentialCheck),
+  ).toBeLessThan(repositorySettingsPreflight.indexOf(immutableReleaseReadback));
 });
 
 async function preparedCandidateDirectory(
