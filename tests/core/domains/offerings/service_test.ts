@@ -8,6 +8,7 @@ import {
   InMemoryOfferingCatalogReader,
   OfferingError,
   OfferingService,
+  offeringSelectionProblems,
 } from "../../../../core/domains/offerings/mod.ts";
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
@@ -302,4 +303,47 @@ test("Takoform is one exact generic Offering subject rather than the catalog typ
     ref: "fa_kv",
     version: "3",
   });
+});
+
+test("OfferingSelection validation covers every public nested field", async () => {
+  const selection = await new OfferingService({
+    catalogs: new InMemoryOfferingCatalogReader([catalog]),
+    resolvers: [
+      {
+        subjectType: "services.example.net/v1/Endpoint",
+        resolve: async () => ({
+          ready: true,
+          resolverId: "endpoint-host",
+          resolutionFingerprint: FINGERPRINT,
+        }),
+      },
+    ],
+    now: () => "2026-07-20T01:00:00.000Z",
+  }).resolve({
+    reference: {
+      catalogId: catalog.id,
+      catalogVersion: catalog.version,
+      offeringId: "ai-gateway",
+      offeringVersion: "v1",
+    },
+  });
+  expect(offeringSelectionProblems(selection)).toEqual([]);
+  expect(
+    offeringSelectionProblems({
+      ...selection,
+      requirements: [
+        {
+          type: "not-namespaced",
+          ref: "customer@example.com",
+          version: "v1",
+        },
+      ],
+      maturity: "unknown",
+      resolvedAt: "0",
+    }),
+  ).toEqual([
+    "selection_maturity_invalid",
+    "selection_requirements_invalid",
+    "selection_resolved_at_invalid",
+  ]);
 });

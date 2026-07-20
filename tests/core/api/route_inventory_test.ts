@@ -393,6 +393,7 @@ test("deployment quote OpenAPI preserves exact versioned price evidence", () => 
     "catalogVersion",
     "offeringId",
     "offeringVersion",
+    "offeringSelection",
     "region",
   ]) {
     assert.ok(quote.properties[field], `quote ${field} missing`);

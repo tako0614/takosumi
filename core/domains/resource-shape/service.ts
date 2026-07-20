@@ -87,6 +87,7 @@ import {
   EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY,
 } from "./planner.ts";
 import { secretLikeJsonPath } from "./secret_guard.ts";
+import { offeringSelectionProblems } from "../offerings/service.ts";
 import type { ActivityLedger } from "../activity/mod.ts";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import type {
@@ -5902,9 +5903,19 @@ function deploymentQuoteError(
       !quote.catalogId ||
       !quote.catalogVersion ||
       !quote.offeringId ||
-      !quote.offeringVersion
+      !quote.offeringVersion ||
+      !quote.offeringSelection
     ) {
-      return "a rated deployment quote requires catalog and offering identity";
+      return "a rated deployment quote requires catalog and offering identity plus an exact OfferingSelection";
+    }
+    const selection = quote.offeringSelection;
+    if (
+      selection.reference.offeringId !== quote.offeringId ||
+      selection.reference.offeringVersion !== quote.offeringVersion ||
+      selection.region !== quote.region ||
+      offeringSelectionProblems(selection).length > 0
+    ) {
+      return "rated deployment quote OfferingSelection does not match its exact catalog identity";
     }
   } else if (quote.ratingStatus !== "unrated") {
     return "deployment quote ratingStatus must be rated or unrated";
