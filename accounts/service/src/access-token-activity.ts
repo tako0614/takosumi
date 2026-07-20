@@ -28,6 +28,18 @@ export async function findActiveAccessToken(input: {
   readonly interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
 }): Promise<TokenRecord | undefined> {
   const record = await input.store.findAccessToken(input.token);
+  return await validateActiveAccessTokenRecord({ ...input, record });
+}
+
+/** Apply the shared activity policy to an already-resolved exact token row. */
+export async function validateActiveAccessTokenRecord(input: {
+  readonly store: AccountsStore;
+  readonly token: string;
+  readonly record: TokenRecord | undefined;
+  readonly now?: number;
+  readonly interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
+}): Promise<TokenRecord | undefined> {
+  const { record } = input;
   const now = input.now ?? Date.now();
   const interfaceRuntime = record?.role === "interface-runtime";
   const interfaceEvidenceComplete =
