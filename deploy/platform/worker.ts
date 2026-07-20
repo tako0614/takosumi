@@ -922,6 +922,10 @@ const PUBLIC_RESOURCE_API_MANAGED_BY = "takosumi.resource-api.v1";
 export function isPlatformResourceShapeApiPath(pathname: string): boolean {
   return (
     pathname === "/v1/form-availability" ||
+    pathname === "/v1/offering-catalogs" ||
+    pathname.startsWith("/v1/offering-catalogs/") ||
+    pathname === "/v1/offering-availability/query" ||
+    pathname === "/v1/offering-selections/resolve" ||
     pathname === TAKOFORM_FORM_HOST_API_PATH ||
     pathname.startsWith(`${TAKOFORM_FORM_HOST_API_PATH}/`) ||
     pathname === "/v1/interfaces" ||
@@ -932,6 +936,15 @@ export function isPlatformResourceShapeApiPath(pathname: string): boolean {
     pathname.startsWith("/v1/target-pools/") ||
     pathname === "/v1/space-policies" ||
     pathname.startsWith("/v1/space-policies/")
+  );
+}
+
+function isPlatformOfferingOperatorApiPath(pathname: string): boolean {
+  return (
+    pathname === "/v1/offering-catalogs" ||
+    pathname.startsWith("/v1/offering-catalogs/") ||
+    pathname === "/v1/offering-availability/query" ||
+    pathname === "/v1/offering-selections/resolve"
   );
 }
 
@@ -979,7 +992,22 @@ export async function handlePlatformResourceShapeApiRequest(
   if (!platformResourceShapeApiEnabled(env)) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
-  if (!platformResourceShapeHasDeployControlBearer(request, env)) {
+  const hasDeployControlBearer = platformResourceShapeHasDeployControlBearer(
+    request,
+    env,
+  );
+  // Catalog publication and operator-side audience inspection are not a
+  // customer session surface. Forward the original credential to Core so its
+  // constant-time deploy-control bearer check remains authoritative; never
+  // rewrite an account session into the operator bearer for these routes.
+  if (
+    !hasDeployControlBearer &&
+    isPlatformOfferingOperatorApiPath(new URL(request.url).pathname)
+  ) {
+    const service = await cachedDeployControlService(env);
+    return await service.app.fetch(request);
+  }
+  if (!hasDeployControlBearer) {
     const authorized = await platformResourceShapeExternalRequest(
       request,
       env,
