@@ -38,6 +38,8 @@
     "service-form:host-conformance": "bun scripts/run-portable-form-host-conformance.ts",
     "service-form:published-package-host-proof": "bun scripts/verify-takoform-published-package-host-proof.ts",
     "service-form:prepare-install-envelopes": "bun scripts/prepare-takoform-install-envelopes.ts",
+    "service-form:formref-replica-fixture": "bun scripts/generate-formref-migration-replica-fixture.ts",
+    "service-form:formref-replica-drill": "bun scripts/run-formref-migration-replica-drill.ts",
     "takoform-schema-validators:assets": "bun scripts/build-takoform-schema-validators.ts",
     "takoform-schema-validators:check": "bun scripts/build-takoform-schema-validators.ts --check",
     "credential-recipes:assets": "bun scripts/build-credential-recipe-assets.ts",
