@@ -37,9 +37,15 @@ credential, target, quote, or backend identity.
 
 The minimum external artifact set is therefore one immutable edge module, one
 immutable workflow module, and one immutable long-running OCI image. Package
-releases remain data-only. Runtime artifacts use a separate immutable release
-and readback lane; a Form Package points at their retained identities and
-digests but never embeds executable code.
+releases remain data-only. Takosumi owns the host-conformance-only source and
+candidate verifier under `conformance/standard-form-runtime/v1.0.1`; its
+separate release lane keyless-signs and attests the exact local bytes. The OCI
+fixture is the public Docker Hub nginx `linux/amd64` manifest pinned as
+`sha256:845b5424415de5f77dd5753cbb7c1be8bd8e44cc81f20f9705783a02f8848317`
+and the candidate gate verifies the registry manifest bytes against that
+digest. A Form Package points at retained release identities and digests but
+never embeds executable code. None of these runtime artifacts grants host,
+target, capacity, billing, or admission authority.
 
 ## Hosted evidence prerequisites
 

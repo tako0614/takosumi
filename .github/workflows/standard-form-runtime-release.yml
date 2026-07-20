@@ -1,0 +1,234 @@
+name: Release standard Form host-conformance runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact existing standard-form-runtime-v<semver> tag
+        required: true
+        type: string
+      expected_commit:
+        description: Exact approved 40-character tag commit
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: standard-form-runtime-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  EXPECTED_COSIGN_VERSION: "v3.0.6"
+  # Keep this mutation lane inert until the ecosystem release-safety registry
+  # owns an exact surface, fixed adapter, and verified envelope for it.
+  RELEASE_SAFETY_REGISTRATION: "disabled-unregistered"
+
+jobs:
+  release:
+    # release-safety: blocked until the ecosystem registry owns a fixed adapter.
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    environment: standard-form-runtime-release
+    timeout-minutes: 20
+    steps:
+      - name: Refuse unregistered release mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RELEASE_SAFETY_REGISTRATION" = "registered-fixed-envelope" || {
+            echo "standard Form runtime publication is disabled until its fixed adapter and envelope are registered in the ecosystem release-safety registry" >&2
+            exit 1
+          }
+
+      - name: Check out trusted main release tooling
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify trusted main and exact approved tag commit
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          [[ "$RELEASE_TAG" =~ ^standard-form-runtime-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$RELEASE_TAG" = "standard-form-runtime-v1.0.1"
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+          tag_commit="$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")"
+          test "$tag_commit" = "$EXPECTED_COMMIT"
+          git merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main
+          test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled)" = "true"
+          {
+            echo "tag=$RELEASE_TAG"
+            echo "commit=$tag_commit"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out untrusted tagged runtime source separately
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.tag }}
+          path: release-source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install pinned Cosign v3
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2, Cosign v3.0.6
+
+      - name: Build exact release candidate with trusted main tooling
+        id: build
+        shell: bash
+        env:
+          EXPECTED_COMMIT: ${{ steps.source.outputs.commit }}
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          test "$(git -C release-source rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test -z "$(git -C release-source status --porcelain=v1 --untracked-files=all)"
+          grep -F "$EXPECTED_COSIGN_VERSION" <<<"$(cosign version 2>&1)"
+          (
+            cd release-source
+            bun "$GITHUB_WORKSPACE/scripts/verify-standard-form-runtime-artifacts.ts" check
+            bun "$GITHUB_WORKSPACE/scripts/verify-standard-form-runtime-artifacts.ts" \
+              build-release --source-commit "$EXPECTED_COMMIT" \
+              --output "$RUNNER_TEMP/standard-form-runtime"
+          )
+          test "$(jq -r .releaseTag "$RUNNER_TEMP/standard-form-runtime/release-manifest.json")" = "$RELEASE_TAG"
+          echo "output=$RUNNER_TEMP/standard-form-runtime" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse an existing release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "A GitHub release already owns $RELEASE_TAG; refusing overwrite" >&2
+            exit 1
+          fi
+
+      - name: Keyless-sign the exact release manifest and close checksums
+        shell: bash
+        env:
+          OUTPUT: ${{ steps.build.outputs.output }}
+        run: |
+          set -euo pipefail
+          identity="https://github.com/$GITHUB_REPOSITORY/.github/workflows/standard-form-runtime-release.yml@refs/heads/main"
+          cosign sign-blob "$OUTPUT/release-manifest.json" \
+            --bundle "$OUTPUT/release-manifest.sigstore.json" --yes
+          cosign verify-blob "$OUTPUT/release-manifest.json" \
+            --bundle "$OUTPUT/release-manifest.sigstore.json" \
+            --certificate-identity "$identity" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+          (
+            cd "$OUTPUT"
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | \
+              xargs sha256sum > SHA256SUMS
+            sha256sum --check --strict SHA256SUMS
+          )
+
+      - name: Create this run's immutable-release candidate
+        id: draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          response="$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$RELEASE_TAG" -f name="$RELEASE_TAG" -F draft=true \
+            -f body='Takosumi-owned host-conformance-only runtime artifacts for the Takoform 1.0.1 evidence run. These assets grant no portable host, target, capacity, or admission authority.')"
+          release_id="$(jq -r .id <<<"$response")"
+          test "$release_id" != "null"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+      - name: Upload and verify the exact draft inventory
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+          OUTPUT: ${{ steps.build.outputs.output }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r asset; do
+            gh release upload "$RELEASE_TAG" "$asset"
+          done < <(find "$OUTPUT" -maxdepth 1 -type f -print | sort)
+          find "$OUTPUT" -maxdepth 1 -type f -printf '%f\n' | sort > "$RUNNER_TEMP/expected-assets.txt"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --jq '.[].name' | sort > "$RUNNER_TEMP/actual-assets.txt"
+          diff -u "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/actual-assets.txt"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .draft)" = "true"
+          while IFS= read -r asset; do
+            name="$(basename "$asset")"
+            want="sha256:$(sha256sum "$asset" | cut -d' ' -f1)"
+            got="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+              --jq ".[] | select(.name == \"$name\") | .digest")"
+            test "$got" = "$want"
+          done < <(find "$OUTPUT" -maxdepth 1 -type f -print | sort)
+
+      - name: Attest exact runtime release inventory
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: |
+            ${{ steps.build.outputs.output }}/edge-worker.mjs
+            ${{ steps.build.outputs.output }}/durable-workflow.mjs
+            ${{ steps.build.outputs.output }}/runtime-manifest.json
+            ${{ steps.build.outputs.output }}/runtime-sbom.spdx.json
+            ${{ steps.build.outputs.output }}/release-manifest.json
+            ${{ steps.build.outputs.output }}/release-manifest.sigstore.json
+            ${{ steps.build.outputs.output }}/SHA256SUMS
+
+      - name: Attest runtime SBOM
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: |
+            ${{ steps.build.outputs.output }}/edge-worker.mjs
+            ${{ steps.build.outputs.output }}/durable-workflow.mjs
+          sbom-path: ${{ steps.build.outputs.output }}/runtime-sbom.spdx.json
+
+      - name: Publish and require repository-enforced immutability
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          finalized="$(gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false)"
+          test "$(jq -r .draft <<<"$finalized")" = "false"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .immutable)" = "true"
+
+      - name: Remove a partial draft after failure
+        if: ${{ always() && !success() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_ID" ]]; then
+            exit 0
+          fi
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" 2>/dev/null || true)"
+          if [[ -n "$release_json" && "$(jq -r .draft <<<"$release_json")" == "true" && "$(jq -r .tag_name <<<"$release_json")" == "$RELEASE_TAG" ]]; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+          fi
