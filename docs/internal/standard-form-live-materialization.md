@@ -20,7 +20,55 @@ only lifecycle checks, identities, fixture names, and digests. It does not echo
 a runner-local path, artifact URL, desired value, connection document,
 credential, target, quote, or backend identity.
 
-## Ten-kind materializability matrix
+## Successor source status
+
+The independent Takoform repository now generates the complete exact `1.0.1`
+source candidate. Its EdgeWorker and DurableWorkflow fixtures pin the published
+immutable `standard-form-runtime-v1.0.3` release bytes, ContainerService pins an
+exact linux/amd64 OCI manifest, unsupported optional preferences were removed,
+and the two retained dependencies are explicit:
+
+- EdgeWorker uses `ObjectBucket/edge-assets` through
+  `object.binding.v1` with read/write grants; and
+- Schedule uses `DurableWorkflow/ingest` through `schedule_trigger` with an
+  invoke grant.
+
+The same package set owns one required, data-only portable Interface descriptor
+for every outward runtime surface:
+
+| Form | Descriptor |
+| --- | --- |
+| `EdgeWorker` | `http.request@1` |
+| `ObjectBucket` | `object.storage@1` |
+| `KVStore` | `keyvalue.store@1` |
+| `SQLDatabase` | `sql.query@1` |
+| `Queue` | `queue.messages@1` |
+| `VectorIndex` | `vector.query@1` |
+| `DurableWorkflow` | `workflow.invoke@1` |
+| `ContainerService` | `http.request@1` |
+| `StatefulActorNamespace` | `actor.invoke@1` |
+| `Schedule` | none; it consumes a workflow and exposes no runtime surface |
+
+These are open portable identities; none uses a `takosumi.cloud.*` name. Each
+descriptor carries a closed non-secret document schema and deterministic
+`output` mappings. SQLDatabase publishes and maps `engine` in addition to its
+Resource id and name.
+
+Takosumi's committed exact fixture retains all ten candidate FormRefs, package
+digests, desired/negative fixture digests, and parsed descriptors. Focused host
+tests prove all ten create/read/update/import/observe/drift/delete lifecycles
+and prove that all nine required descriptors become `Resolved`, Resource-owned
+Interfaces with `form_descriptor` provenance before Resource Ready. Schedule
+creates no invented Interface. The proof uses an explicitly injected
+deterministic test Adapter; it is source-level OSS host conformance, not a
+hosted target or production deployment proof.
+
+Local source gates and the all-or-nothing ten-package candidate builder do not
+require CI. The GitHub workflow remains optional automation and the current
+keyless OIDC signing path. Publication must stop at that exact signer boundary
+if the identity is unavailable; it must not weaken signature policy.
+
+## Historical blocker matrix and hosted remainder
 
 | Kind | `1.0.0` live result | Minimum `1.0.1` / host work | Import authority | Honest drift evidence |
 | --- | --- | --- | --- | --- |

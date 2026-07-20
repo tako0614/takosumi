@@ -1,0 +1,671 @@
+{
+  "format": "takosumi.takoform-standard-host-matrix@v1",
+  "status": "candidate-only",
+  "definitionVersion": "1.0.1",
+  "packageVersion": "1.0.1",
+  "entries": [
+    {
+      "kind": "EdgeWorker",
+      "identity": {
+        "formRef": {
+          "apiVersion": "forms.takoform.com/v1alpha1",
+          "kind": "EdgeWorker",
+          "definitionVersion": "1.0.1",
+          "schemaDigest": "sha256:1d20c21cad95deec873359e218729be53ceaf0a8abfbdcc860be2a4ac0c7c722"
+        },
+        "packageDigest": "sha256:63e87939660c898837290f0cc8e64e0098106eb4e7cba97a984762d2beaaabb3"
+      },
+      "interfaceDescriptors": [
+        {
+          "name": "http.request",
+          "version": "1",
+          "description": "Portable HTTP request surface exposed by an edge application.",
+          "required": true,
+          "document": {
+            "operations": ["request"]
+          },
+          "documentSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "operations": {
+                "items": {
+                  "enum": ["request"],
+                  "type": "string"
+                },
+                "maxItems": 1,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": ["operations"],
+            "type": "object"
+          },
+          "inputs": [
+            {
+              "name": "resource",
+              "source": "output",
+              "pointer": "/id"
+            },
+            {
+              "name": "name",
+              "source": "output",
+              "pointer": "/name"
+            }
+          ]
+        }
+      ],
+      "desired": {
+        "compatibilityDate": "2026-07-20",
+        "compatibilityFlags": ["nodejs_compat"],
+        "connections": {
+          "ASSETS": {
+            "permissions": ["read", "write"],
+            "projection": "object.binding.v1",
+            "resource": "ObjectBucket/edge-assets"
+          }
+        },
+        "name": "edge",
+        "profiles": ["workers"],
+        "source": {
+          "artifactSha256": "281b77f65f6258e56d0468a580b1f67baf9f4d71891c2f7259ce24c47bf7d67e",
+          "artifactUrl": "https://github.com/tako0614/takosumi/releases/download/standard-form-runtime-v1.0.3/edge-worker.mjs"
+        }
+      },
+      "negative": {
+        "compatibilityDate": "2026-07-20",
+        "compatibilityFlags": ["nodejs_compat"],
+        "connections": {
+          "ASSETS": {
+            "permissions": ["read", "write"],
+            "projection": "object.binding.v1",
+            "resource": "ObjectBucket/edge-assets"
+          }
+        },
+        "name": "edge",
+        "profiles": ["workers"],
+        "source": {
+          "artifactUrl": "https://artifacts.example.test/edge.js"
+        }
+      },
+      "desiredDigest": "sha256:c1d71aacbfe5df62aabbb22f911304bdb1450c4b898aa7f194a3eaa8a372fbda",
+      "negativeDigest": "sha256:5bbb54f28e9b30c814443d128698b59e1663db54a01746b6efccd79a1b396ea6"
+    },
+    {
+      "kind": "ObjectBucket",
+      "identity": {
+        "formRef": {
+          "apiVersion": "forms.takoform.com/v1alpha1",
+          "kind": "ObjectBucket",
+          "definitionVersion": "1.0.1",
+          "schemaDigest": "sha256:4584b9233ef23231037d941c652eedd67c184deb9e36bec14d41151a28b7c2b4"
+        },
+        "packageDigest": "sha256:00f3ed05da56cc795a42043112933ef00e97b531ed123e0c2df3cce70bd1e391"
+      },
+      "interfaceDescriptors": [
+        {
+          "name": "object.storage",
+          "version": "1",
+          "description": "Portable object storage operations.",
+          "required": true,
+          "document": {
+            "operations": ["delete", "get", "list", "put"]
+          },
+          "documentSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "operations": {
+                "items": {
+                  "enum": ["delete", "get", "list", "put"],
+                  "type": "string"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": ["operations"],
+            "type": "object"
+          },
+          "inputs": [
+            {
+              "name": "resource",
+              "source": "output",
+              "pointer": "/id"
+            },
+            {
+              "name": "name",
+              "source": "output",
+              "pointer": "/name"
+            }
+          ]
+        }
+      ],
+      "desired": {
+        "interfaces": ["s3_api"],
+        "name": "assets",
+        "storageClass": "standard"
+      },
+      "negative": {
+        "interfaces": ["s3_api"],
+        "name": "assets",
+        "storageClass": "cold"
+      },
+      "desiredDigest": "sha256:02eebf9060e28c799c296f40f0220db4ddbb6fef4da8df32e49983ffee521ae7",
+      "negativeDigest": "sha256:2fd0b298855cbf98ac4c7844a248ccf7d5261c16af4d74f4c9a0e1c6e713ef11"
+    },
+    {
+      "kind": "KVStore",
+      "identity": {
+        "formRef": {
+          "apiVersion": "forms.takoform.com/v1alpha1",
+          "kind": "KVStore",
+          "definitionVersion": "1.0.1",
+          "schemaDigest": "sha256:137e97cbce057aac1ef8e9af3f00bb9ca3a3967131bf2d920c252d5249b6e96f"
+        },
+        "packageDigest": "sha256:964c0bdc7445440f93f2ee6318eb9bf6356f8d749d12a7eb904e90141e312dca"
+      },
+      "interfaceDescriptors": [
+        {
+          "name": "keyvalue.store",
+          "version": "1",
+          "description": "Portable key/value operations.",
+          "required": true,
+          "document": {
+            "operations": ["delete", "get", "list", "put"]
+          },
+          "documentSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "operations": {
+                "items": {
+                  "enum": ["delete", "get", "list", "put"],
+                  "type": "string"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": ["operations"],
+            "type": "object"
+          },
+          "inputs": [
+            {
+              "name": "resource",
+              "source": "output",
+              "pointer": "/id"
+            },
+            {
+              "name": "name",
+              "source": "output",
+              "pointer": "/name"
+            }
+          ]
+        }
+      ],
+      "desired": {
+        "consistency": "eventual",
+        "name": "cache"
+      },
+      "negative": {
+        "consistency": "linearizable",
+        "name": "cache"
+      },
+      "desiredDigest": "sha256:bc9df908d5b4083274c41d02491f483808e46c20e945fb0ff5a87faf3ce0e2fa",
+      "negativeDigest": "sha256:a6e7889fd52a8a3a4fb8a65daf3ffc0bbb35921961cc3c74493037af80f96011"
+    },
+    {
+      "kind": "SQLDatabase",
+      "identity": {
+        "formRef": {
+          "apiVersion": "forms.takoform.com/v1alpha1",
+          "kind": "SQLDatabase",
+          "definitionVersion": "1.0.1",
+          "schemaDigest": "sha256:ecd201ad6a2156dabed0f1afbbea242c3f994fce37d2edf6f676342cd6937246"
+        },
+        "packageDigest": "sha256:714a6c3de551598788b25e208783c08b7e8059f10fb96873f5a34b321075c401"
+      },
+      "interfaceDescriptors": [
+        {
+          "name": "sql.query",
+          "version": "1",
+          "description": "Portable SQL query and transaction operations.",
+          "required": true,
+          "document": {
+            "operations": ["execute", "query", "transaction"]
+          },
+          "documentSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "operations": {
+                "items": {
+                  "enum": ["execute", "query", "transaction"],
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": ["operations"],
+            "type": "object"
+          },
+          "inputs": [
+            {
+              "name": "resource",
+              "source": "output",
+              "pointer": "/id"
+            },
+            {
+              "name": "name",
+              "source": "output",
+              "pointer": "/name"
+            },
+            {
+              "name": "engine",
+              "source": "output",
+              "pointer": "/engine"
+            }
+          ]
+        }
+      ],
+      "desired": {
+        "engine": "sqlite",
+        "name": "main"
+      },
+      "negative": {
+        "engine": "not a token",
+        "name": "main"
+      },
+      "desiredDigest": "sha256:f4da055dfc9240132a2a8e2a39712df8412210664ce8998a8ce917a7e2e30f51",
+      "negativeDigest": "sha256:cc9820f9b619e94666879914fc228cc6985b03cb48bbf26c7d2350815a6bc100"
+    },
+    {
+      "kind": "Queue",
+      "identity": {
+        "formRef": {
+          "apiVersion": "forms.takoform.com/v1alpha1",
+          "kind": "Queue",
+          "definitionVersion": "1.0.1",
+          "schemaDigest": "sha256:93308869c7fd95654ee5009efe329d43452d11c59d36f61b5fc79b0a2fbe4646"
+        },
+        "packageDigest": "sha256:609958d46da6f74f3a29e0940fb628e9c455c353d41d9457791c5859360ad8cc"
+      },
+      "interfaceDescriptors": [
+        {
+          "name": "queue.messages",
+          "version": "1",
+          "description": "Portable queue delivery operations.",
+          "required": true,
+          "document": {
+            "operations": ["acknowledge", "receive", "send"]
+          },
+          "documentSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "operations": {
+                "items": {
+                  "enum": ["acknowledge", "receive", "send"],
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": ["operations"],
+            "type": "object"
+          },
+          "inputs": [
+            {
+              "name": "resource",
+              "source": "output",
+              "pointer": "/id"
+            },
+            {
+              "name": "name",
+              "source": "output",
+              "pointer": "/name"
+            }
+          ]
+        }
+      ],
+      "desired": {
+        "name": "jobs"
+      },
+      "negative": {
+        "delivery": {
+          "maxRetries": -1
+        },
+        "name": "jobs"
+      },
+      "desiredDigest": "sha256:3b5f3a61516403c6d837fa75b36f1b5110663ecac1e3b5c0278f1ef496338df6",
+      "negativeDigest": "sha256:577bdc1f86bd7329baf3f421263fbc99074e8f8bd684565a5f6d00d5b0bfa0be"
+    },
+    {
+      "kind": "VectorIndex",
+      "identity": {
+        "formRef": {
+          "apiVersion": "forms.takoform.com/v1alpha1",
+          "kind": "VectorIndex",
+          "definitionVersion": "1.0.1",
+          "schemaDigest": "sha256:f0db5c150198bec614485074cc10c8ee1533edddf11a7374f1aaa7cdebc77fea"
+        },
+        "packageDigest": "sha256:adffdb7d630eb44b03c8f4cd4a8ef2295e66318ea81b1fa88be6dfdd20dd429b"
+      },
+      "interfaceDescriptors": [
+        {
+          "name": "vector.query",
+          "version": "1",
+          "description": "Portable vector index operations.",
+          "required": true,
+          "document": {
+            "operations": ["delete", "query", "upsert"]
+          },
+          "documentSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "operations": {
+                "items": {
+                  "enum": ["delete", "query", "upsert"],
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": ["operations"],
+            "type": "object"
+          },
+          "inputs": [
+            {
+              "name": "resource",
+              "source": "output",
+              "pointer": "/id"
+            },
+            {
+              "name": "name",
+              "source": "output",
+              "pointer": "/name"
+            }
+          ]
+        }
+      ],
+      "desired": {
+        "dimensions": 1536,
+        "metric": "cosine",
+        "name": "embeddings"
+      },
+      "negative": {
+        "dimensions": 0,
+        "metric": "cosine",
+        "name": "embeddings"
+      },
+      "desiredDigest": "sha256:2bbb58be0ffc411da933428645c0e2f7d79ecc91e31bf06bfc58d3d731825790",
+      "negativeDigest": "sha256:f077b30f08cca546a8fbff2191ead29348cae75f01d22d3fbd365e0331ee984c"
+    },
+    {
+      "kind": "DurableWorkflow",
+      "identity": {
+        "formRef": {
+          "apiVersion": "forms.takoform.com/v1alpha1",
+          "kind": "DurableWorkflow",
+          "definitionVersion": "1.0.1",
+          "schemaDigest": "sha256:9b6e5e0d28d8ea35527ae20756c9ed1eb57907e93ff6a44ae300dbbf72b80d45"
+        },
+        "packageDigest": "sha256:05db4bd34b3361eb933ff284f40c1dd17a9f4025c5b5a2ade56a838996a69b90"
+      },
+      "interfaceDescriptors": [
+        {
+          "name": "workflow.invoke",
+          "version": "1",
+          "description": "Portable durable workflow invocation operations.",
+          "required": true,
+          "document": {
+            "operations": ["cancel", "invoke", "status"]
+          },
+          "documentSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "operations": {
+                "items": {
+                  "enum": ["cancel", "invoke", "status"],
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": ["operations"],
+            "type": "object"
+          },
+          "inputs": [
+            {
+              "name": "resource",
+              "source": "output",
+              "pointer": "/id"
+            },
+            {
+              "name": "name",
+              "source": "output",
+              "pointer": "/name"
+            }
+          ]
+        }
+      ],
+      "desired": {
+        "entrypoint": "IngestWorkflow",
+        "name": "ingest",
+        "retry": {
+          "initialBackoffSeconds": 5,
+          "maxAttempts": 3
+        },
+        "source": {
+          "artifactRef": "standard-form-runtime/v1.0.3/durable-workflow.mjs",
+          "artifactSha256": "8712e09089276b497669472eddc0aa425c6fa2bf766037f7351690a3517d5ac5"
+        }
+      },
+      "negative": {
+        "entrypoint": "IngestWorkflow",
+        "name": "ingest",
+        "retry": {
+          "maxAttempts": 0
+        },
+        "source": {
+          "artifactRef": "standard-form-runtime/v1.0.3/durable-workflow.mjs",
+          "artifactSha256": "8712e09089276b497669472eddc0aa425c6fa2bf766037f7351690a3517d5ac5"
+        }
+      },
+      "desiredDigest": "sha256:8b0132ff6438b9480c877ee282261da5146c06b6fde80c53ec84101cd17d2018",
+      "negativeDigest": "sha256:497ab9292ce482d1c8145e0859fff8943a6b5d80e0e1973915a7b62cea5289bf"
+    },
+    {
+      "kind": "ContainerService",
+      "identity": {
+        "formRef": {
+          "apiVersion": "forms.takoform.com/v1alpha1",
+          "kind": "ContainerService",
+          "definitionVersion": "1.0.1",
+          "schemaDigest": "sha256:f39586a6ca97ee474b3e130b0a2a57ba81d40282632cd44fa65631cfbd17c7cf"
+        },
+        "packageDigest": "sha256:5adfb7dd11a3f462bb2bad94ba9abbcb097c92afa0987d9cc1fa0783d00f3b05"
+      },
+      "interfaceDescriptors": [
+        {
+          "name": "http.request",
+          "version": "1",
+          "description": "Portable HTTP request surface exposed by a container service.",
+          "required": true,
+          "document": {
+            "operations": ["request"]
+          },
+          "documentSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "operations": {
+                "items": {
+                  "enum": ["request"],
+                  "type": "string"
+                },
+                "maxItems": 1,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": ["operations"],
+            "type": "object"
+          },
+          "inputs": [
+            {
+              "name": "resource",
+              "source": "output",
+              "pointer": "/id"
+            },
+            {
+              "name": "name",
+              "source": "output",
+              "pointer": "/name"
+            }
+          ]
+        }
+      ],
+      "desired": {
+        "image": "docker.io/library/nginx@sha256:845b5424415de5f77dd5753cbb7c1be8bd8e44cc81f20f9705783a02f8848317",
+        "name": "agent",
+        "ports": [80],
+        "publicHttp": true
+      },
+      "negative": {
+        "image": "docker.io/library/nginx@sha256:845b5424415de5f77dd5753cbb7c1be8bd8e44cc81f20f9705783a02f8848317",
+        "name": "agent",
+        "ports": [0],
+        "publicHttp": true
+      },
+      "desiredDigest": "sha256:182c83da931b52573aedad21294eac9934e2c0c1f42420b00a5e6ac7390c6c6c",
+      "negativeDigest": "sha256:6808753cc5a0be4bfcf8023dfedfe8d1bb0d8f605c679837db326cc27daf19ed"
+    },
+    {
+      "kind": "StatefulActorNamespace",
+      "identity": {
+        "formRef": {
+          "apiVersion": "forms.takoform.com/v1alpha1",
+          "kind": "StatefulActorNamespace",
+          "definitionVersion": "1.0.1",
+          "schemaDigest": "sha256:c82fa8458e333ce20160f052c255ee94636219bbdea6a46d4730852411050be4"
+        },
+        "packageDigest": "sha256:d6bd34aac538485161ff9045c8a8f9d8dc6193f28f1667cc7bef84a85dbf85d7"
+      },
+      "interfaceDescriptors": [
+        {
+          "name": "actor.invoke",
+          "version": "1",
+          "description": "Portable stateful actor invocation operations.",
+          "required": true,
+          "document": {
+            "operations": ["invoke"]
+          },
+          "documentSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "operations": {
+                "items": {
+                  "enum": ["invoke"],
+                  "type": "string"
+                },
+                "maxItems": 1,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": ["operations"],
+            "type": "object"
+          },
+          "inputs": [
+            {
+              "name": "resource",
+              "source": "output",
+              "pointer": "/id"
+            },
+            {
+              "name": "name",
+              "source": "output",
+              "pointer": "/name"
+            }
+          ]
+        }
+      ],
+      "desired": {
+        "className": "RoomActor",
+        "migrationTag": "v1",
+        "name": "rooms",
+        "storageProfile": "durable_sqlite"
+      },
+      "negative": {
+        "className": "not a class",
+        "migrationTag": "v1",
+        "name": "rooms",
+        "storageProfile": "durable_sqlite"
+      },
+      "desiredDigest": "sha256:3a16f86ec2dc943f53c8a2aa389632e66038b6203d8aec96b634da50be13a4e2",
+      "negativeDigest": "sha256:dc5d84f65fcf623fea1b669f28c1b6bc0263b1a630b61a8b882aad771521cbf3"
+    },
+    {
+      "kind": "Schedule",
+      "identity": {
+        "formRef": {
+          "apiVersion": "forms.takoform.com/v1alpha1",
+          "kind": "Schedule",
+          "definitionVersion": "1.0.1",
+          "schemaDigest": "sha256:b44b0e785453c32133c53bfded6c75d1e95bd5860bdf54d874bb4b330a4c2508"
+        },
+        "packageDigest": "sha256:ebf03b9e2d90b4fe0444e6dfe824758637639a79e0e267616258e7b28e8d690e"
+      },
+      "desired": {
+        "connections": {
+          "workflow": {
+            "permissions": ["invoke"],
+            "projection": "schedule_trigger",
+            "resource": "DurableWorkflow/ingest"
+          }
+        },
+        "cron": "0 0 * * *",
+        "name": "nightly",
+        "timezone": "UTC"
+      },
+      "negative": {
+        "connections": {
+          "workflow": {
+            "permissions": ["invoke"],
+            "projection": "schedule_trigger",
+            "resource": "DurableWorkflow/ingest"
+          }
+        },
+        "cron": "0 0 * *",
+        "name": "nightly",
+        "timezone": "UTC"
+      },
+      "desiredDigest": "sha256:a26cb8a1c4c1ddc5c15804eadddad19af27bd9e8c22d0d35d6be0541bef1c1b7",
+      "negativeDigest": "sha256:76f747035c2587b273e244b5e7cb9ae5f4e10b7237f8cb7b0f1873b98688ba1b"
+    }
+  ]
+}

@@ -4925,7 +4925,11 @@ export class ResourceShapeService {
     const resolved: Record<string, ResolvedResourceConnection> = {};
     for (const name of Object.keys(connections).sort()) {
       const connection = connections[name]!;
-      if (connection.resource === consumerResourceId) {
+      const referencedResourceId = canonicalConnectionResourceId(
+        space,
+        connection.resource,
+      );
+      if (referencedResourceId === consumerResourceId) {
         return {
           ok: false,
           error: {
@@ -4934,7 +4938,7 @@ export class ResourceShapeService {
           },
         };
       }
-      const resource = resourcesById.get(connection.resource);
+      const resource = resourcesById.get(referencedResourceId);
       // Do not reveal whether a resource id belongs to another Space.
       if (!resource) {
         return {
@@ -5027,7 +5031,7 @@ export class ResourceShapeService {
     if (!connections) return false;
     return Object.values(connections).some((connection) =>
       this.#connectionPathReaches(
-        connection.resource,
+        canonicalConnectionResourceId(current.spaceId, connection.resource),
         targetId,
         resourcesById,
         visited,
@@ -5052,7 +5056,11 @@ export class ResourceShapeService {
       if (
         connections &&
         Object.values(connections).some(
-          (connection) => connection.resource === resourceId,
+          (connection) =>
+            canonicalConnectionResourceId(
+              candidate.spaceId,
+              connection.resource,
+            ) === resourceId,
         )
       ) {
         return candidate;
@@ -6326,6 +6334,26 @@ function connectionsForParsedResource(
     return parsed.spec.connections;
   }
   return undefined;
+}
+
+/**
+ * Portable Form fixtures identify a same-Space dependency as `Kind/name`.
+ * Canonical Resource ids remain the stored authority, so resolution expands
+ * only that exact path-safe shorthand and preserves already-canonical ids.
+ */
+function canonicalConnectionResourceId(
+  space: SpaceId,
+  resource: string,
+): string {
+  const match = /^([^/]+)\/([^/]+)$/u.exec(resource);
+  if (
+    !match ||
+    !isResourceShapeKind(match[1]) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(match[2]!)
+  ) {
+    return resource;
+  }
+  return formatResourceShapeId(space, match[1], match[2]!);
 }
 
 function invalidTargetPool(message: string): ResourceServiceError {
