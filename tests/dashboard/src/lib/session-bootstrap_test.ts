@@ -84,7 +84,7 @@ describe("dashboard session bootstrap", () => {
     ]);
   });
 
-  test("lets session proof and the shell workspace list use separate fast and workspace bootstrap requests", async () => {
+  test("shares one bootstrap between shell session proof and its workspace list", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const path = typeof input === "string" ? input : String(input);
@@ -111,19 +111,16 @@ describe("dashboard session bootstrap", () => {
     }) as typeof fetch;
 
     const [session, workspaces] = await Promise.all([
-      refreshSession(),
+      refreshSession({ includeWorkspaces: true }),
       listWorkspacesCached(),
     ]);
 
     expect(session?.subject).toBe("tsub_1");
     expect(workspaces[0]?.id).toBe("space_1");
-    expect(calls).toEqual([
-      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
-      workspaceBootstrapPath,
-    ]);
+    expect(calls).toEqual([workspaceBootstrapPath]);
   });
 
-  test("keeps workspace bootstrap independent when the workspace list starts first", async () => {
+  test("shares the workspace bootstrap when the workspace list starts first", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const path = typeof input === "string" ? input : String(input);
@@ -150,7 +147,7 @@ describe("dashboard session bootstrap", () => {
     }) as typeof fetch;
 
     const workspacePromise = listWorkspacesCached();
-    const sessionPromise = refreshSession();
+    const sessionPromise = refreshSession({ includeWorkspaces: true });
     const [workspaces, session] = await Promise.all([
       workspacePromise,
       sessionPromise,
@@ -158,9 +155,6 @@ describe("dashboard session bootstrap", () => {
 
     expect(workspaces[0]?.id).toBe("space_1");
     expect(session?.subject).toBe("tsub_1");
-    expect(calls).toEqual([
-      workspaceBootstrapPath,
-      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
-    ]);
+    expect(calls).toEqual([workspaceBootstrapPath]);
   });
 });

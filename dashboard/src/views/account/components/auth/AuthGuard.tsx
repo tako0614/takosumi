@@ -38,7 +38,10 @@ export default function AuthGuard(props: Props) {
   // Cache-first: the session is held module-side and survives navigation, so a
   // page change that already has a known session renders instantly instead of
   // re-probing /session/me and flashing a full-screen spinner every time.
-  const cached = readSession();
+  // The authenticated shell always mounts a Workspace switcher. Prime the
+  // session and Workspace list through the same bootstrap request so the
+  // first useful screen does not wait on two serial API roundtrips.
+  const cached = readSession({ includeWorkspaces: true });
   const [session, setSession] = createSignal<SessionRecord | null>(cached);
   const [state, setState] = createSignal<AuthState>(
     cached ? "authenticated" : "loading",
@@ -59,7 +62,7 @@ export default function AuthGuard(props: Props) {
     // onSessionChange reacts if it changed. Only block on the probe when there
     // is no session yet (genuine first load / signed out).
     if (session()) return;
-    void refreshSession().then((s) => {
+    void refreshSession({ includeWorkspaces: true }).then((s) => {
       setSession(s);
       if (s) {
         setState("authenticated");
