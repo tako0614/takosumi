@@ -20,3 +20,12 @@ The verifier fails closed on strict I-JSON, package/schema digests, Sigstore
 certificate/CT/Rekor evidence, publisher identity, package closure, executable
 mode or extension, unsupported media, forbidden credential/operator/commercial
 fields, open or remote schema authority, and conformance fixture mismatch.
+
+Schema validation is safe for the Cloudflare Workers runtime. Fixed FormRef,
+package-index, Form Definition, and Draft 2020-12 meta-schema validators are
+generated ahead of time by `bun run takoform-schema-validators:assets`; the
+committed modules are self-contained and import neither Ajv nor runtime codegen.
+Portable desired/observed/output/document schemas pass the generated
+meta-schema and portability admission first, then use the eval-free shared
+Draft 2020-12 interpreter. `bun run takoform-schema-validators:check` fails if
+the generated assets are stale or regain an Ajv/runtime-codegen dependency.

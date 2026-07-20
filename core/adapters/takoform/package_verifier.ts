@@ -1,7 +1,3 @@
-import Ajv2020, {
-  type AnySchema,
-  type ValidateFunction,
-} from "ajv/dist/2020.js";
 import type {
   FormInterfaceDescriptor,
   FormOperation,
@@ -21,9 +17,15 @@ import {
   parseCanonicalJson,
 } from "./canonical_json.ts";
 import type { TakoformPackageSignatureVerifier } from "./signature.ts";
-import formDefinitionSchema from "./schemas/form-definition.schema.json" with { type: "json" };
-import formRefSchema from "./schemas/form-ref.schema.json" with { type: "json" };
-import packageIndexSchema from "./schemas/package-index.schema.json" with { type: "json" };
+import {
+  type StaticSchemaValidator,
+  validateTakoformFormDefinition,
+  validateTakoformPackageIndex,
+} from "./json_schema_2020.ts";
+import {
+  assertDraft202012Schema,
+  InterpretedDraft202012Validator,
+} from "../../shared/json-schema/draft_2020.ts";
 
 export const TAKOFORM_PACKAGE_ENVELOPE_MEDIA_TYPE =
   "application/vnd.takosumi.takoform-package-install.v1+json";
@@ -170,15 +172,6 @@ interface TakoformDefinition {
   }[];
 }
 
-const ajv = new Ajv2020({
-  allErrors: true,
-  strict: false,
-  validateFormats: false,
-});
-ajv.addSchema(formRefSchema);
-const validateIndex = ajv.compile(packageIndexSchema);
-const validateDefinition = ajv.compile(formDefinitionSchema);
-
 /**
  * Takosumi host adapter for the independent Takoform Form Package v1alpha1
  * contract. The internal envelope is transport only; package and FormRef
@@ -209,7 +202,11 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
       MAX_INDEX_BYTES,
     );
     const indexValue = parseCanonicalJson(indexBytes);
-    assertSchema(validateIndex, indexValue, "package-index.json");
+    assertSchema(
+      validateTakoformPackageIndex,
+      indexValue,
+      "package-index.json",
+    );
     const index = indexValue as unknown as PackageIndex;
     assertPackageIndexClosure(index);
 
@@ -233,7 +230,11 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
       );
     }
     const definitionValue = parseCanonicalJson(definitionPayload);
-    assertSchema(validateDefinition, definitionValue, "Form Definition");
+    assertSchema(
+      validateTakoformFormDefinition,
+      definitionValue,
+      "Form Definition",
+    );
     rejectForbiddenDefinitionContent(definitionValue, "$");
     const definition = definitionValue as unknown as TakoformDefinition;
     verifyDefinitionSemantics(definition);
@@ -303,21 +304,20 @@ function verifyDefinitionSemantics(definition: TakoformDefinition): void {
       }
     }
     if (descriptor.documentSchema !== undefined) {
-      let validateDocument: ValidateFunction;
+      let validateDocument: InterpretedDraft202012Validator;
       try {
-        // The closed Form Definition schema already proved this value is a
-        // JSON Schema object. CanonicalJsonValue remains intentionally wider
-        // at the parser boundary, so narrow only at the Ajv compile seam.
-        validateDocument = ajv.compile(descriptor.documentSchema as AnySchema);
+        validateDocument = new InterpretedDraft202012Validator(
+          descriptor.documentSchema,
+        );
       } catch (error) {
         throw new TypeError(
-          `interfaces[${position}].documentSchema could not be compiled: ${error instanceof Error ? error.message : String(error)}`,
+          `interfaces[${position}].documentSchema could not be prepared: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
       const document = descriptor.document ?? {};
-      if (!validateDocument(document)) {
+      if (!validateDocument.validate(document)) {
         throw new TypeError(
-          `interfaces[${position}].document does not satisfy documentSchema: ${ajv.errorsText(validateDocument.errors)}`,
+          `interfaces[${position}].document does not satisfy documentSchema: ${validateDocument.errorsText()}`,
         );
       }
     }
@@ -547,6 +547,7 @@ async function verifyDefinitionIdentity(
 }
 
 function verifyPortableSchema(value: CanonicalJsonValue, label: string): void {
+  assertDraft202012Schema(value, label);
   const root = value;
   let operations = 0;
   const visiting = new Set<string>();
@@ -586,12 +587,23 @@ function verifyPortableSchema(value: CanonicalJsonValue, label: string): void {
       "$id",
       "$anchor",
       "$dynamicAnchor",
+      "$dynamicRef",
       "$recursiveAnchor",
       "$recursiveRef",
       "$vocabulary",
     ]) {
       if (forbidden in node)
         throw new TypeError(`${location}.${forbidden} is not portable`);
+    }
+    if (typeof node.pattern === "string") {
+      try {
+        new RegExp(node.pattern, "u");
+      } catch (error) {
+        throw new TypeError(
+          `${location}.pattern is not a valid ECMA-262 pattern`,
+          { cause: error },
+        );
+      }
     }
     if (
       node.$schema !== undefined &&
@@ -741,14 +753,9 @@ function verifyPortableSchema(value: CanonicalJsonValue, label: string): void {
     );
   }
   try {
-    const validator = new Ajv2020({
-      strict: false,
-      allErrors: true,
-      validateFormats: false,
-    });
-    validator.compile(root as object);
+    new InterpretedDraft202012Validator(root);
   } catch (error) {
-    throw new TypeError(`${label} is not a compilable Draft 2020-12 schema`, {
+    throw new TypeError(`${label} cannot be prepared for validation`, {
       cause: error,
     });
   }
@@ -976,22 +983,23 @@ function verifyConformanceFixtures(
   definition: TakoformDefinition,
   payloads: ReadonlyMap<string, Uint8Array>,
 ): void {
-  let desiredValidator: ValidateFunction;
-  let observedValidator: ValidateFunction;
-  let outputValidator: ValidateFunction | undefined;
+  let desiredValidator: InterpretedDraft202012Validator;
+  let observedValidator: InterpretedDraft202012Validator;
+  let outputValidator: InterpretedDraft202012Validator | undefined;
   try {
-    const fixtureAjv = new Ajv2020({
-      strict: false,
-      allErrors: true,
-      validateFormats: false,
-    });
-    desiredValidator = fixtureAjv.compile(definition.desiredSchema as object);
-    observedValidator = fixtureAjv.compile(definition.observedSchema as object);
+    desiredValidator = new InterpretedDraft202012Validator(
+      definition.desiredSchema,
+    );
+    observedValidator = new InterpretedDraft202012Validator(
+      definition.observedSchema,
+    );
     if (definition.outputSchema !== undefined) {
-      outputValidator = fixtureAjv.compile(definition.outputSchema as object);
+      outputValidator = new InterpretedDraft202012Validator(
+        definition.outputSchema,
+      );
     }
   } catch (error) {
-    throw new TypeError("Form Definition schemas cannot be compiled", {
+    throw new TypeError("Form Definition schemas cannot be prepared", {
       cause: error,
     });
   }
@@ -1006,7 +1014,7 @@ function verifyConformanceFixtures(
       desired,
       `${fixture.name} desired`,
     );
-    if (!desiredValidator(desired)) {
+    if (!desiredValidator.validate(desired)) {
       throw new TypeError(
         `fixture ${fixture.name} does not satisfy desiredSchema`,
       );
@@ -1022,7 +1030,7 @@ function verifyConformanceFixtures(
         observed,
         `${fixture.name} observed`,
       );
-      if (!observedValidator(observed)) {
+      if (!observedValidator.validate(observed)) {
         throw new TypeError(
           `fixture ${fixture.name} does not satisfy observedSchema`,
         );
@@ -1047,7 +1055,7 @@ function verifyConformanceFixtures(
         output,
         `${fixture.name} output`,
       );
-      if (!outputValidator(output)) {
+      if (!outputValidator.validate(output)) {
         throw new TypeError(
           `fixture ${fixture.name} does not satisfy outputSchema`,
         );
@@ -1087,7 +1095,7 @@ function verifyConformanceFixtures(
       input,
       `${fixture.name} ${fixture.stage}`,
     );
-    if (selected.validator(input)) {
+    if (selected.validator.validate(input)) {
       throw new TypeError(
         `negative fixture ${fixture.name} unexpectedly passed ${fixture.stage} validation`,
       );
@@ -1499,7 +1507,7 @@ function matchesCompoundToken(actual: string, singular: string): boolean {
 }
 
 function assertSchema(
-  validator: ValidateFunction,
+  validator: StaticSchemaValidator,
   value: CanonicalJsonValue,
   label: string,
 ): void {

@@ -368,6 +368,47 @@ test("Interface descriptor versions coexist and exact documents fail closed", as
   ).rejects.toThrow("pointer must match pattern");
 });
 
+test("portable schema admission rejects dynamic references and preserves literal pattern data", async () => {
+  const verifier = new TakoformDataOnlyPackageVerifier(
+    new AcceptingSignatureVerifier(),
+  );
+  const dynamicReference = await buildArtifact((definition) => ({
+    ...asRecord(definition),
+    desiredSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+      $dynamicRef: "#node",
+    },
+  }));
+  await expect(
+    verifier.verify(dynamicReference.envelope, dynamicReference.packageDigest),
+  ).rejects.toThrow("desiredSchema.$dynamicRef is not portable");
+
+  const literalPattern = await buildArtifact((definition) => ({
+    ...asRecord(definition),
+    desiredSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        payload: {
+          type: "object",
+          additionalProperties: false,
+          properties: { pattern: { type: "string" } },
+          required: ["pattern"],
+          const: { pattern: "[" },
+        },
+      },
+      required: ["payload"],
+    },
+  }));
+  await expect(
+    verifier.verify(literalPattern.envelope, literalPattern.packageDigest),
+  ).resolves.toBeDefined();
+});
+
 async function buildArtifact(
   mutateDefinition?: (definition: CanonicalJsonValue) => CanonicalJsonValue,
   options: {
