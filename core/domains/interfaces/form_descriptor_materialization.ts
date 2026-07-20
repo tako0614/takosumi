@@ -1,4 +1,3 @@
-import Ajv2020 from "ajv/dist/2020.js";
 import type {
   ActorContext,
   FormInterfaceDescriptor,
@@ -11,6 +10,7 @@ import type {
 } from "takosumi-contract";
 import { formRefKey, isPortableInterfaceInputSource } from "takosumi-contract";
 import { sha256HexAsync } from "../../shared/runtime/hash.ts";
+import { InterpretedDraft202012Validator } from "../../shared/json-schema/draft_2020.ts";
 import { InterfaceService, InterfaceServiceError } from "./service.ts";
 
 export type FormDescriptorSkipReason =
@@ -328,13 +328,7 @@ function validDocument(
 ): boolean {
   if (!schema) return true;
   try {
-    return (
-      new Ajv2020({
-        allErrors: true,
-        strict: false,
-        validateFormats: false,
-      }).compile(schema)(document) === true
-    );
+    return new InterpretedDraft202012Validator(schema).validate(document);
   } catch {
     return false;
   }

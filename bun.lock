@@ -5,12 +5,12 @@
     "": {
       "name": "@takosjp/takosumi",
       "dependencies": {
+        "@cfworker/json-schema": "4.1.1",
         "@cloudflare/containers": "^0.3.6",
         "@sigstore/bundle": "5.0.0",
         "@sigstore/protobuf-specs": "0.5.1",
         "@sigstore/verify": "4.1.0",
         "age-encryption": "^0.3.0",
-        "ajv": "8.18.0",
         "commander": "^12.1.0",
         "drizzle-orm": "^0.45.2",
         "hono": "^4.12.25",
@@ -22,7 +22,9 @@
         "@types/bun": "^1.2.0",
         "@types/node": "^22.0.0",
         "@types/pg": "^8.11.0",
+        "ajv": "8.18.0",
         "drizzle-kit": "^0.31.10",
+        "miniflare": "4.20260710.0",
         "typescript": "^5.7.0",
         "wrangler": "4.111.0",
       },
@@ -62,6 +64,8 @@
     "ws": "8.21.0",
   },
   "packages": {
+    "@cfworker/json-schema": ["@cfworker/json-schema@4.1.1", "", {}, "sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og=="],
+
     "@cloudflare/containers": ["@cloudflare/containers@0.3.6", "", {}, "sha512-8RrbK/Et165gjvXccui3pgkUuySVWysTC6bJRXfgqmbCA2vAmh8pm7cAKDh2nZFR/GSjW4BgxeKpffCTD8SJEg=="],
 
     "@cloudflare/kv-asset-handler": ["@cloudflare/kv-asset-handler@0.5.0", "", {}, "sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg=="],
