@@ -46,8 +46,9 @@ the same reviewed activation set.
 Repeat the same bounded request with `dryRun` omitted or `false`. Stop on the
 first refused row or unexpected count. Every successful row atomically pins
 both Resource and ResolutionLock and emits an idempotent redacted activity
-event. Retry of the same page is safe and reports `already_pinned`; a
-substituted identity or concurrent Resource/lock change fails closed.
+event. Retry is safe: a backfill scan omits rows that are already pinned, while
+an exact backup replay reports `already_pinned`. A substituted identity or
+concurrent Resource/lock change fails closed.
 
 After the last page:
 
@@ -98,4 +99,64 @@ unverifiable retained package, or concurrent change is refused.
 Record source commit, schema manifest digest, backup id/time, activation id,
 page cursors/counts, response digests, post-replay read/observe result, and the
 isolated-target teardown in operator-private evidence. Live staging replay is
-the release gate; repository tests alone are not live rollback evidence.
+not a substitute for the isolated production-equivalent release gate;
+repository tests alone are not live rollback evidence.
+
+## Production-equivalent pre-FormRef replica drill
+
+Before the first production migration, prove the full forward-and-restore path
+on two newly created, purpose-named scratch databases. Never point these
+commands at production or the shared staging database. Evidence belongs in an
+operator-owned directory outside every repository, with directory mode `0700`
+and file mode `0600`.
+
+Generate the legacy fixture from the reviewed implementation immediately
+before FormRef persistence, rather than maintaining handwritten legacy SQL:
+
+```bash
+bun run service-form:formref-replica-fixture -- \
+  --predecessor-checkout /absolute/path/to/clean/reviewed-v44-checkout \
+  --sqlite-output /absolute/private/evidence/pre-formref-v44.sqlite \
+  --sql-output /absolute/private/evidence/pre-formref-v44.sql \
+  --evidence-output /absolute/private/evidence/pre-formref-v44.json
+```
+
+The generator pins the reviewed predecessor commit, requires a clean checkout,
+materializes schema v44 through that checkout's migration code, writes the
+legacy Resource/ResolutionLock pair through that checkout's stores, and proves
+that neither table has exact Form identity columns. SQLite `.dump` transaction
+wrappers are not valid D1 import statements; remove only `BEGIN TRANSACTION`
+and `COMMIT` in a separately digested D1-import copy.
+
+After importing that fixture into distinct primary and restore scratch D1
+databases, run the live harness with an OAuth/API token supplied only through
+`CLOUDFLARE_API_TOKEN`:
+
+```bash
+bun run service-form:formref-replica-drill -- \
+  --source-commit <clean-exact-head> \
+  --account-id <scratch-account-id> \
+  --primary-database-id <scratch-primary-id> \
+  --primary-database-name takosumi-formref-primary-YYYYMMDD-<nonce> \
+  --restore-database-id <scratch-restore-id> \
+  --restore-database-name takosumi-formref-restore-YYYYMMDD-<nonce> \
+  --takoform-root /absolute/path/to/clean/reviewed-takoform-checkout \
+  --evidence-directory /absolute/private/evidence
+```
+
+The harness requires the supplied source commit to equal the clean checkout
+HEAD and refuses database names outside the two scratch prefixes. Before any
+schema write it reads back schema v44, exact row counts, the synthetic fixture
+id/spec/output/lock markers, and the absence of FormRef columns from both
+targets. It then applies the canonical current D1 migration to both databases;
+verifies the reviewed
+signed ObjectBucket package and exact activation; exports pre-write backups;
+proves missing-activation refusal, dry-run immutability, atomic backfill,
+idempotent retry, and partial-pair trigger refusal; then replays the redacted
+sidecar into the separate restore database and proves wrong-scope,
+unverifiable-package, and missing-lock refusals plus idempotent restore. It
+writes no account/database id to the final report, only SHA-256 fingerprints.
+
+Delete both scratch databases by their exact names after preserving the final
+exports and transcripts. Record deletion success in the private evidence set;
+do not use wildcard cleanup.
