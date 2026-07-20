@@ -370,7 +370,7 @@ const DASHBOARD_ACTIVITY_METADATA_KEYS = [
 ] as const;
 
 interface DashboardWorkspaceListMeta {
-  readonly total: number;
+  readonly total?: number;
   readonly returned: number;
   readonly limit: number;
   readonly truncated: boolean;
@@ -390,12 +390,13 @@ async function listActiveWorkspaceProjectionForSession(
 }> {
   const workspaces: Workspace[] = [];
   let cursor: string | undefined;
-  let total = 0;
+  let total: number | undefined;
   do {
     const page = await operations.workspaces.listWorkspacesForAccountPage(
       sessionSubject,
       {
         includeArchived: false,
+        includeTotal: false,
         order: "updated_desc",
         limit: options.limit - workspaces.length,
         ...(cursor ? { cursor } : {}),
@@ -424,20 +425,26 @@ async function listActiveWorkspaceProjectionForSession(
   }
   return {
     workspaces: limited,
-    meta: workspaceListMeta(limited, total, options.limit),
+    meta: workspaceListMeta(
+      limited,
+      total,
+      options.limit,
+      cursor !== undefined,
+    ),
   };
 }
 
 function workspaceListMeta(
   workspaces: readonly Workspace[],
-  total: number,
+  total: number | undefined,
   limit: number,
+  hasMore = false,
 ): DashboardWorkspaceListMeta {
   return {
-    total,
+    ...(total === undefined ? {} : { total }),
     returned: workspaces.length,
     limit,
-    truncated: total > workspaces.length,
+    truncated: hasMore || (total !== undefined && total > workspaces.length),
   };
 }
 

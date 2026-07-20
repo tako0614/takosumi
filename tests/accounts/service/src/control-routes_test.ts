@@ -12,6 +12,7 @@ import {
 import { handleWorkspaces } from "../../../../accounts/service/src/control/workspaces.ts";
 import { handleDashboard } from "../../../../accounts/service/src/control/dashboard.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
+import { encodeCursor } from "../../../../contract/pagination.ts";
 
 const workspace = {
   id: "ws_owner",
@@ -142,7 +143,10 @@ function operationsFixture() {
         params: Record<string, unknown>,
       ) => {
         workspacePageCalls.push({ accountId, ...params });
-        return { items: [workspace], total: 1 };
+        return {
+          items: [workspace],
+          ...(params.includeTotal === false ? {} : { total: 1 }),
+        };
       },
     },
     members: {
@@ -318,7 +322,7 @@ test("Project create/list/get routes are a facade over canonical operations", as
   expect((await fetched?.json()).project.name).toBe("Production");
 });
 
-test("Workspace list preserves its response/order while using account pages", async () => {
+test("Workspace list defaults to one bounded created-order page", async () => {
   const fixture = operationsFixture();
   const request = new Request("https://app.example.test/api/v1/workspaces");
   const response = await handleWorkspaces(
@@ -328,14 +332,145 @@ test("Workspace list preserves its response/order while using account pages", as
   );
 
   expect(response?.status).toBe(200);
-  expect(await response?.json()).toEqual({ workspaces: [workspace] });
+  expect(await response?.json()).toEqual({
+    workspaces: [workspace],
+    returned: 1,
+    limit: 100,
+    truncated: false,
+  });
   expect(fixture.workspacePageCalls).toEqual([
     {
       accountId: "tsub_owner",
       includeArchived: false,
+      includeTotal: false,
       order: "created_asc",
+      limit: 100,
     },
   ]);
+});
+
+test("Workspace list page is bounded and pins an authorized selected Workspace", async () => {
+  const fixture = operationsFixture();
+  const selected = {
+    ...workspace,
+    id: "ws_selected",
+    handle: "selected",
+    displayName: "Selected",
+    updatedAt: "2025-01-01T00:00:00.000Z",
+  };
+  const first = {
+    ...workspace,
+    id: "ws_recent",
+    handle: "recent",
+    displayName: "Recent",
+    updatedAt: "2026-07-20T00:00:00.000Z",
+  };
+  const operations = {
+    ...fixture.operations,
+    workspaces: {
+      ...fixture.operations.workspaces,
+      listWorkspacesForAccountPage: async (
+        accountId: string,
+        params: Record<string, unknown>,
+      ) => {
+        fixture.workspacePageCalls.push({ accountId, ...params });
+        return { items: [first], nextCursor: "next_cursor", total: 73 };
+      },
+      getWorkspaceForAccount: async (
+        _accountId: string,
+        workspaceId: string,
+      ) => (workspaceId === selected.id ? selected : undefined),
+    },
+  } as ControlPlaneOperations;
+  const request = new Request(
+    "https://app.example.test/api/v1/workspaces?limit=50&order=updated_desc&selectedWorkspaceId=ws_selected&includeTotal=true",
+  );
+  const response = await handleWorkspaces(
+    context(operations, request),
+    ["workspaces"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toEqual({
+    workspaces: [selected, first],
+    total: 73,
+    returned: 2,
+    limit: 50,
+    truncated: true,
+    nextCursor: "next_cursor",
+    pinnedWorkspaceId: selected.id,
+  });
+  expect(fixture.workspacePageCalls).toEqual([
+    {
+      accountId: "tsub_owner",
+      includeArchived: false,
+      includeTotal: true,
+      order: "updated_desc",
+      limit: 50,
+    },
+  ]);
+});
+
+test("Workspace cursor pages do not repeat selected lookup or pinned row", async () => {
+  const fixture = operationsFixture();
+  let selectedLookups = 0;
+  const cursor = encodeCursor({
+    createdAt: "2026-01-01T00:00:00.000Z",
+    id: "ws_cursor",
+  });
+  const operations = {
+    ...fixture.operations,
+    workspaces: {
+      ...fixture.operations.workspaces,
+      getWorkspaceForAccount: async () => {
+        selectedLookups += 1;
+        return workspace;
+      },
+    },
+  } as ControlPlaneOperations;
+  const request = new Request(
+    `https://app.example.test/api/v1/workspaces?limit=50&order=updated_desc&cursor=${cursor}&selectedWorkspaceId=ws_test`,
+  );
+  const response = await handleWorkspaces(
+    context(operations, request),
+    ["workspaces"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toEqual({
+    workspaces: [workspace],
+    returned: 1,
+    limit: 50,
+    truncated: false,
+  });
+  expect(selectedLookups).toBe(0);
+  expect(fixture.workspacePageCalls).toEqual([
+    {
+      accountId: "tsub_owner",
+      includeArchived: false,
+      includeTotal: false,
+      order: "updated_desc",
+      limit: 50,
+      cursor,
+    },
+  ]);
+});
+
+test("Workspace list page rejects malformed order before reading a page", async () => {
+  const fixture = operationsFixture();
+  const request = new Request(
+    "https://app.example.test/api/v1/workspaces?limit=50&order=random",
+  );
+  const response = await handleWorkspaces(
+    context(fixture.operations, request),
+    ["workspaces"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(400);
+  expect(fixture.workspacePageCalls).toEqual([]);
 });
 
 test("Dashboard Workspace projection pushes active latest-first limit into the store", async () => {
@@ -352,12 +487,13 @@ test("Dashboard Workspace projection pushes active latest-first limit into the s
   expect(response?.status).toBe(200);
   expect(await response?.json()).toMatchObject({
     workspaces: [workspace],
-    workspaceList: { total: 1, returned: 1, limit: 50, truncated: false },
+    workspaceList: { returned: 1, limit: 50, truncated: false },
   });
   expect(fixture.workspacePageCalls).toEqual([
     {
       accountId: "tsub_owner",
       includeArchived: false,
+      includeTotal: false,
       order: "updated_desc",
       limit: 50,
     },

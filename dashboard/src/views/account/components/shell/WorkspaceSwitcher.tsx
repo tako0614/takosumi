@@ -3,9 +3,10 @@
  * working in" for the whole dashboard (GitHub org-switcher analogue).
  *
  * Replaces the per-view `lib/workspace-state.ts` signal: every view
- * now reads the same `workspace-state.ts` signal this control writes. Lists Workspaces
- * via `GET /api/v1/workspaces` and defaults to the first Workspace when none is
- * selected. Creation belongs in setup/admin flows, not in the everyday topbar.
+ * now reads the same `workspace-state.ts` signal this control writes. It lists
+ * a bounded recent Workspace projection, always pins the current Workspace,
+ * and defaults to the first Workspace when none is selected. Creation belongs
+ * in setup/admin flows, not in the everyday topbar.
  *
  * The picker is a lightweight popover menu (not a native `<select>`): one tap
  * on the current-workspace chip opens a list with the active one checked.
@@ -29,17 +30,22 @@ import {
 import {
   type ControlApiError,
   createWorkspace,
+  DASHBOARD_WORKSPACE_LIST_LIMIT,
+  listWorkspacePage,
   type Workspace,
+  type WorkspaceListPage,
 } from "../../../../lib/control-api.ts";
 import {
   clearWorkspaceListCache,
   listWorkspacesCached,
+  mergeWorkspaceLists,
 } from "../../../../lib/workspace-list.ts";
 import {
   currentWorkspaceId,
   selectAvailableWorkspaceId,
   setCurrentWorkspaceId,
 } from "../../../../lib/workspace-state.ts";
+import { friendlyError } from "../../../../lib/error-copy.ts";
 import { createAction } from "../../lib/action.tsx";
 import { t } from "../../../../i18n/index.ts";
 import { Button } from "../../../../components/ui/index.ts";
@@ -69,13 +75,22 @@ export default function WorkspaceSwitcher(props: Props = {}) {
     listWorkspacesCached({ selectedWorkspaceId: currentWorkspaceId() }),
   );
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
+  const [switcherPage, setSwitcherPage] =
+    createSignal<WorkspaceListPage | null>(null);
+  const [switcherPageLoading, setSwitcherPageLoading] = createSignal(false);
+  const [switcherPageError, setSwitcherPageError] = createSignal<string | null>(
+    null,
+  );
   // Reading an errored createResource THROWS. This switcher is mounted in BOTH
   // the sidebar and the topbar, so an unguarded read would take the whole
   // chrome down on every page when the workspace list fails (and its written
   // error UI below would never render). Guard on `.error` and fall back to the
   // last-known list — mirrors RunsListView / ActivityView.
   const loadedWorkspaces = createMemo(() =>
-    workspaces.error ? [] : (workspaces.latest ?? []),
+    mergeWorkspaceLists(
+      workspaces.error ? [] : (workspaces.latest ?? []),
+      switcherPage()?.workspaces ?? [],
+    ),
   );
   const selectedWorkspaceId = createMemo(() =>
     selectAvailableWorkspaceId(currentWorkspaceId(), loadedWorkspaces()),
@@ -124,6 +139,8 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   if (typeof window !== "undefined") {
     const refreshWorkspaces = () => {
       clearWorkspaceListCache();
+      setSwitcherPage(null);
+      setSwitcherPageError(null);
       void refetch();
     };
     window.addEventListener("takosumi:workspaces-changed", refreshWorkspaces);
@@ -159,6 +176,46 @@ export default function WorkspaceSwitcher(props: Props = {}) {
       window.removeEventListener("focusin", onFocusIn);
     });
   }
+
+  const loadSwitcherPage = async (cursor?: string) => {
+    if (switcherPageLoading()) return;
+    setSwitcherPageLoading(true);
+    setSwitcherPageError(null);
+    try {
+      const page = await listWorkspacePage({
+        limit: DASHBOARD_WORKSPACE_LIST_LIMIT,
+        order: "updated_desc",
+        ...(cursor ? { cursor } : {}),
+        ...(!cursor && currentWorkspaceId()
+          ? { selectedWorkspaceId: currentWorkspaceId() }
+          : {}),
+      });
+      const merged = mergeWorkspaceLists(
+        cursor ? (switcherPage()?.workspaces ?? []) : [],
+        page.workspaces,
+      );
+      setSwitcherPage({
+        ...page,
+        workspaces: merged,
+        returned: merged.length,
+      });
+    } catch (error) {
+      setSwitcherPageError(friendlyError(error, t).message);
+    } finally {
+      setSwitcherPageLoading(false);
+    }
+  };
+
+  const toggleSwitcher = () => {
+    const open = !switcherOpen();
+    setSwitcherOpen(open);
+    if (open && switcherPage() === null) void loadSwitcherPage();
+  };
+
+  const loadMoreSwitcherWorkspaces = () => {
+    const cursor = switcherPage()?.nextCursor;
+    if (cursor) void loadSwitcherPage(cursor);
+  };
 
   const choose = (id: string) => {
     setCurrentWorkspaceId(id);
@@ -342,7 +399,7 @@ export default function WorkspaceSwitcher(props: Props = {}) {
               aria-expanded={switcherOpen()}
               aria-controls={switcherId()}
               ref={triggerRef}
-              onClick={() => setSwitcherOpen((open) => !open)}
+              onClick={toggleSwitcher}
             >
               <span class="topbar-workspace-avatar" aria-hidden="true">
                 {workspaceInitial(selectedWorkspaceName())}
@@ -412,6 +469,28 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                     )}
                   </For>
                 </ul>
+                <Show when={!createOpen() && switcherPage()?.nextCursor}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="topbar-workspace-settings"
+                    disabled={switcherPageLoading()}
+                    onClick={loadMoreSwitcherWorkspaces}
+                  >
+                    <span>
+                      {switcherPageLoading()
+                        ? t("workspace.loading")
+                        : t("common.loadMore")}
+                    </span>
+                  </button>
+                </Show>
+                <Show when={switcherPageError()}>
+                  {(message) => (
+                    <p class="topbar-workspace-error" role="alert">
+                      {t("workspace.loadFailed", { message: message() })}
+                    </p>
+                  )}
+                </Show>
                 <Show
                   when={createOpen()}
                   fallback={

@@ -351,6 +351,14 @@ test("account Workspace pages push active/archive/order/limit/cursor into every 
       "workspace_many_174",
     ]);
     expect(activeFirst.nextCursor, label).toBeDefined();
+    const hotRead = await store.listWorkspacesForAccountPage("account_many", {
+      includeArchived: false,
+      includeTotal: false,
+      order: "updated_desc",
+      limit: 3,
+    });
+    expect(hotRead.total, label).toBeUndefined();
+    expect(hotRead.items, label).toEqual(activeFirst.items);
     const activeSecond = await store.listWorkspacesForAccountPage(
       "account_many",
       {

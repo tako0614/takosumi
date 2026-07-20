@@ -53,6 +53,7 @@ import type {
   SpacePolicySpec as ContractSpacePolicySpec,
   TargetPoolSpec as ContractTargetPoolSpec,
   Workspace as ContractWorkspace,
+  PublicWorkspaceListPage as ContractPublicWorkspaceListPage,
   UsageEvent as ContractUsageEvent,
 } from "takosumi-contract";
 
@@ -798,16 +799,56 @@ type _ContractResponseAssignableToDashboardMirrors = [
 
 // --- Workspaces ----------------------------------------------------------------
 
-type WorkspaceListEnvelope = {
+export interface WorkspaceListPage {
   readonly workspaces: readonly Workspace[];
-};
+  readonly total?: number;
+  readonly returned: number;
+  readonly limit: number;
+  readonly truncated: boolean;
+  readonly nextCursor?: string;
+  readonly pinnedWorkspaceId?: string;
+}
 type WorkspaceEnvelope = {
   readonly workspace: Workspace;
 };
 
-export async function listWorkspaces(): Promise<readonly Workspace[]> {
-  const body = await controlFetch<WorkspaceListEnvelope>(`${BASE}/workspaces`);
-  return body.workspaces;
+export const DASHBOARD_WORKSPACE_LIST_LIMIT = 50;
+
+export async function listWorkspacePage(
+  options: {
+    readonly includeArchived?: boolean;
+    readonly limit?: number;
+    readonly cursor?: string;
+    readonly order?: "created_asc" | "updated_desc";
+    readonly selectedWorkspaceId?: string;
+    readonly includeTotal?: boolean;
+  } = {},
+): Promise<WorkspaceListPage> {
+  return await controlFetch<ContractPublicWorkspaceListPage>(
+    `${BASE}/workspaces${query({
+      includeArchived: options.includeArchived,
+      limit: options.limit ?? DASHBOARD_WORKSPACE_LIST_LIMIT,
+      cursor: options.cursor,
+      order: options.order ?? "updated_desc",
+      selectedWorkspaceId: options.selectedWorkspaceId,
+      includeTotal: options.includeTotal,
+    })}`,
+  );
+}
+
+export async function listWorkspaces(
+  options: {
+    readonly selectedWorkspaceId?: string;
+    readonly limit?: number;
+  } = {},
+): Promise<readonly Workspace[]> {
+  return (
+    await listWorkspacePage({
+      limit: options.limit,
+      order: "updated_desc",
+      selectedWorkspaceId: options.selectedWorkspaceId,
+    })
+  ).workspaces;
 }
 
 export async function getDashboardOverview(
@@ -824,15 +865,6 @@ export async function getDashboardOverview(
       capsuleLimit: options.capsuleLimit,
     })}`,
   );
-}
-
-export async function listWorkspacesIncludingArchived(): Promise<
-  readonly Workspace[]
-> {
-  const body = await controlFetch<WorkspaceListEnvelope>(
-    `${BASE}/workspaces${query({ includeArchived: "true" })}`,
-  );
-  return body.workspaces;
 }
 
 export async function createWorkspace(input: {

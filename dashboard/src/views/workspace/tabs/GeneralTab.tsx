@@ -15,8 +15,7 @@ import {
   untrack,
 } from "solid-js";
 import {
-  listWorkspaces,
-  listWorkspacesIncludingArchived,
+  listWorkspacePage,
   updateWorkspace,
 } from "../../../lib/control-api.ts";
 import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
@@ -42,21 +41,40 @@ const [archiveNotice, setArchiveNotice] = createSignal<string | null>(null);
 
 export default function GeneralTab(props: { readonly workspaceId: string }) {
   const { confirm } = useConfirmDialog();
-  const [workspaces, { refetch }] = createResource(listWorkspaces);
-  const [archivedList, { refetch: refetchArchived }] = createResource(() =>
-    listWorkspacesIncludingArchived().catch(() => []),
+  const [workspacePage, { refetch }] = createResource(() =>
+    listWorkspacePage({
+      limit: 1,
+      includeTotal: true,
+      order: "updated_desc",
+      selectedWorkspaceId: props.workspaceId,
+    }),
+  );
+  const [archivedPage, { mutate: mutateArchived, refetch: refetchArchived }] =
+    createResource(() =>
+      listWorkspacePage({
+        includeArchived: true,
+        limit: 50,
+        order: "updated_desc",
+      }),
+    );
+  const [loadingArchivedMore, setLoadingArchivedMore] = createSignal(false);
+  const [archivedLoadError, setArchivedLoadError] = createSignal<string | null>(
+    null,
   );
   const archivedWorkspaces = createMemo(() =>
-    (archivedList() ?? []).filter((w) => Boolean(w.archivedAt)),
+    (archivedPage.error ? [] : (archivedPage.latest?.workspaces ?? [])).filter(
+      (workspace) => Boolean(workspace.archivedAt),
+    ),
   );
   // An errored resource THROWS on read; route reads through this guarded
   // accessor so the Switch below reaches its error fallback instead of crashing
   // the <Match when={workspace()}> evaluation.
-  const activeWorkspaces = () =>
-    workspaces.error ? [] : (workspaces.latest ?? []);
   const workspace = createMemo(() =>
-    activeWorkspaces().find((item) => item.id === props.workspaceId),
+    (workspacePage.error ? [] : (workspacePage.latest?.workspaces ?? [])).find(
+      (item) => item.id === props.workspaceId,
+    ),
   );
+  const activeWorkspaceTotal = () => workspacePage.latest?.total ?? 0;
   const [displayNameDraft, setDisplayNameDraft] = createSignal("");
   const [saving, setSaving] = createSignal(false);
   const [archiving, setArchiving] = createSignal(false);
@@ -114,7 +132,7 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
     if (archiving()) return;
     const current = workspace();
     if (!current) return;
-    if (activeWorkspaces().length <= 1) {
+    if (activeWorkspaceTotal() <= 1) {
       setSaveError(t("workspaceSettings.general.archiveLastError"));
       return;
     }
@@ -168,6 +186,37 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
     }
   };
 
+  const loadMoreArchived = async () => {
+    const current = archivedPage.latest;
+    if (!current?.nextCursor || loadingArchivedMore()) return;
+    setLoadingArchivedMore(true);
+    setArchivedLoadError(null);
+    try {
+      const next = await listWorkspacePage({
+        includeArchived: true,
+        limit: 50,
+        order: "updated_desc",
+        cursor: current.nextCursor,
+      });
+      const byId = new Map(
+        [...current.workspaces, ...next.workspaces].map((item) => [
+          item.id,
+          item,
+        ]),
+      );
+      const workspaces = [...byId.values()];
+      mutateArchived({
+        ...next,
+        workspaces,
+        returned: workspaces.length,
+      });
+    } catch (error) {
+      setArchivedLoadError(friendlyError(error, t).message);
+    } finally {
+      setLoadingArchivedMore(false);
+    }
+  };
+
   return (
     <Card>
       <CardHeader title={t("workspaceSettings.tab.general")} />
@@ -185,17 +234,19 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
       <Switch
         fallback={
           <Show
-            when={workspaces.error}
+            when={workspacePage.error}
             fallback={
               <p class="muted">
-                {workspaces.loading
+                {workspacePage.loading
                   ? t("common.loading")
                   : t("workspaceSettings.general.notFound")}
               </p>
             }
           >
             <div class="tg-card-error">
-              <p class="muted">{friendlyError(workspaces.error, t).message}</p>
+              <p class="muted">
+                {friendlyError(workspacePage.error, t).message}
+              </p>
               <Button
                 variant="secondary"
                 size="sm"
@@ -254,11 +305,11 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
                         variant="danger"
                         type="button"
                         busy={archiving()}
-                        disabled={archiving() || activeWorkspaces().length <= 1}
+                        disabled={archiving() || activeWorkspaceTotal() <= 1}
                         // The disabled path is otherwise a dead end — surface
                         // WHY the last workspace cannot be archived on hover.
                         title={
-                          activeWorkspaces().length <= 1
+                          activeWorkspaceTotal() <= 1
                             ? t("workspaceSettings.general.archiveLastError")
                             : undefined
                         }
@@ -287,7 +338,12 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
           )}
         </Match>
       </Switch>
-      <Show when={archivedWorkspaces().length > 0}>
+      <Show
+        when={
+          archivedWorkspaces().length > 0 ||
+          archivedPage.latest?.nextCursor !== undefined
+        }
+      >
         <CardSection>
           <h2 class="tg-card-title">
             {t("workspaceSettings.general.archivedTitle")}
@@ -311,6 +367,23 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
               )}
             </For>
           </ul>
+          <Show when={archivedPage.latest?.nextCursor}>
+            <div class="wc-form-actions">
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                busy={loadingArchivedMore()}
+                disabled={loadingArchivedMore()}
+                onClick={() => void loadMoreArchived()}
+              >
+                {t("common.loadMore")}
+              </Button>
+            </div>
+          </Show>
+          <Show when={archivedLoadError()}>
+            {(message) => <Toast tone="error">{message()}</Toast>}
+          </Show>
         </CardSection>
       </Show>
     </Card>

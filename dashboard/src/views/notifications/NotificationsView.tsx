@@ -1,7 +1,7 @@
 /**
  * Notifications (`/notifications`) — the plain-language feed for the signed-in
- * person, aggregated across every Workspace they belong to (the friendly
- * counterpart of the raw Activity view).
+ * person, aggregated across a bounded recent set of active Workspaces plus the
+ * current Workspace (the friendly counterpart of the raw Activity view).
  *
  * Honesty contract: every sentence renders ONLY values the backend already
  * recorded as public-safe Activity metadata (names, ids, counts, compact error
@@ -18,12 +18,12 @@ import {
   attentionCount,
   type FeedEntry,
   isFailureAction,
+  loadNotificationCapsuleNameIndex,
   notificationFeed,
   refreshNotificationFeed,
 } from "../../lib/notifications.ts";
 import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
-import { listCapsulesCached } from "../../lib/capsule-list.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { operationLabel } from "../../lib/labels.ts";
 import { relativeTime, t } from "../../i18n/index.ts";
@@ -248,33 +248,6 @@ function eventCapsuleId(event: ActivityEvent): string | undefined {
   return undefined;
 }
 
-/** workspaceId → (capsuleId → name), resolved best-effort per feed load. */
-type CapsuleNameIndex = ReadonlyMap<string, ReadonlyMap<string, string>>;
-
-async function loadCapsuleNameIndex(
-  entries: readonly FeedEntry[],
-): Promise<CapsuleNameIndex> {
-  const workspaceIds = [
-    ...new Set(entries.map((entry) => entry.event.workspaceId)),
-  ];
-  const results = await Promise.allSettled(
-    workspaceIds.map(
-      async (id) =>
-        [id, await listCapsulesCached(id, { includeDestroyed: true })] as const,
-    ),
-  );
-  const index = new Map<string, ReadonlyMap<string, string>>();
-  for (const result of results) {
-    if (result.status !== "fulfilled") continue;
-    const [id, capsules] = result.value;
-    index.set(
-      id,
-      new Map(capsules.map((capsule) => [capsule.id, capsule.name])),
-    );
-  }
-  return index;
-}
-
 function NotificationRow(props: {
   entry: FeedEntry;
   serviceName?: string | undefined;
@@ -342,16 +315,19 @@ export default function NotificationsView() {
         // badge derive the SAME count from this feed (attentionCount, scoped to
         // the current Workspace).
         const [refreshed] = createResource(() =>
-          refreshNotificationFeed({ force: true }),
+          refreshNotificationFeed({
+            force: true,
+            selectedWorkspaceId: currentWorkspaceId() || undefined,
+          }),
         );
         const feed = () => notificationFeed();
         // Service names for the recorded Capsule ids — best-effort, cached;
         // lines render unnamed until (unless) the lookup resolves. Guard the
-        // errored-resource read (loadCapsuleNameIndex is allSettled so it
-        // should never reject, but a throw here would take the whole page down).
+        // errored-resource read (the loader isolates per-Workspace failures, but
+        // a throw here still must not take the whole page down).
         const [capsuleNames] = createResource(
           () => feed(),
-          (entries) => loadCapsuleNameIndex(entries),
+          (entries) => loadNotificationCapsuleNameIndex(entries),
         );
         const serviceNameFor = (event: ActivityEvent): string | undefined => {
           const capsuleId = eventCapsuleId(event);

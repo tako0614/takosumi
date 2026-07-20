@@ -73,4 +73,11 @@ describe("GeneralTab archive lifecycle", () => {
     expect(source).toContain("busy={unarchivingId() === w.id}");
     expect(source).toContain("disabled={unarchivingId() !== null}");
   });
+
+  test("archived management keeps a bounded load-more path", () => {
+    expect(source).toContain("listWorkspacePage({");
+    expect(source).toContain("cursor: current.nextCursor");
+    expect(source).toContain("loadMoreArchived");
+    expect(source).toContain('t("common.loadMore")');
+  });
 });

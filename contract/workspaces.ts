@@ -114,15 +114,38 @@ export type AccountWorkspaceListOrder = "created_asc" | "updated_desc";
 export interface AccountWorkspaceListParams extends PageParams {
   readonly includeArchived?: boolean;
   readonly order?: AccountWorkspaceListOrder;
+  /** Opt in to the extra exact `count(*)`; hot interactive reads omit it. */
+  readonly includeTotal?: boolean;
 }
 
 /**
- * Bounded canonical-membership Workspace page. `total` counts all matching
- * active memberships before the cursor so dashboard truncation metadata does
- * not require materializing the full list.
+ * Bounded canonical-membership Workspace page. When `includeTotal=true`,
+ * `total` counts all matching active memberships before cursor filtering.
+ * Hot interactive reads omit it and use the `limit + 1` probe instead.
  */
 export interface AccountWorkspacePage extends Page<Workspace> {
-  readonly total: number;
+  readonly total?: number;
+}
+
+/**
+ * Bounded session API envelope returned by `GET /api/v1/workspaces`.
+ * `limit` defaults to 100 and is hard-capped at 100; clients follow the opaque
+ * `nextCursor` when they genuinely need every authorized Workspace.
+ *
+ * `selectedWorkspaceId` pins an authorized current Workspace into the first
+ * page even when it is outside the requested keyset window. In that case the
+ * response contains at most `limit + 1` rows and `pinnedWorkspaceId` names the
+ * extra row; the opaque `nextCursor` still describes only the ordered page.
+ */
+export interface PublicWorkspaceListPage {
+  readonly workspaces: readonly Workspace[];
+  /** Present only when the caller explicitly requests `includeTotal=true`. */
+  readonly total?: number;
+  readonly returned: number;
+  readonly limit: number;
+  readonly truncated: boolean;
+  readonly nextCursor?: string;
+  readonly pinnedWorkspaceId?: string;
 }
 
 /** Capsule full name (`@workspace/name`) helper shape. */

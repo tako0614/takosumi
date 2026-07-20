@@ -24,7 +24,7 @@ export interface DashboardBootstrapResponse {
   readonly session?: DashboardBootstrapSession | null;
   readonly workspaces?: readonly Workspace[];
   readonly workspaceList?: {
-    readonly total: number;
+    readonly total?: number;
     readonly returned: number;
     readonly limit: number;
     readonly truncated: boolean;

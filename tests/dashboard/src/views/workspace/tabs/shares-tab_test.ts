@@ -57,4 +57,13 @@ describe("SharesTab revoke confirmation", () => {
     expect(createForm).toContain("create.error()");
     expect(createForm).toContain("formError()");
   });
+
+  test("keeps off-page targets reachable and existing share labels exact", () => {
+    expect(source).toContain("listWorkspacePage({");
+    expect(source).toContain("cursor: current.nextCursor");
+    expect(source).toContain("loadMoreWorkspaces");
+    expect(source).toContain('t("common.loadMore")');
+    expect(source).toContain("loadWorkspaceLabels");
+    expect(source).toContain("await getWorkspace(id)");
+  });
 });

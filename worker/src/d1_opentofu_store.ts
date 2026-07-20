@@ -1063,14 +1063,21 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ? undefined
         : sql`COALESCE(json_extract(${schema.workspaces.recordJson}, '$.archivedAt'), '') = ''`,
     );
-    const countRows = await this.#orm
-      .select({ total: sql<number>`count(*)` })
-      .from(schema.workspaceMembers)
-      .innerJoin(
-        schema.workspaces,
-        eq(schema.workspaces.id, schema.workspaceMembers.workspaceId),
-      )
-      .where(baseFilter);
+    const total =
+      params.includeTotal === false
+        ? undefined
+        : Number(
+            (
+              await this.#orm
+                .select({ total: sql<number>`count(*)` })
+                .from(schema.workspaceMembers)
+                .innerJoin(
+                  schema.workspaces,
+                  eq(schema.workspaces.id, schema.workspaceMembers.workspaceId),
+                )
+                .where(baseFilter)
+            )[0]?.total ?? 0,
+          );
     const cursor = decodeCursor(params.cursor);
     const pageFilter =
       order === "updated_desc"
@@ -1108,7 +1115,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         order === "updated_desc" ? workspace.updatedAt : workspace.createdAt,
       id: workspace.id,
     }));
-    return { ...page, total: Number(countRows[0]?.total ?? 0) };
+    return { ...page, ...(total === undefined ? {} : { total }) };
   }
 
   async putProject(project: Project): Promise<Project> {

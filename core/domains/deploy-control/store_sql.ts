@@ -1068,14 +1068,24 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         ? undefined
         : sql`COALESCE(${pgSchema.workspaces.spaceJson} ->> 'archivedAt', '') = ''`,
     );
-    const countRows = await this.#db
-      .select({ total: sql<number>`count(*)` })
-      .from(pgSchema.workspaceMembers)
-      .innerJoin(
-        pgSchema.workspaces,
-        eq(pgSchema.workspaces.id, pgSchema.workspaceMembers.workspaceId),
-      )
-      .where(baseFilter);
+    const total =
+      params.includeTotal === false
+        ? undefined
+        : Number(
+            (
+              await this.#db
+                .select({ total: sql<number>`count(*)` })
+                .from(pgSchema.workspaceMembers)
+                .innerJoin(
+                  pgSchema.workspaces,
+                  eq(
+                    pgSchema.workspaces.id,
+                    pgSchema.workspaceMembers.workspaceId,
+                  ),
+                )
+                .where(baseFilter)
+            )[0]?.total ?? 0,
+          );
     const cursor = decodeCursor(params.cursor);
     const pageFilter =
       order === "updated_desc"
@@ -1113,7 +1123,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         order === "updated_desc" ? workspace.updatedAt : workspace.createdAt,
       id: workspace.id,
     }));
-    return { ...page, total: Number(countRows[0]?.total ?? 0) };
+    return { ...page, ...(total === undefined ? {} : { total }) };
   }
 
   async putProject(project: Project): Promise<Project> {

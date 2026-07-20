@@ -217,6 +217,7 @@ export class WorkspacesService {
     do {
       const page = await this.#store.listWorkspacesForAccountPage(accountId, {
         includeArchived: true,
+        includeTotal: false,
         order: "created_asc",
         ...(cursor ? { cursor } : {}),
       });
