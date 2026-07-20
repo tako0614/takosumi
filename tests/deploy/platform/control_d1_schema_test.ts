@@ -28,6 +28,15 @@ const PREDECESSOR_SOURCE_COMMIT = "b".repeat(40);
 const PREDECESSOR_MANIFEST_DIGEST = `sha256:${"c".repeat(64)}`;
 const NOW = "2026-07-16T00:00:00.000Z";
 
+interface AppliedControlD1CatalogFixture {
+  readonly schemaVersion: 1;
+  readonly migrations: readonly {
+    readonly version: number;
+    readonly name: string;
+    readonly checksum: string;
+  }[];
+}
+
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -541,6 +550,24 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
       (index) => index.name === "interfaces_form_descriptor_idx",
     ),
   ).toBe(true);
+});
+
+test("control D1 migrations preserve checksums accepted by existing v42 databases", async () => {
+  const fixture = (await Bun.file(
+    resolve(
+      import.meta.dir,
+      "fixtures/valid-applied-control-d1-catalog-v42.json",
+    ),
+  ).json()) as AppliedControlD1CatalogFixture;
+  const plan = await buildControlD1SchemaPlan();
+
+  expect(fixture.schemaVersion).toBe(1);
+  expect(
+    plan.migrations
+      .slice(0, fixture.migrations.length)
+      .map(({ version, name, checksum }) => ({ version, name, checksum })),
+  ).toEqual(fixture.migrations);
+  expect(fixture.migrations.at(-1)?.version).toBe(42);
 });
 
 test("control D1 verify is read-only and accepts host extension tables", async () => {
