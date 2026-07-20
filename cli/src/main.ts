@@ -12,6 +12,7 @@ import { runConnections } from "./cli-connections-commands.ts";
 import { runFormActivations } from "./cli-form-activation-commands.ts";
 import { runFormPackages } from "./cli-form-package-commands.ts";
 import { runFormAvailability } from "./cli-form-availability-commands.ts";
+import { runOfferingCatalogs } from "./cli-offering-commands.ts";
 import {
   runResources,
   runSpacePolicies,
@@ -111,6 +112,9 @@ export async function main(
   }
   if (domain === "form-availability") {
     return await runFormAvailability([command, ...rest].filter(Boolean), io);
+  }
+  if (domain === "offering-catalogs") {
+    return await runOfferingCatalogs([command, ...rest].filter(Boolean), io);
   }
   if (domain === "resources") {
     return await runResources([command, ...rest].filter(Boolean), io);

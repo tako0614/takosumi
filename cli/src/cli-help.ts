@@ -31,6 +31,7 @@ export function helpText(): string {
       "  install-configs         versioned service-side config patch を適用",
       "  form-activations        exact FormRef の公開ポリシーを管理",
       "  form-packages           信頼済み Form Package を install / reverify",
+      "  offering-catalogs       汎用 Offering catalog と利用可否を管理",
       "  target-pools            TargetPool 宣言を管理",
       "  space-policies          SpacePolicy 宣言を管理",
       "",
@@ -60,6 +61,7 @@ export function helpText(): string {
     "  install-configs         Apply versioned service-side config patches",
     "  form-activations        Manage exact FormRef audience policy",
     "  form-packages           Install or reverify trusted Form Packages",
+    "  offering-catalogs       Manage generic Offering catalogs and availability",
     "  target-pools            Manage TargetPool declarations",
     "  space-policies          Manage SpacePolicy declarations",
     "",
@@ -158,6 +160,39 @@ export function formActivationsHelpText(): string {
     "  update <id> --file <activation-update.json>",
     "",
     "Only the operator bearer may use this API. FormActivation contains no price, SKU, billing, capacity, or SLA.",
+    "Common options: --url, --token, --json",
+  ].join("\n");
+}
+
+export function offeringCatalogsHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi offering-catalogs <command>",
+      "",
+      "コマンド:",
+      "  list [--limit <n> --cursor <opaque>]",
+      "  get <catalog-id> <catalog-version>",
+      "  publish --file <offering-catalog.json>",
+      "  availability --file <availability-query.json>",
+      "  resolve --file <exact-selection-query.json>",
+      "",
+      "Takoform は subject の一種です。任意の namespaced subject と installed resolver を同じ方式で扱います。",
+      "価格、SKU、請求、容量、manager、SLA、support は OSS Offering catalog に含めません。",
+      "共通オプション: --url、--token、--json",
+    ].join("\n");
+  }
+  return [
+    "takosumi offering-catalogs <command>",
+    "",
+    "Commands:",
+    "  list [--limit <n> --cursor <opaque>]",
+    "  get <catalog-id> <catalog-version>",
+    "  publish --file <offering-catalog.json>",
+    "  availability --file <availability-query.json>",
+    "  resolve --file <exact-selection-query.json>",
+    "",
+    "Takoform is one subject type. Any namespaced subject with an installed resolver uses the same mechanism.",
+    "OSS Offering catalogs contain no price, SKU, billing, capacity, manager, SLA, or support data.",
     "Common options: --url, --token, --json",
   ].join("\n");
 }
