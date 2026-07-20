@@ -204,7 +204,20 @@ describe("dashboard shell navigation layout", () => {
     expect(spaceSwitcherSource).toContain(
       'window.dispatchEvent(new Event("takosumi:workspaces-changed"))',
     );
-    expect(spaceSwitcherSource).not.toContain("disabled={");
+    // Initial shell reads stay bounded, while opening the popover discovers the
+    // first cursor and an explicit load-more path keeps every Workspace
+    // reachable without returning to an eager all-Workspace request.
+    expect(spaceSwitcherSource).toContain("loadSwitcherPage");
+    expect(spaceSwitcherSource).toContain(
+      "limit: DASHBOARD_WORKSPACE_LIST_LIMIT",
+    );
+    expect(spaceSwitcherSource).toContain(
+      "const cursor = switcherPage()?.nextCursor",
+    );
+    expect(spaceSwitcherSource).toContain("loadMoreSwitcherWorkspaces");
+    expect(spaceSwitcherSource).toContain('t("common.loadMore")');
+    expect(spaceSwitcherSource).toContain("mergeWorkspaceLists(");
+    expect(spaceSwitcherSource).not.toContain("disabled={create.busy()}");
     expect(spaceSwitcherSource).not.toContain("createSpace");
     // Vocabulary parity. Keys are flat with dots, so assert direct access —
     // toHaveProperty would treat "a.b" as a nested path.

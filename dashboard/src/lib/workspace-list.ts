@@ -8,7 +8,9 @@ const CACHE_TTL_MS = 10_000;
 
 let cachedWorkspaces: readonly Workspace[] | undefined;
 let cachedAt = 0;
-let inflight: Promise<readonly Workspace[]> | undefined;
+let cacheGeneration = 0;
+let requestedScope = "";
+const inflight = new Map<string, Promise<readonly Workspace[]>>();
 
 function cacheIsFresh(now = Date.now()): boolean {
   return (
@@ -21,7 +23,9 @@ function cacheIsFresh(now = Date.now()): boolean {
 export function clearWorkspaceListCache(): void {
   cachedWorkspaces = undefined;
   cachedAt = 0;
-  inflight = undefined;
+  cacheGeneration += 1;
+  requestedScope = "";
+  inflight.clear();
   clearDashboardBootstrapCache();
 }
 
@@ -32,13 +36,10 @@ export function primeWorkspaceListCache(
   cachedAt = Date.now();
 }
 
-function fetchAndCacheWorkspaces(
+function fetchWorkspacePage(
   selectedWorkspaceId?: string,
 ): Promise<readonly Workspace[]> {
-  return listWorkspaces({ selectedWorkspaceId }).then((workspaces) => {
-    primeWorkspaceListCache(workspaces);
-    return workspaces;
-  });
+  return listWorkspaces({ selectedWorkspaceId });
 }
 
 async function fetchBootstrapWorkspaces(
@@ -46,8 +47,27 @@ async function fetchBootstrapWorkspaces(
 ): Promise<readonly Workspace[] | undefined> {
   const data = await fetchDashboardWorkspaceBootstrap({ selectedWorkspaceId });
   if (!Array.isArray(data?.workspaces)) return undefined;
-  primeWorkspaceListCache(data.workspaces);
   return data.workspaces;
+}
+
+function cacheContainsScope(scope: string): boolean {
+  return (
+    scope.length === 0 ||
+    (cachedWorkspaces ?? []).some((workspace) => workspace.id === scope)
+  );
+}
+
+/** Deduplicates pinned/current rows while retaining the first visible order. */
+export function mergeWorkspaceLists(
+  ...lists: readonly (readonly Workspace[])[]
+): readonly Workspace[] {
+  const byId = new Map<string, Workspace>();
+  for (const list of lists) {
+    for (const workspace of list) {
+      if (!byId.has(workspace.id)) byId.set(workspace.id, workspace);
+    }
+  }
+  return [...byId.values()];
 }
 
 export async function listWorkspacesCached(
@@ -56,30 +76,33 @@ export async function listWorkspacesCached(
     readonly selectedWorkspaceId?: string;
   } = {},
 ): Promise<readonly Workspace[]> {
-  if (!options.force && cacheIsFresh()) {
+  const scope = options.selectedWorkspaceId?.trim() ?? "";
+  if (!options.force && cacheIsFresh() && cacheContainsScope(scope)) {
     return cachedWorkspaces ?? [];
   }
-  if (!options.force && inflight) {
-    return inflight;
-  }
+  requestedScope = scope;
+  const currentInflight = inflight.get(scope);
+  if (currentInflight) return currentInflight;
+  const generation = cacheGeneration;
 
-  if (!options.force) {
-    inflight = fetchBootstrapWorkspaces(options.selectedWorkspaceId)
-      .then(
-        (workspaces) =>
-          workspaces ?? fetchAndCacheWorkspaces(options.selectedWorkspaceId),
-      )
-      .catch(() => fetchAndCacheWorkspaces(options.selectedWorkspaceId))
-      .finally(() => {
-        inflight = undefined;
-      });
-    return inflight;
-  }
+  const load = options.force
+    ? fetchWorkspacePage(scope || undefined)
+    : fetchBootstrapWorkspaces(scope || undefined)
+        .then(
+          (workspaces) => workspaces ?? fetchWorkspacePage(scope || undefined),
+        )
+        .catch(() => fetchWorkspacePage(scope || undefined));
 
-  inflight = fetchAndCacheWorkspaces(options.selectedWorkspaceId).finally(
-    () => {
-      inflight = undefined;
-    },
-  );
-  return inflight;
+  const request = load
+    .then((workspaces) => {
+      if (cacheGeneration === generation && requestedScope === scope) {
+        primeWorkspaceListCache(workspaces);
+      }
+      return workspaces;
+    })
+    .finally(() => {
+      if (inflight.get(scope) === request) inflight.delete(scope);
+    });
+  inflight.set(scope, request);
+  return request;
 }
