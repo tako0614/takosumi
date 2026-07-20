@@ -86,14 +86,52 @@ canonical Resource becomes `Degraded` rather than being reported `Ready`.
 retained negative desired-fixture rejection, preview/apply/replay/read,
 canonical `/v1` Resource parity, digest-substitution rejection, observe,
 refresh, canonical audit parity, optional import replay, and idempotent delete
-against a host. It accepts JSON files for the exact identity, desired spec, and
+against a host. Supplying `--updated-desired` additionally executes a real,
+ETag-fenced update for the same Resource. Supplying `--expect-drift true` and a
+fresh `--drift-signal-file` pauses immediately before observe; after independent
+automation mutates only the test backend object, it creates that file and the
+runner requires the portable observation status to be `drifted`.
+
+The runner accepts JSON files for the exact identity, desired documents, and
 optional `StandardFormNegativeFixture[]`; bearer and native import identities
 are read only from named environment variables. Unsupported negative fixture
-stages fail closed. The emitted proof derives its fixture names only from the
-fixtures this runner actually executed; callers cannot attach unexecuted names
-after the run. The digest-bound report also includes each positive and negative
-fixture's canonical input digest and the exact portable HTTP status/error code,
-so a successful proof cannot be relabeled onto different fixture bytes.
+stages fail closed. The emitted portable proof derives fixture names only from
+fixtures this runner actually executed, and binds the canonical fixture inputs
+and HTTP results by digest, so callers cannot attach or relabel unexecuted
+fixtures.
 
-The runner emits a digest-bound report suitable for the host half of standard
-Form admission evidence. Provider conformance remains separate evidence.
+`--output-format standard-runner-report` emits canonical
+`takoform.standard-runner-report@v1` JSON for the host half of portable-standard
+admission. This mode fails closed unless create/read/update/delete/import/
+observe/refresh/drift and at least one positive and negative fixture actually
+passed. It does not sign, publish, or activate admission evidence. The Takoform
+admission release process owns publisher policy, Sigstore signing, provider
+evidence, exact package closure, and immutable admission activation.
+
+For each exact retained package, invoke the complete host lane with private
+operator paths and a dedicated test Resource:
+
+```console
+TAKOFORM_IMPORT_NATIVE_ID=<existing-native-test-id> \
+bun run service-form:host-conformance -- \
+  --endpoint https://<host> \
+  --space <dedicated-test-space> \
+  --name <dedicated-test-resource-name> \
+  --identity /private/evidence/<kind>/installed-form-reference.json \
+  --desired /private/evidence/<kind>/desired.json \
+  --updated-desired /private/evidence/<kind>/updated-desired.json \
+  --positive-fixture-name canonical \
+  --negative-fixtures /private/evidence/<kind>/negative-fixtures.json \
+  --token-env TAKOSUMI_DEPLOY_CONTROL_TOKEN \
+  --import-native-id-env TAKOFORM_IMPORT_NATIVE_ID \
+  --expect-drift true \
+  --drift-signal-file /private/evidence/<kind>/backend-drift-complete \
+  --output-format standard-runner-report
+```
+
+The runner writes an `awaiting-external-drift` object to stderr. Mutate the
+already-created native test object through its real backend, then atomically
+create the named signal file. Do not signal before the backend read returns the
+mutated state. The signal carries no authority and cannot make a non-drifted
+observation pass. Use a new signal path and Resource identity for every run;
+the runner refuses a pre-existing signal file and times out after five minutes.
