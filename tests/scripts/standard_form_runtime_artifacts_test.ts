@@ -4,8 +4,12 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import {
+  buildRuntimeCandidateManifest,
+  buildRuntimeReleaseReadback,
   buildRuntimeRelease,
+  decodePromotionHealthChecks,
   verifyBuiltRuntimeRelease,
+  verifyRuntimeCandidateManifest,
   verifyRuntimeArtifacts,
 } from "../../scripts/verify-standard-form-runtime-artifacts.ts";
 
@@ -129,3 +133,162 @@ test("release verification rejects source asset changes concealed by an updated 
     ).rejects.toThrow("does not match the source closure");
   }
 });
+
+test("release-safety candidate binds the closed stable byte set and envelope ordering", async () => {
+  const sourceCommit = "c".repeat(40);
+  const output = await preparedCandidateDirectory(sourceCommit);
+  const workflowRunId = "123456789";
+  const candidate = await buildRuntimeCandidateManifest(
+    ROOT,
+    output,
+    sourceCommit,
+    workflowRunId,
+    "2026-07-20T12:34:56.000Z",
+  );
+  expect(candidate.kind).toBe("takos.release-candidate-manifest@v1");
+  expect(candidate.repository).toBe("https://github.com/tako0614/takosumi.git");
+  expect(candidate.ociImages).toEqual([]);
+  expect(candidate.releaseAssets.map(({ name }) => name)).toEqual([
+    "SHA256SUMS",
+    "durable-workflow.mjs",
+    "edge-worker.mjs",
+    "release-manifest.json",
+    "release-manifest.sigstore.json",
+    "runtime-manifest.json",
+    "runtime-sbom.spdx.json",
+  ]);
+  expect(candidate.artifactDigests).toEqual(
+    candidate.releaseAssets.map(({ digest }) => digest),
+  );
+  await verifyRuntimeCandidateManifest(ROOT, output, {
+    sourceCommit,
+    workflowRunId,
+    artifactDigests: candidate.artifactDigests,
+    manifestDigest: sha256(
+      await readFile(join(output, "release-candidate-manifest.json")),
+    ),
+  });
+});
+
+test("candidate verification rejects a post-build stable byte substitution", async () => {
+  const sourceCommit = "d".repeat(40);
+  const output = await preparedCandidateDirectory(sourceCommit);
+  const candidate = await buildRuntimeCandidateManifest(
+    ROOT,
+    output,
+    sourceCommit,
+    "987654321",
+    "2026-07-20T12:34:56.000Z",
+  );
+  await writeFile(
+    join(output, "release-manifest.sigstore.json"),
+    '{"forged":true}\n',
+  );
+  await expect(
+    verifyRuntimeCandidateManifest(ROOT, output, {
+      sourceCommit,
+      workflowRunId: "987654321",
+      artifactDigests: candidate.artifactDigests,
+    }),
+  ).rejects.toThrow("SHA256SUMS");
+});
+
+test("release readback converts only the fixed envelope checks to passed", () => {
+  const bindingDigest = `sha256:${"e".repeat(64)}`;
+  const encodedChecks = Buffer.from(
+    JSON.stringify([
+      {
+        name: "stable GitHub release asset readback",
+        status: "required",
+        bindingDigest,
+      },
+      {
+        name: "Sigstore bundle and transparency readback",
+        status: "required",
+        bindingDigest: `sha256:${"f".repeat(64)}`,
+      },
+    ]),
+  ).toString("base64url");
+  const healthChecks = decodePromotionHealthChecks(encodedChecks);
+  const readback = buildRuntimeReleaseReadback({
+    sourceCommit: "a".repeat(40),
+    controllerCommit: "b".repeat(40),
+    controllerDigest: `sha256:${"1".repeat(64)}`,
+    adapterDigest: `sha256:${"2".repeat(64)}`,
+    artifactDigests: Array.from(
+      { length: 7 },
+      (_, index) => `sha256:${String(index + 3).repeat(64)}`,
+    ),
+    healthChecks,
+    targetFingerprint: `sha256:${"a".repeat(64)}`,
+    attestationDigest: `sha256:${"b".repeat(64)}`,
+    workflowRunId: "456789123",
+    readbackAt: "2026-07-20T12:35:56.000Z",
+  });
+  expect(readback.status).toBe("promoted");
+  expect(readback.healthChecks.map(({ status }) => status)).toEqual([
+    "passed",
+    "passed",
+  ]);
+  expect(readback.releaseUrl).toBe(
+    "https://github.com/tako0614/takosumi/releases/tag/standard-form-runtime-v1.0.1",
+  );
+});
+
+test("runtime release workflow is fixed-controller-bound and promotion cannot rebuild", async () => {
+  const workflow = await readFile(
+    join(ROOT, ".github", "workflows", "standard-form-runtime-release.yml"),
+    "utf8",
+  );
+  expect(workflow).toContain(
+    'RELEASE_SAFETY_CONTROLLER_COMMIT: "cd9b8b74672e3f436cc467ca8359738a232599fc"',
+  );
+  expect(workflow).toContain(
+    'RELEASE_SAFETY_ADAPTER_DIGEST: "sha256:c25918640423a52c014ad903a57cefa8208b29348d60fc76084ea13e57bc1f3f"',
+  );
+  expect(workflow).toContain("release-safety:standard-form-runtime:");
+  expect(workflow).toContain("candidate_run_id:");
+  expect(workflow).toContain("release-safety-readback.json");
+  expect(workflow).toContain("secrets.RELEASE_SAFETY_AUTHORIZATION_DIGEST");
+  expect(workflow).toContain("secrets.RELEASE_SAFETY_RULESET_AUDIT_TOKEN");
+  expect(workflow).toContain("age_seconds > 300");
+  expect(workflow).toContain("standard-form-runtime-release-tags");
+  expect(workflow).toContain(".bypass_actors == []");
+  expect(workflow).not.toContain("--clobber");
+  const promote = workflow.slice(workflow.indexOf("\n  promote:"));
+  expect(promote).not.toContain("build-release");
+  expect(promote).not.toContain("build-candidate");
+  expect(
+    promote.indexOf(
+      "Verify candidate Sigstore identity and GitHub attestation before mutation",
+    ),
+  ).toBeLessThan(promote.indexOf("Create an exact draft release"));
+});
+
+async function preparedCandidateDirectory(
+  sourceCommit: string,
+): Promise<string> {
+  const output = await mkdtemp(join(tmpdir(), "takosumi-runtime-candidate-"));
+  await buildRuntimeRelease(ROOT, sourceCommit, output);
+  await writeFile(join(output, "release-manifest.sigstore.json"), "{}\n");
+  const names = [
+    "durable-workflow.mjs",
+    "edge-worker.mjs",
+    "release-manifest.json",
+    "release-manifest.sigstore.json",
+    "runtime-manifest.json",
+    "runtime-sbom.spdx.json",
+  ];
+  const checksums = await Promise.all(
+    names.map(async (name) => {
+      const value = sha256(await readFile(join(output, name))).slice(7);
+      return `${value}  ${name}`;
+    }),
+  );
+  await writeFile(join(output, "SHA256SUMS"), `${checksums.join("\n")}\n`);
+  return output;
+}
+
+function sha256(bytes: Uint8Array): string {
+  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+}
