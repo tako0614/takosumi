@@ -94,11 +94,10 @@ describe("History and notifications", () => {
     expect(ja["notif.event.recorded"]).toBe("記録された操作");
   });
 
-  test("topbar badge and /notifications derive the SAME 要対応 count from the SAME feed", () => {
-    // One derivation, owned by lib/notifications.ts: the shared cross-Workspace
-    // feed snapshot + attentionCount. The badge previously counted capsule
-    // statuses from a 5s-TTL cache — it disagreed with the page and vanished
-    // on views that fetch nothing.
+  test("topbar badge and /notifications share the same failure-count derivation without a navigation fanout", () => {
+    // One derivation, owned by lib/notifications.ts: attentionCount. The
+    // notifications page may load its cross-Workspace feed, while ordinary
+    // TopBar navigation is strictly scoped to the selected Workspace.
     expect(notificationsLibSource).toContain("export function attentionCount");
     expect(notificationsLibSource).toContain(
       "export async function refreshNotificationFeed",
@@ -106,14 +105,15 @@ describe("History and notifications", () => {
     expect(notificationsLibSource).toContain(
       "isFailureAction(entry.event.action)",
     );
-    // TopBar: refresh on navigation (TTL-throttled, no polling loop), count via
-    // the shared derivation.
-    expect(topBarSource).toContain("refreshNotificationFeed()");
+    // TopBar: one Workspace Activity request on navigation (TTL-throttled, no
+    // polling loop), count via the shared derivation.
     expect(topBarSource).toContain(
-      "attentionCount(notificationFeed(), currentWorkspaceId() || undefined)",
+      "refreshWorkspaceNotificationFeed(workspaceId)",
     );
+    expect(topBarSource).toContain("workspaceNotificationFeed(workspaceId)");
     expect(topBarSource).toContain("loc.pathname");
     expect(topBarSource).not.toContain("peekCapsulesCached");
+    expect(topBarSource).not.toContain("refreshNotificationFeed()");
     expect(topBarSource).not.toContain("setInterval");
     // NotificationsView: same feed (revalidated in the background), same count.
     expect(notificationsSource).toContain(
@@ -127,6 +127,9 @@ describe("History and notifications", () => {
     );
     expect(notificationsLibSource).not.toContain(
       "const spaces = await listSpaces()",
+    );
+    expect(notificationsLibSource).toContain(
+      "export async function refreshWorkspaceNotificationFeed",
     );
     expect(notificationsLibSource).not.toContain("tg_notif_seen_at");
   });

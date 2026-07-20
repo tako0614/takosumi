@@ -5,11 +5,10 @@
  * where the sidebar is hidden) and carries the global notifications / account
  * affordances (the profile avatar opens account, activity, and preferences).
  * Adding an app is owned by the store tab (shared nav model in `nav.ts`).
- * The bell badge and the /notifications 要対応 banner derive the SAME count from
- * the SAME shared cross-Workspace feed snapshot in lib/notifications.ts
- * (refreshed on navigation, TTL-throttled) — scoped to the current Workspace —
- * so the badge persists on views that fetch nothing else, agrees with the page,
- * and a Workspace switch never leaves the previous count on the bell.
+ * The bell badge and the /notifications 要対応 banner derive the same failure
+ * count from lib/notifications.ts. The bell refresh is Workspace-scoped and
+ * TTL-throttled: ordinary navigation never lists every Workspace or fans out
+ * one Activity request per Workspace.
  */
 import { A, useLocation } from "@solidjs/router";
 import { createEffect, createMemo, Show } from "solid-js";
@@ -19,8 +18,8 @@ import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
 import { SECTION_TITLES } from "./nav.ts";
 import {
   attentionCount,
-  notificationFeed,
-  refreshNotificationFeed,
+  refreshWorkspaceNotificationFeed,
+  workspaceNotificationFeed,
 } from "../../../../lib/notifications.ts";
 import { currentWorkspaceId } from "../../../../lib/workspace-state.ts";
 import { t } from "../../../../i18n/index.ts";
@@ -32,16 +31,20 @@ export default function TopBar() {
     return hit ? t(hit[1]) : "";
   };
 
-  // Refresh the shared feed snapshot on every navigation (TTL-throttled in
-  // lib/notifications.ts — no polling loop). Errors are non-fatal for the
-  // chrome: the badge simply keeps its last known count.
+  // Refresh exactly the selected Workspace on navigation (TTL-throttled in
+  // lib/notifications.ts — no polling loop). Errors are non-fatal for chrome:
+  // the badge simply keeps its last known count.
   createEffect(() => {
     void loc.pathname;
-    void refreshNotificationFeed().catch(() => {});
+    const workspaceId = currentWorkspaceId();
+    if (!workspaceId) return;
+    void refreshWorkspaceNotificationFeed(workspaceId).catch(() => {});
   });
-  const badge = createMemo(() =>
-    attentionCount(notificationFeed(), currentWorkspaceId() || undefined),
-  );
+  const badge = createMemo(() => {
+    const workspaceId = currentWorkspaceId();
+    if (!workspaceId) return 0;
+    return attentionCount(workspaceNotificationFeed(workspaceId), workspaceId);
+  });
 
   return (
     <header class="topbar">
