@@ -63,7 +63,8 @@ jobs:
         run: bash website/build.sh
 
       - name: Deploy to Cloudflare Pages
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        # release-safety: blocked until the takosumi-website fixed adapter is registered.
+        if: ${{ false }}
         uses: cloudflare/pages-action@f0a1cd58cd66095dee69bfa18fa5efd1dde93bca # pinned: v1.5.0 (2026)
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
