@@ -117,9 +117,13 @@ import {
   type FormRegistryStore,
 } from "./domains/service-forms/mod.ts";
 import {
+  CompositeOfferingCatalogReader,
+  createSqlOfferingCatalogStore,
   FormOfferingSubjectResolver,
   InMemoryOfferingCatalogReader,
+  OfferingCatalogAdminService,
   OfferingService,
+  type OfferingCatalogStore,
 } from "./domains/offerings/mod.ts";
 import {
   type BackupArtifactStore,
@@ -483,6 +487,12 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly offeringHostComposition?: OfferingHostComposition;
   /**
+   * Durable immutable generic Offering catalog administration store. When
+   * omitted, `sqlClient` supplies Postgres; otherwise dev/test uses memory.
+   * Cloud commercial bindings are never persisted through this port.
+   */
+  readonly offeringCatalogStore?: OfferingCatalogStore;
+  /**
    * Pre-built durable store for the public OpenTofu run ledger. When omitted,
    * a configured `sqlClient` backs it with SQL; when neither is present the
    * controller falls back to an in-memory dev/test store (gated for
@@ -749,6 +759,11 @@ export interface TakosumiOperations {
    * OfferingSelection.
    */
   readonly offerings: Pick<OfferingService, "listAvailability" | "resolve">;
+  /** Operator administration of immutable generic noncommercial catalogs. */
+  readonly offeringCatalogs: Pick<
+    OfferingCatalogAdminService,
+    "publish" | "get" | "list"
+  >;
   /** Internal-only bounded exact-Form backfill and backup replay operation. */
   readonly resourceFormPins?: ResourceFormPinOperations;
   claimManagedPublicHostname(
@@ -1156,6 +1171,11 @@ export async function createTakosumiService(
           : {}),
       })
     : undefined;
+  const offeringCatalogStore =
+    options.offeringCatalogStore ??
+    (options.sqlClient
+      ? createSqlOfferingCatalogStore(options.sqlClient)
+      : new InMemoryOfferingCatalogReader());
   const billingExtension = options.billingExtensionFactory
     ? await options.billingExtensionFactory.create()
     : undefined;
@@ -1460,9 +1480,12 @@ export async function createTakosumiService(
       })
     : undefined;
   const offeringService = new OfferingService({
-    catalogs:
-      options.offeringHostComposition?.catalogs ??
-      new InMemoryOfferingCatalogReader(),
+    catalogs: options.offeringHostComposition?.catalogs
+      ? new CompositeOfferingCatalogReader([
+          offeringCatalogStore,
+          options.offeringHostComposition.catalogs,
+        ])
+      : offeringCatalogStore,
     resolvers: [
       ...(formRegistryService && resourceShapeService
         ? [
@@ -1474,6 +1497,9 @@ export async function createTakosumiService(
         : []),
       ...(options.offeringHostComposition?.resolvers ?? []),
     ],
+  });
+  const offeringCatalogAdminService = new OfferingCatalogAdminService({
+    store: offeringCatalogStore,
   });
   const interfaceStores =
     options.interfaceStores ??
@@ -2095,6 +2121,8 @@ export async function createTakosumiService(
       role === "takosumi-api" &&
       formRegistryService !== undefined &&
       Boolean(deployControlToken),
+    registerOfferingCatalogRoutes:
+      role === "takosumi-api" && Boolean(deployControlToken),
     registerInterfaceRoutes: role === "takosumi-api",
     resourceCapabilities,
     ...(options.adapterCapabilities
@@ -2158,6 +2186,13 @@ export async function createTakosumiService(
             getBearerToken: () => deployControlToken,
           }
         : undefined,
+    offeringCatalogRouteOptions: deployControlToken
+      ? {
+          catalogs: offeringCatalogAdminService,
+          offerings: offeringService,
+          getBearerToken: () => deployControlToken,
+        }
+      : undefined,
     interfaceRouteOptions: {
       service: interfaceService,
       ...(deployControlToken
@@ -2250,6 +2285,7 @@ export async function createTakosumiService(
     controller: opentofuController,
     ...(formRegistryService ? { forms: formRegistryService } : {}),
     offerings: offeringService,
+    offeringCatalogs: offeringCatalogAdminService,
     ...(resourceFormPinOperations
       ? { resourceFormPins: resourceFormPinOperations }
       : {}),

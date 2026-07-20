@@ -47,6 +47,10 @@ import {
   registerFormActivationRoutes,
 } from "./form_activation_routes.ts";
 import {
+  type RegisterOfferingCatalogRoutesOptions,
+  registerOfferingCatalogRoutes,
+} from "./offering_catalog_routes.ts";
+import {
   registerRequestCorrelation,
   type RegisterRequestCorrelationOptions,
 } from "./request_correlation.ts";
@@ -75,6 +79,9 @@ export interface CreateApiAppOptions {
   /** Operator-only generic noncommercial FormActivation lifecycle API. */
   readonly registerFormActivationRoutes?: boolean;
   readonly formActivationRouteOptions?: RegisterFormActivationRoutesOptions;
+  /** Operator-only immutable generic noncommercial Offering catalog API. */
+  readonly registerOfferingCatalogRoutes?: boolean;
+  readonly offeringCatalogRouteOptions?: RegisterOfferingCatalogRoutesOptions;
   /** Takosumi-managed runtime declaration API shared by both authoring flows. */
   readonly registerInterfaceRoutes?: boolean;
   readonly interfaceRouteOptions?: RegisterInterfaceRoutesOptions;
@@ -108,6 +115,7 @@ export async function createApiApp(
   const metricsRoutesMounted = mounted.metricsRoutesMounted;
   const resourceShapeRoutesMounted = mounted.resourceShapeRoutesMounted;
   const formActivationRoutesMounted = mounted.formActivationRoutesMounted;
+  const offeringCatalogRoutesMounted = mounted.offeringCatalogRoutesMounted;
   const interfaceRoutesMounted = mounted.interfaceRoutesMounted;
 
   app.get("/capabilities", (c) => {
@@ -212,6 +220,16 @@ export async function createApiApp(
     registerFormActivationRoutes(app, options.formActivationRouteOptions);
   }
 
+  if (offeringCatalogRoutesMounted) {
+    if (!options.offeringCatalogRouteOptions) {
+      throw new Error(
+        "registerOfferingCatalogRoutes was requested but " +
+          "offeringCatalogRouteOptions was not supplied",
+      );
+    }
+    registerOfferingCatalogRoutes(app, options.offeringCatalogRouteOptions);
+  }
+
   if (interfaceRoutesMounted) {
     if (!options.interfaceRouteOptions) {
       throw new Error(
@@ -311,6 +329,10 @@ function routeFamilyMountInputs(
     formActivationRoutesMounted: {
       override: options.registerFormActivationRoutes,
       hasOptions: options.formActivationRouteOptions !== undefined,
+    },
+    offeringCatalogRoutesMounted: {
+      override: options.registerOfferingCatalogRoutes,
+      hasOptions: options.offeringCatalogRouteOptions !== undefined,
     },
     interfaceRoutesMounted: {
       override: options.registerInterfaceRoutes,

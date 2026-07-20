@@ -84,6 +84,12 @@ with open subject types; a Form subject re-reads exact FormRef and
 FormActivation. Commercially available is a separate closed projection keyed
 by an exact Offering selection, not a field in portable FormAvailability or the
 generic Offering.
+Takosumi persists immutable generic catalogs through D1 v50/Postgres v97 and
+publishes deploy-control-bearer operator routes for exact publication,
+pagination, read, availability, and selection. Reusing an id/version with
+different content is a conflict; composed readers that both claim the same
+exact catalog are ambiguous and fail closed. Selection evidence hashes the
+complete catalog row together with the resolver's exact subject evidence.
 The portable project owns no Resource ID, lifecycle ledger, Run, StateVersion,
 Output, Target, credential, Policy, Adapter, Interface, or InterfaceBinding.
 

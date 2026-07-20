@@ -34,6 +34,7 @@ import { CloudflareD1ObservabilitySink } from "./d1_observability.ts";
 import { createD1ResourceShapeStores } from "../../core/domains/resource-shape/d1_stores.ts";
 import { createD1InterfaceStores } from "../../core/domains/interfaces/d1_stores.ts";
 import { createD1FormRegistryStore } from "../../core/domains/service-forms/mod.ts";
+import { createD1OfferingCatalogStore } from "../../core/domains/offerings/mod.ts";
 import {
   ControllerOpentofuRunPort,
   OpentofuResourceShapeAdapter,
@@ -275,6 +276,7 @@ export async function createWorkerServiceApp(
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     resourceShapeStores: createD1ResourceShapeStores(env.TAKOSUMI_CONTROL_DB),
     formRegistryStore: createD1FormRegistryStore(env.TAKOSUMI_CONTROL_DB),
+    offeringCatalogStore: createD1OfferingCatalogStore(env.TAKOSUMI_CONTROL_DB),
     // Stock multi-tenant routes use the verified Workspace id as the Resource
     // authorization scope. Keep that host mapping explicit for backup.
     resolveResourceBackupScope: (workspaceId) => workspaceId,

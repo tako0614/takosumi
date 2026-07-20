@@ -4289,4 +4289,27 @@ alter table takosumi_interfaces
   drop column if exists form_schema_digest,
   drop column if exists form_ref_key;`,
     },
+    {
+      id: "registry.generic_offering_catalog.create",
+      version: 97,
+      domain: "registry",
+      description:
+        "Create immutable generic noncommercial Offering catalog snapshots without Cloud commercial binding, price, capacity, manager, billing, SLA, or support state.",
+      sql: `create table if not exists takosumi_offering_catalogs (
+  catalog_key     text primary key,
+  catalog_id      text not null,
+  catalog_version text not null,
+  effective_at    text not null,
+  record_json     jsonb not null,
+  created_at      text not null,
+  created_by      text not null
+);
+create unique index if not exists takosumi_offering_catalogs_id_version_unique
+  on takosumi_offering_catalogs (catalog_id, catalog_version);
+create index if not exists takosumi_offering_catalogs_created_key_idx
+  on takosumi_offering_catalogs (created_at, catalog_key);
+create index if not exists takosumi_offering_catalogs_effective_key_idx
+  on takosumi_offering_catalogs (effective_at, catalog_key);`,
+      down: `drop table if exists takosumi_offering_catalogs;`,
+    },
   ]);

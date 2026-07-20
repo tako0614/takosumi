@@ -3380,6 +3380,24 @@ const D1_SERVICE_FORM_REGISTRY_STATEMENTS = [
     on service_form_activations (form_ref_key, package_digest)`,
 ] as const;
 
+const D1_OFFERING_CATALOG_STATEMENTS = [
+  `create table if not exists offering_catalogs (
+    catalog_key text primary key,
+    catalog_id text not null,
+    catalog_version text not null,
+    effective_at text not null,
+    record_json text not null,
+    created_at text not null,
+    created_by text not null
+  )`,
+  `create unique index if not exists offering_catalogs_id_version_unique
+    on offering_catalogs (catalog_id, catalog_version)`,
+  `create index if not exists offering_catalogs_created_key_idx
+    on offering_catalogs (created_at, catalog_key)`,
+  `create index if not exists offering_catalogs_effective_key_idx
+    on offering_catalogs (effective_at, catalog_key)`,
+] as const;
+
 /**
  * Bootstrap the §27 control-plane tables for the default self-host mode.
  * Idempotent (`IF NOT EXISTS`) and called once per store instance via the
@@ -3939,6 +3957,7 @@ export async function ensureD1OpenTofuLedgerSchema(
     `create index if not exists interface_bindings_workspace_subject_idx
       on interface_bindings (workspace_id, subject_kind, subject_id)`,
     ...D1_SERVICE_FORM_REGISTRY_STATEMENTS,
+    ...D1_OFFERING_CATALOG_STATEMENTS,
   ];
   const tableStatements = statements.filter((sql) => !isD1IndexStatement(sql));
   const indexStatements = statements.filter((sql) => isD1IndexStatement(sql));
@@ -5785,6 +5804,22 @@ ${D1_INTERFACE_CANONICAL_TABLE_CONVERGENCE_STATEMENTS.join("\n---\n")}
         db,
         D1_INTERFACE_CANONICAL_TABLE_CONVERGENCE_STATEMENTS,
       );
+    },
+  },
+  {
+    version: 50,
+    name: "d1_generic_offering_catalog",
+    checksumSource: () => `
+immutable generic noncommercial Offering catalog snapshots
+exact catalog id/version is the only lookup authority; no latest fallback
+Cloud price capacity manager billing SLA and support state are absent
+${D1_OFFERING_CATALOG_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements() {
+      return D1_OFFERING_CATALOG_STATEMENTS;
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, D1_OFFERING_CATALOG_STATEMENTS);
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];

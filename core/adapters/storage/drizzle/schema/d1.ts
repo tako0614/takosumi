@@ -810,3 +810,30 @@ export const serviceFormActivations = sqliteTable(
     ),
   ],
 );
+
+export const offeringCatalogs = sqliteTable(
+  names.offeringCatalogs,
+  {
+    catalogKey: text("catalog_key").primaryKey(),
+    catalogId: text("catalog_id").notNull(),
+    catalogVersion: text("catalog_version").notNull(),
+    effectiveAt: text("effective_at").notNull(),
+    recordJson: jsonText("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    createdBy: text("created_by").notNull(),
+  },
+  (table) => [
+    uniqueIndex("offering_catalogs_id_version_unique").on(
+      table.catalogId,
+      table.catalogVersion,
+    ),
+    index("offering_catalogs_created_key_idx").on(
+      table.createdAt,
+      table.catalogKey,
+    ),
+    index("offering_catalogs_effective_key_idx").on(
+      table.effectiveAt,
+      table.catalogKey,
+    ),
+  ],
+);
