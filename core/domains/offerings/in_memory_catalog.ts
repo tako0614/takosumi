@@ -8,10 +8,13 @@ export class InMemoryOfferingCatalogReader implements OfferingCatalogReader {
   }
 
   set(catalog: OfferingCatalog): void {
-    this.#catalogs.set(
-      `${catalog.id}\u0000${catalog.version}`,
-      structuredClone(catalog),
-    );
+    const key = `${catalog.id}\u0000${catalog.version}`;
+    if (this.#catalogs.has(key)) {
+      throw new TypeError(
+        `Offering catalog ${catalog.id}@${catalog.version} is immutable`,
+      );
+    }
+    this.#catalogs.set(key, structuredClone(catalog));
   }
 
   async getCatalog(

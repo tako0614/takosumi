@@ -59,7 +59,8 @@ test("service composition installs the generic Offering engine for non-Form subj
   });
 
   expect(selected.subject.type).toBe("services.example.test/v1/Endpoint");
-  expect(selected.resolutionFingerprint).toBe(FINGERPRINT);
+  expect(selected.resolutionFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+  expect(selected.resolutionFingerprint).not.toBe(FINGERPRINT);
 });
 
 test("zero-offering service composition stays operational and fails exact lookup closed", async () => {

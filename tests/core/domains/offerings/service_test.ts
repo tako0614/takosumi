@@ -105,7 +105,8 @@ test("generic OSS Offering selection supports Form and non-Form subjects", async
   expect(selected.requirements[0]?.type).toBe(
     "takosumi.dev/v1alpha1/FormActivation",
   );
-  expect(selected.resolutionFingerprint).toBe(FINGERPRINT);
+  expect(selected.resolutionFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+  expect(selected.resolutionFingerprint).not.toBe(FINGERPRINT);
 });
 
 test("unknown subject resolvers and audience denial fail closed", async () => {
@@ -230,6 +231,52 @@ test("resolve invokes the subject authority exactly once", async () => {
     },
   });
   expect(calls).toBe(1);
+});
+
+test("Core fingerprints the exact catalog row and rejects reader identity substitution", async () => {
+  const resolver = {
+    subjectType: "services.example.net/v1/Endpoint",
+    resolve: async () => ({
+      ready: true as const,
+      resolverId: "endpoint-host",
+      resolutionFingerprint: FINGERPRINT,
+    }),
+  };
+  const changedCatalog = structuredClone(catalog) as OfferingCatalog;
+  (changedCatalog.offerings as Array<{ profile: string }>)[1]!.profile =
+    "changed-profile";
+  const reference = {
+    catalogId: catalog.id,
+    catalogVersion: catalog.version,
+    offeringId: "ai-gateway",
+    offeringVersion: "v1",
+  };
+  const originalSelection = await new OfferingService({
+    catalogs: new InMemoryOfferingCatalogReader([catalog]),
+    resolvers: [resolver],
+    now: () => "2026-07-20T01:00:00.000Z",
+  }).resolve({ reference });
+  const changedSelection = await new OfferingService({
+    catalogs: new InMemoryOfferingCatalogReader([changedCatalog]),
+    resolvers: [resolver],
+    now: () => "2026-07-20T01:00:00.000Z",
+  }).resolve({ reference });
+  expect(changedSelection.resolutionFingerprint).not.toBe(
+    originalSelection.resolutionFingerprint,
+  );
+
+  const immutableReader = new InMemoryOfferingCatalogReader([catalog]);
+  expect(() => immutableReader.set(catalog)).toThrow("is immutable");
+
+  const substituted = new OfferingService({
+    catalogs: {
+      getCatalog: async () => ({ ...catalog, id: "other-catalog" }),
+    },
+    resolvers: [resolver],
+  });
+  await expect(substituted.resolve({ reference })).rejects.toMatchObject({
+    code: "invalid_catalog",
+  });
 });
 
 test("Takoform is one exact generic Offering subject rather than the catalog type", () => {
