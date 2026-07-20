@@ -1,0 +1,30 @@
+{
+  "format": "takosumi.standard-form-runtime@v1",
+  "version": "1.0.1",
+  "releaseTag": "standard-form-runtime-v1.0.1",
+  "publicationStatus": "candidate-only",
+  "hostConformanceOnly": true,
+  "assets": [
+    {
+      "name": "durable-workflow.mjs",
+      "mediaType": "text/javascript",
+      "size": 138,
+      "sha256": "sha256:8712e09089276b497669472eddc0aa425c6fa2bf766037f7351690a3517d5ac5"
+    },
+    {
+      "name": "edge-worker.mjs",
+      "mediaType": "text/javascript",
+      "size": 283,
+      "sha256": "sha256:281b77f65f6258e56d0468a580b1f67baf9f4d71891c2f7259ce24c47bf7d67e"
+    }
+  ],
+  "externalArtifacts": [
+    {
+      "name": "container-service",
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "reference": "docker.io/library/nginx@sha256:845b5424415de5f77dd5753cbb7c1be8bd8e44cc81f20f9705783a02f8848317",
+      "digest": "sha256:845b5424415de5f77dd5753cbb7c1be8bd8e44cc81f20f9705783a02f8848317",
+      "platform": "linux/amd64"
+    }
+  ]
+}
