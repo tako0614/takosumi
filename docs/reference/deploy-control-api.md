@@ -1,6 +1,6 @@
 # Deploy-Control API
 
-Last updated: 2026-07-14
+Last updated: 2026-07-20
 
 この API は、Takosumi OSS における OpenTofu/Terraform execution を制御します。既存の
 provider をそのまま実行します。public な compatibility profile は、Resource Shape model に
@@ -80,6 +80,24 @@ ProviderConnection 登録時の write-only material として保存・Run 時だ
 materialize します。独立した `POST /secrets` API や Resource Shape の
 `Secret` はまだ公開しません。後者は schema / planner / adapter / import / drift
 契約が揃ってから追加する future shape で、現在 bundled される ten compatibility kinds とは別です。
+
+## Host-internal Form Package operation
+
+Form Package の install / retained-byte reverify は customer API ではなく、host
+operator の private deploy-control seam です。
+
+```text
+POST /internal/v1/form-packages/install
+POST /internal/v1/form-packages/reverify
+```
+
+instance-wide deploy-control bearer のみを許可し、Workspace-scoped bearer / customer
+session / PAT は拒否します。`actorId` は request から受け取らず、認証済み principal
+から決めます。response は package digest、verifier id、status、definition refs、時刻と
+exact identity のみで、artifact ref、package bytes、trust policy、raw verifier error を
+返しません。CLI は `takosumi form-packages install --file ...` と
+`takosumi form-packages reverify --file ...` です。詳しい staging/restart 証跡は
+operator source runbook `docs/operations/form-package-installation.md` を参照してください。
 
 ## Output と Runtime Interface
 

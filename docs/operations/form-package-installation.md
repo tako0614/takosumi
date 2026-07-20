@@ -64,10 +64,55 @@ Existing schema-v1 documents using `tagPattern` remain accepted and are
 normalized to `refPattern`; specifying both is rejected. `tagPattern` is a
 deprecated compatibility field retained until a schema-v2 transition.
 
-The operator-only in-process operation calls
-`operations.forms.installPackage({ artifactRef: "r2:packages/<asset>",
-expectedPackageDigest, actorId })`. It verifies before the D1 transaction. No
-public customer mutation route is implied by this composition.
+The host-internal deploy-control seam reserves two customer-nonpublic
+operations; they become available only when the Form Registry service is
+installed:
+
+```http
+POST /internal/v1/form-packages/install
+POST /internal/v1/form-packages/reverify
+Authorization: Bearer <instance-wide-operator-token>
+```
+
+These routes are excluded from customer capabilities and OpenAPI. A
+Workspace-scoped bearer, customer session, or PAT is rejected; the audit actor
+comes from the authenticated deploy-control principal and cannot be supplied in
+the request. An unwired registry returns `501`, and a registry without both the
+reader and verifier fails closed before a package row is written.
+
+Create a non-secret install request containing only the opaque host artifact
+reference and independently reviewed digest:
+
+```json
+{
+  "artifactRef": "r2:packages/<asset>",
+  "expectedPackageDigest": "sha256:<exact-package-digest>"
+}
+```
+
+Then run the operator CLI against the private service origin, not the public
+customer application origin:
+
+```console
+export TAKOSUMI_DEPLOY_CONTROL_URL=https://<private-service-origin>
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<instance-wide-operator-bearer>
+takosumi form-packages install --file package-install.json --json
+```
+
+The stock Cloudflare platform worker keeps every generic `/internal/v1/*`
+edge route at `404` unless a self-host operator deliberately enables
+`TAKOSUMI_EXPOSE_INTERNAL_EDGE=1` behind a private, independently fenced
+origin. Do not enable that flag on a public application hostname merely for
+this operation. A composing hosted service should instead authenticate its
+own narrow operator route and forward only these two operations through
+`dispatchPlatformDeployControlRequest`; it must not proxy the generic internal
+prefix. Takosumi Cloud owns that closed hosted ingress and its service-token
+policy separately from this OSS host contract.
+
+The response deliberately omits `artifactRef`, package bytes, trust policy,
+publisher evidence, and actor ids. Reader/verifier error details are also
+redacted. Inspect the host's protected operator evidence for diagnosis; never
+copy raw package or trust material into a ticket or command line.
 
 ## Bun / Node + Postgres composition
 
@@ -95,6 +140,35 @@ database and artifact store, restart the host, re-verify the retained identity,
 and record the exact package digest and actor audit evidence. FormActivation,
 an executable implementation, and any Cloud ServiceOffering remain separate
 operations.
+
+After restart, write the exact installed identity returned by the reviewed
+package release to `installed-form-reference.json`:
+
+```json
+{
+  "formRef": {
+    "apiVersion": "forms.takoform.com/v1alpha1",
+    "kind": "ObjectBucket",
+    "definitionVersion": "1.0.0",
+    "schemaDigest": "sha256:<exact-schema-digest>"
+  },
+  "packageDigest": "sha256:<exact-package-digest>"
+}
+```
+
+Re-open the retained artifact through the same host reader and verifier:
+
+```console
+takosumi form-packages reverify \
+  --file installed-form-reference.json \
+  --json
+```
+
+Require `verified: true`, the same package digest, verifier id, status, and
+exact identity. A missing/mismatched row, missing retained bytes, changed trust
+policy, failed signature, or package content mismatch blocks replay. The
+operation never consults `latest` and never changes FormActivation or creates a
+Cloud ServiceOffering.
 
 The repository-retained publication lane can be replayed through the actual
 Takosumi host verifier and registry with:

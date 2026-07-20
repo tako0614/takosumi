@@ -38,6 +38,7 @@ import type { ActivityService } from "../domains/activity/mod.ts";
 import type { BackupsService } from "../domains/backups/mod.ts";
 import type { LegacyResourceStateAdoptionService } from "../domains/resource-shape/legacy_state_adoption.ts";
 import type { ResourceFormPinOperations } from "../domains/resource-shape/form_pin_operations.ts";
+import type { FormRegistryService } from "../domains/service-forms/mod.ts";
 import type { LegacyOutputInterfaceMigrationService } from "../domains/interfaces/legacy_output_migration.ts";
 import {
   OpenTofuControllerError,
@@ -269,6 +270,8 @@ export const ALLOWED_KEYS: Record<
     "dryRun",
   ]),
   resourceFormPinRestore: new Set(["entries", "cursor", "limit"]),
+  formPackageInstall: new Set(["artifactRef", "expectedPackageDigest"]),
+  formPackageReverify: new Set(["formRef", "packageDigest"]),
   outputInterfaceMigrationConfirm: new Set(["candidate", "selection"]),
 };
 
@@ -297,6 +300,8 @@ export type DeployControlRouteName =
   | "resourceStateAdoptionConfirm"
   | "resourceFormPinBackfill"
   | "resourceFormPinRestore"
+  | "formPackageInstall"
+  | "formPackageReverify"
   | "outputInterfaceMigrationConfirm";
 
 export interface DeployControlInternalRouteDependencies {
@@ -397,6 +402,8 @@ export interface DeployControlInternalRouteDependencies {
   readonly legacyResourceStateAdoptionService?: LegacyResourceStateAdoptionService;
   /** Operator-only exact FormRef backfill and retained backup replay. */
   readonly resourceFormPinOperations?: ResourceFormPinOperations;
+  /** Operator-only immutable Form Package install and retained-byte reverify. */
+  readonly formRegistryService?: FormRegistryService;
   /**
    * Explicit Workspace -> Resource authorization-scope bridge. Matching raw
    * id strings are never treated as authority.
@@ -735,6 +742,18 @@ export function ensureWorkspaceCreatePermission(
   throw new OpenTofuControllerError(
     "permission_denied",
     `deploy control principal ${principal.actor} cannot create workspaces`,
+  );
+}
+
+/** Instance-wide host configuration is never available to a Workspace-scoped bearer. */
+export function ensureOperatorPermission(
+  principal: DeployControlPrincipal,
+  operation: string,
+): void {
+  if (principal.workspaceIds === "*") return;
+  throw new OpenTofuControllerError(
+    "permission_denied",
+    `deploy control principal cannot ${operation}`,
   );
 }
 

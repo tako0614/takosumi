@@ -2166,6 +2166,7 @@ export async function createTakosumiService(
             resolveResourceFormPinScope: options.resolveResourceBackupScope,
           }
         : {}),
+      ...(formRegistryService ? { formRegistryService } : {}),
       legacyOutputInterfaceMigrationService,
       ...(deployControlToken
         ? { getDeployControlToken: () => deployControlToken }
