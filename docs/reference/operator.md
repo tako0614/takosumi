@@ -57,7 +57,9 @@ exact FormRef + Resource
 Operator は必要な場合だけスコープ指定・バージョン指定の compatibility profile を有効にできます。例:
 `compat.s3.v1`、`compat.oci.v1`、`compat.cloudevents.v1`。既存の OpenTofu provider や標準 endpoint
 で足りる場合はそれを使い、Takosumi 側で再実装しません。公開範囲は `/v1/capabilities` で示し、
-AWS API 完全互換や Cloudflare API 完全互換は名乗りません。
+特定 vendor/provider API の完全互換は名乗りません。Cloudflare compatibility profile は廃止済みです。
+Cloudflare を使う場合は通常の ProviderConnection + plain Stack、または provider-neutral な managed Resource の
+内部 manager として扱います。
 
 ## Operator / Cloud の境界
 

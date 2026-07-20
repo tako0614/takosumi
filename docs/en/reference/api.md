@@ -575,12 +575,17 @@ implicitly; they resolve one that is already Ready. Operations outside a scoped
 profile fail closed and are documented in the compatibility matrix instead of
 pretending full vendor compatibility.
 
-Compatibility route or script-subdomain writes that create a managed hostname
-must include source Workspace and source Capsule context and use the same OSS
-hostname reservation authority as Capsule Runs. Cloud-extension KV or Durable
-Object routing and activation records are not the source of truth for hostname
-ownership. A route-level DELETE removes only that state and does not release a
-reservation owned by the Capsule lifetime.
+The former Cloudflare-shaped import profile is retired. `/compat/cloudflare/*`
+routes and `compat.cloudflare.*` capabilities are not part of the supported
+API. Cloudflare-backed Targets remain provider-neutral managed Resources, and
+customer-owned Cloudflare resources use a normal ProviderConnection and plain
+Stack flow.
+
+Compatibility profiles do not create managed hostnames. Runtime routes use a
+canonical `http.route` Interface plus InterfaceBinding, while hostname
+ownership belongs to the OSS reservation authority or the Operator/Cloud
+VerifiedDomain lifecycle. Routing caches and backend state are never hostname
+ownership authority.
 
 Takosumi Cloud-specific endpoint examples live in
 [Cloud endpoints](https://app.takosumi.com/docs/en/endpoints).
