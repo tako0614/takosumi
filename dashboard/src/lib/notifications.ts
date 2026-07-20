@@ -15,10 +15,9 @@ import { createSignal } from "solid-js";
 import {
   type ActivityEvent,
   listActivity,
-  listWorkspaces,
   type Workspace,
 } from "./control-api.ts";
-import { listCapsulesCached } from "./capsule-list.ts";
+import { fetchDashboardWorkspaceBootstrap } from "./dashboard-bootstrap.ts";
 
 /** Max events fetched per Workspace and rendered in the merged feed. */
 export const NOTIF_PER_WORKSPACE_LIMIT = 50;
@@ -124,33 +123,6 @@ export async function loadNotificationFeed(
     .slice(0, NOTIF_FEED_LIMIT);
 }
 
-/** workspaceId -> (capsuleId -> name), resolved with the same fan-out cap. */
-export type NotificationCapsuleNameIndex = ReadonlyMap<
-  string,
-  ReadonlyMap<string, string>
->;
-
-export async function loadNotificationCapsuleNameIndex(
-  entries: readonly FeedEntry[],
-): Promise<NotificationCapsuleNameIndex> {
-  const workspaceIds = [
-    ...new Set(entries.map((entry) => entry.event.workspaceId)),
-  ];
-  const rows = await settledNotificationFanout(
-    workspaceIds,
-    async (id) =>
-      [id, await listCapsulesCached(id, { includeDestroyed: true })] as const,
-  );
-  const index = new Map<string, ReadonlyMap<string, string>>();
-  for (const [id, capsules] of rows) {
-    index.set(
-      id,
-      new Map(capsules.map((capsule) => [capsule.id, capsule.name])),
-    );
-  }
-  return index;
-}
-
 // --- shared feed snapshot (TopBar badge + /notifications banner) -------------
 
 /** Navigation-driven refresh throttle — no polling loop, just "don't refetch
@@ -233,13 +205,14 @@ export async function refreshNotificationFeed(
   const currentInflight = sharedFeedInflight.get(scope);
   if (currentInflight) return currentInflight;
   const request = (async () => {
-    const workspaces = await listWorkspaces({
-      limit: NOTIF_WORKSPACE_LIMIT,
+    const bootstrap = await fetchDashboardWorkspaceBootstrap({
+      includeNotifications: true,
       selectedWorkspaceId: scope || undefined,
     });
-    const entries = await loadNotificationFeed(workspaces, {
-      selectedWorkspaceId: scope || undefined,
-    });
+    if (!Array.isArray(bootstrap?.notifications)) {
+      throw new Error("Dashboard notification projection is unavailable");
+    }
+    const entries = bootstrap.notifications.slice(0, NOTIF_FEED_LIMIT);
     if (requestedSharedFeedScope === scope) {
       sharedFeedFetchedAt = Date.now();
       sharedFeedScope = scope;

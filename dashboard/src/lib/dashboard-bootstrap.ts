@@ -1,4 +1,4 @@
-import type { Workspace } from "./control-api.ts";
+import type { ActivityEvent, Workspace } from "./control-api.ts";
 
 const DASHBOARD_BOOTSTRAP_PATH = "/api/v1/dashboard/bootstrap";
 export const DASHBOARD_SESSION_BOOTSTRAP_PATH = `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=false`;
@@ -29,6 +29,10 @@ export interface DashboardBootstrapResponse {
     readonly limit: number;
     readonly truncated: boolean;
   };
+  readonly notifications?: readonly {
+    readonly event: ActivityEvent;
+    readonly workspaceHandle: string;
+  }[];
 }
 
 const inflight = new Map<
@@ -45,17 +49,22 @@ export function fetchDashboardBootstrap(): Promise<
 >;
 export function fetchDashboardBootstrap(options: {
   readonly includeWorkspaces?: boolean;
+  readonly includeNotifications?: boolean;
   readonly selectedWorkspaceId?: string;
 }): Promise<DashboardBootstrapResponse | undefined>;
 export function fetchDashboardBootstrap(
   options: {
     readonly includeWorkspaces?: boolean;
+    readonly includeNotifications?: boolean;
     readonly selectedWorkspaceId?: string;
   } = {},
 ): Promise<DashboardBootstrapResponse | undefined> {
   const path =
     options.includeWorkspaces === true
-      ? dashboardWorkspaceBootstrapPath(options.selectedWorkspaceId)
+      ? dashboardWorkspaceBootstrapPath(
+          options.selectedWorkspaceId,
+          options.includeNotifications === true,
+        )
       : DASHBOARD_SESSION_BOOTSTRAP_PATH;
   const current = inflight.get(path);
   if (current) return current;
@@ -78,7 +87,10 @@ export function fetchDashboardBootstrap(
   return request;
 }
 
-function dashboardWorkspaceBootstrapPath(selectedWorkspaceId?: string): string {
+function dashboardWorkspaceBootstrapPath(
+  selectedWorkspaceId?: string,
+  includeNotifications = false,
+): string {
   const params = new URLSearchParams({
     includeWorkspaces: "true",
     workspaceLimit: String(DASHBOARD_WORKSPACE_BOOTSTRAP_LIMIT),
@@ -86,6 +98,7 @@ function dashboardWorkspaceBootstrapPath(selectedWorkspaceId?: string): string {
   if (selectedWorkspaceId && selectedWorkspaceId.length > 0) {
     params.set("workspaceId", selectedWorkspaceId);
   }
+  if (includeNotifications) params.set("includeNotifications", "true");
   return `${DASHBOARD_BOOTSTRAP_PATH}?${params.toString()}`;
 }
 
@@ -94,14 +107,17 @@ export function fetchDashboardWorkspaceBootstrap(): Promise<
 >;
 export function fetchDashboardWorkspaceBootstrap(options: {
   readonly selectedWorkspaceId?: string;
+  readonly includeNotifications?: boolean;
 }): Promise<DashboardBootstrapResponse | undefined>;
 export function fetchDashboardWorkspaceBootstrap(
   options: {
     readonly selectedWorkspaceId?: string;
+    readonly includeNotifications?: boolean;
   } = {},
 ): Promise<DashboardBootstrapResponse | undefined> {
   return fetchDashboardBootstrap({
     includeWorkspaces: true,
+    includeNotifications: options.includeNotifications,
     selectedWorkspaceId: options.selectedWorkspaceId,
   });
 }

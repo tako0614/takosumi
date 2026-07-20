@@ -18,7 +18,6 @@ import {
   attentionCount,
   type FeedEntry,
   isFailureAction,
-  loadNotificationCapsuleNameIndex,
   notificationFeed,
   refreshNotificationFeed,
 } from "../../lib/notifications.ts";
@@ -238,16 +237,6 @@ function eventHref(event: ActivityEvent): string | undefined {
 
 /** Capsule id an event is about: run events record it as metadata; service
  * events carry it as the target. */
-function eventCapsuleId(event: ActivityEvent): string | undefined {
-  const m = event.metadata ?? {};
-  const fromMeta = metaString(m, "capsuleId");
-  if (fromMeta) return fromMeta;
-  if (event.targetType === "capsule") {
-    return event.targetId;
-  }
-  return undefined;
-}
-
 function NotificationRow(props: {
   entry: FeedEntry;
   serviceName?: string | undefined;
@@ -321,19 +310,11 @@ export default function NotificationsView() {
           }),
         );
         const feed = () => notificationFeed();
-        // Service names for the recorded Capsule ids — best-effort, cached;
-        // lines render unnamed until (unless) the lookup resolves. Guard the
-        // errored-resource read (the loader isolates per-Workspace failures, but
-        // a throw here still must not take the whole page down).
-        const [capsuleNames] = createResource(
-          () => feed(),
-          (entries) => loadNotificationCapsuleNameIndex(entries),
-        );
         const serviceNameFor = (event: ActivityEvent): string | undefined => {
-          const capsuleId = eventCapsuleId(event);
-          if (!capsuleId) return undefined;
-          const names = capsuleNames.error ? undefined : capsuleNames.latest;
-          return names?.get(event.workspaceId)?.get(capsuleId);
+          const metadata = event.metadata ?? {};
+          return (
+            metaString(metadata, "capsuleName") ?? metaString(metadata, "name")
+          );
         };
         // Skeleton / error only before the FIRST snapshot exists; afterwards a
         // failed background refresh silently keeps the last-known entries

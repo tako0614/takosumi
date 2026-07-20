@@ -123,9 +123,9 @@ test("createCapsule persists the canonical Workspace, Project, and Capsule field
 test("createCapsule rejects an invalid name", async () => {
   const { store, service } = build();
   await seedAll(store);
-  await expect(createCapsule(service, { name: "Shop Name" })).rejects.toMatchObject(
-    { code: "invalid_argument" },
-  );
+  await expect(
+    createCapsule(service, { name: "Shop Name" }),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
 });
 
 test("createCapsule rejects an unknown Workspace", async () => {
@@ -261,13 +261,18 @@ test("the same Capsule name can be used in another environment", async () => {
   expect(preview.environment).toBe("preview");
 });
 
-test("getCapsule, listCapsules, and patchCapsuleStatus use canonical ids", async () => {
+test("getCapsule, batched get, listCapsules, and patchCapsuleStatus use canonical ids", async () => {
   const { store, service } = build();
   await seedAll(store);
   await seedWorkspace(store, { id: "ws_2", handle: "other" });
   const capsule = await createCapsule(service);
 
   expect((await service.getCapsule(capsule.id)).id).toBe(capsule.id);
+  expect(
+    (await service.getCapsulesByIds([capsule.id, "cap_missing"])).map(
+      (row) => row.id,
+    ),
+  ).toEqual([capsule.id]);
   expect((await service.listCapsules("ws_1")).map((row) => row.id)).toEqual([
     capsule.id,
   ]);

@@ -28,7 +28,7 @@ function workspace(index: number): Workspace {
 }
 
 function installScopedFeedFetch(): string[] {
-  const workspaceRequests: string[] = [];
+  const bootstrapRequests: string[] = [];
   const selected = (id: string): Workspace => ({
     ...workspace(id === "ws_a" ? 0 : 1),
     id,
@@ -36,41 +36,43 @@ function installScopedFeedFetch(): string[] {
   });
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const path = typeof input === "string" ? input : String(input);
-    if (path.startsWith("/api/v1/workspaces?")) {
+    if (path.startsWith("/api/v1/dashboard/bootstrap?")) {
       const id = new URL(path, "https://dashboard.test").searchParams.get(
-        "selectedWorkspaceId",
+        "workspaceId",
       );
       if (id !== "ws_a" && id !== "ws_b") {
         throw new Error(`unexpected selected Workspace: ${id ?? "missing"}`);
       }
-      workspaceRequests.push(id);
+      bootstrapRequests.push(id);
+      await new Promise((resolve) =>
+        setTimeout(resolve, id === "ws_a" ? 10 : 1),
+      );
       return Response.json({
         workspaces: [selected(id)],
-        returned: 1,
-        limit: NOTIF_WORKSPACE_LIMIT,
-        truncated: false,
+        workspaceList: {
+          returned: 1,
+          limit: NOTIF_WORKSPACE_LIMIT,
+          truncated: false,
+        },
+        notifications: [
+          {
+            workspaceHandle: id,
+            event: {
+              id: `act_${id}`,
+              workspaceId: id,
+              action: "run.applied",
+              targetType: "run",
+              targetId: `run_${id}`,
+              metadata: {},
+              createdAt: "2026-07-20T00:00:00.000Z",
+            },
+          },
+        ],
       });
     }
-    const match = path.match(/^\/api\/v1\/workspaces\/(ws_[ab])\/activity/);
-    if (!match?.[1]) throw new Error(`unexpected fetch: ${path}`);
-    await new Promise((resolve) =>
-      setTimeout(resolve, match[1] === "ws_a" ? 10 : 1),
-    );
-    return Response.json({
-      events: [
-        {
-          id: `act_${match[1]}`,
-          workspaceId: match[1],
-          action: "run.applied",
-          targetType: "run",
-          targetId: `run_${match[1]}`,
-          metadata: {},
-          createdAt: "2026-07-20T00:00:00.000Z",
-        },
-      ],
-    });
+    throw new Error(`unexpected fetch: ${path}`);
   }) as typeof fetch;
-  return workspaceRequests;
+  return bootstrapRequests;
 }
 
 describe("notification fan-out bounds", () => {

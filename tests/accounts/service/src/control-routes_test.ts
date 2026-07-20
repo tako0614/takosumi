@@ -486,7 +486,8 @@ test("Dashboard Workspace projection pushes active latest-first limit into the s
   );
 
   expect(response?.status).toBe(200);
-  expect(await response?.json()).toMatchObject({
+  const body = await response?.json();
+  expect(body).toMatchObject({
     workspaces: [workspace],
     workspaceList: { returned: 1, limit: 50, truncated: false },
   });
@@ -499,6 +500,196 @@ test("Dashboard Workspace projection pushes active latest-first limit into the s
       limit: 50,
     },
   ]);
+});
+
+test("Dashboard notification projection batches authorized Workspace activity", async () => {
+  const fixture = operationsFixture();
+  const activityCalls: unknown[] = [];
+  const capsuleBatchCalls: string[][] = [];
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      getCapsulesByIds: async (ids: readonly string[]) => {
+        capsuleBatchCalls.push([...ids]);
+        return ids.map((id) => ({
+          id,
+          workspaceId: workspace.id,
+          projectId: "prj_default_ws_owner",
+          name: id === "cap_1" ? "api" : "worker",
+          slug: id === "cap_1" ? "api" : "worker",
+          sourceId: "src_git",
+          installConfigId: `cfg_${id}`,
+          environment: "production",
+          currentStateGeneration: 0,
+          status: "active" as const,
+          createdAt: workspace.createdAt,
+          updatedAt: workspace.updatedAt,
+        }));
+      },
+    },
+    activity: {
+      list: async () => [],
+      listAcrossWorkspaces: async (
+        workspaceIds: readonly string[],
+        limit?: number,
+      ) => {
+        activityCalls.push({ workspaceIds, limit });
+        return [
+          {
+            id: "act_1",
+            workspaceId: workspace.id,
+            action: "run.failed",
+            targetType: "run",
+            targetId: "run_1",
+            metadata: {
+              capsuleId: "cap_1",
+              errorCode: "runner_failed",
+              secret: "must-not-project",
+            },
+            createdAt: "2026-07-20T00:00:00.000Z",
+          },
+          {
+            id: "act_2",
+            workspaceId: workspace.id,
+            action: "capsule.auto_update_failed",
+            targetType: "capsule",
+            targetId: "cap_2",
+            metadata: { errorCode: "runner_failed" },
+            createdAt: "2026-07-20T00:00:01.000Z",
+          },
+        ];
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    `https://app.example.test/api/v1/dashboard/bootstrap?includeWorkspaces=true&includeNotifications=true&workspaceId=${workspace.id}`,
+  );
+  const response = await handleDashboard(
+    context(operations, request),
+    ["dashboard", "bootstrap"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  const body = await response?.json();
+  expect(body).toMatchObject({
+    notifications: [
+      {
+        workspaceHandle: workspace.handle,
+        event: {
+          id: "act_1",
+          metadata: {
+            capsuleId: "cap_1",
+            capsuleName: "api",
+            errorCode: "runner_failed",
+          },
+        },
+      },
+      {
+        workspaceHandle: workspace.handle,
+        event: {
+          id: "act_2",
+          metadata: {
+            capsuleName: "worker",
+            errorCode: "runner_failed",
+          },
+        },
+      },
+    ],
+  });
+  expect(JSON.stringify(body)).not.toContain("must-not-project");
+  expect(activityCalls).toEqual([{ workspaceIds: [workspace.id], limit: 60 }]);
+  expect(capsuleBatchCalls).toEqual([["cap_1", "cap_2"]]);
+});
+
+test("Dashboard notifications survive optional Capsule-name lookup failure", async () => {
+  const fixture = operationsFixture();
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      getCapsulesByIds: async () => {
+        throw new Error("Capsule projection unavailable");
+      },
+    },
+    activity: {
+      list: async () => [],
+      listAcrossWorkspaces: async () => [
+        {
+          id: "act_1",
+          workspaceId: workspace.id,
+          action: "run.failed",
+          targetType: "run",
+          targetId: "run_1",
+          metadata: { capsuleId: "cap_1", errorCode: "runner_failed" },
+          createdAt: "2026-07-20T00:00:00.000Z",
+        },
+      ],
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    `https://app.example.test/api/v1/dashboard/bootstrap?includeNotifications=true&workspaceId=${workspace.id}`,
+  );
+  const response = await handleDashboard(
+    context(operations, request),
+    ["dashboard", "bootstrap"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  const body = await response?.json();
+  expect(body.notifications).toHaveLength(1);
+  expect(body.notifications[0].event).toMatchObject({
+    id: "act_1",
+    metadata: { capsuleId: "cap_1", errorCode: "runner_failed" },
+  });
+  expect(body.notifications[0].event.metadata.capsuleName).toBeUndefined();
+});
+
+test("Dashboard notifications keep fetched Activity when Capsule-name lookup times out", async () => {
+  const fixture = operationsFixture();
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      getCapsulesByIds: async () =>
+        await new Promise<never>(() => {
+          // Deliberately never resolves: the shared notification deadline must
+          // return the already-fetched Activity without a service name.
+        }),
+    },
+    activity: {
+      list: async () => [],
+      listAcrossWorkspaces: async () => [
+        {
+          id: "act_timeout",
+          workspaceId: workspace.id,
+          action: "run.failed",
+          targetType: "run",
+          targetId: "run_timeout",
+          metadata: { capsuleId: "cap_slow", errorCode: "runner_failed" },
+          createdAt: "2026-07-20T00:00:00.000Z",
+        },
+      ],
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    `https://app.example.test/api/v1/dashboard/bootstrap?includeNotifications=true&workspaceId=${workspace.id}`,
+  );
+  const startedAt = Date.now();
+  const response = await handleDashboard(
+    context(operations, request),
+    ["dashboard", "bootstrap"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  const body = await response?.json();
+  expect(body.notifications).toHaveLength(1);
+  expect(body.notifications[0].event.id).toBe("act_timeout");
+  expect(body.notifications[0].event.metadata.capsuleName).toBeUndefined();
+  expect(Date.now() - startedAt).toBeLessThan(2_000);
 });
 
 test("Workspace authorization uses one exact membership lookup instead of scanning the roster", async () => {

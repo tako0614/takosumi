@@ -742,6 +742,7 @@ export interface OpenTofuControlStore {
   // Capsule records (active UNIQUE(project_id, name, environment)).
   putCapsule(capsule: Capsule): Promise<Capsule>;
   getCapsule(id: string): Promise<Capsule | undefined>;
+  getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]>;
   getCapsuleByName(
     projectId: string,
     name: string,
@@ -962,6 +963,14 @@ export interface OpenTofuControlStore {
   putActivityEvent(event: ActivityEvent): Promise<ActivityEvent>;
   listActivityEvents(
     workspaceId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly ActivityEvent[]>;
+  /**
+   * Bounded newest-first Activity projection across authorized Workspaces.
+   * At most 12 ids keeps the D1 statement below its 100-variable limit.
+   */
+  listActivityEventsForWorkspaces(
+    workspaceIds: readonly string[],
     options?: { readonly limit?: number },
   ): Promise<readonly ActivityEvent[]>;
   /**
@@ -1631,6 +1640,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   getCapsule(id: string): Promise<Capsule | undefined> {
     return Promise.resolve(this.#capsules.get(id));
+  }
+
+  getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
+    return Promise.resolve(
+      ids
+        .map((id) => this.#capsules.get(id))
+        .filter((row): row is Capsule => row !== undefined),
+    );
   }
 
   getCapsuleByName(
@@ -2374,6 +2391,23 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(rows);
   }
 
+  async listActivityEventsForWorkspaces(
+    workspaceIds: readonly string[],
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly ActivityEvent[]> {
+    const ids = boundedActivityWorkspaceIds(workspaceIds);
+    if (ids.length === 0) return [];
+    const idSet = new Set(ids);
+    const limit = clampActivityLimit(options.limit);
+    return Array.from(this.#activityEvents.values())
+      .filter((row) => idSet.has(row.workspaceId))
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      )
+      .slice(0, limit);
+  }
+
   listActivityEventsForTargetPage(
     workspaceId: string,
     targetType: string,
@@ -2513,6 +2547,23 @@ export function clampActivityLimit(limit: number | undefined): number {
   if (floored < 1) return 1;
   if (floored > ACTIVITY_MAX_LIMIT) return ACTIVITY_MAX_LIMIT;
   return floored;
+}
+
+export const ACTIVITY_WORKSPACE_BATCH_LIMIT = 12;
+
+export function boundedActivityWorkspaceIds(
+  workspaceIds: readonly string[],
+): readonly string[] {
+  const ids = [...new Set(workspaceIds.map((id) => id.trim()))];
+  if (
+    ids.some((id) => id.length === 0) ||
+    ids.length > ACTIVITY_WORKSPACE_BATCH_LIMIT
+  ) {
+    throw new RangeError(
+      `Activity Workspace batch must contain at most ${ACTIVITY_WORKSPACE_BATCH_LIMIT} unique non-empty ids`,
+    );
+  }
+  return ids;
 }
 
 /** Store-side clamp for Workspace Run listings. Route layers reject bad input. */

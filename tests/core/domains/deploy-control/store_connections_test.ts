@@ -13,10 +13,13 @@ import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_open
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import type { Capsule } from "takosumi-contract/capsules";
 
 // -- Fixtures ------------------------------------------------------------------
 
-function connection(overrides: Partial<ProviderConnection> = {}): ProviderConnection {
+function connection(
+  overrides: Partial<ProviderConnection> = {},
+): ProviderConnection {
   return {
     id: "conn_abcdef0123456789",
     workspaceId: "workspace_1",
@@ -65,6 +68,33 @@ const STORES: ReadonlyArray<[string, () => OpenTofuControlStore]> = [
 ];
 
 for (const [name, make] of STORES) {
+  test(`${name}: Capsule id batches preserve request order and omit misses`, async () => {
+    const store = make();
+    const capsule = (id: string): Capsule => ({
+      id,
+      workspaceId: "workspace_1",
+      projectId: "project_1",
+      name: id,
+      slug: id,
+      sourceId: "source_1",
+      installConfigId: "config_1",
+      environment: "production",
+      currentStateGeneration: 0,
+      status: "active",
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    });
+    await store.putCapsule(capsule("capsule_a"));
+    await store.putCapsule(capsule("capsule_b"));
+
+    expect(
+      (await store.getCapsulesByIds(["capsule_b", "missing", "capsule_a"])).map(
+        (row) => row.id,
+      ),
+    ).toEqual(["capsule_b", "capsule_a"]);
+    expect(await store.getCapsulesByIds([])).toEqual([]);
+  });
+
   test(`${name}: connection put/get/list/delete round-trip`, async () => {
     const store = make();
     const conn = connection();
@@ -113,37 +143,58 @@ for (const [name, make] of STORES) {
 
   test(`${name}: activity event put/list newest-first + Workspace-scoped + limit`, async () => {
     const store = make();
-    await store.putActivityEvent(activityEvent({
-      id: "act_a",
-      createdAt: "2026-06-06T00:00:01.000Z",
-    }));
-    await store.putActivityEvent(activityEvent({
-      id: "act_b",
-      action: "run.applied",
-      targetType: "run",
-      targetId: "apply_1",
-      runId: "apply_1",
-      metadata: { stateVersionId: "state_1" },
-      createdAt: "2026-06-06T00:00:02.000Z",
-    }));
-    await store.putActivityEvent(activityEvent({
-      id: "act_other",
-      workspaceId: "workspace_2",
-      createdAt: "2026-06-06T00:00:03.000Z",
-    }));
+    await store.putActivityEvent(
+      activityEvent({
+        id: "act_a",
+        createdAt: "2026-06-06T00:00:01.000Z",
+      }),
+    );
+    await store.putActivityEvent(
+      activityEvent({
+        id: "act_b",
+        action: "run.applied",
+        targetType: "run",
+        targetId: "apply_1",
+        runId: "apply_1",
+        metadata: { stateVersionId: "state_1" },
+        createdAt: "2026-06-06T00:00:02.000Z",
+      }),
+    );
+    await store.putActivityEvent(
+      activityEvent({
+        id: "act_other",
+        workspaceId: "workspace_2",
+        createdAt: "2026-06-06T00:00:03.000Z",
+      }),
+    );
 
     const listed = await store.listActivityEvents("workspace_1");
     expect(listed.map((e) => e.id)).toEqual(["act_b", "act_a"]);
     expect(listed[0]!.runId).toBe("apply_1");
     expect(listed[0]!.metadata.stateVersionId).toBe("state_1");
 
-    expect((await store.listActivityEvents("workspace_2")).map((e) => e.id))
-      .toEqual(["act_other"]);
+    expect(
+      (await store.listActivityEvents("workspace_2")).map((e) => e.id),
+    ).toEqual(["act_other"]);
     expect(
       (await store.listActivityEvents("workspace_1", { limit: 1 })).map(
         (e) => e.id,
       ),
     ).toEqual(["act_b"]);
+    expect(
+      (
+        await store.listActivityEventsForWorkspaces(
+          ["workspace_1", "workspace_2"],
+          { limit: 2 },
+        )
+      ).map((event) => event.id),
+    ).toEqual(["act_other", "act_b"]);
+    expect(await store.listActivityEventsForWorkspaces([])).toEqual([]);
+    await expect(
+      store.listActivityEventsForWorkspaces(
+        Array.from({ length: 13 }, (_, index) => `workspace_${index}`),
+      ),
+    ).rejects.toBeInstanceOf(RangeError);
   });
 }
 
