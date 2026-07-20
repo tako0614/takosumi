@@ -29,6 +29,12 @@ import { checkPlatformBindings } from "./bindings-check.ts";
 export interface CloudflareWorkerEnv {
   readonly [name: string]: unknown;
   readonly TAKOSUMI_ACCOUNTS_DB: D1Database;
+  /**
+   * `predeployed` keeps schema DDL off the request/cold-start path. Operators
+   * must run and verify the accounts migration lane before enabling it.
+   * Self-host/bootstrap environments retain the idempotent default.
+   */
+  readonly TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE?: "bootstrap" | "predeployed";
   // Cloudflare Static Assets binding for the bundled dashboard SPA
   // (dashboard → dist). Present when the wrangler `[assets]` block is
   // configured; absent in API-only deploys/tests.
@@ -335,10 +341,13 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   if (!env.TAKOSUMI_ACCOUNTS_DB) {
     throw new TypeError("TAKOSUMI_ACCOUNTS_DB D1 binding is required");
   }
+  const schemaMode = accountsD1SchemaMode(env);
   configureSessionHashSalt(env);
   const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB);
-  await store.initialize();
-  await ensureD1SchemaVersion(env.TAKOSUMI_ACCOUNTS_DB);
+  if (schemaMode === "bootstrap") {
+    await store.initialize();
+  }
+  await ensureD1SchemaVersion(env.TAKOSUMI_ACCOUNTS_DB, schemaMode);
   await seedLocalSubstrateAccount(store, env);
   // TAKOSUMI_ACCOUNTS_ISSUER must be explicitly set. We deliberately do NOT
   // fall back to the first request URL: caching that as the issuer poisons
@@ -360,17 +369,17 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   // Keep ordinary identity requests on the lightweight handler. Canonical
   // Core is resolved lazily only when an Interface OAuth token is actually
   // presented to UserInfo/introspection.
-  const interfaceOAuthActivityValidator: InterfaceOAuthActivityValidator | undefined =
-    options.controlPlaneOperations
-      ? async (evidence) => {
-          const operations = await options.controlPlaneOperations?.(env);
-          return (
-            (await operations?.interfaces?.validatePrincipalOAuth2TokenEvidence(
-              evidence,
-            )) === true
-          );
-        }
-      : undefined;
+  const interfaceOAuthActivityValidator:
+    InterfaceOAuthActivityValidator | undefined = options.controlPlaneOperations
+    ? async (evidence) => {
+        const operations = await options.controlPlaneOperations?.(env);
+        return (
+          (await operations?.interfaces?.validatePrincipalOAuth2TokenEvidence(
+            evidence,
+          )) === true
+        );
+      }
+    : undefined;
   const managedPublicBaseDomain = optionalString(
     env.TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN,
   );
@@ -445,13 +454,16 @@ interface SchemaMigrationRow {
 // fail-closed gate satisfiable by the documented runner.
 async function ensureD1SchemaVersion(
   db: CloudflareWorkerEnv["TAKOSUMI_ACCOUNTS_DB"],
+  schemaMode: "bootstrap" | "predeployed",
 ): Promise<void> {
   // D1 `exec()` runs one statement per line; keep this single-line. Mirrors
   // `D1_SCHEMA_MIGRATIONS_TABLE_SQL` in the CLI migrate-d1 runner so the
   // table the Worker reads is exactly the table the runner writes.
-  await db.exec(
-    "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
-  );
+  if (schemaMode === "bootstrap") {
+    await db.exec(
+      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+    );
+  }
   const row = await db
     .prepare(
       "SELECT version FROM takosumi_accounts_schema_migrations ORDER BY version DESC LIMIT 1",
@@ -474,6 +486,16 @@ async function ensureD1SchemaVersion(
       `D1 schema version ${currentVersion} is behind this Worker (expected ${EXPECTED_D1_SCHEMA_VERSION}); run \`bun run cli -- accounts migrate-d1\` or the equivalent migration runner before serving account-plane traffic`,
     );
   }
+}
+
+function accountsD1SchemaMode(
+  env: Pick<CloudflareWorkerEnv, "TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE">,
+): "bootstrap" | "predeployed" {
+  const value = env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE ?? "bootstrap";
+  if (value === "bootstrap" || value === "predeployed") return value;
+  throw new TypeError(
+    "TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE must be bootstrap or predeployed",
+  );
 }
 
 async function seedLocalSubstrateAccount(
