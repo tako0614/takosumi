@@ -89,9 +89,10 @@ project name. The owner has approved `takoform.com`, public source repository
 `registry.terraform.io/tako0614/takoform`, and the
 `takoform_` resource prefix. The HCP Terraform organization is `takoform`; it manages the
 Public Registry namespace derived from linked GitHub account `tako0614`. The current
-`takosumi.dev/v1alpha1`, `ResourceShape`, `takosumi_*` form resources,
-`/v1/resources`, Resource IDs, kind tokens, import IDs, database fields, and
-provider state remain compatibility surfaces during the additive migration.
+`takosumi.dev/v1alpha1`, `ResourceShape`, `/v1/resources`, Resource IDs, kind
+tokens, import IDs, and database fields remain compatibility surfaces during the
+additive migration. The discontinued provider's `takosumi_*` resources and
+existing state remain historical migration/rollback custody only.
 
 Takosumi remains provider-neutral beyond Takoform. Any runner-installable OpenTofu/Terraform
 provider may be used by a plain Stack through ProviderConnection, CredentialRecipe, and
@@ -232,7 +233,8 @@ This is not "Takosumi should create every missing provider." It is:
 ```text
 vendor-neutral provider or standard API already exists:
   prefer it. Takosumi can manage credentials, runs, state, outputs, policy, and
-  usage around that surface without adding a takosumi_* resource.
+  usage around that surface without introducing a new Takosumi-owned HCL
+  resource; the discontinued provider receives none.
 
 standard surface exists:
   do not recreate its provider-specific resource vocabulary in takosumi_provider.
@@ -251,7 +253,7 @@ portable project admits a durable managed service form:
 
 provider schema does not correspond to a provider-neutral Takosumi-managed
 service form or an operator/admin object:
-  do not add it. It has no reason to exist in the Takosumi provider.
+  do not add it. The discontinued Takosumi provider receives no new resources.
 ```
 
 The mixed `takosumi/takosumi` provider is discontinued and retained only for
@@ -424,7 +426,7 @@ unknown provider
 ```
 
 There is no verified/unverified provider tier, provider-specific runner
-auto-selection, or Takosumi provider allowlist derived from recipe metadata.
+auto-selection, or provider allowlist derived from recipe metadata.
 Provider installation uses a configured cache or mirror when available and the
 normal OpenTofu registry path otherwise. An operator may explicitly require a
 mirror, deny a provider source, or select a capability-specific runner profile,
@@ -1207,7 +1209,7 @@ There are two extension layers:
 
 ```text
 typed Service Form client layer:
-  standard forms require an immutable definition/provider release.
+  standard forms require an immutable definition and Takoform typed-provider release.
   This preserves OpenTofu plan diffs, validation, import, state upgrades, and
   completion.
 
@@ -1430,8 +1432,8 @@ are peer Cloud-provided services in Takosumi Cloud. AI Gateway remains a service
 endpoint rather than a Service Form, but billable AI requests still enter the
 same Cloud managed-operation boundary before upstream model execution.
 
-Managed provider-compatible paths use the same TargetPool / Adapter decision as
-form-backed Resources. A managed Target can either declare a complete module-backed
+Module-backed managed Targets use the same TargetPool / Adapter decision as
+form-backed Resources. A managed Target can either declare a complete
 descriptor (`providerSource`, `providerConfig`, `moduleTemplate`, explicit
 input/output mappings), or select an operator-installed adapter plugin for
 direct materialization. Core never derives these fields from Target or shape
@@ -1758,7 +1760,7 @@ spec invariant as the original six shapes.
 ### 4.5 AI Gateway Is Not A Service Form
 
 AI Gateway remains a Takosumi Cloud / operator service endpoint, not a default
-`takosumi_*` resource.
+Service Form Resource.
 
 In Takosumi Cloud, billable AI Gateway requests still pass through the common
 Cloud managed-operation boundary:
@@ -2587,7 +2589,7 @@ generic takosumi_resource { type, spec } as the primary interface
 Takosumi runtime schemas inside reserved OpenTofu Outputs
 Workspace-wide reconcile triggered by ordinary Output changes
 backend selection as normal user HCL
-Cloud-only branches in the takosumi provider
+Cloud-only branches in any provider client
 secret material inside Service Form definitions or Resource specs
 secret material inside Interface documents or resolved inputs
 commercial billing enforcement inside OSS core
@@ -2682,7 +2684,7 @@ Verified custom-domain lifecycle
 
 The two non-form services use generic non-Form Offering subjects and do not
 require FormRef or FormActivation. Every item in the wider Cloud
-GA service-surface set must pass lifecycle, provider/API compatibility where applicable,
+GA service-surface set must pass lifecycle, documented standard API conformance where applicable,
 price coverage, immutable metering, spend enforcement, invoice reconciliation,
 recovery, tenant isolation, dashboard, and live operator evidence before any of
 them is advertised as the Takosumi Cloud GA set. GA is not inferred from a

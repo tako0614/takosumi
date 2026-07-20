@@ -471,8 +471,9 @@ capability evidence / ResolutionLock で決めます。
 `kubernetes`, `vm`, `takosumi_native`) に加えて operator-defined adapter
 token を boolean key として返せます。これは既存 typed shape の実装先を増やす
 ための拡張であり、新しい HCL resource type を runtime に生やす仕組みではありません。
-新しい portable Form は Takoform の exact Form Package/schema/provider conformance と、
-Takosumi host API/adapter conformance が必要です。Takosumi provider は更新しません。
+新しい portable Form は Takoform の exact Form Package/schema/typed-provider conformance と、
+Takosumi host API/adapter conformance が必要です。廃止済み Takosumi provider は更新・
+再公開しません。
 
 ```http
 PUT    /v1/target-pools/{name}
@@ -556,10 +557,10 @@ data-plane profile は既存 Resource を暗黙作成せず、Ready な Resource
 表現できない操作は互換のように成功させず、compatibility matrix で範囲を明示して
 安全側に停止します。
 
-旧 Cloudflare-shaped import profile は廃止済みです。`/compat/cloudflare/*` route と
-`compat.cloudflare.*` capability は supported API ではありません。Cloudflare-backed Target は
-provider-neutral な managed Resource として扱い、ユーザー自身の Cloudflare resource は通常の
-ProviderConnection + plain Stack flow で管理します。
+Cloudflare 固有の import/deploy compatibility profile は廃止済みで、v1 の supported API や
+capability には含みません。Cloudflare-backed Target は provider-neutral な managed Resource
+として扱い、ユーザー自身の Cloudflare resource は通常の ProviderConnection + plain Stack
+flow で管理します。
 
 Compatibility profile は managed hostname を作りません。runtime route は canonical
 `http.route` Interface + InterfaceBinding を使い、hostname ownership は OSS reservation または

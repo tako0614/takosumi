@@ -88,7 +88,8 @@ Same form, different target.
 The same `.tf` can move between dev/prod, accounts, and provider aliases by
 changing ProviderBindings. The same exact Service Form can resolve to any
 operator-enabled Target through TargetPool, Policy, and Adapter evidence. The
-current wire/provider/state compatibility surface calls this a Resource Shape.
+current wire and existing-state aliases from the discontinued provider call
+this a Resource Shape.
 
 ## What Takosumi Does Not Rebuild
 

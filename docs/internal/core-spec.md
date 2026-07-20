@@ -57,9 +57,10 @@ The approved public identities are `Takoform`, `takoform.com`,
 organization `takoform` manages the GitHub-account-derived `tako0614` Public Registry namespace. Source
 publication is authorized; provider/package releases still require signing and
 real-install evidence. The current `takosumi.dev/v1alpha1`, `ResourceShape`,
-`takosumi_*` form resources, `/v1/resources`, IDs, kinds, imports, database
-columns, and provider state remain compatibility surfaces. No current code is
-conformant merely because this target is documented.
+`/v1/resources`, IDs, kinds, imports, and database columns remain compatibility
+surfaces. The discontinued provider's `takosumi_*` resources and existing state
+remain historical migration/rollback custody only. No current code is conformant
+merely because this target is documented.
 
 Takosumi Core is provider-neutral beyond Takoform. Plain Stack execution accepts any
 runner-installable OpenTofu/Terraform provider configured through ProviderConnection,
@@ -890,7 +891,7 @@ a form is installed, executable, activated, or offered.
 This remains true over time. A new universal client may replace the HCL provider
 as the preferred user surface, but its control operations still call the Deploy
 API and its data plane still resolves the canonical Ready Resource. This keeps
-service state portable without making the Takosumi provider mandatory.
+service state portable without reviving the discontinued Takosumi provider.
 
 When a durable managed-service definition is justified, the portable project
 admits an exact versioned Service Form even if its public protocol is standard.
@@ -904,7 +905,7 @@ security review, and conformance evidence. No new Takosumi-provider resource is
 admitted; operator objects use API/CLI/dashboard and old types remain custody.
 
 The target extension has two layers. Adding a standard HCL-facing form resource
-requires an immutable Form Package/provider release so OpenTofu can keep
+requires an immutable Form Package and Takoform typed-provider release so OpenTofu can keep
 typed plan diffs, validation, import, state upgrade, and completion. Adding a
 new backend for an existing shape is operator configuration: TargetPool entries
 can publish implementation tokens, adapter plugin ids, plugin-local non-secret

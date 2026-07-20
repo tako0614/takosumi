@@ -39,7 +39,8 @@ release authority.
 announces the minimum policy without backdating its start:
 
 - the current `takosumi.dev/v1alpha1`, `/v1/resources`, `ResourceShape`, and
-  `takosumi_*` form state aliases stay supported throughout Takosumi v1;
+  discontinued provider's `takosumi_*` form state aliases stay supported
+  throughout Takosumi v1;
 - removal can be considered only in v2 or later;
 - the support window is at least 365 days and starts at the later of public
   migration notice and stable migration-path availability; and
@@ -81,7 +82,8 @@ The pinned lifecycle has five ordered phases:
 The structural Takoform fixture intentionally labels the three host-dependent
 phases `external-required`. The existing
 `bun run provider:custody:state-proof` separately validates the retained
-Takosumi provider's old-state no-op/observe/rollback behavior. Neither local
+historical-custody Takosumi provider's old-state no-op/observe/rollback
+behavior. Neither local
 fixture substitutes for the live cross-provider operation.
 
 ## Removal eligibility gate
@@ -175,7 +177,8 @@ old HCL revision, old/new provider bundles, and restore-drill transcript.
 The gate rejects a v1 removal, a support-window start before either public
 notice or stable migration availability, a short/active window, stale or
 non-zero usage, incomplete authorized inventory, any live legacy form instance,
-an external-required migration phase, stale Takosumi provider proof, a missing
+an external-required migration phase, stale historical-custody Takosumi
+provider proof, a missing
 rollback digest, or a failed restore/no-op phase. Passing the gate proves only
 technical removal eligibility for the supplied operator scope. It does not
 authorize a release, delete retained provider/package bytes, or replace the
