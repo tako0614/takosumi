@@ -105,12 +105,14 @@ import {
   resourceInterfaceWorkspaceInput,
   resourceLifecycleInterfaceWorkspaceInput,
   type ResourceInterfaceWorkspaceResolver,
+  type FormInterfaceResourceUriResolver,
   type InterfaceBindingDeliveryHandlerRegistry,
   type InterfaceCredentialIssuer,
   type InterfaceOAuth2ResourceAuthorizer,
   type InterfaceStores,
 } from "./domains/interfaces/mod.ts";
 import { createSqlInterfaceStores } from "./domains/interfaces/sql_stores.ts";
+import { canonicalInterfaceOAuth2ResourceUri } from "./domains/interfaces/oauth_resource.ts";
 import {
   FormRegistryService,
   createSqlFormRegistryStore,
@@ -547,6 +549,12 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * treated as authority.
    */
   readonly resolveResourceInterfaceWorkspace?: ResourceInterfaceWorkspaceResolver;
+  /**
+   * Host-owned canonical resource URI projection for portable Form Interface
+   * descriptors. Omission leaves `resource_uri` inputs unavailable and a
+   * required descriptor fails closed before the Resource is advertised Ready.
+   */
+  readonly resolveFormInterfaceResourceUri?: FormInterfaceResourceUriResolver;
   /**
    * Explicit host-owned Workspace -> Resource authorization-scope mapping used
    * for the redacted exact-Form backup sidecar and exact FormRef migration.
@@ -1453,6 +1461,8 @@ export async function createTakosumiService(
     );
   const resolveResourceInterfaceWorkspace =
     options.resolveResourceInterfaceWorkspace;
+  const resolveFormInterfaceResourceUri =
+    options.resolveFormInterfaceResourceUri;
   const resourceShapeService = resourceShapeAdapter
     ? new ResourceShapeService({
         stores: resourceShapeStores,
@@ -1493,9 +1503,46 @@ export async function createTakosumiService(
                     request.name,
                   ),
                 });
-                return workspaceId
-                  ? undefined
-                  : "required Interface materialization has no authorized Workspace mapping for this Resource";
+                if (!workspaceId) {
+                  return "required Interface materialization has no authorized Workspace mapping for this Resource";
+                }
+                const resourceId = formatResourceShapeId(
+                  request.space,
+                  request.kind,
+                  request.name,
+                );
+                for (const descriptor of definition.interfaceDescriptors ??
+                  []) {
+                  if (descriptor.required !== true) continue;
+                  const resourceUriInputs = (descriptor.inputs ?? []).filter(
+                    (declared) => declared.source === "resource_uri",
+                  );
+                  if (resourceUriInputs.length === 0) continue;
+                  if (
+                    descriptor.resourceUriInput === undefined ||
+                    resourceUriInputs.length !== 1 ||
+                    resourceUriInputs[0]?.name !==
+                      descriptor.resourceUriInput ||
+                    resourceUriInputs[0]?.pointer !== undefined ||
+                    resourceUriInputs[0]?.value !== undefined
+                  ) {
+                    return "required Interface has an invalid resource_uri declaration";
+                  }
+                  if (!resolveFormInterfaceResourceUri) {
+                    return "required Interface materialization needs a host resource URI resolver";
+                  }
+                  const resourceUri = await resolveFormInterfaceResourceUri({
+                    workspaceId,
+                    resourceId,
+                    form: definition.identity,
+                    descriptorName: descriptor.name,
+                    descriptorVersion: descriptor.version,
+                  });
+                  if (!canonicalInterfaceOAuth2ResourceUri(resourceUri)) {
+                    return "required Interface canonical resource URI is unavailable";
+                  }
+                }
+                return undefined;
               },
             }
           : {}),
@@ -1852,6 +1899,9 @@ export async function createTakosumiService(
       resourceId,
       form: resource.form,
       descriptors: definition.interfaceDescriptors ?? [],
+      ...(resolveFormInterfaceResourceUri
+        ? { resolveResourceUri: resolveFormInterfaceResourceUri }
+        : {}),
     });
   };
   const degradeRequiredFormInterface = async (

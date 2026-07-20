@@ -366,6 +366,61 @@ test("Interface descriptor versions coexist and exact documents fail closed", as
   await expect(
     verifier.verify(invalidPointer.envelope, invalidPointer.packageDigest),
   ).rejects.toThrow("pointer must match pattern");
+
+  const resourceUri = await buildArtifact((definition) => ({
+    ...asRecord(definition),
+    interfaces: [
+      {
+        name: "data.indexed",
+        version: "1",
+        required: true,
+        resourceUriInput: "resource_uri",
+        inputs: [{ name: "resource_uri", source: "resource_uri" }],
+      },
+    ],
+  }));
+  expect(
+    (await verifier.verify(resourceUri.envelope, resourceUri.packageDigest))
+      .definitions[0]?.interfaceDescriptors,
+  ).toEqual([
+    {
+      name: "data.indexed",
+      version: "1",
+      required: true,
+      resourceUriInput: "resource_uri",
+      inputs: [{ name: "resource_uri", source: "resource_uri" }],
+    },
+  ]);
+
+  for (const descriptor of Object.values({
+    missingMarker: {
+      name: "data.indexed",
+      version: "1",
+      inputs: [{ name: "resource_uri", source: "resource_uri" }],
+    },
+    wrongMarker: {
+      name: "data.indexed",
+      version: "1",
+      resourceUriInput: "other",
+      inputs: [{ name: "resource_uri", source: "resource_uri" }],
+    },
+    pointer: {
+      name: "data.indexed",
+      version: "1",
+      resourceUriInput: "resource_uri",
+      inputs: [
+        { name: "resource_uri", source: "resource_uri", pointer: "/bad" },
+      ],
+    },
+  })) {
+    const invalid = await buildArtifact((definition) => ({
+      ...asRecord(definition),
+      interfaces: [descriptor],
+    }));
+    await expect(
+      verifier.verify(invalid.envelope, invalid.packageDigest),
+    ).rejects.toThrow();
+  }
 });
 
 test("portable schema admission rejects dynamic references and preserves literal pattern data", async () => {

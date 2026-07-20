@@ -69,6 +69,10 @@
           },
           "description": { "type": "string", "maxLength": 1024 },
           "required": { "type": "boolean" },
+          "resourceUriInput": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,63}$"
+          },
           "document": { "type": "object" },
           "documentSchema": { "$ref": "#/$defs/jsonSchema" },
           "inputs": {
@@ -88,7 +92,7 @@
                   "type": "string",
                   "maxLength": 128,
                   "anyOf": [
-                    { "enum": ["literal", "output"] },
+                    { "enum": ["literal", "output", "resource_uri"] },
                     { "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$" }
                   ]
                 },

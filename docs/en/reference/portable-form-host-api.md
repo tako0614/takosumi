@@ -73,6 +73,14 @@ descriptor document and resolved public values. It never exposes the host
 Interface id, `InterfaceBinding`, bearer/token delivery, private declarations,
 or raw Resource Outputs. Declaration and authorization remain separate.
 
+Descriptor inputs use the portable `literal`, `output`, and `resource_uri`
+sources. `resource_uri` carries no pointer or value; exactly one such input is
+named by `resourceUriInput`, and host code supplies its canonical,
+credential-free HTTPS value. The resolved URI is public audience identity, not
+authorization. An exact Takosumi `InterfaceBinding` and the host's existing
+owner/resource-claim proof are still required. If the host cannot resolve a
+valid URI, a required descriptor fails closed.
+
 A required descriptor is part of Resource admission. Takosumi rejects the
 initial mutation before adapter/backend execution when its input source or the
 explicit Resource-to-Workspace ownership bridge is unavailable. Backend-

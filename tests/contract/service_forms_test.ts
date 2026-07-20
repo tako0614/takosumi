@@ -4,7 +4,9 @@ import {
   installedFormReferenceKey,
   isFormRef,
   isInstalledFormReference,
+  isPortableInterfaceInputSource,
   isSha256Digest,
+  PORTABLE_INTERFACE_INPUT_SOURCES,
   type FormRef,
 } from "../../contract/service-forms.ts";
 
@@ -52,4 +54,14 @@ test("InstalledFormReference rejects partial, extra, and malformed identities", 
       packageDigest: "sha256:latest",
     }),
   ).toThrow("invalid exact installed Form reference");
+});
+
+test("portable Interface input sources include the host-owned resource URI marker", () => {
+  expect(PORTABLE_INTERFACE_INPUT_SOURCES).toEqual([
+    "literal",
+    "output",
+    "resource_uri",
+  ]);
+  expect(isPortableInterfaceInputSource("resource_uri")).toBe(true);
+  expect(isPortableInterfaceInputSource("host.resource_uri")).toBe(false);
 });

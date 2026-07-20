@@ -103,6 +103,11 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_RESOURCE_INTERFACE_WORKSPACE_RESOLVER?: import("../../core/domains/interfaces/mod.ts").ResourceInterfaceWorkspaceResolver;
   /**
+   * Host-code resolver for a portable Form descriptor's canonical
+   * `resource_uri` input. It is never accepted as a serialized Wrangler var.
+   */
+  readonly TAKOSUMI_FORM_INTERFACE_RESOURCE_URI_RESOLVER?: import("../../core/domains/interfaces/mod.ts").FormInterfaceResourceUriResolver;
+  /**
    * Additional host-code proof for Resource-owned OAuth2 Interface audiences.
    * OSS contributes no external Resource audience. This must be a runtime
    * function supplied by the composing host, never a Wrangler text variable.

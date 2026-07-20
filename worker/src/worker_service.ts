@@ -136,6 +136,8 @@ export async function createWorkerServiceApp(
      * this is never populated from a Wrangler text variable.
      */
     readonly resolveResourceInterfaceWorkspace?: CreateTakosumiServiceOptions["resolveResourceInterfaceWorkspace"];
+    /** Host-owned canonical URI projection for Form descriptor inputs. */
+    readonly resolveFormInterfaceResourceUri?: CreateTakosumiServiceOptions["resolveFormInterfaceResourceUri"];
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
@@ -230,6 +232,9 @@ export async function createWorkerServiceApp(
   const resolveResourceInterfaceWorkspace =
     options.resolveResourceInterfaceWorkspace ??
     resourceInterfaceWorkspaceResolverFromEnv(env);
+  const resolveFormInterfaceResourceUri =
+    options.resolveFormInterfaceResourceUri ??
+    formInterfaceResourceUriResolverFromEnv(env);
   const interfaceCredentialIssuer = env.TAKOSUMI_ACCOUNTS_DB
     ? interfaceCredentialIssuerFromAccountsStore(
         new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB),
@@ -296,6 +301,9 @@ export async function createWorkerServiceApp(
       : {}),
     ...(resolveResourceInterfaceWorkspace
       ? { resolveResourceInterfaceWorkspace }
+      : {}),
+    ...(resolveFormInterfaceResourceUri
+      ? { resolveFormInterfaceResourceUri }
       : {}),
     ...(interfaceCredentialIssuer ? { interfaceCredentialIssuer } : {}),
     interfaceOAuth2ResourceAuthorizer,
@@ -451,6 +459,24 @@ export function resourceInterfaceWorkspaceResolverFromEnv(
   if (typeof resolver !== "function") {
     throw new TypeError(
       "TAKOSUMI_RESOURCE_INTERFACE_WORKSPACE_RESOLVER must be a host-code resolver function",
+    );
+  }
+  return resolver;
+}
+
+/**
+ * Reads the host-installed canonical resource URI projection. Like the
+ * Workspace bridge, this is a code-only seam and never a serialized URL
+ * template or portable Form authority.
+ */
+export function formInterfaceResourceUriResolverFromEnv(
+  env: CloudflareWorkerEnv,
+): CreateTakosumiServiceOptions["resolveFormInterfaceResourceUri"] {
+  const resolver = env.TAKOSUMI_FORM_INTERFACE_RESOURCE_URI_RESOLVER;
+  if (resolver === undefined) return undefined;
+  if (typeof resolver !== "function") {
+    throw new TypeError(
+      "TAKOSUMI_FORM_INTERFACE_RESOURCE_URI_RESOLVER must be a host-code resolver function",
     );
   }
   return resolver;
