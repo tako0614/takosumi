@@ -287,14 +287,15 @@ async function resolveOidcAuthorizationSubject(input: {
       errorDescription: "OIDC client Capsule was not found",
     };
   }
-  const member = (
-    await input.operations.members.listMembers(capsule.workspaceId)
-  ).find(
-    (candidate) =>
-      candidate.accountId === input.sessionSubject &&
-      candidate.status === "active",
-  );
-  if (!member) {
+  const member = input.operations.members.getMember
+    ? await input.operations.members.getMember(
+        capsule.workspaceId,
+        input.sessionSubject,
+      )
+    : (await input.operations.members.listMembers(capsule.workspaceId)).find(
+        (candidate) => candidate.accountId === input.sessionSubject,
+      );
+  if (!member || member.status !== "active") {
     return {
       ok: false,
       status: 403,

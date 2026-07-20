@@ -1188,6 +1188,26 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return config;
   }
 
+  async getInstallConfigsByIds(
+    ids: readonly string[],
+  ): Promise<readonly InstallConfig[]> {
+    if (ids.length === 0) return [];
+    const rows: InstallConfig[] = [];
+    for (const idChunk of d1InQueryChunks([...new Set(ids)])) {
+      rows.push(
+        ...(await this.#drizzleManyJson<InstallConfig>(
+          schema.installConfigs,
+          schema.installConfigs.recordJson,
+          { where: inArray(schema.installConfigs.id, [...idChunk]) },
+        )),
+      );
+    }
+    const byId = new Map(rows.map((row) => [row.id, row] as const));
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is InstallConfig => row !== undefined);
+  }
+
   async listInstallConfigs(
     workspaceId?: string,
   ): Promise<readonly InstallConfig[]> {
@@ -1206,6 +1226,64 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       },
     );
     return configs;
+  }
+
+  async listSharedInstallConfigs(): Promise<readonly InstallConfig[]> {
+    return await this.#drizzleManyJson<InstallConfig>(
+      schema.installConfigs,
+      schema.installConfigs.recordJson,
+      {
+        where: isNull(schema.installConfigs.workspaceId),
+        orderBy: [
+          asc(schema.installConfigs.createdAt),
+          asc(schema.installConfigs.id),
+        ],
+      },
+    );
+  }
+
+  async listInstallConfigsPage(
+    workspaceId: string,
+    params: PageParams,
+  ): Promise<Page<InstallConfig>> {
+    return await this.#listExactInstallConfigScopePage(
+      eq(schema.installConfigs.workspaceId, workspaceId),
+      params,
+    );
+  }
+
+  async listSharedInstallConfigsPage(
+    params: PageParams,
+  ): Promise<Page<InstallConfig>> {
+    return await this.#listExactInstallConfigScopePage(
+      isNull(schema.installConfigs.workspaceId),
+      params,
+    );
+  }
+
+  async #listExactInstallConfigScopePage(
+    baseWhere: SQL,
+    params: PageParams,
+  ): Promise<Page<InstallConfig>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#drizzleManyJson<InstallConfig>(
+      schema.installConfigs,
+      schema.installConfigs.recordJson,
+      {
+        where: d1KeysetWhere(
+          baseWhere,
+          schema.installConfigs.createdAt,
+          schema.installConfigs.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          asc(schema.installConfigs.createdAt),
+          asc(schema.installConfigs.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
   }
 
   // -- Capsule -----------------------------------------------------------
@@ -3532,6 +3610,8 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create index if not exists install_configs_space_idx
       on install_configs (space_id)`,
+    `create index if not exists install_configs_space_created_id_idx
+      on install_configs (space_id, created_at, id)`,
     `create table if not exists capsules (
       id text primary key,
       space_id text not null,
@@ -5846,6 +5926,31 @@ ${D1_OFFERING_CATALOG_STATEMENTS.join("\n---\n")}
     },
     async apply(db) {
       await runD1AtomicSql(db, D1_OFFERING_CATALOG_STATEMENTS);
+    },
+  },
+  {
+    version: 51,
+    name: "d1_install_config_scope_keyset_index",
+    checksumSource: `
+shared and one-Workspace InstallConfig pages are exact-scope keyset reads
+space_id plus created_at plus id satisfies filtering ordering and limit without a scope-wide sort
+the legacy global InstallConfig enumeration remains unchanged for backup compatibility
+`,
+    async atomicStatements(db) {
+      if (!(await d1TableExists(db, "install_configs"))) return [];
+      return [
+        `create index if not exists install_configs_space_created_id_idx
+         on install_configs (space_id, created_at, id)`,
+      ];
+    },
+    async apply(db) {
+      if (!(await d1TableExists(db, "install_configs"))) return;
+      await db
+        .prepare(
+          `create index if not exists install_configs_space_created_id_idx
+           on install_configs (space_id, created_at, id)`,
+        )
+        .run();
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];

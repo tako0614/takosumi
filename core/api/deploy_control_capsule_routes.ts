@@ -48,7 +48,6 @@ import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
 import { validateCapsuleInterfaceBlueprints } from "../domains/interfaces/service.ts";
 import { normalizeVariablePathRecord } from "../domains/deploy-control/validation.ts";
 import { defaultCapsuleOutputAllowlist } from "../domains/capsules/default_install_config.ts";
-import { pageSorted } from "takosumi-contract/pagination";
 import {
   TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE,
   TAKOSUMI_API_CAPSULE_OUTPUTS_ROUTE,
@@ -213,11 +212,6 @@ function parseInstallConfigListView(
       },
     ),
   };
-}
-
-function isStoreInstallConfig(config: InstallConfig): boolean {
-  if (config.workspaceId !== undefined) return false;
-  return config.store?.source !== undefined;
 }
 
 function parseIncludeDestroyed(
@@ -819,31 +813,10 @@ export function mountDeployControlCapsuleRoutes(
         if (page.kind === "invalid") return page.response;
         const view = parseInstallConfigListView(c.req.query("view"));
         if (view.kind === "invalid") return view.response;
-        // Without a workspaceId only shared configs are returned; with one,
-        // shared configs plus that Workspace's own configs. The
-        // shared + scoped union is a small set, so it is materialized, merge-
-        // sorted by (createdAt, id), and bounded with the in-memory keyset pager
-        // (a keyset across a UNION query would be unsound).
-        const sharedConfigs = (await capsules!.listInstallConfigs()).filter(
-          (config) =>
-            config.workspaceId === undefined &&
-            isSelectableInstallConfig(config),
-        );
-        const scoped =
-          workspaceId === undefined || view.view === "store"
-            ? []
-            : (await capsules!.listInstallConfigs(workspaceId)).filter(
-                isSelectableInstallConfig,
-              );
-        const merged = (
-          view.view === "store"
-            ? sharedConfigs.filter(isStoreInstallConfig)
-            : [...sharedConfigs, ...scoped]
-        ).sort(
-          (a, b) =>
-            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        );
-        const { items, nextCursor } = pageSorted(merged, page.value);
+        const { items, nextCursor } =
+          await capsules!.listInstallConfigUnionPage(workspaceId, page.value, {
+            view: view.view,
+          });
         return c.json(
           {
             installConfigs: items.map(publicInstallConfig),

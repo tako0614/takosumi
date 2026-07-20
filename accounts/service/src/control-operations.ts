@@ -195,6 +195,11 @@ export interface ControlPlaneOperations {
   //   - `removeMember` is a SOFT remove (`status: "suspended"`), since the
   //     membership store exposes no delete.
   readonly members: {
+    /** Exact pair lookup used by ordinary authorization reads. */
+    getMember?(
+      workspaceId: string,
+      accountId: string,
+    ): Promise<PublicWorkspaceMember | undefined>;
     /** Lists a Workspace's memberships (membership domain `listWorkspaceMemberships`). */
     listMembers(workspaceId: string): Promise<readonly PublicWorkspaceMember[]>;
     /**
@@ -230,7 +235,33 @@ export interface ControlPlaneOperations {
     }): Promise<Capsule>;
     putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
     getInstallConfig(id: string): Promise<InstallConfig>;
-    listInstallConfigs(workspaceId?: string): Promise<readonly InstallConfig[]>;
+    getInstallConfigsByIds?(
+      ids: readonly string[],
+    ): Promise<readonly InstallConfig[]>;
+    listInstallConfigs(
+      workspaceId?: string,
+      options?: { readonly includeInternal?: boolean },
+    ): Promise<readonly InstallConfig[]>;
+    listSharedInstallConfigs(options?: {
+      readonly includeInternal?: boolean;
+    }): Promise<readonly InstallConfig[]>;
+    listInstallConfigsPage?(
+      workspaceId: string,
+      params: PageParams,
+      options?: { readonly includeInternal?: boolean },
+    ): Promise<Page<InstallConfig>>;
+    listSharedInstallConfigsPage?(
+      params: PageParams,
+      options?: { readonly includeInternal?: boolean },
+    ): Promise<Page<InstallConfig>>;
+    listInstallConfigUnionPage?(
+      workspaceId: string | undefined,
+      params: PageParams,
+      options?: {
+        readonly view?: "all" | "store";
+        readonly includeInternal?: boolean;
+      },
+    ): Promise<Page<InstallConfig>>;
     patchCapsuleStatus(id: string, status: Capsule["status"]): Promise<Capsule>;
     setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule>;
     abandonUnappliedCapsule?(id: string, reason: string): Promise<Capsule>;

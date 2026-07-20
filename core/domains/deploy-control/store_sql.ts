@@ -1209,6 +1209,25 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return config;
   }
 
+  async getInstallConfigsByIds(
+    ids: readonly string[],
+  ): Promise<readonly InstallConfig[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.#db
+      .select({ json: pgSchema.installConfigs.configJson })
+      .from(pgSchema.installConfigs)
+      .where(inArray(pgSchema.installConfigs.id, [...new Set(ids)]));
+    const byId = new Map(
+      rows.map((row) => {
+        const value = parseRow(row) as InstallConfig;
+        return [value.id, value] as const;
+      }),
+    );
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is InstallConfig => row !== undefined);
+  }
+
   async listInstallConfigs(
     workspaceId?: string,
   ): Promise<readonly InstallConfig[]> {
@@ -1227,6 +1246,64 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       },
     );
     return configs;
+  }
+
+  async listSharedInstallConfigs(): Promise<readonly InstallConfig[]> {
+    return await this.#pgManyJson<InstallConfig>(
+      pgSchema.installConfigs,
+      pgSchema.installConfigs.configJson,
+      {
+        where: isNull(pgSchema.installConfigs.workspaceId),
+        orderBy: [
+          asc(pgSchema.installConfigs.createdAt),
+          asc(pgSchema.installConfigs.id),
+        ],
+      },
+    );
+  }
+
+  async listInstallConfigsPage(
+    workspaceId: string,
+    params: PageParams,
+  ): Promise<Page<InstallConfig>> {
+    return await this.#listExactInstallConfigScopePage(
+      eq(pgSchema.installConfigs.workspaceId, workspaceId),
+      params,
+    );
+  }
+
+  async listSharedInstallConfigsPage(
+    params: PageParams,
+  ): Promise<Page<InstallConfig>> {
+    return await this.#listExactInstallConfigScopePage(
+      isNull(pgSchema.installConfigs.workspaceId),
+      params,
+    );
+  }
+
+  async #listExactInstallConfigScopePage(
+    baseWhere: SQL,
+    params: PageParams,
+  ): Promise<Page<InstallConfig>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#pgManyJson<InstallConfig>(
+      pgSchema.installConfigs,
+      pgSchema.installConfigs.configJson,
+      {
+        where: pgKeysetWhere(
+          baseWhere,
+          pgSchema.installConfigs.createdAt,
+          pgSchema.installConfigs.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          asc(pgSchema.installConfigs.createdAt),
+          asc(pgSchema.installConfigs.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
   }
 
   // --- Capsules (§5 / §27, active UNIQUE(project_id, name, environment)) ---

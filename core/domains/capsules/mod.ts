@@ -20,7 +20,13 @@ import type {
   InstallConfigLifecycleAction,
   InstallConfigPatchV1,
 } from "takosumi-contract/install-configs";
-import type { Page } from "takosumi-contract/pagination";
+import {
+  clampPageLimit,
+  DEFAULT_PAGE_LIMIT,
+  pageFromProbe,
+  type Page,
+  type PageParams,
+} from "takosumi-contract/pagination";
 import {
   OpenTofuControllerError,
   requireNonEmptyString,
@@ -399,12 +405,96 @@ export class CapsulesService {
     return config;
   }
 
+  async getInstallConfigsByIds(
+    ids: readonly string[],
+  ): Promise<readonly InstallConfig[]> {
+    for (const id of ids) requireNonEmptyString(id, "id");
+    return await this.#store.getInstallConfigsByIds(ids);
+  }
+
   async listInstallConfigs(
     workspaceId?: string,
+    options: { readonly includeInternal?: boolean } = {},
   ): Promise<readonly InstallConfig[]> {
-    return (await this.#store.listInstallConfigs(workspaceId)).filter(
-      isSelectableInstallConfig,
+    const configs = await this.#store.listInstallConfigs(workspaceId);
+    return options.includeInternal
+      ? configs
+      : configs.filter(isSelectableInstallConfig);
+  }
+
+  async listSharedInstallConfigs(
+    options: { readonly includeInternal?: boolean } = {},
+  ): Promise<readonly InstallConfig[]> {
+    const configs = await this.#store.listSharedInstallConfigs();
+    return options.includeInternal
+      ? configs
+      : configs.filter(isSelectableInstallConfig);
+  }
+
+  async listInstallConfigsPage(
+    workspaceId: string,
+    params: PageParams,
+    options: { readonly includeInternal?: boolean } = {},
+  ): Promise<Page<InstallConfig>> {
+    requireNonEmptyString(workspaceId, "workspaceId");
+    return filterInstallConfigPage(
+      await this.#store.listInstallConfigsPage(workspaceId, params),
+      options.includeInternal === true,
     );
+  }
+
+  async listSharedInstallConfigsPage(
+    params: PageParams,
+    options: { readonly includeInternal?: boolean } = {},
+  ): Promise<Page<InstallConfig>> {
+    return filterInstallConfigPage(
+      await this.#store.listSharedInstallConfigsPage(params),
+      options.includeInternal === true,
+    );
+  }
+
+  /**
+   * Bounded keyset page over the shared + one-Workspace union. Each exact
+   * scope is paged in the durable store; the service only merges at most
+   * `limit + 1` visible candidates from either side.
+   */
+  async listInstallConfigUnionPage(
+    workspaceId: string | undefined,
+    params: PageParams,
+    options: {
+      readonly view?: "all" | "store";
+      readonly includeInternal?: boolean;
+    } = {},
+  ): Promise<Page<InstallConfig>> {
+    if (workspaceId !== undefined) {
+      requireNonEmptyString(workspaceId, "workspaceId");
+    }
+    const limit = clampPageLimit(params.limit);
+    const visible = (config: InstallConfig): boolean => {
+      if (!options.includeInternal && !isSelectableInstallConfig(config)) {
+        return false;
+      }
+      return options.view !== "store" || isStoreInstallConfig(config);
+    };
+    const loads: Array<(page: PageParams) => Promise<Page<InstallConfig>>> = [
+      (page) => this.#store.listSharedInstallConfigsPage(page),
+    ];
+    if (workspaceId !== undefined && options.view !== "store") {
+      loads.push((page) =>
+        this.#store.listInstallConfigsPage(workspaceId, page),
+      );
+    }
+    const candidates = await Promise.all(
+      loads.map((load) =>
+        collectVisibleInstallConfigCandidates(
+          load,
+          params.cursor,
+          limit + 1,
+          visible,
+        ),
+      ),
+    );
+    return pageFromProbe(candidates.flat().sort(compareInstallConfigs), limit);
   }
 
   // --- Capsule provider env binding record ----------------------------------
@@ -454,6 +544,44 @@ export class CapsulesService {
     }
     return capsule;
   }
+}
+
+function filterInstallConfigPage(
+  page: Page<InstallConfig>,
+  includeInternal: boolean,
+): Page<InstallConfig> {
+  if (includeInternal) return page;
+  return {
+    items: page.items.filter(isSelectableInstallConfig),
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+  };
+}
+
+async function collectVisibleInstallConfigCandidates(
+  load: (params: PageParams) => Promise<Page<InstallConfig>>,
+  initialCursor: string | undefined,
+  target: number,
+  visible: (config: InstallConfig) => boolean,
+): Promise<readonly InstallConfig[]> {
+  const rows: InstallConfig[] = [];
+  let cursor = initialCursor;
+  do {
+    const page = await load({
+      limit: Math.min(DEFAULT_PAGE_LIMIT, Math.max(1, target - rows.length)),
+      ...(cursor ? { cursor } : {}),
+    });
+    rows.push(...page.items.filter(visible));
+    cursor = page.nextCursor;
+  } while (rows.length < target && cursor !== undefined);
+  return rows;
+}
+
+function compareInstallConfigs(a: InstallConfig, b: InstallConfig): number {
+  return a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+}
+
+function isStoreInstallConfig(config: InstallConfig): boolean {
+  return config.workspaceId === undefined && config.store?.source !== undefined;
 }
 
 function patchPolicy(

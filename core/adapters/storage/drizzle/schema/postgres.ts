@@ -167,6 +167,11 @@ export const installConfigs = pgTable(
   },
   (table) => [
     index("takosumi_install_configs_space_idx").on(table.workspaceId),
+    index("takosumi_install_configs_space_created_id_idx").on(
+      table.workspaceId,
+      table.createdAt,
+      table.id,
+    ),
   ],
 );
 

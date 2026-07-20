@@ -295,12 +295,11 @@ export async function buildComposedApp(
       try {
         const workspace = await operations.workspaces.getWorkspace(workspaceId);
         if (workspace.ownerUserId === actor.actorAccountId) return true;
-        const members = await operations.members.listMembers(workspaceId);
-        return members.some(
-          (member) =>
-            member.accountId === actor.actorAccountId &&
-            member.status === "active",
+        const member = await operations.members.getMember(
+          workspaceId,
+          actor.actorAccountId,
         );
+        return member?.status === "active";
       } catch {
         return false;
       }
