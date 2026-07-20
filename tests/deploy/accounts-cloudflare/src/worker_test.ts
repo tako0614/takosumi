@@ -295,3 +295,67 @@ test("Cloudflare identity handler lazily revalidates Interface OAuth against Cor
     takosumi: { interface_id: "if_cloudflare" },
   });
 });
+
+test("predeployed accounts schema mode performs no request-time DDL", async () => {
+  const db = new SqliteFakeD1();
+  const store = new D1AccountsStore(db);
+  await store.initialize();
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
+    )
+    .run();
+  await db
+    .prepare(
+      "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+    )
+    .bind(2, "current", Date.now())
+    .run();
+
+  let requestTimeExecCalls = 0;
+  const predeployedDb: CloudflareWorkerEnv["TAKOSUMI_ACCOUNTS_DB"] = {
+    prepare: (query) => db.prepare(query),
+    exec: () => {
+      requestTimeExecCalls += 1;
+      return Promise.reject(new Error("request-time schema DDL is forbidden"));
+    },
+  };
+  const response = await createCloudflareWorker().fetch(
+    new Request("http://localhost:8787/v1/account/session/me"),
+    env({
+      TAKOSUMI_ACCOUNTS_DB: predeployedDb,
+      TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+      TAKOSUMI_ACCOUNTS_ISSUER: "http://localhost:8787",
+      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
+        "predeployed-accounts-test-session-salt",
+    }),
+  );
+
+  expect(response.status).toBe(200);
+  expect(requestTimeExecCalls).toBe(0);
+});
+
+test("predeployed accounts schema mode fails closed when schema is absent", async () => {
+  const db = new SqliteFakeD1();
+  let requestTimeExecCalls = 0;
+  const predeployedDb: CloudflareWorkerEnv["TAKOSUMI_ACCOUNTS_DB"] = {
+    prepare: (query) => db.prepare(query),
+    exec: () => {
+      requestTimeExecCalls += 1;
+      return Promise.reject(new Error("request-time schema DDL is forbidden"));
+    },
+  };
+  const response = await createCloudflareWorker().fetch(
+    new Request("https://app.example.test/v1/account/session/me"),
+    env({
+      TAKOSUMI_ACCOUNTS_DB: predeployedDb,
+      TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+      TAKOSUMI_ACCOUNTS_ISSUER: "https://app.example.test",
+      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
+        "predeployed-accounts-absent-test-session-salt",
+    }),
+  );
+
+  expect(response.status).toBe(500);
+  expect(requestTimeExecCalls).toBe(0);
+});

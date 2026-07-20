@@ -55,10 +55,14 @@ Outputs are referenced only through explicit Interface input mappings.
 
 The handler keeps `/healthz` as an edge-local route. Every account-plane path is handled directly by
 `createEphemeralAccountsHandler` (or `createAccountsHandler` when a stable ES256
-JWK is configured) with a `D1AccountsStore`. The D1 schema is initialized lazily
-and idempotently before the first account-plane handler is built. Control-plane
-state, Outputs, backups, and source transport remain owned by the canonical
-Takosumi control plane rather than Accounts storage.
+JWK is configured) with a `D1AccountsStore`. The default `bootstrap` mode
+initializes the D1 schema lazily and idempotently before the first account-plane
+handler is built. A hosted operator that runs the reviewed migration lane before
+promotion can set `TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE=predeployed`; that mode keeps
+all schema DDL off the request/cold-start path and performs only the strict
+read-only schema-version check. A missing table or version fails closed.
+Control-plane state, Outputs, backups, and source transport remain owned by the
+canonical Takosumi control plane rather than Accounts storage.
 
 ## D1 schema migration
 
@@ -94,6 +98,8 @@ the table the `accounts migrate-d1` runner writes
   lockstep.
 
 The schema version is verified once per isolate (cached alongside the handler).
-Expect a single
+In `predeployed` mode, expect a single
 `SELECT version FROM takosumi_accounts_schema_migrations ORDER BY version DESC LIMIT 1`
-query per cold start.
+query per cold start and no request-time DDL. Do not enable this mode until the
+operator migration lane has created the document/index tables and recorded the
+exact expected migration version.
