@@ -844,3 +844,30 @@ export const serviceFormActivations = pgTable(
     ),
   ],
 );
+
+export const offeringCatalogs = pgTable(
+  names.offeringCatalogs,
+  {
+    catalogKey: text("catalog_key").primaryKey(),
+    catalogId: text("catalog_id").notNull(),
+    catalogVersion: text("catalog_version").notNull(),
+    effectiveAt: text("effective_at").notNull(),
+    recordJson: json("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    createdBy: text("created_by").notNull(),
+  },
+  (table) => [
+    uniqueIndex("takosumi_offering_catalogs_id_version_unique").on(
+      table.catalogId,
+      table.catalogVersion,
+    ),
+    index("takosumi_offering_catalogs_created_key_idx").on(
+      table.createdAt,
+      table.catalogKey,
+    ),
+    index("takosumi_offering_catalogs_effective_key_idx").on(
+      table.effectiveAt,
+      table.catalogKey,
+    ),
+  ],
+);

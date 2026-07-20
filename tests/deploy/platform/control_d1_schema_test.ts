@@ -365,69 +365,17 @@ async function legacyApplicationSchemaSnapshot(database: D1Database) {
   return { objects: objects.results ?? [], ledger: ledger.results ?? [] };
 }
 
-async function seedAppendedV48InterfaceLayout(
+async function seedImmediatePredecessorV49(
   database: D1Database,
 ): Promise<void> {
-  await database.prepare(`drop table interfaces`).run();
-  await database
-    .prepare(
-      `create table interfaces (
-        id text primary key,
-        workspace_id text not null,
-        owner_kind text not null,
-        owner_id text not null,
-        name text not null,
-        interface_type text not null,
-        phase text not null,
-        generation integer not null,
-        resolved_revision integer not null,
-        record_json text not null,
-        created_at text not null,
-        updated_at text not null,
-        oauth_resource_uri text,
-        form_ref_key text,
-        form_schema_digest text,
-        descriptor_name text,
-        descriptor_version text
-      )`,
-    )
-    .run();
-  await database
-    .prepare(
-      `create unique index interfaces_active_name_unique
-       on interfaces (workspace_id, owner_kind, owner_id, name)
-       where phase <> 'Retired'`,
-    )
-    .run();
-  await database
-    .prepare(
-      `create index interfaces_workspace_type_phase_idx
-       on interfaces (workspace_id, interface_type, phase)`,
-    )
-    .run();
-  await database
-    .prepare(
-      `create unique index interfaces_oauth_resource_claim_unique
-       on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
-       where oauth_resource_uri is not null`,
-    )
-    .run();
-  await database
-    .prepare(
-      `create index interfaces_form_descriptor_idx
-       on interfaces (
-         workspace_id, form_ref_key, form_schema_digest,
-         descriptor_name, descriptor_version
-       ) where form_ref_key is not null`,
-    )
-    .run();
+  await database.prepare(`drop table offering_catalogs`).run();
   await database
     .prepare(
       `insert into interfaces (
          id, workspace_id, owner_kind, owner_id, name, interface_type, phase,
-         generation, resolved_revision, record_json, created_at, updated_at,
-         oauth_resource_uri, form_ref_key, form_schema_digest,
-         descriptor_name, descriptor_version
+         generation, resolved_revision, oauth_resource_uri, form_ref_key,
+         form_schema_digest, descriptor_name, descriptor_version, record_json,
+         created_at, updated_at
        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
@@ -440,14 +388,14 @@ async function seedAppendedV48InterfaceLayout(
       "Ready",
       3,
       2,
-      JSON.stringify({ id: "iface_v48", generation: 3 }),
-      NOW,
-      NOW,
       "https://resource.example.test",
       "forms.takoform.com/v1alpha1|Document|1.0.0",
       `sha256:${"d".repeat(64)}`,
       "display",
       "1",
+      JSON.stringify({ id: "iface_v48", generation: 3 }),
+      NOW,
+      NOW,
     )
     .run();
   await database
@@ -471,11 +419,11 @@ async function seedAppendedV48InterfaceLayout(
     )
     .run();
   await database
-    .prepare(`delete from schema_migrations where version = 49`)
+    .prepare(`delete from schema_migrations where version = 50`)
     .run();
 }
 
-async function readV48InterfaceRows(database: D1Database) {
+async function readPredecessorInterfaceRows(database: D1Database) {
   return {
     interface: await database
       .prepare(
@@ -518,8 +466,8 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(49);
-  expect(plan.migrations).toHaveLength(46);
+  expect(plan.migrations.at(-1)?.version).toBe(50);
+  expect(plan.migrations).toHaveLength(47);
   expect(plan.tables.some((table) => table.name === "target_pools")).toBe(true);
   expect(
     plan.tables.some((table) => table.name === "takosumi_target_pools"),
@@ -592,7 +540,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(49);
+    expect(verification.latestMigrationVersion).toBe(50);
   } finally {
     database.close();
   }
@@ -648,16 +596,16 @@ test("control D1 apply converges a fresh database and records every version", as
   }
 });
 
-test("control D1 v49 atomically preserves populated appended-order Interfaces through predecessor fence recovery", async () => {
+test("control D1 v50 preserves predecessor Interface rows through fenced Offering catalog creation", async () => {
   const plan = await buildControlD1SchemaPlan();
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedAppendedV48InterfaceLayout(database);
-    const before = await readV48InterfaceRows(database);
+    await seedImmediatePredecessorV49(database);
+    const before = await readPredecessorInterfaceRows(database);
     const beforeVerification = await verifyControlD1Schema(database, plan);
     expect(beforeVerification.issues).toContain(
-      "schema_table_mismatch:interfaces",
+      "schema_table_missing:offering_catalogs",
     );
     expect(beforeVerification.issues).toContain("migration_ledger_mismatch");
 
@@ -673,7 +621,7 @@ test("control D1 v49 atomically preserves populated appended-order Interfaces th
       },
       NOW,
     );
-    // Live v48 predates durable predecessor lineage. Recovery must add these
+    // The predecessor fixture predates durable predecessor lineage. Recovery must add these
     // nullable columns before the first state read while the old fence and all
     // guards remain active.
     await downgradeMaintenanceTableToV48(database);
@@ -749,12 +697,12 @@ test("control D1 v49 atomically preserves populated appended-order Interfaces th
       });
 
     const retained = await applyWithPredecessor(true);
-    expect(retained.appliedMigrationVersions).toEqual([49]);
+    expect(retained.appliedMigrationVersions).toEqual([50]);
     expect(retained.verification.status).toBe("ready");
     expect(retained.maintenanceStatus).toBe("retained");
     expect(retained.predecessorMaintenanceFence).toEqual(predecessorFence);
     expect(firstUpgradeBatchBlockedWrite).toBe(true);
-    expect(await readV48InterfaceRows(database)).toEqual(before);
+    expect(await readPredecessorInterfaceRows(database)).toEqual(before);
     const interfaceGuards = await database
       .prepare(
         `select name from sqlite_master
@@ -775,10 +723,10 @@ test("control D1 v49 atomically preserves populated appended-order Interfaces th
     expect(resumed.maintenanceStatus).toBe("released");
     expect(resumed.predecessorMaintenanceFence).toEqual(predecessorFence);
     expect(blockedDuringTransition).toBe(2);
-    expect(await readV48InterfaceRows(database)).toEqual(before);
+    expect(await readPredecessorInterfaceRows(database)).toEqual(before);
     expect(await verifyControlD1Schema(database, plan)).toMatchObject({
       status: "ready",
-      latestMigrationVersion: 49,
+      latestMigrationVersion: 50,
       issues: [],
     });
     expect(await readControlD1MaintenanceState(database)).toEqual({
@@ -803,8 +751,8 @@ for (const responseLossBatch of [1, 2, 3] as const) {
     const database = new SqliteControlD1Database();
     try {
       await ensureD1OpenTofuLedgerSchema(database);
-      await seedAppendedV48InterfaceLayout(database);
-      const before = await readV48InterfaceRows(database);
+      await seedImmediatePredecessorV49(database);
+      const before = await readPredecessorInterfaceRows(database);
       await acquireControlD1MaintenanceFence(
         database,
         {
@@ -856,7 +804,7 @@ for (const responseLossBatch of [1, 2, 3] as const) {
       expect(await readControlD1MaintenanceState(database)).toMatchObject({
         status: "active",
       });
-      expect(await readV48InterfaceRows(database)).toEqual(before);
+      expect(await readPredecessorInterfaceRows(database)).toEqual(before);
       await expect(
         database
           .prepare(
@@ -876,14 +824,12 @@ for (const responseLossBatch of [1, 2, 3] as const) {
       const resumed = await apply();
       expect(resumed.verification).toMatchObject({
         status: "ready",
-        latestMigrationVersion: 49,
+        latestMigrationVersion: 50,
         issues: [],
       });
-      expect(resumed.appliedMigrationVersions).toEqual(
-        responseLossBatch === 3 ? [] : [49],
-      );
+      expect(resumed.appliedMigrationVersions).toEqual([50]);
       expect(resumed.maintenanceStatus).toBe("retained");
-      expect(await readV48InterfaceRows(database)).toEqual(before);
+      expect(await readPredecessorInterfaceRows(database)).toEqual(before);
       const state = await readControlD1MaintenanceState(database);
       expect(state).toMatchObject({
         status: "active",
@@ -930,7 +876,7 @@ test("control D1 predecessor fence recovery rejects identity and non-immediate l
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedAppendedV48InterfaceLayout(database);
+    await seedImmediatePredecessorV49(database);
     const predecessorFence = await acquireControlD1MaintenanceFence(
       database,
       {
@@ -1691,7 +1637,7 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 49 },
+      verification: { latestMigrationVersion: 50 },
     });
   } finally {
     database.close();
@@ -1752,7 +1698,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedAppendedV48InterfaceLayout(database);
+    await seedImmediatePredecessorV49(database);
     const predecessorFence = await acquireControlD1MaintenanceFence(
       database,
       {
@@ -1804,7 +1750,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
     expect(code).toBe(0);
     expect(transcript).toMatchObject({
       status: "ready",
-      appliedMigrationVersions: [49],
+      appliedMigrationVersions: [50],
       maintenanceFenceTransition: {
         predecessorSourceCommit: PREDECESSOR_SOURCE_COMMIT,
         predecessorManifestDigest: PREDECESSOR_MANIFEST_DIGEST,
@@ -1835,7 +1781,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedAppendedV48InterfaceLayout(database);
+    await seedImmediatePredecessorV49(database);
     await database
       .prepare(
         `create trigger unexpected_workspace_trigger
@@ -1920,7 +1866,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
       await database
         .prepare(`select max(version) as version from schema_migrations`)
         .first(),
-    ).toEqual({ version: 49 });
+    ).toEqual({ version: 50 });
     await expect(
       database
         .prepare(
@@ -2149,7 +2095,7 @@ test("control D1 REST compound renderer fails closed on bind mismatch", async ()
   expect(fetchCalls).toBe(0);
 });
 
-test("control D1 REST import transport converges the live v24 fixture through canonical v49 triggers", async () => {
+test("control D1 REST import transport converges the live v24 fixture through canonical v50 triggers", async () => {
   const plan = await buildControlD1SchemaPlan();
   const backing = new SqliteControlD1Database();
   const sql = await Bun.file(
@@ -2199,7 +2145,7 @@ test("control D1 REST import transport converges the live v24 fixture through ca
         .map((entry) => entry.version),
     );
     expect(applied.verification.status).toBe("ready");
-    expect(applied.verification.latestMigrationVersion).toBe(49);
+    expect(applied.verification.latestMigrationVersion).toBe(50);
     expect(stats.importIngests).toBeGreaterThan(0);
     expect(stats.queryTriggerRejections).toBe(0);
     expect(await readLiveV24ConvergenceRows(backing)).toEqual(before);

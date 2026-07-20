@@ -71,6 +71,8 @@ export interface CreateTakosumiOpenApiDocumentOptions {
   readonly metricsRoutesMounted?: boolean;
   /** Mounted when the operator FormActivation lifecycle API is configured. */
   readonly formActivationRoutesMounted?: boolean;
+  /** Mounted when immutable generic Offering catalog administration is configured. */
+  readonly offeringCatalogRoutesMounted?: boolean;
   /**
    * Mounted by default on `takosumi-api` as reference process route
    * inventory. Public deploy API docs remain the source of truth for
@@ -352,6 +354,14 @@ function operation(input: {
             "503": errorResponse(),
           }
         : {}),
+      ...(input.tag === "offering-catalogs"
+        ? {
+            "400": errorResponse(),
+            "404": errorResponse(),
+            "409": errorResponse(),
+            "503": errorResponse(),
+          }
+        : {}),
     },
     "x-takos-auth": input.auth,
     ...(input.mountedPath ? { "x-takos-mounted-path": input.mountedPath } : {}),
@@ -498,6 +508,7 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     ...interfaceSchemas(),
     ...resourceShapeSchemas(),
     ...formActivationSchemas(),
+    ...offeringCatalogSchemas(),
     ...runnerSchemas(),
     ...capsuleAndInstallConfigSchemas(),
     ...capsuleSchemas(),
@@ -516,6 +527,223 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     ...resourceFormPinSchemas(),
     ...outputShareSchemas(),
     ...errorSchemas(),
+  };
+}
+
+/** Generic OSS Offering contracts; commercial host fields are intentionally absent. */
+function offeringCatalogSchemas(): Record<string, Record<string, unknown>> {
+  const token = {
+    type: "string",
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+  };
+  const digest = { type: "string", pattern: "^sha256:[a-f0-9]{64}$" };
+  const subject = {
+    type: "object",
+    required: ["type", "ref", "version", "digest"],
+    properties: {
+      type: { type: "string", minLength: 3, maxLength: 320 },
+      ref: { type: "string", minLength: 1, maxLength: 1024 },
+      version: { type: "string", minLength: 1, maxLength: 128 },
+      digest,
+    },
+    additionalProperties: false,
+  };
+  const requirement = {
+    type: "object",
+    required: ["type", "ref", "version"],
+    properties: {
+      type: { type: "string", minLength: 3, maxLength: 320 },
+      ref: { type: "string", minLength: 1, maxLength: 1024 },
+      version: { type: "string", minLength: 1, maxLength: 128 },
+      digest,
+    },
+    additionalProperties: false,
+  };
+  const audience = {
+    type: "object",
+    properties: {
+      public: { type: "boolean" },
+      principalIds: {
+        type: "array",
+        uniqueItems: true,
+        items: token,
+      },
+      roles: { type: "array", uniqueItems: true, items: token },
+    },
+    additionalProperties: false,
+  };
+  const context = {
+    type: "object",
+    required: ["type", "id"],
+    properties: {
+      type: { type: "string", minLength: 1, maxLength: 320 },
+      id: { type: "string", minLength: 1, maxLength: 1024 },
+    },
+    additionalProperties: false,
+  };
+  const audienceQuery = {
+    principalId: { type: "string", minLength: 1, maxLength: 1024 },
+    roles: {
+      type: "array",
+      maxItems: 64,
+      uniqueItems: true,
+      items: { type: "string", minLength: 1 },
+    },
+    workspaceId: { type: "string", minLength: 1, maxLength: 1024 },
+    contexts: { type: "array", maxItems: 64, items: context },
+  };
+  return {
+    OfferingReference: {
+      type: "object",
+      required: [
+        "catalogId",
+        "catalogVersion",
+        "offeringId",
+        "offeringVersion",
+      ],
+      properties: {
+        catalogId: token,
+        catalogVersion: token,
+        offeringId: token,
+        offeringVersion: token,
+      },
+      additionalProperties: false,
+    },
+    Offering: {
+      type: "object",
+      required: [
+        "id",
+        "version",
+        "subject",
+        "requirements",
+        "profile",
+        "region",
+        "maturity",
+        "audience",
+        "status",
+      ],
+      properties: {
+        id: token,
+        version: token,
+        subject,
+        requirements: {
+          type: "array",
+          uniqueItems: true,
+          items: requirement,
+        },
+        profile: token,
+        region: token,
+        maturity: { enum: ["stable", "preview"] },
+        audience,
+        status: { enum: ["active", "inactive"] },
+      },
+      additionalProperties: false,
+    },
+    OfferingCatalog: {
+      type: "object",
+      required: ["id", "version", "effectiveAt", "offerings"],
+      properties: {
+        id: token,
+        version: token,
+        effectiveAt: { type: "string", format: "date-time" },
+        offerings: { type: "array", items: ref("Offering") },
+      },
+      additionalProperties: false,
+    },
+    ListOfferingCatalogsResponse: {
+      type: "object",
+      required: ["catalogs"],
+      properties: {
+        catalogs: { type: "array", items: ref("OfferingCatalog") },
+        nextCursor: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    OfferingAvailabilityRequest: {
+      type: "object",
+      required: ["catalogId", "catalogVersion"],
+      properties: {
+        catalogId: token,
+        catalogVersion: token,
+        ...audienceQuery,
+      },
+      additionalProperties: false,
+    },
+    OfferingAvailability: {
+      type: "object",
+      required: [
+        "reference",
+        "subject",
+        "profile",
+        "region",
+        "maturity",
+        "availableToPrincipal",
+      ],
+      properties: {
+        reference: ref("OfferingReference"),
+        subject,
+        profile: token,
+        region: token,
+        maturity: { enum: ["stable", "preview"] },
+        availableToPrincipal: { type: "boolean" },
+        reason: {
+          enum: [
+            "catalog_not_effective",
+            "offering_inactive",
+            "principal_not_allowed",
+            "resolver_unavailable",
+            "subject_unavailable",
+          ],
+        },
+      },
+      additionalProperties: false,
+    },
+    OfferingAvailabilityResponse: {
+      type: "object",
+      required: ["availability"],
+      properties: {
+        availability: {
+          type: "array",
+          items: ref("OfferingAvailability"),
+        },
+      },
+      additionalProperties: false,
+    },
+    ResolveOfferingSelectionRequest: {
+      type: "object",
+      required: ["reference"],
+      properties: {
+        reference: ref("OfferingReference"),
+        ...audienceQuery,
+      },
+      additionalProperties: false,
+    },
+    OfferingSelection: {
+      type: "object",
+      required: [
+        "reference",
+        "subject",
+        "requirements",
+        "profile",
+        "region",
+        "maturity",
+        "resolverId",
+        "resolutionFingerprint",
+        "resolvedAt",
+      ],
+      properties: {
+        reference: ref("OfferingReference"),
+        subject,
+        requirements: { type: "array", items: requirement },
+        profile: token,
+        region: token,
+        maturity: { enum: ["stable", "preview"] },
+        resolverId: token,
+        resolutionFingerprint: digest,
+        resolvedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
   };
 }
 

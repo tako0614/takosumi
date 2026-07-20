@@ -24,6 +24,7 @@ const ALL_MOUNTED: RouteFamilyMountedFlags = {
   metricsRoutesMounted: true,
   resourceShapeRoutesMounted: true,
   formActivationRoutesMounted: true,
+  offeringCatalogRoutesMounted: true,
   interfaceRoutesMounted: true,
 };
 
@@ -180,6 +181,37 @@ test("FormActivation OpenAPI publishes exact noncommercial operator contracts", 
     openapi.components.schemas.CreateFormActivationRequest.additionalProperties,
     false,
   );
+});
+
+test("Offering OpenAPI is generic, immutable, and commercially neutral", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  assert.ok(openapi.paths["/v1/offering-catalogs"]?.post);
+  assert.ok(openapi.paths["/v1/offering-catalogs"]?.get);
+  assert.ok(openapi.paths["/v1/offering-availability/query"]?.post);
+  assert.ok(openapi.paths["/v1/offering-selections/resolve"]?.post);
+  const offering = openapi.components.schemas.Offering;
+  const selection = openapi.components.schemas.OfferingSelection;
+  assert.ok(offering);
+  assert.ok(selection);
+  assert.deepEqual(offering.properties.subject.required, [
+    "type",
+    "ref",
+    "version",
+    "digest",
+  ]);
+  for (const field of [
+    "formRef",
+    "price",
+    "sku",
+    "billing",
+    "capacity",
+    "managerId",
+    "sla",
+    "support",
+  ]) {
+    assert.equal(offering.properties[field], undefined, field);
+    assert.equal(selection.properties[field], undefined, field);
+  }
 });
 
 test("all-mounted inventories suppress internal seams and still publish process routes", () => {

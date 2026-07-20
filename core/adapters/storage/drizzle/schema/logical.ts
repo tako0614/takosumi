@@ -41,6 +41,9 @@ export const deployControlLogicalTables = [
   "serviceFormPackages",
   "serviceFormDefinitions",
   "serviceFormActivations",
+  // Generic noncommercial Offering authority. Cloud commercial bindings live
+  // outside this OSS table and attach only to exact selections.
+  "offeringCatalogs",
 ] as const;
 
 export type DeployControlLogicalTable =
@@ -83,6 +86,7 @@ export const deployControlD1TableNames = {
   serviceFormPackages: "service_form_packages",
   serviceFormDefinitions: "service_form_definitions",
   serviceFormActivations: "service_form_activations",
+  offeringCatalogs: "offering_catalogs",
 } as const satisfies Record<DeployControlLogicalTable, string>;
 
 export const deployControlPostgresTableNames = {
@@ -122,4 +126,5 @@ export const deployControlPostgresTableNames = {
   serviceFormPackages: "takosumi_service_form_packages",
   serviceFormDefinitions: "takosumi_service_form_definitions",
   serviceFormActivations: "takosumi_service_form_activations",
+  offeringCatalogs: "takosumi_offering_catalogs",
 } as const satisfies Record<DeployControlLogicalTable, string>;

@@ -1,9 +1,9 @@
 # Generic Offering model
 
-Status: target contract, Core engine, Worker composition port, platform bridge,
-and exact built-in Form subject adapter implemented in OSS. Durable operator
-catalog configuration/API, Cloud commercial binding migration, and live
-evidence remain.
+Status: target contract, Core engine, immutable D1/Postgres catalog,
+operator API, Worker composition port, platform bridge, and exact built-in
+Form subject adapter implemented in OSS. Cloud commercial binding migration
+and live evidence remain.
 
 Takosumi owns one noncommercial Offering mechanism. Takoform is one possible
 subject source; it is not the Offering catalog's type system. A host can offer
@@ -25,6 +25,32 @@ There is no `latest` lookup or fallback resolver. An unknown subject type,
 inactive row, denied audience, missing/stale requirement, unavailable subject,
 or non-digest resolution result fails closed. Empty catalogs are valid, so
 plain OpenTofu and zero-form Takosumi do not depend on this feature.
+
+## Durable catalog and operator API
+
+OSS persists immutable catalog snapshots in D1 migration v50 and Postgres
+migration v97. A `(catalog id, catalog version)` can be published
+idempotently only when its complete content is unchanged; substitution returns
+a conflict. Selection fingerprints bind the full catalog row, exact reference,
+resolver id, and subject-resolution fingerprint, so later host state cannot
+reinterpret a previously selected version.
+
+The deploy-control bearer protects the generic administration and evaluation
+routes:
+
+```text
+POST /v1/offering-catalogs
+GET  /v1/offering-catalogs
+GET  /v1/offering-catalogs/:catalogId/versions/:catalogVersion
+POST /v1/offering-availability/query
+POST /v1/offering-selections/resolve
+```
+
+The request schemas reject unknown commercial/private fields. Catalog storage
+and availability remain usable with no Form Registry and with any installed
+namespaced subject resolver. A host-code catalog reader can be composed with
+the durable store, but an exact id/version present in more than one authority
+is ambiguous and fails closed.
 
 ## Subject ownership
 
