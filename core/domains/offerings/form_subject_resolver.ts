@@ -28,7 +28,10 @@ export interface FormOfferingAvailabilityReader {
     readonly space: string;
     readonly identity: InstalledFormReference;
     readonly activationId: string;
-  }): Promise<FormAvailability>;
+  }): Promise<{
+    readonly availability: FormAvailability;
+    readonly evidenceFingerprint: string;
+  }>;
 }
 
 /**
@@ -75,8 +78,7 @@ export class FormOfferingSubjectResolver implements OfferingSubjectResolver {
     );
     if (
       resourceNamespaces.length !== 1 ||
-      resourceNamespaces[0]!.id.trim() === "" ||
-      resourceNamespaces[0]!.id.length > 256
+      !boundedReference(resourceNamespaces[0]!.id, 256)
     ) {
       return unavailable("resource_namespace_context_required");
     }
@@ -109,7 +111,7 @@ export class FormOfferingSubjectResolver implements OfferingSubjectResolver {
       return unavailable("form_not_installed");
     }
 
-    const availability =
+    const resolvedAvailability =
       await this.#availability.resolveFormOfferingAvailability({
         actor: {
           actorAccountId: input.principalId ?? "",
@@ -121,6 +123,10 @@ export class FormOfferingSubjectResolver implements OfferingSubjectResolver {
         identity,
         activationId: activation.id,
       });
+    const { availability, evidenceFingerprint } = resolvedAvailability;
+    if (!/^sha256:[a-f0-9]{64}$/u.test(evidenceFingerprint)) {
+      return unavailable("resource_evidence_invalid");
+    }
     if (
       !availability.availableToPrincipal ||
       availability.deprecated ||
@@ -161,6 +167,7 @@ export class FormOfferingSubjectResolver implements OfferingSubjectResolver {
         definition: definitionBefore,
         package: packageBefore,
         availability,
+        resourceEvidenceFingerprint: evidenceFingerprint,
         resourceSpace,
         workspaceId: input.workspaceId ?? null,
       }),
@@ -176,7 +183,7 @@ function exactActivationRequirement(
   if (
     requirements.length !== 1 ||
     requirements[0]?.type !== FORM_ACTIVATION_OFFERING_REQUIREMENT_TYPE ||
-    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(requirements[0].ref) ||
+    !boundedReference(requirements[0].ref, 1024) ||
     !/^[1-9][0-9]*$/u.test(requirements[0].version) ||
     requirements[0].digest !== undefined
   ) {
@@ -211,4 +218,12 @@ function activationAudienceAllows(
 
 function unavailable(reason: string) {
   return { ready: false as const, reason };
+}
+
+function boundedReference(value: string, max: number): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= max &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  );
 }

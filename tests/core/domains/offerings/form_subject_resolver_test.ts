@@ -87,7 +87,10 @@ function resolverWith(input: {
     availability: {
       resolveFormOfferingAvailability: async (request) => {
         expect(request.activationId).toBe(activation.id);
-        return input.resolvedAvailability ?? availability;
+        return {
+          availability: input.resolvedAvailability ?? availability,
+          evidenceFingerprint: `sha256:${"c".repeat(64)}`,
+        };
       },
     },
   });
