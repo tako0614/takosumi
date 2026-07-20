@@ -1068,6 +1068,15 @@ Resource is admitted, Takosumi materializes the descriptor with Resource-owned
 `form_descriptor` provenance. A scoped compatibility profile may similarly own
 the canonical Resource `http.route` it controls. Neither is a Capsule source.
 
+Portable descriptor mappings use `literal`, `output`, or `resource_uri`.
+`resource_uri` is the one host-supplied public value: it carries neither a
+pointer nor a value, exactly one such input is named by the descriptor's
+`resourceUriInput`, and host code resolves it to the canonical credential-free
+HTTPS resource URI. Takosumi materializes it as a non-secret literal input. It
+is an OAuth audience identifier, never a grant; InterfaceBinding, owner proof,
+and the canonical resource claim remain mandatory. A required descriptor stays
+fail-closed when that host resolver is absent or returns an invalid URI.
+
 #### Interface Status And Freshness
 
 `spec` is desired declaration state. Apply/refresh resolves the explicit

@@ -276,6 +276,93 @@ test("concurrent descriptor materialization adopts the exact persisted winner", 
   ).toHaveLength(1);
 });
 
+test("portable resource_uri is host-supplied, canonical, and never creates a binding", async () => {
+  const interfaces = new InterfaceService({
+    stores: createInMemoryInterfaceStores(),
+    now: () => NOW,
+    newId: () => "if_indexed",
+  });
+  const descriptors: readonly FormInterfaceDescriptor[] = [
+    {
+      name: "data.indexed",
+      version: "1",
+      required: true,
+      resourceUriInput: "resource_uri",
+      inputs: [{ name: "resource_uri", source: "resource_uri" }],
+    },
+  ];
+  const requests: unknown[] = [];
+  const result = await ensureFormDescriptorInterfaces({
+    interfaces,
+    workspaceId: "workspace_1",
+    resourceId: "space_1/SQLDatabase/main",
+    form: FORM,
+    descriptors,
+    resolveResourceUri: (input) => {
+      requests.push(input);
+      return "https://data.example.test/indexed/main?view=current#ignored";
+    },
+  });
+
+  expect(requests).toEqual([
+    {
+      workspaceId: "workspace_1",
+      resourceId: "space_1/SQLDatabase/main",
+      form: FORM,
+      descriptorName: "data.indexed",
+      descriptorVersion: "1",
+    },
+  ]);
+  expect(result.materialized).toHaveLength(1);
+  expect(result.materialized[0]?.spec).toMatchObject({
+    access: {
+      visibility: "workspace",
+      resourceUriInput: "resource_uri",
+    },
+    inputs: {
+      resource_uri: {
+        source: "literal",
+        value: "https://data.example.test/indexed/main",
+      },
+    },
+  });
+  expect(result.materialized[0]?.status.resolvedInputs).toEqual({
+    resource_uri: "https://data.example.test/indexed/main",
+  });
+  expect(
+    await interfaces.listBindings(result.materialized[0]!.metadata.id),
+  ).toEqual([]);
+
+  await expect(
+    ensureFormDescriptorInterfaces({
+      interfaces: new InterfaceService({
+        stores: createInMemoryInterfaceStores(),
+        now: () => NOW,
+        newId: () => "if_missing_resource_uri",
+      }),
+      workspaceId: "workspace_1",
+      resourceId: "space_1/SQLDatabase/missing",
+      form: FORM,
+      descriptors,
+    }),
+  ).rejects.toMatchObject({ reason: "input_not_ready" });
+
+  await expect(
+    ensureFormDescriptorInterfaces({
+      interfaces: new InterfaceService({
+        stores: createInMemoryInterfaceStores(),
+        now: () => NOW,
+        newId: () => "if_bad_resource_uri",
+      }),
+      workspaceId: "workspace_1",
+      resourceId: "space_1/SQLDatabase/bad",
+      form: FORM,
+      descriptors,
+      resolveResourceUri: () => "https://user:secret@data.example.test/",
+    }),
+  ).rejects.toMatchObject({ reason: "input_not_ready" });
+});
+
 test("portable declaration reads are bounded and enforce each Resource Workspace bridge", async () => {
   const stores = createInMemoryInterfaceStores();
   const interfaces = new InterfaceService({

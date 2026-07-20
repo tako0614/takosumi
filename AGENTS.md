@@ -146,7 +146,9 @@ Three principles are load-bearing for new work:
   New Capsule declarations come from service-side blueprints; historical `capsule_resource` custody never becomes a
   recommended module-author path and has no Capsule-scoped Run credential. Operators may inspect or retire those rows
   through the ordinary control API. Resource-owned Form descriptors are a separate provenance. InterfaceBinding
-  authorization never becomes module or Form Package authority. Freshness beyond apply time is a status-plane channel
+  authorization never becomes module or Form Package authority. A portable descriptor's `resource_uri` source is
+  resolved by host code to a credential-free HTTPS audience and materialized as a non-secret literal input; it grants
+  no access, and a missing resolver keeps a required descriptor fail-closed. Freshness beyond apply time is a status-plane channel
   (self-report / probe / refresh Run) that may update conditions only, never spec. The `document.display` consumer
   profile is defined once in the Final Plan / Core Spec and parsed through the shared contract-layer parser.
 - **No secrets in Interface state**: Interface documents and resolved inputs never contain runtime credentials, and

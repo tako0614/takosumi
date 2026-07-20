@@ -5,6 +5,7 @@ import { ensureD1OpenTofuLedgerSchema } from "../../../worker/src/d1_opentofu_st
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import {
   createWorkerServiceApp,
+  formInterfaceResourceUriResolverFromEnv,
   resourceInterfaceWorkspaceResolverFromEnv,
 } from "../../../worker/src/worker_service.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
@@ -162,6 +163,26 @@ test("shipped Worker keeps Resource Interface ownership fail-closed without a ho
       },
     }),
   ).rejects.toThrow("Interface owner does not exist in the Workspace");
+});
+
+test("shipped Worker accepts the Form resource URI resolver only as host code", () => {
+  const resolver = async () => "https://data.example.test/indexed/main";
+  expect(
+    formInterfaceResourceUriResolverFromEnv({
+      TAKOSUMI_FORM_INTERFACE_RESOURCE_URI_RESOLVER: resolver,
+    } as unknown as CloudflareWorkerEnv),
+  ).toBe(resolver);
+  expect(
+    formInterfaceResourceUriResolverFromEnv({
+      TAKOSUMI_FORM_INTERFACE_RESOURCE_URI_RESOLVER: undefined,
+    } as unknown as CloudflareWorkerEnv),
+  ).toBeUndefined();
+  expect(() =>
+    formInterfaceResourceUriResolverFromEnv({
+      TAKOSUMI_FORM_INTERFACE_RESOURCE_URI_RESOLVER:
+        "https://data.example.test/{resourceId}",
+    } as unknown as CloudflareWorkerEnv),
+  ).toThrow("must be a host-code resolver function");
 });
 
 async function seedReadyResource(

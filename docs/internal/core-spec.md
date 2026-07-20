@@ -340,6 +340,17 @@ provenance. Scoped compatibility control may similarly retain
 `compatibility_profile` provenance for its canonical Resource-owned
 `http.route`. Neither is a Capsule declaration source.
 
+Portable descriptors map inputs from `literal`, `output`, or `resource_uri`.
+The first two remain data-only declaration values and public Resource output
+references. `resource_uri` has no pointer or value: exactly one such input must
+be named by the descriptor's `resourceUriInput`, and a host-code resolver
+supplies the canonical credential-free HTTPS URI. Takosumi persists that URI as
+an ordinary non-secret literal Interface input and uses the named input as the
+OAuth audience. The URI is not an authorization grant; an exact
+InterfaceBinding and the existing ownership/resource-claim checks remain
+required. A missing or invalid host resolver fails a required descriptor closed
+before the Resource can remain Ready.
+
 One resolution pass pins each referenced StateVersion or Resource generation.
 Missing, null, sensitive, invalid-pointer, unavailable-generation, or cross-Workspace
 references fail closed as `NotReady`; an old resolved value is not exposed as

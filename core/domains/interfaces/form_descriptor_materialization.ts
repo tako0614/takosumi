@@ -11,6 +11,7 @@ import type {
 import { formRefKey, isPortableInterfaceInputSource } from "takosumi-contract";
 import { sha256HexAsync } from "../../shared/runtime/hash.ts";
 import { InterpretedDraft202012Validator } from "../../shared/json-schema/draft_2020.ts";
+import { canonicalInterfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 import { InterfaceService, InterfaceServiceError } from "./service.ts";
 
 export type FormDescriptorSkipReason =
@@ -35,8 +36,22 @@ export interface FormDescriptorMaterializationInput {
   readonly resourceId: string;
   readonly form: InstalledFormReference;
   readonly descriptors: readonly FormInterfaceDescriptor[];
+  /**
+   * Host-owned resolver for the canonical public resource URI requested by a
+   * portable `resource_uri` input. The value is an audience identifier only;
+   * InterfaceBinding remains the sole authorization grant.
+   */
+  readonly resolveResourceUri?: FormInterfaceResourceUriResolver;
   readonly actor?: ActorContext;
 }
+
+export type FormInterfaceResourceUriResolver = (input: {
+  readonly workspaceId: string;
+  readonly resourceId: string;
+  readonly form: InstalledFormReference;
+  readonly descriptorName: string;
+  readonly descriptorVersion: string;
+}) => string | undefined | Promise<string | undefined>;
 
 export interface FormDescriptorMaterializationResult {
   readonly materialized: readonly Interface[];
@@ -92,20 +107,34 @@ export async function ensureFormDescriptorInterfaces(
       });
       continue;
     }
-    const inputs = translateInputs(input.resourceId, descriptor.inputs ?? []);
+    const inputs = await translateInputs(
+      input.resourceId,
+      descriptor,
+      descriptor.inputs?.some(
+        (declaration) => declaration.source === "resource_uri",
+      ) && input.resolveResourceUri
+        ? await input.resolveResourceUri({
+            workspaceId: input.workspaceId,
+            resourceId: input.resourceId,
+            form: input.form,
+            descriptorName: descriptor.name,
+            descriptorVersion: descriptor.version,
+          })
+        : undefined,
+    );
     if (!inputs.ok) {
       if (required) {
         throw new RequiredFormInterfaceError(
           descriptor.name,
           descriptor.version,
-          "unsupported_source",
+          inputs.reason,
         );
       }
       skipped.push({
         name: descriptor.name,
         version: descriptor.version,
         required,
-        reason: "unsupported_source",
+        reason: inputs.reason,
       });
       continue;
     }
@@ -115,7 +144,12 @@ export async function ensureFormDescriptorInterfaces(
       version: descriptor.version,
       document,
       ...(Object.keys(inputs.value).length > 0 ? { inputs: inputs.value } : {}),
-      access: { visibility: "workspace" },
+      access: {
+        visibility: "workspace",
+        ...(descriptor.resourceUriInput
+          ? { resourceUriInput: descriptor.resourceUriInput }
+          : {}),
+      },
     };
     const name = await descriptorRecordName(descriptor);
     const existingIndex = history.findIndex((record) => {
@@ -334,24 +368,49 @@ function validDocument(
   }
 }
 
-function translateInputs(
+async function translateInputs(
   resourceId: string,
-  declarations: readonly FormInterfaceInputDeclaration[],
-):
+  descriptor: FormInterfaceDescriptor,
+  resolvedResourceUri: string | undefined,
+): Promise<
   | { readonly ok: true; readonly value: Record<string, InterfaceInput> }
-  | { readonly ok: false } {
+  | { readonly ok: false; readonly reason: FormDescriptorSkipReason }
+> {
   const inputs: Record<string, InterfaceInput> = {};
+  let resourceUriInputs = 0;
+  let matchedResourceUriInput = false;
+  const declarations: readonly FormInterfaceInputDeclaration[] =
+    descriptor.inputs ?? [];
   for (const declaration of declarations) {
     if (!isPortableInterfaceInputSource(declaration.source))
-      return { ok: false };
+      return { ok: false, reason: "unsupported_source" };
     if (declaration.source === "literal") {
-      if (declaration.value === undefined) return { ok: false };
+      if (declaration.value === undefined || declaration.pointer !== undefined)
+        return { ok: false, reason: "unsupported_source" };
       inputs[declaration.name] = {
         source: "literal",
         value: declaration.value,
       };
       continue;
     }
+    if (declaration.source === "resource_uri") {
+      resourceUriInputs += 1;
+      if (
+        declaration.pointer !== undefined ||
+        declaration.value !== undefined ||
+        declaration.name !== descriptor.resourceUriInput
+      ) {
+        return { ok: false, reason: "unsupported_source" };
+      }
+      matchedResourceUriInput = true;
+      const canonical =
+        canonicalInterfaceOAuth2ResourceUri(resolvedResourceUri);
+      if (!canonical) return { ok: false, reason: "input_not_ready" };
+      inputs[declaration.name] = { source: "literal", value: canonical };
+      continue;
+    }
+    if (declaration.value !== undefined)
+      return { ok: false, reason: "unsupported_source" };
     const pointer = declaration.pointer;
     if (pointer === undefined || pointer === "") {
       inputs[declaration.name] = { source: "resource_output", resourceId };
@@ -359,7 +418,7 @@ function translateInputs(
     }
     const encodedTokens = pointer.slice(1).split("/");
     const outputName = decodePointerToken(encodedTokens[0]!);
-    if (outputName === "") return { ok: false };
+    if (outputName === "") return { ok: false, reason: "unsupported_source" };
     inputs[declaration.name] = {
       source: "resource_output",
       resourceId,
@@ -368,6 +427,13 @@ function translateInputs(
         ? { pointer: `/${encodedTokens.slice(1).join("/")}` }
         : {}),
     };
+  }
+  if (
+    (descriptor.resourceUriInput !== undefined &&
+      (!matchedResourceUriInput || resourceUriInputs !== 1)) ||
+    (descriptor.resourceUriInput === undefined && resourceUriInputs !== 0)
+  ) {
+    return { ok: false, reason: "unsupported_source" };
   }
   return { ok: true, value: inputs };
 }

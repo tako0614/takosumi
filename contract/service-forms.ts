@@ -50,7 +50,11 @@ export type FormOperation =
   "create" | "read" | "update" | "delete" | "import" | "refresh";
 
 /** Portable, data-only mapping sources every conforming host understands. */
-export const PORTABLE_INTERFACE_INPUT_SOURCES = ["literal", "output"] as const;
+export const PORTABLE_INTERFACE_INPUT_SOURCES = [
+  "literal",
+  "output",
+  "resource_uri",
+] as const;
 export type PortableInterfaceInputSource =
   (typeof PORTABLE_INTERFACE_INPUT_SOURCES)[number];
 
@@ -82,6 +86,11 @@ export interface FormInterfaceDescriptor {
   readonly version: string;
   readonly description?: string;
   readonly required?: boolean;
+  /**
+   * Names the sole `resource_uri` input supplied by the host as this
+   * declaration's canonical OAuth audience. The marker grants no access.
+   */
+  readonly resourceUriInput?: string;
   /** Exact non-secret document copied by a host; omitted means `{}`. */
   readonly document?: JsonObject;
   /** Portable schema already verified with the containing Form Package. */

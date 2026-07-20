@@ -149,6 +149,7 @@ interface TakoformDefinition {
     readonly version: string;
     readonly description?: string;
     readonly required?: boolean;
+    readonly resourceUriInput?: string;
     readonly document?: CanonicalJsonValue;
     readonly documentSchema?: CanonicalJsonValue;
     readonly inputs?: readonly {
@@ -286,6 +287,8 @@ function verifyDefinitionSemantics(definition: TakoformDefinition): void {
     }
     interfaces.add(key);
     const inputs = new Set<string>();
+    let resourceUriInputs = 0;
+    let resourceUriMatches = 0;
     for (const input of descriptor.inputs ?? []) {
       if (inputs.has(input.name)) {
         throw new TypeError(`duplicate Interface input ${key}:${input.name}`);
@@ -297,11 +300,30 @@ function verifyDefinitionSemantics(definition: TakoformDefinition): void {
             `literal Interface input ${key}:${input.name} requires value and forbids pointer`,
           );
         }
+      } else if (input.source === "resource_uri") {
+        resourceUriInputs += 1;
+        if (input.pointer !== undefined || input.value !== undefined) {
+          throw new TypeError(
+            `resource_uri Interface input ${key}:${input.name} forbids pointer and value`,
+          );
+        }
+        if (input.name === descriptor.resourceUriInput) {
+          resourceUriMatches += 1;
+        }
       } else if (input.value !== undefined) {
         throw new TypeError(
           `non-literal Interface input ${key}:${input.name} forbids value`,
         );
       }
+    }
+    if (
+      (descriptor.resourceUriInput !== undefined &&
+        (resourceUriInputs !== 1 || resourceUriMatches !== 1)) ||
+      (descriptor.resourceUriInput === undefined && resourceUriInputs !== 0)
+    ) {
+      throw new TypeError(
+        `Interface ${key} resourceUriInput must name exactly one resource_uri input`,
+      );
     }
     if (descriptor.documentSchema !== undefined) {
       let validateDocument: InterpretedDraft202012Validator;
@@ -346,6 +368,9 @@ function verifiedInterfaceDescriptors(
     version: descriptor.version,
     ...(descriptor.description ? { description: descriptor.description } : {}),
     ...(descriptor.required === true ? { required: true } : {}),
+    ...(descriptor.resourceUriInput
+      ? { resourceUriInput: descriptor.resourceUriInput }
+      : {}),
     ...(descriptor.document !== undefined
       ? { document: descriptor.document as JsonObject }
       : {}),

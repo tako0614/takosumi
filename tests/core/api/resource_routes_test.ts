@@ -3039,6 +3039,103 @@ test("bootstrap rejects a required portable Interface before backend work when t
   expect(adapter.previewCalls).toBe(0);
 });
 
+test("bootstrap rejects a required resource_uri descriptor before backend work when its host resolver is absent", async () => {
+  const formRegistryStore = new InMemoryFormRegistryStore();
+  const installedAt = "2026-01-01T00:00:00.000Z";
+  await formRegistryStore.installPackage(
+    {
+      packageDigest: EXACT_OBJECT_BUCKET_FORM.packageDigest,
+      artifactRef: "oci://forms.example/object-bucket@sha256:exact",
+      verifierId: "test-verifier",
+      status: "installed",
+      definitionRefs: [EXACT_OBJECT_BUCKET_FORM.formRef],
+      installedAt,
+      installedBy: "test",
+      updatedAt: installedAt,
+    },
+    [
+      {
+        identity: EXACT_OBJECT_BUCKET_FORM,
+        displayName: "Object bucket with canonical resource URI",
+        operations: ["create", "read", "update", "delete"],
+        interfaceDescriptors: [
+          {
+            name: "data.indexed",
+            version: "1",
+            required: true,
+            resourceUriInput: "resource_uri",
+            inputs: [{ name: "resource_uri", source: "resource_uri" }],
+          },
+        ],
+        installedAt,
+      },
+    ],
+  );
+  await formRegistryStore.createActivation({
+    id: "activation_required_resource_uri",
+    identity: EXACT_OBJECT_BUCKET_FORM,
+    scope: { type: "space", id: "space_1" },
+    audience: { roles: ["owner"] },
+    policy: {},
+    eligibleTargetPoolClasses: ["edge.object-store"],
+    status: "active",
+    revision: 1,
+    createdAt: installedAt,
+    createdBy: "test",
+    updatedAt: installedAt,
+    updatedBy: "test",
+  });
+  const adapter = new CountingPreviewAdapter();
+  const { app } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
+    formRegistryStore,
+    resourceShapeAdapter: adapter,
+    resourceShapeSchemaRegistry:
+      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
+    resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
+    resolveResourceInterfaceWorkspace: async () => "workspace_1",
+  });
+  expect(
+    (
+      await app.request("/v1/target-pools/default", {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ space: "space_1", spec: POOL }),
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await app.request("/v1/space-policies/default", {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ space: "space_1", spec: POLICY }),
+      })
+    ).status,
+  ).toBe(200);
+
+  const preview = await app.request("/v1/resources/preview", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      kind: "ObjectBucket",
+      metadata: { space: "space_1" },
+      form: EXACT_OBJECT_BUCKET_FORM,
+      spec: { name: "missing-uri", interfaces: ["s3_api"] },
+    }),
+  });
+  expect(preview.status).toBe(409);
+  expect(await preview.json()).toMatchObject({
+    error: {
+      code: "capability_missing",
+      message: expect.stringContaining("resource URI resolver"),
+    },
+  });
+  expect(adapter.previewCalls).toBe(0);
+});
+
 test("runtime discovery repairs a missed Resource lifecycle observer from the durable ledger", async () => {
   const baseInterfaceStores = createInMemoryInterfaceStores();
   let rejectLifecycleWrites = false;
