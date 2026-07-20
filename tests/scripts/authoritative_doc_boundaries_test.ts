@@ -81,6 +81,11 @@ test("authoritative docs reject active provider claims masked by generic negativ
     "The Takosumi provider will add an admin resource. Takosumi does not depend on it.",
     "Add new `takosumi_*` resources to the provider. The provider is retired.",
     "Takosumi provider は今後新規 resource を公開します。他の Stack は依存しません。",
+    "The discontinued Takosumi provider is still used to author new resources.",
+    "The retired terraform-provider-takosumi remains the default provider.",
+    "The discontinued Takosumi provider is used for current deployments.",
+    "The retired Takosumi provider continues as the authoring surface.",
+    "The retired Takosumi provider acts as the default client.",
   ]) {
     const violations = findAuthoritativeDocViolations([
       ...COMPLETE_BASELINE,
@@ -90,6 +95,20 @@ test("authoritative docs reject active provider claims masked by generic negativ
     expect(violations).toContainEqual(
       expect.objectContaining({ ruleId: "active-takosumi-provider-doc" }),
     );
+  }
+});
+
+test("authoritative docs allow explicit historical-only use and old-state support", () => {
+  for (const content of [
+    "The discontinued Takosumi provider is used only for historical migration/rollback custody.",
+    "The discontinued provider's `takosumi_*` old state remains supported throughout v1 migration custody.",
+  ]) {
+    const violations = findAuthoritativeDocViolations([
+      ...COMPLETE_BASELINE,
+      { path: "docs/reference/provider-custody.md", content },
+    ]);
+
+    expect(violations).toEqual([]);
   }
 });
 
