@@ -1695,6 +1695,16 @@ test("platform Resource Shape API does not advertise shapes without an operator 
 test("platform Resource Shape API routes are routed before accounts and bearer-gated", async () => {
   expect(isPlatformResourceShapeApiPath("/v1/resources")).toBe(true);
   expect(isPlatformResourceShapeApiPath("/v1/form-availability")).toBe(true);
+  expect(isPlatformResourceShapeApiPath("/v1/offering-catalogs")).toBe(true);
+  expect(
+    isPlatformResourceShapeApiPath("/v1/offering-catalogs/public/versions/v1"),
+  ).toBe(true);
+  expect(
+    isPlatformResourceShapeApiPath("/v1/offering-availability/query"),
+  ).toBe(true);
+  expect(
+    isPlatformResourceShapeApiPath("/v1/offering-selections/resolve"),
+  ).toBe(true);
   expect(isPlatformResourceShapeApiPath(TAKOFORM_FORM_HOST_API_PATH)).toBe(
     true,
   );
@@ -1771,6 +1781,27 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
     env,
   );
   expect(authorized.status).toBe(200);
+
+  const sessionMustNotBecomeOfferingOperator =
+    await handlePlatformResourceShapeApiRequest(
+      new Request("https://app.takosumi.com/v1/offering-catalogs"),
+      env,
+      async () => ({
+        authenticated: true,
+        authKind: "session",
+        subject: "customer-account",
+      }),
+    );
+  expect(sessionMustNotBecomeOfferingOperator.status).toBe(401);
+
+  const operatorCatalogs = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/offering-catalogs", {
+      headers: { authorization: "Bearer resource-token" },
+    }),
+    env,
+  );
+  expect(operatorCatalogs.status).toBe(200);
+  expect(await operatorCatalogs.json()).toEqual({ catalogs: [] });
 });
 
 test("platform exposes public Takoform discovery and fences portable reads to an existing Workspace", async () => {
