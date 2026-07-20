@@ -37,7 +37,7 @@ const MAX_ARCHIVE_ENTRIES = 1_024;
 const MAX_EXPANDED_ARCHIVE_BYTES = 64 << 20;
 const PROCESS_TIMEOUT_MS = 15_000;
 const MAX_STDERR_BYTES = 64 << 10;
-const EXPECTED_KINDS = [
+export const REVIEWED_TAKOFORM_PACKAGE_KINDS = [
   "ContainerService",
   "DurableWorkflow",
   "EdgeWorker",
@@ -100,6 +100,30 @@ interface FormRef {
   readonly kind: string;
   readonly definitionVersion: string;
   readonly schemaDigest: string;
+}
+
+export interface ReviewedPublishedPackageInstallArtifact {
+  readonly kind: string;
+  readonly releaseTag: string;
+  readonly packageDigest: string;
+  readonly formRef: FormRef;
+  readonly envelopeBytes: Uint8Array;
+}
+
+export interface ReviewedPublishedPackageInstallSet {
+  readonly format: "takosumi.reviewed-takoform-package-install-set@v1";
+  readonly repository: string;
+  readonly checkoutCommit: string;
+  readonly releaseCommit: string;
+  readonly packageVersion: string;
+  readonly definitionVersion: string;
+  readonly publishedSet: PinnedArtifact;
+  readonly publishedTrust: PinnedArtifact;
+  readonly packageIndexPolicy: PinnedArtifact;
+  readonly trustedRoot: PinnedArtifact & { readonly bytes: Uint8Array };
+  readonly publisher: TakoformPublisherPolicy;
+  readonly verifierId: string;
+  readonly packages: readonly ReviewedPublishedPackageInstallArtifact[];
 }
 
 interface PublishedPackageTrust {
@@ -188,6 +212,144 @@ export async function main(argv: readonly string[]): Promise<number> {
 export async function verifyPublishedPackageHostProof(
   takoformRoot: string,
 ): Promise<PublishedPackageHostProofResult> {
+  const context = await loadReviewedPublishedPackageContext(takoformRoot);
+  const {
+    pins,
+    retained,
+    publishedSetBytes,
+    publishedSet,
+    trust,
+    trustedRootPath,
+    trustedRootBytes,
+    publisher,
+  } = context;
+  const createSignatureVerifier = (rootBytes: Uint8Array) =>
+    new SigstoreTakoformPackageSignatureVerifier({
+      trustedRootDigest: trust.trustedRoot.digest as `sha256:${string}`,
+      loadTrustedRoot: async () => rootBytes,
+      publishers: [publisher],
+    });
+  const signatureVerifier = createSignatureVerifier(trustedRootBytes);
+  const verifier = new TakoformDataOnlyPackageVerifier(signatureVerifier);
+  const artifacts = new Map<string, Uint8Array>();
+  const store = new InMemoryFormRegistryStore();
+  const registry = new FormRegistryService({
+    store,
+    artifactReader: {
+      read: async (artifactRef) => {
+        const bytes = artifacts.get(artifactRef);
+        if (!bytes) throw new Error("retained package artifact is unavailable");
+        return bytes;
+      },
+    },
+    verifier,
+    now: () => "2026-07-19T00:00:00.000Z",
+  });
+
+  const prepared = await buildReviewedPublishedPackageInstallSet(context);
+  for (const [position, entry] of prepared.packages.entries()) {
+    const envelope = entry.envelopeBytes;
+    if (position === 0) {
+      await assertTransparencyTamperRejected(signatureVerifier, envelope);
+    }
+    const artifactRef = `retained:takoform/${entry.kind}/${prepared.packageVersion}`;
+    artifacts.set(artifactRef, envelope);
+    const installed = await registry.installPackage({
+      artifactRef,
+      expectedPackageDigest: entry.packageDigest,
+      actorId: "operator:published-package-host-proof",
+    });
+    if (
+      installed.packageDigest !== entry.packageDigest ||
+      !sameJson(installed.definitionRefs, [entry.formRef])
+    ) {
+      throw new Error(`${entry.kind} installed identity drifted`);
+    }
+  }
+
+  // Re-read trust bytes and construct fresh verifier/service objects. This is
+  // deliberately repo-regression evidence, not a durable substrate restart.
+  const reconstructedTrustedRoot = await retained.read(trustedRootPath);
+  assertDigest(
+    reconstructedTrustedRoot,
+    pins.trustedRoot.digest,
+    "reconstructed TrustedRoot",
+  );
+  const reconstructedVerifier = new TakoformDataOnlyPackageVerifier(
+    createSignatureVerifier(reconstructedTrustedRoot),
+  );
+  const reconstructed = new FormRegistryService({
+    store,
+    artifactReader: {
+      read: async (artifactRef) => {
+        const bytes = artifacts.get(artifactRef);
+        if (!bytes) throw new Error("retained package artifact is unavailable");
+        return bytes;
+      },
+    },
+    verifier: reconstructedVerifier,
+    now: () => "2026-07-19T00:00:00.000Z",
+  });
+  for (const entry of prepared.packages) {
+    const identity = {
+      formRef: entry.formRef,
+      packageDigest: entry.packageDigest,
+    };
+    await reconstructed.getRetainedIdentity(identity);
+    await reconstructed.verifyRetainedIdentity(identity);
+    await reconstructed.installPackage({
+      artifactRef: `retained:takoform/${entry.kind}/${prepared.packageVersion}`,
+      expectedPackageDigest: entry.packageDigest,
+      actorId: "operator:published-package-host-proof",
+    });
+  }
+
+  return {
+    kind: "takosumi.takoform-published-package-host-proof@v1",
+    status: "passed",
+    evidenceLevel: "repo_regression",
+    packageCount: publishedSet.entries.length,
+    kinds: publishedSet.entries.map(({ kind }) => kind).sort(),
+    releaseCommits: [
+      ...new Set(
+        publishedSet.entries.map(({ releaseCommit }) => releaseCommit),
+      ),
+    ].sort(),
+    packageVersion: publishedSet.packageVersion,
+    definitionVersion: publishedSet.definitionVersion,
+    publishedSetDigest: sha256(publishedSetBytes),
+    verifierId: verifier.id,
+    transparencyTamperRejection: "passed",
+    installReplay: "passed",
+    serviceReconstructionReverification: "passed",
+    admissionStatus: publishedSet.admissionStatus,
+    unsettledPublisherRoles: [...trust.unsettledPublisherRoles].sort(),
+    revocationCheckpointStatus: publishedSet.revocationCheckpointStatus,
+  };
+}
+
+interface ReviewedPublishedPackageContext {
+  readonly pins: HostProofPins;
+  readonly retained: RetainedRoot;
+  readonly publishedSetBytes: Uint8Array;
+  readonly publishedSet: PublishedPackageSet;
+  readonly trust: PublishedPackageTrust;
+  readonly trustedRootPath: string;
+  readonly trustedRootBytes: Uint8Array;
+  readonly publisher: TakoformPublisherPolicy;
+}
+
+export async function loadReviewedPublishedPackageInstallSet(
+  takoformRoot: string,
+): Promise<ReviewedPublishedPackageInstallSet> {
+  return await buildReviewedPublishedPackageInstallSet(
+    await loadReviewedPublishedPackageContext(takoformRoot),
+  );
+}
+
+async function loadReviewedPublishedPackageContext(
+  takoformRoot: string,
+): Promise<ReviewedPublishedPackageContext> {
   const pins = await loadHostProofPins();
   const retained = await RetainedRoot.open(takoformRoot);
   await retained.assertCleanCheckout(pins.checkoutCommit);
@@ -239,111 +401,67 @@ export async function verifyPublishedPackageHostProof(
     "package index policy",
   );
   const packagePolicy = parseJson<PackageIndexPolicy>(policyBytes);
-  const publisher = parsePublisherIdentity(
-    packagePolicy,
-    publishedSet.repository,
-  );
-  const createSignatureVerifier = (rootBytes: Uint8Array) =>
+  return {
+    pins,
+    retained,
+    publishedSetBytes,
+    publishedSet,
+    trust,
+    trustedRootPath,
+    trustedRootBytes,
+    publisher: parsePublisherIdentity(packagePolicy, publishedSet.repository),
+  };
+}
+
+async function buildReviewedPublishedPackageInstallSet(
+  context: ReviewedPublishedPackageContext,
+): Promise<ReviewedPublishedPackageInstallSet> {
+  const { pins, retained, publishedSet, trust, trustedRootBytes, publisher } =
+    context;
+  const verifier = new TakoformDataOnlyPackageVerifier(
     new SigstoreTakoformPackageSignatureVerifier({
       trustedRootDigest: trust.trustedRoot.digest as `sha256:${string}`,
-      loadTrustedRoot: async () => rootBytes,
+      loadTrustedRoot: async () => trustedRootBytes,
       publishers: [publisher],
-    });
-  const signatureVerifier = createSignatureVerifier(trustedRootBytes);
-  const verifier = new TakoformDataOnlyPackageVerifier(signatureVerifier);
-  const artifacts = new Map<string, Uint8Array>();
-  const store = new InMemoryFormRegistryStore();
-  const registry = new FormRegistryService({
-    store,
-    artifactReader: {
-      read: async (artifactRef) => {
-        const bytes = artifacts.get(artifactRef);
-        if (!bytes) throw new Error("retained package artifact is unavailable");
-        return bytes;
-      },
-    },
-    verifier,
-    now: () => "2026-07-19T00:00:00.000Z",
-  });
-
-  for (const [position, entry] of publishedSet.entries.entries()) {
-    const envelope = await buildInstallEnvelope(retained, entry);
-    if (position === 0) {
-      await assertTransparencyTamperRejected(signatureVerifier, envelope);
-    }
-    const artifactRef = `retained:takoform/${entry.kind}/${publishedSet.packageVersion}`;
-    artifacts.set(artifactRef, envelope);
-    const installed = await registry.installPackage({
-      artifactRef,
-      expectedPackageDigest: entry.packageDigest,
-      actorId: "operator:published-package-host-proof",
-    });
+    }),
+  );
+  const packages: ReviewedPublishedPackageInstallArtifact[] = [];
+  for (const entry of [...publishedSet.entries].sort((left, right) =>
+    left.kind.localeCompare(right.kind),
+  )) {
+    const envelopeBytes = await buildInstallEnvelope(retained, entry);
+    const verified = await verifier.verify(envelopeBytes, entry.packageDigest);
     if (
-      installed.packageDigest !== entry.packageDigest ||
-      !sameJson(installed.definitionRefs, [entry.formRef])
+      verified.packageDigest !== entry.packageDigest ||
+      !sameJson(
+        verified.definitions.map(({ formRef }) => formRef),
+        [entry.formRef],
+      )
     ) {
-      throw new Error(`${entry.kind} installed identity drifted`);
+      throw new Error(`${entry.kind} verified identity drifted`);
     }
-  }
-
-  // Re-read trust bytes and construct fresh verifier/service objects. This is
-  // deliberately repo-regression evidence, not a durable substrate restart.
-  const reconstructedTrustedRoot = await retained.read(trustedRootPath);
-  assertDigest(
-    reconstructedTrustedRoot,
-    pins.trustedRoot.digest,
-    "reconstructed TrustedRoot",
-  );
-  const reconstructedVerifier = new TakoformDataOnlyPackageVerifier(
-    createSignatureVerifier(reconstructedTrustedRoot),
-  );
-  const reconstructed = new FormRegistryService({
-    store,
-    artifactReader: {
-      read: async (artifactRef) => {
-        const bytes = artifacts.get(artifactRef);
-        if (!bytes) throw new Error("retained package artifact is unavailable");
-        return bytes;
-      },
-    },
-    verifier: reconstructedVerifier,
-    now: () => "2026-07-19T00:00:00.000Z",
-  });
-  for (const entry of publishedSet.entries) {
-    const identity = {
-      formRef: entry.formRef,
+    packages.push({
+      kind: entry.kind,
+      releaseTag: entry.releaseTag,
       packageDigest: entry.packageDigest,
-    };
-    await reconstructed.getRetainedIdentity(identity);
-    await reconstructed.verifyRetainedIdentity(identity);
-    await reconstructed.installPackage({
-      artifactRef: `retained:takoform/${entry.kind}/${publishedSet.packageVersion}`,
-      expectedPackageDigest: entry.packageDigest,
-      actorId: "operator:published-package-host-proof",
+      formRef: entry.formRef,
+      envelopeBytes,
     });
   }
-
   return {
-    kind: "takosumi.takoform-published-package-host-proof@v1",
-    status: "passed",
-    evidenceLevel: "repo_regression",
-    packageCount: publishedSet.entries.length,
-    kinds: publishedSet.entries.map(({ kind }) => kind).sort(),
-    releaseCommits: [
-      ...new Set(
-        publishedSet.entries.map(({ releaseCommit }) => releaseCommit),
-      ),
-    ].sort(),
-    packageVersion: publishedSet.packageVersion,
-    definitionVersion: publishedSet.definitionVersion,
-    publishedSetDigest: sha256(publishedSetBytes),
+    format: "takosumi.reviewed-takoform-package-install-set@v1",
+    repository: pins.repository,
+    checkoutCommit: pins.checkoutCommit,
+    releaseCommit: pins.releaseCommit,
+    packageVersion: pins.packageVersion,
+    definitionVersion: pins.definitionVersion,
+    publishedSet: pins.publishedSet,
+    publishedTrust: pins.publishedTrust,
+    packageIndexPolicy: pins.packageIndexPolicy,
+    trustedRoot: { ...pins.trustedRoot, bytes: trustedRootBytes },
+    publisher,
     verifierId: verifier.id,
-    transparencyTamperRejection: "passed",
-    installReplay: "passed",
-    serviceReconstructionReverification: "passed",
-    admissionStatus: publishedSet.admissionStatus,
-    unsettledPublisherRoles: [...trust.unsettledPublisherRoles].sort(),
-    revocationCheckpointStatus: publishedSet.revocationCheckpointStatus,
+    packages,
   };
 }
 
@@ -590,15 +708,19 @@ export function parseChecksums(text: string): ReadonlyMap<string, string> {
   return checksums;
 }
 
-class RetainedRoot {
+export class RetainedRoot {
   private constructor(private readonly root: string) {}
 
   static async open(path: string): Promise<RetainedRoot> {
     if (!path.trim()) throw new Error("--takoform-root is required");
-    const root = await realpath(resolve(path));
-    const status = await lstat(root);
+    const requestedRoot = resolve(path);
+    const status = await lstat(requestedRoot);
     if (!status.isDirectory() || status.isSymbolicLink()) {
       throw new Error("Takoform retained root must be a real directory");
+    }
+    const root = await realpath(requestedRoot);
+    if (root !== requestedRoot) {
+      throw new Error("Takoform retained root must not traverse a symlink");
     }
     return new RetainedRoot(root);
   }
@@ -636,11 +758,12 @@ class RetainedRoot {
     if (
       !status.isFile() ||
       status.isSymbolicLink() ||
+      (status.mode & 0o7133) !== 0 ||
       status.size <= 0 ||
       status.size > maxBytes
     ) {
       throw new Error(
-        `retained artifact ${path} is not a bounded regular file`,
+        `retained artifact ${path} is not a bounded non-executable private-write regular file`,
       );
     }
     const bytes = new Uint8Array(await readFile(absolute));
@@ -666,10 +789,27 @@ class RetainedRoot {
     if (fromRoot.startsWith("..") || isAbsolute(fromRoot)) {
       throw new Error(`retained artifact path escapes root: ${path}`);
     }
+    let component = this.root;
+    const parts = path.split("/");
+    for (const [index, part] of parts.entries()) {
+      component = resolve(component, part);
+      const status = await lstat(component);
+      if (status.isSymbolicLink()) {
+        throw new Error(`retained artifact path contains a symlink: ${path}`);
+      }
+      if (index < parts.length - 1 && !status.isDirectory()) {
+        throw new Error(
+          `retained artifact path contains a non-directory: ${path}`,
+        );
+      }
+    }
     const resolved = await realpath(absolute);
     const resolvedFromRoot = relative(this.root, resolved);
     if (resolvedFromRoot.startsWith("..") || isAbsolute(resolvedFromRoot)) {
       throw new Error(`retained artifact symlink escapes root: ${path}`);
+    }
+    if (resolved !== absolute) {
+      throw new Error(`retained artifact path is not canonical: ${path}`);
     }
     return resolved;
   }
@@ -876,10 +1016,10 @@ function assertPublishedSet(
     value.repository !== pins.repository ||
     value.packageVersion !== pins.packageVersion ||
     value.definitionVersion !== pins.definitionVersion ||
-    value.entries.length !== EXPECTED_KINDS.length ||
+    value.entries.length !== REVIEWED_TAKOFORM_PACKAGE_KINDS.length ||
     !sameJson(
       value.entries.map(({ kind }) => kind).sort(),
-      [...EXPECTED_KINDS].sort(),
+      [...REVIEWED_TAKOFORM_PACKAGE_KINDS].sort(),
     ) ||
     value.entries.some(
       (entry) =>
