@@ -68,10 +68,12 @@ Takosumi OSS:
   Run / StateVersion / Output / audit
   Target / TargetPool / Policy / Adapter / credentials / Interface
   generic noncommercial FormActivation
+  generic noncommercial Offering catalog / audience / availability resolution
 
 Takosumi Cloud closed layer:
-  exact official ServiceOffering
+  realized official Offering catalog contributions
   official targets, capacity, managers, native implementations, credentials
+  commercial Offering binding and customer-facing availability
   price / rating / billing / quota / abuse / SLA / support
 ```
 
@@ -97,6 +99,24 @@ ProviderBinding without a Form Package or proprietary manifest. A versioned Comp
 Adapter may optionally project supported provider/vendor operations onto an exact Takoform
 FormRef, but both paths converge on the same Resource/Run/state/output/audit authority. A
 provider-native resource with no approved Form remains ordinary Stack state.
+
+Takosumi's Offering mechanism is likewise not Takoform-specific. OSS owns an
+exact, versioned, noncommercial `Offering` catalog whose subject is an open
+namespaced `type + ref + version + digest`, an explicit audience, and an
+installed subject resolver. A Form-backed Offering is one subject type and
+re-reads an exact FormActivation as a prerequisite. A Capsule distribution,
+provider-backed operator service, protocol endpoint, or another future subject
+can install its own resolver without becoming a Form or changing the Offering
+engine. Unknown subject types, absent resolvers, stale requirements, and
+non-exact resolution evidence fail closed.
+
+Cloud does not own a second Offering selection engine. It contributes realized
+catalog rows and resolvers to the OSS mechanism, then binds an exact selected
+Offering to manager/capacity/SKU/PriceCatalog/payment evidence in its closed
+commercial layer. The current Cloud-local `ServiceOffering` name is migration
+surface for that commercial binding, not the owner of generic availability or
+selection logic. SKU, price, payment, manager credentials, raw capacity, SLA,
+and support never enter the OSS Offering contract.
 
 Current implementation must be described honestly:
 
@@ -140,20 +160,23 @@ forms installed. A composition may explicitly pin a trusted Form Package,
 Host Extension/Adapter, target implementation, and FormActivation.
 
 Definition publication, host installation, executable implementation,
-FormActivation, and closed ServiceOffering are independent states. Portable
-host discovery reports definition known, installed, executable, activated, and
-available-to-principal with bounded reasons. A separate closed Cloud catalog
-projection reports customer-visible ServiceOffering/version, region, SKU,
-price, and availability keyed by the same exact FormRef and FormActivation.
+FormActivation, generic Offering, and a closed commercial binding are
+independent states. Portable host discovery reports definition known,
+installed, executable, activated, and available-to-principal with bounded
+reasons. Generic Offering discovery reports the exact subject/version and
+principal availability without commercial fields. A separate closed Cloud
+projection adds region, SKU, price, and commercial availability keyed by the
+same exact Offering selection.
 The portable wire contains no commercial field, and neither response exposes a
 private manager, credential, or raw capacity. A provider knowing a static
-schema does not imply that the selected host offers it.
+schema does not imply that the selected host offers it, and a generic Offering
+does not imply that Takosumi Cloud sells it.
 
 `FormRef` contains `apiVersion`, `kind`, `definitionVersion`, and
 `schemaDigest`. `packageDigest` identifies the immutable package envelope and
 is stored beside the FormRef, never inside it. Stored Resources resolve to an
-exact immutable FormRef; ResolutionLock, FormActivation, and ServiceOffering
-pin that identity. Referenced package bytes remain available for
+exact immutable FormRef; ResolutionLock, FormActivation, and a Form-backed
+Offering pin that identity. Referenced package bytes remain available for
 observe/delete and lifecycle replay.
 FormRef persistence uses the additive D1 v46 / Postgres v94 migrations after
 the D1 v45 / Postgres v93 Service Form Registry heads; released migration
@@ -182,8 +205,10 @@ contains credentials or native values.
 Keep external infrastructure on industry-standard providers when those
 providers already work. Define a durable provider-neutral Service Form only
 when its semantics pass the portability and conformance gate. A Takosumi host
-may install, realize, and activate that exact form; Takosumi Cloud may attach a
-closed exact ServiceOffering. Standard and vendor-compatible protocols are
+may install, realize, activate, and offer that exact form through the generic
+Offering engine; Takosumi Cloud may attach a closed commercial binding. The
+same engine can offer non-Form subjects through separately installed
+resolvers. Standard and vendor-compatible protocols are
 entrances or data planes for the same host-owned Resource; they are not
 definition authorities, backend implementations, or competing ledgers.
 
@@ -1086,7 +1111,9 @@ exact FormRef from an installed Form Package
 The Service Form defines deterministic portable semantics. The Takosumi
 operator decides which package is trusted, which implementations and targets
 can satisfy it, and whether a generic FormActivation exposes it to an
-authorized audience. None of those facts creates a Cloud ServiceOffering.
+authorized audience. None of those facts creates a generic Offering
+automatically, and a generic Offering never creates a Cloud commercial binding
+automatically.
 
 Resource materialization uses the same OpenTofu runner and `Run` ledger as a
 plain Stack, but the Run subject is the Resource itself. A module-backed Adapter
@@ -1253,6 +1280,7 @@ ProviderBinding
 generic env provider support
 Service Form host framework (current `Resource Shape` compatibility API)
 Form Registry / FormActivation
+generic Offering catalog / resolver / audience / exact selection
 Resolver / Planner / Reconciler
 Target / TargetPool
 Credential / OIDC / Workload Identity
@@ -1291,6 +1319,7 @@ quota / metering / invoice / payment integration
 DB-backed operator configuration
 CLI / API / runbook operations
 managed target offerings
+realized Offering catalogs and subject resolvers
 support and abuse tooling
 commercial audit export
 ```
@@ -1308,6 +1337,7 @@ It adds official operation:
 ```text
 official account system
 official runner and target pools
+official Offering catalog contributions and subject resolvers
 official versioned pricing, billing, and invoicing
 official usage metering
 official support / SLA / abuse controls
@@ -1455,11 +1485,13 @@ All Cloud-managed service entrypoints share the Cloud extension boundary before
 any backend API call:
 
 ```text
-Takoform / control-plane Compatibility API / Dashboard / CLI / direct API
+Service Form clients (including Takoform) / versioned control compatibility API / Dashboard / CLI / direct API
   -> auth + source Workspace + owner billing account
   -> provider-neutral Resource desired state
   -> Deploy API preview
-  -> exact FormRef + FormActivation + ServiceOffering resolution
+  -> exact OSS Offering selection
+     (this Form subject re-reads exact FormRef + FormActivation)
+  -> closed commercial binding + manager/capacity readiness
   -> versioned PriceCatalog + DeploymentQuote
   -> apply with quote id + quote digest
   -> billing reservation
@@ -1470,9 +1502,12 @@ Takoform / control-plane Compatibility API / Dashboard / CLI / direct API
   -> usage rating + invoice reconciliation
 ```
 
-The versioned `ServiceOffering` catalog is the Cloud source of truth for which
-exact FormRefs, generic activations, regions, implementation fingerprints,
-managers, and SKUs can be sold. The versioned `PriceCatalog` is the source of truth for fixed, minimum,
+The versioned OSS `Offering` catalog is the source of truth for which exact
+subjects are available to a principal; a Form subject binds its exact FormRef,
+package, and activation through its installed resolver. The closed commercial
+binding is the Cloud source of truth for which exact Offering selections,
+implementation fingerprints, managers, capacity, and SKUs can be sold. The
+versioned `PriceCatalog` is the source of truth for fixed, minimum,
 and usage prices. A service form with no active offering, a billable SKU with no
 price, an unconfigured manager, or an expired/mismatched quote fails before a
 billing reservation and before any backend API call. A free SKU is an explicit
@@ -1761,8 +1796,9 @@ list is a candidate vocabulary, not a commitment to recreate vendor provider
 resources. Admit a form only when portable governance defines its lifecycle,
 import/drift, security, and conformance semantics and at least one real host
 implementation exists. Takosumi owns each hosted Resource's lifecycle,
-bindings, resolution, policy, and audit; a Cloud ServiceOffering separately
-owns official metering and sale. A standard API may remain its compatibility or
+bindings, resolution, policy, and audit; a generic OSS Offering separately
+owns noncommercial availability, while a Cloud commercial binding owns
+official metering and sale. A standard API may remain its compatibility or
 data-plane surface without creating another lifecycle authority. External
 infrastructure that an operator does not offer as a managed service remains on
 its mature provider through the Stack flow.
@@ -2355,12 +2391,15 @@ support and abuse workflows
 Takosumi Cloud pricing is explicit and versioned:
 
 ```text
-ServiceOffering:
+Offering (OSS):
   offering id / version
-  exact FormRef (apiVersion / kind / definitionVersion / schemaDigest)
-  generic FormActivation reference
-  region / profile / implementation fingerprint / manager id
-  enabled capabilities and lifecycle actions
+  open exact subject type / ref / version / digest
+  exact requirement references (Form subjects use FormActivation)
+  audience / region / profile / maturity / active state
+
+CommercialOfferingBinding (Cloud):
+  exact Offering catalog/id/version + resolution fingerprint
+  implementation fingerprint / manager id / capacity readiness
   referenced SKU ids
 
 PriceCatalog:
@@ -2372,18 +2411,20 @@ PriceCatalog:
 DeploymentQuote:
   quote id / issued at / expiry / quote digest
   Resource desired-state digest
-  exact FormRef / resolution fingerprint / ServiceOffering version
+  exact Offering selection / resolution fingerprint / commercial binding version
   PriceCatalog id / version
   fixed and estimated usage line items
   subtotal / tax treatment / estimated total micros / currency
 ```
 
-`ServiceOffering` is a closed operator/Cloud record, not a portable Form
-Package field. A definition may remain installed after an offering is disabled;
-an implementation may remain executable without being commercially offered.
-Cloud admission fails before reserve/backend work unless the exact definition,
-generic FormActivation, implementation fingerprint, target/manager readiness,
-SKU, and price version all match.
+The current Cloud-local `ServiceOffering` record is migrated into the generic
+OSS Offering plus a closed `CommercialOfferingBinding`; it is not a portable
+Form Package field or a second selection engine. A definition may remain
+installed after an offering is disabled; an implementation may remain
+executable without being generically or commercially offered. Cloud admission
+fails before reserve/backend work unless the exact Offering selection,
+subject-specific requirements, resolution/implementation fingerprints,
+target/manager readiness, SKU, and price version all match.
 
 ### Public plans and tax
 
@@ -2593,6 +2634,8 @@ Capsule Interface blueprint ownership, operator cleanup of retained historical r
 supported old provider state has no-op migration and rollback proof
 TargetPool/Policy/Adapter remain usable but live in operator/advanced UX
 FormActivation is generic OSS policy with no price/payment/capacity fields
+generic Offering supports open subject types, exact catalog/id/version selection, explicit audience, installed resolver readiness, and no commercial/private fields
+Form-backed Offerings pin exact FormRef/package identity and an exact FormActivation prerequisite without making Takoform the Offering type system
 D1/Postgres additive FormRef migration, backup, restore, and retained-definition delete proof exists
 Resource/Run/state/output/audit recovery and migration evidence is complete
 OSS-to-Cloud dependency and package/provider secret-leakage gates pass
@@ -2601,7 +2644,8 @@ OSS-to-Cloud dependency and package/provider secret-leakage gates pass
 Takosumi Cloud may call a Service Form Stable only when it additionally proves:
 
 ```text
-an active versioned ServiceOffering pins exact FormRef + generic FormActivation
+an active versioned generic Offering subject pins exact FormRef/package + generic FormActivation
+the closed commercial binding pins that exact Offering selection, not a parallel catalog decision
 the offered exact FormRef is an approved standard definition with portable semantic and conformance evidence, not only a legacy compatibility definition
 installed definition + executable implementation + target/manager readiness
 immutable implementation fingerprint and PriceCatalog/SKU versions
@@ -2636,7 +2680,8 @@ AI Gateway service endpoint
 Verified custom-domain lifecycle
 ```
 
-The two non-form services do not require FormRef or FormActivation. Every item in the wider Cloud
+The two non-form services use generic non-Form Offering subjects and do not
+require FormRef or FormActivation. Every item in the wider Cloud
 GA service-surface set must pass lifecycle, provider/API compatibility where applicable,
 price coverage, immutable metering, spend enforcement, invoice reconciliation,
 recovery, tenant isolation, dashboard, and live operator evidence before any of
@@ -2662,35 +2707,43 @@ self-test, a descriptor, an unconfigured manager, or one green client.
    retain old packages, and prove D1/Postgres backup/restore.
 6. Replace bundled parser/default authority with an installed Form Registry;
    make Core zero-form and add generic noncommercial FormActivation.
-7. Implement neutral interoperability and structured availability as a second
+7. Add the OSS generic Offering catalog/resolver/selection engine. Make exact
+   Takoform/FormActivation one subject adapter, not the catalog type; require
+   explicit installed resolvers for non-Form subjects and reject commercial or
+   private fields in the generic contract.
+8. Implement neutral interoperability and structured availability as a second
    client route over the same Resource service. Dual-advertise current aliases
    until semantic/state migration evidence permits removal.
-8. Release the portable typed form provider independently. Keep the mixed
+9. Release the portable typed form provider independently. Keep the mixed
    Takosumi provider as discontinued state/migration custody only; use
    Takosumi API/CLI/dashboard for operator administration.
-9. Make dashboard/CLI render exact definition, installed, executable,
-   activated, and Cloud-offered states without hard-coded form ownership.
-10. Migrate Cloud ServiceOffering, quote, admission, and evidence from a loose
-    form string to exact FormRef + FormActivation + implementation fingerprint.
-11. Keep every compatibility control profile translating into the Deploy API
+10. Make dashboard/CLI render exact definition, installed, executable,
+    activated, generically offered, and commercially available states without
+    hard-coded form ownership.
+11. Migrate the Cloud commercial catalog, quote, admission, and evidence from a
+    loose form string to exact OSS Offering selection + implementation
+    fingerprint. Form subjects additionally retain exact FormRef/FormActivation.
+12. Keep every compatibility control profile translating into the Deploy API
     and every data-plane profile resolving canonical Ready Resources.
-12. Complete one canonical meter/price/quote/reserve/capture/release/invoice
+13. Complete one canonical meter/price/quote/reserve/capture/release/invoice
     ledger and every selected Cloud manager/data plane without exposing a
     provider-shaped parallel lifecycle.
-13. Prototype and rehearse provider address/type state migration, import,
+14. Prototype and rehearse provider address/type state migration, import,
     no-op refresh, rollback, registry/mirror, and air-gap paths before changing
     public vocabulary or removing an alias.
-14. Simplify default UX to service -> inputs -> price -> preview -> deploy while
+15. Simplify default UX to service -> inputs -> price -> preview -> deploy while
     keeping targets, policy, adapters, meters, and recovery in advanced/operator
     views. Require the full OSS and Cloud evidence matrices before GA.
 
 ## 16. Final Sentence
 
 The portable project defines exact versioned Service Forms and typed client
-interoperability; Takosumi remains an optional zero-form Git + OpenTofu host and
-the sole Resource lifecycle authority; Takosumi Cloud privately decides which
-exact FormRefs it implements, activates as official ServiceOfferings, prices,
-bills, and supports. Existing providers remain the Stack-flow path, all
+interoperability; Takosumi remains an optional zero-form Git + OpenTofu host,
+the sole Resource lifecycle authority, and the owner of an open generic
+Offering selection engine in which Takoform is one subject type. Takosumi Cloud
+contributes official subjects/resolvers and privately binds exact Offering
+selections to implementations, capacity, prices, billing, and support. Existing
+providers remain the Stack-flow path, all
 compatibility entrances converge on the same canonical Resource, and Capsule /
 Resource runtimes use the non-secret Interface/InterfaceBinding layer while
 OpenTofu Outputs remain ordinary module return values.
