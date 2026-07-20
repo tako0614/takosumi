@@ -333,6 +333,73 @@ export function offeringCatalogProblems(value: unknown): readonly string[] {
   return problems.sort();
 }
 
+/**
+ * Validate the complete public OfferingSelection envelope at host boundaries.
+ * A commercial host may construct this value, so callers must not rely on the
+ * TypeScript type alone before persisting or returning it.
+ */
+export function offeringSelectionProblems(value: unknown): readonly string[] {
+  if (
+    !recordWithExactKeys(value, [
+      "reference",
+      "subject",
+      "requirements",
+      "profile",
+      "region",
+      "maturity",
+      "resolverId",
+      "resolutionFingerprint",
+      "resolvedAt",
+    ])
+  ) {
+    return ["selection_envelope_invalid"];
+  }
+  const problems: string[] = [];
+  if (
+    !recordWithExactKeys(value.reference, [
+      "catalogId",
+      "catalogVersion",
+      "offeringId",
+      "offeringVersion",
+    ]) ||
+    !TOKEN.test(string(value.reference.catalogId)) ||
+    !TOKEN.test(string(value.reference.catalogVersion)) ||
+    !TOKEN.test(string(value.reference.offeringId)) ||
+    !TOKEN.test(string(value.reference.offeringVersion))
+  ) {
+    problems.push("selection_reference_invalid");
+  }
+  if (!subjectReference(value.subject)) {
+    problems.push("selection_subject_invalid");
+  }
+  if (
+    !Array.isArray(value.requirements) ||
+    value.requirements.some(
+      (requirement) => !requirementReference(requirement),
+    ) ||
+    new Set(value.requirements.map(requirementKey)).size !==
+      value.requirements.length
+  ) {
+    problems.push("selection_requirements_invalid");
+  }
+  if (!TOKEN.test(string(value.profile)) || !TOKEN.test(string(value.region))) {
+    problems.push("selection_placement_invalid");
+  }
+  if (value.maturity !== "stable" && value.maturity !== "preview") {
+    problems.push("selection_maturity_invalid");
+  }
+  if (!TOKEN.test(string(value.resolverId))) {
+    problems.push("selection_resolver_invalid");
+  }
+  if (!SHA256.test(string(value.resolutionFingerprint))) {
+    problems.push("selection_fingerprint_invalid");
+  }
+  if (!isoTimestamp(value.resolvedAt)) {
+    problems.push("selection_resolved_at_invalid");
+  }
+  return problems.sort();
+}
+
 function audienceAllows(
   offering: Offering,
   principalId: string | undefined,

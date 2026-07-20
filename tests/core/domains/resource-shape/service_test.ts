@@ -2215,6 +2215,40 @@ test("rated quote rejects an OfferingSelection for a different offering", async 
   }
 });
 
+test("rated quote rejects a structurally invalid OfferingSelection", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const admission = new RecordingDeploymentAdmission();
+  admission.quoteFactory = (context) => {
+    const quote = ratedQuote(context);
+    return {
+      ...quote,
+      offeringSelection: {
+        ...quote.offeringSelection!,
+        subject: {
+          ...quote.offeringSelection!.subject,
+          digest: "not-a-digest",
+        },
+        resolvedAt: "0",
+      },
+    };
+  };
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new StubResourceShapeAdapter(),
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const preview = await service.preview(APPLY);
+  expect(preview.ok).toBe(false);
+  if (!preview.ok) {
+    expect(preview.error.code).toBe("deployment_quote_invalid");
+    expect(preview.error.message).toContain("OfferingSelection");
+  }
+});
+
 test("import admission can fail closed before adapter or lifecycle writes", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new ImportingAdapter();

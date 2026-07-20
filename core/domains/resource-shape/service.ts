@@ -87,6 +87,7 @@ import {
   EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY,
 } from "./planner.ts";
 import { secretLikeJsonPath } from "./secret_guard.ts";
+import { offeringSelectionProblems } from "../offerings/service.ts";
 import type { ActivityLedger } from "../activity/mod.ts";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import type {
@@ -5912,9 +5913,7 @@ function deploymentQuoteError(
       selection.reference.offeringId !== quote.offeringId ||
       selection.reference.offeringVersion !== quote.offeringVersion ||
       selection.region !== quote.region ||
-      !selection.resolverId.trim() ||
-      !SHA256_DIGEST_PATTERN.test(selection.resolutionFingerprint) ||
-      !Number.isFinite(Date.parse(selection.resolvedAt))
+      offeringSelectionProblems(selection).length > 0
     ) {
       return "rated deployment quote OfferingSelection does not match its exact catalog identity";
     }
