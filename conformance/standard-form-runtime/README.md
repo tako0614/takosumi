@@ -4,7 +4,7 @@ This directory contains the Takosumi-owned executable fixtures used only to
 exercise a real portable-host lifecycle. It is not part of a Takoform Form
 Package and grants no host, target, capacity, billing, or admission authority.
 
-Runtime release `v1.0.2` closes over two local modules and one external OCI
+Runtime release `v1.0.3` closes over two local modules and one external OCI
 manifest for the still-unpublished Takoform Form Package `1.0.1` / provider
 `0.1.1` evidence set:
 
@@ -23,7 +23,7 @@ bun run service-form:runtime-artifacts:oci-readback
 
 The ecosystem release-safety registry now owns this exact surface and its fixed
 adapter. The workflow has two fail-closed `workflow_dispatch` phases and accepts
-only the signed annotated `standard-form-runtime-v1.0.2` tag and its exact source
+only the signed annotated `standard-form-runtime-v1.0.3` tag and its exact source
 commit. `candidate` runs the full quality gate, builds the release bytes once,
 emits the deterministic SPDX 2.3 SBOM, keyless-signs the release manifest,
 attests the assets and SBOM, and uploads one closed Actions artifact without
@@ -37,9 +37,10 @@ run id and bound digests. Promotion runs in the
 of the controller dispatch. The protected environment must carry the exact
 per-release controller authorization digest; a direct or replayed dispatch
 cannot substitute a syntactically valid value. It also carries a ruleset audit
-credential that GitHub permits to see the otherwise omitted `bypass_actors`
-field; the workflow uses that credential only for two ruleset reads. The
-repository must have immutable releases enabled and an active, no-bypass tag ruleset named
+credential that GitHub permits to read repository settings, including the
+otherwise omitted `bypass_actors` field; the workflow uses that credential only
+for the immutable-release readback and two ruleset reads. The repository must
+have immutable releases enabled and an active, no-bypass tag ruleset named
 `standard-form-runtime-release-tags` that denies update and deletion for only
 `refs/tags/standard-form-runtime-v*`.
 
