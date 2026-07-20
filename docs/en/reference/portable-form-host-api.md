@@ -104,7 +104,13 @@ fixtures.
 `takoform.standard-runner-report@v1` JSON for the host half of portable-standard
 admission. This mode fails closed unless create/read/update/delete/import/
 observe/refresh/drift and at least one positive and negative fixture actually
-passed. It does not sign, publish, or activate admission evidence. The Takoform
+passed. `--package-root` is also required. The runner verifies that its exact
+FormRef, positive desired document, and complete negative fixture closure equal
+that retained package and binds each package-file digest to the effective
+canonical input digest. The report embeds only the non-secret lifecycle
+summary; Takoform recomputes its RFC 8785 digest during admission. Artifact
+locations, desired values, connection documents, and runner-local paths are not
+echoed. It does not sign, publish, or activate admission evidence. The Takoform
 admission release process owns publisher policy, Sigstore signing, provider
 evidence, exact package closure, and immutable admission activation.
 
@@ -122,6 +128,7 @@ bun run service-form:host-conformance -- \
   --updated-desired /private/evidence/<kind>/updated-desired.json \
   --positive-fixture-name canonical \
   --negative-fixtures /private/evidence/<kind>/negative-fixtures.json \
+  --package-root /private/readback/takoform/<kind> \
   --token-env TAKOSUMI_DEPLOY_CONTROL_TOKEN \
   --import-native-id-env TAKOFORM_IMPORT_NATIVE_ID \
   --expect-drift true \

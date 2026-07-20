@@ -9,6 +9,7 @@ import {
   portableStandardHostRunnerReport,
   runPortableFormHostConformance,
 } from "../core/conformance/portable_form_host.ts";
+import { readExactPackageFixtureBindings } from "./lib/takoform-package-fixture-bindings.ts";
 
 const args = parseArgs(process.argv.slice(2));
 const endpoint = required(args, "endpoint");
@@ -70,12 +71,23 @@ if (outputFormat === "standard-runner-report") {
   if (negativeFixtures.length === 0) missing.push("--negative-fixtures");
   if (!importNativeId) missing.push("--import-native-id-env with a set value");
   if (!expectDrift) missing.push("--expect-drift true --drift-signal-file");
+  if (!args["package-root"]) missing.push("--package-root");
   if (missing.length > 0) {
     throw new TypeError(
       `standard-runner-report requires ${missing.join(", ")}`,
     );
   }
 }
+
+const packageBindings = args["package-root"]
+  ? await readExactPackageFixtureBindings({
+      root: args["package-root"],
+      identity,
+      positiveFixtureName,
+      desired: desired as JsonObject,
+      negativeFixtures,
+    })
+  : undefined;
 
 const report = await runPortableFormHostConformance({
   endpoint,
@@ -85,6 +97,12 @@ const report = await runPortableFormHostConformance({
   desired: desired as JsonObject,
   ...(updatedDesired ? { updatedDesired: updatedDesired as JsonObject } : {}),
   positiveFixtureName,
+  ...(packageBindings
+    ? {
+        positivePackageFixtureDigest: packageBindings.positive,
+        negativePackageFixtureDigests: packageBindings.negative,
+      }
+    : {}),
   negativeFixtures,
   ...(token ? { token } : {}),
   ...(importNativeId ? { importNativeId } : {}),
@@ -127,7 +145,7 @@ function parseArgs(values: readonly string[]): Record<string, string> {
     const value = values[index + 1];
     if (!key?.startsWith("--") || !value) {
       throw new TypeError(
-        "usage: --endpoint URL --space ID --name NAME --identity FILE --desired FILE [--updated-desired FILE] [--positive-fixture-name NAME] [--negative-fixtures FILE] [--token-env ENV] [--import-native-id-env ENV] [--expect-drift true --drift-signal-file FILE] [--output-format portable-report|standard-runner-report]",
+        "usage: --endpoint URL --space ID --name NAME --identity FILE --desired FILE [--updated-desired FILE] [--positive-fixture-name NAME] [--negative-fixtures FILE] [--package-root DIR] [--token-env ENV] [--import-native-id-env ENV] [--expect-drift true --drift-signal-file FILE] [--output-format portable-report|standard-runner-report]",
       );
     }
     result[key.slice(2)] = value;
