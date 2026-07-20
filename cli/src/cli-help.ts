@@ -30,6 +30,7 @@ export function helpText(): string {
       "  connections             operator connection と internal resolver を管理",
       "  install-configs         versioned service-side config patch を適用",
       "  form-activations        exact FormRef の公開ポリシーを管理",
+      "  form-packages           信頼済み Form Package を install / reverify",
       "  target-pools            TargetPool 宣言を管理",
       "  space-policies          SpacePolicy 宣言を管理",
       "",
@@ -58,6 +59,7 @@ export function helpText(): string {
     "  connections             Manage operator connections and internal resolvers",
     "  install-configs         Apply versioned service-side config patches",
     "  form-activations        Manage exact FormRef audience policy",
+    "  form-packages           Install or reverify trusted Form Packages",
     "  target-pools            Manage TargetPool declarations",
     "  space-policies          Manage SpacePolicy declarations",
     "",
@@ -156,6 +158,33 @@ export function formActivationsHelpText(): string {
     "  update <id> --file <activation-update.json>",
     "",
     "Only the operator bearer may use this API. FormActivation contains no price, SKU, billing, capacity, or SLA.",
+    "Common options: --url, --token, --json",
+  ].join("\n");
+}
+
+export function formPackagesHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi form-packages <command>",
+      "",
+      "コマンド:",
+      "  install --file <package-install.json>",
+      "  reverify --file <installed-form-reference.json>",
+      "",
+      "host-internal deploy-control URL と instance-wide operator bearer が必要です。",
+      "package bytes、署名 trust policy、secret は request file に含めません。",
+      "共通オプション: --url、--token、--json",
+    ].join("\n");
+  }
+  return [
+    "takosumi form-packages <command>",
+    "",
+    "Commands:",
+    "  install --file <package-install.json>",
+    "  reverify --file <installed-form-reference.json>",
+    "",
+    "Requires the host-internal deploy-control URL and an instance-wide operator bearer.",
+    "Do not put package bytes, signing trust policy, or secrets in the request file.",
     "Common options: --url, --token, --json",
   ].join("\n");
 }

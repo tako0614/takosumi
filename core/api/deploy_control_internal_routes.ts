@@ -91,6 +91,10 @@ import {
   mountDeployControlResourceFormPinRoutes,
 } from "./deploy_control_resource_form_pin_routes.ts";
 import {
+  DEPLOY_CONTROL_FORM_PACKAGE_ENDPOINTS,
+  mountDeployControlFormPackageRoutes,
+} from "./deploy_control_form_package_routes.ts";
+import {
   DEPLOY_CONTROL_OUTPUT_INTERFACE_MIGRATION_ENDPOINTS,
   mountDeployControlOutputInterfaceMigrationRoutes,
 } from "./deploy_control_output_interface_migration_routes.ts";
@@ -135,6 +139,7 @@ const DEPLOY_CONTROL_INTERNAL_ENDPOINTS_RICH: readonly DeployControlEndpoint[] =
     ...DEPLOY_CONTROL_BILLING_ENDPOINTS,
     ...DEPLOY_CONTROL_RESOURCE_STATE_ADOPTION_ENDPOINTS,
     ...DEPLOY_CONTROL_RESOURCE_FORM_PIN_ENDPOINTS,
+    ...DEPLOY_CONTROL_FORM_PACKAGE_ENDPOINTS,
     ...DEPLOY_CONTROL_OUTPUT_INTERFACE_MIGRATION_ENDPOINTS,
   ];
 
@@ -178,6 +183,7 @@ export function mountDeployControlInternalRoutes(
   mountDeployControlBillingRoutes(ctx);
   mountDeployControlResourceStateAdoptionRoutes(ctx);
   mountDeployControlResourceFormPinRoutes(ctx);
+  mountDeployControlFormPackageRoutes(ctx);
   mountDeployControlOutputInterfaceMigrationRoutes(ctx);
 }
 

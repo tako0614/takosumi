@@ -154,6 +154,12 @@ export const TAKOSUMI_WORKSPACE_RESOURCE_FORM_PIN_BACKFILL_ROUTE =
 /** Operator-only retained exact FormRef replay from a redacted backup sidecar. */
 export const TAKOSUMI_WORKSPACE_RESOURCE_FORM_PIN_RESTORE_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/resource-form-pins/restore` as const;
+/** Operator-only install of one immutable, verifier-approved Form Package. */
+export const TAKOSUMI_FORM_PACKAGE_INSTALL_ROUTE =
+  `${INTERNAL_V1_PREFIX}/form-packages/install` as const;
+/** Operator-only re-verification of one retained exact FormRef/package pair. */
+export const TAKOSUMI_FORM_PACKAGE_REVERIFY_ROUTE =
+  `${INTERNAL_V1_PREFIX}/form-packages/reverify` as const;
 /** Operator-only migration from retired runtime Output conventions. */
 export const TAKOSUMI_WORKSPACE_OUTPUT_INTERFACE_MIGRATION_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/output-interfaces` as const;

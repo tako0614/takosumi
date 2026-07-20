@@ -202,6 +202,20 @@ function deployControlSeam(env: DeployControlEnv) {
   return seam;
 }
 
+/**
+ * Dispatch one already-authenticated request through the platform's in-process
+ * deploy-control service. This is a host-composition seam, not edge routing:
+ * callers must expose only an explicit route subset and must authenticate
+ * before calling it. Generic `/internal/v1/*` edge ingress remains disabled by
+ * default and this function must never be mounted as a catch-all proxy.
+ */
+export async function dispatchPlatformDeployControlRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Promise<Response> {
+  return await deployControlSeam(env).fetch(request);
+}
+
 type PlatformDeployControlSeam = Pick<
   ReturnType<typeof createInProcessDeployControlSeam>,
   "fetch"

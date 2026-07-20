@@ -10,6 +10,7 @@ import {
 } from "./cli-accounts-commands.ts";
 import { runConnections } from "./cli-connections-commands.ts";
 import { runFormActivations } from "./cli-form-activation-commands.ts";
+import { runFormPackages } from "./cli-form-package-commands.ts";
 import { runFormAvailability } from "./cli-form-availability-commands.ts";
 import {
   runResources,
@@ -104,6 +105,9 @@ export async function main(
   }
   if (domain === "form-activations") {
     return await runFormActivations([command, ...rest].filter(Boolean), io);
+  }
+  if (domain === "form-packages") {
+    return await runFormPackages([command, ...rest].filter(Boolean), io);
   }
   if (domain === "form-availability") {
     return await runFormAvailability([command, ...rest].filter(Boolean), io);
