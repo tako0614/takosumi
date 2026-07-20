@@ -17,12 +17,26 @@ const ROOT = new URL("../..", import.meta.url).pathname;
 
 test("committed standard Form runtime candidate has an exact closed artifact set", async () => {
   const manifest = await verifyRuntimeArtifacts(ROOT);
-  expect(manifest.version).toBe("1.0.1");
+  expect(manifest.version).toBe("1.0.2");
   expect(manifest.assets.map(({ name }) => name)).toEqual([
     "durable-workflow.mjs",
     "edge-worker.mjs",
   ]);
   expect(manifest.externalArtifacts[0]?.platform).toBe("linux/amd64");
+});
+
+test("runtime 1.0.2 preserves the unpublished Form Package 1.0.1 executable fixture bytes", async () => {
+  for (const name of ["durable-workflow.mjs", "edge-worker.mjs"]) {
+    expect(
+      await readFile(
+        join(ROOT, "conformance", "standard-form-runtime", "v1.0.2", name),
+      ),
+    ).toEqual(
+      await readFile(
+        join(ROOT, "conformance", "standard-form-runtime", "v1.0.1", name),
+      ),
+    );
+  }
 });
 
 test("runtime verification rejects changed executable bytes", async () => {
@@ -36,7 +50,7 @@ test("runtime verification rejects changed executable bytes", async () => {
     root,
     "conformance",
     "standard-form-runtime",
-    "v1.0.1",
+    "v1.0.2",
     "edge-worker.mjs",
   );
   await writeFile(path, `${await readFile(path, "utf8")}\n`);
@@ -231,7 +245,7 @@ test("release readback converts only the fixed envelope checks to passed", () =>
     "passed",
   ]);
   expect(readback.releaseUrl).toBe(
-    "https://github.com/tako0614/takosumi/releases/tag/standard-form-runtime-v1.0.1",
+    "https://github.com/tako0614/takosumi/releases/tag/standard-form-runtime-v1.0.2",
   );
 });
 
@@ -254,6 +268,21 @@ test("runtime release workflow is fixed-controller-bound and promotion cannot re
   expect(workflow).toContain("age_seconds > 300");
   expect(workflow).toContain("standard-form-runtime-release-tags");
   expect(workflow).toContain(".bypass_actors == []");
+  expect(workflow).toContain('test "${VERSION}" = "1.0.2"');
+  const qualityGate = workflow.slice(
+    workflow.indexOf("- name: Run the complete source quality gate"),
+    workflow.indexOf("- name: Build the exact runtime release bytes once"),
+  );
+  expect(qualityGate).toContain("bun install --frozen-lockfile");
+  expect(qualityGate).toContain(
+    "(cd dashboard && bun install --frozen-lockfile)",
+  );
+  expect(qualityGate.indexOf("bun install --frozen-lockfile")).toBeLessThan(
+    qualityGate.indexOf("(cd dashboard && bun install --frozen-lockfile)"),
+  );
+  expect(
+    qualityGate.indexOf("(cd dashboard && bun install --frozen-lockfile)"),
+  ).toBeLessThan(qualityGate.indexOf("bun run check"));
   expect(workflow).not.toContain("--clobber");
   const promote = workflow.slice(workflow.indexOf("\n  promote:"));
   expect(promote).not.toContain("build-release");
