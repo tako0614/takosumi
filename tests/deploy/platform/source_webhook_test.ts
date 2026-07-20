@@ -71,6 +71,7 @@ import {
 } from "../../../deploy/platform/worker.ts";
 import { platformResourceInterfaceWorkspaceResolver } from "../../../worker/src/deploy_control_seam.ts";
 import { createManagedProviderRunToken } from "../../../core/shared/managed_provider_tokens.ts";
+import { sha256HexAsync } from "../../../core/shared/runtime/hash.ts";
 import {
   createInMemoryResourceShapeStores,
   MapResourceShapeSchemaRegistry,
@@ -3142,6 +3143,71 @@ test("platform Interface ingress rejects oversized control bodies before JSON pa
   );
   expect(response.status).toBe(413);
   expect((await response.json()).error).toBe("request_too_large");
+});
+
+test("platform Resource artifact ingress preserves authenticated binary bodies above the JSON limit", async () => {
+  const writes: Uint8Array[] = [];
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
+    TAKOSUMI_RESOURCE_ARTIFACT_WRITER: {
+      prepare: () => ({ maxBytes: 2 * 1024 * 1024 }),
+      write: async (input: {
+        readonly purpose: string;
+        readonly expectedDigest: `sha256:${string}`;
+        readonly bytes: Uint8Array;
+        readonly runId: string;
+      }) => {
+        writes.push(input.bytes.slice());
+        return {
+          purpose: input.purpose,
+          ref: `test-artifact:v1:${input.runId}`,
+          digest: input.expectedDigest,
+          sizeBytes: input.bytes.byteLength,
+        };
+      },
+    },
+  } as never;
+  const bytes = new Uint8Array(1_048_576 + 17).fill(0x5a);
+  const digest = `sha256:${await sha256HexAsync(bytes)}`;
+  const response = await handlePlatformResourceShapeApiRequest(
+    new Request(
+      "https://app.takosumi.com/v1/resources/EdgeWorker/takos/artifacts?space=workspace_artifact",
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer takpat_write",
+          "content-type": "application/gzip",
+          "idempotency-key": "platform-artifact-key-0001",
+          "x-takosumi-artifact-purpose": "worker_release",
+          "x-takosumi-artifact-sha256": digest,
+        },
+        body: bytes,
+      },
+    ),
+    env,
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "account_artifact",
+      workspaceId: "workspace_artifact",
+      scopes: ["write"],
+    }),
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    artifact: { digest, sizeBytes: bytes.byteLength },
+    run: {
+      workspaceId: "workspace_artifact",
+      type: "artifact",
+      status: "succeeded",
+    },
+  });
+  expect(writes).toHaveLength(1);
+  expect(writes[0]).toEqual(bytes);
 });
 
 test("platform Interface API binds delegated OAuth requests to their Workspace", async () => {

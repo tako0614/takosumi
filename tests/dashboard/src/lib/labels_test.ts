@@ -68,6 +68,7 @@ describe("run operation labels", () => {
       t("op.compatibility_check"),
     );
     expect(operationLabel("source_sync")).toBe(t("op.source_sync"));
+    expect(operationLabel("artifact")).toBe(t("op.artifact"));
     // Unknown tokens still degrade to the neutral noun, not raw snake_case.
     expect(operationLabel("mystery_op")).toBe(t("op.generic"));
   });

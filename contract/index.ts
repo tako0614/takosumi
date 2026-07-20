@@ -10,6 +10,7 @@ export * from "./mobile.ts";
 export * from "./notification-pushers.ts";
 export * from "./install-experience.ts";
 export * from "./resource-shape.ts";
+export * from "./resource-artifacts.ts";
 export * from "./service-forms.ts";
 export * from "./offerings.ts";
 export * from "./form-host-interoperability.ts";

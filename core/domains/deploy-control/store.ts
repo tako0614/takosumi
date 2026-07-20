@@ -501,6 +501,13 @@ export interface ResourceOperationResultEvidence {
   readonly observationStatus?: "current" | "drifted" | "missing";
   /** Opaque backend correlation evidence only; never a canonical Run id. */
   readonly backendOperationId?: string;
+  /** Immutable artifact evidence. Bytes never enter the Run ledger. */
+  readonly artifact?: {
+    readonly kind: string;
+    readonly ref: string;
+    readonly digest: `sha256:${string}`;
+    readonly sizeBytes: number;
+  };
 }
 
 /** Internal durable Activity outbox carried by the single Run row. */
@@ -2501,6 +2508,10 @@ export function isResourceOperationRun(
 export function resourceOperationRunNeedsRecovery(
   run: ResourceOperationRun,
 ): boolean {
+  // A running artifact Run can only resume when the caller retries with the
+  // original bytes. ResourceShapeService's scheduled reconciliation has no
+  // byte authority and must not attempt to infer or fetch them.
+  if (run.resourceOperation === "artifact") return false;
   return (
     run.status === "running" || run.resourceOperationAudit?.status === "pending"
   );
@@ -2535,6 +2546,7 @@ export function assertResourceOperationRunStart(
 
 function isResourceOperationToken(value: unknown): value is ResourceOperation {
   return (
+    value === "artifact" ||
     value === "preview" ||
     value === "apply" ||
     value === "import" ||
@@ -2547,6 +2559,7 @@ function isResourceOperationToken(value: unknown): value is ResourceOperation {
 function resourceOperationRunType(
   operation: ResourceOperation,
 ): ResourceOperationRun["type"] {
+  if (operation === "artifact") return "artifact";
   if (operation === "preview") return "plan";
   if (operation === "observe") return "drift_check";
   if (operation === "delete") return "destroy_apply";

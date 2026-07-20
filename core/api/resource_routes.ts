@@ -11,6 +11,7 @@ import type {
   ActorContext,
   InstalledFormReference,
   JsonObject,
+  ResourceArtifactWriteScope,
   ResourceManagedBy,
   ResourceShapeKind,
   SpacePolicySpec,
@@ -32,6 +33,8 @@ import {
 import {
   type ApplyResourceRequest,
   formatResourceShapeId,
+  type ResourceArtifactService,
+  type ResourceArtifactServiceErrorCode,
   type ResourceServiceErrorCode,
   type ResourceShapeService,
 } from "../domains/resource-shape/mod.ts";
@@ -46,6 +49,8 @@ export const TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER =
 
 export interface RegisterResourceShapeRoutesOptions {
   readonly service: ResourceShapeService;
+  /** Optional canonical byte ingress backed by a host-installed artifact writer. */
+  readonly artifactService?: ResourceArtifactService;
   readonly interfaceDeclarations?: PortableInterfaceDeclarationReader;
   /**
    * Public Resource Shape kinds this host exposes for preview/apply/import and
@@ -111,6 +116,23 @@ export const RESOURCE_SHAPE_ENDPOINTS: readonly ApiEndpoint[] = [
   endpoint("PUT", "/v1/resources/:kind/:name", "putResource", {
     requestSchema: "ResourceShapeApplyRequest",
   }),
+  endpoint(
+    "POST",
+    "/v1/resources/:kind/:name/artifacts",
+    "stageResourceArtifact",
+    {
+      okSchema: "ResourceArtifactStageResponse",
+      query: ["space"],
+      requestBody: {
+        required: true,
+        content: {
+          "application/octet-stream": {
+            schema: { type: "string", format: "binary" },
+          },
+        },
+      },
+    },
+  ),
   endpoint("POST", "/v1/resources/:kind/:name/import", "importResource", {
     requestSchema: "ResourceShapeImportRequest",
     okSchema: "ResourceShapeImportResponse",
@@ -251,6 +273,121 @@ export function registerResourceShapeRoutes(
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(withId(parsed.request, result.value), 200);
   });
+
+  if (options.artifactService) {
+    app.post("/v1/resources/:kind/:name/artifacts", async (c) => {
+      const auth = await authorizeResourceShape(c, options);
+      if (!auth.ok) return auth.response;
+      if (!hasResourceArtifactWriteScope(auth.actor)) {
+        return c.json(
+          apiError(
+            "permission_denied",
+            "artifact staging requires resources:write scope",
+            undefined,
+            requestIdFromContext(c),
+          ),
+          403,
+        );
+      }
+      const kind = parseKind(c, enabledKinds);
+      if ("response" in kind) return kind.response;
+      const space = requireQuery(c, "space");
+      if ("response" in space) return space.response;
+      if (
+        auth.actor.workspaceId !== undefined &&
+        auth.actor.workspaceId !== space.value
+      ) {
+        return c.json(
+          apiError(
+            "forbidden",
+            "actor Workspace does not match Resource Space",
+            undefined,
+            requestIdFromContext(c),
+          ),
+          403,
+        );
+      }
+      const name = c.req.param("name");
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name)) {
+        return badRequest(c, "invalid resource name");
+      }
+      const purpose = c.req.header("x-takosumi-artifact-purpose")?.trim();
+      const digest = c.req.header("x-takosumi-artifact-sha256")?.trim();
+      const idempotencyKey = c.req.header("idempotency-key")?.trim();
+      const contentType = c.req.header("content-type")?.trim();
+      const contentEncoding = c.req.header("content-encoding")?.trim();
+      if (!purpose) {
+        return badRequest(c, "X-Takosumi-Artifact-Purpose is required");
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(purpose)) {
+        return badRequest(c, "X-Takosumi-Artifact-Purpose is invalid");
+      }
+      if (!digest || !/^sha256:[0-9a-f]{64}$/u.test(digest)) {
+        return badRequest(
+          c,
+          "X-Takosumi-Artifact-Sha256 must be a lowercase sha256 digest",
+        );
+      }
+      if (!idempotencyKey) {
+        return badRequest(c, "Idempotency-Key is required");
+      }
+      if (
+        idempotencyKey.length < 8 ||
+        idempotencyKey.length > 128 ||
+        /[^\x21-\x7e]/u.test(idempotencyKey)
+      ) {
+        return badRequest(c, "Idempotency-Key is invalid");
+      }
+      if (!contentType) return badRequest(c, "Content-Type is required");
+      if (contentType.length > 255 || /[^\x21-\x7e]/u.test(contentType)) {
+        return badRequest(c, "Content-Type is invalid");
+      }
+      if (contentEncoding && contentEncoding.toLowerCase() !== "identity") {
+        return badRequest(c, "compressed Content-Encoding is not supported");
+      }
+
+      const scope: ResourceArtifactWriteScope = {
+        workspaceId: space.value,
+        resourceId: formatResourceShapeId(space.value, kind.value, name),
+        resourceKind: kind.value,
+        resourceName: name,
+        actorAccountId: auth.actor.actorAccountId,
+        purpose,
+        contentType,
+      };
+      const admitted = await options.artifactService!.maximumBytes(scope);
+      if (!admitted.ok) {
+        return resourceArtifactErrorResponse(c, admitted.error);
+      }
+      const body = await readBoundedBytes(c.req.raw, admitted.value);
+      if (!body.ok) {
+        return c.json(
+          apiError(
+            "payload_too_large",
+            `artifact exceeds the host limit of ${admitted.value} bytes`,
+            undefined,
+            requestIdFromContext(c),
+          ),
+          413,
+        );
+      }
+      const result = await options.artifactService!.stage({
+        actor: auth.actor,
+        space: space.value,
+        kind: kind.value,
+        name,
+        purpose,
+        contentType,
+        expectedDigest: digest as `sha256:${string}`,
+        idempotencyKey,
+        bytes: body.value,
+      });
+      if (!result.ok) return resourceArtifactErrorResponse(c, result.error);
+      c.header("cache-control", "no-store");
+      c.header("idempotency-key", idempotencyKey);
+      return c.json(result.value, 200);
+    });
+  }
 
   app.post("/v1/resources/:kind/:name/import", async (c) => {
     const auth = await authorizeResourceShape(c, options);
@@ -762,6 +899,89 @@ export function hasFormAvailabilityReadScope(actor: ActorContext): boolean {
     scopes.has("read") ||
     scopes.has("admin")
   );
+}
+
+export function hasResourceArtifactWriteScope(actor: ActorContext): boolean {
+  if (actor.scopes === undefined) return true;
+  const scopes = new Set(actor.scopes);
+  return (
+    scopes.has("*") ||
+    scopes.has("admin") ||
+    scopes.has("write") ||
+    scopes.has("resources:write") ||
+    scopes.has("resources:*") ||
+    scopes.has("capsules:write")
+  );
+}
+
+async function readBoundedBytes(
+  request: Request,
+  maxBytes: number,
+): Promise<
+  { readonly ok: true; readonly value: Uint8Array } | { readonly ok: false }
+> {
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    return { ok: false };
+  }
+  const reader = request.body?.getReader();
+  if (!reader) return { ok: true, value: new Uint8Array() };
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("artifact exceeds host limit");
+        return { ok: false };
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, value: bytes };
+}
+
+function resourceArtifactErrorResponse(
+  c: Context,
+  error: {
+    readonly code: ResourceArtifactServiceErrorCode;
+    readonly message: string;
+  },
+): Response {
+  const status = resourceArtifactErrorStatus(error.code);
+  return c.json(
+    apiError(error.code, error.message, undefined, requestIdFromContext(c)),
+    status,
+  );
+}
+
+function resourceArtifactErrorStatus(
+  code: ResourceArtifactServiceErrorCode,
+): 400 | 409 | 413 | 502 | 503 {
+  switch (code) {
+    case "artifact_invalid":
+    case "artifact_digest_mismatch":
+      return 400;
+    case "artifact_not_supported":
+    case "artifact_idempotency_conflict":
+      return 409;
+    case "artifact_too_large":
+      return 413;
+    case "artifact_writer_invalid":
+      return 502;
+    case "artifact_writer_failed":
+      return 503;
+  }
 }
 
 function parseAvailabilityIdentity(

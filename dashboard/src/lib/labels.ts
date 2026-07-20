@@ -107,6 +107,7 @@ const OPERATION: Record<string, MessageKey> = {
   drift_check: "op.drift_check",
   source_sync: "op.source_sync",
   compatibility_check: "op.compatibility_check",
+  artifact: "op.artifact",
   backup: "op.backup",
   restore: "op.restore",
   // Activity metadata records the INTERNAL plan operation (create / update /

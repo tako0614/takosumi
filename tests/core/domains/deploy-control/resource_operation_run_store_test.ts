@@ -306,6 +306,7 @@ test("exact Resource Run and NativeResource evidence round trip without permitti
 
 test("direct Resource Runs are readable through the canonical public Run facade without being misread as PlanRun/ApplyRun", async () => {
   const operations = [
+    ["artifact", "artifact"],
     ["preview", "plan"],
     ["apply", "apply"],
     ["import", "apply"],

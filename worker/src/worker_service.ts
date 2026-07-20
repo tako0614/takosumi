@@ -226,6 +226,7 @@ export async function createWorkerServiceApp(
     managedProviderCredentialIssuerFromEnv(env);
   const billingExtensionFactory = billingExtensionFactoryFromEnv(env);
   const resourceDeploymentAdmission = resourceDeploymentAdmissionFromEnv(env);
+  const resourceArtifactWriter = resourceArtifactWriterFromEnv(env);
   const resolveResourceInterfaceWorkspace =
     options.resolveResourceInterfaceWorkspace ??
     resourceInterfaceWorkspaceResolverFromEnv(env);
@@ -326,6 +327,7 @@ export async function createWorkerServiceApp(
       : {}),
     ...(billingExtensionFactory ? { billingExtensionFactory } : {}),
     ...(resourceDeploymentAdmission ? { resourceDeploymentAdmission } : {}),
+    ...(resourceArtifactWriter ? { resourceArtifactWriter } : {}),
     // Async run lifecycle: when the run queue is bound, the create path persists
     // the run `queued` and returns immediately; the `queue()` consumer in this
     // same worker drives execution. Without the binding, the controller's
@@ -494,6 +496,24 @@ export function resourceDeploymentAdmissionFromEnv(
     );
   }
   return admission;
+}
+
+export function resourceArtifactWriterFromEnv(
+  env: CloudflareWorkerEnv,
+): import("takosumi-contract").ResourceArtifactWriter | undefined {
+  const writer = env.TAKOSUMI_RESOURCE_ARTIFACT_WRITER;
+  if (writer === undefined) return undefined;
+  if (
+    typeof writer !== "object" ||
+    writer === null ||
+    typeof writer.prepare !== "function" ||
+    typeof writer.write !== "function"
+  ) {
+    throw new TypeError(
+      "TAKOSUMI_RESOURCE_ARTIFACT_WRITER must implement prepare() and write()",
+    );
+  }
+  return writer;
 }
 
 function interfaceCredentialIssuerFromAccountsStore(

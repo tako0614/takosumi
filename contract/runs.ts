@@ -22,6 +22,8 @@ import type { JsonValue } from "./types.ts";
 export type RunType =
   | "source_sync"
   | "compatibility_check"
+  /** Host-backed immutable artifact staging; it does not mutate Resource state. */
+  | "artifact"
   | "plan"
   | "apply"
   | "destroy_plan"
@@ -64,7 +66,13 @@ export type RunSubject =
  * backend request id can never become lifecycle authority.
  */
 export type ResourceOperation =
-  "preview" | "apply" | "import" | "observe" | "refresh" | "delete";
+  | "artifact"
+  | "preview"
+  | "apply"
+  | "import"
+  | "observe"
+  | "refresh"
+  | "delete";
 
 /** Default page size for a Workspace Run listing when no limit is given. */
 export const RUN_LIST_DEFAULT_LIMIT = 100;

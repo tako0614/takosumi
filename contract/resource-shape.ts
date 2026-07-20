@@ -232,9 +232,9 @@ export interface EdgeWorkerSource {
   readonly artifactUrl?: string;
   /**
    * Host-allocated opaque reference to an immutable Worker artifact. This is
-   * used by in-process compatibility/import paths that already received the
-   * bytes and must not publish a temporary URL or credential in Resource
-   * desired state. Only the selected host adapter interprets the reference.
+   * produced by the canonical Resource artifact staging API when a caller
+   * cannot publish a stable HTTPS release URL. It is not a second Resource or
+   * Source authority. Only the selected host adapter interprets the reference.
    */
   readonly artifactRef?: string;
   /** Expected artifact digest as a hex SHA-256 string, optionally prefixed with `sha256:`. */

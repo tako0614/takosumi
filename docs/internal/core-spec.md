@@ -244,6 +244,25 @@ The Cloudflare adapter may interpret a ref as an R2 object key; another host may
 map it to a filesystem, database, or remote artifact service without changing
 the ledger contract.
 
+For Resource desired-state artifacts, Core exposes the optional raw-byte route
+`POST /v1/resources/{kind}/{name}/artifacts?space={space}`. It requires
+`resources:write`, `Idempotency-Key`, `X-Takosumi-Artifact-Purpose`,
+`X-Takosumi-Artifact-Sha256`, and `Content-Type`; non-identity
+`Content-Encoding` is rejected. The host writer advertises a bounded maximum
+before Core reads the stream and must repeat that bound at physical storage.
+Core computes the digest, binds the idempotency key to caller + Workspace +
+Resource + complete byte identity, and persists the succeeded `artifact` Run,
+`ArtifactRecord`, and Activity outbox evidence. Ambiguous writer failures leave
+the Run retryable with the same bytes and key. A writer response with a changed
+purpose, digest, size, or non-idempotent ref fails closed.
+
+Artifact staging is not Resource apply. It does not infer desired state from
+the bytes and does not update Resource, ResolutionLock, NativeResource,
+StateVersion, Output, or Interface rows. Hosts may support only selected
+kind/purpose pairs and return no admission for the rest. Cloud storage,
+commercial quota, retention, and manager realization remain host concerns
+behind the same portable port.
+
 ### Shared Interface Layer
 
 | Concept          | Meaning                                                                                                  |
