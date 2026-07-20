@@ -1,0 +1,201 @@
+{
+  "schemaVersion": 1,
+  "description": "Immutable checksums from a valid applied control D1 migration catalog through version 42.",
+  "migrations": [
+    {
+      "version": 1,
+      "name": "d1_opentofu_connections_and_secret_blobs_shape",
+      "checksum": "sha256:c7de9dab69ec0e41c41f5a0d5794c6571191e55437fb811eee1429d7ad7bb724"
+    },
+    {
+      "version": 2,
+      "name": "d1_opentofu_installations_output_snapshot_pointer",
+      "checksum": "sha256:d9d58f9a56043f98bf7818e3e8715d1beb92f7ecba74deb1b4781938ce3e1769"
+    },
+    {
+      "version": 3,
+      "name": "d1_opentofu_runs_projection_columns",
+      "checksum": "sha256:cc56932e74b2c65776f0763a4216f62d74b6996f2d4dc4a9bc56df70ce38aae3"
+    },
+    {
+      "version": 4,
+      "name": "d1_opentofu_credential_mint_source_scope",
+      "checksum": "sha256:cce6996de1b73a16d91f43b149b7b3e9859b99a78b20309d1a9a8729b8427dc9"
+    },
+    {
+      "version": 6,
+      "name": "d1_opentofu_backups_installation_run_projection",
+      "checksum": "sha256:8bcfea603967574fa975841607c1d8bc8a450f44121204cf0632c1b60b65d3be"
+    },
+    {
+      "version": 7,
+      "name": "d1_opentofu_provider_catalog_table",
+      "checksum": "sha256:338fd26fd3e0342d007cdb496aa8d85b17ebbe6ede1bb60d3a2e739838bedd7b"
+    },
+    {
+      "version": 8,
+      "name": "d1_opentofu_provider_materialization_values",
+      "checksum": "sha256:1bfd6209ed0068d274b769a06f6d1e4e7c9236d15e62a5914c08874d08737e09"
+    },
+    {
+      "version": 9,
+      "name": "d1_opentofu_drizzle_index_parity",
+      "checksum": "sha256:0679dcb15ad5e50dce98bc2f7842d8a8d678d0e770f4b0564561ea7eb186692e"
+    },
+    {
+      "version": 10,
+      "name": "d1_opentofu_provider_materialization_constraints",
+      "checksum": "sha256:2dcb78cc376c9e7f2e574fdd9a07c870ced62c177a45d7cf75ab06fbfbd94341"
+    },
+    {
+      "version": 11,
+      "name": "d1_opentofu_provider_catalog_ownership_repair",
+      "checksum": "sha256:027dd6b88c3fc340c0fcaca670a837dc17329fb17178be2cda9c071c06b10e13"
+    },
+    {
+      "version": 12,
+      "name": "d1_opentofu_upload_origin_nullable_source_repair",
+      "checksum": "sha256:ab9c69cae65937032afda0dcb8f53f05142825f5874f58e94d23ce8c3917ac09"
+    },
+    {
+      "version": 13,
+      "name": "d1_opentofu_usage_event_meter_metadata",
+      "checksum": "sha256:9df2df4eb0749f2a1e76afa83f6e2e5c88173f2a54163d11b829363e10f7fa92"
+    },
+    {
+      "version": 16,
+      "name": "d1_opentofu_provider_credential_collapse",
+      "checksum": "sha256:68c56e3395d3475ff397867388838c0070cfc67fbc2dcec2e29e39dc27e5936d"
+    },
+    {
+      "version": 17,
+      "name": "d1_opentofu_workspace_capsule_rename",
+      "checksum": "sha256:fb6cfe10efd0500599c15bfb5f7246523d119eabf7899b180e516905a6d55345"
+    },
+    {
+      "version": 18,
+      "name": "d1_opentofu_compatibility_report_root_interface",
+      "checksum": "sha256:91cdb9c0c9377ba623ce5044067daae09e4306a3ae8d388503dabb1c70202587"
+    },
+    {
+      "version": 19,
+      "name": "d1_opentofu_public_host_reservations",
+      "checksum": "sha256:aa89ba4c964eafdd85b880256fa53bb6f6ae54478b52bed52794f69fefad95e6"
+    },
+    {
+      "version": 20,
+      "name": "d1_opentofu_public_host_reservations_backfill",
+      "checksum": "sha256:6d8566c046dee8af88d419ac953219fd8d884ba4b8e4d366683983ed5b41fb1d"
+    },
+    {
+      "version": 21,
+      "name": "d1_opentofu_capsule_active_name_unique",
+      "checksum": "sha256:518fe3a61db7e5112115c0cbb23a8041181c52ba4356723cd87ab320624a5819"
+    },
+    {
+      "version": 22,
+      "name": "d1_opentofu_install_config_store_key",
+      "checksum": "sha256:695284d030532468fef616653a57aeca28aa14ed38f2dcdd849ec69d7a449800"
+    },
+    {
+      "version": 23,
+      "name": "d1_opentofu_public_host_owner_slots",
+      "checksum": "sha256:c39c0c304f7bc548255185e286fdec972d69af9742e0a2e6203cf83c7cf7a11c"
+    },
+    {
+      "version": 24,
+      "name": "d1_opentofu_public_host_legacy_grandfather",
+      "checksum": "sha256:15ed838ad60859bfaa1de73a9cb6d6a9246af4eaacff2073cda2df529131342c"
+    },
+    {
+      "version": 25,
+      "name": "d1_opentofu_install_config_runner_profile",
+      "checksum": "sha256:bddab83bade9ee2eaaea5a99dd4104d06ad5c9d8867a821d294810767b7707f4"
+    },
+    {
+      "version": 26,
+      "name": "d1_opentofu_workspace_output_sync",
+      "checksum": "sha256:f2c63e60ad320c880d577338c6661c6e60a363cb43d07a01085109544fd9ae65"
+    },
+    {
+      "version": 27,
+      "name": "d1_opentofu_workspace_output_sync_retire",
+      "checksum": "sha256:ac8b1991f191d6f2fa11860da0e2c0eb02aa6df3230a78c75ba9b19c4d4fa815"
+    },
+    {
+      "version": 28,
+      "name": "d1_resource_shape_resolution_lock_identity",
+      "checksum": "sha256:57270d98063b6895e6828f1bb56388110d1f2fba9012e0352cac2e1e8cde2bdb"
+    },
+    {
+      "version": 29,
+      "name": "d1_capsule_compatibility_auto_rewrite_retire",
+      "checksum": "sha256:42c880b6d5d7d8a7ff3f6222292459bda0e2fc3f5e1d43831791f33afd0ab32e"
+    },
+    {
+      "version": 30,
+      "name": "d1_workspace_members_create",
+      "checksum": "sha256:56a830147be5ae558db9fc5e4a0dd393b71e81056b77e30219331dc45066088b"
+    },
+    {
+      "version": 31,
+      "name": "d1_capsule_install_discriminators_retire",
+      "checksum": "sha256:15327725168f2e261abb7a4abbc52db391f4c42a6b8badc7154a20cd8f82fce3"
+    },
+    {
+      "version": 32,
+      "name": "d1_capsule_project_boundary_enforce",
+      "checksum": "sha256:ba5d60cf47e2e659f43abb30fc51c386b5ac552a95f6c4abe92cff92392528df"
+    },
+    {
+      "version": 33,
+      "name": "d1_resource_execution_state_add",
+      "checksum": "sha256:ce675513a256afa85c3cb0bf025a7b2c5c39af4ebd2585f4f0d0ae4026f71f65"
+    },
+    {
+      "version": 34,
+      "name": "d1_connection_secret_partition_backfill",
+      "checksum": "sha256:1347d814f4b9f4e7f37fc7d528c6b7dcd5bdff50d013f5d784a97a28a33baf3b"
+    },
+    {
+      "version": 35,
+      "name": "d1_resource_legacy_state_adoption_add",
+      "checksum": "sha256:ad45cbf8e0358bed112ff74624f12abf2b64e40bdb3dc22d0fbdd9057e01829b"
+    },
+    {
+      "version": 36,
+      "name": "d1_install_config_trust_level_retire",
+      "checksum": "sha256:2648fdc96dfeba42e1d06a15b60411599f14a71b0449b45f40369fe70fba0723"
+    },
+    {
+      "version": 37,
+      "name": "d1_oss_usage_ledger_clean_cut",
+      "checksum": "sha256:f38ed19333aa7b8952e64c9893a01725c741cadda2f9011b734b794e4a4cd82d"
+    },
+    {
+      "version": 38,
+      "name": "d1_install_config_variable_defaults_normalize",
+      "checksum": "sha256:3963b7e86ee6660965cb3e30f087d730cfa41175fe51593a1cf6adc57174964f"
+    },
+    {
+      "version": 39,
+      "name": "d1_usage_event_rating_status",
+      "checksum": "sha256:ae609666bb9da565f90374eb194b4c4426ae0dd0122355a8b9cea904aa1ea480"
+    },
+    {
+      "version": 40,
+      "name": "d1_resource_list_keyset_indexes",
+      "checksum": "sha256:208de66961ed4ea05ab6d96794b9f14d6f493e3646a82ac933a7e6a0c673b704"
+    },
+    {
+      "version": 41,
+      "name": "d1_resource_event_target_keyset_index",
+      "checksum": "sha256:1bb6c8987f414283e62f82932186149f3a355552cdfb4923b03662f22f366c0d"
+    },
+    {
+      "version": 42,
+      "name": "d1_resource_observation_schedule_lease",
+      "checksum": "sha256:0ce189f3472c019d56995d12f1c8229118fafe784accb2606b9d7982f567c955"
+    }
+  ]
+}

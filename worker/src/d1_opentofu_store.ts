@@ -5280,9 +5280,12 @@ Git Source plus DB InstallConfig are the only Capsule execution authority
   {
     version: 32,
     name: "d1_capsule_project_boundary_enforce",
+    // This text is immutable: valid v32-v42 ledgers persist its digest. The
+    // idempotent implementation may repair a missing default Project while a
+    // not-yet-applied v32 runs, but that repair must not rewrite the accepted
+    // identity of databases which already applied this migration.
     checksumSource: `
 capsules.project_id is required for every current Capsule
-Workspace default Projects missing after the original rename backfill are reconciled
 existing null project_id values point to the Workspace default Project
 active Capsule name uniqueness is scoped to project_id/name/environment
 source_id remains nullable only for historical pre-Git-only operator migration rows
