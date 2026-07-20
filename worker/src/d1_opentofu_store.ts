@@ -684,7 +684,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             ? undefined
             : eq(schema.runs.workspaceId, options.workspaceId),
           or(
-            eq(schema.runs.status, "running"),
+            and(
+              eq(schema.runs.status, "running"),
+              sql`json_extract(${schema.runs.runJson}, '$.resourceOperation') <> 'artifact'`,
+            ),
             sql`json_extract(${schema.runs.runJson}, '$.resourceOperationAudit.status') = 'pending'`,
           ),
         ),

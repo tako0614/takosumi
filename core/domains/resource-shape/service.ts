@@ -437,7 +437,8 @@ export class ResourceShapeService {
           assertResourceOperationFormEvidence(candidate, formEvidence.value);
         } else if (
           candidate.resourceOperation !== "preview" &&
-          candidate.resourceOperation !== "delete"
+          candidate.resourceOperation !== "delete" &&
+          candidate.resourceOperation !== "artifact"
         ) {
           throw new Error(
             `resource ${candidate.subject.id} is missing during ${candidate.resourceOperation} Run recovery`,

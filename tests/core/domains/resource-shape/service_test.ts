@@ -3485,6 +3485,107 @@ test("scheduled repair terminalizes a direct-plugin Run after Resource commit wi
   ).toHaveLength(1);
 });
 
+test("scheduled repair completes a staged artifact audit without a Resource while leaving running bytes caller-owned", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const ledger = new InMemoryOpenTofuControlStore();
+  const running: ResourceOperationRun = {
+    id: "run_artifact_running_bytes",
+    workspaceId: "space_1",
+    subject: {
+      kind: "resource",
+      id: "tkrn:space_1:EdgeWorker:running-bytes",
+    },
+    resourceOperation: "artifact",
+    resourceOperationKey: "sha256:running-artifact",
+    resourceOperationVersion: 1,
+    type: "artifact",
+    status: "running",
+    createdBy: ACTOR.actorAccountId,
+    createdAt: NOW,
+    startedAt: NOW,
+  };
+  await ledger.beginResourceOperationRun(running);
+  const staged: ResourceOperationRun = {
+    ...running,
+    id: "run_artifact_pending_audit",
+    subject: {
+      kind: "resource",
+      id: "tkrn:space_1:EdgeWorker:pending-audit",
+    },
+    resourceOperationKey: "sha256:staged-artifact",
+  };
+  await ledger.beginResourceOperationRun(staged);
+  const succeeded: ResourceOperationRun = {
+    ...staged,
+    status: "succeeded",
+    finishedAt: NOW,
+    resourceOperationVersion: 2,
+    resourceOperationResult: {
+      summary: "staged worker release",
+      artifact: {
+        kind: "worker_release",
+        ref: `artifact:v1:sha256:${"a".repeat(64)}`,
+        digest: `sha256:${"a".repeat(64)}`,
+        sizeBytes: 128,
+      },
+    },
+    resourceOperationAudit: {
+      status: "pending",
+      eventId: `act_${staged.id}`,
+      action: "resource.artifact.staged",
+      metadata: {
+        purpose: "worker_release",
+        digest: `sha256:${"a".repeat(64)}`,
+        sizeBytes: 128,
+        resourceKind: "EdgeWorker",
+      },
+      createdAt: NOW,
+    },
+  };
+  expect(
+    (
+      await ledger.transitionResourceOperationRun({
+        id: staged.id,
+        operationKey: staged.resourceOperationKey,
+        expectedVersion: 1,
+        expectFrom: ["running"],
+        run: succeeded,
+      })
+    ).won,
+  ).toBe(true);
+
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new PluginSpyAdapter(),
+    operationRuns: ledger,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    now: () => NOW,
+  });
+  expect(await service.repairResourceOperationRuns({ limit: 1 })).toEqual({
+    scanned: 1,
+    completed: 0,
+    auditsRepaired: 1,
+    pending: 0,
+  });
+  expect(
+    (await ledger.getResourceOperationRun(staged.id))?.resourceOperationAudit
+      ?.status,
+  ).toBe("completed");
+  expect((await ledger.getResourceOperationRun(running.id))?.status).toBe(
+    "running",
+  );
+  expect(await stores.resources.get(staged.subject.id)).toBeUndefined();
+  expect(await ledger.listRecoverableResourceOperationRuns()).toEqual([]);
+  expect(await ledger.listActivityEvents("space_1")).toMatchObject([
+    {
+      id: `act_${staged.id}`,
+      action: "resource.artifact.staged",
+      targetId: staged.subject.id,
+      runId: staged.id,
+    },
+  ]);
+});
+
 test("direct-plugin apply recovers a persisted backend result after restart without redispatch", async () => {
   const baseStores = createInMemoryResourceShapeStores();
   let failReadyCommit = true;

@@ -245,6 +245,97 @@ test("terminal Resource Run outcomes cannot be overwritten; only audit acknowled
   }
 });
 
+test("running artifact Runs cannot starve bounded recovery of terminal audit work", async () => {
+  for (const [, store] of await stores()) {
+    for (let index = 0; index < 3; index += 1) {
+      await store.beginResourceOperationRun(
+        resourceRun({
+          id: `run_artifact_running_${index}`,
+          subject: {
+            kind: "resource",
+            id: `tkrn:space_a:EdgeWorker:running-${index}`,
+          },
+          resourceOperation: "artifact",
+          resourceOperationKey: `sha256:artifact-running-${index}`,
+          type: "artifact",
+          createdAt: `2026-07-14T00:00:0${index}.000Z`,
+          startedAt: `2026-07-14T00:00:0${index}.000Z`,
+        }),
+      );
+    }
+
+    const staged = resourceRun({
+      id: "run_artifact_staged",
+      subject: {
+        kind: "resource",
+        id: "tkrn:space_a:EdgeWorker:staged",
+      },
+      resourceOperation: "artifact",
+      resourceOperationKey: "sha256:artifact-staged",
+      type: "artifact",
+      createdAt: "2026-07-14T00:00:03.000Z",
+      startedAt: "2026-07-14T00:00:03.000Z",
+    });
+    await store.beginResourceOperationRun(staged);
+    const succeeded: ResourceOperationRun = {
+      ...staged,
+      status: "succeeded",
+      finishedAt: "2026-07-14T00:00:04.000Z",
+      resourceOperationVersion: 2,
+      resourceOperationResult: {
+        summary: "staged worker release",
+        artifact: {
+          kind: "worker_release",
+          ref: `artifact:v1:sha256:${"a".repeat(64)}`,
+          digest: `sha256:${"a".repeat(64)}`,
+          sizeBytes: 128,
+        },
+      },
+      resourceOperationAudit: {
+        status: "pending",
+        eventId: `act_${staged.id}`,
+        action: "resource.artifact.staged",
+        metadata: { purpose: "worker_release" },
+        createdAt: "2026-07-14T00:00:04.000Z",
+      },
+    };
+    expect(
+      (
+        await store.transitionResourceOperationRun({
+          id: staged.id,
+          operationKey: staged.resourceOperationKey,
+          expectedVersion: 1,
+          expectFrom: ["running"],
+          run: succeeded,
+        })
+      ).won,
+    ).toBe(true);
+
+    const ordinary = resourceRun({
+      id: "run_resource_apply_after_artifacts",
+      subject: {
+        kind: "resource",
+        id: "tkrn:space_a:ObjectBucket:after-artifacts",
+      },
+      resourceOperationKey: "sha256:apply-after-artifacts",
+      createdAt: "2026-07-14T00:00:05.000Z",
+      startedAt: "2026-07-14T00:00:05.000Z",
+    });
+    await store.beginResourceOperationRun(ordinary);
+
+    expect(
+      (await store.listRecoverableResourceOperationRuns({ limit: 1 })).map(
+        (run) => run.id,
+      ),
+    ).toEqual([staged.id]);
+    expect(
+      (await store.listRecoverableResourceOperationRuns({ limit: 2 })).map(
+        (run) => run.id,
+      ),
+    ).toEqual([staged.id, ordinary.id]);
+  }
+});
+
 test("exact Resource Run and NativeResource evidence round trip without permitting Form substitution", async () => {
   for (const [, store] of await stores()) {
     const initial = resourceRun({ resourceForm: EXACT_FORM });

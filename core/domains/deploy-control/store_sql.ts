@@ -620,7 +620,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             ? sql`true`
             : eq(pgSchema.runs.workspaceId, options.workspaceId),
           or(
-            eq(pgSchema.runs.status, "running"),
+            and(
+              eq(pgSchema.runs.status, "running"),
+              sql`${pgSchema.runs.runJson} ->> 'resourceOperation' <> 'artifact'`,
+            ),
             sql`${pgSchema.runs.runJson} -> 'resourceOperationAudit' ->> 'status' = 'pending'`,
           ),
         ),

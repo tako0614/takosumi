@@ -2510,8 +2510,12 @@ export function resourceOperationRunNeedsRecovery(
 ): boolean {
   // A running artifact Run can only resume when the caller retries with the
   // original bytes. ResourceShapeService's scheduled reconciliation has no
-  // byte authority and must not attempt to infer or fetch them.
-  if (run.resourceOperation === "artifact") return false;
+  // byte authority and must not attempt to infer or fetch them. Once the
+  // exact bytes and terminal artifact evidence have committed, however, the
+  // ordinary Activity outbox repair no longer needs those bytes.
+  if (run.resourceOperation === "artifact" && run.status === "running") {
+    return false;
+  }
   return (
     run.status === "running" || run.resourceOperationAudit?.status === "pending"
   );
