@@ -12,6 +12,7 @@ import type {
 } from "./catalog_store.ts";
 
 export class InMemoryOfferingCatalogReader implements OfferingCatalogStore {
+  readonly persistence = "ephemeral" as const;
   readonly #catalogs = new Map<string, StoredOfferingCatalog>();
 
   constructor(catalogs: readonly OfferingCatalog[] = []) {

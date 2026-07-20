@@ -22,6 +22,8 @@ type CatalogRow = Record<string, unknown> & {
 };
 
 export class SqlOfferingCatalogStore implements OfferingCatalogStore {
+  readonly persistence = "durable" as const;
+
   constructor(readonly client: SqlClient) {}
 
   async createCatalog(

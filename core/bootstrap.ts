@@ -2104,7 +2104,7 @@ export async function createTakosumiService(
   assertDurableOfferingCatalogStoreOrWarn({
     environment: runtimeConfig.environment,
     exposed: role === "takosumi-api" && Boolean(deployControlToken),
-    durable: Boolean(options.offeringCatalogStore ?? options.sqlClient),
+    durable: offeringCatalogStore.persistence === "durable",
   });
   const connectionOAuthHelpers = options.connectionOAuthHelpers;
   const installedResourceShapeKinds =
