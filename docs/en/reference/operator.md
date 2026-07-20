@@ -66,7 +66,9 @@ actually needed, such as `compat.s3.v1`, `compat.oci.v1`, and
 `compat.cloudevents.v1`. If an existing OpenTofu provider or standard endpoint
 is enough, use that instead of recreating it in Takosumi. Operators must report
 the enabled surface through `/v1/capabilities` and must not claim full vendor
-provider compatibility.
+provider compatibility. The Cloudflare compatibility profile is retired.
+Cloudflare is used through a normal ProviderConnection and plain Stack, or as
+an internal manager behind a provider-neutral managed Resource.
 
 ## Operator / Cloud Boundary
 

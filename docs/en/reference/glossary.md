@@ -67,4 +67,4 @@ the compatibility-removal gate are complete.
 | ResolutionLock               | The record that pins an exact form / implementation / Target decision.                                                                                                         |
 | NativeResource               | The record of the real resource created by a resolution.                                                                                                                       |
 | Space / Environment / Stack  | The Resource API namespace, environment (dev/prod, etc.), and grouping units.                                                                                                  |
-| Compatibility API            | A compatibility API with an explicit scope and version, like `compat.s3.v1`. Not full AWS or Cloudflare compatibility.                                                         |
+| Compatibility API            | A scoped, versioned facade for a standard protocol/API, such as `compat.s3.v1`. It is not a clone of a vendor/provider API.                                     |

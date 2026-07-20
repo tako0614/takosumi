@@ -556,11 +556,15 @@ data-plane profile は既存 Resource を暗黙作成せず、Ready な Resource
 表現できない操作は互換のように成功させず、compatibility matrix で範囲を明示して
 安全側に停止します。
 
-managed hostname を作る compatibility route / script-subdomain write は source
-Workspace と source Capsule のコンテキストを必須とし、Capsule Run と同じ OSS hostname
-予約管理を使います。Cloud extension の KV / Durable Object などの
-routing / activation state は hostname 所有権の正とする情報ではありません。route-level
-DELETE はその state だけを削除し、Capsule lifetime に属する reservation を解放しません。
+旧 Cloudflare-shaped import profile は廃止済みです。`/compat/cloudflare/*` route と
+`compat.cloudflare.*` capability は supported API ではありません。Cloudflare-backed Target は
+provider-neutral な managed Resource として扱い、ユーザー自身の Cloudflare resource は通常の
+ProviderConnection + plain Stack flow で管理します。
+
+Compatibility profile は managed hostname を作りません。runtime route は canonical
+`http.route` Interface + InterfaceBinding を使い、hostname ownership は OSS reservation または
+Operator/Cloud の VerifiedDomain lifecycle が所有します。routing cache や backend state は
+hostname ownership authority ではありません。
 
 Takosumi Cloud 固有の endpoint 例は
 [Cloud endpoints](https://app.takosumi.com/docs/endpoints) を見てください。
