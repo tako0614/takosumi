@@ -75,6 +75,10 @@ import type {
   InstalledFormReference,
   Interface,
   NativeResourceRef,
+  OfferingAvailability,
+  OfferingContextReference,
+  OfferingReference,
+  OfferingSelection,
   ResourceObject,
   ResourceShapeKind,
 } from "takosumi-contract";
@@ -518,6 +522,51 @@ export async function resolvePlatformFormActivation(
     return { status: "unavailable", reason: "package_not_installed" };
   }
   return { status: "active", activation };
+}
+
+/**
+ * Read-only bridge from a composing host into the OSS generic Offering engine.
+ * The host supplies an already-authenticated principal context; this function
+ * neither accepts edge credentials nor exposes catalog mutation.
+ */
+export async function listPlatformOfferingAvailability(
+  input: {
+    readonly catalogId: string;
+    readonly catalogVersion: string;
+    readonly principalId?: string;
+    readonly roles?: readonly string[];
+    readonly workspaceId?: string;
+    readonly contexts?: readonly OfferingContextReference[];
+  },
+  env: object,
+  operationsForEnv: (
+    env: PlatformEnv,
+  ) => Promise<Pick<TakosumiOperations, "offerings">> = takosumiOperationsFor,
+): Promise<readonly OfferingAvailability[]> {
+  const offerings = (await operationsForEnv(env as PlatformEnv)).offerings;
+  return await offerings.listAvailability(input);
+}
+
+/**
+ * Resolves one exact catalog/id/version selection through OSS subject
+ * readiness. Cloud and other commercial hosts attach private manager,
+ * capacity, SKU, price, and payment evidence only to the returned pin.
+ */
+export async function resolvePlatformOffering(
+  input: {
+    readonly reference: OfferingReference;
+    readonly principalId?: string;
+    readonly roles?: readonly string[];
+    readonly workspaceId?: string;
+    readonly contexts?: readonly OfferingContextReference[];
+  },
+  env: object,
+  operationsForEnv: (
+    env: PlatformEnv,
+  ) => Promise<Pick<TakosumiOperations, "offerings">> = takosumiOperationsFor,
+): Promise<OfferingSelection> {
+  const offerings = (await operationsForEnv(env as PlatformEnv)).offerings;
+  return await offerings.resolve(input);
 }
 
 /**

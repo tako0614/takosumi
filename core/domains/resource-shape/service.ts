@@ -261,6 +261,7 @@ export interface ResourceShapeServiceDeps {
       formRef: InstalledFormReference["formRef"],
     ): Promise<FormDefinition | undefined>;
     getPackage(packageDigest: string): Promise<FormPackage | undefined>;
+    getActivation?(id: string): Promise<FormActivation | undefined>;
     listDefinitions?(params?: PageParams): Promise<Page<FormDefinition>>;
     listActivations?(params?: PageParams): Promise<Page<FormActivation>>;
   };
@@ -679,6 +680,31 @@ export class ResourceShapeService {
       items,
       ...(definitions.nextCursor ? { nextCursor: definitions.nextCursor } : {}),
     };
+  }
+
+  /**
+   * Re-evaluates one exact FormActivation for the generic Offering resolver.
+   * Unlike discovery, no other activation can make this result available.
+   */
+  async resolveFormOfferingAvailability(input: {
+    readonly actor: ActorContext;
+    readonly space: SpaceId;
+    readonly identity: InstalledFormReference;
+    readonly activationId: string;
+  }): Promise<FormAvailability> {
+    const [definition, activation, pools] = await Promise.all([
+      this.#formRegistry?.getDefinition(input.identity.formRef),
+      this.#formRegistry?.getActivation?.(input.activationId),
+      this.#stores.targetPools.listBySpace(input.space),
+    ]);
+    return await this.#formAvailabilityFor({
+      actor: input.actor,
+      space: input.space,
+      identity: input.identity,
+      definition,
+      activations: activation ? [activation] : [],
+      pools,
+    });
   }
 
   async deleteTargetPool(

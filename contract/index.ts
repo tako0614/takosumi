@@ -11,6 +11,7 @@ export * from "./notification-pushers.ts";
 export * from "./install-experience.ts";
 export * from "./resource-shape.ts";
 export * from "./service-forms.ts";
+export * from "./offerings.ts";
 export * from "./form-host-interoperability.ts";
 export * from "./standard-form-admission.ts";
 export * from "./resource-deployment.ts";

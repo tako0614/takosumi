@@ -1,4 +1,9 @@
 import type { IsoTimestamp, JsonObject, JsonValue } from "./types.ts";
+import type {
+  OfferingContextReference,
+  OfferingRequirementReference,
+  OfferingSubjectReference,
+} from "./offerings.ts";
 
 /**
  * Exact, immutable identity of one portable Service Form definition.
@@ -147,6 +152,68 @@ export interface FormActivation {
   readonly updatedBy: string;
 }
 
+/** Open Offering subject type installed by the portable Form host adapter. */
+export const SERVICE_FORM_OFFERING_SUBJECT_TYPE =
+  "forms.takoform.com/v1alpha1/Form" as const;
+
+/** Exact OSS prerequisite type used by a Form-backed Offering. */
+export const FORM_ACTIVATION_OFFERING_REQUIREMENT_TYPE =
+  "takosumi.dev/v1alpha1/FormActivation" as const;
+
+/** Exact Resource namespace context consumed by the built-in Form resolver. */
+export const FORM_HOST_RESOURCE_NAMESPACE_OFFERING_CONTEXT_TYPE =
+  "takosumi.dev/v1alpha1/ResourceNamespace" as const;
+
+export function formHostResourceNamespaceOfferingContext(
+  id: string,
+): OfferingContextReference {
+  if (typeof id !== "string" || id.trim() === "" || id.length > 256) {
+    throw new TypeError("invalid Form host Resource namespace context");
+  }
+  return {
+    type: FORM_HOST_RESOURCE_NAMESPACE_OFFERING_CONTEXT_TYPE,
+    id,
+  };
+}
+
+/**
+ * Projects an installed Form into the generic Offering subject vocabulary.
+ * The opaque ref retains the full FormRef (including schema digest), while the
+ * subject digest pins the containing immutable package.
+ */
+export function formOfferingSubject(
+  identity: InstalledFormReference,
+): OfferingSubjectReference {
+  if (!isInstalledFormReference(identity)) {
+    throw new TypeError("invalid installed Form identity for Offering");
+  }
+  return {
+    type: SERVICE_FORM_OFFERING_SUBJECT_TYPE,
+    ref: formRefKey(identity.formRef),
+    version: identity.formRef.definitionVersion,
+    digest: identity.packageDigest,
+  };
+}
+
+/** Exact activation revision re-read by the Form Offering resolver. */
+export function formActivationOfferingRequirement(
+  activation: Pick<FormActivation, "id" | "revision">,
+): OfferingRequirementReference {
+  if (
+    typeof activation.id !== "string" ||
+    activation.id.trim() === "" ||
+    !Number.isSafeInteger(activation.revision) ||
+    activation.revision < 1
+  ) {
+    throw new TypeError("invalid FormActivation reference for Offering");
+  }
+  return {
+    type: FORM_ACTIVATION_OFFERING_REQUIREMENT_TYPE,
+    ref: activation.id,
+    version: String(activation.revision),
+  };
+}
+
 export type FormAvailabilityReason =
   | "definition_unknown"
   | "package_not_installed"
@@ -217,6 +284,24 @@ export function formRefKey(ref: FormRef): string {
   return [ref.apiVersion, ref.kind, ref.definitionVersion, ref.schemaDigest]
     .map(encodeURIComponent)
     .join("|");
+}
+
+/** Reverses the opaque exact FormRef key without accepting partial identity. */
+export function parseFormRefKey(value: string): FormRef | undefined {
+  if (typeof value !== "string") return undefined;
+  const parts = value.split("|");
+  if (parts.length !== 4) return undefined;
+  try {
+    const ref: FormRef = {
+      apiVersion: decodeURIComponent(parts[0]!),
+      kind: decodeURIComponent(parts[1]!),
+      definitionVersion: decodeURIComponent(parts[2]!),
+      schemaDigest: decodeURIComponent(parts[3]!),
+    };
+    return isFormRef(ref) && formRefKey(ref) === value ? ref : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function installedFormReferenceKey(
