@@ -289,7 +289,8 @@ Service Form requires an exact Takoform Form Package, typed client schema,
 planner/adapter/import/drift/state behavior, and conformance evidence. Current
 `takosumi_*` form resources remain compatibility state; all new typed
 form-client authority belongs to Takoform. Takosumi operator objects are
-authored through API, CLI, or dashboard rather than a Takosumi-owned provider.
+authored through API, CLI, or dashboard; the discontinued Takosumi-owned
+provider is not used.
 
 `takosumi/takosumi` is discontinued and retained only for existing-state
 migration and rollback custody. Takoform owns portable authoring; direct API,
@@ -339,10 +340,10 @@ Extensible surfaces use capability tokens. For example, a
 with custom interface evidence. The endpoint accepts or rejects those tokens
 through resolver/policy, not through a hard-coded provider binary allow-list.
 That extension is for backends of an existing typed shape. Adding a new
-portable HCL-facing Form requires a Takoform schema/Form Package/provider
+portable HCL-facing Form requires a Takoform schema/Form Package/typed-provider
 release plus host conformance so OpenTofu can keep typed validation, plan
-diffs, import, and state upgrade behavior. It does not revive the Takosumi
-provider.
+diffs, import, and state upgrade behavior. It does not revive or republish the
+discontinued Takosumi provider.
 
 Provider capability documents may include operator-defined adapter tokens as
 additional boolean keys under `adapters`. Known adapter keys remain

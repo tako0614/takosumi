@@ -270,7 +270,7 @@ provider-neutral な Service Form は、exact Takoform Form Package、typed clie
 planner/adapter/import/drift/state の挙動、conformance 証跡を必要とします。現在の
 `takosumi_*` form resource は compatibility state として維持し、新しい typed form client
 authority はすべて Takoform が所有します。Takosumi operator object は API / CLI /
-dashboard から authoring し、Takosumi-owned provider は使いません。
+dashboard から authoring し、廃止済み Takosumi-owned provider は使いません。
 
 `takosumi/takosumi` provider は廃止済みで、既存 compatibility state の migration / rollback
 custody にだけ残ります。portable authoring は Takoform、operator/admin 操作は direct API、
@@ -318,7 +318,8 @@ target は、custom な interface 証跡を持つ operator 定義の implementat
 allow-list ではなく resolver/policy を通して受理・拒否します。この拡張は既存の typed
 shape の backend 向けです。新しい portable HCL Form は、OpenTofu が typed validation、
 plan diff、import、state upgrade を維持できるよう、Takoform schema / Form Package /
-provider release と host conformance が必要です。Takosumi provider は更新しません。
+typed-provider release と host conformance が必要です。廃止済み Takosumi provider は更新・
+再公開しません。
 
 Provider capability document は、`adapters` 配下の追加 boolean key として
 operator 定義の adapter token を含められます。既知の adapter key は引き続き `opentofu`、

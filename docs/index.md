@@ -85,8 +85,8 @@ Same form, different target.
 
 同じ `.tf` を使い、ProviderBinding だけを変えて dev/prod、別 account、別 provider
 alias に流せます。同じ exact Service Form を使い、TargetPool / Policy / Adapter によって
-operator が有効化した target へ解決できます。現在の wire/provider/state では、この flow を
-Resource Shape と呼びます。
+operator が有効化した target へ解決できます。現在の wire と廃止済み provider の既存 state
+に残る compatibility alias では、この flow を Resource Shape と呼びます。
 
 ## 作り直さないもの
 

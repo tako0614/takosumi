@@ -15,7 +15,8 @@
   ],
   "scripts": {
     "wrangler": "wrangler",
-    "check": "bun run credential-recipes:assets && bun run takoform-schema-validators:check && bun run service-form:runtime-artifacts:check && bun run provider:custody:check && bun run service-form:compat-removal:check && bun run test:provider && bun run test:control-d1-schema && bun run check:test-source-boundary && bun run check:generalization-boundaries && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "check": "bun run credential-recipes:assets && bun run takoform-schema-validators:check && bun run service-form:runtime-artifacts:check && bun run provider:custody:check && bun run service-form:compat-removal:check && bun run check:authoritative-docs && bun run test:provider && bun run test:control-d1-schema && bun run check:test-source-boundary && bun run check:generalization-boundaries && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "check:authoritative-docs": "bun scripts/check-authoritative-doc-boundaries.ts",
     "check:generalization-boundaries": "bun scripts/check-generalization-boundaries.ts",
     "check:test-source-boundary": "bun scripts/check-test-source-boundary.ts",
     "check:dashboard": "(cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build) && bash scripts/build-app-docs.sh",

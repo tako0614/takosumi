@@ -500,8 +500,8 @@ additional boolean keys alongside the known keys (`opentofu`, `aws`,
 `cloudflare`, `kubernetes`, `vm`, and `takosumi_native`). Those extension keys
 add implementations for existing typed shapes; they do not create new HCL
 resource types at runtime. New portable Forms require a Takoform exact Form
-Package/schema/provider release and Takosumi host/adapter conformance. The
-Takosumi provider is not updated.
+Package/schema/typed-provider release and Takosumi host/adapter conformance.
+The discontinued Takosumi provider is neither updated nor republished.
 
 ```http
 PUT    /v1/target-pools/{name}
@@ -594,11 +594,10 @@ implicitly; they resolve one that is already Ready. Operations outside a scoped
 profile fail closed and are documented in the compatibility matrix instead of
 pretending full vendor compatibility.
 
-The former Cloudflare-shaped import profile is retired. `/compat/cloudflare/*`
-routes and `compat.cloudflare.*` capabilities are not part of the supported
-API. Cloudflare-backed Targets remain provider-neutral managed Resources, and
-customer-owned Cloudflare resources use a normal ProviderConnection and plain
-Stack flow.
+The Cloudflare-specific import/deploy compatibility profile is retired and is
+not part of the supported v1 API or capability surface. Cloudflare-backed
+Targets remain provider-neutral managed Resources, and customer-owned
+Cloudflare resources use a normal ProviderConnection and plain Stack flow.
 
 Compatibility profiles do not create managed hostnames. Runtime routes use a
 canonical `http.route` Interface plus InterfaceBinding, while hostname
