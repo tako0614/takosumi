@@ -263,7 +263,11 @@ async function dashboardOverview(
       [],
     ),
     optionalDashboardProjection(
-      operations.capsules.listInstallConfigs(selectedWorkspace.id),
+      listDashboardInstallConfigCandidates(
+        operations,
+        selectedWorkspace.id,
+        installConfigLimit,
+      ),
       [],
     ),
   ]);
@@ -520,21 +524,92 @@ async function listDashboardInstallConfigs(
     }
   }
 
-  for (const id of referencedIds) {
-    if (byId.has(id)) continue;
+  const missingIds = referencedIds.filter((id) => !byId.has(id));
+  if (missingIds.length > 0) {
     try {
-      append(await operations.capsules.getInstallConfig(id), {
-        referenced: true,
-      });
+      const configs = operations.capsules.getInstallConfigsByIds
+        ? await operations.capsules.getInstallConfigsByIds(missingIds)
+        : await Promise.all(
+            missingIds.map((id) => operations.capsules.getInstallConfig(id)),
+          );
+      for (const config of configs) {
+        append(config, { referenced: true });
+      }
     } catch {
       // A stale Capsule row can point at a retired or deleted config. The
-      // The installed-service list can still show the Capsule from its own
-      // record; do not fail the whole overview projection for missing Store
+      // installed-service list can still show the Capsule from its own record;
+      // do not fail the whole overview projection for missing Store
       // presentation metadata. This never creates a runtime launcher surface.
     }
   }
 
   return result.map(publicInstallConfig);
+}
+
+async function listDashboardInstallConfigCandidates(
+  operations: ControlPlaneOperations,
+  workspaceId: string,
+  limit: number,
+): Promise<readonly InstallConfig[]> {
+  const listUnionPage = operations.capsules.listInstallConfigUnionPage;
+  if (listUnionPage) {
+    return collectInstallConfigScope(limit, (params) =>
+      listUnionPage.call(operations.capsules, workspaceId, params, {
+        includeInternal: true,
+      }),
+    );
+  }
+  const listSharedPage = operations.capsules.listSharedInstallConfigsPage;
+  const listScopedPage = operations.capsules.listInstallConfigsPage;
+  if (!listSharedPage || !listScopedPage) {
+    const [shared, scoped] = await Promise.all([
+      operations.capsules.listSharedInstallConfigs({ includeInternal: true }),
+      operations.capsules.listInstallConfigs(workspaceId, {
+        includeInternal: true,
+      }),
+    ]);
+    return [...shared, ...scoped].sort(compareInstallConfigs);
+  }
+  const [shared, scoped] = await Promise.all([
+    collectInstallConfigScope(limit, (params) =>
+      listSharedPage.call(operations.capsules, params, {
+        includeInternal: true,
+      }),
+    ),
+    collectInstallConfigScope(limit, (params) =>
+      listScopedPage.call(operations.capsules, workspaceId, params, {
+        includeInternal: true,
+      }),
+    ),
+  ]);
+  return [...shared, ...scoped].sort(compareInstallConfigs);
+}
+
+async function collectInstallConfigScope(
+  limit: number,
+  load: (params: {
+    readonly limit: number;
+    readonly cursor?: string;
+  }) => Promise<{
+    readonly items: readonly InstallConfig[];
+    readonly nextCursor?: string;
+  }>,
+): Promise<readonly InstallConfig[]> {
+  const rows: InstallConfig[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await load({
+      limit: limit - rows.length,
+      ...(cursor ? { cursor } : {}),
+    });
+    rows.push(...page.items);
+    cursor = page.nextCursor;
+  } while (rows.length < limit && cursor !== undefined);
+  return rows;
+}
+
+function compareInstallConfigs(a: InstallConfig, b: InstallConfig): number {
+  return a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 }
 
 function isDashboardInstallConfigVisible(

@@ -624,7 +624,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "updated_at",
       ],
       primaryKey: ["id"],
-      indexes: [["space_id"]],
+      indexes: [["space_id"], ["space_id", "created_at", "id"]],
     },
     {
       name: "takosumi_capsules",
@@ -4311,5 +4311,15 @@ create index if not exists takosumi_offering_catalogs_created_key_idx
 create index if not exists takosumi_offering_catalogs_effective_key_idx
   on takosumi_offering_catalogs (effective_at, catalog_key);`,
       down: `drop table if exists takosumi_offering_catalogs;`,
+    },
+    {
+      id: "deploy.install_config_scope_keyset_index.add",
+      version: 98,
+      domain: "deploy",
+      description:
+        "Add the exact shared-or-Workspace InstallConfig keyset index used by bounded dashboard and list projections.",
+      sql: `create index if not exists takosumi_install_configs_space_created_id_idx
+  on takosumi_install_configs (space_id, created_at, id);`,
+      down: "drop index if exists takosumi_install_configs_space_created_id_idx;",
     },
   ]);

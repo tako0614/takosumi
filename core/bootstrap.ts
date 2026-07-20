@@ -821,6 +821,10 @@ export interface TakosumiOperations {
    * membership-domain projection or isolate-local shadow roster.
    */
   readonly members: {
+    getMember(
+      workspaceId: string,
+      accountId: string,
+    ): Promise<WorkspaceMember | undefined>;
     listMembers(workspaceId: string): Promise<readonly WorkspaceMember[]>;
     upsertMember(input: {
       readonly workspaceId: string;
@@ -2368,6 +2372,8 @@ export async function createTakosumiService(
   // controller; does not duplicate controller logic.
   //
   const members: TakosumiOperations["members"] = {
+    getMember: (workspaceId, accountId) =>
+      workspacesService.getWorkspaceMember(workspaceId, accountId),
     listMembers: (workspaceId) =>
       workspacesService.listWorkspaceMembers(workspaceId),
     upsertMember: (input) =>

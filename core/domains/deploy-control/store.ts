@@ -721,10 +721,23 @@ export interface OpenTofuControlStore {
   ): Promise<Project | undefined>;
   listProjectsByWorkspace(workspaceId: string): Promise<readonly Project[]>;
 
-  // InstallConfig records. `workspaceId` absent = operator-shared config.
+  // InstallConfig records. The legacy optional list enumerates every config
+  // when `workspaceId` is absent; latency-sensitive reads must use the
+  // explicit shared-only operation instead of filtering that global result.
   putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
   getInstallConfig(id: string): Promise<InstallConfig | undefined>;
+  getInstallConfigsByIds(
+    ids: readonly string[],
+  ): Promise<readonly InstallConfig[]>;
   listInstallConfigs(workspaceId?: string): Promise<readonly InstallConfig[]>;
+  listSharedInstallConfigs(): Promise<readonly InstallConfig[]>;
+  listInstallConfigsPage(
+    workspaceId: string,
+    params: PageParams,
+  ): Promise<Page<InstallConfig>>;
+  listSharedInstallConfigsPage(
+    params: PageParams,
+  ): Promise<Page<InstallConfig>>;
 
   // Capsule records (active UNIQUE(project_id, name, environment)).
   putCapsule(capsule: Capsule): Promise<Capsule>;
@@ -1528,6 +1541,16 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(this.#installConfigs.get(id));
   }
 
+  getInstallConfigsByIds(
+    ids: readonly string[],
+  ): Promise<readonly InstallConfig[]> {
+    return Promise.resolve(
+      ids
+        .map((id) => this.#installConfigs.get(id))
+        .filter((row): row is InstallConfig => row !== undefined),
+    );
+  }
+
   listInstallConfigs(workspaceId?: string): Promise<readonly InstallConfig[]> {
     const rows = Array.from(this.#installConfigs.values());
     const filtered =
@@ -1539,6 +1562,46 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         (a, b) =>
           a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
       ),
+    );
+  }
+
+  listSharedInstallConfigs(): Promise<readonly InstallConfig[]> {
+    return Promise.resolve(
+      Array.from(this.#installConfigs.values())
+        .filter((row) => row.workspaceId === undefined)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
+    );
+  }
+
+  async listInstallConfigsPage(
+    workspaceId: string,
+    params: PageParams,
+  ): Promise<Page<InstallConfig>> {
+    return pageSorted(
+      Array.from(this.#installConfigs.values())
+        .filter((row) => row.workspaceId === workspaceId)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
+      params,
+    );
+  }
+
+  async listSharedInstallConfigsPage(
+    params: PageParams,
+  ): Promise<Page<InstallConfig>> {
+    return pageSorted(
+      Array.from(this.#installConfigs.values())
+        .filter((row) => row.workspaceId === undefined)
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
+      params,
     );
   }
 

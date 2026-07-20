@@ -5,6 +5,7 @@ import { handleProjects } from "../../../../accounts/service/src/control/project
 import { handleCapsules } from "../../../../accounts/service/src/control/capsules.ts";
 import {
   controllerErrorResponse,
+  canAccessWorkspace,
   publicDependency,
   publicOutputShare,
   type ControlDispatchContext,
@@ -498,6 +499,194 @@ test("Dashboard Workspace projection pushes active latest-first limit into the s
       limit: 50,
     },
   ]);
+});
+
+test("Workspace authorization uses one exact membership lookup instead of scanning the roster", async () => {
+  const fixture = operationsFixture();
+  let exactLookups = 0;
+  let rosterLists = 0;
+  const operations = {
+    ...fixture.operations,
+    members: {
+      getMember: async (workspaceId: string, accountId: string) => {
+        exactLookups += 1;
+        return {
+          id: "wsm_member",
+          workspaceId,
+          accountId,
+          roles: ["member"],
+          status: "active",
+          createdAt: workspace.createdAt,
+          updatedAt: workspace.updatedAt,
+        } as const;
+      },
+      listMembers: async () => {
+        rosterLists += 1;
+        return [];
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+
+  expect(
+    await canAccessWorkspace({
+      operations,
+      store: new InMemoryAccountsStore(),
+      subject: "tsub_member",
+      workspaceId: workspace.id,
+      workspace,
+    }),
+  ).toBe(true);
+  expect(exactLookups).toBe(1);
+  expect(rosterLists).toBe(0);
+});
+
+test("Dashboard overview pushes the config limit into one union page and batches referenced ids", async () => {
+  const fixture = operationsFixture();
+  const unionCalls: unknown[] = [];
+  const batchCalls: string[][] = [];
+  let exactGets = 0;
+  const capsule = (id: string, installConfigId: string) => ({
+    id,
+    workspaceId: workspace.id,
+    projectId: "prj_default_ws_owner",
+    name: id,
+    slug: id,
+    sourceId: "src_git",
+    installConfigId,
+    environment: "production",
+    currentStateGeneration: 0,
+    status: "active" as const,
+    createdAt: workspace.createdAt,
+    updatedAt: workspace.updatedAt,
+  });
+  const config = (id: string) => ({
+    id,
+    name: id,
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: workspace.createdAt,
+    updatedAt: workspace.updatedAt,
+  });
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      listCapsulesPage: async () => ({
+        items: [
+          capsule("cap_a", "cfg_ref_a"),
+          capsule("cap_b", "cfg_ref_b"),
+          capsule("cap_c", "cfg_ref_a"),
+        ],
+      }),
+      listInstallConfigUnionPage: async (
+        workspaceId: string | undefined,
+        params: Record<string, unknown>,
+        options: Record<string, unknown>,
+      ) => {
+        unionCalls.push({ workspaceId, params, options });
+        return { items: [config("cfg_visible")] };
+      },
+      getInstallConfigsByIds: async (ids: readonly string[]) => {
+        batchCalls.push([...ids]);
+        return ids.map(config);
+      },
+      getInstallConfig: async () => {
+        exactGets += 1;
+        return config("unexpected");
+      },
+    },
+    activity: { list: async () => [] },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    `https://app.example.test/api/v1/dashboard/overview?workspaceId=${workspace.id}&includeWorkspaces=false&installConfigLimit=7&capsuleLimit=3`,
+  );
+  const response = await handleDashboard(
+    context(operations, request),
+    ["dashboard", "overview"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(unionCalls).toEqual([
+    {
+      workspaceId: workspace.id,
+      params: { limit: 7 },
+      options: { includeInternal: true },
+    },
+  ]);
+  expect(batchCalls).toEqual([["cfg_ref_a", "cfg_ref_b"]]);
+  expect(exactGets).toBe(0);
+  expect(
+    ((await response?.json()).installConfigs as Array<{ id: string }>).map(
+      (row) => row.id,
+    ),
+  ).toEqual(["cfg_visible", "cfg_ref_a", "cfg_ref_b"]);
+});
+
+test("Dashboard overview follows bounded union pages beyond the store page cap", async () => {
+  const fixture = operationsFixture();
+  const unionCalls: Array<Record<string, unknown>> = [];
+  const config = (id: string) => ({
+    id,
+    name: id,
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: workspace.createdAt,
+    updatedAt: workspace.updatedAt,
+  });
+  const firstPage = Array.from({ length: 100 }, (_, index) =>
+    config(`cfg_${index.toString().padStart(3, "0")}`),
+  );
+  const secondPage = Array.from({ length: 20 }, (_, index) =>
+    config(`cfg_${(index + 100).toString().padStart(3, "0")}`),
+  );
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      listCapsulesPage: async () => ({ items: [] }),
+      listInstallConfigUnionPage: async (
+        workspaceId: string | undefined,
+        params: Record<string, unknown>,
+        options: Record<string, unknown>,
+      ) => {
+        unionCalls.push({ workspaceId, params, options });
+        return params.cursor === "after-100"
+          ? { items: secondPage }
+          : { items: firstPage, nextCursor: "after-100" };
+      },
+    },
+    activity: { list: async () => [] },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    `https://app.example.test/api/v1/dashboard/overview?workspaceId=${workspace.id}&includeWorkspaces=false&installConfigLimit=150`,
+  );
+  const response = await handleDashboard(
+    context(operations, request),
+    ["dashboard", "overview"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(unionCalls).toEqual([
+    {
+      workspaceId: workspace.id,
+      params: { limit: 150 },
+      options: { includeInternal: true },
+    },
+    {
+      workspaceId: workspace.id,
+      params: { limit: 50, cursor: "after-100" },
+      options: { includeInternal: true },
+    },
+  ]);
+  expect(
+    ((await response?.json()).installConfigs as Array<{ id: string }>).map(
+      (row) => row.id,
+    ),
+  ).toEqual([...firstPage, ...secondPage].map((row) => row.id));
 });
 
 test("Capsule create forwards optional projectId and otherwise uses the canonical default", async () => {

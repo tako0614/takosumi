@@ -157,7 +157,14 @@ export const installConfigs = sqliteTable(
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
-  (table) => [index("install_configs_space_idx").on(table.workspaceId)],
+  (table) => [
+    index("install_configs_space_idx").on(table.workspaceId),
+    index("install_configs_space_created_id_idx").on(
+      table.workspaceId,
+      table.createdAt,
+      table.id,
+    ),
+  ],
 );
 
 export const capsules = sqliteTable(

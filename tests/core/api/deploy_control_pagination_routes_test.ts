@@ -285,6 +285,9 @@ test("GET /internal/v1/install-configs caps the shared+scoped union at 100 and p
     for (let i = shared; i < shared + scoped; i += 1) {
       await store.putInstallConfig(installConfigFixture(i, WORKSPACE_ID));
     }
+    store.listInstallConfigs = async () => {
+      throw new Error("route must not enumerate the global InstallConfig set");
+    };
   });
 
   const seen: string[] = [];

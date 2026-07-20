@@ -251,6 +251,16 @@ export class WorkspacesService {
     return await this.#store.getWorkspace(workspaceId);
   }
 
+  /** Exact membership lookup for authorization hot paths. */
+  async getWorkspaceMember(
+    workspaceId: string,
+    accountId: string,
+  ): Promise<WorkspaceMember | undefined> {
+    requireNonEmptyString(workspaceId, "workspaceId");
+    requireNonEmptyString(accountId, "accountId");
+    return await this.#store.getWorkspaceMember(workspaceId, accountId);
+  }
+
   /** Returns the single canonical WorkspaceMember roster. */
   async listWorkspaceMembers(
     workspaceId: string,

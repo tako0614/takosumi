@@ -524,6 +524,13 @@ export async function canAccessWorkspace(input: {
     (await input.operations.workspaces.getWorkspace(input.workspaceId));
   if (workspace.ownerUserId === input.subject) return true;
 
+  if (input.operations.members.getMember) {
+    const member = await input.operations.members.getMember(
+      input.workspaceId,
+      input.subject,
+    );
+    return member?.status === "active";
+  }
   const members = await input.operations.members.listMembers(input.workspaceId);
   return members.some(
     (member) =>

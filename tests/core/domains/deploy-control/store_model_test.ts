@@ -2,6 +2,7 @@ import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 
 import type {
   ApplyRun,
+  InstallConfig,
   ProviderConnection,
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
@@ -81,6 +82,24 @@ function project(overrides: Partial<Project> = {}): Project {
     createdAt: TS,
     updatedAt: TS,
     ...overrides,
+  };
+}
+
+function installConfig(
+  id: string,
+  workspaceId?: string,
+  sequence = 0,
+): InstallConfig {
+  const timestamp = `2026-06-06T00:00:00.${String(sequence).padStart(3, "0")}Z`;
+  return {
+    id,
+    ...(workspaceId ? { workspaceId } : {}),
+    name: id,
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
   };
 }
 
@@ -259,6 +278,118 @@ test("Workspace and Project stores expose only canonical ownership fields", asyn
       (await store.getProjectBySlug(first.id, "project-a"))?.id,
       label,
     ).toBe("project_a");
+  }
+});
+
+test("InstallConfig stores preserve global enumeration and expose exact bounded scopes", async () => {
+  for (const [label, store] of await stores()) {
+    const shared = Array.from({ length: 12 }, (_, index) =>
+      installConfig(
+        `config_shared_${String(index).padStart(2, "0")}`,
+        undefined,
+        index,
+      ),
+    );
+    const scoped = Array.from({ length: 13 }, (_, index) =>
+      installConfig(
+        `config_scoped_${String(index).padStart(2, "0")}`,
+        "workspace_a",
+        index + 20,
+      ),
+    );
+    const other = installConfig("config_other", "workspace_b", 40);
+    for (const config of [...shared, ...scoped, other]) {
+      await store.putInstallConfig(config);
+    }
+
+    expect((await store.listInstallConfigs()).length, label).toBe(26);
+    expect(
+      (await store.listSharedInstallConfigs()).map((row) => row.id),
+      label,
+    ).toEqual(shared.map((row) => row.id));
+    expect(
+      (await store.listInstallConfigs("workspace_a")).map((row) => row.id),
+      label,
+    ).toEqual(scoped.map((row) => row.id));
+
+    const sharedFirst = await store.listSharedInstallConfigsPage({ limit: 5 });
+    expect(
+      sharedFirst.items.map((row) => row.id),
+      label,
+    ).toEqual(shared.slice(0, 5).map((row) => row.id));
+    expect(sharedFirst.nextCursor, label).toBeDefined();
+    const sharedSecond = await store.listSharedInstallConfigsPage({
+      limit: 5,
+      cursor: sharedFirst.nextCursor,
+    });
+    expect(
+      sharedSecond.items.map((row) => row.id),
+      label,
+    ).toEqual(shared.slice(5, 10).map((row) => row.id));
+
+    expect(
+      (
+        await store.getInstallConfigsByIds([
+          scoped[12]!.id,
+          "config_missing",
+          shared[0]!.id,
+        ])
+      ).map((row) => row.id),
+      label,
+    ).toEqual([scoped[12]!.id, shared[0]!.id]);
+  }
+});
+
+test("D1 InstallConfig id lookup chunks past the runtime variable limit", async () => {
+  const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
+  const configs = Array.from({ length: 205 }, (_, index) =>
+    installConfig(
+      `config_batch_${String(index).padStart(3, "0")}`,
+      undefined,
+      index,
+    ),
+  );
+  for (const config of configs) await store.putInstallConfig(config);
+  expect(
+    (await store.getInstallConfigsByIds(configs.map((row) => row.id))).map(
+      (row) => row.id,
+    ),
+  ).toEqual(configs.map((row) => row.id));
+});
+
+test("D1 exact InstallConfig pages use the scope-created-id covering index", async () => {
+  const db = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(db);
+  await store.putInstallConfig(installConfig("config_shared", undefined, 1));
+  await store.putInstallConfig(
+    installConfig("config_scoped", "workspace_a", 2),
+  );
+
+  const sharedPlan = await db
+    .prepare(
+      `explain query plan
+       select record_json from install_configs
+       where space_id is null
+       order by created_at asc, id asc
+       limit ?`,
+    )
+    .bind(6)
+    .all<{ readonly detail: string }>();
+  const scopedPlan = await db
+    .prepare(
+      `explain query plan
+       select record_json from install_configs
+       where space_id = ?
+       order by created_at asc, id asc
+       limit ?`,
+    )
+    .bind("workspace_a", 6)
+    .all<{ readonly detail: string }>();
+
+  for (const plan of [sharedPlan, scopedPlan]) {
+    expect(plan.results.map((row) => row.detail).join("\n")).toContain(
+      "install_configs_space_created_id_idx",
+    );
   }
 });
 

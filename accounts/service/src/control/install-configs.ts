@@ -491,11 +491,6 @@ function parseInstallConfigListView(
   };
 }
 
-function isStoreInstallConfig(config: InstallConfig): boolean {
-  if (config.workspaceId !== undefined) return false;
-  return config.store?.source !== undefined;
-}
-
 async function listInstallConfigs(
   operations: ControlPlaneOperations,
   store: AccountsStore,
@@ -509,15 +504,6 @@ async function listInstallConfigs(
   if (!page.ok) return page.response;
   const view = parseInstallConfigListView(url);
   if (!view.ok) return view.response;
-  // Without a workspaceId only shared configs (workspaceId-less configs) are
-  // returned; with one, shared configs plus that Workspace's own configs —
-  // mirroring the §30 `/api/v1/capsule-configs` projection. The shared +
-  // scoped union is a small set, so it is materialized, merge-sorted by
-  // (createdAt, id), and bounded with the in-memory keyset pager.
-  const sharedConfigs = (await operations.capsules.listInstallConfigs()).filter(
-    (config) =>
-      config.workspaceId === undefined && isSelectableInstallConfig(config),
-  );
   if (workspaceId !== undefined) {
     const auth = await requireWorkspaceAccess({
       operations,
@@ -527,15 +513,33 @@ async function listInstallConfigs(
     });
     if (!auth.ok) return auth.response;
   }
-  const scoped =
+  const listUnionPage = operations.capsules.listInstallConfigUnionPage;
+  if (listUnionPage) {
+    const { items, nextCursor } = await listUnionPage.call(
+      operations.capsules,
+      workspaceId,
+      page.params,
+      { view: view.view },
+    );
+    return json({
+      installConfigs: items.map(publicInstallConfig),
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+    });
+  }
+  const [sharedRows, scopedRows] = await Promise.all([
+    operations.capsules.listSharedInstallConfigs(),
     workspaceId === undefined || view.view === "store"
-      ? []
-      : (await operations.capsules.listInstallConfigs(workspaceId)).filter(
-          isSelectableInstallConfig,
-        );
+      ? Promise.resolve([])
+      : operations.capsules.listInstallConfigs(workspaceId),
+  ]);
+  const sharedConfigs = sharedRows.filter(
+    (config) =>
+      config.workspaceId === undefined && isSelectableInstallConfig(config),
+  );
+  const scoped = scopedRows.filter(isSelectableInstallConfig);
   const merged = (
     view.view === "store"
-      ? sharedConfigs.filter(isStoreInstallConfig)
+      ? sharedConfigs.filter((config) => config.store?.source !== undefined)
       : [...sharedConfigs, ...scoped]
   ).sort(
     (a, b) =>
