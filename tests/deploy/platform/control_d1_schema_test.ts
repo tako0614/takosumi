@@ -24,6 +24,8 @@ import {
 } from "../../../worker/src/d1_schema_maintenance.ts";
 
 const SOURCE_COMMIT = "a".repeat(40);
+const PREDECESSOR_SOURCE_COMMIT = "b".repeat(40);
+const PREDECESSOR_MANIFEST_DIGEST = `sha256:${"c".repeat(64)}`;
 const NOW = "2026-07-16T00:00:00.000Z";
 
 async function sha256Hex(value: string): Promise<string> {
@@ -354,13 +356,161 @@ async function legacyApplicationSchemaSnapshot(database: D1Database) {
   return { objects: objects.results ?? [], ledger: ledger.results ?? [] };
 }
 
+async function seedAppendedV48InterfaceLayout(
+  database: D1Database,
+): Promise<void> {
+  await database.prepare(`drop table interfaces`).run();
+  await database
+    .prepare(
+      `create table interfaces (
+        id text primary key,
+        workspace_id text not null,
+        owner_kind text not null,
+        owner_id text not null,
+        name text not null,
+        interface_type text not null,
+        phase text not null,
+        generation integer not null,
+        resolved_revision integer not null,
+        record_json text not null,
+        created_at text not null,
+        updated_at text not null,
+        oauth_resource_uri text,
+        form_ref_key text,
+        form_schema_digest text,
+        descriptor_name text,
+        descriptor_version text
+      )`,
+    )
+    .run();
+  await database
+    .prepare(
+      `create unique index interfaces_active_name_unique
+       on interfaces (workspace_id, owner_kind, owner_id, name)
+       where phase <> 'Retired'`,
+    )
+    .run();
+  await database
+    .prepare(
+      `create index interfaces_workspace_type_phase_idx
+       on interfaces (workspace_id, interface_type, phase)`,
+    )
+    .run();
+  await database
+    .prepare(
+      `create unique index interfaces_oauth_resource_claim_unique
+       on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
+       where oauth_resource_uri is not null`,
+    )
+    .run();
+  await database
+    .prepare(
+      `create index interfaces_form_descriptor_idx
+       on interfaces (
+         workspace_id, form_ref_key, form_schema_digest,
+         descriptor_name, descriptor_version
+       ) where form_ref_key is not null`,
+    )
+    .run();
+  await database
+    .prepare(
+      `insert into interfaces (
+         id, workspace_id, owner_kind, owner_id, name, interface_type, phase,
+         generation, resolved_revision, record_json, created_at, updated_at,
+         oauth_resource_uri, form_ref_key, form_schema_digest,
+         descriptor_name, descriptor_version
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "iface_v48",
+      "ws_v48",
+      "resource",
+      "resource_v48",
+      "document",
+      "document.display",
+      "Ready",
+      3,
+      2,
+      JSON.stringify({ id: "iface_v48", generation: 3 }),
+      NOW,
+      NOW,
+      "https://resource.example.test",
+      "forms.takoform.com/v1alpha1|Document|1.0.0",
+      `sha256:${"d".repeat(64)}`,
+      "display",
+      "1",
+    )
+    .run();
+  await database
+    .prepare(
+      `insert into interface_bindings (
+         id, workspace_id, interface_id, subject_kind, subject_id, phase,
+         generation, record_json, created_at, updated_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "ifbind_v48",
+      "ws_v48",
+      "iface_v48",
+      "service_account",
+      "sa_v48",
+      "Active",
+      4,
+      JSON.stringify({ id: "ifbind_v48", interfaceId: "iface_v48" }),
+      NOW,
+      NOW,
+    )
+    .run();
+  await database
+    .prepare(`delete from schema_migrations where version = 49`)
+    .run();
+}
+
+async function readV48InterfaceRows(database: D1Database) {
+  return {
+    interface: await database
+      .prepare(
+        `select id, workspace_id, owner_kind, owner_id, name, interface_type,
+                phase, generation, resolved_revision, oauth_resource_uri,
+                form_ref_key, form_schema_digest, descriptor_name,
+                descriptor_version, record_json, created_at, updated_at
+         from interfaces where id = 'iface_v48'`,
+      )
+      .first(),
+    binding: await database
+      .prepare(
+        `select id, workspace_id, interface_id, subject_kind, subject_id,
+                phase, generation, record_json, created_at, updated_at
+         from interface_bindings where id = 'ifbind_v48'`,
+      )
+      .first(),
+  };
+}
+
+async function downgradeMaintenanceTableToV48(
+  database: D1Database,
+): Promise<void> {
+  for (const column of [
+    "predecessor_fence_id",
+    "predecessor_source_commit",
+    "predecessor_manifest_digest",
+  ]) {
+    await database
+      .prepare(
+        `alter table _takosumi_control_schema_maintenance
+         drop column ${column}`,
+      )
+      .run();
+  }
+}
+
 test("control D1 plan captures the full OSS schema and migration ledger", async () => {
   const plan = await buildControlD1SchemaPlan();
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(48);
-  expect(plan.migrations).toHaveLength(45);
+  expect(plan.migrations.at(-1)?.version).toBe(49);
+  expect(plan.migrations).toHaveLength(46);
   expect(plan.tables.some((table) => table.name === "target_pools")).toBe(true);
   expect(
     plan.tables.some((table) => table.name === "takosumi_target_pools"),
@@ -415,7 +565,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(48);
+    expect(verification.latestMigrationVersion).toBe(49);
   } finally {
     database.close();
   }
@@ -466,6 +616,418 @@ test("control D1 apply converges a fresh database and records every version", as
     expect(applied.appliedMigrationVersions).toEqual(
       plan.migrations.map((migration) => migration.version),
     );
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 v49 atomically preserves populated appended-order Interfaces through predecessor fence recovery", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(database);
+    await seedAppendedV48InterfaceLayout(database);
+    const before = await readV48InterfaceRows(database);
+    const beforeVerification = await verifyControlD1Schema(database, plan);
+    expect(beforeVerification.issues).toContain(
+      "schema_table_mismatch:interfaces",
+    );
+    expect(beforeVerification.issues).toContain("migration_ledger_mismatch");
+
+    const predecessorFence = await acquireControlD1MaintenanceFence(
+      database,
+      {
+        sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+      },
+      NOW,
+    );
+    // Live v48 predates durable predecessor lineage. Recovery must add these
+    // nullable columns before the first state read while the old fence and all
+    // guards remain active.
+    await downgradeMaintenanceTableToV48(database);
+    await database
+      .prepare(`drop trigger "_takosumi_schema_fence_interfaces_insert"`)
+      .run();
+
+    let supersessionBatchCount = 0;
+    let firstUpgradeBatchBlockedWrite = false;
+    const migrationDatabase: D1Database = {
+      prepare: (query) => database.prepare(query),
+      batch: async <T>(statements) => {
+        const results = await database.batch<T>(statements);
+        supersessionBatchCount += 1;
+        if (supersessionBatchCount === 1) {
+          try {
+            await database
+              .prepare(
+                `insert into interfaces (
+                   id, workspace_id, owner_kind, owner_id, name,
+                   interface_type, phase, generation, resolved_revision,
+                   record_json, created_at, updated_at
+                 ) values (
+                   'iface_upgrade_gap', 'ws_v48', 'resource', 'resource_gap',
+                   'gap', 'document.display', 'Ready', 1, 0, '{}', ?, ?
+                 )`,
+              )
+              .bind(NOW, NOW)
+              .run();
+          } catch (error) {
+            firstUpgradeBatchBlockedWrite = String(error).includes(
+              "takosumi control schema maintenance",
+            );
+          }
+        }
+        return results;
+      },
+    };
+    let blockedDuringTransition = 0;
+    const applyWithPredecessor = (retainMaintenanceFence: boolean) =>
+      applyControlD1Schema(migrationDatabase, plan, {
+        sourceCommit: SOURCE_COMMIT,
+        environment: "staging",
+        activatedAt: "2026-07-16T00:01:00.000Z",
+        releasedAt: () => "2026-07-16T00:02:00.000Z",
+        maintenanceDrainMilliseconds: 0,
+        waitForRequestDrain: async () => {
+          await expect(
+            database
+              .prepare(
+                `insert into interfaces (
+                   id, workspace_id, owner_kind, owner_id, name,
+                   interface_type, phase, generation, resolved_revision,
+                   record_json, created_at, updated_at
+                 ) values (
+                   'iface_blocked', 'ws_v48', 'resource', 'resource_blocked',
+                   'blocked', 'document.display', 'Ready', 1, 0, '{}', ?, ?
+                 )`,
+              )
+              .bind(NOW, NOW)
+              .run(),
+          ).rejects.toThrow("takosumi control schema maintenance");
+          blockedDuringTransition += 1;
+        },
+        retainMaintenanceFence,
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+        activePredecessorFence: {
+          sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+          manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        },
+      });
+
+    const retained = await applyWithPredecessor(true);
+    expect(retained.appliedMigrationVersions).toEqual([49]);
+    expect(retained.verification.status).toBe("ready");
+    expect(retained.maintenanceStatus).toBe("retained");
+    expect(retained.predecessorMaintenanceFence).toEqual(predecessorFence);
+    expect(firstUpgradeBatchBlockedWrite).toBe(true);
+    expect(await readV48InterfaceRows(database)).toEqual(before);
+    const interfaceGuards = await database
+      .prepare(
+        `select name from sqlite_master
+         where type = 'trigger'
+           and tbl_name = 'interfaces'
+           and name like '_takosumi_schema_fence_interfaces_%'
+         order by name`,
+      )
+      .all<{ readonly name: string }>();
+    expect((interfaceGuards.results ?? []).map((row) => row.name)).toEqual([
+      "_takosumi_schema_fence_interfaces_delete",
+      "_takosumi_schema_fence_interfaces_insert",
+      "_takosumi_schema_fence_interfaces_update",
+    ]);
+
+    const resumed = await applyWithPredecessor(false);
+    expect(resumed.appliedMigrationVersions).toEqual([]);
+    expect(resumed.maintenanceStatus).toBe("released");
+    expect(resumed.predecessorMaintenanceFence).toEqual(predecessorFence);
+    expect(blockedDuringTransition).toBe(2);
+    expect(await readV48InterfaceRows(database)).toEqual(before);
+    expect(await verifyControlD1Schema(database, plan)).toMatchObject({
+      status: "ready",
+      latestMigrationVersion: 49,
+      issues: [],
+    });
+    expect(await readControlD1MaintenanceState(database)).toEqual({
+      status: "inactive",
+    });
+    expect(
+      await database
+        .prepare(
+          `select name from sqlite_master
+           where type = 'table' and name = 'interfaces__takosumi_v49'`,
+        )
+        .first(),
+    ).toBeNull();
+  } finally {
+    database.close();
+  }
+});
+
+for (const responseLossBatch of [1, 2, 3] as const) {
+  test(`control D1 predecessor recovery resumes after committed batch ${responseLossBatch} loses its response`, async () => {
+    const plan = await buildControlD1SchemaPlan();
+    const database = new SqliteControlD1Database();
+    try {
+      await ensureD1OpenTofuLedgerSchema(database);
+      await seedAppendedV48InterfaceLayout(database);
+      const before = await readV48InterfaceRows(database);
+      await acquireControlD1MaintenanceFence(
+        database,
+        {
+          sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+          manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+          environment: "staging",
+          databaseRole: "in_place",
+          releasePolicy: "in_place",
+          databaseId: "database_staging",
+        },
+        NOW,
+      );
+      await downgradeMaintenanceTableToV48(database);
+
+      let batchCount = 0;
+      let responseLost = false;
+      const responseLossDatabase: D1Database = {
+        prepare: (query) => database.prepare(query),
+        batch: async <T>(statements) => {
+          const results = await database.batch<T>(statements);
+          batchCount += 1;
+          if (!responseLost && batchCount === responseLossBatch) {
+            responseLost = true;
+            throw new Error(`simulated committed batch ${responseLossBatch}`);
+          }
+          return results;
+        },
+      };
+      const apply = () =>
+        applyControlD1Schema(responseLossDatabase, plan, {
+          sourceCommit: SOURCE_COMMIT,
+          environment: "staging",
+          activatedAt: "2026-07-16T00:01:00.000Z",
+          releasedAt: () => "2026-07-16T00:02:00.000Z",
+          maintenanceDrainMilliseconds: 0,
+          waitForRequestDrain: async () => {},
+          retainMaintenanceFence: true,
+          databaseRole: "in_place",
+          releasePolicy: "in_place",
+          databaseId: "database_staging",
+          activePredecessorFence: {
+            sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+            manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+          },
+        });
+
+      await expect(apply()).rejects.toBeInstanceOf(Error);
+      expect(responseLost).toBe(true);
+      expect(await readControlD1MaintenanceState(database)).toMatchObject({
+        status: "active",
+      });
+      expect(await readV48InterfaceRows(database)).toEqual(before);
+      await expect(
+        database
+          .prepare(
+            `insert into interfaces (
+               id, workspace_id, owner_kind, owner_id, name, interface_type,
+               phase, generation, resolved_revision, record_json,
+               created_at, updated_at
+             ) values (
+               'response-loss-blocked', 'ws_v48', 'resource', 'resource_loss',
+               'blocked', 'document.display', 'Ready', 1, 0, '{}', ?, ?
+             )`,
+          )
+          .bind(NOW, NOW)
+          .run(),
+      ).rejects.toThrow("takosumi control schema maintenance");
+
+      const resumed = await apply();
+      expect(resumed.verification).toMatchObject({
+        status: "ready",
+        latestMigrationVersion: 49,
+        issues: [],
+      });
+      expect(resumed.appliedMigrationVersions).toEqual(
+        responseLossBatch === 3 ? [] : [49],
+      );
+      expect(resumed.maintenanceStatus).toBe("retained");
+      expect(await readV48InterfaceRows(database)).toEqual(before);
+      const state = await readControlD1MaintenanceState(database);
+      expect(state).toMatchObject({
+        status: "active",
+        fence: {
+          sourceCommit: SOURCE_COMMIT,
+          manifestDigest: plan.manifestDigest,
+          predecessor: {
+            sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+            manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+          },
+        },
+      });
+      await expect(
+        database
+          .prepare(
+            `insert into interfaces (
+               id, workspace_id, owner_kind, owner_id, name, interface_type,
+               phase, generation, resolved_revision, record_json,
+               created_at, updated_at
+             ) values (
+               'retry-blocked', 'ws_v48', 'resource', 'resource_retry',
+               'blocked', 'document.display', 'Ready', 1, 0, '{}', ?, ?
+             )`,
+          )
+          .bind(NOW, NOW)
+          .run(),
+      ).rejects.toThrow("takosumi control schema maintenance");
+      expect(
+        await database
+          .prepare(
+            `select name from sqlite_master
+             where type = 'table' and name = 'interfaces__takosumi_v49'`,
+          )
+          .first(),
+      ).toBeNull();
+    } finally {
+      database.close();
+    }
+  });
+}
+
+test("control D1 predecessor fence recovery rejects identity and non-immediate ledger drift without opening writes", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(database);
+    await seedAppendedV48InterfaceLayout(database);
+    const predecessorFence = await acquireControlD1MaintenanceFence(
+      database,
+      {
+        sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+      },
+      NOW,
+    );
+    const baseOptions = {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging" as const,
+      activatedAt: "2026-07-16T00:01:00.000Z",
+      releasedAt: () => "2026-07-16T00:02:00.000Z",
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      databaseRole: "in_place" as const,
+      releasePolicy: "in_place" as const,
+      databaseId: "database_staging",
+    };
+
+    await expect(
+      applyControlD1Schema(database, plan, {
+        ...baseOptions,
+        activePredecessorFence: {
+          sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+          manifestDigest: `sha256:${"0".repeat(64)}`,
+        },
+      }),
+    ).rejects.toThrow("maintenance_fence_predecessor_mismatch");
+    await expect(
+      applyControlD1Schema(database, plan, {
+        ...baseOptions,
+        databaseId: "database_other",
+        activePredecessorFence: {
+          sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+          manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        },
+      }),
+    ).rejects.toThrow("maintenance_fence_predecessor_mismatch");
+
+    await database
+      .prepare(`delete from schema_migrations where version = 48`)
+      .run();
+    await expect(
+      applyControlD1Schema(database, plan, {
+        ...baseOptions,
+        activePredecessorFence: {
+          sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+          manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        },
+      }),
+    ).rejects.toThrow("maintenance_fence_predecessor_not_immediate");
+    expect(await readControlD1MaintenanceState(database)).toMatchObject({
+      status: "active",
+      fence: predecessorFence,
+    });
+    await expect(
+      database
+        .prepare(
+          `insert into workspaces
+             (id, handle, record_json, created_at, updated_at)
+           values ('still-blocked', 'still-blocked', '{}', ?, ?)`,
+        )
+        .bind(NOW, NOW)
+        .run(),
+    ).rejects.toThrow("takosumi control schema maintenance");
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 predecessor recovery rejects a full ledger behind the old fence", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(database);
+    const predecessorFence = await acquireControlD1MaintenanceFence(
+      database,
+      {
+        sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+      },
+      NOW,
+    );
+
+    await expect(
+      applyControlD1Schema(database, plan, {
+        sourceCommit: SOURCE_COMMIT,
+        environment: "staging",
+        activatedAt: NOW,
+        releasedAt: () => NOW,
+        maintenanceDrainMilliseconds: 0,
+        waitForRequestDrain: async () => {},
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+        activePredecessorFence: {
+          sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+          manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        },
+      }),
+    ).rejects.toThrow("maintenance_fence_predecessor_not_immediate");
+    expect(await readControlD1MaintenanceState(database)).toMatchObject({
+      status: "active",
+      fence: predecessorFence,
+    });
+    await expect(
+      database
+        .prepare(
+          `insert into workspaces
+             (id, handle, record_json, created_at, updated_at)
+           values ('full-ledger-blocked', 'full-ledger-blocked', '{}', ?, ?)`,
+        )
+        .bind(NOW, NOW)
+        .run(),
+    ).rejects.toThrow("takosumi control schema maintenance");
   } finally {
     database.close();
   }
@@ -1102,7 +1664,7 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 48 },
+      verification: { latestMigrationVersion: 49 },
     });
   } finally {
     database.close();
@@ -1122,6 +1684,229 @@ test("control D1 CLI apply requires exact manifest confirmation", async () => {
     status: "failed",
     failureCode: "manifest_confirmation_required",
   });
+});
+
+test("control D1 CLI predecessor confirmations are paired and apply-only", async () => {
+  for (const argv of [
+    ["apply", "--confirm-predecessor-source", PREDECESSOR_SOURCE_COMMIT],
+    [
+      "verify",
+      "--confirm-predecessor-source",
+      PREDECESSOR_SOURCE_COMMIT,
+      "--confirm-predecessor-manifest",
+      PREDECESSOR_MANIFEST_DIGEST,
+    ],
+    [
+      "apply",
+      "--dry-run",
+      "--confirm-predecessor-source",
+      PREDECESSOR_SOURCE_COMMIT,
+      "--confirm-predecessor-manifest",
+      PREDECESSOR_MANIFEST_DIGEST,
+    ],
+  ]) {
+    const output: string[] = [];
+    const code = await runControlD1SchemaCli(
+      argv,
+      {},
+      (value) => output.push(value),
+      { sourceCommit: SOURCE_COMMIT, now: () => NOW },
+    );
+    expect(code).toBe(1);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      status: "failed",
+      failureCode: "arguments_invalid",
+    });
+  }
+});
+
+test("control D1 CLI reports the exact predecessor fence transition on recovery", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(database);
+    await seedAppendedV48InterfaceLayout(database);
+    const predecessorFence = await acquireControlD1MaintenanceFence(
+      database,
+      {
+        sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+      },
+      NOW,
+    );
+    const output: string[] = [];
+    const code = await runControlD1SchemaCli(
+      [
+        "apply",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+        "--retain-maintenance-fence",
+        "--confirm-predecessor-source",
+        PREDECESSOR_SOURCE_COMMIT,
+        "--confirm-predecessor-manifest",
+        PREDECESSOR_MANIFEST_DIGEST,
+      ],
+      {},
+      (value) => output.push(value),
+      {
+        sourceCommit: SOURCE_COMMIT,
+        now: () => NOW,
+        maintenanceDrainMilliseconds: 0,
+        waitForRequestDrain: async () => {},
+        inspectSourceCheckout: async () => ({
+          head: SOURCE_COMMIT,
+          clean: true,
+        }),
+        createRemoteDatabase: () => ({
+          database,
+          configurationDigest: `sha256:${"1".repeat(64)}`,
+          databaseId: "database_staging",
+        }),
+      },
+    );
+    const transcript = JSON.parse(output.at(-1) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(code).toBe(0);
+    expect(transcript).toMatchObject({
+      status: "ready",
+      appliedMigrationVersions: [49],
+      maintenanceFenceTransition: {
+        predecessorSourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        predecessorManifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        predecessorFenceId: predecessorFence.fenceId,
+      },
+    });
+    const transition = transcript.maintenanceFenceTransition as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(transition).sort()).toEqual([
+      "predecessorFenceId",
+      "predecessorManifestDigest",
+      "predecessorSourceCommit",
+      "successorFenceId",
+    ]);
+    const state = await readControlD1MaintenanceState(database);
+    expect(state.status).toBe("active");
+    if (state.status !== "active") throw new Error("expected active fence");
+    expect(transition.successorFenceId).toBe(state.fence.fenceId);
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 CLI preserves the fence transition on post-apply schema mismatch", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(database);
+    await seedAppendedV48InterfaceLayout(database);
+    await database
+      .prepare(
+        `create trigger unexpected_workspace_trigger
+         after insert on workspaces
+         begin
+           select 1;
+         end`,
+      )
+      .run();
+    const predecessorFence = await acquireControlD1MaintenanceFence(
+      database,
+      {
+        sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        manifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+      },
+      NOW,
+    );
+    const output: string[] = [];
+    const code = await runControlD1SchemaCli(
+      [
+        "apply",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+        "--confirm-predecessor-source",
+        PREDECESSOR_SOURCE_COMMIT,
+        "--confirm-predecessor-manifest",
+        PREDECESSOR_MANIFEST_DIGEST,
+      ],
+      {},
+      (value) => output.push(value),
+      {
+        sourceCommit: SOURCE_COMMIT,
+        now: () => NOW,
+        maintenanceDrainMilliseconds: 0,
+        waitForRequestDrain: async () => {},
+        inspectSourceCheckout: async () => ({
+          head: SOURCE_COMMIT,
+          clean: true,
+        }),
+        createRemoteDatabase: () => ({
+          database,
+          configurationDigest: `sha256:${"1".repeat(64)}`,
+          databaseId: "database_staging",
+        }),
+      },
+    );
+    const transcript = JSON.parse(output.at(-1) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(code).toBe(1);
+    expect(transcript).toMatchObject({
+      status: "failed",
+      failureCode: "post_apply_verification_failed",
+      maintenanceFenceTransition: {
+        predecessorSourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        predecessorManifestDigest: PREDECESSOR_MANIFEST_DIGEST,
+        predecessorFenceId: predecessorFence.fenceId,
+      },
+    });
+    const transition = transcript.maintenanceFenceTransition as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(transition).sort()).toEqual([
+      "predecessorFenceId",
+      "predecessorManifestDigest",
+      "predecessorSourceCommit",
+      "successorFenceId",
+    ]);
+    const state = await readControlD1MaintenanceState(database);
+    expect(state.status).toBe("active");
+    if (state.status !== "active") throw new Error("expected active fence");
+    expect(transition.successorFenceId).toBe(state.fence.fenceId);
+    expect(
+      await database
+        .prepare(`select max(version) as version from schema_migrations`)
+        .first(),
+    ).toEqual({ version: 49 });
+    await expect(
+      database
+        .prepare(
+          `insert into workspaces
+             (id, handle, record_json, created_at, updated_at)
+           values ('mismatch-blocked', 'mismatch-blocked', '{}', ?, ?)`,
+        )
+        .bind(NOW, NOW)
+        .run(),
+    ).rejects.toThrow("takosumi control schema maintenance");
+  } finally {
+    database.close();
+  }
 });
 
 test("control D1 CLI exposes stable maintenance codes without raw detail", async () => {
@@ -1337,7 +2122,7 @@ test("control D1 REST compound renderer fails closed on bind mismatch", async ()
   expect(fetchCalls).toBe(0);
 });
 
-test("control D1 REST import transport converges the live v24 fixture through canonical v48 triggers", async () => {
+test("control D1 REST import transport converges the live v24 fixture through canonical v49 triggers", async () => {
   const plan = await buildControlD1SchemaPlan();
   const backing = new SqliteControlD1Database();
   const sql = await Bun.file(
@@ -1387,7 +2172,7 @@ test("control D1 REST import transport converges the live v24 fixture through ca
         .map((entry) => entry.version),
     );
     expect(applied.verification.status).toBe("ready");
-    expect(applied.verification.latestMigrationVersion).toBe(48);
+    expect(applied.verification.latestMigrationVersion).toBe(49);
     expect(stats.importIngests).toBeGreaterThan(0);
     expect(stats.queryTriggerRejections).toBe(0);
     expect(await readLiveV24ConvergenceRows(backing)).toEqual(before);
