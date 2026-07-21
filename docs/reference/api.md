@@ -254,8 +254,8 @@ BYOC provider に渡すことまで禁止するものではありません。
 `url` / `routePattern` が managed namespace 外の hostname を指した時点で plan が
 `custom_domain_not_verified` (`failed_precondition`) で停止します。以前は予約対象から
 黙って除外され、hostname が所有確認も衝突検出も経ずに generated root へ届いていました。
-managed namespace を持たない self-host operator は従来どおり自分のドメインをそのまま
-使えます。
+managed namespace を持たない self-host operator はこの verification の対象外で、自分のドメインを
+そのまま使えます。
 
 Run には次を保存します。
 
