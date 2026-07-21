@@ -97,6 +97,7 @@ export const en: Record<keyof typeof ja, string> = {
   "workspace.select": "Select a workspace",
   "workspace.selectMessage": "Pick a workspace from the switcher at the top.",
   "workspace.loading": "Loading workspaces…",
+  "workspace.loadFailed": "Could not load workspaces — {message}",
   "workspace.settings": "Workspace settings",
   "workspace.switcherAria": "Switch workspace (current: {name})",
   "workspace.defaultName": "My workspace",

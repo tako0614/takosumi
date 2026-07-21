@@ -51,7 +51,6 @@ export interface RegisterResourceShapeRoutesOptions {
   readonly service: ResourceShapeService;
   /** Optional canonical byte ingress backed by a host-installed artifact writer. */
   readonly artifactService?: ResourceArtifactService;
-  readonly interfaceDeclarations?: PortableInterfaceDeclarationReader;
   /**
    * Optional portable declaration read (ADR 0002). Omitted means this host
    * serves no portable declarations and does not advertise the feature.
@@ -1241,7 +1240,6 @@ function httpStatusForServiceError(
     case "policy_denied":
     case "form_registry_unavailable":
     case "form_not_installed":
-    case "form_not_activated":
     case "form_identity_conflict":
     case "target_pool_exists":
     case "target_pool_in_use":

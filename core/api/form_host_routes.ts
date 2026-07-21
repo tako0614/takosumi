@@ -28,6 +28,7 @@ import type {
 import { formatResourceShapeId } from "../domains/resource-shape/mod.ts";
 import { PortableDeclarationReadLimitError } from "../domains/interfaces/portable_declarations.ts";
 import { readJsonObject, requestIdFromContext } from "./errors.ts";
+import type { ApiEndpoint } from "./route_families.ts";
 import { parsePageQuery } from "./page_query.ts";
 
 const PORTABLE_FORM_MANAGER = "takoform.form-host.v1";
@@ -64,6 +65,85 @@ export interface RegisterPortableFormHostRoutesOptions {
   readonly authorize: (c: Context) => Promise<PortableFormHostAuthResult>;
   readonly canReadForms: (actor: ActorContext) => boolean;
   readonly interfaceDeclarations?: PortableInterfaceDeclarationReader;
+}
+
+/**
+ * Portable Form host routes mounted by the Resource Shape family. They are
+ * intentionally excluded from Takosumi's own OpenAPI inventory; the portable
+ * contract advertises them through its well-known document. Keeping the list
+ * beside the mount calls lets the edge ingress derive routing without a second
+ * hand-maintained prefix list.
+ */
+export const PORTABLE_FORM_HOST_ENDPOINTS: readonly ApiEndpoint[] = [
+  portableEndpoint("GET", TAKOFORM_FORM_HOST_WELL_KNOWN_PATH, {
+    operationId: "getTakoformHostDiscovery",
+    auth: "none",
+  }),
+  portableEndpoint("GET", `${TAKOFORM_FORM_HOST_API_PATH}/interfaces`, {
+    operationId: "listTakoformDeclaredInterfaces",
+  }),
+  portableEndpoint("GET", `${TAKOFORM_FORM_HOST_API_PATH}/interfaces/:name`, {
+    operationId: "getTakoformDeclaredInterface",
+  }),
+  portableEndpoint("GET", `${TAKOFORM_FORM_HOST_API_PATH}/forms`, {
+    operationId: "listTakoformAvailableForms",
+  }),
+  portableEndpoint("POST", `${TAKOFORM_FORM_HOST_API_PATH}/resources/preview`, {
+    operationId: "previewTakoformResource",
+  }),
+  portableEndpoint("GET", `${TAKOFORM_FORM_HOST_API_PATH}/resources`, {
+    operationId: "listTakoformResources",
+  }),
+  portableEndpoint(
+    "PUT",
+    `${TAKOFORM_FORM_HOST_API_PATH}/resources/:kind/:name`,
+    { operationId: "putTakoformResource" },
+  ),
+  portableEndpoint(
+    "GET",
+    `${TAKOFORM_FORM_HOST_API_PATH}/resources/:kind/:name`,
+    { operationId: "getTakoformResource" },
+  ),
+  portableEndpoint(
+    "DELETE",
+    `${TAKOFORM_FORM_HOST_API_PATH}/resources/:kind/:name`,
+    { operationId: "deleteTakoformResource" },
+  ),
+  portableEndpoint(
+    "POST",
+    `${TAKOFORM_FORM_HOST_API_PATH}/resources/:kind/:name/import`,
+    { operationId: "importTakoformResource" },
+  ),
+  portableEndpoint(
+    "POST",
+    `${TAKOFORM_FORM_HOST_API_PATH}/resources/:kind/:name/observe`,
+    { operationId: "observeTakoformResource" },
+  ),
+  portableEndpoint(
+    "POST",
+    `${TAKOFORM_FORM_HOST_API_PATH}/resources/:kind/:name/refresh`,
+    { operationId: "refreshTakoformResource" },
+  ),
+] as const;
+
+function portableEndpoint(
+  method: ApiEndpoint["method"],
+  path: string,
+  options: {
+    readonly operationId: string;
+    readonly auth?: ApiEndpoint["auth"];
+  },
+): ApiEndpoint {
+  return {
+    method,
+    path,
+    summary: `Portable Form host API: ${options.operationId}`,
+    auth: options.auth ?? "deploy-control-token",
+    operationId: options.operationId,
+    discoverable: false,
+    tag: "resource-shape",
+    openapi: { okSchema: "ResourceShapeResponse" },
+  };
 }
 
 /**

@@ -228,6 +228,7 @@ export const capsuleCompatibilityReports = pgTable(
       .notNull()
       .default([]),
     createdAt: text("created_at").notNull(),
+    modulePath: text("module_path"),
   },
   (table) => [
     index("takosumi_capsule_compat_reports_source_snapshot_idx").on(

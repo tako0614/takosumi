@@ -115,6 +115,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
+  type ControlSession,
   canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
@@ -209,7 +210,7 @@ export async function handleWorkspaces(
       operations,
       store,
       workspaceId,
-      subject: ctx.session.subject,
+      session: ctx.session,
     });
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
@@ -302,7 +303,7 @@ export async function handleWorkspaces(
           operations,
           store,
           ctx.issuer,
-          ctx.session.subject,
+          ctx.session,
           workspaceId,
           ctx.managedPublicBaseDomain,
         );
@@ -1069,7 +1070,7 @@ async function createCapsule(
   operations: ControlPlaneOperations,
   store: AccountsStore,
   issuer: string | undefined,
-  sessionSubject: string,
+  session: ControlSession,
   workspaceId: string,
   managedPublicBaseDomain?: string,
 ): Promise<Response> {
@@ -1171,7 +1172,7 @@ async function createCapsule(
       operations,
       store,
       workspaceId: sourceOwnerWorkspaceId,
-      subject: sessionSubject,
+      session,
     });
     if (!auth.ok) return auth.response;
     return errorJson(
@@ -1223,7 +1224,7 @@ async function createCapsule(
   const resolvedInterfaceBlueprints =
     resolveCapsuleInterfaceBlueprintInstallingPrincipal(
       selectedInterfaceBlueprints,
-      sessionSubject,
+      session.subject,
     );
   if (
     hasVars ||

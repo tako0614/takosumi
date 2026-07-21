@@ -547,7 +547,7 @@ export async function canAccessWorkspace(input: {
   if (input.operations.members.getMember) {
     const member = await input.operations.members.getMember(
       input.workspaceId,
-      input.subject,
+      input.session.subject,
     );
     return member?.status === "active";
   }

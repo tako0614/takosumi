@@ -11,6 +11,7 @@ import type { Output, OutputShare } from "takosumi-contract/outputs";
 import type { Project } from "takosumi-contract/projects";
 import type { Workspace, WorkspaceMember } from "takosumi-contract/workspaces";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import {
   CapsuleStateVersionGuardConflict,
   InMemoryOpenTofuControlStore,
@@ -412,6 +413,38 @@ test("D1 Workspace id lookup chunks large membership sets without changing order
   expect(
     (await store.listWorkspacesByIds(requestedIds)).map((item) => item.id),
   ).toEqual([...seeded.map((item) => item.id).reverse(), seeded[0]!.id]);
+});
+
+test("Capsule compatibility reports persist the analyzed module path on every store", async () => {
+  const report = {
+    id: "caprep_module_path",
+    sourceId: "source_module_path",
+    capsuleId: "capsule_module_path",
+    sourceSnapshotId: "snapshot_module_path",
+    modulePath: "deploy/opentofu",
+    level: "ready",
+    findings: [],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: TS,
+  } satisfies CapsuleCompatibilityReport;
+
+  for (const [label, store] of await stores()) {
+    await store.putCapsuleCompatibilityReport(report);
+    expect(
+      await store.getCapsuleCompatibilityReport(report.id),
+      label,
+    ).toMatchObject(report);
+    expect(
+      await store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+        report.sourceSnapshotId,
+        { sourceId: report.sourceId, capsuleId: report.capsuleId },
+      ),
+      label,
+    ).toMatchObject(report);
+  }
 });
 
 test("account Workspace pages push active/archive/order/limit/cursor into every store", async () => {

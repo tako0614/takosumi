@@ -2191,6 +2191,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       sourceId: normalized.sourceId ?? null,
       capsuleId: normalized.capsuleId ?? null,
       sourceSnapshotId: normalized.sourceSnapshotId,
+      modulePath: normalized.modulePath ?? null,
       level: normalized.level,
       findingsJson: normalized.findings,
       providersJson: normalized.providers,
@@ -2220,6 +2221,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       sourceId: compatibilityReportSourceId(row.sourceId),
       ...(row.capsuleId ? { capsuleId: row.capsuleId } : {}),
       sourceSnapshotId: row.sourceSnapshotId,
+      ...(row.modulePath ? { modulePath: row.modulePath } : {}),
       level: normalizeStoredCapsuleCompatibilityLevel(row.level),
       findings: row.findingsJson as CapsuleCompatibilityReport["findings"],
       providers: row.providersJson as CapsuleCompatibilityReport["providers"],
@@ -2276,6 +2278,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       sourceId: compatibilityReportSourceId(row.sourceId),
       ...(row.capsuleId ? { capsuleId: row.capsuleId } : {}),
       sourceSnapshotId: row.sourceSnapshotId,
+      ...(row.modulePath ? { modulePath: row.modulePath } : {}),
       level: normalizeStoredCapsuleCompatibilityLevel(row.level),
       findings: row.findingsJson as CapsuleCompatibilityReport["findings"],
       providers: row.providersJson as CapsuleCompatibilityReport["providers"],
@@ -3699,7 +3702,8 @@ export async function ensureD1OpenTofuLedgerSchema(
       provisioners_json text not null,
       root_module_variables_json text not null default '[]',
       root_module_outputs_json text not null default '[]',
-      created_at text not null
+      created_at text not null,
+      module_path text
     )`,
     `create index if not exists capsule_compatibility_reports_source_snapshot_idx
       on capsule_compatibility_reports (source_snapshot_id)`,
@@ -5996,6 +6000,34 @@ the legacy global InstallConfig enumeration remains unchanged for backup compati
            on install_configs (space_id, created_at, id)`,
         )
         .run();
+    },
+  },
+  {
+    version: 52,
+    name: "d1_capsule_compatibility_report_module_path",
+    checksumSource: `
+a compatibility report records the module path the Capsule Gate actually analyzed
+a plan may only reuse a report whose recorded path equals the module path it executes
+reports written before this column stay null and cannot gate a plan
+`,
+    async atomicStatements(db) {
+      if (!(await d1TableExists(db, "capsule_compatibility_reports")))
+        return [];
+      const columns = await d1ColumnNames(db, "capsule_compatibility_reports");
+      return columns.has("module_path")
+        ? []
+        : [
+            `alter table capsule_compatibility_reports add column module_path text`,
+          ];
+    },
+    async apply(db) {
+      if (!(await d1TableExists(db, "capsule_compatibility_reports"))) return;
+      await ensureD1Column(
+        db,
+        "capsule_compatibility_reports",
+        "module_path",
+        "text",
+      );
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
