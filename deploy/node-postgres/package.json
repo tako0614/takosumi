@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@takosjp/takosumi-accounts-service": "workspace:*",
-    "hono": "^4.12.9",
+    "hono": "^4.12.27",
     "pg": "^8.11.0"
   }
 }
