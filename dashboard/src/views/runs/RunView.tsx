@@ -99,7 +99,6 @@ import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
-import { refreshSession } from "../account/lib/session.ts";
 import {
   formatDateTime,
   locale,
@@ -814,13 +813,10 @@ function Inner() {
   });
   const [completedRunUiSurfaces] = createResource(
     completedRunUiSurfaceKey,
-    async ({ workspaceId, capsuleId: id }) => {
-      const session = await refreshSession();
-      if (!session) throw new Error("dashboard session is unavailable");
-      return await listAuthorizedUiSurfaces(workspaceId, session.subject, {
+    ({ workspaceId, capsuleId: id }) =>
+      listAuthorizedUiSurfaces(workspaceId, {
         capsuleId: id,
-      });
-    },
+      }),
   );
   const completedRunLaunchUrl = createMemo(() => {
     // Runtime launch surfaces are Interface-owned. StateVersion history,

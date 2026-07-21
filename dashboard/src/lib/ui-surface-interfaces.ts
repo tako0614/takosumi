@@ -45,28 +45,24 @@ export interface UiSurfaceReadOptions {
 
 export async function listAuthorizedUiSurfaces(
   workspaceId: string,
-  subjectId: string,
   options: UiSurfaceReadOptions = {},
 ): Promise<readonly AuthorizedUiSurface[]> {
   const normalizedWorkspaceId = requiredId(workspaceId, "workspaceId");
-  const normalizedSubjectId = requiredId(subjectId, "subjectId");
   const normalizedCapsuleId =
     options.capsuleId === undefined
       ? undefined
       : requiredId(options.capsuleId, "capsuleId");
-  const params = new URLSearchParams({
-    workspaceId: normalizedWorkspaceId,
-    type: UI_SURFACE_INTERFACE_TYPE,
-    phase: "Resolved",
-    permission: UI_SURFACE_PERMISSION,
-  });
+  const params = new URLSearchParams();
   if (normalizedCapsuleId !== undefined) {
-    params.set("ownerKind", "Capsule");
-    params.set("ownerId", normalizedCapsuleId);
+    params.set("capsuleId", normalizedCapsuleId);
   }
-  const body = await fetchJson(`/v1/interfaces?${params.toString()}`, options);
+  const query = params.size > 0 ? `?${params.toString()}` : "";
+  const body = await fetchJson(
+    `/api/v1/workspaces/${encodeURIComponent(normalizedWorkspaceId)}/ui-surfaces${query}`,
+    options,
+  );
   if (!isRecord(body) || !Array.isArray(body.interfaces)) {
-    throw new Error("Interface list response is invalid");
+    throw new Error("UI surface list response is invalid");
   }
 
   const candidates = body.interfaces
@@ -78,25 +74,7 @@ export async function listAuthorizedUiSurfaces(
           value.capsuleId === normalizedCapsuleId),
     );
 
-  const authorized = await Promise.all(
-    candidates.map(async (candidate) => {
-      const bindings = await fetchJson(
-        `/v1/interfaces/${encodeURIComponent(candidate.interfaceId)}/bindings?permission=${encodeURIComponent(UI_SURFACE_PERMISSION)}`,
-        options,
-      );
-      if (!isRecord(bindings) || !Array.isArray(bindings.bindings)) {
-        throw new Error("InterfaceBinding list response is invalid");
-      }
-      return bindings.bindings.some((binding) =>
-        isReadyUiOpenBinding(binding, candidate.interface, normalizedSubjectId),
-      )
-        ? stripInterface(candidate)
-        : null;
-    }),
-  );
-  return authorized
-    .filter((value): value is AuthorizedUiSurface => value !== null)
-    .sort(compareAuthorizedUiSurfaces);
+  return candidates.map(stripInterface).sort(compareAuthorizedUiSurfaces);
 }
 
 export function parseUiSurfaceInterface(

@@ -57,7 +57,12 @@ import {
   capsuleInterfaceBlueprintsNeedInstallingPrincipal,
   resolveCapsuleInterfaceBlueprintInstallingPrincipal,
 } from "takosumi-contract/interfaces";
-import { parseScopeBoundaryPolicy } from "takosumi-contract";
+import {
+  parseScopeBoundaryPolicy,
+  UI_SURFACE_INTERFACE_TYPE,
+  UI_SURFACE_INTERFACE_VERSION,
+  UI_SURFACE_OPEN_PERMISSION,
+} from "takosumi-contract";
 import type {
   Dependency,
   DependencyMode,
@@ -276,6 +281,48 @@ export async function handleWorkspaces(
     }
     if (leaf === "projects" && segments.length === 3) {
       return await handleWorkspaceProjects(ctx, workspaceId, method);
+    }
+    if (leaf === "ui-surfaces" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      if (!operations.interfaces) return controlPlaneUnavailable();
+      const rawCapsuleId = url.searchParams.get("capsuleId");
+      if (rawCapsuleId !== null && !stringValue(rawCapsuleId)) {
+        return errorJson(
+          "invalid_request",
+          "capsuleId must be a non-empty string",
+          400,
+        );
+      }
+      const capsuleId = stringValue(rawCapsuleId ?? undefined);
+      const interfaces = await operations.interfaces.listAuthorizedForPrincipal(
+        {
+          workspaceId,
+          type: UI_SURFACE_INTERFACE_TYPE,
+          phase: "Resolved",
+          ownerKind: "Capsule",
+          ...(capsuleId ? { ownerId: capsuleId } : {}),
+        },
+        ctx.session.subject,
+        UI_SURFACE_OPEN_PERMISSION,
+      );
+      // InterfaceService owns current Binding and lifecycle authorization. The
+      // account-plane projection narrows that authorized result to the exact
+      // launcher protocol version; type-specific document/URL safety remains
+      // the dashboard consumer's responsibility.
+      return json(
+        {
+          interfaces: interfaces.filter(
+            (iface) =>
+              iface.metadata.workspaceId === workspaceId &&
+              iface.metadata.ownerRef.kind === "Capsule" &&
+              iface.spec.type === UI_SURFACE_INTERFACE_TYPE &&
+              iface.spec.version === UI_SURFACE_INTERFACE_VERSION &&
+              iface.status.phase === "Resolved",
+          ),
+        },
+        200,
+        { "cache-control": "no-store" },
+      );
     }
     if (
       leaf === "source-ref-resolutions" &&

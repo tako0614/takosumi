@@ -208,14 +208,14 @@ describe("dashboard UI-surface Interface consumer", () => {
     const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
       const path = String(input);
       calls.push(path);
-      if (path.startsWith("/v1/interfaces?")) {
+      if (path.startsWith("/api/v1/workspaces/ws_1/ui-surfaces")) {
         return Response.json({ interfaces: [uiInterface()] });
       }
-      return Response.json({ bindings: [readyBinding()] });
+      return Response.json({ error: "unexpected request" }, { status: 500 });
     };
 
     await expect(
-      listAuthorizedUiSurfaces("ws_1", "acct_1", {
+      listAuthorizedUiSurfaces("ws_1", {
         fetch: fetcher,
         capsuleId: "cap_1",
       }),
@@ -232,16 +232,13 @@ describe("dashboard UI-surface Interface consumer", () => {
         url: "https://office.example.test/app",
       },
     ]);
-    expect(calls[0]).toContain("type=interface.ui.surface");
-    expect(calls[0]).toContain("phase=Resolved");
-    expect(calls[0]).toContain("permission=ui.open");
-    expect(calls[0]).toContain("ownerKind=Capsule");
-    expect(calls[0]).toContain("ownerId=cap_1");
-    expect(calls[1]).toBe("/v1/interfaces/if_ui/bindings?permission=ui.open");
+    expect(calls).toEqual([
+      "/api/v1/workspaces/ws_1/ui-surfaces?capsuleId=cap_1",
+    ]);
 
     calls.length = 0;
     await expect(
-      listAuthorizedUiSurfaces("ws_1", "acct_1", {
+      listAuthorizedUiSurfaces("ws_1", {
         fetch: fetcher,
         capsuleId: "cap_other",
       }),

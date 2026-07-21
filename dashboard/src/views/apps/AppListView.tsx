@@ -25,10 +25,7 @@ import {
   setCurrentWorkspaceId,
 } from "../../lib/workspace-state.ts";
 import { listWorkspacesCached } from "../../lib/workspace-list.ts";
-import {
-  clearDashboardOverviewCache,
-  getDashboardOverviewCached,
-} from "../../lib/dashboard-overview.ts";
+import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import {
   clearCapsuleListCache,
   listCapsulesCached,
@@ -48,7 +45,6 @@ import {
   needsAttention,
 } from "../../lib/capsules-ui.ts";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
-import { refreshSession } from "../account/lib/session.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { Button, Toast } from "../../components/ui/index.ts";
 import { createAction } from "../account/lib/action.tsx";
@@ -129,12 +125,16 @@ function Inner() {
     }
   });
 
-  const [overview, { refetch: refetchOverview }] = createResource(
+  // The launcher needs only the Capsule ledger. `listCapsulesCached` follows the
+  // bounded API's nextCursor itself, so the home screen neither waits for the
+  // wider dashboard overview (Activity, StateVersions, InstallConfigs) nor
+  // re-reads its first Capsule page when more than one page exists.
+  const [capsules, { refetch: refetchCapsules }] = createResource(
     workspaceId,
-    (id) => getDashboardOverviewCached(id, { capsuleLimit: 500 }),
+    (id) => listCapsulesCached(id, { includeDestroyed: false }),
   );
   createEffect(() => {
-    const error = overview.error as ControlApiError | undefined;
+    const error = capsules.error as ControlApiError | undefined;
     const staleWorkspaceId = workspaceId();
     if (
       !staleWorkspaceId ||
@@ -146,41 +146,23 @@ function Inner() {
     clearWorkspaceProjectionCaches(staleWorkspaceId);
     void ensureAccessibleWorkspaceSelection({ force: true });
   });
-  const fullProjectionWorkspaceId = createMemo(() =>
-    overview()?.nextCapsuleCursor ? workspaceId() : undefined,
-  );
-  const [fullCapsules, { refetch: refetchFullCapsules }] = createResource(
-    fullProjectionWorkspaceId,
-    (id) => listCapsulesCached(id, { includeDestroyed: false }),
-  );
   const [uiSurfaces, { refetch: refetchUiSurfaces }] = createResource(
     workspaceId,
-    async (id) => {
-      const session = await refreshSession();
-      if (!session) throw new Error("dashboard session is unavailable");
-      return await listAuthorizedUiSurfaces(id, session.subject);
-    },
+    (id) => listAuthorizedUiSurfaces(id),
   );
-  // The supplemental full-list fetches can fail independently of the overview;
-  // without surfacing it the launcher silently truncates to the first page.
-  const fullFetchError = createMemo(
-    () => (fullCapsules.error ?? uiSurfaces.error) as Error | undefined,
+  // Interface discovery can fail independently of the canonical Capsule list.
+  // Keep the established incomplete-list warning and retry without treating a
+  // missing authorization projection as a first-run Workspace.
+  const supplementalFetchError = createMemo(
+    () => uiSurfaces.error as Error | undefined,
   );
-  const retryFullFetch = () => {
-    if (fullCapsules.error) void refetchFullCapsules();
+  const retryUiSurfaces = () => {
     if (uiSurfaces.error) void refetchUiSurfaces();
   };
-  // `.error` first: reading an errored resource THROWS. A failed supplemental
-  // full-list fetch must degrade to the overview's first page (with the
-  // fullFetchError toast + retry) rather than white-screening the launcher.
-  const capsules = createMemo(() =>
-    mergeById(
-      overview()?.capsules ?? [],
-      fullCapsules.error ? [] : (fullCapsules() ?? []),
-    ),
-  );
   const visibleCapsules = createMemo(() =>
-    (capsules() ?? []).filter(isVisibleServiceCapsule),
+    (capsules.error ? [] : (capsules.latest ?? [])).filter(
+      isVisibleServiceCapsule,
+    ),
   );
   // Capsule is the installed-app ledger. Interface is the only launcher/runtime
   // surface authority; its explicit URL mapping has already been resolved and
@@ -247,31 +229,31 @@ function Inner() {
         }
       >
         <Switch>
-          <Match when={overview.loading || uiSurfaces.loading}>
+          <Match when={capsules.loading || uiSurfaces.loading}>
             <LauncherSkeleton />
           </Match>
-          <Match when={overview.error}>
+          <Match when={capsules.error}>
             <Toast tone="error">
-              {fetchFailedMessage(overview.error, t)}
+              {fetchFailedMessage(capsules.error, t)}
               <Button
                 variant="secondary"
                 size="sm"
                 type="button"
-                onClick={() => void refetchOverview()}
+                onClick={() => void refetchCapsules()}
               >
                 {t("common.retry")}
               </Button>
             </Toast>
           </Match>
-          <Match when={overview()}>
-            <Show when={fullFetchError()}>
+          <Match when={capsules.latest}>
+            <Show when={supplementalFetchError()}>
               <Toast tone="error">
                 {t("apps.listIncomplete")}
                 <Button
                   variant="secondary"
                   size="sm"
                   type="button"
-                  onClick={retryFullFetch}
+                  onClick={retryUiSurfaces}
                 >
                   {t("common.retry")}
                 </Button>
@@ -282,7 +264,8 @@ function Inner() {
               fallback={
                 // A load failure or a workspace whose services simply have no
                 // screen must never render the first-run panel.
-                fullFetchError() ? null : visibleCapsules().length > 0 ? (
+                supplementalFetchError() ? null : visibleCapsules().length >
+                  0 ? (
                   <NoLaunchableAppsPanel count={visibleCapsules().length} />
                 ) : (
                   <WorkspaceStartPanel />
@@ -296,21 +279,6 @@ function Inner() {
       </Show>
     </>
   );
-}
-
-function mergeById<T extends { readonly id: string }>(
-  primary: readonly T[],
-  secondary: readonly T[],
-): readonly T[] {
-  if (secondary.length === 0) return primary;
-  const byId = new Map<string, T>();
-  const merged: T[] = [];
-  for (const item of [...primary, ...secondary]) {
-    if (byId.has(item.id)) continue;
-    byId.set(item.id, item);
-    merged.push(item);
-  }
-  return merged;
 }
 
 function compareAppTiles(a: AppTile, b: AppTile): number {

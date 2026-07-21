@@ -271,7 +271,7 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain("listActivity");
     expect(runViewSource).not.toContain("launchUrlFromDeployment");
     expect(runViewSource).toContain("listAuthorizedUiSurfaces");
-    expect(runViewSource).toContain("refreshSession");
+    expect(runViewSource).not.toContain("refreshSession");
     expect(runViewSource).toContain("capsuleId: id");
     expect(runViewSource).toContain("completedRunLaunchUrl");
     expect(runViewSource).toContain(

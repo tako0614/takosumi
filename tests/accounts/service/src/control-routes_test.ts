@@ -815,6 +815,62 @@ test("Dashboard overview pushes the config limit into one union page and batches
   ).toEqual(["cfg_visible", "cfg_ref_a", "cfg_ref_b"]);
 });
 
+test("Dashboard overview shares one deadline across sequential optional projections", async () => {
+  const fixture = operationsFixture();
+  const capsule = {
+    id: "cap_slow",
+    workspaceId: workspace.id,
+    projectId: "prj_default_ws_owner",
+    name: "slow service",
+    slug: "slow-service",
+    sourceId: "src_git",
+    installConfigId: "cfg_slow",
+    environment: "production",
+    currentStateGeneration: 1,
+    currentStateVersionId: "sv_slow",
+    status: "active" as const,
+    createdAt: workspace.createdAt,
+    updatedAt: workspace.updatedAt,
+  };
+  let referencedConfigLookups = 0;
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      listCapsulesPage: async () => ({ items: [capsule] }),
+      listInstallConfigUnionPage: async () => ({ items: [] }),
+      getInstallConfigsByIds: async () => {
+        referencedConfigLookups += 1;
+        return await new Promise<never>(() => {
+          // This sequential fallback must inherit the already-spent route
+          // deadline instead of starting another 1.2 second wait.
+        });
+      },
+    },
+    activity: { list: async () => [] },
+    listStateVersionsByIds: async () =>
+      await new Promise<never>(() => {
+        // First sequential optional projection consumes the shared deadline.
+      }),
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    `https://app.example.test/api/v1/dashboard/overview?workspaceId=${workspace.id}&includeWorkspaces=false`,
+  );
+  const startedAt = Date.now();
+  const response = await handleDashboard(
+    context(operations, request),
+    ["dashboard", "overview"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  const body = await response?.json();
+  expect(body.currentStateVersions).toEqual([]);
+  expect(body.installConfigs).toEqual([]);
+  expect(referencedConfigLookups).toBe(1);
+  expect(Date.now() - startedAt).toBeLessThan(2_000);
+});
+
 test("Dashboard overview follows bounded union pages beyond the store page cap", async () => {
   const fixture = operationsFixture();
   const unionCalls: Array<Record<string, unknown>> = [];

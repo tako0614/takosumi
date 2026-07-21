@@ -189,6 +189,17 @@ omit it so D1/Postgres complete with a `limit + 1` probe and no extra
 `created_asc` order with a maximum of 100 rows. Clients that genuinely need all
 authorized Workspaces must follow `nextCursor`.
 
+The Dashboard reads launcher Interfaces authorized with `ui.open` for the
+exact Principal derived from the current account session through one
+account-session API request. Optional `capsuleId` is only an owner filter and
+does not influence the authorization principal. The response contains only
+authorized Interfaces and never exposes InterfaceBinding records.
+
+```http
+GET /api/v1/workspaces/{workspaceId}/ui-surfaces
+GET /api/v1/workspaces/{workspaceId}/ui-surfaces?capsuleId={capsuleId}
+```
+
 A Run is one ledger entry with a `plan`, `apply`, `destroy`, `refresh`, or
 `output` operation. Plan / Apply / Destroy are not separate ledgers.
 

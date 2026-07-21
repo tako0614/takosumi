@@ -46,20 +46,21 @@ describe("AppListView app launcher", () => {
     );
     expect(installationsUiSource).toContain('inst.status !== "destroyed"');
     expect(appListSource).toContain("listAuthorizedUiSurfaces");
-    expect(appListSource).toContain("refreshSession");
-    expect(appListSource).toContain("session.subject");
+    expect(appListSource).not.toContain("refreshSession");
+    expect(appListSource).toContain("listAuthorizedUiSurfaces(id)");
     expect(appListSource).toContain("surface.capsuleId");
     expect(appListSource).toContain("surface.interfaceId");
     expect(appListSource).not.toContain("appSurfaceFromInstallConfigStore");
     expect(appListSource).not.toContain("appSurfacesFromDeployment");
-    expect(appListSource).toContain("getDashboardOverviewCached");
+    expect(appListSource).not.toContain("getDashboardOverviewCached");
+    expect(appListSource).not.toContain("/api/v1/dashboard/overview");
     expect(appListSource).toContain("listCapsulesCached");
     expect(appListSource).not.toContain("listCurrentStateVersionsCached");
     expect(appListSource).not.toContain("listInstallConfigsCached");
-    expect(appListSource).toContain("overview()?.nextCapsuleCursor");
-    expect(appListSource).toContain("mergeById");
+    expect(appListSource).not.toContain("nextCapsuleCursor");
+    expect(appListSource).not.toContain("mergeById");
     expect(appListSource).toContain("surfacesByCapsule");
-    expect(appListSource).not.toContain("overview()?.currentStateVersions");
+    expect(appListSource).not.toContain("getDashboardOverviewCached");
     expect(appListSource).not.toMatch(/\bgetDeployment\(/);
     expect(appListSource).toContain("const appTiles = createMemo");
     expect(appListSource).toContain("compareAppTiles");
@@ -95,7 +96,7 @@ describe("AppListView app launcher", () => {
   });
 
   test("recovers when the persisted Workspace is no longer accessible", () => {
-    expect(appListSource).toContain("overview.error as ControlApiError");
+    expect(appListSource).toContain("capsules.error as ControlApiError");
     expect(appListSource).toContain("error.status !== 403");
     expect(appListSource).toContain("error.status !== 404");
     expect(appListSource).toContain("listWorkspacesCached({");
@@ -177,10 +178,10 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain("surface.url");
   });
 
-  test("a failed supplemental full-list fetch is surfaced, not silent truncation", () => {
-    expect(appListSource).toContain("fullCapsules.error");
+  test("a failed Interface projection is surfaced without inventing launcher tiles", () => {
     expect(appListSource).toContain("uiSurfaces.error");
-    expect(appListSource).toContain("retryFullFetch");
+    expect(appListSource).toContain("supplementalFetchError");
+    expect(appListSource).toContain("retryUiSurfaces");
     expect(appListSource).toContain('t("apps.listIncomplete")');
     expect(appListSource).toContain('t("common.retry")');
     expect(en["apps.listIncomplete"]).toBeTruthy();

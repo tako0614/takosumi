@@ -200,6 +200,16 @@ page 応答は `workspaces`、`returned`、`limit`、`truncated` と任意の
 `GET /api/v1/workspaces` も `created_asc` / 最大100件のbounded pageであり、全件が必要な
 clientは必ず `nextCursor` を追跡します。
 
+Dashboard は、現在の account session が exact Principal として `ui.open`
+権限を持つ launcher Interface を次の account-session API で1回にまとめて読みます。
+`capsuleId` は任意の owner filter であり、認可主体には影響しません。応答は認可済み
+Interface だけを含み、InterfaceBinding record 自体は公開しません。
+
+```http
+GET /api/v1/workspaces/{workspaceId}/ui-surfaces
+GET /api/v1/workspaces/{workspaceId}/ui-surfaces?capsuleId={capsuleId}
+```
+
 Run は `plan` / `apply` / `destroy` / `refresh` / `output` の操作を持つ単一の
 記録エントリです。Plan / Apply / Destroy を別のエンティティにはしません。
 

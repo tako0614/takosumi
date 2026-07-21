@@ -65,6 +65,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
+      method: "GET",
+      path: "/api/v1/workspaces/{workspaceId}/ui-surfaces",
+      summary: "List authorized Workspace UI surface Interfaces",
+      auth: "account-session",
+    },
+    {
       method: "POST",
       path: "/api/v1/workspaces/{workspaceId}/projects",
       summary: "Create a Project",

@@ -107,6 +107,7 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { InterfaceOAuthActivityEvidence } from "./access-token-activity.ts";
+import type { Interface } from "takosumi-contract/interfaces";
 
 interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
@@ -135,11 +136,26 @@ export interface MembershipActor {
  * convenience for the same-origin dashboard only.
  */
 export interface ControlPlaneOperations {
-  /** Optional narrow Core seam used only for Interface OAuth active checks. */
+  /**
+   * Optional narrow Core seam for Interface OAuth active checks and the
+   * session-authenticated dashboard launcher projection. Core remains the
+   * binding/lifecycle authority; the account plane never reimplements it.
+   */
   readonly interfaces?: {
     validatePrincipalOAuth2TokenEvidence(
       evidence: InterfaceOAuthActivityEvidence,
     ): Promise<boolean>;
+    listAuthorizedForPrincipal(
+      filter: {
+        readonly workspaceId: string;
+        readonly type: "interface.ui.surface";
+        readonly phase: "Resolved";
+        readonly ownerKind: "Capsule";
+        readonly ownerId?: string;
+      },
+      subjectId: string,
+      permission: "ui.open",
+    ): Promise<readonly Interface[]>;
   };
   // --- Workspaces (§4) ---
   readonly workspaces: {

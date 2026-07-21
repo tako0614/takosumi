@@ -264,7 +264,7 @@ describe("Capsule detail StateVersion surface", () => {
       "StateVersion is readiness/provenance only. URL and presentation authority",
     );
     expect(source).toContain("listAuthorizedUiSurfaces");
-    expect(source).toContain("refreshSession");
+    expect(source).not.toContain("refreshSession");
     expect(source).toContain("capsuleId: ownerId");
     expect(source).toContain("uiSurfaces.error ? []");
     expect(source).not.toContain("publicOutputs");

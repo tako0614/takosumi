@@ -261,6 +261,12 @@ async function dashboardOverview(
     );
   }
 
+  // Optional dashboard decorations share one route-wide deadline. Giving
+  // Activity, install metadata, StateVersions, and referenced-config lookup
+  // independent timeouts let a degraded dependency hold this read projection
+  // for up to N * timeout even though every value has a safe empty fallback.
+  const projectionDeadline =
+    Date.now() + DASHBOARD_OPTIONAL_PROJECTION_TIMEOUT_MS;
   const [capsulePage, activity, installConfigs] = await Promise.all([
     operations.capsules.listCapsulesPage(selectedWorkspace.id, {
       limit: capsuleLimit,
@@ -269,6 +275,7 @@ async function dashboardOverview(
     optionalDashboardProjection(
       operations.activity.list(selectedWorkspace.id, activityLimit),
       [],
+      remainingDashboardProjectionMs(projectionDeadline),
     ),
     optionalDashboardProjection(
       listDashboardInstallConfigCandidates(
@@ -277,6 +284,7 @@ async function dashboardOverview(
         installConfigLimit,
       ),
       [],
+      remainingDashboardProjectionMs(projectionDeadline),
     ),
   ]);
   const capsules = capsulePage.items.map(publicCapsule);
@@ -287,6 +295,7 @@ async function dashboardOverview(
       capsulePage.items,
     ),
     [],
+    remainingDashboardProjectionMs(projectionDeadline),
   );
   const visibleInstallConfigs = await optionalDashboardProjection(
     listDashboardInstallConfigs(
@@ -296,6 +305,7 @@ async function dashboardOverview(
       installConfigLimit,
     ),
     [],
+    remainingDashboardProjectionMs(projectionDeadline),
   );
 
   return json({

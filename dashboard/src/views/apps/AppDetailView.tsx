@@ -125,7 +125,6 @@ import {
   listAuthorizedUiSurfaces,
   type AuthorizedUiSurface,
 } from "../../lib/ui-surface-interfaces.ts";
-import { refreshSession } from "../account/lib/session.ts";
 
 type TabId = "overview" | "deploys" | "settings" | "danger";
 
@@ -216,13 +215,10 @@ function Inner() {
   });
   const [uiSurfaces] = createResource(
     uiSurfaceKey,
-    async ({ workspaceId: id, capsuleId: ownerId }) => {
-      const session = await refreshSession();
-      if (!session) throw new Error("dashboard session is unavailable");
-      return await listAuthorizedUiSurfaces(id, session.subject, {
+    ({ workspaceId: id, capsuleId: ownerId }) =>
+      listAuthorizedUiSurfaces(id, {
         capsuleId: ownerId,
-      });
-    },
+      }),
   );
   const [graph] = createResource(graphWorkspaceId, getWorkspaceGraph);
   const [providerConnections] = createResource(
