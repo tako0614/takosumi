@@ -2,8 +2,8 @@
 
 Takosumi Cloud is the official Takosumi hosting we operate. Publish apps and
 APIs from Git at a `*.app.takos.jp` URL, straight from the browser. Attach
-managed resources — storage, databases, queues, AI — as you need them. Pricing
-is a plan plus what you use ([pricing](./pricing.md)).
+managed resources — storage, databases, queues, AI — as you need them. Paid
+pricing is usage only, with no fixed monthly charge ([pricing](./pricing.md)).
 
 These docs cover the hosted Takosumi Cloud service served from
 `app.takosumi.com`. Portable Takosumi software and Takosumi for Operator docs
@@ -146,7 +146,7 @@ unconfigured manager, or one green client does not establish GA.
 
 ## Billing and Spend Guard
 
-Takosumi Cloud runs on subscription plans and usage metering. Billable
+Takosumi Cloud uses a Free allowance or Pay as you go usage metering. Billable
 operations are priced by the active Cloud PriceCatalog and stop before execution when
 the plan, limits, or payment state do not allow the operation. Cleanup and
 destroy operations remain available after a spend-guard block so users can

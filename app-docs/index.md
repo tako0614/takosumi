@@ -3,7 +3,7 @@
 Takosumi Cloud は、私たちが運営する Takosumi の公式ホスティングです。
 Git に置いたアプリや API を、ブラウザから `*.app.takos.jp` の URL で公開できます。
 ストレージ、データベース、キュー、AI などの managed resource も、必要な分だけ
-接続して使えます。料金はプランと使った分の組み合わせです ([料金](./pricing.md))。
+接続して使えます。有料料金は固定月額なしの従量課金です ([料金](./pricing.md))。
 
 この docs は `app.takosumi.com` で提供する hosted service としての
 Takosumi Cloud の docs です。自分で動かせる software としての Takosumi /
@@ -141,7 +141,7 @@ descriptor、未設定 manager、1 つの green client だけでは GA になり
 
 ## Billing and Spend Guard
 
-Takosumi Cloud は、サブスクリプションプランと使用量の記録で動きます。課金対象の
+Takosumi Cloud は、Free の利用枠または Pay as you go の使用量記録で動きます。課金対象の
 操作は active な PriceCatalog で価格が決まり、プラン / 上限 / 支払い状態で許可されない場合は
 実行前に止まります。cleanup / destroy は上限に達した後でも実行できるようにし、
 作った resource が消せなくなる状態を避けます。

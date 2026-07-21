@@ -2462,9 +2462,9 @@ All public plans expose the same managed-service catalog. Resource counts are
 technical safety ceilings, not plan features.
 
 ```text
-Lite:  USD 1/month  + usage, USD 0.50 monthly managed-usage grant
-Plus: USD 5/month  + usage, USD 3.00 monthly managed-usage grant
-Pro:  USD 10/month + usage, USD 7.00 monthly managed-usage grant
+Free:          USD 0/month, USD 0.25 non-carrying monthly managed-usage grant;
+               positive-priced usage pauses when exhausted
+Pay as you go: USD 0/month + exact metered usage, no monthly managed-usage grant
 ```
 
 Prices are tax-exclusive and Stripe automatic tax is enabled. Takosumi Cloud
@@ -2480,7 +2480,7 @@ The versioned Takosumi Cloud PriceCatalog is the authority for official managed
 capacity. Current provider public overage/marginal rates remain reviewed cost
 comparison inputs, but provider invoices do not define tenant usage or public
 retail prices. Shared provider free tiers, account subscriptions, and other
-fixed platform costs are absorbed by the Takosumi Cloud subscription and are
+fixed platform costs are absorbed by Takosumi Cloud and are
 not allocated as hidden per-tenant free tiers. A catalog update is versioned
 and effective-dated; it never re-rates old immutable usage.
 
