@@ -88,6 +88,11 @@ export class WorkspacesService {
     }
     const existing = await this.#store.getWorkspaceByHandle(request.handle);
     if (existing) {
+      if (workspaceMatchesCreateRequest(existing, request)) {
+        await this.#ensureOwnerMember(existing);
+        await this.#ensureDefaultProject?.(existing.id);
+        return existing;
+      }
       throw new OpenTofuControllerError(
         "failed_precondition",
         "workspace already exists",
@@ -103,7 +108,16 @@ export class WorkspacesService {
       createdAt: nowIso,
       updatedAt: nowIso,
     };
-    const created = await this.#store.putWorkspace(workspace);
+    let created: Workspace;
+    try {
+      created = await this.#store.putWorkspace(workspace);
+    } catch (error) {
+      const recovered = await this.#store.getWorkspaceByHandle(request.handle);
+      if (!recovered || !workspaceMatchesCreateRequest(recovered, request)) {
+        throw error;
+      }
+      created = recovered;
+    }
     await this.#ensureOwnerMember(created);
     await this.#ensureDefaultProject?.(created.id);
     return created;
@@ -402,6 +416,18 @@ export class WorkspacesService {
       updatedAt: nowIso,
     });
   }
+}
+
+function workspaceMatchesCreateRequest(
+  workspace: Workspace,
+  request: CreateWorkspaceRequest,
+): boolean {
+  return (
+    workspace.handle === request.handle &&
+    workspace.displayName === request.displayName &&
+    workspace.type === request.type &&
+    workspace.ownerUserId === request.ownerUserId
+  );
 }
 
 function defaultId(prefix: string): string {

@@ -114,6 +114,69 @@ test("createWorkspace rejects a duplicate handle", async () => {
   ).rejects.toMatchObject({ code: "failed_precondition" });
 });
 
+test("createWorkspace recovers an exact retry after a partial first attempt", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let defaultProjectAttempts = 0;
+  let counter = 0;
+  const service = new WorkspacesService({
+    store,
+    newId: (prefix) =>
+      `${prefix}_retry${(counter += 1).toString().padStart(8, "0")}`,
+    now: () => new Date("2026-06-06T00:00:00.000Z"),
+    ensureDefaultProject: async () => {
+      defaultProjectAttempts += 1;
+      if (defaultProjectAttempts === 1) throw new Error("response lost");
+    },
+  });
+  const request = {
+    handle: "retry-safe",
+    displayName: "Retry Safe",
+    type: "organization" as const,
+    ownerUserId: "user_owner",
+  };
+
+  await expect(service.createWorkspace(request)).rejects.toThrow(
+    "response lost",
+  );
+  const recovered = await service.createWorkspace(request);
+
+  expect(recovered.id).toBe("ws_retry00000001");
+  expect(defaultProjectAttempts).toBe(2);
+  expect(await store.listWorkspaces()).toHaveLength(1);
+  expect(await store.listWorkspaceMembers(recovered.id)).toEqual([
+    expect.objectContaining({
+      accountId: "user_owner",
+      roles: ["owner"],
+      status: "active",
+    }),
+  ]);
+});
+
+test("createWorkspace recovers a durable write with an ambiguous store error", async () => {
+  const { store, service } = build();
+  const putWorkspace = store.putWorkspace.bind(store);
+  let failAfterWrite = true;
+  store.putWorkspace = async (workspace) => {
+    const persisted = await putWorkspace(workspace);
+    if (failAfterWrite) {
+      failAfterWrite = false;
+      throw new Error("ambiguous D1 response");
+    }
+    return persisted;
+  };
+
+  const workspace = await service.createWorkspace({
+    handle: "ambiguous-write",
+    displayName: "Ambiguous Write",
+    type: "personal",
+    ownerUserId: "user_1",
+  });
+
+  expect(workspace.id).toBe("ws_test00000001");
+  expect(await store.listWorkspaces()).toHaveLength(1);
+  expect(await store.listWorkspaceMembers(workspace.id)).toHaveLength(1);
+});
+
 test("getWorkspace returns the record and throws not_found when missing", async () => {
   const { service } = build();
   const workspace = await service.createWorkspace({
@@ -159,13 +222,17 @@ test("updateWorkspace archives and restores a Workspace without deleting it", as
     type: "personal",
     ownerUserId: "user_1",
   });
-  const archived = await service.updateWorkspace(workspace.id, { archived: true });
+  const archived = await service.updateWorkspace(workspace.id, {
+    archived: true,
+  });
   expect(archived.archivedAt).toBe("2026-06-06T00:00:00.000Z");
   expect((await service.getWorkspace(workspace.id)).archivedAt).toBe(
     "2026-06-06T00:00:00.000Z",
   );
 
-  const restored = await service.updateWorkspace(workspace.id, { archived: false });
+  const restored = await service.updateWorkspace(workspace.id, {
+    archived: false,
+  });
   expect(restored.archivedAt).toBeUndefined();
   expect((await service.getWorkspace(workspace.id)).archivedAt).toBeUndefined();
 });
@@ -196,9 +263,9 @@ test("listWorkspaces returns all created Workspaces", async () => {
   });
   expect((await service.listWorkspaces()).length).toBe(2);
   expect(
-    (
-      await service.listWorkspacesByIds([acme.id, "ws_missing", shota.id])
-    ).map((workspace) => workspace.id),
+    (await service.listWorkspacesByIds([acme.id, "ws_missing", shota.id])).map(
+      (workspace) => workspace.id,
+    ),
   ).toEqual([acme.id, shota.id]);
 });
 
@@ -243,8 +310,8 @@ test("canonical Workspace membership controls mutation and account visibility", 
   });
   expect(member.roles).toEqual(["member"]);
   expect(
-    (await service.listWorkspacesForAccount("user_member")).map((row) =>
-      row.id
+    (await service.listWorkspacesForAccount("user_member")).map(
+      (row) => row.id,
     ),
   ).toEqual([workspace.id]);
   expect(workspacePageCalls).toEqual([
