@@ -94,6 +94,7 @@ import type {
   ManagedPublicHostnameClaimRequest,
   ManagedPublicHostnameClaimResult,
 } from "takosumi-contract/install-configs";
+import type { WorkspaceMember } from "takosumi-contract/workspaces";
 import {
   encodeActorContext,
   TAKOSUMI_INTERNAL_ACTOR_HEADER,
@@ -2839,6 +2840,17 @@ async function platformCompatibilityRouteInterfaceScope(
     throw error;
   }
   const operations = await takosumiOperationsFor(context.env);
+  const actor = platformResourceShapeActorContext(
+    verified.session,
+    workspaceId,
+  );
+  if (access === "write") {
+    await assertPlatformCompatibilityRouteWriter(
+      operations,
+      workspaceId,
+      actor.actorAccountId,
+    );
+  }
   return {
     service: new CompatibilityRouteControlService(operations.interfaces, {
       resolveReadyEdgeWorker: async ({ workspaceId, resourceName }) =>
@@ -2853,9 +2865,50 @@ async function platformCompatibilityRouteInterfaceScope(
     scope: {
       profile,
       workspaceId,
-      actor: platformResourceShapeActorContext(verified.session, workspaceId),
+      actor,
     },
   };
+}
+
+async function assertPlatformCompatibilityRouteWriter(
+  operations: TakosumiOperations,
+  workspaceId: string,
+  actorAccountId: string,
+): Promise<void> {
+  const [workspace, members] = await Promise.all([
+    operations.workspaces.getWorkspace(workspaceId),
+    operations.members.listMembers(workspaceId),
+  ]);
+  if (
+    platformCompatibilityRouteWriterAllowed(
+      workspace.ownerUserId,
+      members,
+      actorAccountId,
+    )
+  ) {
+    return;
+  }
+  const error = new Error(
+    "compatibility route Interface write requires more than viewer access",
+  );
+  (error as { code?: string }).code = "forbidden";
+  throw error;
+}
+
+export function platformCompatibilityRouteWriterAllowed(
+  ownerUserId: string,
+  members: readonly WorkspaceMember[],
+  actorAccountId: string,
+): boolean {
+  if (ownerUserId === actorAccountId) return true;
+  const member = members.find(
+    (candidate) =>
+      candidate.accountId === actorAccountId && candidate.status === "active",
+  );
+  if (!member) return false;
+  return (
+    member.roles.length === 0 || member.roles.some((role) => role !== "viewer")
+  );
 }
 
 export function createPlatformCanonicalResourceReadAuthority(

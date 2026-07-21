@@ -56,8 +56,7 @@ credential、capacity、price、SKU、quota、SLA の状態は含みません。
 
 ## Interface declaration の read (optional)
 
-Form が宣言した runtime interface は、portable な read surface からも引けます
-([ADR 0002](../../../docs/platform/decisions/0002-portable-interface-declarations.md))。
+Form が宣言した runtime interface は、portable な read surface からも引けます。
 
 - `GET {api}/interfaces` — この Space の宣言一覧
 - `GET {api}/interfaces/{name}` — 宣言名で 1 件

@@ -453,14 +453,27 @@ test("GET /internal/v1/compatibility-reports resolves owner from sourceSnapshot 
 });
 
 test("source snapshot file read is source-scoped and selects the requested JSON file", async () => {
-  const observedOptions: unknown[] = [];
+  const observedJobs: Array<{
+    readonly path: string;
+    readonly sourceSnapshot: SourceSnapshot;
+  }> = [];
   const { app, store } = await makeAppWithStore({
-    readCapsuleSourceFiles: async (_snapshot, options) => {
-      observedOptions.push(options);
-      return [
-        { path: "yurucommu-standalone.json", text: '{"kind":"CapsuleComposition"}' },
-        { path: "other.json", text: "{}" },
-      ];
+    runner: {
+      plan: () => {
+        throw new Error("not used");
+      },
+      apply: () => {
+        throw new Error("not used");
+      },
+      readSourceSnapshotPresentationFile: async (job) => {
+        observedJobs.push(job);
+        return {
+          path: job.path,
+          text: '{"kind":"CapsuleComposition"}',
+          digest: `sha256:${"c".repeat(64)}`,
+          sizeBytes: 29,
+        };
+      },
     },
   });
   const created = await app.request("/internal/v1/sources", {
@@ -496,12 +509,14 @@ test("source snapshot file read is source-scoped and selects the requested JSON 
     { headers: { authorization: "Bearer scoped-token" } },
   );
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({
+  expect(await response.json()).toMatchObject({
     sourceSnapshotId: snapshot.id,
     path: "compositions/yurucommu-standalone.json",
     text: '{"kind":"CapsuleComposition"}',
   });
-  expect(observedOptions).toEqual([{ modulePath: "compositions" }]);
+  expect(observedJobs).toHaveLength(1);
+  expect(observedJobs[0]?.path).toBe("compositions/yurucommu-standalone.json");
+  expect(observedJobs[0]?.sourceSnapshot.id).toBe(snapshot.id);
 });
 
 test("source compatibility-check analyzes expanded OpenTofu files at modulePath when available", async () => {

@@ -195,7 +195,7 @@ export async function handleWorkspaces(
         store,
         operations,
       });
-      return await listWorkspaces(operations, store, ctx.session.subject, url);
+      return await listWorkspaces(operations, store, ctx.session, url);
     }
     if (method === "POST") {
       return await createWorkspace(request, operations, ctx.session.subject);
@@ -408,15 +408,15 @@ export async function handleWorkspaces(
 async function listWorkspaces(
   operations: ControlPlaneOperations,
   _store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   url: URL,
 ): Promise<Response> {
-  return await listWorkspacePage(operations, sessionSubject, url);
+  return await listWorkspacePage(operations, session, url);
 }
 
 async function listWorkspacePage(
   operations: ControlPlaneOperations,
-  sessionSubject: string,
+  session: ControlSession,
   url: URL,
 ): Promise<Response> {
   const parsedPage = parseControlPageParams(url);
@@ -443,8 +443,27 @@ async function listWorkspacePage(
   const includeTotal = parseBooleanQuery(url, "includeTotal") === true;
   const limit = clampPageLimit(parsedPage.params.limit);
   const isFirstPage = parsedPage.params.cursor === undefined;
+  if (session.workspaceId !== undefined) {
+    const workspace = isFirstPage
+      ? await operations.workspaces.getWorkspaceForAccount(
+          session.subject,
+          session.workspaceId,
+        )
+      : undefined;
+    const workspaces =
+      workspace && (includeArchived || !isArchivedWorkspace(workspace))
+        ? [workspace]
+        : [];
+    return json({
+      workspaces,
+      ...(includeTotal ? { total: workspaces.length } : {}),
+      returned: workspaces.length,
+      limit,
+      truncated: false,
+    } satisfies PublicWorkspaceListPage);
+  }
   const [page, selected] = await Promise.all([
-    operations.workspaces.listWorkspacesForAccountPage(sessionSubject, {
+    operations.workspaces.listWorkspacesForAccountPage(session.subject, {
       ...parsedPage.params,
       includeArchived,
       includeTotal,
@@ -453,7 +472,7 @@ async function listWorkspacePage(
     }),
     selectedWorkspaceId && isFirstPage
       ? operations.workspaces.getWorkspaceForAccount(
-          sessionSubject,
+          session.subject,
           selectedWorkspaceId,
         )
       : Promise.resolve(undefined),

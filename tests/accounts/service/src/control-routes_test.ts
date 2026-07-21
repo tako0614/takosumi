@@ -722,7 +722,7 @@ test("Workspace authorization uses one exact membership lookup instead of scanni
     await canAccessWorkspace({
       operations,
       store: new InMemoryAccountsStore(),
-      subject: "tsub_member",
+      session: { subject: "tsub_member" },
       workspaceId: workspace.id,
       workspace,
     }),

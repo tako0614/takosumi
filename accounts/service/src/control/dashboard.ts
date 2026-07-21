@@ -112,7 +112,7 @@ async function dashboardBootstrap(
       ? await listActiveWorkspaceProjectionForSession(
           operations,
           store,
-          sessionSubject,
+          session,
           {
             limit: workspaceLimit,
             ensureWorkspaceId: selectedWorkspaceId,
@@ -171,7 +171,7 @@ async function dashboardOverview(
     ? await listActiveWorkspaceProjectionForSession(
         operations,
         store,
-        sessionSubject,
+        session,
         {
           limit: workspaceLimit,
           ensureWorkspaceId: requestedWorkspaceId,
@@ -206,7 +206,7 @@ async function dashboardOverview(
             await listActiveWorkspaceProjectionForSession(
               operations,
               store,
-              sessionSubject,
+              session,
               {
                 limit: workspaceLimit,
               },
@@ -497,7 +497,7 @@ interface DashboardWorkspaceListMeta {
 async function listActiveWorkspaceProjectionForSession(
   operations: ControlPlaneOperations,
   _store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   options: {
     readonly limit: number;
     readonly ensureWorkspaceId?: string;
@@ -506,12 +506,24 @@ async function listActiveWorkspaceProjectionForSession(
   readonly workspaces: readonly Workspace[];
   readonly meta: DashboardWorkspaceListMeta;
 }> {
+  if (session.workspaceId !== undefined) {
+    const workspace = await operations.workspaces.getWorkspaceForAccount(
+      session.subject,
+      session.workspaceId,
+    );
+    const workspaces =
+      workspace && !isArchivedWorkspace(workspace) ? [workspace] : [];
+    return {
+      workspaces,
+      meta: workspaceListMeta(workspaces, workspaces.length, options.limit),
+    };
+  }
   const workspaces: Workspace[] = [];
   let cursor: string | undefined;
   let total: number | undefined;
   do {
     const page = await operations.workspaces.listWorkspacesForAccountPage(
-      sessionSubject,
+      session.subject,
       {
         includeArchived: false,
         includeTotal: false,
@@ -531,7 +543,7 @@ async function listActiveWorkspaceProjectionForSession(
     !limited.some((workspace) => workspace.id === options.ensureWorkspaceId)
   ) {
     const selected = await operations.workspaces.getWorkspaceForAccount(
-      sessionSubject,
+      session.subject,
       options.ensureWorkspaceId,
     );
     if (selected && !isArchivedWorkspace(selected)) {

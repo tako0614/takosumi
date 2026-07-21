@@ -19,26 +19,35 @@
  */
 const OAUTH_AUTOSTART_KEY = "takosumi.oauth-autostart-attempted";
 
-export function autoStartAlreadyAttempted(): boolean {
+type AutoStartStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+function autoStartStorage(
+  storage: AutoStartStorage | undefined,
+): AutoStartStorage | undefined {
+  if (storage) return storage;
+  return typeof sessionStorage === "undefined" ? undefined : sessionStorage;
+}
+
+export function autoStartAlreadyAttempted(storage?: AutoStartStorage): boolean {
   try {
-    return sessionStorage.getItem(OAUTH_AUTOSTART_KEY) === "1";
+    return autoStartStorage(storage)?.getItem(OAUTH_AUTOSTART_KEY) === "1";
   } catch {
     return false;
   }
 }
 
-export function markAutoStartAttempted(): void {
+export function markAutoStartAttempted(storage?: AutoStartStorage): void {
   try {
-    sessionStorage.setItem(OAUTH_AUTOSTART_KEY, "1");
+    autoStartStorage(storage)?.setItem(OAUTH_AUTOSTART_KEY, "1");
   } catch {
     // sessionStorage unavailable — `manual=1` on the sign-out / retry link is
     // the fallback suppression.
   }
 }
 
-export function clearAutoStartAttempt(): void {
+export function clearAutoStartAttempt(storage?: AutoStartStorage): void {
   try {
-    sessionStorage.removeItem(OAUTH_AUTOSTART_KEY);
+    autoStartStorage(storage)?.removeItem(OAUTH_AUTOSTART_KEY);
   } catch {
     // ignore
   }
