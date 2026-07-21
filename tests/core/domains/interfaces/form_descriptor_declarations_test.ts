@@ -79,7 +79,9 @@ test("a declared descriptor becomes a Resource-owned Interface with form provena
   expect(record.metadata.materializedFrom).toEqual({
     source: "form_descriptor",
     formRefKey: formRefKey(FORM.formRef),
+    formSchemaDigest: FORM.formRef.schemaDigest,
     descriptorName: "mcp.server",
+    descriptorVersion: "2025-11-25",
   });
   // The portable `output` source maps onto this host's own vocabulary; a Form
   // never names a Capsule or Resource output directly.
@@ -119,7 +121,12 @@ test("a host that does not understand a declared source declares nothing", async
   // Fail closed: never a record resolved with the input silently missing.
   expect(result.materialized).toEqual([]);
   expect(result.skipped).toEqual([
-    { descriptor: "mcp.server", reason: "unsupported_source" },
+    {
+      name: "mcp.server",
+      version: "2025-11-25",
+      required: false,
+      reason: "unsupported_source",
+    },
   ]);
 });
 
@@ -141,10 +148,12 @@ test("a descriptor never adopts or rewrites a declaration made another way", asy
     { compatibilityProfile: "compat.example.v1", compatibilityKey: "route" },
   );
   const result = await materialize(interfaces, [descriptor()]);
-  expect(result.materialized).toEqual([]);
-  expect(result.skipped).toEqual([
-    { descriptor: "mcp.server", reason: "name_taken" },
-  ]);
+  expect(result.materialized).toHaveLength(1);
+  expect(result.materialized[0]?.metadata.id).not.toBe(existing.metadata.id);
+  expect(result.materialized[0]?.metadata.materializedFrom?.source).toBe(
+    "form_descriptor",
+  );
+  expect(result.skipped).toEqual([]);
   const after = await interfaces.get(existing.metadata.id);
   expect(after.spec.document).toEqual({ owner: "compatibility-profile" });
   expect(after.metadata.materializedFrom?.source).toBe("compatibility_profile");
@@ -161,6 +170,7 @@ function readerFor(interfaces: InterfaceService) {
           metadata: { name: "assets", space: "space_1", generation: 1 },
           spec: {},
           form: FORM,
+          status: { phase: "Ready", observedGeneration: 1 },
         } as never,
       ],
       nextCursor: undefined,
@@ -179,7 +189,14 @@ test("the portable read reports the declared identity, never the host record", a
     space: "space_1",
   });
   expect(declared).toEqual([
-    { name: "mcp.server", version: "2025-11-25", form: FORM },
+    {
+      name: "mcp.server",
+      version: "2025-11-25",
+      resource: { kind: "ObjectBucket", name: "assets" },
+      document: {},
+      values: {},
+      form: FORM,
+    },
   ]);
   // No id, generation, revision, owner, provenance, condition, or binding: the
   // read says what exists, never who may use it or how the host tracks it.
@@ -232,6 +249,7 @@ test("an unresolvable Space contributes nothing instead of guessing", async () =
           metadata: { name: "assets", space: "space_1", generation: 1 },
           spec: {},
           form: FORM,
+          status: { phase: "Ready", observedGeneration: 1 },
         } as never,
       ],
       nextCursor: undefined,

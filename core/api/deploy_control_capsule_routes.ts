@@ -34,7 +34,9 @@ import {
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
+  ensureOperationPermission,
   ensureRunnerProfilePermission,
+  ensureRunnerProfileSelectionPermission,
   ensureWorkspacePermission,
   errorEnvelope,
   nonEmptyString,
@@ -714,6 +716,8 @@ export function mountDeployControlCapsuleRoutes(
           );
           return c.json({ ...capsuleResponse(capsule), abandoned: true }, 202);
         }
+        ensureOperationPermission(principal, "destroy");
+        ensureRunnerProfileSelectionPermission(principal, undefined);
         const response = await controller.createCapsuleDestroyPlan(id, {
           actor: principal.actor,
         });
@@ -778,6 +782,8 @@ export function mountDeployControlCapsuleRoutes(
         // Workspace-permission gated, then create the pinned rollback plan.
         const { stateVersion } = await controller.getStateVersion(id);
         ensureWorkspacePermission(principal, stateVersion.workspaceId);
+        ensureOperationPermission(principal, "update");
+        ensureRunnerProfileSelectionPermission(principal, undefined);
         const response = await controller.createStateVersionRollbackPlan(id, {
           actor: principal.actor,
         });
@@ -844,6 +850,11 @@ export function mountDeployControlCapsuleRoutes(
         );
         const runnerProfileId = runnerIdFromBody(body);
         const compatibilityReportId = compatibilityReportIdFromBody(body);
+        ensureOperationPermission(
+          principal,
+          capsuleHasAppliedState(capsule.capsule) ? "update" : "create",
+        );
+        ensureRunnerProfileSelectionPermission(principal, runnerProfileId);
         const response = await controller.createCapsulePlan(
           id,
           {
@@ -916,6 +927,8 @@ export function mountDeployControlCapsuleRoutes(
           "capsuleDestroyPlan",
         );
         const runnerProfileId = runnerIdFromBody(body);
+        ensureOperationPermission(principal, "destroy");
+        ensureRunnerProfileSelectionPermission(principal, runnerProfileId);
         const response = await controller.createCapsuleDestroyPlan(
           id,
           {
@@ -941,6 +954,8 @@ export function mountDeployControlCapsuleRoutes(
       handler: async ({ c, principal, id }) => {
         const capsule = await controller.getCapsule(id);
         ensureWorkspacePermission(principal, capsule.capsule.workspaceId);
+        ensureOperationPermission(principal, "update");
+        ensureRunnerProfileSelectionPermission(principal, undefined);
         const response = await controller.createCapsuleDriftCheck(id, {
           actor: principal.actor,
         });

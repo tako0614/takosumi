@@ -52,7 +52,7 @@ describe("sign-out cannot be undone by single-provider auto-start", () => {
 describe("oauth auto-start breaker", () => {
   test("marks, reads, and clears through sessionStorage", async () => {
     const store = new Map<string, string>();
-    (globalThis as { sessionStorage?: unknown }).sessionStorage = {
+    const storage = {
       getItem: (key: string) => store.get(key) ?? null,
       setItem: (key: string, value: string) => void store.set(key, value),
       removeItem: (key: string) => void store.delete(key),
@@ -64,10 +64,10 @@ describe("oauth auto-start breaker", () => {
     } =
       await import("../../../../../../dashboard/src/views/account/lib/oauth-autostart.ts");
 
-    expect(autoStartAlreadyAttempted()).toBe(false);
-    markAutoStartAttempted();
-    expect(autoStartAlreadyAttempted()).toBe(true);
-    clearAutoStartAttempt();
-    expect(autoStartAlreadyAttempted()).toBe(false);
+    expect(autoStartAlreadyAttempted(storage)).toBe(false);
+    markAutoStartAttempted(storage);
+    expect(autoStartAlreadyAttempted(storage)).toBe(true);
+    clearAutoStartAttempt(storage);
+    expect(autoStartAlreadyAttempted(storage)).toBe(false);
   });
 });
