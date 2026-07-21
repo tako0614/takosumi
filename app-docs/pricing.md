@@ -8,11 +8,18 @@ Resource 数は plan 特典ではなく共通の安全上限です。
 
 | Plan |  月額 | 毎月の managed usage grant | 超過分   |
 | ---- | ----: | -------------------------: | -------- |
+| Free |  `$0` |                    `$0.25` | 利用停止 |
 | Lite |  `$1` |                    `$0.50` | 従量課金 |
 | Plus |  `$5` |                    `$3.00` | 従量課金 |
 | Pro  | `$10` |                    `$7.00` | 従量課金 |
 
-grant は billing period ごとに付与され、現金化・翌月繰越はできません。自分の
+Free はカードや国情報を登録せず開始できます。grant は billing period ごとに
+付与され、現金化・翌月繰越はできません。Free は全サービスを選択できますが、
+active Resource は各 service kind 1個、active verified domain は1個までです。
+grant を使い切ると正の料金が発生する操作と runtime 利用を停止し、Resource は
+削除しません。Destroy は残高なしでも実行できます。休眠による自動削除はありません。
+
+自分の
 Provider Connection を使う外部 provider は grant の対象外で、その provider から
 直接請求されます。
 
@@ -22,7 +29,7 @@ Provider Connection を使う外部 provider は grant の対象外で、その 
 grant は、Takosumi Cloud が提供する resource と service の従量料金に先に充当されます。
 利用量と請求は所有アカウントに集約し、Workspace / Resource 別の内訳も確認できます。
 
-共通の owner-account safety ceiling は total 250 Resources、Edge/Object/KV/Queue/
+Paid plan の共通 owner-account safety ceiling は total 250 Resources、Edge/Object/KV/Queue/
 Schedule 各100、Database/Workflow/Stateful Actor 各50、Vector 25、Container 10、
 active verified domains 25 です。これは plan feature ではなく、すべての plan に共通する
 abuse / safety 上限です。
@@ -31,8 +38,8 @@ abuse / safety 上限です。
 
 managed capacity の価格は Takosumi Cloud の versioned PriceCatalog が正本です。
 provider 公開価格は原価比較に使いますが、provider invoice を tenant 使用量の正本には
-しません。共有 free tier と platform 固定費は subscription 側で吸収し、tenant ごとの
-隠れた free tier にはしません。価格変更は version と effective date を持ち、過去の
+しません。provider の共有 free tier と platform 固定費は plan 側で吸収し、tenant ごとの
+隠れた割引にはしません。価格変更は version と effective date を持ち、過去の
 usage を再計算しません。
 
 | Service                          | Billable item                         |                                                              Price |

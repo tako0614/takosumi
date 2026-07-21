@@ -8,12 +8,19 @@ Resource counts are common safety ceilings, not plan features.
 
 | Plan | Monthly price | Monthly managed-usage grant | Overage       |
 | ---- | ------------: | --------------------------: | ------------- |
+| Free |          `$0` |                     `$0.25` | Usage pauses  |
 | Lite |          `$1` |                     `$0.50` | Metered usage |
 | Plus |          `$5` |                     `$3.00` | Metered usage |
 | Pro  |         `$10` |                     `$7.00` | Metered usage |
 
-The grant is issued per billing period, cannot be redeemed for cash, and does
-not roll over. External providers connected with your own Provider Connection
+Free starts without a card or declared country. The grant is issued per billing
+period, cannot be redeemed for cash, and does not roll over. Free can select
+every service, with one active Resource per service kind and one active verified
+domain. Positive-priced operations and runtime usage pause when the grant is
+exhausted; Resources are not deleted, destroy remains available, and there is no
+automatic inactivity deletion.
+
+External providers connected with your own Provider Connection
 are billed directly by that provider and do not consume the grant.
 
 ## Usage and Limits
@@ -23,7 +30,7 @@ grant is applied first to metered Takosumi Cloud resources and services. Usage
 and billing are aggregated for the owner account while preserving Workspace and
 Resource attribution for the usage breakdown.
 
-The common owner-account safety ceiling is 250 total Resources; 100 each for
+The common paid-plan owner-account safety ceiling is 250 total Resources; 100 each for
 Edge, Object, KV, Queue and Schedule; 50 each for Database, Workflow and
 Stateful Actor; 25 Vector indexes; 10 Containers; and 25 active verified
 domains. These are shared abuse and safety limits, not plan features.
@@ -32,9 +39,9 @@ domains. These are shared abuse and safety limits, not plan features.
 
 Takosumi Cloud's versioned PriceCatalog is the authority for managed-capacity
 prices. Provider public prices remain cost-comparison inputs, but provider
-invoices do not define tenant usage. Shared free tiers and fixed platform costs
-are absorbed by the subscription rather than allocated as hidden per-tenant
-free tiers. Catalog changes are versioned and effective-dated and never re-rate
+invoices do not define tenant usage. Provider shared free tiers and fixed
+platform costs are absorbed by plans rather than allocated as hidden
+per-tenant discounts. Catalog changes are versioned and effective-dated and never re-rate
 old usage.
 
 | Service                          | Billable item                         |                                                              Price |
