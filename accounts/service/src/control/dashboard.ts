@@ -27,6 +27,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
+  type ControlSession,
   publicCapsule,
   publicStateVersion,
   requireWorkspaceAccess,
@@ -62,12 +63,7 @@ export async function handleDashboard(
     if (method !== "GET") return methodNotAllowed("GET");
     const timings = serverTimingBucketForPath(ctx.url.pathname);
     const response = await measureServerTiming(timings, "tk_dashboard", () =>
-      dashboardBootstrap(
-        ctx.operations,
-        ctx.store,
-        ctx.session.subject,
-        ctx.url,
-      ),
+      dashboardBootstrap(ctx.operations, ctx.store, ctx.session, ctx.url),
     );
     return appendServerTiming(response, timings);
   }
@@ -79,12 +75,7 @@ export async function handleDashboard(
     if (method !== "GET") return methodNotAllowed("GET");
     const timings = serverTimingBucketForPath(ctx.url.pathname);
     const response = await measureServerTiming(timings, "tk_dashboard", () =>
-      dashboardOverview(
-        ctx.operations,
-        ctx.store,
-        ctx.session.subject,
-        ctx.url,
-      ),
+      dashboardOverview(ctx.operations, ctx.store, ctx.session, ctx.url),
     );
     return appendServerTiming(response, timings);
   }
@@ -94,9 +85,10 @@ export async function handleDashboard(
 async function dashboardBootstrap(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   url: URL,
 ): Promise<Response> {
+  const sessionSubject = session.subject;
   const includeWorkspaces =
     url.searchParams.get("includeWorkspaces") !== "false";
   const includeNotifications =
@@ -154,9 +146,10 @@ async function dashboardBootstrap(
 async function dashboardOverview(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   url: URL,
 ): Promise<Response> {
+  const sessionSubject = session.subject;
   const requestedWorkspaceId = stringValue(
     url.searchParams.get("workspaceId") ?? undefined,
   );
@@ -238,7 +231,7 @@ async function dashboardOverview(
   const auth = await requireWorkspaceAccess({
     operations,
     store,
-    subject: sessionSubject,
+    session,
     workspaceId: selectedWorkspace.id,
     workspace: selectedWorkspace,
   });

@@ -51,6 +51,8 @@ const EDGE_EXPOSURE_BY_FAMILY: Record<RouteFamilyId, EdgeExposure> = {
   // Operator-bearer surface; deliberately not reachable through the public
   // session seam, which injects the deploy-control bearer.
   "form-activations": "off",
+  // Operator-bearer publication/evaluation surface; never session-routed.
+  "offering-catalogs": "off",
   interfaces: "session",
 };
 
@@ -114,10 +116,12 @@ function buildEdgePathRules(): readonly EdgePathRule[] {
       byPrefix.set(prefix, exposure);
     }
   }
-  return [...byPrefix.entries()]
-    .map(([prefix, exposure]) => ({ prefix, exposure }))
-    // Longest prefix first so an overridden leaf wins over its parent.
-    .sort((a, b) => b.prefix.length - a.prefix.length);
+  return (
+    [...byPrefix.entries()]
+      .map(([prefix, exposure]) => ({ prefix, exposure }))
+      // Longest prefix first so an overridden leaf wins over its parent.
+      .sort((a, b) => b.prefix.length - a.prefix.length)
+  );
 }
 
 /**

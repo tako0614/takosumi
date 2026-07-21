@@ -778,6 +778,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "root_module_variables_json",
         "root_module_outputs_json",
         "created_at",
+        "module_path",
       ],
       primaryKey: ["id"],
       indexes: [
@@ -4321,5 +4322,16 @@ create index if not exists takosumi_offering_catalogs_effective_key_idx
       sql: `create index if not exists takosumi_install_configs_space_created_id_idx
   on takosumi_install_configs (space_id, created_at, id);`,
       down: "drop index if exists takosumi_install_configs_space_created_id_idx;",
+    },
+    {
+      id: "deploy.capsule_compatibility_report_module_path.add",
+      version: 99,
+      domain: "deploy",
+      description:
+        "Record the module path the Capsule Gate analyzed so a plan can only reuse a compatibility report produced for the module path it actually executes. Reports written before this column stay null and cannot gate a plan.",
+      sql: `alter table takosumi_capsule_compatibility_reports
+  add column if not exists module_path text;`,
+      down: `alter table takosumi_capsule_compatibility_reports
+  drop column if exists module_path;`,
     },
   ]);

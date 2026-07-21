@@ -250,7 +250,7 @@ export async function handleSources(
         operations,
         store,
         workspaceId,
-        subject: ctx.session.subject,
+        session: ctx.session,
       });
       if (!auth.ok) return auth.response;
       if (source.authConnectionId) {

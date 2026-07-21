@@ -227,6 +227,7 @@ export const capsuleCompatibilityReports = sqliteTable(
       .notNull()
       .default([]),
     createdAt: text("created_at").notNull(),
+    modulePath: text("module_path"),
   },
   (table) => [
     index("capsule_compatibility_reports_source_snapshot_idx").on(

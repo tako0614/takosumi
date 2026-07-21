@@ -103,6 +103,7 @@ export const ja = {
   "workspace.selectMessage":
     "上部のワークスペース切り替えからワークスペースを選ぶと表示されます。",
   "workspace.loading": "ワークスペースを読み込み中…",
+  "workspace.loadFailed": "ワークスペースを読み込めませんでした — {message}",
   "workspace.settings": "ワークスペース設定",
   "workspace.switcherAria": "ワークスペースを切り替え（現在: {name}）",
   "workspace.defaultName": "自分のワークスペース",
