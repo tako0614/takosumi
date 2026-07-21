@@ -33,7 +33,7 @@ export default function Nav() {
         本文へスキップ
       </a>
       <div class="nav-inner container">
-        <Wordmark variant="geometric" />
+        <Wordmark />
         <nav class="nav-links" aria-label="Primary">
           <For each={NAV_LINKS}>
             {(l) => (

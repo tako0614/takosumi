@@ -18,18 +18,17 @@ import {
 import { ScrollText } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
-import {
-  type ActivityEvent,
-  type ControlApiError,
-  listActivity,
-} from "../../lib/control-api.ts";
+import { type ActivityEvent, listActivity } from "../../lib/control-api.ts";
 import { operationLabel } from "../../lib/labels.ts";
-import { formatDateTime, t } from "../../i18n/index.ts";
+import { formatDateTime, relativeTime, t } from "../../i18n/index.ts";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import { Card } from "../../components/ui/Card.tsx";
 import EmptyState from "../../components/ui/EmptyState.tsx";
 import Button from "../../components/ui/Button.tsx";
 import Skeleton from "../../components/ui/Skeleton.tsx";
+import { fetchFailedMessage } from "../../lib/error-copy.ts";
+import { activityEventHref } from "../../lib/activity-links.ts";
+import { A } from "@solidjs/router";
 
 const ACTIVITY_PAGE_SIZE = 100;
 /** Backend clamp (contract ACTIVITY_MAX_LIMIT) — asking for more is a 400. */
@@ -125,7 +124,21 @@ function ActivityRow(props: { event: ActivityEvent }) {
   return (
     <li class="wa-activity-row">
       <div class="wa-activity-head">
-        <span class="wa-activity-action">{activityTitle(props.event)}</span>
+        {/* The identical row on /notifications links to the run or service it
+            is about; the history page rendered it as unclickable text, so a
+            failure found here was a dead end. */}
+        <Show
+          when={activityEventHref(props.event)}
+          fallback={
+            <span class="wa-activity-action">{activityTitle(props.event)}</span>
+          }
+        >
+          {(href) => (
+            <A class="wa-activity-action wa-activity-link" href={href()}>
+              {activityTitle(props.event)}
+            </A>
+          )}
+        </Show>
       </div>
       <div class="wa-activity-rowmeta">
         {/* The page promises だれが何を変更したか — surface the recorded
@@ -138,8 +151,13 @@ function ActivityRow(props: { event: ActivityEvent }) {
             </span>
           )}
         </Show>
-        <time datetime={props.event.createdAt}>
-          {formatDateTime(props.event.createdAt)}
+        {/* Relative first (the app's convention elsewhere), absolute on hover
+            — "6 months ago vs today" was unanswerable at a glance. */}
+        <time
+          datetime={props.event.createdAt}
+          title={formatDateTime(props.event.createdAt)}
+        >
+          {relativeTime(props.event.createdAt)}
         </time>
       </div>
       <details class="wb-disclosure">
@@ -228,9 +246,7 @@ function Inner() {
             <EmptyState
               icon={<ScrollText size={28} />}
               title={t("activity.title")}
-              message={t("common.fetchFailed", {
-                message: (events.error as ControlApiError).message,
-              })}
+              message={fetchFailedMessage(events.error, t)}
               action={
                 <Button
                   variant="secondary"

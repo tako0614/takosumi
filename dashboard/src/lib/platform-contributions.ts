@@ -18,22 +18,35 @@ export interface PlatformContributionCatalog {
   readonly contributions: readonly PlatformContribution[];
 }
 
-export async function loadPlatformContributions(): Promise<PlatformContributionCatalog> {
-  const response = await fetch(PLATFORM_CONTRIBUTIONS_PATH, {
-    credentials: "include",
-    headers: { accept: "application/json" },
-  });
-  if (!response.ok) {
-    throw new Error(`Platform contributions failed (${response.status})`);
+/**
+ * Optional operator-installed navigation/legal decorations.
+ *
+ * This NEVER rejects. Every consumer reads it through `createResource`, and
+ * reading an errored resource re-throws into the root ErrorBoundary — which
+ * wraps the whole Router, including `/sign-in`. A deployment that simply does
+ * not serve this endpoint (or a transient 5xx) must degrade to "no extra
+ * entries", not take the entire app down to a chrome-less reload card.
+ */
+export async function loadPlatformContributions(): Promise<
+  PlatformContributionCatalog | undefined
+> {
+  try {
+    const response = await fetch(PLATFORM_CONTRIBUTIONS_PATH, {
+      credentials: "include",
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) return undefined;
+    const value = (await response.json()) as PlatformContributionCatalog;
+    if (
+      value.kind !== "takosumi.platform-extension-contributions@v1" ||
+      !Array.isArray(value.contributions)
+    ) {
+      return undefined;
+    }
+    return value;
+  } catch {
+    return undefined;
   }
-  const value = (await response.json()) as PlatformContributionCatalog;
-  if (
-    value.kind !== "takosumi.platform-extension-contributions@v1" ||
-    !Array.isArray(value.contributions)
-  ) {
-    throw new Error("Platform contributions response is invalid");
-  }
-  return value;
 }
 
 export function platformContributionsForSlot(

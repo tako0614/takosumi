@@ -245,8 +245,9 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_RESOURCE_ADAPTER_PLUGIN_HANDLERS?: string;
   /**
    * Operator-managed provider/compat API base URLs that may appear in Resource
-   * Shape TargetPool implementation options. CSV/whitespace list or JSON
-   * string array. Unset means provider base URL overrides are rejected.
+   * Shape TargetPool implementation options and in a Provider Connection's
+   * `scopeHints.providerConfig`. CSV/whitespace list or JSON string array.
+   * Unset means provider base URL overrides are rejected.
    */
   readonly TAKOSUMI_RESOURCE_PROVIDER_BASE_URL_ALLOWLIST?: string;
   /**

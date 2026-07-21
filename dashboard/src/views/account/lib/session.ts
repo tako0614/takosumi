@@ -19,8 +19,11 @@
  * doesn't fire a /me request on every render but still notices a
  * server-side revocation within a reasonable window.
  */
-import { setCurrentWorkspaceId } from "../../../lib/workspace-state.ts";
-import { primeWorkspaceListCache } from "../../../lib/workspace-list.ts";
+import {
+  clearWorkspaceListCache,
+  primeWorkspaceListCache,
+} from "../../../lib/workspace-list.ts";
+import { markAutoStartAttempted } from "./oauth-autostart.ts";
 import {
   fetchDashboardBootstrap,
   fetchDashboardWorkspaceBootstrap,
@@ -206,12 +209,25 @@ export function writeSession(_s: SessionRecord): void {
  * Clear the local cache and ask the server to revoke the cookie. The
  * server endpoint is responsible for issuing `Set-Cookie: takosumi_session=;
  * Max-Age=0` and removing the session record.
+ *
+ * Signing out also arms the sign-in auto-start breaker. The upstream IdP
+ * session outlives our cookie, so a single-provider deployment would otherwise
+ * bounce the just-signed-out user through /sign-in straight back into a new
+ * session without a single click.
+ *
+ * The cached Workspace *list* is dropped (it is the previous session's
+ * projection and must not be shown to whoever signs in next in this tab), but
+ * the persisted current-Workspace *selection* is kept: it is validated against
+ * the next session's own list by `selectAvailableWorkspaceId`, and discarding
+ * it dumped returning users into an arbitrary first Workspace — usually the
+ * empty auto-created personal one — which reads as "signed in as someone else".
  */
 export function clearSession(): void {
   cachedSession = null;
   cachedAt = Date.now();
   initialized = true;
-  setCurrentWorkspaceId("");
+  markAutoStartAttempted();
+  clearWorkspaceListCache();
   notify(null);
   if (typeof fetch !== "undefined") {
     // keepalive: the caller navigates to /sign-in right after this, which

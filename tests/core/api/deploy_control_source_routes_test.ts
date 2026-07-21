@@ -452,6 +452,58 @@ test("GET /internal/v1/compatibility-reports resolves owner from sourceSnapshot 
   expect(got.status).toBe(403);
 });
 
+test("source snapshot file read is source-scoped and selects the requested JSON file", async () => {
+  const observedOptions: unknown[] = [];
+  const { app, store } = await makeAppWithStore({
+    readCapsuleSourceFiles: async (_snapshot, options) => {
+      observedOptions.push(options);
+      return [
+        { path: "yurucommu-standalone.json", text: '{"kind":"CapsuleComposition"}' },
+        { path: "other.json", text: "{}" },
+      ];
+    },
+  });
+  const created = await app.request("/internal/v1/sources", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      workspaceId: "ws_001",
+      name: "composition",
+      url: "https://github.com/tako0614/takoform.git",
+    }),
+  });
+  expect(created.status).toBe(201);
+  const { source } = await created.json();
+  const snapshot: SourceSnapshot = {
+    id: "snap_composition00001",
+    origin: "git",
+    sourceId: source.id,
+    workspaceId: "ws_001",
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveRef: "workspaces/ws_001/source.tar.zst",
+    archiveDigest: "sha256:sourcearchive",
+    archiveSizeBytes: 42,
+    fetchedByRunId: "ssr_composition00001",
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putSourceSnapshot(snapshot);
+
+  const response = await app.request(
+    `/internal/v1/sources/${source.id}/snapshots/${snapshot.id}/file?path=compositions/yurucommu-standalone.json`,
+    { headers: { authorization: "Bearer scoped-token" } },
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    sourceSnapshotId: snapshot.id,
+    path: "compositions/yurucommu-standalone.json",
+    text: '{"kind":"CapsuleComposition"}',
+  });
+  expect(observedOptions).toEqual([{ modulePath: "compositions" }]);
+});
+
 test("source compatibility-check analyzes expanded OpenTofu files at modulePath when available", async () => {
   const sourceFileReadOptions: unknown[] = [];
   const { app, store } = await makeAppWithStore({

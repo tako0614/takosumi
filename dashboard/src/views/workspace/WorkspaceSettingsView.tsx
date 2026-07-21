@@ -11,9 +11,7 @@ import { useParams } from "@solidjs/router";
 import Page from "../account/components/auth/Page.tsx";
 import type { SessionRecord } from "../account/lib/session.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
-import {
-  hasPlatformExtensionCapability,
-} from "../../lib/runtime-capabilities.ts";
+import { hasPlatformExtensionCapability } from "../../lib/runtime-capabilities.ts";
 import { t } from "../../i18n/index.ts";
 import { EmptyState, PageHeader, Tabs } from "../../components/ui/index.ts";
 import GeneralTab from "./tabs/GeneralTab.tsx";
@@ -24,12 +22,7 @@ import BackupsTab from "./tabs/BackupsTab.tsx";
 import SharesTab from "./tabs/SharesTab.tsx";
 
 type TabId =
-  | "general"
-  | "members"
-  | "connections"
-  | "billing"
-  | "backups"
-  | "shares";
+  "general" | "members" | "connections" | "billing" | "backups" | "shares";
 
 type StandaloneTabId = Extract<TabId, "connections" | "billing">;
 

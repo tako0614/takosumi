@@ -3,6 +3,7 @@ import {
   appendTakosumiAppHandoff,
   createTakosumiAppConnectHref,
   createTakosumiAppHandoffUrl,
+  isSafeLinkHref,
   parseTakosumiAppProductKey,
   parseTakosumiAppReturnUri,
   takosumiAppHandoffFromSearch,
@@ -90,6 +91,28 @@ describe("Takosumi App Handoff contract", () => {
     expect(
       parseTakosumiAppReturnUri("https://app.example/connect?debug=1"),
     ).toBeUndefined();
+  });
+
+  test("rejects script-capable return URI schemes in their authority form", () => {
+    // `javascript:alert(1)` was already rejected for lacking `://`, but the
+    // authority form parses cleanly and still executes: the connect payload
+    // appended by createTakosumiAppConnectHref lands after the `//` comment.
+    for (const raw of [
+      "javascript://x/%0Aalert(1)//",
+      "JavaScript://x/%0Aalert(1)//",
+      "vbscript://x/%0Amsgbox(1)//",
+      "data://text/html,<script>alert(1)</script>",
+      "blob://x/y",
+      "file://host/etc/passwd",
+    ]) {
+      expect(parseTakosumiAppReturnUri(raw)).toBeUndefined();
+      expect(isSafeLinkHref(raw)).toBe(false);
+    }
+    // Ordinary client schemes and in-app paths stay usable.
+    expect(isSafeLinkHref("notesapp://connect")).toBe(true);
+    expect(isSafeLinkHref("https://app.example/connect")).toBe(true);
+    expect(isSafeLinkHref("/runs/run_1")).toBe(true);
+    expect(isSafeLinkHref(undefined)).toBe(false);
   });
 
   test("round-trips dashboard paths and connect payloads", () => {

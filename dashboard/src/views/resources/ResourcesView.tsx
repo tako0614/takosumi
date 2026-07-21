@@ -46,6 +46,7 @@ import {
   type Column,
 } from "../../components/ui/index.ts";
 import ResourceEditor from "./ResourceEditor.tsx";
+import { resourcePhaseLabel } from "../../lib/labels.ts";
 
 type Scope = { readonly workspaceId: string; readonly space: string };
 
@@ -111,6 +112,18 @@ function Inner(): JSX.Element {
       listResourceSpacePolicies(workspace, selectedSpace),
   );
 
+  // Reading `.error` first: an errored resource re-throws on read.
+  const targetPoolNames = () =>
+    targetPools.error ? [] : (targetPools() ?? []).map((pool) => pool.name);
+  const spacePolicyNames = () =>
+    spacePolicies.error
+      ? []
+      : (spacePolicies() ?? []).map((policy) => policy.name);
+  // A Space with no TargetPool cannot resolve ANY resource, so the editor's
+  // primary action would always fail at preview with a raw server error.
+  const placementReady = () =>
+    targetPools.loading || targetPoolNames().length > 0;
+
   const resourceColumns: readonly Column<ResourceShape>[] = [
     {
       header: t("resources.column.resource"),
@@ -125,7 +138,7 @@ function Inner(): JSX.Element {
       header: t("resources.column.phase"),
       cell: (resource) => (
         <Badge tone={resourcePhaseTone(resource.status?.phase)}>
-          {resource.status?.phase ?? t("common.unknown")}
+          {resourcePhaseLabel(resource.status?.phase)}
         </Badge>
       ),
     },
@@ -422,7 +435,7 @@ function Inner(): JSX.Element {
               type="button"
               variant="primary"
               icon={<Plus size={16} />}
-              disabled={!scope() || featureUnavailable()}
+              disabled={!scope() || featureUnavailable() || !placementReady()}
               onClick={() => setShowEditor((value) => !value)}
             >
               {t("resources.define")}
@@ -430,6 +443,11 @@ function Inner(): JSX.Element {
           </div>
         }
       />
+
+      {/* A disabled primary action must say why. */}
+      <Show when={scope() && !featureUnavailable() && !placementReady()}>
+        <Toast>{t("resources.define.needsTargetPool")}</Toast>
+      </Show>
 
       <Show
         when={workspaceId()}
@@ -472,6 +490,8 @@ function Inner(): JSX.Element {
                   workspaceId={active().workspaceId}
                   space={active().space}
                   formAvailability={formAvailability() ?? []}
+                  targetPools={targetPoolNames()}
+                  spacePolicies={spacePolicyNames()}
                   onCancel={() => setShowEditor(false)}
                   onApplied={async () => {
                     setShowEditor(false);
@@ -646,6 +666,13 @@ function Inner(): JSX.Element {
                     }
                     empty={t("resources.policy.empty")}
                   />
+                  {/* Outside the editor block: a delete can fail while the
+                      editor is closed, and that used to report nothing at all. */}
+                  <Show when={policyMessage()}>
+                    {(message) => (
+                      <Toast tone={message().tone}>{message().text}</Toast>
+                    )}
+                  </Show>
                   <Show when={policyEditorOpen()}>
                     <Card class="rs-config-editor">
                       <CardHeader
@@ -702,13 +729,6 @@ function Inner(): JSX.Element {
                             {t("common.save")}
                           </Button>
                         </div>
-                        <Show when={policyMessage()}>
-                          {(message) => (
-                            <Toast tone={message().tone}>
-                              {message().text}
-                            </Toast>
-                          )}
-                        </Show>
                       </CardSection>
                     </Card>
                   </Show>

@@ -173,6 +173,16 @@ export interface CapsuleCompatibilityReport {
   readonly sourceId: string;
   readonly capsuleId?: string;
   readonly sourceSnapshotId: string;
+  /**
+   * Normalized module path the Capsule Gate actually analyzed inside the
+   * SourceSnapshot archive; `"."` marks the archive root. A plan executes
+   * `InstallConfig.modulePath`, so a report is only evidence about the module
+   * it was produced for: without this field a report for a benign module could
+   * be reused (or supplied as a `compatibilityReportId` hint) to gate an
+   * unreviewed sibling module in the same snapshot. Absent means a report
+   * written before the path was recorded, which can no longer gate any plan.
+   */
+  readonly modulePath?: string;
   readonly level: CapsuleCompatibilityLevel;
   readonly findings: readonly CapsuleGateFinding[];
   readonly providers: readonly CapsuleProviderRequirement[];
@@ -190,6 +200,26 @@ export interface CapsuleCompatibilityReport {
   readonly providerRequirements?: readonly ProviderRequirement[];
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly createdAt: string;
+}
+
+/**
+ * Canonical spelling of the module path a compatibility report was analyzed
+ * for, so the report can be compared against the path a plan will actually
+ * execute. `"."` is the archive root; any other value is a normalized relative
+ * path. Callers must treat a missing `CapsuleCompatibilityReport.modulePath` as
+ * unknown rather than as the root, so a pre-guard report cannot pass itself off
+ * as evidence for a module it never analyzed.
+ */
+export function normalizeCompatibilityReportModulePath(
+  modulePath: string | undefined,
+): string {
+  const value = modulePath?.trim();
+  if (!value) return ".";
+  const normalized = value
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/\/+$/g, "");
+  return normalized && normalized !== "." ? normalized : ".";
 }
 
 export interface CapsuleGateResult {

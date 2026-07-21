@@ -1,8 +1,6 @@
 import type { JSX } from "solid-js";
 
 interface Props {
-  /** Retained for call-site compatibility; Takosumi now uses the app logo asset. */
-  variant?: "geometric" | "inkdrop";
   size?: number;
   class?: string;
 }

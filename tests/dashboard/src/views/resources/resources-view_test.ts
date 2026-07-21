@@ -89,8 +89,13 @@ describe("Resource Shape dashboard surface", () => {
 
   test("labels the discovered set Stable without inventing AI or domain Resource kinds", () => {
     expect(editor).toContain('t("resources.editor.stable")');
-    expect(en).toContain("host's Form availability contract");
-    expect(ja).toContain("ホストの Form availability 契約");
+    // The list is whatever the host offers — stated in product language now.
+    // `Form availability contract` is an internal host-contract noun and must
+    // not be the sentence an ordinary user reads.
+    expect(en).toContain("service types this deployment offers");
+    expect(ja).toContain("この環境が提供しているもの");
+    expect(en).not.toContain("Form availability contract");
+    expect(ja).not.toContain("Form availability");
     expect(serviceForm).not.toContain('"AIGateway"');
     expect(serviceForm).not.toContain('"VerifiedDomain"');
     expect(editor).not.toContain('<option value="AIGateway">');

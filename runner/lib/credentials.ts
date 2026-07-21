@@ -4,7 +4,7 @@
 //
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   isProviderEnvName,
@@ -337,8 +337,11 @@ export async function prepareProviderCredentialFiles(
   if (files.length === 0) {
     return { context, cleanup: async () => {} };
   }
-  const credentialDir = join(workspace.root, ".provider-credentials");
-  await mkdir(credentialDir, { recursive: true, mode: 0o700 });
+  // A SIBLING of the run workspace with a random suffix, never a child of it:
+  // the source-build phase runs user commands inside `workspace.sourceRoot`,
+  // and `<workspace.root>/.provider-credentials` was one `../` away from them.
+  const credentialDir = await mkdtemp(`${workspace.root}-credentials-`);
+  await chmod(credentialDir, 0o700);
   const env: Record<string, string> = { ...context.env };
   for (const file of files) {
     assertSafeCredentialFileName(file.path);

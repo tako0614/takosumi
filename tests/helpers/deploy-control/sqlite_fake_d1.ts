@@ -30,12 +30,20 @@ import type {
  *    with "LIKE or GLOB pattern too complex"; D1's effective ceiling is far
  *    lower than bun:sqlite's, and a value-derived `%<long needle>%` pattern is
  *    the realistic trigger (use `instr()` for literal substring search instead).
- *    We approximate the limit with the project's documented heuristic —
- *    pattern length x wildcard (`%`/`_`) count — and reject above ~7500. A
- *    string with no wildcards has complexity 0, so plain params never trip.
+ *    SQLITE_LIMIT_LIKE_PATTERN_LENGTH bounds the pattern's LENGTH and does not
+ *    weigh wildcards, so the bound is the length alone. A `length x wildcards`
+ *    score rated a 7501-character wildcard-free pattern 0 and passed it here
+ *    while real D1 rejected it — this harness must stay identical to the other
+ *    repos' harnesses (`takos/src/worker/testing/d1-limits.ts`,
+ *    `yurucommu-core/src/backend/__tests__/helpers/d1-semantics.ts`,
+ *    `road-to-me/backend/test/helpers/d1-limits.ts`).
+ *
+ * Both constants are exported so the root `scripts/check-d1-safety.mjs` gate can
+ * discover this file as an enforcing harness and compare its predicate — with
+ * bare `const` it was invisible to the gate and drifted unobserved.
  */
-const D1_MAX_BOUND_PARAMS = 100;
-const D1_MAX_LIKE_COMPLEXITY = 7500;
+export const D1_MAX_BOUND_PARAMS = 100;
+export const D1_MAX_LIKE_COMPLEXITY = 7500;
 
 export class SqliteFakeD1 implements D1Database {
   readonly #db = new Database(":memory:");
@@ -143,10 +151,9 @@ class SqliteFakeStatement implements D1PreparedStatement {
           `(chunk the IN (...) / id list)`,
       );
     }
-    // (2) Cloudflare D1: LIKE pattern-complexity ceiling. Value-derived patterns
+    // (2) Cloudflare D1: LIKE pattern-length ceiling. Value-derived patterns
     // arrive as bound params; a literal pattern lives in the SQL text. Check
-    // both. Complexity = length x wildcard count, so plain (wildcard-free)
-    // strings score 0 and never trip; only an actual %...% / _..._ pattern can.
+    // both (scanning the SQL text is a superset the other harnesses share).
     if (/\bLIKE\b/i.test(this.query)) {
       const patterns: string[] = [];
       for (const value of this.#bound) {
@@ -156,14 +163,11 @@ class SqliteFakeStatement implements D1PreparedStatement {
         patterns.push(match[1] ?? "");
       }
       for (const pattern of patterns) {
-        const wildcards = (pattern.match(/[%_]/g) ?? []).length;
-        const complexity = pattern.length * wildcards;
-        if (complexity > D1_MAX_LIKE_COMPLEXITY) {
+        if (pattern.length > D1_MAX_LIKE_COMPLEXITY) {
           throw new Error(
-            `D1_ERROR: LIKE or GLOB pattern too complex: pattern length ` +
-              `${pattern.length} x ${wildcards} wildcards = ${complexity} ` +
-              `exceeds the D1 cap of ${D1_MAX_LIKE_COMPLEXITY} ` +
-              `(use instr() for literal substring search)`,
+            `D1_ERROR: LIKE or GLOB pattern too complex ` +
+              `(${pattern.length} > ${D1_MAX_LIKE_COMPLEXITY}). ` +
+              `Use instr(lower(col), lower(q)) > 0 for literal substring search.`,
           );
         }
       }

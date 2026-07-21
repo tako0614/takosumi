@@ -18,6 +18,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
 source "$SCRIPT_DIR/compose-helpers.sh"
+# Recreating the worker re-runs the test-bed seeder, so carry the stack's
+# generated dev session bearer instead of recreating it with an empty one.
+export TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID="$(local_substrate_dev_session_id)"
 
 PROFILE="$(local_substrate_profile)"
 

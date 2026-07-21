@@ -905,3 +905,29 @@
     min-height: 44px;
   }
 }
+
+/* Toast is an inline banner, not a timed popup: a dismiss control is how a
+   success note stops being permanent. */
+.tg-toast-body {
+  flex: 1;
+  min-width: 0;
+}
+.tg-toast-dismiss {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--tg-r-sm);
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.tg-toast-dismiss:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentcolor 12%, transparent);
+}

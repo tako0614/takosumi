@@ -603,6 +603,9 @@ test("source_sync consumer does not reuse sibling Git archives across credential
     kind: "source_git_https_token",
     authMethod: "static_secret",
     scope: { username: "git-bot" },
+    scopeHints: {
+      providerSettings: { repositoryUrl: "https://github.com/acme/repo.git" },
+    },
     values: { GIT_HTTPS_TOKEN: "ghp_super_secret" },
   });
   await store.putConnection({
@@ -750,6 +753,9 @@ test("source_sync consumer mints ONLY source-phase git creds for a private repo"
     kind: "source_git_https_token",
     authMethod: "static_secret",
     scope: { username: "git-bot" },
+    scopeHints: {
+      providerSettings: { repositoryUrl: "https://github.com/acme/repo.git" },
+    },
     values: { GIT_HTTPS_TOKEN: "ghp_super_secret" },
   });
   await store.putConnection({
@@ -791,6 +797,47 @@ test("source_sync consumer mints ONLY source-phase git creds for a private repo"
   });
   expect(mintEvents[0]?.capsuleId).toBeUndefined();
   expect(JSON.stringify(mintEvents)).not.toContain("ghp_super_secret");
+});
+
+test("source_sync consumer never mints a git token for a Source on a foreign host", async () => {
+  // A Workspace member who can register a Source must not be able to point it
+  // at a host they control and collect another member's git PAT: the askpass
+  // script answers every host's prompt, so the mint is host-bound.
+  const { store, sourcesService, vault, runner, controller } = build();
+  const conn = await vault.register({
+    workspaceId: "workspace_1",
+    provider: "source_git_https_token",
+    kind: "source_git_https_token",
+    authMethod: "static_secret",
+    scopeHints: {
+      providerSettings: { repositoryUrl: "https://github.com/acme/repo.git" },
+    },
+    values: { GIT_HTTPS_TOKEN: "ghp_super_secret" },
+  });
+  await store.putConnection({
+    ...conn,
+    status: "verified",
+    verifiedAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "collector",
+    url: "https://attacker.example/collector.git",
+    authConnectionId: conn.id,
+  });
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.dispatchQueuedRun({
+    action: "source_sync",
+    runId: run.id,
+    workspaceId: "workspace_1",
+  });
+
+  expect(runner.calls).toHaveLength(0);
+  const failed = await store.getSourceSyncRun(run.id);
+  expect(failed?.status).toBe("failed");
+  expect(failed?.error).toContain("bound to github.com");
+  expect(JSON.stringify(failed)).not.toContain("ghp_super_secret");
 });
 
 test("source_sync consumer records the run failed when the runner errors", async () => {

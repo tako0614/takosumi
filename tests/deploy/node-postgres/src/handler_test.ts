@@ -47,6 +47,28 @@ test("node-postgres preserves a host-specific public mobile OIDC client", () => 
   expect(config.clients).toEqual([mobileClient]);
 });
 
+test("node-postgres resolves the Takosumi Mobile discovery client", () => {
+  const mobileClient = {
+    clientId: "takosumi-mobile-host-example",
+    redirectUris: ["takosumi://oauth/callback"],
+    tokenEndpointAuthMethod: "none",
+    allowedScopes: [
+      "openid",
+      "profile",
+      "offline_access",
+      "capsules:read",
+      "capsules:write",
+    ],
+  } as const;
+  const config = parseEnv({
+    TAKOSUMI_ACCOUNTS_DATABASE_URL: DATABASE_URL,
+    TAKOSUMI_MOBILE_OIDC_CLIENT_ID: mobileClient.clientId,
+    TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([mobileClient]),
+  });
+
+  expect(config.mobileOidcClientId).toBe(mobileClient.clientId);
+});
+
 test("node-postgres stable OIDC needs only the OIDC pairwise subject secret", () => {
   const previousPublicJwksJson = JSON.stringify({
     keys: [

@@ -57,7 +57,7 @@ origin 上の Cloud extension boundary を通して提供されます。
 支払い主体の確認、リソースの正規化、実行先の空き確認、使用量と上限の確認を経て、
 選ばれた backend (Workers for Platforms、R2、D1、KV、Queue、Containers など) が
 実行します。実行先が未設定の service form は、課金や backend 呼び出しの前に
-安全側に停止し (fail closed)、別の経路へ勝手に迂回しません。課金は Workspace ごとに
+安全側に停止し、別の経路へ勝手に迂回しません。課金は Workspace ごとに
 分かれず、発生元 Workspace を記録として残しながら、所有ユーザーのアカウント残高から
 消費されます。
 
@@ -135,7 +135,7 @@ Takosumi Cloud 全体を Pre-GA のままにします。
 | Preview     | Vector Index / Durable Workflow / Container / Stateful Actor Namespace / Schedule               |
 | Pre-GA      | 上の全項目が同じ Stable evidence matrix を通るまで public GA は開かない                         |
 
-Stable evidence には lifecycle、価格、immutable metering、spend enforcement、invoice reconciliation、
+Stable evidence には lifecycle、価格、変更不可な metering、spend enforcement、invoice reconciliation、
 recovery、tenant isolation、Dashboard、本番環境での動作・運用検証が含まれます。self-test、
 descriptor、未設定 manager、1 つの green client だけでは GA になりません。
 

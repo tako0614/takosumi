@@ -8,7 +8,15 @@ test("runtime config loader defaults to local + takosumi-api when env empty", as
   assert.equal(config.environment, "local");
   assert.equal(config.processRole, "takosumi-api");
   assert.equal(config.allowUnsafeProductionDefaults, false);
-  assert.deepEqual(config.diagnostics, []);
+  // Defaulting to `local` is reported: on a served deployment it silently
+  // downgrades every production strict boot gate.
+  assert.deepEqual(
+    config.diagnostics.map((diagnostic) => [
+      diagnostic.severity,
+      diagnostic.code,
+    ]),
+    [["warning", "missing_environment"]],
+  );
 });
 
 test("runtime config loader reads explicit environment + API process role", async () => {

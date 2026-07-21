@@ -58,6 +58,13 @@ type Props = {
   readonly workspaceId: string;
   readonly space: string;
   readonly formAvailability: readonly FormAvailability[];
+  /**
+   * Placement targets that actually exist in this Space. Free text here meant
+   * the default `"default"` silently failed at preview time with a raw English
+   * server error on every fresh Space.
+   */
+  readonly targetPools?: readonly string[];
+  readonly spacePolicies?: readonly string[];
   readonly resource?: ResourceShape;
   readonly onApplied?: (resource: ResourceShapeResult) => void | Promise<void>;
   readonly onCancel?: () => void;
@@ -84,8 +91,12 @@ export default function ResourceEditor(props: Props): JSX.Element {
   const [name, setName] = createSignal("");
   const [project, setProject] = createSignal("");
   const [environment, setEnvironment] = createSignal("default");
-  const [targetPoolName, setTargetPoolName] = createSignal("default");
-  const [spacePolicyName, setSpacePolicyName] = createSignal("default");
+  const [targetPoolName, setTargetPoolName] = createSignal(
+    props.targetPools?.[0] ?? "default",
+  );
+  const [spacePolicyName, setSpacePolicyName] = createSignal(
+    props.spacePolicies?.[0] ?? "default",
+  );
   const [specText, setSpecText] = createSignal(prettyJson({ name: "" }));
   const [labelsText, setLabelsText] = createSignal(prettyJson({}));
   const [artifactSource, setArtifactSource] =
@@ -1572,25 +1583,59 @@ export default function ResourceEditor(props: Props): JSX.Element {
               <span class="tg-field-label">
                 {t("resources.editor.targetPool")}
               </span>
-              <input
-                class="tg-input"
-                value={targetPoolName()}
-                onInput={(event) =>
-                  setTargetPoolName(event.currentTarget.value)
+              <Show
+                when={(props.targetPools ?? []).length > 0}
+                fallback={
+                  <input
+                    class="tg-input"
+                    value={targetPoolName()}
+                    onInput={(event) =>
+                      setTargetPoolName(event.currentTarget.value)
+                    }
+                    autocomplete="off"
+                  />
                 }
-                autocomplete="off"
-              />
+              >
+                <select
+                  class="tg-select"
+                  value={targetPoolName()}
+                  onChange={(event) =>
+                    setTargetPoolName(event.currentTarget.value)
+                  }
+                >
+                  <For each={props.targetPools ?? []}>
+                    {(pool) => <option value={pool}>{pool}</option>}
+                  </For>
+                </select>
+              </Show>
             </label>
             <label class="tg-field">
               <span class="tg-field-label">{t("resources.editor.policy")}</span>
-              <input
-                class="tg-input"
-                value={spacePolicyName()}
-                onInput={(event) =>
-                  setSpacePolicyName(event.currentTarget.value)
+              <Show
+                when={(props.spacePolicies ?? []).length > 0}
+                fallback={
+                  <input
+                    class="tg-input"
+                    value={spacePolicyName()}
+                    onInput={(event) =>
+                      setSpacePolicyName(event.currentTarget.value)
+                    }
+                    autocomplete="off"
+                  />
                 }
-                autocomplete="off"
-              />
+              >
+                <select
+                  class="tg-select"
+                  value={spacePolicyName()}
+                  onChange={(event) =>
+                    setSpacePolicyName(event.currentTarget.value)
+                  }
+                >
+                  <For each={props.spacePolicies ?? []}>
+                    {(policy) => <option value={policy}>{policy}</option>}
+                  </For>
+                </select>
+              </Show>
             </label>
           </div>
           <label class="tg-field rs-json-field">
@@ -1625,6 +1670,22 @@ export default function ResourceEditor(props: Props): JSX.Element {
           >
             <div class="rs-raw-authoring">
               <p class="rs-raw-warning">{t("resources.editor.rawWarning")}</p>
+              {/* Switching to raw used to be one-way: the only path back went
+                  through the service <select>, which fires no change event when
+                  the already-selected option is re-picked — so with a single
+                  installed form there was no control that could return. */}
+              <Show when={isGuidedResourceServiceKind(kind())}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    selectService(kind() as GuidedResourceServiceKind)
+                  }
+                >
+                  {t("resources.editor.backToGuided")}
+                </Button>
+              </Show>
               <label class="tg-field">
                 <span class="tg-field-label">{t("resources.editor.kind")}</span>
                 <input class="tg-input" value={kind()} disabled />

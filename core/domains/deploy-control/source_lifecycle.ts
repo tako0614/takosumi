@@ -163,6 +163,9 @@ export class SourceLifecycleService {
           workspaceId: run.workspaceId,
           phase: "source",
           sourceConnectionId: stored.authConnectionId,
+          // The vault refuses to mint a git token for a host the connection is
+          // not bound to, so the Source URL is part of the mint request.
+          sourceUrl: stored.url,
         });
         await this.#recordSourceCredentialMintEvent({
           runId: run.id,

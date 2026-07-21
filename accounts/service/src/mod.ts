@@ -136,6 +136,7 @@ export * from "./upstream.ts";
 export * from "./upstream-config.ts";
 export * from "./passkey.ts";
 export * from "./identity.ts";
+export * from "./mobile-oidc-client.ts";
 export * from "./jwt.ts";
 export * from "./postgres-store.ts";
 export * from "./d1-store.ts";

@@ -1,6 +1,14 @@
 /**
- * Add a service (`/new`) — app discovery first for normal users, explicit
- * install links / Git sources second, one underlying flow.
+ * ストア (`/new`) — the single discovery + add surface. This is the primary
+ * store tab: browsing the decentralized Takosumi store(s) and adding what you
+ * pick are ONE page, not a store page that bounces to a separate add page.
+ * Picking a listing swaps this same page from the store grid to the install
+ * flow; there is no second store listing anywhere in the dashboard.
+ *
+ * Whether a Capsule can be added without user configuration is decided by this
+ * flow against the real repository-owned metadata. A listing says
+ * nothing about build or deploy duration: the store feed strips the input
+ * schema and makes no client-side readiness or speed claim.
  *
  * Three entry shapes, identical install path:
  *   - Link/source import: the primary path for app install links or raw Git
@@ -55,6 +63,7 @@ import {
 import Page from "../account/components/auth/Page.tsx";
 import {
   currentWorkspaceId,
+  selectAvailableWorkspaceId,
   setCurrentWorkspaceId,
 } from "../../lib/workspace-state.ts";
 import {
@@ -106,6 +115,7 @@ import {
 import { locale, t } from "../../i18n/index.ts";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
+import { consumeAutoInstallToken } from "../../lib/auto-install-handoff.ts";
 import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
 import {
   clearCapsuleListCache,
@@ -320,14 +330,16 @@ function Inner() {
   // itself once prerequisites settle (workspace, install config, store
   // hydration). Blockers still stop it — auto never bypasses a review.
   //
-  // Auto-start is gated on a genuine store handoff (tcsBase/tcsListing). The
-  // in-app store CTA always carries one; an EXTERNAL link (`/install?git=…` or a
-  // hand-crafted `/new?git=…&auto=1`) carries only a raw git URL, and those must
-  // stay pre-fill only — never silently register + deploy an attacker-chosen
-  // repo into the user's workspace without an explicit Add click.
+  // The query is NOT the authority for that: `auto`, `tcsBase` and `tcsListing`
+  // are all forgeable, so an EXTERNAL link (`/install?git=…` or a hand-crafted
+  // `/new?git=…&auto=1&tcsBase=…&tcsListing=…`) could otherwise register and
+  // deploy an attacker-chosen repo into the user's workspace with no Add click.
+  // Only a one-shot sessionStorage token minted by our own store CTA in this
+  // tab arms it; everything else stays pre-fill only.
   const autoInstallRequested =
     new URLSearchParams(initialSearch).get("auto") === "1" &&
-    initialTcsHandoff !== null;
+    initialTcsHandoff !== null &&
+    consumeAutoInstallToken(initialSearch);
   const initialInstallPrefill =
     typeof location === "undefined"
       ? undefined
@@ -388,6 +400,9 @@ function Inner() {
   // store pick auto-fills setName() with the suggested name, which must not
   // count as meaningful input for the 選び直す discard guard.
   const [nameTouched, setNameTouched] = createSignal(false);
+  // The derived service identity (display name + public subdomain) renders as
+  // one read-only URL line until the user asks to change it.
+  const [identityOpen, setIdentityOpen] = createSignal(false);
   const [resourcePrefix, setResourcePrefix] = createSignal("");
   const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(false);
   const [managedPublicHostnameMode, setManagedPublicHostnameMode] =
@@ -416,6 +431,28 @@ function Inner() {
 
   const workspaceId = () =>
     currentWorkspaceId() ? currentWorkspaceId() : null;
+  // This page is the store tab, so it is a normal first landing spot with no
+  // Workspace selected yet (a fresh browser, a store deep link). Recover the
+  // selection here instead of showing 最初のワークスペースを作成 to someone who
+  // already has one; `resolvingWorkspace` keeps that panel hidden until we
+  // actually know there is none.
+  const [resolvingWorkspace, setResolvingWorkspace] =
+    createSignal(!currentWorkspaceId());
+  onMount(async () => {
+    if (!resolvingWorkspace()) return;
+    try {
+      const workspaces = await listWorkspacesCached();
+      const chosen = selectAvailableWorkspaceId(
+        currentWorkspaceId(),
+        workspaces,
+      );
+      if (chosen) setCurrentWorkspaceId(chosen);
+    } catch {
+      // The shell workspace switcher and the create action below cover this.
+    } finally {
+      setResolvingWorkspace(false);
+    }
+  });
   const [workspaceList] = createResource(
     () => workspaceId() ?? undefined,
     (selectedWorkspaceId) => listWorkspacesCached({ selectedWorkspaceId }),
@@ -993,6 +1030,9 @@ function Inner() {
     );
     if (entry && publicEndpointField) {
       updateStoreInputValue(entry, publicEndpointField, candidate);
+      // The subdomain lives behind 変更; applying a suggestion into a collapsed
+      // field would look like nothing happened.
+      setIdentityOpen(true);
       return;
     }
     setResourcePrefixTouched(true);
@@ -1315,6 +1355,38 @@ function Inner() {
         !isServiceIdentityStoreInput(entry, field) &&
         isAdvancedStoreInput(entry, field),
     );
+  // The public-endpoint subdomain IS the service's identity, and Takosumi
+  // already derives it from the listing. Presenting it as the resulting URL
+  // with an explicit 変更 affordance (instead of a raw required text field)
+  // is what lets an ordinary store install ask for nothing at all. It is not
+  // folded away: `installIdentityFields()` renders the same input inline.
+  const identityStoreInput = (entry: StoreEntry) =>
+    storePublicEndpointSubdomainField(entry);
+  const setupStoreInputs = (entry: StoreEntry) => {
+    const identity = identityStoreInput(entry);
+    return visibleStoreInputs(entry).filter(
+      (field) => field.name !== identity?.name,
+    );
+  };
+  const hasSetupStoreInputs = () => {
+    const entry = selectedServiceEntry();
+    return Boolean(entry && setupStoreInputs(entry).length > 0);
+  };
+  const storePublisherLabel = (): string => {
+    const publisher = selectedServiceEntry()?.publisher;
+    if (!publisher) return "";
+    return publisher.displayName?.trim() || `@${publisher.handle}`;
+  };
+  const storeBadgeLabel = (): string =>
+    selectedServiceEntry()?.badge[locale()]?.trim() ?? "";
+  // The public host this install will land on. Empty while the workspace
+  // handle or managed base domain is still unknown.
+  const installTargetHost = (): string => {
+    const entry = selectedServiceEntry();
+    const identity = entry ? identityStoreInput(entry) : undefined;
+    if (entry && identity) return storeFieldHostPreview(entry, identity);
+    return managedHostPreview();
+  };
   const hasMissingAdvancedStoreInputs = () => {
     const entry = selectedServiceEntry();
     if (!entry || !compatibility()) return false;
@@ -1741,26 +1813,36 @@ function Inner() {
   // A's slower metadata response overwrite B's form (same reqToken pattern as
   // StoreBrowser.rebuild()). Stale resolutions are dropped silently.
   let storePickToken = 0;
+  const STORE_PICK_BUSY_DELAY_MS = 250;
   const pickStoreListing = (listing: TcsListing) => {
     void (async () => {
       const token = ++storePickToken;
       setFailedStorePick(null);
       setStoreMetadataUnavailable(false);
       setError(null);
-      setStorePickBusy(true);
+      // Delay-gated: a spinner that appears and vanishes within a frame reads
+      // as a glitch, not as progress. Only a pick that actually keeps the user
+      // waiting gets an indicator.
+      const busyTimer = setTimeout(() => {
+        if (token === storePickToken) setStorePickBusy(true);
+      }, STORE_PICK_BUSY_DELAY_MS);
+      const settlePickBusy = () => {
+        clearTimeout(busyTimer);
+        setStorePickBusy(false);
+      };
       let hydratedListing: TcsListing;
       try {
         hydratedListing = await prepareStoreListing(listing);
       } catch {
         if (token !== storePickToken) return;
-        setStorePickBusy(false);
+        settlePickBusy();
         setStoreMetadataUnavailable(true);
         setFailedStorePick(listing);
         setError(t("new.error.configLoadFailed"));
         return;
       }
       if (token !== storePickToken) return;
-      setStorePickBusy(false);
+      settlePickBusy();
       void loadConnections();
       // Focus lands on the freshly-mounted chosen-flow section: the tapped
       // store card unmounts with the discovery section, and focus must not
@@ -1905,11 +1987,15 @@ function Inner() {
         setSelectedStoreListing(hydratedListing);
         setActiveTab("store");
         void loadConnections();
+        // Only a listing that actually resolved and matches the pre-filled
+        // source settles the handoff. A missing/mismatched/failed listing must
+        // leave it unsettled: settling in a `finally` armed the auto-install
+        // precondition for exactly the store handoffs that could not be
+        // verified, which is the case that must fall back to the visible form.
+        setTcsHandoffSettled(true);
       } catch {
         setStoreMetadataUnavailable(true);
         setError(t("new.error.configLoadFailed"));
-      } finally {
-        setTcsHandoffSettled(true);
       }
     })();
   });
@@ -1918,11 +2004,14 @@ function Inner() {
     const level = compatibility()?.level;
     return level === "ready";
   };
+  // Reached only from inside submit/runFlow, so "press add first" would be a
+  // lie: either a listed item blocks the install, or the check never produced
+  // a result and the honest instruction is to try again.
   const proceedBlocker = (): string =>
     providerConnectionError() ??
     (compatibility() && !compatibilityRunnable()
       ? t("new.error.notRunnable")
-      : t("new.proceedHint"));
+      : t("new.error.checkIncomplete"));
   const canContinue = () =>
     compatibility() !== null &&
     compatibilityRunnable() &&
@@ -1945,6 +2034,13 @@ function Inner() {
    * panels can explain it — otherwise continue straight through to create + plan.
    */
   const submitInstall = async () => {
+    // A typed-but-unsaved source token used to fail validation with "save the
+    // token first", pointing at a separate button buried in 詳細設定. Saving it
+    // here is the same explicit action the user already asked for.
+    if (sourceAccessMode() === "token" && sourceToken().trim()) {
+      await saveSourceTokenConnection();
+      if (sourceTokenError()) return;
+    }
     // Ensure source connections settle before validating source access.
     await loadConnections().catch(() => []);
     const validationError = validate();
@@ -2113,6 +2209,9 @@ function Inner() {
         setStepSync("error");
       } else if (apiError?.isAppHostnameUnavailable) {
         setAppHostnameConflict(true);
+        // Reveal the identity block so the conflicting name — and the 候補名
+        // affordance that fixes it — are both visible.
+        setIdentityOpen(true);
         setStepSource("error");
         setStepSync("idle");
       } else {
@@ -2325,6 +2424,9 @@ function Inner() {
         setError(sourceFetchErrorMessage(apiError));
       } else if (apiError?.isAppHostnameUnavailable) {
         setAppHostnameConflict(true);
+        // Reveal the identity block so the conflicting name — and the 候補名
+        // affordance that fixes it — are both visible.
+        setIdentityOpen(true);
         setError(addFlowErrorMessage(apiError));
       } else if (isDuplicateServiceError(apiError)) {
         setStepPlan("idle");
@@ -2393,6 +2495,33 @@ function Inner() {
     [stepSource(), stepSync(), stepInstall(), stepPlan()].some(
       (step) => step === "running" || step === "error",
     );
+
+  // Installing is the primary state, not an interruption: the four setup steps
+  // drive one calm progress line in place of the action row. Waiting must not
+  // borrow the error palette.
+  const installSteps = (): readonly {
+    readonly state: StepState;
+    readonly label: string;
+  }[] => [
+    { state: stepSource(), label: t("new.step.register") },
+    { state: stepSync(), label: t("new.step.sync") },
+    { state: stepInstall(), label: t("new.step.create") },
+    { state: stepPlan(), label: t("new.step.plan") },
+  ];
+  const installProgressActive = () => checkingCompatibility() || busy();
+  const installProgressPercent = (): number => {
+    const steps = installSteps();
+    const done = steps.filter((step) => step.state === "done").length;
+    const running = steps.some((step) => step.state === "running") ? 0.5 : 0;
+    // Never render an empty bar: a just-started install still reads as moving.
+    return Math.max(8, Math.round(((done + running) / steps.length) * 100));
+  };
+  const installProgressLabel = (): string => {
+    const running = installSteps().find((step) => step.state === "running");
+    if (running) return running.label;
+    const next = installSteps().find((step) => step.state === "idle");
+    return next?.label ?? t("new.step.register");
+  };
 
   const gitFields = () => (
     <FormField label={t("new.git.url")}>
@@ -2606,31 +2735,134 @@ function Inner() {
       </section>
     );
   };
-  const addSummaryTitle = () =>
-    selectedServiceEntry()?.name[locale()] ||
-    name().trim() ||
-    capsuleNameFromUrl(sourceGitUrl()) ||
-    t("new.advancedImport.title");
-  const addSummaryDescription = () =>
-    selectedServiceEntry()?.description[locale()] ||
-    (activeTab() === "git"
-      ? t("new.advancedImport.subtitle")
-      : t("new.selection.subtitle"));
-  const addSummaryProvider = () =>
-    selectedServiceEntry()
-      ? providerDisplayName(selectedServiceEntry()!.provider)
-      : sourceHostLabel(sourceGitUrl());
-
+  // Derived service identity. An ordinary store install shows the resulting
+  // URL and nothing else; 変更 reveals the same display-name / subdomain inputs
+  // inline, so the install contract stays visible rather than folded away.
+  // Takes an ACCESSOR, not a value: <Show> does not re-invoke its child
+  // function when `when` merely changes identity, so capturing the entry here
+  // would freeze the pre-InstallConfig placeholder and silently drop the
+  // subdomain input.
+  const installIdentityFields = (entry: () => StoreEntry) => {
+    const identity = () => identityStoreInput(entry());
+    return (
+      <section class="av-add-identity">
+        <div class="av-add-identity-row">
+          <div class="av-add-identity-target">
+            <span class="av-add-identity-label">{t("new.identity.label")}</span>
+            <Show
+              when={installTargetHost()}
+              fallback={
+                <span class="av-add-identity-host muted">
+                  {name().trim() || defaultProjectName()}
+                </span>
+              }
+            >
+              {(host) => <span class="av-add-identity-host">{host()}</span>}
+            </Show>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            disabled={busy()}
+            aria-expanded={identityOpen()}
+            onClick={() => setIdentityOpen(!identityOpen())}
+          >
+            {identityOpen() ? t("new.identity.done") : t("new.identity.edit")}
+          </Button>
+        </div>
+        <Show when={identityOpen()}>
+          <div class="av-add-identity-fields">
+            <FormField label={t("new.name")} error={serviceNameFieldError()}>
+              <Input
+                id="new-capsule-name"
+                name="name"
+                type="text"
+                invalid={serviceNameFieldError() !== null}
+                maxlength={96}
+                value={name()}
+                disabled={busy()}
+                onInput={(e) => {
+                  setName(e.currentTarget.value);
+                  setNameTouched(true);
+                  resetCompatibility();
+                }}
+                placeholder="photo-blog"
+                autocomplete="off"
+                spellcheck={false}
+              />
+            </FormField>
+            <Show when={identity()}>
+              {(field) => (
+                <FormField
+                  label={field().label[locale()]}
+                  hint={field().helper?.[locale()]}
+                  required={field().required}
+                >
+                  <Input
+                    id={`store-input-${entry().id}-${field().name}`}
+                    name={`storeInput:${field().name}`}
+                    type="text"
+                    invalid={appHostnameConflict()}
+                    disabled={busy()}
+                    value={storeInputValue(entry(), field())}
+                    onInput={(e) =>
+                      updateStoreInputValue(
+                        entry(),
+                        field(),
+                        e.currentTarget.value,
+                      )
+                    }
+                    placeholder={field().placeholder ?? ""}
+                    autocomplete="off"
+                    spellcheck={false}
+                  />
+                </FormField>
+              )}
+            </Show>
+            <Show when={supportsManagedPublicHostnameChoice()}>
+              <FormField
+                label={t("new.hostname.mode.label")}
+                hint={t("new.hostname.mode.hint")}
+              >
+                <Select
+                  id="new-managed-public-hostname-mode"
+                  name="managedPublicHostnameMode"
+                  value={managedPublicHostnameMode()}
+                  disabled={busy()}
+                  onChange={(event) => {
+                    setManagedPublicHostnameMode(
+                      event.currentTarget.value as ManagedPublicHostnameMode,
+                    );
+                    resetCompatibility();
+                  }}
+                >
+                  <option value="scoped">
+                    {t("new.hostname.mode.scoped")}
+                  </option>
+                  <option value="vanity">
+                    {t("new.hostname.mode.vanity")}
+                  </option>
+                </Select>
+              </FormField>
+            </Show>
+          </div>
+        </Show>
+      </section>
+    );
+  };
   return (
     <>
       <Show
         when={workspaceId()}
         fallback={
-          <NoWorkspaceStartPanel
-            busy={createFirstWorkspace.busy()}
-            error={createFirstWorkspace.error()}
-            onCreate={() => void createFirstWorkspace.run()}
-          />
+          <Show when={!resolvingWorkspace()}>
+            <NoWorkspaceStartPanel
+              busy={createFirstWorkspace.busy()}
+              error={createFirstWorkspace.error()}
+              onCreate={() => void createFirstWorkspace.run()}
+            />
+          </Show>
         }
       >
         <h1 class="sr-only">{t("new.title")}</h1>
@@ -2718,11 +2950,14 @@ function Inner() {
               classList={{ "is-picking": storePickBusy() }}
               aria-busy={storePickBusy()}
             >
+              {/* The dashboard's ONLY store grid. Source controls (取得元) and
+                  sort both live here — the merged page has to carry everything
+                  the separate store tab used to offer. */}
               <StoreBrowser
                 locale={locale()}
                 onConfigure={pickStoreListing}
                 showSourceControls={true}
-                showSortControl={false}
+                showSortControl={true}
               />
             </div>
             <div class="av-manual-entry">
@@ -2790,17 +3025,27 @@ function Inner() {
                   </Show>
                 </div>
                 <div class="av-add-flow-copy">
-                  <span class="av-add-flow-kicker">
-                    {usingSelectedService()
-                      ? t("new.flow.selected")
-                      : t("new.flow.manual")}
-                  </span>
                   <h2>
                     {usingSelectedService()
                       ? (selectedServiceEntry()?.name[locale()] ??
                         sourceSummaryTitle())
                       : t("new.advancedImport.title")}
                   </h2>
+                  <p class="av-add-flow-by">
+                    <Show
+                      when={usingSelectedService()}
+                      fallback={<span>{t("new.flow.manual")}</span>}
+                    >
+                      <Show when={storePublisherLabel()}>
+                        {(publisher) => <span>{publisher()}</span>}
+                      </Show>
+                      <Show when={storeBadgeLabel()}>
+                        {(badge) => (
+                          <span class="av-add-flow-badge">{badge()}</span>
+                        )}
+                      </Show>
+                    </Show>
+                  </p>
                   <p>
                     {usingSelectedService()
                       ? (selectedServiceEntry()?.description[locale()] ??
@@ -2822,35 +3067,13 @@ function Inner() {
                   {activeInstallPrefill() ? prefilledLinkReview() : gitFields()}
                 </Show>
 
-                <Show when={supportsManagedPublicHostnameChoice()}>
-                  <FormField
-                    label={t("new.hostname.mode.label")}
-                    hint={t("new.hostname.mode.hint")}
-                  >
-                    <Select
-                      id="new-managed-public-hostname-mode"
-                      name="managedPublicHostnameMode"
-                      value={managedPublicHostnameMode()}
-                      disabled={busy()}
-                      onChange={(event) => {
-                        setManagedPublicHostnameMode(
-                          event.currentTarget
-                            .value as ManagedPublicHostnameMode,
-                        );
-                        resetCompatibility();
-                      }}
-                    >
-                      <option value="scoped">
-                        {t("new.hostname.mode.scoped")}
-                      </option>
-                      <option value="vanity">
-                        {t("new.hostname.mode.vanity")}
-                      </option>
-                    </Select>
-                  </FormField>
+                <Show when={selectedServiceEntry()}>
+                  {(entry) => installIdentityFields(entry)}
                 </Show>
 
-                <Show when={selectedServiceEntry()}>
+                <Show
+                  when={hasSetupStoreInputs() ? selectedServiceEntry() : null}
+                >
                   {(entry) => (
                     <section class="av-service-setup">
                       <div class="av-service-setup-head">
@@ -2858,29 +3081,7 @@ function Inner() {
                         <p>{t("new.storeInput.subtitle")}</p>
                       </div>
                       <div class="av-service-setup-grid">
-                        <FormField
-                          label={t("new.name")}
-                          error={serviceNameFieldError()}
-                        >
-                          <Input
-                            id="new-capsule-name"
-                            name="name"
-                            type="text"
-                            invalid={serviceNameFieldError() !== null}
-                            maxlength={96}
-                            value={name()}
-                            disabled={busy()}
-                            onInput={(e) => {
-                              setName(e.currentTarget.value);
-                              setNameTouched(true);
-                              resetCompatibility();
-                            }}
-                            placeholder="photo-blog"
-                            autocomplete="off"
-                            spellcheck={false}
-                          />
-                        </FormField>
-                        <For each={visibleStoreInputs(entry())}>
+                        <For each={setupStoreInputs(entry())}>
                           {(field) => (
                             <FormField
                               label={field.label[locale()]}
@@ -3272,34 +3473,6 @@ function Inner() {
                   </section>
                 </details>
 
-                <Show
-                  when={
-                    checkingCompatibility() ||
-                    (busy() && stepSync() === "running")
-                  }
-                >
-                  <AnnouncedStatus class="wb-status-panel">
-                    <strong>{t("new.progress.title")}</strong>
-                    <p>
-                      {sourceSyncSlow()
-                        ? t("new.progress.slow")
-                        : t("new.progress.fetching")}
-                    </p>
-                    <Show when={sourceSyncRunStatus()}>
-                      {(status) => (
-                        <details class="wb-inline-details">
-                          <summary>{t("new.progress.details")}</summary>
-                          <span class="wb-status-meta">
-                            {t("new.progress.status", {
-                              status: runStatusLabel(status()),
-                            })}
-                          </span>
-                        </details>
-                      )}
-                    </Show>
-                  </AnnouncedStatus>
-                </Show>
-
                 <Show when={!staleCheckResult() && compatibility()}>
                   {(result) => (
                     <>
@@ -3502,49 +3675,101 @@ function Inner() {
                   </div>
                 </Show>
 
-                <div class="wb-form-actions">
-                  <Button
-                    variant="primary"
-                    type="submit"
-                    busy={checkingCompatibility() || busy()}
-                    disabled={
-                      checkingCompatibility() ||
-                      busy() ||
-                      installConfigLoading() ||
-                      (compatibility() !== null && !canContinue())
-                    }
-                  >
-                    {checkingCompatibility()
-                      ? t("new.compat.checking")
-                      : busy()
-                        ? t("new.installing")
-                        : installConfigLoading()
-                          ? t("common.loading")
-                          : t("new.installCta")}
-                  </Button>
-                  <Show
-                    when={
-                      compatibility() && !checkingCompatibility() && !busy()
-                    }
-                  >
+                <Show
+                  when={!installProgressActive()}
+                  fallback={
+                    <AnnouncedStatus class="av-add-progress">
+                      <div
+                        class="av-add-progress-track"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={installProgressPercent()}
+                        aria-label={t("new.progress.title")}
+                      >
+                        <span
+                          class="av-add-progress-fill"
+                          style={{ width: `${installProgressPercent()}%` }}
+                        />
+                      </div>
+                      <p class="av-add-progress-label">
+                        {t("new.progress.title")}
+                      </p>
+                      <p class="av-add-progress-note">
+                        {sourceSyncSlow()
+                          ? t("new.progress.slow")
+                          : installProgressLabel()}
+                      </p>
+                      <Show when={sourceSyncRunStatus()}>
+                        {(status) => (
+                          <p class="av-add-progress-note">
+                            {t("new.progress.status", {
+                              status: runStatusLabel(status()),
+                            })}
+                          </p>
+                        )}
+                      </Show>
+                      <Show when={showSetupProgress()} fallback={null}>
+                        <details class="wb-disclosure av-add-technical">
+                          <summary>{t("new.progress.details")}</summary>
+                          <ol class="wb-steps">
+                            <For each={installSteps()}>
+                              {(step) => (
+                                <li class={`wb-step ${stepClass(step.state)}`}>
+                                  <span class="wb-step-icon" aria-hidden="true">
+                                    {stepIcon(step.state)}
+                                  </span>
+                                  <span class="sr-only">
+                                    {stepStateLabel(step.state)}
+                                  </span>
+                                  {step.label}
+                                </li>
+                              )}
+                            </For>
+                          </ol>
+                        </details>
+                      </Show>
+                    </AnnouncedStatus>
+                  }
+                >
+                  <div class="wb-form-actions av-add-actions">
                     <Button
-                      variant="secondary"
-                      type="button"
-                      onClick={() => void runCompatibilityCheck()}
+                      variant="primary"
+                      type="submit"
+                      disabled={
+                        installConfigLoading() ||
+                        (compatibility() !== null && !canContinue())
+                      }
                     >
-                      {t("new.compat.recheck")}
+                      {installConfigLoading()
+                        ? t("common.loading")
+                        : t("new.installCta")}
                     </Button>
+                    <Show when={compatibility()}>
+                      <Button
+                        variant="ghost"
+                        type="button"
+                        onClick={() => void runCompatibilityCheck()}
+                      >
+                        {t("new.compat.recheck")}
+                      </Button>
+                    </Show>
+                    <Show when={syncRequired()}>
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        onClick={retryAfterSyncWait}
+                      >
+                        {t("common.retry")}
+                      </Button>
+                    </Show>
+                  </div>
+                  {/* A disabled install button with no stated reason is a dead
+                      end; say what is holding it. */}
+                  <Show when={compatibility() !== null && !canContinue()}>
+                    <p class="av-add-blocked">{proceedBlocker()}</p>
                   </Show>
-                  <Show when={syncRequired() && !busy()}>
-                    <Button
-                      variant="secondary"
-                      type="button"
-                      onClick={retryAfterSyncWait}
-                    >
-                      {t("common.retry")}
-                    </Button>
-                  </Show>
-                </div>
+                </Show>
 
                 <Show when={error()}>
                   {(m) => (
@@ -3597,94 +3822,6 @@ function Inner() {
                   )}
                 </Show>
               </form>
-
-              <aside class="av-add-summary" aria-label={t("new.summary.aria")}>
-                <div class="av-add-summary-card">
-                  <div class="av-add-summary-head">
-                    <span class="av-add-summary-icon" aria-hidden="true">
-                      <Show
-                        when={selectedServiceEntry()}
-                        fallback={<Download size={22} />}
-                      >
-                        {(entry) => <StoreIcon entry={entry()} />}
-                      </Show>
-                    </span>
-                    <div>
-                      <span class="av-add-summary-kicker">
-                        {usingSelectedService()
-                          ? t("new.flow.selected")
-                          : t("new.flow.manual")}
-                      </span>
-                      <h3>{addSummaryTitle()}</h3>
-                    </div>
-                  </div>
-                  <p>{addSummaryDescription()}</p>
-                  <dl class="av-add-summary-meta">
-                    <div>
-                      <dt>
-                        {usingSelectedService()
-                          ? t("new.summary.provider")
-                          : t("new.deeplink.source")}
-                      </dt>
-                      <dd>{addSummaryProvider()}</dd>
-                    </div>
-                    <Show when={!usingSelectedService()}>
-                      <div>
-                        <dt>{t("new.deeplink.version")}</dt>
-                        <dd>{displayRef(sourceRef())}</dd>
-                      </div>
-                      <div>
-                        <dt>{t("new.deeplink.folder")}</dt>
-                        <dd>{displayModulePath(sourcePath())}</dd>
-                      </div>
-                    </Show>
-                  </dl>
-                </div>
-
-                <Show when={showSetupProgress()} fallback={null}>
-                  <details class="wb-disclosure av-add-technical">
-                    <summary>{t("new.step.technical")}</summary>
-                    <ol class="wb-steps">
-                      <li class={`wb-step ${stepClass(stepSource())}`}>
-                        <span class="wb-step-icon" aria-hidden="true">
-                          {stepIcon(stepSource())}
-                        </span>
-                        <span class="sr-only">
-                          {stepStateLabel(stepSource())}
-                        </span>
-                        {t("new.step.register")}
-                      </li>
-                      <li class={`wb-step ${stepClass(stepSync())}`}>
-                        <span class="wb-step-icon" aria-hidden="true">
-                          {stepIcon(stepSync())}
-                        </span>
-                        <span class="sr-only">
-                          {stepStateLabel(stepSync())}
-                        </span>
-                        {t("new.step.sync")}
-                      </li>
-                      <li class={`wb-step ${stepClass(stepInstall())}`}>
-                        <span class="wb-step-icon" aria-hidden="true">
-                          {stepIcon(stepInstall())}
-                        </span>
-                        <span class="sr-only">
-                          {stepStateLabel(stepInstall())}
-                        </span>
-                        {t("new.step.create")}
-                      </li>
-                      <li class={`wb-step ${stepClass(stepPlan())}`}>
-                        <span class="wb-step-icon" aria-hidden="true">
-                          {stepIcon(stepPlan())}
-                        </span>
-                        <span class="sr-only">
-                          {stepStateLabel(stepPlan())}
-                        </span>
-                        {t("new.step.plan")}
-                      </li>
-                    </ol>
-                  </details>
-                </Show>
-              </aside>
             </div>
           </section>
         </Show>

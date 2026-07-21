@@ -164,6 +164,7 @@ async function createCapsule(
     id: `caprep_${name}00001`,
     sourceId,
     sourceSnapshotId: snapshot.id,
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [],
@@ -203,10 +204,10 @@ test("real flows emit Activity events; listing is workspace-scoped and newest-fi
   const capsuleId = await createCapsule(store, app, workspaceId, "shop");
 
   // Planning emits run.plan_created.
-  const planRes = await app.request(
-    `/internal/v1/capsules/${capsuleId}/plan`,
-    { method: "POST", headers: headers() },
-  );
+  const planRes = await app.request(`/internal/v1/capsules/${capsuleId}/plan`, {
+    method: "POST",
+    headers: headers(),
+  });
   expect(planRes.status).toBe(201);
 
   const res = await listActivity(app, workspaceId);

@@ -107,14 +107,16 @@ test("git_https: missing token ⇒ pending (no probe)", async () => {
   expect(result.detail).toContain("GIT_HTTPS_TOKEN");
 });
 
-test("git_https: token present + no repoUrl ⇒ structural verified, no fetch", async () => {
+test("git_https: token present + no repoUrl ⇒ pending, no probe", async () => {
+  // Without a repositoryUrl the token has no host binding, and the minted
+  // askpass answers every host, so the connection must not reach verified.
   const result = await verifyGitHttps({
     connection: connection({ kind: "source_git_https_token" }),
     values: { GIT_HTTPS_TOKEN: "ghp_token" },
     fetch: noFetch,
   });
-  expect(result.ok).toBe(true);
-  expect(result.detail).toContain("structural verify");
+  expect(result.ok).toBe(false);
+  expect(result.detail).toContain("repositoryUrl");
 });
 
 // --- git_ssh (reserved/structural) ----------------------------------------

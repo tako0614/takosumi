@@ -1,6 +1,6 @@
 # Operations: Online DB Migrations
 
-> このページでわかること: Takosumi の durable accounts / control ledger を
+> このページでわかること: Takosumi の永続 accounts / control ledger を
 > zero-downtime に migration するための expand / backfill / contract 手順、
 > rollback 方針、release gate。D1 と Postgres は同じ論理 model の adapter です。
 

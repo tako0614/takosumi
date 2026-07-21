@@ -26,8 +26,10 @@ import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
+import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import { normalizeScopeBoundaryPolicy } from "takosumi-contract";
+import { timingSafeEqualHex } from "takosumi-contract/internal/crypto";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
@@ -385,14 +387,19 @@ export class SourcesService {
           stored.workspaceId,
           request.installConfigId,
         );
+    // Module path precedence mirrors policy precedence: an existing Capsule
+    // executes its own InstallConfig path, so a caller-supplied path must not
+    // be able to produce a Capsule-scoped report that describes a different
+    // module than the one the Capsule will actually plan.
+    const modulePath = capsuleId
+      ? context.modulePath
+      : (request.modulePath ?? context.modulePath);
     return await this.#runCompatibilityAnalysis({
       snapshot,
       workspaceId: stored.workspaceId,
       sourceId,
       ...(capsuleId ? { capsuleId } : {}),
-      ...((request.modulePath ?? context.modulePath)
-        ? { modulePath: request.modulePath ?? context.modulePath }
-        : {}),
+      ...(modulePath ? { modulePath } : {}),
       ...(context.policy ? { policy: context.policy } : {}),
     });
   }
@@ -441,6 +448,10 @@ export class SourcesService {
       sourceId: input.sourceId,
       ...(input.capsuleId ? { capsuleId: input.capsuleId } : {}),
       sourceSnapshotId: snapshot.id,
+      // Record which module the Capsule Gate actually looked at. A plan
+      // executes InstallConfig.modulePath, so without this a report for a
+      // reviewed module could gate an unreviewed sibling in the same snapshot.
+      modulePath: normalizeCompatibilityReportModulePath(input.modulePath),
       level: analysis.level,
       findings: analysis.findings,
       providers: analysis.providers,
@@ -716,7 +727,7 @@ export class SourcesService {
       return false;
     }
     const presentedHash = await sha256HexOfStringAsync(presentedSecret);
-    return timingSafeHexEquals(presentedHash, stored.hookSecretHash);
+    return timingSafeEqualHex(presentedHash, stored.hookSecretHash);
   }
 
   async #activeSyncRun(
@@ -885,13 +896,4 @@ function intersectOptionalLists(
   if (local === undefined) return ceiling;
   const allowed = new Set(ceiling);
   return local.filter((entry) => allowed.has(entry)).sort();
-}
-
-function timingSafeHexEquals(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
 }

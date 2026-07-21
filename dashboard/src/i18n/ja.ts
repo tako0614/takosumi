@@ -13,20 +13,22 @@
  */
 export const ja = {
   // --- common -------------------------------------------------------------
-  "common.loading": "読み込み中...",
+  "common.loading": "読み込み中…",
   "common.retry": "再試行",
   "common.refresh": "更新",
   "common.create": "作成",
-  "common.creating": "作成中...",
+  "common.creating": "作成中…",
   "common.cancel": "キャンセル",
   "common.save": "保存",
-  "common.saving": "保存中...",
+  "common.saving": "保存中…",
   "common.delete": "削除",
   "common.none": "なし",
   "common.unknown": "不明",
+  "common.dismiss": "閉じる",
   "common.details": "詳細",
   "common.fetchFailed": "取得に失敗しました — {message}",
-  "common.copy": "コピー",
+  "common.fetchFailedGeneric":
+    "読み込めませんでした。時間をおいてもう一度お試しください。",
   "common.ok": "OK",
   "common.justNow": "たった今",
   "common.minutesAgo": "{n}分前",
@@ -39,22 +41,17 @@ export const ja = {
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "ホーム",
   "nav.services": "サービス",
-  "nav.add": "追加",
   "nav.store": "ストア",
   "nav.settings": "設定",
   "nav.graph": "依存関係",
   "nav.resources": "リソース",
-  "store.title": "ストア",
-  "store.subtitle": "ストアから追加できるサービスを探します。",
-  "store.manualEntry":
-    "お探しのものがありませんか？ Git URL / 独自の取得元から追加",
-  "nav.runs": "アクティビティ",
+  "nav.runs": "デプロイ履歴",
   "nav.connections": "接続済みアカウント",
-  "nav.billing": "お支払い",
+  "nav.billing": "使用量",
   "nav.activity": "操作履歴",
   "nav.primary": "主な操作",
   "nav.notifications": "通知",
-  "nav.workspaceSettings": "設定",
+  "nav.workspaceSettings": "ワークスペース設定",
   "nav.account": "アカウント",
   "nav.docs": "ドキュメント",
   "nav.backToTakos": "Takos に戻る",
@@ -78,7 +75,7 @@ export const ja = {
   "settings.account.title": "アカウント",
   "settings.account.desc": "プロフィールとサインイン情報",
   "settings.billing.title": "使用量",
-  "settings.billing.desc": "使用量と operator 提供のショーバック",
+  "settings.billing.desc": "利用状況と、運営者が示す費用の内訳",
   "settings.notifications.title": "通知",
   "settings.notifications.desc": "お知らせと要対応の確認",
   "settings.billingSummary.manage": "管理する",
@@ -93,7 +90,7 @@ export const ja = {
   "settings.manage.connections": "クラウドアカウントの接続とカギの管理",
   "settings.manage.runs": "デプロイと変更の実行記録",
   "settings.manage.graph": "サービス間の依存関係の表示",
-  "settings.manage.resources": "Resource Shape、TargetPool、SpacePolicy の管理",
+  "settings.manage.resources": "サービスが作った実リソースと、その配置先の管理",
   "settings.manage.activity": "だれが何を変更したかの操作履歴",
   "settings.manage.workspace": "メンバー、キー、バックアップ、共有、ポリシー",
   "settings.manage.backups": "復元ポイントの作成と復元",
@@ -101,12 +98,11 @@ export const ja = {
 
   // --- workspace switcher -------------------------------------------------------
   "workspace.label": "ワークスペース",
-  "workspace.loadFailed": "ワークスペースの取得に失敗しました — {message}",
   "workspace.none": "ワークスペースがありません",
   "workspace.select": "ワークスペースを選択してください",
   "workspace.selectMessage":
-    "サイドバーのワークスペース選択からワークスペースを選ぶと表示されます。",
-  "workspace.loading": "ワークスペースを読み込み中...",
+    "上部のワークスペース切り替えからワークスペースを選ぶと表示されます。",
+  "workspace.loading": "ワークスペースを読み込み中…",
   "workspace.settings": "ワークスペース設定",
   "workspace.switcherAria": "ワークスペースを切り替え（現在: {name}）",
   "workspace.defaultName": "自分のワークスペース",
@@ -116,7 +112,7 @@ export const ja = {
   "workspace.start.body":
     "サービス、デプロイ履歴、設定はワークスペースにまとめて保存されます。",
   "workspace.start.create": "ワークスペースを作成",
-  "workspace.start.creating": "作成中...",
+  "workspace.start.creating": "作成中…",
   "workspace.create.nameLabel": "ワークスペース名",
   "workspace.create.namePlaceholder": "新しいワークスペース",
   "workspace.create.nameRequired": "ワークスペース名を入力してください。",
@@ -131,7 +127,6 @@ export const ja = {
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
-  "legal.langLabel": "言語",
   "legal.policiesNav": "operator のポリシー",
   "auth.signInSub": "設定済みの ID プロバイダーでサインインします。",
   "auth.singleSignOn": "シングルサインオン",
@@ -160,7 +155,7 @@ export const ja = {
   "auth.and": "と",
   "auth.privacyPolicy": "プライバシーポリシー",
   "auth.termsSuffix": "に同意したものとみなします。",
-  "auth.processing": "サインイン処理中...",
+  "auth.processing": "サインイン処理中…",
   "auth.failed": "サインインに失敗しました",
   "auth.backToSignIn": "サインインへ戻る",
   "auth.retryableCallbackFailure":
@@ -182,6 +177,15 @@ export const ja = {
   "errorBoundary.reload": "再読み込み",
 
   // --- status labels ----------------------------------------------------
+  "status.resource.pending": "準備中",
+  "status.resource.resolving": "配置先を確認中",
+  "status.resource.planning": "変更を確認中",
+  "status.resource.applying": "反映中",
+  "status.resource.ready": "利用可能",
+  "status.resource.degraded": "一部に問題あり",
+  "status.resource.failed": "失敗",
+  "status.resource.deleting": "削除中",
+  "status.resource.deleted": "削除済み",
   "status.capsule.pending": "準備中",
   "status.capsule.needsAttention": "確認が必要",
   // `active` = 直近の apply が成功し state generation が前進した状態。readiness
@@ -198,7 +202,7 @@ export const ja = {
   "status.run.failed": "失敗",
   "status.run.cancelled": "キャンセル",
   "status.run.expired": "期限切れ",
-  "status.run.ready_to_deploy": "実行待ち",
+  "status.run.ready_to_deploy": "デプロイ待ち",
   "status.policy.pass": "問題なし",
   "status.policy.warn": "警告あり",
   "status.policy.deny": "拒否",
@@ -269,6 +273,11 @@ export const ja = {
   "apps.start.titleEmpty": "最初のアプリを追加しましょう",
   "apps.start.bodyEmpty": "アプリを選ぶか、リンクを貼って追加します。",
   "apps.start.optionStore": "追加する",
+  "apps.noLaunchable.kicker": "画面のあるアプリはまだありません",
+  "apps.noLaunchable.title": "{count} 件のサービスがあります",
+  "apps.noLaunchable.body":
+    "準備中か、開く画面を持たないサービスです。一覧から状態を確認できます。",
+  "apps.noLaunchable.cta": "サービス一覧を開く",
   "apps.listIncomplete":
     "一部のアプリを読み込めませんでした。表示されていないアプリがあるかもしれません。",
 
@@ -307,6 +316,7 @@ export const ja = {
     "公開リンクを読み込めませんでした。時間をおいて開き直してください。",
   "app.surfaces.none": "このサービスには利用可能な公開リンクがありません。",
   "app.surfaces.defaultName": "画面 {n}",
+  "app.surfaces.openAria": "{name} を新しいタブで開く",
   "app.surfaces.open": "公開リンクを開く",
   "app.deps.title": "連携しているサービス",
   "app.deps.dependsOn": "このサービスが使うサービス",
@@ -323,7 +333,6 @@ export const ja = {
   "app.deploys.reviewSubtitle":
     "変更がある場合は内容を確認してからデプロイできます。",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
-  "app.deploys.restoreMenu": "その他",
   "app.deploys.restore": "この状態に戻す",
   "app.deploys.restoreDisclosure": "以前の状態に戻す",
   "app.deploys.advancedActions": "必要なときだけ使う操作",
@@ -360,7 +369,8 @@ export const ja = {
   "app.config.oidcOn": "有効",
   "app.config.updatedAt": "最終更新",
   "app.config.empty": "編集できる設定値はありません。",
-  "app.config.notReady": "設定値を読み込めませんでした。",
+  "app.config.notReady":
+    "設定値をまだ読み込めていません。ページを再読み込みしてください。",
   "app.config.advanced": "その他の設定値",
   "app.config.addVariable": "設定値を追加",
   "app.config.name": "名前",
@@ -371,9 +381,9 @@ export const ja = {
   "app.config.reset": "リセット",
   "app.config.remove": "削除",
   "app.config.undoReset": "元に戻す",
-  "app.config.resetAria": "設定値 {name} をクリア",
+  "app.config.resetAria": "{name} をリセット",
   "app.config.removeAria": "設定値 {name} を削除",
-  "app.config.undoResetAria": "設定値 {name} のリセットを取り消す",
+  "app.config.undoResetAria": "{name} のリセットを元に戻す",
   "app.config.defaultBadge": "既定値",
   "app.config.resetPendingHint": "保存すると既定値に戻ります。",
   "app.config.customName": "CUSTOM_ENV",
@@ -382,13 +392,14 @@ export const ja = {
   "app.config.errorNameDuplicate": "{name} が重複しています。",
   "app.config.errorNumber": "{name} は数値で入力してください。",
   "app.config.errorJson": "{name} は JSON として入力してください。",
-  "app.interfaces.title": "ランタイム Interface（高度な設定）",
+  "app.interfaces.title": "アプリが公開する連携面（上級者向け）",
   "app.interfaces.subtitle":
-    "通常の OpenTofu Output とは分けて、ランタイムの公開面を宣言します。変更は次のデプロイ確認に反映されます。",
+    "他のサービスやアプリから利用できる公開面を宣言します。変更は次のデプロイ確認に反映されます。",
   "app.interfaces.editorLabel": "Interface blueprint（JSON）",
   "app.interfaces.editorHint":
     "配列として入力します。各宣言には key、name、spec を明示し、動的な値は spec.inputs で literal、capsule_output、resource_output のいずれかに割り当てます。シークレットは記載しません。",
-  "app.interfaces.notReady": "Interface 宣言を読み込めませんでした。",
+  "app.interfaces.notReady":
+    "連携面の設定をまだ読み込めていません。ページを再読み込みしてください。",
   "app.interfaces.errorJson": "正しい JSON を入力してください。",
   "app.interfaces.errorArray":
     "Interface blueprint の JSON は配列で入力してください。すべて削除する場合は [] を使います。",
@@ -416,6 +427,9 @@ export const ja = {
   "app.danger.destroyTitle": "サービスを削除",
   "app.danger.destroyBody":
     "{name} を削除するには、まず削除の確認で内容を確かめ、そのうえで実行します。実行するとリソースは取り除かれ、元に戻せません。",
+  "app.danger.destroyConfirmTitle": "このサービスを削除しますか？",
+  "app.danger.destroyConfirmMessage":
+    "{name} を削除します。まだデプロイされていない場合はこの場で完全に削除され、元に戻せません。",
   "app.danger.destroyCta": "削除の確認を開く",
   "app.setupIncomplete.body":
     "追加が完了していません。変更の確認からやり直すか、削除してやり直せます。",
@@ -459,6 +473,25 @@ export const ja = {
   "run.summary.removed": "削除が完了しました。",
   "run.summary.failed": "{operation}に失敗しました。",
   "run.summary.failedHint": "下の診断とログで原因を確認できます。",
+  "controlError.stateGenerationMismatch":
+    "別の変更が先に実行されました。もう一度変更を確認してからデプロイしてください。",
+  "controlError.dependencySnapshotStale":
+    "連携しているサービスが先に更新されました。もう一度変更を確認してください。",
+  "controlError.dependencyUnavailable":
+    "連携しているサービスの値をいま取得できません。時間をおいてもう一度お試しください。",
+  "controlError.sourceChanged":
+    "取得元の内容が変わりました。もう一度変更を確認してください。",
+  "controlError.compatibilityStale":
+    "確認結果が古くなりました。もう一度確認してください。",
+  "controlError.runnerUnavailable":
+    "実行環境をいま利用できません。時間をおいてもう一度お試しください。",
+  "controlError.slotLimitReached":
+    "利用できる枠の上限に達しました。不要なサービスを削除するか、運営者にお問い合わせください。",
+  "controlError.capsuleNotFound":
+    "対象のサービスが見つかりません。削除された可能性があります。",
+  "controlError.configNotFound":
+    "このサービスの設定が見つかりません。追加し直してください。",
+  "controlError.shareRevoked": "この共有は無効になっています。",
   "runError.sourceSyncFailed":
     "サービスの内容を取得できませんでした。リンクとバージョンを確認して、もう一度お試しください。",
   "runError.sourceRefNotFound":
@@ -501,9 +534,9 @@ export const ja = {
   "run.summary.syncRunning": "内容を取得しています…",
   "run.summary.fallback": "実行の状態: {status}",
   "run.approve": "この変更を承認",
-  "run.approving": "承認中...",
+  "run.approving": "承認中…",
   "run.deploy": "デプロイを実行",
-  "run.deploying": "実行中...",
+  "run.deploying": "実行中…",
   "run.deployBlocked": "実行できません",
   "run.retryPlan": "もう一度変更を確認",
   "run.backToApp": "サービスへ戻る",
@@ -513,6 +546,16 @@ export const ja = {
   "run.destructiveConfirm": "破壊的な変更を承知のうえで実行",
   "run.stopGoBack": "やめて戻る",
   "run.cancel": "この実行をキャンセル",
+  "run.approveConfirm.restoreTitle": "バックアップから復元しますか？",
+  "run.approveConfirm.restoreMessage":
+    "{name} を選んだバックアップの内容に戻します。現在の状態は置き換わり、元に戻せません。",
+  "run.approveConfirm.restoreMessageGeneric":
+    "選んだバックアップの内容に戻します。現在の状態は置き換わり、元に戻せません。",
+  "run.approveConfirm.destroyTitle": "この削除を実行しますか？",
+  "run.approveConfirm.destroyMessage":
+    "{name} のリソースを削除します。元に戻せません。",
+  "run.approveConfirm.destroyMessageGeneric":
+    "対象のリソースを削除します。元に戻せません。",
   "run.cancelConfirm.title": "実行をキャンセルしますか？",
   "run.cancelConfirm.message": "「{name}」の{operation}を途中で終了します。",
   "run.cancelConfirm.messageGeneric": "この{operation}を途中で終了します。",
@@ -525,7 +568,7 @@ export const ja = {
   "run.cost.billingCta": "お支払いを開く",
   "run.cost.operatorHelp":
     "オーナーがワークスペースの使用量・上限を見直すと、この操作を実行できます。",
-  "run.cost.quotaCta": "使用量 / 上限を確認",
+  "run.cost.quotaCta": "使用量を確認",
   "run.changes.title": "変更される内容",
   "run.changes.titleDone": "変更された内容",
   "run.changes.noRecord": "変更内容の記録はありません",
@@ -610,7 +653,7 @@ export const ja = {
   "run.audit.detail": "記録の詳細",
 
   // --- run history --------------------------------------------------------------
-  "runList.title": "アクティビティ",
+  "runList.title": "デプロイ履歴",
   "runList.subtitle": "最近の確認・承認・デプロイを新しい順に表示します。",
   "runList.open": "詳細",
   "runList.review": "確認する",
@@ -641,14 +684,14 @@ export const ja = {
   "new.advancedImport.subtitle": "インストールリンクを貼り付けて追加します。",
   "new.selection.subtitle":
     "まず内容を確認します。デプロイは承認後に実行されます。",
-  "new.flow.selected": "選択中",
   "new.flow.manual": "手動追加",
   "new.flow.back": "選び直す",
   "new.pick.checking": "選択したサービスを確認しています…",
-  "new.summary.aria": "追加内容",
-  "new.summary.provider": "ホスト先",
-  "new.storeInput.title": "サービス設定",
-  "new.storeInput.subtitle": "表示名と、公開に必要な最小限の項目です。",
+  "new.identity.label": "公開URL",
+  "new.identity.edit": "変更",
+  "new.identity.done": "閉じる",
+  "new.storeInput.title": "初期設定",
+  "new.storeInput.subtitle": "このアプリが求めている設定です。",
   "new.storeInput.errorRequired": "{label} を入力してください。",
   "new.storeInput.errorUnsafeValue":
     "{label} の値が長すぎるか、使えない文字を含んでいます。",
@@ -753,13 +796,10 @@ export const ja = {
   "new.appHandoff.kicker": "アプリからのリクエスト",
   "new.appHandoff.app": "アプリ",
   "new.appHandoff.return": "戻り先",
-  "new.installCta": "サービスを追加",
-  "new.installing": "追加中...",
+  "new.installCta": "インストール",
   "new.compat.recheck": "もう一度確認",
-  "new.compat.checking": "準備中...",
-  "new.progress.title": "サービスを準備しています",
-  "new.progress.fetching": "内容を取得しています。このままお待ちください。",
-  "new.progress.slow": "少し時間がかかっています。完了すると次に進めます。",
+  "new.progress.title": "インストールしています",
+  "new.progress.slow": "少し時間がかかっています。このままお待ちください。",
   "new.progress.details": "詳しい進行状況",
   "new.progress.status": "状態: {status}",
   "new.compat.title": "確認結果",
@@ -788,7 +828,6 @@ export const ja = {
     "利用する接続先の固定情報が含まれています。非公開値を外したあと、追加時に固定内容を確認します。",
   "new.compat.issue.reviewRequired.message":
     "追加前に確認が必要な項目があります。",
-  "new.proceedHint": "先に「サービスを追加」を押してください。",
   "new.existing.title": "このサービスは既に追加されています",
   "new.existing.body":
     "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
@@ -802,7 +841,6 @@ export const ja = {
   "new.providers.missingBody": "接続済みアカウントを設定すると続けられます。",
   "new.providers.setupMissing": "必要な接続済みアカウントを設定",
   "new.providers.returnNote": "接続を保存すると、この追加の続きに戻ります。",
-  "new.step.technical": "詳しい進行状況",
   "new.step.register": "サービスを準備",
   "new.step.sync": "内容を取得",
   "new.step.create": "サービスを作成",
@@ -851,6 +889,8 @@ export const ja = {
     "このサービス名は予約済みですが、現在の一覧では見つかりません。サービス一覧を更新し、未完了のサービスが表示されたら削除するか、別の名前を使ってください。",
   "new.error.notRunnable":
     "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
+  "new.error.checkIncomplete":
+    "確認を完了できませんでした。もう一度お試しください。",
 
   // --- workspace settings ---------------------------------------------------------
   "workspaceSettings.title": "設定",
@@ -860,9 +900,8 @@ export const ja = {
   "workspaceSettings.tab.general": "一般",
   "workspaceSettings.tab.members": "メンバー",
   "workspaceSettings.tab.connections": "接続",
-  "workspaceSettings.tab.billing": "お支払い",
-  "workspaceSettings.tab.usageQuota": "使用量 / 上限",
-  "workspaceSettings.tab.keys": "APIキー",
+  "workspaceSettings.tab.billing": "使用量",
+  "workspaceSettings.tab.usageQuota": "使用量",
   "workspaceSettings.tab.backups": "バックアップ",
   "workspaceSettings.tab.shares": "共有値",
   "workspaceSettings.general.displayName": "表示名",
@@ -874,7 +913,7 @@ export const ja = {
   "workspaceSettings.general.saved": "設定を保存しました。",
   "workspaceSettings.general.archive": "ワークスペースをアーカイブ",
   "workspaceSettings.general.archiveConfirm":
-    "このワークスペースを通常の一覧から外します。あとから管理用APIで確認できます。",
+    "このワークスペースを通常の一覧から外します。下の「アーカイブ済み」からいつでも元に戻せます。",
   "workspaceSettings.general.archivedNamed": "「{name}」をアーカイブしました。",
   "workspaceSettings.general.archivedHint":
     "復元は下のアーカイブ済み一覧から、別のワークスペースへの移動はワークスペース切り替えからできます。",
@@ -894,14 +933,16 @@ export const ja = {
   "members.status.active": "有効",
   "members.status.invited": "招待中",
   "members.status.suspended": "停止中",
-  "members.invite.title": "メンバーを招待",
+  "members.invite.title": "メンバーを追加",
   "members.invite.subtitle":
-    "一度サインイン済みの相手のメールアドレスを入力してください。",
+    "一度サインイン済みの相手のメールアドレスを入力してください。追加するとすぐに利用できます（メールは送られません）。",
   "members.invite.email": "メールアドレス",
   "members.invite.role": "役割",
-  "members.invite.cta": "招待",
+  "members.invite.cta": "追加",
+  "members.invite.notFound":
+    "そのメールアドレスの Takosumi アカウントが見つかりません。相手に一度サインインしてもらってください。",
   "members.invite.emailRequired": "メールアドレスを入力してください。",
-  "members.invite.success": "{email} を招待しました。",
+  "members.invite.success": "{email} を追加しました。すぐに利用できます。",
   "members.col.member": "メンバー",
   "members.col.roles": "役割",
   "members.col.status": "状態",
@@ -917,6 +958,9 @@ export const ja = {
   "members.lastOwnerRemove":
     "最後のオーナーは削除できません。先に別のオーナーを指名してください。",
   "members.remove": "削除",
+  "members.removeSelf": "自分を削除",
+  "members.removeSelfConfirm":
+    "自分をこのワークスペースから削除します。以後このワークスペースにアクセスできなくなり、自分では戻せません。",
   "members.removeConfirm": "このメンバーを削除しますか？（{account}）",
   "members.empty": "このワークスペースにはまだメンバーがいません。",
   "members.viewerNote":
@@ -962,7 +1006,7 @@ export const ja = {
     "自分のカギを使う接続に Takosumi の課金はありません。課金対象になるのは Takosumi が提供するリソースだけです。",
   "conn.byok.usePreset": "インストール済み Recipe を使う",
   "conn.register": "接続を保存",
-  "conn.registering": "保存中...",
+  "conn.registering": "保存中…",
   "conn.genericEnv.providerName": "プロバイダーの取得元",
   "conn.genericEnv.providerPlaceholder": "examplecorp/example",
   "conn.genericEnv.envName": "env 名",
@@ -985,7 +1029,7 @@ export const ja = {
   "conn.empty.message":
     "自分のカギ（クラウドのトークンやキー）を入れれば、制限や承認、課金なしで、どのプロバイダーでも動かせます。",
   "conn.test": "アクセス確認",
-  "conn.testing": "確認中...",
+  "conn.testing": "確認中…",
   "conn.test.notReady":
     "このアカウントはまだ利用できません（状態: {status}）。",
   "conn.remove.confirmTitle": "接続済みアカウントを削除",
@@ -1052,6 +1096,7 @@ export const ja = {
   "shares.empty": "共有はまだありません。",
 
   // --- notifications -------------------------------------------------------------
+  "notif.markAllRead": "すべて既読にする",
   "notif.title": "通知",
   "notif.subtitle":
     "追加・デプロイ・承認・失敗など、最近の出来事を新しい順に表示します。",
@@ -1151,26 +1196,28 @@ export const ja = {
   "graph.noEdges.message":
     "サービスが他のサービスの値を使うようになると、ここにつながりが表示されます。",
 
-  // --- Resource Shape ----------------------------------------------------------
+  // --- Resources (service-created cloud resources) -----------------------------
   "resources.title": "リソース",
   "resources.subtitle":
-    "Resource Shape の望ましい状態、配置先、観測結果を管理します。",
+    "サービスが作った実リソースの望ましい状態、配置先、観測結果を管理します。",
+  "resources.define.needsTargetPool":
+    "配置先が未設定です。下の「配置先」を1つ作ると定義できます。",
   "resources.define": "リソースを定義",
-  "resources.empty": "この Resource Space にはリソースがありません。",
+  "resources.empty": "この範囲にはリソースがありません。",
   "resources.column.resource": "リソース",
   "resources.column.phase": "状態",
   "resources.column.target": "配置先",
   "resources.column.managedBy": "管理元",
-  "resources.scope.title": "Resource Space",
+  "resources.scope.title": "対象範囲",
   "resources.scope.subtitle":
-    "Dashboard セッションでは、検証済み Workspace ID が Resource Space の境界になります。",
-  "resources.scope.label": "Space ID",
-  "resources.scope.required": "Resource Space が必要です。",
-  "resources.unavailable.title": "Resource Shape API は無効です",
+    "ダッシュボードでは、検証済みのワークスペース ID がそのまま対象範囲になります。",
+  "resources.scope.label": "範囲 ID",
+  "resources.scope.required": "対象範囲が必要です。",
+  "resources.unavailable.title": "リソース管理は利用できません",
   "resources.unavailable.message":
-    "この operator では、永続 Resource Shape API と runner がまだ有効になっていません。",
+    "この環境では、リソース管理の保存先と実行環境がまだ有効になっていません。",
   "resources.inventory.title": "リソース一覧",
-  "resources.inventory.subtitle": "Space {space} の望ましい状態と観測状態",
+  "resources.inventory.subtitle": "範囲 {space} の望ましい状態と観測状態",
   "resources.editor.createTitle": "リソースを定義",
   "resources.editor.editTitle": "望ましい状態を変更",
   "resources.editor.subtitle":
@@ -1189,21 +1236,20 @@ export const ja = {
   "resources.editor.service.containerService": "Container",
   "resources.editor.service.statefulActorNamespace": "Stateful Actor Namespace",
   "resources.editor.service.schedule": "Schedule",
-  "resources.editor.service.custom": "Operator / カスタム Shape",
   "resources.editor.stable": "Stable",
   "resources.editor.stableHint":
-    "あなたが利用できる Resource Shape は同じ Stable Deploy API を使います。一覧はホストの Form availability 契約から取得します。",
+    "利用できるサービス種別は、この環境が提供しているものです。",
   "resources.editor.customHint":
     "Operator 定義の Shape は、詳細設定で kind と Spec JSON を入力します。利用可否は接続先が判定します。",
   "resources.editor.inputsStep": "必要な設定",
   "resources.editor.inputsHint":
     "認証情報や provider 固有の設定は入力しません。",
-  "resources.editor.kind": "Shape kind",
+  "resources.editor.kind": "種別",
   "resources.editor.kindHint":
     "組み込み shape のほか、operator が明示登録した token も指定できます。",
-  "resources.editor.kindInvalid": "有効な Shape kind を入力してください。",
+  "resources.editor.kindInvalid": "有効な種別を入力してください。",
   "resources.editor.formUnavailable":
-    "この Space であなたが利用できる exact Service Form がありません。",
+    "この範囲で利用できるサービス種別がありません。",
   "resources.editor.name": "サービス名",
   "resources.editor.nameRequired": "サービス名を入力してください。",
   "resources.editor.artifactSource": "不変 artifact の参照方法",
@@ -1305,19 +1351,20 @@ export const ja = {
     "空白を含まない target Resource reference を入力してください。",
   "resources.editor.project": "Project（任意）",
   "resources.editor.environment": "Environment",
-  "resources.editor.targetPool": "TargetPool",
-  "resources.editor.policy": "SpacePolicy",
+  "resources.editor.targetPool": "配置先",
+  "resources.editor.policy": "ポリシー",
   "resources.editor.spec": "Spec JSON",
   "resources.editor.specHint":
     "選択した Shape の spec だけを JSON object で入力します。認証情報は含めません。",
   "resources.editor.advanced": "詳細・operator 設定",
   "resources.editor.advancedHint":
-    "Project、Environment、TargetPool、SpacePolicy、labels は必要な場合だけ指定します。通常のデプロイでは既定値を使えます。",
+    "プロジェクト、環境、配置先、ポリシー、ラベルは必要な場合だけ指定します。通常は既定値のままで進められます。",
   "resources.editor.rawOptInHint":
     "connections、lifecycle policy、operator 拡張が必要な場合だけ raw Spec JSON に切り替えます。",
   "resources.editor.useRawSpec": "Raw Spec JSON を使う",
   "resources.editor.rawWarning":
     "これはカスタム Shape と operator 向けの入力です。schema、提供状況、価格は Deploy API が判定します。",
+  "resources.editor.backToGuided": "かんたん入力に戻す",
   "resources.editor.rawCannotGuide":
     "Raw Spec JSON に guided form が扱わない設定があります。内容を失わないよう raw mode のままにしました。",
   "resources.editor.labels": "Labels JSON",
@@ -1378,58 +1425,58 @@ export const ja = {
   "resources.preview.nativePlan": "Native plan",
   "resources.preview.risks": "注意事項",
   "resources.preview.noRisks": "追加の注意事項はありません。",
-  "resources.targetPools.title": "TargetPool",
+  "resources.targetPools.title": "配置先",
   "resources.targetPools.subtitle":
     "利用可能な Target と実装 descriptor を優先順に宣言します。",
-  "resources.targetPools.add": "TargetPool を追加",
-  "resources.targetPools.empty": "TargetPool がありません。",
+  "resources.targetPools.add": "配置先 を追加",
+  "resources.targetPools.empty": "配置先 がありません。",
   "resources.targetPools.column.name": "名前",
   "resources.targetPools.column.targets": "Target 数",
   "resources.targetPools.column.updated": "更新日時",
   "resources.targetPools.edit": "編集",
-  "resources.targetPools.editorTitle": "TargetPool 設定",
-  "resources.targetPools.name": "TargetPool 名",
-  "resources.targetPools.nameRequired": "TargetPool 名を入力してください。",
-  "resources.targetPools.spec": "TargetPool spec JSON",
+  "resources.targetPools.editorTitle": "配置先 設定",
+  "resources.targetPools.name": "配置先 名",
+  "resources.targetPools.nameRequired": "配置先 名を入力してください。",
+  "resources.targetPools.spec": "配置先 spec JSON",
   "resources.targetPools.specInvalid":
     "targets 配列を持つ有効な JSON object を入力してください。",
-  "resources.targetPools.saved": "TargetPool を保存しました。",
-  "resources.targetPools.deleteTitle": "TargetPool を削除しますか？",
+  "resources.targetPools.saved": "配置先 を保存しました。",
+  "resources.targetPools.deleteTitle": "配置先 を削除しますか？",
   "resources.targetPools.deleteMessage":
-    "TargetPool {name} を削除します。リソースから参照中の場合は拒否されます。",
-  "resources.targetPools.deleteAria": "TargetPool {name} を削除",
+    "配置先 {name} を削除します。リソースから参照中の場合は拒否されます。",
+  "resources.targetPools.deleteAria": "配置先 {name} を削除",
   "resources.config.noSecrets":
     "ここには非機密 descriptor だけを入力します。認証情報は Provider Connection に保存してください。",
-  "resources.policy.title": "SpacePolicy の詳細設定",
+  "resources.policy.title": "ポリシー の詳細設定",
   "resources.policy.subtitle": "配置制約、優先度、承認要件を JSON で設定",
-  "resources.policy.add": "SpacePolicy を追加",
-  "resources.policy.empty": "SpacePolicy がありません。",
+  "resources.policy.add": "ポリシー を追加",
+  "resources.policy.empty": "ポリシー がありません。",
   "resources.policy.column.name": "名前",
   "resources.policy.column.updated": "更新日時",
   "resources.policy.edit": "編集",
-  "resources.policy.editorTitle": "SpacePolicy 設定",
-  "resources.policy.name": "SpacePolicy 名",
-  "resources.policy.nameRequired": "SpacePolicy 名を入力してください。",
-  "resources.policy.spec": "SpacePolicy spec JSON",
+  "resources.policy.editorTitle": "ポリシー 設定",
+  "resources.policy.name": "ポリシー 名",
+  "resources.policy.nameRequired": "ポリシー 名を入力してください。",
+  "resources.policy.spec": "ポリシー spec JSON",
   "resources.policy.specInvalid": "有効な JSON object を入力してください。",
-  "resources.policy.saved": "SpacePolicy を保存しました。",
-  "resources.policy.deleteTitle": "SpacePolicy を削除しますか？",
-  "resources.policy.deleteMessage": "SpacePolicy {name} を削除します。",
-  "resources.policy.deleteAria": "SpacePolicy {name} を削除",
+  "resources.policy.saved": "ポリシー を保存しました。",
+  "resources.policy.deleteTitle": "ポリシー を削除しますか？",
+  "resources.policy.deleteMessage": "ポリシー {name} を削除します。",
+  "resources.policy.deleteAria": "ポリシー {name} を削除",
   "resources.policy.writeOnlyHint":
     "同名ポリシーの現在値を上書きします。認証情報や秘密値は含めません。",
-  "resources.detail.subtitle": "Resource Space {space} の状態と操作履歴",
+  "resources.detail.subtitle": "範囲 {space} の状態と操作履歴",
   "resources.detail.back": "リソース一覧",
   "resources.detail.observe": "観測",
   "resources.detail.refresh": "状態を更新",
   "resources.detail.actionComplete": "操作が完了しました。",
   "resources.detail.loadFailed": "リソースを読み込めませんでした",
   "resources.detail.status": "現在の状態",
-  "resources.detail.kind": "Kind",
-  "resources.detail.space": "Space",
+  "resources.detail.kind": "種別",
+  "resources.detail.space": "範囲",
   "resources.detail.managedBy": "管理元",
   "resources.detail.generation": "観測済み generation",
-  "resources.detail.resolution": "ResolutionLock",
+  "resources.detail.resolution": "配置の確定",
   "resources.detail.locked": "固定済み",
   "resources.detail.yes": "はい",
   "resources.detail.no": "いいえ",
@@ -1438,7 +1485,9 @@ export const ja = {
     "Spec は折りたたんで表示し、変更前には必ず再プレビューします。",
   "resources.detail.change": "変更する",
   "resources.detail.showSpec": "Spec JSON を表示",
-  "resources.detail.conditions": "Conditions",
+  "resources.condition.ok": "正常",
+  "resources.condition.bad": "異常",
+  "resources.detail.conditions": "状態条件",
   "resources.detail.conditionsHint": "Reconcile と drift の公開状態",
   "resources.detail.outputs": "Output keys",
   "resources.detail.outputsHint":
@@ -1471,30 +1520,36 @@ export const ja = {
   "account.theme.title": "表示",
   "account.preferences.title": "表示設定",
   "account.preferences.body": "言語と見た目を変更できます。",
+  "account.installTarget.title": "ストアからのインストール先",
+  "account.installTarget.body":
+    "ストアの「インストール」ボタンを、この端末ではこの Takosumi で開くようブラウザに登録します。登録後は、別のストアからでもここに着地します。",
+  "account.installTarget.register": "この端末を登録",
+  "account.installTarget.registered": "この端末で登録済み",
+  "account.installTarget.done":
+    "登録しました。ブラウザの確認ダイアログに応じてください。",
+  "account.installTarget.unsupported":
+    "このブラウザはこの機能に未対応です。ストア側でインスタンス URL を入力してください。",
 
   // --- billing -------------------------------------------------------------------
   "billing.subtitle":
     "プロバイダーに依存しない使用量とショーバック記録を確認します。",
-  "billing.usageQuotaTitle": "ショーバック",
+  "billing.usageQuotaTitle": "利用状況",
   "billing.usageQuotaSubtitle":
-    "この Workspace の記録モードとプロバイダー非依存な使用量を確認します。",
-  "billing.mode.disabled": "この Workspace ではショーバックは無効です。",
+    "この ワークスペース の記録モードとプロバイダー非依存な使用量を確認します。",
+  "billing.mode.disabled": "この ワークスペース ではショーバックは無効です。",
   "billing.mode.label": "モード",
   "billing.mode.showback": "使用量は記録されますが、請求はありません。",
   "billing.loadError": "使用量設定を読み込めませんでした: {message}",
   "billing.usage.title": "使用量",
   "billing.usage.subtitle":
-    "この Workspace のプロバイダー非依存な使用イベントです。",
+    "この ワークスペース のプロバイダー非依存な使用イベントです。",
   "billing.usage.load": "使用量を読み込む",
   "billing.usage.more": "さらに読み込む",
-  "billing.usage.openHint": "使用履歴を開くと最近の明細を読み込みます。",
-  "billing.usage.moreAvailable": "最近の明細を表示しています。",
-  "billing.usage.loading": "使用量を読み込み中です...",
   "billing.usage.error": "使用量を読み込めませんでした: {message}",
   "billing.usage.empty": "使用量はまだありません。",
   "billing.usage.kind": "種別",
   "billing.usage.time": "日時",
-  "billing.usage.kind.runnerMinute": "実行時間",
+  "billing.usage.kind.runner_minute": "実行時間",
   "billing.usage.kind.operation": "サービス操作",
   "billing.usage.kind.compute": "コンピュート",
   "billing.usage.kind.storage": "ストレージ",

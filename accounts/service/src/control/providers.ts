@@ -98,6 +98,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
+  type ControlSession,
   canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
@@ -165,12 +166,7 @@ export async function handleProviderConnections(
   // /api/v1/provider-connections?workspaceId=
   if (segments.length === 1 && segments[0] === "provider-connections") {
     if (method !== "GET") return methodNotAllowed("GET");
-    return await listProviderConnections(
-      operations,
-      store,
-      ctx.session.subject,
-      url,
-    );
+    return await listProviderConnections(operations, store, ctx.session, url);
   }
   return undefined;
 }
@@ -178,7 +174,7 @@ export async function handleProviderConnections(
 async function listProviderConnections(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   url: URL,
 ): Promise<Response> {
   const workspaceId = stringValue(
@@ -195,7 +191,7 @@ async function listProviderConnections(
     operations,
     store,
     workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   const providerConnections = (

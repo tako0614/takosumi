@@ -13,6 +13,27 @@ const source = readFileSync(
 );
 
 describe("RunView", () => {
+  test("the install layer shows ONE indicator: the progress bar", () => {
+    // A determinate bar already says "this is moving". The spinning ring that
+    // used to sit beside it read as a second, competing wait — and it was the
+    // only rotating element left in the add → install journey, which is now a
+    // bar-plus-label language end to end.
+    expect(source).toContain('class="av-install-bar"');
+    expect(source).toContain('class="av-install-phase"');
+    expect(source).not.toContain("av-install-spin");
+    const css = readFileSync(
+      resolve(
+        import.meta.dir,
+        "../../../../../dashboard/src/styles/app-views.css",
+      ),
+      "utf8",
+    );
+    expect(css).not.toContain(".av-install-spin");
+    // The full run console keeps its spinner: that summary line is genuinely
+    // indeterminate and has no bar of its own.
+    expect(source).toContain('class="av-run-spinner"');
+  });
+
   test("labels a succeeded review run awaiting its deploy 実行待ち, not 成功", () => {
     // The header badge must agree with the deploy CTA it renders right below: a
     // deployable succeeded plan reads 実行待ち (ready to run — the remaining

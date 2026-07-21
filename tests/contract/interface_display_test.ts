@@ -47,6 +47,32 @@ describe("resolveDisplayIcon", () => {
     expect(resolveDisplayIcon("/icons/app.svg")).toBeNull();
   });
 
+  test("rejects an icon that points back at the viewer's own origin", () => {
+    const VIEWER = "https://app.takosumi.example";
+    // `<img src>` on the dashboard sends the account session cookie, and
+    // /oauth/authorize answers a credentialed GET with a code redirect.
+    expect(
+      resolveDisplayIcon(
+        `${VIEWER}/oauth/authorize?response_type=code&client_id=toc_x&redirect_uri=https%3A%2F%2Fattacker.example%2Fcb&code_challenge=x&code_challenge_method=S256`,
+        SURFACE,
+        VIEWER,
+      ),
+    ).toBeNull();
+    expect(
+      resolveDisplayIcon(`${VIEWER}/icons/app.svg`, SURFACE, VIEWER),
+    ).toBeNull();
+    expect(
+      parseInterfaceDisplay(
+        { icon: `${VIEWER}/oauth/authorize?response_type=code` },
+        { surfaceUrl: SURFACE, viewerOrigin: VIEWER },
+      ).icon,
+    ).toBeUndefined();
+    // A third-party icon is unaffected.
+    expect(
+      resolveDisplayIcon("https://cdn.example.test/icon.svg", SURFACE, VIEWER),
+    ).toEqual({ kind: "image", url: "https://cdn.example.test/icon.svg" });
+  });
+
   test("accepts a short emoji glyph and rejects long or path-like text", () => {
     expect(resolveDisplayIcon("🐙")).toEqual({ kind: "glyph", glyph: "🐙" });
     expect(resolveDisplayIcon("icons/app.svg", SURFACE)).toBeNull();

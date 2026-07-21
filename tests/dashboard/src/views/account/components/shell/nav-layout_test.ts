@@ -56,7 +56,6 @@ describe("dashboard shell navigation layout", () => {
     // No view may re-wrap itself in the chrome (the layout owns it).
     const viewsThatMustNotWrap = [
       "views/apps/AppListView.tsx",
-      "views/store/StoreView.tsx",
       "views/new/NewAppView.tsx",
       "views/runs/RunView.tsx",
       "views/workspace/WorkspaceSettingsView.tsx",
@@ -75,10 +74,12 @@ describe("dashboard shell navigation layout", () => {
       navSource.indexOf("ManageDestination"),
     );
     expect(primary).toContain('href: "/", labelKey: "nav.home"');
-    expect(primary).toContain('href: "/store", labelKey: "nav.store"');
+    // ストア tab = the merged browse+add page. `/new` IS the store tab here, so
+    // it is deliberately in the primary nav (there is no second add tab).
+    expect(primary).toContain('href: "/new", labelKey: "nav.store"');
     expect(primary).toContain('href: "/settings", labelKey: "nav.settings"');
     // Deploy-console destinations stay OUT of the primary nav.
-    for (const banned of ['"/new"', '"/runs"', '"/account"', '"/services"']) {
+    for (const banned of ['"/runs"', '"/account"', '"/services"']) {
       expect(primary).not.toContain(`href: ${banned}`);
     }
     // Sidebar and mobile tabs render the shared model — no hard-coded hrefs.
@@ -143,18 +144,25 @@ describe("dashboard shell navigation layout", () => {
     expect(indexSource).not.toContain("CloudResourcesView");
   });
 
-  test("the store is a first-class tab (no /store → /new bounce)", () => {
-    expect(indexSource).toContain(
-      '<Route path="/store" component={StoreView} />',
-    );
-    expect(indexSource).not.toContain(
-      '<Route path="/store" component={() => <RedirectWithQuery to="/new" />} />',
-    );
-    // /new stays alive as the install-execution flow (external /install links).
+  test("browse and add are ONE page: /new is the store tab, /store only redirects", () => {
+    // The store tab renders the merged view — browsing and adding are the same
+    // page, so there is no second store surface to drift.
     expect(indexSource).toContain(
       '<Route path="/new" component={NewAppView} />',
     );
+    expect(indexSource).not.toContain("StoreView");
+    // /store survives only as a query-preserving compatibility entrance.
+    expect(indexSource).toContain('path="/store"');
+    expect(indexSource).toContain('<RedirectWithQuery to="/new" />');
     expect(indexSource).toContain('path="/install"');
+    // Exactly one StoreBrowser host in the app.
+    const storeBrowserHosts = [
+      "views/new/NewAppView.tsx",
+      "views/apps/AppListView.tsx",
+      "views/apps/ServiceListView.tsx",
+      "views/settings/SettingsView.tsx",
+    ].filter((rel) => read(rel).includes("<StoreBrowser"));
+    expect(storeBrowserHosts).toEqual(["views/new/NewAppView.tsx"]);
   });
 
   test("mobile bottom bar mirrors the sidebar trio, icon-only", () => {

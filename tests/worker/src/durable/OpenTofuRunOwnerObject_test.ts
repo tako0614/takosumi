@@ -6,6 +6,7 @@ import {
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
 } from "../../../../core/domains/deploy-control/errors.ts";
 import { OpenTofuRunOwnerObject } from "../../../../worker/src/durable/OpenTofuRunOwnerObject.ts";
+import { createVirtualAlarmClock } from "../../../helpers/lifecycle/virtual_alarm_clock.ts";
 import type { CloudflareWorkerEnv } from "../../../../worker/src/bindings.ts";
 
 test("OpenTofu run owner stores identity only and schedules an alarm", async () => {
@@ -529,6 +530,80 @@ test("OpenTofu run owner does not echo invalid request details", async () => {
   const text = await response.text();
   assert.equal(text.includes("secret-token-that-must-not-echo"), false);
   assert.equal(text.includes("invalid run owner request"), true);
+});
+
+// The two tests below are the loop-termination proof. Both inject a peer that
+// NEVER settles, which is exactly the production shape that pinned one Durable
+// Object at 1 Hz forever: a `restore` whose run row is missing (ledger read
+// keeps failing) and a run that stays `queued` because the runner pool is full.
+// The harness drives the alarm itself and fails the test if the object re-arms
+// past the cap or faster than the floor, so "it dispatches twice and the test
+// stops" is no longer expressible.
+test("OpenTofu run owner stops polling an unreadable ledger at the deadline", async () => {
+  const startedAt = Date.parse("2026-06-22T08:00:00.000Z");
+  const clock = createVirtualAlarmClock({
+    startedAt,
+    // >= 15min budget / 1s floor, so only an unbounded loop can exceed it.
+    maxDispatches: 1_000,
+    minDelayMs: 1_000,
+  });
+  let dispatches = 0;
+  const owner = new OpenTofuRunOwnerObject(
+    { storage: clock.storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: clock.now,
+      dispatch: () => {
+        dispatches += 1;
+        return Promise.resolve();
+      },
+      readRunStatus: () => Promise.reject(new Error("run row is gone")),
+    },
+  );
+
+  await start(owner, "apply");
+  const run = await clock.drain(() => owner.alarm());
+
+  assert.equal(run.dispatches > 1, true);
+  assert.equal(dispatches, run.dispatches);
+  assert.equal(Math.min(...run.delaysMs) >= 1_000, true);
+  assert.equal(Math.max(...run.delaysMs) <= 60_000, true);
+  assert.equal(clock.now() - startedAt >= 15 * 60 * 1000, true);
+  const record = await clock.storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "failed");
+  assert.equal(
+    typeof record?.lastError === "string" &&
+      record.lastError.includes("poll deadline exceeded"),
+    true,
+  );
+  assert.equal(await clock.storage.getAlarm(), null);
+});
+
+test("OpenTofu run owner stops re-dispatching a run that stays queued", async () => {
+  const startedAt = Date.parse("2026-06-22T08:00:00.000Z");
+  const clock = createVirtualAlarmClock({
+    startedAt,
+    maxDispatches: 1_000,
+    minDelayMs: 1_000,
+  });
+  const owner = new OpenTofuRunOwnerObject(
+    { storage: clock.storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: clock.now,
+      dispatch: () => Promise.resolve(),
+      readRunStatus: () => Promise.resolve("queued" as const),
+    },
+  );
+
+  await start(owner, "plan");
+  const run = await clock.drain(() => owner.alarm());
+
+  assert.equal(run.dispatches > 1, true);
+  const record = await clock.storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "failed");
+  assert.equal(record?.lastPolledStatus, undefined);
+  assert.equal(await clock.storage.getAlarm(), null);
 });
 
 async function start(

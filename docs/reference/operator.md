@@ -95,7 +95,7 @@ official billing / quota / usage / support / SLA
 
 platform worker は、有効な current Resource Shape compatibility kind がある場合に read-only の scheduled observation を既定で実行します。
 対象は現 generation の適用が完了した `Ready` Resource だけです。観測は pinned Target / implementation に対する
-`drift_check` Run であり、apply / refresh は行いません。候補選択は全 Space 横断の durable lease で重複を防ぎ、
+`drift_check` Run であり、apply / refresh は行いません。候補選択は全 Space 横断の永続 lease で重複を防ぎ、
 失敗した Resource が同じ tick の別 Resource を止めることもありません。
 
 | 変数                                             | 既定値 | 許容範囲       | 意味                                     |
@@ -129,4 +129,4 @@ OSS Operator GA の準備状況は以下です。
 | Audit              | Run、secret、state、管理者操作の証跡                                                                               |
 
 Cloud GA では追加で、公式 managed target、hosted compatibility profile、公式 billing、
-abuse 対策、support、usage metering、deprovision の証跡が必要になります。
+abuse 対策、support、usage metering、削除の証跡が必要になります。

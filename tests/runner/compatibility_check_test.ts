@@ -608,7 +608,6 @@ test("plan with mirror-required policy forces tofu init through a strict filesys
   );
   const previousPath = Bun.env.PATH;
   const previousMirror = Bun.env.OPENTOFU_PROVIDER_MIRROR;
-  const providerCache = join(root, "provider-cache");
   try {
     await mkdir(providerPath, { recursive: true });
     await mkdir(sourceRoot, { recursive: true });
@@ -725,7 +724,9 @@ esac
       join(root, "generated-root", "strict-tofu.rc.seen"),
       "utf8",
     );
-    expect(seenConfig).toContain(`plugin_cache_dir = "${providerCache}"`);
+    // A strict mirror run installs ONLY from the operator mirror: a plugin
+    // cache would let an earlier run in this container seed the binaries.
+    expect(seenConfig).not.toContain("plugin_cache_dir");
     expect(seenConfig).toContain(`path = "${mirrorRoot}"`);
     expect(seenConfig).toContain(
       '"registry.opentofu.org/cloudflare/cloudflare"',
@@ -768,7 +769,7 @@ test("provider plugin cache can be shared by runner container env", async () => 
       workspace,
       { env: {} },
       ["registry.opentofu.org/cloudflare/cloudflare"],
-      { requireMirror: true },
+      { requireMirror: false },
     );
     expect(init?.providerCacheDir).toBe(sharedCache);
     expect(init?.sharedProviderCache).toBe(true);
@@ -777,6 +778,23 @@ test("provider plugin cache can be shared by runner container env", async () => 
       "utf8",
     );
     expect(config).toContain(`plugin_cache_dir = "${sharedCache}"`);
+
+    // A strict mirror run never joins the container-wide cache: another
+    // Workspace's run could otherwise seed the provider binaries it installs.
+    const strict = await prepareStrictProviderMirrorInit(
+      testWorkspace(join(root, "strict-run")),
+      { env: {} },
+      ["registry.opentofu.org/cloudflare/cloudflare"],
+      { requireMirror: true },
+    );
+    expect(strict?.providerCacheDir).toBeUndefined();
+    expect(strict?.sharedProviderCache).toBe(false);
+    expect(
+      await readFile(
+        join(root, "strict-run", "takosumi.tofu.rc"),
+        "utf8",
+      ),
+    ).not.toContain("plugin_cache_dir");
   } finally {
     if (previousCache === undefined) {
       delete Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR;
@@ -797,7 +815,7 @@ test("shared provider plugin cache serializes tofu init per cache path", async (
       testWorkspace(join(root, "run")),
       { env: {} },
       ["registry.opentofu.org/cloudflare/cloudflare"],
-      { requireMirror: true },
+      { requireMirror: false },
     );
     expect(init?.sharedProviderCache).toBe(true);
     const events: string[] = [];

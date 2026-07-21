@@ -111,6 +111,17 @@ describe("History and notifications", () => {
       "refreshWorkspaceNotificationFeed(workspaceId)",
     );
     expect(topBarSource).toContain("workspaceNotificationFeed(workspaceId)");
+    // A badge nobody can clear stops being a signal — both the count and the
+    // "mark all read" action come from the shared module, so the bell drops
+    // the moment the page acknowledges.
+    expect(notificationsLibSource).toContain(
+      "export function acknowledgeNotifications",
+    );
+    expect(notificationsLibSource).toContain(
+      "isAcknowledged(entry, seenBefore)",
+    );
+    expect(topBarSource).toContain("onNotificationsAcknowledged(");
+    expect(notificationsSource).toContain("acknowledgeNotifications(feed())");
     expect(topBarSource).toContain("loc.pathname");
     expect(topBarSource).not.toContain("peekCapsulesCached");
     expect(topBarSource).not.toContain("refreshNotificationFeed()");

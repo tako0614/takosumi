@@ -89,11 +89,10 @@ function recordingRunner(): RecordingRunner {
         requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
         // A delete/replace change so the §25 action policy flags the plan
-        // requiresApproval -> a production plan parks waiting_approval, keeping
-        // the `approveRun` calls in the strict-staleness test valid. Approval is
-        // no longer gated by the environment alone. (Preview plans also require
-        // approval now, but the preview tests apply directly — apply is not
-        // approval-gated.)
+        // requiresApproval. Approval is not gated by the environment: every
+        // plan in this file therefore carries the approval gate that
+        // `createApplyRun` enforces, which is why each apply below is preceded
+        // by an explicit `approveRun`.
         planResourceChanges: [
           {
             address: "module.child.cloudflare_workers_script.this",
@@ -320,6 +319,7 @@ test("consumer plan injects the producer output and pins a DependencySnapshot", 
 
   // Producer applies first -> gen 1 + Output with base_domain.
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   const producerApply = await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -413,8 +413,9 @@ test("pinned consumer apply succeeds despite the producer moving", async () => {
   await seedGraph(store, "preview");
   const controller = controllerWith(store, runner);
 
-  // Producer applies -> gen 1 (preview: no approval gate).
+  // Producer applies -> gen 1.
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -429,6 +430,7 @@ test("pinned consumer apply succeeds despite the producer moving", async () => {
 
   // Producer re-applies -> gen 2.
   const producerPlan2 = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan2.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan2.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan2.planRun),
@@ -436,6 +438,7 @@ test("pinned consumer apply succeeds despite the producer moving", async () => {
 
   // The consumer's pinned apply tolerates the producer movement and succeeds,
   // applying the values frozen at plan time.
+  await controller.approveRun(consumerPlan.planRun.id);
   const consumerApply = await controller.createApplyRun({
     planRunId: consumerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
@@ -467,6 +470,7 @@ test("plan diagnostics never carry injected dependency values", async () => {
   const controller = controllerWith(store, runner);
 
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -554,6 +558,7 @@ test("cross-Workspace published_output injects the shared output and pins a snap
 
   // Producer applies (in space_producer) -> gen 1 + Output base_domain.
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -569,6 +574,7 @@ test("cross-Workspace published_output injects the shared output and pins a snap
   expect(consumerPlanJob?.variables.base_domain).toEqual("shota.example.com");
 
   // The consumer applies successfully using the shared value.
+  await controller.approveRun(consumerPlan.planRun.id);
   const consumerApply = await controller.createApplyRun({
     planRunId: consumerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
@@ -583,6 +589,7 @@ test("revoking the share between plan and apply fails the consumer apply output_
   const controller = controllerWith(store, runner);
 
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -602,6 +609,7 @@ test("revoking the share between plan and apply fails the consumer apply output_
 
   // The consumer's apply now fails: the published_output edge re-verifies the
   // share at apply, and a revoked grant is output_share_revoked.
+  await controller.approveRun(consumerPlan.planRun.id);
   const revokedApply = await controller.createApplyRun({
     planRunId: consumerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
@@ -622,6 +630,7 @@ test("pending share does not authorize cross-Workspace published_output planning
   await store.putOutputShare({ ...share!, status: "pending" });
 
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -660,6 +669,7 @@ test("sensitive published_output injects only through explicit share resolver an
   });
 
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -702,6 +712,7 @@ test("sensitive published_output injects only through explicit share resolver an
   expect(sidecar?.sealed?.ciphertext).toBeTruthy();
   expect(sidecar?.variables).not.toHaveProperty("admin_token");
   // The consumer apply still succeeds: the sealed value round-trips at verify.
+  await controller.approveRun(consumerPlan.planRun.id);
   const consumerApply = await controller.createApplyRun({
     planRunId: consumerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
@@ -733,6 +744,7 @@ test("sensitive published_output fails closed when no value sealer is configured
     sensitiveOutputResolver: staticSensitiveResolver(),
   });
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -765,6 +777,7 @@ test("tampered sealed dependency values fail the apply closed", async () => {
     dependencyValueSealer: fakeValueSealer(),
   });
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -788,6 +801,7 @@ test("tampered sealed dependency values fail the apply closed", async () => {
       },
     ],
   });
+  await controller.approveRun(consumerPlan.planRun.id);
   const tamperedApply = await controller.createApplyRun({
     planRunId: consumerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
@@ -835,6 +849,7 @@ test("tampered sealed runs_inputs sidecar fails the apply closed", async () => {
     dependencyValueSealer: fakeValueSealer(),
   });
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -860,6 +875,7 @@ test("tampered sealed runs_inputs sidecar fails the apply closed", async () => {
   // recovered or handed to the runner. (This differs from the dependency-snapshot
   // tamper above, which fails inside the runner execution and records a `failed`
   // run; the sidecar guard fires earlier, at dispatch.)
+  await controller.approveRun(consumerPlan.planRun.id);
   await expect(
     controller.createApplyRun({
       planRunId: consumerPlan.planRun.id,
@@ -898,6 +914,7 @@ test("sensitive published_output fails closed when controller has no resolver", 
   const controller = controllerWith(store, runner);
 
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -949,6 +966,7 @@ test("remote_state dispatch carries depStates from the producer's pinned StateVe
 
   // Producer applies -> records a StateVersion (gen 1) the depState points at.
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -985,6 +1003,7 @@ test("remote_state dispatch carries depStates from the producer's pinned StateVe
   // The producer can advance after the consumer plan in preview/pinned mode, but
   // the consumer apply still restores the producer state bytes pinned above.
   const producerPlan2 = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan2.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan2.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan2.planRun),
@@ -997,6 +1016,7 @@ test("remote_state dispatch carries depStates from the producer's pinned StateVe
   expect(producerState2?.stateRef).not.toEqual(producerState!.stateRef);
 
   // The consumer apply ALSO carries the depState (materialized before apply).
+  await controller.approveRun(consumerPlan.planRun.id);
   const consumerApply = await controller.createApplyRun({
     planRunId: consumerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
@@ -1087,6 +1107,7 @@ test("remote_state apply fails when the pinned StateVersion object is tampered",
   const controller = controllerWith(store, runner);
 
   const producerPlan = await controller.createCapsulePlan("cap_producer1");
+  await controller.approveRun(producerPlan.planRun.id);
   await controller.createApplyRun({
     planRunId: producerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(producerPlan.planRun),
@@ -1105,6 +1126,7 @@ test("remote_state apply fails when the pinned StateVersion object is tampered",
     ],
   });
 
+  await controller.approveRun(consumerPlan.planRun.id);
   const tamperedApply = await controller.createApplyRun({
     planRunId: consumerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),

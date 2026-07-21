@@ -33,6 +33,11 @@ import {
 import { dashboardProductName } from "../../lib/runtime-capabilities.ts";
 import type { MessageKey } from "../../i18n/index.ts";
 import { rpc } from "../account/lib/api.ts";
+import {
+  autoStartAlreadyAttempted,
+  clearAutoStartAttempt,
+  markAutoStartAttempted,
+} from "../account/lib/oauth-autostart.ts";
 import { refreshSession } from "../account/lib/session.ts";
 import LogoMark from "../account/components/brand/LogoMark.tsx";
 import { setDocumentTitle, t } from "../../i18n/index.ts";
@@ -53,32 +58,10 @@ const THEME_ICON: Record<ThemePreference, () => JSX.Element> = {
 
 // Cloud single-provider auto-start is convenient but must not become an
 // inescapable redirect loop when the OAuth round-trip fails or the session
-// cookie doesn't persist. We record one auto-start attempt per browser session
-// (survives the full-page OAuth redirect via sessionStorage) and refuse to
-// auto-start again until a real sign-in clears it.
-const OAUTH_AUTOSTART_KEY = "takosumi.oauth-autostart-attempted";
-function autoStartAlreadyAttempted(): boolean {
-  try {
-    return sessionStorage.getItem(OAUTH_AUTOSTART_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-function markAutoStartAttempted(): void {
-  try {
-    sessionStorage.setItem(OAUTH_AUTOSTART_KEY, "1");
-  } catch {
-    // sessionStorage unavailable — manual=1 on the retry link is the fallback.
-  }
-}
-function clearAutoStartAttempt(): void {
-  try {
-    sessionStorage.removeItem(OAUTH_AUTOSTART_KEY);
-  } catch {
-    // ignore
-  }
-}
-
+// cookie doesn't persist, and it must never re-sign-in someone who just signed
+// out. The breaker (one auto-start attempt per browser session, surviving the
+// full-page OAuth redirect via sessionStorage) is owned by `lib/auth.ts` so the
+// sign-out handlers can arm it too.
 export function SignInPanel() {
   const [platformContributions] = createResource(loadPlatformContributions);
   const termsContribution = () =>

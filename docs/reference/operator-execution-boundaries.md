@@ -5,7 +5,7 @@ public な製品用語ではありません。
 
 ## Owns
 
-- runner substrate
+- runner 実行基盤
 - executor registry adapter bindings
 - typed profile lifecycle and availability
 - runner image
@@ -77,19 +77,29 @@ runtime capability は Run を拒否できますが、Takosumi の recipe 一覧
 `TAKOSUMI_RUNNER_HOST_COMPOSITION` object を注入し、`TAKOSUMI_ENABLED_RUNNER_PROFILES`
 で profile id を明示的に有効化し、`TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID` で fallback を
 選べます。この寄与は host 側のコードであり、テキストの catalog、repository manifest、
-OpenTofu Output ではありません。重複した profile id と未登録の executor は fail closed
+OpenTofu Output ではありません。重複した profile id と未登録の executor は安全側に停止
 します。
 
 `executorId` は、注入された executor registry によってのみ解決される open な
 operator 定義 token です。label は説明/検索用の metadata であり、lifecycle、
 availability、scheduling、executor の選択を変えることはできません。未登録の executor は
-fail closed します。
+安全側に停止します。
 
 ## Secret Exposure
 
 `providerCredentials: "runner-only"` は、provider credential が runner の dispatch
 経路の内部でのみ解決されることを意味します。承認済みの env/file channel を通して注入され、
 `.tfvars`、run log、public API の projection、tenant workload を経由することはありません。
+`providerCredentials: "forbidden"` を選ぶと、その profile の Run では provider credential を
+一切 mint せず、credential を必要とする provider binding を解決した時点で Run が安全側に停止します。
+mint 対象は Capsule の Provider Binding 全体ではなく、その Run が宣言した
+`requiredProviders` に一致する binding だけです。Capsule は過去に使った provider の
+binding を保持し続けるため、絞り込みがないと 1 つの provider しか使わない Run にも
+無関係な provider の生きた credential が渡ります。plan/apply 間の
+`resolvedProviderBindingsDigest` fence は従来どおり解決結果全体に対して取ります。
+`redactLogs` / `blockSensitiveOutputs` は runner 境界で常に適用されるため `true` 以外を書けません。
+この policy は「宣言できるが強制されない」項目を持たない設計で、強制できない値は profile の
+activation 時に拒否されます。
 
 ## Managed-Capacity Boundary
 

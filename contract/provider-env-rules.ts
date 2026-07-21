@@ -15,7 +15,23 @@ export function isProviderEnvName(value: string): boolean {
 
 const RESERVED_PROVIDER_ENV_NAMES = new Set([
   "ALL_PROXY",
+  // `tofu init` fetches `git::`/`ssh://` module sources by spawning git, which
+  // inherits the run env. Every git knob below is a command or a config
+  // override that git executes through a shell, so a declared provider
+  // variable named after one of them would be arbitrary code execution in the
+  // credentialed plan/apply phase.
+  "GIT_ALLOW_PROTOCOL",
   "GIT_ASKPASS",
+  "GIT_EDITOR",
+  "GIT_EXTERNAL_DIFF",
+  "GIT_PAGER",
+  "GIT_PROXY_COMMAND",
+  "GIT_SEQUENCE_EDITOR",
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
+  "GIT_SSL_CAINFO",
+  "GIT_SSL_NO_VERIFY",
+  "GIT_TERMINAL_PROMPT",
   "HOME",
   "HOSTNAME",
   "HTTP_PROXY",
@@ -25,6 +41,7 @@ const RESERVED_PROVIDER_ENV_NAMES = new Set([
   "OLDPWD",
   "PATH",
   "PWD",
+  "REQUESTS_CA_BUNDLE",
   "SHELL",
   "SSH_AUTH_SOCK",
   "SSL_CERT_DIR",
@@ -38,6 +55,11 @@ const RESERVED_PROVIDER_ENV_NAMES = new Set([
 const RESERVED_PROVIDER_ENV_PREFIXES = [
   "BUN_",
   "DYLD_",
+  // GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n and
+  // GIT_CONFIG_GLOBAL|SYSTEM|NOSYSTEM inject arbitrary git config into the
+  // spawned git, which reaches core.sshCommand / core.fsmonitor /
+  // url.*.insteadOf — the same execution surface as GIT_SSH_COMMAND.
+  "GIT_CONFIG",
   "LD_",
   "NODE_",
   "NPM_",

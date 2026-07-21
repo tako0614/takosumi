@@ -448,8 +448,14 @@ function oauthAccessTokenHasScope(
   return required === "read" && scopes.has("capsules:read");
 }
 
+/**
+ * True when a credential may act on `workspaceId`. Workspace-unrestricted
+ * credentials (browser sessions, account-wide PATs) pass; a restricted one
+ * passes only for its own Workspace. This is a fence, not an authorization —
+ * membership is still checked separately.
+ */
 export function bearerWorkspaceAllows(
-  auth: AccountsBearerSubject,
+  auth: Pick<AccountsBearerSubject, "workspaceId">,
   workspaceId: string,
 ): boolean {
   return !auth.workspaceId || auth.workspaceId === workspaceId;

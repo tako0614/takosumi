@@ -6,6 +6,7 @@ import type {
   OpenTofuRunner,
 } from "../../core/domains/deploy-control/mod.ts";
 import type { JsonValue } from "takosumi-contract/reference/compat";
+import { redactString } from "takosumi-contract/redaction";
 import type { CloudflareWorkerEnv } from "./bindings.ts";
 
 const RELEASE_ACTIVATOR_KIND = "takosumi.operator.release-activation@v2";
@@ -376,8 +377,15 @@ async function releaseActivatorFailureDetail(
   }
 }
 
+/**
+ * The activator is an operator-side process that runs operator argv and puts
+ * its stdout/stderr tails into failure bodies and result messages. Everything
+ * crossing this boundary lands in workspace-visible Run activity, so it goes
+ * through the shared secret heuristics before flattening — the operator's own
+ * value substitution only covers env it already knows about.
+ */
 function redactFailureDetail(value: string): string {
-  return value
+  return redactString(value)
     .replace(/[\0\r\n\t]+/gu, " ")
     .replace(/\s{2,}/gu, " ")
     .trim();
@@ -397,7 +405,7 @@ function parseReleaseActivatorResponse(
     status,
     ...(stringField(value, "kind") ? { kind: stringField(value, "kind") } : {}),
     ...(stringField(value, "message")
-      ? { message: stringField(value, "message") }
+      ? { message: redactFailureDetail(stringField(value, "message")!) }
       : {}),
     ...(stringField(value, "healthUrl")
       ? { healthUrl: stringField(value, "healthUrl") }

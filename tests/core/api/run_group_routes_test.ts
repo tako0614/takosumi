@@ -166,6 +166,7 @@ async function seedCapsule(
     sourceId,
     capsuleId,
     sourceSnapshotId: snapshot.id,
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [],

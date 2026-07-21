@@ -1,3 +1,5 @@
+import { constantTimeEqualsBytes } from "./constant_time.ts";
+
 const MANAGED_PROVIDER_RUN_TOKEN_PREFIX = "takmpt_";
 const MANAGED_PROVIDER_RUN_TOKEN_FORMAT = "v1";
 const MANAGED_PROVIDER_RUN_TOKEN_TYPE = "takosumi-provider-run";
@@ -155,7 +157,7 @@ export async function verifyManagedProviderRunToken(
     input.secret,
     new TextEncoder().encode(signed),
   );
-  if (!constantTimeEqual(presentedSignature, expectedSignature)) {
+  if (!constantTimeEqualsBytes(presentedSignature, expectedSignature)) {
     return { ok: false, reason: "invalid_signature" };
   }
 
@@ -336,15 +338,6 @@ async function hmacSha256Bytes(
   return new Uint8Array(
     await crypto.subtle.sign("HMAC", key, bytesToArrayBuffer(value)),
   );
-}
-
-function constantTimeEqual(left: Uint8Array, right: Uint8Array): boolean {
-  const length = Math.max(left.byteLength, right.byteLength);
-  let diff = left.byteLength ^ right.byteLength;
-  for (let index = 0; index < length; index += 1) {
-    diff |= (left[index] ?? 0) ^ (right[index] ?? 0);
-  }
-  return diff === 0;
 }
 
 function base64UrlEncodeBytes(bytes: Uint8Array): string {

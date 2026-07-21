@@ -125,9 +125,7 @@ describe("setMemberRole", () => {
     const req = captured();
     expect(req.method).toBe("PATCH");
     // Both the workspaceId and target subject are URL-encoded path segments.
-    expect(req.url).toBe(
-      "/api/v1/workspaces/workspace_1/members/acct%20alice",
-    );
+    expect(req.url).toBe("/api/v1/workspaces/workspace_1/members/acct%20alice");
     expect(req.body).toEqual({ roles: "admin" });
   });
 
@@ -154,9 +152,7 @@ describe("removeMember", () => {
     const got = await removeMember("workspace_1", "acct alice");
     const req = captured();
     expect(req.method).toBe("DELETE");
-    expect(req.url).toBe(
-      "/api/v1/workspaces/workspace_1/members/acct%20alice",
-    );
+    expect(req.url).toBe("/api/v1/workspaces/workspace_1/members/acct%20alice");
     expect(req.body).toBeUndefined();
     // The backend soft-removes (status: suspended) and returns the projection.
     expect(got.status).toBe("suspended");

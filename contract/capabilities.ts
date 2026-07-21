@@ -4,6 +4,16 @@ export const TAKOSUMI_API_VERSION = "takosumi.dev/v1alpha1" as const;
 export const TAKOSUMI_INTERFACES_CAPABILITY = "takosumi.interfaces.v1" as const;
 
 export interface TakosumiWellKnownDocument {
+  /** Identifies this document as the Takosumi native-client discovery target. */
+  readonly product: "takosumi";
+  readonly name: "Takosumi";
+  /** Exact operator-registered public PKCE client; absent when mobile is disabled. */
+  readonly oidcClientId?: string;
+  readonly auth: {
+    readonly oidc: true;
+    readonly password: false;
+  };
+  readonly apiBaseUrl: string;
   readonly api_versions: readonly [typeof TAKOSUMI_API_VERSION];
   readonly features: TakosumiWellKnownFeatures;
   readonly endpoints: TakosumiWellKnownEndpoints;
@@ -163,6 +173,8 @@ export interface TakosumiOperatorCapabilities extends Readonly<
 
 export interface CreateTakosumiDiscoveryOptions {
   readonly origin: string;
+  /** Exact public PKCE client id advertised to the standalone mobile app. */
+  readonly mobileOidcClientId?: string;
   readonly resources?: Partial<TakosumiResourceCapabilities>;
   readonly adapters?: Partial<TakosumiAdapterCapabilities>;
   readonly identity?: Partial<TakosumiIdentityCapabilities>;
@@ -182,7 +194,16 @@ export function createTakosumiWellKnownDocument(
   options: CreateTakosumiDiscoveryOptions,
 ): TakosumiWellKnownDocument {
   const capabilities = createTakosumiProductCapabilities(options);
+  const origin = trimTrailingSlash(options.origin);
+  const mobileOidcClientId = normalizeMobileOidcClientId(
+    options.mobileOidcClientId,
+  );
   return {
+    product: "takosumi",
+    name: "Takosumi",
+    ...(mobileOidcClientId ? { oidcClientId: mobileOidcClientId } : {}),
+    auth: { oidc: true, password: false },
+    apiBaseUrl: `${origin}/api/v1`,
     api_versions: [TAKOSUMI_API_VERSION],
     features: {
       stacks: capabilities.resources.Stack,
@@ -199,14 +220,27 @@ export function createTakosumiWellKnownDocument(
       interfaces: options.interfacesEnabled ?? false,
     },
     endpoints: {
-      api: `${trimTrailingSlash(options.origin)}/api`,
-      capabilities: `${trimTrailingSlash(options.origin)}/v1/capabilities`,
-      oidc_issuer: trimTrailingSlash(options.origin),
+      api: `${origin}/api`,
+      capabilities: `${origin}/v1/capabilities`,
+      oidc_issuer: origin,
       ...(options.endpoints && Object.keys(options.endpoints).length > 0
         ? { extensions: { ...options.endpoints } }
         : {}),
     },
   };
+}
+
+function normalizeMobileOidcClientId(
+  value: string | undefined,
+): string | undefined {
+  const clientId = value?.trim();
+  if (!clientId) return undefined;
+  if (clientId.length > 256 || /[\u0000-\u001f\u007f]/u.test(clientId)) {
+    throw new TypeError(
+      "mobileOidcClientId must be a bounded printable string",
+    );
+  }
+  return clientId;
 }
 
 export function createTakosumiProductCapabilities(

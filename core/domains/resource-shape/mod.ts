@@ -5,6 +5,7 @@
 // of storage-driver imports.
 
 export * from "./records.ts";
+export * from "./lookup.ts";
 export * from "./stores.ts";
 export * from "./adapter.ts";
 export * from "./plugin_adapter.ts";

@@ -51,6 +51,15 @@ bash scripts/up.sh                                        # or --profile postgre
 
 env var を shell profile (`~/.bashrc` 等) に export しておけば毎回設定不要。
 
+`INGRESS_IP` が loopback 以外のとき、 up.sh は Caddy の 80/443 を `0.0.0.0` に publish する
+(single-machine default は `127.0.0.1` binding)。 bind を自分で決めたい場合は
+`TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_HOST_BIND` を明示 export する。
+
+LAN 公開時の注意: LAN に出るのは account plane ごと (= session bearer は本物の OpenTofu
+runner に届く) なので、 dev fixture session の bearer は固定値ではなく up.sh が起動ごとに
+生成する (`caddy/runtime/dev-session-id` に書き出し、 起動ログにも表示)。 smoke script は
+そこから読むので通常は何も設定しなくてよい。
+
 ### 3. dev マシン自身の DNS resolver を更新
 
 dev マシンで `https://hello.takosumi.test/` を踏む場合の DNS resolver を CoreDNS に向け直す:

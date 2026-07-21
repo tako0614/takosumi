@@ -2211,6 +2211,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       sourceId: normalized.sourceId ?? null,
       capsuleId: normalized.capsuleId ?? null,
       sourceSnapshotId: normalized.sourceSnapshotId,
+      modulePath: normalized.modulePath ?? null,
       level: normalized.level,
       findingsJson: normalized.findings,
       providersJson: normalized.providers,
@@ -2239,6 +2240,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       sourceId: compatibilityReportSourceId(row.sourceId),
       ...(row.capsuleId ? { capsuleId: row.capsuleId } : {}),
       sourceSnapshotId: row.sourceSnapshotId,
+      ...(row.modulePath ? { modulePath: row.modulePath } : {}),
       level: normalizeStoredCapsuleCompatibilityLevel(row.level),
       findings: parseJson(
         row.findingsJson,
@@ -2307,6 +2309,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       sourceId: compatibilityReportSourceId(row.sourceId),
       ...(row.capsuleId ? { capsuleId: row.capsuleId } : {}),
       sourceSnapshotId: row.sourceSnapshotId,
+      ...(row.modulePath ? { modulePath: row.modulePath } : {}),
       level: normalizeStoredCapsuleCompatibilityLevel(row.level),
       findings: parseJson(
         row.findingsJson,

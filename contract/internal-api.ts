@@ -1,10 +1,4 @@
-import type {
-  ActorContext,
-  GroupCreateRequest,
-  GroupSummary,
-  SpaceCreateRequest,
-  SpaceSummary,
-} from "./types.ts";
+import type { ActorContext } from "./types.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 import {
   assertNoCanonicalDelimiter,
@@ -28,24 +22,6 @@ export {
 };
 
 export type TakosumiActorContext = ActorContext;
-
-export interface InternalSpaceRequest extends Partial<SpaceCreateRequest> {
-  actor: TakosumiActorContext;
-  workspaceId?: string;
-}
-
-export interface InternalSpaceSummary
-  extends Pick<SpaceSummary, "id" | "name"> {
-  actorAccountId: string;
-}
-
-export interface InternalGroupRequest extends Partial<GroupCreateRequest> {
-  actor: TakosumiActorContext;
-  workspaceId: string;
-  groupId?: string;
-}
-
-export type InternalGroupSummary = GroupSummary;
 
 export const TAKOSUMI_INTERNAL_PATHS = {
   workspaces: `${INTERNAL_V1_PREFIX}/workspaces`,

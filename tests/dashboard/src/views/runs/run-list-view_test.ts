@@ -50,9 +50,16 @@ describe("RunsListView", () => {
     expect(source).not.toContain("Math.random");
   });
 
-  test("keeps run history copy user-facing", () => {
-    expect(en["runList.title"]).toBe("Activity");
-    expect(ja["runList.title"]).toBe("アクティビティ");
+  test("keeps run history copy user-facing and distinct from the audit log", () => {
+    // 「アクティビティ」 sat next to 「操作履歴」 in the manage catalog — two
+    // near-synonyms for two different logs, with no way to guess which one
+    // holds a failed deploy. This page is specifically about deploys.
+    expect(en["runList.title"]).toBe("Deploy history");
+    expect(ja["runList.title"]).toBe("デプロイ履歴");
+    expect(en["nav.runs"]).toBe(en["runList.title"]);
+    expect(ja["nav.runs"]).toBe(ja["runList.title"]);
+    expect(ja["nav.runs"]).not.toBe(ja["nav.activity"]);
+    expect(en["nav.runs"]).not.toBe(en["nav.activity"]);
     expect(en["runList.subtitle"]).not.toContain("ledger");
     expect(ja["runList.subtitle"]).not.toContain("台帳");
   });

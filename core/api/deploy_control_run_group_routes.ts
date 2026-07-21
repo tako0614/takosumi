@@ -10,6 +10,8 @@ import {
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
+  ensureOperationPermission,
+  ensureRunnerProfileSelectionPermission,
   ensureWorkspacePermission,
   RUN_GROUP_ID_PATTERN,
   WORKSPACE_ID_PATTERN,
@@ -92,6 +94,13 @@ export function mountDeployControlRunGroupRoutes(
       param: { param: "workspaceId", pattern: WORKSPACE_ID_PATTERN },
       handler: async ({ c, principal, id }) => {
         ensureWorkspacePermission(principal, id);
+        // RunGroupsService never sees the caller, so the fan-out creates an
+        // update plan per stale Capsule on each Capsule's own resolved runner
+        // profile. Authorize the write here: the operation the members derive,
+        // and — since the route offers no profile choice — deny any principal
+        // whose runner-profile scope is restricted.
+        ensureOperationPermission(principal, "update");
+        ensureRunnerProfileSelectionPermission(principal, undefined);
         const result = await runGroupsService!.createWorkspaceUpdate(id);
         return c.json(result, 201);
       },

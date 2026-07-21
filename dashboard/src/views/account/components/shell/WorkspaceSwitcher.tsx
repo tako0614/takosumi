@@ -11,7 +11,7 @@
  * The picker is a lightweight popover menu (not a native `<select>`): one tap
  * on the current-workspace chip opens a list with the active one checked.
  */
-import { A } from "@solidjs/router";
+import { A, useLocation, useNavigate } from "@solidjs/router";
 import { Check, ChevronsUpDown, Plus, Settings } from "lucide-solid";
 import {
   createEffect,
@@ -28,7 +28,6 @@ import {
   slugifyWorkspaceHandle,
 } from "takosumi-contract";
 import {
-  type ControlApiError,
   createWorkspace,
   DASHBOARD_WORKSPACE_LIST_LIMIT,
   listWorkspacePage,
@@ -49,6 +48,7 @@ import { friendlyError } from "../../../../lib/error-copy.ts";
 import { createAction } from "../../lib/action.tsx";
 import { t } from "../../../../i18n/index.ts";
 import { Button } from "../../../../components/ui/index.ts";
+import { fetchFailedMessage } from "../../../../lib/error-copy.ts";
 
 interface Props {
   readonly compact?: boolean;
@@ -217,9 +217,27 @@ export default function WorkspaceSwitcher(props: Props = {}) {
     if (cursor) void loadSwitcherPage(cursor);
   };
 
+  const navigate = useNavigate();
+  const location = useLocation();
+  /**
+   * Routes whose content belongs to a specific entity, not to the selected
+   * workspace. They read their scope from the entity id in the URL, so after a
+   * switch they keep rendering — and keep accepting destructive actions on —
+   * the PREVIOUS workspace's object while the chrome says otherwise.
+   */
+  const ENTITY_SCOPED_ROUTES: readonly (readonly [RegExp, string])[] = [
+    [/^\/services\/[^/]+/u, "/services"],
+    [/^\/runs\/[^/]+/u, "/runs"],
+    [/^\/run-groups\/[^/]+/u, "/runs"],
+    [/^\/resources\/[^/]+\/[^/]+/u, "/resources"],
+  ];
   const choose = (id: string) => {
     setCurrentWorkspaceId(id);
     setSwitcherOpen(false);
+    const match = ENTITY_SCOPED_ROUTES.find(([pattern]) =>
+      pattern.test(location.pathname),
+    );
+    if (match) navigate(match[1]);
     // Closing removes the focused menu item from the DOM; without this,
     // focus falls back to <body>.
     triggerRef?.focus();
@@ -378,11 +396,23 @@ export default function WorkspaceSwitcher(props: Props = {}) {
             // On error, suppress the "no workspaces" text — the error line
             // below states what actually happened instead of implying empty.
             <Show when={!workspaces.error}>
-              <span class="topbar-workspace-empty">
-                {workspaces.loading
-                  ? t("workspace.loading")
-                  : t("workspace.none")}
-              </span>
+              <Show
+                when={!workspaces.loading}
+                fallback={
+                  <span class="topbar-workspace-empty">
+                    {t("workspace.loading")}
+                  </span>
+                }
+              >
+                {/* Zero workspaces is the one state where creating one is
+                    mandatory — and it used to be the one state where the
+                    create control was unreachable (it lives inside a popover
+                    that only opens when a workspace already exists). */}
+                <a href="/" class="topbar-workspace-empty-cta">
+                  <Plus size={15} aria-hidden="true" />
+                  <span>{t("workspace.start.create")}</span>
+                </a>
+              </Show>
             </Show>
           }
         >
@@ -625,11 +655,7 @@ export default function WorkspaceSwitcher(props: Props = {}) {
 
       <Show when={workspaces.error}>
         <div class="topbar-workspace-error" role="alert">
-          <span>
-            {t("workspace.loadFailed", {
-              message: (workspaces.error as ControlApiError).message,
-            })}
-          </span>
+          <span>{fetchFailedMessage(workspaces.error, t)}</span>
           <button
             type="button"
             class="topbar-workspace-retry"

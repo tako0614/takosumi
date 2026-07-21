@@ -153,7 +153,15 @@ export function parseUiSurfaceInterface(
 
   const url = safeRuntimeUrl(resolvedInputs.url);
   if (!url) return null;
-  const display = parseInterfaceDisplay(document.display, { surfaceUrl: url });
+  // The dashboard origin is where the tile <img> is fetched from, and that
+  // fetch carries the account session cookie. Hand it to the parser so a
+  // Capsule can never point its icon at our own credentialed endpoints.
+  const display = parseInterfaceDisplay(document.display, {
+    surfaceUrl: url,
+    ...(typeof location === "undefined"
+      ? {}
+      : { viewerOrigin: location.origin }),
+  });
   const icon =
     display.icon === undefined
       ? undefined

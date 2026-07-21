@@ -128,6 +128,32 @@ native app. If either the configured Accounts issuer or mobile client id is
 missing, `/.well-known/takos` deliberately returns 503 and the app cannot start
 authorization.
 
+The standalone Takosumi app uses a separate public client because its token is
+authorized for the Takosumi Accounts/control API rather than the Takos product
+API. Add it to the same `TAKOSUMI_ACCOUNTS_CLIENTS` array:
+
+```json
+{
+  "clientId": "takosumi-mobile-operator-example",
+  "redirectUris": ["takosumi://oauth/callback"],
+  "tokenEndpointAuthMethod": "none",
+  "allowedScopes": [
+    "openid",
+    "profile",
+    "offline_access",
+    "capsules:read",
+    "capsules:write"
+  ]
+}
+```
+
+Then set the non-secret selector
+`TAKOSUMI_MOBILE_OIDC_CLIENT_ID=takosumi-mobile-operator-example`. The platform
+publishes that exact id from `/.well-known/takosumi` only after validating the
+public-client method, exact `takosumi://oauth/callback` redirect, and required
+scopes. Omitting the selector leaves mobile discovery disabled without changing
+browser dashboard sign-in.
+
 ## Secret handling
 
 Keep one approved vault as authority. Push values through the deployment

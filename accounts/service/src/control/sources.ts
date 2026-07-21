@@ -99,6 +99,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
+  type ControlSession,
   canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
@@ -167,15 +168,10 @@ export async function handleSources(
   if (segments[0] === "sources") {
     if (segments.length === 1) {
       if (method === "GET") {
-        return await listSources(operations, store, ctx.session.subject, url);
+        return await listSources(operations, store, ctx.session, url);
       }
       if (method === "POST") {
-        return await createSource(
-          request,
-          operations,
-          store,
-          ctx.session.subject,
-        );
+        return await createSource(request, operations, store, ctx.session);
       }
       return methodNotAllowed("GET, POST");
     }
@@ -201,7 +197,7 @@ export async function handleSources(
         operations,
         store,
         workspaceId,
-        subject: ctx.session.subject,
+        session: ctx.session,
       });
       if (!auth.ok) return auth.response;
       const response = await operations.createSourceSync(sourceId, {
@@ -225,7 +221,7 @@ export async function handleSources(
         operations,
         store,
         workspaceId,
-        subject: ctx.session.subject,
+        session: ctx.session,
       });
       if (!auth.ok) return auth.response;
       const page = parseControlPageParams(url);
@@ -295,7 +291,7 @@ export async function handleSources(
         operations,
         store,
         workspaceId,
-        subject: ctx.session.subject,
+        session: ctx.session,
       });
       if (!auth.ok) return auth.response;
       const body = await readOptionalJsonObject(request);
@@ -343,7 +339,7 @@ export async function handleSources(
         operations,
         store,
         workspaceId,
-        subject: ctx.session.subject,
+        session: ctx.session,
       });
       if (!auth.ok) return auth.response;
       if (method === "GET") {
@@ -397,7 +393,7 @@ export async function handleCompatibilityReports(
       operations,
       store,
       workspaceId: reportWorkspaceId,
-      subject: ctx.session.subject,
+      session: ctx.session,
     });
     if (!auth.ok) return auth.response;
     return json(await publicCompatibilityReportResponse(operations, response));
@@ -408,7 +404,7 @@ export async function handleCompatibilityReports(
 async function listSources(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   url: URL,
 ): Promise<Response> {
   const workspaceId = stringValue(
@@ -425,7 +421,7 @@ async function listSources(
     operations,
     store,
     workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   const page = parseControlPageParams(url);
@@ -441,7 +437,7 @@ async function createSource(
   request: Request,
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -459,7 +455,7 @@ async function createSource(
     operations,
     store,
     workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   const authConnectionId = stringValue(body.authConnectionId);
@@ -475,7 +471,7 @@ async function createSource(
           operations,
           store,
           workspaceId: connectionWorkspaceId,
-          subject: sessionSubject,
+          session,
         });
         if (!connectionAuth.ok) return connectionAuth.response;
       }

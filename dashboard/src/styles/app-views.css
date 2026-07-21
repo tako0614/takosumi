@@ -685,14 +685,6 @@
   background: var(--tg-success);
   color: #06210d;
 }
-.av-install-spin {
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--tg-accent);
-  border-right-color: transparent;
-  border-radius: 50%;
-  animation: tg-spin 0.7s linear infinite;
-}
 .av-install-head-text {
   min-width: 0;
 }
@@ -716,9 +708,6 @@
   transition: width var(--tg-dur-slow) var(--tg-ease);
 }
 .av-install-phase {
-  display: flex;
-  align-items: center;
-  gap: var(--tg-s-2);
   margin: 0;
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
@@ -1034,158 +1023,192 @@
   max-width: 560px;
 }
 
+/* Add flow — an app-store install page, not a deploy console: one centred
+   column with the app identity on top and a single action (or its progress)
+   at the bottom. There is no right-rail summary; the header IS the app card
+   at every width. */
 .av-add-flow {
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--tg-s-4);
-  width: min(100%, 960px);
-  margin: 0 auto 0 0;
+  width: min(100%, 620px);
+  margin: 0 auto;
   align-items: start;
 }
 .av-add-flow-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--tg-s-3);
   min-width: 0;
-  padding: var(--tg-s-4);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-elev);
-  box-shadow: var(--tg-shadow-xs);
 }
 .av-add-flow-selected {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--tg-s-3);
-  align-items: start;
+  gap: var(--tg-s-4);
+  align-items: center;
+  min-width: 0;
 }
 .av-add-flow-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 48px;
-  height: 48px;
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-sm);
+  width: 72px;
+  height: 72px;
+  border-radius: 20px;
   background: var(--tg-bg-subtle);
-  color: var(--tg-accent-text);
+  color: var(--tg-fg-muted);
+  overflow: hidden;
   flex: none;
 }
 .av-add-flow-copy {
   display: grid;
-  gap: var(--tg-s-1);
+  gap: 4px;
   min-width: 0;
-}
-.av-add-flow-kicker {
-  color: var(--tg-accent-text);
-  font-size: var(--tg-fs-xs);
-  font-weight: 750;
 }
 .av-add-flow-copy h2 {
   margin: 0;
-  font-size: var(--tg-fs-lg);
-  letter-spacing: 0;
+  font-size: var(--tg-fs-xl);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
   overflow-wrap: anywhere;
 }
-.av-add-flow-copy p {
+/* Publisher + store badge, the app-listing byline. */
+.av-add-flow-by {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--tg-s-2);
   margin: 0;
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
-  line-height: 1.5;
+}
+.av-add-flow-by:empty {
+  display: none;
+}
+.av-add-flow-badge {
+  padding: 1px 8px;
+  border: 1px solid var(--tg-line-strong);
+  border-radius: 999px;
+  font-size: var(--tg-fs-xs);
+  font-weight: 700;
+}
+.av-add-flow-copy > p:last-child {
+  margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  line-height: 1.55;
 }
 .av-add-flow-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
-  align-items: start;
-  gap: var(--tg-s-4);
+  grid-template-columns: 1fr;
   min-width: 0;
 }
 .av-add-form {
   width: 100%;
+  display: grid;
+  gap: var(--tg-s-4);
+  align-content: start;
 }
-.av-add-summary {
-  position: sticky;
-  top: calc(var(--tg-topbar-h) + var(--tg-s-4));
+
+/* Derived service identity. An ordinary install shows the resulting URL and
+   nothing else; 変更 reveals the same inputs inline. */
+.av-add-identity {
   display: grid;
   gap: var(--tg-s-3);
+  padding: var(--tg-s-3) var(--tg-s-3) var(--tg-s-3) var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-elev);
+}
+.av-add-identity-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--tg-s-3);
+}
+.av-add-identity-target {
+  display: grid;
+  gap: 2px;
   min-width: 0;
 }
-.av-add-summary-card {
+.av-add-identity-label {
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-xs);
+  font-weight: 700;
+}
+.av-add-identity-host {
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.av-add-identity-fields {
   display: grid;
   gap: var(--tg-s-3);
+  padding-top: var(--tg-s-3);
+  border-top: 1px solid var(--tg-line);
+}
+
+/* Installing is a normal state, so it uses the neutral surface — never the
+   danger tint the old wb-status-panel borrowed. */
+.av-add-progress {
+  display: grid;
+  gap: var(--tg-s-2);
   padding: var(--tg-s-4);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
   background: var(--tg-bg-elev);
-  box-shadow: var(--tg-shadow-xs);
 }
-.av-add-summary-head {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: var(--tg-s-3);
-  min-width: 0;
+.av-add-progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--tg-bg-hi);
+  overflow: hidden;
 }
-.av-add-summary-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 46px;
-  height: 46px;
-  border-radius: 14px;
-  background: linear-gradient(145deg, #2563eb, #0f766e);
-  color: #fff;
-  box-shadow:
-    0 1px 1px rgba(0, 0, 0, 0.16),
-    0 10px 18px -10px currentcolor,
-    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+.av-add-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--tg-accent);
+  transition: width 320ms ease;
 }
-.av-add-summary-kicker {
-  color: var(--tg-accent-text);
-  font-size: var(--tg-fs-xs);
-  font-weight: 750;
+@media (prefers-reduced-motion: reduce) {
+  .av-add-progress-fill {
+    transition: none;
+  }
 }
-.av-add-summary h3 {
-  margin: 2px 0 0;
-  font-size: var(--tg-fs-lg);
-  line-height: 1.25;
-  letter-spacing: 0;
-  overflow-wrap: anywhere;
+.av-add-progress-label {
+  margin: 0;
+  font-weight: 650;
 }
-.av-add-summary p {
+.av-add-progress-note {
   margin: 0;
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
-  line-height: 1.45;
 }
-.av-add-summary-meta {
-  display: grid;
+.av-add-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--tg-s-2);
-  margin: 0;
 }
-.av-add-summary-meta div {
-  min-width: 0;
-  padding: var(--tg-s-2);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-subtle);
-}
-.av-add-summary-meta dt {
+/* Why the install button is disabled. Advisory, not an error alert. */
+.av-add-blocked {
+  margin: var(--tg-s-2) 0 0;
   color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-xs);
-  font-weight: 700;
+  font-size: var(--tg-fs-sm);
+  line-height: 1.5;
 }
-.av-add-summary-meta dd {
-  margin: 2px 0 0;
-  font-weight: 700;
-  overflow-wrap: anywhere;
-}
+/* Step-by-step detail lives inside the progress panel, collapsed: reassurance
+   for whoever wants it, never the primary reading. */
 .av-add-technical {
-  padding: var(--tg-s-3);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-lg);
-  background: var(--tg-bg-elev);
+  margin-top: var(--tg-s-1);
+  padding: var(--tg-s-2) 0 0;
+  border-top: 1px solid var(--tg-line);
+}
+.av-add-technical > summary {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
 }
 .av-link-review {
   display: grid;
@@ -1345,36 +1368,15 @@ button.tg-tab {
     grid-template-columns: 1fr;
   }
 
-  .av-add-flow-header {
-    display: grid;
-    grid-template-columns: 1fr;
-    padding: var(--tg-s-3);
-  }
-
-  .av-add-flow-selected {
-    align-items: center;
-  }
-
   .av-add-flow-icon {
-    width: 40px;
-    height: 40px;
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
   }
 
-  .av-add-flow-header .tg-btn {
-    width: 100%;
-  }
-
-  .av-add-flow-body {
+  .av-add-identity-row {
     grid-template-columns: 1fr;
-  }
-
-  .av-add-summary {
-    position: static;
-    order: -1;
-  }
-
-  .av-add-summary-card {
-    display: none;
+    align-items: start;
   }
 
   .wb-install-form.wb-install-source-form.av-add-form > .wb-form-actions {
@@ -1385,11 +1387,7 @@ button.tg-tab {
   }
 
   .av-add-flow-copy h2 {
-    font-size: var(--tg-fs-base);
-  }
-
-  .av-add-flow-copy p {
-    font-size: var(--tg-fs-xs);
+    font-size: var(--tg-fs-lg);
   }
 
   .av-link-review {
@@ -1418,8 +1416,12 @@ button.tg-tab {
     grid-template-columns: auto minmax(0, 1fr) auto auto;
   }
 
+  /* Reflow, don't drop: "touched today or six months ago?" was unanswerable
+     on a phone without opening every service. */
   .av-service-row-time {
-    display: none;
+    display: block;
+    grid-column: 2;
+    font-size: var(--tg-fs-xs);
   }
 }
 
@@ -1662,15 +1664,6 @@ button.tg-tab {
   color: color-mix(in srgb, var(--tg-fg) 25%, var(--tg-fg-muted));
   overflow-wrap: anywhere;
 }
-/* The chosen listing renders in both the top banner and the right-rail 追加内容
-   card. Wide screens keep the rail summary and hide the top duplicate; the
-   narrow layout (≤720px) hides the rail card instead (see the mobile block). */
-@media (min-width: 721px) {
-  .av-add-flow-header {
-    display: none;
-  }
-}
-
 /* ===== Touch targets (WCAG 2.5.8 / M37) =====
  * Coarse-pointer only: raise the sub-40px view-local controls to a comfortable
  * tap size. Desktop (fine pointer) keeps the compact sizing. */

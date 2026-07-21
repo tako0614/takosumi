@@ -5,7 +5,7 @@ export default function Footer() {
     <footer class="site">
       <div class="container">
         <div style="display: flex; align-items: center; gap: 12px;">
-          <Wordmark variant="geometric" size={20} />
+          <Wordmark size={20} />
           <span class="copy">© Takosumi contributors — AGPL-3.0</span>
         </div>
         <nav aria-label="Footer">

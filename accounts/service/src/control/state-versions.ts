@@ -159,7 +159,7 @@ export async function handleStateVersions(
       operations,
       store,
       workspaceId: stateVersion.workspaceId,
-      subject: ctx.session.subject,
+      session: ctx.session,
     });
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {

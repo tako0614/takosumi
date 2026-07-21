@@ -15,6 +15,7 @@ import { AlertTriangle, Bell } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import type { ActivityEvent, ControlApiError } from "../../lib/control-api.ts";
 import {
+  acknowledgeNotifications,
   attentionCount,
   type FeedEntry,
   isFailureAction,
@@ -28,11 +29,14 @@ import { operationLabel } from "../../lib/labels.ts";
 import { relativeTime, t } from "../../i18n/index.ts";
 import {
   Badge,
+  Button,
   EmptyState,
   PageHeader,
   Skeleton,
   Toast,
 } from "../../components/ui/index.ts";
+import { fetchFailedMessage } from "../../lib/error-copy.ts";
+import { activityEventHref } from "../../lib/activity-links.ts";
 
 function metaString(
   metadata: Record<string, unknown>,
@@ -211,32 +215,7 @@ function describeEvent(
   }
 }
 
-/** Links an activity event to the page for its target. Connection events
- * (incl. the failure-styled `connection.revoked`) and output-share events
- * (incl. the `output_share.created` approval request) would otherwise be
- * dead-end 要対応 rows, so they route to the pages that act on them: the
- * connections list and the workspace shares tab. */
-function eventHref(event: ActivityEvent): string | undefined {
-  if (event.targetType === "run") {
-    return `/runs/${encodeURIComponent(event.targetId)}`;
-  }
-  if (event.targetType === "run_group") {
-    return `/run-groups/${encodeURIComponent(event.targetId)}`;
-  }
-  if (event.targetType === "capsule") {
-    return `/services/${encodeURIComponent(event.targetId)}`;
-  }
-  if (event.targetType === "connection") {
-    return "/connections";
-  }
-  if (event.targetType === "output_share") {
-    return "/advanced/workspace/shares";
-  }
-  return undefined;
-}
-
-/** Capsule id an event is about: run events record it as metadata; service
- * events carry it as the target. */
+const eventHref = activityEventHref;
 function NotificationRow(props: {
   entry: FeedEntry;
   serviceName?: string | undefined;
@@ -332,6 +311,18 @@ export default function NotificationsView() {
             <PageHeader
               title={t("notif.title")}
               subtitle={t("notif.subtitle")}
+              actions={
+                <Show when={failureCount() > 0}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={() => acknowledgeNotifications(feed())}
+                  >
+                    {t("notif.markAllRead")}
+                  </Button>
+                </Show>
+              }
             />
 
             <Switch>
@@ -340,7 +331,17 @@ export default function NotificationsView() {
               </Match>
               <Match when={error()}>
                 <Toast tone="error">
-                  {t("common.fetchFailed", { message: error()?.message ?? "" })}
+                  {fetchFailedMessage(error(), t)}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={() =>
+                      void refreshNotificationFeed({ force: true })
+                    }
+                  >
+                    {t("common.retry")}
+                  </Button>
                 </Toast>
               </Match>
               <Match when={feed()}>

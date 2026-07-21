@@ -223,6 +223,11 @@ creation may choose its allocation mode. The default is `scoped`:
 }
 ```
 
+Reservation only runs for a Capsule config that carries the `public_endpoint`
+projection, so a per-install patch (`PATCH /api/v1/capsule-configs/:id`) cannot
+remove it — dropping it would leave the endpoint variables in place while
+skipping reservation and its ownership check.
+
 `scoped` produces
 `<workspace-handle>-<label>.<managed-base-domain>` without consuming a vanity
 slot. `vanity` keeps `<label>.<managed-base-domain>` and consumes one finite
@@ -577,7 +582,10 @@ Operator/Cloud may add Enterprise SSO, SCIM, and commercial audit export through
 that generic seam.
 
 A Capsule-projected public OIDC client can declare required scopes through
-`installExperience.oidc_client.scopes`; `openid` is mandatory. Accounts access
+`installExperience.oidc_client.scopes`; `openid` is mandatory. A client id is
+owned by its Capsule: an install whose `clientIdVariable` names another
+Capsule's client id fails with `failed_precondition`
+(`oidc_client_id_already_bound`). Accounts access
 tokens carrying `capsules:read` or `capsules:write` are bound to one Workspace,
 and canonical Capsule-ledger reads and Interface invocations validate both scope and Workspace. Clients
 allowed to request `offline_access` may receive refresh tokens. Consumers must

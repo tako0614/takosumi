@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isReservedProviderEnvName } from "../contract/provider-env-rules.ts";
-import { isSecretKey } from "../contract/redaction.ts";
+import { isSecretKey, redactString } from "../contract/redaction.ts";
 
 const RELEASE_ACTIVATION_KIND = "takosumi.operator.release-activation@v2";
 const DEFAULT_WORK_ROOT = defaultReleaseWorkRoot();
@@ -527,7 +527,12 @@ function redactReleaseCommandOutput(
     if (secret.length < 6) continue;
     out = out.replace(new RegExp(escapeRegExp(secret), "g"), "[REDACTED]");
   }
-  return out;
+  // Substituting the operator env we injected only covers credentials we
+  // already hold. This tail is returned to the control plane and reaches
+  // workspace-visible Run activity, so anything else the command printed —
+  // tokens from a file, another tool's output, a DSN — goes through the shared
+  // secret heuristics too.
+  return redactString(out);
 }
 
 function escapeRegExp(value: string): string {

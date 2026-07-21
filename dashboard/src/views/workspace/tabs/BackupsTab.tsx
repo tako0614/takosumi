@@ -9,7 +9,6 @@ import { Archive, RotateCcw } from "lucide-solid";
 import {
   type BackupRecord,
   createBackupRestore,
-  type ControlApiError,
   createWorkspaceBackup,
   listWorkspaceBackups,
 } from "../../../lib/control-api.ts";
@@ -24,6 +23,7 @@ import {
   EmptyState,
   Spinner,
 } from "../../../components/ui/index.ts";
+import { fetchFailedMessage } from "../../../lib/error-copy.ts";
 
 export default function BackupsTab(props: { readonly workspaceId: string }) {
   const navigate = useNavigate();
@@ -91,19 +91,27 @@ export default function BackupsTab(props: { readonly workspaceId: string }) {
       header: t("backups.col.actions"),
       align: "right",
       cell: (backup) => (
-        <Button
-          variant="secondary"
-          size="sm"
-          icon={<RotateCcw size={14} />}
-          busy={restore.busy() && restoringId() === backup.id}
-          disabled={restore.busy() || !backup.restoreTarget}
-          onClick={() => void restore.run(backup)}
-          title={
-            backup.restoreTarget ? undefined : t("backups.restoreUnavailable")
+        <Show
+          when={backup.restoreTarget}
+          fallback={
+            // Not a hoverable hint: this row can NEVER be restored, and the
+            // fix lives on another screen.
+            <a class="wc-disabled-reason-link" href="/services">
+              {t("backups.restoreUnavailable")}
+            </a>
           }
         >
-          {t("backups.restore")}
-        </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<RotateCcw size={14} />}
+            busy={restore.busy() && restoringId() === backup.id}
+            disabled={restore.busy()}
+            onClick={() => void restore.run(backup)}
+          >
+            {t("backups.restore")}
+          </Button>
+        </Show>
       ),
     },
   ];
@@ -145,9 +153,7 @@ export default function BackupsTab(props: { readonly workspaceId: string }) {
             <EmptyState
               icon={<Archive size={28} />}
               title={t("workspaceSettings.tab.backups")}
-              message={t("common.fetchFailed", {
-                message: (backups.error as ControlApiError).message,
-              })}
+              message={fetchFailedMessage(backups.error, t)}
               action={
                 <Button
                   variant="secondary"

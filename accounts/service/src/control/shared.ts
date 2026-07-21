@@ -39,6 +39,7 @@ import type {
 } from "takosumi-contract/capsules";
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import { consoleErrorRedacted } from "../redacted-log.ts";
+import { bearerWorkspaceAllows } from "../account-session.ts";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
   InstallConfig,
@@ -111,6 +112,18 @@ import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/dep
  * Per-resource dispatch context: the inputs each `control/<resource>.ts`
  * handler receives from `handleControlRoute`'s dispatch table.
  */
+/**
+ * The authenticated control-plane caller. `workspaceId` is the credential's own
+ * Workspace restriction (a workspace-scoped PAT, or an OAuth access token bound
+ * to its Capsule's Workspace at issuance) and is absent for unrestricted
+ * account sessions. It is carried alongside the subject so every Workspace
+ * authorization decision can see it — see {@link canAccessWorkspace}.
+ */
+export interface ControlSession {
+  readonly subject: string;
+  readonly workspaceId?: string;
+}
+
 export interface ControlDispatchContext {
   readonly request: Request;
   readonly url: URL;
@@ -118,7 +131,7 @@ export interface ControlDispatchContext {
   readonly store: AccountsStore;
   readonly issuer?: string;
   readonly managedPublicBaseDomain?: string;
-  readonly session: { readonly subject: string };
+  readonly session: ControlSession;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -487,7 +500,7 @@ type WorkspaceAccessResult =
 export async function requireWorkspaceAccess(input: {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
-  readonly subject: string;
+  readonly session: ControlSession;
   readonly workspaceId: string;
   readonly workspace?: Workspace;
 }): Promise<WorkspaceAccessResult> {
@@ -495,7 +508,7 @@ export async function requireWorkspaceAccess(input: {
     await canAccessWorkspace({
       operations: input.operations,
       store: input.store,
-      subject: input.subject,
+      session: input.session,
       workspaceId: input.workspaceId,
       ...(input.workspace ? { workspace: input.workspace } : {}),
     })
@@ -515,14 +528,21 @@ export async function requireWorkspaceAccess(input: {
 export async function canAccessWorkspace(input: {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
-  readonly subject: string;
+  readonly session: ControlSession;
   readonly workspaceId: string;
   readonly workspace?: Workspace;
 }): Promise<boolean> {
+  // A Workspace-restricted credential must not reach any other Workspace, even
+  // one whose membership its subject legitimately holds: a PAT scoped to
+  // workspace A, or an OAuth token issued for a Capsule in A, would otherwise
+  // read B's Capsules, Runs, and Outputs through every id-addressed route.
+  // The restriction is applied before membership, never instead of it.
+  if (!bearerWorkspaceAllows(input.session, input.workspaceId)) return false;
+
   const workspace =
     input.workspace ??
     (await input.operations.workspaces.getWorkspace(input.workspaceId));
-  if (workspace.ownerUserId === input.subject) return true;
+  if (workspace.ownerUserId === input.session.subject) return true;
 
   if (input.operations.members.getMember) {
     const member = await input.operations.members.getMember(
@@ -534,7 +554,7 @@ export async function canAccessWorkspace(input: {
   const members = await input.operations.members.listMembers(input.workspaceId);
   return members.some(
     (member) =>
-      member.accountId === input.subject && member.status === "active",
+      member.accountId === input.session.subject && member.status === "active",
   );
 }
 

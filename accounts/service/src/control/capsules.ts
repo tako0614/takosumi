@@ -106,6 +106,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
+  type ControlSession,
   canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorResponse,
@@ -166,7 +167,7 @@ export async function handleCapsules(
       operations,
       store,
       workspaceId: capsule.workspaceId,
-      subject: ctx.session.subject,
+      session: ctx.session,
     });
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
@@ -284,7 +285,7 @@ export async function handleCapsules(
         request,
         operations,
         store,
-        ctx.session.subject,
+        ctx.session,
         capsuleId,
       );
     }
@@ -568,7 +569,7 @@ async function createDependency(
   request: Request,
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   consumerCapsuleId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
@@ -584,7 +585,7 @@ async function createDependency(
     operations,
     store,
     workspaceId: consumer.workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!consumerAuth.ok) return consumerAuth.response;
   const producer = await operations.capsules.getCapsule(producerCapsuleId);
@@ -592,7 +593,7 @@ async function createDependency(
     operations,
     store,
     workspaceId: producer.workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!producerAuth.ok) return producerAuth.response;
   const dependency = await operations.dependencies.createDependency({

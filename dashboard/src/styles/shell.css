@@ -43,7 +43,10 @@
    screen) keeps the previous page on screen while the URL + header title already
    change; this bar + a gentle fade make it read as "loading", not "frozen". */
 .route-progress {
-  position: absolute;
+  /* `absolute` pinned it to the top of the document-height column, so any
+     navigation started below the fold rendered the bar off-screen and left a
+     50%-dimmed page as the only (ambiguous) signal. */
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
@@ -386,6 +389,24 @@
   min-width: 0;
   color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-sm);
+}
+/* Zero-workspace state: an actionable control, not dead text. */
+.topbar-workspace-empty-cta {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  padding: 0 var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+  font-size: var(--tg-fs-sm);
+  font-weight: 650;
+  text-decoration: none;
+}
+.topbar-workspace-empty-cta:hover {
+  border-color: var(--tg-line-strong);
 }
 .topbar-workspace-error {
   display: flex;

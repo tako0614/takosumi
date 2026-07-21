@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   createPlatformCompatibilityAuthority,
   handlePlatformExtensionRouteRequest,
+  platformCompatibilityRouteWriterAllowed,
   type PlatformCompatibilityReadyResourceEvidence,
 } from "../../../deploy/platform/worker.ts";
 import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
@@ -206,6 +207,47 @@ test("compatibility profiles never fall back to the generic raw fetch handler", 
 
   expect(response.status).toBe(503);
   expect(rawFetchCalled).toBe(false);
+});
+
+test("route Interface writes require more than viewer membership", () => {
+  // Membership alone admits every active member. Route Interfaces are the
+  // routing surface for a Workspace's public traffic, so an explicitly
+  // read-only member must not be able to ensure/update/retire one.
+  const member = (
+    accountId: string,
+    roles: readonly ("owner" | "admin" | "member" | "viewer")[],
+    status: "active" | "invited" | "suspended" = "active",
+  ) => ({
+    id: `wsm_${accountId}`,
+    workspaceId: "space_example",
+    accountId,
+    roles,
+    status,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const members = [
+    member("account_owner", ["owner"]),
+    member("account_editor", ["member"]),
+    member("account_viewer", ["viewer"]),
+    member("account_legacy", []),
+    member("account_suspended", ["admin"], "suspended"),
+  ];
+  const allowed = (accountId: string) =>
+    platformCompatibilityRouteWriterAllowed(
+      "account_owner",
+      members,
+      accountId,
+    );
+
+  expect(allowed("account_owner")).toBe(true);
+  expect(allowed("account_editor")).toBe(true);
+  // Legacy rows written before the role grant keep their historical authority.
+  expect(allowed("account_legacy")).toBe(true);
+
+  expect(allowed("account_viewer")).toBe(false);
+  expect(allowed("account_suspended")).toBe(false);
+  expect(allowed("account_stranger")).toBe(false);
 });
 
 function routeInterfaceStub() {

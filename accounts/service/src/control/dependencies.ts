@@ -97,6 +97,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
+  type ControlSession,
   canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
@@ -151,12 +152,7 @@ export async function handleDependencies(
   if (segments[0] === "dependencies" && segments.length === 2) {
     const dependencyId = decodeURIComponent(segments[1] ?? "");
     if (method !== "DELETE") return methodNotAllowed("DELETE");
-    return await deleteDependency(
-      operations,
-      store,
-      ctx.session.subject,
-      dependencyId,
-    );
+    return await deleteDependency(operations, store, ctx.session, dependencyId);
   }
   return undefined;
 }
@@ -164,7 +160,7 @@ export async function handleDependencies(
 async function deleteDependency(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   dependencyId: string,
 ): Promise<Response> {
   const existing = await operations.dependencies.getDependency(dependencyId);
@@ -173,7 +169,7 @@ async function deleteDependency(
     operations,
     store,
     workspaceId: existing.workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   await operations.dependencies.deleteDependency(dependencyId);

@@ -11,11 +11,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/compose-helpers.sh"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 APP_HOST="${TAKOSUMI_LOCAL_APP_HOST:-app.takosumi.test}"
 OAUTH_HOST="${TAKOSUMI_LOCAL_OAUTH_MOCK_HOST:-oauth-mock.test}"
 BASE="https://${APP_HOST}"
-LOCAL_DEV_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
+LOCAL_DEV_SESSION_ID="$(local_substrate_dev_session_id)"
 LOCAL_DEV_SUBJECT="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SUBJECT:-tsub_takosumi_accounts_local}"
 COOKIE_JARS=()
 CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:127.0.0.1" --resolve "${OAUTH_HOST}:443:127.0.0.1")

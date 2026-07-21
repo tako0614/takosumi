@@ -568,6 +568,34 @@ test("local-substrate ingress blocks private and retired control seams", () => {
   expect(caddyfile).toContain("respond @private 404");
 });
 
+test("local-substrate ships no fixed dev session bearer and keeps ingress loopback by default", () => {
+  // The dev fixture session is a real bearer that reaches the local OpenTofu
+  // runner, and the ingress can be published on a LAN, so neither the credential
+  // nor the exposure may be a checked-in default.
+  for (const env of [cloudEnv, serviceWorkerEnv]) {
+    expect(env).not.toContain("TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID=sess_");
+  }
+  expect(compose).toContain(
+    "TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID: ${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-}",
+  );
+  expect(upScript).toContain(
+    'TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID="sess_$(openssl rand -hex 24)"',
+  );
+  expect(upScript).toContain("export TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID");
+  expect(composeHelpers).toContain("local_substrate_dev_session_id()");
+  for (const script of [smoke, tenantIsolation]) {
+    expect(script).not.toContain("sess_local_substrate");
+    expect(script).toContain("$(local_substrate_dev_session_id)");
+  }
+  expect(ingressCompose).toContain(
+    '"${TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_HOST_BIND:-127.0.0.1}:443:443"',
+  );
+  expect(ingressCompose).not.toContain('- "443:443"');
+  expect(upScript).toContain(
+    'export TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_HOST_BIND="$INGRESS_HOST_BIND"',
+  );
+});
+
 test("local-substrate cloud env uses explicit upstream descriptors and a real dev session", () => {
   expect(cloudEnv).toContain("TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS=");
   expect(cloudEnv).toContain(
@@ -580,7 +608,7 @@ test("local-substrate cloud env uses explicit upstream descriptors and a real de
   expect(cloudEnv).not.toContain("TAKOSUMI_ACCOUNTS_LOCAL_DEV_SPACE_ID");
   expect(cloudEnv).not.toContain("TAKOSUMI_ACCOUNTS_LOCAL_DEV_ACCOUNT_ID");
   expect(cloudEnv).toContain(
-    "TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID=sess_local_substrate",
+    "TAKOSUMI_ACCOUNTS_LOCAL_DEV_SUBJECT=tsub_takosumi_accounts_local",
   );
   expect(cloudEnv).toContain(
     "TAKOSUMI_ACCOUNTS_PASSKEY_RP_ID=app.takosumi.test",

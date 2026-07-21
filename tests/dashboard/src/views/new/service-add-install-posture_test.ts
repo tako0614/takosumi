@@ -17,7 +17,8 @@ const newAppViewSource = readFileSync(
 
 describe("service add install posture", () => {
   test("routes service creation through the app-like install flow", () => {
-    expect(serviceListViewSource).toContain('href="/store"');
+    expect(serviceListViewSource).toContain('href="/new"');
+    expect(serviceListViewSource).not.toContain('href="/store"');
     expect(serviceListViewSource).not.toContain('href="/services/new"');
     expect(serviceListViewSource).not.toContain("createService(");
     expect(newAppViewSource).toContain("StoreBrowser");

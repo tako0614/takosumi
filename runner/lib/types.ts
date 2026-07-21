@@ -186,9 +186,26 @@ export interface PreparedProviderCredentialFiles {
   readonly cleanup: () => Promise<void>;
 }
 
+/**
+ * Result of walking a generated root for declared provider sources.
+ * `complete` is false when the walk stopped early, so callers can tell a clean
+ * tree apart from one the runner failed to read in full.
+ */
+export interface TerraformTreeProviderScan {
+  readonly providers: readonly string[];
+  readonly complete: boolean;
+}
+
 export interface RunnerPolicyBeforeInitOptions {
   readonly allowProviderFreeGeneratedRoot?: boolean;
   readonly requiredProviders?: readonly string[];
+  /**
+   * `false` when the generated-root provider scan hit its file/byte caps or
+   * could not read a config file. A partial scan cannot be told apart from a
+   * clean one, so a profile that carries a provider policy must refuse to init
+   * rather than enforce the policy against an incomplete provider list.
+   */
+  readonly providerScanComplete?: boolean;
 }
 
 export interface StrictProviderMirrorAttestation {
@@ -199,7 +216,8 @@ export interface StrictProviderMirrorAttestation {
 
 export interface ProviderMirrorInit {
   readonly commandContext: CommandContext;
-  readonly providerCacheDir: string;
+  /** Absent in strict mirror mode: those runs install only from the mirror. */
+  readonly providerCacheDir?: string;
   readonly sharedProviderCache: boolean;
   readonly attestation?: StrictProviderMirrorAttestation;
 }

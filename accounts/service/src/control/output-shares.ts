@@ -97,6 +97,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
+  type ControlSession,
   canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
@@ -152,20 +153,10 @@ export async function handleOutputShares(
   if (segments[0] === "output-shares") {
     if (segments.length === 1) {
       if (method === "GET") {
-        return await listOutputShares(
-          operations,
-          store,
-          ctx.session.subject,
-          url,
-        );
+        return await listOutputShares(operations, store, ctx.session, url);
       }
       if (method === "POST") {
-        return await createOutputShare(
-          request,
-          operations,
-          store,
-          ctx.session.subject,
-        );
+        return await createOutputShare(request, operations, store, ctx.session);
       }
       return methodNotAllowed("GET, POST");
     }
@@ -177,18 +168,13 @@ export async function handleOutputShares(
         return await approveOutputShare(
           operations,
           store,
-          ctx.session.subject,
+          ctx.session,
           shareId,
         );
       }
       if (action === "revoke") {
         if (method !== "POST") return methodNotAllowed("POST");
-        return await revokeOutputShare(
-          operations,
-          store,
-          ctx.session.subject,
-          shareId,
-        );
+        return await revokeOutputShare(operations, store, ctx.session, shareId);
       }
     }
   }
@@ -198,7 +184,7 @@ export async function handleOutputShares(
 async function listOutputShares(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   url: URL,
 ): Promise<Response> {
   const workspaceId = stringValue(
@@ -215,7 +201,7 @@ async function listOutputShares(
     operations,
     store,
     workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   const page = parseControlPageParams(url);
@@ -235,7 +221,7 @@ async function createOutputShare(
   request: Request,
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -255,7 +241,7 @@ async function createOutputShare(
     operations,
     store,
     workspaceId: fromWorkspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   const producer = await operations.capsules.getCapsule(producerCapsuleId);
@@ -264,7 +250,7 @@ async function createOutputShare(
       operations,
       store,
       workspaceId: producer.workspaceId,
-      subject: sessionSubject,
+      session,
     });
     if (!producerAuth.ok) return producerAuth.response;
     return errorJson(
@@ -286,7 +272,7 @@ async function createOutputShare(
 async function approveOutputShare(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   shareId: string,
 ): Promise<Response> {
   const existing = await operations.outputShares.getShare(shareId);
@@ -295,7 +281,7 @@ async function approveOutputShare(
     operations,
     store,
     workspaceId: existing.toWorkspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   return json({
@@ -308,7 +294,7 @@ async function approveOutputShare(
 async function revokeOutputShare(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   shareId: string,
 ): Promise<Response> {
   const existing = await operations.outputShares.getShare(shareId);
@@ -317,7 +303,7 @@ async function revokeOutputShare(
     operations,
     store,
     workspaceId: existing.fromWorkspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   return json({

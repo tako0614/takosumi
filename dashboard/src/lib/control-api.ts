@@ -1606,6 +1606,27 @@ export async function readSourceSnapshotPresentationFile(
   );
 }
 
+/** Reads one bounded manifest file from a SourceSnapshot pinned by source_sync. */
+export async function readSourceSnapshotFile(
+  sourceId: string,
+  sourceSnapshotId: string,
+  path: string,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<{
+  readonly sourceSnapshotId: string;
+  readonly path: string;
+  readonly text: string;
+}> {
+  return await controlFetch<{
+    readonly sourceSnapshotId: string;
+    readonly path: string;
+    readonly text: string;
+  }>(
+    `${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/file${query({ path })}`,
+    { signal: options.signal },
+  );
+}
+
 export async function waitForLatestSourceSnapshot(
   sourceId: string,
   options: {

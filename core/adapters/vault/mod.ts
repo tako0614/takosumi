@@ -47,7 +47,10 @@ import {
   type CredentialRecipeRuntimeDriver,
 } from "@takosumi/providers";
 import { mintGitSourceCredential } from "@takosumi/providers/git/credentials.ts";
-import { gitProviderSettings } from "@takosumi/providers/git/settings.ts";
+import {
+  gitHostScope,
+  gitProviderSettings,
+} from "@takosumi/providers/git/settings.ts";
 import {
   DeclaredEnvRegistrationError,
   validateDeclaredEnvRegistration,
@@ -57,6 +60,10 @@ import type {
   OpenTofuControlStore,
   StoredSecretBlob,
 } from "../../domains/deploy-control/store.ts";
+import {
+  normalizeProviderConfigBaseUrl,
+  providerConfigUrlError,
+} from "../../shared/provider_config_urls.ts";
 import type { SecretBoundaryCrypto } from "../secret-store/memory.ts";
 import type { SecretPartition } from "../secret-store/types.ts";
 
@@ -200,6 +207,12 @@ export interface MintRequest {
    * public repo (the source phase then returns an empty bundle).
    */
   readonly sourceConnectionId?: string;
+  /**
+   * The Source URL the `source` phase is about to clone. The vault requires it
+   * to sit on the host the git connection declares, so a Source pointed at a
+   * foreign host can never be handed another Workspace member's git token.
+   */
+  readonly sourceUrl?: string;
   /**
    * Provider-binding connection pool for the tofu phases (spec §9). When
    * present, provider selection draws ONLY from these connections (each must
@@ -363,6 +376,13 @@ export interface StaticSecretConnectionVaultDependencies {
     id: string,
   ) => CredentialRecipe | undefined;
   readonly credentialDrivers?: CredentialRecipeDriverRegistry;
+  /**
+   * Operator allowlist of provider/compat API base URLs that may appear in a
+   * Connection's `scopeHints.providerConfig` (same list the Resource Shape
+   * TargetPool surface uses). Omitted means no override host is approved, so
+   * every absolute http(s) URL in provider configuration is rejected.
+   */
+  readonly allowedProviderConfigUrls?: readonly string[];
 }
 
 export class StaticSecretConnectionVault implements ConnectionVault {
@@ -376,6 +396,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     id: string,
   ) => CredentialRecipe | undefined;
   readonly #credentialDrivers: CredentialRecipeDriverRegistry;
+  readonly #allowedProviderConfigUrls: ReadonlySet<string>;
 
   constructor(deps: StaticSecretConnectionVaultDependencies) {
     this.#store = deps.store;
@@ -390,6 +411,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     this.#credentialRecipeResolver =
       deps.credentialRecipeResolver ?? (() => undefined);
     this.#credentialDrivers = deps.credentialDrivers ?? {};
+    this.#allowedProviderConfigUrls = new Set(
+      (deps.allowedProviderConfigUrls ?? []).map(
+        normalizeProviderConfigBaseUrl,
+      ),
+    );
   }
 
   async register(input: RegisterConnectionInput): Promise<ProviderConnection> {
@@ -538,9 +564,13 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     // material. In particular, provider configuration and module defaults are
     // public connection metadata and must never become an alternate secret
     // transport around Credential Recipes.
-    const scopeHints = normalizeScope(input.scopeHints);
     const connectionScope =
       input.scope ?? (workspaceId ? "workspace" : "operator");
+    const scopeHints = normalizeScope(
+      input.scopeHints,
+      connectionScope,
+      this.#allowedProviderConfigUrls,
+    );
     assertManagedProviderOperatorOwnership(
       scopeHints,
       workspaceId,
@@ -652,9 +682,13 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `value for ${expectedEnv} must be a non-empty string`,
       );
     }
-    const scopeHints = normalizeScope(input.scopeHints);
     const connectionScope =
       input.scope ?? (workspaceId ? "workspace" : "operator");
+    const scopeHints = normalizeScope(
+      input.scopeHints,
+      connectionScope,
+      this.#allowedProviderConfigUrls,
+    );
     assertManagedProviderOperatorOwnership(
       scopeHints,
       workspaceId,
@@ -665,6 +699,19 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         throw new ConnectionVaultError(
           "invalid_argument",
           "source_git_ssh_key requires scopeHints.providerSettings.knownHostsEntry (the known_hosts line for the host)",
+        );
+      }
+    }
+    if (kind === "source_git_https_token") {
+      // The SSH kind is host-bound by its pinned known_hosts entry; the HTTPS
+      // kind has no such pin and its askpass script answers every host's
+      // credential prompt, so the repository URL is what binds the token to one
+      // host. Without it a Source pointed at an attacker-controlled host would
+      // exfiltrate the stored PAT (`#mintSourceGit` re-checks the binding).
+      if (!gitHostScope(gitProviderSettings(scopeHints).repositoryUrl)) {
+        throw new ConnectionVaultError(
+          "invalid_argument",
+          "source_git_https_token requires scopeHints.providerSettings.repositoryUrl (an http(s) repository URL that binds the token to one host)",
         );
       }
     }
@@ -1074,6 +1121,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       return await this.#mintSourceGit(
         request.workspaceId,
         request.sourceConnectionId,
+        request.sourceUrl,
       );
     }
 
@@ -1107,6 +1155,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   async #mintSourceGit(
     workspaceId: string,
     connectionId: string,
+    sourceUrl: string | undefined,
   ): Promise<PhaseMintBundle> {
     const connection = await this.#requireConnection(connectionId);
     if (
@@ -1138,6 +1187,27 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     assertConnectionVerified(connection);
+    if (connection.kind === "source_git_https_token") {
+      // The minted askpass script answers ANY host's credential prompt, so the
+      // token may only be minted for the host the connection is bound to.
+      // Otherwise a Workspace member who can register a Source is able to point
+      // it at a host they control and collect another member's git PAT.
+      const boundHost = gitHostScope(
+        gitProviderSettings(connection.scopeHints).repositoryUrl,
+      );
+      if (!boundHost) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `connection ${connectionId} has no scopeHints.providerSettings.repositoryUrl to bind the token to a host`,
+        );
+      }
+      if (gitHostScope(sourceUrl) !== boundHost) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `connection ${connectionId} is bound to ${boundHost} and must not be minted for another host`,
+        );
+      }
+    }
     const values = await this.#openValues(connection);
 
     // The git source driver (`@takosumi/providers/git`) turns the opened secret
@@ -1447,6 +1517,8 @@ function connectionIsExpired(
 
 function normalizeScope(
   scope: ConnectionScopeHints | undefined,
+  connectionScope: ProviderConnection["scope"],
+  allowedProviderConfigUrls: ReadonlySet<string>,
 ): ConnectionScopeHints | undefined {
   if (!scope) return undefined;
   const out: {
@@ -1477,7 +1549,28 @@ function normalizeScope(
     scope.providerConfig,
     "scopeHints.providerConfig",
   );
-  if (providerConfig) out.providerConfig = providerConfig;
+  if (providerConfig) {
+    // providerConfig is rendered verbatim into the generated provider block, so
+    // an `endpoint` / `base_url` string in it decides where the minted provider
+    // credential is sent. The Resource Shape TargetPool surface already runs the
+    // operator allowlist over the identical shape; without the same check the
+    // Workspace-scoped connection-create path (a session-authenticated request
+    // body) is the unguarded second entrance to that same generated block, and a
+    // Workspace member could redirect provider traffic — and the credential
+    // riding along with it — to a host they control. Operator-scoped rows are the
+    // operator's own configuration, the same authority that owns the allowlist.
+    if (connectionScope === "workspace") {
+      const urlError = providerConfigUrlError(
+        providerConfig,
+        "scopeHints.providerConfig",
+        allowedProviderConfigUrls,
+      );
+      if (urlError) {
+        throw new ConnectionVaultError("invalid_argument", urlError);
+      }
+    }
+    out.providerConfig = providerConfig;
+  }
   const moduleInputDefaults = normalizeNonSecretJsonRecord(
     scope.moduleInputDefaults,
     "scopeHints.moduleInputDefaults",

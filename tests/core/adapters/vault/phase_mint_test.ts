@@ -170,6 +170,9 @@ async function registerCloudflareTokenVending(
   );
 }
 
+/** Host the https-token fixture connection is bound to. */
+const HTTPS_REPO_URL = "https://git.example.com/o/r.git";
+
 async function registerHttps(
   store: InMemoryOpenTofuControlStore,
   vault: StaticSecretConnectionVault,
@@ -181,7 +184,12 @@ async function registerHttps(
       provider: "source_git_https_token",
       kind: "source_git_https_token",
       authMethod: "static_secret",
-      scopeHints: { providerSettings: { username: "git-bot" } },
+      scopeHints: {
+        providerSettings: {
+          username: "git-bot",
+          repositoryUrl: HTTPS_REPO_URL,
+        },
+      },
       values: { GIT_HTTPS_TOKEN: "ghp_secret_token" },
     }),
   );
@@ -220,9 +228,29 @@ test("registers source_git_https_token with kind and single env", async () => {
   expect(conn.envNames).toEqual(["GIT_HTTPS_TOKEN"]);
   expect(conn.scope).toBe("workspace");
   expect(conn.scopeHints).toEqual({
-    providerSettings: { username: "git-bot" },
+    providerSettings: { username: "git-bot", repositoryUrl: HTTPS_REPO_URL },
   });
   expect(JSON.stringify(conn)).not.toContain("ghp_secret_token");
+});
+
+test("source_git_https_token requires a repositoryUrl host binding", async () => {
+  const { vault } = makeVault();
+  const err = await vault
+    .register({
+      workspaceId: "space_1",
+      provider: "source_git_https_token",
+      kind: "source_git_https_token",
+      authMethod: "static_secret",
+      scopeHints: { providerSettings: { username: "git-bot" } },
+      values: { GIT_HTTPS_TOKEN: "ghp_secret_token" },
+    })
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+  expect(err).toBeInstanceOf(ConnectionVaultError);
+  expect((err as ConnectionVaultError).code).toBe("invalid_argument");
+  expect((err as Error).message).toMatch(/repositoryUrl/);
 });
 
 test("source_git_ssh_key REQUIRES scopeHints.knownHostsEntry", async () => {
@@ -277,6 +305,7 @@ test("rule 2a: source phase mints https git creds as env + askpass file", async 
     workspaceId: "space_1",
     phase: "source",
     sourceConnectionId: conn.id,
+    sourceUrl: HTTPS_REPO_URL,
   });
   expect(bundle).toBeInstanceOf(PhaseMintBundle);
   const response = bundle.toMintResponse();
@@ -288,6 +317,40 @@ test("rule 2a: source phase mints https git creds as env + askpass file", async 
   expect(response.files?.[0].content).toContain("git-bot");
   // The bundle never serializes its values.
   expect(JSON.stringify(bundle)).not.toContain("ghp_secret_token");
+});
+
+// The askpass script answers every host's credential prompt, so a Source on a
+// host the connection is not bound to must never receive the token.
+test("source phase refuses to mint an https git token for a foreign host", async () => {
+  const { store, vault } = makeVault();
+  const conn = await registerHttps(store, vault);
+  const err = await vault
+    .mintForPhase({
+      workspaceId: "space_1",
+      phase: "source",
+      sourceConnectionId: conn.id,
+      sourceUrl: "https://attacker.example/collector.git",
+    })
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+  expect(err).toBeInstanceOf(ConnectionVaultError);
+  expect((err as ConnectionVaultError).code).toBe("failed_precondition");
+  expect((err as Error).message).toMatch(/bound to git.example.com/);
+  expect(String(err)).not.toContain("ghp_secret_token");
+});
+
+test("source phase refuses to mint an https git token with no Source url", async () => {
+  const { store, vault } = makeVault();
+  const conn = await registerHttps(store, vault);
+  await expect(
+    vault.mintForPhase({
+      workspaceId: "space_1",
+      phase: "source",
+      sourceConnectionId: conn.id,
+    }),
+  ).rejects.toThrow(/must not be minted for another host/);
 });
 
 // Rule 2: source + git ssh connection -> ssh key file + known_hosts, strict.

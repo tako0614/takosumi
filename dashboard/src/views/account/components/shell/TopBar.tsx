@@ -11,13 +11,20 @@
  * one Activity request per Workspace.
  */
 import { A, useLocation } from "@solidjs/router";
-import { createEffect, createMemo, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  Show,
+} from "solid-js";
 import { Bell } from "lucide-solid";
 import UserMenu from "../auth/UserMenu.tsx";
 import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
 import { SECTION_TITLES } from "./nav.ts";
 import {
   attentionCount,
+  onNotificationsAcknowledged,
   refreshWorkspaceNotificationFeed,
   workspaceNotificationFeed,
 } from "../../../../lib/notifications.ts";
@@ -40,7 +47,12 @@ export default function TopBar() {
     if (!workspaceId) return;
     void refreshWorkspaceNotificationFeed(workspaceId).catch(() => {});
   });
+  // The acknowledged-at mark lives in localStorage, outside the reactive
+  // graph — bump a tick so the badge clears the moment "mark all read" runs.
+  const [ackTick, setAckTick] = createSignal(0);
+  onCleanup(onNotificationsAcknowledged(() => setAckTick((n) => n + 1)));
   const badge = createMemo(() => {
+    void ackTick();
     const workspaceId = currentWorkspaceId();
     if (!workspaceId) return 0;
     return attentionCount(workspaceNotificationFeed(workspaceId), workspaceId);

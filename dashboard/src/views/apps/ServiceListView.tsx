@@ -20,7 +20,7 @@ import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { getDashboardOverviewCached } from "../../lib/dashboard-overview.ts";
 import { listCapsulesCached } from "../../lib/capsule-list.ts";
-import { type ControlApiError, type Capsule } from "../../lib/control-api.ts";
+import { type Capsule } from "../../lib/control-api.ts";
 import {
   effectiveCapsuleStatus,
   isVisibleServiceCapsule,
@@ -33,6 +33,7 @@ import {
   StatusBadge,
   Toast,
 } from "../../components/ui/index.ts";
+import { fetchFailedMessage } from "../../lib/error-copy.ts";
 
 export default function ServiceListView() {
   return <Page title={t("services.title")}>{() => <Inner />}</Page>;
@@ -106,7 +107,7 @@ function Inner() {
           context line + the add action. */}
       <div class="av-list-toolbar">
         <span class="av-list-toolbar-sub">{t("services.subtitle")}</span>
-        <Button variant="primary" href="/store" icon={<Plus size={16} />}>
+        <Button variant="primary" href="/new" icon={<Plus size={16} />}>
           {t("apps.add")}
         </Button>
       </div>
@@ -122,9 +123,7 @@ function Inner() {
           </Match>
           <Match when={overview.error}>
             <Toast tone="error">
-              {t("common.fetchFailed", {
-                message: (overview.error as ControlApiError).message,
-              })}
+              {fetchFailedMessage(overview.error, t)}
               <Button
                 variant="secondary"
                 size="sm"
@@ -215,7 +214,7 @@ function ServicesEmpty() {
         <h2 class="av-start-title">{t("services.empty.title")}</h2>
         <p class="av-start-sub">{t("services.empty.body")}</p>
       </div>
-      <a href="/store" class="av-start-action">
+      <a href="/new" class="av-start-action">
         <Plus size={18} aria-hidden="true" />
         <span>{t("apps.add")}</span>
       </a>

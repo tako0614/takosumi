@@ -9,11 +9,7 @@ import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { Network } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
-import {
-  type ControlApiError,
-  getWorkspaceGraph,
-  type GraphNode,
-} from "../../lib/control-api.ts";
+import { getWorkspaceGraph, type GraphNode } from "../../lib/control-api.ts";
 import { filterGraphForDependencyView, layerGraph } from "./graph-layering.ts";
 import { capsuleStatusLabel, capsuleTone } from "../../lib/labels.ts";
 import { t } from "../../i18n/index.ts";
@@ -25,6 +21,7 @@ import {
   PageHeader,
   Skeleton,
 } from "../../components/ui/index.ts";
+import { fetchFailedMessage } from "../../lib/error-copy.ts";
 
 export default function GraphView() {
   return <Page title={t("graph.title")}>{() => <Inner />}</Page>;
@@ -102,9 +99,7 @@ function Inner() {
             <EmptyState
               icon={<Network size={28} />}
               title={t("graph.title")}
-              message={t("common.fetchFailed", {
-                message: (graph.error as ControlApiError).message,
-              })}
+              message={fetchFailedMessage(graph.error, t)}
               action={
                 <Button
                   variant="secondary"

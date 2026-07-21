@@ -1107,4 +1107,82 @@ output "url" {
   ]);
   expect(report.level).toBe("ready");
   expect(report.findings).toEqual([]);
+  expect(report.modulePath).toBe("deploy/opentofu");
+});
+
+test("createCompatibilityCheck pins a Capsule-scoped check to the Capsule's own module path", async () => {
+  // A Capsule plans its own InstallConfig module path, so a caller-supplied
+  // path must not be able to produce a Capsule-scoped report that describes a
+  // different module than the one the Capsule will actually execute.
+  const observedOptions: unknown[] = [];
+  const { store, service } = makeService({
+    readCapsuleSourceFiles: async (_snapshot, options) => {
+      observedOptions.push(options);
+      return [
+        {
+          path: "main.tf",
+          text: `
+output "url" {
+  value = "https://example.com"
+}
+`,
+        },
+      ];
+    },
+  });
+  await store.putInstallConfig({
+    id: "cfg_capsule_module",
+    name: "capsule",
+    modulePath: "deploy/opentofu",
+    variableMapping: {},
+    outputAllowlist: {},
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "capsule",
+    url: "https://github.com/acme/capsule.git",
+  });
+  const { run } = await service.createSync(source.id);
+  await store.putSourceSnapshot({
+    id: run.snapshotId!,
+    origin: "git",
+    workspaceId: source.workspaceId,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveRef: run.archiveRef,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putCapsule({
+    id: "capsule_module_path",
+    workspaceId: "workspace_1",
+    projectId: "project_module_path",
+    name: "capsule",
+    slug: "capsule",
+    sourceId: source.id,
+    installConfigId: "cfg_capsule_module",
+    environment: "preview",
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  const { report } = await service.createCompatibilityCheck(source.id, {
+    sourceSnapshotId: run.snapshotId,
+    capsuleId: "capsule_module_path",
+    modulePath: "examples/hello",
+  });
+
+  expect(observedOptions).toEqual([
+    { modulePath: "deploy/opentofu", runId: "ccr_test00000004" },
+  ]);
+  expect(report.modulePath).toBe("deploy/opentofu");
 });

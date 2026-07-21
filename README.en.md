@@ -2,28 +2,55 @@
 
 日本語: [README.md](README.md)
 
-Takosumi is one OSS OpenTofu-native control plane. It provides deploy-control, accounts, dashboard, runner boundary, and
-audit ledger code that can be composed in two contexts:
+Takosumi is an OSS control plane that safely deploys and manages Git-hosted OpenTofu/Terraform modules
+through a plan → review → apply workflow. It runs existing OpenTofu/Terraform providers as-is — no
+proprietary manifest or DSL is needed.
 
-- an operator-run Takosumi platform worker at the operator's own origin (the
-  official Takosumi Cloud deployment uses `app.takosumi.com`);
-- the self-hosted Takos distribution worker, where the Takos product surface composes Takosumi accounts, deploy-control,
-  dashboard, and runner boundaries in-process at the self-hoster's own origin.
+What you get:
 
-It registers plain OpenTofu/Terraform modules from Git URLs as Capsules under a Workspace/Project, binds providers or
-aliases to ProviderConnections through ProviderBindings, records plan/apply/destroy Runs, persists StateVersions, and
-projects OpenTofu outputs as Outputs.
-
-Takosumi handlers are consumed **in-process** through `tsconfig` aliases by the host worker. That is a composition
-mechanism, not two different products. There is no retired split account/deploy-control host topology, and no
-npm-published service package. An operator serves the composed platform at an
-explicit origin; our official hosted deployment uses `app.takosumi.com`.
-`takosumi.com` is the landing/software-docs site only.
+- Register modules from any Git URL as apps or infrastructure (Capsule)
+- Store cloud credentials securely and inject them only while a Run executes (ProviderConnection)
+- Review planned changes before applying them, then apply with approval (plan / apply Run)
+- Record state after every apply and track who changed what, when (StateVersion / AuditEvent)
+- Capture module outputs and optionally wire them into another Capsule's inputs (Output)
 
 Software docs: <https://takosumi.com/docs/>
 Hosted Cloud docs: <https://app.takosumi.com/docs/>
 
-## In-process entry points
+## Local control-plane quickstart
+
+Run the local control-plane service directly when you want to exercise the `/api/v1` contract from curl or tests.
+
+```bash
+bun install
+
+export TAKOSUMI_DEV_MODE=1
+export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
+PORT=8788 bun core/index.ts
+```
+
+The standard product flow is to install via the dashboard using a Git URL, creating a Capsule from a Git Source.
+Dashboard install / plan / apply go through the [`/api`](docs/en/reference/deploy-control-api.md) control plane
+against a registered Git Source. App source, build outputs, container images, and release artifacts are modeled by
+the Git-hosted OpenTofu module and its ordinary variables, not by a Takosumi-owned upload/build path. The CLI is
+documented in [docs/en/reference/cli.md](docs/en/reference/cli.md). The retired `takosumi deploy` /
+`takosumi plan` local-upload helpers fail closed and do not create public Capsules.
+
+## How it works
+
+Takosumi is one OSS product whose handlers are composed **in-process** through `tsconfig` aliases into the host
+worker. It is used in two composition contexts:
+
+- An operator-run Takosumi platform worker at the operator's own origin (the official Takosumi Cloud deployment
+  uses `app.takosumi.com`)
+- The self-hosted Takos distribution worker, where the Takos product surface composes Takosumi accounts,
+  deploy-control, dashboard, and runner boundaries in-process at the self-hoster's own origin
+
+This is a composition mechanism, not two different products. There is no retired split account/deploy-control
+host topology and no npm-published service package. An operator serves the composed platform at an explicit
+origin; our official hosted deployment uses `app.takosumi.com`. `takosumi.com` is the landing/software-docs site.
+
+### In-process entry points
 
 | Handler        | File                                                                  | Mount                                                                               |
 | -------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -33,11 +60,6 @@ Hosted Cloud docs: <https://app.takosumi.com/docs/>
 `/install?git=...&ref=...&path=...` is a dashboard SPA entrypoint, not a deploy-control handler. The SPA preserves the
 query, forwards to `/new`, and only pre-fills the Git form; compatibility check and explicit confirmation still happen
 inside `/new`.
-
-`deploy/accounts-cloudflare/` stores account-plane state in D1. Capsule backup artifacts belong to the control-plane
-Backup ledger and artifact store, not to the account-plane ownership boundary. Accounts privacy export requests record
-only operator workflow state and references; they do not hold Capsule export bundles or signed downloads. Cloudflare Container
-is not used by the account-plane path; it is used by the deploy-control runner for OpenTofu `plan` / `apply`.
 
 `deploy/node-postgres/` is the Bun + Postgres substrate that backs the same `createAccountsHandler` for the
 local-substrate cloud profile (the `deploy/local-substrate/` cloud wrapper imports its server). It is a substrate
@@ -68,20 +90,8 @@ direction lives in [docs/internal/final-plan.md](docs/internal/final-plan.md) (n
 | `AuditEvent`         | Actor/action/target/result evidence.                                                                                            |
 | `Operator`           | The person or organization running Takosumi for their own users.                                                                |
 
-Legacy Space / Installation / Deployment / OutputSnapshot / `takos_provided` /
-pre-v1 provider endpoint wording may still appear in migration notes or
-internal implementation names, but it is not the current public surface.
-
 Takosumi does not replace OpenTofu or Terraform providers. Existing providers run as-is; Takosumi records the reviewable
-and auditable control-plane layer around those operations. OSS Takosumi is an optional host that owns the current
-Resource Shape compatibility API, its sole Resource / Run / state / audit ledger, Resolver / Planner / Reconciler,
-Target / Policy / credential authority, Compatibility API framework, Adapter system, and generic FormActivation.
-The adopted target assigns portable Service Forms, exact FormRefs, data-only Form Packages, conformance, and the typed
-form provider to an independently released OSS project. Takosumi Core still runs plain OpenTofu Stacks with zero Form
-Packages installed. Official managed target pools, Takosumi-owned native resource internals, exact ServiceOfferings,
-enforced billing, support/SLA, and official resource backends belong to Takosumi for Operator / Takosumi Cloud.
-`Resource Shape` remains the current API/provider/state name until additive FormRef persistence and compatibility
-migration evidence exist.
+and auditable control-plane layer around those operations.
 
 ## Editions
 
@@ -94,28 +104,7 @@ migration evidence exist.
 The dependency direction is **one-way Cloud -> OSS**: the hosted Cloud operation consumes OSS contracts and composition
 points. OSS ships and runs with nothing from the hosted Cloud operation present.
 
-## Local control-plane quickstart
-
-Run the local control-plane service directly when you want to exercise the `/api/v1` contract from curl or tests.
-The CLI is documented separately in [docs/en/reference/cli.md](docs/en/reference/cli.md): the standard product flow is
-dashboard Git URL install and Capsule creation from a Git Source. The retired
-`takosumi deploy` / `takosumi plan` local-upload helpers fail closed and do not
-create public Capsules.
-
-```bash
-bun install
-
-export TAKOSUMI_DEV_MODE=1
-export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
-PORT=8788 bun core/index.ts
-```
-
-Dashboard install / plan / apply go through the [`/api`](docs/en/reference/deploy-control-api.md) control plane against a
-registered Git Source. App source, build outputs, container images, and release
-artifacts are modeled by the Git-hosted OpenTofu module and its ordinary
-variables, not by a Takosumi-owned upload/build path.
-
-## Repository Layout
+## Repository layout
 
 The current layout is `contract/`, `core/`, `lib/`, `accounts/`, `providers/`, `worker/`, `runner/`,
 `opentofu-modules/`, `dashboard/`, `website/`, and `deploy/`. See the [AGENTS.md](AGENTS.md) "Workspace" section for the

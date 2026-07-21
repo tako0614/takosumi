@@ -82,7 +82,11 @@ export default function UserMenu() {
 
   const signOut = () => {
     clearSession();
-    nav("/sign-in", { replace: true });
+    // `manual=1` on top of the sessionStorage breaker armed by clearSession():
+    // a browser that refuses sessionStorage must still land on the provider
+    // buttons instead of being auto-redirected back into the IdP session it
+    // just asked to leave.
+    nav("/sign-in?manual=1", { replace: true });
   };
 
   return (

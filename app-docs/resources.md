@@ -98,7 +98,7 @@ compat data request
 ```
 
 マネージャが未設定のサービス形態は、使用量の事前課金より前に安全側に停止します
-(fail closed)。つまり ContainerService などのバックエンドがまだ公式 Cloud に
+。つまり ContainerService などのバックエンドがまだ公式 Cloud に
 入っていない場合、クレジットだけ引かれたり、別の互換経路へ暗黙に迂回したりしません。
 Worker route contract は backend resource ではなく、Ready `EdgeWorker` が持つ
 canonical system URL に対する `http.route` Interface と exact Principal Binding です。
@@ -117,7 +117,7 @@ dispatch namespace ですが、公開リソース名は `EdgeWorker` /
 `takosumi.edge_worker`、課金ファミリも `takosumi.edge_worker`、meter id は
 `takosumi:edge_worker:*` です。入口が異なっても課金 identity は変わりません。
 WfP は実装トークンであり、ユーザー向けのリソース名や課金単位にはしません。旧
-`cloudflare.workers_script` family は immutable な過去の usage / invoice の再照合だけで
+`cloudflare.workers_script` family は変更不可な過去の usage / invoice の再照合だけで
 読み取り、新しい使用量には書きません。
 同じ理由で、Cloud 内部の正規化リソース種別は `object_bucket` /
 `sql_database` / `durable_workflow` のようなサービス形態寄りの名前にします。

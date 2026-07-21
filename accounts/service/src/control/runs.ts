@@ -98,6 +98,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
+  type ControlSession,
   canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
@@ -156,7 +157,7 @@ export async function handleRuns(
       operations,
       store,
       workspaceId: run.workspaceId,
-      subject: ctx.session.subject,
+      session: ctx.session,
     });
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
@@ -166,11 +167,11 @@ export async function handleRuns(
     const leaf = segments[2];
     if (leaf === "approve" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await approveRun(request, operations, runId, ctx.session.subject);
+      return await approveRun(request, operations, runId, ctx.session);
     }
     if (leaf === "apply" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await applyPlanRun(operations, store, ctx.session.subject, runId);
+      return await applyPlanRun(operations, store, ctx.session, runId);
     }
     if (leaf === "logs" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -337,7 +338,7 @@ export async function handleRunGroups(
       operations,
       store,
       workspaceId: runGroupWorkspaceId,
-      subject: ctx.session.subject,
+      session: ctx.session,
     });
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
@@ -356,12 +357,12 @@ async function approveRun(
   request: Request,
   operations: ControlPlaneOperations,
   runId: string,
-  sessionSubject: string,
+  session: ControlSession,
 ): Promise<Response> {
   const body = await readJsonObject(request.clone()).catch(() => null);
   const reason = body ? stringValue(body.reason) : undefined;
   const run = await operations.approveRun(runId, {
-    approvedBy: sessionSubject,
+    approvedBy: session.subject,
     ...(reason ? { reason } : {}),
   });
   return json({ run: await publicRun(operations, run) });
@@ -379,7 +380,7 @@ async function approveRun(
 async function applyPlanRun(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   planRunId: string,
 ): Promise<Response> {
   const { planRun } = await operations.getPlanRun(planRunId);
@@ -387,7 +388,7 @@ async function applyPlanRun(
     operations,
     store,
     workspaceId: planRun.workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   const applyRequest: CreateApplyRunRequest = {

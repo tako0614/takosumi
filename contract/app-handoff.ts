@@ -1,6 +1,26 @@
 export const TAKOSUMI_APP_HANDOFF_PUBLIC_PATH = "/install" as const;
 export const TAKOSUMI_APP_HANDOFF_DASHBOARD_PATH = "/new" as const;
 
+/**
+ * Custom URL scheme for the "install into your own home Takosumi" deep link.
+ * A registered protocol handler routes `web+takosumi:install?...` to the user's
+ * chosen home (`navigator.registerProtocolHandler("web+takosumi",
+ * "/install?handoff=%s")`), which decodes it and pre-fills `/new`. Opaque form
+ * (`web+takosumi:install?...`, action read from `pathname`) — never the
+ * authority form `web+takosumi://install`, whose keyword lands in `host` and is
+ * lowercased/punycode-normalized. Canonical spec: docs/integration/remote-install.md.
+ */
+export const TAKOSUMI_APP_INSTALL_SCHEME = "web+takosumi" as const;
+export const TAKOSUMI_APP_INSTALL_SCHEME_ACTION = "install" as const;
+/** Base opaque URL the builder appends the query onto. */
+export const TAKOSUMI_APP_INSTALL_SCHEME_BASE =
+  `${TAKOSUMI_APP_INSTALL_SCHEME}:${TAKOSUMI_APP_INSTALL_SCHEME_ACTION}` as const;
+/** The `%s` placeholder target passed to `navigator.registerProtocolHandler`. */
+export const TAKOSUMI_APP_INSTALL_HANDLER_TEMPLATE =
+  `${TAKOSUMI_APP_HANDOFF_PUBLIC_PATH}?handoff=%s` as const;
+/** Upper bound on a decoded handoff string before it is parsed. */
+export const TAKOSUMI_APP_INSTALL_SCHEME_MAX_LENGTH = 4096 as const;
+
 export type TakosumiAppProductKey = string;
 
 export interface TakosumiAppHandoff {
@@ -131,6 +151,137 @@ export function createTakosumiAppConnectHref(
   return url.toString();
 }
 
+export type CreateTakosumiAppInstallSchemeInput = Omit<
+  CreateTakosumiAppHandoffUrlInput,
+  "baseUrl"
+>;
+
+export interface TakosumiAppInstallSchemeFields {
+  readonly git?: string;
+  readonly source?: string;
+  readonly ref?: string;
+  readonly path?: string;
+  readonly name?: string;
+  readonly product?: TakosumiAppProductKey;
+  readonly returnUri?: string;
+}
+
+/**
+ * Build a `web+takosumi:install?...` deep link (host-independent — the visitor's
+ * registered handler supplies the home origin). Same payload vocabulary and
+ * one-of-git/source rule as {@link createTakosumiAppHandoffUrl}. Values MUST go
+ * through `URLSearchParams`; never concatenate a raw git URL (its `&`/`?` would
+ * truncate the link and silently prefill the wrong repo).
+ */
+export function createTakosumiAppInstallScheme(
+  input: CreateTakosumiAppInstallSchemeInput,
+): string {
+  const source = safeQueryValue(input.source);
+  const git = safeQueryValue(input.git);
+  if (source && git) {
+    throw new Error("Install scheme requires exactly one of git or source.");
+  }
+  if (!source && !git) {
+    throw new Error("Install scheme requires git or source.");
+  }
+  const url = new URL(TAKOSUMI_APP_INSTALL_SCHEME_BASE);
+  if (input.product || input.returnUri) {
+    url.searchParams.set(
+      "product",
+      requireTakosumiAppProductKey(input.product ?? "", "Install scheme product"),
+    );
+    url.searchParams.set(
+      "return_uri",
+      requireTakosumiAppReturnUri(input.returnUri ?? ""),
+    );
+  }
+  if (source) url.searchParams.set("source", source);
+  if (!source && git) url.searchParams.set("git", git);
+  if (input.ref != null) url.searchParams.set("ref", input.ref);
+  if (input.path != null) url.searchParams.set("path", input.path);
+  if (input.name) url.searchParams.set("name", input.name);
+  return url.toString();
+}
+
+/**
+ * Parse a decoded `web+takosumi:install?...` string into its whitelisted
+ * install fields, or undefined when the scheme/action/payload is invalid.
+ * Guards (in order): length cap, CR/LF/NUL screen on the whole string, exact
+ * `web+takosumi:` scheme + `install` action, exactly one of git/source,
+ * product/return_uri travel together. Note: this does not apply the browser's
+ * https-only git guard — the dashboard prefill path re-checks git via
+ * `isSafeHttpsGitUrl` in `install-link.ts`.
+ */
+export function parseTakosumiAppInstallScheme(
+  raw: unknown,
+): TakosumiAppInstallSchemeFields | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (
+    !trimmed ||
+    trimmed.length > TAKOSUMI_APP_INSTALL_SCHEME_MAX_LENGTH ||
+    hasUnsafeBytes(trimmed)
+  ) {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== `${TAKOSUMI_APP_INSTALL_SCHEME}:`) return undefined;
+  if (url.pathname !== TAKOSUMI_APP_INSTALL_SCHEME_ACTION) return undefined;
+
+  const params = url.searchParams;
+
+  // Fail closed: if a recognized field is PRESENT but fails validation (e.g. a
+  // percent-encoded newline in `ref`/`path` that only surfaces after decode),
+  // reject the whole payload rather than silently prefilling a partial one.
+  let invalid = false;
+  const field = (key: string): string | undefined => {
+    if (!params.has(key)) return undefined;
+    const value = safeQueryValue(params.get(key) ?? undefined);
+    if (!value) {
+      invalid = true;
+      return undefined;
+    }
+    return value;
+  };
+
+  const source = field("source");
+  const git = field("git");
+  const ref = field("ref");
+  const path = field("path");
+  const name = field("name");
+
+  let product: TakosumiAppProductKey | undefined;
+  if (params.has("product")) {
+    product = parseTakosumiAppProductKey(params.get("product"));
+    if (!product) invalid = true;
+  }
+  let returnUri: string | undefined;
+  if (params.has("return_uri")) {
+    returnUri = parseTakosumiAppReturnUri(params.get("return_uri"));
+    if (!returnUri) invalid = true;
+  }
+
+  if (invalid) return undefined;
+  if (source && git) return undefined;
+  if (!source && !git) return undefined;
+  if (Boolean(product) !== Boolean(returnUri)) return undefined;
+
+  return {
+    ...(git ? { git } : {}),
+    ...(source ? { source } : {}),
+    ...(ref ? { ref } : {}),
+    ...(path ? { path } : {}),
+    ...(name ? { name } : {}),
+    ...(product ? { product } : {}),
+    ...(returnUri ? { returnUri } : {}),
+  };
+}
+
 export function parseTakosumiAppProductKey(
   value: unknown,
 ): TakosumiAppProductKey | undefined {
@@ -154,6 +305,44 @@ export function requireTakosumiAppProductKey(
   throw new Error(`${label} key is invalid.`);
 }
 
+/**
+ * Schemes a browser can turn into script or inline content. A `return_uri` is
+ * rendered as an anchor href on the run screen, and the authority form of these
+ * schemes survives URL parsing: `javascript://x/%0Aalert(1)//` keeps
+ * `javascript:` as its protocol, and the connect payload appended after it
+ * lands behind the `//` line comment, so the click executes in the dashboard
+ * origin. A client scheme (`notesapp://connect`) stays allowed.
+ */
+const UNSAFE_LINK_PROTOCOLS = new Set([
+  "javascript:",
+  "data:",
+  "vbscript:",
+  "blob:",
+  "file:",
+  "about:",
+  "filesystem:",
+  "view-source:",
+]);
+
+/**
+ * True when a value is safe to place in an anchor `href`. Fail-closed: an
+ * unparseable value, a control byte, or a script-capable scheme is not safe.
+ * Site-relative paths stay allowed so ordinary in-app links pass unchanged.
+ */
+export function isSafeLinkHref(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const raw = value.trim();
+  if (!raw || hasUnsafeBytes(raw)) return false;
+  if (raw.startsWith("/") && !raw.startsWith("//")) return true;
+  try {
+    return !UNSAFE_LINK_PROTOCOLS.has(new URL(raw).protocol.toLowerCase());
+  } catch {
+    // A relative value with no base is not a scheme, so it cannot be one of
+    // the script-capable schemes above.
+    return !/^[a-z][a-z0-9+.-]*:/i.test(raw);
+  }
+}
+
 export function parseTakosumiAppReturnUri(value: unknown): string | undefined {
   const raw = parseBoundedString(value, 2048);
   if (!raw || hasUnsafeBytes(raw)) return undefined;
@@ -164,6 +353,7 @@ export function parseTakosumiAppReturnUri(value: unknown): string | undefined {
     return undefined;
   }
   if (!/^[a-z][a-z0-9+.-]*:$/.test(url.protocol)) return undefined;
+  if (UNSAFE_LINK_PROTOCOLS.has(url.protocol)) return undefined;
   if (url.username || url.password || url.search || url.hash) {
     return undefined;
   }

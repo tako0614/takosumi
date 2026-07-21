@@ -14,6 +14,7 @@ import type {
   StrictProviderMirrorAttestation,
   ProviderMirrorInit,
   PlanScopeSelector,
+  TerraformTreeProviderScan,
 } from "./types.ts";
 import {
   CAPSULE_COMPATIBILITY_MAX_FILES,
@@ -55,26 +56,49 @@ export function assertRunnerPolicyForRequest(
 export async function requiredProvidersForGeneratedRoot(
   request: unknown,
   rootDir: string,
-): Promise<readonly string[]> {
+): Promise<TerraformTreeProviderScan> {
   const declared = parseRequiredProviders(request);
   const observed = await requiredProviderSourcesFromTerraformTree(rootDir);
-  return normalizedProviderList([...declared, ...observed]);
+  return {
+    providers: normalizedProviderList([...declared, ...observed.providers]),
+    complete: observed.complete,
+  };
+}
+
+/**
+ * OpenTofu loads `.tf` / `.tofu` (HCL) and `.tf.json` / `.tofu.json` (JSON)
+ * config files. A scanner that only looks at `.tf` would let a provider
+ * declared in any of the other three spellings reach `tofu init` unseen by the
+ * runner provider policy.
+ */
+function terraformConfigFileKind(name: string): "hcl" | "json" | undefined {
+  if (name.endsWith(".tf.json") || name.endsWith(".tofu.json")) return "json";
+  if (name.endsWith(".tf") || name.endsWith(".tofu")) return "hcl";
+  return undefined;
 }
 
 export async function requiredProviderSourcesFromTerraformTree(
   rootDir: string,
-): Promise<readonly string[]> {
+): Promise<TerraformTreeProviderScan> {
   let files = 0;
   let totalBytes = 0;
   const providers: string[] = [];
   const stack = [rootDir];
+  // A scan that stops early (unreadable directory, DoS caps, unparsable JSON)
+  // yields a provider list that looks exactly like a clean one. It is reported
+  // as incomplete so provider policy fails closed instead of enforcing itself
+  // against providers it never saw.
+  const incomplete = (): TerraformTreeProviderScan => ({
+    providers: normalizedProviderList(providers),
+    complete: false,
+  });
   while (stack.length > 0) {
     const current = stack.pop()!;
     let entries;
     try {
       entries = await readdir(current, { withFileTypes: true });
     } catch {
-      return [];
+      return incomplete();
     }
     for (const entry of entries) {
       if (
@@ -89,21 +113,85 @@ export async function requiredProviderSourcesFromTerraformTree(
         stack.push(path);
         continue;
       }
-      if (!entry.isFile() || !entry.name.endsWith(".tf")) continue;
+      if (!entry.isFile()) continue;
+      const kind = terraformConfigFileKind(entry.name);
+      if (!kind) continue;
       files += 1;
-      if (files > CAPSULE_COMPATIBILITY_MAX_FILES) return [];
+      if (files > CAPSULE_COMPATIBILITY_MAX_FILES) return incomplete();
       const info = await stat(path);
-      if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) return [];
+      if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) {
+        return incomplete();
+      }
       totalBytes += info.size;
-      if (totalBytes > CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES) return [];
-      providers.push(
-        ...requiredProviderSourcesFromTerraformText(
-          await readFile(path, "utf8"),
-        ),
-      );
+      if (totalBytes > CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES) {
+        return incomplete();
+      }
+      const text = await readFile(path, "utf8");
+      if (kind === "hcl") {
+        providers.push(...requiredProviderSourcesFromTerraformText(text));
+        continue;
+      }
+      const json = requiredProviderSourcesFromTerraformJson(text);
+      if (!json) return incomplete();
+      providers.push(...json);
     }
   }
+  return { providers: normalizedProviderList(providers), complete: true };
+}
+
+/**
+ * Provider sources declared by a JSON config file. `undefined` means the file
+ * could not be parsed, so its provider declarations are unknown.
+ */
+export function requiredProviderSourcesFromTerraformJson(
+  text: string,
+): readonly string[] | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  const providers: string[] = [];
+  collectRequiredProviderSources(parsed, providers);
   return normalizedProviderList(providers);
+}
+
+function collectRequiredProviderSources(
+  value: unknown,
+  providers: string[],
+): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectRequiredProviderSources(item, providers);
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "required_providers") {
+      collectProviderSourceStrings(child, providers);
+      continue;
+    }
+    collectRequiredProviderSources(child, providers);
+  }
+}
+
+function collectProviderSourceStrings(
+  value: unknown,
+  providers: string[],
+): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectProviderSourceStrings(item, providers);
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "source" && typeof child === "string") {
+      const source = child.trim();
+      if (source.includes("/")) providers.push(source);
+      continue;
+    }
+    collectProviderSourceStrings(child, providers);
+  }
 }
 
 export function requiredProviderSourcesFromTerraformText(
@@ -156,6 +244,17 @@ export function assertRunnerPolicyBeforeInit(
   const deniedProviders = stringArray(
     recordField(runnerProfile, "deniedProviders"),
   );
+  if (
+    (allowedProviders.length > 0 || deniedProviders.length > 0) &&
+    options.providerScanComplete === false
+  ) {
+    // An incomplete scan looks exactly like a clean one, so enforcing the
+    // allow/deny list against it would let an oversized or unreadable source
+    // tree smuggle an unlisted provider past the gate.
+    throw new Error(
+      `runner profile ${stringField(runnerProfile, "id") ?? "<unknown>"} cannot enforce its provider policy: the generated-root provider scan did not complete`,
+    );
+  }
   if (
     allowedProviders.length > 0 &&
     requiredProviders.length === 0 &&
@@ -215,13 +314,19 @@ export async function generatedRootTreeHasNoProviderUsage(
         stack.push(path);
         continue;
       }
-      if (!entry.isFile() || !entry.name.endsWith(".tf")) continue;
+      if (!entry.isFile()) continue;
+      const kind = terraformConfigFileKind(entry.name);
+      if (!kind) continue;
       files += 1;
       if (files > CAPSULE_COMPATIBILITY_MAX_FILES) return false;
       const info = await stat(path);
       if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) return false;
       totalBytes += info.size;
       if (totalBytes > CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES) return false;
+      // A JSON config file is loaded by `tofu init` exactly like an HCL one.
+      // The HCL text probe cannot speak for it, so its mere presence means the
+      // root is not provably provider-free.
+      if (kind === "json") return false;
       const text = await readFile(path, "utf8");
       if (hasProviderUsageBeforeInit(text)) return false;
     }
@@ -317,22 +422,25 @@ export async function prepareStrictProviderMirrorInit(
     policy?.requireMirror === true && canonicalProviders.length > 0;
   const mirrorRoot =
     Bun.env.OPENTOFU_PROVIDER_MIRROR ?? DEFAULT_PROVIDER_MIRROR_PATH;
-  const providerCache = providerPluginCacheForWorkspace(workspace);
-  const content = strict
-    ? strictProviderMirrorCliConfig(
-        canonicalProviders,
-        mirrorRoot,
-        providerCache.path,
-      )
-    : defaultProviderMirrorCliConfig(mirrorRoot, providerCache.path);
+  // Strict mode promises the run installs providers ONLY from the operator
+  // filesystem mirror. A plugin cache breaks that promise: the container-wide
+  // one is writable by every run in this container, so an earlier run for
+  // another Workspace could seed the binaries this run installs. Strict runs
+  // therefore get no plugin cache at all.
+  const providerCache = strict
+    ? undefined
+    : providerPluginCacheForWorkspace(workspace);
+  const content = providerCache
+    ? defaultProviderMirrorCliConfig(mirrorRoot, providerCache.path)
+    : strictProviderMirrorCliConfig(canonicalProviders, mirrorRoot);
   const cliConfigPath = join(workspace.root, "takosumi.tofu.rc");
   await mkdir(workspace.root, { recursive: true });
-  await mkdir(providerCache.path, { recursive: true });
+  if (providerCache) await mkdir(providerCache.path, { recursive: true });
   await writeFile(cliConfigPath, content, { mode: 0o600 });
   const cliConfigDigest = await digestBytes(new TextEncoder().encode(content));
   return {
-    providerCacheDir: providerCache.path,
-    sharedProviderCache: providerCache.shared,
+    ...(providerCache ? { providerCacheDir: providerCache.path } : {}),
+    sharedProviderCache: providerCache?.shared === true,
     commandContext: {
       ...context,
       env: {
@@ -367,7 +475,7 @@ export async function withProviderPluginCacheInitLock<T>(
   init: ProviderMirrorInit | undefined,
   run: () => Promise<T>,
 ): Promise<T> {
-  if (!init?.sharedProviderCache) return await run();
+  if (!init?.sharedProviderCache || !init.providerCacheDir) return await run();
   const key = init.providerCacheDir;
   const previous = providerCacheInitLocks.get(key) ?? Promise.resolve();
   const ready = previous.catch(() => {});
@@ -391,14 +499,11 @@ export async function withProviderPluginCacheInitLock<T>(
 export function strictProviderMirrorCliConfig(
   providers: readonly string[],
   mirrorRoot: string,
-  providerCache: string,
 ): string {
   const providerLines = providers
     .map((provider) => `      ${JSON.stringify(provider)}`)
     .join(",\n");
-  return `plugin_cache_dir = ${JSON.stringify(providerCache)}
-
-provider_installation {
+  return `provider_installation {
   filesystem_mirror {
     path = ${JSON.stringify(mirrorRoot)}
     include = [

@@ -509,6 +509,40 @@ const HOST_FILESYSTEM_PATTERNS: readonly {
   { pattern: /\bpath\.root\b/, label: "path.root" },
 ];
 
+/**
+ * OpenTofu's file-reading builtins take the path to read as their first
+ * argument. A module-local `file()` is harmless, but the same call reaches
+ * anywhere the runner process can read: the run root holds every other run's
+ * workspace and the materialized provider credential files, so
+ * `file("/etc/passwd")`, `templatefile("/proc/self/environ", {})`, and a
+ * `fileset("/tmp/takosumi-runs", …)` state sweep are host reads that the
+ * module-local warning alone let through as `ready`.
+ */
+const FILE_READ_CALL_PATH_LITERAL_PATTERN =
+  /\b(file|fileexists|fileset|filebase64|filebase64sha256|filebase64sha512|filemd5|filesha1|filesha256|filesha512|templatefile)\s*\(\s*"((?:[^"\\]|\\.)*)"/g;
+
+/**
+ * A path literal escapes the module when it is rooted at the host filesystem
+ * (`/`), expands to the runner's home (`~`), or walks out of the module with a
+ * `..` segment — including after an interpolation such as
+ * `"${path.module}/../../../etc/passwd"`.
+ */
+function escapesModuleFilesystem(literal: string): boolean {
+  if (literal.startsWith("/") || literal.startsWith("~")) return true;
+  return literal.split("/").includes("..");
+}
+
+function collectHostPathLiterals(text: string): string[] {
+  const literals = new Set<string>();
+  for (const match of text.matchAll(FILE_READ_CALL_PATH_LITERAL_PATTERN)) {
+    const literal = match[2] ?? "";
+    if (escapesModuleFilesystem(literal)) {
+      literals.add(`${match[1]}("${literal}")`);
+    }
+  }
+  return [...literals];
+}
+
 function collectFilesystemSensitiveExpressionFindings(
   files: readonly CapsuleSourceFile[],
   findings: CapsuleGateFinding[],
@@ -531,17 +565,20 @@ function collectFilesystemSensitiveExpressionFindings(
       });
     }
 
-    const hostHits = HOST_FILESYSTEM_PATTERNS.filter((entry) =>
-      entry.pattern.test(file.text),
-    );
+    const hostHits = [
+      ...HOST_FILESYSTEM_PATTERNS.filter((entry) =>
+        entry.pattern.test(file.text),
+      ).map((entry) => entry.label),
+      ...collectHostPathLiterals(file.text),
+    ];
     if (hostHits.length > 0) {
       findings.push({
         severity: "warning",
         compatibilityImpact: "needs_patch",
         code: "filesystem_host_path_expression",
-        message: `Host-path-sensitive OpenTofu expressions were detected: ${hostHits
-          .map((hit) => hit.label)
-          .join(", ")}.`,
+        message: `Host-path-sensitive OpenTofu expressions were detected: ${hostHits.join(
+          ", ",
+        )}.`,
         path: file.path,
         suggestion:
           "Avoid host-path expansion in reusable Capsules; pass explicit files through the module source or variables.",
@@ -554,16 +591,12 @@ function compatibilityLevel(
   findings: readonly CapsuleGateFinding[],
 ): CapsuleCompatibilityLevel {
   if (
-    findings.some(
-      (finding) => finding.compatibilityImpact === "unsupported",
-    )
+    findings.some((finding) => finding.compatibilityImpact === "unsupported")
   ) {
     return "unsupported";
   }
   if (
-    findings.some(
-      (finding) => finding.compatibilityImpact === "needs_patch",
-    )
+    findings.some((finding) => finding.compatibilityImpact === "needs_patch")
   ) {
     return "needs_patch";
   }
@@ -583,7 +616,9 @@ export function collectRootModuleVariableNames(
 export function collectRootModuleOutputNames(
   files: readonly CapsuleSourceFile[],
 ): readonly string[] {
-  return collectRootModuleOutputDeclarations(files).map((output) => output.name);
+  return collectRootModuleOutputDeclarations(files).map(
+    (output) => output.name,
+  );
 }
 
 export function collectRootModuleOutputDeclarations(
@@ -682,15 +717,13 @@ function explicitAllowlist(
 function allowlistContains(
   allowlist: ExplicitAllowlist,
   value: string,
-  contains: (
-    value: string,
-    allowlist: ReadonlySet<string>,
-  ) => boolean = (candidate, entries) => entries.has(candidate),
+  contains: (value: string, allowlist: ReadonlySet<string>) => boolean = (
+    candidate,
+    entries,
+  ) => entries.has(candidate),
 ): boolean {
   return (
-    allowlist === undefined ||
-    allowlist.has("*") ||
-    contains(value, allowlist)
+    allowlist === undefined || allowlist.has("*") || contains(value, allowlist)
   );
 }
 

@@ -161,8 +161,22 @@ max_batch_timeout = 5
 crons = ["*/5 * * * *"]
 
 [vars]
+# Runtime environment selector. Every strict boot gate (durable run ledger,
+# authenticated Interface / Resource Shape routes) and HTTP request logging key
+# off this value; when it is unset the runtime falls back to "local", which
+# downgrades each of those hard failures to a warning and silences request
+# logs. Keep it "production" here and swap to "staging" for a rehearsal
+# deployment — never leave it unset on a served deployment.
+TAKOSUMI_ENVIRONMENT = "production"
 TAKOSUMI_ACCOUNTS_ISSUER = "https://takosumi.example.com"
 TAKOSUMI_ACCOUNTS_SUBJECT = "operator-platform"
+# Public control-plane base URL handed to a Capsule run as TAKOSUMI_ENDPOINT
+# alongside a short-lived `takrun_` token. Both this URL and the run-token
+# signing secret (TAKOSUMI_RUN_TOKEN_SECRET, falling back to
+# TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET) must be present or no ambient run
+# identity is injected and a module declaring `takosumi_interface` fails its
+# apply with "Missing ambient Takosumi run identity".
+TAKOSUMI_RUN_INTERFACE_API_URL = "https://takosumi.example.com"
 # The stock Worker contributes one provider-neutral runner. A composing Worker
 # may inject additional profiles and executor adapters through the runtime
 # TAKOSUMI_RUNNER_HOST_COMPOSITION object; this text value only enables exact
@@ -226,6 +240,8 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 #   TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN     operator token for privacy request completion
 #   TAKOSUMI_DEPLOY_CONTROL_TOKEN                  accounts/control-plane bearer
 #   TAKOSUMI_METRICS_SCRAPE_TOKEN                  Prometheus `/metrics` scrape bearer
+#   TAKOSUMI_RUN_TOKEN_SECRET                      Capsule run (`takrun_`) signing secret;
+#                                                  TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET is the fallback
 # Optional release activation webhook:
 #   TAKOSUMI_RELEASE_ACTIVATOR_TOKEN               required only when TAKOSUMI_RELEASE_ACTIVATOR_URL is set
 # Commercial payment-provider credentials belong to the host extension and are

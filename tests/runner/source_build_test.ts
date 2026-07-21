@@ -85,3 +85,57 @@ test("source build rejects outputs that resolve outside the checkout", async () 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("source build leaves no surviving descendant behind", async () => {
+  // A build command that daemonizes a helper would otherwise still be running,
+  // as the same uid, once the run's provider credential files are written for
+  // the tofu phases.
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-build-group-"));
+  const sourceRoot = join(root, "source");
+  let leakedPid: number | undefined;
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await runSourceBuild(
+      {
+        commands: [
+          {
+            argv: [
+              process.execPath,
+              "-e",
+              `import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], {
+  stdio: "ignore",
+});
+child.unref();
+writeFileSync("leaked.pid", String(child.pid));`,
+            ],
+          },
+        ],
+        outputs: ["leaked.pid"],
+      },
+      sourceRoot,
+    );
+    leakedPid = Number(await readFile(join(sourceRoot, "leaked.pid"), "utf8"));
+    expect(Number.isInteger(leakedPid)).toBe(true);
+    let alive = true;
+    for (let attempt = 0; attempt < 50 && alive; attempt += 1) {
+      try {
+        process.kill(leakedPid, 0);
+        await Bun.sleep(20);
+      } catch {
+        alive = false;
+      }
+    }
+    expect(alive).toBe(false);
+  } finally {
+    if (leakedPid !== undefined) {
+      try {
+        process.kill(leakedPid, "SIGKILL");
+      } catch {
+        // Already reaped by the process-group kill under test.
+      }
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});

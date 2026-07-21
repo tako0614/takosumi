@@ -11,6 +11,7 @@ import {
 import { hasCapsuleSourceOptionsInstallLink } from "takosumi-contract";
 import { installStaleAssetReload } from "./lib/chunk-reload.ts";
 import { initializeTakosumiRuntimeCapabilities } from "./lib/runtime-capabilities.ts";
+import { installHandoffTarget } from "./lib/app-handoff.ts";
 import ErrorBoundary from "./components/ErrorBoundary.tsx";
 import "./lib/theme.ts";
 
@@ -50,7 +51,6 @@ const ShellLayout = lazy(
   () => import("./views/account/components/shell/ShellLayout.tsx"),
 );
 const AppListView = lazy(() => import("./views/apps/AppListView.tsx"));
-const StoreView = lazy(() => import("./views/store/StoreView.tsx"));
 const SettingsView = lazy(() => import("./views/settings/SettingsView.tsx"));
 const ManageView = lazy(() => import("./views/settings/ManageView.tsx"));
 const ServiceListView = lazy(() => import("./views/apps/ServiceListView.tsx"));
@@ -58,6 +58,9 @@ const AppDetailView = lazy(() => import("./views/apps/AppDetailView.tsx"));
 const NewAppView = lazy(() => import("./views/new/NewAppView.tsx"));
 const CapsuleSourceOptionsInstallView = lazy(
   () => import("./views/new/CapsuleSourceOptionsInstallView.tsx"),
+);
+const CompositionInstallView = lazy(
+  () => import("./views/new/CompositionInstallView.tsx"),
 );
 const RunsListView = lazy(() => import("./views/runs/RunsListView.tsx"));
 const RunView = lazy(() => import("./views/runs/RunView.tsx"));
@@ -119,6 +122,17 @@ function RedirectWithQuery(props: { readonly to: string }) {
 
 function InstallEntryRoute() {
   const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const handoff = params.get("handoff");
+  if (handoff !== null) {
+    // Protocol-handler path (`web+takosumi:install?…` → `/install?handoff=<…>`).
+    // Build a fresh query from the decoded, whitelisted scheme fields so outer
+    // parameters cannot turn a handoff into an automatic install.
+    return <Navigate href={installHandoffTarget(handoff)} />;
+  }
+  if (params.get("kind") === "composition") {
+    return <Navigate href={`/composition/install${location.search}`} />;
+  }
   return hasCapsuleSourceOptionsInstallLink(location.search) ? (
     <CapsuleSourceOptionsInstallView />
   ) : (
@@ -164,11 +178,11 @@ function App() {
       />
 
       {/* Normal hosted-service surface — ShellLayout owns AuthGuard + chrome.
-          Primary tabs: / (launcher), /store (discovery), /settings (hub).
-          Hosting management stays fully reachable via /settings/manage. */}
+          Primary tabs: / (launcher), /new (ストア: browse AND add in one page),
+          /settings (hub). Hosting management stays fully reachable via
+          /settings/manage. */}
       <Route component={ShellLayout}>
         <Route path="/" component={AppListView} />
-        <Route path="/store" component={StoreView} />
         <Route path="/settings" component={SettingsView} />
         <Route path="/settings/account" component={AccountView} />
         <Route path="/settings/billing" component={BillingView} />
@@ -176,6 +190,7 @@ function App() {
         <Route path="/services" component={ServiceListView} />
         <Route path="/new" component={NewAppView} />
         <Route path="/install" component={InstallEntryRoute} />
+        <Route path="/composition/install" component={CompositionInstallView} />
         <Route path="/connections" component={ConnectionsView} />
         <Route path="/services/:id" component={AppDetailView} />
         <Route path="/services/:id/:tab" component={AppDetailView} />
@@ -211,6 +226,12 @@ function App() {
         path="/billing"
         component={() => <RedirectWithQuery to="/settings/billing" />}
       />
+
+      {/* The store browser and the add flow are ONE page (`/new`). `/store` was
+          the second, duplicate store surface and is now just a compatibility
+          entrance for older links — query intact, so a store deep link still
+          pre-fills. */}
+      <Route path="/store" component={() => <RedirectWithQuery to="/new" />} />
 
       {/* Old paths → new homes. /install is the external install link
           (client-handled): it forwards its query to /new, where

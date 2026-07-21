@@ -36,7 +36,8 @@ export type ShellNavItem = {
 /** Everyday consumer nav — identical on the sidebar and the mobile bottom bar. */
 export const PRIMARY_NAV: readonly ShellNavItem[] = [
   { href: "/", labelKey: "nav.home", icon: LayoutGrid, end: true },
-  { href: "/store", labelKey: "nav.store", icon: Store },
+  // ストア = browse + add in one page (`/new`). There is no separate add tab.
+  { href: "/new", labelKey: "nav.store", icon: Store },
   { href: "/settings", labelKey: "nav.settings", icon: Settings },
 ];
 
@@ -109,11 +110,16 @@ export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
  * section they belong to (the item's own name stays in the page header). */
 export const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/^\/$/, "nav.home"],
-  [/^\/store(\/|$)/, "nav.store"],
   [/^\/settings\/manage(\/|$)/, "settings.manage.title"],
+  // `/account` and `/billing` now live under `/settings`, so their specific
+  // rows must be matched BEFORE the generic `/settings` row — otherwise the top
+  // bar said 設定 while the page header said アカウント / 使用量.
+  [/^\/settings\/account(\/|$)/, "nav.account"],
+  [/^\/settings\/billing(\/|$)/, "nav.billing"],
   [/^\/settings(\/|$)/, "nav.settings"],
+  [/^\/composition(\/|$)/, "nav.store"],
   [/^\/services(\/|$)/, "nav.services"],
-  [/^\/new(\/|$)/, "nav.add"],
+  [/^\/new(\/|$)/, "nav.store"],
   [/^\/connections(\/|$)/, "nav.connections"],
   [/^\/advanced\/workspace(\/|$)/, "nav.workspaceSettings"],
   [/^\/billing(\/|$)/, "nav.billing"],

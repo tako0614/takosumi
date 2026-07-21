@@ -115,6 +115,10 @@ sudo bash scripts/configure-dns.sh
 # verify
 bash scripts/smoke.sh
 bash scripts/prove-no-public-leak.sh
+# smoke/tenant-isolation replay the dev fixture session bearer. up.sh generates a
+# fresh one per bring-up (printed once, and written to caddy/runtime/dev-session-id);
+# there is no fixed value, because the bearer reaches the real OpenTofu runner.
+# Export TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID=sess_... to pin your own.
 curl https://hello.takosumi.test/
 curl https://app.takosumi.test/.well-known/openid-configuration
 curl https://service-worker.takosumi.test/healthz  # local-only worker probe, postgres profile

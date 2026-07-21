@@ -19,7 +19,10 @@ case "$PROFILE" in
 esac
 export TAKOSUMI_SERVICE_URL
 CA="caddy/runtime/pebble-issuance-root.pem"
-LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
+LOCAL_CLOUD_SESSION_ID="$(local_substrate_dev_session_id)"
+# Child compose invocations (migration-idempotency force-recreates the worker)
+# must keep the same generated bearer instead of dropping it to empty.
+export TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID="$LOCAL_CLOUD_SESSION_ID"
 PASS=0
 FAIL=0
 SMOKE_LOG_DIR="${SMOKE_LOG_DIR:-/tmp/smoke-logs}"
@@ -199,7 +202,6 @@ echo
 echo "==> Production mirror — takosumi.com / app.takosumi.com under .test"
 check "prod-mirror.landing.index" "takosumi.test" "/" "200"
 check "prod-mirror.landing.favicon" "takosumi.test" "/brand/favicon.svg" "200"
-check "prod-mirror.landing.geometric" "takosumi.test" "/brand/geometric.svg" "200"
 check "prod-mirror.landing.inkdrop" "takosumi.test" "/brand/inkdrop.svg" "200"
 check "prod-mirror.docs.index" "takosumi.test" "/docs/" "200"
 
