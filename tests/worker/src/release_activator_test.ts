@@ -583,6 +583,48 @@ test("webhook release activator fails closed on non-2xx responses", async () => 
   );
 });
 
+test("webhook release activator redacts operator command output before it reaches the Run ledger", async () => {
+  // The operator activator puts the failed command's stdout/stderr tails into
+  // the failure body and the job result message, and both are carried verbatim
+  // into workspace-visible Run activity.
+  const leakyTail =
+    "release command failed (1): publish stderr tail: " +
+    "CLOUDFLARE_API_TOKEN=abc123def456 " +
+    "Authorization: Bearer sk-live-not-a-real-key-000000 " +
+    "postgres://takosumi:hunter2@db.internal:5432/control";
+
+  const failing = createWebhookReleaseActivator({
+    url: "https://materializer.example.test/activate",
+    token: "release-token",
+    fetcher: async () => new Response(leakyTail, { status: 500 }),
+  });
+  const thrown = await failing
+    .activate(fakeOperatorActivationInput())
+    .then(() => undefined)
+    .catch((error: unknown) => String(error));
+  expect(thrown).toContain("release activator request failed: 500");
+  expect(thrown).not.toContain("abc123def456");
+  expect(thrown).not.toContain("sk-live-not-a-real-key-000000");
+  expect(thrown).not.toContain("hunter2");
+
+  const reporting = createWebhookReleaseActivator({
+    url: "https://materializer.example.test/activate",
+    token: "release-token",
+    fetcher: async () =>
+      Response.json({
+        status: "failed",
+        kind: "takosumi.operator.release-commands@v1",
+        message: leakyTail,
+      }),
+  });
+  const result = await reporting.activate(fakeOperatorActivationInput());
+  expect(result.status).toBe("failed");
+  expect(result.message).toContain("release command failed");
+  expect(result.message).not.toContain("abc123def456");
+  expect(result.message).not.toContain("sk-live-not-a-real-key-000000");
+  expect(result.message).not.toContain("hunter2");
+});
+
 test("webhook release activator validates response status", async () => {
   const activator = createWebhookReleaseActivator({
     url: "https://materializer.example.test/activate",

@@ -6,6 +6,7 @@ import {
   type PublicEndpointProjection,
 } from "takosumi-contract";
 import { normalizeIssuer } from "@takosjp/takosumi-accounts-contract";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import type { AccountsStore, OidcClientRecord } from "../store.ts";
 import {
@@ -131,7 +132,24 @@ async function oidcClientForCapsuleOrMappedClientId(
   const byCapsule = await store.findOidcClientForCapsule(capsuleId);
   if (byCapsule) return byCapsule;
   const clientId = mappedOidcClientId(variables, oidcExperience);
-  return clientId ? await store.findOidcClient(clientId) : undefined;
+  if (!clientId) return undefined;
+  const mapped = await store.findOidcClient(clientId);
+  if (!mapped) return undefined;
+  // The mapped client id comes from a caller-supplied install variable, so it
+  // may only ever re-select this Capsule's own registration. Without this the
+  // saveOidcClient upsert below would rewrite ANOTHER Capsule's client — its
+  // capsuleId, issuer, allowed scopes and redirectUris — to values the caller
+  // chose, taking over that Capsule's sign-in. Fail the install instead of
+  // minting a fresh id: the upsert is keyed on clientId, so continuing with the
+  // colliding id would rewrite the victim row just the same.
+  if (mapped.capsuleId !== capsuleId) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "oidc_client_id_already_bound: the OIDC client id belongs to another Capsule",
+      { reason: "oidc_client_id_already_bound" },
+    );
+  }
+  return mapped;
 }
 
 export async function ensureTakosumiAccountsOidcForExistingCapsule(input: {

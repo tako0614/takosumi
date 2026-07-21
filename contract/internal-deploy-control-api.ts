@@ -115,12 +115,21 @@ export interface RunnerNetworkPolicy {
   readonly allowedHostPatterns?: readonly string[];
 }
 
+/**
+ * Closed on purpose: every member is enforced somewhere, so an operator can
+ * never declare a stricter-sounding value that the runner boundary silently
+ * ignores. `providerCredentials: "forbidden"` denies credential minting for
+ * runs on that profile; `redactLogs` / `blockSensitiveOutputs` are unconditional
+ * at the runner boundary and may only be declared `true`.
+ */
 export interface RunnerSecretExposurePolicy {
-  readonly providerCredentials: "runner-only" | "operator-managed" | string;
+  readonly providerCredentials: "runner-only" | "operator-managed" | "forbidden";
   readonly tenantWorkerOperatorSecrets:
-    "forbidden" | "tenant-scoped-references-only" | "operator-managed" | string;
-  readonly redactLogs?: boolean;
-  readonly blockSensitiveOutputs?: boolean;
+    | "forbidden"
+    | "tenant-scoped-references-only"
+    | "operator-managed";
+  readonly redactLogs?: true;
+  readonly blockSensitiveOutputs?: true;
 }
 
 /**

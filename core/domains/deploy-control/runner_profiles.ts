@@ -158,9 +158,58 @@ function assertRunnerProfileAvailable(profile: RunnerProfile): void {
         (profile.availability.reason ? `: ${profile.availability.reason}` : ""),
     );
   }
+  assertEnforceableSecretExposurePolicy(profile);
   if (profile.lifecycle.state !== "reserved") return;
   throw new Error(
     `runner profile ${profile.id} is reserved and cannot be activated` +
       (profile.lifecycle.reason ? `: ${profile.lifecycle.reason}` : ""),
   );
 }
+
+/**
+ * A secret exposure policy is a promise about what reaches the runner, so a
+ * value the boundary does not implement must never be activated: an operator
+ * writing something stricter-sounding than the enforced set would otherwise
+ * trust a declaration nothing reads. Redaction and sensitive-output blocking
+ * are unconditional at the runner boundary and cannot be turned off here.
+ */
+function assertEnforceableSecretExposurePolicy(profile: RunnerProfile): void {
+  const policy = profile.secretExposurePolicy;
+  if (!policy) return;
+  if (!PROVIDER_CREDENTIAL_EXPOSURES.has(policy.providerCredentials)) {
+    throw new Error(
+      `runner profile ${profile.id} declares unenforceable secretExposurePolicy.providerCredentials ` +
+        `${String(policy.providerCredentials)}; expected one of ${[...PROVIDER_CREDENTIAL_EXPOSURES].join(", ")}`,
+    );
+  }
+  if (
+    !TENANT_WORKER_OPERATOR_SECRET_EXPOSURES.has(
+      policy.tenantWorkerOperatorSecrets,
+    )
+  ) {
+    throw new Error(
+      `runner profile ${profile.id} declares unenforceable secretExposurePolicy.tenantWorkerOperatorSecrets ` +
+        `${String(policy.tenantWorkerOperatorSecrets)}; expected one of ${[...TENANT_WORKER_OPERATOR_SECRET_EXPOSURES].join(", ")}`,
+    );
+  }
+  for (const field of ["redactLogs", "blockSensitiveOutputs"] as const) {
+    const value = policy[field];
+    if (value === undefined || value === true) continue;
+    throw new Error(
+      `runner profile ${profile.id} cannot disable secretExposurePolicy.${field}; ` +
+        `the runner boundary always redacts run material`,
+    );
+  }
+}
+
+const PROVIDER_CREDENTIAL_EXPOSURES: ReadonlySet<string> = new Set([
+  "runner-only",
+  "operator-managed",
+  "forbidden",
+]);
+
+const TENANT_WORKER_OPERATOR_SECRET_EXPOSURES: ReadonlySet<string> = new Set([
+  "forbidden",
+  "tenant-scoped-references-only",
+  "operator-managed",
+]);

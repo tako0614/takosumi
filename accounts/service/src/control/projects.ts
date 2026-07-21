@@ -62,7 +62,7 @@ export async function handleProjects(
     operations: ctx.operations,
     store: ctx.store,
     workspaceId: project.workspaceId,
-    subject: ctx.session.subject,
+    session: ctx.session,
   });
   if (!auth.ok) return auth.response;
   return json({ project });

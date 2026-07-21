@@ -11,6 +11,7 @@ import type {
   UpstreamOAuthOptions,
 } from "@takosjp/takosumi-accounts-service";
 import { upstreamOAuthOptionsFromEnvironment } from "@takosjp/takosumi-accounts-service";
+import { resolveTakosumiMobileOidcClientId } from "@takosjp/takosumi-accounts-service";
 
 export interface NodeAccountsStableOidcConfig {
   readonly privateJwkJson: string;
@@ -33,6 +34,7 @@ export interface NodeAccountsServerConfig {
   readonly managedPublicBaseDomain: string | undefined;
   readonly databaseUrl: string;
   readonly clients: readonly OidcClientRegistration[] | undefined;
+  readonly mobileOidcClientId: string | undefined;
   readonly loginEmailAllowlist: LoginEmailAllowlist | undefined;
   readonly passkeys: PasskeyHttpOptions | undefined;
   readonly upstreamOAuth: UpstreamOAuthOptions | undefined;
@@ -52,6 +54,7 @@ export function parseEnv(
       env.PORT,
       8787,
     )}`;
+  const clients = parseClients(env);
   return {
     bindHost: optional(env, "TAKOSUMI_ACCOUNTS_BIND_HOST") ?? "0.0.0.0",
     port: parseIntOr(env.PORT ?? env.TAKOSUMI_ACCOUNTS_PORT, 8787),
@@ -61,7 +64,11 @@ export function parseEnv(
       "TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN",
     ),
     databaseUrl,
-    clients: parseClients(env),
+    clients,
+    mobileOidcClientId: resolveTakosumiMobileOidcClientId({
+      configuredClientId: optional(env, "TAKOSUMI_MOBILE_OIDC_CLIENT_ID"),
+      clients,
+    }),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
     passkeys: parsePasskeys(env),
     upstreamOAuth: parseUpstreamOAuth(env),
@@ -186,8 +193,8 @@ function parseLoginEmailAllowlist(
   _issuer: string,
 ): LoginEmailAllowlist | undefined {
   const configured = optional(env, "TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST");
-  if (configured?.trim() === "*") return undefined;
-  const emails = configured !== undefined ? splitList(configured) : [];
+  const emails = configured?.trim() === "*" ? [] : splitList(configured);
+  assertPlatformAccessMatchesAllowlist(env, emails.length);
   if (emails.length === 0) return undefined;
   return {
     emails,
@@ -198,6 +205,35 @@ function parseLoginEmailAllowlist(
       )?.toLowerCase() === "false"
     ),
   };
+}
+
+/**
+ * `closed` is an operator promise that this deployment does not accept new
+ * sign-ins. The login email allowlist is its only enforcement, and an unset,
+ * empty, or `"*"` allowlist lets upstream OAuth auto-provision an account for
+ * anyone. Refuse to compose the handler instead of serving an open deployment
+ * that reports itself as closed.
+ */
+function assertPlatformAccessMatchesAllowlist(
+  env: Record<string, string | undefined>,
+  allowlistedEmailCount: number,
+): void {
+  const access = optional(
+    env,
+    "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS",
+  )?.toLowerCase();
+  if (access === undefined || access === "open") return;
+  if (access !== "closed") {
+    throw new TypeError(
+      "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS must be one of: open, closed",
+    );
+  }
+  if (allowlistedEmailCount > 0) return;
+  throw new TypeError(
+    "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS=closed requires a non-empty " +
+      "TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST; set the allowlist or declare " +
+      "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS=open",
+  );
 }
 
 function parsePasskeys(

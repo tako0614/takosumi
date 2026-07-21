@@ -247,7 +247,11 @@ test("runner materializes generic provider credential files for plan and cleans 
     expect(text).toContain("[redacted]");
 
     const materializedPath = await readFile(fixture.pathRecord, "utf8");
-    expect(materializedPath).toContain("/.provider-credentials/");
+    expect(materializedPath).toContain("-credentials-");
+    // Credential files must not sit inside the run workspace: the source-build
+    // phase runs user commands in there and would reach them with one `../`.
+    const workspace = workspaceForRun("plan_generic_provider_file");
+    expect(materializedPath.startsWith(`${workspace.root}/`)).toBe(false);
     await expect(stat(materializedPath)).rejects.toThrow();
   });
 });
@@ -290,7 +294,7 @@ test("runner rematerializes generic provider credential files for apply and clea
       planArtifact: { digest: string };
     };
     const planMaterializedPath = await readFile(fixture.pathRecord, "utf8");
-    expect(planMaterializedPath).toContain("/.provider-credentials/");
+    expect(planMaterializedPath).toContain("-credentials-");
     await expect(stat(planMaterializedPath)).rejects.toThrow();
 
     const apply = await handleRunnerRequest(
@@ -331,7 +335,7 @@ test("runner rematerializes generic provider credential files for apply and clea
     expect(text).toContain("[redacted]");
 
     const applyMaterializedPath = await readFile(fixture.pathRecord, "utf8");
-    expect(applyMaterializedPath).toContain("/.provider-credentials/");
+    expect(applyMaterializedPath).toContain("-credentials-");
     await expect(stat(applyMaterializedPath)).rejects.toThrow();
   });
 });
@@ -374,7 +378,7 @@ test("runner rematerializes generic provider credential files for destroy and cl
       planArtifact: { digest: string };
     };
     const planMaterializedPath = await readFile(fixture.pathRecord, "utf8");
-    expect(planMaterializedPath).toContain("/.provider-credentials/");
+    expect(planMaterializedPath).toContain("-credentials-");
     await expect(stat(planMaterializedPath)).rejects.toThrow();
 
     const destroy = await handleRunnerRequest(
@@ -415,7 +419,7 @@ test("runner rematerializes generic provider credential files for destroy and cl
     expect(text).toContain("[redacted]");
 
     const destroyMaterializedPath = await readFile(fixture.pathRecord, "utf8");
-    expect(destroyMaterializedPath).toContain("/.provider-credentials/");
+    expect(destroyMaterializedPath).toContain("-credentials-");
     await expect(stat(destroyMaterializedPath)).rejects.toThrow();
   });
 });

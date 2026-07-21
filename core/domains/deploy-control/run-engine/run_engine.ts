@@ -31,9 +31,11 @@ import type {
   PolicyDecision,
   RunStatus,
   RunnerProfile,
+  RunnerSecretExposurePolicy,
 } from "@takosumi/internal/deploy-control-api";
 import type { CreateRestoreRequest } from "takosumi-contract/backups";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
 import { usesDeclaredEnvCredentialRecipe } from "takosumi-contract/connections";
 import type {
   Dependency,
@@ -1082,6 +1084,14 @@ export class RunEngine {
     return this.#resolveRunProviderBindings(planRun);
   }
 
+  /** Secret exposure policy of the profile a run dispatches to (credential gate). */
+  async runnerSecretExposurePolicy(
+    planRun: PlanRun,
+  ): Promise<RunnerSecretExposurePolicy | undefined> {
+    const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
+    return profile.secretExposurePolicy;
+  }
+
   policyForPlanRun(planRun: PlanRun): Promise<PolicyConfig | undefined> {
     return this.#policyForPlanRun(planRun);
   }
@@ -1175,6 +1185,22 @@ export class RunEngine {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "capsule is not available to this workspace",
+      );
+    }
+    // SECURITY (operation label must match the target): the route derives the
+    // required scope from the caller-supplied operation, so an explicit
+    // `create` against a Capsule that already has a StateVersion would let a
+    // principal scoped to `create` alone plan and apply over a deployed
+    // Capsule. The label must match what the Capsule's state cursor implies.
+    // A Resource run legitimately uses `create` with no Capsule.
+    if (
+      capsule &&
+      operation === "create" &&
+      capsule.currentStateVersionId !== undefined
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `capsule ${capsule.id} already has a current StateVersion; use operation "update"`,
       );
     }
     const capsuleContext: PlanRunCapsuleContext | undefined = capsule
@@ -1611,6 +1637,7 @@ export class RunEngine {
             source,
             snapshot,
             internal.compatibilityReportId,
+            installConfig.modulePath,
           ),
         )
       : await planCreationStage(
@@ -1826,6 +1853,7 @@ export class RunEngine {
         capsule,
         source,
         snapshot,
+        modulePath,
       )
     ) {
       this.#assertCompatibilityReportRunnable(existing, policy);
@@ -1839,13 +1867,20 @@ export class RunEngine {
           capsuleId: capsule.id,
         },
       );
-    if (preflight) {
-      this.#assertCompatibilityReportScopedToCapsulePlan(
+    // A preflight report that analyzed a different module path is not evidence
+    // about this plan's module. That is an ordinary miss, not tampering, so
+    // fall through to a fresh Capsule Gate run at the planned path rather than
+    // reusing it.
+    if (
+      preflight &&
+      this.#isCompatibilityReportScopedToCapsulePlan(
         preflight,
         capsule,
         source,
         snapshot,
-      );
+        modulePath,
+      )
+    ) {
       this.#assertCompatibilityReportRunnable(preflight, policy);
       await this.#store.patchCapsule(capsule.id, {
         compatibilityReportId: preflight.id,
@@ -1861,6 +1896,7 @@ export class RunEngine {
           capsule,
           source,
           snapshot,
+          modulePath,
         );
       }
       return undefined;
@@ -1887,6 +1923,7 @@ export class RunEngine {
     source: Source,
     snapshot: SourceSnapshot,
     reportId: string,
+    modulePath: string | undefined,
   ): Promise<CapsuleCompatibilityReport> {
     const report = await this.#store.getCapsuleCompatibilityReport(reportId);
     if (!report) {
@@ -1901,6 +1938,7 @@ export class RunEngine {
       capsule,
       source,
       snapshot,
+      modulePath,
     );
     const policy = await this.#policyForCapsule(capsule);
     this.#assertCompatibilityReportRunnable(report, policy);
@@ -1919,11 +1957,30 @@ export class RunEngine {
     capsule: Capsule,
     source: Source,
     snapshot: SourceSnapshot,
+    modulePath: string | undefined,
   ): boolean {
     return (
       report.sourceSnapshotId === snapshot.id &&
       (!report.sourceId || report.sourceId === source.id) &&
-      (!report.capsuleId || report.capsuleId === capsule.id)
+      (!report.capsuleId || report.capsuleId === capsule.id) &&
+      this.#isCompatibilityReportForPlannedModule(report, modulePath)
+    );
+  }
+
+  /**
+   * A report only reviewed the module it was analyzed for. The plan executes
+   * `InstallConfig.modulePath`, so a report produced for a benign sibling
+   * module in the same snapshot must never gate it. A report written before the
+   * analyzed path was recorded is unknown, not root, and is never reusable.
+   */
+  #isCompatibilityReportForPlannedModule(
+    report: CapsuleCompatibilityReport,
+    modulePath: string | undefined,
+  ): boolean {
+    if (!report.modulePath) return false;
+    return (
+      normalizeCompatibilityReportModulePath(report.modulePath) ===
+      normalizeCompatibilityReportModulePath(modulePath)
     );
   }
 
@@ -1932,6 +1989,7 @@ export class RunEngine {
     capsule: Capsule,
     source: Source,
     snapshot: SourceSnapshot,
+    modulePath: string | undefined,
   ): void {
     if (report.sourceSnapshotId !== snapshot.id) {
       throw new OpenTofuControllerError(
@@ -1957,6 +2015,16 @@ export class RunEngine {
           `${capsule.id} but report ${report.id} was created for ` +
           `${report.capsuleId}`,
         { reason: "compatibility_report_capsule_mismatch" },
+      );
+    }
+    if (!this.#isCompatibilityReportForPlannedModule(report, modulePath)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_module_path_mismatch: plan executes module path ` +
+          `${normalizeCompatibilityReportModulePath(modulePath)} but report ` +
+          `${report.id} analyzed ` +
+          `${report.modulePath ? normalizeCompatibilityReportModulePath(report.modulePath) : "an unrecorded path"}`,
+        { reason: "compatibility_report_module_path_mismatch" },
       );
     }
   }
@@ -2267,6 +2335,26 @@ export class RunEngine {
         publicHostPolicyKind(host, managedBaseDomains) ===
         "managed_default_hostname",
     );
+    // Silently dropping the rest is what let a member point a managed-namespace
+    // Capsule at somebody else's hostname: the variable still reached the
+    // generated root, only the reservation and its collision check were skipped.
+    // OSS has no VerifiedDomain ownership authority, so refuse the claim
+    // outright rather than pass an unproven hostname through unrecorded. An
+    // operator with no managed namespace at all is self-hosting its own domain
+    // and is unaffected.
+    if (managedBaseDomains.length > 0) {
+      const unverifiedHosts = requestedHosts.filter(
+        (host) =>
+          publicHostPolicyKind(host, managedBaseDomains) === "custom_domain",
+      );
+      if (unverifiedHosts.length > 0) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `custom_domain_not_verified: ${unverifiedHosts.join(", ")} has no proven ownership record on this host`,
+          { reason: "custom_domain_not_verified" },
+        );
+      }
+    }
     if (claimableHosts.length === 0) return;
     const workspaceId = capsule.workspaceId;
     const workspace = await this.#store.getWorkspace(workspaceId);
@@ -2602,16 +2690,22 @@ export class RunEngine {
       await checkApplyExpected(request.expected, planRun);
       return await this.getApplyRun(planRun.appliedApplyRunId);
     }
-    // Approval gate (spec §10.6 always-two-stage destroy / invariant 22). A
-    // destroy plan is "always two-stage": it must carry a RECORDED approval
-    // (POST /runs/:id/approve, which sets planRun.approval) before it can apply.
-    // Without this the approval surfaced as `awaitingApproval` in the dashboard
-    // is display-only and the single most destructive operation would apply
-    // unreviewed.
-    if (planRun.operation === "destroy" && !planRun.approval) {
+    // Approval gate (spec §10.6 always-two-stage destroy / §25 action policy /
+    // invariant 22). A destroy plan is "always two-stage", and an action-policy
+    // delete/replace plan records `requiresApproval`: both must carry a RECORDED
+    // approval (POST /runs/:id/approve, which sets planRun.approval) before they
+    // can apply. The gate is enforced against exactly the set
+    // `RunQueryService.planAwaitsApproval` reports — otherwise the §19 Run
+    // projection would show `waiting_approval` (and the auto-apply hook would
+    // refuse) while this route accepted the apply, making the review of the most
+    // destructive changes display-only.
+    if (
+      !planRun.approval &&
+      (planRun.operation === "destroy" || planRun.requiresApproval === true)
+    ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `plan run ${planRun.id} is a destroy awaiting approval; approve it (POST /runs/${planRun.id}/approve) before apply`,
+        `plan run ${planRun.id} is awaiting approval; approve it (POST /runs/${planRun.id}/approve) before apply`,
       );
     }
     await checkApplyExpected(request.expected, planRun);
@@ -5177,10 +5271,11 @@ export class RunEngine {
     // two-stage — it MUST carry a recorded approval (`approveRun`) before apply —
     // so a passed destroy plan parks in the persisted `waiting_approval` status
     // instead of `succeeded` (it was previously `succeeded` + a read-time
-    // derivation). The OTHER gates are NOT approval-mandatory at apply and stay
-    // `succeeded`: a `requiresApproval` (delete/replace) change remains a
-    // display/review signal. A read-only drift_check never parks; a
-    // policy-denied plan is `failed`.
+    // derivation). An action-policy delete/replace plan keeps the persisted
+    // `succeeded` status and carries its gate in `requiresApproval`, which
+    // `planAwaitsApproval` (read model) and `createApplyRun` (apply gate) both
+    // honour. A read-only drift_check never parks; a policy-denied plan is
+    // `failed`.
     const parksForApproval =
       passedPolicy &&
       running.driftCheck !== true &&

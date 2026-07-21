@@ -25,6 +25,7 @@ import type {
 import {
   installedFormReferenceKey,
   isInstalledFormReference,
+  isResourceShapeKind,
 } from "takosumi-contract";
 import type { ResourceOperation } from "takosumi-contract/runs";
 import type { IsoTimestamp } from "../../shared/time.ts";
@@ -168,6 +169,22 @@ export function formatResourceShapeId(
   return `tkrn:${spaceId}:${kind}:${name}`;
 }
 
+/**
+ * Split a canonical resource id back into its parts. Returns undefined for
+ * anything that is not exactly `tkrn:{space}:{kind}:{name}`, so a malformed or
+ * foreign id never resolves to a Resource by accident.
+ */
+export function parseResourceShapeId(
+  id: ResourceShapeRecordId,
+): { spaceId: SpaceId; kind: ResourceShapeKind; name: string } | undefined {
+  const parts = id.split(":");
+  if (parts.length !== 4 || parts[0] !== "tkrn") return undefined;
+  const [, spaceId, kind, name] = parts;
+  if (!spaceId || !kind || !name || !isResourceShapeKind(kind))
+    return undefined;
+  return { spaceId, kind, name };
+}
+
 /** Validate one optional exact identity against the compatibility kind token. */
 export function assertResourceFormIdentity(
   form: InstalledFormReference | undefined,
@@ -190,6 +207,22 @@ export function resourceFormIdentitiesEqual(
 ): boolean {
   if (left === undefined || right === undefined) return left === right;
   return installedFormReferenceKey(left) === installedFormReferenceKey(right);
+}
+
+/**
+ * NativeResource evidence this Resource's lifecycle may destroy.
+ *
+ * `operator` marks shared operator backing the Resource only borrows
+ * (`contract/resolution.ts`), so handing it to a delete plugin would let one
+ * Resource's teardown destroy infrastructure other Resources still depend on.
+ * It is withheld from the adapter's delete/observe input entirely.
+ */
+export function deletableNativeResources(
+  nativeResources: readonly NativeResourceRef[] | undefined,
+): readonly NativeResourceRef[] {
+  return (nativeResources ?? []).filter(
+    (nativeResource) => nativeResource.ownership !== "operator",
+  );
 }
 
 /**

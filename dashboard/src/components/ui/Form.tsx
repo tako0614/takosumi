@@ -56,6 +56,16 @@ export function FormField(props: FieldProps): JSX.Element {
       el.removeAttribute("aria-describedby");
     }
   });
+  // `aria-invalid` belongs with the error message that FormField itself
+  // renders. Leaving it to each call site's `invalid` prop made correctness
+  // opt-in: any `FormField error=` without a paired `invalid=` announced a red
+  // message as a plain description on a field reported as valid.
+  createEffect(() => {
+    const el = control();
+    if (!el) return;
+    if (props.error) el.setAttribute("aria-invalid", "true");
+    else el.removeAttribute("aria-invalid");
+  });
   const body = (
     <>
       <Show when={props.label}>

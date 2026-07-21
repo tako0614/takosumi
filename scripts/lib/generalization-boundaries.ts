@@ -72,16 +72,21 @@ const RULES: readonly BoundaryRule[] = [
   {
     id: "retired-contract-subpath",
     message:
-      "current imports and path aliases must resolve to canonical Capsule contracts, not removed deployments/installations modules",
+      "current imports and path aliases must resolve to canonical Capsule contracts, not removed deployments/installations/capability-bindings modules",
     appliesTo: (path) =>
       isImplementationPath(path) ||
       path === "tsconfig.json" ||
       path.endsWith("/tsconfig.json") ||
       path === "package.json" ||
       path.endsWith("/package.json"),
+    // `capability-bindings` is retired provider-model vocabulary (see the root
+    // `check-no-legacy-names.mjs` CapabilityBinding rule, whose `\bCapabilityBinding\b`
+    // pattern cannot match the kebab-case module path). `install-link` is
+    // deliberately absent: it is live vocabulary (`dashboard/src/lib/install-link.ts`),
+    // so only its stale alias was removed, not the name.
     patterns: [
-      /takosumi-contract\/(?:deployments|installations)\b/,
-      /(?:\.\.\/|\.\/)?contract\/(?:deployments|installations)\.ts\b/,
+      /takosumi-contract\/(?:deployments|installations|capability-bindings)\b/,
+      /(?:\.\.\/|\.\/)?contract\/(?:deployments|installations|capability-bindings)\.ts\b/,
     ],
   },
   {

@@ -114,10 +114,61 @@ function truncate(message: string): string {
  * - Otherwise the message is a real, user-facing sentence (e.g. a 4xx
  *   validation reason) and is returned as-is.
  */
+/**
+ * Stable deploy-control `details.reason` tokens → localized sentences.
+ *
+ * The control plane throws these as 4xx with an engineer-facing English
+ * message (`state_generation_mismatch: plan run pr_x was created against …`).
+ * `friendlyError` passes 4xx text through by design — a real validation
+ * sentence IS the best copy — but these particular ones are internal prose, so
+ * they are translated here instead. Unmapped reasons keep the existing
+ * behaviour.
+ */
+const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
+  state_generation_mismatch: "controlError.stateGenerationMismatch",
+  dependency_snapshot_stale: "controlError.dependencySnapshotStale",
+  dependency_snapshot_missing: "controlError.dependencySnapshotStale",
+  dependency_snapshot_tampered: "controlError.dependencySnapshotStale",
+  dependency_outputs_unavailable: "controlError.dependencyUnavailable",
+  dependency_state_unavailable: "controlError.dependencyUnavailable",
+  dependency_value_sealer_unavailable: "controlError.dependencyUnavailable",
+  sensitive_output_resolver_unavailable: "controlError.dependencyUnavailable",
+  source_ref_changed: "controlError.sourceChanged",
+  source_snapshot_mismatch: "controlError.sourceChanged",
+  source_snapshot_missing: "controlError.sourceChanged",
+  compatibility_report_missing: "controlError.compatibilityStale",
+  compatibility_report_capsule_mismatch: "controlError.compatibilityStale",
+  compatibility_report_snapshot_mismatch: "controlError.compatibilityStale",
+  compatibility_report_source_mismatch: "controlError.compatibilityStale",
+  compatibility_report_not_runnable: "controlError.compatibilityStale",
+  compatibility_report_output_metadata_missing:
+    "controlError.compatibilityStale",
+  runner_infrastructure_error: "controlError.runnerUnavailable",
+  runner_infrastructure_retry_exhausted: "controlError.runnerUnavailable",
+  runner_capability_missing: "controlError.runnerUnavailable",
+  capsule_plan_creation_timeout: "controlError.runnerUnavailable",
+  slot_limit_reached: "controlError.slotLimitReached",
+  owner_slot_limit_reached: "controlError.slotLimitReached",
+  capsule_not_found: "controlError.capsuleNotFound",
+  install_config_not_found: "controlError.configNotFound",
+  output_share_revoked: "controlError.shareRevoked",
+};
+
+function mappedReasonMessage(
+  err: unknown,
+  t: FriendlyErrorTranslate,
+): string | undefined {
+  if (!(err instanceof ControlApiError)) return undefined;
+  const key = err.reason ? REASON_MESSAGES[err.reason] : undefined;
+  return key ? t(key) : undefined;
+}
+
 export function friendlyError(
   err: unknown,
   t: FriendlyErrorTranslate,
 ): FriendlyError {
+  const mapped = mappedReasonMessage(err, t);
+  if (mapped !== undefined) return { message: mapped };
   const raw = extract(err);
   if (isOpaque(raw)) {
     const detail =
@@ -132,4 +183,23 @@ export function friendlyError(
     };
   }
   return { message: raw.message };
+}
+
+/**
+ * One-line copy for a failed READ (list/detail fetch).
+ *
+ * Views used to interpolate `ControlApiError.message` straight into
+ * `common.fetchFailed`, which put `500 Internal Server Error` on a Japanese
+ * screen. Opaque failures now collapse to one localized sentence; a genuine
+ * 4xx explanation is still shown, and anything longer is left to `friendlyError`
+ * callers that render a folded detail.
+ */
+export function fetchFailedMessage(
+  err: unknown,
+  t: FriendlyErrorTranslate,
+): string {
+  const friendly = friendlyError(err, t);
+  return friendly.message === t("error.generic")
+    ? t("common.fetchFailedGeneric")
+    : t("common.fetchFailed", { message: friendly.message });
 }

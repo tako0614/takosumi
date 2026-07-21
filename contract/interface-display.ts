@@ -30,7 +30,10 @@ export interface InterfaceDisplay {
  */
 export function parseInterfaceDisplay(
   value: unknown,
-  options: { readonly surfaceUrl?: string } = {},
+  options: {
+    readonly surfaceUrl?: string;
+    readonly viewerOrigin?: string;
+  } = {},
 ): InterfaceDisplay {
   const record = isRecord(value) ? value : null;
   if (!record) return {};
@@ -39,7 +42,11 @@ export function parseInterfaceDisplay(
     record.description,
     INTERFACE_DISPLAY_DESCRIPTION_MAX_LENGTH,
   );
-  const icon = resolveDisplayIcon(record.icon, options.surfaceUrl);
+  const icon = resolveDisplayIcon(
+    record.icon,
+    options.surfaceUrl,
+    options.viewerOrigin,
+  );
   const category = boundedText(
     record.category,
     INTERFACE_DISPLAY_CATEGORY_MAX_LENGTH,
@@ -62,10 +69,17 @@ export function parseInterfaceDisplay(
  * a credential-free absolute HTTPS image URL, a leading-`/` path resolved
  * against the surface's runtime origin, or a short emoji glyph. Everything
  * else resolves to `null`.
+ *
+ * `viewerOrigin` is the origin of the page that will render the icon (the
+ * dashboard / accounts origin). An icon there is not an image: it is a
+ * Capsule-chosen, session-credentialed same-origin request the viewer never
+ * approved — `/oauth/authorize?...` answers a cookie-authenticated GET with a
+ * code redirect, so the tile alone would leak an authorization code.
  */
 export function resolveDisplayIcon(
   value: unknown,
   surfaceUrl?: string,
+  viewerOrigin?: string,
 ): InterfaceDisplayIcon | null {
   const raw = boundedText(value, INTERFACE_DISPLAY_ICON_MAX_LENGTH);
   if (raw === undefined) return null;
@@ -87,16 +101,19 @@ export function resolveDisplayIcon(
     } catch {
       return null;
     }
-    return safeImageUrl(raw, origin, { allowHttp: true });
+    return safeImageUrl(raw, origin, { allowHttp: true, viewerOrigin });
   }
 
-  return safeImageUrl(raw, undefined, { allowHttp: false });
+  return safeImageUrl(raw, undefined, { allowHttp: false, viewerOrigin });
 }
 
 function safeImageUrl(
   raw: string,
   base: string | undefined,
-  options: { readonly allowHttp: boolean },
+  options: {
+    readonly allowHttp: boolean;
+    readonly viewerOrigin?: string;
+  },
 ): InterfaceDisplayIcon | null {
   let url: URL;
   try {
@@ -108,7 +125,21 @@ function safeImageUrl(
   if (!allowedProtocols.includes(url.protocol)) return null;
   if (url.username || url.password || url.hash) return null;
   if (hasCredentialQueryParams(url.searchParams)) return null;
+  if (
+    options.viewerOrigin &&
+    url.origin === normalizedOrigin(options.viewerOrigin)
+  ) {
+    return null;
+  }
   return { kind: "image", url: url.toString() };
+}
+
+function normalizedOrigin(value: string): string | null {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

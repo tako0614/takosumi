@@ -38,6 +38,7 @@ import {
   Skeleton,
   StatusBadge,
 } from "../../components/ui/index.ts";
+import { fetchFailedMessage } from "../../lib/error-copy.ts";
 
 const RUN_LIST_PAGE_SIZE = 200;
 /** Backend clamp (contract RUN_LIST_MAX_LIMIT) — asking for more is a no-op. */
@@ -150,9 +151,7 @@ function Inner() {
             <EmptyState
               icon={<Activity size={28} />}
               title={t("runList.title")}
-              message={t("common.fetchFailed", {
-                message: errorMessage(runs.error),
-              })}
+              message={fetchFailedMessage(runs.error, t)}
               action={
                 <Button
                   variant="secondary"
@@ -175,7 +174,7 @@ function Inner() {
                     title={t("runList.empty.title")}
                     message={t("runList.empty.message")}
                     action={
-                      <Button variant="primary" href="/store">
+                      <Button variant="primary" href="/new">
                         {t("apps.add")}
                       </Button>
                     }

@@ -23,7 +23,12 @@ function makeCrypto(): PartitionedSecretBoundaryCrypto {
   });
 }
 
-function makeVault(overrides: { fetch?: typeof fetch } = {}) {
+function makeVault(
+  overrides: {
+    fetch?: typeof fetch;
+    allowedProviderConfigUrls?: readonly string[];
+  } = {},
+) {
   const store = new InMemoryOpenTofuControlStore();
   let counter = 0;
   const subject = new StaticSecretConnectionVault({
@@ -32,6 +37,9 @@ function makeVault(overrides: { fetch?: typeof fetch } = {}) {
     now: () => new Date("2026-06-04T00:00:00.000Z"),
     newId: () => `conn_test${(counter += 1).toString().padStart(12, "0")}`,
     fetch: overrides.fetch as never,
+    ...(overrides.allowedProviderConfigUrls
+      ? { allowedProviderConfigUrls: overrides.allowedProviderConfigUrls }
+      : {}),
     credentialRecipeResolver: (id) =>
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes.find(
         (recipe) => recipe.id === id,
@@ -470,8 +478,78 @@ test("register rejects credential-shaped values in non-secret provider metadata 
   }
 });
 
-test("register keeps descriptive non-secret provider metadata", async () => {
+test("register rejects a provider base URL outside the operator allowlist", async () => {
+  // providerConfig lands verbatim in the generated provider block, so an
+  // unvalidated `endpoint` redirects the minted provider credential to whatever
+  // host the caller names. Only the operator's allowlist may widen this.
+  const { store, vault } = makeVault({
+    allowedProviderConfigUrls: ["https://provider.example.test"],
+  });
+  const error = await vault
+    .register({
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/hashicorp/local",
+      credentialRecipe: declaredEnvRecipe(),
+      values: { LOCAL_PROVIDER_MARKER: "sealed-secret" },
+      scopeHints: {
+        providerConfig: { endpoint: "https://attacker.example.invalid" },
+      },
+    })
+    .catch((caught) => caught);
+
+  expect(error).toBeInstanceOf(ConnectionVaultError);
+  expect((error as ConnectionVaultError).code).toBe("invalid_argument");
+  expect((error as ConnectionVaultError).message).toContain(
+    "scopeHints.providerConfig.endpoint URL https://attacker.example.invalid is not in the operator allowlist",
+  );
+  expect(await store.listConnections("space_1")).toEqual([]);
+  expect(await store.getSecretBlob("conn_test000000000001")).toBeUndefined();
+
+  // Nested and array positions are policed the same way.
+  const nested = await vault
+    .register({
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/hashicorp/local",
+      credentialRecipe: declaredEnvRecipe(),
+      values: { LOCAL_PROVIDER_MARKER: "sealed-secret" },
+      scopeHints: {
+        providerConfig: {
+          endpoints: { extra: ["http://169.254.169.254/latest"] },
+        },
+      },
+    })
+    .catch((caught) => caught);
+  expect(nested).toBeInstanceOf(ConnectionVaultError);
+  expect((nested as ConnectionVaultError).message).toContain(
+    "scopeHints.providerConfig.endpoints.extra[0]",
+  );
+});
+
+test("register rejects every provider base URL when the operator set no allowlist", async () => {
   const { vault } = makeVault();
+  const error = await vault
+    .register({
+      workspaceId: "space_1",
+      provider: "registry.opentofu.org/hashicorp/local",
+      credentialRecipe: declaredEnvRecipe(),
+      values: { LOCAL_PROVIDER_MARKER: "sealed-secret" },
+      scopeHints: {
+        providerConfig: { endpoint: "https://provider.example.test" },
+      },
+    })
+    .catch((caught) => caught);
+
+  expect(error).toBeInstanceOf(ConnectionVaultError);
+  expect((error as ConnectionVaultError).code).toBe("invalid_argument");
+  expect((error as ConnectionVaultError).message).toContain(
+    "is not in the operator allowlist",
+  );
+});
+
+test("register keeps descriptive non-secret provider metadata", async () => {
+  const { vault } = makeVault({
+    allowedProviderConfigUrls: ["https://provider.example.test"],
+  });
   const connection = await vault.register({
     workspaceId: "space_1",
     provider: "registry.opentofu.org/hashicorp/local",
@@ -1034,14 +1112,19 @@ test("mint rejects unavailable pre-run drivers even if a row is manually verifie
 });
 
 test("test() reaches verified for a git https source connection", async () => {
-  // A git source ProviderConnection (no live probe URL configured) verifies
-  // structurally once its token is present, so the source phase can mint it.
-  const { store, vault } = makeVault();
+  // A git source ProviderConnection verifies through a live smart-HTTP probe of
+  // the repository URL it is bound to, so the source phase can mint it.
+  const probeFetch = (): Promise<Response> =>
+    Promise.resolve(new Response("001e# service=git-upload-pack\n"));
+  const { store, vault } = makeVault({ fetch: probeFetch as never });
   const connection = await vault.register({
     workspaceId: "space_1",
     provider: "source_git_https_token",
     kind: "source_git_https_token",
     authMethod: "static_secret",
+    scopeHints: {
+      providerSettings: { repositoryUrl: "https://git.example.com/o/r.git" },
+    },
     values: { GIT_HTTPS_TOKEN: "ghp_token" },
   });
 

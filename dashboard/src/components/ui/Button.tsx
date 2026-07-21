@@ -1,6 +1,7 @@
 import { type JSX, Show, splitProps } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { Loader2 } from "lucide-solid";
+import { isSafeLinkHref } from "takosumi-contract";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 type Size = "sm" | "md" | "lg";
@@ -97,8 +98,15 @@ export default function Button(props: Props): JSX.Element {
         component="a"
         {...(rest as Record<string, unknown>)}
         // A disabled/busy link-button must not activate: an anchor without
-        // href is neither focusable nor followable, so drop it entirely.
-        href={local.disabled || local.busy ? undefined : local.href}
+        // href is neither focusable nor followable, so drop it entirely. The
+        // same drop covers a script-capable href: some callers pass a URL that
+        // ultimately came from a query parameter (the app-handoff return_uri),
+        // and a `javascript:` anchor would run in the dashboard origin.
+        href={
+          local.disabled || local.busy || !isSafeLinkHref(local.href)
+            ? undefined
+            : local.href
+        }
         class={cls()}
         aria-disabled={local.disabled || local.busy ? "true" : undefined}
       >

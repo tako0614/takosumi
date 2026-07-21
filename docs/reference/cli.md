@@ -39,7 +39,7 @@ takosumi launch-readiness validate --file readiness.private.json
 生成される `takosumi.platform-readiness@v2` document は contribution の `id` / `version` /
 `capability` と追加 requirement / evidence schema を埋め込みます。そのため validate と
 public-summary は provider 固有コードや外部 registry lookup を使わず、その document だけで
-fail-closed に検証できます。別 version の contribution は同じ readiness profile として暗黙に
+安全側に停止する形で検証できます。別 version の contribution は同じ readiness profile として暗黙に
 扱いません。旧 baseline ID は validate 時に二重解釈せず、明示的な
 `launch-readiness migrate-final-model` で一度だけ更新します。
 

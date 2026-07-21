@@ -199,7 +199,19 @@ function selectEnvironment(
   raw: { readonly key: string; readonly value: string } | undefined,
   diagnostics: RuntimeConfigDiagnostic[],
 ): Selector<RuntimeEnvironment> {
-  if (!raw) return { value: DEFAULT_ENVIRONMENT, defaulted: true };
+  if (!raw) {
+    // Silence here used to hide a served deployment running as `local`, where
+    // every production/staging strict boot gate degrades to a warning and HTTP
+    // request logs are off. Report it so a half-configured host is visible.
+    diagnostics.push({
+      severity: "warning",
+      code: "missing_environment",
+      message:
+        `TAKOSUMI_ENVIRONMENT is not set; defaulting to ${DEFAULT_ENVIRONMENT}. ` +
+        `Production/staging strict boot assertions and HTTP request logs stay off until it is set.`,
+    });
+    return { value: DEFAULT_ENVIRONMENT, defaulted: true };
+  }
   const normalized = normalizeToken(raw.value);
   if (isRuntimeEnvironment(normalized)) {
     return { value: normalized, key: raw.key, defaulted: false };

@@ -69,8 +69,12 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     ports:
-      - "80:80"
-      - "443:443"
+      # DNS と同じく host bind の default は 127.0.0.1。 ingress は account plane
+      # (= runner に届く session bearer) をそのまま外に出すので、 LAN 公開は
+      # scripts/up.sh の LAN mode (INGRESS_IP を loopback 以外に設定) か
+      # TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_HOST_BIND の明示 opt-in だけにする。
+      - "${TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_HOST_BIND:-127.0.0.1}:80:80"
+      - "${TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_HOST_BIND:-127.0.0.1}:443:443"
       # Caddy admin API (2019) is intentionally NOT exposed to the host.
       # route-registrar talks to it over the internal docker network. To
       # poke it from the host ad-hoc, use:

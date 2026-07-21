@@ -19,6 +19,11 @@ import {
   type ThemePreference,
 } from "../../lib/theme.ts";
 import {
+  installHandlerRegistered,
+  installHandlerSupported,
+  registerInstallHandler,
+} from "../../lib/install-handler.ts";
+import {
   Button,
   Card,
   CardHeader,
@@ -45,11 +50,29 @@ function Inner(props: { readonly session: SessionRecord }) {
   const nav = useNavigate();
   const [busy, setBusy] = createSignal(false);
   const [confirming, setConfirming] = createSignal(false);
+  const installHandlerAvailable = installHandlerSupported();
+  const [handlerRegistered, setHandlerRegistered] = createSignal(
+    installHandlerRegistered(),
+  );
+  const [handlerJustRegistered, setHandlerJustRegistered] = createSignal(false);
+
+  const registerThisDevice = () => {
+    try {
+      registerInstallHandler();
+      setHandlerRegistered(true);
+      setHandlerJustRegistered(true);
+    } catch {
+      // The browser refused (no gesture / private mode). Leave state unchanged;
+      // the button stays offered.
+    }
+  };
 
   const signOutThisBrowser = () => {
     setBusy(true);
     clearSession();
-    nav("/sign-in");
+    // `manual=1`: see UserMenu.signOut — sign-out must never hand the user
+    // straight back to the single-provider auto-start.
+    nav("/sign-in?manual=1");
   };
 
   return (
@@ -205,6 +228,34 @@ function Inner(props: { readonly session: SessionRecord }) {
                     </Button>
                   ))}
                 </div>
+              </div>
+              <div>
+                <p class="tg-card-title">{t("account.installTarget.title")}</p>
+                <p class="muted">{t("account.installTarget.body")}</p>
+                <Show
+                  when={installHandlerAvailable}
+                  fallback={
+                    <p class="muted">
+                      {t("account.installTarget.unsupported")}
+                    </p>
+                  }
+                >
+                  <div class="wc-form-actions">
+                    <Button
+                      variant={handlerRegistered() ? "secondary" : "primary"}
+                      aria-pressed={handlerRegistered()}
+                      type="button"
+                      onClick={registerThisDevice}
+                    >
+                      {handlerRegistered()
+                        ? t("account.installTarget.registered")
+                        : t("account.installTarget.register")}
+                    </Button>
+                  </div>
+                  <Show when={handlerJustRegistered()}>
+                    <p class="muted">{t("account.installTarget.done")}</p>
+                  </Show>
+                </Show>
               </div>
             </div>
           </CardSection>

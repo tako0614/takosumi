@@ -142,3 +142,47 @@ test("labels cannot activate a candidate profile", () => {
   expect(decision.status).toBe("blocked");
   expect(decision.reasons.join("\n")).toContain("lifecycle is candidate");
 });
+
+test("a secret exposure policy the runner boundary cannot enforce fails closed", () => {
+  const seed = SEEDS[0]!;
+  const activate = (secretExposurePolicy: unknown) =>
+    resolveEnabledRunnerProfiles(
+      [
+        {
+          ...seed,
+          secretExposurePolicy:
+            secretExposurePolicy as typeof seed.secretExposurePolicy,
+        },
+      ],
+      seed.id,
+    );
+
+  // An operator writing something stricter-sounding than the enforced set must
+  // not get a profile that silently ignores it.
+  expect(() =>
+    activate({
+      providerCredentials: "vault-only",
+      tenantWorkerOperatorSecrets: "forbidden",
+    }),
+  ).toThrow("unenforceable secretExposurePolicy.providerCredentials");
+  expect(() =>
+    activate({
+      providerCredentials: "runner-only",
+      tenantWorkerOperatorSecrets: "operator-audited",
+    }),
+  ).toThrow("unenforceable secretExposurePolicy.tenantWorkerOperatorSecrets");
+  expect(() =>
+    activate({
+      providerCredentials: "runner-only",
+      tenantWorkerOperatorSecrets: "forbidden",
+      redactLogs: false,
+    }),
+  ).toThrow("cannot disable secretExposurePolicy.redactLogs");
+
+  expect(
+    activate({
+      providerCredentials: "forbidden",
+      tenantWorkerOperatorSecrets: "forbidden",
+    })[0]?.secretExposurePolicy?.providerCredentials,
+  ).toBe("forbidden");
+});

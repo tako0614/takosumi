@@ -262,7 +262,12 @@ test("POST /internal/v1/connections/setups/git-https-token returns 201 with the 
     body: JSON.stringify({
       workspaceId: WORKSPACE_ID,
       displayName: "github",
-      scopeHints: { providerSettings: { username: "git" } },
+      scopeHints: {
+        providerSettings: {
+          username: "git",
+          repositoryUrl: "https://git.example.com/o/r.git",
+        },
+      },
       values: { GIT_HTTPS_TOKEN: "ghp-secret" },
     }),
   });

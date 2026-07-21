@@ -19,7 +19,7 @@ adapter が所有し、Core の backup contract には入りません。
    provider policy、compatibility report、Run、StateVersion、Output、artifacts manifest、
    operator quota/showback ledger、AuditEvent ledger。
 2. **Service-data backup** (Capsule 所有 / optional): messages、attachments、files、
-   posts、profiles など Capsule が provision した service 固有データ。現時点では generic restore は未実装で、対応 provider
+   posts、profiles など Capsule が作成した service 固有データ。現時点では generic restore は未実装で、対応 provider
    adapter または Capsule-defined export がある Capsule だけを対象にする。
 
 control backup は Project / Capsule graph と StateVersion / Output 世代を復元します。

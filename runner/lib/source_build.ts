@@ -47,7 +47,11 @@ export async function runSourceBuild(
       `sourceBuild.commands[${index}] directory`,
     );
 
-    const result = await runCommand(command.argv, { cwd, context });
+    const result = await runCommand(command.argv, {
+      cwd,
+      context,
+      isolateProcessGroup: true,
+    });
     const commandLabel = `source build ${index + 1}/${sourceBuild.commands.length} (${command.argv[0]})`;
     logs.push(
       [commandLabel, result.stdout.trim(), result.stderr.trim()]

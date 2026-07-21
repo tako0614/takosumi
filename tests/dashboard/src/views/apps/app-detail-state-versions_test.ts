@@ -101,17 +101,24 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain(
       'inst().status !== "destroyed" && tab() !== "danger"',
     );
-    // The danger-tab CTA creates the destroy PLAN directly — no confirm modal.
-    // Creating a plan removes nothing; the single confirmation lives on the run
-    // screen at destroy-apply (RunView's destructive-confirm block), where the
-    // plan (what will be removed) is visible.
-    expect(source).toContain("onClick={() => void destroyPlan.run()}");
-    expect(source).not.toContain("confirmDestroy");
-    // useConfirmDialog now exists, but ONLY for the settings-tab unsaved-edits
-    // leave guard — never for delete. The destroy CTA creates the plan directly
-    // (asserted above); the sole confirm() dialog is the leaveConfirm guard.
+    // Creating a plan removes nothing; for an APPLIED service the single
+    // confirmation stays on the run screen at destroy-apply (RunView's
+    // destructive-confirm block), where the plan is visible.
+    expect(source).toContain("if (!destroyIsImmediate()) {");
+    expect(source).toContain("await destroyPlan.run();");
+    // The exception, and the ONLY reason a modal exists here: a service that
+    // never applied is abandoned immediately by the backend, producing no run
+    // — so that path would otherwise delete with no confirmation anywhere.
+    expect(source).toContain(
+      "const destroyIsImmediate = () => !currentStateVersionId();",
+    );
+    expect(source).toContain('title: t("app.danger.destroyConfirmTitle")');
+    expect(ja["app.danger.destroyConfirmMessage"]).toContain("{name}");
+    expect(en["app.danger.destroyConfirmMessage"]).toContain("{name}");
+    // Still exactly two confirm() dialogs: the immediate-delete gate above and
+    // the settings-tab unsaved-edits leave guard. No blanket delete modal.
     expect(source).toContain('title: t("app.settings.leaveConfirm.title")');
-    expect(source.match(/await confirm\(/g)?.length).toBe(1);
+    expect(source.match(/await confirm\(/g)?.length).toBe(2);
     // The danger tab still names the service in its warning header.
     expect(source).toContain(
       't("app.danger.destroyBody", {\n                          name: serviceLabel(),\n                        })',

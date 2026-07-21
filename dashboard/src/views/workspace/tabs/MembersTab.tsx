@@ -19,6 +19,7 @@ import {
 } from "solid-js";
 import { ShieldCheck, Trash2, UserPlus, Users } from "lucide-solid";
 import {
+  ControlApiError,
   type ControlWorkspaceRole,
   inviteMember,
   listMembers,
@@ -140,10 +141,20 @@ export default function MembersTab(props: {
     const email = inviteEmail().trim();
     if (!email) throw new Error(t("members.invite.emailRequired"));
     setInviteSuccess(null);
-    await inviteMember(props.workspaceId, {
-      email,
-      role: inviteRole(),
-    });
+    try {
+      await inviteMember(props.workspaceId, {
+        email,
+        role: inviteRole(),
+      });
+    } catch (err) {
+      // The control plane answers an unknown email with an untranslated
+      // English sentence, and `friendlyError` passes 4xx text through — so the
+      // single most likely failure landed in a Japanese UI in English.
+      if (err instanceof ControlApiError && err.status === 404) {
+        throw new Error(t("members.invite.notFound"));
+      }
+      throw err;
+    }
     setInviteSuccess(email);
     setInviteEmail("");
     setInviteRole("viewer");
@@ -194,12 +205,18 @@ export default function MembersTab(props: {
     null,
   );
   const remove = createAction(async (member: PublicWorkspaceMember) => {
+    // Removing YOURSELF locks you out of this workspace with no self-service
+    // way back — the generic "remove this member (tsub_ab12…)" wording made
+    // that indistinguishable from removing someone else.
+    const isSelf = member.accountId === callerSubject();
     const ok = await confirm({
-      title: t("members.remove"),
-      message: t("members.removeConfirm", {
-        account: shortSubject(member.accountId),
-      }),
-      confirmText: t("members.remove"),
+      title: isSelf ? t("members.removeSelf") : t("members.remove"),
+      message: isSelf
+        ? t("members.removeSelfConfirm")
+        : t("members.removeConfirm", {
+            account: shortSubject(member.accountId),
+          }),
+      confirmText: isSelf ? t("members.removeSelf") : t("members.remove"),
       danger: true,
     });
     if (!ok) return;

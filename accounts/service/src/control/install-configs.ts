@@ -80,6 +80,7 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
+import { installExperiencePublicEndpoint } from "takosumi-contract";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -99,6 +100,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
+  type ControlSession,
   canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
@@ -140,6 +142,7 @@ import {
 } from "./parse.ts";
 import { parseInterfaceBlueprintsValue } from "./interface-blueprints.ts";
 import { defaultCapsuleOutputAllowlist } from "../../../../core/domains/capsules/default_install_config.ts";
+import { publicInstallConfigRecord } from "../../../../core/domains/capsules/public_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
@@ -153,12 +156,7 @@ export async function handleInstallConfigs(
   // /api/v1/capsule-configs, normalized to the historical handler key.
   if (segments.length === 1 && segments[0] === "capsule-configs") {
     if (method !== "GET") return methodNotAllowed("GET");
-    return await listInstallConfigs(
-      operations,
-      store,
-      ctx.session.subject,
-      url,
-    );
+    return await listInstallConfigs(operations, store, ctx.session, url);
   }
   if (segments.length === 2 && segments[0] === "capsule-configs") {
     if (method !== "GET" && method !== "PATCH") {
@@ -171,7 +169,7 @@ export async function handleInstallConfigs(
         operations,
         store,
         workspaceId: config.workspaceId,
-        subject: ctx.session.subject,
+        session: ctx.session,
       });
       if (!auth.ok) return auth.response;
     }
@@ -269,6 +267,22 @@ async function patchScopedInstallConfig(
     return errorJson(
       "invalid_request",
       "installExperience must be a valid service-side projection declaration",
+      400,
+    );
+  }
+  // The public_endpoint projection is what makes a plan reserve — and check the
+  // ownership of — the Capsule's public hostname. A patch that drops it keeps
+  // the endpoint variables flowing into the generated root while the plan skips
+  // reservation entirely, so a member could point `app_url` at another
+  // Workspace's host. A patch may refine the projections, never remove this one.
+  if (
+    installExperiencePatch !== undefined &&
+    installExperiencePublicEndpoint(config.installExperience) !== undefined &&
+    installExperiencePublicEndpoint(installExperiencePatch) === undefined
+  ) {
+    return errorJson(
+      "invalid_request",
+      "installExperience cannot remove the public_endpoint projection",
       400,
     );
   }
@@ -463,12 +477,7 @@ function stringArrayValue(value: unknown): readonly string[] | undefined {
 export function publicInstallConfig(
   config: InstallConfig,
 ): PublicInstallConfig {
-  const { runnerId: _runnerId, internal: _internal, ...publicRecord } = config;
-  const store = config.store;
-  return {
-    ...publicRecord,
-    ...(store ? { store } : {}),
-  };
+  return publicInstallConfigRecord(config);
 }
 
 type InstallConfigListView = "all" | "store";
@@ -494,7 +503,7 @@ function parseInstallConfigListView(
 async function listInstallConfigs(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   url: URL,
 ): Promise<Response> {
   const workspaceId = stringValue(
@@ -509,7 +518,7 @@ async function listInstallConfigs(
       operations,
       store,
       workspaceId,
-      subject: sessionSubject,
+      session,
     });
     if (!auth.ok) return auth.response;
   }

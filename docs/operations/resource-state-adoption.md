@@ -2,7 +2,7 @@
 
 > このページでわかること: backing Capsule を使っていた旧 Resource Shape 実装の
 > encrypted OpenTofu state を、現在の Resource-owned Run/state scope へ明示的に
-> 1 回だけ引き継ぐ手順と fail-closed 条件。
+> 1 回だけ引き継ぐ手順と安全側に停止する条件。
 
 現在の module-backed Resource は Resource 自身を Run subject とし、Resource record が
 最新の encrypted-state pointer と public outputs を所有します。通常の preview / apply /
@@ -74,7 +74,7 @@ execution が既にある場合は失敗します。request body に state bytes
 ## 3. Apply Once And Verify Consumption
 
 通常の Resource preview で plan を確認し、同じ Resource を apply します。runner は次の順序を
-fail closed で実行します。
+安全側に停止する形で実行します。
 
 1. canonical Resource state scope を確認する。既存 state があれば adoption を拒否する。
 2. descriptor が指す exact legacy key だけを読み、generation / digest / Workspace を照合する。

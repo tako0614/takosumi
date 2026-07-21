@@ -31,6 +31,7 @@ import type {
   OutputAllowlistEntry,
 } from "takosumi-contract/install-configs";
 import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-configs";
+import { TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES } from "@takosjp/takosumi-accounts-contract";
 
 const REFERENCE_CONFIG_TIMESTAMP = "2026-07-14T00:00:00.000Z";
 const MANAGED_APP_BASE_DOMAIN = "app.takos.jp";
@@ -290,11 +291,21 @@ function commonCloudflareVariables(input: {
 function publicInstallExperience(input: {
   readonly subdomainVariable: "project_name" | "public_subdomain";
   readonly urlVariable: "app_url" | "public_url";
+  /** `null` for modules that expose no Worker route pattern variable. */
+  readonly routePatternVariable?: string | null;
   readonly oidc?: {
     readonly issuerVariable: string;
     readonly clientIdVariable: string;
+    readonly accountsUrlVariable?: string;
     readonly redirectUriVariable?: string;
     readonly callbackPath: string;
+    /**
+     * Cap for the registered Capsule client. Identity-only apps take the
+     * default; an app that keeps calling the control plane for the signed-in
+     * account must declare the delegation scopes it sends, because authorize
+     * rejects anything outside this list with `invalid_scope`.
+     */
+    readonly scopes?: readonly string[];
   };
 }) {
   return {
@@ -305,7 +316,12 @@ function publicInstallExperience(input: {
         variables: {
           subdomain: input.subdomainVariable,
           url: input.urlVariable,
-          routePattern: "cloudflare_route_pattern",
+          ...(input.routePatternVariable === null
+            ? {}
+            : {
+                routePattern:
+                  input.routePatternVariable ?? "cloudflare_route_pattern",
+              }),
         },
         baseDomain: MANAGED_APP_BASE_DOMAIN,
       },
@@ -316,12 +332,15 @@ function publicInstallExperience(input: {
               variables: {
                 issuerUrl: input.oidc.issuerVariable,
                 clientId: input.oidc.clientIdVariable,
+                ...(input.oidc.accountsUrlVariable
+                  ? { accountsUrl: input.oidc.accountsUrlVariable }
+                  : {}),
                 ...(input.oidc.redirectUriVariable
                   ? { redirectUri: input.oidc.redirectUriVariable }
                   : {}),
               },
               callbackPath: input.oidc.callbackPath,
-              scopes: ["openid", "profile", "email"],
+              scopes: input.oidc.scopes ?? ["openid", "profile", "email"],
             },
           ]
         : []),
@@ -787,8 +806,84 @@ const gitConfig = {
   updatedAt: REFERENCE_CONFIG_TIMESTAMP,
 } satisfies InstallConfig;
 
+/**
+ * The Takos distribution worker. It has no Store entry because Takos is the
+ * workspace shell itself rather than an app installed into one, but it still
+ * needs an addressable InstallConfig: the OIDC client Takos signs in with is
+ * only created by the Capsule install experience, and only a Capsule-bound
+ * client receives the `takosumi` workspace claims Takos requires.
+ *
+ * Unlike the identity-only apps, Takos keeps calling the control plane for the
+ * signed-in account after the browser flow, so its client must be capped at the
+ * full delegation scope set it sends
+ * (`takos/src/worker/server/routes/auth/accounts-delegation.ts`).
+ */
+const takosConfig = {
+  id: "cfg-reference-takos-main",
+  name: "takos-main",
+  modulePath: "deploy/opentofu",
+  variableMapping: {},
+  variablePresentation: [
+    {
+      name: "project_name",
+      type: "string",
+      format: "subdomain",
+      required: true,
+      defaultValue: { source: "capsule_name" },
+      label: { ja: "リソース名", en: "Resource name" },
+      helper: {
+        ja: "この Capsule が作成するリソースの名前です。",
+        en: "Name prefix for resources created by this Capsule.",
+      },
+    },
+    {
+      name: "public_subdomain",
+      type: "string",
+      format: "subdomain",
+      required: true,
+      defaultValue: { source: "capsule_name" },
+      label: { ja: "公開名", en: "Public name" },
+    },
+    {
+      name: "public_url",
+      type: "string",
+      format: "url",
+      advanced: true,
+      label: { ja: "公開 URL", en: "Public URL" },
+    },
+    {
+      name: "environment",
+      type: "string",
+      format: "text",
+      advanced: true,
+      label: { ja: "環境名", en: "Environment" },
+    },
+  ],
+  installExperience: publicInstallExperience({
+    subdomainVariable: "public_subdomain",
+    urlVariable: "public_url",
+    // The Takos module composes Worker routes from `public_url`.
+    routePatternVariable: null,
+    oidc: {
+      issuerVariable: "takosumi_accounts_issuer_url",
+      clientIdVariable: "takosumi_accounts_client_id",
+      accountsUrlVariable: "takosumi_accounts_url",
+      redirectUriVariable: "takosumi_accounts_redirect_uri",
+      callbackPath: "/auth/oidc/callback",
+      scopes: [...TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES],
+    },
+  }),
+  outputAllowlist: {
+    launch_url: urlOutput("launch_url"),
+  },
+  policy: {},
+  createdAt: REFERENCE_CONFIG_TIMESTAMP,
+  updatedAt: REFERENCE_CONFIG_TIMESTAMP,
+} satisfies InstallConfig;
+
 export const REFERENCE_APP_INSTALL_CONFIGS: readonly InstallConfig[] =
   Object.freeze([
+    takosConfig,
     officeConfig,
     yuruConfig({
       app: "yurucommu",

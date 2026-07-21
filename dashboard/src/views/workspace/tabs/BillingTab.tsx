@@ -37,6 +37,7 @@ import {
   KVList,
   Toast,
 } from "../../../components/ui/index.ts";
+import { friendlyError } from "../../../lib/error-copy.ts";
 
 const MODE_KEY: Record<string, MessageKey> = {
   disabled: "billing.mode.disabled",
@@ -98,7 +99,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
       setUsageCursor(page.nextCursor);
       setUsageLoaded(true);
     } catch (error) {
-      setUsageError(errorMessage(error));
+      setUsageError(friendlyError(error, t).message);
     } finally {
       setUsageLoading(false);
     }
@@ -108,7 +109,9 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
     <div class="wa-stack">
       <Show when={billing.error}>
         <Toast tone="error">
-          {t("billing.loadError", { message: errorMessage(billing.error) })}
+          {t("billing.loadError", {
+            message: friendlyError(billing.error, t).message,
+          })}
           <Button size="sm" variant="secondary" onClick={() => void refetch()}>
             {t("common.retry")}
           </Button>
@@ -163,21 +166,39 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
           title={t("billing.usage.title")}
           subtitle={t("billing.usage.subtitle")}
         />
+        {/* The error slot sits OUTSIDE the loaded gate: `usageLoaded` only
+            flips on success, so a first-load failure used to stop the spinner
+            and change nothing at all. */}
+        <Show when={usageError()}>
+          {(message) => (
+            <Toast tone="error">
+              {t("billing.usage.error", { message: message() })}
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                busy={usageLoading()}
+                onClick={() => void loadUsage(false)}
+              >
+                {t("common.retry")}
+              </Button>
+            </Toast>
+          )}
+        </Show>
         <Show
           when={usageLoaded()}
           fallback={
-            <Button
-              variant="secondary"
-              busy={usageLoading()}
-              onClick={() => void loadUsage(false)}
-            >
-              {t("billing.usage.load")}
-            </Button>
+            <Show when={!usageError()}>
+              <Button
+                variant="secondary"
+                busy={usageLoading()}
+                onClick={() => void loadUsage(false)}
+              >
+                {t("billing.usage.load")}
+              </Button>
+            </Show>
           }
         >
-          <Show when={usageError()}>
-            <Toast tone="error">{usageError()}</Toast>
-          </Show>
           <DataTable
             columns={usageColumns()}
             rows={usageRows()}
@@ -199,12 +220,14 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
   );
 }
 
+/**
+ * Usage kinds arrive as snake_case backend tokens (`runner_minute`). The label
+ * keys now match those tokens exactly; an unrecognized kind falls back to the
+ * neutral "unknown" word rather than leaking the raw enum, matching the
+ * contract stated in lib/labels.ts.
+ */
 function usageKindLabel(kind: string): string {
   const key = `billing.usage.kind.${kind}` as MessageKey;
   const translated = t(key);
-  return translated === key ? kind : translated;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return translated === key ? t("common.unknown") : translated;
 }

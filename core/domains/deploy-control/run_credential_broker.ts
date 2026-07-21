@@ -46,6 +46,7 @@ import {
   structuredErrorReason,
 } from "./errors.ts";
 import { evaluateProviderCredentialMintPolicy } from "./provider_policy.ts";
+import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import {
   resolvedProviderBindingsDigest,
   type ResolvedCapsuleProviderBinding,
@@ -169,7 +170,19 @@ export class RunCredentialBroker {
       // the Credential Recipes materialized for the runner dispatch.
       // Every recipe uses the same provider-neutral env/file path. Rootgen may
       // render explicit non-secret providerConfig, but never credential args.
-      const providerEntries = providerMintEntriesFromResolved(resolved);
+      //
+      // Narrow to the providers the reviewed plan actually declared before
+      // minting: a Capsule keeps one Provider Binding set for every provider it
+      // has ever used, so an unnarrowed mint hands a run that needs only
+      // `hashicorp/http` the live credentials of every other bound provider.
+      // The digest fence above stays on the FULL resolved set — it pins what
+      // the reviewer saw, not what this phase materializes.
+      const mintable = resolved.filter((entry) =>
+        planRun.requiredProviders.some((required) =>
+          sameProviderSource(required, entry.provider),
+        ),
+      );
+      const providerEntries = providerMintEntriesFromResolved(mintable);
       const credentialEvidenceProviders = providerEntries.map(
         (entry) => entry.provider,
       );
@@ -186,7 +199,7 @@ export class RunCredentialBroker {
       if (providerEntries.length === 0) {
         await this.#recordProviderCredentialMintEvents(
           planRun,
-          resolved,
+          mintable,
           phase,
           auditRunId,
           bundle.providerCredentialEvidence,
@@ -199,7 +212,7 @@ export class RunCredentialBroker {
         );
         return {
           env: { ...bundle.env },
-          manifest: credentialManifest(resolved),
+          manifest: credentialManifest(mintable),
         };
       }
       const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
@@ -214,7 +227,7 @@ export class RunCredentialBroker {
       ];
       await this.#recordProviderCredentialMintEvents(
         planRun,
-        resolved,
+        mintable,
         phase,
         auditRunId,
         evidence,
@@ -227,7 +240,7 @@ export class RunCredentialBroker {
       );
       const recipeResponse = recipeBundle.toMintResponse();
       const env = { ...bundle.env, ...recipeResponse.env };
-      const manifest = credentialManifest(resolved, recipeResponse.files);
+      const manifest = credentialManifest(mintable, recipeResponse.files);
       return recipeResponse.files && recipeResponse.files.length > 0
         ? { env, files: recipeResponse.files, manifest }
         : { env, manifest };

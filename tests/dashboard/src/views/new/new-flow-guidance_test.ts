@@ -86,8 +86,10 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("startLinkImport");
     expect(newAppViewSource).toContain('class="av-add-discovery"');
     expect(newAppViewSource).toContain('class="av-link-entry"');
+    // Merged store tab: this page is the only store surface, so it keeps both
+    // the 取得元 controls and the sort control.
     expect(newAppViewSource).toContain("showSourceControls={true}");
-    expect(newAppViewSource).toContain("showSortControl={false}");
+    expect(newAppViewSource).toContain("showSortControl={true}");
     expect(newAppViewSource).not.toContain("showKindFilters");
     expect(newAppViewSource).toContain("function StoreIcon");
     expect(newAppViewSource).toContain("return <Package size={20} />");
@@ -157,7 +159,14 @@ describe("/new flow guidance", () => {
     expect(en).not.toHaveProperty("new.store.add");
     expect(en).not.toHaveProperty("new.store.kind.worker");
     expect(en).not.toHaveProperty("new.store.kind.site");
-    expect(en["new.summary.provider"]).toBe("Runs on");
+    // The 追加内容 rail is gone, and with it its labels — the app card and the
+    // derived public URL say the same thing without a second panel.
+    expect(en).not.toHaveProperty("new.summary.provider");
+    expect(en).not.toHaveProperty("new.summary.aria");
+    expect(en).not.toHaveProperty("new.flow.selected");
+    expect(ja).not.toHaveProperty("new.summary.provider");
+    expect(ja).not.toHaveProperty("new.summary.aria");
+    expect(ja).not.toHaveProperty("new.flow.selected");
     expect(en).not.toHaveProperty("new.store.blocksTitle");
     expect(en).not.toHaveProperty("new.store.examplesTitle");
     expect(en).not.toHaveProperty("new.advancedImport.open");
@@ -176,7 +185,6 @@ describe("/new flow guidance", () => {
     expect(ja).not.toHaveProperty("new.store.kind.worker");
     expect(ja).not.toHaveProperty("new.store.kind.site");
     expect(ja).not.toHaveProperty("new.store.kind.storage");
-    expect(ja["new.summary.provider"]).toBe("ホスト先");
     expect(ja).not.toHaveProperty("new.store.blocksTitle");
     expect(ja).not.toHaveProperty("new.store.examplesTitle");
     expect(ja).not.toHaveProperty("new.advancedImport.open");
@@ -563,6 +571,17 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('t("new.storeInput.title")');
     expect(newAppViewSource).toContain('t("new.storeInput.subtitle")');
     expect(newAppViewSource).not.toContain('t("new.storeInput.body")');
+    // The setup section carries ONLY what the app actually asks for. The
+    // derived identity (display name + public subdomain) is not a required
+    // field on an ordinary install, so it is excluded here and rendered by
+    // installIdentityFields instead — and the section does not mount at all
+    // when nothing is left to ask.
+    expect(newAppViewSource).toContain("const setupStoreInputs = (");
+    expect(newAppViewSource).toContain("const hasSetupStoreInputs = ()");
+    expect(newAppViewSource).toContain(
+      "when={hasSetupStoreInputs() ? selectedServiceEntry() : null}",
+    );
+    expect(newAppViewSource).toContain("setupStoreInputs(entry())");
     // The service-name field carries live inline validation (error prop +
     // invalid input state) instead of the old bare label-only FormField.
     expect(newAppViewSource).toContain('label={t("new.name")}');
@@ -573,9 +592,47 @@ describe("/new flow guidance", () => {
     expect(appViewsCssSource).toContain(".av-service-setup-grid");
     expect(appViewsCssSource).toContain(".av-service-setup-head p");
     expect(en).not.toHaveProperty("new.storeInput.body");
-    expect(en["new.storeInput.subtitle"]).toContain("minimum fields");
     expect(ja).not.toHaveProperty("new.storeInput.body");
-    expect(ja["new.storeInput.subtitle"]).toContain("最小限");
+  });
+
+  test("an ordinary store install asks for nothing the platform can derive", () => {
+    // The install page leads with the resulting public URL and a single
+    // action. Display name / subdomain / hostname mode stay reachable behind
+    // 変更 — derived by default, never invented, never hidden away.
+    expect(newAppViewSource).toContain("const installIdentityFields = (");
+    expect(newAppViewSource).toContain('class="av-add-identity"');
+    expect(newAppViewSource).toContain("const installTargetHost = ()");
+    expect(newAppViewSource).toContain('t("new.identity.label")');
+    expect(newAppViewSource).toContain("setIdentityOpen(!identityOpen())");
+    expect(newAppViewSource).toContain('t("new.identity.edit")');
+    expect(newAppViewSource).toContain("const identityStoreInput = (");
+    // The managed-hostname mode is a platform concept; it belongs with the
+    // identity it changes, not as a bare select above the app.
+    expect(newAppViewSource).toContain("supportsManagedPublicHostnameChoice()");
+    expect(appViewsCssSource).toContain(".av-add-identity-host");
+    expect(ja["new.identity.label"]).toBe("公開URL");
+    expect(en["new.identity.label"]).toBe("Public URL");
+    // App-store vocabulary for the single action.
+    expect(ja["new.installCta"]).toBe("インストール");
+    expect(en["new.installCta"]).toBe("Install");
+  });
+
+  test("a disabled install button always states what is blocking it", () => {
+    expect(newAppViewSource).toContain('class="av-add-blocked"');
+    expect(newAppViewSource).toContain(
+      "when={compatibility() !== null && !canContinue()}",
+    );
+    // "Press add first" was reachable from INSIDE the add action.
+    expect(newAppViewSource).not.toContain('t("new.proceedHint")');
+    expect(en).not.toHaveProperty("new.proceedHint");
+    expect(ja).not.toHaveProperty("new.proceedHint");
+    expect(newAppViewSource).toContain('t("new.error.checkIncomplete")');
+    // A typed-but-unsaved source token saves as part of the same action
+    // instead of failing validation and pointing at a buried 保存 button.
+    expect(newAppViewSource).toContain(
+      'if (sourceAccessMode() === "token" && sourceToken().trim()) {',
+    );
+    expect(newAppViewSource).toContain("await saveSourceTokenConnection();");
   });
 
   test("does not hard-code Takos repo behavior into the add flow", () => {
@@ -708,12 +765,35 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).toContain("showSetupProgress()");
     expect(newAppViewSource).toContain('t("new.progress.details")');
-    expect(newAppViewSource.indexOf('t("new.progress.status"')).toBeGreaterThan(
-      newAppViewSource.indexOf('t("new.progress.details")'),
-    );
     expect(newAppViewSource).not.toContain('stepSource() !== "idle"');
     expect(en["new.progress.details"]).toBe("Detailed progress");
     expect(ja["new.progress.details"]).toBe("詳しい進行状況");
+  });
+
+  test("waiting renders as progress, not as an error-toned alert", () => {
+    // Installing REPLACES the action row with one neutral progress panel;
+    // step-by-step detail stays collapsed inside it. The old red-bordered
+    // wb-status-panel made a normal wait read as a failure.
+    expect(newAppViewSource).toContain("const installProgressActive = ()");
+    expect(newAppViewSource).toContain("const installProgressPercent = ()");
+    expect(newAppViewSource).toContain('class="av-add-progress"');
+    expect(newAppViewSource).toContain('role="progressbar"');
+    expect(newAppViewSource).toContain("when={!installProgressActive()}");
+    expect(newAppViewSource).not.toContain(
+      'AnnouncedStatus class="wb-status-panel">',
+    );
+    expect(appViewsCssSource).toContain(".av-add-progress-track");
+    expect(appViewsCssSource).toContain(".av-add-progress-fill");
+    // The add flow must not reuse RunView's install-card class names — both
+    // render an "install progress" surface and same-name rules collide.
+    expect(newAppViewSource).not.toContain('class="av-install-progress"');
+    expect(newAppViewSource).not.toContain("av-install-actions");
+    // Neutral surface, never the danger tint.
+    expect(appViewsCssSource).not.toMatch(
+      /\.av-add-progress \{[^}]*--tg-danger/u,
+    );
+    expect(ja["new.progress.title"]).toBe("インストールしています");
+    expect(en["new.progress.title"]).toBe("Installing");
   });
 
   test("keeps install progress copy app-oriented instead of OpenTofu-oriented", () => {
@@ -742,6 +822,12 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain(
       'class="wb-status-panel av-pick-status"',
     );
+    // Delay-gated: an indicator that appears and vanishes inside one frame
+    // reads as a glitch. Only a pick that really keeps the user waiting shows
+    // one; the busy state and its retry path still exist for slow hydration.
+    expect(newAppViewSource).toContain("const STORE_PICK_BUSY_DELAY_MS =");
+    expect(newAppViewSource).toContain("const settlePickBusy = () =>");
+    expect(newAppViewSource).toContain("clearTimeout(busyTimer);");
     // Errors from a failed pick render INSIDE the discovery section (the
     // chosen-source error slot is not mounted there) with a retry affordance.
     expect(newAppViewSource).toContain("setFailedStorePick(listing)");
@@ -871,12 +957,21 @@ describe("/new flow guidance", () => {
     expect(en["new.advanced.customUrlHint"].toLowerCase()).toContain("url");
   });
 
-  test("the chosen listing is not rendered twice on wide screens", () => {
-    // Wide screens keep the right-rail 追加内容 summary and hide the top
-    // banner duplicate; the ≤720px layout hides the rail card instead.
-    expect(appViewsCssSource).toMatch(
+  test("the chosen listing renders once, as the app card, at every width", () => {
+    // The right-rail 追加内容 summary is gone: it duplicated the app identity
+    // and gave the page a deploy-console shape. The header IS the app card,
+    // so nothing needs hiding per breakpoint.
+    expect(newAppViewSource).not.toContain('class="av-add-summary"');
+    expect(newAppViewSource).not.toContain('class="av-add-summary-card"');
+    expect(appViewsCssSource).not.toContain(".av-add-summary");
+    expect(appViewsCssSource).not.toMatch(
       /@media \(min-width: 721px\) \{\s*\.av-add-flow-header \{\s*display: none;/u,
     );
+    // One centred column, app identity on top.
+    expect(appViewsCssSource).toMatch(
+      /\.av-add-flow-body \{[^}]*grid-template-columns: 1fr;/u,
+    );
+    expect(newAppViewSource).toContain('class="av-add-flow-by"');
   });
 
   test("uses neutral compatibility summaries for unknown backend diagnostics", () => {

@@ -42,6 +42,23 @@ export const TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES = [
   "capsules:write",
 ] as const;
 
+/**
+ * Scopes a Capsule-registered OIDC client must be granted to keep acting on the
+ * control plane for the signed-in account after the browser flow ends. A
+ * Capsule that only identifies the user needs `openid profile email`; one that
+ * delegates Workspace/Capsule operations (the Takos distribution worker) needs
+ * this full set, so its `installExperience` must declare it explicitly —
+ * `allowedScopes` is a hard cap and authorize answers `invalid_scope` for
+ * anything outside it.
+ */
+export const TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES = [
+  "openid",
+  "profile",
+  "email",
+  "offline_access",
+  ...TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES,
+] as const;
+
 export type TakosumiAccountsPatScope =
   (typeof TAKOSUMI_ACCOUNTS_PAT_SCOPES)[number];
 
@@ -276,13 +293,7 @@ export function buildOidcDiscoveryDocument(
     ...(config.serviceDocumentation
       ? { service_documentation: config.serviceDocumentation }
       : {}),
-    scopes_supported: [
-      "openid",
-      "profile",
-      "email",
-      "offline_access",
-      ...TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES,
-    ],
+    scopes_supported: [...TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES],
     claims_supported: ["sub", "iss", "aud", "exp", "iat", "email", "name"],
   };
 }

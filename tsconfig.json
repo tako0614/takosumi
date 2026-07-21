@@ -47,7 +47,6 @@
       "takosumi-contract/workspaces": ["./contract/workspaces.ts"],
       "takosumi-contract/projects": ["./contract/projects.ts"],
       "takosumi-contract/install-configs": ["./contract/install-configs.ts"],
-      "takosumi-contract/deploy": ["./contract/deploy.ts"],
       "takosumi-contract/capsules": ["./contract/capsules.ts"],
       "takosumi-contract/provider-resolution": [
         "./contract/provider-resolution.ts"
@@ -63,7 +62,6 @@
       "takosumi-contract/interfaces": ["./contract/interfaces.ts"],
       "takosumi-contract/runs": ["./contract/runs.ts"],
       "takosumi-contract/state-versions": ["./contract/state-versions.ts"],
-      "takosumi-contract/install-link": ["./contract/install-link.ts"],
       "takosumi-contract/backups": ["./contract/backups.ts"],
       "takosumi-contract/billing": ["./contract/billing.ts"],
       "takosumi-contract/security": ["./contract/security.ts"],

@@ -10,6 +10,7 @@ import {
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
+  ensureOperationPermission,
   ensureWorkspacePermission,
   readJsonBody,
   DEPENDENCY_ID_PATTERN,
@@ -85,8 +86,12 @@ export function mountDeployControlDependencyRoutes(
       enforceBody: true,
       handler: async ({ c, principal, id }) => {
         // The consumer is the path Capsule; its Workspace gates the write.
+        // A Dependency edge decides which producer Output is injected into the
+        // consumer's next run, so it is an update to the consumer Capsule and
+        // needs write authority, not just Workspace membership.
         const consumer = await controller.getCapsule(id);
         ensureWorkspacePermission(principal, consumer.capsule.workspaceId);
+        ensureOperationPermission(principal, "update");
         const body = await readJsonBody<
           Omit<
             CreateDependencyRequest,
@@ -134,6 +139,7 @@ export function mountDeployControlDependencyRoutes(
           );
         }
         ensureWorkspacePermission(principal, dependency.workspaceId);
+        ensureOperationPermission(principal, "update");
         await dependenciesService!.deleteDependency(id);
         return c.body(null, 204);
       },

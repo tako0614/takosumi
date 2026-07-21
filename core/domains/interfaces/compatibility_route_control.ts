@@ -5,12 +5,22 @@ import type {
   ResourceObject,
 } from "takosumi-contract";
 import { isTakosumiCompatibilityProfileToken } from "takosumi-contract/capabilities";
+import {
+  COMPATIBILITY_ROUTE_INTERFACE_TYPE,
+  COMPATIBILITY_ROUTE_INTERFACE_VERSION,
+  COMPATIBILITY_ROUTE_PERMISSION,
+} from "takosumi-contract";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { InterfaceService, InterfaceServiceError } from "./service.ts";
 
-export const COMPATIBILITY_ROUTE_INTERFACE_TYPE = "http.route";
-export const COMPATIBILITY_ROUTE_INTERFACE_VERSION = "v1alpha1";
-export const COMPATIBILITY_ROUTE_PERMISSION = "edge.request";
+// The route type/version/permission tokens are shared wire vocabulary and live
+// on the contract surface with the rest of them; re-exported here so existing
+// importers of this module keep working.
+export {
+  COMPATIBILITY_ROUTE_INTERFACE_TYPE,
+  COMPATIBILITY_ROUTE_INTERFACE_VERSION,
+  COMPATIBILITY_ROUTE_PERMISSION,
+};
 export const COMPATIBILITY_ROUTE_ENDPOINT_INPUT = "endpoint";
 export const COMPATIBILITY_ROUTE_ENDPOINT_OUTPUT = "url";
 

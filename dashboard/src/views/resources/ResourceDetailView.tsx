@@ -48,6 +48,7 @@ import {
   Toast,
 } from "../../components/ui/index.ts";
 import ResourceEditor from "./ResourceEditor.tsx";
+import { resourcePhaseLabel } from "../../lib/labels.ts";
 
 type Identity = {
   readonly workspaceId: string;
@@ -279,7 +280,7 @@ function Inner(): JSX.Element {
                     title={t("resources.detail.status")}
                     actions={
                       <Badge tone={resourcePhaseTone(item().status?.phase)}>
-                        {item().status?.phase ?? t("common.unknown")}
+                        {resourcePhaseLabel(item().status?.phase)}
                       </Badge>
                     }
                   />
@@ -403,7 +404,13 @@ function Inner(): JSX.Element {
                                         : "muted"
                                   }
                                 >
-                                  {condition.status}
+                                  {/* `true` / `false` is the wire value, not a
+                                      status a reader can act on. */}
+                                  {condition.status === "true"
+                                    ? t("resources.condition.ok")
+                                    : condition.status === "false"
+                                      ? t("resources.condition.bad")
+                                      : t("common.unknown")}
                                 </Badge>
                               </div>
                               <Show

@@ -22,6 +22,7 @@ import {
   upstreamOAuthOptionsFromEnvironment,
   type LoginEmailAllowlist,
   type InterfaceOAuthActivityValidator,
+  resolveTakosumiMobileOidcClientId,
 } from "@takosjp/takosumi-accounts-service";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 import { checkPlatformBindings } from "./bindings-check.ts";
@@ -48,6 +49,8 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_CLIENT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD?: string;
   readonly TAKOSUMI_ACCOUNTS_ALLOWED_SCOPES?: string;
+  /** Exact public PKCE client advertised by `/.well-known/takosumi`. */
+  readonly TAKOSUMI_MOBILE_OIDC_CLIENT_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_KEY_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS?: string;
@@ -63,6 +66,8 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS?: string;
   readonly TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST?: string;
   readonly TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED?: string;
+  /** `open` | `closed`. `closed` requires a non-empty login email allowlist. */
+  readonly TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS?: string;
   /**
    * Shared platform-worker load-shedding knob used by the scheduled deploy-control
    * source poller. Optional and intentionally not part of the required accounts
@@ -250,8 +255,8 @@ export function parseLoginEmailAllowlist(
   const configured = optionalString(
     env.TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST,
   );
-  if (configured?.trim() === "*") return undefined;
-  const emails = configured !== undefined ? splitList(configured) : [];
+  const emails = configured?.trim() === "*" ? [] : splitList(configured ?? "");
+  assertPlatformAccessMatchesAllowlist(env, emails.length);
   if (emails.length === 0) return undefined;
   return {
     emails,
@@ -260,6 +265,35 @@ export function parseLoginEmailAllowlist(
         env.TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED,
       ) ?? true,
   };
+}
+
+/**
+ * `closed` is an operator promise that this deployment does not accept new
+ * sign-ins, and it is recorded as such in every release attestation. Nothing
+ * else enforces it: the login email allowlist is the only gate, and an unset,
+ * empty, or `"*"` allowlist lets upstream OAuth auto-provision an account for
+ * anyone. Refuse to compose the handler rather than serve an open deployment
+ * that reports itself as closed.
+ */
+function assertPlatformAccessMatchesAllowlist(
+  env: CloudflareWorkerEnv,
+  allowlistedEmailCount: number,
+): void {
+  const access = optionalString(
+    env.TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS,
+  )?.toLowerCase();
+  if (access === undefined || access === "open") return;
+  if (access !== "closed") {
+    throw new TypeError(
+      "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS must be one of: open, closed",
+    );
+  }
+  if (allowlistedEmailCount > 0) return;
+  throw new TypeError(
+    "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS=closed requires a non-empty " +
+      "TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST; set the allowlist or declare " +
+      "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS=open",
+  );
 }
 
 /** Whether at least one usable upstream OAuth/OIDC registration is mounted. */
@@ -509,9 +543,7 @@ async function seedLocalSubstrateAccount(
       optionalString(env.TAKOSUMI_ACCOUNTS_SUBJECT) ??
       "tsub_takosumi_local",
   );
-  const sessionId =
-    optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID) ??
-    "sess_local_substrate";
+  const sessionId = optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID);
   await store.saveAccount({
     subject,
     displayName: "Local Substrate",
@@ -519,6 +551,12 @@ async function seedLocalSubstrateAccount(
     createdAt: now,
     updatedAt: now,
   });
+  // No hard-coded fallback: this session id is a bearer that reaches the real
+  // OpenTofu runner, and the test bed's ingress can be published on a LAN. A
+  // built-in literal would be a credential every reader of this repo holds, so
+  // an unset id seeds the fixture account with no replayable session
+  // (scripts/up.sh generates one per bring-up).
+  if (!sessionId) return;
   await store.saveAccountSession({
     sessionId,
     subject,
@@ -699,6 +737,17 @@ export function parseConfiguredOidcClients(
       tokenEndpointAuthMethod,
     },
   ];
+}
+
+export function configuredTakosumiMobileOidcClientId(
+  env: CloudflareWorkerEnv,
+): string | undefined {
+  const configuredClientId = optionalString(env.TAKOSUMI_MOBILE_OIDC_CLIENT_ID);
+  if (!configuredClientId) return undefined;
+  return resolveTakosumiMobileOidcClientId({
+    configuredClientId,
+    clients: parseConfiguredOidcClients(env),
+  });
 }
 
 function parseClientRecord(value: unknown): OidcClientRegistration {

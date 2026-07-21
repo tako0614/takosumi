@@ -17,9 +17,7 @@ export default function Wordmark(props: Props): JSX.Element {
       <span aria-hidden="true">
         <LogoMark size={props.size ?? 26} />
       </span>
-      <span class="wordmark-text">
-        {props.productName ?? "Takosumi"}
-      </span>
+      <span class="wordmark-text">{props.productName ?? "Takosumi"}</span>
     </>
   );
   return props.href === undefined ? (

@@ -14,6 +14,11 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
   });
 
   assert.deepEqual(document.api_versions, [TAKOSUMI_API_VERSION]);
+  assert.equal(document.product, "takosumi");
+  assert.equal(document.name, "Takosumi");
+  assert.equal(document.apiBaseUrl, "https://takosumi.example.com/api/v1");
+  assert.equal(document.oidcClientId, undefined);
+  assert.deepEqual(document.auth, { oidc: true, password: false });
   assert.equal(document.features.stacks, true);
   assert.equal(document.features.resource_shapes, false);
   assert.equal(document.features.compat_framework, true);
@@ -25,6 +30,17 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
     "https://takosumi.example.com/v1/capabilities",
   );
   assert.equal(document.endpoints.oidc_issuer, "https://takosumi.example.com");
+});
+
+test("Takosumi discovery advertises only the configured native PKCE client", () => {
+  const document = createTakosumiWellKnownDocument({
+    origin: "https://app.takosumi.com",
+    mobileOidcClientId: " takosumi-mobile-cloud ",
+  });
+
+  assert.equal(document.product, "takosumi");
+  assert.equal(document.oidcClientId, "takosumi-mobile-cloud");
+  assert.equal(document.endpoints.oidc_issuer, "https://app.takosumi.com");
 });
 
 test("Takosumi product capabilities separate framework from enabled profiles", () => {

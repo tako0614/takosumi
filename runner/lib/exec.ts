@@ -130,30 +130,53 @@ export async function readOpenTofuOutputsFromStateFile(
 
 export async function runCommand(
   command: readonly string[],
-  options: { readonly cwd: string; readonly context?: CommandContext },
+  options: {
+    readonly cwd: string;
+    readonly context?: CommandContext;
+    /**
+     * Runs the command in its own process group and kills the whole group once
+     * it returns. Source-build commands are user-supplied and run before the
+     * run's provider credentials are written to disk, so a descendant left
+     * behind by a build command would still be alive — as the same uid — while
+     * those credential files exist.
+     */
+    readonly isolateProcessGroup?: boolean;
+  },
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   let timedOut = false;
+  const isolate = options.isolateProcessGroup === true;
   const subprocess = Bun.spawn([...command], {
     cwd: options.cwd,
     env: options.context?.env ?? baseCommandEnv(),
     stdout: "pipe",
     stderr: "pipe",
+    ...(isolate ? { detached: true } : {}),
   });
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timeoutMs = options.context?.timeoutMs;
-  const exit =
+  const exited =
     timeoutMs && timeoutMs > 0
       ? Promise.race([
           subprocess.exited,
           new Promise<number>((resolve) => {
             timeout = setTimeout(() => {
               timedOut = true;
+              if (isolate) killProcessGroup(subprocess.pid);
               subprocess.kill();
               resolve(124);
             }, timeoutMs);
           }),
         ])
       : subprocess.exited;
+  // Reaping the group as soon as the direct child is done also closes the
+  // inherited stdout/stderr pipes, so a surviving descendant cannot hold the
+  // output readers open.
+  const exit = isolate
+    ? exited.then((code) => {
+        killProcessGroup(subprocess.pid);
+        return code;
+      })
+    : exited;
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(subprocess.stdout).text(),
     new Response(subprocess.stderr).text(),
@@ -169,6 +192,15 @@ export async function runCommand(
           .join("\n")
       : stderr,
   };
+}
+
+/** SIGKILLs a whole process group; an already-empty group is not an error. */
+function killProcessGroup(pid: number): void {
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    // The group is already gone.
+  }
 }
 
 export function commandFailurePayload(

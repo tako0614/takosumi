@@ -182,10 +182,11 @@ export async function runGeneratedRootPlan(
     workspace,
   );
   try {
-    const requiredProviders = await requiredProvidersForGeneratedRoot(
+    const providerScan = await requiredProvidersForGeneratedRoot(
       request,
       workspace.generatedRootDir,
     );
+    const requiredProviders = providerScan.providers;
     assertRunnerPolicyBeforeInit(
       request,
       runnerProfile,
@@ -194,6 +195,7 @@ export async function runGeneratedRootPlan(
         allowProviderFreeGeneratedRoot:
           await generatedRootTreeHasNoProviderUsage(workspace.generatedRootDir),
         requiredProviders,
+        providerScanComplete: providerScan.complete,
       },
     );
     return await initPlanAndBuildResponse(
@@ -268,10 +270,11 @@ export async function runDirectRootPlan(
     workspace,
   );
   try {
-    const requiredProviders = await requiredProvidersForGeneratedRoot(
+    const providerScan = await requiredProvidersForGeneratedRoot(
       request,
       moduleDir,
     );
+    const requiredProviders = providerScan.providers;
     assertRunnerPolicyBeforeInit(
       request,
       runnerProfile,
@@ -280,6 +283,7 @@ export async function runDirectRootPlan(
         allowProviderFreeGeneratedRoot:
           await generatedRootTreeHasNoProviderUsage(moduleDir),
         requiredProviders,
+        providerScanComplete: providerScan.complete,
       },
     );
     const sourceCommit =
@@ -502,10 +506,11 @@ export async function runReviewedPlanApply(
     workspace,
   );
   try {
-    const requiredProviders = await requiredProvidersForGeneratedRoot(
+    const providerScan = await requiredProvidersForGeneratedRoot(
       request,
       moduleDir,
     );
+    const requiredProviders = providerScan.providers;
     assertRunnerPolicyBeforeInit(
       request,
       runnerProfile,
@@ -514,6 +519,7 @@ export async function runReviewedPlanApply(
         allowProviderFreeGeneratedRoot:
           await generatedRootTreeHasNoProviderUsage(moduleDir),
         requiredProviders,
+        providerScanComplete: providerScan.complete,
       },
     );
     const strictMirrorInit = await prepareStrictProviderMirrorInit(

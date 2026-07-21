@@ -209,3 +209,22 @@ export function providerConnectionTone(status: string | undefined): Tone {
       return "neutral";
   }
 }
+
+/**
+ * Resource lifecycle phase. Same contract as CAPSULE / RUN above: a primary
+ * badge never shows the raw backend token — Resources was the one status
+ * surface still rendering `Ready` / `Degraded` into a Japanese-first UI.
+ */
+const RESOURCE_PHASE: Record<string, MessageKey> = {
+  Pending: "status.resource.pending",
+  Resolving: "status.resource.resolving",
+  Planning: "status.resource.planning",
+  Applying: "status.resource.applying",
+  Ready: "status.resource.ready",
+  Degraded: "status.resource.degraded",
+  Failed: "status.resource.failed",
+  Deleting: "status.resource.deleting",
+  Deleted: "status.resource.deleted",
+};
+export const resourcePhaseLabel = (phase?: string) =>
+  label(RESOURCE_PHASE, phase);

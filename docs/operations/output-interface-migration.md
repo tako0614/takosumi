@@ -16,7 +16,7 @@ Output として残り得ますが、fallback authority には戻しません。
   type/version、入力名を明示選択します。well-known Output 名から推測しません。
 - confirmation は Capsule `updatedAt`、InstallConfig `updatedAt`、current Output ID /
   digest、Output名digest、blueprint digestを report と完全一致させます。
-- Interface が `Resolved` になり、durable Activity evidence が書けた場合だけ完了です。
+- Interface が `Resolved` になり、永続 Activity evidence が書けた場合だけ完了です。
   evidence 書き込み前に停止しても、同じ確認requestは安全に再実行できます。
 
 ## 1. report
@@ -29,11 +29,11 @@ Authorization: Bearer {deploy-control-token}
 レスポンスには次を含みます。
 
 - `candidates`: exact fence と、値を含まない `availableOutputNames`
-- `completed`: durable migration evidence と Interface ID
-- `issues`: Output pointer不整合、missing Output、retired blueprintなどのfail-closed理由
+- `completed`: 永続 migration evidence と Interface ID
+- `issues`: Output pointer不整合、missing Output、retired blueprintなどの安全側に停止する理由
 
 `mode=service_blueprints` なら `candidate` をそのまま確認します。
-`mode=owner_selection_required` なら、ownerとInterface consumerが合意した明示
+`mode=owner_selection_required` なら、ownerとInterface 利用側が合意した明示
 `selection` を付けます。
 
 ## 2. known first-party の確認
@@ -80,7 +80,7 @@ blueprint由来のInterfaceがあれば再利用し、operatorの後続編集や
 
 もう一度GETし、対象Capsuleが`completed`にあり、返された`evidenceEventId`が
 Workspace Activityで `interface.output_convention_migrated` として読めることを確認します。
-runtime consumerはInterface APIとReady InterfaceBindingだけを読みます。shadow compareを
+runtime 利用側はInterface APIとReady InterfaceBindingだけを読みます。shadow compareを
 行う場合も旧Output discoveryは観測対象に限定し、fallbackとして使いません。
 
 移行後にInterfaceが不要になった場合は通常のInterface retireを使います。旧Output

@@ -327,7 +327,7 @@ function preferredWorkspaceRole(roles: readonly string[]): string {
   return "member";
 }
 
-function scopeIsAllowed(
+export function scopeIsAllowed(
   requestedScope: string,
   allowedScopes: readonly string[],
 ): boolean {
@@ -344,6 +344,23 @@ export async function handleAuthorize(input: {
   store: AccountsStore;
   operations?: ControlPlaneOperations;
 }): Promise<Response> {
+  // An authorization request is a top-level navigation the user chose to make.
+  // A browser that labels it as a subresource — an <img>, <script>, <iframe>,
+  // or fetch on some other page — is a silent code grab: the session cookie
+  // rides along and the 302 hands the code to the client's registered redirect
+  // host without the account holder ever seeing a prompt. A Capsule-declared
+  // launcher icon is exactly such an <img>. Non-browser callers send no
+  // Sec-Fetch-Dest at all, and the header survives cross-origin redirects.
+  const fetchDest = input.request.headers.get("sec-fetch-dest");
+  if (fetchDest !== null && fetchDest !== "document") {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "authorize must be a top-level navigation",
+      },
+      400,
+    );
+  }
   const responseType = input.url.searchParams.get("response_type");
   const clientId = input.url.searchParams.get("client_id");
   const redirectUri = input.url.searchParams.get("redirect_uri");

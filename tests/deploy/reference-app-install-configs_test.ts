@@ -14,7 +14,7 @@ function bindingPermissions(blueprint: CapsuleInterfaceBlueprint): string[] {
 }
 
 test("reference app composition exposes four replaceable Store source identities", () => {
-  expect(REFERENCE_APP_INSTALL_CONFIGS).toHaveLength(4);
+  expect(REFERENCE_APP_INSTALL_CONFIGS).toHaveLength(5);
   const storeConfigs = REFERENCE_APP_INSTALL_CONFIGS.filter(
     (config) => config.store?.source !== undefined,
   );
@@ -23,12 +23,20 @@ test("reference app composition exposes four replaceable Store source identities
   ).toEqual(EXPECTED_STORE_SOURCES);
   expect(
     new Set(REFERENCE_APP_INSTALL_CONFIGS.map((config) => config.id)).size,
-  ).toBe(4);
+  ).toBe(5);
+  // Takos is the workspace shell, not an app installed into one: it stays
+  // addressable without appearing in shared Store discovery.
+  expect(
+    REFERENCE_APP_INSTALL_CONFIGS.find((config) => config.name === "takos-main")
+      ?.store,
+  ).toBeUndefined();
 
   for (const config of REFERENCE_APP_INSTALL_CONFIGS) {
     expect(config.workspaceId).toBeUndefined();
     expect(config.internal).toBeUndefined();
-    expect(config.modulePath).toBe(".");
+    expect(config.modulePath).toBe(
+      config.name === "takos-main" ? "deploy/opentofu" : ".",
+    );
     for (const key of Object.keys(config.variableMapping)) {
       expect(key).not.toMatch(/secret|password|token|api.?key/iu);
     }

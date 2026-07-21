@@ -3,9 +3,10 @@
  * hosted-service terms belong to that host's `legal.*` extension contributions.
  */
 import { A, useParams } from "@solidjs/router";
-import { For } from "solid-js";
+import { createEffect, For, Show } from "solid-js";
 import { dashboardProductName } from "../../lib/runtime-capabilities.ts";
-import { locale, t } from "../../i18n/index.ts";
+import { locale, setDocumentTitle, t } from "../../i18n/index.ts";
+import NotFoundView from "../NotFoundView.tsx";
 
 type LegalPage =
   | "terms-of-service"
@@ -75,44 +76,51 @@ const COPY = {
 
 export default function LegalView(props: Props) {
   const params = useParams();
-  const page = (): LegalPage => {
+  // An unknown /legal/<slug> used to silently render the Terms page under the
+  // wrong URL. Showing the wrong legal document is exactly where a silent
+  // fallback is unacceptable.
+  const page = (): LegalPage | null => {
     const value = props.page ?? params.page;
-    return PAGES.includes(value as LegalPage)
-      ? (value as LegalPage)
-      : "terms-of-service";
+    return PAGES.includes(value as LegalPage) ? (value as LegalPage) : null;
   };
   const language = () => (locale().startsWith("ja") ? "ja" : "en");
-  const copy = () => COPY[language()][page()];
+  const copy = () => COPY[language()][page() ?? "terms-of-service"];
+  createEffect(() => {
+    const current = page();
+    if (current) setDocumentTitle(copy().title);
+  });
 
   return (
-    <main class="legal-page">
-      <section class="legal-card" aria-labelledby="legal-title">
-        <header class="legal-header">
-          <A class="legal-brand" href="/">
-            {dashboardProductName()}
-          </A>
-          <A class="legal-sign-in" href="/sign-in">
-            {t("auth.signIn")}
-          </A>
-        </header>
-        <nav class="legal-nav" aria-label={t("legal.policiesNav")}>
-          <For each={PAGES}>
-            {(key) => (
-              <A
-                class="legal-nav-link"
-                classList={{ active: page() === key }}
-                href={key === "support" ? "/support" : `/legal/${key}`}
-              >
-                {COPY[language()][key].title}
-              </A>
-            )}
-          </For>
-        </nav>
-        <article class="legal-content">
-          <h1 id="legal-title">{copy().title}</h1>
-          <p class="legal-lead">{copy().lead}</p>
-        </article>
-      </section>
-    </main>
+    <Show when={page()} fallback={<NotFoundView />}>
+      <main class="legal-page">
+        <section class="legal-card" aria-labelledby="legal-title">
+          <header class="legal-header">
+            <A class="legal-brand" href="/">
+              {dashboardProductName()}
+            </A>
+            <A class="legal-sign-in" href="/sign-in">
+              {t("auth.signIn")}
+            </A>
+          </header>
+          <nav class="legal-nav" aria-label={t("legal.policiesNav")}>
+            <For each={PAGES}>
+              {(key) => (
+                <A
+                  class="legal-nav-link"
+                  classList={{ active: page() === key }}
+                  href={key === "support" ? "/support" : `/legal/${key}`}
+                >
+                  {COPY[language()][key].title}
+                </A>
+              )}
+            </For>
+          </nav>
+          <article class="legal-content">
+            <h1 id="legal-title">{copy().title}</h1>
+            <p class="legal-lead">{copy().lead}</p>
+          </article>
+        </section>
+      </main>
+    </Show>
   );
 }

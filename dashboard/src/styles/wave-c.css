@@ -292,3 +292,22 @@
   display: grid;
   gap: var(--tg-s-3);
 }
+
+/* Reason for a control the user cannot use. A `title` tooltip is invisible to
+   touch, keyboard and screen readers on a `disabled` element, so every
+   permanently-blocked action states its reason as readable text instead. */
+.wc-disabled-reason {
+  margin: var(--tg-s-2) 0 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  line-height: 1.5;
+}
+.wc-disabled-reason-link {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.wc-disabled-reason-link:hover {
+  color: var(--tg-fg);
+}

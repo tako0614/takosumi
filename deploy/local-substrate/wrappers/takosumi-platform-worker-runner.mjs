@@ -15,8 +15,8 @@
  * the Miniflare worker bindings. That convenience is acceptable inside the
  * local-substrate docker network — where the host process IS the test harness —
  * but in production it would be a credential-exfiltration vector. Production
- * deploys go through `wrangler deploy --config deploy/platform/wrangler.toml`
- * with an explicit env block + `wrangler secret put`. THIS FILE MUST NEVER BE
+ * promotion goes through the ecosystem `release-production-safely` controller
+ * with an operator-private envelope and fixed adapter. THIS FILE MUST NEVER BE
  * COPIED to a production runner. The LOCAL_SUBSTRATE_TEST_BED=1 guard below
  * fails fast if someone tries.
  *
@@ -36,7 +36,7 @@ if (process.env.LOCAL_SUBSTRATE_TEST_BED !== "1") {
       "    It pass-throughs ALL TAKOSUMI_* env vars into worker bindings and injects\n" +
       "    local fixture bindings/secrets for Miniflare D1/R2/DO/queue,\n" +
       "    which is a credential leak path outside a controlled test bed.\n" +
-      "    For production use `wrangler deploy --config deploy/platform/wrangler.toml`.\n" +
+      "    For production use the ecosystem release-production-safely controller.\n" +
       "    For local-substrate use, set LOCAL_SUBSTRATE_TEST_BED=1.",
   );
   process.exit(1);

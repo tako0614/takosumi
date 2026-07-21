@@ -172,11 +172,58 @@ export function attentionCount(
   entries: readonly FeedEntry[] | undefined,
   workspaceId?: string,
 ): number {
+  const seenBefore = readAcknowledgedAt();
   return (entries ?? []).filter(
     (entry) =>
       isFailureAction(entry.event.action) &&
-      (!workspaceId || entry.event.workspaceId === workspaceId),
+      (!workspaceId || entry.event.workspaceId === workspaceId) &&
+      !isAcknowledged(entry, seenBefore),
   ).length;
+}
+
+const ACK_STORAGE_KEY = "takosumi.notifications.acknowledgedAt";
+
+/**
+ * Read the "everything up to here has been seen" mark.
+ *
+ * Without it the bell badge could never be cleared: it counted every failure in
+ * the last 50 activity events, so one failed deploy kept the badge red for days
+ * — long enough that users learn to ignore it and miss the next real failure.
+ */
+export function readAcknowledgedAt(): number {
+  if (typeof localStorage === "undefined") return 0;
+  const raw = localStorage.getItem(ACK_STORAGE_KEY);
+  const value = raw ? Date.parse(raw) : Number.NaN;
+  return Number.isFinite(value) ? value : 0;
+}
+
+function isAcknowledged(entry: FeedEntry, seenBefore: number): boolean {
+  if (seenBefore === 0) return false;
+  const at = Date.parse(entry.event.createdAt);
+  return Number.isFinite(at) && at <= seenBefore;
+}
+
+/** Mark every currently-known event as seen. */
+export function acknowledgeNotifications(
+  entries: readonly FeedEntry[] | undefined,
+): void {
+  if (typeof localStorage === "undefined") return;
+  const newest = (entries ?? []).reduce((max, entry) => {
+    const at = Date.parse(entry.event.createdAt);
+    return Number.isFinite(at) && at > max ? at : max;
+  }, 0);
+  const mark = newest > 0 ? newest : Date.now();
+  localStorage.setItem(ACK_STORAGE_KEY, new Date(mark).toISOString());
+  notifyAcknowledged();
+}
+
+const ackListeners = new Set<() => void>();
+export function onNotificationsAcknowledged(listener: () => void): () => void {
+  ackListeners.add(listener);
+  return () => ackListeners.delete(listener);
+}
+function notifyAcknowledged(): void {
+  for (const listener of [...ackListeners]) listener();
 }
 
 /**

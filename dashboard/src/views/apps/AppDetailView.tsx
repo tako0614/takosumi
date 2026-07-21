@@ -368,6 +368,35 @@ function Inner() {
     }
     navigate("/services");
   });
+  const { confirm } = useConfirmDialog();
+  /**
+   * Delete is confirmed exactly once — normally at destroy-APPLY on the run
+   * screen, where the plan shows what will be removed. Creating a plan removes
+   * nothing, so an upfront modal there would be a second, less informed
+   * confirmation.
+   *
+   * The exception: a service that has never applied has no state to plan
+   * against, and the backend abandons it immediately (see
+   * `deleteCapsule` in lib/control-api.ts). That path produces no run and
+   * therefore never reached the destroy-apply confirmation at all — so it, and
+   * only it, confirms here.
+   */
+  const destroyIsImmediate = () => !currentStateVersionId();
+  const confirmDestroy = async (): Promise<void> => {
+    if (!destroyIsImmediate()) {
+      await destroyPlan.run();
+      return;
+    }
+    const ok = await confirm({
+      title: t("app.danger.destroyConfirmTitle"),
+      message: t("app.danger.destroyConfirmMessage", { name: serviceLabel() }),
+      confirmText: t("app.danger.destroyCta"),
+      cancelText: t("common.cancel"),
+      danger: true,
+    });
+    if (!ok) return;
+    await destroyPlan.run();
+  };
   const backup = createAction(async (): Promise<BackupRecord> => {
     return await createCapsuleBackup(capsuleId());
   });
@@ -436,7 +465,7 @@ function Inner() {
               action={
                 <Button
                   variant="secondary"
-                  href="/"
+                  href="/services"
                   icon={<ArrowLeft size={16} />}
                 >
                   {t("app.backToList")}
@@ -473,7 +502,10 @@ function Inner() {
                 }
                 actions={
                   <div class="av-actions">
-                    <Button variant="ghost" href="/">
+                    {/* /services is the list this detail belongs to; home only
+                        shows services that expose a screen, so returning there
+                        can look like the service disappeared. */}
+                    <Button variant="ghost" href="/services">
                       {t("app.backToList")}
                     </Button>
                     <Show when={effectiveCapsuleStatus(inst()) === "stale"}>
@@ -667,7 +699,7 @@ function Inner() {
                           type="button"
                           disabled={destroyPlan.busy()}
                           busy={destroyPlan.busy()}
-                          onClick={() => void destroyPlan.run()}
+                          onClick={() => void confirmDestroy()}
                         >
                           {t("app.danger.destroyCta")}
                         </Button>
@@ -904,6 +936,11 @@ function RuntimeSurfaceLink(props: {
             href={props.surface.url}
             target="_blank"
             rel="noreferrer noopener"
+            // A service with several surfaces rendered N identically-named
+            // links; the distinguishing text sits outside the control.
+            aria-label={t("app.surfaces.openAria", {
+              name: props.surface.name || props.surface.url,
+            })}
           >
             {t("app.surfaces.open")}
           </Button>

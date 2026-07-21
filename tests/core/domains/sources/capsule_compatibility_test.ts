@@ -673,6 +673,95 @@ output "attachments_bucket" {
   expect(filesystemFinding?.message).toContain("abspath()");
 });
 
+test("requires patch for file reads rooted outside the module", () => {
+  // A module-local `file()` warning is not a licence to read the runner host:
+  // the run root holds every other run's workspace and the materialized
+  // provider credential files.
+  for (const expression of [
+    `file("/etc/passwd")`,
+    `templatefile("/proc/self/environ", {})`,
+    `file("\${path.module}/../../../etc/passwd")`,
+    `file("~/.config/takosumi/credentials")`,
+  ]) {
+    const result = analyzeOpenTofuCapsuleFiles({
+      sourceId: "src_test",
+      sourceSnapshot: snapshot,
+      files: [
+        {
+          path: "main.tf",
+          text: `
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
+resource "aws_s3_bucket" "attachments" {
+  bucket = "exfil"
+  tags = {
+    leaked = ${expression}
+  }
+}
+
+output "attachments_bucket" {
+  value = aws_s3_bucket.attachments.bucket
+}
+`,
+        },
+      ],
+    });
+
+    expect(result.level).toBe("needs_patch");
+    expect(
+      result.findings.find(
+        (finding) => finding.code === "filesystem_host_path_expression",
+      ),
+    ).toMatchObject({
+      severity: "warning",
+      path: "main.tf",
+    });
+  }
+});
+
+test("keeps module-rooted file reads ready", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
+resource "aws_s3_bucket" "attachments" {
+  bucket = jsondecode(file("\${path.module}/bucket.json")).name
+  tags = {
+    policy = templatefile("templates/policy.json.tftpl", {})
+  }
+}
+
+output "attachments_bucket" {
+  value = aws_s3_bucket.attachments.bucket
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.findings.map((finding) => finding.code)).not.toContain(
+    "filesystem_host_path_expression",
+  );
+});
+
 test("admits standard Cloudflare data-plane resource types by default", () => {
   // Promo path: a plain Cloudflare Capsule (a Worker + its D1 / KV / Queues /
   // R2 / Pages data plane) is installable out of the box, with no curated

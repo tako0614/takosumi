@@ -64,11 +64,10 @@ export type VerifyDriver = (
  *   - 401 / 403 ⇒ pending "bad credential" (the token is rejected by the host).
  *   - other http ⇒ pending with the status.
  *
- * The probe runs only when a repo URL is configured on the connection
- * (`scopeHints.providerSettings.repositoryUrl`). Without a probe
- * URL there is no host to ask, so the driver falls back to STRUCTURAL: a present
- * `GIT_HTTPS_TOKEN` ⇒ verified (so the ProviderConnection is not permanently
- * mint-blocked), a missing token ⇒ pending.
+ * The probe needs the repo URL configured on the connection
+ * (`scopeHints.providerSettings.repositoryUrl`). Registration requires it, and
+ * the vault refuses to mint a connection that lacks it (an unbound HTTPS token
+ * is mintable for any host), so a row without one ⇒ pending, never verified.
  */
 export const verifyGitHttps: VerifyDriver = async ({
   connection,
@@ -85,9 +84,9 @@ export const verifyGitHttps: VerifyDriver = async ({
   const repoUrl = gitProbeUrl(connection);
   if (!repoUrl) {
     return {
-      ok: true,
+      ok: false,
       detail:
-        "structural verify (no Git provider repositoryUrl configured for a live smart-HTTP probe)",
+        "git https connection has no scopeHints.providerSettings.repositoryUrl to bind the token to a host",
     };
   }
   const username =
@@ -173,9 +172,9 @@ export function verifyDriverForConnection(
 }
 
 /**
- * Reads the optional git smart-HTTP probe URL from a connection's scope hints.
- * The Git provider owns this optional repository URL. Absent means there is no
- * host to probe, so verification uses the structural fallback.
+ * Reads the git smart-HTTP probe URL from a connection's scope hints. The Git
+ * provider owns this repository URL; it is also the connection's host binding,
+ * so absent means the connection cannot verify and cannot mint.
  */
 function gitProbeUrl(connection: ProviderConnection): string | undefined {
   const repoUrl = gitProviderSettings(connection.scopeHints).repositoryUrl;

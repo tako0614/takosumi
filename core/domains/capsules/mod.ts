@@ -345,6 +345,19 @@ export class CapsulesService {
           "workspace does not exist",
         );
       }
+      // SECURITY (lifecycle-action self-authorization): `validateLifecycleActions`
+      // checks the actions against the policy carried by the SAME write, so any
+      // caller allowed to update a Workspace-owned config could widen
+      // `policy.lifecycleActions` and install the actions it just authorized in
+      // one call — including `executor: "operator"` commands, which the release
+      // activator hands to the operator webhook with the operator bearer token.
+      // Both patch entrances reach this method (the deploy-control PATCH and the
+      // Workspace-session PATCH /api/v1/capsule-configs/:id), so the stored
+      // policy is the ceiling here: an update may narrow it, never widen it.
+      // Shared operator-owned configs (no workspaceId) are unaffected — only an
+      // unrestricted operator can patch those.
+      const stored = await this.#store.getInstallConfig(config.id);
+      if (stored) assertLifecycleActionsNotEscalated(stored, config);
     }
     validateCapsuleInterfaceBlueprints(config.interfaceBlueprints ?? []);
     return await this.#store.putInstallConfig(config);
@@ -603,6 +616,92 @@ function patchPolicy(
 
 function hasOwn(value: object, key: PropertyKey): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+/**
+ * Rejects any update to a Workspace-owned InstallConfig that gives its
+ * lifecycle actions more authority than the stored row already had. The
+ * operator-authored shared config the row was cloned from stays the ceiling;
+ * narrowing (or leaving the actions and policy untouched) is always allowed.
+ */
+function assertLifecycleActionsNotEscalated(
+  stored: InstallConfig,
+  next: InstallConfig,
+): void {
+  assertLifecycleActionPolicyNotWidened(stored, next);
+  // The policy ceiling alone is not enough: a row that legitimately inherited
+  // `allowedExecutors: ["operator"]` would otherwise let the Workspace rewrite
+  // the operator command itself, and an operator action is executed by the
+  // operator's own release-activation webhook. Operator-executor actions on a
+  // Workspace-owned config may therefore only be inherited verbatim or removed.
+  const storedOperatorActions = new Set(
+    (stored.lifecycleActions ?? [])
+      .filter((action) => action.executor === "operator")
+      .map(canonicalLifecycleActionKey),
+  );
+  for (const action of next.lifecycleActions ?? []) {
+    if (action.executor !== "operator") continue;
+    if (!storedOperatorActions.has(canonicalLifecycleActionKey(action))) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        `lifecycleActions.${action.id} runs with operator authority and cannot be authored on a Workspace-owned install config`,
+      );
+    }
+  }
+}
+
+function canonicalLifecycleActionKey(
+  action: InstallConfigLifecycleAction,
+): string {
+  return JSON.stringify(action, (_key, value: unknown) =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+            a.localeCompare(b),
+          ),
+        )
+      : value,
+  );
+}
+
+function assertLifecycleActionPolicyNotWidened(
+  stored: InstallConfig,
+  next: InstallConfig,
+): void {
+  const nextPolicy = next.policy.lifecycleActions;
+  if (!nextPolicy) return;
+  const storedPolicy = stored.policy.lifecycleActions;
+  if (!storedPolicy) {
+    throw new OpenTofuControllerError(
+      "permission_denied",
+      "policy.lifecycleActions cannot be granted to a Workspace-owned install config",
+    );
+  }
+  for (const executor of nextPolicy.allowedExecutors) {
+    if (!storedPolicy.allowedExecutors.includes(executor)) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        `policy.lifecycleActions.allowedExecutors cannot add ${executor}`,
+      );
+    }
+  }
+  for (const capability of nextPolicy.allowedRunnerCapabilities) {
+    if (!storedPolicy.allowedRunnerCapabilities.includes(capability)) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        `policy.lifecycleActions.allowedRunnerCapabilities cannot add ${capability}`,
+      );
+    }
+  }
+  if (
+    nextPolicy.allowProviderCredentials === true &&
+    storedPolicy.allowProviderCredentials !== true
+  ) {
+    throw new OpenTofuControllerError(
+      "permission_denied",
+      "policy.lifecycleActions.allowProviderCredentials cannot be granted",
+    );
+  }
 }
 
 function assertSafeInstallConfigPath(value: string, field: string): void {

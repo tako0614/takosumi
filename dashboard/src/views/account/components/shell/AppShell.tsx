@@ -37,17 +37,46 @@ export default function AppShell(props: Props) {
   let mainRef: HTMLElement | undefined;
   // On SPA navigation, move focus to the content well so keyboard/AT users
   // land on the new page instead of staying on the old nav control.
-  // `defer` skips the first run so initial load doesn't steal focus.
+  //
+  // Keyed on the page, NOT the raw pathname: detail screens put their tab strip
+  // in the trailing segment (`/services/:id/:tab`), and throwing focus out of
+  // the tab strip on every tab click made those strips unusable by keyboard.
+  // It also waits for the routing transition to settle — `location.pathname`
+  // flips as soon as the URL commits, which on a slow lazy route meant focusing
+  // <main> while it still held the PREVIOUS page.
+  const pageKey = () => {
+    const segments = location.pathname.split("/").filter(Boolean);
+    const isDetailTab =
+      segments.length === 3 &&
+      (segments[0] === "services" || segments[0] === "advanced");
+    return isDetailTab ? segments.slice(0, 2).join("/") : location.pathname;
+  };
   createEffect(
     on(
-      () => location.pathname,
-      () => mainRef?.focus(),
+      () => [pageKey(), isRouting()] as const,
+      ([, routing], previous) => {
+        if (routing) return;
+        if (previous && previous[0] === pageKey()) return;
+        mainRef?.focus();
+      },
       { defer: true },
     ),
   );
   return (
     <div class="app-shell">
-      <a href="#main" class="skip-link">
+      {/* The router intercepts same-origin anchors and only scrolls the hash
+          target, so the browser's native "focus the fragment" never ran — the
+          skip link moved the viewport but not focus, and the next Tab walked
+          straight back into the sidebar. */}
+      <a
+        href="#main"
+        class="skip-link"
+        onClick={(event) => {
+          event.preventDefault();
+          mainRef?.focus();
+          mainRef?.scrollIntoView();
+        }}
+      >
         {t("shell.skipToContent")}
       </a>
       <Sidebar />

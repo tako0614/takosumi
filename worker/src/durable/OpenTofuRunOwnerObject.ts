@@ -5,13 +5,45 @@ import {
   OpenTofuControllerError,
 } from "../../../core/domains/deploy-control/errors.ts";
 import { CapsuleLeaseBusyError } from "../../../core/domains/deploy-control/capsule_lease.ts";
+import {
+  PollSchedule,
+  RetrySchedule,
+} from "../../../core/shared/lifecycle/mod.ts";
+import { log } from "../../../core/shared/log.ts";
 import type { RunStatus } from "takosumi-contract/runs";
 
 const RUN_OWNER_RECORD_KEY = "run";
 const RUN_OWNER_MAX_ATTEMPTS = 3;
 const RUN_OWNER_RETRY_BASE_DELAY_MS = 10_000;
+const RUN_OWNER_RETRY_MAX_DELAY_MS = 60_000;
 const RUN_OWNER_LEASE_BUSY_DELAY_MS = 10_000;
 const RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS = 1_000;
+const RUN_OWNER_CONTROLLER_POLL_MAX_DELAY_MS = 60_000;
+/**
+ * Total budget for waiting on the control ledger to settle after a dispatch.
+ * Reaching it is not "the run failed" — it means this owner can no longer
+ * observe the run, so it parks loudly and hands the run back to the scheduled
+ * repair sweep instead of re-poking the controller forever.
+ */
+const RUN_OWNER_CONTROLLER_POLL_DEADLINE_MS = 15 * 60 * 1000;
+
+/**
+ * Waiting for the controller/ledger is a POLL, not a retry: a run that is still
+ * `queued` because the runner pool is full, or a ledger read that timed out, is
+ * a normal state and must not burn the dispatch retry budget. It must also not
+ * re-arm at a flat 1s forever, which is what an unbounded requeue delay did:
+ * every alarm re-dispatched, so a run whose row was missing pinned one Durable
+ * Object at 1 Hz with no attempt counter, no ceiling, and no log line.
+ */
+/** Synthetic observed-status token for a runner-infrastructure requeue. */
+const CONTROLLER_REQUEUE_STATUS = "runner_requeued";
+
+const RUN_OWNER_CONTROLLER_POLL = new PollSchedule({
+  minDelayMs: RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS,
+  maxDelayMs: RUN_OWNER_CONTROLLER_POLL_MAX_DELAY_MS,
+  deadlineMs: RUN_OWNER_CONTROLLER_POLL_DEADLINE_MS,
+  jitter: "full",
+});
 // This is the recovery window for a RunOwner DO that resets after the
 // controller already put the run ledger back to queued. Normal long dispatches
 // stay serialized by the same DO event, so a shorter alarm mainly reduces the
@@ -48,6 +80,14 @@ interface RunOwnerRecord {
   readonly messageId?: string;
   readonly lastScheduleCause?: "controller_retry";
   readonly lastError?: string;
+  /**
+   * Controller/ledger poll bookkeeping. Absent on records written before the
+   * poll budget existed; treated as "no poll in flight", which restarts the
+   * budget rather than inheriting an unbounded one.
+   */
+  readonly pollAttempts?: number;
+  readonly pollingSince?: string;
+  readonly lastPolledStatus?: string;
 }
 
 interface DurableObjectState {
@@ -302,31 +342,23 @@ export class OpenTofuRunOwnerObject {
         () => "unknown" as const,
       );
       if (runStatus === "unknown") {
-        const requeueAt = this.#now() + RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS;
-        await this.#writeRecord({
-          ...base,
-          status: "scheduled",
-          startedAt: record.startedAt ?? startedAt,
-          updatedAt: new Date(this.#now()).toISOString(),
-          nextAttemptAt: new Date(requeueAt).toISOString(),
-          lastScheduleCause: "controller_retry",
-          lastError: "run status unavailable after dispatch",
+        await this.#pollController({
+          record,
+          base,
+          startedAt,
+          observedStatus: "unknown",
+          reason: "run status unavailable after dispatch",
         });
-        await this.#scheduleAlarm(requeueAt);
         return;
       }
       if (isRunStillDispatchable(runStatus)) {
-        const requeueAt = this.#now() + RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS;
-        await this.#writeRecord({
-          ...base,
-          status: "scheduled",
-          startedAt: record.startedAt ?? startedAt,
-          updatedAt: new Date(this.#now()).toISOString(),
-          nextAttemptAt: new Date(requeueAt).toISOString(),
-          lastScheduleCause: "controller_retry",
-          lastError: `run remained ${runStatus} after dispatch`,
+        await this.#pollController({
+          record,
+          base,
+          startedAt,
+          observedStatus: runStatus,
+          reason: `run remained ${runStatus} after dispatch`,
         });
-        await this.#scheduleAlarm(requeueAt);
         return;
       }
       const finishedAt = new Date(this.#now()).toISOString();
@@ -351,6 +383,84 @@ export class OpenTofuRunOwnerObject {
     }
   }
 
+  /**
+   * Re-arms the alarm for a run whose controller/ledger state has not settled
+   * yet. Every path out of here either advances a persisted poll counter with a
+   * capped, jittered delay, or ends the loop at the deadline with an error log —
+   * there is no branch that re-arms without accounting.
+   */
+  async #pollController(input: {
+    readonly record: RunOwnerRecord;
+    readonly base: RunOwnerRecord;
+    readonly startedAt: string;
+    readonly observedStatus: string;
+    readonly reason: string;
+  }): Promise<void> {
+    const now = this.#now();
+    // A different observed status is progress, so the backoff (and the budget)
+    // restart. Only a stuck observation is allowed to accumulate.
+    const progressed = input.record.lastPolledStatus !== input.observedStatus;
+    const polls = progressed ? 0 : (input.record.pollAttempts ?? 0);
+    const pollingSince =
+      progressed || !input.record.pollingSince
+        ? new Date(now).toISOString()
+        : input.record.pollingSince;
+    const decision = RUN_OWNER_CONTROLLER_POLL.next({
+      polls,
+      elapsedMs: now - parseIsoMs(pollingSince, now),
+      now,
+      reason: input.reason,
+    });
+    const fields = {
+      runId: input.record.runId,
+      workspaceId: input.record.workspaceId,
+      action: input.record.action,
+      observedStatus: input.observedStatus,
+    };
+    if (decision.kind === "deadline-exceeded") {
+      log.error("takosumi.run_owner.controller_poll_deadline_exceeded", {
+        ...fields,
+        poll: decision.poll,
+        elapsedMs: decision.elapsedMs,
+        deadlineMs: decision.deadlineMs,
+        reason: decision.reason,
+      });
+      // Park instead of looping. The scheduled run-repair sweep is the backstop
+      // for a run whose ledger row is still non-terminal, and a terminal owner
+      // record makes that sweep able to re-arm this object.
+      const finishedAt = new Date(now).toISOString();
+      await this.#writeRecord({
+        ...input.base,
+        status: "failed",
+        startedAt: input.record.startedAt ?? input.startedAt,
+        finishedAt,
+        updatedAt: finishedAt,
+        lastError: `${decision.reason} (poll deadline exceeded after ${decision.elapsedMs}ms)`,
+      });
+      await this.state.storage.deleteAlarm?.();
+      return;
+    }
+    log.warn("takosumi.run_owner.controller_poll_scheduled", {
+      ...fields,
+      poll: decision.poll,
+      delayMs: decision.delayMs,
+      reason: decision.reason,
+    });
+    await this.#writeRecord({
+      ...input.base,
+      status: "scheduled",
+      startedAt: input.record.startedAt ?? input.startedAt,
+      updatedAt: new Date(now).toISOString(),
+      nextAttemptAt: new Date(decision.at).toISOString(),
+      lastScheduleCause: "controller_retry",
+      lastError: decision.reason,
+      pollAttempts: decision.poll,
+      pollingSince,
+      lastPolledStatus: input.observedStatus,
+    });
+    await this.#scheduleAlarm(decision.at);
+  }
+
   async #recordDispatchFailure(
     record: RunOwnerRecord,
     error: unknown,
@@ -373,26 +483,79 @@ export class OpenTofuRunOwnerObject {
     if (isControllerManagedRetryError(error)) {
       const existing = await this.#readRecord();
       const now = this.#now();
-      const nextAttemptAt = new Date(
-        now +
-          (immediateControllerRetry
-            ? 0
-            : RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS),
-      ).toISOString();
+      const current = existing?.runId === record.runId ? existing : record;
+      // Runner-infrastructure requeue is a wait for capacity, not a dispatch
+      // failure, so it is accounted on the poll budget instead of the attempt
+      // budget. Without that budget this branch re-armed every second forever
+      // whenever the runner pool stayed unavailable.
+      const progressed = current.lastPolledStatus !== CONTROLLER_REQUEUE_STATUS;
+      const polls = progressed ? 0 : (current.pollAttempts ?? 0);
+      const pollingSince =
+        progressed || !current.pollingSince
+          ? new Date(now).toISOString()
+          : current.pollingSince;
+      const decision = RUN_OWNER_CONTROLLER_POLL.next({
+        polls,
+        elapsedMs: now - parseIsoMs(pollingSince, now),
+        now,
+        reason: "controller-managed retry",
+      });
+      if (decision.kind === "deadline-exceeded") {
+        log.error("takosumi.run_owner.controller_poll_deadline_exceeded", {
+          runId: record.runId,
+          workspaceId: record.workspaceId,
+          action: record.action,
+          observedStatus: CONTROLLER_REQUEUE_STATUS,
+          poll: decision.poll,
+          elapsedMs: decision.elapsedMs,
+          deadlineMs: decision.deadlineMs,
+          reason: decision.reason,
+        });
+        const finishedAt = new Date(now).toISOString();
+        await this.#writeRecord({
+          ...current,
+          status: "failed",
+          finishedAt,
+          updatedAt: finishedAt,
+          lastError: `${decision.reason} (poll deadline exceeded after ${decision.elapsedMs}ms)`,
+        });
+        await this.state.storage.deleteAlarm?.();
+        return false;
+      }
+      // The first drain within one alarm still runs inline; the persisted
+      // re-arm is what the schedule bounds.
+      const nextAttemptMs = immediateControllerRetry ? now : decision.at;
       const next: RunOwnerRecord = {
-        ...(existing?.runId === record.runId ? existing : record),
+        ...current,
         status: "scheduled",
         updatedAt: new Date(now).toISOString(),
-        nextAttemptAt,
+        nextAttemptAt: new Date(nextAttemptMs).toISOString(),
         lastScheduleCause: "controller_retry",
         lastError: "controller-managed retry",
+        pollAttempts: decision.poll,
+        pollingSince,
+        lastPolledStatus: CONTROLLER_REQUEUE_STATUS,
       };
       await this.#writeRecord(next);
-      await this.#scheduleAlarm(Date.parse(nextAttemptAt));
+      await this.#scheduleAlarm(nextAttemptMs);
       return true;
     }
-    const attempts = record.attempts + 1;
-    if (attempts >= record.maxAttempts) {
+    const failure = runDispatchFailureMessage(error);
+    const decision = retryScheduleFor(record).next({
+      attempts: record.attempts,
+      now: this.#now(),
+      reason: failure,
+    });
+    const attempts = decision.attempt;
+    if (decision.kind === "exhausted") {
+      log.error("takosumi.run_owner.dispatch_retries_exhausted", {
+        runId: record.runId,
+        workspaceId: record.workspaceId,
+        action: record.action,
+        attempt: decision.attempt,
+        maxAttempts: decision.maxAttempts,
+        reason: decision.reason,
+      });
       try {
         await this.#markRetriesExhausted(
           {
@@ -413,23 +576,28 @@ export class OpenTofuRunOwnerObject {
         attempts,
         finishedAt,
         updatedAt: finishedAt,
-        lastError: runDispatchFailureMessage(error),
+        lastError: failure,
       });
       await this.state.storage.deleteAlarm?.();
       return false;
     }
-    const nextAttemptAt = new Date(
-      this.#now() + RUN_OWNER_RETRY_BASE_DELAY_MS * attempts,
-    ).toISOString();
+    log.warn("takosumi.run_owner.dispatch_retry_scheduled", {
+      runId: record.runId,
+      workspaceId: record.workspaceId,
+      action: record.action,
+      attempt: decision.attempt,
+      delayMs: decision.delayMs,
+      reason: decision.reason,
+    });
     await this.#writeRecord({
       ...record,
       status: "scheduled",
       attempts,
       updatedAt: new Date(this.#now()).toISOString(),
-      nextAttemptAt,
-      lastError: runDispatchFailureMessage(error),
+      nextAttemptAt: new Date(decision.at).toISOString(),
+      lastError: failure,
     });
-    await this.#scheduleAlarm(Date.parse(nextAttemptAt));
+    await this.#scheduleAlarm(decision.at);
     return false;
   }
 
@@ -571,11 +739,36 @@ function dispatchableAction(
 }
 
 function clearRetryState(record: RunOwnerRecord): RunOwnerRecord {
-  const { nextAttemptAt, lastError, lastScheduleCause, ...cleaned } = record;
+  const {
+    nextAttemptAt,
+    lastError,
+    lastScheduleCause,
+    pollAttempts,
+    pollingSince,
+    lastPolledStatus,
+    ...cleaned
+  } = record;
   void nextAttemptAt;
   void lastError;
   void lastScheduleCause;
+  void pollAttempts;
+  void pollingSince;
+  void lastPolledStatus;
   return cleaned as RunOwnerRecord;
+}
+
+/**
+ * The persisted `maxAttempts` stays the authority so an in-flight record keeps
+ * the budget it was created with; only the delay shape comes from the module
+ * constants.
+ */
+function retryScheduleFor(record: RunOwnerRecord): RetrySchedule {
+  return new RetrySchedule({
+    minDelayMs: RUN_OWNER_RETRY_BASE_DELAY_MS,
+    maxDelayMs: RUN_OWNER_RETRY_MAX_DELAY_MS,
+    maxAttempts: Math.max(1, Math.floor(record.maxAttempts)),
+    jitter: "equal",
+  });
 }
 
 function isControllerManagedRetryError(error: unknown): boolean {
@@ -600,7 +793,9 @@ function redactErrorMessage(message: string): string {
     .slice(0, 240);
 }
 
-function isRunStillDispatchable(status: RunStatus | undefined): boolean {
+function isRunStillDispatchable(
+  status: RunStatus | undefined,
+): status is "queued" | "running" {
   return status === "queued" || status === "running";
 }
 

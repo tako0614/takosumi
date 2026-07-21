@@ -82,10 +82,9 @@ function recordingRunner(
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
         // A replace (delete+create) change so the §25 action policy flags the
         // plan requiresApproval. This drives the RunGroup status transition
-        // through `waiting_approval` (approval is no longer gated by the
-        // environment alone — it follows the plan's actual changes). The apply
-        // path is not approval-gated, so the preview `applyPlan` helper still
-        // applies without an explicit approve.
+        // through `waiting_approval` (approval is not gated by the environment
+        // — it follows the plan's actual changes) and makes every apply in this
+        // file go through `approveRun` first.
         planResourceChanges: [
           {
             address: "module.child.cloudflare_workers_script.this",
@@ -190,12 +189,17 @@ async function seedChain(
   return { core: "inst_core", files: "inst_files", talk: "inst_talk" };
 }
 
-/** Applies a preview capsule plan to completion (no approval gate). */
+/**
+ * Applies a capsule plan to completion. The fixture runner reports a
+ * delete/replace change, so every plan here records `requiresApproval` and
+ * `createApplyRun` refuses it until the gate is cleared.
+ */
 async function applyPlan(
   controller: OpenTofuController,
   capsuleId: string,
 ): Promise<void> {
   const plan = await controller.createCapsulePlan(capsuleId);
+  await controller.approveRun(plan.planRun.id);
   await controller.createApplyRun({
     planRunId: plan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(plan.planRun),

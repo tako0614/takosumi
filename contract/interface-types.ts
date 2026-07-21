@@ -34,3 +34,19 @@ export const FILE_HANDLER_INTERFACE_TYPE = "interface.file.handler" as const;
 export const FILE_HANDLER_INTERFACE_VERSION = "1" as const;
 /** Permission token consumers request to open a file with a handler. */
 export const FILE_HANDLER_OPEN_PERMISSION = "file.open" as const;
+
+/**
+ * `spec.type` of the canonical public route Interface a scoped compatibility
+ * profile controls for a Ready edge Resource. It lives here with the rest of
+ * the shared wire vocabulary rather than inside the profile implementation.
+ */
+export const COMPATIBILITY_ROUTE_INTERFACE_TYPE = "http.route" as const;
+/** `spec.version` for `http.route`. */
+export const COMPATIBILITY_ROUTE_INTERFACE_VERSION = "v1alpha1" as const;
+/** Permission token consumers request to reach a public route. */
+export const COMPATIBILITY_ROUTE_PERMISSION = "edge.request" as const;
+
+// This registry is descriptive, never an allowlist. Core stores, resolves, and
+// reads unknown type/version pairs, and per ADR 0002 the declared type
+// namespace is open: anyone may define their own type with their own document
+// schema without registering it here.

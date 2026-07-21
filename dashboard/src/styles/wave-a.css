@@ -518,3 +518,13 @@
 .wa-meta-chip code {
   color: var(--tg-fg);
 }
+
+/* History rows link to what they are about — keep them readable as links. */
+.wa-activity-link {
+  color: inherit;
+  text-decoration: none;
+}
+.wa-activity-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

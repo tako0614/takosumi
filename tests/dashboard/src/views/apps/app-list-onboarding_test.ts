@@ -22,8 +22,9 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain("if (chosen !== current)");
     expect(appListSource).toContain("ensureAccessibleWorkspaceSelection");
     expect(appListSource).toContain("clearWorkspaceProjectionCaches");
-    expect(appListSource).toContain('href="/store"');
-    expect(appListSource).not.toContain('href="/new"');
+    // Add CTAs land on the merged ストア page (browse + add in one place).
+    expect(appListSource).toContain('href="/new"');
+    expect(appListSource).not.toContain('href="/store"');
     expect(appListSource).toContain('t("apps.start.optionStore")');
     expect(appListSource).not.toContain('href="/new?mode=link"');
     expect(appListSource).not.toContain('t("apps.start.add")');
@@ -123,8 +124,8 @@ describe("AppListView app launcher", () => {
     expect(appListSource).not.toContain("/tako.png");
     // A Capsule without a UI Interface stays on /services, not in the launcher.
     expect(appListSource).not.toContain("AppsEmptyPanel");
-    expect(appListSource).toContain('href="/store"');
-    expect(appListSource).not.toContain('href="/new"');
+    expect(appListSource).toContain('href="/new"');
+    expect(appListSource).not.toContain('href="/store"');
   });
 
   test("keeps empty app copy action-oriented and non-procedural in both locales", () => {

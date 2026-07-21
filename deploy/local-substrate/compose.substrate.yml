@@ -130,6 +130,11 @@ services:
         bun deploy/local-substrate/scripts/seed-dev-session.ts
     env_file:
       - env/cloud.env
+    environment:
+      # Per-bring-up dev fixture bearer from scripts/up.sh. Empty (the value when
+      # a stack is started with plain `docker compose up`) means no fixture
+      # session is seeded at all.
+      TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID: ${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-}
     volumes:
       - ../../../takosumi:/workspace
     networks:
@@ -259,6 +264,11 @@ services:
     command: ["node", "/app/runner.mjs"]
     env_file:
       - ./env/takosumi-service-worker.env
+    environment:
+      # Per-bring-up dev fixture bearer from scripts/up.sh. Empty means the
+      # LOCAL_SUBSTRATE_TEST_BED seeder creates the fixture account with no
+      # replayable session.
+      TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID: ${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-}
     volumes:
       - ../../../takosumi/deploy/platform/.wrangler/dist:/worker:ro
       - ./wrappers/takosumi-platform-worker-runner.mjs:/app/runner.mjs:ro

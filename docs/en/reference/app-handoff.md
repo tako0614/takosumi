@@ -155,6 +155,12 @@ https://app.example/connect
 It must be absolute, contain no username/password, and contain no existing query
 or fragment. Takosumi appends the connect payload itself.
 
+The `javascript:`, `data:`, `vbscript:`, `blob:`, `file:`, `about:`,
+`filesystem:`, and `view-source:` schemes are rejected, including their
+authority form (`javascript://…`). The connect link is rendered as an anchor in
+the dashboard, so those are not links: they are script execution in the
+dashboard origin.
+
 ## Boundary
 
 Takosumi owns the protocol, Host Center flow, Source/Capsule/Run lifecycle,

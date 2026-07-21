@@ -689,9 +689,27 @@ export function ensurePlanCreatePermission(
     request.operation ?? (request.capsuleId ? "update" : "create");
   ensureWorkspacePermission(principal, request.workspaceId);
   ensureOperationPermission(principal, operation);
-  if (request.runnerProfileId) {
-    ensureRunnerProfilePermission(principal, request.runnerProfileId);
-  } else if (principal.runnerProfileIds !== "*") {
+  ensureRunnerProfileSelectionPermission(principal, request.runnerProfileId);
+}
+
+/**
+ * Authorizes the runner profile a run-creating route will execute on. An
+ * explicitly chosen profile must be in scope; when the caller chooses none the
+ * run engine silently falls back to the Capsule's configured profile (and then
+ * the instance default), so a scoped principal is denied rather than executed
+ * on a profile it was never granted. Plan-kind runs mint provider credentials
+ * before dispatch, which is why profile selection is an authorization decision
+ * and not a preference.
+ */
+export function ensureRunnerProfileSelectionPermission(
+  principal: DeployControlPrincipal,
+  runnerProfileId: string | undefined,
+): void {
+  if (runnerProfileId) {
+    ensureRunnerProfilePermission(principal, runnerProfileId);
+    return;
+  }
+  if (principal.runnerProfileIds !== "*") {
     throw new OpenTofuControllerError(
       "permission_denied",
       `deploy control principal ${principal.actor} must choose an allowed runner profile`,
@@ -790,7 +808,7 @@ export function ensureConnectionPermission(
   );
 }
 
-function ensureOperationPermission(
+export function ensureOperationPermission(
   principal: DeployControlPrincipal,
   operation: OpenTofuOperation,
 ): void {

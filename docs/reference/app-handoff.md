@@ -153,6 +153,11 @@ https://app.example/connect
 絶対 URI であること、username/password を含まないこと、既存の query / fragment を
 含まないことが条件です。Takosumi が connect payload を追加します。
 
+`javascript:` / `data:` / `vbscript:` / `blob:` / `file:` / `about:` /
+`filesystem:` / `view-source:` の scheme は authority 形式
+(`javascript://…`) でも拒否します。connect link は dashboard 上の anchor として
+描画されるため、これらは link ではなく dashboard origin での script 実行になります。
+
 ## 責任境界
 
 Takosumi が持つもの:

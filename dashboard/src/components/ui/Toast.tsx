@@ -1,5 +1,6 @@
 import { createSignal, type JSX, onCleanup, onMount, Show } from "solid-js";
-import { CheckCircle2, XCircle } from "lucide-solid";
+import { CheckCircle2, X, XCircle } from "lucide-solid";
+import { t } from "../../i18n/index.ts";
 
 type Tone = "success" | "error" | "neutral";
 
@@ -7,6 +8,12 @@ interface Props {
   tone?: Tone;
   /** Optional leading icon override (defaults per tone). */
   icon?: JSX.Element;
+  /**
+   * Render a dismiss control. Despite the name this is an INLINE banner with
+   * no lifecycle of its own, so a success note used to stay pinned for the rest
+   * of the session — including after the user edited the field again.
+   */
+  onDismiss?: () => void;
   children: JSX.Element;
 }
 
@@ -55,7 +62,19 @@ export default function Toast(props: Props): JSX.Element {
             {props.icon}
           </span>
         </Show>
-        <span>{props.children}</span>
+        <span class="tg-toast-body">{props.children}</span>
+        <Show when={props.onDismiss}>
+          {(dismiss) => (
+            <button
+              type="button"
+              class="tg-toast-dismiss"
+              aria-label={t("common.dismiss")}
+              onClick={() => dismiss()()}
+            >
+              <X size={14} aria-hidden="true" />
+            </button>
+          )}
+        </Show>
       </Show>
     </div>
   );

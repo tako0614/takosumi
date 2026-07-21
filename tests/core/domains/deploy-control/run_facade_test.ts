@@ -104,6 +104,25 @@ test("getRun projects a queued plan run as the unified Run", async () => {
   expect(run.createdBy).toBe("system");
 });
 
+test("createPlanRun rejects a create operation against a Capsule that already has state", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const controller = new OpenTofuController({
+    store,
+    now: () => 1,
+    newId: deterministicIds(),
+  });
+  const request = await seedUpdatableCapsule(store, {
+    capsuleId: "cap_mislabel",
+  });
+
+  // The apply authorization re-reads the STORED operation, so a `create` label
+  // on a deployed Capsule would let a principal scoped to `create` alone plan
+  // and apply a new StateVersion over it.
+  await expect(
+    controller.createPlanRun({ ...request, operation: "create" }),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
+});
+
 test("getRun projects a succeeded plan + its apply run", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const controller = new OpenTofuController({

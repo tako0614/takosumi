@@ -1250,6 +1250,68 @@ test("app_url stays an ordinary OpenTofu input without publicEndpoint mapping", 
   ).resolves.toBeUndefined();
 });
 
+test("a managed-namespace Capsule cannot claim an unverified custom domain", async () => {
+  // On an operator that runs a managed namespace, a custom hostname used to be
+  // filtered out of the reservation and then forgotten: the variable still
+  // reached the generated root, so the collision check that stops one Workspace
+  // pointing at another's host never ran. There is no VerifiedDomain ownership
+  // authority in OSS, so the plan has to refuse instead of silently proceeding.
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedCapsuleModel(store, {
+    environment: "production",
+    installConfig: {
+      variableMapping: {
+        app_url: "https://someone-elses.example.com",
+        cloudflare: { account_id: null, api_base_url: null },
+      },
+      installExperience: {
+        projections: [
+          {
+            kind: "public_endpoint",
+            variables: { subdomain: "worker_name", url: "app_url" },
+            baseDomain: "app.takos.jp",
+          },
+        ],
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(
+    store,
+    cloudflareConnection(
+      "conn_cloudflare_custom_domain",
+      seeded.capsule.workspaceId,
+    ),
+  );
+  await store.putProviderBindingSet({
+    id: "profile_cloudflare_custom_domain",
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    environment: seeded.capsule.environment,
+    bindings: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_custom_domain",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  await expect(controller.createCapsulePlan(seeded.capsule.id)).rejects.toThrow(
+    /custom_domain_not_verified/u,
+  );
+  await expect(
+    store.getPublicHostReservation("someone-elses.example.com"),
+  ).resolves.toBeUndefined();
+});
+
 test("generic Capsule setup variables are filtered to the declared OpenTofu module interface", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
@@ -1276,6 +1338,7 @@ test("generic Capsule setup variables are filtered to the declared OpenTofu modu
     id: "caprep_no_release_images",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [
@@ -1355,6 +1418,7 @@ test("generic Capsule with known empty module interface receives no setup variab
     id: "caprep_no_inputs",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [
@@ -1649,6 +1713,7 @@ test("capsule plan verifies CompatibilityReport before provider credential mint"
     id: "caprep_needs_patch",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "needs_patch",
     findings: [
       {
@@ -1694,6 +1759,7 @@ test("capsule CompatibilityReport gate honors InstallConfig resource policy", as
     id: "caprep_policy_allowed_resource",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "unsupported",
     findings: [
       {
@@ -1858,6 +1924,7 @@ test("capsule plan reuses a preflight CompatibilityReport hint without recheckin
     id: "caprep_preflight",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [
@@ -1942,6 +2009,7 @@ test("capsule plan reuses the latest matching preflight CompatibilityReport when
     id: "caprep_preflight",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [
@@ -2004,6 +2072,7 @@ test("capsule plan ignores a stale cached CompatibilityReport when a matching pr
     sourceId: seeded.source.id,
     capsuleId: seeded.capsule.id,
     sourceSnapshotId: "snap_old",
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [],
@@ -2021,6 +2090,7 @@ test("capsule plan ignores a stale cached CompatibilityReport when a matching pr
     id: "caprep_current_preflight",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [
@@ -2079,6 +2149,7 @@ test("failed compatibility analysis does not replace the Capsule current report"
     sourceId: seeded.source.id,
     capsuleId: seeded.capsule.id,
     sourceSnapshotId: "snap_previous",
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [],
@@ -2191,6 +2262,7 @@ test("capsule plan records runnable CompatibilityReport in policy audit", async 
     id: "caprep_ready",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "ready",
     findings: [
       {
@@ -2257,6 +2329,7 @@ test("generic Capsule capsule plan derives pre-init requiredProviders from Compa
     id: "caprep_providers",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [
@@ -2600,6 +2673,7 @@ test("generic Capsule plan creation blocks stale CompatibilityReport as policy",
     id: "caprep_stale",
     sourceId: seeded.source.id,
     sourceSnapshotId: "snap_old",
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [],
@@ -2621,6 +2695,152 @@ test("generic Capsule plan creation blocks stale CompatibilityReport as policy",
   expect(runner.planJobs).toHaveLength(0);
 });
 
+test("capsule plan rejects a CompatibilityReport hint from another module path", async () => {
+  // A caller-supplied report id must not let a report produced for a reviewed
+  // module gate a plan that executes an unreviewed sibling module in the same
+  // SourceSnapshot.
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: {
+      modulePath: "deploy/opentofu",
+    },
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_other_module",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    modulePath: "examples/hello",
+    level: "ready",
+    findings: [],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-06-07T00:00:00.000Z",
+  });
+  const controller = controllerWith(store, runner);
+
+  await expect(
+    controller.createCapsulePlan(
+      seeded.capsule.id,
+      {},
+      { compatibilityReportId: "caprep_other_module" },
+    ),
+  ).rejects.toThrow("compatibility_report_module_path_mismatch");
+  expect(runner.planJobs).toHaveLength(0);
+});
+
+test("capsule plan rejects a CompatibilityReport hint with no recorded module path", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_unrecorded_module",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    level: "ready",
+    findings: [],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-06-07T00:00:00.000Z",
+  });
+  const controller = controllerWith(store, runner);
+
+  await expect(
+    controller.createCapsulePlan(
+      seeded.capsule.id,
+      {},
+      { compatibilityReportId: "caprep_unrecorded_module" },
+    ),
+  ).rejects.toThrow("compatibility_report_module_path_mismatch");
+  expect(runner.planJobs).toHaveLength(0);
+});
+
+test("capsule plan re-checks instead of reusing a preflight report for another module path", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: {
+      modulePath: "deploy/opentofu",
+    },
+  });
+  // Preflight report produced through the source route for a benign module in
+  // the same snapshot, with no capsuleId, so the preflight lookup returns it.
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_preflight_other_module",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    modulePath: "examples/hello",
+    level: "ready",
+    findings: [],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-06-07T00:00:00.000Z",
+  });
+  const sourceFileReadOptions: unknown[] = [];
+  const sourcesService = new SourcesService({
+    store,
+    now: () => new Date("2026-06-07T00:00:00.000Z"),
+    newId: (prefix) => `${prefix}_rechecked`,
+    readCapsuleSourceFiles: (_snapshot, options) => {
+      sourceFileReadOptions.push(options);
+      return Promise.resolve([
+        {
+          path: "main.tf",
+          text: `
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
+resource "aws_s3_bucket" "attachments" {
+  bucket = "attachments"
+}
+
+output "attachments_bucket" {
+  value = aws_s3_bucket.attachments.bucket
+}
+`,
+        },
+      ]);
+    },
+  });
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    runner,
+    sourcesService,
+    vault: fakeProviderVault() as never,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createCapsulePlan(seeded.capsule.id);
+
+  expect(planRun.compatibilityReportId).toBe("caprep_rechecked");
+  expect(sourceFileReadOptions).toEqual([
+    {
+      modulePath: "deploy/opentofu",
+      runId: "ccr_rechecked",
+    },
+  ]);
+  const rechecked =
+    await store.getCapsuleCompatibilityReport("caprep_rechecked");
+  expect(rechecked?.modulePath).toBe("deploy/opentofu");
+});
+
 test("capsule apply revalidates CompatibilityReport before provider credential mint", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
@@ -2631,6 +2851,7 @@ test("capsule apply revalidates CompatibilityReport before provider credential m
     id: "caprep_apply_guard",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "ready" as const,
     findings: [],
     providers: [
@@ -2728,6 +2949,7 @@ test("capsule apply rejects a CompatibilityReport scoped to another Capsule befo
     id: "caprep_apply_scope_guard",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "ready" as const,
     findings: [],
     providers: [
@@ -5593,6 +5815,7 @@ test("generic Capsule captures ordinary root Outputs without publishing unallowl
     id: "caprep_output_privacy",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [
@@ -5672,6 +5895,7 @@ test("generic Capsule retains explicit public source Outputs before applying the
     id: "caprep_output_cap_priority",
     sourceId: seeded.source.id,
     sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
     level: "ready",
     findings: [],
     providers: [

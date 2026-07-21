@@ -1,3 +1,5 @@
+import { constantTimeEqualsBytes } from "takosumi-contract/internal/crypto";
+
 export interface PasskeyRelyingParty {
   id: string;
   name: string;
@@ -493,7 +495,7 @@ async function assertRpIdHash(
     await crypto.subtle.digest("SHA-256", textEncoder.encode(rpId)),
   );
   const actual = authenticatorData.slice(0, 32);
-  if (!timingSafeEqual(actual, expected)) {
+  if (!constantTimeEqualsBytes(actual, expected)) {
     throw new TypeError("passkey assertion rpId hash mismatch");
   }
 }
@@ -623,15 +625,6 @@ function padEs256Integer(value: Uint8Array): Uint8Array<ArrayBuffer> {
   const output = new Uint8Array(32);
   output.set(trimmed, 32 - trimmed.byteLength);
   return output;
-}
-
-function timingSafeEqual(first: Uint8Array, second: Uint8Array): boolean {
-  if (first.byteLength !== second.byteLength) return false;
-  let diff = 0;
-  for (let index = 0; index < first.byteLength; index += 1) {
-    diff |= first[index] ^ second[index];
-  }
-  return diff === 0;
 }
 
 function base64UrlEncodeBytes(value: Uint8Array): string {

@@ -119,6 +119,7 @@ import {
   StatusBadge,
   type Tone,
 } from "../../components/ui/index.ts";
+import { fetchFailedMessage } from "../../lib/error-copy.ts";
 
 const APPLY_REQUEST_TIMEOUT_MS = 45_000;
 const RELEASE_ACTIVATION_POLL_MS = 3_000;
@@ -1258,6 +1259,40 @@ function Inner() {
   // Cancelling a queued/running apply must never be one stray click — name
   // the run (service + operation) in an explicit ConfirmDialog first.
   const { confirm } = useConfirmDialog();
+  /**
+   * Run operations whose approval immediately replaces or removes live state.
+   * A plan/apply of ordinary changes is already gated by the destructive-count
+   * review; these bypass that because there is no plan to read.
+   */
+  const overwritesLiveState = (type: string | undefined): boolean =>
+    type === "restore" || type === "destroy_plan" || type === "destroy_apply";
+  const confirmApprove = async (): Promise<void> => {
+    const r = run.latest;
+    if (!overwritesLiveState(r?.type)) {
+      await approve.run();
+      return;
+    }
+    const name = appName();
+    const ok = await confirm({
+      title:
+        r?.type === "restore"
+          ? t("run.approveConfirm.restoreTitle")
+          : t("run.approveConfirm.destroyTitle"),
+      message:
+        r?.type === "restore"
+          ? name
+            ? t("run.approveConfirm.restoreMessage", { name })
+            : t("run.approveConfirm.restoreMessageGeneric")
+          : name
+            ? t("run.approveConfirm.destroyMessage", { name })
+            : t("run.approveConfirm.destroyMessageGeneric"),
+      confirmText: t("run.approve"),
+      cancelText: t("common.cancel"),
+      danger: true,
+    });
+    if (!ok) return;
+    await approve.run();
+  };
   const confirmCancel = async (): Promise<void> => {
     const r = run.latest;
     const operation = operationLabel(r?.type);
@@ -1564,8 +1599,11 @@ function Inner() {
       }
       return { kind: "progress", text: t(runningKey) };
     }
+    // A terminal run must never fall through to the spinning "progress"
+    // shape: polling has stopped, so the spinner would turn forever beside a
+    // red 失敗 badge. (Reached by backup/restore, and by a failed drift check.)
     return {
-      kind: "progress",
+      kind: isTerminalRunStatus(r.status) ? "error" : "progress",
       text: t("run.summary.fallback", { status: runStatusLabel(r.status) }),
     };
   });
@@ -1846,8 +1884,10 @@ function Inner() {
                   aria-hidden="true"
                 />
               </div>
+              {/* The bar already carries "this is moving". A second spinning
+                  indicator next to it reads as two overlapping waits, so the
+                  phase line is plain text — same language as the add flow. */}
               <p class="av-install-phase">
-                <span class="av-install-spin" aria-hidden="true" />
                 {installStepLabel(
                   INSTALL_STEPS[
                     Math.min(installActiveIndex(), INSTALL_STEPS.length - 1)
@@ -1940,9 +1980,7 @@ function Inner() {
                 <EmptyState
                   icon={<Activity size={28} />}
                   title={t("run.loadFailedTitle")}
-                  message={t("common.fetchFailed", {
-                    message: (run.error as ControlApiError).message,
-                  })}
+                  message={fetchFailedMessage(run.error, t)}
                   action={
                     <Button
                       variant="secondary"
@@ -2032,11 +2070,18 @@ function Inner() {
                   {/* primary action */}
                   <div class="wa-form-actions">
                     <Show when={r().status === "waiting_approval"}>
+                      {/* `restore` and the destroy family overwrite or remove
+                          live state the moment this is pressed, so they get
+                          the danger treatment and an explicit confirmation —
+                          previously a backup restore was a single quiet
+                          primary click. */}
                       <Button
-                        variant="primary"
+                        variant={
+                          overwritesLiveState(r().type) ? "danger" : "primary"
+                        }
                         type="button"
                         busy={approve.busy()}
-                        onClick={() => void approve.run()}
+                        onClick={() => void confirmApprove()}
                       >
                         {approve.busy() ? t("run.approving") : t("run.approve")}
                       </Button>
@@ -2074,13 +2119,17 @@ function Inner() {
                       </Button>
                     </Show>
 
+                    {/* Any terminal, non-successful run can be re-planned.
+                        The old condition only covered review runs, so a failed
+                        / expired / cancelled apply rendered NO action at all
+                        while its own copy said "try again". */}
                     <Show
                       when={
-                        ((r().status === "failed" &&
-                          (isReviewRun(r()) ||
-                            connectionVerificationRequired())) ||
-                          isPolicyBlockedReview(r())) &&
-                        r().capsuleId
+                        Boolean(r().capsuleId) &&
+                        ((isTerminalRunStatus(r().status) &&
+                          r().status !== "succeeded") ||
+                          isPolicyBlockedReview(r()) ||
+                          connectionVerificationRequired())
                       }
                     >
                       <Button
@@ -2388,9 +2437,7 @@ function Inner() {
                       </Match>
                       <Match when={logs.error && !logsSnapshot()}>
                         <p class="wa-error">
-                          {t("common.fetchFailed", {
-                            message: (logs.error as ControlApiError).message,
-                          })}
+                          {fetchFailedMessage(logs.error, t)}
                         </p>
                       </Match>
                     </Switch>

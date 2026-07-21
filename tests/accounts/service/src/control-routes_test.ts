@@ -950,6 +950,55 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
   ).toBeUndefined();
 });
 
+test("a Workspace-restricted credential cannot reach another Workspace it is a member of", async () => {
+  // A workspace-scoped PAT (or a Capsule OAuth access token, bound to its
+  // Capsule's Workspace at issuance) may name only its own Workspace. Its
+  // subject is a legitimate member of ws_owner here, so membership alone would
+  // let it read that Workspace's Capsules, Runs, and Outputs by id.
+  const fixture = operationsFixture();
+  const boundContext = (request: Request): ControlDispatchContext => ({
+    ...context(fixture.operations, request),
+    session: { subject: "tsub_owner", workspaceId: "ws_other" },
+  });
+
+  const capsuleRequest = new Request(
+    "https://app.example.test/api/v1/capsules/cap_1",
+  );
+  const capsule = await handleCapsules(
+    boundContext(capsuleRequest),
+    ["capsules", "cap_1"],
+    "GET",
+  );
+  expect(capsule?.status).toBe(403);
+
+  const workspaceRequest = new Request(
+    `https://app.example.test/api/v1/workspaces/${workspace.id}/projects`,
+  );
+  const projects = await handleWorkspaces(
+    boundContext(workspaceRequest),
+    ["workspaces", workspace.id, "projects"],
+    "GET",
+  );
+  expect(projects?.status).toBe(403);
+
+  // …and it does not learn the other Workspace exists through the list route.
+  const listRequest = new Request("https://app.example.test/api/v1/workspaces");
+  const listed = await handleWorkspaces(
+    boundContext(listRequest),
+    ["workspaces"],
+    "GET",
+  );
+  expect((await listed?.json()).workspaces).toEqual([]);
+
+  // The same subject without a restriction keeps its membership access.
+  const unrestricted = await handleCapsules(
+    context(fixture.operations, capsuleRequest),
+    ["capsules", "cap_1"],
+    "GET",
+  );
+  expect(unrestricted?.status).toBe(200);
+});
+
 test("retired projection and upload operations have no Accounts handler", async () => {
   expect(isControlRoutePath("/v1/capsule-projections")).toBe(false);
   const fixture = operationsFixture();

@@ -1,5 +1,6 @@
 import type { CreateConnectionRequest } from "@takosumi/internal/deploy-control-api";
 import type { ConnectionOAuthDescriptor } from "@takosumi/providers";
+import { constantTimeEqualsString } from "takosumi-contract/internal/crypto";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import type {
   ConnectionOAuthCallbackInput,
@@ -248,7 +249,7 @@ async function verifyState(
     );
   }
   const expected = await hmac(payload, secret);
-  if (!constantTimeStringEquals(signature, expected)) {
+  if (!constantTimeEqualsString(signature, expected)) {
     throw new OpenTofuControllerError(
       "invalid_argument",
       "invalid OAuth state",
@@ -308,15 +309,6 @@ function base64UrlDecode(value: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
-}
-
-function constantTimeStringEquals(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let index = 0; index < a.length; index += 1) {
-    diff |= a.charCodeAt(index) ^ b.charCodeAt(index);
-  }
-  return diff === 0;
 }
 
 function isSignedOAuthState(value: unknown): value is SignedOAuthState {

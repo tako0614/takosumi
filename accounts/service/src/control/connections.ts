@@ -100,6 +100,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
+  type ControlSession,
   canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
@@ -154,19 +155,14 @@ export async function handleConnections(
   // /api/v1/connections?workspaceId=  (GET list / POST create)
   if (segments.length === 1 && segments[0] === "connections") {
     if (method === "GET") {
-      return await listControlConnections(
-        operations,
-        store,
-        ctx.session.subject,
-        url,
-      );
+      return await listControlConnections(operations, store, ctx.session, url);
     }
     if (method === "POST") {
       return await createControlConnection(
         request,
         operations,
         store,
-        ctx.session.subject,
+        ctx.session,
       );
     }
     return methodNotAllowed("GET, POST");
@@ -186,7 +182,7 @@ export async function handleConnections(
     return await connectionItemOp(
       operations,
       store,
-      ctx.session.subject,
+      ctx.session,
       connectionId,
       segments[2],
     );
@@ -209,7 +205,7 @@ export async function handleConnections(
         request,
         operations,
         store,
-        ctx.session.subject,
+        ctx.session,
         url,
         decodeURIComponent(segments[2] ?? ""),
       );
@@ -221,7 +217,7 @@ export async function handleConnections(
 async function listControlConnections(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   url: URL,
 ): Promise<Response> {
   const workspaceId = stringValue(
@@ -242,7 +238,7 @@ async function listControlConnections(
     operations,
     store,
     workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   const page = parseControlPageParams(url);
@@ -274,7 +270,7 @@ async function createControlConnection(
   request: Request,
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -286,7 +282,7 @@ async function createControlConnection(
     operations,
     store,
     workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   const requestedKind = stringValue(body.kind);
@@ -399,7 +395,7 @@ async function createControlConnection(
 async function connectionItemOp(
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   connectionId: string,
   op: "test" | "revoke",
 ): Promise<Response> {
@@ -410,7 +406,7 @@ async function connectionItemOp(
   // connection (typed `not_found`) is mapped to the same non-disclosing 404.
   const target = await resolveConnectionItemTarget(
     operations,
-    sessionSubject,
+    session,
     connectionId,
   );
   if (!target) {
@@ -428,7 +424,7 @@ async function connectionItemOp(
     operations,
     store,
     workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) {
     return errorJson("connection_not_found", "connection not found", 404);
@@ -442,7 +438,7 @@ async function connectionItemOp(
 
 async function resolveConnectionItemTarget(
   operations: ControlPlaneOperations,
-  sessionSubject: string,
+  session: ControlSession,
   connectionId: string,
 ): Promise<
   | {
@@ -451,7 +447,7 @@ async function resolveConnectionItemTarget(
     }
   | undefined
 > {
-  void sessionSubject;
+  void session;
   try {
     return {
       connection: await operations.getConnection(connectionId),
@@ -474,7 +470,7 @@ async function startConnectionOAuth(
   request: Request,
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  sessionSubject: string,
+  session: ControlSession,
   url: URL,
   helperId: string,
 ): Promise<Response> {
@@ -491,13 +487,13 @@ async function startConnectionOAuth(
     operations,
     store,
     workspaceId,
-    subject: sessionSubject,
+    session,
   });
   if (!auth.ok) return auth.response;
   const started = await helper.start({
     // Bind the OAuth state to the authenticated subject so the cross-site
     // callback can authorize without depending on a session cookie.
-    subject: sessionSubject,
+    subject: session.subject,
     workspaceId,
     ...(stringValue(body.displayName)
       ? { displayName: stringValue(body.displayName) }
@@ -560,11 +556,13 @@ export async function completeConnectionOAuth(
   // stolen or forged callback cannot mint a Connection into a Workspace the
   // authenticated initiator does not own. This is the callback's only authz —
   // there is no session cookie on a cross-site redirect.
+  // No bearer credential reaches this cross-site callback, so the state's
+  // subject carries no Workspace restriction of its own.
   const auth = await requireWorkspaceAccess({
     operations,
     store,
     workspaceId,
-    subject,
+    session: { subject },
   });
   if (!auth.ok) return redirectToConnections(url, { error: "forbidden" });
   let created: ConnectionResponse;

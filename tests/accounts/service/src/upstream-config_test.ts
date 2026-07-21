@@ -36,10 +36,36 @@ test("upstream provider descriptors resolve arbitrary providers explicitly", () 
   });
   expect(options?.providers[0]?.provider).toMatchObject({
     id: "company-sso",
-    issuer: "https://id.example.test/",
+    issuer: "https://id.example.test",
     tokenEndpoint: "https://id.example.test/oauth/token",
   });
   expect(options?.sessionTtlMs).toBe(60000);
+});
+
+test("issuer identity is spelling-stable across trailing-slash drift", () => {
+  // The issuer is one of the two inputs that key `upstream_identities` and seed
+  // the account-subject HMAC. If parsing rewrites it (URL.toString() appending
+  // "/" to an origin-only issuer, an operator adding or dropping the slash),
+  // every existing user of that provider silently lands on a brand-new empty
+  // account on their next sign-in. Both spellings must resolve to one string.
+  const resolveIssuer = (issuer: string): string | undefined =>
+    upstreamOAuthOptionsFromEnvironment({
+      [UPSTREAM_PROVIDER_DESCRIPTORS_ENV]: JSON.stringify([
+        { ...provider, issuer },
+      ]),
+      TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "subject-secret",
+      COMPANY_SSO_CLIENT_SECRET: "client-secret",
+    })?.providers[0]?.provider.issuer;
+
+  expect(resolveIssuer("https://accounts.google.com")).toBe(
+    "https://accounts.google.com",
+  );
+  expect(resolveIssuer("https://accounts.google.com/")).toBe(
+    "https://accounts.google.com",
+  );
+  expect(resolveIssuer("https://id.example.test/oidc/")).toBe(
+    "https://id.example.test/oidc",
+  );
 });
 
 test("provider identifiers never select a built-in adapter", () => {

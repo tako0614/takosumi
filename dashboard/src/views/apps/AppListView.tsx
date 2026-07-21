@@ -17,7 +17,7 @@ import {
   Switch,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { Plus, Settings2, Sparkles } from "lucide-solid";
+import { Plus, Server, Settings2, Sparkles } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import {
   currentWorkspaceId,
@@ -52,6 +52,7 @@ import { refreshSession } from "../account/lib/session.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { Button, Toast } from "../../components/ui/index.ts";
 import { createAction } from "../account/lib/action.tsx";
+import { fetchFailedMessage } from "../../lib/error-copy.ts";
 
 /** One launcher tile: a Takosumi-owned surface belonging to a service. */
 interface AppTile {
@@ -229,7 +230,7 @@ function Inner() {
     });
     setCurrentWorkspaceId(workspace.id);
     window.dispatchEvent(new Event("takosumi:workspaces-changed"));
-    navigate("/store");
+    navigate("/new");
     return workspace;
   });
 
@@ -251,9 +252,7 @@ function Inner() {
           </Match>
           <Match when={overview.error}>
             <Toast tone="error">
-              {t("common.fetchFailed", {
-                message: (overview.error as ControlApiError).message,
-              })}
+              {fetchFailedMessage(overview.error, t)}
               <Button
                 variant="secondary"
                 size="sm"
@@ -280,7 +279,15 @@ function Inner() {
             </Show>
             <Show
               when={appTiles().length > 0}
-              fallback={<WorkspaceStartPanel />}
+              fallback={
+                // A load failure or a workspace whose services simply have no
+                // screen must never render the first-run panel.
+                fullFetchError() ? null : visibleCapsules().length > 0 ? (
+                  <NoLaunchableAppsPanel count={visibleCapsules().length} />
+                ) : (
+                  <WorkspaceStartPanel />
+                )
+              }
             >
               <AppLauncher tiles={appTiles()} />
             </Show>
@@ -388,7 +395,7 @@ function AppLauncher(props: { readonly tiles: readonly AppTile[] }) {
           )}
         </For>
         <li>
-          <a class="av-tile av-tile-add" href="/store">
+          <a class="av-tile av-tile-add" href="/new">
             <span class="av-tile-icon" aria-hidden="true">
               <Plus />
             </span>
@@ -460,6 +467,9 @@ function AppTileView(props: { readonly tile: AppTile }) {
                 src={src()}
                 alt=""
                 loading="lazy"
+                // The icon is a Capsule-supplied URL: never hand it the
+                // dashboard URL (it carries workspace/run ids) as a Referer.
+                referrerpolicy="no-referrer"
                 onError={() => setImageFailed(true)}
               />
             )}
@@ -529,9 +539,35 @@ function WorkspaceStartPanel() {
         <h2 class="av-start-title">{t("apps.start.titleEmpty")}</h2>
         <p class="av-start-sub">{t("apps.start.bodyEmpty")}</p>
       </div>
-      <a href="/store" class="av-start-action">
+      <a href="/new" class="av-start-action">
         <Sparkles size={18} aria-hidden="true" />
         <span>{t("apps.start.optionStore")}</span>
+      </a>
+    </section>
+  );
+}
+
+/**
+ * The launcher only holds services that expose a `interface.ui.surface`
+ * Interface. A workspace can legitimately own services with no screen (storage,
+ * git hosting), and a service mid-first-deploy has not resolved its Interface
+ * yet — in both cases the launcher is empty while the workspace is NOT. Saying
+ * 「まだアプリがありません」 there is a lie about the user's own account, and its
+ * only CTA (install another one) is the wrong next step.
+ */
+function NoLaunchableAppsPanel(props: { readonly count: number }) {
+  return (
+    <section class="av-start" aria-label={t("apps.start.aria")}>
+      <div class="av-start-copy">
+        <span class="av-start-kicker">{t("apps.noLaunchable.kicker")}</span>
+        <h2 class="av-start-title">
+          {t("apps.noLaunchable.title", { count: String(props.count) })}
+        </h2>
+        <p class="av-start-sub">{t("apps.noLaunchable.body")}</p>
+      </div>
+      <a href="/services" class="av-start-action">
+        <Server size={18} aria-hidden="true" />
+        <span>{t("apps.noLaunchable.cta")}</span>
       </a>
     </section>
   );

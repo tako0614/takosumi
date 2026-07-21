@@ -117,6 +117,41 @@ test("createApplyRun redacts approval reasons before persistence", async () => {
   expect(reason).not.toContain("sk-live-token-123456789");
 });
 
+test("createApplyRun refuses a delete/replace plan that still awaits approval", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  // A §25 action-policy delete/replace plan persists `succeeded` and carries its
+  // gate in `requiresApproval`; the §19 projection and the auto-apply hook both
+  // treat it as parked, so the apply route must refuse it exactly like a
+  // destroy — otherwise the review of the most destructive changes is
+  // display-only.
+  const planRun = await seedWaitingApprovalPlan(store, "plan_gated1");
+  const succeeded: PlanRun = { ...planRun, status: "succeeded" };
+  await store.putPlanRun(succeeded);
+
+  await expect(
+    controller(store).createApplyRun({
+      planRunId: "plan_gated1",
+      expected: applyExpectedGuardFromPlanRun(succeeded),
+    }),
+  ).rejects.toMatchObject({ code: "failed_precondition" });
+});
+
+test("createApplyRun accepts the same delete/replace plan once approved", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const planRun = await seedWaitingApprovalPlan(store, "plan_gated2");
+  const succeeded: PlanRun = { ...planRun, status: "succeeded" };
+  await store.putPlanRun(succeeded);
+  const ctrl = controller(store);
+  await ctrl.approveRun("plan_gated2", { approvedBy: "ops" });
+
+  const created = await ctrl.createApplyRun({
+    planRunId: "plan_gated2",
+    expected: applyExpectedGuardFromPlanRun(succeeded),
+  });
+
+  expect(created.applyRun.planRunId).toBe("plan_gated2");
+});
+
 test("approveRun is idempotent on an already-approved plan", async () => {
   const store = new InMemoryOpenTofuControlStore();
   await seedWaitingApprovalPlan(store);

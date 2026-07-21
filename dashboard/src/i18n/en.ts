@@ -7,20 +7,21 @@ import type { ja } from "./ja.ts";
  */
 export const en: Record<keyof typeof ja, string> = {
   // --- common -------------------------------------------------------------
-  "common.loading": "Loading...",
+  "common.loading": "Loading…",
   "common.retry": "Retry",
   "common.refresh": "Refresh",
   "common.create": "Create",
-  "common.creating": "Creating...",
+  "common.creating": "Creating…",
   "common.cancel": "Cancel",
   "common.save": "Save",
-  "common.saving": "Saving...",
+  "common.saving": "Saving…",
   "common.delete": "Delete",
   "common.none": "None",
   "common.unknown": "Unknown",
+  "common.dismiss": "Dismiss",
   "common.details": "Details",
   "common.fetchFailed": "Failed to load — {message}",
-  "common.copy": "Copy",
+  "common.fetchFailedGeneric": "Couldn't load. Please try again in a moment.",
   "common.ok": "OK",
   "common.justNow": "just now",
   "common.minutesAgo": "{n}m ago",
@@ -33,22 +34,17 @@ export const en: Record<keyof typeof ja, string> = {
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "Home",
   "nav.services": "Services",
-  "nav.add": "Add",
   "nav.store": "Store",
   "nav.settings": "Settings",
   "nav.graph": "Dependencies",
   "nav.resources": "Resources",
-  "store.title": "Store",
-  "store.subtitle": "Find services to add from the store.",
-  "store.manualEntry":
-    "Can't find what you need? Add from a Git URL / your own source",
-  "nav.runs": "Activity",
+  "nav.runs": "Deploy history",
   "nav.connections": "Connected accounts",
-  "nav.billing": "Billing",
+  "nav.billing": "Usage",
   "nav.activity": "History",
   "nav.primary": "Primary",
   "nav.notifications": "Notifications",
-  "nav.workspaceSettings": "Settings",
+  "nav.workspaceSettings": "Workspace settings",
   "nav.account": "Account",
   "nav.docs": "Docs",
   "nav.backToTakos": "Back to Takos",
@@ -72,7 +68,8 @@ export const en: Record<keyof typeof ja, string> = {
   "settings.account.title": "Account",
   "settings.account.desc": "Profile and sign-in details",
   "settings.billing.title": "Usage",
-  "settings.billing.desc": "Usage and operator-provided showback",
+  "settings.billing.desc":
+    "Your usage, and the cost breakdown your operator provides",
   "settings.notifications.title": "Notifications",
   "settings.notifications.desc": "Updates and items needing attention",
   "settings.billingSummary.manage": "Manage",
@@ -88,7 +85,7 @@ export const en: Record<keyof typeof ja, string> = {
   "settings.manage.runs": "Deploy and change execution records",
   "settings.manage.graph": "Dependencies between services",
   "settings.manage.resources":
-    "Manage Resource Shapes, TargetPools, and SpacePolicy",
+    "The real resources your services created, and where they run",
   "settings.manage.activity": "Who changed what, and when",
   "settings.manage.workspace": "Members, keys, backups, shares, policy",
   "settings.manage.backups": "Create and restore restore points",
@@ -96,12 +93,10 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- workspace switcher -------------------------------------------------------
   "workspace.label": "Workspace",
-  "workspace.loadFailed": "Failed to load workspaces — {message}",
   "workspace.none": "No workspaces",
   "workspace.select": "Select a workspace",
-  "workspace.selectMessage":
-    "Pick a workspace from the switcher in the sidebar.",
-  "workspace.loading": "Loading workspaces...",
+  "workspace.selectMessage": "Pick a workspace from the switcher at the top.",
+  "workspace.loading": "Loading workspaces…",
   "workspace.settings": "Workspace settings",
   "workspace.switcherAria": "Switch workspace (current: {name})",
   "workspace.defaultName": "My workspace",
@@ -111,7 +106,7 @@ export const en: Record<keyof typeof ja, string> = {
   "workspace.start.body":
     "Takosumi keeps your services, deploy history, and settings inside a workspace.",
   "workspace.start.create": "Create workspace",
-  "workspace.start.creating": "Creating workspace...",
+  "workspace.start.creating": "Creating workspace…",
   "workspace.create.nameLabel": "Workspace name",
   "workspace.create.namePlaceholder": "New workspace",
   "workspace.create.nameRequired": "Enter a workspace name.",
@@ -126,7 +121,6 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
-  "legal.langLabel": "Language",
   "legal.policiesNav": "Operator policies",
   "auth.signInSub": "Sign in with a configured identity provider.",
   "auth.singleSignOn": "Single sign-on",
@@ -155,7 +149,7 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.and": " and ",
   "auth.privacyPolicy": "Privacy Policy",
   "auth.termsSuffix": ".",
-  "auth.processing": "Signing you in...",
+  "auth.processing": "Signing you in…",
   "auth.failed": "Sign-in failed",
   "auth.backToSignIn": "Back to sign-in",
   "auth.retryableCallbackFailure":
@@ -176,6 +170,15 @@ export const en: Record<keyof typeof ja, string> = {
   "errorBoundary.reload": "Reload",
 
   // --- status labels ----------------------------------------------------
+  "status.resource.pending": "Pending",
+  "status.resource.resolving": "Resolving placement",
+  "status.resource.planning": "Reviewing changes",
+  "status.resource.applying": "Applying",
+  "status.resource.ready": "Ready",
+  "status.resource.degraded": "Degraded",
+  "status.resource.failed": "Failed",
+  "status.resource.deleting": "Deleting",
+  "status.resource.deleted": "Deleted",
   "status.capsule.pending": "Setting up",
   "status.capsule.needsAttention": "Needs attention",
   // `active` = the last apply succeeded and the state generation advanced; it
@@ -263,6 +266,11 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.start.titleEmpty": "Add your first app",
   "apps.start.bodyEmpty": "Choose an app or paste an install link.",
   "apps.start.optionStore": "Add an app",
+  "apps.noLaunchable.kicker": "No openable apps yet",
+  "apps.noLaunchable.title": "You have {count} service(s)",
+  "apps.noLaunchable.body":
+    "They're still starting up, or they have no screen to open. Check their status in the list.",
+  "apps.noLaunchable.cta": "Open service list",
   "apps.listIncomplete":
     "Some apps could not be loaded, so this screen may be missing apps.",
 
@@ -302,6 +310,7 @@ export const en: Record<keyof typeof ja, string> = {
     "The public links could not be loaded. Reopen this page shortly.",
   "app.surfaces.none": "This service has no authorized public link.",
   "app.surfaces.defaultName": "Screen {n}",
+  "app.surfaces.openAria": "Open {name} in a new tab",
   "app.surfaces.open": "Open public link",
   "app.deps.title": "Connected services",
   "app.deps.dependsOn": "Services this uses",
@@ -319,7 +328,6 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.reviewSubtitle":
     "Check available changes before deploying them.",
   "app.deploys.empty": "No deploys yet.",
-  "app.deploys.restoreMenu": "More",
   "app.deploys.restore": "Restore this state",
   "app.deploys.restoreDisclosure": "Restore a previous version",
   "app.deploys.advancedActions": "Extra actions",
@@ -356,7 +364,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.config.oidcOn": "Enabled",
   "app.config.updatedAt": "Updated",
   "app.config.empty": "There are no editable settings.",
-  "app.config.notReady": "Settings are not available yet.",
+  "app.config.notReady": "Settings haven\u2019t loaded yet. Reload the page.",
   "app.config.advanced": "Other settings",
   "app.config.addVariable": "Add setting",
   "app.config.name": "Name",
@@ -367,9 +375,9 @@ export const en: Record<keyof typeof ja, string> = {
   "app.config.reset": "Reset",
   "app.config.remove": "Remove",
   "app.config.undoReset": "Undo",
-  "app.config.resetAria": "Clear setting {name}",
+  "app.config.resetAria": "Reset {name}",
   "app.config.removeAria": "Remove setting {name}",
-  "app.config.undoResetAria": "Undo resetting {name}",
+  "app.config.undoResetAria": "Undo reset of {name}",
   "app.config.defaultBadge": "Default value",
   "app.config.resetPendingHint": "Reverts to the default when you save.",
   "app.config.customName": "CUSTOM_ENV",
@@ -378,13 +386,14 @@ export const en: Record<keyof typeof ja, string> = {
   "app.config.errorNameDuplicate": "{name} is duplicated.",
   "app.config.errorNumber": "{name} must be a number.",
   "app.config.errorJson": "{name} must be valid JSON.",
-  "app.interfaces.title": "Runtime interfaces (advanced)",
+  "app.interfaces.title": "What this app exposes (advanced)",
   "app.interfaces.subtitle":
-    "Declare runtime surfaces separately from ordinary OpenTofu outputs. Changes apply on the next deploy review.",
+    "Declare the surfaces other services and apps can use. Changes apply on the next deploy review.",
   "app.interfaces.editorLabel": "Interface blueprints (JSON)",
   "app.interfaces.editorHint":
     "Use an array. Each declaration explicitly provides key, name, and spec. Put dynamic mappings under spec.inputs with a literal, capsule_output, or resource_output source. Do not put secrets here.",
-  "app.interfaces.notReady": "Interface declarations are not available yet.",
+  "app.interfaces.notReady":
+    "These declarations haven\u2019t loaded yet. Reload the page.",
   "app.interfaces.errorJson": "Enter valid JSON.",
   "app.interfaces.errorArray":
     "Interface blueprint JSON must be an array. Use [] to remove all declarations.",
@@ -411,6 +420,9 @@ export const en: Record<keyof typeof ja, string> = {
   "app.danger.destroyTitle": "Delete this service",
   "app.danger.destroyBody":
     "Deleting {name} first creates a delete review so you can inspect what will be removed, then you run it. Once run, the resources are removed and cannot be restored.",
+  "app.danger.destroyConfirmTitle": "Delete this service?",
+  "app.danger.destroyConfirmMessage":
+    "This deletes {name}. If it has never been deployed it is removed immediately and cannot be recovered.",
   "app.danger.destroyCta": "Review deletion",
   "app.setupIncomplete.body":
     "Setup didn't finish. Retry from the update review, or delete this service and start over.",
@@ -452,6 +464,25 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.removing": "Removing…",
   "run.summary.removed": "Removal complete.",
   "run.summary.failed": "{operation} failed.",
+  "controlError.stateGenerationMismatch":
+    "Another change ran first. Review the changes again before deploying.",
+  "controlError.dependencySnapshotStale":
+    "A connected service was updated first. Review the changes again.",
+  "controlError.dependencyUnavailable":
+    "Values from a connected service aren't available right now. Try again in a moment.",
+  "controlError.sourceChanged":
+    "The source contents changed. Review the changes again.",
+  "controlError.compatibilityStale":
+    "The check result is out of date. Check again.",
+  "controlError.runnerUnavailable":
+    "The run environment isn't available right now. Try again in a moment.",
+  "controlError.slotLimitReached":
+    "You've reached your limit. Remove a service you no longer need, or contact your operator.",
+  "controlError.capsuleNotFound":
+    "That service could not be found. It may have been deleted.",
+  "controlError.configNotFound":
+    "Setup for this service could not be found. Add it again.",
+  "controlError.shareRevoked": "This share has been revoked.",
   "runError.sourceSyncFailed":
     "The service contents could not be fetched. Check the link and version, then try again.",
   "runError.sourceRefNotFound":
@@ -496,9 +527,9 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.syncRunning": "Fetching the contents…",
   "run.summary.fallback": "Status: {status}",
   "run.approve": "Approve this change",
-  "run.approving": "Approving...",
+  "run.approving": "Approving…",
   "run.deploy": "Deploy",
-  "run.deploying": "Deploying...",
+  "run.deploying": "Deploying…",
   "run.deployBlocked": "Deploy blocked",
   "run.retryPlan": "Review changes again",
   "run.backToApp": "Back to service",
@@ -508,6 +539,16 @@ export const en: Record<keyof typeof ja, string> = {
   "run.destructiveConfirm": "Run destructive changes anyway",
   "run.stopGoBack": "Go back",
   "run.cancel": "Cancel this run",
+  "run.approveConfirm.restoreTitle": "Restore from this backup?",
+  "run.approveConfirm.restoreMessage":
+    "This replaces {name} with the contents of the selected backup. The current state is overwritten and cannot be recovered.",
+  "run.approveConfirm.restoreMessageGeneric":
+    "This replaces the service with the contents of the selected backup. The current state is overwritten and cannot be recovered.",
+  "run.approveConfirm.destroyTitle": "Run this deletion?",
+  "run.approveConfirm.destroyMessage":
+    "This deletes {name}'s resources. It cannot be undone.",
+  "run.approveConfirm.destroyMessageGeneric":
+    "This deletes the target resources. It cannot be undone.",
   "run.cancelConfirm.title": "Cancel this run?",
   "run.cancelConfirm.message":
     "This stops the {operation} for “{name}” before it finishes.",
@@ -521,7 +562,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.cost.billingCta": "Open billing",
   "run.cost.operatorHelp":
     "An owner can review this workspace's usage and limits to enable it.",
-  "run.cost.quotaCta": "Review usage / quota",
+  "run.cost.quotaCta": "Review usage",
   "run.changes.title": "What will change",
   "run.changes.titleDone": "What changed",
   "run.changes.noRecord": "No record of the changes is available",
@@ -606,7 +647,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.audit.detail": "Record detail",
 
   // --- run history --------------------------------------------------------------
-  "runList.title": "Activity",
+  "runList.title": "Deploy history",
   "runList.subtitle": "Recent reviews, approvals, and deploys, newest first.",
   "runList.open": "Details",
   "runList.review": "Review",
@@ -636,15 +677,14 @@ export const en: Record<keyof typeof ja, string> = {
   "new.advancedImport.title": "Add from link",
   "new.advancedImport.subtitle": "Paste an install link to add it.",
   "new.selection.subtitle": "Check it first. Deploy happens after review.",
-  "new.flow.selected": "Selected",
   "new.flow.manual": "Manual add",
   "new.flow.back": "Choose a different service",
   "new.pick.checking": "Checking the selected service…",
-  "new.summary.aria": "Add summary",
-  "new.summary.provider": "Runs on",
-  "new.storeInput.title": "Service setup",
-  "new.storeInput.subtitle":
-    "Name the service and fill the minimum fields needed to publish it.",
+  "new.identity.label": "Public URL",
+  "new.identity.edit": "Change",
+  "new.identity.done": "Close",
+  "new.storeInput.title": "Initial setup",
+  "new.storeInput.subtitle": "Settings this app asks for.",
   "new.storeInput.errorRequired": "Enter {label}.",
   "new.storeInput.errorUnsafeValue":
     "{label} contains unsupported characters or is too long.",
@@ -748,12 +788,9 @@ export const en: Record<keyof typeof ja, string> = {
   "new.appHandoff.kicker": "Requested by an app",
   "new.appHandoff.app": "App",
   "new.appHandoff.return": "Return target",
-  "new.installCta": "Add service",
-  "new.installing": "Adding...",
+  "new.installCta": "Install",
   "new.compat.recheck": "Check again",
-  "new.compat.checking": "Preparing...",
-  "new.progress.title": "Preparing the service",
-  "new.progress.fetching": "Fetching the contents. Keep this page open.",
+  "new.progress.title": "Installing",
   "new.progress.slow":
     "This is taking a little longer. You can continue when it finishes.",
   "new.progress.details": "Detailed progress",
@@ -784,7 +821,6 @@ export const en: Record<keyof typeof ja, string> = {
     "Pinned connection target information is included. After private values are removed, the pinned targets will be reviewed during add.",
   "new.compat.issue.reviewRequired.message":
     "An item needs review before this can be added.",
-  "new.proceedHint": "Use “Add service” first.",
   "new.existing.title": "This service is already added",
   "new.existing.body":
     "“{name}” already exists in the {environment} environment. Open the existing service instead of creating another one.",
@@ -799,7 +835,6 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.setupMissing": "Set up required connected account",
   "new.providers.returnNote":
     "After you save the connection, you return here to finish adding.",
-  "new.step.technical": "Detailed progress",
   "new.step.register": "Prepare service",
   "new.step.sync": "Fetch content",
   "new.step.create": "Create service",
@@ -848,6 +883,7 @@ export const en: Record<keyof typeof ja, string> = {
     "That service name is reserved but was not found in the current list. Refresh services, delete the unfinished service if it appears, or choose another name.",
   "new.error.notRunnable":
     "This service cannot be added yet. Resolve the listed items, then check again.",
+  "new.error.checkIncomplete": "The check could not finish. Try again.",
 
   // --- workspace settings ---------------------------------------------------------
   "workspaceSettings.title": "Settings",
@@ -857,9 +893,8 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.tab.general": "General",
   "workspaceSettings.tab.members": "Members",
   "workspaceSettings.tab.connections": "Connections",
-  "workspaceSettings.tab.billing": "Billing",
-  "workspaceSettings.tab.usageQuota": "Usage / quota",
-  "workspaceSettings.tab.keys": "API keys",
+  "workspaceSettings.tab.billing": "Usage",
+  "workspaceSettings.tab.usageQuota": "Usage",
   "workspaceSettings.tab.backups": "Backups",
   "workspaceSettings.tab.shares": "Shared values",
   "workspaceSettings.general.displayName": "Display name",
@@ -871,7 +906,7 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.general.saved": "Settings saved.",
   "workspaceSettings.general.archive": "Archive workspace",
   "workspaceSettings.general.archiveConfirm":
-    "This workspace will be hidden from the normal switcher. You can still inspect it through the admin API.",
+    "This workspace will be hidden from the normal switcher. You can restore it any time from “Archived” below.",
   "workspaceSettings.general.archivedNamed": "Archived “{name}”.",
   "workspaceSettings.general.archivedHint":
     "You can restore it from the archived list below, or move to another workspace with the workspace switcher.",
@@ -891,14 +926,16 @@ export const en: Record<keyof typeof ja, string> = {
   "members.status.active": "Active",
   "members.status.invited": "Invited",
   "members.status.suspended": "Suspended",
-  "members.invite.title": "Invite a member",
+  "members.invite.title": "Add a member",
   "members.invite.subtitle":
-    "Enter the email for someone who has already signed in.",
+    "Enter the email for someone who has already signed in. They get access immediately — no email is sent.",
   "members.invite.email": "Email",
   "members.invite.role": "Role",
-  "members.invite.cta": "Invite",
+  "members.invite.cta": "Add",
+  "members.invite.notFound":
+    "No Takosumi account was found for that email. Ask them to sign in once first.",
   "members.invite.emailRequired": "Enter an email address.",
-  "members.invite.success": "Invited {email}.",
+  "members.invite.success": "Added {email}. They have access now.",
   "members.col.member": "Member",
   "members.col.roles": "Roles",
   "members.col.status": "Status",
@@ -913,6 +950,9 @@ export const en: Record<keyof typeof ja, string> = {
   "members.lastOwnerRemove":
     "The last owner cannot be removed. Appoint another owner first.",
   "members.remove": "Remove",
+  "members.removeSelf": "Remove yourself",
+  "members.removeSelfConfirm":
+    "This removes you from the workspace. You will lose access and cannot restore it yourself.",
   "members.removeConfirm": "Remove this member? ({account})",
   "members.empty": "This workspace has no members yet.",
   "members.viewerNote":
@@ -958,7 +998,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Connections that use your own key are never billed by Takosumi. Only resources Takosumi provides are billed.",
   "conn.byok.usePreset": "Use an installed recipe instead",
   "conn.register": "Save connection",
-  "conn.registering": "Saving...",
+  "conn.registering": "Saving…",
   "conn.genericEnv.providerName": "Provider source",
   "conn.genericEnv.providerPlaceholder": "examplecorp/example",
   "conn.genericEnv.envName": "Env name",
@@ -980,13 +1020,13 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.empty.message":
     "Enter your own key (a cloud token or key) and any provider runs — no restrictions, no approval, no billing.",
   "conn.test": "Check access",
-  "conn.testing": "Checking...",
+  "conn.testing": "Checking…",
   "conn.test.notReady": "The account is not ready yet (status: {status}).",
   "conn.remove.confirmTitle": "Delete connected account",
   "conn.remove.confirmMessage":
     "Really delete {name}? Its saved access values are deleted too. This cannot be undone.",
   "conn.remove.bindingWarning":
-    "Capsule runs that use this connection will fail.",
+    "Services that use this connection will fail to deploy.",
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle": "Manage restore points for this workspace.",
@@ -1043,6 +1083,7 @@ export const en: Record<keyof typeof ja, string> = {
   "shares.empty": "No shares yet.",
 
   // --- notifications -------------------------------------------------------------
+  "notif.markAllRead": "Mark all as read",
   "notif.title": "Notifications",
   "notif.subtitle":
     "Adds, deploys, approvals, failures — what happened most recently.",
@@ -1142,26 +1183,28 @@ export const en: Record<keyof typeof ja, string> = {
   "graph.noEdges.message":
     "Connections appear here once a service uses values from another service.",
 
-  // --- Resource Shape ----------------------------------------------------------
+  // --- Resources (service-created cloud resources) -----------------------------
   "resources.title": "Resources",
   "resources.subtitle":
-    "Manage desired state, placement, and observations for Resource Shapes.",
+    "Manage desired state, placement, and observations for the resources your services created.",
+  "resources.define.needsTargetPool":
+    "No placement target is configured. Create one below to start defining resources.",
   "resources.define": "Define resource",
-  "resources.empty": "This Resource Space has no resources.",
+  "resources.empty": "This scope has no resources.",
   "resources.column.resource": "Resource",
   "resources.column.phase": "Phase",
   "resources.column.target": "Target",
   "resources.column.managedBy": "Managed by",
-  "resources.scope.title": "Resource Space",
+  "resources.scope.title": "Scope",
   "resources.scope.subtitle":
-    "For dashboard sessions, the verified Workspace ID is the Resource Space boundary.",
-  "resources.scope.label": "Space ID",
-  "resources.scope.required": "A Resource Space is required.",
-  "resources.unavailable.title": "Resource Shape API is disabled",
+    "In the dashboard, your verified workspace ID is the scope.",
+  "resources.scope.label": "Scope ID",
+  "resources.scope.required": "A scope is required.",
+  "resources.unavailable.title": "Resource management is unavailable",
   "resources.unavailable.message":
-    "This operator has not enabled the durable Resource Shape API and runner yet.",
+    "This deployment has not enabled durable resource storage and its run environment yet.",
   "resources.inventory.title": "Resource inventory",
-  "resources.inventory.subtitle": "Desired and observed state in Space {space}",
+  "resources.inventory.subtitle": "Desired and observed state in scope {space}",
   "resources.editor.createTitle": "Define resource",
   "resources.editor.editTitle": "Change desired state",
   "resources.editor.subtitle":
@@ -1180,21 +1223,20 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.editor.service.containerService": "Container",
   "resources.editor.service.statefulActorNamespace": "Stateful Actor Namespace",
   "resources.editor.service.schedule": "Schedule",
-  "resources.editor.service.custom": "Operator / custom Shape",
   "resources.editor.stable": "Stable",
   "resources.editor.stableHint":
-    "The Resource Shapes available to you use the same Stable Deploy API. This list comes from the host's Form availability contract.",
+    "These are the service types this deployment offers.",
   "resources.editor.customHint":
     "Operator-defined Shapes use a kind and raw Spec JSON under advanced settings. The endpoint decides availability.",
   "resources.editor.inputsStep": "Required inputs",
   "resources.editor.inputsHint":
     "Do not enter credentials or provider-specific configuration here.",
-  "resources.editor.kind": "Shape kind",
+  "resources.editor.kind": "Type",
   "resources.editor.kindHint":
     "Use a bundled shape or a token explicitly registered by the operator.",
   "resources.editor.kindInvalid": "Enter a valid Shape kind.",
   "resources.editor.formUnavailable":
-    "No exact Service Form is available to your account in this Space.",
+    "No service type is available to your account in this scope.",
   "resources.editor.name": "Service name",
   "resources.editor.nameRequired": "Enter a service name.",
   "resources.editor.artifactSource": "Immutable artifact source",
@@ -1295,19 +1337,20 @@ export const en: Record<keyof typeof ja, string> = {
     "Enter a target Resource reference without whitespace.",
   "resources.editor.project": "Project (optional)",
   "resources.editor.environment": "Environment",
-  "resources.editor.targetPool": "TargetPool",
-  "resources.editor.policy": "SpacePolicy",
+  "resources.editor.targetPool": "Placement",
+  "resources.editor.policy": "Policy",
   "resources.editor.spec": "Spec JSON",
   "resources.editor.specHint":
     "Enter only the selected Shape's spec as a JSON object. Do not include credentials.",
   "resources.editor.advanced": "Advanced and operator settings",
   "resources.editor.advancedHint":
-    "Set Project, Environment, TargetPool, SpacePolicy, or labels only when needed. Ordinary deploys can use operator defaults.",
+    "Set project, environment, placement, policy, or labels only when needed. Ordinary deploys can use the defaults.",
   "resources.editor.rawOptInHint":
     "Switch to raw Spec JSON only for connections, lifecycle policy, or operator extensions.",
   "resources.editor.useRawSpec": "Use raw Spec JSON",
   "resources.editor.rawWarning":
     "This is the custom Shape and operator path. The Deploy API decides schema, availability, and price.",
+  "resources.editor.backToGuided": "Back to the guided form",
   "resources.editor.rawCannotGuide":
     "The raw Spec JSON contains settings the guided form does not handle. It stayed in raw mode to avoid losing them.",
   "resources.editor.labels": "Labels JSON",
@@ -1367,60 +1410,59 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.preview.nativePlan": "Native plan",
   "resources.preview.risks": "Risk notes",
   "resources.preview.noRisks": "No additional risk notes.",
-  "resources.targetPools.title": "TargetPools",
+  "resources.targetPools.title": "Placements",
   "resources.targetPools.subtitle":
     "Declare available Targets and implementation descriptors in priority order.",
-  "resources.targetPools.add": "Add TargetPool",
-  "resources.targetPools.empty": "No TargetPools.",
+  "resources.targetPools.add": "Add Placement",
+  "resources.targetPools.empty": "No Placements.",
   "resources.targetPools.column.name": "Name",
   "resources.targetPools.column.targets": "Targets",
   "resources.targetPools.column.updated": "Updated",
   "resources.targetPools.edit": "Edit",
-  "resources.targetPools.editorTitle": "TargetPool configuration",
-  "resources.targetPools.name": "TargetPool name",
-  "resources.targetPools.nameRequired": "Enter a TargetPool name.",
-  "resources.targetPools.spec": "TargetPool spec JSON",
+  "resources.targetPools.editorTitle": "Placement configuration",
+  "resources.targetPools.name": "Placement name",
+  "resources.targetPools.nameRequired": "Enter a Placement name.",
+  "resources.targetPools.spec": "Placement spec JSON",
   "resources.targetPools.specInvalid":
     "Enter a valid JSON object containing a targets array.",
-  "resources.targetPools.saved": "TargetPool saved.",
-  "resources.targetPools.deleteTitle": "Delete this TargetPool?",
+  "resources.targetPools.saved": "Placement saved.",
+  "resources.targetPools.deleteTitle": "Delete this Placement?",
   "resources.targetPools.deleteMessage":
-    "Delete TargetPool {name}. The request is rejected while a Resource pins it.",
-  "resources.targetPools.deleteAria": "Delete TargetPool {name}",
+    "Delete Placement {name}. The request is rejected while a Resource pins it.",
+  "resources.targetPools.deleteAria": "Delete Placement {name}",
   "resources.config.noSecrets":
     "Enter only non-secret descriptors here. Store credentials in a Provider Connection.",
-  "resources.policy.title": "Advanced SpacePolicy",
+  "resources.policy.title": "Advanced Policy",
   "resources.policy.subtitle":
     "Configure placement constraints, preferences, and approvals as JSON",
-  "resources.policy.add": "Add SpacePolicy",
+  "resources.policy.add": "Add Policy",
   "resources.policy.empty": "No SpacePolicies.",
   "resources.policy.column.name": "Name",
   "resources.policy.column.updated": "Updated",
   "resources.policy.edit": "Edit",
-  "resources.policy.editorTitle": "SpacePolicy configuration",
-  "resources.policy.name": "SpacePolicy name",
-  "resources.policy.nameRequired": "Enter a SpacePolicy name.",
-  "resources.policy.spec": "SpacePolicy spec JSON",
+  "resources.policy.editorTitle": "Policy configuration",
+  "resources.policy.name": "Policy name",
+  "resources.policy.nameRequired": "Enter a Policy name.",
+  "resources.policy.spec": "Policy spec JSON",
   "resources.policy.specInvalid": "Enter a valid JSON object.",
-  "resources.policy.saved": "SpacePolicy saved.",
-  "resources.policy.deleteTitle": "Delete this SpacePolicy?",
-  "resources.policy.deleteMessage": "Delete SpacePolicy {name}.",
-  "resources.policy.deleteAria": "Delete SpacePolicy {name}",
+  "resources.policy.saved": "Policy saved.",
+  "resources.policy.deleteTitle": "Delete this Policy?",
+  "resources.policy.deleteMessage": "Delete Policy {name}.",
+  "resources.policy.deleteAria": "Delete Policy {name}",
   "resources.policy.writeOnlyHint":
     "Saving replaces the policy with the same name. Do not include credentials or secrets.",
-  "resources.detail.subtitle":
-    "State and operation history in Resource Space {space}",
+  "resources.detail.subtitle": "State and operation history in scope {space}",
   "resources.detail.back": "Resource inventory",
   "resources.detail.observe": "Observe",
   "resources.detail.refresh": "Refresh state",
   "resources.detail.actionComplete": "Operation complete.",
   "resources.detail.loadFailed": "Could not load this resource",
   "resources.detail.status": "Current status",
-  "resources.detail.kind": "Kind",
-  "resources.detail.space": "Space",
+  "resources.detail.kind": "Type",
+  "resources.detail.space": "Scope",
   "resources.detail.managedBy": "Managed by",
   "resources.detail.generation": "Observed generation",
-  "resources.detail.resolution": "ResolutionLock",
+  "resources.detail.resolution": "Placement lock",
   "resources.detail.locked": "Locked",
   "resources.detail.yes": "Yes",
   "resources.detail.no": "No",
@@ -1429,6 +1471,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The spec stays folded, and every change must be previewed again.",
   "resources.detail.change": "Change",
   "resources.detail.showSpec": "Show Spec JSON",
+  "resources.condition.ok": "OK",
+  "resources.condition.bad": "Not OK",
   "resources.detail.conditions": "Conditions",
   "resources.detail.conditionsHint": "Public reconcile and drift status",
   "resources.detail.outputs": "Output keys",
@@ -1462,10 +1506,18 @@ export const en: Record<keyof typeof ja, string> = {
   "account.theme.title": "Appearance",
   "account.preferences.title": "Display settings",
   "account.preferences.body": "Change language and appearance.",
+  "account.installTarget.title": "Where store installs land",
+  "account.installTarget.body":
+    "Register this browser so a store’s “Install” button opens here, in this Takosumi. Once registered, install buttons on other stores also land here.",
+  "account.installTarget.register": "Register this device",
+  "account.installTarget.registered": "Registered on this device",
+  "account.installTarget.done": "Registered — approve your browser’s prompt.",
+  "account.installTarget.unsupported":
+    "This browser doesn’t support this. Enter your instance URL on the store instead.",
 
   // --- billing -------------------------------------------------------------------
   "billing.subtitle": "Review provider-neutral usage and showback records.",
-  "billing.usageQuotaTitle": "Showback",
+  "billing.usageQuotaTitle": "Usage overview",
   "billing.usageQuotaSubtitle":
     "Review this Workspace's recording mode and provider-neutral usage.",
   "billing.mode.disabled": "Showback is disabled for this Workspace.",
@@ -1476,14 +1528,11 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.usage.subtitle": "Provider-neutral usage events for this Workspace.",
   "billing.usage.load": "Load usage",
   "billing.usage.more": "Load more",
-  "billing.usage.openHint": "Open usage history to load recent entries.",
-  "billing.usage.moreAvailable": "Showing the most recent usage entries.",
-  "billing.usage.loading": "Loading usage...",
   "billing.usage.error": "Could not load usage: {message}",
   "billing.usage.empty": "No usage yet.",
   "billing.usage.kind": "Kind",
   "billing.usage.time": "Time",
-  "billing.usage.kind.runnerMinute": "Runner time",
+  "billing.usage.kind.runner_minute": "Runner time",
   "billing.usage.kind.operation": "Service operation",
   "billing.usage.kind.compute": "Compute",
   "billing.usage.kind.storage": "Storage",

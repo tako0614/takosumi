@@ -79,6 +79,18 @@
   color: var(--c-accent-fg);
   font-weight: 600;
 }
+/* Operator-level store-source control: present, but not competing with the
+   apps it sits above. */
+.tcs-btn.tcs-quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--c-muted);
+  font-weight: 600;
+}
+.tcs-btn.tcs-quiet:hover:not(:disabled) {
+  border-color: var(--c-border);
+  color: var(--c-fg);
+}
 .tcs-btn:disabled {
   opacity: 0.55;
   cursor: default;
@@ -260,6 +272,23 @@
   min-height: 36px;
   min-width: 112px;
 }
+/* Card-level install: quiet by default so a grid of apps reads as a catalogue,
+   not a wall of primary buttons. The filled accent stays in the detail drawer. */
+.tcs-btn.tcs-install {
+  background: transparent;
+  border-color: var(--c-accent);
+  color: var(--tg-accent-text, var(--c-accent));
+}
+.tcs-btn.tcs-install:hover:not(:disabled) {
+  background: var(--tg-accent-soft, var(--c-panel2));
+}
+/* Publisher byline between the app name and its description. */
+.tcs-card-by {
+  margin: -2px 0 0;
+  color: var(--c-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
 
 .tcs-tag {
   background: var(--c-panel2);
@@ -283,6 +312,10 @@
   font-size: 0.8rem;
 }
 .tcs-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
   color: var(--c-muted);
   text-align: center;
   padding: 40px 0;
@@ -432,31 +465,6 @@
     display: inline-flex;
     align-items: center;
   }
-}
-
-/* Store tab page wrapper (StoreView) — token-driven, no inline styles. */
-.store-view {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: var(--tg-s-5) var(--tg-s-5) var(--tg-s-8);
-}
-@media (max-width: 640px) {
-  .store-view {
-    padding: var(--tg-s-4) var(--tg-s-3) var(--tg-s-7);
-  }
-}
-.store-manual-entry {
-  margin-top: var(--tg-s-5);
-  text-align: center;
-  font-size: var(--tg-fs-sm);
-  color: var(--tg-fg-muted);
-}
-.store-manual-entry a {
-  color: var(--tg-fg-muted);
-  text-decoration: underline;
-}
-.store-manual-entry a:hover {
-  color: var(--tg-fg);
 }
 
 /* Skeleton tiles while the store loads (matches .tcs-card footprint). */

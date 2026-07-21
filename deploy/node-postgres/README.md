@@ -9,7 +9,7 @@ The handler is the same `createAccountsHandler` mounted in the platform worker. 
 | compute | Cloudflare Workers (V8) | Bun on a VM / container              |
 | storage | D1 (`D1AccountsStore`)  | Postgres (`PostgresAccountsStore`)   |
 | TLS     | Cloudflare edge         | Caddy automatic HTTPS                |
-| secrets | `wrangler secret put`   | `.env` file or operator secret store |
+| secrets | operator secret binding | `.env` file or operator secret store |
 
 The account plane is the backing layer for session cookies, upstream sign-in, the bare-origin OIDC issuer, dashboard
 account records, session/OIDC/PAT state, and the dashboard facade. It is mounted on the same composed Takosumi origin as
@@ -52,6 +52,12 @@ For a Takos native shell, register a separate host-specific public client in
 `allowedScopes` must list only the Takos mobile API scopes the shell uses. Set
 the same `clientId` as `OIDC_MOBILE_CLIENT_ID` on that Takos Worker. Do not put a
 client secret in the app or reuse the browser client's id.
+
+For the standalone Takosumi app, register another public client with the exact
+`takosumi://oauth/callback` redirect and the `openid profile offline_access
+capsules:read capsules:write` scopes, then select it with the non-secret
+`TAKOSUMI_MOBILE_OIDC_CLIENT_ID`. The composed server validates and publishes
+that id through `/.well-known/takosumi`.
 
 ## Files
 

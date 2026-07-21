@@ -16,7 +16,6 @@ import {
 import { Share2 } from "lucide-solid";
 import { listCapsulesCached } from "../../../lib/capsule-list.ts";
 import {
-  type ControlApiError,
   approveOutputShare,
   createOutputShare,
   getWorkspace,
@@ -45,6 +44,7 @@ import {
   Textarea,
   Toast,
 } from "../../../components/ui/index.ts";
+import { fetchFailedMessage } from "../../../lib/error-copy.ts";
 
 type OutputDraft = {
   readonly id: string;
@@ -598,9 +598,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
             <EmptyState
               icon={<Share2 size={28} />}
               title={t("workspaceSettings.tab.shares")}
-              message={t("common.fetchFailed", {
-                message: (shares.error as ControlApiError).message,
-              })}
+              message={fetchFailedMessage(shares.error, t)}
               action={
                 <Button
                   variant="secondary"

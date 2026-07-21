@@ -80,3 +80,47 @@ test("static public OIDC clients enforce exact redirect and allowed scopes", asy
     error: "invalid_scope",
   });
 });
+
+test("authorize refuses a subresource load so an <img> cannot harvest a code", async () => {
+  const handler = await createEphemeralAccountsHandler({
+    issuer: "http://localhost:8787",
+    subject: "tsub_local",
+    store: new InMemoryAccountsStore(),
+    clients: [
+      {
+        clientId: "takos-mobile-host-example",
+        redirectUris: ["takos://oauth/callback"],
+        tokenEndpointAuthMethod: "none",
+        allowedScopes: ["openid"],
+      },
+    ],
+  });
+  const authorize = new URL("http://localhost:8787/oauth/authorize");
+  authorize.search = new URLSearchParams({
+    response_type: "code",
+    client_id: "takos-mobile-host-example",
+    redirect_uri: "takos://oauth/callback",
+    scope: "openid",
+    code_challenge: "challenge",
+    code_challenge_method: "S256",
+  }).toString();
+
+  // A launcher tile <img> pointed at /oauth/authorize: the browser labels the
+  // request `image` and sends the session cookie with it.
+  for (const dest of ["image", "iframe", "script", "empty"]) {
+    const subresource = await handler(
+      new Request(authorize, { headers: { "sec-fetch-dest": dest } }),
+    );
+    expect(subresource.status).toBe(400);
+    expect(await subresource.json()).toMatchObject({
+      error: "invalid_request",
+      error_description: "authorize must be a top-level navigation",
+    });
+  }
+
+  // A real navigation still reaches the sign-in gate rather than a 400.
+  const navigation = await handler(
+    new Request(authorize, { headers: { "sec-fetch-dest": "document" } }),
+  );
+  expect(navigation.status).not.toBe(400);
+});

@@ -176,6 +176,9 @@ export async function buildComposedServer(
   const { app } = await buildComposedApp({
     config,
     store,
+    productDiscovery: {
+      mobileOidcClientId: config.mobileOidcClientId,
+    },
     createAccountsHandler: (controlPlaneOperations) =>
       buildAccountsHandler(config, store, controlPlaneOperations),
     preHandle: (req) => preHandleNonServiceRequest(req, pool),

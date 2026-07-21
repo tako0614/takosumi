@@ -95,9 +95,13 @@ export function ConfirmDialogRenderer() {
             {state().message}
           </p>
           <div class="tg-confirm-actions">
+            {/* The app's highest-stakes surface used the legacy `.btn`
+                taxonomy — square corners, display font, different height —
+                so every destructive confirmation looked off-system against the
+                page behind it. */}
             <button
               type="button"
-              class="btn btn-secondary"
+              class="tg-btn tg-btn-secondary"
               ref={cancelRef}
               onClick={() => handleCancel()}
             >
@@ -105,10 +109,10 @@ export function ConfirmDialogRenderer() {
             </button>
             <button
               type="button"
-              class="btn"
+              class="tg-btn"
               classList={{
-                "btn-danger": Boolean(state().danger),
-                "btn-primary": !state().danger,
+                "tg-btn-danger": Boolean(state().danger),
+                "tg-btn-primary": !state().danger,
               }}
               onClick={() => handleConfirm()}
             >

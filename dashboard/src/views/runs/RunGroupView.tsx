@@ -22,7 +22,6 @@ import { Layers } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import {
   approveRunGroup,
-  type ControlApiError,
   getRunGroup,
   type Run,
   type RunGroupWithRuns,
@@ -46,6 +45,7 @@ import { Card, CardHeader } from "../../components/ui/Card.tsx";
 import { Badge, StatusBadge } from "../../components/ui/Badge.tsx";
 import EmptyState from "../../components/ui/EmptyState.tsx";
 import Skeleton from "../../components/ui/Skeleton.tsx";
+import { fetchFailedMessage } from "../../lib/error-copy.ts";
 
 const RUN_GROUP_POLL_MS = 5_000;
 
@@ -166,9 +166,17 @@ function Inner() {
   // screen it had no confirmation. Enumerate what will run and gate behind an
   // explicit (danger-styled when any member removes resources) confirm.
   const { confirm } = useConfirmDialog();
+  // Fail closed, matching the single-run gate: a member that DELETES resources
+  // counts even when its run type is an ordinary update, and a member whose
+  // change counts are unknown counts too. Approving N at once must never be a
+  // weaker gate than approving one.
   const anyDestroyMember = createMemo(() =>
     (snapshot()?.runs ?? []).some(
-      (r) => r.type === "destroy_plan" || r.type === "destroy_apply",
+      (r) =>
+        r.type === "destroy_plan" ||
+        r.type === "destroy_apply" ||
+        (r.summary?.destroy ?? 0) > 0 ||
+        (r.status === "waiting_approval" && r.summary === undefined),
     ),
   );
   const confirmApproveAll = async (): Promise<void> => {
@@ -223,9 +231,7 @@ function Inner() {
           <EmptyState
             icon={<Layers size={28} />}
             title={t("runGroup.title")}
-            message={t("common.fetchFailed", {
-              message: (group.error as ControlApiError).message,
-            })}
+            message={fetchFailedMessage(group.error, t)}
             action={
               <Button
                 variant="secondary"

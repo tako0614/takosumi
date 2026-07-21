@@ -6,7 +6,7 @@
 
 この runbook は operator が構成した Takosumi platform の汎用運用正本です。
 対象は accounts plane、control plane、dashboard SPA、Run queue、coordination、
-runner substrate、operator が選択した database / object storage です。公式 hosted
+runner 実行基盤、operator が選択した database / object storage です。公式 hosted
 deployment 固有の topology、provider、official SLA/support は host extension の
 readiness contribution と runbook が所有します。
 Takos product runtime / installable app runtime の incident は各 product docs が

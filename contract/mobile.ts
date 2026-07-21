@@ -32,6 +32,15 @@ export interface MobileProductWellKnownEndpoints {
   readonly notifications?: string;
   readonly notificationPushers?: string;
   readonly mobilePushRegistrations?: string;
+  /**
+   * Native-shell auth endpoints. Declared here because product hosts already
+   * emit them (`yurucommu-core/src/backend/index.ts`) and the mobile shells
+   * already read them: an emitted-and-read field that only the index signature
+   * covered is a field whose rename nothing would catch.
+   */
+  readonly mobilePasswordLogin?: string;
+  readonly mobileOidcExchange?: string;
+  readonly mobileLogout?: string;
   readonly [key: string]: string | undefined;
 }
 
@@ -45,6 +54,15 @@ export interface MobileProductWellKnown {
    * refresh; product-wide fallback ids are not host registration authority.
    */
   readonly oidcClientId?: string;
+  /**
+   * Which sign-in methods this host actually offers. A shell that shows a
+   * password form against an OIDC-only host, or an OIDC button against a host
+   * with no registered client, fails after the user has already committed.
+   */
+  readonly auth?: {
+    readonly oidc?: boolean;
+    readonly password?: boolean;
+  };
   readonly apiBaseUrl?: string;
   readonly endpoints?: MobileProductWellKnownEndpoints;
   readonly [key: string]: unknown;

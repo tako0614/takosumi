@@ -72,6 +72,11 @@ type StoreEntry = NonNullable<InstallConfig["store"]> & {
   readonly source: NonNullable<NonNullable<InstallConfig["store"]>["source"]>;
   readonly inputs: NonNullable<InstallConfig["variablePresentation"]>;
   readonly installExperience?: InstallConfig["installExperience"];
+  /**
+   * Store-listing presentation only. Publisher identity comes from the Store
+   * node, never from the InstallConfig, and never grants install authority.
+   */
+  readonly publisher?: TcsListing["publisher"];
 };
 type StoreInputField = StoreEntry["inputs"][number];
 
@@ -718,6 +723,7 @@ function storeEntryFromStoreListing(
     ...(installConfig.installExperience
       ? { installExperience: installConfig.installExperience }
       : {}),
+    ...(listing.publisher ? { publisher: listing.publisher } : {}),
     source: store.source ?? {
       url: listing.source.url,
       path: listing.source.path || ".",

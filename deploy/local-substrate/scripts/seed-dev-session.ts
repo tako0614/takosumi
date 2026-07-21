@@ -13,7 +13,10 @@ const databaseUrl =
 const sessionId = process.env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID;
 const subject = process.env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SUBJECT;
 
-if (!sessionId && !subject) {
+// No session id means no fixture bearer for this stack. The id is generated per
+// bring-up by scripts/up.sh precisely so that a stack started without it (or a
+// stack reachable from the LAN) has no long-lived replayable credential to seed.
+if (!sessionId) {
   process.exit(0);
 }
 
@@ -22,7 +25,7 @@ if (!databaseUrl) {
     "TAKOSUMI_ACCOUNTS_DATABASE_URL or DATABASE_URL is required to seed a dev session",
   );
 }
-if (!sessionId?.startsWith("sess_")) {
+if (!sessionId.startsWith("sess_")) {
   throw new Error(
     "TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID must be set and use the sess_ prefix",
   );

@@ -12,10 +12,7 @@ const workspaceStateSource = readFileSync(
 
 test("selectAvailableWorkspaceId keeps an accessible Workspace id", () => {
   expect(
-    selectAvailableWorkspaceId("ws_b", [
-      { id: "ws_a" },
-      { id: "ws_b" },
-    ]),
+    selectAvailableWorkspaceId("ws_b", [{ id: "ws_a" }, { id: "ws_b" }]),
   ).toBe("ws_b");
 });
 

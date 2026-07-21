@@ -155,7 +155,7 @@ function parseDescriptor(
     providerId,
     ...optionalProperty("label", optionalString(value.label, `${label}.label`)),
     ...optionalProperty("protocol", normalizedProtocol),
-    issuer: requiredHttpUrl(value.issuer, `${label}.issuer`),
+    issuer: requiredIssuerIdentity(value.issuer, `${label}.issuer`),
     authorizationEndpoint: requiredHttpUrl(
       value.authorizationEndpoint,
       `${label}.authorizationEndpoint`,
@@ -261,6 +261,34 @@ function requiredHttpUrl(value: unknown, label: string): string {
     throw new TypeError(`${label} must be an http:// or https:// URL`);
   }
   return url.toString();
+}
+
+/**
+ * The upstream issuer is NOT a URL we fetch: it is one of the two identity
+ * inputs (issuer + upstream subject) that key `upstream_identities` and seed
+ * the `deriveTakosumiSubject` HMAC. Any byte-level change to it silently
+ * forks every existing user onto a brand-new empty account, so it must not be
+ * run through `URL.toString()` normalization (`https://accounts.google.com`
+ * would become `https://accounts.google.com/`, which is exactly the drift that
+ * orphaned accounts once). Validate the shape, then pin one canonical spelling
+ * that both operator spellings collapse onto: origin + path with any trailing
+ * slashes removed, and no query/fragment.
+ */
+function requiredIssuerIdentity(value: unknown, label: string): string {
+  const raw = requiredString(value, label);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new TypeError(`${label} must be an http:// or https:// URL`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new TypeError(`${label} must be an http:// or https:// URL`);
+  }
+  if (url.search || url.hash) {
+    throw new TypeError(`${label} must not carry a query or fragment`);
+  }
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
 }
 
 function optionalStringArray(

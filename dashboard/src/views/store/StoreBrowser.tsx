@@ -74,8 +74,13 @@ const STR = {
   unreachable: { ja: "接続不可", en: "Unreachable" },
   reachable: { ja: "接続済み", en: "Connected" },
   alsoOn: { ja: "他にもあり", en: "also elsewhere" },
-  install: { ja: "追加", en: "Add" },
-  installAria: { ja: "追加: {name}", en: "Add {name}" },
+  noStore: {
+    ja: "ストアの取得元が設定されていません。",
+    en: "No store source is configured.",
+  },
+  noStoreCta: { ja: "取得元を設定", en: "Configure a source" },
+  install: { ja: "インストール", en: "Install" },
+  installAria: { ja: "インストール: {name}", en: "Install {name}" },
   loadingAnnounce: { ja: "読み込み中…", en: "Loading…" },
   resultsAnnounce: {
     ja: "{n} 件のサービスが見つかりました",
@@ -90,7 +95,7 @@ const STR = {
   },
   sourceLocation: { ja: "取得元", en: "Source" },
   folder: { ja: "フォルダ", en: "Folder" },
-  openRepo: { ja: "リポジトリ", en: "Repository" },
+  openRepo: { ja: "取得元を開く", en: "Open source" },
 } as const;
 
 function s(key: keyof typeof STR, locale: TcsLocale): string {
@@ -301,24 +306,41 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     };
   };
 
-  const displayed = createMemo(() =>
-    allItems()
+  // The local substring filter is for INCREMENTAL typing only. Once a query has
+  // been submitted, the aggregate already holds server-filtered results, and
+  // re-testing them with `includes()` silently discarded matches the store had
+  // found (a two-word query, or a match on a field the client does not index).
+  const displayed = createMemo(() => {
+    const submitted = agg().q ?? "";
+    const localQuery = submitted === activeQuery() ? "" : activeQuery();
+    return allItems()
       .filter(
         (l) =>
           (!activeStore() || l.seenOn.includes(activeStore())) &&
-          (!activeQuery() ||
+          (!localQuery ||
             listingSearchText(l, props.locale).includes(
-              activeQuery().toLowerCase(),
+              localQuery.toLowerCase(),
             )),
       )
-      .map((listing) => listingForActiveStore(listing)),
-  );
+      .map((listing) => listingForActiveStore(listing));
+  });
 
-  const installButton = (listing: TcsListing) => {
+  // Store-listing byline. Presentation only — publisher identity never grants
+  // install authority.
+  const publisherLabel = (listing: TcsListing): string => {
+    const publisher = listing.publisher;
+    if (!publisher) return "";
+    return publisher.displayName?.trim() || `@${publisher.handle}`;
+  };
+
+  // App-store posture: the grid repeats one quiet action per card, and the
+  // filled accent button is reserved for the detail drawer where a single
+  // listing has the user's attention.
+  const installButton = (listing: TcsListing, prominent = false) => {
     return (
       <button
         type="button"
-        class="tcs-btn tcs-primary"
+        class={prominent ? "tcs-btn tcs-primary" : "tcs-btn tcs-install"}
         // Every card repeats the same visible "追加"/"Add"; the accessible
         // name carries the listing so the buttons are distinguishable.
         aria-label={s("installAria", props.locale).replace(
@@ -382,12 +404,11 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
         <Show when={showSourceControls()}>
           <button
             type="button"
-            class="tcs-btn"
+            class="tcs-btn tcs-quiet"
             aria-expanded={showServers()}
             onClick={() => setShowServers((v) => !v)}
           >
-            {s("serversAdvanced", props.locale)}: {s("servers", props.locale)} (
-            {agg().status.length})
+            {s("servers", props.locale)} ({agg().status.length})
           </button>
         </Show>
       </div>
@@ -505,13 +526,34 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               <Show
                 when={agg().loading}
                 fallback={
-                  <p class="tcs-empty">
-                    {/* With unfetched pages left, a flat "no matches" is a
-                        lie — the match may simply not be loaded yet. */}
-                    {agg().done
-                      ? s("none", props.locale)
-                      : s("noneUnfetched", props.locale)}
-                  </p>
+                  <Show
+                    when={agg().status.length > 0}
+                    fallback={
+                      // No store source is configured at all (self-host with
+                      // no VITE_TAKOSUMI_TCS_STORE_URL). "No matching services"
+                      // reads as an empty search result and offers nothing.
+                      <p class="tcs-empty">
+                        <span>{s("noStore", props.locale)}</span>
+                        <Show when={showSourceControls()}>
+                          <button
+                            type="button"
+                            class="tcs-btn"
+                            onClick={() => setShowServers(true)}
+                          >
+                            {s("noStoreCta", props.locale)}
+                          </button>
+                        </Show>
+                      </p>
+                    }
+                  >
+                    <p class="tcs-empty">
+                      {/* With unfetched pages left, a flat "no matches" is a
+                          lie — the match may simply not be loaded yet. */}
+                      {agg().done
+                        ? s("none", props.locale)
+                        : s("noneUnfetched", props.locale)}
+                    </p>
+                  </Show>
                 }
               >
                 <div class="tcs-grid" aria-hidden="true">
@@ -556,6 +598,9 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                         {pick(listing.name, props.locale)}
                       </button>
                     </h2>
+                    <Show when={publisherLabel(listing)}>
+                      {(publisher) => <p class="tcs-card-by">{publisher()}</p>}
+                    </Show>
                     <p class="tcs-card-desc">
                       {pick(listing.description, props.locale)}
                     </p>
@@ -679,7 +724,9 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                 <p class="tcs-muted">
                   {pick(listing().description, props.locale)}
                 </p>
-                <div class="tcs-detail-actions">{installButton(listing())}</div>
+                <div class="tcs-detail-actions">
+                  {installButton(listing(), true)}
+                </div>
                 <details class="tcs-advanced">
                   <summary>{s("technicalDetails", props.locale)}</summary>
                   <section>

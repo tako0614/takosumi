@@ -14,9 +14,18 @@ describe("generalization boundary scanner", () => {
         content:
           'import type { Capsule } from "../../contract/installations.ts";',
       },
+      // kebab-case `capability-bindings` cannot be matched by the root gate's
+      // `\bCapabilityBinding\b` pattern, so this rule is the only thing that
+      // sees a stale alias to that removed module.
+      {
+        path: "dashboard/tsconfig.json",
+        content:
+          '"takosumi-contract/capability-bindings": ["./contract/capability-bindings.ts"]',
+      },
     ]);
 
     expect(violations.map((violation) => violation.ruleId)).toEqual([
+      "retired-contract-subpath",
       "retired-contract-subpath",
       "retired-contract-subpath",
     ]);
