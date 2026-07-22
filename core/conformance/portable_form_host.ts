@@ -447,7 +447,7 @@ export interface TakoformStandardHostRunnerReport {
   readonly format: "takoform.standard-runner-report@v1";
   readonly role: "host-report";
   readonly subject: string;
-  readonly runnerVersion: "1.1.0";
+  readonly runnerVersion: string;
   readonly identity: InstalledFormReference;
   readonly status: "passed";
   readonly executionEvidence: Omit<
@@ -482,12 +482,24 @@ export interface TakoformStandardHostRunnerReport {
 
 export async function portableStandardHostRunnerReport(
   report: PortableFormHostConformanceReport,
+  options: {
+    /**
+     * Source-bound runner version retained by the signed report lane. Local
+     * callers keep the compatibility default; release evidence supplies an
+     * exact reviewed source identity.
+     */
+    readonly runnerVersion?: string;
+  } = {},
 ): Promise<{
   readonly report: TakoformStandardHostRunnerReport;
   readonly canonical: string;
   readonly evidenceDigest: string;
   readonly proof: StandardFormConformanceProof;
 }> {
+  const runnerVersion = options.runnerVersion ?? "1.1.0";
+  if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u.test(runnerVersion)) {
+    throw new Error("standard host runnerVersion must be a canonical semver");
+  }
   const requiredChecks = [
     "apply",
     "read",
@@ -538,7 +550,7 @@ export async function portableStandardHostRunnerReport(
     format: "takoform.standard-runner-report@v1",
     role: "host-report",
     subject: `host:${report.endpointOrigin}`,
-    runnerVersion: "1.1.0",
+    runnerVersion,
     identity: report.identity,
     status: "passed",
     executionEvidence,

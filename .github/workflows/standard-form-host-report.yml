@@ -1,0 +1,171 @@
+name: Build signed Standard Form host reports
+
+on:
+  workflow_dispatch:
+    inputs:
+      takoform_commit:
+        description: Exact reviewed Takoform main commit containing Standard Form 1.0.1
+        required: true
+        type: string
+
+run-name: standard-form-host-report:1.0.1:${{ github.sha }}:${{ inputs.takoform_commit }}
+
+concurrency:
+  group: standard-form-host-report-1.0.1-${{ github.sha }}-${{ inputs.takoform_commit }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  EXPECTED_COSIGN_VERSION: "v3.0.6"
+  HOST_REPORT_IDENTITY: https://github.com/tako0614/takosumi/.github/workflows/standard-form-host-report.yml@refs/heads/main
+
+jobs:
+  candidate:
+    name: Build and sign the closed reference-host candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout exact Takosumi source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pinned: v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate protected sources
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAKOFORM_COMMIT: ${{ inputs.takoform_commit }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_RUN_ATTEMPT}" = "1"
+          test "${GITHUB_REF}" = "refs/heads/main"
+          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${TAKOFORM_COMMIT}" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git rev-parse refs/remotes/origin/main)" = "${GITHUB_SHA}"
+          test "$(gh api repos/tako0614/terraform-provider-takoform/branches/main --jq .commit.sha)" = "${TAKOFORM_COMMIT}"
+          {
+            echo "takosumi_short=${GITHUB_SHA:0:12}"
+            echo "takoform_short=${TAKOFORM_COMMIT:0:12}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout exact Takoform source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pinned: v6.0.2
+        with:
+          repository: tako0614/terraform-provider-takoform
+          ref: ${{ inputs.takoform_commit }}
+          path: takoform-source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # pinned: v2.0.2
+        with:
+          bun-version: 1.3.14
+
+      - name: Setup Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # pinned: v6.0.0
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: takoform-source/go.sum
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2, Cosign v3.0.6
+
+      - name: Install locked Takosumi dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify exact Takoform candidate bytes
+        working-directory: takoform-source
+        run: |
+          set -euo pipefail
+          go run ./cmd/form-package conformance
+          go run ./cmd/standard-form-conformance candidate-publication-check
+
+      - name: Generate the reference-host reports twice
+        shell: bash
+        env:
+          TAKOFORM_COMMIT: ${{ inputs.takoform_commit }}
+        run: |
+          set -euo pipefail
+          first="${RUNNER_TEMP}/standard-form-host-report-first"
+          second="${RUNNER_TEMP}/standard-form-host-report-second"
+          bun run service-form:host-reports -- generate \
+            --takoform-root "${GITHUB_WORKSPACE}/takoform-source" \
+            --takosumi-commit "${GITHUB_SHA}" \
+            --takoform-commit "${TAKOFORM_COMMIT}" \
+            --output-dir "${first}"
+          bun run service-form:host-reports -- generate \
+            --takoform-root "${GITHUB_WORKSPACE}/takoform-source" \
+            --takosumi-commit "${GITHUB_SHA}" \
+            --takoform-commit "${TAKOFORM_COMMIT}" \
+            --output-dir "${second}"
+          diff -ru "${first}" "${second}"
+          test "$(find "${first}/packages" -name host-report.json -type f | wc -l)" -eq 10
+          echo "CANDIDATE_DIR=${first}" >> "${GITHUB_ENV}"
+
+      - name: Sign and verify every exact report
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F "${EXPECTED_COSIGN_VERSION}" <<<"$(cosign version 2>&1)"
+          while IFS= read -r report; do
+            bundle="${report%.json}.sigstore.json"
+            test ! -e "${bundle}"
+            cosign sign-blob "${report}" --bundle "${bundle}" --yes
+            cosign verify-blob "${report}" \
+              --bundle "${bundle}" \
+              --certificate-identity "${HOST_REPORT_IDENTITY}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+          done < <(find "${CANDIDATE_DIR}/packages" -name host-report.json -type f | sort)
+          test "$(find "${CANDIDATE_DIR}/packages" -name host-report.sigstore.json -type f | wc -l)" -eq 10
+
+      - name: Close and verify the signed candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run service-form:host-reports -- close-signed \
+            --candidate-dir "${CANDIDATE_DIR}" \
+            --workflow-run-id "${GITHUB_RUN_ID}" \
+            --workflow-run-attempt "${GITHUB_RUN_ATTEMPT}"
+          (cd "${CANDIDATE_DIR}" && sha256sum --check --strict SHA256SUMS)
+          test "$(find "${CANDIDATE_DIR}" -type f | wc -l)" -eq 23
+          test "$(find "${CANDIDATE_DIR}" -type l | wc -l)" -eq 0
+
+      - name: Upload the closed candidate only
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: takosumi-standard-form-host-report-candidate-1.0.1-${{ steps.source.outputs.takosumi_short }}-${{ steps.source.outputs.takoform_short }}
+          path: ${{ env.CANDIDATE_DIR }}/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record non-publication candidate identity
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${ARTIFACT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "### Standard Form host-report candidate"
+            echo ""
+            echo "- proof: OSS in-process reference-host source conformance only"
+            echo "- subject: \`host:https://in-process.takosumi.test\`"
+            echo "- Takosumi source: \`${GITHUB_SHA}\`"
+            echo "- Takoform source: \`${{ inputs.takoform_commit }}\`"
+            echo "- artifact id: \`${ARTIFACT_ID}\`"
+            echo "- artifact digest: \`${ARTIFACT_DIGEST}\`"
+            echo "- publication or production mutation: none"
+          } >> "${GITHUB_STEP_SUMMARY}"
