@@ -9,6 +9,32 @@ import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts"
 
 const clients: PGliteSqlClient[] = [];
 
+async function expectCompleteWorkspacePages(
+  service: WorkspacesService,
+): Promise<void> {
+  for (const handle of ["paging-two", "paging-three"]) {
+    await service.createWorkspace({
+      handle,
+      displayName: handle,
+      type: "organization",
+      ownerUserId: "account_owner",
+    });
+  }
+  const ids: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await service.listWorkspacesPage({
+      limit: 2,
+      ...(cursor ? { cursor } : {}),
+    });
+    expect(page.items.length).toBeLessThanOrEqual(2);
+    ids.push(...page.items.map((workspace) => workspace.id));
+    cursor = page.nextCursor;
+  } while (cursor);
+  expect(ids).toHaveLength(3);
+  expect(new Set(ids).size).toBe(3);
+}
+
 afterAll(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
 });
@@ -67,6 +93,7 @@ test("Postgres persists Project and WorkspaceMember in the canonical control led
   expect(await store.listWorkspaceMembersByAccount("account_member")).toEqual([
     expect.objectContaining({ workspaceId: workspace.id }),
   ]);
+  await expectCompleteWorkspacePages(workspaces);
 });
 
 test("D1 persists Project and WorkspaceMember in the canonical control ledger", async () => {
@@ -106,4 +133,5 @@ test("D1 persists Project and WorkspaceMember in the canonical control ledger", 
       status: "active",
     }),
   ]);
+  await expectCompleteWorkspacePages(workspaces);
 });

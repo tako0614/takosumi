@@ -681,6 +681,8 @@ export interface OpenTofuControlStore {
   listWorkspacesByIds(ids: readonly string[]): Promise<readonly Workspace[]>;
   getWorkspaceByHandle(handle: string): Promise<Workspace | undefined>;
   listWorkspaces(): Promise<readonly Workspace[]>;
+  /** Bounded keyset page over every durable Workspace in `(createdAt, id)` order. */
+  listWorkspacesPage(params: PageParams): Promise<Page<Workspace>>;
   /**
    * Lists only the Workspaces directly owned by `ownerUserId` (spec §4), same
    * `(createdAt, id)` sort as `listWorkspaces`. Used by the dashboard session
@@ -1409,6 +1411,18 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       Array.from(this.#workspaces.values()).sort(
         (a, b) =>
           a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+      ),
+    );
+  }
+
+  listWorkspacesPage(params: PageParams): Promise<Page<Workspace>> {
+    return Promise.resolve(
+      pageSorted(
+        Array.from(this.#workspaces.values()).sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
+        params,
       ),
     );
   }

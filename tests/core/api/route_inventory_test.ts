@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { createApiCapabilitiesDescription } from "../../../core/api/capabilities.ts";
 import {
   createTakosumiOpenApiDocument,
+  resourceFormPinSchemas,
   TAKOSUMI_OPENAPI_VERSION,
 } from "../../../core/api/openapi.ts";
 import { DEPLOY_CONTROL_ACTIVITY_ENDPOINTS } from "../../../core/api/deploy_control_activity_routes.ts";
+import { DEPLOY_CONTROL_RESOURCE_FORM_PIN_ENDPOINTS } from "../../../core/api/deploy_control_resource_form_pin_routes.ts";
 import { RESOURCE_SHAPE_KINDS } from "../../../contract/resource-shape.ts";
 import {
   ALWAYS_MOUNTED_ENDPOINTS,
@@ -485,6 +487,59 @@ test("restore endpoint descriptor carries a concrete restore request schema", ()
     (item) => item.operationId === "createBackupRestore",
   );
   assert.equal(endpoint?.openapi.requestSchema, "CreateRestoreRequest");
+});
+
+test("authoritative Form pin inventory has one token-only concrete descriptor", () => {
+  const endpoint = DEPLOY_CONTROL_RESOURCE_FORM_PIN_ENDPOINTS.find(
+    (item) => item.operationId === "captureResourceFormPinInventory",
+  );
+  assert.deepEqual(endpoint, {
+    method: "GET",
+    path: "/internal/v1/migrations/resource-form-pins/inventory",
+    summary:
+      "Captures a complete, authoritative all-Workspace exact FormRef pin inventory.",
+    auth: "deploy-control-token",
+    operationId: "captureResourceFormPinInventory",
+    openapi: { okSchema: "ResourceFormPinInventoryReceipt" },
+    notImplementedMessage: "exact FormRef pin inventory is not wired",
+  });
+});
+
+test("authoritative Form pin inventory schema exposes identity only", () => {
+  const schemas = resourceFormPinSchemas();
+  const receipt = schemas.ResourceFormPinInventoryReceipt as
+    { readonly properties: Record<string, unknown> } | undefined;
+  const row = schemas.ResourceFormPinInventoryRow as
+    | {
+        readonly properties: Record<string, unknown>;
+        readonly additionalProperties: boolean;
+      }
+    | undefined;
+  assert.ok(receipt);
+  assert.ok(row);
+  assert.deepEqual(Object.keys(row.properties), [
+    "workspaceId",
+    "space",
+    "resourceId",
+    "name",
+    "kind",
+    "form",
+  ]);
+  assert.equal(row.additionalProperties, false);
+  for (const sensitive of [
+    "spec",
+    "outputs",
+    "nativeResources",
+    "target",
+    "credentials",
+  ]) {
+    assert.equal(row.properties[sensitive], undefined, sensitive);
+  }
+  assert.deepEqual(receipt.properties.complete, { const: true });
+  assert.deepEqual(receipt.properties.matrixDigest, {
+    type: "string",
+    pattern: "^sha256:[0-9a-f]{64}$",
+  });
 });
 
 test("mountedEndpoints with no families includes process endpoints", () => {

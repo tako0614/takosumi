@@ -4,11 +4,13 @@ import {
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
+  ensureOperatorPermission,
   ensureWorkspacePermission,
   readJsonBody,
   WORKSPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import {
+  TAKOSUMI_RESOURCE_FORM_PIN_INVENTORY_ROUTE,
   TAKOSUMI_WORKSPACE_RESOURCE_FORM_PIN_BACKFILL_ROUTE,
   TAKOSUMI_WORKSPACE_RESOURCE_FORM_PIN_RESTORE_ROUTE,
 } from "./deploy_control_route_paths.ts";
@@ -29,6 +31,16 @@ const WORKSPACE_ID_PARAM = {
 
 export const DEPLOY_CONTROL_RESOURCE_FORM_PIN_ENDPOINTS: readonly DeployControlEndpoint[] =
   [
+    {
+      method: "GET",
+      path: TAKOSUMI_RESOURCE_FORM_PIN_INVENTORY_ROUTE,
+      summary:
+        "Captures a complete, authoritative all-Workspace exact FormRef pin inventory.",
+      auth: "deploy-control-token",
+      operationId: "captureResourceFormPinInventory",
+      openapi: { okSchema: "ResourceFormPinInventoryReceipt" },
+      notImplementedMessage: "exact FormRef pin inventory is not wired",
+    },
     {
       method: "POST",
       path: TAKOSUMI_WORKSPACE_RESOURCE_FORM_PIN_BACKFILL_ROUTE,
@@ -64,6 +76,24 @@ export function mountDeployControlResourceFormPinRoutes(
 ): void {
   const { app, dependencies, deployControlBodyLimit } = ctx;
   const operations = dependencies.resourceFormPinOperations;
+
+  app.get(
+    TAKOSUMI_RESOURCE_FORM_PIN_INVENTORY_ROUTE,
+    defineRoute({
+      ctx,
+      requireService: requiredInventoryDependency,
+      handler: async ({ c, principal }) => {
+        ensureOperatorPermission(
+          principal,
+          "capture the instance-wide Resource Form pin inventory",
+        );
+        return c.json(
+          await dependencies.resourceFormPinInventory!.capture(),
+          200,
+        );
+      },
+    }),
+  );
 
   app.post(
     TAKOSUMI_WORKSPACE_RESOURCE_FORM_PIN_BACKFILL_ROUTE,
@@ -124,6 +154,14 @@ export function mountDeployControlResourceFormPinRoutes(
       },
     }),
   );
+}
+
+function requiredInventoryDependency(
+  dependencies: DeployControlRouteContext["dependencies"],
+): string | undefined {
+  return dependencies.resourceFormPinInventory
+    ? undefined
+    : "exact FormRef pin inventory is not wired";
 }
 
 function requiredDependencies(

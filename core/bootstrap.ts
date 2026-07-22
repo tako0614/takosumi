@@ -82,6 +82,7 @@ import {
   formatResourceShapeId,
   LegacyResourceStateAdoptionService,
   matchesApplyLock,
+  ResourceFormPinInventoryService,
   ResourceFormPinOperations,
   ResourceArtifactService,
   ResourceShapeService,
@@ -1457,6 +1458,13 @@ export async function createTakosumiService(
         activity: activityService,
       })
     : undefined;
+  const resourceFormPinInventory = options.resolveResourceBackupScope
+    ? new ResourceFormPinInventoryService({
+        workspaces: workspacesService,
+        resources: resourceShapeStores.resources,
+        resolveSpace: options.resolveResourceBackupScope,
+      })
+    : undefined;
   const legacyResourceStateAdoptionService =
     new LegacyResourceStateAdoptionService(
       resourceShapeStores,
@@ -2333,6 +2341,7 @@ export async function createTakosumiService(
       activityService,
       backupsService,
       legacyResourceStateAdoptionService,
+      ...(resourceFormPinInventory ? { resourceFormPinInventory } : {}),
       ...(resourceFormPinOperations && options.resolveResourceBackupScope
         ? {
             resourceFormPinOperations,

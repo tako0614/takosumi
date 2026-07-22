@@ -107,6 +107,24 @@ exact identity のみで、artifact ref、package bytes、trust policy、raw ver
 `takosumi form-packages reverify --file ...` です。詳しい staging/restart 証跡は
 operator source runbook `docs/operations/form-package-installation.md` を参照してください。
 
+## Host-internal exact Form pin migration
+
+exact FormRef移行はcustomer APIではなく、deploy-control token専用のoperator seamです。
+
+```text
+GET  /internal/v1/migrations/resource-form-pins/inventory
+POST /internal/v1/workspaces/:workspaceId/migrations/resource-form-pins/backfill
+POST /internal/v1/workspaces/:workspaceId/migrations/resource-form-pins/restore
+```
+
+inventoryはinstance-wide bearerだけを許可し、全durable Workspaceと明示的な
+Workspace-to-Resource-Space mappingを正本から走査します。10個のbundled kindすべてについて
+ゼロ件scopeも含むmatrixと、Resource identity・exact Form identityまたは`null`だけのrowsを返し、
+spec / Output / NativeResource / target / credential値は返しません。bounded keyset scanを2回行い、
+semantic digestが一致した場合だけ`complete: true`のreceiptを返します。backfill manifest自身が
+申告した件数をcoverage証拠にしてはいけません。詳細は
+operator source runbook `docs/operations/exact-formref-migration.md` を参照してください。
+
 ## Output と Runtime Interface
 
 成功した apply の後、Takosumi は `tofu output -json` から通常の root module Output を

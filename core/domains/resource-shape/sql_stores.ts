@@ -247,6 +247,35 @@ class SqlResourceShapeStore implements ResourceShapeStore {
     return pageFromProbe(result.rows.map(resourceShapeFromRow), limit);
   }
 
+  async listByKindsPage(
+    kinds: readonly ResourceShapeKind[],
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    const selectedKinds = [...new Set(kinds)];
+    if (selectedKinds.length === 0) return { items: [] };
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const kindPlaceholders = selectedKinds
+      .map((_, index) => `$${index + 1}`)
+      .join(", ");
+    const createdAtIndex = selectedKinds.length + 1;
+    const idIndex = selectedKinds.length + 2;
+    const limitIndex = selectedKinds.length + (cursor ? 3 : 1);
+    const result = await this.client.query<ResourceShapeRow>(
+      `select * from ${this.#table}
+       where kind in (${kindPlaceholders})${
+         cursor
+           ? ` and (created_at > $${createdAtIndex} or (created_at = $${createdAtIndex} and id > $${idIndex}))`
+           : ""
+       }
+       order by created_at asc, id asc limit $${limitIndex}`,
+      cursor
+        ? [...selectedKinds, cursor.createdAt, cursor.id, limit + 1]
+        : [...selectedKinds, limit + 1],
+    );
+    return pageFromProbe(result.rows.map(resourceShapeFromRow), limit);
+  }
+
   async listReadyByKindPage(
     kind: ResourceShapeKind,
     params: PageParams,

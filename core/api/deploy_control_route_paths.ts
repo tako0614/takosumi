@@ -151,6 +151,9 @@ export const TAKOSUMI_WORKSPACE_RESOURCE_STATE_ADOPTION_ROUTE =
 /** Operator-only exact FormRef migration over canonical Resource/ResolutionLock rows. */
 export const TAKOSUMI_WORKSPACE_RESOURCE_FORM_PIN_BACKFILL_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/resource-form-pins/backfill` as const;
+/** Operator-only, all-Workspace authoritative exact FormRef pin inventory. */
+export const TAKOSUMI_RESOURCE_FORM_PIN_INVENTORY_ROUTE =
+  `${INTERNAL_V1_PREFIX}/migrations/resource-form-pins/inventory` as const;
 /** Operator-only retained exact FormRef replay from a redacted backup sidecar. */
 export const TAKOSUMI_WORKSPACE_RESOURCE_FORM_PIN_RESTORE_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/resource-form-pins/restore` as const;
