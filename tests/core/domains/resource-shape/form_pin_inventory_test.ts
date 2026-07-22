@@ -68,9 +68,6 @@ test("authoritative inventory cannot omit empty Workspaces or compatible Resourc
   await stores.resources.upsert(pinned);
   await stores.resources.upsert(unpinned);
   await stores.resources.upsert(resource(alpha, "OperatorCustom", "ignored"));
-  await stores.resources.upsert(
-    resource("space_operator_only" as SpaceId, "Queue", "not-a-workspace"),
-  );
 
   const service = new ResourceFormPinInventoryService({
     workspaces,
@@ -118,6 +115,33 @@ test("authoritative inventory cannot omit empty Workspaces or compatible Resourc
   expect(JSON.stringify(receipt)).not.toContain("DO-NOT-LEAK");
   expect(receipt.matrixDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
   expect((await service.capture()).matrixDigest).toBe(receipt.matrixDigest);
+});
+
+test("inventory fails closed when a bundled Resource has no Workspace mapping", async () => {
+  const workspaces = new InMemoryOpenTofuControlStore();
+  await workspaces.putWorkspace(workspace("ws_alpha", NOW));
+  const stores = createInMemoryResourceShapeStores();
+  const orphan = resource(
+    "space_operator_only" as SpaceId,
+    "Queue",
+    "not-a-workspace",
+  );
+  await stores.resources.upsert(orphan);
+
+  await expect(
+    new ResourceFormPinInventoryService({
+      workspaces,
+      resources: stores.resources,
+      resolveSpace: () => "space_alpha",
+    }).capture(),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: {
+      reason: "resource_form_pin_inventory_resource_scope_unmapped",
+      resourceId: orphan.id,
+      spaceId: "space_operator_only",
+    },
+  });
 });
 
 test("inventory fails closed when the semantic Resource set changes between scans", async () => {
