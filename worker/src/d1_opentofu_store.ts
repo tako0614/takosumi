@@ -153,6 +153,7 @@ import {
   repairControlD1MaintenanceGuards,
   wrapControlD1MaintenanceMigrationBatch,
 } from "./d1_schema_maintenance.ts";
+import { chunkD1InQueryValues } from "./d1_query_limits.ts";
 
 /**
  * Discriminator stored in the single §27 `runs.type` column. PlanRun rows use
@@ -167,23 +168,6 @@ const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
 const RUN_KIND_RESOURCE_OPERATION = "resource_operation" as const;
 const RUN_KIND_BACKUP = "backup" as const;
 const RUN_KIND_RESTORE = "restore" as const;
-
-// D1 rejects statements with more than 100 bound parameters. Leave headroom
-// for future predicates instead of allowing a caller/data-sized `IN (...)`
-// list to turn an otherwise valid route into a production 500.
-const D1_IN_QUERY_VALUE_CHUNK_SIZE = 90;
-
-function d1InQueryChunks<T>(values: readonly T[]): readonly (readonly T[])[] {
-  const chunks: T[][] = [];
-  for (
-    let offset = 0;
-    offset < values.length;
-    offset += D1_IN_QUERY_VALUE_CHUNK_SIZE
-  ) {
-    chunks.push(values.slice(offset, offset + D1_IN_QUERY_VALUE_CHUNK_SIZE));
-  }
-  return chunks;
-}
 
 function compatibilityReportSourceId(value: string | null | undefined): string {
   if (!value?.trim()) {
@@ -931,7 +915,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (ids.length === 0) return [];
     const uniqueIds = [...new Set(ids)];
     const rows: Workspace[] = [];
-    for (const idChunk of d1InQueryChunks(uniqueIds)) {
+    for (const idChunk of chunkD1InQueryValues(uniqueIds)) {
       rows.push(
         ...(await this.#drizzleManyJson<Workspace>(
           schema.workspaces,
@@ -1219,7 +1203,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   ): Promise<readonly InstallConfig[]> {
     if (ids.length === 0) return [];
     const rows: InstallConfig[] = [];
-    for (const idChunk of d1InQueryChunks([...new Set(ids)])) {
+    for (const idChunk of chunkD1InQueryValues([...new Set(ids)])) {
       rows.push(
         ...(await this.#drizzleManyJson<InstallConfig>(
           schema.installConfigs,
@@ -1349,7 +1333,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
     if (ids.length === 0) return [];
     const rows: Capsule[] = [];
-    for (const idChunk of d1InQueryChunks([...new Set(ids)])) {
+    for (const idChunk of chunkD1InQueryValues([...new Set(ids)])) {
       rows.push(
         ...(await this.#drizzleManyJson<Capsule>(
           schema.capsules,
@@ -2152,7 +2136,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   ): Promise<readonly SourceSnapshot[]> {
     if (sourceIds.length === 0) return [];
     const rows: SourceSnapshot[] = [];
-    for (const sourceIdChunk of d1InQueryChunks([...new Set(sourceIds)])) {
+    for (const sourceIdChunk of chunkD1InQueryValues([...new Set(sourceIds)])) {
       rows.push(
         ...(await this.#drizzleManyJson<SourceSnapshot>(
           schema.sourceSnapshots,
