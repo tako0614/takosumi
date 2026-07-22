@@ -63,7 +63,12 @@ test("OpenTofu runner image stays isolated from the Worker browser bundle", asyn
   // runner image source so the behaviors stay covered after the lib split.
   const server = await readRunnerServerSource();
 
-  assert.match(dockerfile, /FROM oven\/bun:1/);
+  assert.match(
+    dockerfile,
+    /^ARG BUN_BASE_IMAGE=oven\/bun:1@sha256:[0-9a-f]{64}$/m,
+  );
+  assert.match(dockerfile, /^FROM \$\{BUN_BASE_IMAGE\}$/m);
+  assert.doesNotMatch(dockerfile, /^FROM oven\/bun:[^@\n]+$/m);
   assert.match(dockerfile, /OPENTOFU_VERSION/);
   assert.match(dockerfile, /apt-get install[\s\S]*\bgit\b/);
   assert.match(dockerfile, /tofu version/);
@@ -100,6 +105,7 @@ test("OpenTofu runner image stays isolated from the Worker browser bundle", asyn
   assert.doesNotMatch(server, /-auto-approve/);
   assert.doesNotMatch(server, /rule\.endsWith/);
   assert.doesNotMatch(dockerfile.toLowerCase(), new RegExp("de" + "no"));
+  assert.doesNotMatch(dockerfile, /COPY\s+(?:web|dashboard)\//);
   assert.doesNotMatch(server.toLowerCase(), new RegExp("de" + "no"));
 });
 
