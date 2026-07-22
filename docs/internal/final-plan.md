@@ -2321,12 +2321,15 @@ Implementation can use Cloudflare primitives such as Workers for Platforms,
 Dynamic Workers, R2, D1, KV, Queues, Workflows, Containers, and AI Gateway.
 Those are implementation details behind official managed targets.
 
-Docs must publish one service-availability matrix. The Cloud Stable contract is
-seven service forms across eight offerings; advanced managed services remain
-Preview until their full evidence is complete:
+Docs must publish one service-availability matrix. The Cloud GA contract is one
+all-or-nothing set: all ten Service Forms from section 14 plus the AI Gateway
+service endpoint and Verified custom-domain lifecycle. ObjectBucket Standard
+and Infrequent Access are two offerings of one Service Form. No subset is
+advertised Stable while another item in this GA set remains Preview or lacks
+the required evidence:
 
 ```text
-Stable:
+Pre-GA (one all-or-nothing GA set):
   EdgeWorker modules and static assets
   EdgeWorker vars, write-only secrets, bindings, reviewed deployments, and routes
   ObjectBucket Standard and Infrequent Access (two offerings) with the documented
@@ -2334,16 +2337,21 @@ Stable:
   KVStore
   SQLDatabase
   Queue
-  AI Gateway as an OpenAI-compatible endpoint surface
-  VerifiedDomain
-
-Preview:
   VectorIndex
   DurableWorkflow
   ContainerService
   StatefulActorNamespace
   Schedule
+  AI Gateway as an OpenAI-compatible endpoint surface
+  VerifiedDomain
 ```
+
+The entire set moves to Stable only after every item passes the section 14
+lifecycle, conformance, price coverage, immutable metering, spend enforcement,
+invoice reconciliation, recovery, tenant-isolation, dashboard, and live
+operator-evidence gates. An unavailable meter, inactive Offering or price
+catalog, missing manager/capacity binding, missing price, expired quote, or
+missing live evidence fails closed and prevents set-level GA activation.
 
 WfP dispatch namespaces, provider-specific storage/database names, and fallback
 origins are operator implementation details. They are never tenant compatibility
@@ -2707,7 +2715,7 @@ The wider Takosumi Cloud GA service-surface set additionally includes non-form s
 
 ```text
 AI Gateway service endpoint
-Verified custom-domain lifecycle
+VerifiedDomain custom-domain lifecycle
 ```
 
 The two non-form services use generic non-Form Offering subjects and do not

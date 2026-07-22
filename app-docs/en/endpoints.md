@@ -292,8 +292,8 @@ runtime first reserves per-Resource and per-Workspace second, day, and billing
 period quota plus credit. Successful durable `gateway_request` capture is the
 accepted-dispatch point. Tenant errors and dispatch failures after that point
 remain charged; a failure before it never invokes tenant code. Dispatch has
-hard limits of `10 CPU-ms` and `5 subrequests`, and Stable disables Workers Logs
-and Logpush.
+hard limits of `10 CPU-ms` and `5 subrequests`, and the GA contract disables
+Workers Logs and Logpush.
 
 Pricing is owned by Takosumi Cloud, not by endpoint request bodies. Requests and
 client headers must not submit `usdMicros` or `credits`. Public prices and
@@ -312,7 +312,7 @@ resources stuck.
 UI, billing, usage ledgers, and public Resource identity use service
 forms such as `EdgeWorker`, `ObjectBucket`, `KVStore`, `SQLDatabase`, `Queue`,
 and `DurableWorkflow` plus versioned SKUs. Internal backend names do not become
-public billing families. Requests outside the Stable contract or without an
+public billing families. Requests outside the GA contract or without an
 exact meter are never proxied to a backend.
 
 Takosumi can claim a customer has been billed only when the owner account usage
@@ -366,17 +366,19 @@ Provider Connection. Do not put raw secrets in manifests.
 ## Cloud resources inventory
 
 The Cloud screen resource inventory projects the canonical `/v1/resources`
-inventory. The Stable contract has seven service forms (eight offerings):
+inventory. The GA scope has ten Service Forms and two non-Form services:
 
 - Edge Worker
 - Object Storage Standard / Infrequent Access offerings
 - KV / Database / Queue
+- Vector Index / Durable Workflow / Container / Stateful Actor Namespace / Schedule
 - AI Gateway
 - Verified Custom Domain
 
-Vector Index, Durable Workflow, Container, Stateful Actor Namespace, and
-Schedule are Preview service forms. They appear in the same inventory only when
-an active offering exists. An installed Compatibility API profile owns no
+This is the single all-or-nothing set in [GA Contract and Launch Gate](./index.md#ga-contract-and-launch-gate).
+Every item remains Pre-GA until the complete evidence set is activated. Items
+appear in the same inventory only when an active Offering exists, but no subset
+is advertised as Stable. An installed Compatibility API profile owns no
 virtual inventory or separate Resource ledger. Dashboard, portable clients,
 and direct Deploy API all converge on the same Resource. The
 `resource_shapes` capability means typed Resource Shape APIs are available; it

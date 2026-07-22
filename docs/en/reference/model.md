@@ -15,8 +15,10 @@ portable project owns Service Forms, exact FormRefs, data-only Form Packages,
 and typed-client conformance. Takosumi is an optional host that owns the Form
 Registry, implementations, Target / Policy / credentials, and generic
 FormActivation. Takosumi Core still runs the plain Stack flow with zero Form
-Packages installed. Takosumi Cloud exact ServiceOfferings, price, billing, and
-official capacity sit outside this OSS host model.
+Packages installed. The OSS generic `Offering` / `OfferingSelection` owns
+noncommercial availability and exact selection for open subject types. Takosumi
+Cloud's closed `CommercialOfferingBinding`, price, billing, and official
+capacity sit outside this OSS host model.
 
 ## OpenTofu Stack Concepts
 
@@ -59,6 +61,25 @@ official capacity sit outside this OSS host model.
 | Condition      | Status and readiness evidence                                               |
 
 `Space` here is the Resource API namespace and policy scope.
+
+## Generic Offering Concepts
+
+Offering is not a Service Form-only catalog. An OSS operator publishes an open
+subject `type + ref + version + digest`, requirements, audience, profile,
+region, and maturity in an immutable catalog version. An explicitly installed
+subject resolver re-reads the exact subject and requirements. A Form-backed
+resolver rechecks the exact FormRef, package, and FormActivation, while a
+Capsule distribution or non-Form service can install a different resolver and
+use the same engine.
+
+`OfferingSelection` is the OSS result that pins catalog and Offering versions,
+the exact subject and requirements, resolver id, and resolution fingerprint.
+Unknown subject types, absent resolvers, inactive catalogs/Offerings, audience
+mismatches, and stale requirements fail closed. Price, SKU, payment, manager,
+credentials, raw capacity, SLA, and support are absent from OSS Offering state.
+Takosumi Cloud attaches a closed `CommercialOfferingBinding` only to that exact
+selection, pinning implementation, manager, capacity, SKU, PriceCatalog, and
+payment evidence. Cloud does not own a second availability or selection engine.
 
 ## Shared Runtime Interaction Concepts
 
@@ -276,8 +297,10 @@ shows the Service Form, required inputs, price, preview, and deploy.
 Service Forms do not replace existing providers for external infrastructure;
 use those providers through the plain Stack flow. Capacity sold and operated by
 an operator uses a portable exact Service Form plus an explicit implementation
-and generic FormActivation. Cloud adds an exact ServiceOffering when it sells or
-officially operates that capacity. Standard/compatible surfaces are
+and generic FormActivation. The operator's generic Offering resolver rechecks
+the exact subject and requirements and returns an `OfferingSelection`. Cloud
+attaches a closed `CommercialOfferingBinding` to that exact selection when it
+sells or officially operates the capacity. Standard/compatible surfaces are
 control-plane translations or data planes for that Resource, not lifecycle
 authorities.
 
@@ -403,10 +426,11 @@ Takosumi for Operator can operate its own managed target catalog and commercial
 service. Takosumi Cloud is the official hosted operation with official managed
 capacity.
 
-Cloud sells versioned `ServiceOffering` records rated by a versioned
-`PriceCatalog`. Preview returns a `DeploymentQuote` bound to the Resource spec
-digest, resolution fingerprint, offering/catalog versions, SKU line items,
-currency, estimated total, expiry, and quote digest. Billable apply requires
+Cloud combines an exact OSS `OfferingSelection` with a closed versioned
+`CommercialOfferingBinding` and `PriceCatalog`. Preview returns a
+`DeploymentQuote` bound to the Resource spec digest, Offering selection and
+resolution fingerprint, commercial-binding and PriceCatalog versions, SKU line
+items, currency, estimated total, expiry, and quote digest. Billable apply requires
 the quote id/digest, reserves before backend work, captures on success, and
 releases on failure or cancellation. Captured reservations and rated UsageEvents
 reconcile to payment-provider invoice lines. These are Cloud commercial records

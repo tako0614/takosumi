@@ -5,7 +5,8 @@ Takosumi can run existing OpenTofu/Terraform provider ecosystems as-is, and it
 is an optional Service Form host. It owns the canonical Resource lifecycle,
 Resolver / Planner / Runner / Reconciler,
 Target / Credential / OIDC / Secret / Policy, the shared Interface /
-InterfaceBinding API, Compatibility API framework, and Adapter system described
+InterfaceBinding API, the generic noncommercial Offering catalog / resolver /
+selection engine, Compatibility API framework, and Adapter system described
 in `docs/internal/final-plan.md`. The current Resource Shape API/provider/state
 is a migration compatibility surface. Portable Service Form / FormRef /
 data-only Form Package / typed form-provider / interoperability/conformance
@@ -23,7 +24,8 @@ Operator / Cloud:
 ```
 
 Takosumi OSS can define compatibility API framework, compatibility profiles,
-Form Registry/FormActivation host contracts, adapter contracts, target capability model, OIDC/workload
+Form Registry/FormActivation host contracts, the open exact Offering catalog/resolver/selection contract,
+adapter contracts, target capability model, OIDC/workload
 identity, and usage-event emission. Takosumi for Operator / Cloud owns
 commercial customer management, rated billing, payment enforcement, invoices,
 official managed target pools, official Takosumi native resource internals,
@@ -33,14 +35,15 @@ support/SLA, and abuse controls.
 It may depend on the public contract and composition root, but it must not reach
 into `takosumi/core` or `takosumi/accounts` internals as a private shortcut.
 
-Takosumi is not a standalone npm-published service. It is one OSS control plane whose handlers are consumed
-**in-process** through `tsconfig` aliases by host workers in two composition contexts: the operator's **Takosumi platform
-worker** (`deploy/platform/`, served at the operator's explicit origin; the official Cloud deployment uses
-`app.takosumi.com`) and the
-**self-hosted Takos distribution worker** (`takos/deploy/cloudflare/` template, served at the self-hoster's own origin).
-The `takosumi.com` apex is the landing/docs site only; `takos.jp` is the Takos introduction site. Takos is the
-first-party AI Workspace distribution: its self-host worker composes the Takos product surface with the embedded
-accounts plane, deploy-control seam, dashboard, and OpenTofu runner boundary at the self-hoster's own origin.
+Takosumi is not a standalone npm-published service. It is one OSS control plane whose handlers are composed
+**in-process** through `tsconfig` aliases into the operator's **Takosumi platform worker** (`deploy/platform/`). The
+operator serves that worker at an explicit origin; the official Cloud deployment uses `app.takosumi.com`, while a
+self-hoster uses an origin they operate. The `takosumi.com` apex is the landing/docs site only; `takos.jp` is the Takos
+introduction site.
+
+The self-hosted Takos distribution worker (`takos/deploy/cloudflare/`) is a separate Takos product worker. It consumes
+Takosumi contract source through aliases and connects to the self-hoster/operator Takosumi control plane as an external
+OIDC client/resource server. It does not mount Accounts, deploy-control, dashboard, or runner handlers in-process.
 
 `deploy/platform/` is the **platform worker's home**: it composes the accounts plane, the in-process control plane,
 the dashboard SPA, and the OpenTofu runner container into the one platform worker the operator runs. The origin is
@@ -48,15 +51,13 @@ operator configuration; our official Takosumi Cloud deployment uses `app.takosum
 Its wrangler.toml is a placeholder reference template; the realized operator config (real resource IDs) lives in the
 operator-private `takosumi-private` repo (state only — no code), which references this repo by relative path.
 
-The two in-process entry points (consumed by both targets) are:
+The two in-process entry points consumed by the Takosumi platform worker are:
 
-- `deploy/accounts-cloudflare/src/handler.ts` — account-plane handler (`createAccountsHandler`) mounted at the worker
-  origin root. The issuer is the bare worker origin (the operator's origin for a platform worker,
-  `app.takosumi.com` for official Cloud, or the self-hoster's own origin for a self-hosted takos worker); there is no
+- `deploy/accounts-cloudflare/src/handler.ts` — account-plane handler (`createAccountsHandler`) mounted at the platform
+  worker origin root. The issuer is that bare operator origin (`app.takosumi.com` for official Cloud); there is no
   dedicated accounts subdomain.
-- `worker/src/handler.ts` — control-plane handler. On the platform worker it serves the `/api` surface and
-  `/hooks/*` inbound webhook routes; inside the takos product worker it is reached via the in-process typed operations
-  seam. There is no dedicated deploy-control subdomain. (The `/install` external install link is CLIENT-handled — a
+- `worker/src/handler.ts` — control-plane handler serving the platform worker's `/api` surface and `/hooks/*` inbound
+  webhook routes. There is no dedicated deploy-control subdomain. (The `/install` external install link is CLIENT-handled — a
   plain SPA path whose query the dashboard parses to pre-fill `/new`.)
 
 ## Public Surface
@@ -80,6 +81,12 @@ pre-v1 Space / Installation ledger model. The old Installation /
 OutputSnapshot / StateSnapshot / Deployment / Provider Catalog / `own_key` /
 `takos_provided` / Gateway / Runtime Projection names are retired; do not reintroduce
 them as current product nouns.
+
+The generic availability layer adds `Offering`, `OfferingCatalog`,
+`OfferingAvailability`, and `OfferingSelection`. It accepts open exact subject
+types and contains no price, payment, private manager/capacity, SLA, or support.
+Cloud attaches a closed `CommercialOfferingBinding` only after Core returns an
+exact selection; it does not own a second catalog decision or selection engine.
 
 - `Workspace`: user/team boundary for projects, provider connections, secrets, state isolation, and audit.
 - `Project`: one product, service, application, or infrastructure group.
@@ -190,9 +197,10 @@ abuse/support workflows are Takosumi Cloud-only closed features in
 
 ## In-Process Composition
 
-The control-plane and account-plane handlers are composed into the host worker (the operator's Takosumi platform worker
-via `deploy/platform/`, and the self-hosted Takos product worker via `takos/deploy/cloudflare/`), not run as separate
-services. The worker injects stores/capabilities and mounts the account-plane handler at the origin root. `/internal/*`
+The control-plane and account-plane handlers are composed into the operator's Takosumi platform worker via
+`deploy/platform/`, not run as separate services and not embedded in the Takos product worker. The platform worker
+injects stores/capabilities and mounts the account-plane handler at the origin root. A self-hosted Takos worker consumes
+that externally operated control plane over OIDC and contract-shaped HTTP APIs. `/internal/*`
 HTTP route families are not customer APIs; they are reserved for opentofu-runner / executor container callbacks,
 host-internal deploy-control seams, and operator hardening gates. Public compatibility routes must be explicit,
 versioned capability surfaces such as `compat.s3.v1`, not hidden internal Gateway bridges.
@@ -286,7 +294,7 @@ bun run test:scripts
   ProviderConnection, CredentialRecipe, ProviderBinding, Secret, Run, Plan,
   Apply, Destroy, StateVersion, Output, Interface, InterfaceBinding, Runner,
   AuditEvent, and Operator.
-- Keep the control-plane and account-plane handlers consumable in-process by both build targets (the operator's Takosumi
-  platform worker via `deploy/platform/` and the self-hosted Takos product worker via `takos/deploy/cloudflare/`); do not
-  reintroduce standalone workers or retired split account/deploy-control host surfaces.
+- Keep the control-plane and account-plane handlers composed in-process by the operator's Takosumi platform worker via
+  `deploy/platform/`; keep the self-hosted Takos product worker as an external OIDC/control-plane client. Do not
+  reintroduce retired split account/deploy-control host surfaces or embed those services into the Takos worker.
 - Do not add Deno; the Bun migration is in progress and Bun remains the default runtime/tooling direction.

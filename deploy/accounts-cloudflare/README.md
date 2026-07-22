@@ -5,12 +5,13 @@ Cloudflare reference entry point for the account-plane handler
 (session cookie, upstream sign-in, OIDC issuer/client registration, dashboard
 account-plane facade, Interface OAuth, and any
 Cloud-only billing hooks supplied by the host composition), consumed in-process
-by two build targets:
+by the operator Takosumi platform worker:
 
 - the operator Takosumi platform worker in `takosumi/deploy/platform/`, served at
-  `app.takosumi.com`;
-- the self-hosted Takos product worker template in `takos/deploy/cloudflare/`,
-  served at the self-hoster's own origin.
+  the operator's explicit origin (`app.takosumi.com` for official Cloud).
+
+The self-hosted Takos product worker template in `takos/deploy/cloudflare/` is an
+external OIDC/control-plane client. It does not mount this handler.
 
 The former standalone account-plane Worker scaffold (its `wrangler.toml`,
 `src/worker.ts` entrypoint, and the `render-config` /
@@ -18,7 +19,7 @@ The former standalone account-plane Worker scaffold (its `wrangler.toml`,
 scripts) has been removed. Real operator deploy configuration and secrets live
 outside this repo in the operator environment.
 
-Both host workers reference this module through the
+The platform worker references this module through the
 `@takosjp/takosumi-accounts-worker` tsconfig alias, which points at
 `src/handler.ts`. The host worker supplies the actual mount, bindings, secrets,
 custom-domain route, and deploy command.

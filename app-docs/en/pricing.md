@@ -84,7 +84,7 @@ An Edge request is accepted after quota and credit reservation and successful
 durable Takosumi usage capture. Tenant errors, CPU/subrequest limit failures,
 and dispatch failures after that point remain one charged accepted request. A
 failure before capture does not invoke tenant code and is not charged. Workers
-Logs, invocation logs, and Logpush are disabled in Stable. Legacy `request`,
+Logs, invocation logs, and Logpush are disabled by the GA contract. Legacy `request`,
 `cpu_time_us`, `subrequest`, `active_script_millisecond`, and log meters remain
 explicit `$0` history rows and cannot authorize a new charge.
 

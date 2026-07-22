@@ -38,24 +38,22 @@ OpenTofu module とその普通の変数で表現し、Takosumi 側に独自の 
 
 ## 仕組み
 
-Takosumi はひとつの OSS ですが、handler は `tsconfig` alias を通して host worker に **in-process** で組み込まれ、
-2 つの構成で使われます。
+Takosumi の account-plane と control-plane handler は、`tsconfig` alias を通して operator の
+Takosumi platform worker に **in-process** で組み込まれます。一般の operator / self-hoster は明示した
+自身の origin でこの platform worker を運用し、私たちの公式 hosted deployment だけが
+`app.takosumi.com` を使います。npm で配布する service package はありません。
 
-- operator 自身の origin で運用する Takosumi platform worker (公式 Takosumi Cloud は
-  `app.takosumi.com`)
-- self-host された Takos distribution worker (Takos product surface が、自分の origin で accounts /
-  deploy-control / dashboard / runner を組み込む)
-
-これは組み込みの仕組みであって、別々の製品ではありません。npm で配布する service package もありません。
-一般の operator は明示した自身の origin で platform を公開し、私たちの公式 hosted deployment だけが
-`app.takosumi.com` を使います。`takosumi.com` は landing / software docs のサイトです。
+self-host された Takos distribution worker は別の Takos product worker です。Takosumi contract source を
+参照し、self-hoster / operator の Takosumi control plane を外部 OIDC issuer / resource server として利用します。
+Accounts / deploy-control / dashboard / runner を Takos worker に組み込みません。`takosumi.com` は landing /
+software docs のサイトです。
 
 ### In-process entry points
 
-| Handler        | File                                                                  | Mount                                                                              |
-| -------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Account plane  | `deploy/accounts-cloudflare/src/handler.ts` (`createAccountsHandler`) | platform worker または takos worker の origin root。issuer は素の origin           |
-| Deploy control | `worker/src/handler.ts`                                               | platform worker では `/api`。takos worker では typed な in-process operations seam |
+| Handler        | File                                                                  | Mount                                                    |
+| -------------- | --------------------------------------------------------------------- | -------------------------------------------------------- |
+| Account plane  | `deploy/accounts-cloudflare/src/handler.ts` (`createAccountsHandler`) | platform worker の origin root。issuer はその素の origin |
+| Deploy control | `worker/src/handler.ts`                                               | platform worker の `/api` と `/hooks/*`                  |
 
 `/install?git=...&ref=...&path=...` は dashboard SPA の入口であって、deploy-control の handler ではありません。
 SPA は query を保持したまま `/new` に転送して Git form に値を入れるだけで、互換性チェックと明示的な確認は
@@ -103,17 +101,20 @@ Takosumi は OpenTofu / Terraform provider を置き換えません。既存 pro
 audit 台帳、Resolver / Planner / Reconciler、Target / Policy / credential、Compatibility API framework、Adapter system、
 generic FormActivation を持つ optional host です。portable な Service Form / exact FormRef / data-only Form Package /
 conformance / typed form provider は独立 release の OSS project が所有する target であり、Takosumi Core は Form Package が
-0 個でも plain OpenTofu Stack を実行できます。公式 managed target pool、Takosumi 自社リソースの内部実装、exact
-ServiceOffering、強制課金、support / SLA、公式 resource backend は Takosumi for Operator / Takosumi Cloud 側にあります。
+0 個でも plain OpenTofu Stack を実行できます。Takosumi OSS はさらに、open な subject type を exact
+`type + ref + version + digest` で選ぶ noncommercial `Offering` catalog / resolver / `OfferingSelection` を所有します。
+公式 managed target pool、Takosumi 自社リソースの内部実装、exact Offering selection に manager / capacity / SKU /
+PriceCatalog / payment evidence を固定する closed `CommercialOfferingBinding`、強制課金、support / SLA、公式 resource
+backend は Takosumi for Operator / Takosumi Cloud 側にあります。
 `Resource Shape` は FormRef の additive persistence と互換移行の証跡が揃うまで current API/provider/state 名として残ります。
 
 ## エディション
 
-| Edition                   | 内容                                                                                                                                                                                                                                                                                 |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Takosumi OSS**          | この repo。Git を起点にした OpenTofu/Terraform control plane、zero-form 対応の optional Service Form host（現在の Resource Shape 互換 API）、Compatibility API framework、Adapter system、接続管理、runner、状態 / 出力 / 監査。課金は disabled / showback のみで apply を止めません |
-| **Takosumi for Operator** | Takosumi を顧客向けにホストする operator 向けエディション。マルチテナントの顧客管理、quota / metering / プラン、DB 管理の operator 設定、CLI / API / runbook 運用、managed target catalog、サポート、商用監査                                                                        |
-| **Takosumi Cloud**        | `app.takosumi.com` で私たちが運営する公式ホスティング。公式 managed targets、Takosumi 自社リソース、AI Gateway、Stripe による課金、quota、usage、support、abuse controls、SLA                                                                                                        |
+| Edition                   | 内容                                                                                                                                                                                                                                                                                                             |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Takosumi OSS**          | この repo。Git を起点にした OpenTofu/Terraform control plane、zero-form 対応の optional Service Form host（現在の Resource Shape 互換 API）、generic Offering selection、Compatibility API framework、Adapter system、接続管理、runner、状態 / 出力 / 監査。課金は disabled / showback のみで apply を止めません |
+| **Takosumi for Operator** | Takosumi を顧客向けにホストする operator 向けエディション。マルチテナントの顧客管理、quota / metering / プラン、DB 管理の operator 設定、CLI / API / runbook 運用、managed target catalog、サポート、商用監査                                                                                                    |
+| **Takosumi Cloud**        | `app.takosumi.com` で私たちが運営する公式ホスティング。exact Offering selection への closed CommercialOfferingBinding、公式 managed targets、Takosumi 自社リソース、AI Gateway、Stripe による課金、quota、usage、support、abuse controls、SLA                                                                    |
 
 依存方向は **Cloud -> OSS の一方向**です。hosted Cloud は OSS の contract と組み込み口だけを使い、OSS は
 Cloud のものが何もなくてもそのまま動きます。

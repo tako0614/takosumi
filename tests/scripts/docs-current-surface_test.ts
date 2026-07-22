@@ -126,6 +126,34 @@ const MINIMAL_API_ROUTES = [
   "GET    /audit",
 ] as const;
 
+const CLOUD_GA_SERVICE_FORMS = [
+  "EdgeWorker",
+  "ObjectBucket",
+  "KVStore",
+  "SQLDatabase",
+  "Queue",
+  "VectorIndex",
+  "DurableWorkflow",
+  "ContainerService",
+  "StatefulActorNamespace",
+  "Schedule",
+] as const;
+
+const CLOUD_GA_PUBLIC_SERVICES = [
+  "Edge Worker",
+  "Object Storage",
+  "KV",
+  "Database",
+  "Queue",
+  "Vector Index",
+  "Durable Workflow",
+  "Container",
+  "Stateful Actor Namespace",
+  "Schedule",
+  "AI Gateway",
+  "Verified custom domain",
+] as const;
+
 test("Takosumi public docs are rebuilt around the current public surface", async () => {
   for (const path of REQUIRED_PUBLIC_DOCS) {
     const entry = await stat(new URL(path, ROOT));
@@ -173,25 +201,141 @@ test("hosted Cloud docs keep current usage identity provider neutral", async () 
   }
 });
 
-test("hosted Cloud docs keep the all-or-nothing GA contract Pre-GA before evidence activation", async () => {
-  const index = await readText(new URL("app-docs/en/index.md", ROOT));
+test("Final Plan and hosted Cloud docs keep one all-or-nothing GA set Pre-GA before evidence activation", async () => {
+  const finalPlan = await readText(
+    new URL("docs/internal/final-plan.md", ROOT),
+  );
+  const publicOffering = section(finalPlan, "## 11.", "## 12.");
+  const gaContract = section(finalPlan, "## 14.", "## 15.");
+  const indexes = await Promise.all(
+    ["app-docs/index.md", "app-docs/en/index.md"].map((path) =>
+      readText(new URL(path, ROOT)),
+    ),
+  );
   const pricing = await readText(new URL("app-docs/en/pricing.md", ROOT));
   const resources = await readText(new URL("app-docs/en/resources.md", ROOT));
   const endpoints = await readText(new URL("app-docs/en/endpoints.md", ROOT));
 
-  assert.match(index, /one Stable contract/);
-  assert.match(index, /Takosumi\s+Cloud stays Pre-GA until every item passes/);
-  assert.match(index, /seven\s+Stable service forms \(eight offerings\)/);
+  assert.match(publicOffering, /one\s+all-or-nothing set/);
+  assert.match(publicOffering, /Pre-GA \(one all-or-nothing GA set\)/);
   assert.match(
-    index,
-    /Vector Index, Durable Workflow, Container, Stateful Actor Namespace, and Schedule/,
+    gaContract,
+    /ten-form Service Form Stable set is all-or-nothing/,
   );
+  assert.doesNotMatch(publicOffering, /\nStable:\s|\nPreview:\s/);
+  for (const service of CLOUD_GA_SERVICE_FORMS) {
+    assert.ok(
+      publicOffering.includes(service),
+      `section 11 omitted ${service}`,
+    );
+    assert.ok(gaContract.includes(service), `section 14 omitted ${service}`);
+  }
+  for (const service of ["AI Gateway", "VerifiedDomain"]) {
+    assert.ok(
+      publicOffering.includes(service),
+      `section 11 omitted ${service}`,
+    );
+    assert.ok(gaContract.includes(service), `section 14 omitted ${service}`);
+  }
+
+  for (const index of indexes) {
+    assert.match(index, /all-or-nothing GA (?:契約|contract)/);
+    assert.match(index, /Pre-GA/);
+    assert.doesNotMatch(
+      index,
+      /seven\s+Stable|7\s*つの Stable|eight offerings/,
+    );
+    assert.doesNotMatch(index, /\|\s*(?:Stable|Preview)\s*\|/);
+    for (const service of CLOUD_GA_PUBLIC_SERVICES) {
+      assert.ok(
+        index.toLowerCase().includes(service.toLowerCase()),
+        `hosted availability matrix omitted ${service}`,
+      );
+    }
+  }
+
   assert.match(pricing, /unpriced meter, inactive catalog, missing manager/);
   assert.match(resources, /public Resource identity remains `EdgeWorker`/);
-  assert.match(endpoints, /seven service forms \(eight offerings\)/);
-  for (const doc of [index, resources, endpoints]) {
-    assert.doesNotMatch(doc, /\|\s*Stable\s*\|/);
+  assert.match(resources, /exact OSS OfferingSelection/);
+  assert.match(resources, /closed CommercialOfferingBinding/);
+  assert.match(endpoints, /ten Service Forms and two non-Form services/);
+  assert.doesNotMatch(endpoints, /Preview service forms|seven service forms/);
+});
+
+test("public docs keep generic OSS Offering selection separate from the closed Cloud binding", async () => {
+  const paths = [
+    "README.md",
+    "README.en.md",
+    "docs/reference/model.md",
+    "docs/en/reference/model.md",
+    "docs/reference/api.md",
+    "docs/en/reference/api.md",
+    "docs/reference/glossary.md",
+    "docs/en/reference/glossary.md",
+  ] as const;
+  const docs = await Promise.all(
+    paths.map(async (path) => ({
+      path,
+      text: await readText(new URL(path, ROOT)),
+    })),
+  );
+
+  for (const { path, text } of docs) {
+    assert.match(
+      text,
+      /OfferingSelection/,
+      `${path} omitted OfferingSelection`,
+    );
+    assert.match(
+      text,
+      /CommercialOfferingBinding/,
+      `${path} omitted CommercialOfferingBinding`,
+    );
+    assert.doesNotMatch(
+      text,
+      /ServiceOffering/,
+      `${path} restored ServiceOffering`,
+    );
   }
+  for (const path of ["docs/reference/api.md", "docs/en/reference/api.md"]) {
+    const api = docs.find((doc) => doc.path === path)?.text ?? "";
+    assert.match(api, /POST \/v1\/offering-catalogs/);
+    assert.match(api, /POST \/v1\/offering-availability\/query/);
+    assert.match(api, /POST \/v1\/offering-selections\/resolve/);
+  }
+});
+
+test("self-hosted Takos keeps Takosumi control-plane services outside the product worker", async () => {
+  const paths = [
+    "AGENTS.md",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "DEPLOY.md",
+    "deploy/README.md",
+    "deploy/accounts-cloudflare/README.md",
+  ] as const;
+  const docs = (
+    await Promise.all(paths.map((path) => readText(new URL(path, ROOT))))
+  ).join("\n");
+
+  for (const stale of [
+    /platform worker or (?:a )?self-hosted Takos worker/i,
+    /inside the takos product worker/i,
+    /Takos product surface composes Takosumi accounts/i,
+    /consumed by both targets/i,
+  ]) {
+    assert.doesNotMatch(docs, stale);
+  }
+
+  assert.match(
+    docs,
+    /does not\s+embed Accounts, deploy-control, the Dashboard, or the runner/,
+  );
+  assert.match(
+    docs,
+    /Accounts \/ deploy-control \/ dashboard \/ runner を Takos worker に\s*組み込みません/,
+  );
 });
 
 test("Takosumi source module exposes the documented hosted billing proxies", async () => {
@@ -386,4 +530,12 @@ async function readText(path: URL): Promise<string> {
 
 function docPath(...segments: readonly string[]): string {
   return ["docs", ...segments].join("/");
+}
+
+function section(content: string, start: string, end: string): string {
+  const startIndex = content.indexOf(start);
+  const endIndex = content.indexOf(end, startIndex + start.length);
+  assert.notEqual(startIndex, -1, `missing section start: ${start}`);
+  assert.notEqual(endIndex, -1, `missing section end: ${end}`);
+  return content.slice(startIndex, endIndex);
 }

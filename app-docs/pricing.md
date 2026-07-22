@@ -82,7 +82,7 @@ Edge request は、quota と credit reservation を通り、Takosumi の永続 u
 capture が成功した時点で「accepted」です。その後の tenant error、CPU/subrequest
 上限超過、dispatch failure も 1 accepted request として課金されます。capture より前に
 失敗した request は tenant code を実行せず課金しません。Workers Logs / invocation
-logs / Logpush は Stable では無効です。旧 `request` / `cpu_time_us` / `subrequest` /
+logs / Logpush は GA contract では無効です。旧 `request` / `cpu_time_us` / `subrequest` /
 `active_script_millisecond` / log meter は履歴解釈用の明示的な `$0` row で、新規請求には
 使いません。
 

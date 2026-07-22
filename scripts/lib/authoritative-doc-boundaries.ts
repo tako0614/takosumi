@@ -122,6 +122,34 @@ const REQUIRED_DOC_CLAIMS: Readonly<
   ],
 };
 
+const CLOUD_GA_SERVICE_FORMS = [
+  "EdgeWorker",
+  "ObjectBucket",
+  "KVStore",
+  "SQLDatabase",
+  "Queue",
+  "VectorIndex",
+  "DurableWorkflow",
+  "ContainerService",
+  "StatefulActorNamespace",
+  "Schedule",
+] as const;
+
+const CLOUD_GA_PUBLIC_SERVICES = [
+  "Edge Worker",
+  "Object Storage",
+  "KV",
+  "Database",
+  "Queue",
+  "Vector Index",
+  "Durable Workflow",
+  "Container",
+  "Stateful Actor Namespace",
+  "Schedule",
+  "AI Gateway",
+  "Verified custom domain",
+] as const;
+
 export function findAuthoritativeDocViolations(
   sources: readonly AuthoritativeDocSource[],
 ): AuthoritativeDocViolation[] {
@@ -189,6 +217,84 @@ export function findAuthoritativeDocViolations(
     }
   }
 
+  const finalPlan = byPath.get("docs/internal/final-plan.md");
+  if (finalPlan?.content.includes("## 11.")) {
+    const publicOffering = section(finalPlan.content, "## 11.", "## 12.");
+    const gaContract = section(finalPlan.content, "## 14.", "## 15.");
+    const split =
+      /\n(?:Stable|Preview):\s|seven\s+service forms|seven\s+Stable/iu.exec(
+        publicOffering,
+      );
+    if (split) {
+      violations.push({
+        ruleId: "cloud-ga-split-contract",
+        path: finalPlan.path,
+        line: lineAt(finalPlan.content, finalPlan.content.indexOf(split[0])),
+        message:
+          "Final Plan section 11 must not split the all-or-nothing Cloud GA set into Stable and Preview subsets",
+        excerpt: split[0].trim(),
+      });
+    }
+    if (
+      !/all-or-nothing/iu.test(publicOffering) ||
+      !/Pre-GA/u.test(publicOffering)
+    ) {
+      violations.push({
+        ruleId: "cloud-ga-missing-all-or-nothing",
+        path: finalPlan.path,
+        line: lineAt(finalPlan.content, finalPlan.content.indexOf("## 11.")),
+        message:
+          "Final Plan section 11 must name the single all-or-nothing Pre-GA contract",
+        excerpt: "## 11. Takosumi Cloud Public Offering",
+      });
+    }
+    for (const service of [
+      ...CLOUD_GA_SERVICE_FORMS,
+      "AI Gateway",
+      "VerifiedDomain",
+    ]) {
+      if (publicOffering.includes(service) && gaContract.includes(service))
+        continue;
+      violations.push({
+        ruleId: "cloud-ga-service-set-drift",
+        path: finalPlan.path,
+        line: lineAt(finalPlan.content, finalPlan.content.indexOf("## 11.")),
+        message: `Final Plan sections 11 and 14 must both include ${service}`,
+        excerpt: service,
+      });
+    }
+  }
+
+  for (const path of ["app-docs/index.md", "app-docs/en/index.md"]) {
+    const source = byPath.get(path);
+    if (!source) continue;
+    for (const service of CLOUD_GA_PUBLIC_SERVICES) {
+      if (source.content.toLowerCase().includes(service.toLowerCase()))
+        continue;
+      violations.push({
+        ruleId: "cloud-docs-ga-service-omitted",
+        path,
+        line: 1,
+        message: `hosted Cloud availability matrix must include ${service}`,
+        excerpt: service,
+      });
+    }
+    const staleStatus =
+      /seven\s+Stable|7\s*つの Stable|eight offerings|\|\s*(?:Stable|Preview)\s*\|/iu.exec(
+        source.content,
+      );
+    if (staleStatus) {
+      violations.push({
+        ruleId: "cloud-docs-ga-split-contract",
+        path,
+        line: lineAt(source.content, source.content.indexOf(staleStatus[0])),
+        message:
+          "hosted Cloud docs must keep the complete GA set Pre-GA instead of publishing Stable/Preview subsets",
+        excerpt: staleStatus[0].trim(),
+      });
+    }
+  }
+
   return violations;
 }
 
@@ -213,4 +319,11 @@ function paragraphs(
     offset = index + paragraph.length;
   }
   return result;
+}
+
+function section(content: string, start: string, end: string): string {
+  const startIndex = content.indexOf(start);
+  if (startIndex < 0) return "";
+  const endIndex = content.indexOf(end, startIndex + start.length);
+  return content.slice(startIndex, endIndex < 0 ? content.length : endIndex);
 }

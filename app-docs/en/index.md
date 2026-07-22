@@ -90,6 +90,9 @@ Takosumi Cloud resources are exposed to apps and services as bindings.
 | Queue            | async jobs and event processing |
 | AI Gateway       | OpenAI-compatible AI endpoint   |
 | Durable Workflow | durable multi-step execution    |
+| Vector Index     | vector search index             |
+| Stateful Actor   | stateful actor namespace        |
+| Schedule         | cron-triggered invocation       |
 
 ## Domains
 
@@ -125,23 +128,24 @@ unverified, expired, or degraded domains fail closed.
 
 ## GA Contract And Launch Gate
 
-Takosumi Cloud does not promote this release one service at a time. Its seven
-Stable service forms (eight offerings) are one Stable contract, and Takosumi
-Cloud stays Pre-GA until every item passes the same readiness matrix.
+Takosumi Cloud does not promote this release one service at a time. Its ten
+Service Forms (Object Storage has Standard and Infrequent Access offerings),
+plus the non-Form AI Gateway and Verified custom-domain services, are one
+all-or-nothing GA contract. Takosumi Cloud stays Pre-GA and advertises no subset
+as Stable until every item passes the same readiness matrix.
 
-| Status      | Scope                                                                                      |
-| ----------- | ------------------------------------------------------------------------------------------ |
-| GA contract | Edge Worker modules, assets, vars, write-only secrets, bindings, versions, and deployments |
-| GA contract | Object Storage Standard and Infrequent Access offerings                                    |
-| GA contract | KV, Database, and Queue                                                                    |
-| GA contract | OpenAI-compatible AI Gateway endpoint                                                      |
-| GA contract | verified custom domains                                                                    |
-| Preview     | Vector Index, Durable Workflow, Container, Stateful Actor Namespace, and Schedule          |
-| Pre-GA      | public GA stays closed until every item passes the same Stable evidence matrix             |
+| Current status | GA scope                                                                            |
+| -------------- | ----------------------------------------------------------------------------------- |
+| Pre-GA         | Edge Worker / Object Storage Standard and Infrequent Access / KV / Database / Queue |
+| Pre-GA         | Vector Index / Durable Workflow / Container / Stateful Actor Namespace / Schedule   |
+| Pre-GA         | OpenAI-compatible AI Gateway endpoint / Verified custom domain                      |
 
-Stable evidence includes lifecycle, price coverage, immutable metering, spend
-enforcement, invoice reconciliation, recovery, tenant isolation, Dashboard,
-and production behavior and operations validation. A self-test, descriptor,
+GA evidence includes lifecycle, applicable standard API conformance, price
+coverage, immutable metering, spend enforcement, invoice reconciliation,
+recovery, tenant isolation, Dashboard, and production behavior and operations
+validation. An unpriced meter, inactive Offering or PriceCatalog, missing
+manager/capacity binding, expired quote, or missing live evidence fails closed
+before backend execution or GA activation. A self-test, descriptor,
 unconfigured manager, or one green client does not establish GA.
 
 ## Billing and Spend Guard
@@ -174,11 +178,11 @@ resolves a Ready `ObjectBucket` and authorized Interface.
 
 ### AI Gateway OpenAI-compatible profile
 
-| Status             | Scope                             |
-| ------------------ | --------------------------------- |
-| Production Preview | `/gateway/ai/v1/models`           |
-| Production Preview | `/gateway/ai/v1/chat/completions` |
-| Production Preview | `/gateway/ai/v1/embeddings`       |
+| Status | Scope                             |
+| ------ | --------------------------------- |
+| Pre-GA | `/gateway/ai/v1/models`           |
+| Pre-GA | `/gateway/ai/v1/chat/completions` |
+| Pre-GA | `/gateway/ai/v1/embeddings`       |
 
 Details:
 

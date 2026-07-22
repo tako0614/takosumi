@@ -141,3 +141,28 @@ test("authoritative docs require matching Japanese and English retirement claims
     }),
   );
 });
+
+test("authoritative docs reject a split Cloud GA availability contract", () => {
+  const staleFinalPlan = [
+    "No corrected or replacement Takosumi provider version will be built or published.",
+    "## 11. Takosumi Cloud Public Offering",
+    "Stable:\n  EdgeWorker",
+    "Preview:\n  VectorIndex",
+    "## 12. Billing Boundary",
+    "## 14. GA Contract",
+    "The ten-form Service Form Stable set is all-or-nothing:",
+    "EdgeWorker ObjectBucket KVStore SQLDatabase Queue VectorIndex DurableWorkflow ContainerService StatefulActorNamespace Schedule AI Gateway VerifiedDomain",
+    "## 15. Immediate Build Order",
+  ].join("\n\n");
+  const violations = findAuthoritativeDocViolations(
+    COMPLETE_BASELINE.map((source) =>
+      source.path === "docs/internal/final-plan.md"
+        ? { ...source, content: staleFinalPlan }
+        : source,
+    ),
+  );
+
+  expect(violations).toContainEqual(
+    expect.objectContaining({ ruleId: "cloud-ga-split-contract" }),
+  );
+});

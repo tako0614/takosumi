@@ -1,9 +1,10 @@
 # Changelog
 
 All notable user-visible changes to the Takosumi source/module release live here.
-Takosumi is consumed in-process by the operator platform worker and the
-self-hosted Takos distribution worker; there is no npm-published service package
-for the v1 GA line.
+Takosumi handlers are consumed in-process by the operator platform worker. The
+self-hosted Takos distribution worker consumes Takosumi contracts and the
+external self-hoster/operator control plane; there is no npm-published service
+package for the v1 GA line.
 
 ## 1.0.0 — Final 17-noun model
 

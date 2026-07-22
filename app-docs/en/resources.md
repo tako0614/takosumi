@@ -17,6 +17,7 @@ Takosumi Cloud Resources =
   + StatefulActorNamespace
   + Schedule
   + AI Gateway
+  + VerifiedDomain
   + managed routes / URLs / secrets
   + USD-denominated billing / usage metering
   + OpenTofu deploys
@@ -43,6 +44,11 @@ Use these terms in landing pages and the main app screen:
 - Vector Index
 - Stateful Actor Namespace
 - Schedule
+
+The single [GA Contract and Launch Gate](./index.md#ga-contract-and-launch-gate)
+matrix is authoritative for public availability. All ten Service Forms plus AI
+Gateway and VerifiedDomain are in the same all-or-nothing GA scope and remain
+Pre-GA until the complete set's evidence is activated.
 
 ## Runtime Architecture
 
@@ -90,7 +96,8 @@ portable client / direct API / Dashboard -> typed Resource request
   -> /v1/resources preview + reviewed apply/delete
   -> auth + Space/Workspace ownership
   -> TargetPool + Policy + ResolutionLock
-  -> versioned offering/price quote + reserve
+  -> exact OSS OfferingSelection
+  -> closed CommercialOfferingBinding + versioned price quote + reserve
   -> Cloud adapter + selected-manager configured check
   -> backend API
   -> canonical Resource / NativeResource / Output / audit + capture/release

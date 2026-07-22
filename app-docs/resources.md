@@ -17,6 +17,7 @@ Takosumi Cloud Resources =
   + StatefulActorNamespace
   + Schedule
   + AI Gateway
+  + VerifiedDomain
   + managed routes / URLs / secrets
   + USD-denominated billing / usage metering
   + OpenTofu deploys
@@ -43,6 +44,10 @@ Takosumi Cloud Resources =
 - Vector Index
 - Stateful Actor Namespace
 - Schedule
+
+公開時の利用可能性は [GA Contract と Launch Gate](./index.md#ga-contract-と-launch-gate) の単一 matrix が
+正本です。上の 10 Service Forms と AI Gateway / VerifiedDomain はすべて同じ all-or-nothing GA scope にあり、
+集合全体の evidence activation までは Pre-GA です。
 
 ## Runtime Architecture
 
@@ -86,7 +91,8 @@ portable client / direct API / Dashboard -> typed Resource request
   -> /v1/resources preview + reviewed apply/delete
   -> auth + Space/Workspace ownership
   -> TargetPool + Policy + ResolutionLock
-  -> versioned offering/price quote + reserve
+  -> exact OSS OfferingSelection
+  -> closed CommercialOfferingBinding + versioned price quote + reserve
   -> Cloud adapter + selected manager configured check
   -> backend API
   -> canonical Resource / NativeResource / Output / audit + capture/release

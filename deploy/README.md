@@ -22,13 +22,13 @@ control-plane handler (`worker/src/handler.ts`) and account-plane handler
 
 ## What lives here
 
-| Directory          | Role                                                                                                                                                                                                                   |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `platform/`        | Operator Takosumi platform worker (the single composed build target): accounts plane + in-process control plane + dashboard SPA + OpenTofu runner container.                                                           |
-| `accounts-cloudflare/` | Account-plane handler entry point (OIDC issuer / billing / dashboard / deploy facade), mounted in-process by the platform worker or a self-hosted Takos worker.                                                        |
-| `node-postgres/`   | Bun + Postgres reference composer (`buildComposedServer`) consumed by `local-substrate/`'s cloud profile.                                                                                                               |
-| `local-substrate/` | Local Pebble + CoreDNS + Caddy dev substrate for production-equivalent hostname access.                                                                                                                                |
-| `observability/`   | Reference observability wiring.                                                                                                                                                                                        |
+| Directory              | Role                                                                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `platform/`            | Operator Takosumi platform worker (the single composed build target): accounts plane + in-process control plane + dashboard SPA + OpenTofu runner container. |
+| `accounts-cloudflare/` | Account-plane handler entry point (OIDC issuer / billing / dashboard / deploy facade), mounted in-process only by the operator Takosumi platform worker.     |
+| `node-postgres/`       | Bun + Postgres reference composer (`buildComposedServer`) consumed by `local-substrate/`'s cloud profile.                                                    |
+| `local-substrate/`     | Local Pebble + CoreDNS + Caddy dev substrate for production-equivalent hostname access.                                                                      |
+| `observability/`       | Reference observability wiring.                                                                                                                              |
 
 ## Why these stay here
 

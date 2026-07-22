@@ -364,10 +364,11 @@ maximum body size are kind/purpose-specific; unsupported staging fails closed.
 
 OSS preview does not require pricing. On a Cloud endpoint with the commercial
 billing extension, billable preview returns a `DeploymentQuote` from a
-versioned `ServiceOffering` and `PriceCatalog`, and apply requires
-`quoteId + quoteDigest`. The quote binds the Resource spec digest, resolution
-fingerprint, offering/catalog versions, SKU line items, currency, estimated
-total micros, and issue/expiry times. Cloud reserves before backend work, captures
+exact OSS `OfferingSelection`, closed `CommercialOfferingBinding`, and
+versioned `PriceCatalog`; apply requires `quoteId + quoteDigest`. The quote binds
+the Resource spec digest, Offering selection and resolution fingerprint,
+commercial-binding and PriceCatalog versions, SKU line items, currency,
+estimated total micros, and issue/expiry times. Cloud reserves before backend work, captures
 after canonical Resource success, releases on failure/cancellation, and
 reconciles rated UsageEvents with payment-provider invoice lines. The wire field
 is advertised by a versioned commercial extension contract; Cloud-only fields
@@ -446,8 +447,9 @@ operator rather than request JSON. Create pins an exact `FormRef` plus
 `packageDigest`; update uses `expectedRevision` CAS and returns an `ETag` for
 the resulting revision. Unknown fields are rejected, so price, SKU, payment,
 billing, managed capacity, region inventory, SLA, and support cannot be smuggled
-into this OSS policy record. Commercial availability remains a separate closed
-ServiceOffering keyed to the same exact identity and activation.
+into this OSS policy record. A Form-backed Offering resolver rechecks that exact
+identity and activation. Commercial availability remains in a closed
+`CommercialOfferingBinding` keyed to the resulting exact `OfferingSelection`.
 
 The operator CLI maps directly to this API:
 
@@ -476,7 +478,7 @@ The host derives this fail-closed from the Form Registry, installed schema,
 TargetPool descriptors, actually injected module/adapter support, and the
 FormActivation scope/audience. It never returns Target names,
 implementation/manager identity, credentials, regions, or raw capacity.
-Price, SKU, billing, and Cloud offerings remain in a separate closed catalog.
+Price, SKU, billing, and the Cloud commercial binding are absent from OSS discovery.
 
 `GET /v1/capabilities?space={space}` uses the same authentication and scopes
 and projects that principal's structured records into `formAvailability.forms`.
@@ -488,6 +490,36 @@ evidence of principal availability.
 ```bash
 takosumi form-availability list --space space_1
 ```
+
+### Generic Offering catalog, availability, and selection API
+
+An OSS operator can publish an exact noncommercial Offering catalog that is not
+limited to Service Forms. A principal can query availability and resolve an
+exact selection:
+
+```http
+POST /v1/offering-catalogs
+GET  /v1/offering-catalogs?limit={n}&cursor={opaque}
+GET  /v1/offering-catalogs/{catalogId}/versions/{catalogVersion}
+POST /v1/offering-availability/query
+POST /v1/offering-selections/resolve
+```
+
+Each Offering pins an exact `catalog id/version + offering id/version`, an open
+subject `type + ref + version + digest`, exact requirement references, audience,
+profile, region, maturity, and active state. A selection pins the exact subject
+and requirements, resolver id, resolution fingerprint, and resolution time.
+There is no `latest` fallback. Unknown subject types, absent resolvers, inactive
+catalogs/Offerings, audience mismatches, and stale requirements fail closed. A
+Form resolver rechecks exact FormRef/package/FormActivation evidence, while a
+non-Form subject can use another resolver in the same engine.
+
+OSS Offering and selection state contains no price, SKU, payment, manager,
+credentials, raw capacity, SLA, or support. Takosumi Cloud attaches a closed
+`CommercialOfferingBinding` only after Core returns an exact
+`OfferingSelection`, pinning implementation, manager, capacity, SKU,
+PriceCatalog, and payment evidence. Cloud owns neither a parallel catalog
+decision nor a second selection engine.
 
 Current v1alpha1 public shapes:
 

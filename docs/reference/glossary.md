@@ -57,9 +57,11 @@ removal gate が揃うまでこの互換名を置き換えません。
 | Service Form                 | 「オブジェクトストレージが 1 つほしい」のような、portable で実装に依存しない service 定義です。                                                                                                 |
 | FormRef                      | `apiVersion`、`kind`、`definitionVersion`、`schemaDigest` からなる exact immutable identity です。Resource / ResolutionLock はその FormRef と package digest を additive columns に固定します。 |
 | Form Package / Form Registry | data-only の署名済み定義 bundle と、その host が信頼して pin した package inventory です。Package に実行 code、credential、price、capacity は入りません。                                       |
-| Resource Shape               | 現在の API と廃止済み provider の既存 state が Service Form-backed Resource を呼ぶ互換名です。                                                                                                 |
+| Resource Shape               | 現在の API と廃止済み provider の既存 state が Service Form-backed Resource を呼ぶ互換名です。                                                                                                  |
 | FormActivation               | OSS operator が exact FormRef を audience/policy scope へ公開する generic record です。price、payment、official capacity、SLA は持ちません。                                                    |
-| ServiceOffering              | Cloud/operator の closed 層が exact FormRef、activation、implementation、target/region、SKU、price、quota、support を公式提供する record です。                                                 |
+| Offering                     | OSS の noncommercial catalog record です。open な subject type を exact ref/version/digest、要件、audience とともに公開し、price や private manager は持ちません。                              |
+| OfferingSelection            | catalog / Offering version、exact subject と要件、resolver、resolution fingerprint を固定した OSS の選択結果です。                                                                              |
+| CommercialOfferingBinding    | Cloud/operator の closed record です。exact OfferingSelection に implementation、manager/capacity、SKU、PriceCatalog、payment evidence を固定し、別の selection engine は作りません。           |
 | Target / TargetPool          | Resource の解決先です。operator が有効化した実行先の候補とその集まりです。                                                                                                                      |
 | Policy                       | どの Resource をどこへ解決してよいかのルールです。                                                                                                                                              |
 | Adapter                      | Resource を実際のリソースに変換する trusted host implementation です。                                                                                                                          |

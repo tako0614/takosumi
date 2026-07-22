@@ -38,24 +38,20 @@ documented in [docs/en/reference/cli.md](docs/en/reference/cli.md). The retired 
 
 ## How it works
 
-Takosumi is one OSS product whose handlers are composed **in-process** through `tsconfig` aliases into the host
-worker. It is used in two composition contexts:
+Takosumi's account-plane and control-plane handlers are composed **in-process** through `tsconfig` aliases into an
+operator-run Takosumi platform worker. An operator or self-hoster serves that platform worker at an explicit origin;
+our official hosted deployment uses `app.takosumi.com`. There is no npm-published service package.
 
-- An operator-run Takosumi platform worker at the operator's own origin (the official Takosumi Cloud deployment
-  uses `app.takosumi.com`)
-- The self-hosted Takos distribution worker, where the Takos product surface composes Takosumi accounts,
-  deploy-control, dashboard, and runner boundaries in-process at the self-hoster's own origin
-
-This is a composition mechanism, not two different products. There is no retired split account/deploy-control
-host topology and no npm-published service package. An operator serves the composed platform at an explicit
-origin; our official hosted deployment uses `app.takosumi.com`. `takosumi.com` is the landing/software-docs site.
+The self-hosted Takos distribution worker is a separate Takos product worker. It references Takosumi contract source
+and uses the self-hoster/operator Takosumi control plane as an external OIDC issuer and resource server. It does not
+embed Accounts, deploy-control, the Dashboard, or the runner. `takosumi.com` is the landing/software-docs site.
 
 ### In-process entry points
 
-| Handler        | File                                                                  | Mount                                                                               |
-| -------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Account plane  | `deploy/accounts-cloudflare/src/handler.ts` (`createAccountsHandler`) | platform worker or takos worker origin root; issuer is the bare origin              |
-| Deploy control | `worker/src/handler.ts`                                               | `/api` on the platform worker; typed in-process operations seam in the takos worker |
+| Handler        | File                                                                  | Mount                                                  |
+| -------------- | --------------------------------------------------------------------- | ------------------------------------------------------ |
+| Account plane  | `deploy/accounts-cloudflare/src/handler.ts` (`createAccountsHandler`) | platform worker origin root; issuer is the bare origin |
+| Deploy control | `worker/src/handler.ts`                                               | platform worker `/api` and `/hooks/*`                  |
 
 `/install?git=...&ref=...&path=...` is a dashboard SPA entrypoint, not a deploy-control handler. The SPA preserves the
 query, forwards to `/new`, and only pre-fills the Git form; compatibility check and explicit confirmation still happen
@@ -93,13 +89,18 @@ direction lives in [docs/internal/final-plan.md](docs/internal/final-plan.md) (n
 Takosumi does not replace OpenTofu or Terraform providers. Existing providers run as-is; Takosumi records the reviewable
 and auditable control-plane layer around those operations.
 
+Takosumi OSS also owns a noncommercial `Offering` catalog, open subject resolvers, and exact `OfferingSelection` over
+`type + ref + version + digest`. A Service Form is one possible subject type; an Offering does not imply that Takosumi
+Cloud sells it. Cloud can attach a closed `CommercialOfferingBinding` only to that exact selection, binding manager,
+capacity, SKU, PriceCatalog, and payment evidence without creating a second availability or selection engine.
+
 ## Editions
 
-| Edition                   | What it is                                                                                                                                                                                                                                                                                                      |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Takosumi OSS**          | This repository: Git-based OpenTofu/Terraform control plane, optional zero-form-capable Service Form host (current Resource Shape compatibility API), Compatibility API framework, Adapter system, ProviderConnections, runner pool, state/output/audit, and disabled/showback billing that never blocks apply. |
-| **Takosumi for Operator** | OSS/commercial operator edition for hosting Takosumi for users or customers: multi-tenant customer management, quota/metering/plans, DB-backed operator configuration, CLI/API/runbook operations, managed target catalog, support tooling, and commercial audit.                                               |
-| **Takosumi Cloud**        | The official hosted Takosumi for Operator at `app.takosumi.com`, with official managed targets, Takosumi-owned native resource internals, AI Gateway, Stripe-enforced billing, quota, usage, support, abuse controls, and SLA.                                                                                  |
+| Edition                   | What it is                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Takosumi OSS**          | This repository: Git-based OpenTofu/Terraform control plane, optional zero-form-capable Service Form host (current Resource Shape compatibility API), generic Offering selection, Compatibility API framework, Adapter system, ProviderConnections, runner pool, state/output/audit, and disabled/showback billing that never blocks apply. |
+| **Takosumi for Operator** | OSS/commercial operator edition for hosting Takosumi for users or customers: multi-tenant customer management, quota/metering/plans, DB-backed operator configuration, CLI/API/runbook operations, managed target catalog, support tooling, and commercial audit.                                                                           |
+| **Takosumi Cloud**        | The official hosted Takosumi for Operator at `app.takosumi.com`, with a closed CommercialOfferingBinding for each exact Offering selection, official managed targets, Takosumi-owned native resource internals, AI Gateway, Stripe-enforced billing, quota, usage, support, abuse controls, and SLA.                                        |
 
 The dependency direction is **one-way Cloud -> OSS**: the hosted Cloud operation consumes OSS contracts and composition
 points. OSS ships and runs with nothing from the hosted Cloud operation present.
