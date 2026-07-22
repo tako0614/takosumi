@@ -61,6 +61,63 @@ Evidence must prove the new key id is published, the previous key remains only
 for the declared overlap, old credentials were revoked, and no private key or
 client secret appears in evidence.
 
+Capture the public JWKS once during overlap and again after removing the old
+public key. Keep the captures and the following exact-schema run log in the
+operator-private evidence directory. IDs are vault/audit references, never
+secret bodies. `owner` and `reviewer` must be different people, and the measured
+OAuth overlap must exactly match `overlapWindowSeconds`.
+
+```json
+{
+  "kind": "takosumi.identity-security-rotation-log@v1",
+  "rotationRunId": "rotation-run-id",
+  "environment": "production",
+  "issuer": "https://app.takosumi.com",
+  "owner": "operator-subject",
+  "reviewer": "reviewer-subject",
+  "startedAt": "2026-01-01T00:00:00.000Z",
+  "completedAt": "2026-01-01T00:30:00.000Z",
+  "result": "passed",
+  "keyRotation": {
+    "keyId": "new-public-kid",
+    "previousKeyId": "previous-public-kid",
+    "overlapCapturedAt": "2026-01-01T00:05:00.000Z",
+    "previousKeyRemovedAt": "2026-01-01T00:20:00.000Z",
+    "postRevocationCapturedAt": "2026-01-01T00:21:00.000Z"
+  },
+  "clientSecretRotation": {
+    "clientId": "upstream-client-id",
+    "oldSecretId": "vault-secret-version-old",
+    "newSecretId": "vault-secret-version-new",
+    "overlapStartedAt": "2026-01-01T00:05:00.000Z",
+    "oldSecretRevokedAt": "2026-01-01T00:20:00.000Z",
+    "overlapWindowSeconds": 900,
+    "revocationEventId": "provider-revocation-event-id"
+  },
+  "auditEvent": {
+    "id": "takosumi-audit-event-id",
+    "subject": "operator-subject",
+    "at": "2026-01-01T00:22:00.000Z"
+  }
+}
+```
+
+Merge the evidence only after both public snapshots and the run log exist:
+
+```bash
+bun run cli -- launch-readiness oidc-account-security evidence \
+  --file "$READINESS_FILE" --out "$READINESS_FILE" \
+  --issuer "$TAKOSUMI_ISSUER" \
+  --overlap-jwks-file "$OVERLAP_JWKS_FILE" \
+  --post-revocation-jwks-file "$POST_REVOCATION_JWKS_FILE" \
+  --rotation-log-file "$ROTATION_LOG_FILE" \
+  --ref-prefix "$PRIVATE_ROTATION_EVIDENCE_REF" --json
+```
+
+The helper rejects private JWK material, a missing old/new overlap, an old key
+that remains published after revocation, extra run-log fields, self-review, or
+inconsistent timestamps. It does not perform or claim the live rotation.
+
 ## ProviderConnection secrets
 
 Create a replacement Connection or secret version, test it, update explicit
@@ -78,20 +135,22 @@ credential.
 
 ## Worker secret delivery
 
-The realized deploy config and vault location are operator-owned. Verify file
-permissions and list only remote secret names:
+The realized deploy config, vault, and delivery adapter are operator-owned.
+Takosumi OSS intentionally does not own a bulk platform-secret registry,
+generate missing operator secrets, or prescribe one cloud CLI. A self-hosting
+operator must use its reviewed deployment adapter, validate the exact selected
+secret names, pass values without logging them, perform a fixed readback, and
+keep only public IDs/digests in evidence.
 
-```bash
-test -f "$TAKOSUMI_WRANGLER_CONFIG"
-test -d "$TAKOSUMI_SECRETS"
-find "$TAKOSUMI_SECRETS" -maxdepth 1 -type f \
-  -exec sh -c 'test "$(stat -c %a "$1")" = 600' sh {} \;
-bun run wrangler -- secret list --config "$TAKOSUMI_WRANGLER_CONFIG"
-```
-
-Push one approved value through standard input. Do not echo it, infer missing
-values, overwrite unrelated classes, or automatically delete remote-only
-secrets.
+Takosumi Cloud is stricter: runtime-secret mutation is part of the fixed
+controller release and raw Wrangler secret/deploy commands are not an operator
+path. The closed adapter accepts an exact value-free
+`takosumi.cloud-runtime-secret-files@v1` manifest whose paths point to
+owner-matched `0600` files under `0700` directories outside every source
+checkout. The sealed release policy allowlists names, the OIDC key triple is
+atomic, and the adapter proves health plus exact public JWKS key IDs before it
+records success. See the closed Cloud rotation and immutable Worker-release
+runbooks for staging, replica, authorization, and production execution.
 
 ## Verification
 

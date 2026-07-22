@@ -39,6 +39,11 @@ Secrets / patching:
   secret-rotation-policy.md
   patch-management.md
 
+Security review / response:
+  security-threat-model.md
+  runner-sandbox-security.md
+  vulnerability-response.md
+
 State / migrations:
   exact-formref-migration.md
   resource-state-adoption.md
