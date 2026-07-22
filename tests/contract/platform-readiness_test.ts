@@ -155,3 +155,18 @@ test("evidence semantics come from schema data, never field or type names", () =
     ),
   ).toEqual([]);
 });
+
+test("UTC timestamp format accepts future expiry values without weakening evidence timestamps", () => {
+  expect(
+    platformReadinessEvidenceSchemaErrors(
+      { fields: ["expiresAt"], formats: { expiresAt: "utc-timestamp" } },
+      { expiresAt: "2100-01-01T00:00:00.000Z" },
+    ),
+  ).toEqual([]);
+  expect(
+    platformReadinessEvidenceSchemaErrors(
+      { fields: ["expiresAt"], formats: { expiresAt: "utc-timestamp" } },
+      { expiresAt: "2100-02-30T00:00:00Z" },
+    ),
+  ).toEqual(["evidence.expiresAt is not a valid utc-timestamp"]);
+});

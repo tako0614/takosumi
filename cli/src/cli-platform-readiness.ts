@@ -535,7 +535,11 @@ function platformReadinessTemplateFieldValue(
   if (format === "evidence-ref") {
     return `vault://platform-readiness/<${field}>`;
   }
-  if (format === "timestamp" || schema?.after?.[field]) {
+  if (
+    format === "timestamp" ||
+    format === "utc-timestamp" ||
+    schema?.after?.[field]
+  ) {
     return "YYYY-MM-DDTHH:mm:ssZ";
   }
   const bound = schema?.numericBounds?.[field];
