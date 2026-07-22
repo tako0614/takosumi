@@ -203,9 +203,20 @@ export class ResourceFormPinInventoryService implements ResourceFormPinInventory
     ensureUnique(scannedResources, (resource) => resource.id, "Resource id");
 
     const rows = scannedResources
-      .flatMap((resource) => {
+      .map((resource) => {
         const workspaceId = workspaceBySpace.get(resource.spaceId);
-        return workspaceId ? [projectResourceRow(workspaceId, resource)] : [];
+        if (!workspaceId) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `Resource ${resource.id} in Space ${resource.spaceId} has no durable Workspace mapping`,
+            {
+              reason: "resource_form_pin_inventory_resource_scope_unmapped",
+              resourceId: resource.id,
+              spaceId: resource.spaceId,
+            },
+          );
+        }
+        return projectResourceRow(workspaceId, resource);
       })
       .sort(compareRows);
     if (rows.length > this.#bounds.maxResources) {
