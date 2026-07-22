@@ -147,11 +147,62 @@ Takosumi release protocol or an Operator requirement:
 
 ```bash
 cd takosumi
+bun run operator:release-activator -- tokens-check \
+  --token-file /run/secrets/takosumi/release-activator-tokens.json
 bun run operator:release-activator -- serve \
+  --token-file /run/secrets/takosumi/release-activator-tokens.json \
   --source-bucket "$TAKOSUMI_RELEASE_SOURCE_BUCKET" \
   --wrangler-config "$TAKOSUMI_RELEASE_WRANGLER_CONFIG" \
   --command-env-allowlist CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID,TAKOSUMI_CLOUDFLARE_ACCOUNT_ID,CLOUDFLARE_CONTAINERS_API_TOKEN
 ```
+
+The preferred authentication input is one absolute, repository-external regular
+file owned by the activator uid with mode exactly `0600`. The operator's secret
+manager writes it atomically; do not render it in a repository, shell argument,
+service-unit `Environment=`, log, or release evidence. The strict file shape is:
+
+```json
+{
+  "kind": "takosumi.operator.release-activator-tokens@v1",
+  "tokens": [
+    {
+      "label": "production",
+      "principal": "takosumi-cloud/production",
+      "token": "<strong independently generated bearer token>"
+    },
+    {
+      "label": "staging",
+      "principal": "takosumi-cloud/staging",
+      "token": "<different strong independently generated bearer token>"
+    }
+  ]
+}
+```
+
+The angle-bracket values are documentation placeholders and do not pass
+validation. Each real token is printable ASCII, 32-512 bytes, and has at least
+12 distinct characters. Labels, principals, and token values must each be
+unique. Unknown fields, duplicate identities or secrets, weak tokens, symlinks,
+wrong ownership, non-`0600` mode, repository-local paths, an oversized file, or
+combining the map with legacy single-token configuration stops startup.
+`tokens-check` prints only labels/principals and never token values.
+
+The existing POST/GET endpoint remains unchanged. Authentication is
+constant-time over fixed SHA-256 token digests. Every job is owned by the exact
+token label and principal: another valid environment token receives `404` for
+that job, and an identical POST under another principal creates a distinct job.
+Use one independent token per production/staging operator principal and put the
+corresponding single bearer value in that environment's Worker secret
+`TAKOSUMI_RELEASE_ACTIVATOR_TOKEN`.
+
+For existing single-environment deployments, the activator process still
+accepts the legacy `TAKOSUMI_RELEASE_ACTIVATOR_TOKEN` environment input and
+assigns it label/principal `legacy`. It is mutually exclusive with the file,
+must pass the same strength checks, and is deleted from the process environment
+before activation children start. Migrate it to the file form; the CLI rejects
+`--token` so a bearer secret cannot be placed in argv. The non-secret file path
+may instead be supplied as `TAKOSUMI_RELEASE_ACTIVATOR_TOKEN_FILE` when the
+service manager cannot add `--token-file`, but not both.
 
 It fetches the SourceSnapshot archive from R2, verifies the recorded digest,
 extracts it into an operator work directory, and runs the opaque `post_apply` argv.

@@ -1,7 +1,16 @@
 #!/usr/bin/env bun
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import process from "node:process";
@@ -13,7 +22,21 @@ const RELEASE_ACTIVATION_KIND = "takosumi.operator.release-activation@v2";
 const DEFAULT_WORK_ROOT = defaultReleaseWorkRoot();
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8797;
-const USAGE = "usage: operator-release-activator.ts <serve|run> ...";
+const USAGE =
+  "usage: operator-release-activator.ts <serve|run|tokens-check> ...";
+const RELEASE_ACTIVATOR_TOKEN_FILE_KIND =
+  "takosumi.operator.release-activator-tokens@v1";
+const RELEASE_ACTIVATOR_TOKEN_FILE_ENV =
+  "TAKOSUMI_RELEASE_ACTIVATOR_TOKEN_FILE";
+const LEGACY_RELEASE_ACTIVATOR_TOKEN_ENV = "TAKOSUMI_RELEASE_ACTIVATOR_TOKEN";
+const RELEASE_ACTIVATOR_REPO_ROOT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
+const MAX_TOKEN_FILE_BYTES = 64 * 1024;
+const MAX_TOKEN_ENTRIES = 64;
+const MIN_TOKEN_BYTES = 32;
+const MAX_TOKEN_BYTES = 512;
 
 interface ReleaseActivationPayload {
   readonly kind: typeof RELEASE_ACTIVATION_KIND;
@@ -81,8 +104,26 @@ interface RunReleaseOptions {
   readonly sourceBucketAllowlist?: readonly string[];
 }
 
-interface ServeOptions extends RunReleaseOptions {
+export interface ReleaseActivatorTokenEntry {
+  readonly label: string;
+  readonly principal: string;
   readonly token: string;
+}
+
+interface ReleaseActivatorIdentity {
+  readonly tokenLabel: string;
+  readonly principal: string;
+}
+
+interface CompiledReleaseActivatorToken extends ReleaseActivatorIdentity {
+  readonly digest: Uint8Array;
+}
+
+interface ServeOptions extends RunReleaseOptions {
+  /** Legacy single-token compatibility for existing operator compositions. */
+  readonly token?: string;
+  /** Preferred multi-principal token configuration loaded from a 0600 file. */
+  readonly tokens?: readonly ReleaseActivatorTokenEntry[];
   readonly host: string;
   readonly port: number;
   readonly runActivation?: (
@@ -104,6 +145,7 @@ type ReleaseActivationJobStatus =
 
 interface ReleaseActivationJob {
   readonly id: string;
+  readonly authorization: ReleaseActivatorIdentity;
   readonly payload: ReleaseActivationPayload;
   readonly createdAt: string;
   status: ReleaseActivationJobStatus;
@@ -326,8 +368,10 @@ function parseCommandEnv(
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(raw)) {
     if (!/^[A-Z_][A-Z0-9_]*$/u.test(name)) continue;
-    if (name === "TAKOSUMI_RELEASE_ACTIVATOR_TOKEN") {
-      throw new Error("release command env must not include activator token");
+    if (isReleaseActivatorAuthEnvName(name)) {
+      throw new Error(
+        "release command env must not include activator authentication config",
+      );
     }
     if (SECRET_ENV_NAME_RE.test(name)) {
       throw new Error(
@@ -595,6 +639,11 @@ function materializerAllowedCommandEnv(
 ): Record<string, string> {
   const next: Record<string, string> = {};
   for (const name of normalizeCommandEnvAllowlist(allowlist)) {
+    if (isReleaseActivatorAuthEnvName(name)) {
+      throw new Error(
+        `release command env allowlist must not include activator authentication config ${name}`,
+      );
+    }
     if (isReservedProviderEnvName(name)) {
       throw new Error(
         `release command env allowlist must not include reserved ${name}`,
@@ -604,6 +653,13 @@ function materializerAllowedCommandEnv(
     if (typeof value === "string") next[name] = value;
   }
   return next;
+}
+
+function isReleaseActivatorAuthEnvName(name: string): boolean {
+  return (
+    name === LEGACY_RELEASE_ACTIVATOR_TOKEN_ENV ||
+    name === RELEASE_ACTIVATOR_TOKEN_FILE_ENV
+  );
 }
 
 function normalizeCommandEnvAllowlist(
@@ -756,6 +812,7 @@ function parseCliArgs(argv: readonly string[]) {
     if (!arg.startsWith("--")) throw new Error(`unexpected argument: ${arg}`);
     const key = arg.slice(2);
     if (key === "keep-workdir") {
+      if (flags.has(key)) throw new Error(`duplicate argument: ${arg}`);
       flags.add(key);
       continue;
     }
@@ -763,10 +820,53 @@ function parseCliArgs(argv: readonly string[]) {
     if (!value || value.startsWith("--")) {
       throw new Error(`missing value for ${arg}`);
     }
+    if (values.has(key)) throw new Error(`duplicate argument: ${arg}`);
     values.set(key, value);
     i += 1;
   }
   return { mode, values, flags };
+}
+
+function validateCliArgs(
+  mode: string | undefined,
+  values: ReadonlyMap<string, string>,
+  flags: ReadonlySet<string>,
+): void {
+  if (values.has("token")) {
+    throw new Error(
+      "--token is forbidden because secret values must not be passed in argv; use --token-file",
+    );
+  }
+
+  const commonValues = [
+    "source-bucket",
+    "wrangler-config",
+    "wrangler-env",
+    "jurisdiction",
+    "work-root",
+    "command-env-allowlist",
+    "source-bucket-allowlist",
+  ];
+  const allowedValues =
+    mode === "run"
+      ? new Set([...commonValues, "payload"])
+      : mode === "serve"
+        ? new Set([...commonValues, "token-file", "host", "port"])
+        : mode === "tokens-check"
+          ? new Set(["token-file"])
+          : undefined;
+  if (!allowedValues) throw new Error(USAGE);
+
+  for (const key of values.keys()) {
+    if (!allowedValues.has(key)) {
+      throw new Error(`unexpected argument for ${mode} mode: --${key}`);
+    }
+  }
+  for (const flag of flags) {
+    if (flag !== "keep-workdir" || mode === "tokens-check") {
+      throw new Error(`unexpected argument for ${mode} mode: --${flag}`);
+    }
+  }
 }
 
 function optionsFromCli(values: Map<string, string>, flags: Set<string>) {
@@ -804,12 +904,238 @@ function parseCommandEnvAllowlist(
     .filter(Boolean);
 }
 
+export function parseReleaseActivatorTokenConfig(
+  raw: unknown,
+): readonly ReleaseActivatorTokenEntry[] {
+  const config = asRecord(raw, "release activator token file");
+  assertExactKeys(config, ["kind", "tokens"], "release activator token file");
+  if (config.kind !== RELEASE_ACTIVATOR_TOKEN_FILE_KIND) {
+    throw new Error("release activator token file kind is invalid");
+  }
+  if (
+    !Array.isArray(config.tokens) ||
+    config.tokens.length === 0 ||
+    config.tokens.length > MAX_TOKEN_ENTRIES
+  ) {
+    throw new Error(
+      `release activator token file must contain 1-${MAX_TOKEN_ENTRIES} tokens`,
+    );
+  }
+  const entries = config.tokens.map((rawEntry, index) => {
+    const entry = asRecord(rawEntry, `tokens[${index}]`);
+    assertExactKeys(entry, ["label", "principal", "token"], `tokens[${index}]`);
+    return {
+      label: releaseActivatorTokenLabel(entry.label, `tokens[${index}].label`),
+      principal: releaseActivatorPrincipal(
+        entry.principal,
+        `tokens[${index}].principal`,
+      ),
+      token: releaseActivatorSecret(entry.token, `tokens[${index}].token`),
+    };
+  });
+  assertDistinctReleaseActivatorTokens(entries);
+  return entries;
+}
+
+export async function loadReleaseActivatorTokenFile(
+  tokenFile: string,
+): Promise<readonly ReleaseActivatorTokenEntry[]> {
+  const configuredPath = tokenFile.trim();
+  if (!configuredPath || !isAbsolute(configuredPath)) {
+    throw new Error("release activator token file path must be absolute");
+  }
+  const resolvedPath = resolve(configuredPath);
+  let handle;
+  try {
+    handle = await open(
+      resolvedPath,
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+    );
+  } catch {
+    throw new Error("release activator token file could not be opened safely");
+  }
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      throw new Error("release activator token file must be a regular file");
+    }
+    if ((stats.mode & 0o777) !== 0o600) {
+      throw new Error("release activator token file must have mode 0600");
+    }
+    if (
+      typeof process.getuid === "function" &&
+      stats.uid !== process.getuid()
+    ) {
+      throw new Error("release activator token file must be owned by this uid");
+    }
+    if (stats.size < 2 || stats.size > MAX_TOKEN_FILE_BYTES) {
+      throw new Error(
+        `release activator token file must be 2-${MAX_TOKEN_FILE_BYTES} bytes`,
+      );
+    }
+    const [canonicalFile, canonicalRepo] = await Promise.all([
+      realpath(resolvedPath),
+      realpath(RELEASE_ACTIVATOR_REPO_ROOT),
+    ]);
+    if (isInside(canonicalFile, canonicalRepo)) {
+      throw new Error(
+        "release activator token file must be outside the Takosumi repository",
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await handle.readFile("utf8")) as unknown;
+    } catch {
+      throw new Error("release activator token file must contain valid JSON");
+    }
+    return parseReleaseActivatorTokenConfig(parsed);
+  } finally {
+    await handle.close();
+  }
+}
+
+function compileReleaseActivatorTokens(
+  options: Pick<ServeOptions, "token" | "tokens">,
+): readonly CompiledReleaseActivatorToken[] {
+  if (options.token !== undefined && options.tokens !== undefined) {
+    throw new Error(
+      "release activator legacy token and token map are mutually exclusive",
+    );
+  }
+  const entries = options.tokens
+    ? [...options.tokens]
+    : options.token !== undefined
+      ? [
+          {
+            label: "legacy",
+            principal: "legacy",
+            token: releaseActivatorSecret(
+              options.token,
+              "legacy release activator token",
+            ),
+          },
+        ]
+      : [];
+  if (entries.length === 0) {
+    throw new Error("release activator token configuration is required");
+  }
+  const validated = parseReleaseActivatorTokenConfig({
+    kind: RELEASE_ACTIVATOR_TOKEN_FILE_KIND,
+    tokens: entries,
+  });
+  return validated.map((entry) => ({
+    tokenLabel: entry.label,
+    principal: entry.principal,
+    digest: releaseActivatorTokenDigest(entry.token),
+  }));
+}
+
+function authenticateReleaseActivatorRequest(
+  request: Request,
+  tokens: readonly CompiledReleaseActivatorToken[],
+): ReleaseActivatorIdentity | undefined {
+  const authorization = request.headers.get("authorization") ?? "";
+  const candidate = authorization.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length)
+    : "";
+  const candidateDigest = releaseActivatorTokenDigest(candidate);
+  let matched: CompiledReleaseActivatorToken | undefined;
+  for (const token of tokens) {
+    const equal = timingSafeEqual(candidateDigest, token.digest);
+    if (equal && !matched) matched = token;
+  }
+  return matched
+    ? { tokenLabel: matched.tokenLabel, principal: matched.principal }
+    : undefined;
+}
+
+function releaseActivatorTokenDigest(value: string): Uint8Array {
+  return createHash("sha256").update(value, "utf8").digest();
+}
+
+function releaseActivatorTokenLabel(value: unknown, label: string): string {
+  const tokenLabel = nonEmptyString(value, label);
+  if (!/^[a-z0-9][a-z0-9._-]{0,62}$/u.test(tokenLabel)) {
+    throw new Error(`${label} is invalid`);
+  }
+  return tokenLabel;
+}
+
+function releaseActivatorPrincipal(value: unknown, label: string): string {
+  const principal = nonEmptyString(value, label);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/u.test(principal)) {
+    throw new Error(`${label} is invalid`);
+  }
+  return principal;
+}
+
+function releaseActivatorSecret(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`${label} is weak or invalid`);
+  const bytes = Buffer.byteLength(value, "utf8");
+  if (
+    bytes < MIN_TOKEN_BYTES ||
+    bytes > MAX_TOKEN_BYTES ||
+    !/^[!-~]+$/u.test(value) ||
+    new Set(value).size < 12
+  ) {
+    throw new Error(`${label} is weak or invalid`);
+  }
+  return value;
+}
+
+function assertDistinctReleaseActivatorTokens(
+  entries: readonly ReleaseActivatorTokenEntry[],
+): void {
+  const labels = new Set<string>();
+  const principals = new Set<string>();
+  const digests = new Set<string>();
+  for (const entry of entries) {
+    if (labels.has(entry.label)) {
+      throw new Error("release activator token labels must be unique");
+    }
+    if (principals.has(entry.principal)) {
+      throw new Error("release activator token principals must be unique");
+    }
+    const digest = Buffer.from(
+      releaseActivatorTokenDigest(entry.token),
+    ).toString("hex");
+    if (digests.has(digest)) {
+      throw new Error("release activator token secrets must be unique");
+    }
+    labels.add(entry.label);
+    principals.add(entry.principal);
+    digests.add(digest);
+  }
+}
+
+function assertExactKeys(
+  value: Readonly<Record<string, unknown>>,
+  expected: readonly string[],
+  label: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
+    throw new Error(`${label} fields are invalid`);
+  }
+}
+
+function isInside(path: string, root: string): boolean {
+  const resolvedPath = resolve(path);
+  const resolvedRoot = resolve(root);
+  return (
+    resolvedPath === resolvedRoot ||
+    resolvedPath.startsWith(`${resolvedRoot}${sep}`)
+  );
+}
+
 async function main(argv = process.argv.slice(2)): Promise<void> {
   if (argv[0] === "--help" || argv[0] === "-h") {
     console.log(USAGE);
     return;
   }
   const { mode, values, flags } = parseCliArgs(argv);
+  validateCliArgs(mode, values, flags);
   if (mode === "run") {
     const payloadPath = values.get("payload");
     if (!payloadPath) throw new Error("--payload is required for run mode");
@@ -821,25 +1147,79 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
+  if (mode === "tokens-check") {
+    const tokenFile = tokenFileFromCli(values);
+    if (!tokenFile) {
+      throw new Error("--token-file is required for tokens-check mode");
+    }
+    const tokens = await loadReleaseActivatorTokenFile(tokenFile);
+    console.log(
+      JSON.stringify(
+        {
+          kind: "takosumi.operator.release-activator-token-check@v1",
+          tokenCount: tokens.length,
+          tokens: tokens.map(({ label, principal }) => ({ label, principal })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
   if (mode === "serve") {
-    const token =
-      values.get("token") ?? process.env.TAKOSUMI_RELEASE_ACTIVATOR_TOKEN;
-    if (!token) throw new Error("release activator token is required");
+    const tokenFile = tokenFileFromCli(values);
+    let legacyToken = process.env[LEGACY_RELEASE_ACTIVATOR_TOKEN_ENV];
+    if (tokenFile && legacyToken) {
+      throw new Error(
+        `${RELEASE_ACTIVATOR_TOKEN_FILE_ENV} and ${LEGACY_RELEASE_ACTIVATOR_TOKEN_ENV} are mutually exclusive`,
+      );
+    }
+    let tokenOptions: Pick<ServeOptions, "token" | "tokens"> | undefined =
+      tokenFile
+        ? { tokens: await loadReleaseActivatorTokenFile(tokenFile) }
+        : legacyToken
+          ? { token: legacyToken }
+          : undefined;
+    if (!tokenOptions) {
+      throw new Error(
+        `release activator token configuration is required; use --token-file or ${RELEASE_ACTIVATOR_TOKEN_FILE_ENV}`,
+      );
+    }
+    if (legacyToken) {
+      // Compatibility input is consumed once and removed before any activation
+      // child is created. New operator deployments should use the 0600 file.
+      delete process.env[LEGACY_RELEASE_ACTIVATOR_TOKEN_ENV];
+    }
     serveReleaseActivator({
       ...optionsFromCli(values, flags),
-      token,
+      ...tokenOptions,
       host:
         values.get("host") ?? process.env.TAKOSUMI_RELEASE_HOST ?? DEFAULT_HOST,
       port: Number(
         values.get("port") ?? process.env.TAKOSUMI_RELEASE_PORT ?? DEFAULT_PORT,
       ),
     });
+    legacyToken = undefined;
+    tokenOptions = undefined;
     await new Promise(() => {
       // Keep the operator HTTP activator process alive after Bun.serve returns.
     });
     return;
   }
   throw new Error(USAGE);
+}
+
+function tokenFileFromCli(
+  values: ReadonlyMap<string, string>,
+): string | undefined {
+  const cliValue = values.get("token-file")?.trim();
+  const envValue = process.env[RELEASE_ACTIVATOR_TOKEN_FILE_ENV]?.trim();
+  if (cliValue && envValue) {
+    throw new Error(
+      `--token-file and ${RELEASE_ACTIVATOR_TOKEN_FILE_ENV} are mutually exclusive`,
+    );
+  }
+  return cliValue || envValue || undefined;
 }
 
 export function serveReleaseActivator(options: ServeOptions): void {
@@ -861,17 +1241,23 @@ export function serveReleaseActivator(options: ServeOptions): void {
 }
 
 export function createReleaseActivatorFetchHandler(options: ServeOptions) {
+  const authorizationTokens = compileReleaseActivatorTokens(options);
+  const runOptions = releaseActivationRunOptions(options);
+  const runActivation = options.runActivation;
   const jobs = new Map<string, ReleaseActivationJob>();
   return async function fetch(request: Request): Promise<Response> {
-    const expected = `Bearer ${options.token}`;
-    if (request.headers.get("authorization") !== expected) {
+    const authorization = authenticateReleaseActivatorRequest(
+      request,
+      authorizationTokens,
+    );
+    if (!authorization) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
     const url = new URL(request.url);
     if (request.method === "GET") {
       const jobId = url.searchParams.get("jobId");
       if (!jobId) return Response.json({ error: "not found" }, { status: 404 });
-      const job = jobs.get(jobId);
+      const job = jobs.get(releaseActivationJobKey(authorization, jobId));
       if (!job) {
         return Response.json({ error: "job not found" }, { status: 404 });
       }
@@ -893,18 +1279,20 @@ export function createReleaseActivatorFetchHandler(options: ServeOptions) {
         { status: 400 },
       );
     }
-    const jobId = releaseActivationJobId(payload);
-    let job = jobs.get(jobId);
+    const jobId = releaseActivationJobId(payload, authorization);
+    const jobKey = releaseActivationJobKey(authorization, jobId);
+    let job = jobs.get(jobKey);
     if (!job) {
       job = {
         id: jobId,
+        authorization,
         payload,
         status: "pending",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      jobs.set(jobId, job);
-      startReleaseActivationJob(job, options);
+      jobs.set(jobKey, job);
+      startReleaseActivationJob(job, runOptions, runActivation);
     }
     const status =
       job.status === "pending" || job.status === "running" ? 202 : 200;
@@ -916,13 +1304,14 @@ export function createReleaseActivatorFetchHandler(options: ServeOptions) {
 
 function startReleaseActivationJob(
   job: ReleaseActivationJob,
-  options: ServeOptions,
+  options: RunReleaseOptions,
+  configuredRun: ServeOptions["runActivation"] | undefined,
 ): void {
   setTimeout(() => {
     job.status = "running";
     job.updatedAt = new Date().toISOString();
     const run =
-      options.runActivation ??
+      configuredRun ??
       ((payload: ReleaseActivationPayload, runOptions: RunReleaseOptions) =>
         runReleaseActivationChild(payload, runOptions, job.id));
     void run(job.payload, options, job.id)
@@ -943,6 +1332,32 @@ function startReleaseActivationJob(
   }, 0);
 }
 
+function releaseActivationRunOptions(options: ServeOptions): RunReleaseOptions {
+  return {
+    ...(options.sourceBucket ? { sourceBucket: options.sourceBucket } : {}),
+    ...(options.wranglerConfig
+      ? { wranglerConfig: options.wranglerConfig }
+      : {}),
+    ...(options.wranglerEnv ? { wranglerEnv: options.wranglerEnv } : {}),
+    ...(options.jurisdiction ? { jurisdiction: options.jurisdiction } : {}),
+    ...(options.workRoot ? { workRoot: options.workRoot } : {}),
+    ...(options.keepWorkdir !== undefined
+      ? { keepWorkdir: options.keepWorkdir }
+      : {}),
+    ...(options.downloadArchive
+      ? { downloadArchive: options.downloadArchive }
+      : {}),
+    ...(options.operatorEnv ? { operatorEnv: options.operatorEnv } : {}),
+    ...(options.commandEnv ? { commandEnv: options.commandEnv } : {}),
+    ...(options.commandEnvAllowlist
+      ? { commandEnvAllowlist: options.commandEnvAllowlist }
+      : {}),
+    ...(options.sourceBucketAllowlist
+      ? { sourceBucketAllowlist: options.sourceBucketAllowlist }
+      : {}),
+  };
+}
+
 async function runReleaseActivationChild(
   payload: ReleaseActivationPayload,
   options: RunReleaseOptions,
@@ -961,7 +1376,7 @@ async function runReleaseActivationChild(
     ...runModeArgs(options),
   ];
   const child = spawn(process.execPath, args, {
-    env: process.env,
+    env: releaseActivatorChildEnv(process.env),
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "";
@@ -1042,10 +1457,31 @@ function runModeArgs(options: RunReleaseOptions): string[] {
   return args;
 }
 
-function releaseActivationJobId(payload: ReleaseActivationPayload): string {
+export function releaseActivatorChildEnv(
+  env: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
+  const childEnv: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (
+      typeof value === "string" &&
+      name !== LEGACY_RELEASE_ACTIVATOR_TOKEN_ENV &&
+      name !== RELEASE_ACTIVATOR_TOKEN_FILE_ENV
+    ) {
+      childEnv[name] = value;
+    }
+  }
+  return childEnv;
+}
+
+function releaseActivationJobId(
+  payload: ReleaseActivationPayload,
+  authorization: ReleaseActivatorIdentity,
+): string {
   const digest = createHash("sha256")
     .update(
       JSON.stringify({
+        tokenLabel: authorization.tokenLabel,
+        principal: authorization.principal,
         applyRunId: payload.applyRunId,
         stateVersionId: payload.stateVersion.id,
         archiveDigest: payload.sourceSnapshot.archiveDigest,
@@ -1054,6 +1490,13 @@ function releaseActivationJobId(payload: ReleaseActivationPayload): string {
     )
     .digest("hex");
   return `rel_${digest.slice(0, 32)}`;
+}
+
+function releaseActivationJobKey(
+  authorization: ReleaseActivatorIdentity,
+  jobId: string,
+): string {
+  return `${authorization.tokenLabel}\0${authorization.principal}\0${jobId}`;
 }
 
 function jobResponse(
@@ -1081,6 +1524,8 @@ function jobResponse(
       ...(base.metadata ?? {}),
       jobId: job.id,
       jobStatus: job.status,
+      tokenLabel: job.authorization.tokenLabel,
+      principal: job.authorization.principal,
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
     },

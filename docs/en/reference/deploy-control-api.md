@@ -325,6 +325,19 @@ Project / Capsule / StateVersion / Output claims. This payload is an
 operator-controlled bridge contract, not a customer API surface. It must return
 one of:
 
+When production, staging, or other Workers share the same stable activator
+endpoint, the operator-side `operator:release-activator` reads independent
+`label` / `principal` / bearer entries from a repository-external mode `0600`
+`takosumi.operator.release-activator-tokens@v1` file. Tokens never enter argv,
+logs, job responses, or activation-child env. Authentication compares fixed
+SHA-256 digests in constant time, and both job ids and storage keys are scoped
+to the authenticated label/principal. Another valid token receives `404` for
+that job; posting the same payload under another principal creates a separate
+job. The previous single `TAKOSUMI_RELEASE_ACTIVATOR_TOKEN` input remains a
+legacy-principal compatibility path and cannot be combined with the file. The
+non-public operator runbook `docs/operations/release-artifacts.md` defines the
+exact file and validation procedure.
+
 ```json
 { "status": "skipped" }
 { "status": "pending", "message": "queued" }
