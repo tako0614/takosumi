@@ -910,6 +910,7 @@ export interface TakosumiOperations {
       | {
           readonly resource: ResourceObject;
           readonly resourceGeneration: number;
+          readonly resourceRevisionId: string;
           readonly nativeResources: readonly NativeResourceRef[];
         }
       | undefined
@@ -927,6 +928,7 @@ export interface TakosumiOperations {
         readonly resourceId: string;
         readonly resource: ResourceObject;
         readonly resourceGeneration: number;
+        readonly resourceRevisionId: string;
         readonly nativeResources: readonly NativeResourceRef[];
       }[];
       readonly nextCursor?: string;
@@ -2462,9 +2464,16 @@ export async function createTakosumiService(
                 recordAfter.phase === "Ready" &&
                 recordAfter.generation === recordBefore.generation &&
                 recordAfter.observedGeneration === recordBefore.generation &&
+                recordAfter.lastOperationRunId ===
+                  recordBefore.lastOperationRunId &&
                 recordAfter.updatedAt === recordBefore.updatedAt;
+              const resourceRevisionId = canonicalReadyResourceRevisionId(
+                recordBefore,
+                lockBefore,
+              );
               if (
                 !unchanged ||
+                !resourceRevisionId ||
                 !result.ok ||
                 result.value.status?.phase !== "Ready" ||
                 result.value.status.observedGeneration !==
@@ -2486,6 +2495,7 @@ export async function createTakosumiService(
               return structuredClone({
                 resource: result.value,
                 resourceGeneration: recordBefore.generation,
+                resourceRevisionId,
                 nativeResources: lockBefore.nativeResources ?? [],
               });
             },
@@ -2536,10 +2546,19 @@ export async function createTakosumiService(
                     currentAfter.generation === candidate.generation &&
                     currentBefore.observedGeneration === candidate.generation &&
                     currentAfter.observedGeneration === candidate.generation &&
+                    currentBefore.lastOperationRunId ===
+                      candidate.lastOperationRunId &&
+                    currentAfter.lastOperationRunId ===
+                      candidate.lastOperationRunId &&
                     currentBefore.updatedAt === candidate.updatedAt &&
                     currentAfter.updatedAt === candidate.updatedAt;
+                  const resourceRevisionId = canonicalReadyResourceRevisionId(
+                    currentBefore,
+                    lockBefore,
+                  );
                   if (
                     !unchanged ||
+                    !resourceRevisionId ||
                     !projected.ok ||
                     projected.value.status?.phase !== "Ready" ||
                     projected.value.status.observedGeneration !==
@@ -2563,6 +2582,7 @@ export async function createTakosumiService(
                     resourceId: candidate.id,
                     resource: projected.value,
                     resourceGeneration: candidate.generation,
+                    resourceRevisionId,
                     nativeResources: lockBefore.nativeResources ?? [],
                   });
                 }),
@@ -2814,6 +2834,35 @@ function serviceMetricTags(
 function normalizedMetricTag(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+function canonicalReadyResourceRevisionId(
+  record: ResourceShapeRecord | undefined,
+  lock:
+    | {
+        readonly implementationSnapshot?: {
+          readonly plugin?: string;
+        };
+        readonly selectedImplementationPlugin?: string;
+      }
+    | undefined,
+): string | undefined {
+  if (!record || !lock) return undefined;
+  let candidate: string | undefined;
+  if (
+    lock.implementationSnapshot?.plugin ||
+    lock.selectedImplementationPlugin
+  ) {
+    candidate = record.lastOperationRunId;
+  } else {
+    candidate = record.lastOperationRunId ?? record.execution?.runId;
+  }
+  return candidate &&
+    candidate.trim() === candidate &&
+    candidate.length <= 256 &&
+    !/[\u0000-\u001f\u007f]/.test(candidate)
+    ? candidate
+    : undefined;
 }
 
 function processRoleFromRuntimeConfig(

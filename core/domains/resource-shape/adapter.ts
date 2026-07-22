@@ -33,6 +33,11 @@ export interface ResolvedResourceConnection {
   readonly resourceId: string;
   /** Exact Ready incarnation observed while resolving this dependency. */
   readonly resourceGeneration: number;
+  /**
+   * Canonical direct-plugin backend revision. This is the Run id that last
+   * changed the referenced Resource's desired backend lifecycle.
+   */
+  readonly resourceRevisionId?: string;
   readonly kind: ResourceShapeKind;
   /** Exact owning Form for replay-safe Resource connection evidence. */
   readonly form?: InstalledFormReference;
@@ -53,6 +58,16 @@ export interface AdapterApplyInput {
    * authority when a runtime can outlive request authorization.
    */
   readonly resourceGeneration: number;
+  /**
+   * Canonical Run id for the direct-plugin backend revision authorized by
+   * this operation. It is optional only for preview and module execution.
+   */
+  readonly resourceRevisionId?: string;
+  /**
+   * Prior canonical direct-plugin backend revision being superseded by this
+   * apply/import. Absent for a newly created or newly imported Resource.
+   */
+  readonly previousResourceRevisionId?: string;
   /** Exact immutable Form selected by the Resource/ResolutionLock pair. */
   readonly form?: InstalledFormReference;
   /**
@@ -176,6 +191,8 @@ export interface AdapterDeleteInput {
   readonly resourceId: string;
   /** Exact canonical Resource generation being retired. */
   readonly resourceGeneration: number;
+  /** Canonical direct-plugin backend revision being retired. */
+  readonly resourceRevisionId?: string;
   /** Exact immutable Form selected by the Resource/ResolutionLock pair. */
   readonly form?: InstalledFormReference;
   /**

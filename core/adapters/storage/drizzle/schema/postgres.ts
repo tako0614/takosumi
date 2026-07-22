@@ -594,6 +594,8 @@ export const resourceShapes = pgTable(
     labelsJson: json("labels_json"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
+    lastOperationRunId: text("last_operation_run_id"),
+    pendingOperationJson: json("pending_operation_json"),
     observationLeaseId: text("observation_lease_id"),
     observationClaimedAt: text("observation_claimed_at"),
     lastObservationAttemptAt: text("last_observation_attempt_at"),

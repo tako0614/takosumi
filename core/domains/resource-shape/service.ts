@@ -254,6 +254,8 @@ export interface ResourceShapeServiceDeps {
     | "listRecoverableResourceOperationRuns"
     | "putArtifactRecord"
   >;
+  /** Fresh entropy for direct-plugin apply/import Resource incarnations. */
+  readonly newOperationNonce?: () => string;
   /** Explicit operator module catalog for `moduleTemplate` descriptors. */
   readonly moduleRegistry?: ResourceShapeModuleRegistry;
   /** Explicit schemas for operator-defined Resource Shape tokens. */
@@ -358,6 +360,7 @@ export class ResourceShapeService {
   readonly #requiredFormInterfaceAdmission: ResourceShapeServiceDeps["requiredFormInterfaceAdmission"];
   readonly #activity: ActivityLedger | undefined;
   readonly #operationRuns: ResourceShapeServiceDeps["operationRuns"];
+  readonly #newOperationNonce: () => string;
   readonly #deploymentAdmission: ResourceDeploymentAdmission;
   #lifecycleObserver: ResourceShapeLifecycleObserver | undefined;
 
@@ -369,6 +372,8 @@ export class ResourceShapeService {
     this.#lifecycleObserver = deps.lifecycleObserver;
     this.#activity = deps.activity;
     this.#operationRuns = deps.operationRuns;
+    this.#newOperationNonce =
+      deps.newOperationNonce ?? (() => crypto.randomUUID());
     this.#deploymentAdmission =
       deps.deploymentAdmission ?? NOOP_RESOURCE_DEPLOYMENT_ADMISSION;
     this.#moduleRegistry =
@@ -479,7 +484,12 @@ export class ResourceShapeService {
         const finalized =
           candidate.resourceOperation === "delete"
             ? resource === undefined
-            : resource?.lastOperationRunId === candidate.id;
+            : candidate.resourceOperation === "observe"
+              ? true
+              : candidate.resourceOperation === "refresh"
+                ? resource?.phase === "Ready" &&
+                  resource.pendingOperation?.runId !== candidate.id
+                : resource?.lastOperationRunId === candidate.id;
         if (!finalized) {
           pending += 1;
           continue;
@@ -791,6 +801,9 @@ export class ResourceShapeService {
     const adapterInput = {
       resourceId: output.resolutionLock.resourceId,
       resourceGeneration: (existing?.generation ?? 0) + 1,
+      ...(existing?.lastOperationRunId
+        ? { resourceRevisionId: existing.lastOperationRunId }
+        : {}),
       ...(form.value === undefined ? {} : { form: form.value }),
       environment: req.environment ?? existing?.environment ?? "default",
       stateGeneration:
@@ -1063,6 +1076,19 @@ export class ResourceShapeService {
     const generation = recoveringApplying
       ? existing.generation
       : (existing?.generation ?? 0) + 1;
+    if (
+      output.selectedImplementationDescriptor.plugin &&
+      existing?.phase === "Ready" &&
+      !existing.lastOperationRunId
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "apply_failed",
+          message: `resource ${id} has no canonical direct-plugin backend revision`,
+        },
+      };
+    }
     let operationRun: ResourceOperationRun | undefined;
     let operationRunCreated = false;
     if (output.selectedImplementationDescriptor.plugin) {
@@ -1094,6 +1120,9 @@ export class ResourceShapeService {
             actor: req.actor,
             ...(form.value === undefined ? {} : { form: form.value }),
             identity: {
+              incarnationNonce: validatedOperationNonce(
+                this.#newOperationNonce(),
+              ),
               generation,
               managedBy: incomingManagedBy,
               planDigest: evidence.planDigest,
@@ -1333,6 +1362,10 @@ export class ResourceShapeService {
       const adapterInput = {
         resourceId: id,
         resourceGeneration: generation,
+        ...(operationRun ? { resourceRevisionId: operationRun.id } : {}),
+        ...(existing?.lastOperationRunId
+          ? { previousResourceRevisionId: existing.lastOperationRunId }
+          : {}),
         ...(form.value === undefined ? {} : { form: form.value }),
         ...(operationRun
           ? { operationKey: operationRun.resourceOperationKey }
@@ -1926,18 +1959,46 @@ export class ResourceShapeService {
     let operationRun: ResourceOperationRun | undefined;
     if (output.selectedImplementationDescriptor.plugin) {
       try {
-        operationRun = await this.#beginPluginOperationRun({
-          operation: "import",
-          resourceId: id,
-          actor: req.actor,
-          ...(form.value === undefined ? {} : { form: form.value }),
-          identity: {
-            importRequestDigest,
-            resolutionFingerprint:
-              output.resolutionLock.implementationFingerprint ??
-              output.selectedImplementation,
-          },
-        });
+        if (recoveringImport) {
+          const pendingOperation = existing?.pendingOperation;
+          if (
+            !this.#operationRuns ||
+            pendingOperation?.operation !== "import"
+          ) {
+            throw new Error(
+              `resource ${id} has no canonical import Run for recovery`,
+            );
+          }
+          operationRun = await this.#operationRuns.getResourceOperationRun(
+            pendingOperation.runId,
+          );
+          if (
+            !operationRun ||
+            operationRun.resourceOperation !== "import" ||
+            operationRun.resourceOperationKey !== pendingOperation.operationKey
+          ) {
+            throw new Error(
+              `resource ${id} canonical import Run is missing or mismatched`,
+            );
+          }
+          assertResourceOperationFormEvidence(operationRun, form.value);
+        } else {
+          operationRun = await this.#beginPluginOperationRun({
+            operation: "import",
+            resourceId: id,
+            actor: req.actor,
+            ...(form.value === undefined ? {} : { form: form.value }),
+            identity: {
+              incarnationNonce: validatedOperationNonce(
+                this.#newOperationNonce(),
+              ),
+              importRequestDigest,
+              resolutionFingerprint:
+                output.resolutionLock.implementationFingerprint ??
+                output.selectedImplementation,
+            },
+          });
+        }
         if (
           existing?.pendingOperation &&
           (existing.pendingOperation.runId !== operationRun.id ||
@@ -2057,6 +2118,10 @@ export class ResourceShapeService {
         result = await this.#adapter.importResource({
           resourceId: id,
           resourceGeneration: 1,
+          ...(operationRun ? { resourceRevisionId: operationRun.id } : {}),
+          ...(existing?.lastOperationRunId
+            ? { previousResourceRevisionId: existing.lastOperationRunId }
+            : {}),
           ...(form.value === undefined ? {} : { form: form.value }),
           ...(operationRun
             ? { operationKey: operationRun.resourceOperationKey }
@@ -2519,6 +2584,16 @@ export class ResourceShapeService {
     );
     if (!resolvedConnections.ok) return resolvedConnections;
 
+    if (implementation.plugin && !record.lastOperationRunId) {
+      return {
+        ok: false,
+        error: {
+          code: "observe_failed",
+          message: `resource ${id} has no canonical direct-plugin backend revision`,
+        },
+      };
+    }
+
     let operationRun: ResourceOperationRun | undefined;
     if (implementation.plugin) {
       try {
@@ -2578,6 +2653,9 @@ export class ResourceShapeService {
         observation = await this.#adapter.observe({
           resourceId: id,
           resourceGeneration: record.generation,
+          ...(record.lastOperationRunId
+            ? { resourceRevisionId: record.lastOperationRunId }
+            : {}),
           ...(record.form === undefined ? {} : { form: record.form }),
           ...(operationRun
             ? { operationKey: operationRun.resourceOperationKey }
@@ -2702,7 +2780,6 @@ export class ResourceShapeService {
         observation.status,
         observation.summary,
       ),
-      ...(operationRun ? { lastOperationRunId: operationRun.id } : {}),
       updatedAt: observedAt,
     };
     const persisted = await this.#stores.resources.compareAndSet(
@@ -2940,6 +3017,16 @@ export class ResourceShapeService {
     );
     if (!resolvedConnections.ok) return resolvedConnections;
 
+    if (implementation.plugin && !record.lastOperationRunId) {
+      return {
+        ok: false,
+        error: {
+          code: "refresh_failed",
+          message: `resource ${id} has no canonical direct-plugin backend revision`,
+        },
+      };
+    }
+
     let operationRun: ResourceOperationRun | undefined;
     if (implementation.plugin) {
       try {
@@ -3066,7 +3153,6 @@ export class ResourceShapeService {
             phase: "Failed",
             outputs: record.outputs,
             execution: record.execution,
-            ...(operationRun ? { lastOperationRunId: operationRun.id } : {}),
             conditions: refreshFailedConditions(
               record.conditions,
               record.generation,
@@ -3141,6 +3227,9 @@ export class ResourceShapeService {
         result = await this.#adapter.refresh({
           resourceId: id,
           resourceGeneration: record.generation,
+          ...(record.lastOperationRunId
+            ? { resourceRevisionId: record.lastOperationRunId }
+            : {}),
           ...(record.form === undefined ? {} : { form: record.form }),
           ...(operationRun
             ? { operationKey: operationRun.resourceOperationKey }
@@ -3222,7 +3311,6 @@ export class ResourceShapeService {
         record.generation,
         refreshedAt,
       ),
-      ...(operationRun ? { lastOperationRunId: operationRun.id } : {}),
       updatedAt: refreshedAt,
     };
     const refreshedLock: ResolutionLockRecord = {
@@ -3699,6 +3787,16 @@ export class ResourceShapeService {
     );
     if (!resolvedConnections.ok) return resolvedConnections;
 
+    if (implementation.plugin && !record.lastOperationRunId) {
+      return {
+        ok: false,
+        error: {
+          code: "delete_blocked",
+          message: `resource ${id} has no canonical direct-plugin backend revision`,
+        },
+      };
+    }
+
     let operationRun: ResourceOperationRun | undefined;
     if (implementation.plugin) {
       try {
@@ -3833,6 +3931,9 @@ export class ResourceShapeService {
           const observation = await this.#adapter.observe({
             resourceId: id,
             resourceGeneration: claimedRecord.generation,
+            ...(record.lastOperationRunId
+              ? { resourceRevisionId: record.lastOperationRunId }
+              : {}),
             ...(record.form === undefined ? {} : { form: record.form }),
             operationKey: operationRun.resourceOperationKey,
             environment: claimedRecord.environment ?? "default",
@@ -3873,6 +3974,9 @@ export class ResourceShapeService {
               this.#adapter.delete({
                 resourceId: id,
                 resourceGeneration: claimedRecord.generation,
+                ...(record.lastOperationRunId
+                  ? { resourceRevisionId: record.lastOperationRunId }
+                  : {}),
                 ...(record.form === undefined ? {} : { form: record.form }),
                 operationKey: operationRun.resourceOperationKey,
                 environment: claimedRecord.environment ?? "default",
@@ -3910,6 +4014,9 @@ export class ResourceShapeService {
             this.#adapter.delete({
               resourceId: id,
               resourceGeneration: claimedRecord.generation,
+              ...(record.lastOperationRunId
+                ? { resourceRevisionId: record.lastOperationRunId }
+                : {}),
               ...(record.form === undefined ? {} : { form: record.form }),
               ...(operationRun
                 ? { operationKey: operationRun.resourceOperationKey }
@@ -5004,9 +5111,25 @@ export class ResourceShapeService {
           },
         };
       }
+      if (
+        (lock.implementationSnapshot?.plugin ||
+          lock.selectedImplementationPlugin) &&
+        !resource.lastOperationRunId
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "connection_not_ready",
+            message: `spec.connections.${name}.resource has no canonical direct-plugin backend revision`,
+          },
+        };
+      }
       resolved[name] = {
         resourceId: resource.id,
         resourceGeneration: resource.generation,
+        ...(resource.lastOperationRunId
+          ? { resourceRevisionId: resource.lastOperationRunId }
+          : {}),
         kind: resource.kind,
         ...(resource.form === undefined ? {} : { form: resource.form }),
         permissions: connection.permissions,
@@ -5363,6 +5486,20 @@ export class ResourceShapeService {
 }
 
 // --- helpers (module-level, pure) ---------------------------------------------
+
+function validatedOperationNonce(value: string): string {
+  if (
+    value.trim() !== value ||
+    value === "" ||
+    value.length > 256 ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new Error(
+      "direct Resource operation nonce must be a non-empty printable string no longer than 256 characters",
+    );
+  }
+  return value;
+}
 
 /**
  * Portable literal/output mappings are the only Interface input sources Core

@@ -26,6 +26,7 @@ function resourceEvidence(
       },
     },
     resourceGeneration: 1,
+    resourceRevisionId: "run_resource_revision_1",
     nativeResources: [{ type: "bucket", id: "native-assets" }],
   };
 }

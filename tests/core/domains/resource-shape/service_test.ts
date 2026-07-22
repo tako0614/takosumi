@@ -44,6 +44,9 @@ import {
   type ResourceOperationRun,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
+import { createD1ResourceShapeStores } from "../../../../core/domains/resource-shape/d1_stores.ts";
+import { ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 class ResourceShapeService extends CoreResourceShapeService {
   constructor(deps: ResourceShapeServiceDeps) {
@@ -1124,8 +1127,11 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
     planDigest: preview.value.planDigest,
   });
   expect(applied.ok).toBe(true);
+  const appliedRevision = (await stores.resources.get(id))?.lastOperationRunId;
+  expect(appliedRevision).toBeDefined();
   expect(adapter.applyInputs[0]).toMatchObject({
     resourceGeneration: 1,
+    resourceRevisionId: appliedRevision,
     form: EXACT_CONTAINER_FORM,
     nativeResources: [{ form: EXACT_CONTAINER_FORM }],
   });
@@ -1148,14 +1154,19 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
   ).toBe(true);
   expect(adapter.observeInputs.at(-1)).toMatchObject({
     resourceGeneration: 1,
+    resourceRevisionId: appliedRevision,
     form: EXACT_CONTAINER_FORM,
     nativeResources: [{ form: EXACT_CONTAINER_FORM }],
   });
   expect(adapter.refreshInputs.at(-1)).toMatchObject({
     resourceGeneration: 1,
+    resourceRevisionId: appliedRevision,
     form: EXACT_CONTAINER_FORM,
     nativeResources: [{ form: EXACT_CONTAINER_FORM }],
   });
+  expect((await stores.resources.get(id))?.lastOperationRunId).toBe(
+    appliedRevision,
+  );
 
   const imported = await service.importResource({
     ...request,
@@ -1169,6 +1180,10 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
   expect(imported.ok).toBe(true);
   expect(adapter.importInputs.at(-1)).toMatchObject({
     resourceGeneration: 1,
+    resourceRevisionId:
+      imported.ok && imported.value.import.runId
+        ? imported.value.import.runId
+        : undefined,
     form: EXACT_CONTAINER_FORM,
     nativeResources: [{ form: EXACT_CONTAINER_FORM }],
   });
@@ -1207,6 +1222,7 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
   ).toBe(true);
   expect(adapter.deleteInputs.at(-1)).toMatchObject({
     resourceGeneration: 1,
+    resourceRevisionId: appliedRevision,
     form: EXACT_CONTAINER_FORM,
     nativeResources: [{ form: EXACT_CONTAINER_FORM }],
   });
@@ -1220,6 +1236,67 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
   expect(internalDeleteRun?.resourceOperationResult?.resourceForm).toEqual(
     EXACT_CONTAINER_FORM,
   );
+});
+
+test("direct-plugin delete and recreate mints a fresh backend revision even when generation resets", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const ledger = new InMemoryOpenTofuControlStore();
+  const nonces = ["first-incarnation", "second-incarnation"];
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    operationRuns: ledger,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    newOperationNonce: () => nonces.shift() ?? "unexpected-incarnation",
+    now: () => NOW,
+  });
+  await seed(service);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-recreated",
+    spec: {
+      name: "agent-recreated",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+  const id = "tkrn:space_1:ContainerService:agent-recreated";
+
+  expect((await reviewedApply(service, request)).ok).toBe(true);
+  const first = await stores.resources.get(id);
+  expect(first?.generation).toBe(1);
+  expect(first?.lastOperationRunId).toBeDefined();
+  expect(adapter.applyInputs[0]?.resourceRevisionId).toBe(
+    first?.lastOperationRunId,
+  );
+  expect(adapter.applyInputs[0]?.previousResourceRevisionId).toBeUndefined();
+
+  expect(
+    (
+      await service.delete(
+        "space_1",
+        "ContainerService",
+        "agent-recreated",
+        ACTOR,
+      )
+    ).ok,
+  ).toBe(true);
+  expect(adapter.deleteInputs[0]?.resourceRevisionId).toBe(
+    first?.lastOperationRunId,
+  );
+  expect(await stores.resources.get(id)).toBeUndefined();
+
+  expect((await reviewedApply(service, request)).ok).toBe(true);
+  const recreated = await stores.resources.get(id);
+  expect(recreated?.generation).toBe(1);
+  expect(recreated?.lastOperationRunId).toBeDefined();
+  expect(recreated?.lastOperationRunId).not.toBe(first?.lastOperationRunId);
+  expect(adapter.applyInputs[1]?.resourceRevisionId).toBe(
+    recreated?.lastOperationRunId,
+  );
+  expect(adapter.applyInputs[1]?.previousResourceRevisionId).toBeUndefined();
 });
 
 test("exact direct-plugin preview rejects adapter NativeResource Form substitution", async () => {
@@ -3041,11 +3118,16 @@ test("portable service shapes resolve, apply, and carry Schedule connections", a
   };
   const preview = await service.preview(scheduleRequest);
   expect(preview.ok).toBe(true);
+  const workflowRevision = (
+    await stores.resources.get("tkrn:space_1:DurableWorkflow:ingest")
+  )?.lastOperationRunId;
+  expect(workflowRevision).toBeDefined();
   expect(
     adapter.previewInputs.at(-1)?.resolvedConnections?.workflow,
   ).toMatchObject({
     resourceId: "tkrn:space_1:DurableWorkflow:ingest",
     resourceGeneration: 1,
+    resourceRevisionId: workflowRevision,
     kind: "DurableWorkflow",
     permissions: ["invoke"],
     projection: "schedule_trigger",
@@ -3952,6 +4034,75 @@ test("direct-plugin apply response loss observes current and never creates a dup
   expect(run?.status).toBe("succeeded");
 });
 
+test("direct-plugin apply recovery retains its exact pending Run across a D1-backed restart", async () => {
+  const database = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(database);
+  const stores = createD1ResourceShapeStores(database);
+  const ledger = new InMemoryOpenTofuControlStore();
+  const backend: StableApplyBackend = {
+    exists: false,
+    creations: 0,
+    operationKeys: [],
+  };
+  const firstAdapter = new LostApplyResponseAdapter(backend, false);
+  const first = new ResourceShapeService({
+    stores,
+    adapter: firstAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    newOperationNonce: () => "durable-incarnation",
+    now: () => NOW,
+  });
+  await seed(first);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-d1-recovery",
+    spec: {
+      name: "agent-d1-recovery",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+
+  const pending = await reviewedApply(first, request);
+  expect(pending.ok).toBe(false);
+  const id = "tkrn:space_1:ContainerService:agent-d1-recovery";
+  const applying = await stores.resources.get(id);
+  expect(applying?.phase).toBe("Applying");
+  expect(applying?.pendingOperation).toMatchObject({
+    operation: "apply",
+    runId: firstAdapter.applyInputs[0]?.resourceRevisionId,
+  });
+
+  const recoveryAdapter = new StableNameApplyRecoveryAdapter(backend);
+  const restarted = new ResourceShapeService({
+    stores: createD1ResourceShapeStores(database),
+    adapter: recoveryAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
+    newOperationNonce: () => {
+      throw new Error("recovery must not mint a new incarnation");
+    },
+    now: () => NOW,
+  });
+  const preview = await restarted.preview(request);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) throw new Error(preview.error.message);
+  const recovered = await restarted.recoverApply(request, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(recovered.ok).toBe(true);
+  expect(recoveryAdapter.observeInputs).toHaveLength(1);
+  expect(recoveryAdapter.applyInputs).toHaveLength(1);
+  expect(recoveryAdapter.applyInputs[0]?.resourceRevisionId).toBe(
+    applying?.pendingOperation?.runId,
+  );
+  expect((await stores.resources.get(id))?.lastOperationRunId).toBe(
+    applying?.pendingOperation?.runId,
+  );
+});
+
 test("direct-plugin apply recovery pins adapter ownership to the original Run across actors", async () => {
   const stores = createInMemoryResourceShapeStores();
   const ledger = new InMemoryOpenTofuControlStore();
@@ -4035,6 +4186,12 @@ test("direct-plugin apply recovery pins adapter ownership to the original Run ac
   ]);
   expect(backend.exists).toBe(true);
   expect(backend.creations).toBe(1);
+  const previousRevision = (
+    await stores.resources.get(
+      "tkrn:space_1:ContainerService:agent-missing-after-loss",
+    )
+  )?.lastOperationRunId;
+  expect(previousRevision).toBeDefined();
 
   const updateAdapter = new PluginSpyAdapter();
   const updater = new ResourceShapeService({
@@ -4054,6 +4211,12 @@ test("direct-plugin apply recovery pins adapter ownership to the original Run ac
   expect(updated.ok).toBe(true);
   expect(updateAdapter.applyInputs).toHaveLength(1);
   expect(updateAdapter.applyInputs[0]?.actor).toEqual(RECOVERY_ACTOR);
+  expect(updateAdapter.applyInputs[0]?.previousResourceRevisionId).toBe(
+    previousRevision,
+  );
+  expect(updateAdapter.applyInputs[0]?.resourceRevisionId).not.toBe(
+    previousRevision,
+  );
   expect(updateAdapter.applyInputs[0]?.operationKey).not.toBe(
     firstAdapter.applyInputs[0]?.operationKey,
   );
@@ -4199,6 +4362,8 @@ test("direct-plugin refresh atomically recovers Resource and ResolutionLock afte
   };
   expect((await reviewedApply(first, request)).ok).toBe(true);
   const id = "tkrn:space_1:ContainerService:agent-refresh-recovery";
+  const initialRevision = (await stores.resources.get(id))?.lastOperationRunId;
+  expect(initialRevision).toBeDefined();
   const stableLock = await stores.locks.get(id);
   expect(stableLock).toBeDefined();
 
@@ -4242,10 +4407,15 @@ test("direct-plugin refresh atomically recovers Resource and ResolutionLock afte
   const ready = await stores.resources.get(id);
   const finalLock = await stores.locks.get(id);
   expect(ready?.phase).toBe("Ready");
+  expect(ready?.lastOperationRunId).toBe(initialRevision);
   expect(finalLock?.nativeResources).toEqual(stableLock?.nativeResources);
-  const run = await ledger.getResourceOperationRun(
-    ready?.lastOperationRunId ?? "missing",
+  const refreshRun = (await ledger.listRunsByWorkspace("space_1")).find(
+    (run) =>
+      "resourceOperation" in run &&
+      run.resourceOperation === "refresh" &&
+      run.subject.id === id,
   );
+  const run = await ledger.getResourceOperationRun(refreshRun?.id ?? "missing");
   expect(run?.resourceOperation).toBe("refresh");
   expect(run?.status).toBe("succeeded");
 });
