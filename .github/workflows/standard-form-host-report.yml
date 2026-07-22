@@ -157,7 +157,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
-          [[ "${ARTIFACT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${ARTIFACT_DIGEST}" =~ ^[0-9a-f]{64}$ ]]
           {
             echo "### Standard Form host-report candidate"
             echo ""
@@ -166,6 +166,6 @@ jobs:
             echo "- Takosumi source: \`${GITHUB_SHA}\`"
             echo "- Takoform source: \`${{ inputs.takoform_commit }}\`"
             echo "- artifact id: \`${ARTIFACT_ID}\`"
-            echo "- artifact digest: \`${ARTIFACT_DIGEST}\`"
+            echo "- artifact digest: \`sha256:${ARTIFACT_DIGEST}\`"
             echo "- publication or production mutation: none"
           } >> "${GITHUB_STEP_SUMMARY}"
