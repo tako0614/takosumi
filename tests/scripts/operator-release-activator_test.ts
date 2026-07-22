@@ -21,9 +21,9 @@ import {
   runReleaseActivation,
 } from "../../scripts/operator-release-activator.ts";
 
-const LEGACY_ACTIVATOR_TOKEN = "legacy_5ybGqZ1Hfx8nVc4Mt2Kr9Pw7Ld3Sj6Ua";
-const PRODUCTION_ACTIVATOR_TOKEN = "production_7mQ2xK9cV4pL8sD1fH6jN3rT5wY0bGz";
-const STAGING_ACTIVATOR_TOKEN = "staging_4vN8kR2mX7cP1sL6hD9qT3yF5wJ0bGa";
+const LEGACY_ACTIVATOR_TOKEN = "legacy_5ybGqZ1Hfx8nVc4Mt2Kr9Pw7Ld3Sj6Ua"; // fixture
+const PRODUCTION_ACTIVATOR_TOKEN = "production_7mQ2xK9cV4pL8sD1fH6jN3rT5wY0bGz"; // fixture
+const STAGING_ACTIVATOR_TOKEN = "staging_4vN8kR2mX7cP1sL6hD9qT3yF5wJ0bGa"; // fixture
 
 test("operator release activator help exits successfully", () => {
   const result = spawnSync(
