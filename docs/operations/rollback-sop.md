@@ -113,21 +113,25 @@ bun run capture:takosumi-runner-profile-migration-evidence -- \
   --source-runner-profile-id <source-profile-id> \
   --target-runner-profile-id <canary-profile-id> \
   --source-commit <40-or-64-hex-commit> \
-  --oidc-client-id <scratch-oidc-client-id> \
-  --domain-name <scratch-domain> \
-  --data-namespace <scratch-data-namespace> \
-  --interface-binding-digest <sha256-digest> \
   --readiness-endpoint <scratch-https-readiness-url> \
   --out-file <absolute-operator-private-evidence-file> \
-  --operation-drill-file <absolute-operator-private-operation-drill-file>
+  [--operation-drill-file <absolute-operator-private-staging-operation-drill-file>]
 ```
 
 collector は target profile で plan/apply し、retained StateVersion から source
-profile へ rollback plan/apply した後、Capsule の current StateVersion と readiness
-を再確認します。production target、同一 profile、Capsule/StateVersion ownership
-不一致、Run の profile 不一致、非成功 Run、readiness failure はすべて evidence を
-書かず fail closed します。token、raw log、provider/account identifier は evidence
-へ転記しません。
+profile へ rollback plan/apply した後、各 phase の Capsule / StateVersion ownership・
+generation・apply Run provenance、公開 Output digest、readiness を再読します。production
+target、同一 profile、plan の source/profile 不一致、StateVersion/Output の lineage
+不一致、Output drift、非成功 Run、readiness failure はすべて evidence を書かず fail
+closed します。token、raw Output、raw log、provider/account identifier は evidence へ
+転記しません。
+
+この collector が直接証明するのは Run / StateVersion / Output / readiness の core drill
+だけです。OIDC client、domain 設定、data namespace、InterfaceBinding の continuity は
+caller が渡した文字列を証跡にせず、別の readback / conformance evidence が必要です。
+その 3 種類 (`continuity-evidence` / `domain-preservation` / `preserve-evidence`) が揃うまで
+readiness patch は `blocked` のままです。`--operation-drill-file` への merge は staging
+だけで許可し、fresh replica は immutable standalone evidence として保存します。
 
 ## Extension Readiness
 
