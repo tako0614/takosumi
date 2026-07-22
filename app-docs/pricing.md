@@ -1,21 +1,18 @@
 # Takosumi Cloud pricing
 
-Takosumi Cloud の有料課金は、固定月額のない税別 USD の従量課金です。
-Free と Pay as you go は同じサービスを利用でき、Resource 数は plan 特典ではなく
-共通の安全上限です。
+Takosumi Cloud は固定月額のない税別 USD の従量課金です。すべてのアカウントが
+同じ managed-service catalog を利用し、Resource 数は plan 特典ではなく共通の安全上限です。
 
 ## Billing options
 
-| Option        | 固定月額 | 毎月の managed usage grant | 課金         |
-| ------------- | -------: | -------------------------: | ------------ |
-| Free          |     `$0` |                    `$0.25` | 枠内のみ     |
-| Pay as you go |     `$0` |                       `$0` | 実利用分のみ |
+| Option        | 固定月額 | 定期 managed usage grant | 課金         |
+| ------------- | -------: | -----------------------: | ------------ |
+| Pay as you go |     `$0` |                     `$0` | 実利用分のみ |
 
-Free はカードや国情報を登録せず開始できます。grant は billing period ごとに
-付与され、現金化・翌月繰越はできません。Free は全サービスを選択できますが、
-active Resource は各 service kind 1個、active verified domain は1個までです。
-grant を使い切ると正の料金が発生する操作と runtime 利用を停止し、Resource は
-削除しません。Destroy は残高なしでも実行できます。休眠による自動削除はありません。
+owner はカードや国情報を登録せず Pay as you go を開始でき、最初に一度だけ
+`$0.25` の onboarding credit を受け取ります。credit は再付与・現金化されず、
+解約後にも復活しません。使い切ると正の料金が発生する操作と runtime 利用を停止し、
+Resource は削除しません。Destroy は残高なしでも実行でき、休眠による自動削除はありません。
 
 Pay as you go はカード、利用区分、請求先国を登録し、Takosumi Cloud の versioned
 PriceCatalog に記録された実利用分だけを請求します。固定月額や毎月の内包クレジットは
@@ -27,8 +24,7 @@ Provider Connection を使う外部 provider は grant の対象外で、その 
 
 ## Usage and Limits
 
-両方の option で同じ managed-service catalog を利用できます。Free の managed usage
-grant は、Takosumi Cloud が提供する resource と service の従量料金に先に充当されます。
+一度限りの onboarding credit は、Takosumi Cloud が提供する resource と service の従量料金に先に充当されます。
 利用量と請求は所有アカウントに集約し、Workspace / Resource 別の内訳も確認できます。
 
 Pay as you go の owner-account safety ceiling は total 250 Resources、Edge/Object/KV/Queue/

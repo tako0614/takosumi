@@ -44,7 +44,7 @@ without reading internal notes or operator runbooks.
 | product / edition boundary  | external Takosumi, Takosumi for Operator, and Takosumi Cloud definitions | design alternatives and unsettled roadmap notes       |
 | API / compatibility surface | endpoint, capability, auth, errors, supported/preview/unsupported        | handler wiring, closed repo paths, and private routes |
 | Resource Shape              | schema, lifecycle, state/import/drift behavior                           | adapter internals and private target inventory        |
-| Cloud pricing / billing     | customer prices, free tier, spend guard, auto charge behavior            | price IDs, cost tables, margin guards, reconciliation |
+| Cloud pricing / billing     | customer prices, onboarding credit, spend guard, auto charge behavior    | price IDs, cost tables, margin guards, reconciliation |
 | security / secret handling  | no secret redisplay, log redaction, run-scoped injection                 | secret file paths, vault paths, and operator tokens   |
 
 Published pages must not link to `docs/internal/` or `docs/operations/` as a
@@ -105,7 +105,7 @@ Published pricing pages live in the hosted Cloud docs at
 
 ```text
 customer pays
-free tier
+onboarding credit
 usage prices
 spend guard behavior
 auto charge behavior

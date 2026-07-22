@@ -1,22 +1,20 @@
 # Takosumi Cloud pricing
 
-Takosumi Cloud paid billing is tax-exclusive USD pay-as-you-go with no fixed
-monthly charge. Free and Pay as you go can use the same managed-service catalog;
-Resource counts are common safety ceilings, not plan features.
+Takosumi Cloud billing is tax-exclusive USD pay-as-you-go with no fixed monthly
+charge. Every account uses the same managed-service catalog; Resource counts
+are common safety ceilings, not plan features.
 
 ## Billing options
 
-| Option        | Fixed monthly charge | Monthly managed-usage grant | Billing           |
-| ------------- | -------------------: | --------------------------: | ----------------- |
-| Free          |                 `$0` |                     `$0.25` | Grant only        |
-| Pay as you go |                 `$0` |                        `$0` | Actual usage only |
+| Option        | Fixed monthly charge | Recurring managed-usage grant | Billing           |
+| ------------- | -------------------: | ----------------------------: | ----------------- |
+| Pay as you go |                 `$0` |                          `$0` | Actual usage only |
 
-Free starts without a card or declared country. The grant is issued per billing
-period, cannot be redeemed for cash, and does not roll over. Free can select
-every service, with one active Resource per service kind and one active verified
-domain. Positive-priced operations and runtime usage pause when the grant is
-exhausted; Resources are not deleted, destroy remains available, and there is no
-automatic inactivity deletion.
+An owner starts on Pay as you go without a card or declared country and receives
+one `$0.25` onboarding credit. The credit is not renewed, cannot be redeemed for
+cash, and is not reissued after cancellation. Positive-priced operations and
+runtime usage pause when it is exhausted; Resources are not deleted, destroy
+remains available, and there is no automatic inactivity deletion.
 
 Pay as you go registers a card, customer type, and billing country, then bills
 only actual usage recorded against the versioned Takosumi Cloud PriceCatalog.
@@ -27,10 +25,9 @@ are billed directly by that provider and do not consume the grant.
 
 ## Usage and Limits
 
-Both options can use the same managed-service catalog. The Free managed-usage
-grant is applied first to metered Takosumi Cloud resources and services. Usage
-and billing are aggregated for the owner account while preserving Workspace and
-Resource attribution for the usage breakdown.
+The one-time onboarding credit is applied first to metered Takosumi Cloud
+resources and services. Usage and billing are aggregated for the owner account
+while preserving Workspace and Resource attribution for the usage breakdown.
 
 The Pay as you go owner-account safety ceiling is 250 total Resources; 100 each for
 Edge, Object, KV, Queue and Schedule; 50 each for Database, Workflow and

@@ -43,7 +43,7 @@
 | product / edition 境界      | Takosumi、Takosumi for Operator、Takosumi Cloud の外部定義       | 設計候補、迷った案、未確定ロードマップ              |
 | API / compatibility surface | endpoint、capability、認証、error、supported/preview/unsupported | handler の配線、closed repo path、private route     |
 | Resource Shape              | schema、lifecycle、state/import/drift の外部挙動                 | adapter 実装詳細、private target 一覧               |
-| Cloud pricing / billing     | 利用者価格、無料枠、spend guard、auto charge の挙動              | price id、原価表、margin guard、reconciliation 手順 |
+| Cloud pricing / billing     | 利用者価格、onboarding credit、spend guard、auto charge の挙動   | price id、原価表、margin guard、reconciliation 手順 |
 | security / secret 管理      | secret 非再表示、ログ秘匿、Run 限定注入                          | secret file path、vault path、operator token        |
 
 公開ドキュメントから `docs/internal/` や `docs/operations/` へ直接リンクして、仕様説明を
@@ -101,7 +101,7 @@ API / pricing / legal reference
 
 ```text
 customer pays
-free tier
+onboarding credit
 usage prices
 spend guard behavior
 auto charge behavior

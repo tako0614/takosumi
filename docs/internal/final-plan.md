@@ -2470,9 +2470,9 @@ All public plans expose the same managed-service catalog. Resource counts are
 technical safety ceilings, not plan features.
 
 ```text
-Free:          USD 0/month, USD 0.25 non-carrying monthly managed-usage grant;
-               positive-priced usage pauses when exhausted
-Pay as you go: USD 0/month + exact metered usage, no monthly managed-usage grant
+Pay as you go: USD 0/month + exact metered usage, no recurring managed-usage grant;
+               each owner receives one non-renewing USD 0.25 onboarding credit
+               and positive-priced usage pauses when it is exhausted
 ```
 
 Prices are tax-exclusive and Stripe automatic tax is enabled. Takosumi Cloud

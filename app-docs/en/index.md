@@ -150,13 +150,14 @@ unconfigured manager, or one green client does not establish GA.
 
 ## Billing and Spend Guard
 
-Takosumi Cloud uses a Free allowance or Pay as you go usage metering. Billable
+Takosumi Cloud uses one Pay as you go entitlement with a one-time onboarding
+credit. Billable
 operations are priced by the active Cloud PriceCatalog and stop before execution when
 the plan, limits, or payment state do not allow the operation. Cleanup and
 destroy operations remain available after a spend-guard block so users can
 remove resources instead of leaving them stranded.
 
-Public prices, free-tier terms, usage rates, and spend-guard behavior are
+Public prices, onboarding-credit terms, usage rates, and spend-guard behavior are
 documented in [Takosumi Cloud pricing](./pricing.md). Payment-provider
 synchronization, margin guards, and reconciliation implementation details are
 service operations rather than public contracts.
