@@ -264,6 +264,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly sourceId?: string;
   readonly sourceSyncRunId?: string;
   readonly sourceSnapshotId?: string;
+  readonly sourceSnapshotTransport?: SourceSnapshotTransportEvidence;
   readonly installConfigId?: string;
   readonly compatibilityReportId?: string;
   readonly capsuleId?: string;
@@ -320,6 +321,15 @@ export interface PlatformControlPlaneSmokeResult {
     readonly installConfigId?: string;
     readonly storeMetadataDigest?: string;
   };
+}
+
+export interface SourceSnapshotTransportEvidence {
+  readonly sourceSnapshotId: string;
+  readonly resolvedCommit: string;
+  readonly archiveRef: string;
+  readonly archiveDigest: string;
+  readonly archiveSizeBytes: number;
+  readonly fetchedByRunId: string;
 }
 
 interface CliArgs {
@@ -1150,6 +1160,7 @@ export async function runPlatformControlPlaneSmoke(
   let sourceId: string | undefined;
   let sourceSyncRunId: string | undefined;
   let sourceSnapshotId: string | undefined;
+  let sourceSnapshotTransport: SourceSnapshotTransportEvidence | undefined;
   let installConfigId: string | undefined;
   let compatibilityReportId: string | undefined;
   let capsuleId: string | undefined;
@@ -1212,6 +1223,7 @@ export async function runPlatformControlPlaneSmoke(
     sourceId = deploy.sourceId;
     sourceSyncRunId = deploy.sourceSyncRunId;
     sourceSnapshotId = deploy.sourceSnapshotId;
+    sourceSnapshotTransport = deploy.sourceSnapshotTransport;
     installConfigId = deploy.installConfigId;
     compatibilityReportId = deploy.compatibilityReportId;
     capsuleId = deploy.capsule.id;
@@ -1373,6 +1385,7 @@ export async function runPlatformControlPlaneSmoke(
       sourceId,
       sourceSyncRunId,
       sourceSnapshotId,
+      sourceSnapshotTransport,
       installConfigId,
       compatibilityReportId,
       capsuleId,
@@ -1500,6 +1513,7 @@ export async function runPlatformControlPlaneSmoke(
     sourceId,
     sourceSyncRunId,
     sourceSnapshotId,
+    sourceSnapshotTransport,
     installConfigId,
     compatibilityReportId,
     planRunId,
@@ -1538,6 +1552,7 @@ function failedResult(
     readonly sourceId?: string;
     readonly sourceSyncRunId?: string;
     readonly sourceSnapshotId?: string;
+    readonly sourceSnapshotTransport?: SourceSnapshotTransportEvidence;
     readonly installConfigId?: string;
     readonly compatibilityReportId?: string;
     readonly capsuleId?: string;
@@ -1593,6 +1608,7 @@ function failedResult(
     sourceId: input.sourceId,
     sourceSyncRunId: input.sourceSyncRunId,
     sourceSnapshotId: input.sourceSnapshotId,
+    sourceSnapshotTransport: input.sourceSnapshotTransport,
     installConfigId: input.installConfigId,
     compatibilityReportId: input.compatibilityReportId,
     capsuleId: input.capsuleId,
@@ -1947,6 +1963,7 @@ async function deployGitSourceCapsule(
     readonly sourceId: string;
     readonly sourceSyncRunId: string;
     readonly sourceSnapshotId: string;
+    readonly sourceSnapshotTransport: SourceSnapshotTransportEvidence;
     readonly installConfigId: string;
   }
 > {
@@ -1961,6 +1978,12 @@ async function deployGitSourceCapsule(
       `source sync run ${sourceSyncRun.id} succeeded without sourceSnapshotId`,
     );
   }
+  const sourceSnapshotTransport = await readSourceSnapshotTransport(
+    options,
+    source.id,
+    sourceSnapshotId,
+    sourceSyncRun.id,
+  );
   const installConfigId = await findSmokeCapsuleInstallConfigId(
     options,
     input.workspaceId,
@@ -2000,8 +2023,53 @@ async function deployGitSourceCapsule(
     sourceId: source.id,
     sourceSyncRunId: sourceSyncRun.id,
     sourceSnapshotId,
+    sourceSnapshotTransport,
     installConfigId,
     compatibilityReportId: compatibility.report.id,
+  };
+}
+
+async function readSourceSnapshotTransport(
+  options: PlatformControlPlaneSmokeOptions,
+  sourceId: string,
+  sourceSnapshotId: string,
+  sourceSyncRunId: string,
+): Promise<SourceSnapshotTransportEvidence> {
+  const response = await requestJson<{
+    readonly snapshots?: readonly unknown[];
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/sources/${encodeURIComponent(sourceId)}/snapshots?limit=100`,
+  });
+  const snapshot = (response.snapshots ?? []).find(
+    (value): value is Record<string, unknown> =>
+      isRecord(value) && value.id === sourceSnapshotId,
+  );
+  if (
+    !snapshot ||
+    Object.hasOwn(snapshot, "archiveObjectKey") ||
+    typeof snapshot.resolvedCommit !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(snapshot.resolvedCommit) ||
+    typeof snapshot.archiveRef !== "string" ||
+    snapshot.archiveRef.length === 0 ||
+    typeof snapshot.archiveDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(snapshot.archiveDigest) ||
+    !Number.isInteger(snapshot.archiveSizeBytes) ||
+    Number(snapshot.archiveSizeBytes) <= 0 ||
+    snapshot.fetchedByRunId !== sourceSyncRunId
+  ) {
+    throw new Error(
+      "SourceSnapshot did not prove the current archiveRef persistence contract",
+    );
+  }
+  return {
+    sourceSnapshotId,
+    resolvedCommit: snapshot.resolvedCommit,
+    archiveRef: snapshot.archiveRef,
+    archiveDigest: snapshot.archiveDigest,
+    archiveSizeBytes: Number(snapshot.archiveSizeBytes),
+    fetchedByRunId: sourceSyncRunId,
   };
 }
 
