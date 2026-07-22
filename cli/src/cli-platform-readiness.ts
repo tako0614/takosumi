@@ -1067,10 +1067,7 @@ function incompleteEvidenceBlockingFields(
       fields.add("evidence.runId");
     }
   }
-  if (
-    scope === "rehearsal" &&
-    !hasConsistentRehearsalStepEvidence(entry, definition)
-  ) {
+  if (!hasConsistentEntryEvidence(entry, scope, definition)) {
     fields.add("evidence.consistency");
   }
   return [...fields].sort();
@@ -1148,7 +1145,11 @@ function isCompleteEvidenceEntry(
     ) &&
     (!rehearsalRun ||
       (entryRunId !== null && hasConsistentEvidenceRunId(entry, entryRunId))) &&
-    (!rehearsalRun || hasConsistentRehearsalStepEvidence(entry, definition))
+    hasConsistentEntryEvidence(
+      entry,
+      rehearsalRun ? "rehearsal" : "domains",
+      definition,
+    )
   );
 }
 
@@ -1314,15 +1315,16 @@ function unexpectedEvidenceTypes(
   return [...unexpected].sort();
 }
 
-function hasConsistentRehearsalStepEvidence(
+function hasConsistentEntryEvidence(
   entry: PlatformReadinessEvidenceEntry,
+  scope: "domains" | "rehearsal",
   definition: PlatformReadinessDefinition = OSS_PLATFORM_READINESS_DEFINITION,
 ): boolean {
   if (typeof entry.id !== "string" || !Array.isArray(entry.evidence)) {
     return true;
   }
   const evidenceByType = evidenceReferencesByType(entry.evidence);
-  for (const rule of definition.consistencyRules.rehearsal[entry.id] ?? []) {
+  for (const rule of definition.consistencyRules[scope][entry.id] ?? []) {
     if (!sameEvidenceField(evidenceByType, rule.evidenceTypes, rule.field)) {
       return false;
     }

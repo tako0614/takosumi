@@ -202,7 +202,22 @@ export const platformReadinessConsistencyRules: {
     Record<string, readonly PlatformReadinessConsistencyRule[]>
   >;
 } = {
-  domains: {},
+  domains: {
+    "export-self-host-sovereignty": [
+      {
+        field: "exportId",
+        evidenceTypes: [
+          "encrypted-export",
+          "self-host-migration",
+          "sample-data-verification",
+        ],
+      },
+      {
+        field: "migrationId",
+        evidenceTypes: ["self-host-migration", "sample-data-verification"],
+      },
+    ],
+  },
   rehearsal: {
     "fresh-signup": [
       {
@@ -545,7 +560,7 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     fields: ["exportId", "archiveDigest", "ageRecipient"],
   },
   "self-host-migration": {
-    fields: ["migrationId", "targetHost", "oidcIssuer"],
+    fields: ["exportId", "migrationId", "targetHost", "oidcIssuer"],
   },
   "sample-data-verification": {
     fields: ["exportId", "migrationId", "verificationRunId", "dataClasses"],
@@ -733,9 +748,19 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
       "migrationId",
       "accountId",
       "sessionSubject",
+      "sessionCreatedAt",
+      "verifiedAt",
       "expiresAt",
     ],
-    formats: { expiresAt: "utc-timestamp" },
+    formats: {
+      sessionCreatedAt: "timestamp",
+      verifiedAt: "timestamp",
+      expiresAt: "utc-timestamp",
+    },
+    after: {
+      verifiedAt: "sessionCreatedAt",
+      expiresAt: "sessionCreatedAt",
+    },
   },
   "source-retention-state": {
     fields: [

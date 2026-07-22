@@ -39,6 +39,7 @@ type ObjectJson = { [key: string]: Json };
 interface Session {
   readonly subject: string;
   readonly primaryAccountId: string;
+  readonly createdAt: number;
   readonly expiresAt: number;
 }
 
@@ -231,6 +232,7 @@ async function session(api: Api): Promise<Session> {
       body.primaryAccountId ?? body.subject,
       "session.primaryAccountId",
     ),
+    createdAt: number(body.createdAt, "session.createdAt"),
     expiresAt: number(body.expiresAt, "session.expiresAt"),
   };
 }
@@ -247,20 +249,138 @@ async function waitRun(api: Api, runId: string, timeoutMs = 180_000) {
   fail(`run ${runId} did not become terminal within ${timeoutMs}ms`);
 }
 
+async function sourceSnapshotById(
+  api: Api,
+  sourceId: string,
+  snapshotId: string,
+  label: string,
+): Promise<Record<string, unknown>> {
+  let cursor: string | undefined;
+  do {
+    const snapshotsBody = await api.get(
+      `/api/v1/sources/${encodeURIComponent(sourceId)}/snapshots?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+    );
+    const snapshots = snapshotsBody.snapshots;
+    if (!Array.isArray(snapshots)) fail("source snapshots response is invalid");
+    const match = snapshots.find(
+      (candidate) => isObject(candidate) && candidate.id === snapshotId,
+    );
+    if (match) return match;
+    cursor =
+      typeof snapshotsBody.nextCursor === "string"
+        ? snapshotsBody.nextCursor
+        : undefined;
+  } while (cursor);
+  fail(`${label} SourceSnapshot ${snapshotId} was not found`);
+}
+
 function proofPath(directory: string, name: string) {
   return resolve(directory, `${name}.json`);
 }
 
-function safeVariables(config: Record<string, unknown>): ObjectJson {
+async function jsonObjectFile(
+  path: string,
+  label: string,
+): Promise<ObjectJson> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(resolve(path), "utf8"));
+  } catch (error) {
+    fail(`${label} could not be read as JSON: ${String(error)}`);
+  }
+  return asJson(object(parsed, label), label) as ObjectJson;
+}
+
+async function replayVariables(
+  config: Record<string, unknown>,
+  options: Options,
+): Promise<ObjectJson> {
   const mapping = object(
     config.variableMapping ?? {},
     "installConfig.variableMapping",
   );
-  return Object.fromEntries(
-    Object.entries(mapping)
-      .filter(([, value]) => value !== REDACTED)
-      .map(([name, value]) => [name, asJson(value, `variable ${name}`)]),
+  const targetVariablesFile = optional(options, "target-variables-file");
+  const targetVariables = targetVariablesFile
+    ? await jsonObjectFile(targetVariablesFile, "target variables")
+    : {};
+  const unknownOverrides = Object.keys(targetVariables).filter(
+    (name) => !Object.prototype.hasOwnProperty.call(mapping, name),
   );
+  if (unknownOverrides.length > 0) {
+    fail(
+      `target variables contain undeclared names: ${unknownOverrides.sort().join(", ")}`,
+    );
+  }
+  const redactedNames = Object.entries(mapping)
+    .filter(([, value]) => value === REDACTED)
+    .map(([name]) => name);
+  const missingSecrets = redactedNames.filter(
+    (name) => !Object.prototype.hasOwnProperty.call(targetVariables, name),
+  );
+  if (missingSecrets.length > 0) {
+    fail(
+      `redacted source variables require --target-variables-file entries: ${missingSecrets.sort().join(", ")}`,
+    );
+  }
+  return Object.fromEntries(
+    Object.entries(mapping).map(([name, value]) => {
+      const selected = Object.prototype.hasOwnProperty.call(
+        targetVariables,
+        name,
+      )
+        ? targetVariables[name]
+        : value;
+      if (selected === REDACTED) {
+        fail(`target variable ${name} must not use the redaction marker`);
+      }
+      return [name, asJson(selected, `variable ${name}`)];
+    }),
+  );
+}
+
+function hasFixedInterfaceBindingSubject(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  return value.some((blueprint) => {
+    if (!isObject(blueprint) || !Array.isArray(blueprint.bindings)) {
+      return false;
+    }
+    return blueprint.bindings.some(
+      (binding) =>
+        isObject(binding) &&
+        Object.prototype.hasOwnProperty.call(binding, "subjectRef"),
+    );
+  });
+}
+
+async function replayInterfaceBlueprints(
+  config: Record<string, unknown>,
+  options: Options,
+): Promise<Json | undefined> {
+  const sourceBlueprints = config.interfaceBlueprints;
+  const targetBlueprintsFile = optional(
+    options,
+    "target-interface-blueprints-file",
+  );
+  if (
+    hasFixedInterfaceBindingSubject(sourceBlueprints) &&
+    !targetBlueprintsFile
+  ) {
+    fail(
+      "source Interface blueprints contain resolved subjectRef values; provide --target-interface-blueprints-file with target-owned bindings",
+    );
+  }
+  if (targetBlueprintsFile) {
+    const parsed = JSON.parse(
+      await readFile(resolve(targetBlueprintsFile), "utf8"),
+    ) as unknown;
+    if (!Array.isArray(parsed)) {
+      fail("target Interface blueprints must be a JSON array");
+    }
+    return asJson(parsed, "target Interface blueprints");
+  }
+  return sourceBlueprints === undefined
+    ? undefined
+    : asJson(sourceBlueprints, "source Interface blueprints");
 }
 
 function assertPortableInstallConfig(config: Record<string, unknown>) {
@@ -352,26 +472,12 @@ async function exportBundle(options: Options): Promise<ExportEvidence> {
     applyRun.sourceSnapshotId,
     "applyRun.sourceSnapshotId",
   );
-  let cursor: string | undefined;
-  let sourceSnapshot: Record<string, unknown> | undefined;
-  do {
-    const snapshotsBody = await api.get(
-      `/api/v1/sources/${encodeURIComponent(sourceId)}/snapshots?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
-    );
-    const snapshots = snapshotsBody.snapshots;
-    if (!Array.isArray(snapshots)) fail("source snapshots response is invalid");
-    const match = snapshots.find(
-      (candidate) => isObject(candidate) && candidate.id === sourceSnapshotId,
-    );
-    if (match) sourceSnapshot = match;
-    cursor =
-      typeof snapshotsBody.nextCursor === "string"
-        ? snapshotsBody.nextCursor
-        : undefined;
-  } while (!sourceSnapshot && cursor);
-  if (!sourceSnapshot) {
-    fail("current apply Run SourceSnapshot was not found in the Source ledger");
-  }
+  const sourceSnapshot = await sourceSnapshotById(
+    api,
+    sourceId,
+    sourceSnapshotId,
+    "current apply Run",
+  );
   string(sourceSnapshot.resolvedCommit, "sourceSnapshot.resolvedCommit");
   const configId = string(capsule.installConfigId, "capsule.installConfigId");
   const configBody = await api.get(
@@ -491,6 +597,11 @@ async function importBundle(options: Options) {
   const sourceCapsule = object(bundle.capsule, "bundle.capsule");
   const sourceConfig = object(bundle.installConfig, "bundle.installConfig");
   assertPortableInstallConfig(sourceConfig);
+  const variables = await replayVariables(sourceConfig, options);
+  const interfaceBlueprints = await replayInterfaceBlueprints(
+    sourceConfig,
+    options,
+  );
   const suffix = optional(options, "name-suffix") ?? "";
 
   const workspaceBody = await api.post("/api/v1/workspaces", {
@@ -500,6 +611,13 @@ async function importBundle(options: Options) {
   });
   const workspace = object(workspaceBody.workspace, "created workspace");
   const workspaceId = string(workspace.id, "created workspace.id");
+  const sourceWorkspacePolicy = asJson(
+    object(sourceWorkspace.policy ?? {}, "workspace.policy"),
+    "workspace.policy",
+  );
+  await api.patch(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}`, {
+    policy: sourceWorkspacePolicy,
+  });
   const sourceBody = await api.post("/api/v1/sources", {
     workspaceId,
     name: `${string(sourceSource.name, "source.name")}${suffix}`,
@@ -508,7 +626,7 @@ async function importBundle(options: Options) {
       sourceSnapshot.resolvedCommit,
       "sourceSnapshot.resolvedCommit",
     ),
-    defaultPath: string(sourceSource.defaultPath, "source.defaultPath"),
+    defaultPath: string(sourceSnapshot.path, "sourceSnapshot.path"),
     autoSync: sourceSource.autoSync === true,
   });
   const source = object(sourceBody.source, "created source");
@@ -525,6 +643,31 @@ async function importBundle(options: Options) {
   if (terminalSync.status !== "succeeded") {
     fail(`source sync failed with status ${String(terminalSync.status)}`);
   }
+  const targetSnapshotId = string(
+    terminalSync.sourceSnapshotId,
+    "source sync run.sourceSnapshotId",
+  );
+  const targetSnapshot = await sourceSnapshotById(
+    api,
+    sourceId,
+    targetSnapshotId,
+    "target sync Run",
+  );
+  const expectedResolvedCommit = string(
+    sourceSnapshot.resolvedCommit,
+    "sourceSnapshot.resolvedCommit",
+  );
+  const expectedSnapshotPath = string(
+    sourceSnapshot.path,
+    "sourceSnapshot.path",
+  );
+  if (
+    string(targetSnapshot.resolvedCommit, "targetSnapshot.resolvedCommit") !==
+      expectedResolvedCommit ||
+    string(targetSnapshot.path, "targetSnapshot.path") !== expectedSnapshotPath
+  ) {
+    fail("target SourceSnapshot commit/path does not match the applied source");
+  }
 
   const capsuleBody = await api.post(
     `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/capsules`,
@@ -537,7 +680,7 @@ async function importBundle(options: Options) {
         "cfg-default-opentofu-capsule",
       runnerProfileId:
         optional(options, "runner-profile-id") ?? "opentofu-default",
-      vars: safeVariables(sourceConfig),
+      vars: variables,
       outputAllowlist: sourceConfig.outputAllowlist ?? {},
       ...(sourceConfig.modulePath === undefined
         ? {}
@@ -545,9 +688,7 @@ async function importBundle(options: Options) {
       ...(sourceConfig.sourceBuild === undefined
         ? {}
         : { sourceBuild: sourceConfig.sourceBuild }),
-      ...(sourceConfig.interfaceBlueprints === undefined
-        ? {}
-        : { interfaceBlueprints: sourceConfig.interfaceBlueprints }),
+      ...(interfaceBlueprints === undefined ? {} : { interfaceBlueprints }),
       ...(sourceConfig.store === undefined
         ? {}
         : { store: sourceConfig.store }),
@@ -574,9 +715,7 @@ async function importBundle(options: Options) {
         ? {}
         : { installExperience: sourceConfig.installExperience }),
       outputAllowlist: sourceConfig.outputAllowlist ?? {},
-      ...(sourceConfig.interfaceBlueprints === undefined
-        ? {}
-        : { interfaceBlueprints: sourceConfig.interfaceBlueprints }),
+      ...(interfaceBlueprints === undefined ? {} : { interfaceBlueprints }),
       ...(sourceConfig.lifecycleActions === undefined
         ? {}
         : { lifecycleActions: sourceConfig.lifecycleActions }),
@@ -618,6 +757,7 @@ async function importBundle(options: Options) {
   }
   await api.patch(`/api/v1/sources/${encodeURIComponent(sourceId)}`, {
     defaultRef: string(sourceSource.defaultRef, "source.defaultRef"),
+    defaultPath: string(sourceSource.defaultPath, "source.defaultPath"),
   });
 
   const verifiedWorkspace = object(
@@ -630,6 +770,13 @@ async function importBundle(options: Options) {
       .capsule,
     "verified capsule",
   );
+  const targetWorkspacePolicy = asJson(
+    object(verifiedWorkspace.policy ?? {}, "verified workspace.policy"),
+    "verified workspace.policy",
+  );
+  if (stable(sourceWorkspacePolicy) !== stable(targetWorkspacePolicy)) {
+    fail("Workspace policy mismatch between source and target");
+  }
   if (verifiedCapsule.status !== "active") {
     fail(`target Capsule is not active: ${String(verifiedCapsule.status)}`);
   }
@@ -680,14 +827,6 @@ async function importBundle(options: Options) {
     applyRunId,
     status: "succeeded",
   };
-  const loginEvidence = {
-    kind: LOGIN_KIND,
-    ...common,
-    targetAccountId: who.primaryAccountId,
-    subject: who.subject,
-    expiresAt: new Date(who.expiresAt).toISOString(),
-    status: "passed",
-  };
   const sampleEvidence = {
     kind: SAMPLE_KIND,
     ...common,
@@ -704,13 +843,68 @@ async function importBundle(options: Options) {
   };
   await Promise.all([
     writeJson(proofPath(proofDirectory, "migration-apply"), applyEvidence),
-    writeJson(proofPath(proofDirectory, "post-migration-login"), loginEvidence),
     writeJson(
       proofPath(proofDirectory, "sample-data-verification"),
       sampleEvidence,
     ),
   ]);
-  return { applyEvidence, loginEvidence, sampleEvidence };
+  return { applyEvidence, sampleEvidence };
+}
+
+function isoDate(value: unknown, label: string): Date {
+  const raw = string(value, label);
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== raw) {
+    fail(`${label} must be a canonical UTC timestamp`);
+  }
+  return parsed;
+}
+
+async function verifyPostMigrationLogin(options: Options) {
+  const api = await apiFrom(options, "target");
+  const applyFile = required(options, "migration-apply-result-file");
+  const evidenceFile = required(options, "login-evidence-file");
+  const apply = await jsonObjectFile(applyFile, "migration apply result");
+  if (apply.kind !== APPLY_KIND || apply.status !== "succeeded") {
+    fail("migration apply result must be a succeeded current migration proof");
+  }
+  const appliedAt = isoDate(apply.generatedAt, "migration apply generatedAt");
+  if (
+    issuer(string(apply.targetIssuer, "migration targetIssuer")) !== api.base
+  ) {
+    fail("post-migration login issuer does not match migration target");
+  }
+  const target = object(apply.target, "migration target");
+  const expectedAccountId = string(target.accountId, "migration accountId");
+  const current = await session(api);
+  if (current.primaryAccountId !== expectedAccountId) {
+    fail("post-migration login account does not match migration target");
+  }
+  if (current.createdAt <= appliedAt.getTime()) {
+    fail(
+      "post-migration session was not created after the migration apply proof",
+    );
+  }
+  if (current.expiresAt <= current.createdAt) {
+    fail("post-migration session expiry is not after session creation");
+  }
+  const verifiedAt = new Date().toISOString();
+  const evidence = {
+    kind: LOGIN_KIND,
+    generatedAt: verifiedAt,
+    migrationId: string(apply.migrationId, "migrationId"),
+    exportId: string(apply.exportId, "exportId"),
+    targetIssuer: api.base,
+    targetHost: new URL(api.base).host,
+    targetAccountId: current.primaryAccountId,
+    subject: current.subject,
+    sessionCreatedAt: new Date(current.createdAt).toISOString(),
+    verifiedAt,
+    expiresAt: new Date(current.expiresAt).toISOString(),
+    status: "passed",
+  };
+  await writeJson(evidenceFile, evidence);
+  return evidence;
 }
 
 async function keygen(options: Options) {
@@ -902,6 +1096,9 @@ async function selfTest() {
     outputDigest: "sha256:target",
   };
   let targetOutputValue: ObjectJson = targetOutput;
+  let targetSessionCreatedAt = Date.now() - 60_000;
+  let targetSnapshotPath = "modules/service";
+  let targetWorkspacePolicy: Json = {};
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -909,12 +1106,13 @@ async function selfTest() {
       const token = request.headers
         .get("authorization")
         ?.replace("Bearer ", "");
-      const target = token === "target-token";
+      const target = token === "target-token" || token === "post-target-token";
       const path = url.pathname;
       if (path === "/v1/account/session/me") {
         return response({
           subject: target ? "acct_target" : "acct_source",
           primaryAccountId: target ? "acct_target" : "acct_source",
+          createdAt: target ? targetSessionCreatedAt : Date.now() - 60_000,
           expiresAt: Date.now() + 60_000,
         });
       }
@@ -927,6 +1125,7 @@ async function selfTest() {
               displayName: "Migration source",
               type: "personal",
               ownerUserId: "acct_source",
+              policy: { allowedProviders: ["registry.example/provider"] },
             },
           });
         }
@@ -964,6 +1163,7 @@ async function selfTest() {
                 id: "snap_source",
                 sourceId: "src_source",
                 resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
+                path: "modules/service",
               },
             ],
           });
@@ -1013,10 +1213,24 @@ async function selfTest() {
                 displayName: "Migration source-target",
                 type: "personal",
                 ownerUserId: "acct_target",
+                policy: {},
               },
             },
             201,
           );
+        }
+        if (
+          request.method === "PATCH" &&
+          path === "/api/v1/workspaces/ws_target"
+        ) {
+          const body = object(await request.json(), "workspace patch");
+          targetWorkspacePolicy = asJson(
+            object(body.policy, "workspace patch.policy"),
+            "workspace patch.policy",
+          );
+          return response({
+            workspace: { id: "ws_target", policy: targetWorkspacePolicy },
+          });
         }
         if (request.method === "POST" && path === "/api/v1/sources") {
           return response({ source: { id: "src_target" } }, 201);
@@ -1026,9 +1240,27 @@ async function selfTest() {
           path === "/api/v1/sources/src_target/sync"
         ) {
           return response(
-            { run: { id: "run_sync", status: "succeeded" } },
+            {
+              run: {
+                id: "run_sync",
+                status: "succeeded",
+                sourceSnapshotId: "snap_target",
+              },
+            },
             201,
           );
+        }
+        if (path === "/api/v1/sources/src_target/snapshots") {
+          return response({
+            snapshots: [
+              {
+                id: "snap_target",
+                sourceId: "src_target",
+                resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
+                path: targetSnapshotPath,
+              },
+            ],
+          });
         }
         if (
           request.method === "PATCH" &&
@@ -1042,8 +1274,14 @@ async function selfTest() {
         ) {
           const body = object(await request.json(), "capsule request");
           const vars = object(body.vars, "capsule vars");
-          if (vars.token !== undefined)
-            return response({ error: { message: "secret replayed" } }, 400);
+          if (vars.token !== "target-secret") {
+            return response(
+              {
+                error: { message: "target secret was not explicitly rebound" },
+              },
+              400,
+            );
+          }
           return response(
             { capsule: { id: "cap_target", installConfigId: "cfg_target" } },
             201,
@@ -1074,7 +1312,13 @@ async function selfTest() {
           );
         }
         if (path === "/api/v1/runs/run_sync") {
-          return response({ run: { id: "run_sync", status: "succeeded" } });
+          return response({
+            run: {
+              id: "run_sync",
+              status: "succeeded",
+              sourceSnapshotId: "snap_target",
+            },
+          });
         }
         if (path === "/api/v1/runs/run_plan") {
           return response({ run: { id: "run_plan", status: "succeeded" } });
@@ -1083,7 +1327,9 @@ async function selfTest() {
           return response({ run: { id: "run_apply", status: "succeeded" } });
         }
         if (path === "/api/v1/workspaces/ws_target") {
-          return response({ workspace: { id: "ws_target" } });
+          return response({
+            workspace: { id: "ws_target", policy: targetWorkspacePolicy },
+          });
         }
         if (path === "/api/v1/capsules/cap_target") {
           return response({
@@ -1110,12 +1356,15 @@ async function selfTest() {
     const recipientFile = resolve(directory, "recipient.txt");
     const sourceTokenFile = resolve(directory, "source-token.txt");
     const targetTokenFile = resolve(directory, "target-token.txt");
+    const postTargetTokenFile = resolve(directory, "post-target-token.txt");
+    const targetVariablesFile = resolve(directory, "target-variables.json");
     const archiveFile = resolve(directory, "migration.age");
     const exportEvidenceFile = resolve(directory, "export.json");
     const proofDirectory = resolve(directory, "proofs");
     await Promise.all([
       writePrivate(sourceTokenFile, "source-token\n"),
       writePrivate(targetTokenFile, "target-token\n"),
+      writeJson(targetVariablesFile, { token: "target-secret" }),
     ]);
     const generated = await keygen({
       "identity-file": identityFile,
@@ -1131,6 +1380,52 @@ async function selfTest() {
       "export-evidence-file": exportEvidenceFile,
       "export-id": "export_self_test",
     });
+    let missingSecretFailed = false;
+    try {
+      await importBundle({
+        "target-issuer": base,
+        "target-token-file": targetTokenFile,
+        "archive-file": archiveFile,
+        "identity-file": identityFile,
+        "proof-directory": resolve(directory, "missing-secret-proofs"),
+      });
+    } catch (error) {
+      missingSecretFailed =
+        error instanceof Error &&
+        error.message.includes("--target-variables-file");
+    }
+    if (!missingSecretFailed) {
+      fail("self-test expected redacted source variables to fail closed");
+    }
+    let fixedSubjectFailed = false;
+    try {
+      await replayInterfaceBlueprints(
+        {
+          interfaceBlueprints: [
+            {
+              key: "fixed",
+              name: "fixed",
+              spec: { type: "example.v1", version: "v1" },
+              bindings: [
+                {
+                  key: "consumer",
+                  subjectRef: { kind: "Principal", id: "source-principal" },
+                  permissions: ["read"],
+                  delivery: { type: "bearer" },
+                },
+              ],
+            },
+          ],
+        },
+        {},
+      );
+    } catch (error) {
+      fixedSubjectFailed =
+        error instanceof Error && error.message.includes("subjectRef");
+    }
+    if (!fixedSubjectFailed) {
+      fail("self-test expected resolved Interface subjects to fail closed");
+    }
     const imported = await importBundle({
       "target-issuer": base,
       "target-token-file": targetTokenFile,
@@ -1138,11 +1433,60 @@ async function selfTest() {
       "identity-file": identityFile,
       "expected-archive-digest": exported.archiveDigest,
       "proof-directory": proofDirectory,
+      "target-variables-file": targetVariablesFile,
       "migration-id": "migration_self_test",
       "name-suffix": "-target",
     });
     if (imported.sampleEvidence.status !== "passed")
       fail("sample proof did not pass");
+    const applyEvidenceFile = proofPath(proofDirectory, "migration-apply");
+    let staleLoginFailed = false;
+    try {
+      await verifyPostMigrationLogin({
+        "target-issuer": base,
+        "target-token-file": targetTokenFile,
+        "migration-apply-result-file": applyEvidenceFile,
+        "login-evidence-file": proofPath(proofDirectory, "stale-login"),
+      });
+    } catch (error) {
+      staleLoginFailed =
+        error instanceof Error &&
+        error.message.includes("was not created after");
+    }
+    if (!staleLoginFailed) {
+      fail("self-test expected a pre-migration session to fail closed");
+    }
+    await Bun.sleep(5);
+    targetSessionCreatedAt = Date.now();
+    await writePrivate(postTargetTokenFile, "post-target-token\n");
+    const login = await verifyPostMigrationLogin({
+      "target-issuer": base,
+      "target-token-file": postTargetTokenFile,
+      "migration-apply-result-file": applyEvidenceFile,
+      "login-evidence-file": proofPath(proofDirectory, "post-migration-login"),
+    });
+    if (login.status !== "passed") fail("post-migration login did not pass");
+    targetSnapshotPath = "wrong/module";
+    let snapshotMismatchFailed = false;
+    try {
+      await importBundle({
+        "target-issuer": base,
+        "target-token-file": targetTokenFile,
+        "archive-file": archiveFile,
+        "identity-file": identityFile,
+        "expected-archive-digest": exported.archiveDigest,
+        "proof-directory": resolve(directory, "snapshot-mismatch-proofs"),
+        "target-variables-file": targetVariablesFile,
+        "migration-id": "migration_snapshot_mismatch",
+      });
+    } catch (error) {
+      snapshotMismatchFailed =
+        error instanceof Error && error.message.includes("commit/path");
+    }
+    if (!snapshotMismatchFailed) {
+      fail("self-test expected SourceSnapshot path drift to fail closed");
+    }
+    targetSnapshotPath = "modules/service";
     targetOutputValue = {
       ...targetOutput,
       workspaceOutputs: { endpoint: "https://target.example.test" },
@@ -1156,6 +1500,7 @@ async function selfTest() {
         "identity-file": identityFile,
         "expected-archive-digest": exported.archiveDigest,
         "proof-directory": resolve(directory, "bad-proofs"),
+        "target-variables-file": targetVariablesFile,
         "migration-id": "migration_mismatch",
         "name-suffix": "-mismatch",
       });
@@ -1179,11 +1524,20 @@ function usage(): never {
   bun scripts/self-host-migration.ts seal-file --source-file FILE --age-recipient AGE1... --archive-file FILE
   bun scripts/self-host-migration.ts seed-fixture --issuer URL --token-file FILE --git-url URL --git-ref COMMIT [--ca-file FILE --out-file FILE]
   bun scripts/self-host-migration.ts export --source-issuer URL --source-token-file FILE --workspace-id ID --capsule-id ID --age-recipient AGE1... --archive-file FILE --export-evidence-file FILE [--source-ca-file FILE] [--export-id ID]
-  bun scripts/self-host-migration.ts import --target-issuer URL --target-token-file FILE --archive-file FILE --identity-file FILE --proof-directory DIR [--target-ca-file FILE] [--expected-archive-digest SHA256] [--migration-id ID]
+  bun scripts/self-host-migration.ts import --target-issuer URL --target-token-file FILE --archive-file FILE --identity-file FILE --proof-directory DIR [--target-ca-file FILE] [--target-variables-file FILE] [--target-interface-blueprints-file FILE] [--expected-archive-digest SHA256] [--migration-id ID]
+  bun scripts/self-host-migration.ts verify-login --target-issuer URL --target-token-file FILE --migration-apply-result-file FILE --login-evidence-file FILE [--target-ca-file FILE]
   bun scripts/self-host-migration.ts self-test`);
 }
 
-export { exportBundle, importBundle, keygen, sealFile, seedFixture, selfTest };
+export {
+  exportBundle,
+  importBundle,
+  keygen,
+  sealFile,
+  seedFixture,
+  selfTest,
+  verifyPostMigrationLogin,
+};
 
 if (import.meta.main) {
   try {
@@ -1200,9 +1554,11 @@ if (import.meta.main) {
               ? await exportBundle(options)
               : command === "import"
                 ? await importBundle(options)
-                : command === "self-test"
-                  ? await selfTest()
-                  : usage();
+                : command === "verify-login"
+                  ? await verifyPostMigrationLogin(options)
+                  : command === "self-test"
+                    ? await selfTest()
+                    : usage();
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } catch (error) {
     process.stderr.write(
