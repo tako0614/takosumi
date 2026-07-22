@@ -480,6 +480,8 @@ function structuredEvidenceFieldsForTest(
       };
     case "sample-data-verification":
       return {
+        exportId: "export_rehearsal",
+        migrationId: "migration_rehearsal",
         verificationRunId: "sample_data_rehearsal",
         dataClasses: "account,workspace,capsule,run,output",
       };
@@ -812,18 +814,23 @@ function structuredEvidenceFieldsForTest(
       };
     case "clean-migration":
       return {
+        exportId: "export_rehearsal",
         migrationId: "migration_rehearsal",
         targetHost: "selfhost.takosumi.local",
         result: "passed",
       };
     case "post-migration-login":
       return {
+        exportId: "export_rehearsal",
         migrationId: "migration_rehearsal",
         accountId: "acct_rehearsal",
-        sessionId: "selfhost_session_rehearsal",
+        sessionSubject: "acct_rehearsal",
+        expiresAt: "2100-01-01T00:00:00.000Z",
       };
     case "source-retention-state":
       return {
+        exportId: "export_rehearsal",
+        migrationId: "migration_rehearsal",
         accountId: "acct_rehearsal",
         retentionRecordId: "source_retention_rehearsal",
         state: "retained",
@@ -3721,7 +3728,7 @@ test("launch-readiness validate rejects inconsistent staged rehearsal references
   )!.evidence as Record<string, unknown>[];
   exportEvidence.find(
     (entry) => entry.type === "source-retention-state",
-  )!.accountId = "acct_other";
+  )!.exportId = "export_other";
   await writeTextFile(file, JSON.stringify(document));
 
   try {

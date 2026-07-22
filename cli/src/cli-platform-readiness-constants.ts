@@ -290,11 +290,22 @@ export const platformReadinessConsistencyRules: {
     "export-self-host-migration": [
       {
         field: "migrationId",
-        evidenceTypes: ["clean-migration", "post-migration-login"],
+        evidenceTypes: [
+          "clean-migration",
+          "post-migration-login",
+          "sample-data-verification",
+          "source-retention-state",
+        ],
       },
       {
-        field: "accountId",
-        evidenceTypes: ["post-migration-login", "source-retention-state"],
+        field: "exportId",
+        evidenceTypes: [
+          "encrypted-export",
+          "clean-migration",
+          "post-migration-login",
+          "sample-data-verification",
+          "source-retention-state",
+        ],
       },
     ],
     "sev-simulation": [
@@ -537,7 +548,7 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     fields: ["migrationId", "targetHost", "oidcIssuer"],
   },
   "sample-data-verification": {
-    fields: ["verificationRunId", "dataClasses"],
+    fields: ["exportId", "migrationId", "verificationRunId", "dataClasses"],
   },
   "restore-transcript": {
     fields: ["restoreRunId", "targetEnvironment", "transcriptRef"],
@@ -713,14 +724,27 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     ],
   },
   "clean-migration": {
-    fields: ["migrationId", "targetHost", "result"],
+    fields: ["exportId", "migrationId", "targetHost", "result"],
     allowedValues: { result: ["passed"] },
   },
   "post-migration-login": {
-    fields: ["migrationId", "accountId", "sessionId"],
+    fields: [
+      "exportId",
+      "migrationId",
+      "accountId",
+      "sessionSubject",
+      "expiresAt",
+    ],
+    formats: { expiresAt: "utc-timestamp" },
   },
   "source-retention-state": {
-    fields: ["accountId", "retentionRecordId", "state"],
+    fields: [
+      "exportId",
+      "migrationId",
+      "accountId",
+      "retentionRecordId",
+      "state",
+    ],
     allowedValues: { state: ["retained", "delete-pending", "deleted"] },
   },
   alert: {

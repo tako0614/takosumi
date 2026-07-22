@@ -93,6 +93,7 @@ export const platformReadinessEvidenceFieldFormats = [
   "https-url",
   "sha256",
   "timestamp",
+  "utc-timestamp",
 ] as const;
 
 export type PlatformReadinessEvidenceFieldFormat =
@@ -231,7 +232,9 @@ export function platformReadinessEvidenceSchemaErrors(
   const errors: string[] = [];
   for (const field of schema.fields ?? []) {
     if (!validEvidenceValue(record[field])) {
-      errors.push(`${label}.${field} is required and must not be a placeholder`);
+      errors.push(
+        `${label}.${field} is required and must not be a placeholder`,
+      );
     }
   }
   for (const fields of schema.anyOf ?? []) {
@@ -293,7 +296,8 @@ export function platformReadinessEvidenceSchemaErrors(
     const values = fields.map((field) => record[field]);
     if (
       values.every(present) &&
-      new Set(values.map((value) => JSON.stringify(value))).size !== values.length
+      new Set(values.map((value) => JSON.stringify(value))).size !==
+        values.length
     ) {
       errors.push(`${label}.${fields.join(",")} must be pairwise distinct`);
     }
@@ -362,7 +366,10 @@ function optionalEvidenceSchemas(value: unknown): boolean {
       optionalStringRecord(record.values, false) &&
       optionalStringRecord(record.allowedValues, true) &&
       optionalRegexRecord(record.patterns) &&
-      optionalEnumRecord(record.formats, platformReadinessEvidenceFieldFormats) &&
+      optionalEnumRecord(
+        record.formats,
+        platformReadinessEvidenceFieldFormats,
+      ) &&
       optionalNumericBounds(record.numericBounds) &&
       optionalStringRecord(record.requiredItems, true) &&
       optionalDistinctFieldGroups(record.distinctFields) &&
@@ -382,11 +389,17 @@ function optionalEvidenceSchemas(value: unknown): boolean {
       ...Object.keys(isPlainRecord(record.values) ? record.values : {}),
     ]);
     const referencedFields = [
-      ...Object.keys(isPlainRecord(record.allowedValues) ? record.allowedValues : {}),
+      ...Object.keys(
+        isPlainRecord(record.allowedValues) ? record.allowedValues : {},
+      ),
       ...Object.keys(isPlainRecord(record.patterns) ? record.patterns : {}),
       ...Object.keys(isPlainRecord(record.formats) ? record.formats : {}),
-      ...Object.keys(isPlainRecord(record.numericBounds) ? record.numericBounds : {}),
-      ...Object.keys(isPlainRecord(record.requiredItems) ? record.requiredItems : {}),
+      ...Object.keys(
+        isPlainRecord(record.numericBounds) ? record.numericBounds : {},
+      ),
+      ...Object.keys(
+        isPlainRecord(record.requiredItems) ? record.requiredItems : {},
+      ),
       ...(Array.isArray(record.distinctFields)
         ? record.distinctFields.flatMap((group) =>
             Array.isArray(group) ? group.filter(nonEmptyString) : [],
@@ -395,9 +408,7 @@ function optionalEvidenceSchemas(value: unknown): boolean {
     ];
     return (
       referencedFields.every((field) => declaredFields.has(field)) &&
-      Object.entries(
-      isPlainRecord(record.after) ? record.after : {},
-      ).every(
+      Object.entries(isPlainRecord(record.after) ? record.after : {}).every(
         ([laterField, earlierField]) =>
           declaredFields.has(laterField) &&
           typeof earlierField === "string" &&
@@ -415,7 +426,8 @@ function optionalEnumRecord(
   return (
     isPlainRecord(value) &&
     Object.entries(value).every(
-      ([field, entry]) => field.trim().length > 0 && allowed.includes(String(entry)),
+      ([field, entry]) =>
+        field.trim().length > 0 && allowed.includes(String(entry)),
     )
   );
 }
@@ -586,6 +598,8 @@ function matchesEvidenceFieldFormat(
       const parsed = strictUtcDate(normalized);
       return !!parsed && parsed.getTime() <= Date.now() + 5 * 60_000;
     }
+    case "utc-timestamp":
+      return !!strictUtcDate(normalized);
   }
 }
 

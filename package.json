@@ -57,6 +57,8 @@
     "release-activation:evidence": "bun scripts/validate-release-activation-evidence.ts",
     "production-hardening:evidence": "bun scripts/validate-production-hardening-evidence.ts",
     "production-hardening:gates": "bun scripts/verify-production-hardening-gates.ts",
+    "self-host:migration": "bun scripts/self-host-migration.ts",
+    "self-host:migration:self-test": "bun scripts/self-host-migration.ts self-test",
     "control-d1-schema:plan": "bun scripts/control-d1-schema.ts plan",
     "control-d1-schema:apply": "bun scripts/control-d1-schema.ts apply",
     "control-d1-schema:fence": "bun scripts/control-d1-schema.ts fence",
