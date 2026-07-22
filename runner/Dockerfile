@@ -1,9 +1,11 @@
-FROM oven/bun:1
+ARG BUN_BASE_IMAGE=oven/bun:1@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4
+FROM ${BUN_BASE_IMAGE}
 
-# OpenTofu 1.11.x. Pinned to the latest 1.11 patch at image-build time; the
-# download URL shape is the published GitHub release asset
-# tofu_${VERSION}_linux_amd64.zip.
-ARG OPENTOFU_VERSION=1.11.8
+# GA runner runtime. Version and official release archive checksum are immutable
+# build inputs. The release workflow additionally verifies the upstream
+# SHA256SUMS Sigstore signature before this Dockerfile is built.
+ARG OPENTOFU_VERSION=1.12.5
+ARG OPENTOFU_SHA256=dade9650e6b74fc7a8b986bd8717497d32f9e09cf82e479afef4977fa3085536
 
 # Source-sync (LANE M1) needs git + openssh-client to clone over https/ssh and
 # zstd to compress the deterministic source archive. tar is in the debian base.
@@ -18,7 +20,9 @@ RUN set -eux; \
     curl -fsSL "${base}/${asset}" -o "/tmp/${asset}"; \
     curl -fsSL "${base}/tofu_${OPENTOFU_VERSION}_SHA256SUMS" \
       -o /tmp/tofu_SHA256SUMS; \
-    grep " ${asset}$" /tmp/tofu_SHA256SUMS > /tmp/tofu_SHA256SUM; \
+    printf '%s  %s\n' "${OPENTOFU_SHA256}" "${asset}" \
+      > /tmp/tofu_SHA256SUM; \
+    grep -F "${OPENTOFU_SHA256}  ${asset}" /tmp/tofu_SHA256SUMS; \
     (cd /tmp && sha256sum -c /tmp/tofu_SHA256SUM); \
     unzip "/tmp/${asset}" -d /usr/local/bin; \
     rm "/tmp/${asset}" /tmp/tofu_SHA256SUM /tmp/tofu_SHA256SUMS; \

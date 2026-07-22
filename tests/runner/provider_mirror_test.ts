@@ -65,6 +65,19 @@ test("runner image configures only an OpenTofu provider plugin cache", async () 
   expect(dockerfile).not.toContain("TAKOSUMI_BUILD_CACHE_DIR");
 });
 
+test("GA runner pins its base image and verified OpenTofu runtime bytes", async () => {
+  const dockerfile = await readFile(RUNNER_DOCKERFILE, "utf8");
+
+  expect(dockerfile).toContain(
+    "BUN_BASE_IMAGE=oven/bun:1@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4",
+  );
+  expect(dockerfile).toContain("ARG OPENTOFU_VERSION=1.12.5");
+  expect(dockerfile).toContain(
+    "ARG OPENTOFU_SHA256=dade9650e6b74fc7a8b986bd8717497d32f9e09cf82e479afef4977fa3085536",
+  );
+  expect(dockerfile).not.toContain("FROM oven/bun:1\n");
+});
+
 test("runner image copies the lifecycle provider-configuration contract closure", async () => {
   const dockerfile = await readFile(RUNNER_DOCKERFILE, "utf8");
 
