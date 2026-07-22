@@ -195,6 +195,15 @@ export interface ResourceShapeStore {
     params: PageParams,
   ): Promise<Page<ResourceShapeRecord>>;
   /**
+   * Internal bounded host inventory over an exact set of shape kinds. This is
+   * never exposed as a customer list API; operator callers must still project
+   * and authorize the returned records before emitting any response.
+   */
+  listByKindsPage(
+    kinds: readonly ResourceShapeKind[],
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>>;
+  /**
    * Internal, global inventory page for host-operated reconciliation jobs.
    * This is not a public Resource list route: callers select one exact shape
    * kind and receive only fully observed Ready records in stable keyset order.
@@ -424,6 +433,17 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
   ): Promise<Page<ResourceShapeRecord>> {
     const records = [...this.#byId.values()]
       .filter((record) => record.spaceId === spaceId)
+      .sort(compareCreatedAtAndId);
+    return Promise.resolve(pageSorted(records, params));
+  }
+
+  listByKindsPage(
+    kinds: readonly ResourceShapeKind[],
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    const kindSet = new Set(kinds);
+    const records = [...this.#byId.values()]
+      .filter((record) => kindSet.has(record.kind))
       .sort(compareCreatedAtAndId);
     return Promise.resolve(pageSorted(records, params));
   }

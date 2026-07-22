@@ -8,11 +8,16 @@ import type {
   ResourceFormPinOperations,
   RestoreResourceFormPinsRequest,
 } from "../../../core/domains/resource-shape/form_pin_operations.ts";
+import type {
+  ResourceFormPinInventoryReader,
+  ResourceFormPinInventoryReceipt,
+} from "../../../core/domains/resource-shape/form_pin_inventory.ts";
 
 const TOKEN = "scoped-token";
 const WORKSPACE = "ws_allowed12";
 const SPACE = "space_resources_a";
 const BASE = `/internal/v1/workspaces/${WORKSPACE}/migrations/resource-form-pins`;
+const INVENTORY_PATH = "/internal/v1/migrations/resource-form-pins/inventory";
 const IDENTITY: InstalledFormReference = {
   formRef: {
     apiVersion: "forms.takoform.com/v1alpha1",
@@ -38,6 +43,7 @@ function emptyReport(dryRun: boolean) {
 async function fixture(
   resolveScope: (workspaceId: string) => string | undefined = (workspaceId) =>
     workspaceId === WORKSPACE ? SPACE : undefined,
+  workspaceIds: "*" | readonly string[] = [WORKSPACE],
 ) {
   let backfillRequest: BackfillResourceFormPinsRequest | undefined;
   let restoreRequest: RestoreResourceFormPinsRequest | undefined;
@@ -51,6 +57,21 @@ async function fixture(
       return emptyReport(false);
     },
   } as unknown as ResourceFormPinOperations;
+  const inventoryReceipt = {
+    kind: "takosumi.resource-form-pin-inventory@v1",
+    complete: true,
+    capturedAt: "2026-07-22T00:00:00.000Z",
+    matrixDigest: `sha256:${"c".repeat(64)}`,
+    rows: [],
+    matrix: [],
+  } as unknown as ResourceFormPinInventoryReceipt;
+  let inventoryCalls = 0;
+  const inventory: ResourceFormPinInventoryReader = {
+    async capture() {
+      inventoryCalls += 1;
+      return inventoryReceipt;
+    },
+  };
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
@@ -58,12 +79,13 @@ async function fixture(
         store: new InMemoryOpenTofuControlStore(),
       }),
       resourceFormPinOperations: operations,
+      resourceFormPinInventory: inventory,
       resolveResourceFormPinScope: resolveScope,
       authorizeDeployControlBearer: ({ token }) =>
         token === TOKEN
           ? {
               actor: "acct_operator",
-              workspaceIds: [WORKSPACE],
+              workspaceIds,
               operations: "*",
               runnerProfileIds: "*",
             }
@@ -75,6 +97,8 @@ async function fixture(
     app,
     backfillRequest: () => backfillRequest,
     restoreRequest: () => restoreRequest,
+    inventoryCalls: () => inventoryCalls,
+    inventoryReceipt,
   };
 }
 
@@ -192,4 +216,21 @@ test("exact FormRef routes preserve Workspace-scoped bearer authorization", asyn
     },
   );
   expect(denied.status).toBe(403);
+});
+
+test("authoritative inventory requires an unrestricted deploy-control bearer", async () => {
+  const scoped = await fixture();
+  const denied = await scoped.app.request(INVENTORY_PATH, { headers });
+  expect(denied.status).toBe(403);
+  expect(scoped.inventoryCalls()).toBe(0);
+
+  const operator = await fixture(undefined, "*");
+  const response = await operator.app.request(INVENTORY_PATH, { headers });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual(operator.inventoryReceipt);
+  expect(operator.inventoryCalls()).toBe(1);
+
+  const unauthenticated = await operator.app.request(INVENTORY_PATH);
+  expect(unauthenticated.status).toBe(401);
+  expect(operator.inventoryCalls()).toBe(1);
 });

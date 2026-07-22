@@ -166,6 +166,7 @@ compatibility profile enable/disable behavior
 zero-form plain OpenTofu host
 Form Package signature/digest/retention and no-executable-code validation
 exact FormRef Resource/ResolutionLock backfill and D1/Postgres parity
+authoritative all-Workspace exact Form pin inventory with zero-scope coverage
 definition-installed-executable-activated structured discovery
 FormActivation authorization without price/payment/capacity fields
 portable/current routes address one canonical Resource row

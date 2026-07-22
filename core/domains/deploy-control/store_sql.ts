@@ -968,6 +968,41 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return rows.map((row) => parseRow(row) as Workspace);
   }
 
+  async listWorkspacesPage(params: PageParams): Promise<Page<Workspace>> {
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const rows = cursor
+      ? await this.#db
+          .select({ json: pgSchema.workspaces.spaceJson })
+          .from(pgSchema.workspaces)
+          .where(
+            or(
+              gt(pgSchema.workspaces.createdAt, cursor.createdAt),
+              and(
+                eq(pgSchema.workspaces.createdAt, cursor.createdAt),
+                gt(pgSchema.workspaces.id, cursor.id),
+              ),
+            ),
+          )
+          .orderBy(
+            asc(pgSchema.workspaces.createdAt),
+            asc(pgSchema.workspaces.id),
+          )
+          .limit(limit + 1)
+      : await this.#db
+          .select({ json: pgSchema.workspaces.spaceJson })
+          .from(pgSchema.workspaces)
+          .orderBy(
+            asc(pgSchema.workspaces.createdAt),
+            asc(pgSchema.workspaces.id),
+          )
+          .limit(limit + 1);
+    return pageFromProbe(
+      rows.map((row) => parseRow(row) as Workspace),
+      limit,
+    );
+  }
+
   async listWorkspacesByOwner(
     ownerUserId: string,
   ): Promise<readonly Workspace[]> {

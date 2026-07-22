@@ -966,6 +966,31 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async listWorkspacesPage(params: PageParams): Promise<Page<Workspace>> {
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const rows = await this.#drizzleManyJson<Workspace>(
+      schema.workspaces,
+      schema.workspaces.recordJson,
+      {
+        ...(cursor
+          ? {
+              where: or(
+                gt(schema.workspaces.createdAt, cursor.createdAt),
+                and(
+                  eq(schema.workspaces.createdAt, cursor.createdAt),
+                  gt(schema.workspaces.id, cursor.id),
+                ),
+              ),
+            }
+          : {}),
+        orderBy: [asc(schema.workspaces.createdAt), asc(schema.workspaces.id)],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
+  }
+
   async listWorkspacesByOwner(
     ownerUserId: string,
   ): Promise<readonly Workspace[]> {

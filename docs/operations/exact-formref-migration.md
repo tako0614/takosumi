@@ -11,11 +11,49 @@ Resource id, import id, native object, or lifecycle authority.
 - exactly one reviewed active `FormActivation` is selected for the target kind
   and scope;
 - the host has an explicit Workspace-to-Resource-Space authorization mapping;
+- a complete authoritative inventory receipt has been captured and reviewed;
 - an immutable control backup was captured before the first non-dry-run page.
 
 Never derive a FormRef from `latest`, kind alone, or a caller-selected Space.
 The internal route derives the Space from the host mapping and the actor from
 the deploy-control bearer.
+
+## Authoritative inventory and receipt binding
+
+Do not derive coverage from the backfill manifest: that cannot detect an
+omitted Workspace or Resource. Before generating any per-Workspace backfill
+requests, use an unrestricted deploy-control bearer to capture the independent
+durable-ledger inventory:
+
+```http
+GET /internal/v1/migrations/resource-form-pins/inventory
+Authorization: Bearer <instance-wide operator token>
+```
+
+The route keyset-pages **all durable Workspaces**, resolves every Workspace to
+one explicit authorized Resource Space, and scans all Resources in the ten
+bundled Service Form-compatible kinds. It performs the semantic scan twice and
+returns no receipt if the two digests differ. A missing/duplicate Space mapping,
+cursor cycle, empty non-terminal page, duplicate id, or hard-bound overflow also
+fails closed; there is no partial-success response.
+
+Require `complete = true`. The canonical `matrix` has exactly one entry for
+every Workspace x bundled-kind scope, including zero-Resource scopes. `rows`
+contains exact `workspaceId`, `space`, `resourceId`, `name`, `kind`, and the
+current installed Form identity or `null`. It contains no Resource spec,
+Output, NativeResource, target, or credential value. `matrixDigest` covers the
+canonical matrix and rows but not `capturedAt`, so production-equivalent replica
+and production receipts can be compared without pretending their timestamps are
+identical.
+
+Generate the backfill set from this receipt and require an exact set/count
+comparison before the first write: every non-null row is already pinned and
+every null row is either represented by exactly one reviewed backfill candidate
+or blocks the cutover. Preserve zero-count matrix scopes. Bind the raw receipt
+and `matrixDigest` to the immutable pre-write backup id/digest, its redacted
+`resourceFormPins` sidecar digest, source commit, package/activation evidence,
+and the cutover manifest. A manifest-provided count or digest is not a substitute
+for this receipt.
 
 ## Bounded dry run
 
@@ -97,10 +135,11 @@ invokes resolution or a backend adapter. A scope mismatch, missing lock,
 unverifiable retained package, or concurrent change is refused.
 
 Record source commit, schema manifest digest, backup id/time, activation id,
-page cursors/counts, response digests, post-replay read/observe result, and the
-isolated-target teardown in operator-private evidence. Live staging replay is
-not a substitute for the isolated production-equivalent release gate;
-repository tests alone are not live rollback evidence.
+authoritative inventory receipt/digest, sidecar digest, page cursors/counts,
+response digests, post-replay read/observe result, and the isolated-target
+teardown in operator-private evidence. Live staging replay is not a substitute
+for the isolated production-equivalent release gate; repository tests alone are
+not live rollback evidence.
 
 ## Production-equivalent pre-FormRef replica drill
 

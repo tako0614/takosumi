@@ -287,6 +287,42 @@ class D1ResourceShapeStore implements ResourceShapeStore {
     return pageFromProbe((rows.results ?? []).map(resourceShapeFromRow), limit);
   }
 
+  async listByKindsPage(
+    kinds: readonly ResourceShapeKind[],
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    const selectedKinds = [...new Set(kinds)];
+    if (selectedKinds.length === 0) return { items: [] };
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const placeholders = selectedKinds.map(() => "?").join(", ");
+    const rows = cursor
+      ? await this.db
+          .prepare(
+            `select * from ${this.#table}
+             where kind in (${placeholders})
+               and (created_at > ? or (created_at = ? and id > ?))
+             order by created_at asc, id asc limit ?`,
+          )
+          .bind(
+            ...selectedKinds,
+            cursor.createdAt,
+            cursor.createdAt,
+            cursor.id,
+            limit + 1,
+          )
+          .all<ResourceShapeRow>()
+      : await this.db
+          .prepare(
+            `select * from ${this.#table}
+             where kind in (${placeholders})
+             order by created_at asc, id asc limit ?`,
+          )
+          .bind(...selectedKinds, limit + 1)
+          .all<ResourceShapeRow>();
+    return pageFromProbe((rows.results ?? []).map(resourceShapeFromRow), limit);
+  }
+
   async listReadyByKindPage(
     kind: ResourceShapeKind,
     params: PageParams,

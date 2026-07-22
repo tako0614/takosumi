@@ -750,7 +750,10 @@ function offeringCatalogSchemas(): Record<string, Record<string, unknown>> {
 }
 
 /** Operator-only exact FormRef backfill and retained replay contracts. */
-function resourceFormPinSchemas(): Record<string, Record<string, unknown>> {
+export function resourceFormPinSchemas(): Record<
+  string,
+  Record<string, unknown>
+> {
   const resourceKind = {
     type: "string",
     pattern: "^[A-Za-z][A-Za-z0-9._-]{0,127}$",
@@ -758,6 +761,16 @@ function resourceFormPinSchemas(): Record<string, Record<string, unknown>> {
   const pageProperties = {
     cursor: { type: "string", minLength: 1 },
     limit: { type: "integer", minimum: 1, maximum: 100 },
+  };
+  const inventoryCounts = {
+    type: "object",
+    required: ["resources", "pinned", "unpinned"],
+    properties: {
+      resources: { type: "integer", minimum: 0 },
+      pinned: { type: "integer", minimum: 0 },
+      unpinned: { type: "integer", minimum: 0 },
+    },
+    additionalProperties: false,
   };
   return {
     ResourceFormPinBackupEntry: {
@@ -858,6 +871,112 @@ function resourceFormPinSchemas(): Record<string, Record<string, unknown>> {
           items: ref("ResourceFormPinEvidence"),
         },
         nextCursor: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    ResourceFormPinInventoryRow: {
+      type: "object",
+      required: ["workspaceId", "space", "resourceId", "name", "kind", "form"],
+      properties: {
+        workspaceId: { type: "string", minLength: 1 },
+        space: { type: "string", minLength: 1 },
+        resourceId: { type: "string", minLength: 1 },
+        name: { type: "string", minLength: 1 },
+        kind: { enum: [...RESOURCE_SHAPE_KINDS] },
+        form: {
+          oneOf: [ref("InstalledFormReference"), { type: "null" }],
+        },
+      },
+      additionalProperties: false,
+    },
+    ResourceFormPinInventoryMatrixEntry: {
+      type: "object",
+      required: [
+        "workspaceId",
+        "space",
+        "kind",
+        "resources",
+        "pinned",
+        "unpinned",
+      ],
+      properties: {
+        workspaceId: { type: "string", minLength: 1 },
+        space: { type: "string", minLength: 1 },
+        kind: { enum: [...RESOURCE_SHAPE_KINDS] },
+        resources: { type: "integer", minimum: 0 },
+        pinned: { type: "integer", minimum: 0 },
+        unpinned: { type: "integer", minimum: 0 },
+      },
+      additionalProperties: false,
+    },
+    ResourceFormPinInventoryReceipt: {
+      type: "object",
+      required: [
+        "kind",
+        "complete",
+        "capturedAt",
+        "bounds",
+        "counts",
+        "matrix",
+        "rows",
+        "matrixDigest",
+      ],
+      properties: {
+        kind: { const: "takosumi.resource-form-pin-inventory@v1" },
+        complete: { const: true },
+        capturedAt: { type: "string", format: "date-time" },
+        bounds: {
+          type: "object",
+          required: [
+            "pageSize",
+            "maxWorkspaces",
+            "maxScannedResources",
+            "maxResources",
+          ],
+          properties: {
+            pageSize: { type: "integer", minimum: 1, maximum: 100 },
+            maxWorkspaces: { type: "integer", minimum: 1 },
+            maxScannedResources: { type: "integer", minimum: 1 },
+            maxResources: { type: "integer", minimum: 1 },
+          },
+          additionalProperties: false,
+        },
+        counts: {
+          type: "object",
+          required: [
+            "workspaces",
+            "scopes",
+            "resources",
+            "pinned",
+            "unpinned",
+            "byKind",
+          ],
+          properties: {
+            workspaces: { type: "integer", minimum: 0 },
+            scopes: { type: "integer", minimum: 0 },
+            resources: { type: "integer", minimum: 0 },
+            pinned: { type: "integer", minimum: 0 },
+            unpinned: { type: "integer", minimum: 0 },
+            byKind: {
+              type: "object",
+              required: [...RESOURCE_SHAPE_KINDS],
+              properties: Object.fromEntries(
+                RESOURCE_SHAPE_KINDS.map((kind) => [kind, inventoryCounts]),
+              ),
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+        matrix: {
+          type: "array",
+          items: ref("ResourceFormPinInventoryMatrixEntry"),
+        },
+        rows: {
+          type: "array",
+          items: ref("ResourceFormPinInventoryRow"),
+        },
+        matrixDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
       },
       additionalProperties: false,
     },

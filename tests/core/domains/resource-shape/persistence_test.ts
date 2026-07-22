@@ -474,6 +474,51 @@ for (const backend of backends) {
       expect(read && "labels" in read).toBe(false);
     });
 
+    test("resource shape: bundled-kind inventory is globally bounded and cursorable", async () => {
+      const edge = readyShape(SPACE_B, `inventory-edge-${backend.label}`, T1);
+      const queue: ResourceShapeRecord = {
+        ...readyShape(SPACE_A, `inventory-queue-${backend.label}`, T2),
+        id: formatResourceShapeId(
+          SPACE_A,
+          "Queue",
+          `inventory-queue-${backend.label}`,
+        ),
+        kind: "Queue",
+      };
+      const custom: ResourceShapeRecord = {
+        ...readyShape(SPACE_A, `inventory-custom-${backend.label}`, T2),
+        id: formatResourceShapeId(
+          SPACE_A,
+          "OperatorCustom",
+          `inventory-custom-${backend.label}`,
+        ),
+        kind: "OperatorCustom",
+      };
+      await stores.resources.upsert(edge);
+      await stores.resources.upsert(queue);
+      await stores.resources.upsert(custom);
+
+      const ids: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await stores.resources.listByKindsPage(
+          ["EdgeWorker", "Queue"],
+          { limit: 1, ...(cursor ? { cursor } : {}) },
+        );
+        expect(page.items).toHaveLength(1);
+        expect(["EdgeWorker", "Queue"]).toContain(page.items[0]?.kind);
+        ids.push(page.items[0]!.id);
+        cursor = page.nextCursor;
+      } while (cursor);
+
+      expect(ids).toContain(edge.id);
+      expect(ids).toContain(queue.id);
+      expect(ids).not.toContain(custom.id);
+      await stores.resources.delete(edge.id);
+      await stores.resources.delete(queue.id);
+      await stores.resources.delete(custom.id);
+    });
+
     test("resource shape: upsert overwrites on id conflict", async () => {
       const record = fullShape();
       await stores.resources.upsert(record);

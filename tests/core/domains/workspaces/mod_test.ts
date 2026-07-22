@@ -83,6 +83,31 @@ test("createWorkspace accepts a 2-char and a 39-char handle", async () => {
   expect(full.handle).toBe(long);
 });
 
+test("listWorkspacesPage walks the complete durable ledger with a keyset cursor", async () => {
+  const { service } = build();
+  for (const handle of ["alpha", "beta", "gamma"]) {
+    await service.createWorkspace({
+      handle,
+      displayName: handle,
+      type: "organization",
+      ownerUserId: "user_1",
+    });
+  }
+
+  const first = await service.listWorkspacesPage({ limit: 2 });
+  expect(first.items.map((workspace) => workspace.handle)).toEqual([
+    "alpha",
+    "beta",
+  ]);
+  expect(first.nextCursor).toBeDefined();
+  const second = await service.listWorkspacesPage({
+    limit: 2,
+    cursor: first.nextCursor,
+  });
+  expect(second.items.map((workspace) => workspace.handle)).toEqual(["gamma"]);
+  expect(second.nextCursor).toBeUndefined();
+});
+
 test("createWorkspace rejects an unknown type", async () => {
   const { service } = build();
   await expect(

@@ -25,6 +25,7 @@ import {
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
 import type { OpenTofuControlStore } from "../deploy-control/store.ts";
+import type { Page, PageParams } from "takosumi-contract/pagination";
 
 // The handle grammar (spec §4: lowercase alnum start, then 1-38 of `[a-z0-9-]`,
 // 2-39 total) is defined once in the contract so the dashboard create form and
@@ -206,6 +207,11 @@ export class WorkspacesService {
 
   async listWorkspaces(): Promise<readonly Workspace[]> {
     return await this.#store.listWorkspaces();
+  }
+
+  /** Bounded operator scan over the complete durable Workspace ledger. */
+  async listWorkspacesPage(params: PageParams): Promise<Page<Workspace>> {
+    return await this.#store.listWorkspacesPage(params);
   }
 
   /**
